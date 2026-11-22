@@ -124,9 +124,18 @@ button.badge:focus-visible, a.badge:focus-visible, .badge[role="button"]:focus-v
   color: var(--fg-muted);
   font-weight: 400;
 }
-/* After every rule above that draws the "·": inside a badge it sits beside the badge's own 4px gap,
+/* After every rule above that draws the "·": inside a badge (or the tags' group) it sits beside its own 4px gap,
    so 2px more makes the 6px every other item of the line has after its dot; and it stays first,
    ahead of a narrow column's letter (the Worker "W" is an `::after` moved to the front). */
-:is(.status-card-meta, .wn-notice-meta, .todo-search-results .todo-item-content[data-search-meta]) .badge.badge.badge::before { margin-right: 2px; order: -2; }
+:is(.status-card-meta, .wn-notice-meta, .todo-search-results .todo-item-content[data-search-meta]) :is(.badge.badge.badge, .task-tag-pills)::before { margin-right: 2px; order: -2; }
+/* A word that starts a wrapped line opens with no "·" (utils/meta-line-fit.ts marks it). The hidden
+   dot keeps its room in the layout, so the word never fits back on the line above without it. */
+.todo-search-results .todo-item-content[data-search-meta] > .todo-item-title-row > [data-line-start][data-line-start]::before { visibility: hidden; }
+/* ...and its whole line moves left by that room (`--wrap-shift`, set on each word of a wrapped
+   line), so the line starts at the same edge as the one above. */
+.todo-search-results .todo-item-content[data-search-meta] > .todo-item-title-row > :is(.badge, .task-tag-pills, .todo-item-limit-pill) {
+  position: relative;
+  left: calc(-1 * var(--wrap-shift, 0px));
+}
 /* A paused badge on a line of words draws its dashes under the text: nothing clips them. */
 :is(.status-card-meta, .wn-notice-meta, .todo-search-results .todo-item-content[data-search-meta]) .badge.badge.badge-paused { overflow: visible; }

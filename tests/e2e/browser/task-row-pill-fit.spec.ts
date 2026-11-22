@@ -73,7 +73,9 @@ async function pillLook(host: Locator, testId: string) {
     const parent = el.querySelector('[data-testid="worker-parent-title"]') as HTMLElement | null
     return {
       text: (el.textContent ?? '').replace(parent?.textContent ?? '', '').trim(),
-      parent: parent && getComputedStyle(parent).display !== 'none' ? parent.textContent?.trim() ?? '' : '',
+      // Drawn: not hidden, and on the pill's one line (a title too narrow wraps out of sight).
+      parent: parent && getComputedStyle(parent).display !== 'none'
+        && parent.getBoundingClientRect().top < el.getBoundingClientRect().bottom - 2 ? parent.textContent?.trim() ?? '' : '',
       wordDrawn: getComputedStyle(long).display !== 'none',
       letter: letter === 'none' || letter === 'normal' ? '' : letter,
       borderStyle: getComputedStyle(el).borderTopStyle,
@@ -330,4 +332,74 @@ test('a trigger arriving or leaving later is a letter at once on a list row', as
   await page.addInitScript((ids) => { localStorage.setItem('walnut-todo-expanded-parents', JSON.stringify(ids)) }, [...litter.tasks])
   await openHome(page, `${API}/`)
   await runLateArrival(page, listRow, worker, stamp)
+})
+
+/**
+ * Every row on the page, seeded or not: no Worker pill shows its leader's title cut to a sliver
+ * ("W H…" read as initials), and no line of words starts with a lone "·" where it wrapped
+ * (2026-11-22 UI audit at 820 px). Checks the whole column, so a new pill or label is held too.
+ */
+async function slivers(page: Page) {
+  return page.locator('.home-navigation-scroll').first().evaluate((scroller) => {
+    const cut: string[] = []
+    for (const e of scroller.querySelectorAll<HTMLElement>('[data-testid="worker-parent-title"]')) {
+      const pill = e.parentElement!.getBoundingClientRect(), b = e.getBoundingClientRect()
+      const shown = Math.min(b.right, pill.right) - b.left
+      // Squeezed to nothing is a sliver too: the label's gap still shows ("W  · L").
+      const drawn = getComputedStyle(e).display !== 'none' && b.top < pill.bottom - 2
+      const sixLetters = parseFloat(getComputedStyle(e).fontSize) * 3
+      if (drawn && shown < sixLetters && e.scrollWidth > e.clientWidth + 1) cut.push(`${Math.round(shown)}px ${e.textContent}`)
+    }
+    const strayDots: string[] = [], offEdge: string[] = []
+    for (const row of scroller.querySelectorAll<HTMLElement>('.todo-item-content[data-search-meta]')) {
+      const items = [...row.querySelectorAll<HTMLElement>(':scope > .todo-search-meta-row, :scope > .todo-item-title-row > :is(.badge, .task-tag-pills, .todo-item-limit-pill)')]
+        .map((e) => { const b = e.getBoundingClientRect(); return { e, mid: b.top + b.height / 2, left: b.left, w: b.width } })
+        .filter((x) => x.w > 0)
+        .sort((a, b) => (Math.abs(a.mid - b.mid) > 8 ? a.mid - b.mid : a.left - b.left))
+      for (let k = 1; k < items.length; k++) {
+        if (items[k].mid <= items[k - 1].mid + 8) continue
+        const dot = getComputedStyle(items[k].e, '::before')
+        if (dot.content.includes('\u00b7') && dot.visibility !== 'hidden') strayDots.push(items[k].e.textContent ?? '')
+        // The wrapped line's words start at the line above's edge: the hidden dot's room is taken back.
+        const room = dot.content.includes('\u00b7') ? parseFloat(dot.width) + parseFloat(dot.marginRight) + (parseFloat(getComputedStyle(items[k].e).columnGap) || 0) : 0
+        if (Math.abs(items[k].left + room - items[0].left) > 3) offEdge.push(`${Math.round(items[k].left + room - items[0].left)}px ${items[k].e.textContent}`)
+      }
+    }
+    // Only names give up letters (the project, a Worker's leader title): a kind, a tag, a state and
+    // a time on the line are whole.
+    const cutWords: string[] = []
+    for (const el of scroller.querySelectorAll<HTMLElement>('.todo-item-content[data-search-meta] > .todo-item-title-row > :is(.badge, .task-tag-pills, .todo-item-limit-pill):not(.todo-item-subtask-pill)')) {
+      const inner = [el, ...el.querySelectorAll<HTMLElement>('*')]
+      if (el.getBoundingClientRect().width > 0 && inner.some((x) => x.scrollWidth > x.clientWidth + 1)) cutWords.push(el.textContent ?? '')
+    }
+    return { cut, strayDots, offEdge, cutWords, rows: scroller.querySelectorAll('.todo-item-content[data-search-meta]').length }
+  })
+}
+
+test('a narrow search column cuts only names, never to a sliver, and starts no line with "·"', async ({ page }) => {
+  test.setTimeout(180_000)
+  const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+  const f = await seed(`Pill fit search ${stamp}`, stamp, false)
+  await presetPanelView(page, { section: 'all', project: '' })
+  await openHome(page, `${API}/`)
+  await expect(listRow(page, f.tagWorkerTrigger)).toBeVisible({ timeout: 90_000 })
+  await expect(listRow(page, f.tagWorkerTrigger).getByTestId('task-trigger-pill')).toBeVisible({ timeout: 30_000 })
+  await page.locator('input[placeholder^="Search tasks"]').first().fill(stamp)
+  await expect(page.locator(`.todo-search-results [data-task-id="${f.tagWorkerTrigger}"]`).first()).toBeVisible({ timeout: 30_000 })
+  let wrappedSeen = false
+  for (const width of [640, 306, 280, 260, 240, 220]) {
+    await setColumnWidth(page, width)
+    await page.waitForTimeout(250)
+    const r = await slivers(page)
+    expect(r.rows, `search rows @${width}`).toBeGreaterThan(5)
+    expect(r.cut, `leader titles cut to a sliver @${width}`).toEqual([])
+    expect(r.strayDots, `lines that start with "·" @${width}`).toEqual([])
+    expect(r.offEdge, `wrapped lines off the line above's edge @${width}`).toEqual([])
+    expect(r.cutWords, `kinds, tags, states or times cut @${width}`).toEqual([])
+    wrappedSeen ||= await page.locator('.todo-search-results [data-line-start]').count() > 0
+  }
+  // The narrowest widths do wrap a crowded row: the check above judged real wrapped lines.
+  expect(wrappedSeen, 'some row wrapped onto a third line').toBe(true)
+  await page.locator('.home-navigation-scroll').first().screenshot({ path: `${SHOT_DIR}/search-narrow.png` })
+  await setColumnWidth(page, null)
 })

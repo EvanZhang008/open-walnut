@@ -48,20 +48,33 @@
     overflow: hidden;
     padding-left: 0;
   }
-  .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] > .todo-item-title-row > .todo-item-subtask-pill {
-    flex: 1 1 0;
-    min-width: 64px;
-    max-width: max-content;
-  }
   .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] > .todo-item-title-row > :not(.todo-item-title, .task-phase-icon-btn, .task-kebab-wrapper, .task-unread-dot, .task-start-btn) {
     order: 2;
     margin-left: 0;
-    /* Basis 0, so no label ever starts a third line: the labels share the second line, each up
-       to its own width, and a crowded line cuts its longest ones ("Worker Marin…"). */
+    /* Whole: a kind (Trigger, Leader · 3), a tag, a state and a time never cut (standard.md, "Text
+       that does not fit"); a line too short for them moves the next one to a line of its own,
+       which starts at the same edge with no "·" (utils/meta-line-fit.ts). */
+    flex: none;
+    max-width: 100%;
+  }
+  /* Only names give up letters: the project (above) and the Worker's leader title, which takes
+     what the line leaves, down to its word ("Worker", or "W" in a tight column), and is hidden
+     rather than cut under six letters (meta-line-fit.ts). */
+  .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] > .todo-item-title-row > .todo-item-subtask-pill {
     flex: 1 1 0;
-    min-width: 3ch;
+    min-width: 8ch;
     max-width: max-content;
   }
-  .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] .todo-search-context-pill { min-width: 4ch; }
+  .home-navigation-scroll[data-row-fit="tight"] .todo-search-results .todo-item-content[data-search-meta] > .todo-item-title-row > .todo-item-subtask-pill { min-width: 3ch; }
+  .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] > .todo-item-title-row > .todo-item-subtask-pill[data-title-cut] { flex: none; min-width: 0; }
+  /* On this line the tags are one word, whole: their "·" and the tags stay together on one line
+     (the list's tags wrap to lines of their own elsewhere), read grey like the others, and move
+     to the next line rather than cut to a fragment ("P5…"). */
+  .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] > .todo-item-title-row > .task-tag-pills {
+    flex-wrap: nowrap;
+    height: auto;
+    overflow: hidden;
+    color: var(--fg-muted);
+  }
   .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] .todo-search-tier-pill { flex: 0 1 auto; min-width: 5ch; }
 }

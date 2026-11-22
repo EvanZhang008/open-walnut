@@ -129,6 +129,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { dragBus } from '@/utils/drag-bus';
 import { observeRowFit } from '@/utils/row-fit';
+import { observeMetaLineFit } from '@/utils/meta-line-fit';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { formatWaitUntil } from './TaskStatusControl';
 import { TaskBatchMenu } from './TaskBatchMenu';
@@ -7927,7 +7928,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const setListScrollEl = useLeanCallback((el: HTMLDivElement | null) => {
     listScrollRef.current = el;
     stopRowFit.current?.();
-    stopRowFit.current = el ? observeRowFit(el) : null;
+    if (el) {
+      const stopFit = observeRowFit(el);
+      const stopLines = observeMetaLineFit(el);
+      stopRowFit.current = () => { stopFit(); stopLines(); };
+    } else stopRowFit.current = null;
   }, [listScrollRef]);
   // The row a person reads stays in place when tasks arrive or leave above it, in WebKit (the Mac
   // app) too, which has no CSS scroll anchoring. One box scrolls the stacked views; in the others

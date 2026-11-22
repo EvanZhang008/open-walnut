@@ -250,9 +250,11 @@
   gap: 4px;
 }
 .todo-item-subtask-pill > .task-pill-long { flex: none; }
-/* The leader's title on a Worker pill is metadata (`.wn-meta`): as long as the row has room,
-   cut only when the row has none (2026-11-21: a 96 px cap cut it beside empty room). */
-.task-worker-parent {
-  min-width: 40px;
-}
+/* The leader's title on a Worker pill is metadata (`.wn-meta`): no cap, so it is cut only when the
+   row has no room (2026-11-21: a 96 px cap cut it beside empty room), and it gives up its letters
+   first. One that would show fewer than six is hidden (`data-title-cut`, utils/meta-line-fit.ts),
+   so a tight row reads "W", never "W H…" (2026-11-22 UI audit: a title cut to one letter read as
+   initials). */
+.todo-item-subtask-pill > .task-worker-parent { min-width: 0; }
+.todo-item-subtask-pill > .task-worker-parent[data-title-cut] { display: none; }
 .home-navigation-scroll[data-row-fit="tight"] .todo-item-subtask-pill::after { order: -1; }

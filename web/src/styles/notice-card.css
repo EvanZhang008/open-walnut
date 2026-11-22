@@ -143,7 +143,9 @@ button.wn-notice-open:focus-visible { outline: 2px solid var(--accent); outline-
 [data-tone='ok'] > .wn-dot { background: var(--success); }
 [data-tone='warn'] > .wn-dot { background: var(--warning); }
 [data-tone='error'] > .wn-dot { background: var(--error); }
-.wn-notice-status[data-tone='ok'] { color: var(--success); }
+/* Words in the text green (`--success-text`, the theme's own): plain --success is under 3:1 on
+   white for 12 px text. */
+.wn-notice-status[data-tone='ok'] { color: var(--success-text); }
 .wn-notice-status[data-tone='warn'] { color: var(--priority-important-text); }
 .wn-notice-status[data-tone='error'] { color: var(--error); }
 .wn-notice-status[data-tone='ask'] { color: var(--accent-text); }
