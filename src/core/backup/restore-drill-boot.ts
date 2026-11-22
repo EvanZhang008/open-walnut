@@ -22,7 +22,6 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import YAML from 'yaml';
-import { ephemeralChildEnv } from '../../commands/ephemeral-snapshot.js';
 import { TRIAL_SERVER_FILE, type TrialServerInfo } from '../../commands/web-trial.js';
 import { inspectSqliteOffThread } from '../../lib/sqlite.js';
 import { pickReadBackNote, readBackThroughServer } from '../trial-start/read-back.js';
@@ -40,25 +39,29 @@ const PRODUCTION_PORT = 3456;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
-/** Environment variables a trial server must not inherit: each would make it some other kind of server. */
-const DROPPED_ENV = [
-  'WALNUT_LEADER_TRIAL', 'WALNUT_LEADER_SWITCH_COMMIT', 'WALNUT_ROLE', 'WALNUT_HOST_SERVER', 'WALNUT_HOST_SERVER_PORT',
-  'WALNUT_CLOUD_MODE', 'WALNUT_BIND_ADDRESS', 'OPEN_WALNUT_EXIT_ON_ORPHAN', 'WALNUT_TERMINAL_SESSION_ID',
-];
+/**
+ * What a trial server takes from the drill's environment: only how to run a program here (the
+ * search path, the account, the language and time zone, the runtime's own options). Everything
+ * else stays out, so nothing inherited makes it another kind of server (a role, a switch's trial
+ * or commit start, an ephemeral opt-in, a bind address), names a session, or carries a sign-in.
+ */
+const KEPT_ENV = new Set(['PATH', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LANGUAGE', 'TZ', 'NODE_OPTIONS', 'NODE_EXTRA_CA_CERTS', 'WALNUT_TEST_EXEC_GUARD']);
 
 /** The child's env: the copy as its home, and every other place it may write inside `sandbox`. */
 export function trialChildEnv(base: NodeJS.ProcessEnv, home: string, sandbox: string, nonce: string): NodeJS.ProcessEnv {
-  const env = ephemeralChildEnv(base, home, path.join(sandbox, 'daemon'));
-  for (const k of DROPPED_ENV) delete env[k];
-  // Opt-ins of an ephemeral server (a leader switch, backups, a standby copy) are not the drill's.
-  for (const k of Object.keys(env)) if (k.startsWith('WALNUT_EPHEMERAL_')) delete env[k];
+  const env: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(base)) if (v !== undefined && (KEPT_ENV.has(k) || k.startsWith('LC_'))) env[k] = v;
+  const tmp = path.join(sandbox, 'tmp');
   Object.assign(env, {
+    OPEN_WALNUT_HOME: home,
+    WALNUT_DAEMON_DIR: path.join(sandbox, 'daemon'),
+    WALNUT_TASK_DIR_ROOT: path.join(sandbox, 'daemon', 'task-dirs'),
     HOME: path.join(sandbox, 'user-home'),
     XDG_STATE_HOME: path.join(sandbox, 'xdg', 'state'),
     XDG_CONFIG_HOME: path.join(sandbox, 'xdg', 'config'),
     XDG_CACHE_HOME: path.join(sandbox, 'xdg', 'cache'),
     XDG_DATA_HOME: path.join(sandbox, 'xdg', 'data'),
-    TMPDIR: path.join(sandbox, 'tmp'), TMP: path.join(sandbox, 'tmp'), TEMP: path.join(sandbox, 'tmp'),
+    TMPDIR: tmp, TMP: tmp, TEMP: tmp,
     [TRIAL_NONCE_ENV]: nonce,
   });
   return env;

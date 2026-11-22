@@ -16,20 +16,21 @@ import { assertOutwardDoor, closeOutwardDoorsForTrial, doorsClosed, isPermitRefu
 afterEach(() => setOutwardDoorChecker(null))
 
 describe('trialChildEnv', () => {
-  it('home, user home, XDG, temp, daemon and task folders all inside the sandbox; no role, trial or session env', () => {
+  it('home, user home, XDG, temp, daemon and task folders all inside the sandbox; nothing else but how to run a program', () => {
     const base: NodeJS.ProcessEnv = {
       PATH: '/usr/bin', HOME: '/home/u', OPEN_WALNUT_HOME: '/home/u/.open-walnut', XDG_STATE_HOME: '/home/u/.local/state',
       WALNUT_LEADER_TRIAL: '1', WALNUT_LEADER_SWITCH_COMMIT: '3', WALNUT_ROLE: 'replica', WALNUT_CLOUD_MODE: '1', WALNUT_BIND_ADDRESS: '0.0.0.0',
       WALNUT_EPHEMERAL_BACKUP: '1', WALNUT_EPHEMERAL_LEADER_SWITCH: '1', WALNUT_SESSION_ID: 's', WALNUT_TASK_DIR: '/x', OPEN_WALNUT_EXIT_ON_ORPHAN: '1',
+      ANTHROPIC_API_KEY: 'k', AWS_SECRET_ACCESS_KEY: 'k', HTTPS_PROXY: 'http://p', VITEST: 'true', LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8',
     }
     const env = trialChildEnv(base, '/tmp/walnut-restore-drill-Ab12Cd/home', '/tmp/walnut-restore-drill-Ab12Cd/boot', 'n0nce')
     expect(env.OPEN_WALNUT_HOME).toBe('/tmp/walnut-restore-drill-Ab12Cd/home')
     for (const k of ['HOME', 'XDG_STATE_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'TMPDIR', 'WALNUT_DAEMON_DIR', 'WALNUT_TASK_DIR_ROOT']) {
       expect(env[k], k).toMatch(/^\/tmp\/walnut-restore-drill-Ab12Cd\/boot\//)
     }
-    for (const k of ['WALNUT_LEADER_TRIAL', 'WALNUT_LEADER_SWITCH_COMMIT', 'WALNUT_ROLE', 'WALNUT_CLOUD_MODE', 'WALNUT_BIND_ADDRESS', 'WALNUT_EPHEMERAL_BACKUP', 'WALNUT_EPHEMERAL_LEADER_SWITCH', 'WALNUT_SESSION_ID', 'WALNUT_TASK_DIR', 'OPEN_WALNUT_EXIT_ON_ORPHAN']) {
-      expect(env[k], k).toBeUndefined()
-    }
+    // Nothing else of the drill's env: only how to run a program here.
+    expect(Object.keys(env).filter((k) => !/^(HOME|XDG_|TMPDIR$|TMP$|TEMP$|WALNUT_DAEMON_DIR$|WALNUT_TASK_DIR_ROOT$|OPEN_WALNUT_HOME$)/.test(k)).sort())
+      .toEqual(['LANG', 'LC_ALL', 'PATH', TRIAL_NONCE_ENV].sort())
     expect(env[TRIAL_NONCE_ENV]).toBe('n0nce')
     expect(env.PATH).toBe('/usr/bin')
     // The parent's env is not touched.

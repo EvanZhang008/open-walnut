@@ -64,7 +64,8 @@ const EXEMPT = new Set([
 const RAW_SIGNAL_BUDGET: Record<string, number> = {
   'src/providers/in-process-daemon.ts': 1,         // a host's one Walnut service ends itself (SIGTERM to its own pid) when its runtime does
   'src/binary/service-entry.ts': 2,                // its own pid at a trial's lifetime; the follower group an older daemon started, by its recorded pid + start time (stopRecordedServer)
-  'src/core/leader/switch/side.ts': 3,             // the switch's own Walnut servers and standbys of its homes (SIGTERM, then SIGKILL after the grace, and the liveness probe); a pid from the home's lock or standby file, a standby's confirmed by its port first, never a pid <= 1
+  'src/core/leader/switch/side.ts': 1,             // a trial or leader server the switch spawned itself that did not answer in time (SIGKILL); its stops go through trial-start/process.ts stopPid
+  'src/core/trial-start/process.ts': 2,            // stopPid (SIGTERM, then SIGKILL after the grace) for the servers the leader switch and the restore drill start: the switch's from the home's lock or standby file (a standby's confirmed by its port first), the drill's the child it spawned; never a pid <= 1
   'src/core/leader/switch/flow.ts': 1,             // tests only (WALNUT_LEADER_SWITCH_KILL_AT): the switch command kills itself, as a crash would
   'src/core/plugins/plugin-hosts.ts': 1,           // a plugin script's own sh group on this machine, at its deadline or cap (host-script-core.ts)
   'src/commands/web-ephemeral.ts': 1,              // the ephemeral child it launched, on a failed launch

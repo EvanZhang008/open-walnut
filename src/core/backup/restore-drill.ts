@@ -83,6 +83,8 @@ export interface DrillOptions {
   bootTimeoutMs?: number;
   /** Tests: the trial server runs (the kill test stops the drill here). */
   onServer?: (pid: number) => void | Promise<void>;
+  /** Tests: the trial server was spawned and boots (the kill test stops the drill here). */
+  onSpawn?: (pid: number) => void | Promise<void>;
   /** Tests: the free bytes where the drill's folder goes; default: what the file system says. */
   freeBytes?: (dir: string) => Promise<number | null>;
   /**
