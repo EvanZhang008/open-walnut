@@ -246,13 +246,31 @@ describe.each(SHELLS)('the service launcher under %s', (_label, bin) => {
     expect(launcherState()).toMatchObject({ current: v1, good: v1, phase: 'committed' })
     expect(kv(path.join(L, 'rollback'))).toMatchObject({ from: v2, to: v1, build: 'walnut-daemon-v2' })
     expect(read(path.join(state, 'update-probation.failed')).split('\n')[0]).toBe('walnut-daemon-v2')
-    expect(read(path.join(dir, 'stops')).trim()).toBe(`stop ${path.join(state, 'detached')}`)
+    // At the put-back, and again when v1 is ready without saying what it adopts (it may land before this read).
+    const stops = read(path.join(dir, 'stops')).trim().split('\n')
+    expect(stops.length).toBeGreaterThanOrEqual(1)
+    expect(new Set(stops)).toEqual(new Set([`stop ${path.join(state, 'detached')}`]))
     // Asked again the same day: refused, nothing stopped.
     const v1pid = live('v1')[0]!.pid
     const again = request(v2)
     await until(() => result().id === again, 5_000, 'refusal')
     expect(result()).toMatchObject({ outcome: 'refused', reason: 'this version failed here in the last day' })
     expect(alive(v1pid)).toBe(true)
+  })
+
+  it('a switch during a clean probation makes the running version the one a failed switch puts back', async () => {
+    // Deploys come every 10 minutes, the probation is 15: a second update must not fall back two versions.
+    const v1 = stub('v1'); const v2 = stub('v2'); const v3 = stub('v3', 'fail')
+    launch(writeLauncher(v1))
+    await until(() => live('v1').length === 1, 5_000, 'first start')
+    const id2 = request(v2)
+    await until(() => result().id === id2 && result().outcome === 'committed', 8_000, 'v2 commit')
+    expect(launcherState()).toMatchObject({ current: v2, good: v1, phase: 'probation' })
+    const id3 = request(v3)
+    await until(() => result().id === id3 && result().outcome === 'rolledback', 8_000, 'v3 rollback')
+    expect(kv(path.join(L, 'rollback'))).toMatchObject({ from: v3, to: v2 })
+    await until(() => live('v2').length === 1 && live('v1').length === 0, 5_000, 'v2 back')
+    expect(launcherState()).toMatchObject({ current: v2, good: v2, phase: 'committed' })
   })
 
   it('puts the old version back when the new one exits before it is ready', async () => {

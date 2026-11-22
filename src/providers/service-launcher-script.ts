@@ -301,7 +301,9 @@ l_request() {
     l_log "dropped a switch to $lq_exe that never got ready to start"; rm -f "$L/request"; return 0
   fi
   l_log "switching from $s_cur to $lq_exe"
-  [ "$s_phase" = committed ] && { s_good=$s_cur; s_gbuild=$s_build; }
+  # The version that runs is what a failed switch puts back: a committed one, or one still in its probation
+  # that has not crashed (a second update within the probation must not fall back two versions).
+  if [ "$s_phase" = committed ] || { [ "$s_phase" = probation ] && [ "$s_crash" = 0 ]; }; then s_good=$s_cur; s_gbuild=$s_build; fi
   s_cur=$lq_exe; s_build=$lq_b; s_phase=trial; s_since=$(l_now); s_crash=0; s_req=$lq_id; s_tries=$lq_t; l_write
   rm -f "$L/request"
   l_stop "$K_STOP"

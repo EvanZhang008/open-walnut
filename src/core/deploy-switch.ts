@@ -19,7 +19,9 @@
  * The same holds while the service launcher keeps this Walnut's server (it restarts it within
  * seconds of any exit, and at login): an app-started server whose launcher is alive (its pid in
  * `<state>/daemon-boot.pid`) waits for any other live server to hold the lock, so the app attaches
- * to the launcher's server instead of racing it. A launcher that is not running lets it start.
+ * to the launcher's server instead of racing it. One installed (the mark names its plist, which is
+ * there) but not running yet, as at a login, is waited for up to LAUNCHER_START_WAIT_MS; one that never
+ * comes, or no launcher, lets it start as before.
  */
 
 import fsp from 'node:fs/promises'
@@ -37,15 +39,33 @@ export function serviceLauncherFile(home: string): string {
   return path.join(home, 'local', 'service-launcher.json')
 }
 
-/** The pid of the live launcher that keeps this Walnut's server, or null. */
-export async function liveServiceLauncher(home: string): Promise<number | null> {
+/** How long an app-started server waits for an installed launcher to start (at login launchd may start it after the app). */
+export const LAUNCHER_START_WAIT_MS = 60_000
+
+interface LauncherMark { state: string; plist: string | null }
+
+async function launcherMark(home: string): Promise<LauncherMark | null> {
   const raw = await readText(serviceLauncherFile(home))
   if (raw === null) return null
-  let state: unknown
-  try { state = (JSON.parse(raw) as { state?: unknown }).state } catch { return null }
-  if (typeof state !== 'string' || !path.isAbsolute(state)) return null
-  const pid = Number((await readText(path.join(state, 'daemon-boot.pid')))?.trim())
+  try {
+    const v = JSON.parse(raw) as { state?: unknown; plist?: unknown }
+    if (typeof v.state !== 'string' || !path.isAbsolute(v.state)) return null
+    return { state: v.state, plist: typeof v.plist === 'string' && path.isAbsolute(v.plist) ? v.plist : null }
+  } catch { return null }
+}
+
+/** The pid of the live launcher that keeps this Walnut's server, or null. */
+export async function liveServiceLauncher(home: string): Promise<number | null> {
+  const mark = await launcherMark(home)
+  if (!mark) return null
+  const pid = Number((await readText(path.join(mark.state, 'daemon-boot.pid')))?.trim())
   return Number.isInteger(pid) && pid > 1 && alive(pid) ? pid : null
+}
+
+/** A launcher is installed (its mark and its launchd plist are there), running or not. */
+async function launcherInstalled(home: string): Promise<boolean> {
+  const mark = await launcherMark(home)
+  return !!mark?.plist && (await readText(mark.plist)) !== null
 }
 
 /**
@@ -91,7 +111,9 @@ export interface DeploySwitchWait {
   pollMs?: number
   now?: () => number
   sleep?: (ms: number) => Promise<void>
+  /** The pid it waits for (a deploy's, the launcher's; 0 while it waits for an installed launcher to start). */
   onWait?: (deployPid: number) => void
+  launcherStartWaitMs?: number
 }
 
 /**
@@ -108,7 +130,17 @@ export async function waitOutDeploySwitch(o: DeploySwitchWait): Promise<'none' |
   const sw = first === null ? null : parseDeploySwitch(first, now())
   // A deploy's switch is waited out first; with none, a live service launcher (its server may
   // have started long ago, so any live holder counts).
-  const launcher = sw && alive(sw.pid) ? null : await liveServiceLauncher(o.home)
+  let launcher = sw && alive(sw.pid) ? null : await liveServiceLauncher(o.home)
+  // Installed but not running yet (a login: launchd may start it after the app): wait for it, bounded.
+  if (!(sw && alive(sw.pid)) && !launcher && await launcherInstalled(o.home)) {
+    const appear = now() + (o.launcherStartWaitMs ?? LAUNCHER_START_WAIT_MS)
+    o.onWait?.(0)
+    while (!launcher && now() < appear) {
+      await sleep(o.pollMs ?? 250)
+      launcher = await liveServiceLauncher(o.home)
+    }
+    if (!launcher) return 'timeout'
+  }
   if (!(sw && alive(sw.pid)) && !launcher) return 'none'
   const pid = launcher ?? sw!.pid
   const since = launcher ? Number.NEGATIVE_INFINITY : sw!.at - 1000

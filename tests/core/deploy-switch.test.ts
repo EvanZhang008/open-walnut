@@ -154,6 +154,33 @@ describe('the service launcher keeps the server (the Mac\'s one service)', () =>
     expect(await liveServiceLauncher(h)).toBeNull()
   })
 
+  it('at a login, waits for an installed launcher that has not started yet, and only so long', async () => {
+    const { home: h, lockFile } = home()
+    const state = path.join(h, 'service')
+    fs.mkdirSync(state, { recursive: true })
+    const plist = path.join(h, 'job.plist')
+    fs.writeFileSync(plist, '<plist/>')
+    fs.writeFileSync(serviceLauncherFile(h), JSON.stringify({ state, plist }))
+    const c = clock()
+    let polls = 0
+    expect(await waitOutDeploySwitch({
+      home: h, lockFile, env: APP_ENV, now: c.now,
+      sleep: async (ms) => {
+        await c.sleep(ms)
+        polls++
+        if (polls === 4) fs.writeFileSync(path.join(state, 'daemon-boot.pid'), `${livePid()}\n`)
+        if (polls === 6) fs.writeFileSync(lockFile, JSON.stringify({ pid: livePid(), port: 3456, startedAt: new Date(c.now()).toISOString() }))
+      },
+    })).toBe('lock-taken')
+    // A launcher that never starts: the app's server starts after the wait.
+    fs.rmSync(path.join(state, 'daemon-boot.pid'))
+    fs.rmSync(lockFile)
+    expect(await waitOutDeploySwitch({ home: h, lockFile, env: APP_ENV, now: c.now, sleep: c.sleep, launcherStartWaitMs: 3_000 })).toBe('timeout')
+    // No plist (taken away): no wait at all.
+    fs.rmSync(plist)
+    expect(await waitOutDeploySwitch({ home: h, lockFile, env: APP_ENV, now: c.now, sleep: c.sleep })).toBe('none')
+  })
+
   it('bounded: a launcher whose server never takes the lock lets it start after the wait, and one that dies ends the wait', async () => {
     const { home: h, lockFile } = home()
     const launcher = spawn('sleep', ['30'], { stdio: 'ignore' })
