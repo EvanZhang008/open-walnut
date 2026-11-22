@@ -1,0 +1,232 @@
+/**
+ * The session channel (src/core/session-channel/channel.ts) over an in-memory link that can be
+ * cut after any record: every record reaches the leader exactly once and in order, across cuts,
+ * a leader that was away, a move to another leader, and a leader below what the log still keeps.
+ * A stale leader is refused; a listener never confirms; deltas go only to a caught-up reader.
+ */
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import fsp from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { FactLog, type FactRecord } from '../../../src/core/session-channel/fact-log.js'
+import { HostChannel, attachLeaderChannel, type AppliedFact, type ChannelCursor, type ChannelFrame, type ChannelLink } from '../../../src/core/session-channel/channel.js'
+import type { SessionRecord } from '../../../src/core/types.js'
+
+let dir = ''
+beforeEach(async () => { dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'sess-channel-')) })
+afterEach(async () => { await fsp.rm(dir, { recursive: true, force: true }) })
+
+const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms))
+async function until(cond: () => boolean, ms = 5000): Promise<void> {
+  const end = Date.now() + ms
+  while (!cond()) { if (Date.now() > end) throw new Error('timed out'); await tick(2) }
+}
+
+/** A leader's data: what it applied, the rows a snapshot gave it, and its position. */
+class Leader {
+  applied: AppliedFact[] = []
+  rows = new Map<string, SessionRecord>()
+  snapshots = 0
+  flows: string[] = []
+  cursor: ChannelCursor | null = null
+  constructor(public permit = 1) {}
+  copy(): Leader {
+    const b = new Leader(this.permit + 1)
+    b.applied = [...this.applied]
+    b.rows = new Map(this.rows)
+    b.cursor = this.cursor ? { ...this.cursor } : null
+    return b
+  }
+}
+
+/** One link: frames delivered asynchronously in order; cut() drops everything after. */
+/** The leader's clock: a test moves it on to say the leader was away. */
+let clockOffset = 0
+beforeEach(() => { clockOffset = 0 })
+
+function connect(host: HostChannel, leader: Leader, opts: { cutAfterSeq?: number } = {}) {
+  let up = true
+  let hostSide: ReturnType<HostChannel['attach']> | null = null
+  let leaderSide: ReturnType<typeof attachLeaderChannel> | null = null
+  const cut = () => {
+    if (!up) return
+    up = false
+    hostSide?.onClose()
+    leaderSide?.onClose()
+  }
+  const toLeader: ChannelLink = {
+    send: (f: ChannelFrame) => {
+      if (!up) return
+      queueMicrotask(() => {
+        if (!up) return
+        leaderSide!.onFrame(f)
+        if (opts.cutAfterSeq !== undefined && f.op === 'facts' && f.recs.some((r) => r.seq >= opts.cutAfterSeq!)) cut()
+      })
+    },
+    close: cut,
+  }
+  const toHost: ChannelLink = { send: (f) => { if (up) queueMicrotask(() => { if (up) hostSide!.onFrame(f) }) }, close: cut }
+  leaderSide = attachLeaderChannel(toHost, {
+    walnutId: 'w1', hostId: 'devbox', permitNumber: () => leader.permit, ackEveryMs: 1, now: () => Date.now() + clockOffset,
+    loadCursor: async () => leader.cursor,
+    apply: async (_h, recs, next) => { leader.applied.push(...recs); leader.cursor = next },
+    applyRows: async (_h, rows, next) => { leader.snapshots++; for (const r of rows) leader.rows.set(r.claudeSessionId, r); leader.cursor = next },
+    onFlow: (_h, _sid, _name, data) => { leader.flows.push(String((data as { text?: string }).text)) },
+  })
+  hostSide = host.attach(toLeader)
+  return { cut, get up() { return up }, idle: () => leaderSide!.idle() }
+}
+
+async function hostOf(over: Partial<Parameters<typeof FactLog.open>[0]> = {}) {
+  const log = await FactLog.open({ dir, walnutId: 'w1', flushMs: 1, durable: false, ...over })
+  const own: SessionRecord[] = [{ claudeSessionId: 's1', taskId: 't', project: 'P', process_status: 'running', mode: 'default', host: 'devbox', judge: 'host' } as SessionRecord]
+  const host = new HostChannel({ log, walnutId: 'w1', hostId: 'devbox', ownRows: async () => own })
+  return { log, host }
+}
+
+const seqs = (l: Leader) => l.applied.map((r) => r.seq)
+const range = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => a + i)
+
+describe('exactly once across a cut after any record', () => {
+  const N = 24
+  for (let k = 1; k <= N; k++) {
+    it(`cut after record ${k}, more written while down, then reconnect`, async () => {
+      const { log, host } = await hostOf()
+      const leader = new Leader()
+      const first = connect(host, leader, { cutAfterSeq: k })
+      for (let i = 1; i <= N; i++) {
+        log.append(`s${i % 3}`, i % 4 ? 'session:tool-use' : 'session:result', { i })
+        await log.flush()
+        await tick()
+      }
+      await until(() => !first.up)
+      await first.idle()
+      const firstApplied = leader.applied.length
+      clockOffset = 120_000 // the leader comes back two minutes later
+      const second = connect(host, leader)
+      await until(() => leader.applied.length >= N)
+      await tick(5)
+      await second.idle()
+      expect(seqs(leader)).toEqual(range(1, N))
+      expect(leader.snapshots).toBe(0)
+      // What the first link applied was live; what came back after the cut is read back, late.
+      // (A record the cut caught between delivery and apply is sent again: it is in the second part.)
+      expect(firstApplied).toBeLessThanOrEqual(k)
+      expect(leader.applied.slice(0, firstApplied).every((r) => !r.late)).toBe(true)
+      expect(leader.applied.slice(firstApplied).every((r) => r.late)).toBe(true)
+      second.cut()
+      await log.close()
+    })
+  }
+})
+
+describe('moving to another leader', () => {
+  it('a copied leader that is behind resumes from its own position; the old one is refused after', async () => {
+    const { log, host } = await hostOf()
+    const a = new Leader(1)
+    const la = connect(host, a)
+    for (let i = 1; i <= 6; i++) log.append('s1', 'session:tool-use', { i })
+    await log.flush()
+    await until(() => a.applied.length === 6)
+    const b = a.copy() // the standby's copy as of record 6
+    for (let i = 7; i <= 10; i++) log.append('s1', 'session:tool-use', { i })
+    await log.flush()
+    await until(() => a.applied.length === 10)
+    la.cut()
+    // B takes over with a higher permit: it gets 7..14, once.
+    for (let i = 11; i <= 14; i++) log.append('s1', 'session:tool-use', { i })
+    await log.flush()
+    const lb = connect(host, b)
+    await until(() => b.applied.length === 14)
+    expect(seqs(b)).toEqual(range(1, 14))
+    // A wakes with its old permit: refused, nothing replayed to it, nothing trimmed by it.
+    const before = a.applied.length
+    const lateA = connect(host, a)
+    await until(() => !lateA.up)
+    expect(a.applied.length).toBe(before)
+    expect(log.permit).toBe(2)
+    lb.cut()
+    await log.close()
+  })
+
+  it('a leader below what the log keeps gets the host\'s rows, then the rest, once', async () => {
+    const { log, host } = await hostOf({ compactBytes: 1 })
+    const a = new Leader(1)
+    const la = connect(host, a)
+    for (let i = 1; i <= 8; i++) log.append('s1', i % 2 ? 'session:user-line' : 'session:result', { i })
+    await log.flush()
+    await until(() => a.applied.length === 8)
+    await until(() => log.acked === 8)
+    await log.compact()
+    expect(log.floor).toBeGreaterThan(8)
+    la.cut()
+    const b = new Leader(2) // no position at all
+    for (let i = 9; i <= 12; i++) log.append('s1', 'session:tool-use', { i })
+    log.append('s1', 'row', { patch: { messageCount: 4 } }) // already in the rows: not applied again
+    await log.flush()
+    const lb = connect(host, b)
+    await until(() => b.applied.length === 4)
+    expect(b.snapshots).toBe(1)
+    expect(b.rows.get('s1')).toMatchObject({ judge: 'host' })
+    expect(seqs(b)).toEqual([9, 10, 11, 12])
+    await until(() => b.cursor?.seq === 13)
+    expect(seqs(b)).toEqual([9, 10, 11, 12])
+    lb.cut()
+    await log.close()
+  })
+})
+
+describe('readers', () => {
+  it('a listener gets the rows and then live records; its acks trim nothing; deltas reach only caught-up readers', async () => {
+    const { log, host } = await hostOf()
+    const got: ChannelFrame[] = []
+    let side: ReturnType<HostChannel['attach']> | null = null
+    side = host.attach({ send: (f) => got.push(f), close: () => {} })
+    host.flow('s1', 'session:text-delta', { text: 'early' }) // not listening yet: dropped
+    side.onFrame({ ch: 'sf', op: 'listen', walnutId: 'w1' })
+    await until(() => got.some((f) => f.op === 'rows'))
+    await tick(5)
+    log.append('s1', 'session:tool-use', {})
+    await log.flush()
+    await until(() => got.some((f) => f.op === 'facts'))
+    host.flow('s1', 'session:text-delta', { text: 'live' })
+    side.onFrame({ ch: 'sf', op: 'ack', logId: log.logId, upTo: 1 })
+    await tick(5)
+    expect(log.acked).toBe(0)
+    expect(got.filter((f) => f.op === 'flow').map((f) => (f as { data: { text: string } }).data.text)).toEqual(['live'])
+    await log.close()
+  })
+
+  it('a leader from another Walnut is refused', async () => {
+    const { log, host } = await hostOf()
+    const got: ChannelFrame[] = []
+    let closed = ''
+    const side = host.attach({ send: (f) => got.push(f), close: (w) => { closed = w ?? '' } })
+    side.onFrame({ ch: 'sf', op: 'resume', walnutId: 'other', hostId: 'devbox', permitNumber: 9, logId: log.logId, after: 0 })
+    await tick(5)
+    expect(closed).toBe('walnut_mismatch')
+    expect(log.permit).toBe(0)
+    await log.close()
+  })
+})
+
+describe('latency', () => {
+  it('a fact is applied on the leader within 1 s of the host writing it (durable, live link)', async () => {
+    const { log, host } = await hostOf({ durable: true, flushMs: 15 })
+    const leader = new Leader()
+    const l = connect(host, leader)
+    await tick(10)
+    const worst: number[] = []
+    for (let i = 0; i < 40; i++) {
+      const t0 = performance.now()
+      log.append('s1', 'session:tool-use', { i })
+      await until(() => leader.applied.length === i + 1)
+      worst.push(performance.now() - t0)
+    }
+    const max = Math.max(...worst)
+    console.log(`session channel in-process latency: max ${max.toFixed(1)} ms, median ${worst.sort((a, b) => a - b)[20].toFixed(1)} ms`)
+    expect(max).toBeLessThan(1000)
+    l.cut()
+    await log.close()
+  })
+})
