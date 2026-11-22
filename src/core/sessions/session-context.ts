@@ -97,8 +97,8 @@
 
 import { ownReadbackEnabled } from './own-readback-mark.js'
 import { keepsThreads } from '../org/keeps-threads.js'
-import { PROOF_IN_PLACE_RULE, THREAD_ONE_PLACE_RULE, THREADS_KEPT_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE, THREADS_MOVE_RULE } from '../org/thread-rules.js'
-import { threadsKeptNow } from '../org/threads-kept.js'
+import { PROOF_IN_PLACE_RULE, THREAD_ONE_PLACE_RULE, THREAD_ONE_PLACE_KEPT_RULE, THREADS_KEPT_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE, THREADS_MOVE_RULE } from '../org/thread-rules.js'
+import { threadsKeptNow, threadsKeptOn } from '../org/threads-kept.js'
 import { TEAM_CHARTER } from '../team-charter.js'
 import { WORK_PLACE_RULE, taskDirLine } from '../work-place.js'
 import { PRIVATE_TASK_RULE } from '../private-tasks/rule.js'
@@ -282,18 +282,18 @@ const AWAY_LETTERS_RULE =
  * there, so no other task pays for them. Its threads stay with it: no node above takes them.
  */
 const TASK_THREADS_WHERE = 'the Threads view beside your chat, opened from its ⋮ menu or its Threads chip'
-const TASK_THREADS_LAST = 'When you hand one of his asks to a task, name the thread (task_create, task_send or task_start with thread): the thread '
+const taskThreadsLast = (onePlace: string): string => 'When you hand one of his asks to a task, name the thread (task_create, task_send or task_start with thread): the thread '
   + 'lists that task and stays yours. A thread in needs makes your task read Needs you, and his phone buzzes for it when he is away. '
   + 'Routine progress on a subject goes to its thread (Walnut asks where each stands at every turn end), a letter only for what needs him right away. '
-  + AWAY_LETTERS_RULE + THREAD_ONE_PLACE_RULE
+  + AWAY_LETTERS_RULE + onePlace
 /** A versioned block (instruction-diff.ts `task-threads`): a running session hears it at once when turned on, and that it is gone when turned off. */
 function taskThreadsBlock(rules: string): string {
   const version = `v${createHash('sha1').update(rules).digest('hex').slice(0, 8)}`
   return versionedBlock(`Threads, the user's setting for your task (${version}): he turned Threads on for it, so you keep them.`, version, rules)
 }
-export const TASK_THREADS_LINE = taskThreadsBlock(threadsLine(TASK_THREADS_WHERE, TASK_THREADS_LAST).trim())
+export const TASK_THREADS_LINE = taskThreadsBlock(threadsLine(TASK_THREADS_WHERE, taskThreadsLast(THREAD_ONE_PLACE_RULE)).trim())
 /** The same with threads_kept_by_walnut on: another version, so a running session hears the change. */
-export const TASK_THREADS_KEPT_LINE = taskThreadsBlock(threadsKeptLine(TASK_THREADS_WHERE, TASK_THREADS_LAST).trim())
+export const TASK_THREADS_KEPT_LINE = taskThreadsBlock(threadsKeptLine(TASK_THREADS_WHERE, taskThreadsLast(THREAD_ONE_PLACE_KEPT_RULE)).trim())
 /** The tasks a reply is about, as live pills under it (core/org/message-about.ts; 2026-10-31, the user). */
 export const MESSAGE_ABOUT_LINE =
   'End each reply the user reads with one line of its own naming the tasks it is about: '
@@ -368,10 +368,13 @@ export const MAIN_NEWS_ONCE_LINE =
  * 2026-11-04, the user: one place per update, so what is on one of his Threads stays there, away or
  * not (THREAD_ONE_PLACE_RULE).
  */
-export const AWAY_INBOX_LINE =
-  AWAY_LETTERS_RULE + THREAD_ONE_PLACE_RULE + ' When he asks for a report at a time ("a report tomorrow morning"), schedule it with '
+const awayInboxLine = (onePlace: string): string =>
+  AWAY_LETTERS_RULE + onePlace + ' When he asks for a report at a time ("a report tomorrow morning"), schedule it with '
   + 'org_report at:<time>; Walnut sends it then: what needs him with the one-tap answers, what finished, what moved. '
   + 'A letter of that absence never takes the proof out of the chat: ' + PROOF_IN_PLACE_RULE + '\n\n'
+export const AWAY_INBOX_LINE = awayInboxLine(THREAD_ONE_PLACE_RULE)
+/** The same with threads_kept_by_walnut on. */
+export const AWAY_INBOX_KEPT_LINE = awayInboxLine(THREAD_ONE_PLACE_KEPT_RULE)
 
 /**
  * 2d. The org above the work (src/core/org/): the main agent talks to one
@@ -460,7 +463,7 @@ export function orgRoleParts(task: OrgRoleTask): Array<[PromptBlockId, string]> 
 /** The away, Brief, Threads and walnut-about rules of Main and every lead, in that order. */
 const ORG_MANUALS = (): string => {
   const kept = threadsKeptNow()
-  return AWAY_INBOX_LINE + (briefOffNow() ? BRIEF_OFF_LINE + (kept ? THREADS_KEPT_OFF_LINE : THREADS_OFF_LINE) : BRIEF_LINE + (kept ? THREADS_KEPT_LINE : THREADS_LINE)) + MESSAGE_ABOUT_LINE
+  return (kept ? AWAY_INBOX_KEPT_LINE : AWAY_INBOX_LINE) + (briefOffNow() ? BRIEF_OFF_LINE + (kept ? THREADS_KEPT_OFF_LINE : THREADS_OFF_LINE) : BRIEF_LINE + (kept ? THREADS_KEPT_LINE : THREADS_LINE)) + MESSAGE_ABOUT_LINE
 }
 
 /** Main's or a lead's role lines, a task's Threads rules when it keeps them ('' for any other task). */
@@ -493,6 +496,8 @@ export async function buildSessionContext(
 ): Promise<SessionContext> {
   // The Brief's switch as the config says now (org/brief-off.ts): ORG_MANUALS reads it synchronously.
   await briefOffOn()
+  // ...and Walnut keeping the Threads (org/threads-kept.ts), which ORG_MANUALS and the task block read too.
+  await threadsKeptOn()
   const { composed, task } = await composeSessionContext(taskId, host, opts)
   // What a cap moved goes to the task's memory folder before the session can read the pointer to it.
   const { writeOverflows } = await import('./memory-folder.js')

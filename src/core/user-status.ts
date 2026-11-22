@@ -42,7 +42,7 @@ import { cutEnd } from './text-cut.js';
 import type { ThreadCounts } from './org/thread-view.js';
 import { outlivingLine, type OutlivingSource } from './sessions/outliving-work.js';
 import type { SameAskFold } from './same-ask.js';
-import type { StatusThreadLine, StatusThreadNew } from './sessions/status-threads.js';
+import type { StatusThreadLine, StatusThreadNew, ThreadMark } from './sessions/status-threads.js';
 import { reportDecision, type AskMemory, type StatusDecision } from './ask-decision.js';
 import type { ActionItem } from './action-needed.js';
 // The web reads Action needed through this module's alias (@open-walnut/user-status).
@@ -233,10 +233,10 @@ export interface StatusReport {
   threads_new?: StatusThreadNew[];
   /** The thread its ask is about (FOR_USER_ASK_THREAD, a thread id): the ask is placed there, never stored here. */
   ask_thread?: string;
-  /** Titles for its untitled threads (FOR_USER_THREAD_TITLE, threads_kept_by_walnut): written to them, never stored here. */
-  thread_titles?: Array<{ id: string; title: string }>;
-  /** Its threads whose answer he reacted to (FOR_USER_THREAD_SEEN, threads_kept_by_walnut): marked known, never stored here. */
-  threads_seen?: string[];
+  /** Titles for its untitled threads (FOR_USER_THREAD_TITLE, threads_kept_by_walnut), each with its newest message when asked: written to them, never stored here. */
+  thread_titles?: ThreadMark[];
+  /** Its threads whose answer he reacted to (FOR_USER_THREAD_SEEN, threads_kept_by_walnut), likewise: marked known, never stored here. */
+  threads_seen?: ThreadMark[];
   /** Its state came from its thread lines, not FOR_USER_STATE (status-threads.ts settleStateFromThreads). */
   from_threads?: true;
 }

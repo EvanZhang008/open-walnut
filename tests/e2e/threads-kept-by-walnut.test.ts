@@ -23,10 +23,10 @@ vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader())
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
-import { addTask, updateTaskRaw } from '../../src/core/task-manager.js'
-import { createSessionRecord } from '../../src/core/session-tracker.js'
+import { addTask, getTask, updateTaskRaw } from '../../src/core/task-manager.js'
+import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
-import { askStatus, settleStatusQuestion } from '../../src/core/sessions/status-question.js'
+import { askStatus, settleStatusQuestion, statusKeepsThreads } from '../../src/core/sessions/status-question.js'
 import { threadsKeptNow } from '../../src/core/org/threads-kept.js'
 import { readThreads } from '../../src/core/org/threads-store.js'
 import { resetSummaryNudges } from '../../src/core/org/thread-summary-stop.js'
@@ -123,7 +123,8 @@ describe('Walnut keeps a lead\'s Threads', () => {
     ].join('\n'))
     expect(await askStatus(taskId, SID, Date.now())).toBe(true)
     const q = fake.askSideQuestion.mock.calls[0][0] as string
-    expect(q).toContain('"Orchard fence" (answered, he wrote since your answer)')
+    expect(q).toContain('"Orchard fence" (answered, he wrote elsewhere since your answer here)')
+    expect(q).toContain('His messages since, newest first:')
     expect(q).toContain('"ok, now order the seeds for spring" (new, untitled)')
     expect(q).not.toContain('FOR_USER_THREAD_NEW')
     const byId = new Map((await readThreads(taskId)).threads.map((t) => [t.id, t]))
@@ -154,5 +155,34 @@ describe('Walnut keeps a lead\'s Threads', () => {
     expect(vents.closed).toBeUndefined()
     expect(vents.known).toBeUndefined()
     expect(vents.state).toBe('answered')
+  })
+
+  it('on: a lead keeps its own state and opens no subject from a line', async () => {
+    await settleStatusQuestion(SID, 10_000)
+    const before = (await readThreads(taskId)).threads.length
+    fakeSession((q) => [
+      'FOR_USER_STATE: done',
+      'FOR_USER_NOW: The seed order went to the purchasing team.',
+      `FOR_USER_THREAD: ${refOf(q, 'Spring seed order')} | waiting | The purchasing team orders on Monday.`,
+      'FOR_USER_THREAD_NEW: waiting | Compost delivery | The truck comes Tuesday.',
+    ].join('\n'))
+    expect(await askStatus(taskId, SID, Date.now())).toBe(true)
+    const report = (await getTask(taskId)).status_report!
+    expect(report.state).toBe('done')
+    expect(report.from_threads).toBeUndefined()
+    const threads = (await readThreads(taskId)).threads
+    expect(threads.length).toBe(before)
+    expect(threads.find((t) => t.id === SEEDS)).toMatchObject({ state: 'pending', reply: 'The purchasing team orders on Monday.' })
+  })
+
+  it('on: a session whose engine takes no status question keeps the old asks', async () => {
+    expect(await statusKeepsThreads(SID)).toBe(true)
+    const other = '44444444-5555-6666-7777-000000000002'
+    // One active session per task: the other engine's session belongs to another lead.
+    const otherLead = (await addTask({ title: 'Orchard VP', project: 'Garden' })).task.id
+    await updateTaskRaw(otherLead, { org_role: 'lead' }, { source: 'test' })
+    await createSessionRecord(other, otherLead, 'Garden', '/repo/garden', { title: 'Orchard VP on another engine' })
+    await updateSessionRecord(other, { engine: 'codex' })
+    expect(await statusKeepsThreads(other)).toBe(false)
   })
 })

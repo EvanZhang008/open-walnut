@@ -10,6 +10,7 @@
  * Off keeps every path as before it. No store import here: the prompt builder imports this.
  */
 import { experimentCache } from '../experimental-cache.js';
+import { threadsKeptNow } from './threads-kept.js';
 
 /** The switch itself, for the runtime that follows it (boards/choice-threads.ts). */
 export const briefOffFlag = experimentCache('brief_off');
@@ -24,3 +25,7 @@ export const briefOffOn = flag.on;
 /** What a brief_write hears while the Brief is off: a success that wrote nothing, so an older prompt never retries it. */
 export const BRIEF_OFF_NOTE = 'The Brief is turned off here (experiment brief_off): nothing was written and nothing needs to be. '
   + 'The user reads your Threads grouped by state instead: keep each thread current with thread_update. Do not call brief_write again.';
+/** The same with threads_kept_by_walnut on (threads-kept.ts): Walnut writes the threads from the status answer. */
+export const BRIEF_OFF_KEPT_NOTE = 'The Brief is turned off here (experiment brief_off): nothing was written and nothing needs to be. '
+  + 'The user reads your Threads grouped by state instead, and Walnut writes where each stands from your status answer at each turn\'s end. Do not call brief_write again.';
+export const briefOffNote = (): string => (threadsKeptNow() ? BRIEF_OFF_KEPT_NOTE : BRIEF_OFF_NOTE);

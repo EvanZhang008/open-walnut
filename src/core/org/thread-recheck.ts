@@ -21,6 +21,7 @@ import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
 import { threadDeadline, threadOverdue, type ThreadOverdue } from './thread-view.js';
 import type { OrgThread, ThreadRecheck } from './threads-model.js';
 import { keepsThreads } from './keeps-threads.js';
+import { threadsKeptNow } from './threads-kept.js';
 import { ANSWERED_THERE_RECHECK } from '../answered-there.js';
 
 /** The send source of the note (org-enabled.ts ORG_OFF_BLOCKED_SOURCES, task-wait-resume.ts). */
@@ -62,6 +63,12 @@ export function threadRecheckBody(due: readonly DueThread[], nowMs: number): str
     const ago = agoWords(nowMs - Date.parse(o.since));
     if (o.why === 'needs') {
       return `- ${t.id} ${q(t.title)}: waits on him with nothing new since ${ago}${o.deadline ? `; a linked task is due ${o.deadline}` : ''}. Check it still stands without asking him again. If nothing changed, leave the thread unchanged; do not rewrite its summary just to change a checked time. Only update it for real news, or close it when evidence shows it no longer needs him.`;
+    }
+    // Walnut keeps the threads from the status answer (threads-kept.ts): the line is the write.
+    if (threadsKeptNow()) {
+      return o.unanswered
+        ? `- ${t.id} ${q(t.title)}: his last message (${ago}) has no reply on this thread (state ${t.state}). Answer it now; your status line for it at this turn's end gives it its summary and state (waiting if it only went to a team), and a decision he must make is thread_update into needs.`
+        : `- ${t.id} ${q(t.title)}: still ${t.state} with nothing new since ${ago}; he does not see it. Say where it stands in your status line for it at this turn's end: answered with the result, waiting if a team has it, done if finished.`;
     }
     return o.unanswered
       ? `- ${t.id} ${q(t.title)}: his last message (${ago}) has no reply on this thread (state ${t.state}). Answer it now: thread_update with the summary and answered or needs, or pending if it only went to a team.`

@@ -35,7 +35,7 @@ import { log } from '../../logging/index.js'
 import { body, header, param, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { sendLinkFailure } from '../middleware/link-failure-answer.js'
-import { BRIEF_OFF_NOTE, briefOffOn } from '../../core/org/brief-off.js'
+import { briefOffNote, briefOffOn } from '../../core/org/brief-off.js'
 
 export const briefV1Router = Router()
 
@@ -63,7 +63,7 @@ briefV1Router.get('/tasks/:id/brief', route(async (req, res) => {
   // person's client (no caller session) gets none, so no screen shows a letter nobody keeps.
   if (await briefOffOn()) {
     const reader = !!header(req, 'x-walnut-caller-sid')
-    res.json({ task_id: task.id, title: task.title, off: true, note: BRIEF_OFF_NOTE, brief: reader && task.brief ? briefOut(task.brief) : null })
+    res.json({ task_id: task.id, title: task.title, off: true, note: briefOffNote(), brief: reader && task.brief ? briefOut(task.brief) : null })
     return
   }
   const tasks = await listTasks()
@@ -146,7 +146,7 @@ briefV1Router.put('/tasks/:id/brief', route(async (req, res) => {
   // Off: a success that writes nothing, so a session on an older prompt moves on instead of retrying.
   if (await briefOffOn()) {
     log.task.info('brief write skipped: the Brief is off', { taskId: task.id, by: header(req, 'x-walnut-caller-sid') ? 'session' : 'human' })
-    res.json({ task_id: task.id, title: task.title, off: true, written: false, note: BRIEF_OFF_NOTE })
+    res.json({ task_id: task.id, title: task.title, off: true, written: false, note: briefOffNote() })
     return
   }
   const b = body(req)

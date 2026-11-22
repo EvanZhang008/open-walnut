@@ -99,9 +99,10 @@ export async function staleSummariesAtStop(callerSid: string | undefined, nowMs 
     const { listTasksByIds } = await import('../task-manager.js');
     const task = (await listTasksByIds([taskId]).catch(() => []))[0];
     if (!task || !keepsThreads(task) || task.phase === 'COMPLETE') return null;
-    // Walnut keeps the threads from the status answer at this turn's end (threads-kept.ts): no write is held for.
-    const { threadsKeptOn } = await import('./threads-kept.js');
-    if (await threadsKeptOn()) return null;
+    // Walnut keeps the threads from the status answer at this turn's end (threads-kept.ts): no write
+    // is held for, unless its last status ask failed (then this turn's summary is the node's).
+    const { threadsKeptNow } = await import('./threads-kept.js');
+    if (threadsKeptNow() && await (await import('../sessions/status-question.js')).statusKeepsThreads(sid)) return null;
     const { readThreads } = await import('./threads-store.js');
     const threads = (await readThreads(taskId)).threads;
     const stale = staleSummaries(threads, nowMs)

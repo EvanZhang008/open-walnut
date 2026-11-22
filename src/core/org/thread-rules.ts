@@ -32,7 +32,8 @@ export const THREADS_KEPT_RULE =
   + 'reacted to it in his own words (a reply about it, an ok or thanks, a follow-up that builds on it; unsure is not seen). His '
   + 'Threads view shows a thread only when it needs him or its result is in. Call thread_update yourself only for what a line '
   + 'cannot do: a decision he must make (needs, with its options, user_kind and user_kind_why), a close he asked for in his own '
-  + 'words (close with user_words quoting him), and a merge (merge_into), split or move.';
+  + 'words (close with user_words quoting him), and a merge (merge_into), split or move. When Walnut could not ask you (a '
+  + '"threads to tidy" note, or a held turn end, names threads), write what it names with thread_update.';
 
 export const THREADS_KNOWN_RULE =
   'Clean your threads yourself, on every turn that touches one: what he already knows leaves the card, what is still news '
@@ -64,6 +65,13 @@ export const THREAD_ONE_PLACE_RULE =
   'One place per update, the thread first: a result, answer or update about one of his threads goes to that thread only '
   + '(thread_update: its summary and state; Walnut files your chat reply under his message), whether he is in your chat or away, '
   + 'never also a letter; a decision about it is that thread\'s needs state (with user_kind), not a letter: Walnut buzzes his phone for it when he is away. His inbox is only for '
+  + 'what needs him and has no thread.';
+
+/** The same with threads_kept_by_walnut on: the thread's update is its status line, not a call. */
+export const THREAD_ONE_PLACE_KEPT_RULE =
+  'One place per update, the thread first: a result, answer or update about one of his threads goes to that thread only '
+  + '(your status line for it at the turn\'s end; Walnut files your chat reply under his message), whether he is in your chat or away, '
+  + 'never also a letter; a decision about it is that thread\'s needs state (thread_update with user_kind), not a letter: Walnut buzzes his phone for it when he is away. His inbox is only for '
   + 'what needs him and has no thread.';
 
 /**
