@@ -245,6 +245,59 @@
   .home-navigation-scroll .todo-panel-item.todo-panel-item > .collapse-chevron { align-self: flex-start; margin-top: 3px; }
 }
 
+/* Hover-only actions never take a title's room (2026-11-22 review: titles wrapped 50 to 85 px short
+   of the row's edge, room kept for a ▶ and a ⋮ that show only on hover). With a pointer that hovers
+   they take no width: a card's sit at the end of its content, before the parts that always show (the
+   tier mark, the time), over the end of whatever is there; a list row's sit over its right edge. They
+   paint the row's own fill (its tint, --row-fill, over the panel's --bg, fading in over 6 px), so
+   showing them never reflows the title. A visible control keeps its room (a worker's put-back arrow
+   while it is out, the session-open chevron). A touch screen shows them always: they keep theirs. */
+@media (hover: hover) and (min-width: 769px) and (min-height: 501px), (hover: hover) and (min-width: 769px) and (pointer: fine) {
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card) { --row-fill: var(--hover-bg, rgba(0, 0, 0, 0.04)); }
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card).todo-pinned-card-needs-action { --row-fill: var(--bg-hover); }
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card).todo-pinned-card-active { --row-fill: var(--accent-subtle); }
+  .home-navigation-scroll .todo-panel-item { --row-fill: var(--row-pill-bg, transparent); }
+  /* A card's actions, in their order (put-back, ▶, ⋮) with the card's 6 px gap: the first one's
+     negative margin takes back the room of all of them, so together they take none. */
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card) > .task-kebab-wrapper { order: 1; margin-left: -28px; }
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card) > .task-start-btn { order: 1; margin-left: -54px; }
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card) > .worker-fold-row-back { order: 1; margin-left: -54px; }
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card) > .worker-fold-row-back:has(+ .task-start-btn) { margin-left: -80px; }
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card) > :is(.task-start-btn, .worker-fold-row-back) + :is(.task-start-btn, .task-kebab-wrapper) { margin-left: 0; }
+  /* A list row's are placed over the title row's right edge already: it keeps no room for them. */
+  .home-navigation-scroll .todo-item-title-row,
+  .home-navigation-scroll .todo-item-title-row:has(> .task-start-btn) { padding-right: 0; }
+  /* The fill: on the ▶ and the put-back arrow always (they are hidden until shown), on the ⋮'s
+     holder only while its button shows. Each also fades in over the 6 px to its left; one with an
+     action before it fills that gap instead. */
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card, .todo-item-title-row) > :is(.task-start-btn, .worker-fold-row-back),
+  .home-navigation-scroll :is(.todo-panel-item:hover .todo-item-title-row, .todo-pinned-card:hover, .todo-focus-card:hover) > .task-kebab-wrapper,
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card, .todo-item-title-row) > .task-kebab-wrapper:is([data-menu-open], :has(> .task-kebab-btn:focus-visible)) {
+    background: linear-gradient(var(--row-fill), var(--row-fill)), var(--bg);
+  }
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card, .todo-item-title-row) > :is(.task-start-btn, .worker-fold-row-back):hover,
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card, .todo-item-title-row) > :is(.task-start-btn, .worker-fold-row-back):focus-visible {
+    background: linear-gradient(var(--accent-subtle), var(--accent-subtle)), linear-gradient(var(--row-fill), var(--row-fill)), var(--bg);
+  }
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card, .todo-item-title-row) > :is(.task-start-btn, .worker-fold-row-back)::before,
+  .home-navigation-scroll :is(.todo-panel-item:hover .todo-item-title-row, .todo-pinned-card:hover, .todo-focus-card:hover) > .task-kebab-wrapper::before,
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card, .todo-item-title-row) > .task-kebab-wrapper:is([data-menu-open], :has(> .task-kebab-btn:focus-visible))::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 100%;
+    width: 6px;
+    background: linear-gradient(to right, transparent, var(--row-fill)), linear-gradient(to right, transparent, var(--bg));
+    pointer-events: none;
+  }
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card, .todo-item-title-row) > :is(.task-start-btn, .worker-fold-row-back) + :is(.task-start-btn, .task-kebab-wrapper)::before {
+    background: linear-gradient(var(--row-fill), var(--row-fill)), var(--bg);
+  }
+  /* The ▶ holds its fade: on a card it sits in the flow (a list row's is placed already). */
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card) > .task-start-btn { position: relative; }
+}
+
 .home-navigation-scroll .todo-group-project .todo-panel-item.task-grouped { padding-left: calc(38px + var(--folder-depth, 0) * 16px); }
 .home-navigation-scroll .todo-panel-item .todo-row-pill { left: 8px; }
 /* The estimate is the CONTENT box: 22 + the 6px padding = the rendered 28px row. At 28 an
@@ -575,7 +628,7 @@
 }
 
 /* A search hit's ask, folded to its question (SearchAskLine.tsx): "Needs you", the question in full
-   (a title: it wraps), and the shared button with the tool look (.btn-ghost) that opens the full card
+   (a title: it wraps), and the shared Show button with the tool look (.btn-ghost) that opens the full card
    under it. The results keep scanning as a list (2026-11-21). The words sit on the button's middle
    (6 px above a 16 px line, the 28 px button's centre), so a wrapped question keeps its first line there. */
 .search-ask-line { display: flex; flex-direction: column; gap: 4px; min-width: 0; container-type: inline-size; }
@@ -587,7 +640,8 @@
 .search-ask-fill { flex: 1 1 auto; }
 .search-ask-line:not(.is-open) .search-ask-fill { display: none; }
 .search-ask-more { font-size: var(--font-size-xs); color: var(--fg-muted); }
-.search-ask-actions-below[hidden] { display: none; }
+/* Gone while nothing is left to answer (an answer sent from here); its card stays mounted inside. */
+.search-ask-line[hidden], .search-ask-actions-below[hidden] { display: none; }
 /* A narrow list (the default panel at 1024): the mark and the button take a line of their own and
    the question the whole width under them, never a sliver between the two. */
 @container (max-width: 399px) {

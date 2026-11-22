@@ -1,7 +1,7 @@
 /**
  * A search hit's ask, folded (web/src/components/tasks/SearchAskLine.tsx; 2026-11-21 UI audit, and
  * the 2026-11-22 review of it):
- *   - folded, the line shows the question in full (a title, never cut) beside an Answer button, a
+ *   - folded, the line shows the question in full (a title, never cut) beside a Show button, a
  *     real <button> with the shared tool look, and no card;
  *   - opened, the card shows the question itself, so the line no longer repeats it;
  *   - what the user did in the card and has not sent (a multiple choice's ticks) survives a fold and

@@ -34,19 +34,16 @@ interface UseResizablePanelReturn {
   width: string;
   /** Raw percentage value */
   pct: number;
-  /** Programmatically set the panel width (clamped to min/max). It is stored, unless `save: false`:
-   *  a width for now only (a cap while another pane is open), and the stored one stays the user's. */
-  setPct: (pct: number, opts?: { save?: boolean }) => void;
-  /** Back to the stored width (or the default when none is stored): undoes a `save: false` set. */
-  restore: () => void;
+  /** Programmatically set the panel width (clamped to min/max), and store it. */
+  setPct: (pct: number) => void;
   panelRef: React.RefObject<HTMLDivElement | null>;
   /** Spread onto the drag handle: `<div {...handleProps} />` */
   handleProps: { onPointerDown: (e: React.PointerEvent) => void };
   /** Whether the user set a width (one is stored, or a drag or a set ran): until then a caller may
    *  draw its own CSS default rather than `pct`. */
   custom: boolean;
-  /** Whether the stored width is one the user dragged (not one a caller set): a caller that sizes
-   *  the panel for a layout of its own keeps a dragged width as it is. */
+  /** Whether the width is one the user dragged (from the first move of a drag; a set by a caller
+   *  clears it): a caller that sizes the panel for a layout of its own keeps a dragged width. */
   dragged: boolean;
   /** Forget the stored width: back to the default, and `custom` false. */
   reset: () => void;
@@ -121,7 +118,7 @@ export function useResizablePanel(storageKey: string, defaultPct = PANEL_PCT_DEF
       // onEnd persists this ref and can run before React renders the last move (WebKit does):
       // set it here, not only from the render, or the drag saves the width it started from.
       pctRef.current = next;
-      if (!movedRef.current) { movedRef.current = true; setCustom(true); }
+      if (!movedRef.current) { movedRef.current = true; setCustom(true); setDragged(true); }
       setPct(next);
     },
     onEnd: () => {
@@ -133,24 +130,18 @@ export function useResizablePanel(storageKey: string, defaultPct = PANEL_PCT_DEF
       if (!movedRef.current) return;
       try { localStorage.setItem(storageKey, String(pctRef.current)); } catch { /* ignore */ }
       markDragged(storageKey, true);
-      setDragged(true);
     },
   });
 
-  const setClampedPct = useCallback((v: number, opts?: { save?: boolean }) => {
+  const setClampedPct = useCallback((v: number) => {
     const next = fit(v);
     setPct(next);
-    if (opts?.save === false) return;
     setCustom(true);
-    // Programmatic sets (e.g. the graduated session-area width) aren't part of
-    // a drag, so they persist immediately.
+    // Programmatic sets aren't part of a drag, so they persist immediately.
     try { localStorage.setItem(storageKey, String(next)); } catch { /* ignore */ }
     markDragged(storageKey, false);
     setDragged(false);
   }, [storageKey]);
-
-  // Called from an effect, never a dependency of one, so it needs no stable identity.
-  const restore = () => { setPct(readStoredPct(storageKey, defaultRef.current)); };
 
   const reset = useCallback(() => {
     try { localStorage.removeItem(storageKey); } catch { /* ignore */ }
@@ -160,5 +151,5 @@ export function useResizablePanel(storageKey: string, defaultPct = PANEL_PCT_DEF
     setDragged(false);
   }, [storageKey]);
 
-  return { width: `${pct}%`, pct, setPct: setClampedPct, restore, panelRef, handleProps: { onPointerDown }, custom, dragged, reset };
+  return { width: `${pct}%`, pct, setPct: setClampedPct, panelRef, handleProps: { onPointerDown }, custom, dragged, reset };
 }

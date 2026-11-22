@@ -4,7 +4,8 @@
  *     blank two thirds of the window;
  *   - the New task draft's mode cards sit right above the input they lead to, not centred
  *     hundreds of pixels above it;
- *   - the Quick question slot opened beside a column gets at least that column's share;
+ *   - the Quick question slot beside a column gets at least that column's share, in every order of
+ *     opening and after a reload (the width is derived, never written by the program);
  *   - expanding the sidebar never narrows the task panel (its width is a share of the window
  *     less the collapsed rail, not of Home);
  *   - a page that is one list of cards keeps a readable width.
@@ -56,20 +57,21 @@ describe("Home's panes go by content", () => {
     expect(rule(globals, '.draft-session-body > *')).toMatch(/margin-top:\s*auto/)
   })
 
-  it('opening the Quick question slot caps the columns at their share, and the task panel width ignores the sidebar', () => {
-    expect(main).toMatch(/sessionAreaPctBesideChat\(count\)/)
+  it('the session area\'s width is derived from the layout, and the task panel width ignores the sidebar', () => {
+    // Round 2 capped it in an effect on the slot's opening and wrote the graduated width in another on
+    // a column added: Quick question first then a column, or a reload with both open, missed the cap
+    // (2026-11-22 review). The width shown is now one derivation (columnSizing.sessionAreaShownPct).
+    expect(main).toMatch(/const sessionAreaShown = sessionAreaShownPct\(usersSessionWidth\(sessionPanel\), colCount, chatVisible && !phoneLayout\)/)
+    expect(main).toMatch(/style=\{sessionColumns\.length > 0 \|\| triagePanelOpen \? \{ width: `\$\{sessionAreaShown\}%` \} : undefined\}/)
+    // Nothing writes the session area's width but a drag: no effect sizes it in turn.
+    expect(main).not.toMatch(/sessionPanel\.setPct\(/)
+    expect(main).not.toMatch(/sessionPanel\.width\b/)
+    // A drag starts from the width that shows (a capped one too), never from the stored one.
+    expect(main).toMatch(/useResizablePanel\('walnut-session-panel-width-v2', 35, 'right', \{ measure: \(\) => sessionAreaShownRef\.current \}\)/)
     expect(main).toMatch(/style=\{todoShown \? \{ width: todoWidth \} : undefined\}/)
     expect(main).not.toMatch(/width: todoPanel\.width/)
     expect(rule(globals, '.main-page')).toMatch(/--home-rail-width:\s*56px/)
     expect(rule(globals, '.sidebar.collapsed')).toMatch(/width:\s*56px/)
-  })
-
-  it('the cap beside the Quick question never covers a width the user dragged, and is never stored', () => {
-    // Round 1 stored the cap (setPct persists), so opening Quick question overwrote the width the user
-    // had dragged, for good (2026-11-22 review). A width a caller set comes back when the slot closes.
-    expect(main).toMatch(/count > 0 && !sessionPanel\.dragged && sessionPanel\.pct > cap/)
-    expect(main).toMatch(/sessionPanel\.setPct\(cap, \{ save: false \}\)/)
-    expect(main).toMatch(/if \(closed && cappedBesideChatRef\.current\) \{[^}]*sessionPanel\.restore\(\)/)
   })
 
   it('every card-list page keeps a readable width', () => {
@@ -80,55 +82,46 @@ describe("Home's panes go by content", () => {
   })
 })
 
-describe('useResizablePanel: a dragged width is the user\'s, a width for now only is never stored', () => {
+describe('useResizablePanel: a dragged width is the user\'s', () => {
   const KEY = 'walnut-session-panel-width-v2'
   function memoryStorage(seed: Record<string, string>) {
     const m = new Map(Object.entries(seed))
     return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => { m.set(k, String(v)) }, removeItem: (k: string) => { m.delete(k) }, raw: m }
   }
 
-  it('a drag stores its width and says it was dragged, and a reload still knows', async () => {
+  it('a drag is the user\'s from its first move, stores its width with its mark, and a reload still knows', async () => {
     const store = memoryStorage({ [KEY]: '50' })
     vi.stubGlobal('localStorage', store)
     vi.stubGlobal('window', { innerWidth: 1000 })
     const { useResizablePanel } = await import('../../web/src/hooks/useResizablePanel')
-    const panel = useResizablePanel(KEY, 35)
+    // The width that shows is a capped 40, not the stored 50: the drag starts from what shows.
+    const panel = useResizablePanel(KEY, 35, 'right', { measure: () => 40 })
     expect(panel.dragged).toBe(false)
+    stateWrites.length = 0
     // The divider is left of the area ('right'): dragging 120 px left widens it by 12%.
-    drag.onStart?.(); drag.onMove?.({ dx: -120 }); drag.onEnd?.()
-    expect(store.raw.get(KEY)).toBe('62')
+    drag.onStart?.(); drag.onMove?.({ dx: -120 })
+    // Mid-drag it is already his (no frame drawn as the program's width), and it moved from 40.
+    expect(stateWrites).toEqual([true, true, 52])
+    drag.onEnd?.()
+    expect(store.raw.get(KEY)).toBe('52')
     expect(store.raw.get(`${KEY}:dragged`)).toBe('1')
-    expect(useResizablePanel(KEY, 35)).toMatchObject({ pct: 62, dragged: true })
-    // A width a caller sets (the graduated one, a new column) is no longer the user's.
+    expect(useResizablePanel(KEY, 35)).toMatchObject({ pct: 52, dragged: true, custom: true })
+    // A width a caller sets is no longer the user's.
     useResizablePanel(KEY, 35).setPct(40)
     expect(store.raw.get(KEY)).toBe('40')
     expect(store.raw.has(`${KEY}:dragged`)).toBe(false)
     vi.unstubAllGlobals()
   })
 
-  it('a width for now only leaves the stored one, and restore brings it back', async () => {
-    const store = memoryStorage({ [KEY]: '62' })
+  it('a press that never moves sets nothing', async () => {
+    const store = memoryStorage({})
     vi.stubGlobal('localStorage', store)
     const { useResizablePanel } = await import('../../web/src/hooks/useResizablePanel')
-    const panel = useResizablePanel(KEY, 35)
+    useResizablePanel(KEY, 35)
     stateWrites.length = 0
-    panel.setPct(50, { save: false })
-    expect(stateWrites).toEqual([50])
-    expect(store.raw.get(KEY)).toBe('62')
-    panel.restore()
-    expect(stateWrites).toEqual([50, 62])
-    expect(useResizablePanel(KEY, 35).pct).toBe(62)
-    vi.unstubAllGlobals()
-  })
-
-  it('with nothing stored, restore goes back to the default', async () => {
-    vi.stubGlobal('localStorage', memoryStorage({}))
-    const { useResizablePanel } = await import('../../web/src/hooks/useResizablePanel')
-    const panel = useResizablePanel(KEY, 35)
-    stateWrites.length = 0
-    panel.setPct(50, { save: false })
-    panel.restore()
-    expect(stateWrites).toEqual([50, 35])
+    drag.onStart?.(); drag.onEnd?.()
+    expect(stateWrites).toEqual([])
+    expect(store.raw.size).toBe(0)
     vi.unstubAllGlobals()
   })
 })

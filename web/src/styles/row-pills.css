@@ -93,3 +93,8 @@ html .todo-panel .tag-pill-group > .tag-chip-overflow { padding-left: 3px; }
     order: 2;
   }
 }
+/* With a pointer that hovers, the row's hover-only ▶ and ⋮ sit over its right edge on the row's fill
+   (home-navigation.css): the content keeps no room for them, so the title runs to the edge. */
+@media (hover: hover) and (min-width: 769px) and (min-height: 501px), (hover: hover) and (min-width: 769px) and (pointer: fine) {
+  .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] { padding-right: 0; }
+}

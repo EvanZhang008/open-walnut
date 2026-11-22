@@ -168,6 +168,8 @@ const NO_PAINTED_WORDS: Record<string, string> = {
   'web/src/styles/tasks-page.css :: .tp-group-kebab-wrap': CONTROL,
   // A tree line's take-out arrow, shown on the line's hover (WorkerFoldTree.tsx).
   'web/src/styles/worker-fold.css :: .worker-fold-action': CONTROL,
+  // The row's put-back arrow, laid out but hidden until the row's hover so showing it never reflows the title.
+  'web/src/styles/worker-fold.css :: @media (hover: hover) and (min-width: 769px) and (min-height: 501px), (hover: hover) and (min-width: 769px) and (pointer: fine) { .status-section-card .worker-fold-row-back': CONTROL,
   'web/src/styles/human-inbox-items.css :: .hii-inert-slot': SLOT,
   // The split inbox's row buttons, shown on the row's hover; hidden, they still hold their width.
   'web/src/styles/inbox-split.css :: .hib-index-row .hib-row-actions': CONTROL,

@@ -7,7 +7,10 @@ import {
   saveColWeights,
   minColPct,
   sessionAreaPctBesideChat,
+  sessionAreaShownPct,
+  sessionWidthForCount,
   todoPanelWidth,
+  usersSessionWidth,
 } from '../../web/src/pages/columnSizing';
 
 /**
@@ -252,5 +255,51 @@ describe("Home's row: the pane just opened gets its share", () => {
     expect(todoPanelWidth(25)).toBe('calc((100vw - var(--home-rail-width, 56px)) * 0.25)');
     expect(todoPanelWidth(33.37)).toBe('calc((100vw - var(--home-rail-width, 56px)) * 0.3337)');
     expect(todoPanelWidth(25)).not.toMatch(/%/);
+  });
+});
+
+// The session area's width as shown: one derivation from the layout, never two effects writing in
+// turn (2026-11-22 review: Quick question opened first, or already open at a load, missed the cap;
+// a column added wiped a dragged width; an older version's own width counted as automatic or not).
+describe("Home's row: the session area's width is derived from the layout", () => {
+  // The panel as useResizablePanel reports it: nothing stored, an older version's own graduated
+  // width, an older version's drag (no mark), and a drag of this version (marked).
+  const none = { pct: 35, custom: false, dragged: false };
+  const olderAuto = { pct: 65, custom: true, dragged: false };
+  const olderDrag = { pct: 58.4, custom: true, dragged: false };
+  const drag = { pct: 65, custom: true, dragged: true };
+  // Every way to reach a layout ends in the same (panel, columns, Quick question open) state, so
+  // the order of opening and a reload cannot change what shows.
+  const shown = (panel: typeof none, count: number, besideChat: boolean) => sessionAreaShownPct(usersSessionWidth(panel), count, besideChat);
+
+  it('a width the user dragged is his, in every layout; any other is the program\'s', () => {
+    expect(usersSessionWidth(none)).toBeNull();
+    expect(usersSessionWidth(olderAuto)).toBeNull();
+    expect(usersSessionWidth({ ...olderAuto, pct: 70 })).toBeNull();
+    // An older version's drag has no mark and stays his; a marked drag is his whatever its value.
+    expect(usersSessionWidth(olderDrag)).toBe(58.4);
+    expect(usersSessionWidth(drag)).toBe(65);
+    for (const count of [1, 2, 3]) for (const chat of [false, true]) {
+      expect(shown(olderDrag, count, chat)).toBe(58.4);
+      expect(shown(drag, count, chat)).toBe(65);
+    }
+  });
+
+  it('the program\'s width goes by the columns open, opening or closing', () => {
+    expect([1, 2, 3, 4, 6].map((n) => shown(none, n, false))).toEqual([65, 65, 70, 70, 70]);
+    expect([1, 2, 3].map((n) => shown(olderAuto, n, false))).toEqual([65, 65, 70]);
+    expect(sessionWidthForCount(0)).toBe(0);
+  });
+
+  it('beside the Quick question slot it is capped so the slot gets a column\'s share, whichever opened first', () => {
+    // One column: 65% would leave the slot a third of the row beside it.
+    expect(shown(none, 1, true)).toBe(50);
+    expect(shown(olderAuto, 1, true)).toBe(50);
+    // From two columns the graduated width already leaves the slot its share.
+    expect(shown(none, 2, true)).toBe(65);
+    expect(shown(none, 3, true)).toBe(70);
+    for (const n of [1, 2, 3, 4]) expect(shown(none, n, true)).toBeLessThanOrEqual(sessionAreaPctBesideChat(n));
+    // Closing the slot gives the graduated width back, with nothing to restore.
+    expect(shown(none, 1, false)).toBe(65);
   });
 });

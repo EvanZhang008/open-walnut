@@ -134,7 +134,7 @@ import { withDetectedOwner } from '@/components/sessions/draft-work-in';
 import { knownHomeOf } from '@/utils/home-folder';
 import { withHomeFolder } from '@/components/sessions/draft-home-default';
 import { reconcileActiveSession } from '@/stores/active-session';
-import { loadColWeights, saveColWeights, resizeAtBoundary, sessionAreaPctBesideChat, todoPanelWidth } from './columnSizing';
+import { loadColWeights, saveColWeights, resizeAtBoundary, sessionAreaShownPct, todoPanelWidth, usersSessionWidth } from './columnSizing';
 import { HomeEmptyPane } from './HomeEmptyPane';
 import {
   HOME_CHAT_VISIBLE_DEFAULT, LS_HOME_CHAT_VISIBLE_KEY, autoDraftMayTakeFocus, firstDraftDecisionReady, focusHolderOf, homeChatChosenOpen, homeTaskPanelShown, readHomeChatVisible, shouldAutoOpenFirstDraft,
@@ -185,15 +185,6 @@ const SS_SESSION_KEY_LEGACY = 'open-walnut-home-session-panel';
 // ── Session column queue helpers ──
 // Pure column-queue operations live in ./sessionColumns.ts so they can be
 // unit-tested without React. See that file for the layout invariant rationale.
-
-// Session-area width as % of the viewport, by column count. 65% is the practical
-// max alongside a readable chat column; from 3 columns up we take the whole 70% the
-// resizable panel allows (useResizablePanel's PANEL_PCT_MAX) or each column is
-// unreadably thin. Indexes past the end clamp to the last entry, so a custom count
-// of 4-6 gets the same 70% rather than falling back to a narrower 2-column width.
-const SESSION_WIDTH_BY_COUNT = [0, 65, 65, 70];
-const sessionWidthForCount = (count: number): number =>
-  SESSION_WIDTH_BY_COUNT[Math.min(Math.max(count, 0), SESSION_WIDTH_BY_COUNT.length - 1)];
 
 /** The strip this window keeps (homeColumnsField: a phone has its own). */
 const COLUMNS_FIELD: LayoutField = homeColumnsField();
@@ -927,7 +918,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Resizable panels
   const todoPanel = useResizablePanel('open-walnut-todo-width', 25, 'left');
   const todoWidth = todoPanelWidth(todoPanel.pct);
-  const sessionPanel = useResizablePanel('walnut-session-panel-width-v2', 35);
+  // The session area's width is derived (sessionAreaShown below); a drag starts from what shows.
+  const sessionAreaShownRef = useRef<number | null>(null);
+  const sessionPanel = useResizablePanel('walnut-session-panel-width-v2', 35, 'right', { measure: () => sessionAreaShownRef.current });
 
   // Merge sessionPanel.panelRef (for width resize observer) with auto-animate's
   // callback ref on the sessions container. Must be stable — a new function
@@ -988,59 +981,17 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     },
   }), [colSplitPointerDown]);
 
-  // Graduated session area width — use total session count (not visible) so tabbed
-  // sessions still get full width. Only auto-set when count increases.
-  // The columns a load restores are not opened by the user: a width kept from before (dragged, or
-  // set for these columns last time) stays across a reload (2026-11-15: it went back every load);
-  // with none kept, the restored columns get their graduated width as before.
-  const prevColCountRef = useRef<number | null>(null);
-  const sessionWidthKept = sessionPanel.custom;
-  useEffect(() => {
-    const count = sessionColumns.length + (triagePanelOpen ? 1 : 0);
-    if (prevColCountRef.current === null) {
-      prevColCountRef.current = count;
-      if (!sessionWidthKept && count > 0) sessionPanel.setPct(sessionWidthForCount(count));
-      return;
-    }
-    if (count === prevColCountRef.current) return;
-    const prev = prevColCountRef.current;
-    prevColCountRef.current = count;
-    // Only auto-set width when opening panels (0→1, 1→2, 2→3), not when closing
-    if (count > prev && count > 0) {
-      sessionPanel.setPct(sessionWidthForCount(count));
-    }
-  }, [sessionColumns.length, triagePanelOpen, sessionPanel.setPct, sessionWidthKept]);
-
-  // The Quick question slot opening beside open columns (the rail, a task shown in it, a
-  // draft giving it back): the slot gets at least one column's share of the row
-  // (sessionAreaPctBesideChat). Only on the opening itself, and never over a width the user
-  // dragged on this divider (2026-11-22 review: the cap overwrote it for good): his split
-  // beside the slot is kept across a close, a reopen and a reload. The cap is for now only,
-  // never stored, so the width a caller set (the graduated one) comes back when the slot closes.
-  const prevChatVisibleRef = useRef(chatVisible);
-  const cappedBesideChatRef = useRef(false);
-  useEffect(() => {
-    const opened = chatVisible && !prevChatVisibleRef.current;
-    const closed = !chatVisible && prevChatVisibleRef.current;
-    prevChatVisibleRef.current = chatVisible;
-    if (closed && cappedBesideChatRef.current) {
-      cappedBesideChatRef.current = false;
-      sessionPanel.restore();
-      return;
-    }
-    if (!opened || phoneLayout) return;
-    const count = sessionColumns.length + (triagePanelOpen ? 1 : 0);
-    const cap = sessionAreaPctBesideChat(count);
-    if (count > 0 && !sessionPanel.dragged && sessionPanel.pct > cap) {
-      cappedBesideChatRef.current = true;
-      sessionPanel.setPct(cap, { save: false });
-    }
-  }, [chatVisible]); // eslint-disable-line react-hooks/exhaustive-deps -- only the opening and closing count
+  // Every column open counts, a tabbed one too, so tabbed sessions still get their width.
+  const colCount = sessionColumns.length + (triagePanelOpen ? 1 : 0);
+  // The session area's width, from the layout as it is now (sessionAreaShownPct): the user's
+  // dragged width as he left it, else the graduated width for these columns, capped beside the
+  // Quick question slot. Nothing writes it, so every order of opening and a reload agree.
+  const sessionAreaShown = sessionAreaShownPct(usersSessionWidth(sessionPanel), colCount, chatVisible && !phoneLayout);
+  sessionAreaShownRef.current = sessionAreaShown;
 
   // Swap in the layout saved for THIS column count. Layouts are stored per count,
   // so opening a 3rd panel doesn't destroy the 2-column split the user tuned —
   // closing it restores the old one verbatim instead of leaving a stretched guess.
-  const colCount = sessionColumns.length + (triagePanelOpen ? 1 : 0);
   useEffect(() => {
     setColWeights(prev => (prev.length === colCount ? prev : loadColWeights(colCount, localStorage)));
   }, [colCount]);
@@ -3995,7 +3946,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       <div
         ref={sessionsAreaCombinedRef}
         className={`main-page-sessions-area${sessionColumns.length === 0 && !triagePanelOpen ? ' collapsed' : ''}`}
-        style={sessionColumns.length > 0 || triagePanelOpen ? { width: sessionPanel.width } : undefined}
+        style={sessionColumns.length > 0 || triagePanelOpen ? { width: `${sessionAreaShown}%` } : undefined}
       >
         {triagePanelOpen && (
           <div

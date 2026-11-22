@@ -150,6 +150,40 @@ export function sessionAreaPctBesideChat(count: number): number {
   return (100 * count) / (count + 1);
 }
 
+// Session-area width (%) by column count. 65% is the practical max alongside a readable
+// chat column; from 3 columns up it takes the whole 70% the resizable panel allows
+// (useResizablePanel's PANEL_PCT_MAX) or each column is unreadably thin. Counts past the
+// end clamp to the last entry, so a custom count of 4-6 gets 70% too.
+const SESSION_WIDTH_BY_COUNT = [0, 65, 65, 70];
+export function sessionWidthForCount(count: number): number {
+  return SESSION_WIDTH_BY_COUNT[Math.min(Math.max(count, 0), SESSION_WIDTH_BY_COUNT.length - 1)]!;
+}
+
+/**
+ * The width the user chose for the session area, or null when it is the program's to size.
+ * A drag marks its width (`dragged`). A stored width with no mark was kept by an older version,
+ * which also stored the graduated width by itself on every column added: one of those exact
+ * values (65, 70) was the program's; any other unmarked width is a drag, and stays his.
+ */
+export function usersSessionWidth(panel: { pct: number; custom: boolean; dragged: boolean }): number | null {
+  if (panel.dragged) return panel.pct;
+  if (!panel.custom) return null;
+  return SESSION_WIDTH_BY_COUNT.includes(panel.pct) ? null : panel.pct;
+}
+
+/**
+ * The session area's width as shown, derived from the layout on every render and never written
+ * back (2026-11-22 review: two effects writing in turn missed the cap whenever Quick question
+ * opened first, or was already open at a load, and a column added wiped a dragged width):
+ * the user's own width as he left it; else the graduated width for the columns open, capped
+ * beside the Quick question slot so the slot gets at least one column's share.
+ */
+export function sessionAreaShownPct(userPct: number | null, count: number, besideChat: boolean): number {
+  if (userPct !== null) return userPct;
+  const graduated = sessionWidthForCount(count);
+  return besideChat && count > 0 ? Math.min(graduated, sessionAreaPctBesideChat(count)) : graduated;
+}
+
 /**
  * The task panel's CSS width for its stored share `pct`. The share is of the window
  * less the collapsed rail (`--home-rail-width` on `.main-page`), so it reads the same
