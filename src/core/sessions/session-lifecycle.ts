@@ -171,7 +171,16 @@ export async function persistSessionModeChange(
   const updated = await updateSessionRecord(sessionId, { modeChosen: true, autoPermissionDenial: null, ...updates, mode });
   emitSessionStatusChanged(updated, {}, ['*']);
 
-  if (updated.taskId && existingRecord.mode !== mode) {
+  await reconcileModeSlots(updated, sessionId, existingRecord.mode, mode);
+  return updated;
+}
+
+/**
+ * A session's mode moved: its task's plan and exec slots follow (the leader's, for a session its
+ * host runs too: sessions/host-judged-controls.ts).
+ */
+export async function reconcileModeSlots(updated: SessionRecord, sessionId: string, fromMode: SessionMode | undefined, mode: SessionMode): Promise<void> {
+  if (updated.taskId && fromMode !== mode) {
     try {
       const { getTask, linkSessionSlot, clearSessionSlot } = await import('../task-manager.js');
       const task = await getTask(updated.taskId);
@@ -202,7 +211,6 @@ export async function persistSessionModeChange(
       }
     } catch { /* task not found or lock contention — ignore */ }
   }
-  return updated;
 }
 
 /**
@@ -230,6 +238,8 @@ export async function changeSessionMode(
   mode: SessionMode,
   updates: Partial<SessionRecord> = {},
 ): Promise<SessionRecord> {
+  // A session its host runs: its mode is its host's to keep and apply (host-judged-controls.ts).
+  if (judgeOf(sessionId) === 'host') return (await import('./host-judged-controls.js')).changeModeOnHost(existingRecord, sessionId, mode, updates);
   const updated = await persistSessionModeChange(existingRecord, sessionId, mode, updates);
 
   if (engineCaps(existingRecord.engine).modeControl === 'config-options') {
@@ -244,6 +254,19 @@ export async function changeSessionMode(
   });
 
   return updated;
+}
+
+/**
+ * A mode change named by the session alone: the host's side of a leader's mode change of a session
+ * it runs (host-judged-controls.ts changeModeOnHost), on its own record. Answers the mode it kept.
+ */
+export async function changeSessionModeOf(sessionId: string, mode: SessionMode): Promise<{ mode: SessionMode }> {
+  if (!SESSION_MODE_IDS.includes(mode)) throw new SessionControlError(`mode must be one of ${SESSION_MODE_IDS.join(', ')}`, 400);
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const record = await getSessionByClaudeId(sessionId);
+  if (!record) throw new SessionControlError('session not found', 404);
+  const updated = await changeSessionMode(record, sessionId, mode);
+  return { mode: updated.mode as SessionMode };
 }
 
 /** How long a mode change waits on a live ACP adapter before it goes on in the background. */
@@ -764,10 +787,8 @@ export async function terminateSession(
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw new SessionControlError('Session not found', 404);
 
-  // A session its host runs and judges: its host stops it, whole (host-calls.ts `lifecycle`).
-  const { hostJudgedSession } = await import('../../providers/host-judged-runner.js');
-  const onHost = hostJudgedSession(sessionId);
-  if (onHost) return await onHost.call('terminateSession', [opts], 'lifecycle') as TerminateResult;
+  // A session its host runs and judges: its host stops it, whole (host-judged-controls.ts).
+  if (judgeOf(sessionId) === 'host') return (await import('./host-judged-controls.js')).terminateOnHost(sessionId, opts);
 
   const { sessionRunner } = await import('../../providers/claude-code-session.js');
 

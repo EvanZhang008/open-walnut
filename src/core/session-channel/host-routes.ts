@@ -60,7 +60,7 @@ export interface HostRoutesOptions {
   /** Where a start's large prompt is spilled (0700, files 0600). */
   spillDir: string
   /** The session controls of host-calls.ts `lifecycle` (sessions/session-lifecycle.ts); tests pass their own. */
-  lifecycle?: { terminateSession(sid: string, opts?: unknown): Promise<unknown> }
+  lifecycle?: Record<string, (sid: string, ...args: unknown[]) => Promise<unknown>>
   /** The op test of a Bash call (lib/walnut-op-command.ts commandRunsOp); tests pass their own. */
   commandRunsOp?(command: string, op: string, file?: string): boolean
   now?: () => number

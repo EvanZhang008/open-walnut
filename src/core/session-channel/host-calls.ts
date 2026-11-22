@@ -26,7 +26,7 @@ export const HOST_CALL_ALLOWLIST = {
     'reinitialize', 'respawnOnCurrentPrompt', 'recoverCancelledForSession', 'markExpectedTeardown', 'undoExpectedTeardown',
     'settleInFlightTurn', 'syncTask', 'syncLane', 'adoptNewCwd', 'getOrAttachLiveSession', 'findOrAttachAcpSession',
   ],
-  lifecycle: ['terminateSession'],
+  lifecycle: ['terminateSession', 'changeSessionModeOf'],
 } as const satisfies Record<'session' | 'acp' | 'runner' | 'lifecycle', readonly string[]>
 
 export type HostCallTarget = keyof typeof HOST_CALL_ALLOWLIST
