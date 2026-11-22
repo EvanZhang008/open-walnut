@@ -34,6 +34,8 @@ function stub(name: string, mode = 'good'): string {
     'case $m in fail) exit 1;; hangterm) trap "" TERM;; *) trap \'echo "$n $$ term" >> "$d/events"; exit 0\' TERM;; esac',
     'r=0; tr=0',
     'while :; do',
+    // A stub whose test dir is gone ends: nothing it reports to exists any more.
+    '  [ -d "$d" ] || exit 0',
     '  m=$(cat "$d/$n.mode"); now=$(date +%s); [ "$m" = hangterm ] && trap "" TERM',
     '  case $m in hang|hangterm) ;; *) b=$(cat "$d/$n.busy" 2>/dev/null || echo 0); echo "$now $b $$" > "$WALNUT_LAUNCHER_DIR/hb.$$" && mv -f "$WALNUT_LAUNCHER_DIR/hb.$$" "$WALNUT_LAUNCHER_DIR/heartbeat";; esac',
     // <name>.adopts: the version says what it takes over (detached/adopts) before it is ready.
@@ -117,7 +119,13 @@ function request(exe: string, extra: Record<string, string> = {}): string {
 /** Kill only what this test started: its launchers, and the stubs whose command names this test's dir. */
 function killAll(): void {
   fs.writeFileSync(path.join(state, 'daemon-boot.stop'), 'stop\n')
-  for (const child of children.splice(0)) { try { child.kill('SIGKILL') } catch { /* gone */ } }
+  // Each launcher is its own process group (spawned detached), and the stubs it runs stay in it:
+  // ending the group ends a stub the runs file does not name yet (2026-11-22: ten stubs outlived
+  // their test on a Mac, each forking every 0.2 s for a day).
+  for (const child of children.splice(0)) {
+    if (child.pid && child.pid > 1) { try { process.kill(-child.pid, 'SIGKILL') } catch { /* gone */ } }
+    try { child.kill('SIGKILL') } catch { /* gone */ }
+  }
   for (const r of runs()) {
     let command = ''
     try { command = execFileSync('ps', ['-o', 'command=', '-p', String(r.pid)], { encoding: 'utf8' }).trim() } catch { continue }
