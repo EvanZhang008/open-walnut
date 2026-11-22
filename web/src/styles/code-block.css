@@ -275,8 +275,8 @@
 .md-code-icon-done { display: none; }
 .md-code-copy[data-state="copied"] .md-code-icon-copy { display: none; }
 .md-code-copy[data-state="copied"] .md-code-icon-done { display: block; }
-.md-code-copy[data-state="copied"] :is(.md-code-icon, .md-code-copy-label) { color: var(--success, #34c759); }
-.md-code-copy[data-state="failed"] :is(.md-code-icon, .md-code-copy-label) { color: var(--warning, #ff9500); }
+.md-code-copy[data-state="copied"] :is(.md-code-icon, .md-code-copy-label) { color: var(--success); }
+.md-code-copy[data-state="failed"] :is(.md-code-icon, .md-code-copy-label) { color: var(--warning); }
 
 /* Wrap: per block, `data-wrap` on the frame (code-block-actions.ts). A block
    with no line too long for it has nothing to wrap: no Wrap button.

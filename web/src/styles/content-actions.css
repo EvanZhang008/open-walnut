@@ -7,7 +7,7 @@
 }
 /* Sent: the CEO has it. The compact (icon) form says so by its icon's colour; the full form says
    "Sent to CEO". The keys themselves are the button family. */
-.content-actions [data-state='done'] svg { color: var(--success, var(--fg)); }
+.content-actions [data-state='done'] svg { color: var(--success); }
 
 /* The Talk to CEO box (components/content/CeoComposer.tsx). */
 .ceo-composer {

@@ -19,8 +19,6 @@
      3.7:1 (accent) and 2.0:1 (amber) against #F5F5F7, under WCAG's 4.5:1; these clear it
      (5.4:1 and 5.2:1). Dark surfaces do not need them, there the twins equal the originals. */
   --accent-text: #0060CC;
-  /* Text and icons on a solid --accent or --error fill (the main action, a destructive confirm). */
-  --on-accent: #FFFFFF;
   --priority-important-text: #9E5300;
   /* Virtual-group cluster outline — soft accent, strong enough to read as one box
      but never competing with a task's own status background. */
@@ -5949,7 +5947,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
    hover), never a box of their own, and they wrap with the text around them. */
 .task-id-pill,
 .session-id-pill {
-  color: var(--accent-text, var(--accent));
+  color: var(--accent-text);
   cursor: pointer;
 }
 .task-id-pill:hover,

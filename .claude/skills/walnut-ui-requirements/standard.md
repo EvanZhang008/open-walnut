@@ -132,9 +132,9 @@ Counted on 2026-11-21 by `tests/web/ui-standard-ratchet.test.ts` (per file, in
   circle) and `styles/inline-answer.css`.
 - 100 rules in 45 files give a `*-btn`, `*-button`, `*-pill` or `*-chip` class its own fill and
   corner instead of a `.btn` variant.
-- 1263 `<button>` elements in 448 TSX files carry no `btn` class (choice controls with role tab,
+- 1261 `<button>` elements in 447 TSX files carry no `btn` class (choice controls with role tab,
   radio, switch, checkbox or option aside). A new file starts at 0.
-- 92 raw `#007aff` / `#0a84ff` in 24 files where `var(--accent)` belongs.
+- 21 raw `#007aff` / `#0a84ff` in 9 files where `var(--accent)` belongs.
 - Values written where a token belongs (per declaration, `tests/web/ui-token-scan.ts`):
   `rawColour`, `radiusNotToken`, `pillRadius` (87: the pill-shaped controls and labels),
   `fontSizeOffScale`, `shadowLiteral`, `zIndexLiteral`, `spacingOffGrid`. Their counts per file are
