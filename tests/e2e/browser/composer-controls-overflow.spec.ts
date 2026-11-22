@@ -38,6 +38,34 @@ test('wide composer keeps only full model and mode inline; add menu holds reply 
   await shootComposer(panel, 'wide-add-menu', 420);
 });
 
+test('a row with room for the full controls keeps the full model name, however little room that is', async ({ page }) => {
+  await mockControlsSession(page, CTRL_SESSION);
+  const panel = await openControlsSession(page, { narrow: false });
+  await expect(barOf(panel)).not.toHaveClass(/is-condensed/);
+  // The row's slack is its spacer. Widening the send group by the spacer less `leftPx`
+  // leaves the row exactly that much room past the full controls, on the real fit path.
+  const slack = await barOf(panel).evaluate((bar) => bar.parentElement!.querySelector('.chat-input-controls-spacer')!.getBoundingClientRect().width);
+  const send = await panel.locator('.chat-send-group').first().evaluate((el) => el.getBoundingClientRect().width);
+  const leaveRoom = async (leftPx: number) => page.evaluate((px) => {
+    let style = document.getElementById('pw-send-widen') as HTMLStyleElement | null;
+    if (!style) { style = document.createElement('style'); style.id = 'pw-send-widen'; document.head.appendChild(style); }
+    style.textContent = `.chat-send-group { min-width: ${px}px !important; }`;
+  }, Math.floor(send + slack - leftPx));
+  const model = controlOf(panel, 'model').locator('button');
+  await leaveRoom(4);
+  await expect(barOf(panel)).not.toHaveClass(/is-condensed/);
+  await expect(model).toContainText('Fable 5.1');
+  await expect(model).toContainText('High');
+  // A few px short of the full row: then, and only then, the short form.
+  await leaveRoom(-12);
+  await expect(barOf(panel)).toHaveClass(/is-condensed/);
+  await expect(model).toHaveText(/^Fable\s*45%$/);
+  await leaveRoom(4);
+  await expect(barOf(panel)).not.toHaveClass(/is-condensed/);
+  await expect(model).toContainText('Fable 5.1');
+  await expectSingleRow(panel);
+});
+
 test('narrow composer condenses the row: Bypass and the short model name with its percentage', async ({ page }) => {
   await mockControlsSession(page, CTRL_SESSION);
   await mockControlsSession(page, CTRL_FILLER);

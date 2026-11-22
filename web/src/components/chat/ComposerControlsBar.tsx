@@ -256,7 +256,10 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
      *  (the model pill's percentage rides along only when the whole row still fits
      *  with it), and which controls go into the "..." menu. */
     const shapeIn = (room: number): RowShape & { compact: boolean } => {
-      const compact = room < Math.max(220, naturalWidth);
+      // Short forms only when the full ones do not fit. A fixed floor here (220px)
+      // condensed a row that had room for the full name ("Opus 35%" with blank
+      // space beside it, 2026-11-22) once the composer got its reading width.
+      const compact = room < naturalWidth;
       const withDetail = !compact || detailFits(rowShort, detailTotal, room);
       const input: ControlFitInput[] = inline.map((c) => ({
         id: c.id,
