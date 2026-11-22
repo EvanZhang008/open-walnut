@@ -94,7 +94,7 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   'src/core/sessions/session-extras.ts': { calls: 1, kind: 'wake-recheck', why: 'the folder picker\'s listing under boundHostRead; a lost read answers degraded' },
   'src/core/sessions/session-lifecycle.ts': { calls: 2, kind: 'wake-recheck', why: 'a recheck a person opens reads one snapshot; a lost one says it could not check' },
   'src/core/sessions/session-rewind.ts': { calls: 2, kind: 'wake-recheck', why: 'a rewind probe; a lost one reads as none and the caller reads its own copy' },
-  'src/core/sessions/session-stop.ts': { calls: 1, kind: 'wake-recheck', why: 'a stop is stored and sent again, on a schedule and when the host reconnects' },
+  'src/core/sessions/session-stop.ts': { calls: 2, kind: 'wake-recheck', why: 'a stop is stored and sent again, on a schedule and when the host reconnects' },
   'src/core/sessions/session-supervision.ts': { calls: 2, kind: 'wake-recheck', why: 'a lost set answers check again; a lost read serves the last known value' },
   'src/core/sessions/task-dir-place.ts': { calls: 5, kind: 'wake-recheck', why: 'an idempotent mkdir, under boundHostRead on another host' },
   'src/core/sessions/task-start.ts': { calls: 6, kind: 'wake-recheck', why: 'cancels a start nobody confirmed (a failure asks the caller to retry after the reconnect), asks the pool whether a lost host\'s link is up before a move, and reads the local daemon\'s MCP capability' },

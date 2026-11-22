@@ -136,7 +136,7 @@ describe('a host-judged session', () => {
       hostId: 'devbox', renames: [], cursor: { logId: 'L', seq: 2 },
       rows: [{ sid: seeded, born: true, patch: { claudeSessionId: seeded, taskId: 'gate-task-b', project: 'p', host: 'devbox', judge: 'host', process_status: 'running', title: 'Host title', startedAt: 'x', lastActiveAt: 'x', messageCount: 1 } }],
     })
-    expect(applied).toEqual({ written: [seeded], skipped: [] })
+    expect(applied).toEqual({ written: [seeded], skipped: [], gone: [] })
     // The host's fields, the leader's own title.
     expect(await getSessionByClaudeId(seeded)).toMatchObject({ process_status: 'running', title: 'Seeded', judge: 'host' })
     // Another seed, a start the host refuses: the leader's again.
