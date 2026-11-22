@@ -68,6 +68,8 @@ export interface RemoteTargetOptions {
   applyPollMs?: number
   /** How long a running apply may go without a new heartbeat before the host is asked about it (default 20 s). */
   applyLateMs?: number
+  /** Changed content from which a batch applies as a background job (default APPLY_JOB_BYTES; 0: every batch). */
+  applyJobBytes?: number
   /** Variables for the receive runs there (tests: a kill point). */
   env?: Record<string, string>
 }
@@ -87,6 +89,8 @@ export class RemoteRefusal extends Error {
 /** One part of an upload (the daemon's upload budget, ssh-upload-budget.ts). */
 /** One fs.writePart part: a daemon frame's cap (ssh-upload-budget.ts), so no part outlasts a keepalive at the bulk pace. */
 const PART_BYTES = MAX_UPLOAD_FRAME_BYTES
+/** A batch changing this much content applies as a background job (5 GB took 339 to 390 s; a script stops at 600 s). */
+export const APPLY_JOB_BYTES = 512 * 1024 * 1024
 const READ_BYTES = 4 * 1024 * 1024
 const COMMAND_TIMEOUT_MS = 60_000
 const SHORT_RUN_MS = 2 * 60_000
@@ -120,6 +124,8 @@ export class RemoteStandbyTarget implements StandbyTransport {
   /** The spool's total when the batch under way started, and the batch being applied there. */
   private batchSpoolStart = 0
   private applying: number | null = null
+  /** The last script apply ran past its limit: the next one runs as a background job. */
+  private nextAsJob = false
   private link: DaemonLink | null = null
   /** The target's current files as last read or made, and the manifest file they came from. */
   private base: { ref: ManifestRef; files: BatchFile[] } | null = null
@@ -366,20 +372,32 @@ export class RemoteStandbyTarget implements StandbyTransport {
     }
     let answer: ApplyAnswer
     const applyStarted = performance.now()
-    // One job id per batch: a start sent again never runs the apply twice (remote-apply.ts).
-    const jobId = `hx-standby-${sha256(Buffer.from(`${this.dir}\n${manifest.batch}\n${manifest.takenAt}\n${upload.hash}`)).slice(0, 40)}`
-    const statusFile = path.join(this.incoming, statusFileName(jobId))
+    // A batch that may apply long (the first, a large one, or one after an apply ran past the
+    // script's limit) runs as a background job; the rest as one script run, which leaves no job,
+    // log or audit line on the host (a batch every 30 s would fill its job table: MAX_JOBS).
+    const changedBytes = puts.reduce((n, f) => { const b = before.get(f.p); return !b || b.h !== f.h ? n + f.size : n }, 0)
+    const asJob = this.nextAsJob || !viewed.state.current || changedBytes >= (this.o.applyJobBytes ?? APPLY_JOB_BYTES)
     try {
       this.open()
       this.applying = manifest.batch
-      answer = await runApplyJob<ApplyAnswer>(this.jobLink(), {
-        jobId, statusFile, pollMs: this.o.applyPollMs, lateMs: this.o.applyLateMs,
-        argv: this.receiveArgv('apply', ['--upload', file, '--verify', '--status', statusFile]),
-      })
+      if (asJob) {
+        // One job id per batch: a start sent again never runs the apply twice (remote-apply.ts).
+        const jobId = `hx-standby-${sha256(Buffer.from(`${this.dir}\n${manifest.batch}\n${manifest.takenAt}\n${upload.hash}`)).slice(0, 40)}`
+        const statusFile = path.join(this.incoming, statusFileName(jobId))
+        answer = await runApplyJob<ApplyAnswer>(this.jobLink(), {
+          jobId, statusFile, pollMs: this.o.applyPollMs, lateMs: this.o.applyLateMs,
+          argv: this.receiveArgv('apply', ['--upload', file, '--verify', '--status', statusFile]),
+        })
+        this.nextAsJob = false
+      } else {
+        answer = await this.receive<ApplyAnswer>('apply', ['--upload', file, '--verify'], SCRIPT_MAX_TIMEOUT_MS)
+      }
       this.stats.lastApplyMs = performance.now() - applyStarted
       this.applying = null
     } catch (err) {
       this.applying = null
+      // A script apply stopped at its limit: the next batch (this one's changes and more) runs as a job.
+      if (!asJob && err instanceof Error && /ran past \d+ s and was stopped/.test(err.message)) this.nextAsJob = true
       // Its end could not be followed (the link went, the start was refused): what the target holds
       // now says which. One that still runs there answers "busy": this batch counts as failed, and
       // the next starts from whatever it left.

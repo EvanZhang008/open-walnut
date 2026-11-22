@@ -31,7 +31,7 @@ afterEach(async () => {
 const settle = () => new Promise((r) => setTimeout(r, 30))
 
 /** Where every target here keeps its spool, and a quick poll of its apply. */
-const place = () => ({ dir: sb.target, spoolDir: path.join(sb.root, 'spool'), applyPollMs: 20, applyLateMs: 300 })
+const place = () => ({ dir: sb.target, spoolDir: path.join(sb.root, 'spool'), applyPollMs: 20, applyLateMs: 300, applyJobBytes: 0 })
 const spoolFiles = () => walkFiles(path.join(sb.root, 'spool'))
 function walkFiles(dir: string): string[] {
   if (!fs.existsSync(dir)) return []
@@ -240,6 +240,33 @@ describe('a standby target on another host', () => {
     const next = await batch(second)
     expect(next.ok && next.commit.batch).toBe(3)
     expect(l.state.applyRuns).toBe(3)
+    await expectCopyIsHome()
+  })
+
+  it('the first batch, a large one, and the one after a script apply ran past its limit apply as jobs; the rest as one script run', async () => {
+    sb = await sandbox('remote-apply-kind')
+    dbs.push(...seedHome(sb.home).dbs)
+    await settle()
+    const l = fakeStandbyHost(sb.root)
+    const t = new RemoteStandbyTarget({ connect: async () => l.link, ...place(), applyJobBytes: 1024 * 1024, linkWaitMs: 5_000 })
+    const step = async (change: () => void) => {
+      change()
+      await settle()
+      const out = await batch(t)
+      return { ok: out.ok, why: out.ok ? '' : out.reason, jobs: l.state.applyRuns, kept: l.jobs.size }
+    }
+    expect(await step(() => {})).toEqual({ ok: true, why: '', jobs: 1, kept: 1 })
+    // A few changed bytes: one script run, no job left on the host.
+    expect(await step(() => write(sb.home, 'memory/small.md', 'a few bytes\n'))).toEqual({ ok: true, why: '', jobs: 1, kept: 1 })
+    expect(await step(() => write(sb.home, 'memory/big.bin', crypto.randomBytes(2 * 1024 * 1024)))).toEqual({ ok: true, why: '', jobs: 2, kept: 2 })
+    // The script apply stopped at its limit (it applied nothing): the batch fails, and the next runs as a job.
+    l.state.fault = (cmd, params) => cmd === 'exec.script' && (params.args as string[])[3] === 'apply' ? { ok: true, code: null, stdout: '', stderr: '', timedOut: true, truncated: false } : undefined
+    const stopped = await step(() => write(sb.home, 'memory/small.md', 'changed\n'))
+    expect(stopped).toMatchObject({ ok: false, jobs: 2 })
+    expect(stopped.why).toMatch(/ran past 600 s and was stopped/)
+    l.state.fault = null
+    expect(await step(() => write(sb.home, 'memory/small.md', 'changed again\n'))).toEqual({ ok: true, why: '', jobs: 3, kept: 3 })
+    expect(await step(() => write(sb.home, 'memory/small.md', 'and again\n'))).toEqual({ ok: true, why: '', jobs: 3, kept: 3 })
     await expectCopyIsHome()
   })
 

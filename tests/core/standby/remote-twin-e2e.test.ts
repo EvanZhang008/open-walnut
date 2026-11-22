@@ -45,7 +45,8 @@ async function setUp(name: string): Promise<StandbyTwin> {
   return twin
 }
 
-const place = () => ({ dir: sb.target, spoolDir: path.join(sb.root, 'spool'), applyPollMs: 200, applyLateMs: 3_000 })
+// Every apply as a background job on the real daemon (the default runs small batches as one script run).
+const place = () => ({ dir: sb.target, spoolDir: path.join(sb.root, 'spool'), applyPollMs: 200, applyLateMs: 3_000, applyJobBytes: 0 })
 const target = (t: StandbyTwin, walnut = CLI, linkWaitMs = 30_000, env?: Record<string, string>) =>
   new RemoteStandbyTarget({ connect: () => t.connect(), ...place(), walnut, linkWaitMs, ...(env ? { env } : {}) })
 const batch = (r: RemoteStandbyTarget) => takeBatch({ home: sb.home, transport: r, stagingDir: path.join(sb.root, 'staging') })
