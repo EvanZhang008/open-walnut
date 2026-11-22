@@ -34,13 +34,13 @@ export function HostNetworkRelay({ net, onChanged }: { net: NetOverview; onChang
     {
       id: 'public',
       label: 'Public relays',
-      help: 'A free public service passes the traffic on when two of your machines cannot reach each other directly. It cannot read it, but it sees which of your machines talk.',
+      help: 'A free public service relays traffic between machines that cannot connect directly. It sees who talks, not what is said.',
       disabled: companion,
     },
     {
       id: 'none',
       label: 'No relay',
-      help: 'Only direct connections: machines on the same network, or one with an open address. Machines behind two home routers may not connect.',
+      help: 'Direct connections only: the same network, or an open address. Machines behind two home routers may not connect.',
       disabled: companion,
     },
   ];
@@ -98,7 +98,7 @@ export function HostNetworkRelay({ net, onChanged }: { net: NetOverview; onChang
             Who runs the public relays
           </DisclosureButton>
         }
-        help={about ? "n0, the makers of iroh, the network software Walnut uses. Their relays see your machines' internet addresses and which of them talk to each other, and their lookup service lists which relay each machine uses." : undefined}
+        help={about ? "n0, the makers of iroh, Walnut's network software. Their relays see your machines' addresses and which ones talk." : undefined}
       />
       {error && <SettingsRow state="error" data-testid="host-network-relay-error" label="Could not change the relay" error={error} />}
     </SettingsGroup>

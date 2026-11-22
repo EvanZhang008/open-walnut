@@ -101,7 +101,7 @@ export function BrowserSection() {
           label="Keep replays of agents' steps"
           help={st?.replayDays === 0
             ? 'Off: no picture of an agent\'s step is kept.'
-            : `A picture of each step an agent takes in your browser, so a task's Browser view can play it back. Kept on this computer only, never synced or backed up, and deleted after ${st?.replayDays ?? 7} day${st?.replayDays === 1 ? '' : 's'}${st?.replayBytes !== undefined ? `. Using ${sizeLine(st.replayBytes)} now (at most 2 GB)` : ''}.`}
+            : `A picture of each agent step, for a task's Browser view. Kept only on this computer and deleted after ${st?.replayDays ?? 7} day${st?.replayDays === 1 ? '' : 's'}${st?.replayBytes !== undefined ? `. Using ${sizeLine(st.replayBytes)} now (at most 2 GB)` : ''}.`}
           control={(
             <select id="browser-replay-days" className="settings-select" aria-label="Keep replays of agents' steps" data-testid="browser-replay-days"
               value={String(st?.replayDays ?? 7)} disabled={!st || busy === 'replay'}

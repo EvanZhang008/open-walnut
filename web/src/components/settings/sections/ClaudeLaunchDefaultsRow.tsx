@@ -65,7 +65,7 @@ export function ClaudeLaunchDefaultsRow({ config, save }: { config: Config; save
       <SettingsRow
         label="Default model"
         htmlFor="default-claude-model"
-        help="Claude Code sessions with no model of their own start on it. Not set: Walnut passes none and Claude Code's own setting decides."
+        help="Claude Code sessions with no model of their own start on it. Not set: Claude Code's own setting decides."
         error={model.error}
         data-testid="default-claude-model-row"
         control={
@@ -79,7 +79,7 @@ export function ClaudeLaunchDefaultsRow({ config, save }: { config: Config; save
       <SettingsRow
         label="Default effort"
         htmlFor="default-claude-effort"
-        help="Claude Code sessions with no effort of their own start at it, and keep it on a restart or resume. A pick when you create a task, a change in the session and a project's own default win. Not set: Walnut passes none and Claude Code's own setting decides."
+        help="Sessions with no effort of their own start at it; a task, session or project pick wins. Not set: Claude Code decides."
         error={effort.error}
         data-testid="default-claude-effort-row"
         control={

@@ -17,6 +17,14 @@ export const ORG_OFF_STOPS = [
 
 export const ORG_OFF_STILL = 'Still works: you can type to CEO or a VP in its chat, and tasks, their sessions, the Board and the inbox keep working.';
 
+/** The panel's one line while the org is off. */
+export const ORG_OFF_LINE = 'Off: CEO and the VPs do nothing on their own; you can still chat with them.';
+
+/** The switch row's hover: what it does now and what turning it off stops, said in full. */
+export function orgSwitchTitle(on: boolean): string {
+  return `${orgSwitchFooter(on)}\n\n${on ? 'Turning it off stops' : 'Off now'}:\n${ORG_OFF_STOPS.map((l) => `- ${l}.`).join('\n')}\n\n${ORG_OFF_STILL}`;
+}
+
 export function orgSwitchFooter(on: boolean): string {
   return on
     ? 'CEO and every VP start by themselves in the background and keep their Brief.'

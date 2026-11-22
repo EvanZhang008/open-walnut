@@ -291,7 +291,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
       {items && items.length === 0 && <SettingsRow indent label={locked ? 'No unencrypted backups here yet.' : 'No backups here yet.'} />}
       {items && locked && (
         <SettingsRow indent state="warning" label="Encrypted backups are here too"
-          help="This computer has no recovery key that opens them. Turn on Encrypt backups above and enter the key you saved to list and restore them."
+          help="No key on this computer opens them. Turn on Encrypt backups above and enter the key you saved to restore them."
           data-testid="backup-restore-locked" />
       )}
       {items && items.length > 0 && (
@@ -420,7 +420,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
       )}
       {switchDone && !pendingSwitch && !switchError && (confirmDeletePrevious ? (
         <SettingsRow label="Delete your data from before the restore?" state="warning" wide data-testid="backup-restore-delete-previous-confirm"
-          help="Anything you changed after the restored backup was made is only in this folder. It is deleted from this computer for good; your backups stay as they are."
+          help="Changes made after that backup are only here. They are deleted from this computer for good; your backups stay."
           error={deleteError ?? undefined}
           control={
             <span className="settings-inline-pair">

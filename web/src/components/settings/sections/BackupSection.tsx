@@ -712,8 +712,8 @@ export function BackupSection({ config, onSave }: Props) {
             label="Encrypt backups"
             htmlFor="backup-encrypt"
             help={encrypted
-              ? 'On: encrypted on this computer first, and only your recovery key opens them. Keep the key somewhere safe. Backups made before stay restorable.'
-              : 'Off: stored as they are, with no key to keep. Anyone who can open your backups can read or change them. Backups made before stay restorable.'}
+              ? 'On: encrypted on this computer first, and only your recovery key opens them: keep it safe. Older backups still restore.'
+              : 'Off: stored as they are, with no key to keep. Anyone who opens them can read or change them. Older ones still restore.'}
             data-testid="backup-encrypt-row"
             control={<ToggleSwitch id="backup-encrypt" checked={encrypted} onChange={setEncryption} />}
           />
@@ -722,7 +722,7 @@ export function BackupSection({ config, onSave }: Props) {
           <SettingsRow
             state="warning"
             label="Back up this computer from now on?"
-            help={`${inUse ?? 'This service'} then takes this computer's backups, the first within a minute. The other computer stops backing up there; the backups already there stay.`}
+            help={`${inUse ?? 'This service'} then backs up this computer, the first within a minute. The other computer stops backing up there; its backups stay.`}
             error={runError ?? undefined}
             data-testid="backup-adopt-confirm"
             control={

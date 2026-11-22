@@ -31,7 +31,7 @@ function PauseMusicRow({ config, onSave }: { config: Config; onSave: OnSave }) {
     (on: boolean) => save((c) => ({ stt: { ...c.stt, pause_media: on } as Config['stt'] }), { rowKey: 'stt.pause_media' }),
     { rowKey: 'stt.pause_media' });
   return <SettingsRow label="Pause music while you dictate" htmlFor="stt-pause-media" error={setting.error}
-    help="When voice input starts, Walnut pauses what plays on this Mac (Spotify, Apple Music, a video in the browser, Rhythm's focus music) and plays it again when you stop. Only what Walnut paused plays again."
+    help="Pauses music and video on this Mac while you dictate, then plays again only what Walnut paused."
     control={<ToggleSwitch id="stt-pause-media" data-testid="stt-pause-media" checked={setting.value} busy={setting.busy} onChange={setting.set} />} />;
 }
 

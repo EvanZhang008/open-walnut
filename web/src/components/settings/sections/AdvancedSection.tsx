@@ -251,7 +251,7 @@ export function AdvancedSection({ config, onSave }: Props) {
             summary={<span data-testid="ka-summary">{keepAwakeSummary(kaEnabled, kaState)}</span>}
           >
             <SettingsRow indent label="Keep Mac awake" htmlFor="ka-enabled"
-              help="While local sessions run, Walnut prevents system sleep; closing the lid turns connected screens off while sessions keep running."
+              help="While local sessions run, Walnut prevents system sleep; closing the lid turns connected screens off, sessions go on."
               control={<ToggleSwitch id="ka-enabled" name="ka-enabled" checked={kaEnabled} onChange={setKaEnabled} />} />
             {needsSetup && (
               <SettingsRow indent label="One-time setup" help="Needs your Mac password once." state="warning"

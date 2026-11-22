@@ -2,7 +2,8 @@
  * The Org page's own settings (2026-11-03, the user: "the setting should also be in the org view,
  * some kind of setting right"): a gear beside "Org chart" opens a small panel with the org's one
  * switch (useOrgSwitch.ts, the same value Settings → Org shows),
- * what turning the org off stops, and a link to the full Settings page. The gear reads "Off" while the org is off.
+ * one short line under it (what turning it off stops is its hover, and Settings → Org), and a link
+ * to the full Settings page. The gear reads "Off" while the org is off.
  * While the Directors experiment is on it also picks how the Directors are listed (useDirectorSettings.ts),
  * the same values Settings → Org shows.
  */
@@ -14,7 +15,7 @@ import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch';
 import { ICON_GEAR } from '@/components/common/Icons';
 import { log } from '@/utils/log';
-import { ORG_OFF_STILL, ORG_OFF_STOPS, orgSwitchFooter, useOrgSwitch } from './useOrgSwitch';
+import { ORG_OFF_LINE, orgSwitchTitle, useOrgSwitch } from './useOrgSwitch';
 import { SegmentedControl } from '@/components/settings/inputs/SegmentedControl';
 import { DIRECTORS_LAYOUT_LABEL, DIRECTORS_LAYOUT_OPTIONS, DIRECTORS_PROJECTS_HELP, DIRECTORS_PROJECTS_LABEL, directorsLayoutHelp, useDirectorSettings } from './useDirectorSettings';
 import '@/styles/org-rail.css';
@@ -59,39 +60,35 @@ export function OrgSettingsMenu() {
           style={menuPlacementStyle(placement)}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <div className="org-settings-row">
+          {/* A settings panel holds settings: one short line under the switch, the why on hover and in
+              Settings › Org (2026-11-21, the user on this panel, full of explanation: "the setting is
+              shit", "no taste"). */}
+          <div className="org-settings-row" title={orgSwitchTitle(on)}>
             <label htmlFor="org-settings-enabled" className="org-settings-label">
               <strong>Org</strong>
-              <span className="org-answer-q">CEO and the VPs above your projects, and their updates.</span>
+              <span className="org-settings-sub" data-testid="org-settings-stops">{on ? 'CEO and the VPs above your projects' : ORG_OFF_LINE}</span>
             </label>
             <ToggleSwitch id="org-settings-enabled" data-testid="org-settings-enabled" checked={on} busy={busy} onChange={flip} />
           </div>
           {error && <div className="org-thread-error" role="alert" data-testid="org-settings-error">{error}</div>}
-          <div className="org-answer-q">{orgSwitchFooter(on)}</div>
-          <div className="org-settings-stops" data-testid="org-settings-stops">
-            <div className="org-settings-stops-head">{on ? 'Turning it off stops' : 'Off now'}</div>
-            <ul>{ORG_OFF_STOPS.map((line) => <li key={line}>{line}.</li>)}</ul>
-            <div className="org-answer-q">{ORG_OFF_STILL}</div>
-          </div>
           {dir.on && (
             <div className="org-settings-directors" data-testid="org-settings-directors">
-              <div className="org-settings-stops-head">Directors</div>
-              <div className="org-settings-row is-stacked">
-                <span className="org-settings-label"><strong>{DIRECTORS_LAYOUT_LABEL}</strong><span className="org-answer-q">{directorsLayoutHelp(dir.layout)}</span></span>
-                <SegmentedControl size="sm" aria-label="Directors layout" value={dir.layout} options={DIRECTORS_LAYOUT_OPTIONS} disabled={dir.busy} onChange={dir.setLayout} />
+              <div className="org-settings-row" title={directorsLayoutHelp(dir.layout)}>
+                <span className="org-settings-label"><strong>Show Directors</strong></span>
+                <SegmentedControl size="sm" aria-label={DIRECTORS_LAYOUT_LABEL} value={dir.layout} options={DIRECTORS_LAYOUT_OPTIONS} disabled={dir.busy} onChange={dir.setLayout} />
               </div>
-              <div className="org-settings-row">
+              <div className="org-settings-row" title={DIRECTORS_PROJECTS_HELP}>
                 <label htmlFor="org-settings-directors-projects" className="org-settings-label">
                   <strong>{DIRECTORS_PROJECTS_LABEL}</strong>
-                  <span className="org-answer-q">{DIRECTORS_PROJECTS_HELP}</span>
                 </label>
                 <ToggleSwitch id="org-settings-directors-projects" data-testid="org-settings-directors-projects" checked={dir.showProjects} busy={dir.busy} onChange={dir.setShowProjects} />
               </div>
               {dir.error && <div className="org-thread-error" role="alert">{dir.error}</div>}
             </div>
           )}
-          <button type="button" className="btn btn-sm org-settings-all" data-testid="org-settings-all"
-            onClick={() => { setOpen(false); navigate('/settings#org'); }}>All Org settings</button>
+          <button type="button" className="btn btn-link org-settings-all" data-testid="org-settings-all"
+            title="What each setting does, and every Org setting"
+            onClick={() => { setOpen(false); navigate('/settings#org'); }}>Open Org settings ›</button>
         </div>,
         document.body,
       )}

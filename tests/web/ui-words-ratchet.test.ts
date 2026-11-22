@@ -8,6 +8,8 @@
  *   - rawId: a tool, field or model id in UI text (snake_case, `opus-5-5`, `__local__`).
  *   - iconOnly: a <button> with no words, no aria-label and no title.
  *   - secondName: a second name for a concept of the word list ("side thread" for side chat).
+ *   - longHelp: a setting's help line over HELP_MAX characters (2026-11-21, the user on the Org
+ *     settings panel, a page of explanations: "the setting is shit", "no taste").
  * The counts that exist today are in ui-words-baseline.json and may only go down. A new file or a
  * higher count fails: name the thing in plain words. A lower count fails too until the baseline is
  * lowered with `UI_WORDS_RECORD=1` on this file, so the ratchet stays tight.
@@ -19,7 +21,7 @@ import { scanAll, scanFile, hasRawId, secondNameOf, NOT_SHOWN, WEB_SRC, type Wor
 
 const BASELINE = path.join(__dirname, 'ui-words-baseline.json');
 const STANDARD = '.claude/skills/walnut-ui-requirements/standard.md';
-const KINDS = ['rawId', 'iconOnly', 'secondName'] as const;
+const KINDS = ['rawId', 'iconOnly', 'secondName', 'longHelp'] as const;
 
 describe('UI standard: plain words', () => {
   const { counts: now, hits } = scanAll();
@@ -68,6 +70,8 @@ describe('UI standard: plain words', () => {
     expect(kinds("const a = <p>{'Use org_send now'}</p>;")).toEqual(['rawId']);
     expect(kinds('const a = <p>Run <code>walnut tools call task_send</code></p>;')).toEqual([]);
     expect(kinds("log.info('ui', 'sent with task_send now');")).toEqual([]);
+    expect(kinds(`const a = <Row label="Org" help="${'x'.repeat(121)}" />;`)).toEqual(['longHelp']);
+    expect(kinds(`const a = <Row label="Org" help="${'x'.repeat(120)}" />;`)).toEqual([]);
   });
 
   it('every file it leaves out exists, and the standard names this test', () => {

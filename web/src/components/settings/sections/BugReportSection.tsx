@@ -126,7 +126,7 @@ export function BugReportSection() {
         />
         <SettingsRow
           label="Diagnostic bundle"
-          help="Holds recent server logs, system health, your settings and this browser's state. Passwords, keys and tokens in it are masked."
+          help="Recent server logs, system health, your settings and this browser's state, with passwords, keys and tokens masked."
           control={
             <SettingsButton variant="primary" onClick={handleGenerate} busy={generating} busyLabel="Generating..."
               data-testid="bug-report-generate">

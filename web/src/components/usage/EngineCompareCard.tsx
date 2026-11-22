@@ -99,7 +99,7 @@ function taskCostNote(t: EngineCompareTask): string | undefined {
 }
 
 const METRICS: Metric[] = [
-  { id: 'done', label: 'Tasks finished', help: 'Completed in the period, counted under the engine and model that carried most of their cost (only the split\'s tasks: the engine it assigned).', value: (r) => r.done, show: (n) => String(n ?? 0) },
+  { id: 'done', label: 'Tasks finished', help: 'Finished in the period, under the engine and model that cost the most (split tasks: the engine it assigned).', value: (r) => r.done, show: (n) => String(n ?? 0) },
   { id: 'open', label: 'Still open', value: (r) => r.open, show: (n) => String(n ?? 0) },
   { id: 'notstarted', label: 'Never started', help: 'Closed after a start that failed before its first turn ran: counted as an error, not as finished work.', value: (r) => r.notStarted ?? 0, show: (n) => String(n ?? 0), onlyWhenAny: true },
   { id: 'split', label: 'Assigned by the split', help: 'Of its tasks, how many the engine split gave it (the rest named their engine or came before the split).', value: (r) => r.split, show: (n) => String(n ?? 0) },
@@ -110,19 +110,19 @@ const METRICS: Metric[] = [
     partialNote: (n) => `${tasksWord(n)} leave out ${LEFT_OUT}: the total is a floor` },
   { id: 'tokens', label: 'Median tokens per task', value: (r) => r.medianTokens, show: (n) => (n === null ? '-' : formatTokens(n)), lower: true, partial: medianTokensPartial,
     partialNote: (n) => `${finishedWord(n)} had requests with no token counts recorded: the median leaves those out`, excluded: leftOutOfMedian, samples: knownDone },
-  { id: 'reviews', label: 'Review tasks per task', help: 'Reviewer subtasks (a subtask whose title starts with "Review", "Reviewer", "Verifier", "Verify:" or "Verification:", maybe after a word like Code, UI or Final). A count, never a contest: more rounds can mean more fixes, and it can mean more care.', value: (r) => r.reviewsPerTask, show: ratio },
-  { id: 'reviewcost', label: 'Review cost per task', help: 'What its reviewer subtasks cost, on top of the task itself. Not ranked: a cheaper review is often just a review that was not done.',
+  { id: 'reviews', label: 'Review tasks per task', help: 'Subtasks titled Review or Verify (and the like). A count, never a contest: more rounds can mean more fixes or more care.', value: (r) => r.reviewsPerTask, show: ratio },
+  { id: 'reviewcost', label: 'Review cost per task', help: 'What its reviewer subtasks cost on top of the task. Not ranked: a cheap review may be one that was not done.',
     // Every finished task's reviewers unknown: no per-task cost, as Total cost reads with none known.
     // No reviews: nothing to show, as a cost with no usage recorded reads.
     // Of the finished tasks that had reviewers (an older server sends no count: all finished).
     value: (r) => (r.reviewsPerTask === 0 || (r.reviewCostPerTask === 0 && (r.reviewedDone ?? r.done) > 0 && reviewPartial(r) >= (r.reviewedDone ?? r.done)) ? null : r.reviewCostPerTask),
     show: (n) => (n === null ? '-' : money(n)), partial: reviewPartial,
     partialNote: (n) => `${finishedWord(n)} had reviewers whose cost leaves out ${LEFT_OUT}` },
-  { id: 'crossreview', label: 'Checked by another company', help: 'Of the tasks it finished whose reviewers\' model is known, the share that a reviewer on another company\'s model checked and gave a verdict on (Claude work reviewed by a GPT model, or the other way round). "-" when no reviewer\'s model is known.',
+  { id: 'crossreview', label: 'Checked by another company', help: 'Of finished tasks with a known reviewer model, the share judged by another company\'s model (Claude by GPT, or back).',
     // No reviews, or none of a known company: nothing to show, never a 0%.
     value: (r) => (r.reviewsPerTask === 0 ? null : r.crossReviewedShare ?? null), show: share,
     sub: (r) => (r.crossReviewedShare != null && r.crossKnownDone !== undefined && r.crossKnownDone < r.done ? `of ${r.crossKnownDone} with a known reviewer` : null) },
-  { id: 'score', label: 'Reviewer score (function · UX · UI)', help: 'Function · UX · UI, out of 10. Per finished task, its reviewers\' latest verdict (each company\'s latest, the lower of them on each), then the median. Ranked by the lowest of the three. Reviewers give it as `score` on their reply.',
+  { id: 'score', label: 'Reviewer score (function · UX · UI)', help: 'Out of 10: each finished task\'s latest verdict (the lower of two companies), then the median. Ranked by the lowest.',
     // Ranked only on all three: a missing UI score is unknown, never a 10.
     value: (r) => (r.reviewScore && SCORE_DIMS.every((d) => r.reviewScore![d] !== undefined) ? Math.min(...SCORE_DIMS.map((d) => r.reviewScore![d]!)) : null),
     show: (_n, r) => scoreText(r.reviewScore), higher: true, samples: (r) => r.scoredDone ?? 0,
@@ -130,7 +130,7 @@ const METRICS: Metric[] = [
   { id: 'followups', label: 'Your messages per task', help: 'What you typed into the task: corrections and follow-ups.', value: (r) => r.followUpsPerTask, show: ratio, lower: true },
   { id: 'reopens', label: 'Reopened after done', help: 'Share of the tasks it finished that were reopened, those being worked on again included.', value: (r) => r.reopenedShare, show: share, lower: true },
   { id: 'errored', label: 'Had a session error', help: 'Share of its tasks whose session hit an error.', value: (r) => r.erroredShare, show: share, lower: true },
-  { id: 'switched', label: 'Moved to another engine', help: 'The split assigned it one engine, but most of its cost ran on another (a switch or a rescue). Counted in the column it was assigned, in either view. A Claude Code task whose subagents ran mostly on another company\'s model counts as moved as well.', value: (r) => r.switched ?? 0, show: (n) => String(n ?? 0), onlyWhenAny: true },
+  { id: 'switched', label: 'Moved to another engine', help: 'The split assigned one engine but most cost ran on another (a switch, a rescue or subagents). Counted where assigned.', value: (r) => r.switched ?? 0, show: (n) => String(n ?? 0), onlyWhenAny: true },
 ];
 
 /** The rows the table shows: a row only some engines have is shown when one has it. */

@@ -128,7 +128,7 @@ export function PasswordsSection({ config, onSave }: Props) {
           label="Keep Passwords unlocked"
           className="settings-row-stacked"
           help={status?.unlockFor === 'always'
-            ? 'Forever: a key stays on this Mac, so agents can use Passwords while you are away. Any program running as you could read the vault.'
+            ? 'Forever: a key on this Mac lets agents use Passwords while you are away; any program running as you could read it.'
             : `${status ? unlockFootText(status) : ''}${status?.unlockFor === 'restart' ? '' : ' Restarting Walnut keeps it.'} ${UNLOCK_CHANGE_WHEN}`}
           control={<SegmentedControl<UnlockFor> id="pw-unlock-for" aria-label="Keep Passwords unlocked" value={foreverTo ?? status?.unlockFor ?? '48h'} disabled={!status?.setUp || busy === 'unlock' || busy === 'forever'}
             options={UNLOCK_OPTIONS.map((o) => ({ value: o.value, label: unlockOptionLabel(o, status?.lockAfterIdleMinutes), testId: `pw-unlock-${o.value}` }))}
@@ -152,8 +152,8 @@ export function PasswordsSection({ config, onSave }: Props) {
           <SettingsRow
             label="Unlock with this Mac's keychain"
             help={keychain.present
-              ? 'On: the keychain item "walnut-vault-master" holds your master password, so Walnut can unlock at start and for the daily sync.'
-              : 'Off. To turn it on, add your master password to the keychain: security add-generic-password -s walnut-vault-master -a "$USER" -w'}
+              ? 'On: the keychain holds your master password, so Walnut unlocks at start and for the daily sync.'
+              : 'Off. To turn it on, run: security add-generic-password -s walnut-vault-master -a "$USER" -w'}
             control={keychain.present
               ? <SettingsButton busy={busy === 'keychain'} disabled={!unlocked} onClick={() => void run('keychain', async () => { await vaultApi.removeKeychain(); return 'Removed from the keychain.' })} data-testid="pw-keychain-remove">Remove from keychain</SettingsButton>
               : <span className="settings-test-result" data-kind="neutral">Off</span>}
@@ -177,7 +177,7 @@ export function PasswordsSection({ config, onSave }: Props) {
           />
           <SettingsRow
             label="An approval lasts"
-            help={needUnlock ?? 'After you approve an ask, that task may use that item again for this long without asking. Lock all or a new master password ends every grant; Agent Activity ends one.'}
+            help={needUnlock ?? 'Once approved, a task may reuse that item this long without asking. Lock all or a new master password ends every grant.'}
             control={<SegmentedControl<string> id="pw-grant-length" aria-label="An approval lasts" value={String(grantMs ?? 172_800_000)} disabled={!unlocked || grantMs === null || busy === 'grant'}
               options={GRANT_OPTIONS.map((o) => ({ value: String(o.value), label: o.label, testId: `pw-grant-${o.value}` }))}
               onChange={(v) => void run('grant', async () => { setGrantMs((await vaultApi.setGrantLength(Number(v))).grantMs) })} />}
@@ -260,7 +260,7 @@ export function PasswordsSection({ config, onSave }: Props) {
           <SettingsRow
             label="Agents can ask while Passwords is locked"
             htmlFor="pw-agents-away"
-            help="Off: only while Passwords is open in a window. On: a key stays on this Mac so they can ask any time (you still approve each use), and any program running as you could read the vault."
+            help="A key stays on this Mac so they can ask any time (you still approve each use); any program running as you could read it."
             control={<ToggleSwitch id="pw-agents-away" checked={!!status.agentsWhileAway} disabled={!unlocked || !confirmPw || busy === 'agents'}
               onChange={(v) => void run('agents', async () => {
                 const { recoveryKit, ...next } = await vaultApi.setAgentsWhileAway(v, confirmPw, status.kdf)

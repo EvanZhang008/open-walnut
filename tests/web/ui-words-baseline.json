@@ -4,5 +4,6 @@
     "components/settings/sections/ProvidersSection.tsx": 1
   },
   "iconOnly": {},
-  "secondName": {}
+  "secondName": {},
+  "longHelp": {}
 }

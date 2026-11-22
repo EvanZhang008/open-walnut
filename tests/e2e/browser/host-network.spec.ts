@@ -237,11 +237,11 @@ test('the relay choice: what each one shares, a companion means its relay, and w
   await expect(words('own')).toContainText('On your cloud companion (wn.example.com). Only your machines use it.')
   // Plain words; who runs the public relays only on request (2026-11-05 reviews: "run by n0, who
   // make iroh ... n0's lookup service" in the choice itself).
-  await expect(words('public')).toContainText('A free public service passes the traffic on when two of your machines cannot reach each other directly.')
+  await expect(words('public')).toContainText('A free public service relays traffic between machines that cannot connect directly.')
   await expect(words('public')).not.toContainText('n0')
   const about = picker.getByTestId('host-network-relay-about')
   await about.click()
-  await expect(picker).toContainText("n0, the makers of iroh, the network software Walnut uses. Their relays see your machines' internet addresses and which of them talk to each other")
+  await expect(picker).toContainText("n0, the makers of iroh, Walnut's network software. Their relays see your machines' addresses and which ones talk.")
   await about.click()
   await expect(words('none')).toContainText('Machines behind two home routers may not connect.')
   await expect(pub).toBeDisabled()

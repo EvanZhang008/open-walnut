@@ -246,7 +246,7 @@ export function MessageHintsGroup() {
         anchor="settings-show-walnut-additions"
         label="Always show what Walnut added to a message"
         htmlFor="show-walnut-additions"
-        help="Its notes in front of a message and the context it put first. On by default. Off: each message's Walnut added button shows them."
+        help="Its notes in front of a message and the context it put first. Off: each message's Walnut added button shows them."
         control={(
           <ToggleSwitch
             id="show-walnut-additions"

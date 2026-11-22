@@ -179,7 +179,8 @@ export function SessionsSection({ config, onSave }: Props) {
         <SettingsRow
           anchor="history-compress-row"
           label="Compress session history after"
-          help="A Claude Code session nobody opened for this many days is compressed in place on its machine, to about a third of its size. Opening it in Walnut brings it back in a moment, nothing is lost. Empty uses 60 days, 0 never compresses. Claude Code's own session list in a terminal shows a compressed session again once Walnut opened it."
+          help="A session unopened this many days shrinks to about a third; opening it restores it. Empty uses 60 days, 0 never."
+          title="Claude Code's own session list in a terminal shows a compressed session again once Walnut opened it."
           htmlFor="history-compress"
           error={historyDays.error}
           control={<NumberInput id="history-compress" field={historyDays.inputProps} unit="days" placeholder="60" min={0} />}
@@ -191,7 +192,8 @@ export function SessionsSection({ config, onSave }: Props) {
         <SettingsRow
           anchor="idle-compaction-row"
           label="Compact idle sessions before the cache expires"
-          help="A Claude Code session left idle that is close to compacting by itself is summarized a few minutes before its one-hour prompt cache runs out, so your next message reads the short summary. Summarizing costs about as much as one message that sends the whole conversation again, so Walnut does it only for sessions that would compact soon anyway."
+          help="An idle session near compacting is summarized just before its prompt cache runs out, so your next message costs less."
+          title="Summarizing costs about one message that resends the whole conversation, so only sessions that would compact soon get it."
           htmlFor="idle-compaction"
           error={idleCompact.error}
           control={
@@ -206,7 +208,8 @@ export function SessionsSection({ config, onSave }: Props) {
           disabled={!idleCompact.value}
           anchor="idle-compaction-percent-row"
           label="When the context reaches"
-          help={`Of the session's auto-compaction limit: the auto-compaction window set on its host, else its model's context window; when neither is known Walnut does not compact. It runs before Claude Code would compact by itself (at least 45K below the limit). Empty uses ${DEFAULT_IDLE_COMPACT_LIMIT_PERCENT}%; ${IDLE_COMPACT_LIMIT_PERCENT_RANGE.min} to ${IDLE_COMPACT_LIMIT_PERCENT_RANGE.max}.`}
+          help={`Of the session's auto-compaction limit, always at least 45K below it. Empty uses ${DEFAULT_IDLE_COMPACT_LIMIT_PERCENT}%; ${IDLE_COMPACT_LIMIT_PERCENT_RANGE.min} to ${IDLE_COMPACT_LIMIT_PERCENT_RANGE.max}.`}
+          title="The limit is the auto-compaction window set on its host, else its model's context window; with neither known, Walnut does not compact."
           htmlFor="idle-compaction-percent"
           error={compactPercent.error}
           control={(

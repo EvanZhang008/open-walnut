@@ -99,7 +99,7 @@ function ClaudeCodeImportGroup({ engine, name }: { engine: string; name: string 
     <SettingsGroup heading={name} data-testid={`cc-import-group-${engine}`}>
       <SettingsRow
         label="Import from Claude Code"
-        help={`Use your Claude Code setup in ${name}: the same model provider and credentials, MCP servers, skills and instructions. Claude Code's files are only read.`}
+        help={`Use Claude Code's model provider, credentials, MCP servers, skills and instructions in ${name}. Its files are only read.`}
         control={(
           <span className="cc-import-controls">
             {hostPicker}
@@ -150,7 +150,7 @@ function ImportPreviewRows({ engine, name, preview, written, applying, onApply }
   if (!preview.claudeCode.found) {
     return (
       <SettingsRow indent label="Claude Code not found" data-testid={`cc-import-none-${engine}`}
-        help={`There is no ${preview.claudeCode.settingsPath} on this host, so there is nothing to import. Set ${name} up on its own, or install and sign in to Claude Code first.`} />
+        help={`There is no ${preview.claudeCode.settingsPath} on this host, so there is nothing to import. Set ${name} up on its own, or sign in to Claude Code first.`} />
     );
   }
   const gatewayUnreadable = preview.gateway?.unreadable;
@@ -168,7 +168,7 @@ function ImportPreviewRows({ engine, name, preview, written, applying, onApply }
       )}
       {preview.pi.needsUpdateForMcp && (
         <SettingsRow indent state="warning" label={`Update ${name} for MCP servers`} data-testid={`cc-import-update-${engine}`}
-          help={`${name} ${preview.pi.version} cannot run MCP servers; everything else comes over now. Update with: npm install -g @earendil-works/pi-coding-agent@latest`} />
+          help={`${name} ${preview.pi.version} cannot run MCP servers; the rest imports now. Update: npm install -g @earendil-works/pi-coding-agent@latest`} />
       )}
       <SettingsRow indent label="Model and credentials" data-testid={`cc-import-credentials-${engine}`} help={preview.credentials.note}>
         {preview.credentials.vars.length > 0 && (

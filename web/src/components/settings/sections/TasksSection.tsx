@@ -182,7 +182,7 @@ export function TasksSection({ config, onSave, onReload }: Props) {
         />
         <SettingsRow
           label="Quick add creates tasks in"
-          help="Walnut saves the task on this device right away. A task saved in Walnut is not synced to a connected service; pick the service to create it there."
+          help="A task saved in Walnut stays here and is not synced to a connected service; pick the service to create it there."
           htmlFor="settings-platform"
           error={platform.error}
           control={

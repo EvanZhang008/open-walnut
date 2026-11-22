@@ -18,8 +18,8 @@ export const DIRECTORS_LAYOUT_LABEL = 'Where Directors show';
 export const DIRECTORS_PROJECTS_LABEL = 'Group Directors by project';
 
 export const DIRECTORS_LAYOUT_OPTIONS: ReadonlyArray<SegmentedOption<DirectorsLayout>> = [
-  { value: 'fold', label: 'Under each VP', testId: 'directors-layout-fold' },
-  { value: 'sections', label: 'In their own section', testId: 'directors-layout-sections' },
+  { value: 'fold', label: 'Under each VP', testId: 'directors-layout-fold', title: 'A folded "N directors" line under each VP; open it to see them' },
+  { value: 'sections', label: 'Own section', testId: 'directors-layout-sections', title: 'A Directors section after the VPs, one row per Director' },
 ];
 
 /** One line per choice: what it means. */

@@ -53,7 +53,7 @@ describe('experimental choices', () => {
       expect(experimentalEnabled({ [EVERY_EXPERIMENT]: true }, id)).toBe(false);
       expect(effectiveExperimentalFlags({ [EVERY_EXPERIMENT]: true })[id]).toBe(false);
       expect(experimentalEnabled({ [EVERY_EXPERIMENT]: true, [id]: true }, id)).toBe(true);
-      // Its row says so, since the switch above it says "every experiment below is on".
+      // Its row says so, since the switch above it says "every experiment is on".
       expect(EXPERIMENTAL_FEATURES.find((f) => f.id === id)!.description).toContain('keeps its own switch');
     }
   });

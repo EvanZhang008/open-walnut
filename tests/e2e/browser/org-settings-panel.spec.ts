@@ -3,7 +3,7 @@
  * "Org chart" opens a panel with the org's switch, the same value Settings → Org shows.
  *   - turning it off in the panel marks the gear "Off" and Settings → Org reads off;
  *   - turning it on in Settings → Org shows on in the panel again;
- *   - Escape closes the panel and "All Org settings" opens Settings → Org;
+ *   - Escape closes the panel and "Open Org settings" opens Settings → Org;
  *   - on a phone the gear and its panel fit the screen.
  * The fixture is shared with other specs, so the switch itself is held in this page: its
  * settings route answers from a value kept here, never the fixture's config (an org turned off
@@ -45,7 +45,10 @@ test('the Org page opens the org switch in place, and Settings → Org shows the
   await gear.click()
   const panel = page.getByTestId('org-settings-menu')
   await expect(panel).toBeVisible()
-  await expect(panel.getByTestId('org-settings-stops')).toContainText('Turning it off stops')
+  await expect(panel.getByTestId('org-settings-stops')).toHaveText('CEO and the VPs above your projects')
+  // A settings panel, not a page of text: what turning it off stops is the switch row's hover.
+  await expect(panel.locator('.org-settings-row').first()).toHaveAttribute('title', /Turning it off stops/)
+  expect((await panel.boundingBox())!.height, 'the panel is a few rows, not a page').toBeLessThan(260)
   // Inside the window.
   const box = (await panel.boundingBox())!
   const vp = page.viewportSize()!
@@ -65,7 +68,8 @@ test('the Org page opens the org switch in place, and Settings → Org shows the
   await expect(toggle).toBeChecked()
   await toggle.click()
   await expect(toggle).not.toBeChecked()
-  await expect(panel.getByTestId('org-settings-stops')).toContainText('Off now')
+  await expect(panel.getByTestId('org-settings-stops')).toContainText('Off: CEO and the VPs do nothing on their own')
+  await expect(panel.locator('.org-settings-row').first()).toHaveAttribute('title', /Off now/)
   await expect(gear).toContainText('Off')
   await expect.poll(() => held.writes).toEqual([false])
 
@@ -74,7 +78,7 @@ test('the Org page opens the org switch in place, and Settings → Org shows the
   await expect(panel).toHaveCount(0)
   await expect(gear).toContainText('Off')
 
-  // "All Org settings" opens Settings → Org, which reads off too.
+  // "Open Org settings" opens Settings → Org, which reads off too.
   await gear.click()
   await page.getByTestId('org-settings-all').click()
   await expect(page).toHaveURL(/\/settings/)

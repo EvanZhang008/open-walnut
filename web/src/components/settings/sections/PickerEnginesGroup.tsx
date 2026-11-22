@@ -64,7 +64,7 @@ export function PickerEnginesGroup({ config, save }: { config: Config; save: Ret
       <SettingsRow
         anchor="custom-acp-engine-row"
         label="Custom ACP engine"
-        help="The command that starts any agent speaking ACP (the Agent Client Protocol), run on this machine. Check Custom (ACP) above to offer it in the picker."
+        help="The command that starts an agent speaking ACP (Agent Client Protocol) here. Check Custom (ACP) above to offer it."
         htmlFor="custom-acp-engine-command"
         error={command.error}
         control={(

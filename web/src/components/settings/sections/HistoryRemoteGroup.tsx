@@ -97,7 +97,7 @@ export function HistoryRemoteGroup({ config, save }: { config: Config; save: (pa
       <SettingsRow
         label="Move old history to remote storage"
         htmlFor="history-remote-enabled"
-        help="A compressed session nobody opened for this many more days is uploaded, checked against its hash, and only then removed from this machine. Opening it downloads it again, checked the same way. Only this machine's own history goes there."
+        help="A compressed session unopened this many more days is uploaded, verified, then removed here. Opening it brings it back."
         control={<ToggleSwitch id="history-remote-enabled" checked={form.enabled} onChange={set('enabled')} />}
       />
       <SettingsRow
@@ -202,7 +202,7 @@ export function HistoryRemoteGroup({ config, save }: { config: Config; save: (pa
           state={setup && !setup.ok ? 'error' : undefined}
           help={setup
             ? setup.ok ? `Done: ${(setup.steps ?? []).join(', ')}.` : `Couldn't set it up: ${setup.error}`
-            : 'Creates it if missing, private and encrypted. On a bucket that exists, only adds Walnut\'s rule moving its history to the cheaper Standard-IA class after 30 days; its other settings and rules stay as they are.'}
+            : 'If missing, creates it private and encrypted. Otherwise only adds a rule moving history to cheaper storage at 30 days.'}
           control={
             <SettingsButton onClick={() => run<SetupResult>('/api/history-remote/setup', setSettingUp, setSetup, (error) => ({ ok: false, error }))}
               disabled={noBucket} title={noBucket ? 'Enter a bucket first.' : undefined} busy={settingUp} busyLabel="Setting up..." data-testid="history-remote-setup">

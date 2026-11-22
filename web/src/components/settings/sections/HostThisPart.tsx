@@ -111,7 +111,7 @@ export function HostThisPart({ host, name, limitKey, server = false, secrets = t
           <SettingsRow
             label="Tasks on other hosts may use it"
             help={open
-              ? 'A task on another of your hosts runs commands, calls MCP servers and reaches web services here without asking you. Each one shows below.'
+              ? 'A task on another host runs commands, MCP servers and web calls here without asking you. Each one shows below.'
               : 'Off: nothing new starts here from another host.'}
             error={exec.error?.host === host ? exec.error.text : undefined}
             data-testid="rh-host-exec"

@@ -144,7 +144,7 @@ function isPhrase(n: Literal): boolean {
 /** A phrase of three words or more: copy a person may read. */
 const isProse = (n: Literal) => (literalText(n).match(/[A-Za-z]{2,}/g) ?? []).length >= 3;
 
-export interface WordHit { kind: 'rawId' | 'iconOnly' | 'secondName'; line: number; text: string }
+export interface WordHit { kind: 'rawId' | 'iconOnly' | 'secondName' | 'longHelp'; line: number; text: string }
 
 /** Every UI string of one file (with its line), and the unnamed icon buttons. */
 export function scanFile(file: string, text: string): WordHit[] {
@@ -168,7 +168,14 @@ export function scanFile(file: string, text: string): WordHit[] {
     if (hasRawId(s)) hits.push({ kind: 'rawId', line: lineOf(at), text: s.trim() });
     if (secondNameOf(s)) hits.push({ kind: 'secondName', line: lineOf(at), text: s.trim() });
   };
+  const helpLength = (texts: string[], at: ts.Node) => {
+    for (const t of texts) if (t.trim().length > HELP_MAX) hits.push({ kind: 'longHelp', line: lineOf(at), text: t.trim() });
+  };
   const visit = (n: ts.Node, inCode: boolean) => {
+    if (ts.isJsxAttribute(n) && n.name.getText() === 'help') {
+      const init = n.initializer;
+      helpLength(init && ts.isStringLiteral(init) ? [init.text] : init && ts.isJsxExpression(init) ? literalTexts(init.expression) : [], n);
+    } else if (ts.isPropertyAssignment(n) && n.name.getText().replace(/['"]/g, '') === 'help') helpLength(literalTexts(n.initializer), n);
     if (ts.isJsxElement(n) || ts.isJsxSelfClosingElement(n)) {
       if (isUnnamedIconButton(n)) hits.push({ kind: 'iconOnly', line: lineOf(n), text: n.getText(sf).slice(0, 80) });
       if (CODE_TAGS.has(tagName(n))) inCode = true;
@@ -211,10 +218,17 @@ export const NOT_SHOWN: Record<string, string> = {
   'hooks/task-list-merge.ts': 'a table of task fields and how each reaches the UI, for a test',
 };
 
+/**
+ * A setting's help line, at most this many characters: two short lines under its label. More is a
+ * page of text, not a setting (2026-11-21, the user on the Org settings panel: "the setting is
+ * shit", "no taste"); the rest goes on hover or in the docs.
+ */
+export const HELP_MAX = 120;
+
 export type WordCounts = Record<WordHit['kind'], Record<string, number>>;
 
 export function scanAll(): { counts: WordCounts; hits: Record<string, WordHit[]> } {
-  const counts: WordCounts = { rawId: {}, iconOnly: {}, secondName: {} };
+  const counts: WordCounts = { rawId: {}, iconOnly: {}, secondName: {}, longHelp: {} };
   const hits: Record<string, WordHit[]> = {};
   for (const file of walk(WEB_SRC, ['.tsx', '.ts']).sort()) {
     if (/\.(test|spec)\.|\.d\.ts$/.test(file)) continue;

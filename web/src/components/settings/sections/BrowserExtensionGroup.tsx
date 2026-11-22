@@ -28,11 +28,11 @@ export interface ExtensionStatus {
 
 /** What the extension adds, in the order a new person meets it. */
 export const EXTENSION_FEATURES: Array<{ id: string; label: string; help: string }> = [
-  { id: 'passwords', label: 'Fill and save passwords', help: 'Fills logins and one-time codes from Passwords on their own site only, and offers to save a new one. It asks for your master password like any Walnut window.' },
-  { id: 'agents', label: 'Agents use your browser', help: 'Once you turn it on in the extension (its popup, Settings), agents open their own tabs in a separate window, signed in as you. A Walnut cursor shows where they act and goes away when they stop; every tab has Stop and Take over.' },
-  { id: 'hand-over', label: 'Hand a tab to an agent', help: 'In the side panel, Act in tab lets the agent of that chat use the tab you are on, and only that tab. Take it back any time.' },
-  { id: 'side-panel', label: 'Ask about the page', help: 'The side panel opens Walnut beside any page, which it can read. Select text and right-click for a quick question about it.' },
-  { id: 'view', label: 'Watch and replay', help: 'A task\'s Browser view shows its tabs live, and plays back the steps an agent took (kept for the days set below).' },
+  { id: 'passwords', label: 'Fill and save passwords', help: 'Fills logins and one-time codes from Passwords on their own site only, and offers to save new ones.' },
+  { id: 'agents', label: 'Agents use your browser', help: 'On in the extension\'s Settings, agents work in their own window, signed in as you. Every tab has Stop and Take over.' },
+  { id: 'hand-over', label: 'Hand a tab to an agent', help: 'In the side panel, Act in tab lets that chat\'s agent use the tab you are on, and only that tab. Take it back any time.' },
+  { id: 'side-panel', label: 'Ask about the page', help: 'The side panel opens Walnut beside any page, which it can read. Select text and right-click to ask about it.' },
+  { id: 'view', label: 'Watch and replay', help: 'A task\'s Browser view shows its tabs live and replays an agent\'s steps (kept for the days set below).' },
 ]
 
 export function BrowserExtensionGroup({ status }: { status?: ExtensionStatus | null }) {

@@ -143,7 +143,7 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
             htmlFor="backup-key-input"
             state="warning"
             help={mismatch && key
-              ? `The backups in ${destinationLabel} were made with a different key from this computer's. Enter that key to use them. This computer's key is kept aside; copy it here first if you need it.`
+              ? `The backups in ${destinationLabel} use a different key from this computer's. Enter that key; copy this computer's first if you need it.`
               : `${destinationLabel} already has your Walnut backups. Enter the recovery key you saved for them (it starts with WB1-).`}
             error={error ?? undefined}
             data-testid="backup-key-needed"
@@ -185,7 +185,7 @@ export function RecoveryKeyGroup({ dest, destinationLabel, ready, mismatch, save
               label="Lost the key?"
               help={onStartOver
                 ? 'Without it these backups cannot be opened. You can start new ones with a new key.'
-                : `Without it these backups cannot be opened. To start new ones: in ${destinationLabel} rename the "Walnut Backup" folder, then Disconnect and Connect again above. Walnut makes a new folder and a new key.`}
+                : `Without it these backups cannot be opened. To start over, rename "Walnut Backup" in ${destinationLabel}, then Disconnect and Connect.`}
               data-testid="backup-key-lost"
               control={onStartOver ? <SettingsButton onClick={() => setConfirmStartOver(true)} data-testid="backup-key-start-over">Start over</SettingsButton> : undefined}
             />

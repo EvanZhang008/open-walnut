@@ -437,6 +437,10 @@ chips" and "org_send". `tests/web/ui-words-ratchet.test.ts` counts what breaks t
    Nov 30, 6:00 PM"), the same clock (12 or 24 hour) everywhere, a duration in words ("1 hour").
 7. **Plain English, sentence case** for labels and buttons ("Clear all", not "Clear All"); no
    em dashes.
+8. **A setting is a label, a control and at most one short help line** (120 characters, about two
+   lines). A settings panel holds settings, never a page of explanations: the why goes on the row's
+   hover or in Settings' own page for it (2026-11-21, the user on the Org settings panel, a switch
+   under two paragraphs and a four-point list: "the setting is shit", "no taste").
 
 ## Tokens (from `globals.css` `:root`)
 

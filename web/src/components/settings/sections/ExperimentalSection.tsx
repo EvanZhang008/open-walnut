@@ -24,7 +24,7 @@ export function ExperimentalSection({ config, onSave }: { config: Config; onSave
     {/* A builder's switch in a small group of its own, so the experiments stay the page (2026-11-22 audit). */}
     <SettingsGroup heading="For people who build or test Walnut" data-testid="experimental-builders">
       <ExperimentalRow label="Every experiment on" flagKey={EVERY_EXPERIMENT}
-        help="Every experiment below is on unless you turn its own switch off, and each new one as soon as it arrives. The few that copy or download all of your data say so and keep their own switch."
+        help="Every experiment is on, new ones too, unless its own switch is off. Ones that copy all your data keep their own switch."
         value={everyExperimentOn(config.experimental)} save={write} />
     </SettingsGroup>
     <SettingsGroup>
