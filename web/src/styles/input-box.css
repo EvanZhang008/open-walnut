@@ -153,7 +153,7 @@
   opacity: 1;
   filter: none;
   background-color: color-mix(in srgb, var(--fg) 10%, var(--bg-secondary));
-  color: var(--fg-notice, var(--fg-muted));
+  color: var(--fg-notice);
   cursor: default;
 }
 /* A running turn's stop takes the send's place: the same key, in grey. */

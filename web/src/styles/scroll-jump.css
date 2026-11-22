@@ -32,7 +32,7 @@
   justify-content: center;
   border-radius: 50%;
   border: 1px solid var(--border);
-  background: var(--bg-elevated, var(--card-bg));
+  background: var(--bg-elevated);
   color: var(--fg-secondary);
   line-height: 1;
   cursor: pointer;
@@ -59,7 +59,7 @@ html .scroll-to-bottom-btn.wn-glass-frost {
 
 .scroll-to-bottom-btn:hover {
   color: var(--fg);
-  border-color: var(--border-strong, var(--border));
+  border-color: var(--border-strong);
 }
 
 .scroll-to-bottom-btn:focus-visible {

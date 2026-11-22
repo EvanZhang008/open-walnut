@@ -156,7 +156,7 @@ export const TASK_CSS = `
   font-size: 12px;
   color: var(--fg-secondary);
 }
-.wt-task-lane b { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.wt-task-lane b { font-size: var(--font-size-xl, 17px); font-weight: 600; font-variant-numeric: tabular-nums; }
 .wt-task-lane.is-human b { color: var(--wt-human); }
 .wt-task-lane.is-agent b { color: var(--wt-agent); }
 
@@ -168,7 +168,7 @@ export const TASK_CSS = `
   max-width: 100%;
   padding: 6px 10px;
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--font-size-md, 13px);
   color: var(--fg);
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -187,9 +187,10 @@ export const TASK_CSS = `
   overflow-wrap: anywhere;
   text-align: left;
 }
-.wt-task-session-v { display: inline-flex; flex: none; gap: 4px; white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 11.5px; }
+.wt-task-session-v { display: inline-flex; flex: none; gap: 4px; white-space: nowrap; font-variant-numeric: tabular-nums; font-size: var(--font-size-sm, 12px); }
 .wt-task-session-v .is-human, .wt-task-day-sessions .is-human { color: var(--wt-human); }
 .wt-task-session-v .is-agent, .wt-task-day-sessions .is-agent { color: var(--wt-agent); }
+.wt-task-session-v .is-zero, .wt-task-day-sessions .is-zero { color: var(--fg-muted); }
 
 .wt-task-days { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .wt-task-day {
@@ -235,9 +236,11 @@ export const TASK_CSS = `
 }
 .wt-task-bar.is-human i { background: var(--wt-human); }
 .wt-task-bar.is-agent i { background: var(--wt-agent); }
-.wt-task-bar b { font-weight: 500; font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+.wt-task-bar b { font-weight: 600; font-size: var(--font-size-md, 13px); text-align: right; font-variant-numeric: tabular-nums; }
 .wt-task-bar.is-human b { color: var(--wt-human); }
 .wt-task-bar.is-agent b { color: var(--wt-agent); }
+/* A lane with no time reads quieter than one with time, in either lane. */
+.wt-task-lane b.is-zero, .wt-task-bar b.is-zero { color: var(--fg-muted); font-weight: 500; }
 
 .wt-task-day-sessions {
   list-style: none;
@@ -254,7 +257,7 @@ export const TASK_CSS = `
   gap: 10px;
   align-items: baseline;
   padding-top: 6px;
-  font-size: 12.5px;
+  font-size: var(--font-size-md, 13px);
   font-variant-numeric: tabular-nums;
 }
 .wt-task-day-sessions li > span:not(.wt-task-day-session-label) { text-align: right; }

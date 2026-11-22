@@ -99,13 +99,22 @@ function Totals({ totals, label }: { totals: TimeTotals; label: string }) {
         <div key={name} className="wt-stat" data-total={name}>
           <span className="wt-stat-label">{name}</span>
           <span className="wt-task-lanes">
-            <span className="wt-task-lane is-human"><span>You</span><b>{formatLane(pair.humanMs)}</b></span>
-            <span className="wt-task-lane is-agent"><span>Agent</span><b>{formatLane(pair.agentMs)}</b></span>
+            <span className="wt-task-lane is-human"><span>You</span><b className={zeroClass(pair.humanMs)}>{formatLane(pair.humanMs)}</b></span>
+            <span className="wt-task-lane is-agent"><span>Agent</span><b className={zeroClass(pair.agentMs)}>{formatLane(pair.agentMs)}</b></span>
           </span>
         </div>
       ))}
     </div>
   )
+}
+
+/** A lane with no time at all reads quieter than one with time. */
+function zeroClass(ms: number): string | undefined {
+  return ms <= 0 ? 'is-zero' : undefined
+}
+
+function laneClass(lane: 'human' | 'agent', ms: number): string {
+  return ms <= 0 ? `is-${lane} is-zero` : `is-${lane}`
 }
 
 /** Each lane has its own scale: agent hours would flatten your minutes to nothing on a shared one. */
@@ -135,11 +144,11 @@ function Bars({ pair, max }: { pair: TimePair; max: TimePair }) {
   return (
     <span className="wt-task-bars" data-idle={idle}>
       <span className="wt-task-bar is-human" title={`You: ${formatLane(pair.humanMs)}`}>
-        <b>{formatLane(pair.humanMs)}</b>
+        <b className={zeroClass(pair.humanMs)}>{formatLane(pair.humanMs)}</b>
         <i style={{ width: `${pct(pair.humanMs, max.humanMs)}%` }} />
       </span>
       <span className="wt-task-bar is-agent" title={`Agent: ${formatLane(pair.agentMs)}`}>
-        <b>{formatLane(pair.agentMs)}</b>
+        <b className={zeroClass(pair.agentMs)}>{formatLane(pair.agentMs)}</b>
         <i style={{ width: `${pct(pair.agentMs, max.agentMs)}%` }} />
       </span>
     </span>
@@ -219,9 +228,9 @@ function TaskBody({ data, focus, onFocus }: { data: TaskTime; focus: string | nu
               >
                 <span className="wt-task-session-name">{names.get(s.sessionId)}</span>
                 <span className="wt-task-session-v">
-                  <span className="is-human">{formatLane(s.totals.all.humanMs)}</span>
+                  <span className={laneClass('human', s.totals.all.humanMs)}>{formatLane(s.totals.all.humanMs)}</span>
                   <span aria-hidden="true">·</span>
-                  <span className="is-agent">{formatLane(s.totals.all.agentMs)}</span>
+                  <span className={laneClass('agent', s.totals.all.agentMs)}>{formatLane(s.totals.all.agentMs)}</span>
                 </span>
               </button>
             ))}
@@ -259,15 +268,15 @@ function TaskBody({ data, focus, onFocus }: { data: TaskTime; focus: string | nu
                         <button type="button" className="wt-task-day-session" onClick={() => onFocus(s.sessionId)} title="Narrow to this session">
                           {names.get(s.sessionId)}
                         </button>
-                        <span className="is-human">You {formatLane(s.humanMs)}</span>
-                        <span className="is-agent">Agent {formatLane(s.agentMs)}</span>
+                        <span className={laneClass('human', s.humanMs)}>You {formatLane(s.humanMs)}</span>
+                        <span className={laneClass('agent', s.agentMs)}>Agent {formatLane(s.agentMs)}</span>
                       </li>
                     ))}
                     {(day.other.humanMs > 0 || day.other.agentMs > 0) && (
                       <li className="is-other">
                         <span className="wt-task-day-session-label">Outside a session</span>
-                        <span className="is-human">You {formatLane(day.other.humanMs)}</span>
-                        <span className="is-agent">Agent {formatLane(day.other.agentMs)}</span>
+                        <span className={laneClass('human', day.other.humanMs)}>You {formatLane(day.other.humanMs)}</span>
+                        <span className={laneClass('agent', day.other.agentMs)}>Agent {formatLane(day.other.agentMs)}</span>
                       </li>
                     )}
                   </ul>

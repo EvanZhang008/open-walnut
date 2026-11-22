@@ -57,7 +57,7 @@
   place-items: center;
   color: var(--on-accent);
   background: linear-gradient(135deg, #ff2d55, var(--warning));
-  box-shadow: 0 4px 14px rgba(255, 45, 85, 0.25);
+  box-shadow: var(--shadow-sm);
 }
 .apps-hero-text { min-width: 0; }
 .apps-hero h1 {

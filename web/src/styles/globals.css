@@ -7,7 +7,7 @@
   --bg-tertiary: #E8E8ED;
   --fg: #1D1D1F;
   --fg-secondary: #424245;
-  --fg-muted: #86868B;
+  --fg-muted: #6E6E73;  /* 5.1:1 on --bg: #86868B was 3.6:1, under AA for small text */
   /* Notice lines in a chat: darker than --fg-muted, which reads 3.6:1 on white (below 4.5:1). */
   --fg-notice: #6E6E73;
   --accent: #007AFF;
@@ -14430,6 +14430,7 @@ a.task-kebab-info:hover {
 
 .agent-card-desc {
   margin-top: 4px;
+  color: var(--fg-secondary);
   line-height: 1.4;
 }
 
@@ -16264,7 +16265,7 @@ a.task-kebab-info:hover {
 }
 
 .model-picker-live-dot {
-  color: var(--success, #34c759);
+  color: var(--success);
   font-size: 8px;
 }
 
@@ -16308,7 +16309,7 @@ a.task-kebab-info:hover {
 
 .model-picker-details-title {
   font-weight: 600;
-  color: var(--fg, inherit);
+  color: var(--fg);
   margin-bottom: 4px;
 }
 
@@ -25904,7 +25905,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 }
 
 .cal-month-cell-today .cal-month-daynum {
-  background: var(--error);
+  background: var(--accent);
   color: var(--on-accent);
   font-weight: 700;
 }
@@ -26106,7 +26107,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 }
 
 .cal-grid-dayhead.today .cal-grid-dayname {
-  color: var(--error);
+  color: var(--accent-text);
   font-weight: 600;
 }
 
@@ -26118,7 +26119,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   height: 24px;
   padding: 0 4px;
   border-radius: var(--radius-md);
-  background: var(--error);
+  background: var(--accent);
   color: var(--on-accent);
 }
 

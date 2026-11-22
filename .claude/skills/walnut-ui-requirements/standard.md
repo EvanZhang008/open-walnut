@@ -481,7 +481,7 @@ chips" and "org_send". `tests/web/ui-words-ratchet.test.ts` counts what breaks t
 | Kind | Tokens |
 |---|---|
 | Fill | `--bg`, `--bg-secondary`, `--bg-tertiary`, `--bg-elevated`, `--bg-hover`, `--card-bg` |
-| Text | `--fg`, `--fg-secondary`, `--fg-muted`, `--on-accent` (on a solid `--error` or `--accent` fill) |
+| Text | `--fg`, `--fg-secondary`, `--fg-muted` (light `#6E6E73`, 5.1:1 on `--bg`: the quietest grey that still passes AA for 12 px text), `--on-accent` (on a solid `--error` or `--accent` fill) |
 | Accent | `--accent`, `--accent-hover`, `--accent-subtle`, `--accent-text` |
 | Lines | `--border`, `--border-strong` |
 | State | `--success`, `--warning`, `--error`; their 10% fills `--success-subtle`, `--warning-subtle`, `--error-subtle` |
