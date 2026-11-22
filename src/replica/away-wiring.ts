@@ -30,6 +30,7 @@ import { createWritePort, type BoardBase, type TaskRow, type WriteActor, type Wr
 import { awayWrites } from './away-writes.js'
 import { awayNotes } from './away-notes.js'
 import { awayReads, overlayBoard, overlayTiers, SYNC_FIELD } from './away-reads.js'
+import { hostAwayStatus } from './away-status.js'
 import { wsWrites } from './ws-writes.js'
 import { writeActorOf } from './write-actor.js'
 import type { SessionRecord } from '../core/types.js'
@@ -240,6 +241,8 @@ export async function wireAwayWrites(opts: AwayWiringOptions): Promise<AwayWirin
       return await enrichTasksWithSessionStatus(rows as never) as unknown as typeof rows
     },
     taskSessions: async (task) => (await import('../web/routes/engine-switch-v1.js')).taskSessionsAnswer(task as never),
+    // The tasks whose sessions this host runs and judges read the status derived now, not the copy's.
+    ...(opts.hostKey ? { shownStatus: hostAwayStatus(opts.hostKey).current } : {}),
   })
   opts.setRpcAnswer(wsWrites({
     port, sessionHere, linked,

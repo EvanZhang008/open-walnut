@@ -52,6 +52,8 @@ import { createdRow } from './write-port.js'
 import { NEEDS_LEADER_HEADERS, needsLeaderBody } from '../core/replication/needs-leader.js'
 import { awayStatus, withHostSessions, withTasksMadeHere } from './away-read-folds.js'
 import type { HostSessionsNow } from './ask-launch.js'
+import { withShownStatus } from './away-status.js'
+import type { UserStatus } from '../core/user-status.js'
 
 export const SYNC_FIELD = 'replica_sync'
 
@@ -73,6 +75,8 @@ export interface AwayReadsDeps {
   hostKey?: string | null
   /** The live state of every session of this Walnut on this host (follower.sessions), by id; null: not known now. */
   hostSessions?(): Promise<HostSessionsNow | null>
+  /** The user status shown now for the tasks whose sessions this host runs (away-status.ts); absent: as the copy says. */
+  shownStatus?(): Promise<ReadonlyMap<string, UserStatus>>
 }
 
 type Row = Record<string, unknown> & { id: string }
@@ -374,11 +378,14 @@ export function awayReads(deps: AwayReadsDeps): RequestHandler {
     if (idOf && NOT_IDS.has(idOf[1]!)) { next(); return }
     const decode = (s: string) => { try { return decodeURIComponent(s) } catch { return s } }
     const enrichHere = !!deps.enrich && (ENRICHED_PATHS.has(path) || ENRICHED_ONE_RE.test(path))
+    // The status of a task whose session runs here, derived now (away-status.ts), for a task read or list.
+    let shown: ReadonlyMap<string, UserStatus> | null = null
     // Never longer than `waitMs`: a slow daemon leaves the answer as the copy has it.
     const ready = Promise.all([
       deps.overlay.refresh(1_000),
       deps.fresh?.().catch(() => {}),
       bulk ? loadBulkProject() : undefined,
+      (one || LIST_PATHS.has(path)) && deps.shownStatus ? deps.shownStatus().then((m) => { shown = m }, () => {}) : undefined,
     ])
     const fresh = Promise.race([ready, new Promise<void>((r) => { const t = setTimeout(r, waitMs); t.unref?.() })])
     fresh.then(() => {
@@ -425,12 +432,12 @@ export function awayReads(deps: AwayReadsDeps): RequestHandler {
               res.status(200)
               return sendEnriched([made], (e) => ({ task: e[0] ?? made }), { task: made })
             }
-            if (out.task && typeof out.task === 'object') out.task = deps.overlay.taskForReaders(id, out.task as Row) ?? out.task
+            if (out.task && typeof out.task === 'object') out.task = withShownStatus((deps.overlay.taskForReaders(id, out.task as Row) ?? out.task) as Row, shown)
             return json(out)
           }
           if (Array.isArray(out.tasks)) {
             const fromCopy = new Set((out.tasks as Row[]).map((r) => r?.id))
-            const tasks = overlayList(req, out.tasks as Row[], deps.overlay)
+            const tasks = overlayList(req, out.tasks as Row[], deps.overlay).map((r) => (r && typeof r.id === 'string' ? withShownStatus(r, shown) : r))
             out.tasks = tasks
             const added = tasks.filter((r) => r && !fromCopy.has(r.id))
             // The route counted the copy's matches (`total`, before its limit): this host's own rows count too.
