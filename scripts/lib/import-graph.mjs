@@ -137,7 +137,8 @@ export function buildImportGraph(root) {
   /**
    * Test files (repo-relative) within `depth` import steps of each changed file, with their step.
    * `hubAt`: a file reached on the way that this many files or more import directly is counted but
-   * not walked past (the tree's foundations: through one, nearly every test reaches the change).
+   * not walked past (the tree's foundations: through one, nearly every test reaches the change),
+   * except that one importing the changed file directly still selects its own tests.
    */
   function testsWithin(changed, depth, { hubAt = Infinity } = {}) {
     const best = new Map()
@@ -155,8 +156,17 @@ export function buildImportGraph(root) {
       for (let i = known.has(start) ? 1 : 2; frontier.length && i <= depth; i++) {
         const next = []
         for (const f of frontier) {
-          if (f !== start && (importers.get(f)?.size ?? 0) >= hubAt) continue
-          for (const g of importers.get(f) || []) if (!level.has(g)) { level.set(g, i); next.push(g) }
+          // A shared module is not walked past, except to its own tests when it imports the changed
+          // file directly: those test the change one step away (2026-11-22: session-context.ts
+          // reached 60 importers, and a change to team-charter.ts no longer selected
+          // session-context.test.ts, the test of the 2026-11-10 red). Measured on 236 commits of
+          // main: 19% more files in the land layer, median 95 per land.
+          const hub = f !== start && (importers.get(f)?.size ?? 0) >= hubAt
+          if (hub && level.get(f) !== 1) continue
+          for (const g of importers.get(f) || []) {
+            if (hub && !isTestFile(g)) continue
+            if (!level.has(g)) { level.set(g, i); if (!hub) next.push(g) }
+          }
         }
         frontier = next
       }

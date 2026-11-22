@@ -210,6 +210,8 @@ describe('the import graph', () => {
       expect([...g.testsWithin(['src/leaf.ts'], Infinity).keys()].sort()).toEqual(['tests/beyond.test.ts', 'tests/far.test.ts', 'tests/hub.test.ts'])
       // src/hub.ts has 4 importers: the walk stops there, so none of them (its own test included) is reached.
       expect([...g.testsWithin(['src/leaf.ts'], Infinity, { hubAt: 4 }).keys()]).toEqual(['tests/far.test.ts'])
+      // A hub importing the changed file directly still brings its own tests, never its other importers.
+      expect([...g.testsWithin(['src/mid.ts'], Infinity, { hubAt: 4 }).keys()].sort()).toEqual(['tests/far.test.ts', 'tests/hub.test.ts'])
       // A changed hub is still walked from: its own importers are the change's.
       expect([...g.testsWithin(['src/hub.ts'], Infinity, { hubAt: 4 }).keys()].sort()).toEqual(['tests/beyond.test.ts', 'tests/hub.test.ts'])
     } finally { fs.rmSync(r, { recursive: true, force: true }) }
