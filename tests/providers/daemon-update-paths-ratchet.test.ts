@@ -73,6 +73,27 @@ describe('every daemon link kind has an update path or a reasoned exemption', ()
     expect(src).toMatch(/if \(changed && value\) this\.netUpdater\?\.schedule\(\)/)
   })
 
+  // 2026-11-22: a host network machine's switch of mode went to the postponed update's SSH check,
+  // which threw every minute. Every way into that check (checkServiceMode, startDeferredUpgrade,
+  // postponeUpgrade's timer, the fold prewarm) goes through recheckPostponedUpgrade, so the turn
+  // away from SSH sits at its top, and the net updater carries the mode itself.
+  it('the SSH update check is never entered for a link with no SSH, and the net updater carries the mode', () => {
+    const src = read('src/providers/daemon-connection.ts')
+    const body = /private recheckPostponedUpgrade\(\): Promise<void> \{([\s\S]*?)\n {2}\}/.exec(src)?.[1] ?? ''
+    const firstStatement = body.split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('//'))
+    expect(firstStatement).toBe('if (this.noSsh) { this.netUpdater?.schedule(0); return Promise.resolve() }')
+    // runUpgradeRecheck (the SSH check) has no other caller.
+    expect(src.match(/this\.runUpgradeRecheck\(/g)).toHaveLength(1)
+    expect(body).toContain('this.runUpgradeRecheck(')
+    const net = /private get netUpdater\(\)[\s\S]*?\n {2}\}/.exec(src)?.[0] ?? ''
+    expect(net).toMatch(/mode: \{\s*read: \(\) => this\.serviceModeNow\(\)/)
+    // The net updater reaches the host only through its link: no SSH helper is named in it.
+    for (const file of ['src/providers/daemon-net-update.ts', 'src/providers/daemon-net-update-io.ts', 'src/providers/daemon-net-update-source.ts']) {
+      const code = read(file).split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n')
+      expect(code, file).not.toMatch(/\bsshExec\b|\bpipeChunk\b|\bdeployWalnutFile\b|\bsshUpdateHost\b/)
+    }
+  })
+
   it('the net updater acts on the net kind and on no other', () => {
     const base: NetUpdateFacts = {
       kind: 'net', host: 'h', testServer: false, follower: false, expected: 'walnut-daemon-b', running: 'walnut-daemon-a', startup: 'service',

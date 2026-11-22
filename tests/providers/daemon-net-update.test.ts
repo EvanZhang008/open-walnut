@@ -776,7 +776,7 @@ describe('NetDaemonUpdater', () => {
     await u.request()
     await vi.waitFor(() => expect(u.state.phase).toBe('updated'))
     // An x86_64 shell under Rosetta on an Apple silicon Mac is that Mac's own arm64 target.
-    expect(source).toHaveBeenCalledWith('darwin-arm64', NEW, expect.any(Function))
+    expect(source).toHaveBeenCalledWith('darwin-arm64', NEW, expect.any(Function), { walnutFile: false })
     expect(update.mock.calls[0]![0]).toEqual({ binary: null, gz, base: base.serviceExecutable })
     // The status comes before the probe, and the probe is a line the macOS guard lets run.
     expect(base.lines.map((l) => (l.includes('uname -s') ? 'probe' : l.includes('daemon status') ? 'status' : l))).toEqual(['status', 'probe'])

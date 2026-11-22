@@ -1512,6 +1512,12 @@ export class DaemonConnection {
       },
       cooldownMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS,
       fence: () => this.fenceFileChanges(),
+      // The host's mode rides this update as it rides the SSH one (one-service-mode.ts): one decision for every link.
+      mode: {
+        read: () => this.serviceModeNow(),
+        asked: (ask) => this.recordModeAsked(ask),
+        unfit: (expected, why) => { this._serveUnfit = { expected, why }; void this.serviceModeWant() },
+      },
     })
     return this._netUpdaterInstance
   }
@@ -4020,6 +4026,8 @@ export class DaemonConnection {
    * experiments off and a host that runs as the daemon, nothing is read and nothing changes.
    */
   private serviceModeWant(): Promise<ServiceModeWant> {
+    // The cloud box gets its daemon from the companion and runs no follower of this Walnut: never switched.
+    if (this.isCloudTunnel) return Promise.resolve({ want: null })
     return serviceModeWantNow({
       ...this.servesAs, home: WALNUT_HOME, launcher: !!this._launcher, expected: this.getExpectedDaemonVersion(),
       serveUnfit: this._serveUnfit, modeAsked: () => this.modeAsked(),
@@ -4029,6 +4037,14 @@ export class DaemonConnection {
       note: (w) => { void import('../core/hosts/one-service-health.js').then((m) => m.noteServiceOffer(this.hostKey, w)).catch(() => {}) },
       noteOff: () => { void import('../core/hosts/one-service-health.js').then((m) => m.noteServiceOfferOff(this.hostKey)).catch(() => {}) },
     })
+  }
+
+  /** A switch of the mode alone due on this live link, and the words the update carries for it (the same for every link). */
+  private async serviceModeNow(): Promise<{ due: boolean; serve?: { home: string; on: boolean } }> {
+    if (!this._connected) return { due: false }
+    const want = await this.serviceModeWant()
+    const serve = serviceModeAsk(want, { ...this.servesAs, home: WALNUT_HOME, homeHere: this._homeHere })
+    return { due: serviceModeDue(want, this._servesAs.serves), ...(serve ? { serve } : {}) }
   }
 
   /** The switch last asked of this host, from disk once per connection (a real server's only: ownUpdateRecord). */
@@ -4975,7 +4991,7 @@ export class DaemonConnection {
 
       if (takeover.managed) {
         // A switch of the host's mode rides the update (one-service-mode.ts): read on a live link only, whose hello is current.
-        const modeDue = this._connected && serviceModeDue(await this.serviceModeWant(), this._servesAs.serves)
+        const modeDue = (await this.serviceModeNow()).due
         if (remoteVersion !== expected || modeDue) {
           if (await this.holdUpgrade(gate, expected, remoteVersion)) return false
           if (await this.execRunsOpen(expected, remoteVersion)) return false
@@ -5413,6 +5429,10 @@ export class DaemonConnection {
    * needs nothing here: the reconnect that brings it back runs the decision.
    */
   private recheckPostponedUpgrade(): Promise<void> {
+    // No SSH to this host: its update (a new build or a switch of its mode) runs over the link, by
+    // the host network's updater, or by its companion (the cloud box). The SSH check would only fail
+    // here, every minute (2026-11-22: a mode due on a host network machine).
+    if (this.noSsh) { this.netUpdater?.schedule(0); return Promise.resolve() }
     if (this._upgradeRecheckInFlight) {
       // Asked while one runs (a reconnect onto the old daemon during the upload,
       // whose own run will find its connection gone): run again after it.
@@ -5725,7 +5745,7 @@ export class DaemonConnection {
       return 'held'
     }
     // The mode's words (one-service-mode.ts): the service needs the walnut file in the slot, not the daemon-only binary.
-    let serve = this._connected ? serviceModeAsk(await this.serviceModeWant(), { ...this.servesAs, home: WALNUT_HOME, homeHere: this._homeHere }) : undefined
+    let serve = (await this.serviceModeNow()).serve
     let source: ServiceDaemonSource
     try {
       source = await this.serviceDaemonSource(serve?.on === true)

@@ -28,6 +28,11 @@ export interface NetSourceDeps {
   compiled?: () => boolean
   /** This build's walnut file for the target (host-file.ts sharedHostFileSource). */
   hostFile?: (t: HostFileTarget, say: (message: string) => void) => Promise<{ gz: Buffer; id: string }>
+  /**
+   * The host is to run as its one Walnut service (one-service-mode.ts `--serve`): only the walnut file
+   * holds the server, so it goes even when a prebuilt daemon binary exists, on any server.
+   */
+  walnutFile?: boolean
 }
 
 /**
@@ -36,9 +41,11 @@ export interface NetSourceDeps {
  * Getting that file may download or build it once per build (host-file.ts caches it).
  */
 export async function netDaemonSource(t: HostFileTarget, expected: string, say: (message: string) => void = () => {}, deps: NetSourceDeps = {}): Promise<NetUpdateSource | { missing: string }> {
-  const prebuilt = await localDaemonBinary(t, expected, deps.dir)
-  if ('file' in prebuilt) return prebuilt
-  if (!(deps.compiled ?? (() => singleFile() !== null))()) return prebuilt
+  if (!deps.walnutFile) {
+    const prebuilt = await localDaemonBinary(t, expected, deps.dir)
+    if ('file' in prebuilt) return prebuilt
+    if (!(deps.compiled ?? (() => singleFile() !== null))()) return prebuilt
+  }
   try {
     const f = await (deps.hostFile ?? defaultHostFile)(t, say)
     if (!f.gz.length) return { missing: `this build's walnut file for ${t} is empty` }

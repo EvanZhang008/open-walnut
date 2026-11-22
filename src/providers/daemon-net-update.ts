@@ -28,6 +28,11 @@
  * is held: someone guards that machine and picks the moment. The hold is logged once
  * per build, and the update runs on request (`host_daemon_update`, this file's
  * `request`). WALNUT_NET_DAEMON_UPDATE=0 turns the automatic update off.
+ *
+ * The host's mode (one-service-mode.ts) rides this update as it rides the SSH one: a switch due on
+ * the current build is an update of its own, every update carries the `--serve`/`--no-serve` words,
+ * and `--serve` sends the walnut file (it holds the server), never the daemon-only binary
+ * (2026-11-22: a mode due on a host network machine went to the SSH check and failed every minute).
  */
 import { daemonBusyRefusal, execRunsHold } from './exec-runs-hold.js'
 import { ACP_BUSY_FILE, acpTurnsHold, acpTurnsReason } from './acp-upgrade-hold.js'
@@ -45,6 +50,7 @@ import { LaunchedNetUpdate, type DaemonUpdateView } from './daemon-net-update-re
 import { afterUpdateFailure, stageCutByLink } from './daemon-update-readback.js'
 import { BUILD_BACKOFF_MS, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
 import type { DaemonLinkKind } from './daemon-update-paths.js'
+import type { ServesAs, ServiceModeAsk } from './one-service-mode.js'
 import { netDaemonSource, type NetUpdateSource } from './daemon-net-update-source.js'
 
 export { localDaemonBinary, netDaemonSource, type NetSourceDeps, type NetUpdateSource } from './daemon-net-update-source.js'
@@ -96,6 +102,8 @@ export interface NetUpdateFacts {
   minGapMs?: number
   /** How long this build's update has been held by the gap already (it waits one gap at most). */
   gapHeldForMs?: number
+  /** A switch of the host's mode alone is due (one-service-mode.ts serviceModeDue): an update on the current build. */
+  modeDue?: boolean
   /** Looked up only when everything above allows an update: undefined = not yet. */
   target?: HostFileTarget | null
   source?: NetUpdateSource | { missing: string }
@@ -115,7 +123,7 @@ export function decideNetUpdate(f: NetUpdateFacts): NetUpdateDecision {
   if (f.testServer) return no('test-server', 'a test server never changes a host\'s daemon')
   if (f.follower) return no('follower', 'only the leader updates a host\'s daemon: two servers of different builds would undo each other')
   if (!f.expected) return no('no-build-version', 'this server runs from source and names no daemon build')
-  if (f.running === f.expected) return no('current', `its daemon is this build (${f.expected})`)
+  if (f.running === f.expected && !f.modeDue) return no('current', `its daemon is this build (${f.expected})`)
   if (f.startup !== 'service' || !f.serviceExecutable || !f.has('service-update-v1')) {
     return no('unmanaged', 'its daemon is not a service Walnut can update (no service-update-v1 service)')
   }
@@ -143,7 +151,8 @@ export function decideNetUpdate(f: NetUpdateFacts): NetUpdateDecision {
     return no('cooldown', `an update to ${f.expected} was tried ${Math.round((f.now - f.lastAttempt.at) / 1000)} s ago`,
       f.cooldownMs - (f.now - f.lastAttempt.at))
   }
-  const gapWait = f.requested ? 0 : daemonUpdateWaitMs(f.daemonAgeMs, f.minGapMs ?? 0, f.gapHeldForMs ?? 0)
+  // The gap is between builds (as on the SSH path): a switch of the mode alone does not wait for it.
+  const gapWait = f.requested || f.running === f.expected ? 0 : daemonUpdateWaitMs(f.daemonAgeMs, f.minGapMs ?? 0, f.gapHeldForMs ?? 0)
   if (gapWait > 0) return no('recent', daemonUpdateGapWhy(f.daemonAgeMs!, gapWait), gapWait)
   if (f.target === undefined || f.source === undefined) return { go: 'lookup' }
   // Both may pass (a probe that timed out, a download that failed): asked again after a cooldown.
@@ -217,13 +226,24 @@ export interface NetUpdaterDeps {
   autofixOff?: () => Promise<string | null>
   /** The host's target, read with host-target.ts's probe over exec.run (as the SSH path reads it). */
   target?: (run: (command: string, timeoutMs?: number) => Promise<string>) => Promise<HostFileTarget | null>
-  source?: (t: HostFileTarget, expected: string, say: (message: string) => void) => Promise<NetUpdateSource | { missing: string }>
+  source?: (t: HostFileTarget, expected: string, say: (message: string) => void, opts: { walnutFile: boolean }) => Promise<NetUpdateSource | { missing: string }>
+  /** The host's mode (one-service-mode.ts), as DaemonConnection decides it for every link; absent: the host keeps its mode. */
+  mode?: NetServiceModeDeps
   update?: typeof updateRemoteDaemonService
   io?: NetUpdateIoOptions
   settleMs?: number
   recheckMs?: number
   now?: () => number
   env?: Record<string, string | undefined>
+}
+
+export interface NetServiceModeDeps {
+  /** Read on a live link: a switch alone due, and the words the update carries (serviceModeAsk). */
+  read(): Promise<{ due: boolean; serve?: { home: string; on: boolean } }>
+  /** An update that ran asked this switch: not asked again with this build (ServiceModeAsk). */
+  asked(ask: ServiceModeAsk): void
+  /** This build's walnut file cannot go to the host: no offer with this build, and the build goes without it. */
+  unfit(expected: string, why: string): void
 }
 
 export type NetUpdatePhase = 'idle' | 'checking' | 'running' | 'updated' | 'failed' | 'skipped' | 'held' | 'postponed'
@@ -376,7 +396,7 @@ export class NetDaemonUpdater {
     return run
   }
 
-  private async facts(trigger: 'auto' | 'request'): Promise<NetUpdateFacts> {
+  private async facts(trigger: 'auto' | 'request', modeDue: boolean): Promise<NetUpdateFacts> {
     const c = this.d.conn
     const env = this.d.env ?? process.env
     return {
@@ -385,7 +405,7 @@ export class NetDaemonUpdater {
       running: c.daemonVersion, startup: c.daemonStartup, serviceExecutable: c.serviceExecutable,
       has: (cap) => c.hasCapability(cap), autofixOff: await (this.d.autofixOff ?? (() => defaultAutofixOff(c.host)))(),
       turnedOff: netDaemonUpdateTurnedOff(env),
-      requested: trigger === 'request', lastAttempt: this.lastAttempt, now: (this.d.now ?? Date.now)(), cooldownMs: this.d.cooldownMs,
+      requested: trigger === 'request', modeDue, lastAttempt: this.lastAttempt, now: (this.d.now ?? Date.now)(), cooldownMs: this.d.cooldownMs,
       shared: sharedWhy(c, this.d.expectedVersion(), (this.d.now ?? Date.now)()),
       contested: !!this.installed && this.installed === this.d.expectedVersion() && c.daemonVersion !== this.installed,
       failedTries: this.failed && this.failed.expected === this.d.expectedVersion() ? this.failed.count : 0,
@@ -406,7 +426,9 @@ export class NetDaemonUpdater {
     // one a server before this one launched (kept on disk, daemon-net-update-record.ts).
     await this.launched.load()
     await this.readBack(true)
-    const facts = await this.facts(trigger)
+    // The mode as decided now, from this link's hello (never a version read over SSH: there is none).
+    const mode: Awaited<ReturnType<NetServiceModeDeps['read']>> = c.connected && this.d.mode ? await this.d.mode.read().catch(() => ({ due: false })) : { due: false }
+    const facts = await this.facts(trigger, mode.due)
     // The bound on the whole update (daemon-update-behind.ts), read before any skip so a round that
     // skips (a cooldown, the gap) still counts as seen: behind this long, the writes in flight and
     // the host_exec runs no longer hold it, and the daemon goes over its own work.
@@ -458,7 +480,17 @@ export class NetDaemonUpdater {
     // Only now the lookups: the probe is one more command, and the walnut file may be a download or a build.
     facts.target = await (this.d.target ?? probeTarget)((command, ms) => io.run(command, ms)).catch(() => null)
     const say = (message: string) => log.session.info('DaemonConnection: getting the walnut file for a host network daemon', { host: c.host, message })
-    facts.source = facts.target ? await (this.d.source ?? netDaemonSource)(facts.target, expected, say) : { missing: 'unknown system' }
+    const lookup = (t: HostFileTarget, walnutFile: boolean) => (this.d.source ?? netDaemonSource)(t, expected, say, { walnutFile })
+    // `--serve` needs the walnut file (it holds the server), as the SSH path's slot does.
+    let serve = mode.serve
+    facts.source = facts.target ? await lookup(facts.target, serve?.on === true) : { missing: 'unknown system' }
+    if (serve?.on && facts.target && 'missing' in facts.source) {
+      // No walnut file of this build for the host: no offer with this build (Walnut Health says why), the build goes as before.
+      this.d.mode?.unfit(expected, facts.source.missing.slice(0, 300))
+      serve = undefined
+      facts.modeDue = false
+      if (c.daemonVersion !== expected) facts.source = await lookup(facts.target, false)
+    }
     const decision = decideNetUpdate(facts)
     // A lookup that found nothing waits a cooldown too: it may have been a download.
     this.lastAttempt = { expected, at: (this.d.now ?? Date.now)() }
@@ -468,8 +500,10 @@ export class NetDaemonUpdater {
     const no = refused()
     if (no) return this.skipped({ go: false, skip: 'refused', why: no }, trigger)
     const from = c.daemonVersion
+    const asked: ServesAs | null = serve ? (serve.on ? 'walnut-serve' : 'daemon') : null
     log.session.info('DaemonConnection: updating a host network machine\'s daemon over its link', {
       host: c.host, from, expected, scope: scope.scope, target: decision.target, source: 'file' in src ? 'daemon binary' : `walnut file ${src.id}`, trigger,
+      ...(asked ? { mode: asked } : {}),
     })
     this.set('running', `uploading ${expected} and updating its ${scope.scope} service`)
     try {
@@ -477,6 +511,7 @@ export class NetDaemonUpdater {
         overBusy: goesOver,
         // The build's hold before its record (the staging dir) is removed on the host.
         onBuildFailed: (error) => this.buildDidNotStay(expected, error.message.slice(0, 300)),
+        ...(serve ? { serve } : {}),
       })
     } catch (err) {
       // The upload was paid for: the next try waits a cooldown, it is not a failure.
@@ -520,6 +555,17 @@ export class NetDaemonUpdater {
           return this.postpone(`the link dropped while the new daemon was put on the host, so nothing changed there (${msg.split('\n')[0].slice(0, 200)})`, this.d.cooldownMs)
         }
       }
+      // Nothing went onto the host (DaemonUpdateStageError, by name as on the SSH path): a walnut file
+      // that cannot go there takes the offer away for this build, and the build is asked again without it.
+      const staging = err instanceof Error && err.name === 'DaemonUpdateStageError'
+      if (staging && serve?.on) {
+        this.d.mode?.unfit(expected, msg.slice(0, 300))
+        this.lastAttempt = null
+        this.launched.outcome(expected, null)
+        return this.postpone(`the walnut file could not be put on the host, so the update goes without the switch (${msg.split('\n')[0].slice(0, 200)})`)
+      }
+      // A switch whose update failed past its staging is not asked again with this build (each try restarts the host's service).
+      if (asked && !staging) this.d.mode?.asked({ expected, want: asked, failed: msg.split('\n')[0].slice(0, 300) })
       this.failed = { expected, count: this.failed?.expected === expected ? this.failed.count + 1 : 1 }
       const count = this.failed.count
       this.launched.outcome(expected, msg)
@@ -535,6 +581,8 @@ export class NetDaemonUpdater {
     this.linkCuts = null
     this.retryAt = 0
     this.installed = expected
+    // The switch went with an update that ran: not asked again with this build, whatever the host chose.
+    if (asked) this.d.mode?.asked({ expected, want: asked })
     this.launched.answered()
     this.launched.outcome(expected, null)
     log.session.info('DaemonConnection: host network machine\'s daemon updated', { host: c.host, from, expected })
