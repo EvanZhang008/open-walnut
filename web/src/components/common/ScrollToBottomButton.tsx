@@ -7,7 +7,8 @@
  * Rendered inside the scroller (a flex column) it rides sticky at the bottom; `seated` is for a
  * place that positions it itself. `badge` is a small count of rows that arrived below.
  */
-import { forwardRef, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { forwardRef, useEffect, useRef, type ReactNode } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import '@/styles/scroll-jump.css';
 
 const ARROW_DOWN = (
@@ -49,7 +50,7 @@ export const ScrollToBottomButton = forwardRef<HTMLButtonElement, ScrollToBottom
   ref,
 ) {
   const own = useRef<HTMLButtonElement | null>(null);
-  const setRef = useCallback((el: HTMLButtonElement | null) => {
+  const setRef = useLeanCallback((el: HTMLButtonElement | null) => {
     own.current = el;
     if (typeof ref === 'function') ref(el);
     else if (ref) ref.current = el;
