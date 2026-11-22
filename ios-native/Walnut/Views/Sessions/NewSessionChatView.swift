@@ -65,7 +65,7 @@ struct NewSessionChatView: View {
     @State private var host = ""
     @State private var mode: NewSessionSheet.PermissionMode = NewSessionChatView.draftStart(inDemo: DemoMode.isActive).mode
     @State private var model: String?
-    /// The reasoning effort picked in the model sheet's Effort row; nil = Default (no --effort,
+    /// The reasoning effort picked in the model sheet's Effort column; nil = Default (no --effort,
     /// Claude Code's own setting decides).
     @State private var effort: String?
     /// The user picked the mode / the model here: until then the pills show the project's
@@ -610,7 +610,7 @@ struct NewSessionChatView: View {
 
     /// Default, then the stable aliases; the current pick checked. Default is the
     /// empty id (`pick` maps it back to nil, which sends no model). A second section is the
-    /// effort (the sheet's Effort row, as on a live session's pill): Default (empty, no
+    /// effort (the sheet's Effort column, as on a live session's pill): Default (empty, no
     /// --effort), then every level Claude Code takes.
     static func modelMenu(selected: String?, effort: String? = nil) -> PillMenu {
         let items = [PillMenu.Item(

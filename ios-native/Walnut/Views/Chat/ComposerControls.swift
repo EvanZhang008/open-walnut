@@ -14,10 +14,11 @@ import SwiftUI
 /// phone matches (user, 2026-10-04: one pill, not a model pill and an effort pill).
 ///
 /// A tap opens "Select model" (`PillMenuSheet`), the Claude app's picker: the
-/// models as one vertical list, and an "Effort" row that opens the levels as
-/// another (user, 2026-10-04: a drawer, every list vertical). It offers only the
-/// levels the CURRENT model declares, and no Effort row for a model without an
-/// effort axis. The sheet opens on one tap with the keyboard up too.
+/// models in one column and the effort levels beside them (user, 2026-10-04: a
+/// drawer; 2026-11-21: model on the left, effort on the right), then the session's
+/// Cost, Speed and Details rows. It offers only the levels the CURRENT model
+/// declares, and no Effort column for a model without an effort axis. The sheet
+/// opens on one tap with the keyboard up too.
 ///
 /// What is deliberately NOT in this row (a 44pt row is not a settings screen):
 ///  - Path/host are not in a live session's composer at all: they are facts of a
@@ -60,7 +61,9 @@ struct ComposerModelPill: View {
                 accessibilityValue: controls.pillAccessibilityValue,
                 onSelect: { choice, token in controls.menuSelect(choice, token: token) },
                 onPresentedChange: { id, presented in controls.setMenuPresented(presented, menu: id) },
-                sheetTitle: Self.sheetTitle
+                sheetTitle: Self.sheetTitle,
+                // Away, the facts cannot be read either: the sheet is its Retry alone.
+                sheetSessionID: controls.unreachable ? nil : controls.modeSessionID
             )
         }
     }
@@ -130,6 +133,9 @@ struct PillChip: View {
     /// Set = the pill opens its menu as a sheet with this title (the model
     /// pill's "Select model", see `PillMenuSheet`) instead of a UIKit menu.
     var sheetTitle: String? = nil
+    /// The session the sheet's menu configures: its cost, speed and context show
+    /// under the choices. nil (the new-session draft) shows none.
+    var sheetSessionID: String? = nil
     @State private var pressed = false
     @State private var sheetShown = false
     @State private var sheetFocus = PillSheetFocus()
@@ -185,7 +191,7 @@ struct PillChip: View {
                 )
                 .disabled(!state.takesTaps)
                 .sheet(isPresented: $sheetShown, onDismiss: sheetClosed) {
-                    PillMenuSheet(title: sheetTitle, menu: menu, onSelect: onSelect)
+                    PillMenuSheet(title: sheetTitle, menu: menu, sessionID: sheetSessionID, onSelect: onSelect)
                         .presentationDetents([.large])
                         .presentationDragIndicator(.visible)
                 }

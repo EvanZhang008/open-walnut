@@ -98,7 +98,7 @@ enum CameraClipMaker {
         }
         guard !Task.isCancelled else { return .none(note: "no narration") }
         do {
-            let text = try await withTimeout(transcribeTimeout) { try await transcribe(audio) }
+            let text = try await Deadline.run(transcribeTimeout) { try await transcribe(audio) }
             let said = AttachmentHeaders.oneLine(text)
             return said.isEmpty ? .none(note: "nothing was said") : .said(said)
         } catch {
@@ -112,22 +112,7 @@ enum CameraClipMaker {
         if case APIError.server(_, let code, _, _, _) = error, code == "stt_unavailable" {
             return "no narration: speech to text is not set up"
         }
-        if error is TimeoutError { return "no narration: speech to text took too long" }
+        if error is Deadline.Expired { return "no narration: speech to text took too long" }
         return "no narration: speech to text failed"
-    }
-
-    struct TimeoutError: Error {}
-
-    static func withTimeout<T: Sendable>(_ limit: Duration, _ work: @escaping @Sendable () async throws -> T) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask { try await work() }
-            group.addTask {
-                try await Task.sleep(for: limit)
-                throw TimeoutError()
-            }
-            defer { group.cancelAll() }
-            guard let first = try await group.next() else { throw TimeoutError() }
-            return first
-        }
     }
 }

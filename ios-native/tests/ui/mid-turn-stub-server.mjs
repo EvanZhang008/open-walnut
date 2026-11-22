@@ -103,6 +103,13 @@
 //                               (POST /sessions/:id/model, /effort) are answered
 //                               and recorded (with the value), so a test can prove
 //                               whether a tap wrote anything, and what.
+//   GET  /api/v1/sessions/sess-stub-lane and …/cost → the model sheet's facts
+//                               (ModelSheetFoldsUITests): the record with the last
+//                               turn's speed (137 tokens in 573 ms, 239 tok/s) and a
+//                               context 93% full, and a $102.31 cost with no budget.
+//                               Only when no flag above answers that session first.
+//   POST /__stub/model-sheet?cost=ok|missing → `missing` answers the cost route 404,
+//                               as a server older than it does. Reset puts back `ok`.
 //   POST /__stub/write-delay?ms=N → those writes answer after N ms (a pick in
 //                               flight a test can see). Reset puts it back to 0.
 //   POST /__stub/lane?model=X&effort=Y → the lane session's CURRENT model and
@@ -278,6 +285,8 @@ const NO_EFFORT = Symbol('no-effort')
 /** How long the lane session's writes take to answer, so a test can see a pick
  *  in flight. */
 let laneWriteDelayMs = 0
+/** The cost route's answer (see /__stub/model-sheet in the header). */
+let modelSheetCost = 'ok'
 
 /** What GET /api/v1/status answers (see /__stub/status in the header). */
 let statusMode = 'live'
@@ -559,6 +568,7 @@ function resetAll() {
   laneEffort = null
   laneMode = 'bypass'
   laneWriteDelayMs = 0
+  modelSheetCost = 'ok'
   workSession = false
   workProcessStatus = 'idle'
   workTaskMode = 'live'
@@ -1862,6 +1872,50 @@ function answerPinnedBoard(p, req, res) {
  *  UIKit menu edges and the taps is on record next to the wire log. Uploads are
  *  batched (every 45s and on foreground), so lines arrive late but carry the
  *  app's own timestamps. */
+// ── The model sheet's Cost, Speed and Details (ModelSheetFoldsUITests) ──────
+// The record fields and the cost payload the real routes answer
+// (src/core/types.ts SessionTurnSpeed, src/core/usage/session-cost.ts
+// getSessionCostFacts), with the numbers of the approved design.
+
+const SHEET_SPEED = {
+  ttftMs: 2563, generationMs: 573, outputTokens: 137, messages: 1, model: 'openai.gpt-6.1-sol[xhigh]',
+  inFlight: false, inFlightChars: 0, inFlightMs: 0, inFlightVisibleMs: 0, durationMs: 52910,
+  tokenScope: 'last-call', final: true,
+}
+// The session's average on its model (src/core/sessions/speed-totals.ts), keyed as the meter keys a
+// Claude Code turn: 12,800 tokens over 100 s in 42 turns, 128 tok/s.
+const SHEET_SPEED_TOTALS = { 'claude-fable-5-1': { outputTokens: 12800, generationMs: 100000, turns: 42, lastAt: 1 } }
+
+function answerModelSheetFacts(p, req, res) {
+  if (req.method !== 'GET') return false
+  const base = `/api/v1/sessions/${LANE_SESSION_ID}`
+  if (p === base) {
+    const now = nowISO()
+    return json(res, 200, {
+      session: {
+        claudeSessionId: LANE_SESSION_ID, process_status: 'idle', title: 'Stub lane session', host: '', cwd: '/stub',
+        startedAt: now, lastActiveAt: now, messageCount: 4, model: laneModel ?? FULL_CATALOG.current,
+        mode: laneMode, engine: 'claude', lastTurnSpeed: SHEET_SPEED, speedTotals: SHEET_SPEED_TOTALS, contextTokens: 767600, modelMaxWindow: 828400,
+      },
+      pendingPermissions: [],
+    }), true
+  }
+  if (p === `${base}/cost`) {
+    if (modelSheetCost === 'missing') return notFound(res, `stub does not serve GET ${p}`), true
+    return json(res, 200, {
+      cost: {
+        sessionId: LANE_SESSION_ID, engine: 'claude', source: 'claude-transcript', status: 'priced',
+        totalUsd: 102.31, responses: 1052, unpricedResponses: 0,
+        models: [{ model: 'claude-fable-5-1', speed: 'standard', responses: 1052, costUsd: 102.31, unpricedResponses: 0 }],
+        firstAt: '2026-11-19T15:00:00.000Z', lastAt: '2026-11-21T08:00:00.000Z', apiDurationMs: 3_960_000,
+        prices: { source: 'litellm' },
+      },
+      budget: null,
+    }), true
+  }
+  return false
+}
+
 function printComposerLogLines(req, body) {
   try {
     const raw = req.headers['content-encoding'] === 'gzip' ? zlib.gunzipSync(body) : body
@@ -1940,6 +1994,11 @@ const server = http.createServer(async (req, res) => {
       if (e) laneEffort = e === 'none' ? NO_EFFORT : e
       console.log(`[stub] lane current → model=${laneModel} effort=${String(e)}`)
       return json(res, 200, { ok: true })
+    }
+    if (p === '/__stub/model-sheet' && req.method === 'POST') {
+      modelSheetCost = url.searchParams.get('cost') === 'missing' ? 'missing' : 'ok'
+      console.log(`[stub] model sheet cost route → ${modelSheetCost}`)
+      return json(res, 200, { ok: true, cost: modelSheetCost })
     }
     if (p === '/__stub/work-session' && req.method === 'POST') {
       workSession = url.searchParams.get('on') === '1'
@@ -2142,6 +2201,7 @@ const server = http.createServer(async (req, res) => {
   if (answerWorkSession(p, req, res, raw)) return
   if (answerPinnedBoard(p, req, res)) return
   if (p === '/api/v1/chat/engine' && req.method === 'GET') return answerEngine(res)
+  if (answerModelSheetFacts(p, req, res)) return
   const modelOptionsMatch = p.match(/^\/api\/v1\/sessions\/([^/]+)\/model-options$/)
   if (modelOptionsMatch && req.method === 'GET') {
     if (decodeURIComponent(modelOptionsMatch[1]) !== LANE_SESSION_ID) return notFound(res, 'no such session')

@@ -54,7 +54,7 @@ struct CameraHarnessView: View {
         actions.close = { open = false }
         actions.photoRoom = { max(0, ComposerBar.maxImages - photos) }
         // Never the network: any sound "times out" (the fake records none).
-        actions.narrate = { url in await CameraClipMaker.narrate(url) { _ in throw CameraClipMaker.TimeoutError() } }
+        actions.narrate = { url in await CameraClipMaker.narrate(url) { _ in throw Deadline.Expired() } }
         return CameraCaptureModel(source: CameraSources.make(), allowsVideo: true, actions: actions)
     }
 }

@@ -21,6 +21,9 @@ import XCTest
 ///
 /// RUN IT WITH `ios-native/tests/ui/run-ui-tests.sh` and the stub running (see
 /// `MidTurnQueueUITests` for why a bare `xcodebuild` skips every case here).
+///
+/// The sheet's Cost, Speed and Details rows are tested in ModelSheetFoldsUITests.swift,
+/// an extension of this class that shares its helpers (the ones without `private`).
 final class ModelPillHealUITests: XCTestCase {
 
     override func setUp() {
@@ -29,11 +32,11 @@ final class ModelPillHealUITests: XCTestCase {
     }
 
     /// The pills once they show the Mac's current model (Fable 5.1, High).
-    private static let healedLabel = "Model: Fable 5.1"
-    private static let healedEffort = "Effort: High"
+    static let healedLabel = "Model: Fable 5.1"
+    static let healedEffort = "Effort: High"
     private static let healedID = "global.anthropic.claude-fable-5-1[1m]"
     /// The model pill's picker (`ComposerModelPill.sheetTitle`).
-    private static let sheetTitle = "Select model"
+    static let sheetTitle = "Select model"
     /// Rows only the Mac's catalog has; the degraded answer has none of them.
     /// Spelled as the Mac's picker spells them (`catalogRowLabel`), which is the
     /// point: "Haiku 4.5", not the catalog's bare "Haiku".
@@ -41,7 +44,7 @@ final class ModelPillHealUITests: XCTestCase {
 
     /// The Mac's rows, top to bottom: `sortByModelStrength` over the real catalog,
     /// as the web computes it (`ModelStrengthOrderTests` pins the same list).
-    private static let macOrder = [
+    static let macOrder = [
         "Haiku 4.5", "GPT-6 Luna", "Sonnet 5", "GPT-6 Astra", "Fable 5 1M", "Fable 5.1 1M",
         "GPT-5.6 Sol", "GPT-6 Sol", "Default (Opus 5.5 1M)", "Opus 5.5 1M",
     ]
@@ -490,14 +493,15 @@ final class ModelPillHealUITests: XCTestCase {
 
     // MARK: - Scenario 5: the sheet and the pills at the default and largest text sizes
 
-    /// The "Select model" sheet (user, 2026-10-04: a drawer, every list vertical,
-    /// the Claude app's picker): the models are one vertical list in the Mac's
-    /// order with the current one checked, and the levels are their own vertical
-    /// list behind one Effort row that names the current level. At the default
-    /// size every name is on one line (an Effort submenu once wrapped "Default
-    /// (Opus 5.5 1M)"); at XXXL (the largest standard size) and AX5 the list
-    /// scrolls, every row is still there in order, and the pill still fits beside
-    /// the mic. A model without an effort axis has no Effort row.
+    /// The "Select model" sheet (user, 2026-10-04: a drawer, the Claude app's
+    /// picker; 2026-11-21: model on the left, effort on the right): the models are
+    /// one vertical column in the Mac's order with the current one checked, and the
+    /// levels are a column beside it with the current level checked (under it at
+    /// the accessibility sizes). At the default size every name is on one line (an
+    /// Effort submenu once wrapped "Default (Opus 5.5 1M)"); at XXXL (the largest
+    /// standard size) and AX5 the sheet scrolls, every row is still there in order,
+    /// and the pill still fits beside the mic. A model without an effort axis has
+    /// no Effort column.
     ///
     /// And AX5, the largest ACCESSIBILITY size, with the WIDEST real pill label
     /// (gate r2 D2: side by side there, "GPT-6 Astra" read "GP…" in a 131pt pill).
@@ -514,7 +518,7 @@ final class ModelPillHealUITests: XCTestCase {
             try await stub.setEngine("lane")
             let expected: String
             // Only some rows of the catalog have an effort axis (and so an effort
-            // half on the pill and an Effort row in its sheet).
+            // half on the pill and an Effort column in its sheet).
             var hasEffort = true
             if size == ax5 {
                 try await stub.setLane(model: widest.id, effort: "xhigh")
@@ -587,22 +591,17 @@ final class ModelPillHealUITests: XCTestCase {
                                   "default size: \"Default (Opus 5.5 1M)\" is \(Int(longest))pt against \(Int(single))pt: it wrapped")
             }
             print("[evidence] \(tag): pill \(pill.frame) (effort \(Self.effortValue(pill) ?? "none")), mic \(mic.frame)")
-            let effortRow = element(app, "composer.modelSheet.effort")
-            let effortInReach = try await scrollSheet(app, to: effortRow, rows: Self.macOrder)
             if hasEffort {
-                // The levels are their own vertical list behind one Effort row,
-                // which names the current level.
+                // The levels are a column of their own, the current one checked:
+                // beside the models, or under them at the accessibility sizes.
                 let level = size == ax5 ? "Extra High" : "High"
-                XCTAssertTrue(effortInReach, "\(tag): the sheet has no Effort row in reach")
-                XCTAssertTrue(effortRowText(app).hasSuffix(level),
-                              "\(tag): the Effort row reads \"\(effortRowText(app))\", not \(level)")
-                try await stub.screenshot(app, "model-pill-08-\(tag)-sheet-effort-row")
-                if try await openEffortPage(app) {
-                    assertTheLevelsAreOneList(app, checked: level, tag: tag)
-                    try await stub.screenshot(app, "model-pill-08-\(tag)-effort-page")
-                }
+                let levelsInReach = try await effortColumnInReach(app)
+                XCTAssertTrue(levelsInReach, "\(tag): the sheet has no Effort column in reach")
+                assertTheLevelsAreOneList(app, checked: level, besideModels: size != ax5, tag: tag)
+                try await stub.screenshot(app, "model-pill-08-\(tag)-sheet-effort-column")
             } else {
-                XCTAssertFalse(effortInReach, "\(tag): a model without an effort axis has an Effort row")
+                XCTAssertFalse(Self.effortRows.contains { app.buttons[$0].exists },
+                               "\(tag): a model without an effort axis has an Effort column")
             }
             closeSheet(app)
             let writes = try await stub.writes()
@@ -676,7 +675,7 @@ final class ModelPillHealUITests: XCTestCase {
         ("gpt-6-sol", "GPT-6 Sol"), ("default", "Opus 5.5"), ("opus", "Opus 5.5"),
     ]
 
-    private static let effortRows = ["Low", "Medium", "High", "Extra High", "Max"]
+    static let effortRows = ["Low", "Medium", "High", "Extra High", "Max"]
 
     /// The model rows the open sheet has in its tree right now, top to bottom.
     @MainActor
@@ -783,12 +782,9 @@ final class ModelPillHealUITests: XCTestCase {
         XCTAssertTrue(waitForEffort(pill, nil, timeout: 20),
                       "the pill still names an effort (\(Self.effortValue(pill) ?? "none")) the session does not report")
         try await secondTaps(app, stub, pill, tag: "effort-unknown")
-        // The levels page with no level checked: the row says the CLI's default.
+        // The levels with none checked: the session runs the CLI's default.
         try await openMenu(app, pill)
-        let row = element(app, "composer.modelSheet.effort")
-        XCTAssertTrue(row.waitForExistence(timeout: 5), "no Effort row for Sonnet 5")
-        XCTAssertTrue(effortRowText(app).hasSuffix("Default"), "the Effort row reads \"\(effortRowText(app))\"")
-        if try await openEffortPage(app) {
+        if try await effortColumnInReach(app) {
             assertTheLevelsAreOneList(app, checked: nil, tag: "effort-unknown")
         }
         closeSheet(app)
@@ -978,8 +974,8 @@ final class ModelPillHealUITests: XCTestCase {
               + "with the keyboard away, \(try await stub.writes().count - before) writes, focus back, typing goes on")
     }
 
-    /// With the keyboard up, a PICK: one tap opens the sheet, the Effort row opens
-    /// the levels, the tapped level is written once, and the focus comes back.
+    /// With the keyboard up, a PICK: one tap opens the sheet, the tapped level in
+    /// its Effort column is written once, and the focus comes back.
     @MainActor
     private func keyboardUpPick(
         _ app: XCUIApplication, _ stub: StubControl, _ pill: XCUIElement, level: String, tag: String
@@ -996,7 +992,7 @@ final class ModelPillHealUITests: XCTestCase {
         XCTAssertTrue(sheetClose(app).waitForExistence(timeout: 5), "\(tag): one tap did not open the sheet")
         XCTAssertTrue(waitUntil(timeout: 3) { !app.keyboards.element.exists }, "\(tag): the keyboard stayed up")
         try await Task.sleep(for: .milliseconds(900))
-        guard try await openEffortPage(app) else { return }
+        guard try await effortColumnInReach(app) else { return }
         app.buttons[level].tap()
         XCTAssertTrue(waitUntil(timeout: 5) { !self.sheetIsUp(app) }, "\(tag): the pick did not close the sheet")
         XCTAssertTrue(waitUntil(timeout: 5) { app.keyboards.element.exists },
@@ -1217,8 +1213,10 @@ final class ModelPillHealUITests: XCTestCase {
         XCTAssertTrue(element(app, "composer.modelPill.retry").waitForExistence(timeout: 5),
                       "the unreachable pill's sheet offers no Retry")
         XCTAssertFalse(app.buttons["Haiku 4.5"].exists, "the unreachable sheet lists models it cannot write")
-        XCTAssertFalse(element(app, "composer.modelSheet.effort").exists,
+        XCTAssertFalse(Self.effortRows.contains { app.buttons[$0].exists },
                        "the unreachable sheet offers levels it cannot write")
+        XCTAssertFalse(element(app, "composer.modelSheet.cost").exists,
+                       "the unreachable sheet shows Cost, Speed and Details it cannot read")
         try await stub.screenshot(app, "model-pill-12-last-known-menu")
         closeMenu(app)
 
@@ -1233,7 +1231,7 @@ final class ModelPillHealUITests: XCTestCase {
     // MARK: - Driving the app
 
     @MainActor
-    private func launchPaired(_ extra: [String] = []) throws -> XCUIApplication {
+    func launchPaired(_ extra: [String] = []) throws -> XCUIApplication {
         let (server, token) = try pairing()
         return UITestLaunch.launch(["-walnut.serverUrl", server, "-walnut.deviceToken", token] + extra)
     }
@@ -1253,14 +1251,14 @@ final class ModelPillHealUITests: XCTestCase {
     }
 
     @MainActor
-    private func openChatTab(_ app: XCUIApplication) {
+    func openChatTab(_ app: XCUIApplication) {
         let chat = app.tab(.chat)
         XCTAssertTrue(chat.waitForExistence(timeout: 60), "the tab bar never appeared")
         chat.tap()
     }
 
     @MainActor
-    private func element(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
+    func element(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
         app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier == %@", identifier))
             .firstMatch
@@ -1279,7 +1277,7 @@ final class ModelPillHealUITests: XCTestCase {
     /// has settled (`PillMenuSheet.settleDelay`, 600ms); the mode pill opens a
     /// UIKit menu.
     @MainActor
-    private func openMenu(_ app: XCUIApplication, _ pill: XCUIElement) async throws {
+    func openMenu(_ app: XCUIApplication, _ pill: XCUIElement) async throws {
         XCTAssertTrue(pill.waitForExistence(timeout: 10), "no pill to open")
         let isModelPill = pill.identifier == "composer.modelPill"
         pill.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
@@ -1310,20 +1308,22 @@ final class ModelPillHealUITests: XCTestCase {
         element(app, "composer.modelSheet.close")
     }
 
-    /// The "Select model" sheet is up, on either of its pages.
+    /// The pages the sheet's Cost, Speed and Details rows open.
+    static let foldPages = ["Cost", "Speed", "Details"]
+
+    /// The "Select model" sheet is up, on its first page or a page it opened.
     @MainActor
-    private func sheetIsUp(_ app: XCUIApplication) -> Bool {
-        sheetClose(app).exists || app.navigationBars["Effort"].exists
+    func sheetIsUp(_ app: XCUIApplication) -> Bool {
+        sheetClose(app).exists || Self.foldPages.contains { app.navigationBars[$0].exists }
     }
 
-    /// Close the sheet the way a user does: its X (back from the Effort page
+    /// Close the sheet the way a user does: its X (back from a page it opened
     /// first). A tap that lands before the sheet has settled is ignored, so the X
     /// is tapped again until the sheet is gone.
     @MainActor
-    private func closeSheet(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
-        let effortBar = app.navigationBars["Effort"]
-        if effortBar.exists {
-            effortBar.buttons.element(boundBy: 0).tap()
+    func closeSheet(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        if let page = Self.foldPages.first(where: { app.navigationBars[$0].exists }) {
+            app.navigationBars[page].buttons.element(boundBy: 0).tap()
             usleep(700_000)
         }
         let close = sheetClose(app)
@@ -1351,31 +1351,19 @@ final class ModelPillHealUITests: XCTestCase {
         return target.exists && target.isHittable
     }
 
-    /// From the sheet's first page, open the Effort page (scrolling to its row).
+    /// On the sheet's first page, bring its Effort column into reach (scrolling the
+    /// sheet when it is taller than the screen, as at the accessibility sizes).
     @MainActor
-    private func openEffortPage(
+    func effortColumnInReach(
         _ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line
     ) async throws -> Bool {
-        let row = element(app, "composer.modelSheet.effort")
-        guard try await scrollSheet(app, to: row, rows: Self.macOrder) else {
-            XCTFail("the sheet has no Effort row in reach", file: file, line: line)
+        let last = app.buttons[Self.effortRows.last!]
+        guard last.waitForExistence(timeout: 5),
+              try await scrollSheet(app, to: last, rows: Self.macOrder + Self.effortRows) else {
+            XCTFail("the sheet has no Effort column in reach", file: file, line: line)
             return false
         }
-        row.tap()
-        let opened = app.navigationBars["Effort"].waitForExistence(timeout: 5)
-        XCTAssertTrue(opened, "the Effort row did not open the levels", file: file, line: line)
-        // The push, before the levels take taps.
-        try await Task.sleep(for: .milliseconds(700))
-        return opened
-    }
-
-    /// What the Effort row on the sheet's first page says ("Effort" and its value).
-    @MainActor
-    private func effortRowText(_ app: XCUIApplication) -> String {
-        let row = element(app, "composer.modelSheet.effort")
-        guard row.exists else { return "" }
-        return [row.label, (row.value as? String) ?? ""].joined(separator: " ")
-            .trimmingCharacters(in: .whitespaces)
+        return true
     }
 
     @MainActor
@@ -1414,16 +1402,14 @@ final class ModelPillHealUITests: XCTestCase {
         // The current model carries the check (the selected trait), and only it.
         let checked = Self.macOrder.filter { app.buttons[$0].isSelected }
         XCTAssertEqual(checked, ["Fable 5.1 1M"], "the checked rows are \(checked)", file: file, line: line)
-        // The levels are not rows of this list: one Effort row names the level.
-        XCTAssertFalse(app.buttons["Extra High"].exists, "levels sit in the model list", file: file, line: line)
-        XCTAssertTrue(effortRowText(app).contains("High"),
-                      "the Effort row reads \"\(effortRowText(app))\"", file: file, line: line)
+        // The levels are their own column beside the models, the current one checked.
+        assertTheLevelsAreOneList(app, checked: "High", besideModels: true, tag: "healed", file: file, line: line)
         try await stubUnderTest().screenshot(app, shot)
         closeMenu(app)
     }
 
-    /// The pill names the effort, and the sheet's Effort row opens every level as
-    /// one vertical list, low to high, the current one checked.
+    /// The pill names the effort, and the sheet's Effort column lists every level,
+    /// low to high, the current one checked.
     @MainActor
     private func assertEffortPillOffersTheLevels(
         _ app: XCUIApplication, shot: String, file: StaticString = #filePath, line: UInt = #line
@@ -1433,25 +1419,37 @@ final class ModelPillHealUITests: XCTestCase {
                       "the pill names no effort (value \(Self.effortValue(pill) ?? "none"))",
                       file: file, line: line)
         try await openMenu(app, pill)
-        guard try await openEffortPage(app, file: file, line: line) else {
+        guard try await effortColumnInReach(app, file: file, line: line) else {
             closeMenu(app)
             return
         }
-        assertTheLevelsAreOneList(app, checked: "High", tag: "healed", file: file, line: line)
+        assertTheLevelsAreOneList(app, checked: "High", besideModels: true, tag: "healed", file: file, line: line)
         try await stubUnderTest().screenshot(app, shot)
         closeMenu(app)
     }
 
-    /// On the Effort page: every level, top to bottom, low to high, in one column,
+    /// The Effort column: every level, top to bottom, low to high, in one column,
     /// and only `checked` carries the check (nil = none, the CLI's default).
+    /// `besideModels`: the column stands to the right of the model rows (the
+    /// default and the standard sizes), not under them (the accessibility sizes).
     @MainActor
-    private func assertTheLevelsAreOneList(
-        _ app: XCUIApplication, checked: String?, tag: String,
+    func assertTheLevelsAreOneList(
+        _ app: XCUIApplication, checked: String?, besideModels: Bool = true, tag: String,
         file: StaticString = #filePath, line: UInt = #line
     ) {
         for level in Self.effortRows {
-            XCTAssertTrue(app.buttons[level].waitForExistence(timeout: 5), "\(tag): the Effort page has no \(level)",
+            XCTAssertTrue(app.buttons[level].waitForExistence(timeout: 5), "\(tag): the Effort column has no \(level)",
                           file: file, line: line)
+        }
+        if let model = Self.macOrder.first(where: { app.buttons[$0].exists }) {
+            let modelX = app.buttons[model].frame.minX
+            let levelX = app.buttons[Self.effortRows[0]].frame.minX
+            if besideModels {
+                XCTAssertGreaterThan(levelX, modelX + 40, "\(tag): the levels are not beside the models "
+                                     + "(\(model) @\(Int(modelX)), \(Self.effortRows[0]) @\(Int(levelX)))", file: file, line: line)
+            } else {
+                XCTAssertEqual(levelX, modelX, accuracy: 2, "\(tag): the levels are not under the models", file: file, line: line)
+            }
         }
         let frames = Self.effortRows.map { app.buttons[$0].frame }
         let column = zip(frames, frames.dropFirst()).allSatisfy { a, b in
@@ -1463,7 +1461,7 @@ final class ModelPillHealUITests: XCTestCase {
         let marked = Self.effortRows.filter { app.buttons[$0].isSelected }
         XCTAssertEqual(marked, checked.map { [$0] } ?? [], "\(tag): the checked levels are \(marked)",
                        file: file, line: line)
-        print("[evidence] \(tag): the Effort page lists \(Self.effortRows) in one column, checked \(marked)")
+        print("[evidence] \(tag): the Effort column lists \(Self.effortRows) in one column, checked \(marked)")
     }
 
     /// The pill's effort half, as VoiceOver reads it after the name. nil = none.
@@ -1479,12 +1477,12 @@ final class ModelPillHealUITests: XCTestCase {
     }
 
     @MainActor
-    private func waitForLabel(_ element: XCUIElement, _ label: String, timeout: TimeInterval) -> Bool {
+    func waitForLabel(_ element: XCUIElement, _ label: String, timeout: TimeInterval) -> Bool {
         waitUntil(timeout: timeout) { element.exists && element.label == label }
     }
 
     @MainActor
-    private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
+    func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if condition() { return true }
@@ -1573,7 +1571,7 @@ final class ModelPillHealUITests: XCTestCase {
 
     // MARK: - The stub
 
-    private func stubUnderTest() async throws -> StubControl {
+    func stubUnderTest() async throws -> StubControl {
         let (server, _) = try pairing()
         guard let base = URL(string: server) else { throw XCTSkip("unusable server URL \(server)") }
         let stub = StubControl(base: base)
@@ -1593,7 +1591,7 @@ final class ModelPillHealUITests: XCTestCase {
         try syncRequests(stub).filter { $0.method == "GET" && $0.path == "/api/v1/chat/engine" }
     }
 
-    private func syncWrites(_ stub: StubControl) throws -> [StubControl.Record] {
+    func syncWrites(_ stub: StubControl) throws -> [StubControl.Record] {
         try syncRequests(stub).filter {
             $0.method == "POST" && $0.path.hasPrefix("/api/v1/sessions/")
                 && ($0.path.hasSuffix("/model") || $0.path.hasSuffix("/effort"))
@@ -1601,7 +1599,7 @@ final class ModelPillHealUITests: XCTestCase {
     }
 
     /// Synchronous read for a polling predicate (the XCUITest wait loop is sync).
-    private func syncRequests(_ stub: StubControl) throws -> [StubControl.Record] {
+    func syncRequests(_ stub: StubControl) throws -> [StubControl.Record] {
         var result: [StubControl.Record] = []
         var failure: Error?
         let done = DispatchSemaphore(value: 0)

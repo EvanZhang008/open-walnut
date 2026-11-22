@@ -66,7 +66,7 @@ final class ComposerControlsTests: XCTestCase {
     }
 
     /// The pill's menu is the models, then the levels, as two sections (the
-    /// sheet shows the second as its Effort row), each headed by its current
+    /// sheet shows the second as its Effort column), each headed by its current
     /// value and each with exactly its own row checked.
     func testTheOnePillsMenuHoldsTheModelsThenTheLevels() {
         let controls = ComposerControlsModel(

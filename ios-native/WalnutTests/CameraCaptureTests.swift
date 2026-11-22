@@ -91,7 +91,7 @@ final class CameraCaptureTests: XCTestCase {
     func testANarrationFailureSaysWhyInTheCardsWords() {
         let unset = APIError.server(status: 503, code: "stt_unavailable", message: "x", serverHash: nil, serverContent: nil)
         XCTAssertEqual(CameraClipMaker.narrationNote(for: unset), "no narration: speech to text is not set up")
-        XCTAssertEqual(CameraClipMaker.narrationNote(for: CameraClipMaker.TimeoutError()), "no narration: speech to text took too long")
+        XCTAssertEqual(CameraClipMaker.narrationNote(for: Deadline.Expired()), "no narration: speech to text took too long")
         XCTAssertEqual(CameraClipMaker.narrationNote(for: URLError(.notConnectedToInternet)), "no narration: speech to text failed")
     }
 

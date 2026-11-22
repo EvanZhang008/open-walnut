@@ -411,6 +411,22 @@ struct SessionDetail: Codable, Equatable {
         var overviewAt: String? = nil
         var recap: String? = nil
         var recapAt: String? = nil
+        // Additive (2026-11): the model sheet's Speed and Details (ModelSheetFacts).
+        // `lastTurnSpeed` decodes field by field (SessionTurnSpeed), so one odd
+        // field never fails the record.
+        var lastTurnSpeed: SessionTurnSpeed? = nil
+        /// The session's average speed per model (additive, 2026-11); absent from older servers.
+        var speedTotals: SessionSpeedTotals? = nil
+        /// An ACP session's model id with its effort ("openai.gpt-6.2-sol[max]"); `model` otherwise.
+        var acpModel: String? = nil
+        /// Tokens in context at the last model call, from an engine that reports it
+        /// as a number (ACP); a Claude Code session has `promptCache.tokens`.
+        var contextTokens: Double? = nil
+        /// The model's whole context window, the percentage's denominator.
+        var modelMaxWindow: Double? = nil
+        var promptCache: SessionPromptCache? = nil
+        /// claude | codex | opencode | …; absent = claude.
+        var engine: String? = nil
 
         private enum CodingKeys: String, CodingKey {
             case claudeSessionId, title, mode, archived
@@ -419,6 +435,7 @@ struct SessionDetail: Codable, Equatable {
             case model, description
             case humanNote = "human_note"
             case overview, overviewAt, recap, recapAt
+            case lastTurnSpeed, speedTotals, acpModel, contextTokens, modelMaxWindow, promptCache, engine
         }
 
         /// Overall and Latest, trimmed; nil when the session has no recap yet.

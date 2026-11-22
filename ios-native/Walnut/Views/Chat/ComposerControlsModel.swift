@@ -439,7 +439,7 @@ final class ComposerControlsModel {
     }
 
     /// The one pill's menu: the models, then the effort levels, as two sections
-    /// (the sheet shows the second as its Effort row). The retry and read-only
+    /// (the sheet shows the second as its Effort column). The retry and read-only
     /// states have no effort to offer and stay the model menu.
     var combinedMenu: PillMenu {
         let model = modelMenu
