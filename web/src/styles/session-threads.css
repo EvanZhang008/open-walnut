@@ -57,3 +57,18 @@
   padding: 4px 4px 12px;
 }
 
+/* Nothing in the view (ThreadsEmpty, no card at all): the pane narrows to its one line and New
+   topic, and the chat beside it takes the rest of the row over its dragged width (2026-11-22, UI
+   audit: the empty pane still took half the window). A phone shows one pane at a time, and a
+   collapsed chat leaves the row to the pane, so neither narrows. */
+.session-panel:not(.is-phone-layer) .session-panel-split.is-changed-open:not(.is-chat-collapsed):has(> .session-panel-diff-col > .session-threads-pane .org-threads-empty-row):not(:has(> .session-panel-diff-col > .session-threads-pane .org-thread)) > .session-panel-diff-col:has(> .session-threads-pane) {
+  flex: 0 0 280px;
+}
+.session-panel:not(.is-phone-layer) .session-panel-split.is-changed-open:not(.is-chat-collapsed):has(> .session-panel-diff-col > .session-threads-pane .org-threads-empty-row):not(:has(> .session-panel-diff-col > .session-threads-pane .org-thread)) > .session-panel-chat-col {
+  /* Over the inline width the drag keeps (SessionPanel chatColStyle): it comes back with the first card. */
+  flex: 1 1 auto !important;
+  width: auto !important;
+}
+/* Narrow and empty, the bar keeps only its name and Turn off: its sub line would be cut there
+   (2026-11-22 review), and the empty line says what the pane is for on hover. */
+.session-threads-pane:has(.org-threads-empty-row):not(:has(.org-thread)) .session-threads-bar-sub { display: none; }

@@ -36,7 +36,7 @@ export function KnownBlock({ t, tasks, name }: { t: OrgThread; tasks: readonly T
           <p>
             {working ? 'Still in work: ' : 'Waiting on '}<TaskChip id={x.id} task={byId.get(x.id)} fallback={x.title} />
             {/* What it waits on is the task's own words: they open from the session that wrote them. */}
-            {x.waitingOn && <>{': '}<AgentText text={x.waitingOn} inline {...taskTextSource(byId.get(x.id), 'waiting')} testId="org-thread-known-on" /></>}
+            {x.waitingOn && <>{': '}<AgentText text={x.waitingOn} inline shortLinks {...taskTextSource(byId.get(x.id), 'waiting')} testId="org-thread-known-on" /></>}
             {x.until ? `, until ${untilWords(x.until)}` : ''}
           </p>
           {x.what && <p className="org-thread-known-what" data-testid="org-thread-known-what">{x.what}</p>}

@@ -90,7 +90,9 @@ describe('one card for everything that waits on him', () => {
       expect(read(rel), `${rel}: only ThreadItem, never a card of its own`).not.toMatch(/<(ThreadCard|PoppedThreadCard)\b/)
     }
     const threads = read('web/src/components/org/OrgThreads.tsx')
-    const needs = threads.slice(threads.indexOf('function NeedsAnswer'), threads.indexOf('function ThreadCard('))
+    // The answer row of a card that waits on him (thread-card-answer.tsx, moved out of OrgThreads.tsx whole).
+    const answers = read('web/src/components/org/thread-card-answer.tsx')
+    const needs = answers.slice(answers.indexOf('function NeedsAnswer'))
     expect(needs).toMatch(/<AskCardFrame\b/)
     expect(threads).toMatch(/<NeedsAnswer\b/)
   });
@@ -139,7 +141,7 @@ describe('every source of choices keeps its buttons on a thread card', () => {
   });
 
   it('a thread\'s own options are drawn with AskOptions on its card and on the card of a thread below', () => {
-    for (const rel of ['web/src/components/org/OrgThreads.tsx', 'web/src/components/org/PoppedThreadCard.tsx']) {
+    for (const rel of ['web/src/components/org/thread-card-answer.tsx', 'web/src/components/org/PoppedThreadCard.tsx']) {
       expect(read(rel), rel).toMatch(/<ThreadOptions thread=\{t\}/);
     }
     const parts = read('web/src/components/org/OrgInlineAnswer.tsx');

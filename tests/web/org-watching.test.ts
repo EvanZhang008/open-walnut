@@ -240,7 +240,7 @@ describe('the Org page keeps one list, the watch', () => {
     expect(src).not.toMatch(/org_pins|setOrgPin|nodePins|isPinnedTo|pinnedNodesOf|\borg-pin(?!s\.ts)/)
     // A task is watched on this page, never pinned (6ca3a4a00). A thread is pinned to the top
     // of the Threads view (1c262e635): that pin is the thread's own, so its words stay there.
-    if (path.basename(file) === 'OrgThreads.tsx') return
+    if (['OrgThreads.tsx', 'thread-card-answer.tsx'].includes(path.basename(file))) return
     expect(src).not.toMatch(/['">`]\s*(Pin|Unpin|Pinned)\b(?! on top)/)
   })
 })

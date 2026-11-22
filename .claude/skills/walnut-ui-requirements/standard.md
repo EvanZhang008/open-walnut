@@ -234,9 +234,11 @@ round controls: "什么鬼东西都要是圆形的呀？所有东西都应该统
 - Anything that waits on the user is an `AskCardFrame` card (frosted glass, one decision per page:
   `needs-card-unified-ratchet.test.ts`).
 - A notice is a `NoticeCard` (`wn-glass-frost`).
-- A card's text never hides what it asks: a question or why cut to its lines gets More / Less (a
-  `DisclosureButton`), and a bare URL or path in it reads as a short label with the whole address as
-  its tooltip (`AgentText shortLinks`, `tests/web/markdown/short-link-labels.test.ts`). A card under
+- A card's text never hides what it asks: a question or why cut to its lines gets Show more /
+  Show less under it, the one fold (`components/common/TextFold.tsx`); a thread card's own words are
+  shown whole, never cut (`CardWords`); and a bare URL or path in it reads as a short label with the
+  whole address as its tooltip (`AgentText shortLinks`, `RichMarkdown shortLinks`,
+  `tests/web/markdown/short-link-labels.test.ts`, `tests/web/thread-card-words-guard.test.ts`). A card under
   460 px wide puts its box on a line of its own, with Snooze and pin under it at the right.
 - Cards in one list share one corner radius and one padding: the ask card's, `--ask-card-radius`
   (`--radius-lg`, 16 px) and `--ask-card-pad` (12 px 12 px 8 px), defined in `globals.css` `:root`. The thread card, the thread

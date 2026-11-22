@@ -42,6 +42,7 @@
 import { memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { holdImageBoxesIn } from '@/utils/image-size-hold';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
+import { shortLinkLabelsHtml } from '@/utils/short-link-labels';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useStableHtml } from '@/hooks/useStableHtml';
 import {
@@ -81,8 +82,10 @@ const ISLAND_CSP = '<meta http-equiv="Content-Security-Policy" content="'
  * per-instance `useId` stands in, which is stable for as long as this component
  * instance lives.
  */
-export function RichMarkdown({ text, cwd, host, inlineImages, scope, onClick, hostRef }: {
+export function RichMarkdown({ text, cwd, host, inlineImages, scope, onClick, hostRef, shortLinks = false }: {
   text: string;
+  /** A bare URL or path reads as a short label, the whole address its tooltip (a card's words; utils/short-link-labels.ts). */
+  shortLinks?: boolean;
   /** Session cwd, so relative file paths in the prose stay clickable. */
   cwd?: string;
   /**
@@ -113,9 +116,13 @@ export function RichMarkdown({ text, cwd, host, inlineImages, scope, onClick, ho
   const split = useMemo(() => (hasRichContent(body) ? splitRichChunks(body) : null), [body]);
   const noImages = inlineImages === false;
   const plainHtml = useMemo(
-    () => (split ? '' : renderMarkdownWithRefs(body, cwd, host, noImages ? { inlineImages: false } : undefined)),
+    () => {
+      if (split) return '';
+      const html = renderMarkdownWithRefs(body, cwd, host, noImages ? { inlineImages: false } : undefined);
+      return shortLinks ? shortLinkLabelsHtml(html) : html;
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
-    [split, body, cwd, host, noImages, labelsVersion],
+    [split, body, cwd, host, noImages, labelsVersion, shortLinks],
   );
   const plainProp = useStableHtml(plainHtml);
   // The host for the image hold (utils/image-size-hold.ts) and the caller's
@@ -152,7 +159,7 @@ export function RichMarkdown({ text, cwd, host, inlineImages, scope, onClick, ho
       {chunks.map((chunk, i) => {
         const key = richChunkKey(scopeId, i);
         if (chunk.kind === 'app') return <AppChunk key={key} chunk={chunk} messageScope={scope} />;
-        return <RichChunkView key={key} text={chunk.text} kind={chunk.kind} scopeId={scopeId} cwd={cwd} host={host} noImages={noImages} />;
+        return <RichChunkView key={key} text={chunk.text} kind={chunk.kind} scopeId={scopeId} cwd={cwd} host={host} noImages={noImages} shortLinks={shortLinks} />;
       })}
     </div>
   );
@@ -167,7 +174,7 @@ export function RichMarkdown({ text, cwd, host, inlineImages, scope, onClick, ho
  * equality no longer buys anything (hooks/useStableHtml.ts). Only the entity-label
  * version can invalidate the html itself, because a pill's text lives in that store.
  */
-const RichChunkView = memo(function RichChunkView({ text, kind, scopeId, cwd, host, noImages = false }: {
+const RichChunkView = memo(function RichChunkView({ text, kind, scopeId, cwd, host, noImages = false, shortLinks = false }: {
   text: string;
   kind: RichChunk['kind'];
   /** The MESSAGE's scope id — used to confine this chunk's CSS, not as a key. */
@@ -176,6 +183,8 @@ const RichChunkView = memo(function RichChunkView({ text, kind, scopeId, cwd, ho
   /** As RichMarkdown's `host` / `inlineImages: false`. */
   host?: string;
   noImages?: boolean;
+  /** As RichMarkdown's `shortLinks`. */
+  shortLinks?: boolean;
 }) {
   // This is the ONE render path allowed to keep a model `<style>` (allowStyle),
   // because it is the one that scopes it: everywhere else a `<style>` would be
@@ -195,7 +204,10 @@ const RichChunkView = memo(function RichChunkView({ text, kind, scopeId, cwd, ho
     // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates the label lookups inside
     [text, cwd, host, noImages, labelsVersion],
   );
-  const html = useMemo(() => scopeStyleHtml(rendered, scopeId), [rendered, scopeId]);
+  const html = useMemo(() => {
+    const scoped = scopeStyleHtml(rendered, scopeId);
+    return shortLinks ? shortLinkLabelsHtml(scoped) : scoped;
+  }, [rendered, scopeId, shortLinks]);
   const htmlProp = useStableHtml(html);
   return (
     <div

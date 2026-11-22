@@ -46,3 +46,7 @@
   flex: none;
   white-space: nowrap;
 }
+
+/* A long link read as its short name (utils/short-link-labels.ts) keeps its name on one line where
+   the line has room, and wraps inside itself only when the column is narrower than the name. */
+.markdown-body a[data-short-label] { display: inline-block; max-width: 100%; }

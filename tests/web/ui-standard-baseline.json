@@ -676,7 +676,7 @@
     "components/org/OrgRouterSettings.tsx": 1,
     "components/org/OrgSidePanel.tsx": 3,
     "components/org/OrgTaskRail.tsx": 5,
-    "components/org/OrgThreads.tsx": 3,
+    "components/org/OrgThreads.tsx": 2,
     "components/org/OrgThreadsByState.tsx": 1,
     "components/org/PoppedThreadCard.tsx": 1,
     "components/org/RouterFolderPicker.tsx": 1,

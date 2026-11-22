@@ -203,7 +203,7 @@ for (const size of [{ width: 390, height: 844, phone: true }, { width: 1280, hei
           const toggle = cards.nth(i).getByTestId('org-thread-unread-toggle')
           if (await toggle.count()) await toggle.click()
           const more = cards.nth(i).getByTestId('org-thread-answer-body-more')
-          if (await more.count() && /Expand/.test(await more.innerText())) await more.click()
+          if (await more.count() && /Show more/.test(await more.innerText())) await more.click()
           // The whole conversation: every ask and every answer, the user's own long words too.
           const head = cards.nth(i).getByTestId('org-thread-head')
           if (await head.getAttribute('aria-expanded') === 'false') await head.click()

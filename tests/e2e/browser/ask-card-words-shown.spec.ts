@@ -224,24 +224,24 @@ test('a long why opens with More, a bare path reads short, and a narrow card giv
   const link = detail.locator('a.file-link').first()
   await expect(link).toHaveText(/^…\/long-fold.*pages\/index\.html$/)
   await expect(link).toHaveAttribute('title', path)
-  // Cut to its lines: More opens it whole in the card, Less cuts it again.
+  // Cut to its lines: Show more opens it whole in the card, Show less cuts it again.
   const clamp = item.locator('.ask-card-detail')
   const cut = await clamp.evaluate((el) => el.clientHeight)
   const toggle = item.getByTestId('ask-card-more')
-  await expect(toggle).toHaveText('More')
-  // The hover peek opens the text where it is; More stays put under the pointer meanwhile.
+  await expect(toggle).toHaveText('Show more')
+  // The hover peek opens the text where it is; Show more stays put under the pointer meanwhile.
   await clamp.hover()
   await expect(item.locator('[data-peek-down]').first(), 'the hover peek opened the text').toBeAttached({ timeout: 5_000 })
   await page.waitForTimeout(500)
-  await expect(toggle).toHaveText('More')
+  await expect(toggle).toHaveText('Show more')
   await page.mouse.move(5, 5)
   await toggle.click()
-  await expect(toggle).toHaveText('Less')
+  await expect(toggle).toHaveText('Show less')
   await expect.poll(() => clamp.evaluate((el) => el.clientHeight)).toBeGreaterThan(cut)
   await expect(item.getByTestId('org-answer-option').first(), 'the answer stays in the card').toBeVisible()
   await page.screenshot({ path: `test-results/ask-card-more-${test.info().project.name}.png`, clip: (await item.boundingBox())! })
   await toggle.click()
-  await expect(toggle).toHaveText('More')
+  await expect(toggle).toHaveText('Show more')
   // Under the pointer the hover peek holds it open again; away from the card it is cut as before.
   await page.mouse.move(5, 5)
   await expect.poll(() => clamp.evaluate((el) => el.clientHeight)).toBe(cut)

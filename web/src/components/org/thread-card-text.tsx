@@ -1,11 +1,12 @@
 /**
- * The words on a thread card (OrgThreads.tsx): the node's answer as its chat shows it and his own
- * words, each folded to a few lines with the rest one click away. Moved out of OrgThreads.tsx whole.
+ * The words on a thread card (OrgThreads.tsx): its summary, whole (CardWords); the node's answer as
+ * its chat shows it and his own words, each folded to a few lines with the rest one click away
+ * (common/TextFold.tsx). A long path or address in any of them reads as a short name, the whole
+ * one its tooltip (utils/short-link-labels.ts; tests/web/thread-card-words-guard.test.ts).
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
-import { useCutOff } from '@/hooks/useCutOff';
+import { useCallback, useMemo, type ReactNode } from 'react';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
-import { DisclosureButton } from '@/components/controls';
+import { TextFold } from '@/components/common/TextFold';
 import { AgentText } from '@/components/common/AgentText';
 import { MessageAbout, rowAbout } from '@/components/sessions/message-about';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
@@ -23,37 +24,22 @@ function clock(at: string, now: number): string {
   return new Date(now).toDateString() === d.toDateString() ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`;
 }
 
+/** Long words fold to a few lines, the toggle under them at the left (org-threads.css cuts them). */
+function Fold({ children, className, testId }: { children: ReactNode; className: string; testId: string }) {
+  return <TextFold className={`org-thread-fold ${className}`} testId={testId} toggleClassName="org-thread-toggle">{children}</TextFold>;
+}
+
 /**
- * Long words fold to a few lines. The toggle sits on the text itself, at its left, and a click on
- * the folded text opens it too (a link or a pill inside still does its own thing).
+ * A card's own words (the node's summary, Walnut's stand-in for it, a held ask's question and
+ * reply), shown whole: never a line clamp and never a fold (2026-11-20, the user: "the threa over
+ * here shoud show all , not just 2 line only the one show on top"). A long path or address in them
+ * reads short (shortLinks), which is what keeps a long card short (2026-11-22, UI audit). Every
+ * card body goes through here (tests/web/thread-card-words-guard.test.ts).
  */
-function Fold({ children, className, testId }: { children: React.ReactNode; className: string; testId: string }) {
-  const box = useRef<HTMLDivElement>(null);
-  const [whole, setWhole] = useState(false);
-  const long = useCutOff(box, { whole, slack: 4 });
-  const folded = long && !whole;
-  return (
-    <>
-      <div
-        ref={box}
-        className={`org-thread-fold ${className}${whole ? ' is-whole' : ''}${folded ? ' is-folded' : ''}`}
-        data-testid={testId}
-        onClick={folded ? (e) => {
-          // A link, a picture, a pill, a disclosure or a selection keeps its own click.
-          if ((e.target as HTMLElement).closest('a, button, img, summary, details, input, [data-source], [data-lightbox-src]')) return;
-          if (window.getSelection()?.isCollapsed === false) return;
-          setWhole(true);
-        } : undefined}
-      >
-        {children}
-      </div>
-      {(long || whole) && (
-        <DisclosureButton expanded={whole} className="org-thread-toggle" data-testid={`${testId}-more`} onClick={() => setWhole(!whole)}>
-          {whole ? 'Collapse' : 'Expand'}
-        </DisclosureButton>
-      )}
-    </>
-  );
+export function CardWords({ children, testId, className = '', data }: {
+  children: ReactNode; testId: string; className?: string; data?: Record<`data-${string}`, string | undefined>;
+}) {
+  return <div className={`org-thread-summary${className ? ` ${className}` : ''}`} data-testid={testId} {...data}>{children}</div>;
 }
 
 /**
@@ -86,7 +72,7 @@ export function Answer({ text, about, at, by, known, now, testId = 'org-thread-a
       <div className="org-thread-answer-by" data-tone={known ? undefined : 'live'}>{!known && <span className="wn-dot" aria-hidden="true" />}{by} · {clock(at, now)}</div>
       {re && <div className="org-thread-re" data-testid="org-thread-re">{re}</div>}
       <Fold className="org-thread-answer-body" testId="org-thread-answer-body">
-        <RichMarkdown text={body} cwd={file.render.cwd} host={file.render.host} inlineImages={file.render.images} onClick={onClick} />
+        <RichMarkdown text={body} shortLinks cwd={file.render.cwd} host={file.render.host} inlineImages={file.render.images} onClick={onClick} />
       </Fold>
       {ids.length > 0 && <MessageAbout ids={ids} />}
     </div>
@@ -104,7 +90,7 @@ export function Words({ m }: { m: OrgThreadMessage }) {
   const text = [m.text, ...(m.images ?? [])].filter(Boolean).join('\n\n');
   return (
     <Fold className="org-thread-words-fold" testId="org-thread-words">
-      <AgentText text={text} className="org-thread-words" {...THREAD_WORDS_SOURCE} />
+      <AgentText text={text} className="org-thread-words" shortLinks {...THREAD_WORDS_SOURCE} />
     </Fold>
   );
 }

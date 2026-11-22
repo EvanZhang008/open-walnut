@@ -8,11 +8,9 @@
  * the box to type in, always shown, with its buttons and Snooze last (beside the box when the width
  * allows, under it when not). No state word, no kind, no age.
  */
-import { useRef, useState, type ReactNode } from 'react';
-import { DisclosureButton } from '@/components/controls';
-import { useCutOff } from '@/hooks/useCutOff';
+import type { ReactNode } from 'react';
+import { FoldToggle, useTextFold } from '@/components/common/TextFold';
 import { useExperimental } from '@/hooks/useExperimental';
-import { hidePeek } from '@/utils/truncation-peek';
 import './ask-card.css';
 
 /**
@@ -40,7 +38,10 @@ export function AskCardFrame({ title, question, detail, status, answer, tools, c
   testId: string;
   data?: Record<`data-${string}`, string | undefined>;
 }) {
-  const text = useWholeText();
+  // Its question and why are cut to a few lines; when they are, Show more under them shows them
+  // whole in the card (2026-11-21, UI audit: a Yes / No card's why ended in an ellipsis with no way
+  // to read the rest before answering). The one fold of every card (common/TextFold.tsx).
+  const text = useTextFold({ parts: ':scope > .ask-card-question, :scope > .ask-card-detail' });
   return (
     // A card with a box to type in: hovering its text opens it downward in its own column, never
     // across the window over the panes beside it (utils/truncation-peek-row.ts growsDown).
@@ -48,26 +49,10 @@ export function AskCardFrame({ title, question, detail, status, answer, tools, c
       {title ? <div className="ask-card-title">{title}</div> : null}
       {question ? <div className="ask-card-question">{question}</div> : null}
       {detail ? <div className="ask-card-detail">{detail}</div> : null}
-      {text.clipped || text.whole ? (
-        <DisclosureButton expanded={text.whole} className="ask-card-more" data-testid="ask-card-more" onClick={() => { hidePeek(); text.setWhole(!text.whole); }}>
-          {text.whole ? 'Less' : 'More'}
-        </DisclosureButton>
-      ) : null}
+      <FoldToggle fold={text} className="ask-card-more" testId="ask-card-more" />
       {status}
       <div className="ask-card-answer">{answer}{tools ? <span className="ask-card-tools">{tools}</span> : null}</div>
     </div>
   );
 }
 
-/**
- * Its question and why are cut to a few lines; when they are, a More under them shows them whole in
- * the card, and Less cuts them again (2026-11-21, UI audit: a Yes / No card's why ended in an
- * ellipsis with no way to read the rest before answering). Read for one look, so not kept. A click
- * on it ends the hover peek first, so Less cuts the text at once instead of the peek holding it open.
- */
-function useWholeText() {
-  const ref = useRef<HTMLDivElement>(null);
-  const [whole, setWhole] = useState(false);
-  const clipped = useCutOff(ref, { parts: ':scope > .ask-card-question, :scope > .ask-card-detail', whole });
-  return { ref, whole, setWhole, clipped };
-}

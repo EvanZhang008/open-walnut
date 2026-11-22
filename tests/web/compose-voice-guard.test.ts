@@ -212,7 +212,7 @@ describe('every box where a person writes words has the mic', () => {
   it('scans the app, and the reported Org Threads follow-up has the mic', () => {
     expect(fields.length).toBeGreaterThan(200);
     // The follow-up is the chat's own composer (ReplyComposer, a light ChatInput with its MicButton).
-    expect(read('components/org/OrgThreads.tsx')).toMatch(/function FollowUp[\s\S]*?<ReplyComposer\b/);
+    expect(read('components/org/thread-card-answer.tsx')).toMatch(/function FollowUp[\s\S]*?<ReplyComposer\b/);
     expect(read('components/chat/ReplyComposer.tsx')).toMatch(/<ChatInput\b/);
     expect(byKey.get('components/common/AnswerBox.tsx|textarea data-testid=testId')?.mic).toBe(true);
     for (const key of [

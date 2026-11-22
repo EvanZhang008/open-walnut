@@ -38,13 +38,20 @@ export function nodeMember(task: Pick<Task, 'id' | 'title' | 'project' | 'org_ro
   return taskMember(task);
 }
 
-/** The Threads view's row of actions: "+ New topic" with its node already picked. */
-export function ThreadsTopicBar({ owner }: { owner: Pick<Task, 'id' | 'title' | 'project' | 'org_role' | 'org_name'> | undefined }) {
+type ThreadsOwner = Pick<Task, 'id' | 'title' | 'project' | 'org_role' | 'org_name'> | undefined;
+
+/** The Threads view's "+ New topic", its node already picked; on the empty view's one line (OrgThreadsByState ThreadsEmpty). */
+export function ThreadsNewTopic({ owner }: { owner: ThreadsOwner }) {
+  return <NewTopicButton members={owner ? [nodeMember(owner)] : []} testId="org-threads-new-topic" />;
+}
+
+/** The Threads view's row of actions above its cards: "+ New topic". */
+export function ThreadsTopicBar({ owner }: { owner: ThreadsOwner }) {
   const on = useTopicsOn();
   if (!on) return null;
   return (
     <div className="org-threads-bar" data-testid="org-threads-topic-bar">
-      <NewTopicButton members={owner ? [nodeMember(owner)] : []} testId="org-threads-new-topic" />
+      <ThreadsNewTopic owner={owner} />
     </div>
   );
 }

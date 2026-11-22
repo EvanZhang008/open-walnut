@@ -163,7 +163,8 @@ test('a request becomes a thread the lead keeps; asks about one subject are one 
   await expect(c1.getByTestId('org-thread-state')).toHaveText('Working')
   await expect(c1.getByTestId('org-thread-reply').locator('strong')).toHaveText('Build Threads')
   await expect(c1.locator(`[data-testid="org-thread-task"][data-task-id="${ids.work}"]`)).toContainText(`Build Threads ${STAMP}`)
-  await expect(c1.locator(`[data-testid="org-thread-task"][data-task-id="${ids.work}"] i`)).toHaveCount(1)
+  // The chip wears its task's live status: the one status icon (components/common/TaskStateIcon.tsx).
+  await expect(c1.locator(`[data-testid="org-thread-task"][data-task-id="${ids.work}"] .task-state-icon`)).toHaveCount(1)
 
   // A second ask right after the first is the same conversation: it joins the first thread at once
   // (core/org/threads-model.ts SAME_CONVERSATION_MS), never a card of its own.
@@ -316,7 +317,7 @@ test('a long Unicode request reads in full; an Acknowledge the server refuses pu
   await expect(c).not.toContainText('Paragraph 1:')
   await c.getByTestId('org-thread-history').click()
   await c.getByTestId('org-thread-words-more').click()
-  await expect(c.getByTestId('org-thread-words-more')).toContainText('Collapse')
+  await expect(c.getByTestId('org-thread-words-more')).toContainText('Show less')
   await expect(c.getByTestId('org-thread-message')).toContainText('Paragraph 12:')
   // No horizontal overflow from the long words.
   const overflow = await page.getByTestId('org-threads').evaluate((el) => el.scrollWidth - el.clientWidth)
@@ -837,7 +838,7 @@ test('asks and structured bodies stay whole; plain long answers still expand wit
     await expect(body).toHaveCSS('mask-image', 'none')
     const toggle = c.getByTestId('org-thread-answer-body-more')
     if (t.state !== 'needs' && !t.title.includes(' short ')) {
-      await expect(toggle).toContainText('Expand')
+      await expect(toggle).toContainText('Show more')
       if (!plainFold) {
         await expect(body).toHaveCSS('overflow-y', 'auto')
         await expect(body).toHaveCSS('max-height', '240px')
@@ -848,7 +849,7 @@ test('asks and structured bodies stay whole; plain long answers still expand wit
       expect(await body.evaluate((e) => e.clientHeight)).toBeGreaterThan(foldedHeight)
       expect(await body.evaluate((e) => e.scrollHeight - e.clientHeight)).toBeLessThanOrEqual(1)
       await toggle.click()
-      await expect(toggle).toContainText('Expand')
+      await expect(toggle).toContainText('Show more')
     } else {
       await expect(toggle).toHaveCount(0)
       if (!t.title.includes(' short ')) {

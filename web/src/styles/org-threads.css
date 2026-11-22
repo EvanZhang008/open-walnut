@@ -4,6 +4,9 @@
    only the answers he has not reacted to yet (the rule beside them). */
 .org-threads { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px 16px; }
 .org-threads-empty { margin: 4px 0; font-size: var(--font-size-md); color: var(--fg-muted); }
+/* Nothing at all (ThreadsEmpty): the short line and New topic on one row. */
+.org-threads-empty-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.org-threads-empty-row > .org-threads-empty { margin: 0; }
 .org-thread-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 /* Packed tight (2026-11-20, the user: "shoudl be narrow"): small padding and gaps, the words whole. */
 .org-thread {
@@ -16,6 +19,7 @@
    summary beside it: a block capped at fifteen lines that scrolled inside itself read as cut off
    mid-list with no sign of more (2026-11-21, a review on his data). Only the top of a chat bounds
    it, and there it fades at its cut with Show all (top-thread.css, TopThread useClippedWords).
+   A long path or address in it reads short instead (shortLinks), which keeps a long card short.
    Guard: tests/e2e/browser/thread-card-whole-summary.spec.ts. */
 .org-thread .ask-card { gap: 3px; }
 .org-thread :is(.ask-card-question, .ask-card-detail) { display: block; -webkit-line-clamp: unset; line-clamp: none; }
@@ -59,14 +63,17 @@
 .org-thread-overdue { margin: 0; font-size: var(--font-size-sm); color: color-mix(in srgb, var(--warning) 75%, var(--fg)); }
 /* The node's summary: what the card is about now, latest first. */
 .org-thread-summary { font-size: var(--font-size-md); line-height: 1.5; color: var(--fg); overflow-wrap: anywhere; }
-.org-thread-summary > :first-child { margin-top: 0; }
-.org-thread-summary > :last-child { margin-bottom: 0; }
+.org-thread-summary > :first-child, .org-thread-summary > .markdown-body > :first-child { margin-top: 0; }
+.org-thread-summary > :last-child, .org-thread-summary > .markdown-body > :last-child { margin-bottom: 0; }
 .org-thread-tasks { display: flex; flex-wrap: wrap; gap: 4px; }
+/* A related task: its state icon, then its name, which wraps whole (.wn-title; 2026-11-22, UI
+   audit: the name was cut at the chip's right end). The icon keeps the first line. */
 .org-thread-task {
-  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 2px 8px; border: 1px solid var(--border);
-  border-radius: 6px; background: var(--bg-secondary); color: var(--fg); font: inherit; font-size: var(--font-size-xs); cursor: pointer;
+  display: inline-flex; align-items: flex-start; gap: 4px; max-width: 100%; padding: 2px 8px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--bg-secondary); color: var(--fg); font: inherit; font-size: var(--font-size-xs); line-height: 16px;
+  text-align: left; cursor: pointer;
 }
-.org-thread-task span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-thread-task > .wn-fixed { margin-top: 2px; }
 
 /* The answers he has not seen, under the summary: what each answers in one line, the answer folded. */
 .org-thread-unread { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
@@ -74,8 +81,9 @@
 .org-thread-unread .org-thread-answer-body { -webkit-line-clamp: 4; }
 .org-thread-re { font-size: var(--font-size-sm); color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Expand / Collapse, on the text it opens (left, under it), and the card's Conversation toggle: the
-   shared Disclosure draws them (choice-controls.css); here only their place. */
+/* Show more / Show less (common/TextFold.tsx), on the text it opens (left, under it), and the
+   card's Conversation toggle: the shared Disclosure draws them (choice-controls.css); here only
+   their place. */
 .org-thread-toggle { align-self: flex-start; }
 .org-thread-fold.is-folded { cursor: pointer; }
 

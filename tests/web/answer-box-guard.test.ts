@@ -30,7 +30,7 @@ const BOXES: Record<string, Kind> = {
   'apps/mail/MailGroupCard.tsx': ANSWER,
   'apps/mail/MailCorrectStepWhere.tsx': ANSWER,
   'components/inbox/ItemConfirmation.tsx': ANSWER,
-  'components/org/OrgThreads.tsx': ANSWER,
+  'components/org/thread-card-answer.tsx': ANSWER,
   'components/content/CeoComposer.tsx': ANSWER,
   // Composers: a message to a session or a person, with their own send row.
   'components/chat/ChatInput.tsx': COMPOSER,

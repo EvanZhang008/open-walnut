@@ -15,9 +15,10 @@ export function TaskChip({ id, task, fallback }: { id: string; task: Task | unde
   const state = task ? taskIconState(task) : null;
   const title = task?.title ?? fallback ?? id;
   return (
-    <button type="button" className="org-thread-task" data-testid="org-thread-task" data-task-id={id} onClick={() => openTask(id)} title={title}>
-      {state && <TaskStateIcon state={state} size={12} decorative />}
-      <span>{title}</span>
+    // Its name wraps whole (.wn-title), so it needs no hover text; the icon keeps its line (.wn-fixed).
+    <button type="button" className="org-thread-task" data-testid="org-thread-task" data-task-id={id} onClick={() => openTask(id)}>
+      {state && <TaskStateIcon state={state} size={12} decorative className="wn-fixed" />}
+      <span className="wn-title">{title}</span>
     </button>
   );
 }

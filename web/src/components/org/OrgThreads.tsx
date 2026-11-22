@@ -11,8 +11,8 @@
  * own line from the latest answer until the node writes one, 2026-11-08: "no summary at all ... I
  * should not need to open it"), and
  * only the node's answers he has not reacted to that the summary did not supersede (2026-11-07: a
- * card showed the new summary and the older answer under it), each folded to a few lines with an Expand /
- * Collapse toggle on the answer itself ("I have to click the corner text ... outrageous"). What he
+ * card showed the new summary and the older answer under it), each folded to a few lines with a Show
+ * more / Show less toggle on the answer itself ("I have to click the corner text ... outrageous"). What he
  * already knew (src/core/org/thread-view.ts) is gone from the card; the whole conversation opens
  * from a toggle in the card body, numbered, with Split out on each message.
  *
@@ -56,13 +56,8 @@ import { ThreadPinIcon } from '@/components/sessions/ThreadIcons';
 import { DisclosureButton } from '@/components/controls';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
-import { ReplyComposer } from '@/components/chat/ReplyComposer';
-import type { ImageAttachment } from '@/api/chat';
-import { draftKey } from '@/utils/drafts';
-import { resolveTaskSessionId } from '@/utils/session-status';
 import { AgentText } from '@/components/common/AgentText';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
-import { useOpenTask } from '@/hooks/useOpenTask';
 import { useAgentFileOpener } from '@/hooks/useAgentFileOpener';
 import { THREAD_LIST_SOURCE, threadAnswerSource, threadOpenerSource, threadStandInSource, threadSummarySource } from './thread-text-source';
 import { timeAgo } from '@/utils/time';
@@ -70,7 +65,7 @@ import { isBoolean, usePageView } from '@/utils/view-memory';
 import { useExperimental } from '@/hooks/useExperimental';
 import type { OrgThread, OrgThreadMessage } from '@/api/org-threads';
 import type { OrgThreadsState } from './useOrgThreads';
-import { OrgThreadSnooze, SnoozedUntil } from './OrgThreadSnooze';
+import { SnoozedUntil } from './OrgThreadSnooze';
 import { threadBadge } from './thread-badge';
 import { ThreadState } from './ThreadState';
 import { PoppedThreadCard } from './PoppedThreadCard';
@@ -81,12 +76,12 @@ import { ThreadChoiceAnswer, answersChoice } from './ThreadChoiceAnswer';
 import { askThreadFocus, useFocusedThread } from './thread-focus';
 import { AskCard } from '@/components/actions/ActionNeeded';
 import { AskCardFrame } from '@/components/actions/AskCard';
-import { ThreadOptions } from './OrgInlineAnswer';
-import { Answer, Words } from './thread-card-text';
+import { Answer, CardWords, Words } from './thread-card-text';
+import { AskedIn, FollowUp, NeedsAnswer, ThreadTools, type OnFollowUp } from './thread-card-answer';
 import { FOLDED_GROUPS, THREAD_GROUPS, THREAD_GROUP_LABELS, ackCardLine, backFromKnown, groupThreads, inAcknowledged, isKnown, type ThreadGroup } from '@open-walnut/thread-groups';
 import { TaskChips } from './ThreadTaskChips';
 import { KnownBlock } from './ThreadKnown';
-import { OrgThreadsByState } from './OrgThreadsByState';
+import { OrgThreadsByState, ThreadsEmpty } from './OrgThreadsByState';
 import '@/styles/org-threads.css';
 import '@/styles/notice-card.css';
 
@@ -123,7 +118,7 @@ interface Props {
   state: OrgThreadsState;
   tasks: readonly Task[];
   /** Send a message filed under this thread; null when the node has no chat yet. */
-  onFollowUp: ((threadId: string, text: string, images?: ImageAttachment[]) => Promise<boolean>) | null;
+  onFollowUp: OnFollowUp;
   now: number;
   /** The Brief is off (experiment brief_off): every thread in its state's group (OrgThreadsByState). */
   byState?: boolean;
@@ -143,40 +138,6 @@ function closedWords(t: OrgThread, now: number): string {
 function oneLine(text: string, max: number): string {
   const line = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   return line.length <= max ? line : `${line.slice(0, max - 1).trimEnd()}…`;
-}
-
-/** The box to follow a thread up in, always on its card: no click opens it (2026-11-20, the user:
- *  "why thead nede to click follow up, just have. ainbox bar there ok"). The chat's own composer
- *  (chat/ReplyComposer.tsx): @, /, pictures and the mic as in the chat, its words kept per thread
- *  until sent, and kept in the box when a send fails. It never takes the focus by itself: a page
- *  shows many of them. */
-function FollowUp({ threadId, title, owner, onSend }: {
-  threadId: string; title: string;
-  /** The node's own task: its session's commands on /, where a file goes, and left out of @. */
-  owner: Task | undefined;
-  onSend: (text: string, images?: ImageAttachment[]) => Promise<boolean>;
-}) {
-  const [failed, setFailed] = useState(false);
-  const sessionId = owner ? resolveTaskSessionId(owner) : null;
-  return (
-    <div className="org-thread-follow" data-testid="org-thread-follow" aria-label={`Follow up on \u201c${title}\u201d`} role="group">
-      <ReplyComposer
-        placeholder="Follow up on this request"
-        draftKey={draftKey('thread-follow', threadId)}
-        sessionId={sessionId}
-        {...(owner ? { taskId: owner.id } : {})}
-        testId="org-thread-follow-input"
-        sendTestId="org-thread-follow-send"
-        onSend={async (text, images) => {
-          setFailed(false);
-          const ok = await onSend(text, images).catch(() => false);
-          if (!ok) setFailed(true);
-          return ok;
-        }}
-      />
-      {failed && <span className="org-thread-error" data-testid="org-thread-follow-failed">Not sent. Your words and pictures are still here.</span>}
-    </div>
-  );
 }
 
 function Exchange({ x, t, name, state, now, shared }: { x: ThreadExchange<OrgThreadMessage>; t: OrgThread; name: string; state: OrgThreadsState; now: number; shared: boolean }) {
@@ -215,77 +176,6 @@ function Exchange({ x, t, name, state, now, shared }: { x: ThreadExchange<OrgThr
         </div>
       )}
     </li>
-  );
-}
-
-/** The task that already asks him this thread's decision: he answers it there (one click opens it). */
-function AskedIn({ a }: { a: NonNullable<OrgThread['askedIn']> }) {
-  const openTask = useOpenTask();
-  return (
-    <p className="org-thread-follows org-thread-asked-in" data-testid="org-thread-asked-in" data-task-id={a.task} data-answered={a.answered ? 'true' : undefined} title={a.ask}>
-      {a.answered ? 'Decided in' : 'Asked in'}{' '}
-      <button type="button" className="org-thread-link" data-testid="org-thread-asked-in-task" onClick={() => openTask(a.task)}>{a.title}</button>
-      {a.answered ? ': nothing more to decide here.' : ': answer it there. This thread comes back if that task stops asking it.'}
-    </p>
-  );
-}
-
-/** A card's Snooze (with Unsnooze while put aside) and its pin. */
-function ThreadTools({ t, snoozed, state, pinned }: { t: OrgThread; snoozed: boolean; state: OrgThreadsState; pinned: boolean }) {
-  return (<>
-    <OrgThreadSnooze
-      title={t.title}
-      current={snoozed ? t.snoozed?.until : undefined}
-      onSnooze={(until) => void state.update(t.id, { snooze: until })}
-    />
-    {/* An icon: the row keeps one line in the side bar (the label is its name and tooltip). */}
-    <button
-      type="button" className="btn btn-sm btn-ghost org-thread-pin-btn" data-testid="org-thread-pin" aria-pressed={pinned}
-      aria-label={pinned ? `Unpin "${t.title}"` : `Pin "${t.title}"`}
-      title={pinned ? 'Unpin: it goes back to its place' : 'Pin: keep it at the top, whatever its state, until you unpin or acknowledge it'}
-      onClick={() => void state.update(t.id, { pin: !pinned })}
-    ><ThreadPinIcon size={14} /></button>
-  </>);
-}
-
-/**
- * A thread waiting on him, answered in the one ask card's row (actions/AskCard.tsx): its choices
- * as buttons (OrgInlineAnswer AskOptions, the recommended one first), the box, always shown, then
- * Snooze. A click is his answer in words (the label), filed under the thread like a typed reply.
- */
-function NeedsAnswer({ t, owner, onFollowUp, snoozed, state, pinned }: {
-  t: OrgThread; owner: Task | undefined; onFollowUp: Props['onFollowUp']; snoozed: boolean; state: OrgThreadsState; pinned: boolean;
-}) {
-  /** A click that did not go (a typed reply's failure is the box's own). */
-  const [failed, setFailed] = useState(false);
-  /** His reply went (typed or clicked): the card says so at once, until the thread moves on. */
-  const [sentFor, setSentFor] = useState<string | null>(null);
-  const answer = async (label: string): Promise<boolean> => {
-    if (!onFollowUp) return false;
-    setFailed(false);
-    const ok = await onFollowUp(t.id, label).catch(() => false);
-    if (!ok) setFailed(true); else { setSentFor(t.updatedAt); state.heard(t.id, undefined, label); }
-    return ok;
-  };
-  const sent = sentFor === t.updatedAt;
-  return (
-    <AskCardFrame
-      testId="org-thread-ask"
-      className="org-thread-ask"
-      status={failed
-        ? <p className="org-thread-error" role="alert" data-testid="org-thread-ask-failed">Not sent. Try again.</p>
-        : sent ? <p className="org-thread-stand-in-note" role="status" data-testid="org-thread-ask-sent">Your reply is sent.</p> : undefined}
-      answer={onFollowUp ? (<>
-        <ThreadOptions thread={t} onAnswer={answer} />
-        {/* The thread's one box, the same on every open card. */}
-        <FollowUp threadId={t.id} title={t.title} owner={owner} onSend={async (text, images) => {
-          const ok = await onFollowUp(t.id, text, images);
-          if (ok) { setSentFor(t.updatedAt); state.heard(t.id, undefined, text); }
-          return ok;
-        }} />
-      </>) : undefined}
-      tools={<ThreadTools t={t} snoozed={snoozed} state={state} pinned={pinned} />}
-    />
   );
 }
 
@@ -384,27 +274,27 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
           {/* Its status a step behind (no item yet): the question in the agent's own rendering until it comes. */}
           {heldItem && owner
             ? <AskCard task={owner} item={heldItem} threadId={t.id} />
-            : <AgentText text={held.ask} compact shortLinks className="org-thread-summary" testId="org-thread-held-question" {...threadSummarySource(t)} />}
-          {held.reply && <AgentText text={held.reply} compact shortLinks className="org-thread-summary" testId="org-thread-reply" {...threadSummarySource(t)} />}
+            : <CardWords testId="org-thread-held-question"><AgentText text={held.ask} compact shortLinks {...threadSummarySource(t)} /></CardWords>}
+          {held.reply && <CardWords testId="org-thread-reply"><AgentText text={held.reply} compact shortLinks {...threadSummarySource(t)} /></CardWords>}
         </div>
       )}
       {known && !deciding && <KnownBlock t={t} tasks={tasks} name={name} />}
       {!asked && !held && !known && (card.summary.by === 'node'
         ? (<>
           {/* The summary opens on the machine of the session that last wrote it, never the node's current one. */}
-          <AgentText text={card.summary.text} compact shortLinks className="org-thread-summary" testId="org-thread-reply" {...threadSummarySource(t)} />
+          <CardWords testId="org-thread-reply"><AgentText text={card.summary.text} compact shortLinks {...threadSummarySource(t)} /></CardWords>
           {/* His message came after it: it says so until the node rewrites it (core/org/thread-view.ts summaryBehindHim). */}
           {card.summary.stale && <span className="org-thread-stand-in-note" data-testid="org-thread-summary-stale">Written before your latest message; {name} has not updated it yet</span>}
         </>)
-        : (
-          // No summary from the node yet: Walnut's own line, so the card never needs the conversation opened (2026-11-08).
-          <div className="org-thread-summary is-stand-in" data-testid="org-thread-reply" data-by="walnut">
+        : (<>
+          {/* No summary from the node yet: Walnut's own line, so the card never needs the conversation opened (2026-11-08). */}
+          <CardWords testId="org-thread-reply" className="is-stand-in" data={{ 'data-by': 'walnut' }}>
             {card.summary.from === 'none'
               ? <p>{name} has not answered yet</p>
               : <AgentText text={card.summary.text} compact shortLinks {...threadStandInSource(t, card.summary)} />}
-            {card.summary.from !== 'none' && <span className="org-thread-stand-in-note" data-testid="org-thread-stand-in">{STAND_IN_NOTE[card.summary.from ?? 'answer'](name)}</span>}
-          </div>
-        ))}
+          </CardWords>
+          {card.summary.from !== 'none' && <span className="org-thread-stand-in-note" data-testid="org-thread-stand-in">{STAND_IN_NOTE[card.summary.from ?? 'answer'](name)}</span>}
+        </>))}
       {chips.length > 0 && !known && <TaskChips ids={chips} tasks={tasks} />}
       {/* The card is its title and summary: the new answers fold behind one line until a click
           (2026-11-08, the user: "the history should all be collapsed unless I click to expand"). */}
@@ -548,21 +438,24 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
     else if (snoozedIds.has(t.id)) setShowSnoozed(true);
     else if (hidden.some((x) => x.id === t.id)) setShowHidden(true);
   });
+  // Nothing in either view: the empty line carries New topic (ThreadsEmpty), no bar above it.
+  const nothing = all !== null && !state.error && (groups ? !THREAD_GROUPS.some((g) => groups[g].length > 0) : !open.length && !hidden.length && !snoozed.length);
   const card = (t: OrgThread) => <ThreadItem key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={clock} snoozed={snoozedIds.has(t.id)} owner={owner} focused={focused === t.id} listed={listedIds.has(t.id)} />;
   return (
     <div ref={rootRef} className="org-threads" data-testid="org-threads" onClick={onEntityClick}>
-      <ThreadsTopicBar owner={owner} />
+      {/* Nothing at all: New topic sits on the empty view's one line instead (ThreadsEmpty). */}
+      {!nothing && <ThreadsTopicBar owner={owner} />}
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}
       {all === null && !state.error && <p className="org-threads-empty" aria-busy="true">Loading…</p>}
-      {groups && all !== null && <OrgThreadsByState groups={groups} opened={opened} onOpen={openFold} card={card} name={name} epoch={state.catchUp ?? 0} {...(owner ? { onShowThread: (id: string) => askThreadFocus(owner.id, id) } : {})} />}
+      {groups && all !== null && <OrgThreadsByState groups={groups} opened={opened} onOpen={openFold} card={card} name={name} owner={owner} epoch={state.catchUp ?? 0} {...(owner ? { onShowThread: (id: string) => askThreadFocus(owner.id, id) } : {})} />}
       {!groups && (<>
-      {all !== null && !open.length && (
-        <p className="org-threads-empty" data-testid="org-threads-empty">
-          {hidden.length || snoozed.length
-            ? `Nothing for you now. ${hidden.length ? `${name} is on the ones below; each` : 'Each snoozed one below'} comes back here when there is news.`
-            : `Nothing open. Each request you send ${name} becomes a thread here; asks about the same thing stay in one thread.`}
-        </p>
-      )}
+      {all !== null && !open.length && (hidden.length || snoozed.length
+        ? (
+          <p className="org-threads-empty" data-testid="org-threads-empty">
+            {`Nothing for you now. ${hidden.length ? `${name} is on the ones below; each` : 'Each snoozed one below'} comes back here when there is news.`}
+          </p>
+        )
+        : <ThreadsEmpty name={name} owner={owner} />)}
       {!!open.length && <ul className="org-thread-list" data-testid="org-thread-list" data-show="open">{open.map(card)}</ul>}
       {snoozed.length > 0 && (
         <DisclosureButton expanded={showSnoozed} className="org-threads-closed-toggle" data-testid="org-threads-snoozed" onClick={() => setShowSnoozed(!showSnoozed)}>
