@@ -24574,8 +24574,8 @@ a.file-link:hover {
   display: inline-flex;      /* the pill sits inline next to the mode pill */
 }
 
-/* The btw trigger is the family's quiet small key, as the mode trigger beside it; open, it keeps
-   its hover fill (.btn-ghost[aria-expanded]). */
+/* The btw trigger is the family's quiet small key, as the mode trigger beside it; open, it reads
+   on, as every open menu trigger does (buttons.css). */
 .side-question-count {
   font-size: var(--font-size-xs);
   font-weight: 600;

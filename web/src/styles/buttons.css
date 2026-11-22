@@ -77,11 +77,15 @@
    palette, chat-palette.css: there the tint alone matched Commit's grey key, 2026-11-22 review).
    `data-on` is the same look on a key that cannot carry aria-pressed: a menu button while its menu
    is open, or while it holds the open view (a session header's "..." with Changed folded into it).
-   It stays on under the pointer, so an open view never reads as merely hovered. */
+   A menu trigger whose menu is open (aria-haspopup with aria-expanded) is on the same way, so every
+   open menu, popover or drawer names its key alike. It stays on under the pointer, so an open view
+   never reads as merely hovered. */
 .btn[aria-pressed='true'],
 .btn[data-on='true'],
+.btn[aria-haspopup]:not([aria-haspopup='false'])[aria-expanded='true'],
 .btn[aria-pressed='true']:hover:not(:disabled):not([aria-disabled='true']),
-.btn[data-on='true']:hover:not(:disabled):not([aria-disabled='true']) {
+.btn[data-on='true']:hover:not(:disabled):not([aria-disabled='true']),
+.btn[aria-haspopup]:not([aria-haspopup='false'])[aria-expanded='true']:hover:not(:disabled):not([aria-disabled='true']) {
   /* Half the accent: still clear where the accent is the chat's dark grey. */
   border-color: color-mix(in srgb, var(--accent) 50%, transparent);
   background: var(--accent-subtle);
@@ -131,8 +135,6 @@
   color: var(--fg);
 }
 .btn-ghost:active:not(:disabled):not([aria-disabled='true']) { background: var(--btn-fill-hover); }
-/* A quiet trigger whose menu or drawer is open keeps its hover fill. */
-.btn-ghost[aria-expanded='true'] { background: var(--btn-fill); color: var(--fg); }
 .btn-ghost.btn-danger { color: var(--btn-danger-text); }
 .btn-ghost.btn-danger:hover:not(:disabled):not([aria-disabled='true']) {
   background: color-mix(in srgb, var(--error) 10%, transparent);

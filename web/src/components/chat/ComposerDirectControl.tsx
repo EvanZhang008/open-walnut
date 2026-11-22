@@ -42,7 +42,7 @@ export function ComposerDirectControl({ id, handleRef, disabled }: {
     // Hidden until the control it mirrors is mounted (the session record may load
     // later), and while a tight row folds it into the "+" menu.
     style={state.present && !state.folded ? undefined : { display: 'none' }}
-    data-add-control={id} disabled={disabled || state.disabled} aria-expanded={state.open}
+    data-add-control={id} disabled={disabled || state.disabled} aria-haspopup="dialog" aria-expanded={state.open}
     title={state.title || (id === 'btw' ? 'Open side threads' : 'Add a session note')}
     // Keep focus where it is until the toggle runs (no blur first), while other
     // popups still see the press and close. Note's editor would read the press as

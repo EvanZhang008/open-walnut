@@ -674,6 +674,7 @@ function SideQuestionDrawerBody({
       {/* Pill trigger — sits inline like the mode pill, NOT a full-width bar. */}
       <button
         className={`btn btn-sm btn-ghost side-question-pill${expanded ? ' is-open' : ''}`}
+        aria-haspopup="dialog"
         aria-expanded={expanded}
         onClick={toggleDrawer}
         // Hovering the pill is the earliest honest signal that an ask is coming —

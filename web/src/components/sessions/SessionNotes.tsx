@@ -122,6 +122,7 @@ export function SessionNotesPill({ noteState, expanded, onToggleExpanded }: Sess
   return (
     <button
       className={`btn btn-sm btn-ghost side-question-pill session-notes-pill${expanded ? ' is-open' : ''}`}
+      aria-haspopup="dialog"
       aria-expanded={expanded}
       onClick={onToggleExpanded}
       title="Add a session note"
