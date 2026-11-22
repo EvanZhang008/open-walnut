@@ -317,7 +317,7 @@ html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill[data-their
   flex: 0 0 30px;
   width: 30px;
   height: 18px;
-  border-radius: var(--radius-sm);
+  border-radius: 9px;
   background: var(--fg-muted);
   transition: background-color 120ms ease-out;
 }

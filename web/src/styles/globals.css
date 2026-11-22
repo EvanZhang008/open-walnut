@@ -34,6 +34,8 @@
   --warning: #FF9500;
   --error: #FF3B30;
   /* Tinted fills behind a state (a failed row, a warning strip): the state's colour at 10%. */
+  /* Success as small text on a light surface (--success reads 2.2:1 on white). */
+  --success-text: #248A3D;
   --success-subtle: color-mix(in srgb, var(--success) 10%, transparent);
   --warning-subtle: color-mix(in srgb, var(--warning) 10%, transparent);
   --error-subtle: color-mix(in srgb, var(--error) 10%, transparent);
@@ -142,6 +144,7 @@
   --accent-subtle: rgba(10, 132, 255, 0.12);
   --accent-text: var(--accent);
   --priority-important-text: var(--priority-important);
+  --success-text: var(--success);
   /* Brighter on dark so the thin cluster outline stays visible on near-black cards. */
   --group-outline: rgba(10, 132, 255, 0.45);
   /* iOS dark separators (UIColor.separator dark family) — hairlines that stay
@@ -183,6 +186,7 @@
     --accent-subtle: rgba(10, 132, 255, 0.12);
     --accent-text: var(--accent);
     --priority-important-text: var(--priority-important);
+    --success-text: var(--success);
     --group-outline: rgba(10, 132, 255, 0.45);
     --border: rgba(84, 84, 88, 0.42);
     --border-strong: rgba(84, 84, 88, 0.6);
@@ -20192,7 +20196,7 @@ td.usage-share-col {
   flex: 1;
   height: 6px;
   background: var(--bg-tertiary);
-  border-radius: var(--radius-xs);
+  border-radius: 3px;
   overflow: hidden;
   min-width: 40px;
 }
@@ -20721,7 +20725,7 @@ td.usage-share-col {
   font-weight: 600;
   color: var(--on-accent);
   background: var(--accent);
-  border-radius: var(--radius-sm);
+  border-radius: 7px;
   line-height: 1;
 }
 
@@ -29274,7 +29278,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 }
 
 .routine-template-chip:hover {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--fg) 8%, var(--bg-tertiary));
 }
 
 .routine-composer-actions {
@@ -29327,7 +29331,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 }
 
 .routine-modal-close:hover {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
 }
 
 /* Instructions textarea with the model picker footer inside the box */
@@ -29990,7 +29994,8 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
   /* Higher-specificity dark override earlier in the file would otherwise
      repaint this one opaque. */
-  :root[data-theme="dark"] .stt-dropdown-menu {
+  :root[data-theme="dark"] .stt-dropdown-menu,
+  :root:not([data-theme]) .stt-dropdown-menu {
     background: var(--glass-bg-menu);
   }
 
@@ -30744,7 +30749,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   height: 22px;
   padding: 0 4px;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: 11px;
   background: transparent;
   color: var(--fg);
   font-size: var(--font-size-sm);
@@ -32389,7 +32394,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   gap: 5px;
   height: 22px;
   padding: 0 9px;
-  border-radius: var(--radius-md);
+  border-radius: 11px;
   border: 1px solid var(--border);
   background: none;
   color: var(--fg-muted);

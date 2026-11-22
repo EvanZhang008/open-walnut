@@ -143,7 +143,7 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
 .needs-category-look { color: var(--accent); }
 .needs-category-close { color: var(--success); }
 .status-card-needs-line .needs-close-btn {
-  flex: none; margin-left: auto; padding: 0 8px; height: 18px; border-radius: var(--radius-sm);
+  flex: none; margin-left: auto; padding: 0 8px; height: 18px; border-radius: 9px;
   border: 1px solid var(--border); background: var(--bg); color: var(--fg); font-size: var(--font-size-xs); line-height: 16px; cursor: pointer;
 }
 .status-card-needs-line .needs-close-btn:hover { background: var(--bg-secondary); }

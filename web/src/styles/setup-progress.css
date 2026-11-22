@@ -16,7 +16,7 @@
   min-width: 24px;
   height: 6px;
   overflow: hidden;
-  border-radius: var(--radius-xs);
+  border-radius: 3px;
   background: var(--bg-tertiary);
 }
 

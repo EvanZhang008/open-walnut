@@ -402,7 +402,7 @@
   display: block;
   width: 42%;
   height: 10px;
-  border-radius: var(--radius-xs);
+  border-radius: 5px;
   background: var(--settings-skeleton-bar);
 }
 

@@ -104,6 +104,11 @@ describe('UI standard: one look per kind of control', () => {
     expect(tokenBreaks(d('box-shadow', '0 8px 24px rgba(0, 0, 0, 0.16)'))).toEqual(['shadowLiteral']);
     expect(tokenBreaks(d('box-shadow', '0 0 0 2px var(--accent)'))).toEqual([]);
     expect(tokenBreaks(d('box-shadow', 'inset 0 1px 3px rgba(0, 0, 0, 0.2)'))).toEqual([]);
+    expect(tokenBreaks(d('box-shadow', 'var(--shadow-sm), 0 0 0 1px var(--border)'))).toEqual([]);
+    expect(tokenBreaks(d('box-shadow', '0 10px 30px color-mix(in srgb, var(--fg) 20%, transparent)'))).toEqual(['shadowLiteral']);
+    expect(tokenBreaks(d('box-shadow', 'rgb(0 0 0 / 20%) 0 4px 12px'))).toEqual(['shadowLiteral']);
+    expect(tokenBreaks(d('color', 'red'))).toEqual(['rawColour']);
+    expect(tokenBreaks(d('border-color', 'var(--red-ish)'))).toEqual([]);
     expect(tokenBreaks(d('z-index', '1000'))).toEqual(['zIndexLiteral']);
     expect(tokenBreaks(d('z-index', '1'))).toEqual([]);
     expect(tokenBreaks(d('padding', '5px 8px'))).toEqual(['spacingOffGrid']);

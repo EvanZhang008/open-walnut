@@ -345,7 +345,7 @@
   height: 30px;
   padding: 0 14px;
   border: 1px solid var(--md-code-rule);
-  border-radius: var(--radius-lg);
+  border-radius: 15px;
   background: var(--md-code-bg);
   color: var(--md-code-ink-strong);
   font: 500 var(--font-size-sm)/1 var(--font-sans);

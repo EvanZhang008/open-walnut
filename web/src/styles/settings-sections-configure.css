@@ -221,7 +221,7 @@
   width: 160px;
   height: 6px;
   margin: 0;
-  border-radius: var(--radius-xs);
+  border-radius: 3px;
   background: var(--bg-tertiary);
   overflow: hidden;
 }

@@ -143,7 +143,7 @@
 }
 .draft-workspace-input:focus { outline: none; border-color: var(--accent); }
 .draft-workspace-note { font-size: var(--font-size-xs); color: var(--fg-muted); }
-.draft-workspace-note.is-warn { color: var(--warning); }
+.draft-workspace-note.is-warn { color: var(--priority-important-text); }
 .draft-workspace-note.is-error { color: var(--error); }
 
 /* ── Task row pill ── */
@@ -161,7 +161,7 @@
 /* Two classes: the shared .todo-item-due-pill (globals.css, loaded later) would grey them out. */
 .workspace-pill.workspace-pill-ok { color: var(--accent); }
 .workspace-pill.workspace-pill-busy { color: var(--fg-muted); }
-.workspace-pill.workspace-pill-warn { color: var(--warning); }
+.workspace-pill.workspace-pill-warn { color: var(--priority-important-text); }
 .workspace-pill.workspace-pill-error { color: var(--error); }
 .workspace-pill-spin {
   width: 8px;
@@ -193,13 +193,13 @@
 .workspace-flyout-title { font-size: var(--font-size-sm); font-weight: 600; color: var(--fg); }
 .workspace-flyout-state { font-size: var(--font-size-xs); color: var(--fg-muted); white-space: nowrap; }
 .workspace-flyout-state.is-failed { color: var(--error); }
-.workspace-flyout-state.is-kept { color: var(--warning); }
+.workspace-flyout-state.is-kept { color: var(--priority-important-text); }
 .workspace-flyout-state.is-ready { color: var(--accent); }
 .workspace-flyout-state.tone-busy { color: var(--fg-muted); }
-.workspace-flyout-state.tone-warn { color: var(--warning); }
+.workspace-flyout-state.tone-warn { color: var(--priority-important-text); }
 .workspace-flyout-state.tone-error { color: var(--error); }
 .task-kebab-project-current-name.tone-error { color: var(--error); }
-.task-kebab-project-current-name.tone-warn { color: var(--warning); }
+.task-kebab-project-current-name.tone-warn { color: var(--priority-important-text); }
 .workspace-flyout-note {
   margin: 0 12px 6px;
   font-size: var(--font-size-xs);
@@ -208,7 +208,7 @@
   overflow-wrap: anywhere;
 }
 .workspace-flyout-note.is-error { color: var(--error); }
-.workspace-flyout-note.is-warn { color: var(--warning); }
+.workspace-flyout-note.is-warn { color: var(--priority-important-text); }
 .workspace-fact {
   display: grid;
   grid-template-columns: 78px minmax(0, 1fr);
@@ -272,14 +272,14 @@
 .script-run-role { color: var(--fg-muted); font-size: var(--font-size-xs); white-space: nowrap; }
 .script-run-name { font-weight: 600; color: var(--fg); flex: 0 0 auto; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .script-run-status { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; color: var(--fg-muted); white-space: nowrap; max-width: 100%; }
-.script-run-card.is-done .script-run-status { color: var(--success); }
+.script-run-card.is-done .script-run-status { color: var(--success-text); }
 .script-run-card.is-failed .script-run-status,
 .script-run-card.is-skipped .script-run-status { color: var(--error); white-space: normal; text-align: right; }
 /* A long failure stays on the name's line and wraps there, not alone on a line of its own. */
 .script-run-card.is-failed .script-run-status,
 .script-run-card.is-skipped .script-run-status { flex: 1 1 10em; min-width: 0; justify-content: flex-end; }
 /* Waiting for the user's OK is no failure: amber, not red. */
-.script-run-card[data-untrusted] .script-run-status { color: var(--warning); }
+.script-run-card[data-untrusted] .script-run-status { color: var(--priority-important-text); }
 .script-run-reason { color: var(--fg-secondary); font-size: var(--font-size-xs); line-height: 1.4; }
 .script-run-command,
 .script-run-progress {
@@ -430,9 +430,9 @@
 .project-scripts-file-head { font-size: var(--font-size-sm); font-weight: 600; color: var(--fg-secondary); }
 .project-scripts-file-head code { font-weight: 500; }
 .project-scripts-field-hint { margin-top: 4px; font-size: var(--font-size-xs); color: var(--fg-muted); line-height: 1.4; }
-.project-scripts-field-hint.is-warn { color: var(--warning); font-size: var(--font-size-sm); overflow-wrap: anywhere; }
+.project-scripts-field-hint.is-warn { color: var(--priority-important-text); font-size: var(--font-size-sm); overflow-wrap: anywhere; }
 .project-scripts-note { font-size: var(--font-size-sm); color: var(--fg-muted); line-height: 1.5; overflow-wrap: anywhere; }
-.project-scripts-note.is-warn { color: var(--warning); }
+.project-scripts-note.is-warn { color: var(--priority-important-text); }
 .project-scripts-note code, .project-scripts-file-head code {
   font-family: var(--font-mono);
   font-size: 0.92em;

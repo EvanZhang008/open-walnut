@@ -179,7 +179,7 @@
 .thread-tree-hit { background: transparent; color: inherit; font-weight: 650; }
 .thread-tree-trailing { display: flex; flex: none; align-items: center; gap: 2px; }
 .thread-tree-pill {
-  min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--radius-sm); background: var(--bg-secondary);
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--bg-secondary);
   color: var(--fg-secondary); font-size: var(--font-size-xs); line-height: 18px; text-align: center;
   font-variant-numeric: tabular-nums;
 }

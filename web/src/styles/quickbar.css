@@ -437,7 +437,7 @@ html.qb-panel-doc #root {
   align-items: center;
   height: 22px;
   padding: 0 4px 0 8px;
-  border-radius: var(--radius-md);
+  border-radius: 11px;
   border: 1px solid var(--qb-line);
   background: transparent;
   color: var(--qb-muted);

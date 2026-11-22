@@ -101,12 +101,12 @@
   max-width: 150px;
   height: 22px;
   border: 1px dashed var(--border);
-  border-radius: var(--radius-md);
+  border-radius: 11px;
   color: var(--fg-muted);
 }
 .session-taskbar-recent-pill:hover { border-color: var(--fg-muted); color: var(--fg); }
 .session-taskbar-recent-pill .session-taskbar-open { gap: 5px; padding: 0 2px 0 8px; font-size: var(--font-size-sm); }
-.session-taskbar-recent-pill .session-taskbar-close { width: 18px; height: 18px; border-radius: var(--radius-sm); }
+.session-taskbar-recent-pill .session-taskbar-close { width: 18px; height: 18px; border-radius: 9px; }
 .session-taskbar-recent-pill .session-taskbar-close svg { width: 9px; height: 9px; }
 .session-taskbar-recent-pill .session-taskbar-dot { width: 6px; height: 6px; }
 
@@ -221,6 +221,6 @@
 }
 .session-taskbar-more-row:hover { background: var(--accent-subtle); }
 .session-taskbar-more-row .session-taskbar-open { flex: 1 1 auto; min-width: 0; gap: 7px; padding: 0 4px 0 8px; font-size: var(--font-size-sm); justify-content: flex-start; }
-.session-taskbar-more-row .session-taskbar-close { width: 22px; height: 22px; border-radius: var(--radius-md); }
+.session-taskbar-more-row .session-taskbar-close { width: 22px; height: 22px; border-radius: 11px; }
 .session-taskbar-more-row .session-taskbar-close svg { width: 10px; height: 10px; }
 .session-taskbar-more-row .session-taskbar-dot { width: 6px; height: 6px; }

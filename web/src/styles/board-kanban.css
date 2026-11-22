@@ -219,7 +219,7 @@
 }
 .board-kanban .kanban-skeleton { min-height: 64px; pointer-events: none; }
 .board-kanban .kanban-skeleton-bar {
-  height: 10px; border-radius: var(--radius-xs); background: color-mix(in srgb, var(--fg) 9%, transparent); margin: 4px 0;
+  height: 10px; border-radius: 5px; background: color-mix(in srgb, var(--fg) 9%, transparent); margin: 4px 0;
 }
 .board-kanban .kanban-skeleton-bar.short { width: 60%; }
 .board-kanban .kanban-card-is-loading .kanban-card-title { color: var(--fg-muted); background: none; height: auto; }
@@ -273,7 +273,7 @@
   color: var(--fg); background: var(--bg-tertiary); border-color: var(--fg-muted); text-decoration: underline;
 }
 .kanban-card-sev {
-  display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: var(--radius-sm); font-size: var(--font-size-xs); font-weight: 600;
+  display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 9px; font-size: var(--font-size-xs); font-weight: 600;
   border: 1px solid var(--border-strong); color: var(--fg-secondary); background: transparent; white-space: nowrap;
 }
 .kanban-card-sev.kanban-sev-1 { background: var(--kb-red-tint); border-color: transparent; color: var(--kb-red); }
