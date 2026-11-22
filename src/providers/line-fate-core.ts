@@ -368,10 +368,21 @@ export function transcriptLineScan(text: string, uuid: string, prev: TranscriptL
   return { found: found, answered: answered, closed: closed }
 }
 
-/** The fate a transcript scan proves for a line whose stream frames are gone, or null (the CLI never took it). */
-export function transcriptLineVerdict(scan: TranscriptLineScan | null): LineFate | null {
-  if (!scan || !scan.found) return null
-  return scan.answered ? { fate: 'ran', state: 'started', answer: 'yes' } : { fate: 'unanswered', state: 'started' }
+/**
+ * The fate a transcript scan proves for a line, or null (the CLI never took it). `stream` is what
+ * the stream and the write records said: null (they hold nothing of the line), or `waiting` (a
+ * write of it went into the process running now and no frame names it). For a waiting line only
+ * an answered one in the transcript changes the answer: Claude Code skips a uuid its session
+ * already holds (print.ts doesMessageExistInSession), so a line that ran and was answered never
+ * runs again however often it is written (2026-11-20: an answered line was written 88 times and
+ * parked as not acknowledged, its frames out of the stream's window). One found but not answered
+ * may be a line the running turn took and still answers: it stays waiting.
+ */
+export function transcriptLineVerdict(scan: TranscriptLineScan | null, stream: LineFate | null = null): LineFate | null {
+  if (stream && stream.fate !== 'waiting') return stream
+  if (!scan || !scan.found) return stream
+  if (scan.answered) return { fate: 'ran', state: 'started', answer: 'yes' }
+  return stream || { fate: 'unanswered', state: 'started' }
 }
 
 /**

@@ -434,6 +434,17 @@ describe('transcriptLineScan: the CLI\'s transcript says whether it took and ans
     expect(verdict(lines(reply([text('before')]), attached, reply([text('after')])))).toEqual({ fate: 'ran', state: 'started', answer: 'yes' })
   })
 
+  it('a line the stream calls waiting: only an answered one in the transcript turns it to ran', () => {
+    const waiting = { fate: 'waiting' as const, writtenAt: 1 }
+    const scan = (t: string) => transcriptLineScan(t, 'u-1', null)
+    expect(transcriptLineVerdict(scan(lines(prompt('u-1'), reply([text('hi')]))), waiting)).toEqual({ fate: 'ran', state: 'started', answer: 'yes' })
+    expect(transcriptLineVerdict(scan(lines(prompt('u-1'))), waiting)).toBe(waiting)
+    expect(transcriptLineVerdict(scan(lines(prompt('u-0'))), waiting)).toBe(waiting)
+    // A verdict the stream proved stands: the transcript never overrides it.
+    const cancelled = { fate: 'cancelled' as const, state: 'cancelled' }
+    expect(transcriptLineVerdict(scan(lines(prompt('u-1'), reply([text('hi')]))), cancelled)).toBe(cancelled)
+  })
+
   it('text that quotes the uuid is not the line; pieces fold like one scan', () => {
     expect(verdict(lines(reply([text('see u-1')])))).toBeNull()
     const whole = lines(prompt('u-1'), reply([text('hi')]))

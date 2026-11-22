@@ -12269,13 +12269,16 @@ async function lineFateInProcess(session, uuid, messageIds, lostPid, torn, answe
   let records = '';
   await scanTail(session.jsonlPath + '.lines', LINE_RECORD_SCAN_BYTES, (text) => { records += text; });
   let verdict = lineFateVerdict(scan, records, q);
-  if (verdict === null && answersSid && q.uuid) {
+  // A line written into this process with no frame of it (waiting) asks too: one the CLI
+  // already ran and answered is skipped as a duplicate, never named again.
+  if ((verdict === null || (verdict.fate === 'waiting' && !verdict.state)) && answersSid && q.uuid) {
     const transcript = await streamFold.transcriptPathOf(CLAUDE_PROJECTS_DIRS, cliOwner.transcriptIdOf(session.args || []) || answersSid).catch(() => null);
     if (transcript) {
       let tscan = null;
       await scanTail(transcript, DEDUPE_SCAN_BYTES, (text) => { tscan = transcriptLineScan(text, q.uuid, tscan); });
-      verdict = transcriptLineVerdict(tscan);
-      if (verdict) logMsg('info', "send: the stream holds no frame of the line, the CLI's transcript has it", { pid: session.pid, uuid: q.uuid, fate: verdict.fate });
+      const before = verdict;
+      verdict = transcriptLineVerdict(tscan, before);
+      if (verdict && verdict !== before) logMsg('info', "send: the stream holds no frame of the line, the CLI's transcript has it", { pid: session.pid, uuid: q.uuid, fate: verdict.fate, was: before ? before.fate : null });
     }
   }
   // An earlier attempt into this process that died part way: end what it left first

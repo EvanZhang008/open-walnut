@@ -327,6 +327,32 @@ describe('daemon send with dedupe (send-dedupe-v1)', () => {
     expect(asked).toHaveLength(3)
   })
 
+  it('a line written again whose uuid the CLI already ran and answered is that run, never waiting for good', async () => {
+    // 2026-11-20: a resend went out under the uuid of a line answered two hours before, its
+    // frames out of the stream's window. Claude Code skipped it as a duplicate, the write record
+    // kept answering "waiting", and Walnut wrote it 88 times, then parked it as not acknowledged.
+    const transcript = path.join(ctx.tmpDir, 'transcript-ran.jsonl')
+    const core = createDaemonCore({ ...ctx.deps, transcriptPathFn: async () => transcript })
+    const prompt = JSON.stringify({ type: 'user', uuid: 'u-1', isSidechain: false, message: { role: 'user', content: 'hello' } })
+    const reply = JSON.stringify({ type: 'assistant', uuid: 'a-1', isSidechain: false, message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }] } })
+    fs.writeFileSync(transcript, `${prompt}\n${reply}\n`)
+    const s = session('ran-before', 930)
+    try {
+      expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch)).toEqual({ ok: true })
+      expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true, answers: true }))
+        .toEqual({ ok: true, duplicate: true, fate: 'ran', state: 'started', answer: 'yes' })
+      expect(drain(s.readerFd)).toHaveLength(1)
+    } finally { fs.closeSync(s.readerFd) }
+    // In the transcript but not answered: a line the running turn took may still be answered, so it waits.
+    fs.writeFileSync(transcript, `${prompt}\n`)
+    const t = session('taken-not-answered', 931)
+    try {
+      expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch)).toEqual({ ok: true })
+      expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true, answers: true }))
+        .toMatchObject({ ok: true, duplicate: true, fate: 'waiting' })
+    } finally { fs.closeSync(t.readerFd) }
+  })
+
   it('P3: the check reads the stream window piece by piece, never holding the loop', async () => {
     const core = createDaemonCore(ctx.deps)
     // 6 MiB of other output after the line's lifecycle word: inside the 8 MiB window.

@@ -1465,13 +1465,16 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     // line-answer-v1: the stream no longer holds the line's frames (a rotated
     // file, a window passed): the CLI's transcript says whether it took the line
     // and answered it. Keep in sync with daemon-source.ts lineFateInProcess.
-    if (verdict === null && answersSid && q.uuid && deps.transcriptPathFn) {
+    // A line written into this process with no frame of it (waiting) asks too: one the CLI
+    // already ran and answered is skipped as a duplicate, never named again.
+    if ((verdict === null || (verdict.fate === 'waiting' && !verdict.state)) && answersSid && q.uuid && deps.transcriptPathFn) {
       const transcript = await deps.transcriptPathFn(answersSid, session).catch(() => null)
       if (transcript) {
         let tscan: TranscriptLineScan | null = null
         await scanTail(transcript, DEDUPE_SCAN_BYTES, (text) => { tscan = transcriptLineScan(text, q.uuid, tscan) })
-        verdict = transcriptLineVerdict(tscan)
-        if (verdict) logger('info', "send: the stream holds no frame of the line, the CLI's transcript has it", { pid: session.pid, uuid: q.uuid, fate: verdict.fate })
+        const before = verdict
+        verdict = transcriptLineVerdict(tscan, before)
+        if (verdict && verdict !== before) logger('info', "send: the stream holds no frame of the line, the CLI's transcript has it", { pid: session.pid, uuid: q.uuid, fate: verdict.fate, was: before ? before.fate : null })
       }
     }
     // An earlier attempt into this process that died part way: end what it left first
