@@ -685,16 +685,16 @@ defineOp({
     dirName: z.string().min(1).regex(/^[A-Za-z0-9._-]+$/).describe('Skill directory name'),
     ...DOC_PART_INPUT,
   },
-  handler: async (args, call) => {
+  handler: async (args, call, caller) => {
     const body = await call('GET', `/skills/${encodeURIComponent(String(args.dirName))}`)
-    // Asked for a part: every caller gets that part. Asked for none: an agent gets the first page (answer.shape).
-    return askedPart(args) ? pagedResult(body, 'skill.content', args, skillAgain(args)) : body
+    // Asked for a part: every caller gets that part, an agent's built for its cap. Asked for none: an agent gets the first page (answer.shape).
+    return askedPart(args) ? pagedResult(body, 'skill.content', args, skillAgain(args), { fit: caller?.answer }) : body
   },
   // A skill is a document an agent reads to do its work: pages up to the document cap (doc-page.ts).
   // 2026-11-21: p95 32,500 characters, and up to 4.6 MB through the CLI.
   answer: {
     kind: 'content', max: DOC_ANSWER_MAX_CHARS,
-    shape: ({ result, args }) => pageOnce(result, () => pagedResult(result, 'skill.content', args, skillAgain(args))),
+    shape: ({ result, args, max, surface }) => pageOnce(result, () => pagedResult(result, 'skill.content', args, skillAgain(args), { fit: { max, surface } })),
   },
   tags: { readonly: true, remote: 'allow' },
 });

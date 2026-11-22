@@ -11,7 +11,7 @@
  */
 import type { OrgThread, ThreadMessage } from '../core/org/threads-model.js'
 import { briefSectionsBlock } from '../core/sessions/brief-structure.js'
-import { ANSWER_CEILING_CHARS, cutMark, type OpAnswer } from './answer.js'
+import { ANSWER_CEILING_CHARS, CONTENT_MAX_CHARS, cutMark, type OpAnswer } from './answer.js'
 // Note for the coordinator: src/ops/answer-text.ts (the shared short/cut helpers) did not exist when
 // this was written, so `cut` below builds on cutMark directly; move it onto answer-text.ts once it lands.
 
@@ -73,8 +73,12 @@ export function pageOf<T>(rows: readonly T[], args: { offset?: unknown; limit?: 
   return { rows: shown, page: { offset, shown: shown.length, total: rows.length, ...(next < rows.length ? { next_offset: next } : {}) } }
 }
 
-/** The most of one page an agent's answer holds: under answer.ts's content cap, with room for its note. */
-export const PAGE_BUDGET = 7_200
+/** Room a page leaves under its answer's cap for the note answer.ts would add. */
+const PAGE_ROOM = 800
+/** The most of one page an answer held to `max` holds (answer.ts gives a shape its cap): room left for its note. */
+export const pageBudget = (max: number): number => Math.max(1_000, max - PAGE_ROOM)
+/** The most of one page under answer.ts's default content cap. */
+export const PAGE_BUDGET = pageBudget(CONTENT_MAX_CHARS)
 
 /**
  * `render` over the first of `rows`, fewer until the answer fits `budget`. A page says where the
@@ -243,7 +247,7 @@ export const BRIEF_READ_MAX = ANSWER_CEILING_CHARS
  * even alone is cut, marked, with the call that reads it whole. A compact read (`compact: true`)
  * and an off Brief are already short and pass as they are.
  */
-export function briefReadAnswer(result: unknown, args: Record<string, unknown>): unknown {
+export function briefReadAnswer(result: unknown, args: Record<string, unknown>, max = BRIEF_READ_MAX): unknown {
   const r = objOf(result)
   if (r.off || r.compact) return result
   const want = typeof args.section === 'string' ? args.section : undefined
@@ -284,7 +288,7 @@ export function briefReadAnswer(result: unknown, args: Record<string, unknown>):
     }
   }
   // Room for the note answer.ts adds if anything were still over.
-  const budget = BRIEF_READ_MAX - 600
+  const budget = max - 600
   const fits = (v: Obj) => JSON.stringify(v).length <= budget
   for (const [lines, rulesMax, moves] of [[BRIEF_SECTION_LINES, 1e9, BRIEF_MOVES_SHOWN], [BRIEF_SECTION_LINES, 3_000, BRIEF_MOVES_SHOWN], [5, 1_500, 10], [2, 600, 5], [0, 300, 3]] as const) {
     const out = build(lines, rulesMax, moves)
@@ -329,6 +333,6 @@ export function openItemsAnswer(result: unknown, args: Record<string, unknown>):
  * The answer policies for ops kept in other files, ready to set as their `answer`:
  * brief_read and brief_write (ops/tasks.ts), open_items (ops/work.ts).
  */
-export const BRIEF_READ_ANSWER: OpAnswer = { kind: 'content', max: BRIEF_READ_MAX, whole: 'brief_read {"_full":true}', shape: ({ result, args }) => briefReadAnswer(result, args) }
+export const BRIEF_READ_ANSWER: OpAnswer = { kind: 'content', max: BRIEF_READ_MAX, whole: 'brief_read {"_full":true}', shape: ({ result, args, max }) => briefReadAnswer(result, args, max) }
 export const BRIEF_WRITE_ANSWER: OpAnswer = { kind: 'receipt', whole: 'brief_read {"_full":true}', shape: ({ result }) => briefWriteAnswer(result) }
 export const OPEN_ITEMS_ANSWER: OpAnswer = { kind: 'content', shape: ({ result, args }) => openItemsAnswer(result, args) }

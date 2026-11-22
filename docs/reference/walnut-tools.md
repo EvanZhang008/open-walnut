@@ -5,6 +5,24 @@ Every Walnut operation (an op) is one tool on every surface: the MCP tool `mcp__
 core ops plus each plugin's own, too many for one flat list, so every op belongs to exactly one
 group.
 
+## What an agent reads back
+
+Every op answers an agent caller under an answer policy (`src/ops/answer.ts`): a write answers a
+receipt (2,000 characters by default), a read answers content (8,000 by default, an op may declare
+up to 24,000), an op's `shape` builds its compact form, and `"_full": true` lifts the cap for one call.
+The cap also depends on where the answer is printed (`ANSWER_SURFACES`): an MCP tool's answer is
+compact JSON held to 24,000 characters (its client keeps about 25,000); `walnut tools call` prints
+pretty JSON into a shell that keeps about 10 KB, so its answer is held to 8,000 bytes of that print.
+An answer is held to the smaller of the op's cap and its surface's. A shape builds for the cap it is
+given (a document's page, a host_exec window, a page of rows) and builds again for a smaller one when
+its answer prints over, so a page and its "read on" offset agree; the generic cut handles the rest.
+
+The surface rides every call: the hub's MCP server says `mcp`, the CLI says `cli`, and a gateway
+`tools.call` names its client (`client: "mcp" | "cli"`, set by `walnut mcp-server`, `walnut tools call`
+and the daemon's minimal fallback CLI). A request that names none (an older CLI or daemon) is held to
+the CLI's smaller cap. Guard: `tests/mcp/answer-policy.test.ts` holds every op on every surface to its
+limit, printed the way that surface prints it, and pages documents to the end on both.
+
 ## Groups
 
 The table is `src/ops/op-groups.ts`: a core op is placed by its exact name or its family's name

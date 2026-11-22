@@ -34,7 +34,7 @@ import { selfCallRefusal } from './origin-policy.js'
 import { declaredKeysNote, invalidTypeHint, unknownKeyHint, unknownKeyNotes } from './arg-hints.js'
 import { isCallId, takeCallIdArg, writeOpId } from '../lib/op-call-id.js'
 import { runOnce } from './op-calls.js'
-import { FULL_ARG, agentAnswer, cutTextRefusal, takeFullArg } from './answer.js'
+import { FULL_ARG, agentAnswer, answerFit, cutTextRefusal, takeFullArg, type AnswerFit, type AnswerSurface } from './answer.js'
 import { COLLECTION_MAX, oversizedCollection } from '../lib/zod-rules.js'
 import { TASK_DIR_VAR, opTmpPathNote } from '../lib/tmp-draft-path.js'
 import { opLinkNotes } from '../lib/missing-links.js'
@@ -349,10 +349,11 @@ export interface ExecuteOpOptions {
    */
   callId?: string
   /**
-   * The answer goes to an agent (a session's MCP tool or its CLI): shaped and capped by the
-   * op's answer policy (answer.ts). Server code that reads the result itself leaves it out.
+   * The answer goes to an agent, printed by this surface: `mcp` (a session's MCP tool) or `cli`
+   * (`walnut tools call` in its shell). Shaped and held to the op's answer policy on that surface
+   * (answer.ts). Server code that reads the result itself leaves it out.
    */
-  forAgent?: boolean
+  forAgent?: AnswerSurface
   /** The CLI's automation label when no session and no person stands behind the call (cli-sender.ts). */
   sender?: string
   /** Recheck a frozen human plan immediately before each mutation self-call. */
@@ -519,6 +520,10 @@ export async function executeOp(
   const unproven = !human && (options.callerUnproven === true || inherited?.unproven === true)
   // A read runs again freely; a write runs once per call id.
   const once = callId && op.tags.readonly !== true ? callId : undefined
+  // An agent's answer is held to the op's cap on the surface that prints it (answer.ts). An untyped
+  // caller's `true` names no surface, so it gets the smaller one. A handler builds a part for it.
+  const surface: AnswerSurface | undefined = options.forAgent ? (options.forAgent === 'mcp' ? 'mcp' : 'cli') : undefined
+  const fit = surface && !full && !human && !pluginId && !op.answer?.whole_for?.(args) ? answerFit(op, surface) : undefined
   const run = async (): Promise<OpOutcome> => {
     const prov: CallerProvenance = {
       sid: explicitSid,
@@ -536,7 +541,7 @@ export async function executeOp(
       ...(unproven ? { unproven: true as const } : {}),
       ...(once ? { callId: once } : {}),
     }
-    const outcome = await humanCallerScope.run(human, () => explicitCallerScope.run({ sid: explicitSid, kind: callerKind, ...(pluginId ? { pluginId } : {}), ...(unproven ? { unproven: true as const } : {}) }, () => runOp(op, args, base, prov)))
+    const outcome = await humanCallerScope.run(human, () => explicitCallerScope.run({ sid: explicitSid, kind: callerKind, ...(pluginId ? { pluginId } : {}), ...(unproven ? { unproven: true as const } : {}) }, () => runOp(op, args, base, prov, fit)))
     // A handler that caught a lost or refused-for-now self-call and answered ok (a bulk op's
     // failed row): a copy must run it again, and the ledger answers the rows that applied.
     if (outcome.ok) return prov.lostAny || prov.unsettled ? { ...outcome, retry: true } : outcome
@@ -553,8 +558,8 @@ export async function executeOp(
   if (human || pluginId) return outcome
   const noted = await withHandedTextNote(op.name, args, outcome, origin, explicitSid)
   // An agent reads a receipt for a write and capped content for a read (answer.ts).
-  if (!options.forAgent || noted.result === undefined) return noted
-  return { ...noted, result: agentAnswer(op, args, noted.result, full) }
+  if (!surface || noted.result === undefined) return noted
+  return { ...noted, result: agentAnswer(op, args, noted.result, full, surface) }
 }
 
 /**
@@ -626,6 +631,7 @@ async function runOp(
   args: Record<string, unknown>,
   base: string,
   prov: CallerProvenance,
+  fit: AnswerFit | undefined,
 ): Promise<OpOutcome> {
   const timeoutMs = (typeof op.timeoutMs === 'function' ? op.timeoutMs(args) : op.timeoutMs) ?? REQUEST_TIMEOUT_MS
   if (op.handler) {
@@ -639,7 +645,7 @@ async function runOp(
       }
       // A handler that runs another op in-process (a plugin's walnut.ops.call)
       // acts for the same caller: the nested call cannot climb above this origin.
-      const result = await withCallerOrigin(prov.origin, () => op.handler!(args, call, { sid: prov.explicitSid, kind: prov.callerKind }))
+      const result = await withCallerOrigin(prov.origin, () => op.handler!(args, call, { sid: prov.explicitSid, kind: prov.callerKind, ...(fit ? { answer: fit } : {}) }))
       const message = op.resultError?.(result)
       return message ? { ok: false, message, result, ...(reachedNoServer(prov) ? { unreachable: true as const } : {}) } : { ok: true, result }
     } catch (err) {
@@ -668,7 +674,7 @@ async function runOp(
   const r = await rawRequest(base, op.bind!.method, materialized.path, materialized.body, timeoutMs, prov)
   if (!r.ok) return r
   try {
-    const result = op.mapResult ? op.mapResult({ body: r.result, args }) : r.result
+    const result = op.mapResult ? op.mapResult({ body: r.result, args, ...(fit ? { answer: fit } : {}) }) : r.result
     const message = op.resultError?.(result)
     return message ? { ok: false, message, result } : { ok: true, result }
   } catch (err) {

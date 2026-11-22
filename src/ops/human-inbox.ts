@@ -33,7 +33,7 @@ import { USER_KINDS, USER_KIND_ABOUT_PARAM, USER_KIND_PARAM, USER_KIND_WHY_PARAM
 import { awayAnswer, withOutcome } from './outcome.js'
 import { PROOF_IN_PLACE_RULE, WORD_TO_USER_RULE } from '../core/org/thread-rules.js'
 import { LIST_MAX } from '../lib/zod-rules.js'
-import { fitPage, line, nextPageCall, objOf, pick, receiptBase } from './org-answer-shapes.js'
+import { fitPage, line, nextPageCall, objOf, pageBudget, pick, receiptBase } from './org-answer-shapes.js'
 
 /** The sender's open decision letter asking the same thing, from the send's answer (duplicate-letter.ts). */
 function openAskOf(body: unknown): { letterId: string; subject: string; sentAt: string; hint: string } | undefined {
@@ -340,7 +340,7 @@ defineOp({
   },
   answer: {
     kind: 'content', whole: 'human_inbox_get {"id":"<id>"}',
-    shape: ({ result, args }) => {
+    shape: ({ result, args, max }) => {
       const r = objOf(result)
       const all = Array.isArray(r.letters) ? r.letters : []
       const offset = typeof args.offset === 'number' ? args.offset : 0
@@ -349,7 +349,7 @@ defineOp({
       return fitPage(rows, offset, total, (letters, page) => {
         const more = nextPageCall('human_inbox_list', args, page)
         return { ...receiptBase(r), letters, page, ...(more ? { next: `Next page: ${more}. ${String(r.next ?? '')}` } : {}) }
-      })
+      }, pageBudget(max))
     },
   },
   routes: [{ method: 'GET', path: '/human-inbox' }],

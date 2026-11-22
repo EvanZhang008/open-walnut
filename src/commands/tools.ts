@@ -369,8 +369,9 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
     // Outside every session and with no terminal, the call is a script's, never the user's.
     const { cliOpCaller } = await import('../lib/cli-sender.js')
     const caller = cliOpCaller()
-    // A session's call reads a receipt or capped content (ops/answer.ts); a person's or a check script's reads the result as it is.
-    const forAgent = !!process.env.WALNUT_SESSION_ID?.trim() && !process.env.WALNUT_CHECK_TOKEN
+    // A session's call reads a receipt or capped content (ops/answer.ts), held to what its shell
+    // keeps of the pretty JSON printed below; a person's or a check script's reads the result as it is.
+    const forAgent = process.env.WALNUT_SESSION_ID?.trim() && !process.env.WALNUT_CHECK_TOKEN ? 'cli' as const : undefined
     let r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, callId, forAgent, ...caller })
     // A server older than the run id refused it before anything ran: the same call without it.
     if (!r.ok && runId && refusedRunId(name, r.message)) {

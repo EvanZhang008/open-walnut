@@ -88,10 +88,10 @@ function alarmDetailShort(value: unknown): Record<string, unknown> {
 }
 
 /** The alarms that fit the cap, in the route's order (ALARM first); the rest are counted with the call that reads them. */
-function alarmList(result: unknown): unknown {
+function alarmList(result: unknown, max = LIST_MAX): unknown {
   const r = rec(result)
   if (!Array.isArray(r.alarms)) return result
-  const budget = LIST_MAX - LIST_HEAD_ROOM
+  const budget = Math.max(1_000, max - LIST_HEAD_ROOM)
   const kept: Record<string, unknown>[] = []
   let used = 0
   for (const a of r.alarms) {
@@ -143,7 +143,7 @@ defineOp({
   answer: {
     kind: 'content',
     max: LIST_MAX,
-    shape: ({ result, args }) => (args.alarm ? alarmDetailShort(result) : alarmList(result)),
+    shape: ({ result, args, max }) => (args.alarm ? alarmDetailShort(result) : alarmList(result, max)),
   },
   tags: { readonly: true, remote: 'allow', primaryOnly: true },
 })

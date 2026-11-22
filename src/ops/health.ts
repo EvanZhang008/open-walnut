@@ -79,11 +79,11 @@ function sleepNight(value: unknown, tz: unknown): Record<string, unknown> {
  * up to 36,000 characters for a long window or one with stages), the older ones named with the call
  * that reads them. The averages, the baseline and the caveats (which a reply must pass on) stay whole.
  */
-function sleepAnswer(result: unknown): unknown {
+function sleepAnswer(result: unknown, max = SLEEP_MAX): unknown {
   const r = rec(result)
   if (!Array.isArray(r.nights)) return result
   const nights = r.nights.map((n) => sleepNight(n, r.tz))
-  const budget = SLEEP_MAX - SLEEP_HEAD_ROOM
+  const budget = Math.max(1_000, max - SLEEP_HEAD_ROOM)
   let used = 0
   let first = nights.length
   while (first > 0) {
@@ -124,7 +124,7 @@ defineOp({
   },
   bind: { method: 'GET', path: '/api/health/sleep' },
   localOnlyMessage: HEALTH_LOCAL_ONLY_MESSAGE,
-  answer: { kind: 'content', max: SLEEP_MAX, shape: ({ result }) => sleepAnswer(result) },
+  answer: { kind: 'content', max: SLEEP_MAX, shape: ({ result, max }) => sleepAnswer(result, max) },
   tags: HEALTH_TAGS,
 })
 

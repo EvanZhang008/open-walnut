@@ -301,10 +301,10 @@ const LIST_HEAD_ROOM = 2_500
  * answered up to 91,700 characters). A row left out is counted in `more`, and the hint names the
  * calls that read it: a narrower list, or one trigger whole. At least one row stays.
  */
-function fittedList(result: unknown): unknown {
+function fittedList(result: unknown, max = LIST_ANSWER_MAX): unknown {
   const r = rec(result)
   if (!Array.isArray(r.triggers)) return result
-  const budget = Math.max(1_000, LIST_ANSWER_MAX - LIST_HEAD_ROOM - JSON.stringify(r.clocks ?? []).length)
+  const budget = Math.max(1_000, max - LIST_HEAD_ROOM - JSON.stringify(r.clocks ?? []).length)
   const kept: unknown[] = []
   let used = 0
   for (const row of r.triggers) {
@@ -414,7 +414,7 @@ defineOp({
     return { ...page, ...(hint ? { hint } : {}) }
   },
   // The rows that fit, newest activity first; the rest are counted with the call that reads them.
-  answer: { kind: 'content', max: LIST_ANSWER_MAX, shape: ({ result }) => fittedList(result) },
+  answer: { kind: 'content', max: LIST_ANSWER_MAX, shape: ({ result, max }) => fittedList(result, max) },
   tags: { readonly: true, remote: 'allow' },
 })
 

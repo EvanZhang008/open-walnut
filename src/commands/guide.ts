@@ -14,7 +14,10 @@ export async function runGuide(globals: GlobalOptions): Promise<void> {
   const { executeOp } = await import('../ops/index.js')
   const { LOCAL_ORIGIN } = await import('../lib/caller-origin.js')
   const { cliOpCaller } = await import('../lib/cli-sender.js')
-  const outcome = await executeOp('skill_read', { dirName: 'walnut' }, { origin: LOCAL_ORIGIN, ...cliOpCaller() })
+  // A session reads the manual through its shell, which keeps about 10 KB: it gets the first page, whose
+  // last line names the call that reads on (ops/answer.ts). A person's terminal prints all of it.
+  const inSession = !!process.env.WALNUT_SESSION_ID?.trim() && !process.env.WALNUT_CHECK_TOKEN
+  const outcome = await executeOp('skill_read', { dirName: 'walnut' }, { origin: LOCAL_ORIGIN, ...(inSession ? { forAgent: 'cli' as const } : {}), ...cliOpCaller() })
   if (!outcome.ok) {
     console.error(`walnut: ${outcome.message}`)
     process.exitCode = 1

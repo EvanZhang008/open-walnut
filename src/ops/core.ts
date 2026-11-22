@@ -339,12 +339,15 @@ defineOp({
   },
   bind: { method: 'GET', path: '/memory/:doc' },
   // Asked for a part: every caller gets that part (the route ignores offset and section).
-  mapResult: ({ body, args }) => {
+  mapResult: ({ body, args, answer }) => {
     const read = memoryReadResult(body, args)
-    return askedPart(args) ? pagedResult(read, 'memory.content', args, memoryAgain(args), MEMORY_PAGE) : read
+    return askedPart(args) ? pagedResult(read, 'memory.content', args, memoryAgain(args), { ...MEMORY_PAGE, fit: answer }) : read
   },
   // A memory document is read to work from: pages up to the document cap (doc-page.ts).
-  answer: { kind: 'content', max: DOC_ANSWER_MAX_CHARS, shape: ({ result, args }) => pageOnce(result, () => pagedResult(result, 'memory.content', args, memoryAgain(args), MEMORY_PAGE)) },
+  answer: {
+    kind: 'content', max: DOC_ANSWER_MAX_CHARS,
+    shape: ({ result, args, max, surface }) => pageOnce(result, () => pagedResult(result, 'memory.content', args, memoryAgain(args), { ...MEMORY_PAGE, fit: { max, surface } })),
+  },
   tags: { readonly: true, remote: 'allow' },
 })
 
@@ -513,15 +516,15 @@ defineOp({
     id: z.string().min(1).optional().describe('Frontmatter note id from note_search (n_...) — use either id or path'),
     ...DOC_PART_INPUT,
   },
-  handler: async (args, call) => {
+  handler: async (args, call, caller) => {
     const note = await readNote(args, call)
     const body = { path: note.path, content: note.content, contentHash: note.contentHash, updatedAt: note.updatedAt }
-    return askedPart(args) ? pagedResult(body, 'content', args, noteAgain(note.path), NOTE_PAGE) : body
+    return askedPart(args) ? pagedResult(body, 'content', args, noteAgain(note.path), { ...NOTE_PAGE, fit: caller?.answer }) : body
   },
   // A note is a document read to work from: pages up to the document cap (doc-page.ts). 2026-11-21: up to 20,000 characters.
   answer: {
     kind: 'content', max: DOC_ANSWER_MAX_CHARS,
-    shape: ({ result }) => pageOnce(result, () => pagedResult(result, 'content', {}, noteAgain(String((result as { path?: unknown }).path ?? '')), NOTE_PAGE)),
+    shape: ({ result, max, surface }) => pageOnce(result, () => pagedResult(result, 'content', {}, noteAgain(String((result as { path?: unknown }).path ?? '')), { ...NOTE_PAGE, fit: { max, surface } })),
   },
   tags: { readonly: true, remote: 'allow' },
 })

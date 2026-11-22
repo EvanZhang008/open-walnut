@@ -88,7 +88,7 @@ defineOp({
   answer: {
     kind: 'content',
     max: SETTINGS_MAX,
-    shape: ({ result, args }) => {
+    shape: ({ result, args, max }) => {
       const r = rec(result)
       if (Array.isArray(r.plugins)) {
         return { ...r, plugins: r.plugins.map((p) => { const { page: _page, ...rest } = rec(p); return rest }) }
@@ -101,7 +101,7 @@ defineOp({
       for (const f of r.fields) {
         const line = fieldLine(f)
         const n = JSON.stringify(line).length + 1
-        if (fields.length && used + n > SETTINGS_MAX) break
+        if (fields.length && used + n > max) break
         fields.push(line)
         used += n
       }

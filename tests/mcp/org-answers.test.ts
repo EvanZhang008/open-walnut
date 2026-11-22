@@ -10,13 +10,16 @@
  */
 import { describe, expect, it } from 'vitest'
 import { getOp } from '../../src/ops/index.js'
-import { agentAnswer, CONTENT_MAX_CHARS, RECEIPT_MAX_CHARS } from '../../src/ops/answer.js'
+import { agentAnswer as answerOn, CONTENT_MAX_CHARS, RECEIPT_MAX_CHARS } from '../../src/ops/answer.js'
 import { withOutcome } from '../../src/ops/outcome.js'
 import * as model from '../../src/core/org/threads-model.js'
 import { BRIEF_SECTION_LINES, briefReadAnswer, briefWriteAnswer, openItemsAnswer } from '../../src/ops/org-answer-shapes.js'
 import { briefSectionsBlock } from '../../src/core/sessions/brief-structure.js'
 import { holdsPageMark } from '../../src/ops/doc-page.js'
 import { cutMark } from '../../src/ops/answer.js'
+
+/** Each op's own shape under its own cap, as an MCP tool answers it (answer-policy.test.ts holds every op to the CLI's smaller cap too). */
+const agentAnswer = (op: Parameters<typeof answerOn>[0], args: Record<string, unknown>, result: unknown, full = false): unknown => answerOn(op, args, result, full, 'mcp')
 
 const size = (v: unknown): number => JSON.stringify(v).length
 const at = (n: number) => new Date(Date.UTC(2026, 10, 14, 6, 0) + n * 60_000).toISOString()

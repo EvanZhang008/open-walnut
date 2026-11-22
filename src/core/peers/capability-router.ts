@@ -382,6 +382,9 @@ async function handleToolsCall(
   // same call runs it at most once, and op_result reads what it did.
   const { isCallId } = await import('../../lib/op-call-id.js');
   const callId = isCallId(payload.callId) ? payload.callId : undefined;
+  // The answer's surface (ops/answer.ts): the client names itself; one that names none (an older CLI or
+  // daemon) gets the CLI's smaller cap, since its answer may be printed into a shell.
+  const { surfaceOf } = await import('../../ops/answer.js');
   const startedAt = Date.now();
   // The daemon could not prove the session sid (lib/caller-unproven.ts): the sid stays the call's
   // provenance, and the start-mode ceiling of every self-call reads the caller as anonymous.
@@ -394,7 +397,7 @@ callerSid, callerHost: host, origin: hostOrigin(host), ...(proofToken ? { caller
 ...(unproven ? { callerUnproven: true } : {}),
   // A session reads a receipt or capped content (ops/answer.ts); a check script or a plugin job reads the result as it is.
   // A call no session made (a person's terminal on that host, an outside script) reads the result as it is too.
-  forAgent: !payload.triggerCaller && !meta.pluginJob && !!callerSid && !isExternalCallerSid(callerSid),
+  ...(!payload.triggerCaller && !meta.pluginJob && !!callerSid && !isExternalCallerSid(callerSid) ? { forAgent: surfaceOf(payload.client) } : {}),
 }));
   // Real use (core/usage-watch): the call's outcome and its answer's size as its client prints it.
   // A test run's calls stay out of it.

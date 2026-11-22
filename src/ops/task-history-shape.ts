@@ -166,6 +166,8 @@ export function leftOutLine(r: Pick<ShapeResult, 'cutOlder' | 'cutSince' | 'fold
 export const AGENT_HISTORY_LIMIT = 20
 /** What those messages may take of the answer's cap (8,000), leaving room for its other keys. */
 const AGENT_HISTORY_BUDGET = 6_500
+/** That room, under a smaller cap (the CLI's) too. */
+const AGENT_HISTORY_ROOM = 1_500
 /** An older assistant reply in that default, when the messages do not fit: its gist. */
 const AGENT_OLDER_REPLY_MAX = 600
 
@@ -199,7 +201,7 @@ function clipOlderReplies(rows: Row[], out: ShapeResult): ShapeResult {
  * the page before. A caller that named limit, since or compact gets the answer it asked for;
  * `"_full": true` skips this altogether.
  */
-export function agentHistory(result: unknown, args: Record<string, unknown>): unknown {
+export function agentHistory(result: unknown, args: Record<string, unknown>, max?: number): unknown {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return result
   const r = result as Row
   const rows = r.messages
@@ -208,14 +210,15 @@ export function agentHistory(result: unknown, args: Record<string, unknown>): un
   // Already this default (a host's call relayed through a gateway that shapes it too).
   if (typeof r.shown === 'string') return result
   const all = rows as Row[]
+  const budget = max === undefined ? AGENT_HISTORY_BUDGET : Math.max(1_500, Math.min(AGENT_HISTORY_BUDGET, max - AGENT_HISTORY_ROOM))
   const chars = (list: Row[]) => list.reduce((n, m) => n + JSON.stringify(m).length + 1, 0)
   const shaped = (n: number): ShapeResult => {
     const one = shapeHistory(all, { limit: n, compact: true })
-    return chars(one.messages) > AGENT_HISTORY_BUDGET ? clipOlderReplies(all, one) : one
+    return chars(one.messages) > budget ? clipOlderReplies(all, one) : one
   }
   let limit = AGENT_HISTORY_LIMIT
   let out = shaped(limit)
-  while (limit > 3 && chars(out.messages) > AGENT_HISTORY_BUDGET) {
+  while (limit > 3 && chars(out.messages) > budget) {
     limit = Math.max(3, Math.floor(limit * 0.7))
     out = shaped(limit)
   }
@@ -251,5 +254,5 @@ export function agentHistory(result: unknown, args: Record<string, unknown>): un
 export const TASK_HISTORY_ANSWER: OpAnswer = {
   kind: 'content',
   whole: 'task_history {"id":"<id>","limit":200}',
-  shape: ({ result, args }) => agentHistory(result, args),
+  shape: ({ result, args, max }) => agentHistory(result, args, max),
 }

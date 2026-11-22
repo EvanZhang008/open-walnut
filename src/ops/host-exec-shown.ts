@@ -12,13 +12,15 @@
  * Server code and the web UI read the run as the server sent it; `_full: true` does too.
  */
 import { runOutcome, secs } from './host-exec-answers.js'
-import { jsonCost, jsonLength, onCharStart, tailText } from './doc-page.js'
-import { cutMark } from './answer.js'
+import { jsonLength, onCharStart, tailText } from './doc-page.js'
+import { cutMark, textCost, type AnswerSurface, type ShapeContext } from './answer.js'
 
-/** The most output an answer shows, in characters of JSON (a newline is two). */
+/** The most output an answer shows, in characters of JSON (a newline is two), under the op's own cap. */
 export const SHOWN_OUTPUT_CHARS = 6_000
-/** The whole answer: the output shown plus its outcome, next step and fields. */
+/** The whole answer: the output shown plus its outcome, next step and fields. A smaller cap (the CLI's) shows that much less output. */
 export const RUN_ANSWER_MAX_CHARS = 10_000
+/** The least output an answer shows. */
+const SHOWN_MIN = 1_000
 /** The first lines kept before the tail, when they are cheap. */
 const HEAD_LINES = 6
 const HEAD_CHARS = 600
@@ -53,10 +55,10 @@ function headOf(out: string): string {
 }
 
 /** The end of `out` (after `from`) that fits `budget`, starting at a line's start when one is near. */
-function tailOf(out: string, from: number, budget: number): string {
+function tailOf(out: string, from: number, budget: number, surface: AnswerSurface): string {
   let used = 0
   let start = out.length
-  while (start > from && used + jsonCost(out.charCodeAt(start - 1)) <= budget) used += jsonCost(out.charCodeAt(--start))
+  while (start > from && used + textCost(out.charCodeAt(start - 1), surface) <= budget) used += textCost(out.charCodeAt(--start), surface)
   const nl = out.indexOf('\n', start)
   // A line's start, unless that throws away more than a quarter of what fits.
   if (start > from && nl >= 0 && nl + 1 < out.length && nl - start < budget / 4) start = nl + 1
@@ -64,10 +66,10 @@ function tailOf(out: string, from: number, budget: number): string {
 }
 
 /** The start of `out` that fits `budget`, ending at a line's end when one is near. */
-function windowOf(out: string, budget: number): string {
+function windowOf(out: string, budget: number, surface: AnswerSurface): string {
   let used = 0
   let end = 0
-  while (end < out.length && used + jsonCost(out.charCodeAt(end)) <= budget) used += jsonCost(out.charCodeAt(end++))
+  while (end < out.length && used + textCost(out.charCodeAt(end), surface) <= budget) used += textCost(out.charCodeAt(end++), surface)
   const nl = out.lastIndexOf('\n', end - 1)
   if (end < out.length && nl >= 0 && end - nl < budget / 4) end = nl + 1
   return out.slice(0, onCharStart(out, end))
@@ -106,15 +108,17 @@ function nothingNew(b: Record<string, unknown>, args: Record<string, unknown>): 
 
 /**
  * What an agent reads of a host_exec, host_exec_pinned or host_exec_read answer (`result` is
- * the answer runOutcome made): at most SHOWN_OUTPUT_CHARS of output, and the read for the rest.
+ * the answer runOutcome made): at most SHOWN_OUTPUT_CHARS of output (less under a smaller `max`,
+ * counted as `surface` prints it), and the read for the rest.
  */
-export function shownRun({ result, args }: { result: unknown; args: Record<string, unknown> }): unknown {
+export function shownRun({ result, args, max = RUN_ANSWER_MAX_CHARS, surface = 'mcp' }: Pick<ShapeContext, 'result' | 'args'> & Partial<Pick<ShapeContext, 'max' | 'surface'>>): unknown {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return result
   const b = result as Record<string, unknown>
   const quiet = nothingNew(b, args)
   if (quiet) return quiet
   const out = typeof b.output === 'string' ? b.output : ''
-  if (jsonLength(out) <= SHOWN_OUTPUT_CHARS) return result
+  const shownMax = Math.max(SHOWN_MIN, Math.min(SHOWN_OUTPUT_CHARS, SHOWN_OUTPUT_CHARS - (RUN_ANSWER_MAX_CHARS - max)))
+  if (jsonLength(out, surface) <= shownMax) return result
   // Where this output starts in the log (a tail starts past the log's start).
   const at = typeof b.offset === 'number' ? b.offset : Math.max(0, (typeof b.outputBytes === 'number' ? b.outputBytes : 0) - utf8Bytes(out))
   // Hidden credential lines and strict's own line change the text, not the log: offsets are then near, not exact.
@@ -122,7 +126,7 @@ export function shownRun({ result, args }: { result: unknown; args: Record<strin
   const log = typeof b.logFile === 'string' && b.logFile ? `${b.logFile} on ${String(b.host)}` : `its log on ${String(b.host)}`
   if (typeof args.offset === 'number') {
     // A read from an offset the caller chose: what follows it, and the offset that goes on.
-    const shown = windowOf(out, SHOWN_OUTPUT_CHARS - 60)
+    const shown = windowOf(out, shownMax - 60, surface)
     const nextOffset = at + utf8Bytes(shown)
     const { outcome: _o, next: _n, ...raw } = b
     return {
@@ -132,7 +136,7 @@ export function shownRun({ result, args }: { result: unknown; args: Record<strin
   }
   // The head of the log, when this output starts there; then the tail.
   const head = at === 0 && b.truncated !== true ? headOf(out) : ''
-  const tail = tailOf(out, head.length, SHOWN_OUTPUT_CHARS - jsonLength(head) - MARK_ROOM)
+  const tail = tailOf(out, head.length, shownMax - jsonLength(head, surface) - MARK_ROOM, surface)
   const from = at + utf8Bytes(head)
   const to = at + utf8Bytes(out.slice(0, out.length - tail.length))
   const left = out.length - head.length - tail.length

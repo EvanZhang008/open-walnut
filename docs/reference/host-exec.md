@@ -6,7 +6,8 @@ because every character of a description is paid by every session that loads the
 keeps the full rules, edge cases included; each answer that meets one of them says so itself.
 
 What an agent reads back (`src/ops/host-exec-shown.ts`): the first lines and the last 6,000
-characters of the output, with the number of characters left out, the log file on that host, and the
+characters of the output (less through `walnut tools call`, whose shell keeps less: see
+[What an agent reads back](./walnut-tools.md#what-an-agent-reads-back)), with the number of characters left out, the log file on that host, and the
 exact `host_exec_read` call (with `offset`) that shows the rest. A read from an offset shows what
 follows it, up to the same size, and the offset that goes on. Every place the output was cut carries
 Walnut's cut mark (`[Walnut cut: N more characters]`), so a write can tell it from a whole output. A

@@ -210,6 +210,10 @@ export function defaultView(full: Body, dueIds: string[], budget = BOARD_GET_BUD
  * read's own parts, made to fit by the board's own rules instead of a blind cut. Pure.
  */
 export const BOARD_AGENT_BUDGET = 6_500;
+/** Room the budget leaves under the cap an answer is held to (answer.ts gives the shape its cap). */
+const BOARD_ANSWER_ROOM = 1_500;
+/** The budget of an answer held to `max`: BOARD_AGENT_BUDGET under the content cap, less under the CLI's. */
+export const boardBudget = (max: number): number => Math.max(1_500, Math.min(BOARD_AGENT_BUDGET, max - BOARD_ANSWER_ROOM));
 
 /** A summary (defaultView) with its lists shortened until it fits `budget`, each saying how many more. */
 export function shrinkSummary(body: Body, budget = BOARD_AGENT_BUDGET): Body {
@@ -306,26 +310,26 @@ const getCall = (args: Record<string, unknown>) => `board_get ${JSON.stringify(a
  * Board_get's answer to an agent, made to fit by the board's own rules: the default read a
  * summary (shorter lists), a part's html in exact windows, a thread its newest messages.
  */
-export function boardGetAnswer(result: unknown, args: Record<string, unknown>, dueOf: (full: Body) => string[]): unknown {
+export function boardGetAnswer(result: unknown, args: Record<string, unknown>, dueOf: (full: Body) => string[], budget = BOARD_AGENT_BUDGET): unknown {
   const r = objOf(result);
   const size = JSON.stringify(r).length;
-  if (size <= BOARD_AGENT_BUDGET) return result;
+  if (size <= budget) return result;
   const task = typeof r.task_id === 'string' ? { task: r.task_id } : {};
   const picked = Array.isArray(args.parts) || typeof args.thread === 'string' || typeof args.since === 'string';
   if (!picked) {
-    if (r.summarized) return withoutVersion(shrinkSummary(r));
+    if (r.summarized) return withoutVersion(shrinkSummary(r, budget));
     // A board under the server's budget is answered whole; an agent's answer holds less.
     const { outcome, next, ...full } = r;
-    const view = defaultView(full, dueOf(full), BOARD_AGENT_BUDGET);
+    const view = defaultView(full, dueOf(full), budget);
     return withoutVersion(shrinkSummary({
       ...view.body,
       outcome: `${String(outcome ?? '')} The whole board is ${size.toLocaleString('en-US')} characters, more than one answer holds, so this is a summary: counts and short lists under \`summary\`, each part's size under \`part_chars\`.`,
       next: `Read the parts you need: ${getCall({ ...task, parts: ['html'] })} (in windows: html_from), ${getCall({ ...task, parts: ['threads'], thread: '<id>' })}. ${String(next ?? '')}`,
-    }));
+    }, budget));
   }
-  let out: Record<string, unknown> = newestThreadMessages(r);
+  let out: Record<string, unknown> = newestThreadMessages(r, budget);
   if (objOf(out.board).html) {
-    out = htmlWindow(out, typeof args.html_from === 'number' ? args.html_from : 0, (n) => getCall({ ...args, html_from: n }));
+    out = htmlWindow(out, typeof args.html_from === 'number' ? args.html_from : 0, (n) => getCall({ ...args, html_from: n }), budget);
     const w = objOf(out.html_window);
     if (typeof w.total === 'number') {
       out = {

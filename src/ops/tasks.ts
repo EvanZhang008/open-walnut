@@ -5,6 +5,7 @@
 import { z } from 'zod'
 import { LIST_MAX } from '../lib/zod-rules.js'
 import { BRIEF_READ_ANSWER, BRIEF_WRITE_ANSWER } from './org-answer-shapes.js'
+import type { AnswerFit } from './answer.js'
 import { REVIEW_SCORE_INPUT } from './review-score-input.js'
 import { handOffLine, type HandOffResult } from '../core/org/thread-follow.js'
 import { defineOp } from './registry.js'
@@ -1077,7 +1078,7 @@ defineOp({
   // A document: pages up to the document cap (doc-page.ts), so a cut never reaches the text. The hook's readback goes whole.
   answer: {
     kind: 'content', max: DOC_ANSWER_MAX_CHARS, whole_for: (args) => args.hook !== undefined,
-    shape: ({ result, args }) => pageOnce(result, () => agentMemoryPage(result, args)),
+    shape: ({ result, args, max, surface }) => pageOnce(result, () => agentMemoryPage(result, args, { max, surface })),
   },
   input: {
     task: z.string().min(1).optional().describe('Task id or unique prefix; default: your own task'),
@@ -1087,7 +1088,7 @@ defineOp({
       'Set by Walnut\'s own SessionStart hook for Main and the VPs: what you keep across conversations (your MEMORY.md, '
       + 'your skills\' index, your recent work in your Threads) in the JSON shape the hook prints'),
   },
-  handler: async (args, call) => {
+  handler: async (args, call, caller) => {
     if (args.hook) {
       const out = await call('GET', `/me/own-readback?hook=${args.hook}`) as { text?: string } | undefined
       const text = typeof out?.text === 'string' ? out.text : ''
@@ -1103,8 +1104,8 @@ defineOp({
       const newer = body.replaces ? ` The file your prompt names (${body.replaces}) is an older version of it, replaced since your session started: this is the current one.` : ''
       const read = withOutcome(body, `${body.name}${body.walnut ? ', Walnut\'s own file' : ', your note'}${body.shared ? ' (shared)' : ''}, written ${body.at}.${newer}`,
         body.walnut ? 'It is part of your instructions: follow it where it applies.' : 'No further action is required.')
-      // Asked for a part: every caller gets that part.
-      return askedPart(args) ? agentMemoryPage(read, args) : read
+      // Asked for a part: every caller gets that part, an agent's built for its cap.
+      return askedPart(args) ? agentMemoryPage(read, args, caller?.answer) : read
     }
     if (!id) throw new Error('No task of your own: pass task.')
     const [body, folder] = await Promise.all([
@@ -1123,7 +1124,7 @@ defineOp({
         ? 'It is over its size: rewrite it shorter with agent_memory_write (mode replace), keeping everything still valid; build the replace from a whole read (every page, or "_full": true).'
         : 'No further action is required.',
     )
-    return askedPart(args) ? agentMemoryPage(read, args) : read
+    return askedPart(args) ? agentMemoryPage(read, args, caller?.answer) : read
   },
   tags: { readonly: true, remote: 'allow' },
 })
@@ -1133,12 +1134,13 @@ defineOp({
  * 2026-11-21: up to 57,700 characters, while Walnut asks for a rewrite above 12,000; a cut answer
  * sent back as a mode replace would delete the rest, so a part says so in its text.
  */
-function agentMemoryPage(result: unknown, args: Record<string, unknown>): unknown {
+function agentMemoryPage(result: unknown, args: Record<string, unknown>, fit: AnswerFit | undefined): unknown {
   const file = typeof args.file === 'string' && args.file.trim() ? args.file.trim() : undefined
   const again = (more: Record<string, unknown>) => `agent_memory_read ${JSON.stringify({
     ...(typeof args.task === 'string' ? { task: args.task } : {}), ...(file ? { file } : {}), ...more,
   })}`
   return pagedResult(result, file ? 'text' : 'memory.text', args, again, {
+    fit,
     changeWith: file ? 'agent_memory_write with file and the whole text' : 'agent_memory_write (mode append), or a mode replace built from a whole read',
   })
 }

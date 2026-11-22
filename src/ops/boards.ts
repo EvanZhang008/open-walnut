@@ -23,7 +23,7 @@ import type { OpCall } from './core.js';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
-import { BOARD_GET_BUDGET, BOARD_PART_NAMES, boardGetAnswer, boardWriteReceipt, defaultView, selectParts, type BoardPart } from './board-get-view.js';
+import { BOARD_GET_BUDGET, BOARD_PART_NAMES, boardBudget, boardGetAnswer, boardWriteReceipt, defaultView, selectParts, type BoardPart } from './board-get-view.js';
 import { objOf, pick, receiptBase } from './org-answer-shapes.js';
 import { holdsPageMark } from './doc-page.js';
 import { LIST_MAX } from '../lib/zod-rules.js'
@@ -251,7 +251,7 @@ defineOp({
     }
     return withOutcome(result, outcome, next);
   },
-  answer: { kind: 'content', shape: ({ result, args }) => boardGetAnswer(result, args, (full) => dueReminders(full as unknown as BoardBody, Date.now())) },
+  answer: { kind: 'content', shape: ({ result, args, max }) => boardGetAnswer(result, args, (full) => dueReminders(full as unknown as BoardBody, Date.now()), boardBudget(max)) },
   tags: { readonly: true, remote: 'allow' },
 });
 

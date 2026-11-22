@@ -221,13 +221,23 @@ export const TASK_FOCUS_TIER_SET_ANSWER = taskReceiptAnswer({ only: true, add: (
 // ── task_get ──────────────────────────────────────────────────────────────────
 
 /**
- * How much of each long text task_get gives an agent, in JSON characters (what the cap counts:
- * a tab, a quote or a newline is two); the rest is one call away (`fields`). The summary is the
- * note's own Executive Summary, which the head of the note already carries.
+ * How much of each long text task_get gives an agent under its own cap, in JSON characters (what
+ * the cap counts: a tab, a quote or a newline is two); the rest is one call away (`fields`). The
+ * summary is the note's own Executive Summary, which the head of the note already carries. A
+ * smaller cap (the CLI's) gives each its share of it (textLimits).
  */
 export const TASK_GET_TEXT_MAX = { note: 4_000, description: 1_500, summary: 600 } as const
 /** task_get's cap for an agent. */
 const TASK_GET_MAX = 12_000
+
+type TextLimits = { note: number; description: number; summary: number }
+
+/** `limits` for an answer held to `max` instead of `full`: each its share, never under a few lines. */
+function textLimits(limits: TextLimits, max: number, full: number): TextLimits {
+  if (max >= full) return limits
+  const k = max / full
+  return { note: Math.max(600, Math.floor(limits.note * k)), description: Math.max(300, Math.floor(limits.description * k)), summary: Math.max(200, Math.floor(limits.summary * k)) }
+}
 /** The most rows of a related-task list (children, dependents) task_get gives an agent. */
 const RELATED_ROWS_MAX = 20
 /** Standing instructions (Main's, a lead's) kept in task_get; the session's own prompt carries them whole. */
@@ -251,14 +261,14 @@ const BOOKKEEPING = new Set([
 const hasValue = (v: unknown): boolean => v !== undefined && v !== null && v !== '' && !(Array.isArray(v) && v.length === 0)
 
 /**
- * The longest field (in JSON characters) task_get's `fields` answers whole under its cap: the cap
- * less the id, the key and room for a second short field.
+ * The longest field (in JSON characters) task_get's `fields` answers whole under a cap of `max`:
+ * the cap less the id, the key and room for a second short field.
  */
-const WHOLE_FIELD_MAX = TASK_GET_MAX - 500
+const wholeFieldMax = (max: number): number => max - 500
 
 /** The call that reads one field of the task whole: `_full` once the field alone is past the cap. */
-function wholeFieldCall(id: string, key: string, text: string): string {
-  return jsonChars(text) > WHOLE_FIELD_MAX
+function wholeFieldCall(id: string, key: string, text: string, max: number): string {
+  return jsonChars(text) > wholeFieldMax(max)
     ? `task_get {"id":"${id}","fields":["${key}"],"_full":true}`
     : `task_get {"id":"${id}","fields":["${key}"]}`
 }
@@ -267,10 +277,10 @@ function wholeFieldCall(id: string, key: string, text: string): string {
  * `out[key]` = `text` held to `max` JSON characters, cut at a line end with the mark, and beside it
  * `<key>_cut` naming the call that reads it whole. A text that fits is set as it is.
  */
-function cutField(out: Obj, key: string, text: string, max: number, id: string): void {
+function cutField(out: Obj, key: string, text: string, max: number, id: string, answerMax = TASK_GET_MAX): void {
   const kept = cutText(text, max, { json: true, lineEnd: true })
   out[key] = kept
-  if (kept !== text) out[`${key}_cut`] = `${wholeFieldCall(id, key, text)} reads it whole`
+  if (kept !== text) out[`${key}_cut`] = `${wholeFieldCall(id, key, text, answerMax)} reads it whole`
 }
 
 /** A related task (child, dependent, parent) as a row: id, title, phase, and what it asks the user. */
@@ -294,16 +304,17 @@ function engineSwitchView(v: unknown): unknown {
  * A task as task_get gives it to an agent: every field an agent decides on (phase, execution,
  * the wait fields, parent, tags, links, result_report, user_status, its requests and asks), the
  * long texts cut to `limits` with a pointer to the rest, the related-task lists cut to their
- * first rows, and Walnut's bookkeeping left out (named under `omitted`).
+ * first rows, and Walnut's bookkeeping left out (named under `omitted`). `answerMax` is the cap
+ * the answer is held to, which decides whether reading a field whole needs `_full`.
  */
-export function compactTaskView(task: Obj, limits: { note: number; description: number; summary: number } = TASK_GET_TEXT_MAX): Obj {
+export function compactTaskView(task: Obj, limits: TextLimits = TASK_GET_TEXT_MAX, answerMax = TASK_GET_MAX): Obj {
   const id = typeof task.id === 'string' ? task.id : ''
   const out: Obj = {}
   const omitted: string[] = []
   for (const [k, v] of Object.entries(task)) {
     if (BOOKKEEPING.has(k)) { if (hasValue(v)) omitted.push(k); continue }
     if (k === 'note' || k === 'description' || k === 'summary') {
-      if (typeof v === 'string') cutField(out, k, v, limits[k], id)
+      if (typeof v === 'string') cutField(out, k, v, limits[k], id, answerMax)
       else out[k] = v
       continue
     }
@@ -320,8 +331,8 @@ export function compactTaskView(task: Obj, limits: { note: number; description: 
     }
     if (k === 'org_instructions' && isObj(v) && typeof v.text === 'string' && jsonChars(v.text) > INSTRUCTIONS_MAX) {
       const text: Obj = {}
-      cutField(text, 'text', v.text, INSTRUCTIONS_MAX, id)
-      out[k] = { ...v, ...text, text_cut: `${wholeFieldCall(id, 'org_instructions', v.text)} reads them whole` }
+      cutField(text, 'text', v.text, INSTRUCTIONS_MAX, id, answerMax)
+      out[k] = { ...v, ...text, text_cut: `${wholeFieldCall(id, 'org_instructions', v.text, answerMax)} reads them whole` }
       continue
     }
     if (k === 'ext' && size(v) > EXT_MAX) { omitted.push(k); continue }
@@ -375,19 +386,19 @@ function fitFields(result: Obj, max: number): Obj {
   return out
 }
 
-const taskGetShape: Shape = ({ result, args }) => {
+const taskGetShape: Shape = ({ result, args, max }) => {
   if (!isObj(result)) return result
   // Fields asked for are already the answer (pickTaskFields): whole when they fit, else marked.
-  if (askedFields(args.fields)) return fitFields(result, TASK_GET_MAX)
+  if (askedFields(args.fields)) return fitFields(result, max)
   if (!isObj(result.task)) return result
-  return { ...result, task: compactTaskView(result.task) }
+  return { ...result, task: compactTaskView(result.task, textLimits(TASK_GET_TEXT_MAX, max, TASK_GET_MAX), max) }
 }
 
 export const TASK_GET_ANSWER: OpAnswer = { kind: 'content', max: TASK_GET_MAX, whole: WHOLE_TASK, shape: taskGetShape }
 
 // ── task_list and task_get_bulk ───────────────────────────────────────────────
 
-/** A list or bulk answer: the most rows that fit, never a row cut off at the end without a word. */
+/** A list or bulk answer under its own cap: the most rows that fit, never a row cut off at the end without a word. */
 const LIST_ANSWER_MAX = 12_000
 /** First guess at the room the hint fitRows writes takes; the fit is then checked whole. */
 const FIT_ROOM = 400
@@ -443,36 +454,37 @@ function leanRowView(row: unknown): unknown {
 /** A full task_list row (fields=full) or a bulk row: its texts held to a share of one answer. */
 const ROW_TEXT_MAX = { note: 600, description: 300, summary: 300 } as const
 
-const taskListShape: Shape = ({ result, args }) => {
+const taskListShape: Shape = ({ result, args, max }) => {
   if (!isObj(result) || !Array.isArray(result.tasks)) return result
   const full = args.fields === 'full'
-  const rows = result.tasks.map((row) => (!isObj(row) ? row : full ? compactTaskView(row, ROW_TEXT_MAX) : leanRowView(row)))
-  return fitRows(result, 'tasks', rows, LIST_ANSWER_MAX,
+  const rows = result.tasks.map((row) => (!isObj(row) ? row : full ? compactTaskView(row, ROW_TEXT_MAX, max) : leanRowView(row)))
+  return fitRows(result, 'tasks', rows, max,
     (left) => `narrow the filters, read them with task_get_bulk {"ids":${JSON.stringify(idsOf(left).slice(0, 50))}}, or repeat with "_full": true.`)
 }
 
 export const TASK_LIST_ANSWER: OpAnswer = { kind: 'content', max: LIST_ANSWER_MAX, whole: WHOLE_TASK, shape: taskListShape }
 
-const taskGetBulkShape: Shape = ({ result }) => {
+const taskGetBulkShape: Shape = ({ result, max }) => {
   if (!isObj(result) || !Array.isArray(result.tasks)) return result
   const n = Math.max(1, result.tasks.length)
   // Each row's texts get an even share of the answer, never less than a few lines.
+  const share = Math.min(1, max / LIST_ANSWER_MAX)
   const limits = {
-    note: Math.max(400, Math.floor(8_000 / n)),
-    description: Math.max(300, Math.floor(3_000 / n)),
-    summary: Math.max(300, Math.floor(4_000 / n)),
+    note: Math.max(400, Math.floor((8_000 * share) / n)),
+    description: Math.max(300, Math.floor((3_000 * share) / n)),
+    summary: Math.max(300, Math.floor((4_000 * share) / n)),
   }
   const rows = result.tasks.map((row) => {
     if (!isObj(row)) return row
     const id = typeof row.id === 'string' ? row.id : ''
     const out: Obj = {}
     for (const [k, v] of Object.entries(row)) {
-      if ((k === 'note' || k === 'description' || k === 'summary') && typeof v === 'string') cutField(out, k, v, limits[k], id)
+      if ((k === 'note' || k === 'description' || k === 'summary') && typeof v === 'string') cutField(out, k, v, limits[k], id, max)
       else out[k] = v
     }
     return out
   })
-  return fitRows(result, 'tasks', rows, LIST_ANSWER_MAX,
+  return fitRows(result, 'tasks', rows, max,
     (left) => `task_get_bulk ${JSON.stringify({ ids: idsOf(left) })} reads them.`)
 }
 

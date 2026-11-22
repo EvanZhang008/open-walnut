@@ -39,7 +39,7 @@ const JOURNAL_HEAD_ROOM = 1_200
  * and a generic cut would drop the newest, which come last). Older ones are counted with the call
  * that reads them all.
  */
-function journalAnswer(result: unknown, args: Record<string, unknown>): unknown {
+function journalAnswer(result: unknown, args: Record<string, unknown>, max = JOURNAL_MAX): unknown {
   const r = (result ?? {}) as Record<string, unknown>
   if (!Array.isArray(r.events)) return result
   const lines = (r.events as Entry[]).map(line)
@@ -47,7 +47,7 @@ function journalAnswer(result: unknown, args: Record<string, unknown>): unknown 
   let first = lines.length
   while (first > 0) {
     const n = lines[first - 1].length + 3
-    if (first < lines.length && used + n > JOURNAL_MAX - JOURNAL_HEAD_ROOM) break
+    if (first < lines.length && used + n > max - JOURNAL_HEAD_ROOM) break
     used += n
     first--
   }
@@ -91,6 +91,6 @@ defineOp({
     )
   },
   // Content: each event in a line, oldest first, the newest that fit.
-  answer: { kind: 'content', max: JOURNAL_MAX, shape: ({ result, args }) => journalAnswer(result, args) },
+  answer: { kind: 'content', max: JOURNAL_MAX, shape: ({ result, args, max }) => journalAnswer(result, args, max) },
   tags: { readonly: true, remote: 'allow' },
 })

@@ -20,7 +20,7 @@
 import { z } from 'zod'
 import { OwnedRegistry } from '../core/plugins/owned-registry.js'
 import type { Disposable } from '../core/plugins/disposable.js'
-import type { OpAnswer } from './answer.js'
+import type { AnswerFit, OpAnswer } from './answer.js'
 
 /** How an op reaches the server when it has no custom handler. */
 export interface HttpBinding {
@@ -43,6 +43,23 @@ export interface OpResultContext {
   body: unknown
   /** Validated input args the op was called with. */
   args: Record<string, unknown>
+  /**
+   * Set when the answer goes to an agent through the op's shape (answer.ts): the cap it is held to.
+   * A part asked for (a document's page) is built for it, so no later cut shortens it.
+   */
+  answer?: AnswerFit
+}
+
+/** Who a handler runs for. */
+export interface OpCaller {
+  sid?: string
+  kind: 'person' | 'agent'
+  /**
+   * Set when the answer goes to an agent through the op's shape (answer.ts): the cap it is held to,
+   * on the surface that prints it. A part the handler builds itself (a document's page) is built
+   * for it; left out, the caller reads the result as it is (a person, server code, `_full`).
+   */
+  answer?: AnswerFit
 }
 
 export interface WalnutOp {
@@ -83,7 +100,7 @@ export interface WalnutOp {
   handler?: (
     args: Record<string, unknown>,
     call: (method: HttpBinding['method'], path: string, body?: unknown) => Promise<unknown>,
-    caller?: { sid?: string; kind: 'person' | 'agent' },
+    caller?: OpCaller,
   ) => Promise<unknown>
   /**
    * The endpoints a `handler` op reaches (templates shaped like `bind.path`),

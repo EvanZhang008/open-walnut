@@ -14,9 +14,16 @@
  * An op may give its own compact form (`shape`); the cap below holds whatever it gives.
  * `"_full": true` in the arguments lifts both for one call (a script that needs all of it).
  *
- * Pure and dependency-free: the guard test runs it over every op.
+ * The cap also depends on where the answer is printed (ANSWER_SURFACES): an MCP tool's answer
+ * goes to the agent as compact JSON and its client keeps about 25,000 characters, while
+ * `walnut tools call` prints pretty JSON into a shell whose harness keeps about 10 KB
+ * (2026-11-22: skill_read answered 19,354 bytes through the CLI and was saved to a file). So an
+ * answer is held to the smaller of the op's cap and the surface's, measured as that surface prints it.
+ *
+ * Pure: the guard test runs it over every op.
  */
 import type { WalnutOp } from './registry.js'
+import { ANSWER_LIMITS, cliAnswerText } from '../lib/tool-answer-size.js'
 
 export interface OpAnswer {
   /**
@@ -33,7 +40,7 @@ export interface OpAnswer {
    * The op's own compact form of its result, for an agent caller. Returns the
    * result to answer; whatever it returns is still held to `max`.
    */
-  shape?: (ctx: { result: unknown; args: Record<string, unknown> }) => unknown
+  shape?: (ctx: ShapeContext) => unknown
   /**
    * Calls whose answer is never shaped or cut: one of Walnut's own hooks, whose output a
    * harness reads as it is (the read-back after a compaction). The guard test lists the ops that may.
@@ -41,12 +48,65 @@ export interface OpAnswer {
   whole_for?: (args: Record<string, unknown>) => boolean
 }
 
+/**
+ * Where an agent reads an answer, and how much of it that place keeps. `max` is what Walnut holds an
+ * answer to, in `unit`, measured on the text that surface prints (printedSize); `keeps` is where
+ * the agent's harness stops passing an answer on (lib/tool-answer-size.ts, read off session records).
+ */
+export const ANSWER_SURFACES = {
+  /** A Walnut MCP tool (src/mcp/tools.ts, walnut-mcp-stdio.ts): compact JSON, counted in characters. */
+  mcp: { max: 24_000, unit: 'chars', keeps: ANSWER_LIMITS.mcp.max },
+  /**
+   * `walnut tools call` in a session's shell (src/commands/tools.ts, wn-cli.ts): pretty JSON and a
+   * newline (cliAnswerText), counted in UTF-8 bytes, which is never less than its characters
+   * (Chinese text is 3 bytes a character). Answers under about 9 KB passed in real sessions.
+   */
+  cli: { max: 8_000, unit: 'bytes', keeps: ANSWER_LIMITS.cli.max },
+} as const satisfies Record<string, { max: number; unit: 'chars' | 'bytes'; keeps: number }>
+
+export type AnswerSurface = keyof typeof ANSWER_SURFACES
+
+/** Every surface, for the guard test and the callers that name one. */
+export const ANSWER_SURFACE_NAMES = Object.keys(ANSWER_SURFACES) as AnswerSurface[]
+
+/** A caller that names no surface (an older CLI or daemon) is held to the smaller cap: a too-small answer costs one more call, a too-big one is lost. */
+export const surfaceOf = (v: unknown): AnswerSurface => (v === 'mcp' ? 'mcp' : 'cli')
+
+/** What one agent answer is held to: `max` in its surface's unit, measured by printedSize. */
+export interface AnswerFit { max: number; surface: AnswerSurface }
+
+/** What an op's shape builds from: the result, the call's arguments, and the cap the answer is held to. */
+export interface ShapeContext extends AnswerFit { result: unknown; args: Record<string, unknown> }
+
+/** Past this many compact characters the printed text is not built: such an answer is over every cap already. */
+const PRINTED_MEASURE_MAX = 400_000
+
+/** `value`'s size as `surface` prints it, in that surface's unit. */
+export function printedSize(value: unknown, surface: AnswerSurface): number {
+  const compact = JSON.stringify(value) ?? 'null'
+  if (surface === 'mcp' || compact.length > PRINTED_MEASURE_MAX) return compact.length
+  return Buffer.byteLength(cliAnswerText(value), 'utf-8')
+}
+
+/**
+ * One UTF-16 unit of a string's content, as `surface` counts it once printed as JSON: an escape
+ * (a newline, a quote) is two or six, and on the CLI a character outside ASCII is its UTF-8 bytes
+ * (a surrogate pair is 4 bytes, 2 for each half).
+ */
+export function textCost(code: number, surface: AnswerSurface = 'mcp'): number {
+  if (code === 0x22 || code === 0x5c) return 2
+  if (code < 0x20) return code === 0x0a || code === 0x0d || code === 0x09 || code === 0x08 || code === 0x0c ? 2 : 6
+  if (code < 0x80 || surface === 'mcp') return 1
+  if (code < 0x800 || (code >= 0xd800 && code <= 0xdfff)) return 2
+  return 3
+}
+
 /** A receipt: ids, a state, a count, an outcome and a next step. */
 export const RECEIPT_MAX_CHARS = 2_000
 /** Content: under what an agent's shell keeps of a command's output (about 10,000 characters). */
 export const CONTENT_MAX_CHARS = 8_000
-/** No op may declare more: the largest answer an agent's MCP client keeps is about 25,000 characters. */
-export const ANSWER_CEILING_CHARS = 24_000
+/** No op may declare more: the largest surface's cap (an agent's MCP client keeps about 25,000 characters). */
+export const ANSWER_CEILING_CHARS: number = ANSWER_SURFACES.mcp.max
 
 /** The argument that lifts the policy for one call. Never one of an op's own arguments. */
 export const FULL_ARG = '_full'
@@ -67,6 +127,11 @@ export function answerPolicy(op: Pick<WalnutOp, 'answer' | 'tags'>): AnswerPolic
   const kind = op.answer?.kind ?? (op.tags.readonly ? 'content' : 'receipt')
   const max = Math.min(op.answer?.max ?? (kind === 'receipt' ? RECEIPT_MAX_CHARS : CONTENT_MAX_CHARS), ANSWER_CEILING_CHARS)
   return { kind, max, ...(op.answer?.whole ? { whole: op.answer.whole } : {}) }
+}
+
+/** What `op`'s answer to an agent on `surface` is held to: the smaller of its own cap and the surface's. */
+export function answerFit(op: Pick<WalnutOp, 'answer' | 'tags'>, surface: AnswerSurface): AnswerFit {
+  return { surface, max: Math.min(answerPolicy(op).max, ANSWER_SURFACES[surface].max) }
 }
 
 /**
@@ -290,24 +355,75 @@ export function cutToFit(value: unknown, max: number, whole?: string): unknown {
   return root
 }
 
+/** The smallest budget a shape or the cutter is asked to build for (cutToFit's own floor). */
+const BUDGET_FLOOR = 200
+
 /**
- * What an agent caller reads for `result`: the op's own compact form, held to its cap.
- * `full` (the caller's `_full: true`) returns the result as the server gave it.
+ * The next budget, in compact JSON characters, after an answer of `compact` characters printed
+ * `printed` against `max`: the same share of what printed over, less a margin. Undefined when no
+ * smaller one is left to try.
+ */
+function smaller(budget: number, compact: number, printed: number, max: number): number | undefined {
+  const next = Math.floor((Math.min(budget, compact) * max) / printed) - Math.max(16, Math.ceil(max / 200))
+  return next < budget && next >= BUDGET_FLOOR ? next : undefined
+}
+
+/**
+ * `value` held to `fit`, printed as its surface prints it. cutToFit counts compact JSON
+ * characters, which a pretty print or a non-ASCII text outgrows: the budget shrinks by what the
+ * printed text was over until it fits.
+ */
+function cutToPrinted(value: unknown, fit: AnswerFit, whole?: string): unknown {
+  let budget = fit.max
+  let out = cutToFit(value, budget, whole)
+  for (let round = 0; round < 8; round++) {
+    const printed = printedSize(out, fit.surface)
+    const next = printed > fit.max ? smaller(budget, size(out), printed, fit.max) : undefined
+    if (next === undefined) return out
+    budget = next
+    out = cutToFit(value, budget, whole)
+  }
+  return out
+}
+
+/**
+ * What an agent caller reads for `result` on `surface`: the op's own compact form, held to the
+ * smaller of the op's cap and the surface's, measured as the surface prints it. A shape builds for
+ * the `max` it is given; when its answer prints over the cap (pretty JSON, Chinese text), it builds
+ * again for a smaller one, so a page and its "read on" offset still agree. Only what a shape cannot
+ * make fit is cut by cutToFit. `full` (the caller's `_full: true`) returns the result as the server gave it.
  */
 export function agentAnswer(
   op: Pick<WalnutOp, 'answer' | 'tags' | 'name'>,
   args: Record<string, unknown>,
   result: unknown,
   full = false,
+  surface: AnswerSurface = 'cli',
 ): unknown {
   if (full || result === undefined || result === null) return result
   if (op.answer?.whole_for?.(args)) return result
   const policy = answerPolicy(op)
-  let shaped = result
-  if (op.answer?.shape) {
-    // A shape that cannot read an answer it did not expect never fails the call.
-    try { shaped = op.answer.shape({ result, args }) ?? result } catch { shaped = result }
+  const fit = answerFit(op, surface)
+  const shape = op.answer?.shape
+  // A shape that cannot read an answer it did not expect never fails the call.
+  const build = (max: number): unknown => {
+    if (!shape) return result
+    try { return shape({ result, args, max, surface }) ?? result } catch { return result }
   }
+  let budget = fit.max
+  let shaped = build(budget)
   // A result JSON cannot hold (a cycle, a BigInt) is answered as it is: the op ran, the answer must not fail it.
-  try { return cutToFit(shaped, policy.max, policy.whole) } catch { return shaped }
+  try {
+    for (let round = 0; shape && round < 4; round++) {
+      const printed = printedSize(shaped, surface)
+      const next = printed > fit.max ? smaller(budget, size(shaped), printed, fit.max) : undefined
+      if (next === undefined) break
+      const again = build(next)
+      // A shape that gives the same answer for any budget is left to the cutter.
+      if (printedSize(again, surface) >= printed) break
+      budget = next
+      shaped = again
+    }
+    return cutToPrinted(shaped, fit, policy.whole)
+  } catch { return shaped }
 }

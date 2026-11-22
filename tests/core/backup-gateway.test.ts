@@ -183,11 +183,22 @@ describe('backup gateway', () => {
     const calls: Array<[string, Record<string, unknown>, { callerSid: string; callerHost: string }]> = []
     const h = harness({ executeOp: async (name, args, ctx) => { calls.push([name, args, ctx]); return name === 'task_complete' ? { ok: false, message: 'refused: no such task' } : { ok: true, result: [1, 2] } } })
     await h.gw.handle('devbox', h.frame({ name: 'note_read', args: { path: 'x.md' } }))
-    expect(calls).toEqual([['note_read', { path: 'x.md' }, { callerSid: CALLER, callerHost: 'devbox' }]])
+    // A session's call is held to its client's surface (ops/answer.ts); naming none, to the CLI's smaller cap.
+    expect(calls).toEqual([['note_read', { path: 'x.md' }, { callerSid: CALLER, callerHost: 'devbox', forAgent: 'cli' }]])
     expect(h.answer()).toMatchObject({ result: { value: [1, 2], viaLeader: true } })
     await h.gw.handle('devbox', h.frame({ name: 'task_complete', args: { id: 'x' } }))
     expect(h.answer()).toMatchObject({ errorCode: 'internal', error: 'refused: no such task' })
     expect(LEADER_OPS).not.toContain('session_start')
+  })
+
+  it('a session\'s MCP server is held to the MCP surface, its CLI and an older client to the CLI\'s, a call no session made to none', async () => {
+    const seen: Array<unknown> = []
+    const h = harness({ executeOp: async (_name, _args, ctx) => { seen.push((ctx as { forAgent?: unknown }).forAgent); return { ok: true, result: {} } } })
+    await h.gw.handle('devbox', h.frame({ name: 'skill_read', args: { dirName: 'walnut' }, client: 'mcp' }))
+    await h.gw.handle('devbox', h.frame({ name: 'skill_read', args: { dirName: 'walnut' }, client: 'cli' }))
+    await h.gw.handle('devbox', h.frame({ name: 'skill_read', args: { dirName: 'walnut' } }))
+    await h.gw.handle('devbox', h.frame({ name: 'skill_read', args: { dirName: 'walnut' } }, { callerSid: 'external' }))
+    expect(seen).toEqual(['mcp', 'cli', 'cli', undefined])
   })
 
   it('an op the API refused says how it answered (api), unless the answer was lost: a check run reads it for machine faults', async () => {

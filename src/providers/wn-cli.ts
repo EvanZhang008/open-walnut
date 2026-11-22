@@ -724,8 +724,8 @@ export async function callHostDaemonTool(
   const sid = (env.WALNUT_SESSION_ID ?? '').trim()
   if (!socket || !sid || !probeSocket(socket)?.isSocket) return null
   try {
-    // The call's id (src/lib/op-call-id.ts): a resend runs it at most once.
-    return await requestOverSocket(socket, { v: 1, op: 'tools.call', sid, args: { name, args, ...(callId ? { callId } : {}) } }, WALNUT_CLI_TIMEOUT_MS, env)
+    // The call's id (src/lib/op-call-id.ts): a resend runs it at most once. `client`: its answer is printed by a CLI (ops/answer.ts).
+    return await requestOverSocket(socket, { v: 1, op: 'tools.call', sid, args: { name, args, ...(callId ? { callId } : {}), client: 'cli' } }, WALNUT_CLI_TIMEOUT_MS, env)
   } catch (err) {
     // A timeout is no proof nothing was delivered: it is the answer, not a miss. Nor is a line
     // the host call entry took whose answer broke off.
@@ -1032,7 +1032,8 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
         ...(argsFile !== undefined ? { argsFile } : { args: callArgs }),
         // Arguments in a file keep a "_call_id" of their own there (the server takes it out).
         callId: callId || (callId = newCallId()),
-        // The hub measures the answer as this CLI prints it (lib/tool-answer-size.ts).
+        // The hub holds the answer to what a shell keeps of this CLI's print, and measures it so
+        // (ops/answer.ts, lib/tool-answer-size.ts).
         client: 'cli',
         ...testRunArg(),
       }

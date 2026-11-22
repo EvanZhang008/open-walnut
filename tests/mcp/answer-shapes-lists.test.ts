@@ -12,8 +12,11 @@
  */
 import { describe, it, expect } from 'vitest'
 import { getOp } from '../../src/ops/index.js'
-import { agentAnswer, answerPolicy } from '../../src/ops/answer.js'
+import { agentAnswer as answerOn, answerPolicy } from '../../src/ops/answer.js'
 import type { WalnutOp } from '../../src/ops/registry.js'
+
+/** Each op's own shape under its own cap, as an MCP tool answers it (answer-policy.test.ts holds every op to the CLI's smaller cap too). */
+const agentAnswer = (op: Parameters<typeof answerOn>[0], args: Record<string, unknown>, result: unknown, full = false): unknown => answerOn(op, args, result, full, 'mcp')
 
 type Rec = Record<string, unknown>
 type Call = (method: string, path: string, body?: unknown) => Promise<unknown>

@@ -1537,7 +1537,8 @@ function runWnMinimal(argv, stdinText) {
           var wnNamed = wnCallIdInText(wnFileText);
           if (wnNamed !== null && !wnCallIdRe.test(wnNamed)) return wnFail('invalid_call_id', '_call_id must be a call id a Walnut client printed', 2);
           wnCallId = wnNamed || wnNewCallId();
-          args = { name: rest[0], argsFile: wnArgsFile, callId: wnCallId };
+          // client: the hub holds the answer to what a shell keeps of this pretty print (ops/answer.ts).
+          args = { name: rest[0], argsFile: wnArgsFile, callId: wnCallId, client: 'cli' };
         } else {
           var parsedCall = wnParseToolArgs(rawText);
           if (!parsedCall.ok) return wnFail('invalid_json', parsedCall.message, 2);
@@ -1559,7 +1560,7 @@ function runWnMinimal(argv, stdinText) {
             // Twin of namedOnSignal: stopped before its answer, the run's id is printed all the same.
             ['SIGTERM', 'SIGINT', 'SIGHUP'].forEach(function (sig) { process.once(sig, function () { if (!wnAnswered) wnLostRun(); process.kill(process.pid, sig); }); });
           }
-          args = { name: rest[0], args: parsedCall.args, callId: wnCallId };
+          args = { name: rest[0], args: parsedCall.args, callId: wnCallId, client: 'cli' };
         }
       }
     } else if (sub === 'call') {

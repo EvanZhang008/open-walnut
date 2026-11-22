@@ -13,10 +13,13 @@
  */
 import { describe, expect, it } from 'vitest'
 import { getOp, parseOpArgs } from '../../src/ops/index.js'
-import { agentAnswer, answerPolicy, cutMark, cutTextRefusal } from '../../src/ops/answer.js'
+import { agentAnswer as answerOn, answerPolicy, cutMark, cutTextRefusal } from '../../src/ops/answer.js'
 import { headingsOf, pageOf, pagedResult, PAGE_MARK, tailText } from '../../src/ops/doc-page.js'
 import { repeatedTailRead, resetHostJobsForTest } from '../../src/core/hosts/host-exec-jobs.js'
 import type { WalnutOp } from '../../src/ops/registry.js'
+
+/** Each op's own shape under its own cap, as an MCP tool answers it (answer-policy.test.ts holds every op to the CLI's smaller cap too). */
+const agentAnswer = (op: Parameters<typeof answerOn>[0], args: Record<string, unknown>, result: unknown, full = false): unknown => answerOn(op, args, result, full, 'mcp')
 
 const op = (name: string): WalnutOp => getOp(name)!
 const size = (v: unknown): number => JSON.stringify(v).length

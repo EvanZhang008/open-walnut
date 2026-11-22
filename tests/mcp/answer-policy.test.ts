@@ -11,13 +11,16 @@
  * when a write answers content without being on the list below, or when an op
  * declares a cap over the ceiling.
  */
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { z } from 'zod'
-import { listOps, executeOp } from '../../src/ops/index.js'
+import { listOps, executeOp, getOp } from '../../src/ops/index.js'
 import { definePluginOp } from '../../src/ops/registry.js'
 import {
-  ANSWER_CEILING_CHARS, CONTENT_MAX_CHARS, RECEIPT_MAX_CHARS, agentAnswer, answerPolicy, cutMark, cutTextPath, cutTextRefusal, cutToFit,
+  ANSWER_CEILING_CHARS, ANSWER_SURFACES, ANSWER_SURFACE_NAMES, CONTENT_MAX_CHARS, RECEIPT_MAX_CHARS, agentAnswer, answerFit, answerPolicy,
+  cutMark, cutTextPath, cutTextRefusal, cutToFit, printedSize, surfaceOf, type AnswerSurface,
 } from '../../src/ops/answer.js'
+import { PAGE_MARK } from '../../src/ops/doc-page.js'
+import { cliAnswerText } from '../../src/lib/tool-answer-size.js'
 import { LOCAL_ORIGIN } from '../../src/lib/caller-origin.js'
 
 /**
@@ -100,6 +103,131 @@ describe('every op answers an agent within its cap', () => {
       expect(names.has(whole.split(/[\s{]/)[0]), `${op.name}: ${whole}`).toBe(true)
     }
   })
+})
+
+/**
+ * A long Markdown document: headings, paragraphs with quotes and newlines, a code fence. `cjk`
+ * writes its prose in Chinese (3 UTF-8 bytes a character), given as escapes per the repo's rule.
+ */
+function markdown(sections: number, cjk = false): string {
+  const prose = cjk ? '\u8fd9\u662f\u4e00\u4e2a\u5f88\u957f\u7684\u6587\u6863\uff0c\u5b83\u8bf4\u4e86"\u5f88\u591a"\u4e8b\u60c5\u3002 ' : 'The rule says "keep going" and the next line follows. '
+  const parts = ['# A long document\n\nIntro.\n']
+  for (let i = 0; i < sections; i++) {
+    parts.push(`## Section ${i}\n\n${prose.repeat(30)}\n${prose.repeat(12)}\n`)
+    if (i % 7 === 3) parts.push('```bash\n# not a heading\necho "hi"\n```\n')
+  }
+  return parts.join('\n')
+}
+
+/** The keys a document op reads its text from (doc-page.ts pagedResult paths), each as a result. */
+const DOC_PATHS = ['skill.content', 'memory.content', 'content', 'text', 'memory.text', 'answer', 'output']
+function docResult(path: string, text: string): Record<string, unknown> {
+  const keys = path.split('.')
+  const leaf: Record<string, unknown> = { [keys[keys.length - 1]]: text, id: 'sa-0123abcd', path: 'Projects/Big', contentHash: 'h1', name: 'big' }
+  return keys.length === 1 ? { ...leaf, outcome: 'Read.', next: 'Nothing else is required.' } : { [keys[0]]: leaf, outcome: 'Read.', next: 'Nothing else is required.' }
+}
+
+describe('every op answers within what each surface keeps, printed as that surface prints it', () => {
+  const ops = listOps({ includeDeprecated: true })
+
+  it('each surface holds an answer well under what its agent\'s harness keeps, and the CLI counts its pretty print', () => {
+    expect(ANSWER_SURFACE_NAMES.sort()).toEqual(['cli', 'mcp'])
+    for (const name of ANSWER_SURFACE_NAMES) {
+      const s = ANSWER_SURFACES[name]
+      expect(s.keeps - s.max, name).toBeGreaterThanOrEqual(1_000)
+    }
+    // Answers of 10 KB were saved to a file and ones under about 9 KB passed: the CLI keeps a fifth spare.
+    expect(ANSWER_SURFACES.cli.max).toBeLessThanOrEqual(Math.floor(ANSWER_SURFACES.cli.keeps * 0.8))
+    expect(ANSWER_CEILING_CHARS).toBe(Math.max(...ANSWER_SURFACE_NAMES.map((n) => ANSWER_SURFACES[n].max)))
+    const v = { a: '\u4e2d\u6587', b: [1, 2] }
+    expect(printedSize(v, 'cli')).toBe(Buffer.byteLength(cliAnswerText(v), 'utf-8'))
+    expect(printedSize(v, 'mcp')).toBe(JSON.stringify(v).length)
+  })
+
+  it('a caller that names no surface, or one it does not know, gets the CLI\'s smaller cap', () => {
+    expect(surfaceOf('mcp')).toBe('mcp')
+    expect(surfaceOf('cli')).toBe('cli')
+    expect(surfaceOf(undefined)).toBe('cli')
+    expect(surfaceOf('unknown')).toBe('cli')
+  })
+
+  // The class: every op, every surface, every result an op's data can grow into.
+  const fixtures: Array<[string, () => unknown]> = [
+    ['large', largeResult],
+    ...DOC_PATHS.flatMap((p): Array<[string, () => unknown]> => [
+      [`doc ${p}`, () => docResult(p, markdown(60))],
+      [`non-ASCII doc ${p}`, () => docResult(p, markdown(40, true))],
+    ]),
+  ]
+  for (const surface of ANSWER_SURFACE_NAMES) {
+    it(`no op answers more than the ${surface} surface keeps, for any of its results`, () => {
+      const limit = ANSWER_SURFACES[surface].max
+      const over: string[] = []
+      for (const op of ops) {
+        if (op.answer?.whole_for?.({})) continue
+        const fit = answerFit(op, surface)
+        expect(fit.max, op.name).toBeLessThanOrEqual(limit)
+        for (const [label, make] of fixtures) {
+          const result = make()
+          const answer = agentAnswer(op, {}, result, false, surface)
+          const printed = printedSize(answer, surface)
+          if (printed > fit.max) over.push(`${op.name} (${label}): ${printed} > ${fit.max}`)
+          // Never more than the op's own cap either, in compact characters.
+          if (JSON.stringify(answer).length > answerPolicy(op).max) over.push(`${op.name} (${label}): over its own cap`)
+        }
+      }
+      expect(over).toEqual([])
+    }, 120_000)
+  }
+})
+
+/**
+ * A document read through the executor, as a session's MCP tool or its CLI makes it: each page's
+ * text, followed by the offset its `next` names, gives back the whole document, no gap, no overlap.
+ */
+describe('a document read pages exactly on every surface', () => {
+  const docs: Array<[string, string]> = [['ASCII', markdown(80)], ['non-ASCII', markdown(50, true)]]
+  const reads: Array<{ op: string; args: Record<string, unknown>; body: (text: string) => unknown; text: (r: Record<string, unknown>) => string }> = [
+    { op: 'skill_read', args: { dirName: 'big' }, body: (t) => ({ skill: { dirName: 'big', name: 'big', description: 'd', location: '/s/big/SKILL.md', content: t } }), text: (r) => String((r.skill as { content: string }).content) },
+    { op: 'note_read', args: { path: 'Projects/Big' }, body: (t) => ({ content: t, contentHash: 'h1', updatedAt: '2026-11-22T00:00:00Z' }), text: (r) => String(r.content) },
+    { op: 'memory_read', args: { doc: 'global' }, body: (t) => ({ memory: { content: t, contentHash: 'm1', updatedAt: '2026-11-22T00:00:00Z' } }), text: (r) => String((r.memory as { content: string }).content) },
+  ]
+  const pageText = (text: string): string => {
+    const at = text.indexOf(`\n\n${PAGE_MARK}`)
+    return at < 0 ? text : text.slice(0, at)
+  }
+
+  for (const surface of ['mcp', 'cli'] as AnswerSurface[]) {
+    for (const [kind, doc] of docs) {
+      for (const read of reads) {
+        it(`${read.op}, ${kind}, on the ${surface} surface`, async () => {
+          const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(read.body(doc)), { status: 200 }))
+          try {
+            let joined = ''
+            let args: Record<string, unknown> = { ...read.args }
+            let pages = 0
+            for (; pages < 200; pages++) {
+              const r = await executeOp(read.op, args, { origin: LOCAL_ORIGIN, callerSid: 's-1', forAgent: surface })
+              expect(r.ok, r.ok ? '' : r.message).toBe(true)
+              const answer = r.result as Record<string, unknown>
+              expect(printedSize(answer, surface)).toBeLessThanOrEqual(answerFit(getOp(read.op)!, surface).max)
+              // A page is never cut again after it was built: its text carries no cut mark.
+              expect(read.text(answer)).not.toContain('[Walnut cut:')
+              joined += pageText(read.text(answer))
+              const next = String((answer.page as { next?: string } | undefined)?.next ?? '')
+              const call = /^\w+ (\{.*\})$/.exec(next)
+              if (!call) break
+              const more = JSON.parse(call[1]) as Record<string, unknown>
+              expect(typeof more.offset).toBe('number')
+              args = { ...read.args, offset: more.offset }
+            }
+            expect(pages).toBeGreaterThan(surface === 'cli' ? 4 : 1)
+            expect(joined).toBe(doc)
+          } finally { fetcher.mockRestore() }
+        })
+      }
+    }
+  }
 })
 
 describe('cutToFit', () => {
@@ -202,7 +330,7 @@ describe('a shortened text is never stored back', () => {
       tags: { readonly: false, remote: 'allow' },
     })
     try {
-      const r = await executeOp('answer_policy_test_store', { content: `head… ${cutMark(9)}` }, { origin: LOCAL_ORIGIN, callerSid: 's-1', forAgent: true })
+      const r = await executeOp('answer_policy_test_store', { content: `head… ${cutMark(9)}` }, { origin: LOCAL_ORIGIN, callerSid: 's-1', forAgent: 'cli' })
       expect(r.ok).toBe(false)
       expect(ran).toBe(false)
     } finally { h.dispose() }
@@ -223,7 +351,7 @@ describe('executeOp holds an agent caller to the policy, and only an agent calle
 
   it('a write answers a receipt to an agent and the whole result to server code', async () => {
     define('answer_policy_test_write', false)
-    const agent = await executeOp('answer_policy_test_write', {}, { origin: LOCAL_ORIGIN, callerSid: 's-1', forAgent: true })
+    const agent = await executeOp('answer_policy_test_write', {}, { origin: LOCAL_ORIGIN, callerSid: 's-1', forAgent: 'cli' })
     expect(agent.ok).toBe(true)
     expect(size(agent.result)).toBeLessThanOrEqual(RECEIPT_MAX_CHARS)
     const server = await executeOp('answer_policy_test_write', {}, { origin: LOCAL_ORIGIN, callerSid: 's-1' })
@@ -232,12 +360,12 @@ describe('executeOp holds an agent caller to the policy, and only an agent calle
 
   it('a read answers capped content, and `_full` lifts the cap for one call', async () => {
     define('answer_policy_test_read', true)
-    const capped = await executeOp('answer_policy_test_read', {}, { origin: LOCAL_ORIGIN, callerSid: 's-1', forAgent: true })
+    const capped = await executeOp('answer_policy_test_read', {}, { origin: LOCAL_ORIGIN, callerSid: 's-1', forAgent: 'cli' })
     expect(size(capped.result)).toBeLessThanOrEqual(CONTENT_MAX_CHARS)
-    const full = await executeOp('answer_policy_test_read', { _full: true }, { origin: LOCAL_ORIGIN, callerSid: 's-1', forAgent: true })
+    const full = await executeOp('answer_policy_test_read', { _full: true }, { origin: LOCAL_ORIGIN, callerSid: 's-1', forAgent: 'cli' })
     expect(full.ok).toBe(true)
     expect(size(full.result)).toBeGreaterThan(300_000)
-    const bad = await executeOp('answer_policy_test_read', { _full: 'yes' }, { origin: LOCAL_ORIGIN, callerSid: 's-1', forAgent: true })
+    const bad = await executeOp('answer_policy_test_read', { _full: 'yes' }, { origin: LOCAL_ORIGIN, callerSid: 's-1', forAgent: 'cli' })
     expect(bad.ok).toBe(false)
   })
 })

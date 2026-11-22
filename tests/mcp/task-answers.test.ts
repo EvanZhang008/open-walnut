@@ -9,9 +9,12 @@
 import { describe, it, expect } from 'vitest'
 import { getOp } from '../../src/ops/index.js'
 import type { WalnutOp } from '../../src/ops/registry.js'
-import { agentAnswer, answerPolicy, cutTextRefusal, RECEIPT_MAX_CHARS, CONTENT_MAX_CHARS } from '../../src/ops/answer.js'
+import { agentAnswer as answerOn, answerPolicy, cutTextRefusal, RECEIPT_MAX_CHARS, CONTENT_MAX_CHARS } from '../../src/ops/answer.js'
 import { TASK_FOCUS_TIER_SET_ANSWER, TASK_PIN_SET_ANSWER, TASK_GET_TEXT_MAX } from '../../src/ops/task-answers.js'
 import { TASK_HISTORY_ANSWER, AGENT_HISTORY_LIMIT } from '../../src/ops/task-history-shape.js'
+
+/** Each op's own shape under its own cap, as an MCP tool answers it (answer-policy.test.ts holds every op to the CLI's smaller cap too). */
+const agentAnswer = (op: Parameters<typeof answerOn>[0], args: Record<string, unknown>, result: unknown, full = false): unknown => answerOn(op, args, result, full, 'mcp')
 
 type Obj = Record<string, unknown>
 const size = (v: unknown): number => JSON.stringify(v).length

@@ -14,7 +14,7 @@ const answerAgain = (id: unknown) => (more: Record<string, unknown>) => `subagen
  */
 const ANSWERED: OpAnswer = {
   kind: 'content', max: DOC_ANSWER_MAX_CHARS,
-  shape: ({ result }) => pageOnce(result, () => pagedResult(result, 'answer', {}, answerAgain((result as { id?: unknown }).id))),
+  shape: ({ result, max, surface }) => pageOnce(result, () => pagedResult(result, 'answer', {}, answerAgain((result as { id?: unknown }).id), { fit: { max, surface } })),
 };
 
 const ENGINES = ['codex', 'opencode', 'goose', 'pi', 'gemini', 'dsh', 'custom', 'claude'] as const;
@@ -91,17 +91,17 @@ defineOp({
     id: z.string().regex(/^sa-[a-f0-9]{4,32}$/).optional().describe('The id subagent_run returned (sa-...); omit to list them all'),
     ...DOC_PART_INPUT,
   },
-  handler: async (args, call) => {
+  handler: async (args, call, caller) => {
     if (!args.id) return call('GET', '/subagents');
     const read = runOutcome(await call('GET', `/subagents/${encodeURIComponent(String(args.id))}`));
-    // Asked for a part of its answer: every caller gets that part.
-    return askedPart(args) ? pagedResult(read, 'answer', args, answerAgain(args.id)) : read;
+    // Asked for a part of its answer: every caller gets that part, an agent's built for its cap.
+    return askedPart(args) ? pagedResult(read, 'answer', args, answerAgain(args.id), { fit: caller?.answer }) : read;
   },
   routes: [{ method: 'GET', path: '/subagents' }, { method: 'GET', path: '/subagents/:id' }],
   timeoutMs: 11 * 60_000,
   answer: {
     kind: 'content', max: DOC_ANSWER_MAX_CHARS,
-    shape: ({ result, args }) => args.id ? pageOnce(result, () => pagedResult(result, 'answer', {}, answerAgain(args.id))) : subagentRows(result),
+    shape: ({ result, args, max, surface }) => args.id ? pageOnce(result, () => pagedResult(result, 'answer', {}, answerAgain(args.id), { fit: { max, surface } })) : subagentRows(result),
   },
   tags: { readonly: true, remote: 'allow', primaryOnly: true },
 });

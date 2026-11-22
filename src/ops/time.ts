@@ -122,7 +122,7 @@ function groupsAt(groups: Record<string, unknown>, top: number | null): Record<s
  * left to the description. When that does not fit: each day in a line, then fewer rows per group
  * (the biggest kept, the rest summed in otherMin), and it says which call reads more.
  */
-function reportAnswer(result: unknown, args: Record<string, unknown>): unknown {
+function reportAnswer(result: unknown, args: Record<string, unknown>, max = REPORT_MAX): unknown {
   const r = rec(result)
   if (!Array.isArray(r.days)) return result
   const frag = rec(r.fragmentation)
@@ -135,11 +135,11 @@ function reportAnswer(result: unknown, args: Record<string, unknown>): unknown {
   }
   const groups = rec(r.groups)
   const whole = { ...base, groups: groupsAt(groups, null) }
-  if (JSON.stringify(whole).length <= REPORT_MAX) return whole
+  if (JSON.stringify(whole).length <= max) return whole
   const lines = { ...base, days: r.days.map(dayLine) }
   let shaped: Record<string, unknown> = { ...lines, groups: groupsAt(groups, null) }
   for (const top of FIT_TOPS) {
-    if (JSON.stringify(shaped).length <= REPORT_MAX) break
+    if (JSON.stringify(shaped).length <= max) break
     shaped = {
       ...lines,
       groups: groupsAt(groups, top),
@@ -182,7 +182,7 @@ defineOp({
   },
   bind: { method: 'GET', path: '/api/time/report' },
   timeoutMs: 30_000,
-  answer: { kind: 'content', max: REPORT_MAX, shape: ({ result, args }) => reportAnswer(result, args) },
+  answer: { kind: 'content', max: REPORT_MAX, shape: ({ result, args, max }) => reportAnswer(result, args, max) },
   tags: { readonly: true, remote: 'allow', primaryOnly: true },
 })
 

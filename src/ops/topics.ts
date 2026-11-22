@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { withOutcome } from './outcome.js'
 import { ROUND_WAKES } from '../core/topics/topics-model.js'
-import { PAGE_BUDGET, cut, fitPage, line, nextPageCall, objOf, pageOf, pageWords, pick, receiptBase } from './org-answer-shapes.js'
+import { cut, fitPage, pageBudget, line, nextPageCall, objOf, pageOf, pageWords, pick, receiptBase } from './org-answer-shapes.js'
 
 /** Topics an agent's topic_list shows, and messages its topic_read shows, when the call names no limit. */
 const TOPIC_LIST_PAGE = 20
@@ -96,7 +96,7 @@ defineOp({
   },
   answer: {
     kind: 'content', whole: 'topic_read {"id":"<id>"}',
-    shape: ({ result, args }) => {
+    shape: ({ result, args, max: cap }) => {
       const r = objOf(result)
       const all = (Array.isArray(r.topics) ? r.topics : []).filter((t) => !args.open || !objOf(t).closed)
       const { rows, page: window } = pageOf(all, args, TOPIC_LIST_PAGE)
@@ -113,7 +113,7 @@ defineOp({
           outcome: `${String(r.outcome ?? '')} Showing ${pageWords(page, 'topics')}.`.trim(),
           next: `${more ? `Next page: ${more}. ` : ''}Read one with topic_read {"id":"<id>"}.`,
         }
-      })
+      }, pageBudget(cap))
     },
   },
   tags: { readonly: true, remote: 'allow' },
@@ -134,7 +134,7 @@ defineOp({
   },
   answer: {
     kind: 'content', whole: 'topic_read {"id":"<id>","since":"<tpm-id>"}',
-    shape: ({ result, args }) => {
+    shape: ({ result, args, max: cap }) => {
       const r = objOf(result)
       const t = objOf(r.topic)
       const messages = Array.isArray(t.messages) ? t.messages : []
@@ -161,7 +161,7 @@ defineOp({
         }
       }
       // Shorter texts first, then fewer of the newest messages, until the answer fits.
-      const fits = (v: unknown) => JSON.stringify(v).length <= PAGE_BUDGET
+      const fits = (v: unknown) => JSON.stringify(v).length <= pageBudget(cap)
       let limit = typeof args.limit === 'number' ? args.limit : TOPIC_READ_MESSAGES
       let out = build(limit, TOPIC_TEXT_SHOWN)
       for (const max of [300, 150]) { if (fits(out)) return out; out = build(limit, max) }

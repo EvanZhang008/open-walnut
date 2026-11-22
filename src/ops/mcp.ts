@@ -52,7 +52,7 @@ defineOp({
     kind: 'content',
     max: SERVERS_MAX,
     // A row in a few facts; the reason a server failed is cut to its head (`server` reads it whole).
-    shape: ({ result, args }) => {
+    shape: ({ result, args, max }) => {
       const r = rec(result)
       if (!Array.isArray(r.servers) || typeof args.server === 'string') return result
       let cut = 0
@@ -76,7 +76,7 @@ defineOp({
       let used = 2_000
       for (const row of servers) {
         const n = JSON.stringify(row).length + 1
-        if (kept.length && used + n > SERVERS_MAX) break
+        if (kept.length && used + n > max) break
         kept.push(row)
         used += n
       }
@@ -130,7 +130,7 @@ defineOp({
   answer: {
     kind: 'content',
     max: DOC_ANSWER_MAX_CHARS,
-    shape: ({ result, args }) => pagedResult(result, 'text', args, (more) => `mcp_read ${JSON.stringify({ ...args, ...more })}`),
+    shape: ({ result, args, max, surface }) => pagedResult(result, 'text', args, (more) => `mcp_read ${JSON.stringify({ ...args, ...more })}`, { fit: { max, surface } }),
   },
   tags: { readonly: true, remote: 'allow' },
 })

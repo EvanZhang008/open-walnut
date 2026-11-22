@@ -4,7 +4,7 @@ import { startTask, THREAD_HANDOFF_ARG } from './task-execution.js';
 import { handOffLine, type HandOffResult } from '../core/org/thread-follow.js';
 import { NO_REPLY_ASKED, sendBehindSlowHostLine, REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
-import { fitPage, line, nextPageCall, objOf, pageOf, pageWords, pick, receiptBase } from './org-answer-shapes.js';
+import { fitPage, line, nextPageCall, objOf, pageBudget, pageOf, pageWords, pick, receiptBase } from './org-answer-shapes.js';
 
 /** Rows of org_get an agent reads when the call names no limit. */
 const ORG_ROWS_PAGE = 30;
@@ -59,7 +59,7 @@ defineOp({
   },
   answer: {
     kind: 'content',
-    shape: ({ result, args }) => {
+    shape: ({ result, args, max }) => {
       const r = objOf(result);
       const all = Array.isArray(r.rows) ? r.rows : [];
       const { rows, page: window } = pageOf(all, args, ORG_ROWS_PAGE);
@@ -73,7 +73,7 @@ defineOp({
           outcome: `${String(r.outcome ?? '')} Showing ${pageWords(page, 'rows')}.`.trim(),
           ...(more ? { next: `Next page: ${more}. ${String(r.next ?? '')}` } : {}),
         };
-      });
+      }, pageBudget(max));
     },
   },
   routes: [{ method: 'GET', path: '/org/reports' }],

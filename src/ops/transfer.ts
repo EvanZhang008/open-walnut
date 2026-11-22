@@ -144,14 +144,14 @@ function fleetRows({ result }: { result: unknown }): unknown {
  * (buckets are oldest first, so the generic cut would keep the oldest). 2026-11-21: up to 21,600 characters.
  */
 const HOST_GET_MAX = 12_000
-function hostCard({ result }: { result: unknown }): unknown {
+function hostCard({ result, max = HOST_GET_MAX }: { result: unknown; max?: number }): unknown {
   const b = (result ?? {}) as Record<string, unknown>
   const host = b.host as Record<string, unknown> | undefined
   const history = host?.history as { buckets?: unknown[] } | null | undefined
-  if (!host || !history || !Array.isArray(history.buckets) || JSON.stringify(b).length <= HOST_GET_MAX) return result
+  if (!host || !history || !Array.isArray(history.buckets) || JSON.stringify(b).length <= max) return result
   const buckets = history.buckets
   const rest = JSON.stringify({ ...b, host: { ...host, history: { ...history, buckets: [] } } }).length
-  let room = HOST_GET_MAX - rest - 600
+  let room = max - rest - 600
   let keep = 0
   for (let i = buckets.length - 1; i >= 0 && room > 0; i--) {
     room -= JSON.stringify(buckets[i]).length + 1

@@ -213,6 +213,36 @@ describe('gateway tools.list', () => {
   });
 });
 
+// A session's MCP server and its `walnut` CLI both reach the server as tools.call; the answer is
+// held to what the asking client's surface keeps (ops/answer.ts), and a client that names none (an
+// older CLI or daemon) to the CLI's smaller cap.
+describe('gateway tools.call holds the answer to the asking client\'s surface', () => {
+  const skill = { skill: { dirName: 'big', name: 'big', description: 'd', location: '/s/big/SKILL.md', content: `# Big\n\n${'## Part\n\nA rule to follow, said "plainly".\n'.repeat(1_500)}` } };
+  const read = async (client: string | undefined) => {
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(skill), { status: 200 }));
+    try {
+      const r = await handleGatewayCapability('tools.call', CALLER, { name: 'skill_read', args: { dirName: 'big' }, ...(client ? { client } : {}) }, 'devbox', deps());
+      expect(r.ok).toBe(true);
+      return r.ok ? r.result : {};
+    } finally { fetcher.mockRestore(); }
+  };
+
+  it('the CLI marker, the MCP marker, and none', async () => {
+    const { ANSWER_SURFACES } = await import('../../../src/ops/answer.js');
+    const { cliAnswerText } = await import('../../../src/lib/tool-answer-size.js');
+    const cli = await read('cli');
+    const mcp = await read('mcp');
+    const none = await read(undefined);
+    // The CLI's answer, printed as `walnut tools call` prints it, fits what a shell keeps.
+    expect(Buffer.byteLength(cliAnswerText(cli), 'utf-8')).toBeLessThanOrEqual(ANSWER_SURFACES.cli.max);
+    // The MCP client keeps more: a longer page, compact.
+    expect(JSON.stringify(mcp).length).toBeLessThanOrEqual(ANSWER_SURFACES.mcp.max);
+    expect(JSON.stringify(mcp).length).toBeGreaterThan(ANSWER_SURFACES.cli.max);
+    // No marker: the smaller cap, the same answer as the CLI's.
+    expect(none).toEqual(cli);
+  });
+});
+
 describe('gateway tools.call — policy gates', () => {
   it('preserves the task id in an error when create succeeds but start fails', async () => {
     const fetcher = vi.spyOn(globalThis, 'fetch')

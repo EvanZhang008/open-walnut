@@ -224,7 +224,8 @@ describe('the Mac is gone and the cloud companion takes over (simulated cluster)
     // A task outside every host's copy: the companion runs it on its replica.
     const far = await s.devbox.gatewayCall(A, 'task_update', { id: TASK_FAR, note: 'checked' })
     expect(far).toMatchObject({ ok: true, result: { applied: true, viaLeader: true } })
-    expect(s.executed).toEqual([{ name: 'task_update', args: { id: TASK_FAR, note: 'checked' }, ctx: { callerSid: A, callerHost: 'devbox' } }])
+    // A session's call, its client naming none: held to the CLI's answer cap (ops/answer.ts).
+    expect(s.executed).toEqual([{ name: 'task_update', args: { id: TASK_FAR, note: 'checked' }, ctx: { callerSid: A, callerHost: 'devbox', forAgent: 'cli' } }])
 
     // A session on the Mac itself cannot be reached while the Mac is away.
     expect(await s.devbox.gatewayCall(A, 'task_send', { to: TASK_M, text: 'hi' })).toMatchObject({ ok: false, error: { code: 'hub_unreachable' } })

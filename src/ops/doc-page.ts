@@ -10,7 +10,7 @@
  * Pure: no I/O.
  */
 import { z } from 'zod'
-import { cutMark } from './answer.js'
+import { cutMark, printedSize, textCost, type AnswerFit, type AnswerSurface } from './answer.js'
 
 /**
  * `text` held to `max` characters: what is left out is said by Walnut's cut mark (answer.ts), so
@@ -46,28 +46,29 @@ export const DOC_PART_INPUT = {
 /** The call asked for a part of the document. */
 export const askedPart = (args: Record<string, unknown>): boolean => typeof args.offset === 'number' || typeof args.section === 'string'
 
-/** A result already paged (a part was asked for, so the handler paged it for every caller) goes as it is. */
+/**
+ * A result already paged goes as it is: a part was asked for, so the handler paged it, for an
+ * agent to the cap its answer is held to (the handler's `caller.answer`), else at DOC_PAGE_CHARS.
+ */
 export const pageOnce = (result: unknown, page: () => unknown): unknown => (result as { page?: unknown } | null)?.page ? result : page()
 
-/** One page of a document, in characters of JSON (a newline is two): a document read may answer this much text. */
+/** One page of a document for a caller whose answer has no cap (a person, server code), in characters of JSON. */
 export const DOC_PAGE_CHARS = 17_000
-/** The cap of a document read's whole answer: the page plus its fields, its headings and its note. */
+/**
+ * The cap of a document read's whole answer: the page plus its fields, its headings and its note.
+ * An agent's page is what the rest of its answer leaves of this cap, or of its surface's when smaller.
+ */
 export const DOC_ANSWER_MAX_CHARS = 23_000
 /** Headings a page lists, at most, and the longest title it shows. */
 const SECTIONS_MAX = 50
 const TITLE_MAX = 60
+/** The smallest page, in the measure's unit. */
+const PAGE_MIN = 200
 
-/** A character's length in JSON text. */
-export function jsonCost(code: number): number {
-  if (code === 0x22 || code === 0x5c) return 2
-  if (code < 0x20) return code === 0x0a || code === 0x0d || code === 0x09 || code === 0x08 || code === 0x0c ? 2 : 6
-  return 1
-}
-
-/** A string's length in JSON text, without its quotes. */
-export function jsonLength(s: string): number {
+/** A string's length in JSON text, without its quotes (answer.ts textCost); on the CLI surface, in UTF-8 bytes. */
+export function jsonLength(s: string, surface: AnswerSurface = 'mcp'): number {
   let n = 0
-  for (let i = 0; i < s.length; i++) n += jsonCost(s.charCodeAt(i))
+  for (let i = 0; i < s.length; i++) n += textCost(s.charCodeAt(i), surface)
   return n
 }
 
@@ -131,12 +132,17 @@ export function onCharStart(s: string, i: number): number {
 
 /**
  * The part of `text` asked for: the section under a heading (matched without case, a whole title
- * first, then a part of one), from `offset`, at most `max` characters of JSON, ending at a line's
- * end when one is near. An unknown section answers `error` with the headings there are.
+ * first, then a part of one), from `offset`, at most `max` characters of JSON (bytes of it on the
+ * CLI surface), ending at a line's end when one is near. An unknown section answers `error` with
+ * the headings there are.
  */
-export function pageOf(text: string, opts: { offset?: number; section?: string; max?: number } = {}): DocPage | { error: string; sections: string[] } {
-  const max = Math.max(1_000, opts.max ?? DOC_PAGE_CHARS)
-  const heads = headingsOf(text)
+export function pageOf(
+  text: string,
+  opts: { offset?: number; section?: string; max?: number; surface?: AnswerSurface; heads?: Heading[] } = {},
+): DocPage | { error: string; sections: string[] } {
+  const max = Math.max(PAGE_MIN, opts.max ?? DOC_PAGE_CHARS)
+  const cost = (i: number): number => textCost(text.charCodeAt(i), opts.surface)
+  const heads = opts.heads ?? headingsOf(text)
   let from = 0
   let to = text.length
   let found: Heading | undefined
@@ -151,7 +157,7 @@ export function pageOf(text: string, opts: { offset?: number; section?: string; 
   const start = onCharStart(text, Math.min(to, Math.max(from, from + Math.max(0, Math.floor(opts.offset ?? 0)))))
   // An offset with a section counts from the section's start; alone, from the document's.
   let end = start
-  for (let used = 0; end < to && used + jsonCost(text.charCodeAt(end)) <= max; end++) used += jsonCost(text.charCodeAt(end))
+  for (let used = 0; end < to && used + cost(end) <= max; end++) used += cost(end)
   if (end < to) {
     const nl = text.lastIndexOf('\n', end - 1)
     if (nl > start && end - nl < max / 4) end = nl + 1
@@ -227,29 +233,56 @@ function partOnly(root: Record<string, unknown>, path: string[]): { out: Record<
  * first, with a `page` field saying where it is and the exact call (`again(args)`) that reads on.
  * A document that fits, asked for no part, is left as it is. `changeWith` names how to change the
  * document without sending it back whole.
+ *
+ * `fit` is the cap an agent's answer is held to (answer.ts answerFit): the whole answer, printed as
+ * its surface prints it, fits it, so no later cut can shorten the page and make its "read on"
+ * offset skip text. Without one (a person, server code) a page is DOC_PAGE_CHARS of text.
  */
 export function pagedResult(
   result: unknown, path: string, args: Record<string, unknown>, again: (more: Record<string, unknown>) => string,
-  opts: { max?: number; changeWith?: string } = {},
+  opts: { fit?: AnswerFit; changeWith?: string } = {},
 ): unknown {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return result
-  const max = opts.max ?? DOC_PAGE_CHARS
   const keys = path.split('.')
   const text = textAt(result, keys)
   if (text === undefined) return result
   const asked = typeof args.offset === 'number' || typeof args.section === 'string'
-  if (!asked && jsonLength(text) <= max) return result
-  const page = pageOf(text, { offset: typeof args.offset === 'number' ? args.offset : undefined, section: typeof args.section === 'string' ? args.section : undefined, max })
-  if ('error' in page) return withAt({ ...partOnly(result as Record<string, unknown>, keys).out, page: { error: page.error, sections: page.sections } }, keys, '')
+  const fit = opts.fit
+  if (!asked && (fit ? text.length <= fit.max && jsonLength(text, fit.surface) <= fit.max && printedSize(result, fit.surface) <= fit.max : jsonLength(text) <= DOC_PAGE_CHARS)) return result
+  const heads = headingsOf(text)
+  const build = (max: number) => pageAnswer(result as Record<string, unknown>, keys, text, heads, args, again, max, fit?.surface, opts.changeWith)
+  if (!fit) return build(DOC_PAGE_CHARS).answer
+  // The page gets what the rest of the answer leaves of the cap: each try that prints over gives
+  // the next a page shorter than its own text by what it was over (a page ends at a line's end, so
+  // a cap only a little lower may end it at the same place).
+  let max = fit.max
+  let out = build(max)
+  for (let round = 0; round < 8; round++) {
+    const over = printedSize(out.answer, fit.surface) - fit.max
+    if (over <= 0 || max <= PAGE_MIN) return out.answer
+    max = Math.max(PAGE_MIN, Math.min(max, out.used) - over - 40)
+    out = build(max)
+  }
+  return out.answer
+}
+
+/** The answer of one page of `text` of at most `max` (pagedResult), and what its text took of that `max`. */
+function pageAnswer(
+  result: Record<string, unknown>, keys: string[], text: string, heads: Heading[], args: Record<string, unknown>,
+  again: (more: Record<string, unknown>) => string, max: number, surface: AnswerSurface | undefined, changeWith: string | undefined,
+): { answer: unknown; used: number } {
+  const asked = typeof args.offset === 'number' || typeof args.section === 'string'
+  const page = pageOf(text, { offset: typeof args.offset === 'number' ? args.offset : undefined, section: typeof args.section === 'string' ? args.section : undefined, max, surface, heads })
+  if ('error' in page) return { answer: withAt({ ...partOnly(result, keys).out, page: { error: page.error, sections: page.sections } }, keys, ''), used: 0 }
   const section = page.section ? { section: page.section } : {}
   const next = page.next_offset !== undefined ? again({ ...section, offset: page.next_offset }) : undefined
   const whole = page.offset === 0 && page.end === page.total
   const shown = `characters ${page.offset} to ${page.end} of ${page.total}${page.section ? `, in section ${page.section}` : ''}`
-  const change = opts.changeWith ? ` To change it use ${opts.changeWith}; never write this part back whole.` : ''
+  const change = changeWith ? ` To change it use ${changeWith}; never write this part back whole.` : ''
   const mark = whole ? '' : `\n\n${PAGE_MARK}: ${shown}.${next ? ` Read on: ${next}.` : ''}${change}]\n`
   // A part carries no hash or version: a write that needs one reads the whole first.
-  const part = whole ? { out: result as Record<string, unknown>, had: false } : partOnly(result as Record<string, unknown>, keys)
-  return withAt({
+  const part = whole ? { out: result, had: false } : partOnly(result, keys)
+  const answer = withAt({
     ...part.out,
     page: {
       ...(part.had ? { hash: 'Left out of a part: a whole write (expectedHash) needs the hash of a whole read ("_full": true).' } : {}),
@@ -258,4 +291,5 @@ export function pagedResult(
       ...(page.sections && !asked ? { sections: page.sections, by_section: again({ section: '<a heading above>' }) } : {}),
     },
   }, keys, `${page.text}${mark}`)
+  return { answer, used: jsonLength(page.text, surface) }
 }

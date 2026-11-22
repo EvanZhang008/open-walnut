@@ -7,9 +7,10 @@ import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { withOutcome } from './outcome.js'
 import {
-  PAGE_BUDGET, THREAD_BODY_MAX, THREAD_GET_MAX, THREAD_GET_MESSAGES, THREAD_LIST_PAGE, fitPage, nextPageCall, objOf, pageOf, pageWords, receiptBase,
+  THREAD_BODY_MAX, THREAD_GET_MAX, THREAD_GET_MESSAGES, THREAD_LIST_PAGE, fitPage, nextPageCall, objOf, pageBudget, pageOf, pageWords, receiptBase,
   threadRead, threadReceipt, threadRow, type Page, type ThreadLike,
 } from './org-answer-shapes.js'
+import { CONTENT_MAX_CHARS } from './answer.js'
 import type { OpCall } from './core.js'
 import { PROOF_IN_PLACE_RULE, WORD_TO_USER_RULE, THREAD_ONE_PLACE_RULE, THREADS_MOVE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_OPTIONS_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../core/org/thread-rules.js'
 import { ASK_OPTIONS_MAX } from '../core/user-status.js'
@@ -123,7 +124,7 @@ const keysOf = (input: Record<string, unknown>): string[] => Object.keys(input)
 const LIST_STATES = [...THREAD_STATES, 'open', 'closed'] as const
 
 /** Thread_list's answer to an agent: a page of short rows (threadRow) that fits, the next page named. */
-function threadListAnswer(result: unknown, args: Record<string, unknown>): unknown {
+function threadListAnswer(result: unknown, args: Record<string, unknown>, cap: number): unknown {
   const r = objOf(result)
   const threads = (Array.isArray(r.threads) ? r.threads : []) as ThreadLike[]
   const opts = { bodies: args.bodies === true, bodyMax: typeof args.body_max === 'number' ? args.body_max : undefined }
@@ -139,7 +140,7 @@ function threadListAnswer(result: unknown, args: Record<string, unknown>): unkno
       outcome: `${String(r.outcome ?? '')} Showing ${pageWords(page, 'threads')}.`.trim(),
       next: `${more ? `Next page: ${more}. ` : ''}Read one thread with ${READ_WHOLE} (its messages and their ids).`,
     }
-  })
+  }, pageBudget(cap))
 }
 
 defineOp({
@@ -186,17 +187,17 @@ defineOp({
       'No further action is required.',
     )
   },
-  answer: { kind: 'content', whole: READ_WHOLE, shape: ({ result, args }) => threadListAnswer(result, args) },
+  answer: { kind: 'content', whole: READ_WHOLE, shape: ({ result, args, max }) => threadListAnswer(result, args, max) },
   tags: { readonly: true, remote: 'allow' },
 })
 
 /** Thread_get's answer to an agent: the thread's head and its newest messages, cut (threadRead). */
-function threadGetAnswer(result: unknown, args: Record<string, unknown>): unknown {
+function threadGetAnswer(result: unknown, args: Record<string, unknown>, cap: number): unknown {
   const r = objOf(result)
   const t = r.thread as ThreadLike | undefined
   if (!t?.id) return result
   const total = Array.isArray(t.messages) ? t.messages.length : 0
-  if (typeof args.message === 'string') return threadMessageAnswer(r, t, args)
+  if (typeof args.message === 'string') return threadMessageAnswer(r, t, args, cap)
   const build = (limit: number, bodyMax: number) => {
     const view = threadRead(t, { limit, bodyMax })
     const earlier = typeof view.earlier_messages === 'number' ? view.earlier_messages : 0
@@ -211,7 +212,7 @@ function threadGetAnswer(result: unknown, args: Record<string, unknown>): unknow
   }
   // What the call named stays; what it left to Walnut gives way until the answer fits: the
   // bodies get shorter first, then fewer of the newest messages are shown.
-  const fits = (v: unknown) => JSON.stringify(v).length <= PAGE_BUDGET
+  const fits = (v: unknown) => JSON.stringify(v).length <= pageBudget(Math.min(cap, CONTENT_MAX_CHARS))
   let limit = typeof args.limit === 'number' ? args.limit : THREAD_GET_MESSAGES
   const maxes = typeof args.body_max === 'number' ? [args.body_max] : [THREAD_BODY_MAX, 400, 250, 150]
   let out = build(limit, maxes[0])
@@ -225,7 +226,7 @@ function threadGetAnswer(result: unknown, args: Record<string, unknown>): unknow
  * and the answer (at most 16,000) may not fit together; then his words come whole and the answer
  * is left out, with its length and the call that reads it whole (`part: "answer"`), never cut.
  */
-function threadMessageAnswer(r: Record<string, unknown>, t: ThreadLike, args: Record<string, unknown>): unknown {
+function threadMessageAnswer(r: Record<string, unknown>, t: ThreadLike, args: Record<string, unknown>, cap: number): unknown {
   const part = args.part === 'text' || args.part === 'answer' ? args.part : 'both'
   const id = String(args.message)
   const build = (p: 'both' | 'text' | 'answer', next: string) => ({
@@ -235,7 +236,7 @@ function threadMessageAnswer(r: Record<string, unknown>, t: ThreadLike, args: Re
   })
   const plain = `Change the thread with thread_update {"id":"${t.id}",...}.`
   const out = build(part, plain)
-  if (JSON.stringify(out).length <= THREAD_GET_MAX - 600 || part !== 'both') return out
+  if (JSON.stringify(out).length <= cap - 600 || part !== 'both') return out
   return build('text', `Its answer did not fit beside his words: thread_get {"id":"${t.id}","message":"${id}","part":"answer"} reads it whole. ${plain}`)
 }
 
@@ -267,8 +268,8 @@ defineOp({
       'No further action is required.',
     )
   },
-  // Up to the ceiling so one whole message fits; a read of the newest messages fits itself to PAGE_BUDGET.
-  answer: { kind: 'content', max: THREAD_GET_MAX, whole: 'thread_get {"id":"<id>","message":"<tm-id>"}', shape: ({ result, args }) => threadGetAnswer(result, args) },
+  // Up to the ceiling so one whole message fits; a read of the newest messages fits itself to a page of the content cap.
+  answer: { kind: 'content', max: THREAD_GET_MAX, whole: 'thread_get {"id":"<id>","message":"<tm-id>"}', shape: ({ result, args, max }) => threadGetAnswer(result, args, max) },
   tags: { readonly: true, remote: 'allow' },
 })
 

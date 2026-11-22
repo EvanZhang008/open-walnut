@@ -20,7 +20,8 @@ import { log } from '../../logging/index.js'
 import { matchIdRef } from '../../lib/id-ref.js'
 import type { BackupLeader } from './backup-leader.js'
 import { DaemonFrameTooLargeError, tooLargeGatewayReply } from '../../providers/daemon-frame-cap.js'
-import { gatewayErrorReplyFields } from '../../providers/gateway-core.js'
+import { gatewayErrorReplyFields, isExternalCallerSid } from '../../providers/gateway-core.js'
+import { surfaceOf, type AnswerSurface } from '../../ops/answer.js'
 import { isCallId, messageIdOfCall } from '../../lib/op-call-id.js'
 
 export interface GatewayRequestFrame {
@@ -44,7 +45,8 @@ export interface BackupGatewayDeps {
   sessions: () => Promise<Array<{ id: string; host: string; task_id?: string; title?: string; task_title?: string; process_status: string; last_active_at?: string }>>
   /** A task of this box's replica by id or unique prefix, with its current session (`sessionId`). */
   findTask: (ref: string) => Promise<{ id: string; title: string; sessionId?: string } | { ambiguous: number } | null>
-  executeOp: (name: string, args: Record<string, unknown>, ctx: { callerSid: string; callerHost: string; callId?: string }) => Promise<{ ok: boolean; result?: unknown; message?: string; lost?: boolean; unreachable?: boolean; status?: number; code?: string }>
+  /** `forAgent`: a session's call, whose answer its client prints (ops/answer.ts), as on the Mac's gateway (capability-router.ts). */
+  executeOp: (name: string, args: Record<string, unknown>, ctx: { callerSid: string; callerHost: string; callId?: string; forAgent?: AnswerSurface }) => Promise<{ ok: boolean; result?: unknown; message?: string; lost?: boolean; unreachable?: boolean; status?: number; code?: string }>
 }
 
 /** Ops the companion runs on its replica for a host while it leads. */
@@ -201,7 +203,10 @@ export function createBackupGateway(deps: BackupGatewayDeps) {
     const callerSid = typeof frame.callerSid === 'string' ? frame.callerSid : ''
     // The caller's call id (src/lib/op-call-id.ts): a resend runs it once here too.
     const callId = isCallId(payload.callId) ? payload.callId : undefined
-    const r = await deps.executeOp(name, args, { callerSid, callerHost: host, ...(callId ? { callId } : {}) })
+    // A session reads a receipt or capped content, held to what its client keeps (ops/answer.ts), as
+    // through the Mac's gateway; a check script or a call no session made reads the result as it is.
+    const forAgent = callerSid && !isExternalCallerSid(callerSid) && !payload.triggerCaller ? surfaceOf(payload.client) : undefined
+    const r = await deps.executeOp(name, args, { callerSid, callerHost: host, ...(callId ? { callId } : {}), ...(forAgent ? { forAgent } : {}) })
     // Its own call went out and got no answer: the caller hears the answer was lost, and names
     // the call. A refused connection ran nothing and stays `internal`.
     const lost = !r.ok && r.lost === true
@@ -282,6 +287,7 @@ export async function handleBackupGatewayFrame(host: string, frame: GatewayReque
       // (host_exec, a read's wait) is held to it, as on the Mac's relay (daemon-connection.ts).
       return withAnswerBy(receivedAt + gatewayHubTimeoutMs(), () => executeOp(name, args, {
         callerSid: ctx.callerSid, callerHost: ctx.callerHost, origin: hostOrigin(ctx.callerHost), ...(ctx.callId ? { callId: ctx.callId } : {}),
+        ...(ctx.forAgent ? { forAgent: ctx.forAgent } : {}),
       }), { fresh: true })
     },
   })
