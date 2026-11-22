@@ -5,12 +5,17 @@ import UIKit
 /// The composer's own camera, full screen (the `camera_capture` experiment): the
 /// picture edge to edge, "Camera on" (or the red timer and Sound) at the top,
 /// Photo | Video, the shutter and the flip at the bottom, and while a video
-/// records, a Photo button that takes a still without stopping it. What was
-/// taken is shown for a look: Retake, Add another (into the composer, the camera
-/// stays open) or Send (into the composer, and the message goes).
+/// records, a Photo button that takes a still without stopping it. What is
+/// taken goes straight into the composer (a flash, and "2 photos added" under the
+/// top bar); the camera stays open, and the person closes it and sends with the
+/// composer's own Send. While a stopped video is finished, and while the composer
+/// refuses one, a row in place of the shutter says so (Skip the words; Discard
+/// it / Add the video).
 struct CameraCaptureView: View {
     @State var model: CameraCaptureModel
     @Environment(\.scenePhase) private var scenePhase
+    /// The white flash of a photo that went in.
+    @State private var flashOn = false
 
     var body: some View {
         ZStack {
@@ -20,8 +25,6 @@ struct CameraCaptureView: View {
                 deniedPage
             case .failed(let why):
                 messagePage(title: "The camera could not start", detail: why)
-            case .preview, .finishing:
-                previewPage
             default:
                 livePage
             }
@@ -42,19 +45,42 @@ struct CameraCaptureView: View {
     // MARK: - Live
 
     private var livePage: some View {
-        ZStack {
-            CameraPreviewHost(view: model.source.previewView).ignoresSafeArea()
-            VStack(spacing: 0) {
-                topBar
-                if let notice = model.notice { noticePill(notice).padding(.top, 10) }
-                Spacer()
+        VStack(spacing: 0) {
+            topBar
+            if let added = model.addedLabel {
+                pill(text: added, id: "camera.added").padding(.top, 10)
+            }
+            if let notice = model.notice { noticePill(notice).padding(.top, 10) }
+            Spacer()
+            if model.stage == .finishing || model.stage == .notAdded {
+                heldRow
+            } else {
                 bottomBar
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The picture (and a photo's flash) is behind the controls and never sizes them:
+        // a source whose view is bigger than the screen would push the shutter off it.
+        .background {
+            CameraPreviewHost(view: model.source.previewView)
+                .overlay { Color.white.opacity(flashOn ? 0.55 : 0).allowsHitTesting(false) }
+                .ignoresSafeArea()
+        }
+        .overlay {
             if model.stage == .starting {
                 ProgressView().tint(.white).controlSize(.large)
             }
+        }
+        .onChange(of: model.photosAdded) { _, _ in flash() }
+    }
+
+    private func flash() {
+        withAnimation(.linear(duration: 0.05)) { flashOn = true }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(90))
+            withAnimation(.easeOut(duration: 0.3)) { flashOn = false }
         }
     }
 
@@ -159,78 +185,39 @@ struct CameraCaptureView: View {
         .accessibilityIdentifier("camera.shutter")
     }
 
-    // MARK: - The look after
+    // MARK: - A stopped video
 
-    private var previewPage: some View {
-        VStack(spacing: 14) {
-            HStack {
-                roundButton("xmark", label: "Close camera", id: "camera.close") { model.close() }
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            ZStack {
-                switch model.taken {
-                case .photo(let image):
-                    Image(uiImage: image).resizable().scaledToFit()
-                case .video(_, _, let still):
-                    if let still { Image(uiImage: still).resizable().scaledToFit() }
-                    Image(systemName: "play.rectangle.fill").font(.system(size: 44)).foregroundStyle(.white.opacity(0.85))
-                case nil:
-                    ProgressView().tint(.white).controlSize(.large)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .accessibilityIdentifier("camera.preview")
-            previewCaption
-                .padding(.horizontal, 20)
-            if let notice = model.notice { noticePill(notice) }
-            HStack(spacing: 12) {
-                previewButton("Retake", id: "camera.retake", prominent: false) { Task { await model.retake() } }
-                previewButton("Add another", id: "camera.addAnother", prominent: false) { Task { await model.addAnother() } }
-                previewButton("Send", id: "camera.send", prominent: true) { Task { await model.send() } }
-            }
-            .disabled(model.stage != .preview || model.busy)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 12)
-        }
-        .padding(.top, 8)
-    }
-
-    @ViewBuilder
-    private var previewCaption: some View {
-        switch model.taken {
-        case .video(let clip, let narration, _):
-            VStack(spacing: 4) {
-                Text(clipLine(clip, narration))
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.white)
-                if case .said(let text) = narration {
-                    Text("\u{201C}\(text)\u{201D}")
-                        .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.8))
-                        .lineLimit(3)
-                }
-            }
-            .multilineTextAlignment(.center)
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("camera.clipCaption")
-        case nil where model.stage == .finishing:
-            // The sound goes to speech to text now, before the person keeps the clip: say so.
-            Text(model.recordingHasSound
-                 ? "Preparing the stills. Your Walnut server is turning what was said into text\u{2026}"
-                 : "Preparing the stills\u{2026}")
-                .font(.footnote)
+    /// In place of the shutter while a stopped video is finished (it goes in by
+    /// itself once its words are in) and while the composer refuses it (kept
+    /// here, never lost; no new recording until it is added or discarded).
+    private var heldRow: some View {
+        VStack(spacing: 12) {
+            Text(model.stage == .notAdded ? "The video is not in the message yet"
+                 : model.recordingHasSound ? "Adding the video once its words are in\u{2026}"
+                 : "Adding the video\u{2026}")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.white)
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.white.opacity(0.85))
-        default:
-            EmptyView()
+                .accessibilityIdentifier("camera.heldStatus")
+            HStack(spacing: 12) {
+                if model.stage == .notAdded {
+                    rowButton("Discard it", id: "camera.discardClip", prominent: false) {
+                        Task { await model.discardHeldClip() }
+                    }
+                    rowButton("Add the video", id: "camera.addClip", prominent: true) {
+                        Task { await model.addHeldClip() }
+                    }
+                } else if model.recordingHasSound {
+                    rowButton("Skip the words", id: "camera.skipWords", prominent: false) { model.skipWords() }
+                }
+            }
         }
-    }
-
-    private func clipLine(_ clip: CameraClipMaker.Clip, _ narration: CameraClipMaker.Narration) -> String {
-        let clock = AttachmentHeaders.clipClock(ms: clip.durationMs)
-        let caption = ComposerFile.clipCaption(for: clip.video, in: clip.files)
-        return ["Video \(clock)", caption].compactMap { $0 }.joined(separator: " \u{00B7} ")
+        .padding(14)
+        .frame(maxWidth: .infinity)
+        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("camera.held")
+        .padding(.bottom, 12)
     }
 
     // MARK: - Access off
@@ -317,7 +304,7 @@ struct CameraCaptureView: View {
         .accessibilityIdentifier(id)
     }
 
-    private func previewButton(_ title: String, id: String, prominent: Bool, action: @escaping () -> Void) -> some View {
+    private func rowButton(_ title: String, id: String, prominent: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.body.weight(.semibold))

@@ -2026,7 +2026,6 @@ struct ComposerBar: View {
             setFiles: { drafts.setFiles($0, key: draftKey) },
             addPhoto: { await attachCaptured($0) },
             dismiss: { showCamera = false },
-            send: { send() },
             pickFile: { if acceptsFiles { openFileImporter() } else { openPhotoPicker() } },
             acceptsFiles: acceptsFiles
         )

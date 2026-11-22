@@ -158,3 +158,9 @@ export function cameraErrorKind(err: unknown): 'denied' | 'missing' | 'busy' | '
   if (name === 'NotReadableError' || name === 'TrackStartError' || name === 'AbortError') return 'busy';
   return 'failed';
 }
+
+/** What this panel put in the message: "2 photos added", "1 photo and 1 video added". */
+export function addedLabel(photos: number, videos: number): string | null {
+  const parts = [photos && (photos === 1 ? '1 photo' : `${photos} photos`), videos && (videos === 1 ? '1 video' : `${videos} videos`)].filter(Boolean);
+  return parts.length ? `${parts.join(' and ')} added` : null;
+}

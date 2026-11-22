@@ -4,9 +4,13 @@ import UIKit
 
 /// What the composer's camera does, apart from how it looks (`CameraCaptureView`):
 /// Photo or Video, a recording of at most a minute that can take photos while it
-/// runs, a look at what was taken (Retake / Add another / Send), and the camera
-/// off whenever it is not on screen. It drives a `CameraSource`, so the same
-/// model runs the device's cameras and the simulator's fake one.
+/// runs, and the camera off whenever it is not on screen. What is taken goes
+/// straight into the composer's attachments (2026-11-22, as the web's
+/// `CameraDock`): a photo the moment the shutter is pressed, a video once its
+/// words are in. The camera stays open for the next one; the composer's own Send
+/// sends them. A video the composer refused stays here until it is added or
+/// discarded, so a minute's recording is never lost. It drives a `CameraSource`,
+/// so the same model runs the device's cameras and the simulator's fake one.
 @MainActor
 @Observable
 final class CameraCaptureModel {
@@ -17,18 +21,15 @@ final class CameraCaptureModel {
         case starting
         case live
         case recording
-        /// The recording stopped; its stills and narration are being made.
+        /// The recording stopped; its stills and narration are being made, then it
+        /// goes into the composer by itself.
         case finishing
-        case preview
+        /// The composer refused the video (its file limit): it is held here
+        /// (`heldClip`) until it is added or discarded; no new recording meanwhile.
+        case notAdded
         /// Camera access is off (`CameraCaptureView` says how to turn it on).
         case denied
         case failed(String)
-    }
-
-    /// What was taken, shown for a look before it goes anywhere.
-    enum Taken {
-        case photo(UIImage)
-        case video(CameraClipMaker.Clip, narration: CameraClipMaker.Narration, still: UIImage?)
     }
 
     /// What the composer gets from the camera.
@@ -39,8 +40,6 @@ final class CameraCaptureModel {
         /// A recorded video, its stills and narration, for the attachments; false
         /// when the message has no room for another file (nothing is attached).
         var addClip: (CameraClipMaker.Clip) -> Bool = { _ in true }
-        /// Send the composer's message (what is attached, with the typed words).
-        var send: () -> Void = {}
         var close: () -> Void = {}
         /// Camera access is off: attach from the library or Files instead.
         var pickFile: () -> Void = {}
@@ -62,6 +61,9 @@ final class CameraCaptureModel {
     static let maxSeconds: TimeInterval = 60
     static let countdownFrom: TimeInterval = 50
 
+    /// A video's narration note when the person did not wait for its words.
+    static let wordsSkippedNote = "words skipped"
+
     let source: CameraSource
     let allowsVideo: Bool
     @ObservationIgnored var actions: Actions
@@ -73,11 +75,14 @@ final class CameraCaptureModel {
     /// Whether the recording running now has sound (the mic can be refused).
     private(set) var recordingHasSound = false
     private(set) var elapsed: TimeInterval = 0
-    private(set) var taken: Taken?
-    /// A short line over the picture ("Photo added"), cleared after a moment.
+    /// A short line over the picture (why a photo was not added), cleared after a moment.
     private(set) var notice: String?
-    /// Photos taken during this recording.
-    private(set) var photosWhileRecording = 0
+    /// What this camera put in the message since it opened (`addedLabel`).
+    private(set) var photosAdded = 0
+    private(set) var videosAdded = 0
+    /// The video the composer refused (`.notAdded`), its copies kept until it is
+    /// added or discarded.
+    private(set) var heldClip: CameraClipMaker.Clip?
     private(set) var busy = false
 
     @ObservationIgnored private var recordingStartedAt: Date?
@@ -94,6 +99,12 @@ final class CameraCaptureModel {
     /// own task, so a caller's cancellation never cuts it short, and `close`
     /// cancels it so a dropped clip's sound is not sent anywhere.
     @ObservationIgnored private var finishing: Task<Void, Never>?
+    /// The stopped recording's speech to text, and the wait for it that either
+    /// its answer or "Skip the words" ends (`wordsIn`, whichever comes first).
+    @ObservationIgnored private var wordsTask: Task<Void, Never>?
+    @ObservationIgnored private var wordsWait: CheckedContinuation<CameraClipMaker.Narration, Never>?
+    /// The person skipped the words of the recording being finished.
+    @ObservationIgnored private var wordsSkipped = false
     @ObservationIgnored private var clock: Task<Void, Never>?
     @ObservationIgnored private var noticeClear: Task<Void, Never>?
     @ObservationIgnored private let now: () -> Date
@@ -120,6 +131,17 @@ final class CameraCaptureModel {
 
     /// Whether a recording this long stops by itself now.
     static func reachedLimit(_ elapsed: TimeInterval) -> Bool { elapsed >= maxSeconds }
+
+    /// What this camera put in the message: "2 photos added", "1 photo and 1
+    /// video added"; nil before anything (the web's `addedLabel`).
+    static func addedLabel(photos: Int, videos: Int) -> String? {
+        var parts: [String] = []
+        if photos > 0 { parts.append(photos == 1 ? "1 photo" : "\(photos) photos") }
+        if videos > 0 { parts.append(videos == 1 ? "1 video" : "\(videos) videos") }
+        return parts.isEmpty ? nil : parts.joined(separator: " and ") + " added"
+    }
+
+    var addedLabel: String? { Self.addedLabel(photos: photosAdded, videos: videosAdded) }
 
     // MARK: - Lifecycle
 
@@ -148,9 +170,9 @@ final class CameraCaptureModel {
     }
 
     /// The app left the screen: the camera stops at once, before anything else.
-    /// A recording ends into its preview (never sent by itself), its stills and
-    /// words made with the camera already off; the picture starts again on return,
-    /// or when the person goes back to it from the preview.
+    /// A recording ends and goes into the composer (never sent by itself), its
+    /// stills and words made with the camera already off; the picture starts
+    /// again on return.
     func sceneLeft() async {
         away = true
         source.stop()
@@ -160,7 +182,22 @@ final class CameraCaptureModel {
 
     func sceneReturned() async {
         away = false
-        if stage == .live || stage == .starting { stage = .starting; await appear() }
+        switch stage {
+        case .live, .starting:
+            stage = .starting
+            await appear()
+        case .notAdded where sourceStopped:
+            // The picture behind the held video; it was granted already.
+            do {
+                try await source.start()
+                sourceStopped = false
+            } catch {
+                // Started again once the video is added or discarded (`backToLive`).
+            }
+        default:
+            // A recording being finished goes back to the picture by itself (`backToLive`).
+            break
+        }
     }
 
     /// The system took the camera away or gave it back (`CameraInterruption`).
@@ -169,7 +206,7 @@ final class CameraCaptureModel {
         case .began(let why):
             // Leaving the screen stopped the camera already (`sceneLeft`).
             guard !away else { return }
-            // A call or another app: the recording ends into its preview, never on with a stopped camera.
+            // A call or another app: the recording ends (and is added), never on with a stopped camera.
             if stage == .recording { await stopRecording() }
             say(why)
         case .ended:
@@ -186,14 +223,17 @@ final class CameraCaptureModel {
         }
     }
 
-    /// Close: whatever was taken and not added goes, and the camera stops. A clip
-    /// still being made is dropped when it is ready (`stopRecording`).
+    /// Close: a video not added goes, and the camera stops. A clip still being
+    /// made is dropped when it is ready (`finishRecording`); what was added stays
+    /// in the composer.
     func close() {
         closed = true
         clock?.cancel()
         finishing?.cancel()
+        wordsTask?.cancel()
+        wordsIn(.none(note: "no narration"))
         source.stop()
-        discardTaken()
+        dropHeldClip()
         // A clip being made still reads its recording; it removes the folder when done.
         if stage != .finishing { removeRecordingDir() }
         actions.close()
@@ -208,14 +248,7 @@ final class CameraCaptureModel {
         guard !busy else { return }
         switch (mode, stage) {
         case (.photo, .live):
-            busy = true
-            defer { busy = false }
-            do {
-                taken = .photo(try await source.takePhoto())
-                stage = .preview
-            } catch {
-                say("The photo could not be taken.")
-            }
+            await addPhoto()
         case (.video, .live):
             await startRecording()
         default:
@@ -223,9 +256,14 @@ final class CameraCaptureModel {
         }
     }
 
-    /// A photo while the video keeps recording: straight into the attachments.
+    /// A photo while the video keeps recording, as any photo: straight in.
     func photoWhileRecording() async {
         guard stage == .recording, !busy else { return }
+        await addPhoto()
+    }
+
+    /// A photo straight into the composer's attachments; the camera stays on.
+    private func addPhoto() async {
         guard actions.photoRoom() > 0 else { say("This message already has \(ComposerBar.maxImages) photos."); return }
         busy = true
         defer { busy = false }
@@ -233,8 +271,7 @@ final class CameraCaptureModel {
             let image = try await source.takePhoto()
             // Only a photo the composer took counts; a refused one says why there.
             guard await actions.addPhoto(image) else { say("The photo was not added."); return }
-            photosWhileRecording += 1
-            say(photosWhileRecording == 1 ? "Photo added" : "\(photosWhileRecording) photos added")
+            photosAdded += 1
         } catch {
             say("The photo could not be taken.")
         }
@@ -261,7 +298,6 @@ final class CameraCaptureModel {
         if soundOn && !recordingHasSound { say("Recording without sound: the microphone is off for Walnut.") }
         recordingStartedAt = now()
         elapsed = 0
-        photosWhileRecording = 0
         stage = .recording
         clock?.cancel()
         clock = Task { [weak self] in
@@ -269,7 +305,7 @@ final class CameraCaptureModel {
                 try? await Task.sleep(for: .milliseconds(250))
                 guard let self, !Task.isCancelled, self.stage == .recording, let started = self.recordingStartedAt else { return }
                 self.elapsed = self.now().timeIntervalSince(started)
-                // A minute at most: it stops into its preview, never sent by itself.
+                // A minute at most: it stops and is added, never sent by itself.
                 // Stopped from a task of its own: stopRecording cancels this clock
                 // (its clip is made in `finishing`, which no caller's cancellation reaches).
                 if Self.reachedLimit(self.elapsed) {
@@ -284,6 +320,7 @@ final class CameraCaptureModel {
         guard stage == .recording else { return }
         clock?.cancel()
         stage = .finishing
+        wordsSkipped = false
         let work = Task { await self.finishRecording() }
         finishing = work
         await work.value
@@ -292,24 +329,64 @@ final class CameraCaptureModel {
 
     private func finishRecording() async {
         defer { removeRecordingDir() }
+        let made: CameraClipMaker.Clip
         do {
             let url = try await source.stopRecording()
             let name = CameraClipMaker.videoName(at: recordingStartedAt ?? now(), ext: "mov", taken: actions.takenNames())
-            let clip = try await CameraClipMaker.make(recording: url, name: name, transcribe: actions.transcribe)
-            // Closed while it was made: nothing holds its copies any more.
-            guard !closed else { clip.files.forEach(ComposerFileStore.remove); return }
-            let narration: CameraClipMaker.Narration
-            if case .video(_, let said?, _) = clip.video.clip { narration = .said(said) }
-            else if case .video(_, _, let note?) = clip.video.clip { narration = .none(note: note) }
-            else { narration = .none(note: "no narration") }
-            // The first still is the recording's first frame.
-            let still = clip.stills.first.flatMap { UIImage(contentsOfFile: $0.localURL.path) }
-            taken = .video(clip, narration: narration, still: still)
-            stage = .preview
+            made = try await CameraClipMaker.make(recording: url, name: name)
         } catch {
             guard !closed else { return }
             await backToLive()
             say("The video could not be saved.")
+            return
+        }
+        let clip = made.narrated(await words(for: made))
+        // Closed while it was made: nothing holds its copies any more.
+        guard !closed else { clip.files.forEach(ComposerFileStore.remove); return }
+        await deliver(clip)
+    }
+
+    /// What was said in the clip: its speech to text, or at once when the person
+    /// skips the words (`skipWords`) or the camera closes.
+    private func words(for clip: CameraClipMaker.Clip) async -> CameraClipMaker.Narration {
+        if closed { return .none(note: "no narration") }
+        if wordsSkipped { return .none(note: Self.wordsSkippedNote) }
+        let url = clip.video.localURL
+        let transcribe = actions.transcribe
+        return await withCheckedContinuation { wait in
+            wordsWait = wait
+            wordsTask = Task { @MainActor in
+                let narration = await CameraClipMaker.narrate(url, transcribe: transcribe)
+                self.wordsIn(narration)
+            }
+        }
+    }
+
+    /// The words are in, skipped or dropped: the first of these ends the wait.
+    private func wordsIn(_ narration: CameraClipMaker.Narration) {
+        guard let wait = wordsWait else { return }
+        wordsWait = nil
+        wordsTask = nil
+        wait.resume(returning: narration)
+    }
+
+    /// "Skip the words": the video goes in now, without what was said.
+    func skipWords() {
+        guard stage == .finishing else { return }
+        wordsSkipped = true
+        wordsTask?.cancel()
+        wordsIn(.none(note: Self.wordsSkippedNote))
+    }
+
+    /// Into the composer; one it refuses is held (`.notAdded`) rather than lost.
+    private func deliver(_ clip: CameraClipMaker.Clip) async {
+        if actions.addClip(clip) {
+            videosAdded += 1
+            await backToLive()
+        } else {
+            heldClip = clip
+            stage = .notAdded
+            say("This message has no room for another file.")
         }
     }
 
@@ -330,48 +407,25 @@ final class CameraCaptureModel {
         }
     }
 
-    // MARK: - After the look
+    // MARK: - A video the composer refused
 
-    func retake() async {
-        discardTaken()
+    /// "Add the video": try the composer again (a file taken off it makes room).
+    func addHeldClip() async {
+        guard stage == .notAdded, let clip = heldClip else { return }
+        heldClip = nil
+        await deliver(clip)
+    }
+
+    /// "Discard it": the held video and its copies go; the picture is live again.
+    func discardHeldClip() async {
+        guard stage == .notAdded else { return }
+        dropHeldClip()
         await backToLive()
     }
 
-    /// Into the composer's attachments; the camera stays open for the next one.
-    func addAnother() async {
-        guard await deliverTaken() else { return }
-        await backToLive()
-    }
-
-    /// Into the attachments, then the composer's message goes with its typed words.
-    func send() async {
-        guard await deliverTaken() else { return }
-        clock?.cancel()
-        source.stop()
-        actions.send()
-    }
-
-    private func deliverTaken() async -> Bool {
-        guard stage == .preview, let taken, !busy else { return false }
-        busy = true
-        defer { busy = false }
-        switch taken {
-        case .photo(let image):
-            guard actions.photoRoom() > 0 else { say("This message already has \(ComposerBar.maxImages) photos."); return false }
-            guard await actions.addPhoto(image) else { say("The photo was not added."); return false }
-        case .video(let clip, _, _):
-            guard actions.addClip(clip) else {
-                say("This message has no room for another file.")
-                return false
-            }
-        }
-        self.taken = nil
-        return true
-    }
-
-    private func discardTaken() {
-        if case .video(let clip, _, _) = taken { clip.files.forEach(ComposerFileStore.remove) }
-        taken = nil
+    private func dropHeldClip() {
+        heldClip?.files.forEach(ComposerFileStore.remove)
+        heldClip = nil
     }
 
     private func say(_ text: String) {

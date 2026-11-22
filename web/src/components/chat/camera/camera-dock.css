@@ -76,6 +76,7 @@
   background: #111;
 }
 .camera-dock-side { min-width: 92px; display: flex; justify-content: flex-end; }
+.camera-dock-held { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
 .camera-dock-hint { color: var(--fg-muted); font-size: var(--font-size-sm); }
 .camera-seg { min-width: 92px; }
 .camera-shutter {

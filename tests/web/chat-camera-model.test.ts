@@ -4,7 +4,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
-  CLIP_COUNTDOWN_FROM_MS, MAX_STILLS, MIN_STILL_CHANGE, cameraErrorKind, captureBaseName, extensionFor, fitLongEdge,
+  CLIP_COUNTDOWN_FROM_MS, MAX_STILLS, addedLabel, MIN_STILL_CHANGE, cameraErrorKind, captureBaseName, extensionFor, fitLongEdge,
   greySignature, pickRecorderType, pickStills, recordingLabel, signatureDiff, stillName, sttFormatFor,
 } from '../../web/src/components/chat/camera/camera-model'
 import { clipDetail, clipStillsUploaded, withAttachmentText } from '../../web/src/components/common/composer-clip'
@@ -61,6 +61,14 @@ describe('signatures', () => {
 })
 
 describe('names, formats and labels', () => {
+  it('says what the panel put in the message, nothing before the first capture', () => {
+    expect(addedLabel(0, 0)).toBeNull()
+    expect(addedLabel(1, 0)).toBe('1 photo added')
+    expect(addedLabel(3, 0)).toBe('3 photos added')
+    expect(addedLabel(0, 1)).toBe('1 video added')
+    expect(addedLabel(2, 2)).toBe('2 photos and 2 videos added')
+  })
+
   it('names a capture by when it was taken, a still by its time in the video', () => {
     expect(captureBaseName(new Date(2026, 10, 20, 14, 16, 5))).toBe('camera-141605')
     expect(stillName('camera-141605', 0)).toBe('camera-141605-still-0m00s.jpg')

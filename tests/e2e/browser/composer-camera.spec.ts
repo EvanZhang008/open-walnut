@@ -1,10 +1,10 @@
 /**
  * Playwright (Chromium, fake camera and microphone): the chat box's Camera
  * (on for everyone; it was the `camera_capture` experiment). The + menu keeps
- * every row it had and has Camera right under Attach; the panel opens above the box with the live
- * picture, takes a photo (Retake, Add another), records a video while photos are
- * taken without stopping it, and sends the video as its file, its stills and what
- * was said; the camera and microphone are off whenever the panel is closed; a
+ * every row it had on its first level and has Camera first in its More flyout;
+ * the panel opens above the box with the live picture; each photo goes straight
+ * into the box, while recording too; a stopped video goes in once its words are in,
+ * and the box's own Send sends it as its file, its stills and what was said; the camera and microphone are off whenever the panel is closed; a
  * refused camera says what to do; a page that cannot open the camera uses the
  * phone's camera app instead.
  *
@@ -75,6 +75,22 @@ async function rows(page: Page): Promise<string[]> {
   return plusMenu(page).getByRole('menuitem').evaluateAll((els) => els.map((e) => (e.textContent ?? '').replace(/\s+/g, ' ').trim()))
 }
 
+const moreFlyout = (page: Page) => page.locator('.chat-plus-more-flyout').last()
+
+/** + menu, then More: the Camera row (the first row there). */
+async function cameraRow(page: Page) {
+  await openMenu(page)
+  await plusMenu(page).getByRole('menuitem', { name: /^\W*More/ }).click()
+  await expect(moreFlyout(page)).toBeVisible()
+  return moreFlyout(page).getByTestId('plus-menu-camera')
+}
+
+async function openCamera(page: Page) {
+  await (await cameraRow(page)).click()
+}
+
+const send = (page: Page) => composer(page).locator('.chat-input-textarea').first().press('Enter')
+
 async function liveVideoPlays(page: Page) {
   await expect.poll(() => dock(page).getByTestId('camera-live').evaluate((v: HTMLVideoElement) => v.videoWidth), { timeout: 15_000 }).toBeGreaterThan(0)
 }
@@ -90,15 +106,18 @@ async function answerSpeech(page: Page) {
   return () => calls
 }
 
-test('the + menu has Camera right under Attach, with no switch, whatever an old choice says', async ({ page }) => {
+test('Camera is the first row of the + menu\'s More, never on its first level, whatever an old choice says', async ({ page }) => {
   await watchStreams(page)
   await open(page)
-  await openMenu(page)
-  const rowsNow = await rows(page)
-  expect(rowsNow[0]).toMatch(/^Attach files or images/)
-  expect(rowsNow[1]).toMatch(/^Camera\s*Photo or video$/)
-  expect(rowsNow).toContain('Draw')
-  // Opening the menu opened nothing.
+  const row = await cameraRow(page)
+  const first = await rows(page)
+  expect(first[0]).toMatch(/^Attach files or images/)
+  expect(first[1]).toBe('Draw')
+  expect(first.some((r) => r.startsWith('Camera'))).toBe(false)
+  const more = await moreFlyout(page).getByRole('menuitem').evaluateAll((els) => els.map((e) => (e.textContent ?? '').replace(/\s+/g, ' ').trim()))
+  expect(more[0]).toMatch(/^Camera\s*Photo or video$/)
+  await expect(row).toBeVisible()
+  // Opening the menus opened nothing.
   expect(await liveTracks(page)).toEqual([])
   await page.keyboard.press('Escape')
 
@@ -106,58 +125,49 @@ test('the + menu has Camera right under Attach, with no switch, whatever an old 
   await oldCameraChoice(page, false)
   await watchStreams(page)
   await open(page)
-  await openMenu(page)
-  expect(await rows(page)).toEqual(rowsNow)
+  await expect(await cameraRow(page)).toBeVisible()
 })
 
-test('a photo: the panel above the box, Retake, Add another, then Send with the typed words; the camera is off once it closes', async ({ page }) => {
+test('a photo goes straight into the box: no preview step, the panel stays for the next, the box sends them with its words', async ({ page }) => {
   await watchStreams(page)
   const h = await open(page)
   const input = composer(page).locator('.chat-input-textarea').first()
   await input.fill('Look at this whiteboard, what is wrong in the second box?')
-  for (let round = 0; round < 2; round++) {
-    await openMenu(page)
-    await plusMenu(page).getByTestId('plus-menu-camera').click()
-    await expect(dock(page)).toBeVisible()
-    await expect(dock(page).getByTestId('camera-on')).toHaveText(/Camera on/)
-    await liveVideoPlays(page)
-    expect(await liveTracks(page)).toEqual(['video'])
-    // The box below still takes words while the camera is on.
-    await expect(input).toHaveValue(/second box\?$/)
-    if (round === 0) {
-      // The panel sits above the box, the same height in every state.
-      const panel = await dock(page).boundingBox()
-      const box = await composer(page).locator('.chat-input-box').boundingBox()
-      expect(panel!.y + panel!.height).toBeLessThanOrEqual(box!.y + 1)
-      await shot(page, 'live')
-      await dock(page).getByTestId('camera-shutter').click()
-      await expect(dock(page).getByTestId('camera-preview-photo')).toBeVisible()
-      expect((await dock(page).boundingBox())!.height).toBeCloseTo(panel!.height, 0)
-      // The preview needs no camera: it is off until Retake.
-      await expect.poll(() => liveTracks(page)).toEqual([])
-      await shot(page, 'photo-preview')
-      await dock(page).getByRole('button', { name: 'Retake' }).click()
-      await liveVideoPlays(page)
-      await dock(page).getByTestId('camera-shutter').click()
-      await dock(page).getByRole('button', { name: 'Add another' }).click()
-      await expect(composer(page).locator('.chat-image-preview')).toHaveCount(1)
-      await liveVideoPlays(page)
-      // Closed with ×: off, and the photo stays in the box.
-      await dock(page).getByRole('button', { name: 'Close camera' }).click()
-      await expect(dock(page)).toHaveCount(0)
-      await expect.poll(() => liveTracks(page)).toEqual([])
-      await expect(composer(page).locator('.chat-image-preview')).toHaveCount(1)
-    } else {
-      await dock(page).getByTestId('camera-shutter').click()
-      await dock(page).getByRole('button', { name: 'Send' }).click()
-    }
-  }
+  await openCamera(page)
+  await expect(dock(page)).toBeVisible()
+  await expect(dock(page).getByTestId('camera-on')).toHaveText(/Camera on/)
+  await liveVideoPlays(page)
+  expect(await liveTracks(page)).toEqual(['video'])
+  // The box below still takes words while the camera is on.
+  await expect(input).toHaveValue(/second box\?$/)
+  // The panel sits above the box.
+  const panel = await dock(page).boundingBox()
+  const box = await composer(page).locator('.chat-input-box').boundingBox()
+  expect(panel!.y + panel!.height).toBeLessThanOrEqual(box!.y + 1)
+  await shot(page, 'live')
+  await dock(page).getByTestId('camera-shutter').click()
+  await expect(composer(page).locator('.chat-image-preview')).toHaveCount(1)
+  await expect(dock(page).getByTestId('camera-added')).toHaveText('1 photo added')
+  // No preview step: no Retake, Add another or Send, and the camera stays on for the next.
+  for (const name of ['Retake', 'Add another', 'Send']) await expect(dock(page).getByRole('button', { name, exact: true })).toHaveCount(0)
+  expect((await dock(page).boundingBox())!.height).toBeCloseTo(panel!.height, 0)
+  expect(await liveTracks(page)).toEqual(['video'])
+  await dock(page).getByTestId('camera-shutter').click()
+  await expect(composer(page).locator('.chat-image-preview')).toHaveCount(2)
+  await expect(dock(page).getByTestId('camera-added')).toHaveText('2 photos added')
+  await shot(page, 'photos-added')
+  // Closed with ×: off, and the photos stay in the box.
+  await dock(page).getByRole('button', { name: 'Close camera' }).click()
+  await expect(dock(page)).toHaveCount(0)
+  await expect.poll(() => liveTracks(page)).toEqual([])
+  await expect(composer(page).locator('.chat-image-preview')).toHaveCount(2)
+  // Nothing was sent until the box's own send.
+  expect(await h.sent()).toHaveLength(0)
+  await send(page)
   await expect.poll(async () => (await h.sent()).length, { timeout: 30_000 }).toBe(1)
   const [msg] = await h.sent()
   expect(msg.message).toBe('Look at this whiteboard, what is wrong in the second box?')
   expect(msg.imageRefs).toHaveLength(2)
-  await expect(dock(page)).toHaveCount(0)
-  await expect.poll(() => liveTracks(page)).toEqual([])
 })
 
 test('a video: photos taken while it records, then it goes as its file, its stills and what was said', async ({ page }) => {
@@ -166,8 +176,7 @@ test('a video: photos taken while it records, then it goes as its file, its stil
   const h = await open(page)
   const input = composer(page).locator('.chat-input-textarea').first()
   await input.fill('Here is the design, check it')
-  await openMenu(page)
-  await plusMenu(page).getByTestId('plus-menu-camera').click()
+  await openCamera(page)
   await liveVideoPlays(page)
   await dock(page).getByRole('radio', { name: 'Video' }).click()
   await expect(dock(page).getByRole('button', { name: /Sound on/ })).toBeVisible()
@@ -179,17 +188,22 @@ test('a video: photos taken while it records, then it goes as its file, its stil
   await shot(page, 'recording')
   // A photo while it records: into the box at once, the recording goes on.
   await dock(page).getByTestId('camera-photo-while-recording').click()
-  await expect(dock(page).getByTestId('camera-photos-taken')).toHaveText('1 photo added')
+  await expect(dock(page).getByTestId('camera-added')).toHaveText('1 photo added')
   await expect(composer(page).locator('.chat-image-preview')).toHaveCount(1)
   await expect(dock(page).getByTestId('camera-stop')).toBeVisible()
   await expect(dock(page).getByTestId('camera-timer')).toHaveText(/0:0[6-9]|0:1\d/, { timeout: 15_000 })
   await dock(page).getByTestId('camera-stop').click()
-  await expect(dock(page).getByTestId('camera-preview-video')).toBeVisible()
-  await expect(dock(page)).toContainText(/Video · \d stills/, { timeout: 20_000 })
-  await expect.poll(() => liveTracks(page)).toEqual([])
+  // Once its words are in it goes into the box by itself; the camera stays on, the microphone is off.
+  await expect(composer(page).locator('.file-card').filter({ hasText: /camera-\d{6}\.(?:mp4|webm)/ })).toHaveCount(1, { timeout: 20_000 })
+  await expect(dock(page).getByTestId('camera-added')).toHaveText('1 photo and 1 video added')
+  await expect(dock(page).getByTestId('camera-held')).toHaveCount(0)
+  await expect.poll(() => liveTracks(page)).toEqual(['video'])
   expect(speech()).toBe(1)
-  await shot(page, 'video-preview')
-  await dock(page).getByRole('button', { name: 'Send' }).click()
+  await shot(page, 'video-added')
+  expect(await h.sent()).toHaveLength(0)
+  await dock(page).getByRole('button', { name: 'Close camera' }).click()
+  await expect.poll(() => liveTracks(page)).toEqual([])
+  await send(page)
   await expect.poll(async () => (await h.sent()).length, { timeout: 60_000 }).toBe(1)
   const [msg] = await h.sent()
   const lines = msg.message.split('\n')
@@ -232,8 +246,7 @@ test('a sent video shows in the chat as its card, with the stills and the words 
 test('a refused camera says what to do, and Pick a file instead opens the picker', async ({ page }) => {
   await watchStreams(page, { refuse: 'NotAllowedError' })
   await open(page)
-  await openMenu(page)
-  await plusMenu(page).getByTestId('plus-menu-camera').click()
+  await openCamera(page)
   const refused = dock(page).getByTestId('camera-refused')
   await expect(refused).toContainText('Walnut can’t use the camera')
   await expect(refused).toContainText('Allow the camera for this site')
@@ -249,8 +262,7 @@ test('a refused camera says what to do, and Pick a file instead opens the picker
 test('a page that cannot open the camera hands it to the phone camera app', async ({ page }) => {
   await watchStreams(page, { noCamera: true })
   await open(page)
-  await openMenu(page)
-  const row = plusMenu(page).getByTestId('plus-menu-camera')
+  const row = await cameraRow(page)
   await expect(row).toContainText('Opens the phone camera')
   const chooser = page.waitForEvent('filechooser')
   await row.click()
@@ -263,8 +275,7 @@ test('a page that cannot open the camera hands it to the phone camera app', asyn
 test('a hidden page closes the camera', async ({ page }) => {
   await watchStreams(page)
   await open(page)
-  await openMenu(page)
-  await plusMenu(page).getByTestId('plus-menu-camera').click()
+  await openCamera(page)
   await liveVideoPlays(page)
   await page.evaluate(() => {
     Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
@@ -277,8 +288,7 @@ test('a hidden page closes the camera', async ({ page }) => {
 test('closing the panel while the browser asks for the microphone leaves nothing on, and Record waits for the answer', async ({ page }) => {
   await watchStreams(page, { slowMic: true })
   await open(page)
-  await openMenu(page)
-  await plusMenu(page).getByTestId('plus-menu-camera').click()
+  await openCamera(page)
   await liveVideoPlays(page)
   await dock(page).getByRole('radio', { name: 'Video' }).click()
   await dock(page).getByTestId('camera-record').click()
@@ -295,7 +305,7 @@ test('closing the panel while the browser asks for the microphone leaves nothing
   await expect(composer(page).locator('.file-card')).toHaveCount(0)
 })
 
-test('a video the box cannot take (its files are full) stays in the preview and nothing is sent', async ({ page }) => {
+test('a video the box cannot take (its files are full) stays in the panel to add again, and nothing is sent', async ({ page }) => {
   await watchStreams(page)
   await answerSpeech(page)
   const h = await open(page)
@@ -303,19 +313,22 @@ test('a video the box cannot take (its files are full) stays in the preview and 
     Array.from({ length: 10 }, (_, i) => ({ name: `notes-${i}.txt`, mimeType: 'text/plain', buffer: Buffer.from(`note ${i}`) })),
   )
   await expect(composer(page).locator('.file-card')).toHaveCount(10)
-  await openMenu(page)
-  await plusMenu(page).getByTestId('plus-menu-camera').click()
+  await openCamera(page)
   await liveVideoPlays(page)
   await dock(page).getByRole('radio', { name: 'Video' }).click()
   await dock(page).getByRole('button', { name: /Sound on/ }).click()
   await dock(page).getByTestId('camera-record').click()
   await expect(dock(page).getByTestId('camera-timer')).toHaveText(/0:0[2-9]/, { timeout: 10_000 })
   await dock(page).getByTestId('camera-stop').click()
-  await expect(dock(page).getByTestId('camera-preview-video')).toBeVisible()
-  await dock(page).getByRole('button', { name: 'Send' }).click()
   await expect(composer(page)).toContainText('Only 10 files fit in one message')
-  await expect(dock(page).getByTestId('camera-preview-video')).toBeVisible()
-  await page.waitForTimeout(1000)
+  const held = dock(page).getByTestId('camera-held')
+  await expect(held).toContainText('The video is not in the message yet')
+  // Make room, then add it again: the same recording goes in.
+  await composer(page).getByRole('button', { name: 'Remove notes-0.txt' }).click()
+  await expect(composer(page).locator('.file-card')).toHaveCount(9)
+  await held.getByRole('button', { name: 'Add the video' }).click()
+  await expect(composer(page).locator('.file-card').filter({ hasText: /camera-\d{6}\.(?:mp4|webm)/ })).toHaveCount(1)
+  await expect(held).toHaveCount(0)
   expect(await h.sent()).toHaveLength(0)
 })
 
@@ -325,15 +338,13 @@ test('a still that failed to upload is retried on its own: the video does not go
   h.setPlan((name, attempt) => (/-still-0m00s\.jpg$/.test(name) && attempt === 1
     ? { status: 507, body: { error: { code: 'host_disk_full', message: "The session's host does not have room for this file." } } }
     : { status: 200 }))
-  await openMenu(page)
-  await plusMenu(page).getByTestId('plus-menu-camera').click()
+  await openCamera(page)
   await liveVideoPlays(page)
   await dock(page).getByRole('radio', { name: 'Video' }).click()
   await dock(page).getByRole('button', { name: /Sound on/ }).click()
   await dock(page).getByTestId('camera-record').click()
   await expect(dock(page).getByTestId('camera-timer')).toHaveText(/0:0[2-9]/, { timeout: 10_000 })
   await dock(page).getByTestId('camera-stop').click()
-  await dock(page).getByRole('button', { name: 'Add another' }).click()
   const video = composer(page).locator('.file-card').filter({ hasText: /camera-\d{6}\.(?:mp4|webm)/ })
   await expect(video).toHaveClass(/is-failed/, { timeout: 20_000 })
   const name = (await video.textContent())!.match(/camera-\d{6}\.(?:mp4|webm)/)![0]

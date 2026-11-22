@@ -1893,7 +1893,6 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
 
   // The chat's camera: a panel above the box, or the
   // phone's own camera where this page cannot open one (plain http).
-  const handleSendRef = useRef<() => void>(() => {});
   const camera = useComposerCamera({
     light: !!light,
     resetKey: `${draftKey ?? ''}\u0000${sessionMentionSelfId ?? ''}`,
@@ -1905,7 +1904,6 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
       setAttachNotice(notice);
       if (notice) attachNoticeTimer.current = setTimeout(() => setAttachNotice(null), 8000);
     },
-    send: () => requestAnimationFrame(() => handleSendRef.current()),
     pickFile: () => fileInputRef.current?.click(),
     micBusy: () => !!micControlRef.current?.busy?.(),
     closeMenu: () => setPlusOpen(false),
@@ -1989,7 +1987,6 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
   useEffect(() => { setSendWhenReady(false); splitSendRef.current = false; }, [draftKey]);
   // A plain send is never a split one (a split send waiting on its words is cancelled by it).
   const handleSend = () => { splitSendRef.current = false; sendGate.send(); };
-  handleSendRef.current = handleSend;
   const handleInterruptSend = () => { splitSendRef.current = false; interruptGate.send(); };
 
   const handleStop = () => {
@@ -2222,7 +2219,6 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                 </svg>
                 <span>{atAttachLimit ? 'Attachment limit reached' : acceptsFiles ? 'Attach files or images' : 'Attach image'}</span>
               </button>
-              <CameraMenuRow camera={camera} disabled={atAttachLimit || !!disabled} />
               <button className="chat-plus-menu-item" type="button" role="menuitem" disabled={atAttachLimit} onClick={() => { setPlusOpen(false); setDrawingOpen(true); }}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="m16 3 5 5-12 12H4v-5L16 3Z" /><path d="m14 5 5 5" />
@@ -2287,8 +2283,10 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                   />
                 </>
               )}
-              {(promptRecallKey || !!moreActions.length) && (
+              {(camera.enabled || promptRecallKey || !!moreActions.length) && (
                 <ComposerMoreMenu>
+                  {/* The camera lives in More (Evan, 2026-11-20: "put in more under +"). */}
+                  <CameraMenuRow camera={camera} disabled={atAttachLimit || !!disabled} />
                   {promptRecallKey && (() => {
                     const untouched = !!recallRef.current && recallRef.current.text === value && !hasAttachments;
                     const empty = (value === '' && !hasAttachments) || untouched;

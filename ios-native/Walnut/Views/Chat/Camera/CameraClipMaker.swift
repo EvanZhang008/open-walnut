@@ -13,6 +13,18 @@ enum CameraClipMaker {
         let stills: [ComposerFile]
         let durationMs: Int
         var files: [ComposerFile] { [video] + stills }
+
+        /// The same clip with its narration on its video's card.
+        func narrated(_ narration: Narration) -> Clip {
+            var video = self.video
+            switch narration {
+            case .said(let text):
+                video.clip = .video(durationMs: durationMs, narration: text, narrationNote: nil)
+            case .none(let note):
+                video.clip = .video(durationMs: durationMs, narration: nil, narrationNote: note)
+            }
+            return Clip(video: video, stills: stills, durationMs: durationMs)
+        }
     }
 
     /// The narration: what was said, or why there is none.
@@ -35,31 +47,22 @@ enum CameraClipMaker {
         return name
     }
 
-    /// Make the clip from the recording at `url` (moved into the app's store).
-    /// `transcribe` is the server's speech to text (`WalnutAPI.transcribe`); its
-    /// failure only leaves the clip without narration, and says why.
-    static func make(recording url: URL, name: String,
-                     transcribe: @escaping @Sendable (Data) async throws -> String) async throws -> Clip {
+    /// Make the clip from the recording at `url` (moved into the app's store): the
+    /// video and its stills, with no narration yet. Its words come apart
+    /// (`narrate` on the video's own file, then `Clip.narrated`), so the camera can
+    /// add the video without them when the person skips them.
+    static func make(recording url: URL, name: String) async throws -> Clip {
         let extracted = (try? await VideoStills.extract(from: url, videoName: name)) ?? (durationMs: 0, stills: [])
-        let narration = await narrate(url, transcribe: transcribe)
         var video = try await ComposerFileStore.importCopy(of: url, name: name, type: .quickTimeMovie,
                                                            scoped: false, move: true)
-        switch narration {
-        case .said(let text):
-            video.clip = .video(durationMs: extracted.durationMs, narration: text, narrationNote: nil)
-        case .none(let note):
-            video.clip = .video(durationMs: extracted.durationMs, narration: nil, narrationNote: note)
-        }
+        video.clip = .video(durationMs: extracted.durationMs, narration: nil, narrationNote: nil)
         var stills: [ComposerFile] = []
         for still in extracted.stills {
             guard var file = try? await ComposerFileStore.importData(still.jpeg, name: still.name) else { continue }
             file.clip = .still(videoID: video.id)
             stills.append(file)
         }
-        AppLog.info("camera", "clip made", [
-            "ms": String(extracted.durationMs), "stills": String(stills.count),
-            "narration": { if case .said = narration { return "yes" } else { return "no" } }(),
-        ])
+        AppLog.info("camera", "clip made", ["ms": String(extracted.durationMs), "stills": String(stills.count)])
         return Clip(video: video, stills: stills, durationMs: extracted.durationMs)
     }
 
@@ -67,8 +70,10 @@ enum CameraClipMaker {
     /// clip goes without it.
     static let transcribeTimeout: Duration = .seconds(45)
 
-    /// The recording's sound as m4a, transcribed; never throws.
-    /// A cancelled task (the clip was dropped) sends nothing.
+    /// The recording's sound as m4a, transcribed; never throws. `transcribe` is
+    /// the server's speech to text (`WalnutAPI.transcribe`); its failure only
+    /// leaves the clip without narration, and says why. A cancelled task (the clip
+    /// was dropped, or its words skipped) sends nothing.
     static func narrate(_ url: URL, transcribe: @escaping @Sendable (Data) async throws -> String) async -> Narration {
         guard !Task.isCancelled else { return .none(note: "no narration") }
         let asset = AVURLAsset(url: url)

@@ -2,7 +2,8 @@ import UIKit
 
 /// What the composer's camera needs from the composer it opens over
 /// (`ComposerBar`): its attachments as they are now, a way to add to them, and
-/// its own Send, close and file picker. The composer hands these over; the
+/// its close and file picker. The camera has no Send of its own: what it takes
+/// goes into the composer, which sends it. The composer hands these over; the
 /// camera's rules for them live here (`CameraCaptureModel.forComposer`).
 struct ComposerCameraHost {
     /// How many photos the message holds now.
@@ -16,8 +17,6 @@ struct ComposerCameraHost {
     var addPhoto: (UIImage) async -> Bool
     /// Take the camera down.
     var dismiss: () -> Void
-    /// Send the composer's message.
-    var send: () -> Void
     /// Open the composer's file picker (its photo picker where it takes no files).
     var pickFile: () -> Void
     /// Whether the composer takes files, and so videos.
@@ -26,8 +25,7 @@ struct ComposerCameraHost {
 
 extension CameraCaptureModel {
     /// The composer's own camera, wired to one composer: its photos go through
-    /// the same merge a pick does, a video joins the files with its stills, and
-    /// Send sends that composer's message.
+    /// the same merge a pick does, and a video joins the files with its stills.
     static func forComposer(_ host: ComposerCameraHost) -> CameraCaptureModel {
         var actions = Actions()
         actions.addPhoto = { image in await host.addPhoto(image) }
@@ -35,10 +33,6 @@ extension CameraCaptureModel {
             guard ComposerFile.countedFiles(host.files()) + host.importing() < ComposerFile.maxFiles else { return false }
             host.setFiles(host.files() + clip.files)
             return true
-        }
-        actions.send = {
-            host.dismiss()
-            host.send()
         }
         actions.close = { host.dismiss() }
         actions.pickFile = {

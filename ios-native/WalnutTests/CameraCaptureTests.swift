@@ -118,6 +118,16 @@ final class CameraCaptureTests: XCTestCase {
         XCTAssertEqual(narration, .none(note: "no sound recorded"))
     }
 
+    /// The HUD line over the picture, the same words as the web's `addedLabel`.
+    func testTheAddedLineNamesWhatThisCameraPutInTheMessage() {
+        XCTAssertNil(CameraCaptureModel.addedLabel(photos: 0, videos: 0), "nothing yet, no line")
+        XCTAssertEqual(CameraCaptureModel.addedLabel(photos: 1, videos: 0), "1 photo added")
+        XCTAssertEqual(CameraCaptureModel.addedLabel(photos: 2, videos: 0), "2 photos added")
+        XCTAssertEqual(CameraCaptureModel.addedLabel(photos: 0, videos: 1), "1 video added")
+        XCTAssertEqual(CameraCaptureModel.addedLabel(photos: 1, videos: 1), "1 photo and 1 video added")
+        XCTAssertEqual(CameraCaptureModel.addedLabel(photos: 3, videos: 2), "3 photos and 2 videos added")
+    }
+
     // MARK: - The flow, on the fake camera
 
     private func model(_ log: Log, allowsVideo: Bool = true, source: CameraSource? = nil,
@@ -128,8 +138,11 @@ final class CameraCaptureTests: XCTestCase {
             log.photos += 1
             return true
         }
-        actions.addClip = { clip in log.clips.append(clip); return true }
-        actions.send = { log.sent += 1 }
+        actions.addClip = { clip in
+            guard log.takesClips else { return false }
+            log.clips.append(clip)
+            return true
+        }
         actions.close = { log.closed += 1 }
         actions.transcribe = { _ in "" }
         return CameraCaptureModel(source: source ?? FakeCameraSource(), allowsVideo: allowsVideo, actions: actions, now: now)
@@ -138,33 +151,35 @@ final class CameraCaptureTests: XCTestCase {
     final class Log {
         var photos = 0
         var clips: [CameraClipMaker.Clip] = []
-        var sent = 0
         var closed = 0
         /// Whether the composer takes a photo (false: its merge refused it).
         var takesPhotos = true
+        /// Whether the composer takes a video (false: no room for another file).
+        var takesClips = true
+        func removeClips() { clips.flatMap(\.files).forEach(ComposerFileStore.remove) }
     }
 
-    func testAPhotoIsLookedAtThenAddedAndTheCameraStaysOpen() async {
+    /// The shutter puts the photo straight in (no look first, no Send in the
+    /// camera); the camera stays open for the next one.
+    func testAPhotoGoesStraightIntoTheMessageAndTheCameraStaysOpen() async {
         let log = Log()
         let camera = model(log)
         await camera.appear()
         XCTAssertEqual(camera.stage, .live)
+        XCTAssertNil(camera.addedLabel)
         await camera.shutter()
-        XCTAssertEqual(camera.stage, .preview)
-        XCTAssertEqual(log.photos, 0, "nothing is attached before the look")
-        await camera.addAnother()
-        XCTAssertEqual(log.photos, 1)
-        XCTAssertEqual(camera.stage, .live)
+        XCTAssertEqual(log.photos, 1, "added the moment it was taken")
+        XCTAssertEqual(camera.stage, .live, "the camera stays open")
+        XCTAssertEqual(camera.addedLabel, "1 photo added")
         await camera.shutter()
-        await camera.retake()
-        XCTAssertEqual(log.photos, 1, "a retake drops it")
-        await camera.shutter()
-        await camera.send()
         XCTAssertEqual(log.photos, 2)
-        XCTAssertEqual(log.sent, 1)
+        XCTAssertEqual(camera.addedLabel, "2 photos added")
+        XCTAssertEqual(log.closed, 0, "nothing closes or sends the message from here")
+        camera.close()
+        XCTAssertEqual(log.photos, 2, "closing keeps what was added")
     }
 
-    func testAVideoTakesPhotosWhileItRecordsAndIsSentWithItsStills() async throws {
+    func testAVideoTakesPhotosWhileItRecordsAndGoesInWithItsStills() async throws {
         let log = Log()
         let camera = model(log)
         await camera.appear()
@@ -174,34 +189,77 @@ final class CameraCaptureTests: XCTestCase {
         await camera.photoWhileRecording()
         XCTAssertEqual(log.photos, 1, "a photo during the video goes straight in as a photo")
         XCTAssertEqual(camera.stage, .recording, "and the video keeps recording")
+        XCTAssertEqual(camera.addedLabel, "1 photo added")
         try await Task.sleep(for: .seconds(3))
         await camera.shutter()
-        XCTAssertEqual(camera.stage, .preview)
-        XCTAssertTrue(log.clips.isEmpty, "never sent or attached by itself")
-        await camera.send()
-        let clip = try XCTUnwrap(log.clips.first)
-        XCTAssertEqual(log.sent, 1)
+        XCTAssertEqual(camera.stage, .live, "back to the picture for the next one")
+        XCTAssertEqual(camera.addedLabel, "1 photo and 1 video added")
+        let clip = try XCTUnwrap(log.clips.first, "the video went in by itself, never sent")
+        XCTAssertEqual(log.clips.count, 1)
         XCTAssertTrue(clip.video.name.hasPrefix("camera-") && clip.video.name.hasSuffix(".mov"))
         XCTAssertFalse(clip.stills.isEmpty)
         XCTAssertTrue(clip.stills.allSatisfy { $0.clip == .still(videoID: clip.video.id) })
         guard case .video(let ms, nil, let note?) = clip.video.clip else { return XCTFail("not a clip: \(String(describing: clip.video.clip))") }
         XCTAssertGreaterThan(ms, 2_000)
         XCTAssertEqual(note, "no sound recorded")
-        clip.files.forEach(ComposerFileStore.remove)
+        log.removeClips()
     }
 
-    func testClosingDropsWhatWasNotAdded() async throws {
+    /// A video the composer refuses (its file limit) is kept, never lost: no new
+    /// recording while it is held, "Add the video" tries again, "Discard it" drops it.
+    func testAVideoTheMessageRefusesIsKeptUntilAddedOrDiscarded() async throws {
         let log = Log()
+        log.takesClips = false
         let camera = model(log)
         await camera.appear()
         camera.mode = .video
         await camera.shutter()
         try await Task.sleep(for: .seconds(1.2))
         await camera.shutter()
-        guard case .video(let clip, _, _) = camera.taken else { return XCTFail("no clip") }
+        XCTAssertEqual(camera.stage, .notAdded)
+        XCTAssertEqual(camera.notice, "This message has no room for another file.")
+        let held = try XCTUnwrap(camera.heldClip)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: held.video.localURL.path), "its copy is kept")
+        XCTAssertNil(camera.addedLabel)
+        await camera.shutter()
+        XCTAssertEqual(camera.stage, .notAdded, "no new recording while a video is held")
+        await camera.addHeldClip()
+        XCTAssertEqual(camera.stage, .notAdded, "still refused: still held")
+        XCTAssertNotNil(camera.heldClip)
+        log.takesClips = true
+        await camera.addHeldClip()
+        XCTAssertEqual(log.clips.map(\.video.id), [held.video.id])
+        XCTAssertNil(camera.heldClip)
+        XCTAssertEqual(camera.stage, .live)
+        XCTAssertEqual(camera.addedLabel, "1 video added")
+
+        log.takesClips = false
+        await camera.shutter()
+        try await Task.sleep(for: .seconds(1.2))
+        await camera.shutter()
+        let second = try XCTUnwrap(camera.heldClip)
+        await camera.discardHeldClip()
+        XCTAssertNil(camera.heldClip)
+        XCTAssertEqual(camera.stage, .live)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: second.video.localURL.path), "a discarded video's copy goes")
+        XCTAssertEqual(log.clips.count, 1)
+        log.removeClips()
+    }
+
+    func testClosingDropsAVideoThatWasNotAdded() async throws {
+        let log = Log()
+        log.takesClips = false
+        let camera = model(log)
+        await camera.appear()
+        camera.mode = .video
+        await camera.shutter()
+        try await Task.sleep(for: .seconds(1.2))
+        await camera.shutter()
+        let clip = try XCTUnwrap(camera.heldClip)
         camera.close()
         XCTAssertEqual(log.closed, 1)
         XCTAssertTrue(log.clips.isEmpty)
+        XCTAssertNil(camera.heldClip)
         XCTAssertFalse(FileManager.default.fileExists(atPath: clip.video.localURL.path), "its copy goes")
     }
 
@@ -211,29 +269,32 @@ final class CameraCaptureTests: XCTestCase {
         camera.actions.photoRoom = { 0 }
         await camera.appear()
         await camera.shutter()
-        await camera.addAnother()
         XCTAssertEqual(log.photos, 0)
-        XCTAssertEqual(camera.stage, .preview, "still there to retake or close")
+        XCTAssertEqual(camera.stage, .live, "the camera stays on")
         XCTAssertEqual(camera.notice, "This message already has \(ComposerBar.maxImages) photos.")
+        XCTAssertNil(camera.addedLabel)
     }
 
-    func testARefusedPhotoWhileRecordingIsNotCountedAsAdded() async {
+    func testARefusedPhotoIsNotCountedAsAdded() async {
         let log = Log()
         log.takesPhotos = false
         let camera = model(log)
         await camera.appear()
+        await camera.shutter()
+        XCTAssertEqual(camera.photosAdded, 0, "a photo the composer refused is not one more added")
+        XCTAssertEqual(camera.notice, "The photo was not added.")
         camera.mode = .video
         await camera.shutter()
         await camera.photoWhileRecording()
-        XCTAssertEqual(camera.photosWhileRecording, 0, "a photo the composer refused is not one more added")
+        XCTAssertEqual(camera.photosAdded, 0, "nor one taken while recording")
         XCTAssertEqual(camera.notice, "The photo was not added.")
         await camera.shutter()
-        if case .video(let clip, _, _) = camera.taken { clip.files.forEach(ComposerFileStore.remove) }
+        log.removeClips()
     }
 
     /// The one-minute stop runs outside the clock it cancels, so the clip is made
-    /// whole: its stills, its preview frame and its narration.
-    func testTheMinuteLimitStopsIntoAWholePreview() async throws {
+    /// whole (its stills and its narration) and goes in by itself.
+    func testTheMinuteLimitStopsAndAddsTheWholeVideo() async throws {
         let log = Log()
         var clock = Date()
         let camera = model(log, now: { clock })
@@ -243,19 +304,43 @@ final class CameraCaptureTests: XCTestCase {
         XCTAssertEqual(camera.stage, .recording)
         try await Task.sleep(for: .seconds(1))
         clock += CameraCaptureModel.maxSeconds + 1
-        for _ in 0..<100 where camera.stage != .preview { try await Task.sleep(for: .milliseconds(100)) }
-        XCTAssertEqual(camera.stage, .preview, "stopped by itself, into its preview")
-        guard case .video(let clip, let narration, let still) = camera.taken else { return XCTFail("no clip") }
+        for _ in 0..<100 where log.clips.isEmpty { try await Task.sleep(for: .milliseconds(100)) }
+        let clip = try XCTUnwrap(log.clips.first, "stopped by itself and added")
+        XCTAssertEqual(camera.stage, .live)
         XCTAssertFalse(clip.stills.isEmpty)
-        XCTAssertNotNil(still, "the first still is the preview's frame")
-        XCTAssertEqual(narration, .none(note: "no sound recorded"))
-        XCTAssertTrue(log.clips.isEmpty, "never sent by itself")
+        guard case .video(_, nil, let note?) = clip.video.clip else { return XCTFail("no narration note") }
+        XCTAssertEqual(note, "no sound recorded", "its narration was made, not cut short")
+        log.removeClips()
         camera.close()
     }
 
-    /// Leaving the app stops the camera first; the recording ends into its
-    /// preview, and Retake starts the camera again before the picture is live.
-    func testAfterTheAppWasAwayRetakeStartsTheCameraAgain() async throws {
+    /// "Skip the words" while the clip is still being made: the video goes in at
+    /// once, its card saying the words were skipped, and nothing is transcribed.
+    func testSkippingTheWordsAddsTheVideoWithoutThem() async throws {
+        let log = Log()
+        let source = CountingSource()
+        source.stopDelay = .milliseconds(500)
+        let camera = model(log, source: source)
+        camera.actions.transcribe = { _ in XCTFail("skipped words are not transcribed"); return "" }
+        await camera.appear()
+        camera.mode = .video
+        await camera.shutter()
+        try await Task.sleep(for: .seconds(1))
+        let stopped = Task { await camera.shutter() }
+        for _ in 0..<100 where camera.stage == .recording { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(camera.stage, .finishing)
+        camera.skipWords()
+        await stopped.value
+        let clip = try XCTUnwrap(log.clips.first)
+        guard case .video(_, nil, let note?) = clip.video.clip else { return XCTFail("no narration note") }
+        XCTAssertEqual(note, CameraCaptureModel.wordsSkippedNote)
+        XCTAssertEqual(camera.stage, .live)
+        log.removeClips()
+    }
+
+    /// Leaving the app stops the camera first; the recording ends and goes in,
+    /// and the camera starts again on return.
+    func testAfterTheAppWasAwayTheVideoIsAddedAndTheCameraStartsAgain() async throws {
         let log = Log()
         let source = CountingSource()
         let camera = model(log, source: source)
@@ -265,17 +350,18 @@ final class CameraCaptureTests: XCTestCase {
         try await Task.sleep(for: .seconds(1))
         await camera.sceneLeft()
         XCTAssertEqual(source.stops, 1)
-        XCTAssertEqual(camera.stage, .preview)
+        XCTAssertEqual(log.clips.count, 1, "the recording went in")
+        XCTAssertEqual(camera.stage, .starting, "no picture while away")
+        XCTAssertEqual(source.starts, 1, "nothing starts the camera while away")
         await camera.sceneReturned()
-        XCTAssertEqual(source.starts, 1, "a preview needs no camera")
-        await camera.retake()
         XCTAssertEqual(source.starts, 2, "started again before the picture is live")
         XCTAssertEqual(camera.stage, .live)
+        log.removeClips()
     }
 
-    /// A call takes the camera while it records: the recording ends into its
-    /// preview, never left running on a stopped camera.
-    func testAnInterruptionWhileRecordingEndsIntoThePreview() async throws {
+    /// A call takes the camera while it records: the recording ends and goes in,
+    /// never left running on a stopped camera.
+    func testAnInterruptionWhileRecordingStopsAndAddsTheVideo() async throws {
         let log = Log()
         let source = CountingSource()
         let camera = model(log, source: source)
@@ -284,9 +370,11 @@ final class CameraCaptureTests: XCTestCase {
         await camera.shutter()
         try await Task.sleep(for: .seconds(1))
         source.onInterruption?(.began("The microphone is in use by a call or another app."))
-        for _ in 0..<100 where camera.stage != .preview { try await Task.sleep(for: .milliseconds(100)) }
-        XCTAssertEqual(camera.stage, .preview)
+        for _ in 0..<100 where log.clips.isEmpty || camera.notice == nil { try await Task.sleep(for: .milliseconds(100)) }
+        XCTAssertEqual(log.clips.count, 1)
+        XCTAssertNotEqual(camera.stage, .recording)
         XCTAssertEqual(camera.notice, "The microphone is in use by a call or another app.")
+        log.removeClips()
         camera.close()
     }
 
@@ -304,8 +392,8 @@ final class CameraCaptureTests: XCTestCase {
         XCTAssertEqual(camera.stage, .finishing)
         camera.close()
         await made.value
-        XCTAssertNil(camera.taken, "a clip made after the close is dropped with its copies")
-        XCTAssertTrue(log.clips.isEmpty)
+        XCTAssertNil(camera.heldClip, "a clip made after the close is dropped with its copies")
+        XCTAssertTrue(log.clips.isEmpty, "and never goes into the message")
         XCTAssertTrue(source.stopCancelled, "closing cancels the clip's making, so its sound goes to no speech to text")
     }
 
@@ -322,9 +410,11 @@ final class CameraCaptureTests: XCTestCase {
         for _ in 0..<100 where !camera.busy { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertTrue(camera.busy, "the photo is being taken")
         await camera.shutter()
-        XCTAssertEqual(camera.stage, .preview, "the tap on Stop ended the recording")
+        XCTAssertNotEqual(camera.stage, .recording, "the tap on Stop ended the recording")
+        XCTAssertEqual(log.clips.count, 1, "and its video went in")
         await photo.value
         XCTAssertEqual(log.photos, 1, "the photo still lands")
+        log.removeClips()
         camera.close()
     }
 

@@ -3,7 +3,8 @@ import SwiftUI
 /// The DEBUG `-camera-harness` launch: the composer's camera on its own, with
 /// the fake source (`FakeCameraSource`), so its layout and its steps can be
 /// driven and screenshotted in a simulator (`CameraCaptureUITests`). Its actions
-/// only count what the composer would have got (`camera.harness.added`).
+/// only count what the composer would have got (`camera.harness.added`): photos,
+/// videos, and whether every video came with its stills.
 enum CameraHarness {
     static let launchArgument = "camera-harness"
 
@@ -21,14 +22,14 @@ enum CameraHarness {
 struct CameraHarnessView: View {
     @State private var photos = 0
     @State private var clips = 0
-    @State private var sent = false
+    @State private var stills = true
     @State private var open = true
     @State private var model: CameraCaptureModel?
 
     var body: some View {
         ZStack(alignment: .bottom) {
             Color(.systemBackground).ignoresSafeArea()
-            Text("photos=\(photos) clips=\(clips) sent=\(sent)")
+            Text("photos=\(photos) clips=\(clips) stills=\(stills)")
                 .font(.footnote.monospaced())
                 .accessibilityIdentifier("camera.harness.added")
                 .padding(.bottom, 40)
@@ -46,10 +47,10 @@ struct CameraHarnessView: View {
         actions.addPhoto = { _ in photos += 1; return true }
         actions.addClip = { clip in
             clips += 1
+            stills = stills && !clip.stills.isEmpty
             clip.files.forEach(ComposerFileStore.remove)
             return true
         }
-        actions.send = { sent = true; open = false }
         actions.close = { open = false }
         actions.photoRoom = { max(0, ComposerBar.maxImages - photos) }
         actions.transcribe = { _ in throw CameraClipMaker.TimeoutError() }

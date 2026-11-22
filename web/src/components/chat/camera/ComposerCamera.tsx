@@ -23,7 +23,6 @@ interface Deps {
   /** The box moved to another draft or session: the camera closes (a recording is dropped), so nothing lands in the other one. */
   resetKey: string;
   setNotice: (notice: string | null) => void;
-  send: () => void;
   pickFile: () => void;
   micBusy: () => boolean;
   closeMenu: () => void;
@@ -55,7 +54,7 @@ const CAMERA_ICON = (
   </svg>
 );
 
-/** The + menu's Camera row, right under the attach row. */
+/** The Camera row: the first row of the + menu's More flyout. */
 export function CameraMenuRow({ camera, disabled }: { camera: ComposerCameraState; disabled: boolean }) {
   if (!camera.enabled) return null;
   const hint = camera.live ? (camera.acceptsFiles ? 'Photo or video' : 'Photo') : 'Opens the phone camera';
@@ -114,7 +113,6 @@ export function ComposerCamera({ camera }: { camera: ComposerCameraState }) {
           onClose={() => { camera.setOpen(false); camera.focusBox(); }}
           onPhoto={addPhoto}
           onClip={acceptsFiles ? addClip : null}
-          onSend={camera.send}
           onPickFile={camera.pickFile}
           micBusy={camera.micBusy}
           onMicHeld={camera.setMicHeld}
