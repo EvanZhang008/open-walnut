@@ -97,3 +97,51 @@ test('the sidebar has no Voice entry; Settings > Voice shows the recordings', as
   await page.locator('.settings-pane').screenshot({ path: `test-results/voice-in-settings-${browserName}.png` })
   expect(errors).toEqual([])
 })
+
+test('Spoken answers: the ElevenLabs key is set in Settings > Voice once voice conversation is on', async ({ page }) => {
+  // 2026-11-22: the voice that reads answers aloud had no field anywhere, only the config file.
+  let flagOn = false
+  const puts: Record<string, unknown>[] = []
+  await page.route((url) => url.pathname === '/api/config', async (route) => {
+    const method = route.request().method()
+    if (method === 'PUT') {
+      puts.push(JSON.parse(route.request().postData() ?? '{}'))
+      // Nothing reaches the shared fixture server's config: answer with what it holds.
+      const res = await route.fetch({ method: 'GET', postData: undefined })
+      return route.fulfill({ response: res })
+    }
+    if (method !== 'GET') return route.fallback()
+    const res = await route.fetch()
+    const json = await res.json()
+    json.config.experimental = { ...(json.config.experimental ?? {}), voice_conversation: flagOn }
+    return route.fulfill({ response: res, json })
+  })
+  await routeRecordings(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+
+  const openVoiceSettings = async () => {
+    await page.goto('/')
+    await expect(page.locator('.sidebar-notification-btn')).toBeVisible({ timeout: 60_000 })
+    await page.getByTestId('sidebar-core-app-settings').click()
+    const nav = page.getByTestId('settings-nav-stt')
+    await nav.scrollIntoViewIfNeeded()
+    await nav.click()
+    await expect(page.getByTestId('stt-dictation')).toBeVisible({ timeout: 20_000 })
+  }
+
+  // The experiment off: no key field.
+  await openVoiceSettings()
+  await expect(page.getByTestId('voice-spoken-answers')).toHaveCount(0)
+
+  flagOn = true
+  await openVoiceSettings()
+  const group = page.getByTestId('voice-spoken-answers')
+  await expect(group).toBeVisible()
+  await expect(group).toContainText("this device's own voice")
+  await group.getByTestId('tts-elevenlabs-key').fill('sk_test_key_for_the_spec')
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+s' : 'Control+s')
+  await expect.poll(() => puts.some((b) => JSON.stringify(b).includes('sk_test_key_for_the_spec')), { timeout: 15_000 }).toBe(true)
+  const body = puts.find((b) => JSON.stringify(b).includes('sk_test_key_for_the_spec'))!
+  expect((body.tts as { elevenlabs_api_key?: string }).elevenlabs_api_key).toBe('sk_test_key_for_the_spec')
+  await group.screenshot({ path: `test-results/voice-spoken-answers.png` })
+})

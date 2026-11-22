@@ -8,6 +8,8 @@ import { SttDetectionPanel, sttDraftOf, type SttDraft } from './SttDetectionPane
 import { useSerialSave, type OnSave } from './GeneralSection';
 import { invalidateSttStatusCache } from '@/hooks/useSttStatus';
 import { VoiceHistoryList } from '@/components/common/VoiceHistoryList';
+import { useExperimental } from '@/hooks/useExperimental';
+import { SecretInput } from '../inputs/SecretInput';
 
 interface Props {
   config: Config;
@@ -15,9 +17,12 @@ interface Props {
   onReload?: () => void;
 }
 
-type VoiceDraft = SttDraft;
+/** Dictation's drafts plus the key of the voice that reads answers aloud (tts, src/core/tts/). */
+type VoiceDraft = SttDraft & { elevenlabsKey: string };
 
-const draftOf = sttDraftOf;
+const draftOf = (config: Config): VoiceDraft => ({ ...sttDraftOf(config), elevenlabsKey: config.tts?.elevenlabs_api_key ?? '' });
+
+const SPOKEN_HELP = 'Voice conversation reads answers aloud with ElevenLabs when a key is set here (elevenlabs.io > Developers > API keys; the free plan covers about 20,000 characters a month with the default model). Without a key, this device\'s own voice reads them.';
 
 /** stt.pause_media: on unless turned off (src/core/stt/media-hold.ts). Saves at once. */
 function PauseMusicRow({ config, onSave }: { config: Config; onSave: OnSave }) {
@@ -40,6 +45,7 @@ function PauseMusicRow({ config, onSave }: { config: Config; onSave: OnSave }) {
  */
 export function SttSection({ config, onSave, onReload }: Props) {
   const [draft, setDraft] = useState<VoiceDraft>(() => draftOf(config));
+  const voiceConversation = useExperimental('voice_conversation');
   const dirty = useRef(false);
   const save = useSerialSave(config, onSave);
   // A config refresh (our own save, another window) re-seeds the drafts only
@@ -69,6 +75,10 @@ export function SttSection({ config, onSave, onReload }: Props) {
           openai_model: draft.openaiModel || undefined,
         } : {}),
       } as Config['stt'],
+      // Only a changed key is written: the field holds the masked value read back otherwise.
+      ...(draft.elevenlabsKey !== (c.tts?.elevenlabs_api_key ?? '')
+        ? { tts: { ...c.tts, elevenlabs_api_key: draft.elevenlabsKey || undefined } as Config['tts'] }
+        : {}),
     }), { rowKey: 'stt.form' });
     invalidateSttStatusCache();
     handleConfigured();
@@ -102,6 +112,13 @@ export function SttSection({ config, onSave, onReload }: Props) {
       <SettingsGroup heading="While you dictate" data-testid="stt-while-dictating">
         <PauseMusicRow config={config} onSave={onSave} />
       </SettingsGroup>
+      {voiceConversation && (
+        <SettingsGroup heading="Spoken answers" data-testid="voice-spoken-answers">
+          <SettingsRow label="ElevenLabs API key" htmlFor="tts-elevenlabs-key" help={SPOKEN_HELP} control={
+            <SecretInput id="tts-elevenlabs-key" data-testid="tts-elevenlabs-key" value={draft.elevenlabsKey} onChange={(v) => onDraft({ elevenlabsKey: v })} placeholder="sk_..." />
+          } />
+        </SettingsGroup>
+      )}
     </SectionCard>
   );
 }
