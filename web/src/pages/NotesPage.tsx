@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { isMacPlatform } from '@/hooks/usePanelKeyRouter';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useLocation, useNavigationType, useSearchParams } from 'react-router-dom';
 import { useNotesTree, isNotesTreeCacheCurrent } from '@/hooks/useNotesTree';
@@ -1311,7 +1312,7 @@ function NotesEmptyState({ onNewNote }: { onNewNote: () => void }) {
       size="pane"
       icon={ICON_NOTE}
       title="No note open"
-      hint={<>Pick one from the list, or press <kbd>⌘K</kbd> to find one.</>}
+      hint={<>Pick one from the list, or press <kbd>{isMacPlatform() ? '⌘K' : 'Ctrl K'}</kbd> to find one.</>}
       action={{ label: 'New note', onClick: onNewNote }}
       testId="notes-empty-state"
     />

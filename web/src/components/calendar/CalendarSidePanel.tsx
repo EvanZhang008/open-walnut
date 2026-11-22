@@ -135,7 +135,7 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
           // One next step: a read that failed is retried; anything else is fixed in Calendar Accounts.
           action={why?.reason === 'fetch-error'
             ? { label: 'Retry', onClick: () => calendar.refetch() }
-            : { label: 'Open Calendar Accounts', testId: 'cal-side-status-accounts', onClick: () => navigate('/settings#calendar') }}
+            : { label: 'Calendar Accounts', tooltip: 'Open Calendar Accounts in Settings', testId: 'cal-side-status-accounts', onClick: () => navigate('/settings#calendar') }}
         />
       )
       : isDayEmpty(items, day)
