@@ -35,6 +35,7 @@ const TAP = /createMediaStreamSource\(|createScriptProcessor\(|audioWorklet\.add
 /** Every Web Audio tap of the mic, and what it may be used for. */
 const KNOWN: Record<string, string> = {
   'web/src/hooks/useSpeechToText.ts:1': 'the level meter and the dead-mic warning only; it never feeds an engine',
+  'web/src/voice/voice-mic.ts:1': "voice conversation's level meter: voice activity and the dead-mic warning only; it never feeds an engine (the take is a MediaRecorder)",
   'web/src/utils/pcm-stream.ts:2': 'the side capture: the live draft reads it only where the recorder\'s audio does not decode',
 };
 

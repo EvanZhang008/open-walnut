@@ -2,9 +2,18 @@
 
 .voice-bar {
   /* The column's own width decides the layout (a CEO column is narrow at any window
-     width), so the bar is the container its insides ask. The glass is wn-glass-frost's. */
+     width), so the bar is the container its insides ask. It sits in the composer's seat,
+     with the composer's own surface (the frosted glass is for overlays portalled to <body>). */
   container-type: inline-size;
   border-radius: var(--radius-lg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  box-shadow: var(--card-shadow);
+}
+
+/* The composer stays mounted under the bar, its draft kept; it shows again with Keyboard. */
+.voice-bar ~ .chat-input-container {
+  display: none;
 }
 
 .voice-bar-inner {

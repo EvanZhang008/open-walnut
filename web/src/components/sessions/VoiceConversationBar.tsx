@@ -69,7 +69,7 @@ export function VoiceConversationBar({ voice, onStopRun, running }: { voice: Voi
   const ring = phase === 'listening' || phase === 'speaking' ? Math.min(1, voice.level) : 0;
   const engineLabel = voice.engine === 'elevenlabs' ? 'Voice: ElevenLabs' : voice.engine === 'device' ? 'Voice: built-in' : '';
   return (
-    <div className={`voice-bar wn-glass-frost is-${phase}`} data-testid="voice-bar" data-phase={phase} role="group" aria-label="Voice conversation">
+    <div className={`voice-bar is-${phase}`} data-testid="voice-bar" data-phase={phase} role="group" aria-label="Voice conversation">
       <div className="voice-bar-inner">
       <button
         type="button"

@@ -4321,6 +4321,11 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           {promptWarning && !(phoneLayer || phoneWidth) && (
             <div className="composer-prompt-warning" data-testid="composer-prompt-warning">{promptWarning}</div>
           )}
+          {voice.micError && !voice.open && (
+            <div className="composer-prompt-warning" role="alert" data-testid="voice-mic-error">{voice.micError}</div>
+          )}
+          {/* The composer stays mounted under it (its draft and state kept); voice-conversation.css hides it. */}
+          {voice.open && <VoiceConversationBar voice={voice} onStopRun={handleStopTurn} running={pageStreaming(threads.stack.api.currentKey)} />}
           {macSessionAway && <MacAwayComposer />}
           <PendingCommentsTray
             pending={ownPendingComments}
@@ -4328,10 +4333,6 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             onEdit={editPendingComment}
             onRemove={commentsStore.remove}
           />
-          {voice.micError && !voice.open && (
-            <div className="composer-prompt-warning" role="alert" data-testid="voice-mic-error">{voice.micError}</div>
-          )}
-          {voice.open ? <VoiceConversationBar voice={voice} onStopRun={handleStopTurn} running={pageStreaming(threads.stack.api.currentKey)} /> : (
           <ChatInput
             sendBlocked={macSessionAway}
             sendSlot={voiceOn && !plainChat && !ownComposerLight && !macSessionAway ? <VoiceTalkButton onClick={voice.start} /> : undefined}
@@ -4412,7 +4413,6 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             // the "+" menu, Bypass and the model are the main conversation's.
             light={ownComposerLight}
           />
-          )}
         </div>
           </div>{/* .session-panel-chat-col */}
         </div>{/* .session-panel-split */}
