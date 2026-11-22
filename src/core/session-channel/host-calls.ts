@@ -27,7 +27,7 @@ export const HOST_CALL_ALLOWLIST = {
   ],
   acp: [
     'gracefulStop', 'resolvePermissionRequest', 'reattachWatcher', 'setModel', 'applyWalnutMode', 'setConfigOption',
-    'requestTurnCompleteSelfReport',
+    'requestTurnCompleteSelfReport', 'detach', 'kill',
   ],
   runner: [
     'isBackgroundWorkActive', 'reconcilePendingBackgroundTasks', 'requestTurnCompleteSelfReport', 'changePermissionMode',

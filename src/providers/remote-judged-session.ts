@@ -135,7 +135,8 @@ export class RemoteJudgedSession {
     })
   }
 
-  getModelCatalog(...a: unknown[]) { return this.call('getModelCatalog', a, 'session') }
+  /** An ACP session has no such member on its host: its catalog is the mirrored one (R2-L3). */
+  getModelCatalog(...a: unknown[]) { return this.kind === 'acp' ? Promise.resolve(this.modelCatalog ?? null) : this.call('getModelCatalog', a, 'session') }
   getSettingsSnapshot(...a: unknown[]) { return this.call('getSettingsSnapshot', a, 'session') }
   applyModel(...a: unknown[]) { return this.call('applyModel', a, 'session') }
   refreshAppliedSettings(...a: unknown[]) { return this.call('refreshAppliedSettings', a, 'session') }
@@ -175,9 +176,10 @@ export class RemoteJudgedSession {
   readonly transport = { prepareOutbound: (...a: unknown[]) => this.call('prepareOutbound', a, 'session') }
 
   // ── forwarded, fire and forget ──
-  invalidateModelCatalog(): void { this.send('invalidateModelCatalog', [], 'session') }
-  detach(): void { this.send('detach', [], 'session') }
-  kill(): void { this.send('kill', [], 'session') }
+  invalidateModelCatalog(): void { if (this.kind !== 'acp') this.send('invalidateModelCatalog', [], 'session') }
+  // The session's own object on its host: a native one, or the ACP one (never a native attach of an ACP id).
+  detach(): void { this.send('detach', []) }
+  kill(): void { this.send('kill', []) }
   forceSettlePermissionRequests(...a: unknown[]): void { this.send('forceSettlePermissionRequests', a, 'session') }
   adoptAppliedSettings(...a: unknown[]): void { this.send('adoptAppliedSettings', a, 'session') }
 
@@ -189,7 +191,8 @@ export class RemoteJudgedSession {
   markExpectedTeardown(reason: string): () => void {
     const previous = this.localTeardown
     this.localTeardown = reason
-    const marked = this.call('markExpectedTeardown', [reason], 'session').then(
+    // An ACP session keeps no such mark on its host: the mark is this side's only.
+    const marked = this.kind === 'acp' ? Promise.resolve(null) : this.call('markExpectedTeardown', [reason], 'session').then(
       (v) => (v && typeof v === 'object' && typeof (v as { undoId?: unknown }).undoId === 'string' ? (v as { undoId: string }).undoId : null),
       (err: unknown) => {
         log.session.warn('host-run session: the teardown mark did not reach its host', { sessionId: this.sid, host: this.host, error: err instanceof Error ? err.message : String(err) })

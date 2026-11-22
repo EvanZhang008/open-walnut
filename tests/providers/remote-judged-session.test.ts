@@ -12,7 +12,7 @@ vi.mock('../../src/core/subagents/registry.js', () => ({ lightSubagentRows: (sid
 
 import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js'
 import {
-  _resetRemoteJudgedSessionsForTesting, noteLiveState, peekRemoteJudgedSession, remoteJudgedSession, renameRemoteJudgedSession,
+  _resetRemoteJudgedSessionsForTesting, forgetRemoteJudgedSession, markHostLiveUnknown, noteLiveState, peekRemoteJudgedSession, remoteJudgedSession, renameRemoteJudgedSession,
   setRemoteJudgedCaller, withLeaderSubagentRows, type HostCallBody,
 } from '../../src/providers/remote-judged-session.js'
 import { hostCallAllowed } from '../../src/core/session-channel/host-calls.js'
@@ -86,6 +86,46 @@ describe('RemoteJudgedSession', () => {
     p.resetConsumedOffsetFromSnapshot()
     p.setCronArmedFromSnapshot()
     expect(calls).toHaveLength(6)
+  })
+
+  it('R2-L3: an ACP proxy never reaches its host\'s native lookups: detach and kill go to its ACP object, the catalog and teardown mark stay here', async () => {
+    const calls = fakeHost()
+    noteLiveState('a1', { acp: { modelCatalog: { models: ['m1'] } } })
+    const a = remoteJudgedSession('a1', 'devbox', 'acp')
+    a.detach()
+    a.kill()
+    a.invalidateModelCatalog()
+    await expect(a.getModelCatalog()).resolves.toEqual({ models: ['m1'] })
+    const undo = a.markExpectedTeardown('task_completed')
+    expect(a.teardownReason).toBe('task_completed')
+    undo()
+    await vi.waitFor(() => expect(calls.map((c) => `${c.target}.${c.member}`)).toEqual(['acp.detach', 'acp.kill']))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(calls.every((c) => hostCallAllowed(c.target, c.member))).toBe(true)
+    expect(calls).toHaveLength(2)
+  })
+
+  it('R2-M1: a host\'s {gone} state reads not running; a link down past its bound reads unknown; a delete forgets the proxy', () => {
+    noteLiveState('s1', { turnGen: 2, processStatus: 'running', turnRunning: true, pendingPermission: true }, 'devbox')
+    noteLiveState('s9', { processStatus: 'running', turnRunning: true }, 'another-box')
+    const p = remoteJudgedSession('s1', 'devbox', 'native')
+    expect(p.turnRunning).toBe(true)
+    expect(markHostLiveUnknown('devbox')).toBe(1)
+    expect(p.liveUnknown).toBe(true)
+    expect(p.turnRunning).toBe(false)
+    expect(p.hasPendingPermission).toBe(false)
+    expect(p.active).toBe(false)
+    // Another host's session keeps its state.
+    expect(remoteJudgedSession('s9', 'another-box', 'native').turnRunning).toBe(true)
+    // The host linked again and sent its state; then the session ended there.
+    noteLiveState('s1', { processStatus: 'running', turnRunning: true }, 'devbox')
+    expect(p.liveUnknown).toBe(false)
+    expect(p.turnRunning).toBe(true)
+    noteLiveState('s1', { gone: true }, 'devbox')
+    expect(p.turnRunning).toBe(false)
+    expect(p.processStatus).toBe('stopped')
+    forgetRemoteJudgedSession('s1')
+    expect(peekRemoteJudgedSession('s1')).toBeUndefined()
   })
 
   it('a teardown mark is local at once, and its undo puts it back and asks the host to undo', async () => {
