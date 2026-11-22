@@ -395,14 +395,16 @@ export function CalendarAccounts({ heading }: { heading?: string } = {}) {
               </SettingsGroup>
             );
           })}
+          </ControlGroup>
           {/* Only on a list the server read with the calendars on (its answer, never the switch's
-              optimistic value) and no failed reload since: an empty list would call every account missing. */}
-          {/* With the experiment, mail accounts show while EventKit cannot read too (another OS, no
-              grant): their own calendars come from their servers, not from this Mac. */}
+              optimistic value) and no failed reload since: an empty list would call every account missing.
+              With the experiment, mail accounts show while EventKit cannot read too (another OS, no
+              grant): their own calendars come from their servers, not from this Mac. Outside the
+              ControlGroup: it shows only while the switch is on, and inside that display:contents
+              fieldset Chromium left its rows without a box once an account group was added above. */}
           {(status.available || mailCalendars) && status.enabled && !loadError && (
             <CalendarMailAccounts calendars={calendars} sources={sources} onChanged={load} />
           )}
-          </ControlGroup>
         </>
       )}
       {fixReport && (() => {
