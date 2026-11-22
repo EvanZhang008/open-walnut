@@ -105,10 +105,14 @@ if ! walnut_find_bun .; then
   exit 1
 fi
 BUN="$BUN_BIN"
+# Under a working node when there is one (scripts/lib/tsc-runtime.sh: a few GB less at its peak).
+# shellcheck source=lib/tsc-runtime.sh
+. scripts/lib/tsc-runtime.sh
+walnut_tsc_runtime "$BUN"
 # tsconfig.json includes only src/**; the archive above holds it and the packages/ it imports.
 ln -s "$OLDPWD/node_modules" "$TMP/node_modules" 2>/dev/null || true
 echo "Type-checking the committed tree (src/ is dirty, so HEAD differs)…"
-if ! (cd "$TMP" && "$BUN" "$OLDPWD/$TSC" --noEmit 2>"$TMP/tsc.log"); then
+if ! (cd "$TMP" && "$TSC_RUNTIME" "$OLDPWD/$TSC" --noEmit 2>"$TMP/tsc.log"); then
   echo ""
   echo "✗ Committed tree (HEAD) fails to type-check:"
   head -8 "$TMP/tsc.log"

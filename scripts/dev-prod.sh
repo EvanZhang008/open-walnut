@@ -724,13 +724,18 @@ sweep_build_clones
 # (`Cannot find name 'groupBy'`) in under a minute. A failure here is usually
 # someone else's unfinished edit: wait for them or coordinate, and only reach
 # for WALNUT_DEVPROD_SKIP_TSC=1 when the error is provably unrelated to `/`.
-# tsc runs on $JS_BIN (bun): its own `#!/usr/bin/env node` line would need a node.
+# tsc runs under a working node when this machine has one, else on $JS_BIN (bun; its
+# own `#!/usr/bin/env node` line would need a node): the same check peaked at 8.3 GB
+# under bun and 3.7 GB under node (scripts/lib/tsc-runtime.sh).
 if [[ "${WALNUT_DEVPROD_SKIP_TSC:-0}" != "1" ]]; then
   WEB_TSC="$REPO_ROOT/web/node_modules/.bin/tsc"
   [[ -x "$WEB_TSC" ]] || WEB_TSC="$REPO_ROOT/node_modules/.bin/tsc"
+  # shellcheck source=lib/tsc-runtime.sh
+  . "$REPO_ROOT/scripts/lib/tsc-runtime.sh"
+  walnut_tsc_runtime "$JS_BIN"
   if [[ -x "$WEB_TSC" ]]; then
     echo "Type-checking web/ before the build (WALNUT_DEVPROD_SKIP_TSC=1 skips)."
-    if ! (cd "$REPO_ROOT/web" && nice -n "$BUILD_NICE" "$JS_BIN" "$WEB_TSC" --noEmit -p tsconfig.json); then
+    if ! (cd "$REPO_ROOT/web" && nice -n "$BUILD_NICE" "$TSC_RUNTIME" "$WEB_TSC" --noEmit -p tsconfig.json); then
       echo "web/ type-check FAILED — deploy aborted, production server on :$PORT untouched." >&2
       echo "A half-edited component ships as a first-paint crash; fix (or wait for the" >&2
       echo "author of) the errors above, or WALNUT_DEVPROD_SKIP_TSC=1 if provably unrelated." >&2
