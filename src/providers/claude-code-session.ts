@@ -15760,7 +15760,7 @@ export class SessionRunner {
     // default model goes under it. An isolated area session resumes exactly as its policy says,
     // and Walnut's own lanes as their starter chose: no default under either.
     if (!areaBound) try {
-      const { getConfig } = await import('../core/config-manager.js')
+      const { getConfig } = await sessionPort().config.loadConfigManager()
       const { resolveClaudeSpawnDefaults, takesLaunchDefaults } = await import('../core/sessions/claude-launch-defaults.js')
       const userSpawn = takesLaunchDefaults(resumeRecord)
       const spawnDefaults = await resolveClaudeSpawnDefaults({
