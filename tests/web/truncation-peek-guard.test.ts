@@ -75,7 +75,12 @@ describe('a task row whose text is cut off expands as a whole', () => {
     expect(Object.keys(NOT_A_ROW).filter((k) => !listed.has(k)), 'stale NOT_A_ROW entries').toEqual([]);
     // The rows of the report are found, so the scan is reading what it should.
     const rows = new Set(sites.filter((s) => s.inRow).map((s) => s.file));
-    for (const f of ['components/tasks/StatusSections.tsx', 'components/tasks/TodoPanel.tsx', 'components/tasks/FocusSatelliteCards.tsx', 'components/tasks/WorkerFoldTree.tsx', 'components/org/OrgChannelList.tsx', 'components/org/OrgTaskRail.tsx']) expect(rows.has(f), f).toBe(true);
+    for (const f of ['components/tasks/StatusSections.tsx', 'components/tasks/TodoPanel.tsx', 'components/tasks/FocusSatelliteCards.tsx']) expect(rows.has(f), f).toBe(true);
+    // These rows' titles wrap now (`.wn-title`, 9b60109d6c: titles never cut, only metadata), so the scan
+    // finds no cut title in them; their rows stay marked, since their metadata can still be cut.
+    for (const f of ['components/tasks/WorkerFoldTree.tsx', 'components/org/OrgChannelList.tsx', 'components/org/OrgTaskRail.tsx']) {
+      expect(fs.readFileSync(path.join(WEB_SRC, f), 'utf8'), f).toContain('data-peek-row=""');
+    }
   });
 });
 
