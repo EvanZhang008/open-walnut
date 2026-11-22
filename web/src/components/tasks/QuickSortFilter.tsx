@@ -9,6 +9,7 @@ import { useTasksContext } from '@/contexts/TasksContext';
 import { OptionPickerFlyout, useCursorFlyout, type FlyoutOption } from './CursorFlyout';
 import { IDLE_STEPS, projectKey, type SortFilter } from './quick-sort-model';
 import { projectIdentity } from '@/utils/project-display';
+import { Chip, ChipGroup } from '@/components/controls';
 
 const ALL = '__all';
 
@@ -59,21 +60,21 @@ export function QuickSortFilter({ filter, setFilter, tiers, counts, showProject 
   const folderOptions: FlyoutOption<string>[] = [{ value: ALL, label: 'All folders' }, ...folders.map(([id, l]) => ({ value: `f:${id}`, label: l }))];
 
   return <div className="quick-sort-filter" data-testid="quick-sort-filter">
-    <div className="quick-sort-chips" role="group" aria-label="Pin tiers to sort">
-      <button type="button" aria-pressed={filter.tiers.length === 0} data-sort-filter-tier="" onClick={() => setFilter({ ...filter, tiers: [] })}>Every tier<b>{total}</b></button>
-      {tiers.map(t => <button key={t.id} type="button" aria-pressed={filter.tiers.includes(t.id)} data-sort-filter-tier={t.id} onClick={() => toggleTier(t.id)}>{t.label}<b>{counts[t.id] ?? 0}</b></button>)}
-    </div>
-    <div className="quick-sort-chips">
-      {showProject && <button type="button" className="quick-sort-pick" data-sort-filter="project" aria-haspopup="listbox" aria-pressed={filter.project !== null}
-        onClick={e => openAt(projectMenu, e.currentTarget)}>{projectLabel} ▾</button>}
-      <button type="button" className="quick-sort-pick" data-sort-filter="folder" aria-haspopup="listbox" aria-pressed={filter.folder !== null}
-        onClick={e => openAt(folderMenu, e.currentTarget)}>{folderLabel} ▾</button>
+    <ChipGroup className="quick-sort-chips" role="group" aria-label="Pin tiers to sort">
+      <Chip pressed={filter.tiers.length === 0} data-sort-filter-tier="" count={total} onClick={() => setFilter({ ...filter, tiers: [] })}>Every tier</Chip>
+      {tiers.map(t => <Chip key={t.id} pressed={filter.tiers.includes(t.id)} data-sort-filter-tier={t.id} count={counts[t.id] ?? 0} onClick={() => toggleTier(t.id)}>{t.label}</Chip>)}
+    </ChipGroup>
+    <ChipGroup className="quick-sort-chips">
+      {showProject && <Chip className="quick-sort-pick" data-sort-filter="project" aria-haspopup="listbox" pressed={filter.project !== null}
+        onClick={e => openAt(projectMenu, e.currentTarget)}>{projectLabel} ▾</Chip>}
+      <Chip className="quick-sort-pick" data-sort-filter="folder" aria-haspopup="listbox" pressed={filter.folder !== null}
+        onClick={e => openAt(folderMenu, e.currentTarget)}>{folderLabel} ▾</Chip>
       <span className="quick-sort-chips-label">No action for</span>
-      <span className="quick-sort-chips" role="group" aria-label="No action for">
-        {IDLE_STEPS.map(n => <button key={n} type="button" aria-pressed={filter.idleDays === n} data-sort-filter-idle={n}
-          onClick={() => setFilter({ ...filter, idleDays: n })}>{n ? `${n}+ days` : 'Any time'}</button>)}
-      </span>
-    </div>
+      <ChipGroup className="quick-sort-chips" role="group" aria-label="No action for">
+        {IDLE_STEPS.map(n => <Chip key={n} pressed={filter.idleDays === n} data-sort-filter-idle={n}
+          onClick={() => setFilter({ ...filter, idleDays: n })}>{n ? `${n}+ days` : 'Any time'}</Chip>)}
+      </ChipGroup>
+    </ChipGroup>
     {projectMenu.state && <OptionPickerFlyout anchorPoint={projectMenu.state.point} anchorRef={projectMenu.noTrigger} options={projectOptions}
       current={filter.project === null ? ALL : `p:${filter.project}`} ariaLabel="Sort which project"
       onPick={v => {

@@ -715,7 +715,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       )}
       <section className="drawing-workspace-main" aria-label={title}>
         <header className="drawing-workspace-bar">
-          <button type="button" className="btn btn-icon drawing-workspace-files-toggle" aria-expanded={filesShown} aria-label={filesShown ? 'Hide drawings list' : 'Show drawings list'} title={filesShown ? 'Hide drawings list' : 'Show drawings list'} onClick={() => setFilesShown((v) => !v)}><Icon d={ICON.list} /></button>
+          <button type="button" className="btn btn-icon drawing-workspace-files-toggle" data-choice-exempt="toolbar icon button that shows the drawings list beside the canvas" aria-expanded={filesShown} aria-label={filesShown ? 'Hide drawings list' : 'Show drawings list'} title={filesShown ? 'Hide drawings list' : 'Show drawings list'} onClick={() => setFilesShown((v) => !v)}><Icon d={ICON.list} /></button>
           {titleEditing && currentPath
             ? <NameField value={title} label="Drawing name" className="drawing-workspace-title" onCommit={(name) => renameDrawing(currentPath, name)}
                 onDone={(failure) => { setTitleEditing(false); setNotice(failure); }} />

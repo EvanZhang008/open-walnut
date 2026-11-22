@@ -10,6 +10,7 @@ import { ItemTaskSelector } from './ItemTaskSelector';
 import { clearItemDraft, rememberInboxReturn, useItemDraft } from './item-drafts';
 import { taskPath } from '@/utils/task-path';
 import { AgentText } from '@/components/common/AgentText';
+import { DisclosureButton } from '@/components/controls';
 
 export function EmailItem({ letterId, item, duplicateLabels, canOpenMail = false, onNavigate, sender }: {
   letterId: string; item: InboxLetterItem; duplicateLabels: ReadonlySet<string>; canOpenMail?: boolean; onNavigate: (to: string) => void;
@@ -71,8 +72,8 @@ export function EmailItem({ letterId, item, duplicateLabels, canOpenMail = false
   return <article className="hii-item" data-item-id={item.id} aria-label={item.subject}>
     <h3 className="hii-subject">{item.subject}</h3>
     <div ref={summary} className={`hii-summary${expanded ? ' hii-summary-expanded' : ''}`}><AgentText compact host={sender?.host} sessionId={sender?.sessionId} unknownSource={sender?.unknownSource ?? (!sender?.sessionId && sender?.host === undefined)} text={item.summary || 'Email summary unavailable'} /></div>
-    {(truncated || expanded) && <button type="button" className="btn btn-sm hib-row-btn hii-summary-toggle" aria-expanded={expanded}
-      aria-label={`${expanded ? 'Show less' : 'Show more'} for ${item.subject}`} onClick={() => setExpanded(v => !v)}>{expanded ? 'Show less' : 'Show more'}</button>}
+    {(truncated || expanded) && <DisclosureButton expanded={expanded} className="hii-summary-toggle"
+      aria-label={`${expanded ? 'Show less' : 'Show more'} for ${item.subject}`} onClick={() => setExpanded(v => !v)}>{expanded ? 'Show less' : 'Show more'}</DisclosureButton>}
     <div className="hii-source"><span>Mail</span><span>{accountText(item, duplicateLabels)}</span>
       <span>{item.display?.sender?.name || item.display?.sender?.address || 'Sender unavailable'}</span>
       <span>{mailDateText(item.display?.sentAt)}</span>

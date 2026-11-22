@@ -7,7 +7,7 @@
  * list of reloaded plugins as the sentence's title when the line abbreviates it to
  * `and 1 more` (N3-16). A failure is the one place red appears on the row.
  *
- * The Details toggle is drawn in a cell that also holds its widest label (`Hide details`),
+ * The Details disclosure (the shared DisclosureButton) is drawn in a cell that also holds its widest label (`Hide details`),
  * so the control does not move or wrap when it is pressed (N3-6). The <pre> is always a
  * full-width block below the sentence.
  *
@@ -17,6 +17,7 @@
 import { useEffect, useState } from 'react'
 import { plainText, type Feedback } from './plugin-update-view'
 import { PluginUpdateIcon } from './plugin-update-icons'
+import { DisclosureButton } from '@/components/controls'
 import '@/styles/plugin-updates.css'
 
 export interface PluginUpdateFeedbackProps {
@@ -38,15 +39,14 @@ export function PluginUpdateFeedback({ rowId, feedback }: PluginUpdateFeedbackPr
       {!isError ? <PluginUpdateIcon name="check" size={14} className="plugin-update-feedback-icon" /> : null}
       <span className="plugin-update-feedback-text" title={feedback.title ? plainText(feedback.title) : undefined}>{plainText(feedback.text)}</span>
       {feedback.detail ? (
-        <button
-          type="button"
+        <DisclosureButton
           className="plugin-update-feedback-toggle"
-          aria-expanded={open}
+          expanded={open}
           aria-controls={detailId}
           onClick={() => setOpen((v) => !v)}
         >
           <span className="plugin-update-label" data-wide="Hide details"><span>{open ? 'Hide details' : 'Details'}</span></span>
-        </button>
+        </DisclosureButton>
       ) : null}
       {feedback.detail && open ? (
         <pre id={detailId} className="plugin-update-detail">{feedback.detail}</pre>

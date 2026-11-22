@@ -31,7 +31,7 @@ test('Calendar comes back in the view the user left it in', async ({ page, baseU
 
   await rail(page, 'calendar').click()
   await expect(page).toHaveURL(/\/calendar$/)
-  const monthTab = page.getByRole('tab', { name: 'Month' })
+  const monthTab = page.getByRole('radio', { name: 'Month' })
   await expect(monthTab).toBeVisible({ timeout: 30_000 })
   await monthTab.click()
   await expect(page).toHaveURL(/\/calendar\?.*view=month/)
@@ -46,14 +46,14 @@ test('Calendar comes back in the view the user left it in', async ({ page, baseU
   await rail(page, 'calendar').click()
   // …and landing there shows Month, not the default Week.
   await expect(page).toHaveURL(/\/calendar\?.*view=month/)
-  await expect(page.getByRole('tab', { name: 'Month' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('radio', { name: 'Month' })).toHaveAttribute('aria-checked', 'true')
 
   // Switching back to Week (the default, no param) is remembered as the cleared state.
-  await page.getByRole('tab', { name: 'Week' }).click()
+  await page.getByRole('radio', { name: 'Week' }).click()
   await expect(page).toHaveURL(/\/calendar(\?(?!.*view=month).*)?$/)
   await gotoHome(page)
   await rail(page, 'calendar').click()
-  await expect(page.getByRole('tab', { name: 'Week' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('radio', { name: 'Week' })).toHaveAttribute('aria-checked', 'true')
 })
 
 test('Settings comes back on the pane the user left open', async ({ page, baseURL }) => {

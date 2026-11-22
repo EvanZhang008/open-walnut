@@ -3,12 +3,13 @@
  *
  * ONE definition for every create surface that shows a tier row (the Quick Task
  * confirm panel) so the pinned area can't drift between them again: tiers are
- * always visible, one click pins, clicking the active tier unpins. Callers own
- * any stickiness; the quick-task panel deliberately has none.
+ * always visible, one click pins, "None" unpins. Callers own any stickiness;
+ * the quick-task panel deliberately has none.
  */
 
 import { BOARD_TIER_POLICY, shownTier, type FocusTier } from '@/api/focus';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
+import { SegmentedControl } from '@/components/controls';
 
 interface Props {
   value: FocusTier | undefined;
@@ -19,58 +20,33 @@ interface Props {
   disabled?: boolean;
 }
 
+/** The segment for "not pinned": a custom tier id is always `ct_<...>`, so it never collides. */
+const NO_TIER = 'none';
+
 export function PinTierPicker({ value, onChange, label, disabled }: Props) {
   // Safe variant: renders fine outside the FocusBarProvider (degrades to built-ins only).
   const customTiers = useFocusBarContextSafe()?.customTiers ?? [];
   // A value in a retired tier (Parked) is drawn in Satellite, as the board draws it.
   const current = shownTier(value);
+  // ONE segmented control (the tiers are mutually exclusive answers to the same question), with
+  // "None" as its own segment: a radio group has no "click the picked one to clear it".
+  const options = [
+    { value: NO_TIER, label: 'None', title: 'Do not pin this task' },
+    // Tooltip = the SAME policy line the quick-task prompt is built from, so the AI's guess and
+    // the user's mental model share one definition.
+    ...BOARD_TIER_POLICY.map((t) => ({ value: t.tier as string, label: t.label, title: t.guidance })),
+    ...customTiers.map((ct) => ({ value: ct.id, label: ct.label, title: `Custom tier "${ct.label}"` })),
+  ];
   return (
-    <div className="pin-tier-options" role="group" aria-label="Pin new task to tier">
+    <div className="pin-tier-options">
       {label && <span className="pin-tier-label">{label}</span>}
-      {/* ONE segmented control (like the Claude|Codex engine toggle), not a row of
-          independent pills: the tiers are mutually exclusive answers to the same
-          question, and separate pills read as unrelated buttons. */}
-      <div className="pin-tier-seg">
-        {BOARD_TIER_POLICY.map((t) => {
-          const active = current === t.tier;
-          return (
-            <button
-              key={t.tier}
-              type="button"
-              // Tier color comes from CSS keyed on the tier class, and ONLY while
-              // active: painting every button its brand color made inactive Focus
-              // (blue) look selected next to active Satellite (grey).
-              className={`pin-tier-btn pin-tier-${t.tier}${active ? ' active' : ''}`}
-              disabled={disabled}
-              // Toggle off when re-clicking the active tier — clicking the visible
-              // active state is exactly the "don't pin this one" gesture.
-              onClick={() => onChange(active ? undefined : t.tier)}
-              // Tooltip = the SAME policy line the quick-task prompt is built from,
-              // so the AI's guess and the user's mental model share one definition.
-              title={`${t.guidance}${active ? ' (click to unpin)' : ''}`}
-              aria-pressed={active}
-            >
-              {t.label}
-            </button>
-          );
-        })}
-        {customTiers.map((ct) => {
-          const active = current === ct.id;
-          return (
-            <button
-              key={ct.id}
-              type="button"
-              className={`pin-tier-btn pin-tier-custom${active ? ' active' : ''}`}
-              disabled={disabled}
-              onClick={() => onChange(active ? undefined : ct.id)}
-              title={`Custom tier "${ct.label}"${active ? ' (click to unpin)' : ''}`}
-              aria-pressed={active}
-            >
-              {ct.label}
-            </button>
-          );
-        })}
-      </div>
+      <SegmentedControl
+        aria-label="Pin new task to tier"
+        value={current ?? NO_TIER}
+        options={options}
+        disabled={disabled}
+        onChange={(v) => onChange(v === NO_TIER ? undefined : v)}
+      />
     </div>
   );
 }

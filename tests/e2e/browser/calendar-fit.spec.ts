@@ -112,7 +112,7 @@ test('late events, midnight resizing, and next-day creation use the displayed wa
     await page.mouse.click(col.x + col.width - 8, col.y + 26 * 2 * await scale(panel) + 1);
     const popover = page.locator('.cal-create-popover');
     await expect(popover).toBeVisible();
-    await popover.getByRole('tab', { name: 'Event', exact: true }).click();
+    await popover.getByRole('radio', { name: 'Event', exact: true }).click();
     await expect(popover.locator('input[type="time"]').first()).toHaveValue('02:00');
     await expect(popover.getByRole('button', { name: 'Date', exact: true })).toHaveAttribute('data-day', day(1));
     await page.keyboard.press('Escape');

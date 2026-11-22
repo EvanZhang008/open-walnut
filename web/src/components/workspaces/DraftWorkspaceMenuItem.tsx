@@ -12,7 +12,9 @@
  * A row of the menu itself (inside its portal), so the menu's outside-click,
  * Escape and pointerdown rules already cover it.
  */
+import { useId } from 'react';
 import { log } from '@/utils/log';
+import { ToggleSwitch } from '@/components/controls';
 import { setDraftWorkspace, useDraftWorkspace } from './draft-workspace-store';
 import { autoGivesWay } from './draft-workspace-model';
 import { WORKSPACE_HINT } from './draft-workspace-model';
@@ -28,32 +30,40 @@ export function DraftWorkspaceMenuItem({ draftId, hasFolder, onDone }: {
   const choice = useDraftWorkspace(draftId);
   // A default with nothing to make (nothing claims the folder) reads as off.
   const on = choice.enabled && hasFolder && !autoGivesWay(choice);
+  const switchId = useId();
+  const toggle = (next: boolean) => {
+    setDraftWorkspace(draftId, { enabled: next, touched: true, auto: false });
+    log.info('workspace', 'draft option toggled', { draftId, enabled: next, via: 'more-menu' });
+    onDone();
+  };
   return (
     <>
-      <button
-        type="button"
-        className={`task-kebab-item draft-workspace-menu-item${on ? ' task-kebab-item-active' : ''}`}
-        data-testid="draft-menu-workspace"
-        aria-pressed={on}
-        disabled={!hasFolder}
+      {/* The whole row is the switch's label: a press anywhere on it flips the switch. */}
+      <label
+        htmlFor={switchId}
+        className="task-kebab-item draft-workspace-menu-item"
+        aria-disabled={!hasFolder || undefined}
         title={!hasFolder
           ? 'Pick a folder first: the workspace is a working copy of that folder'
           : on
             ? 'The task gets its own working copy; click to run in the folder itself'
             : 'Give this task its own working copy (a git worktree, or a plugin workspace)'}
-        onClick={(e) => {
-          e.stopPropagation();
-          setDraftWorkspace(draftId, { enabled: !on, touched: true, auto: false });
-          log.info('workspace', 'draft option toggled', { draftId, enabled: !on, via: 'more-menu' });
-          onDone();
-        }}
+        onClick={(e) => e.stopPropagation()}
       >
-        <span className={`draft-workspace-switch${on ? ' is-on' : ''}`} aria-hidden />
+        <ToggleSwitch
+          id={switchId}
+          size="sm"
+          checked={on}
+          disabled={!hasFolder}
+          onChange={toggle}
+          aria-labelledby={`${switchId}-name`}
+          data-testid="draft-menu-workspace"
+        />
         <span className="draft-workspace-menu-text">
-          <span>Isolated workspace</span>
+          <span id={`${switchId}-name`}>Isolated workspace</span>
           <span className="draft-workspace-menu-hint" data-testid="draft-menu-workspace-hint">{hasFolder ? WORKSPACE_HINT : 'Pick a folder first'}</span>
         </span>
-      </button>
+      </label>
       <div className="task-kebab-divider" />
     </>
   );

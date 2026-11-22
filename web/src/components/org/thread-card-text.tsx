@@ -4,6 +4,7 @@
  */
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
+import { DisclosureButton } from '@/components/controls';
 import { AgentText } from '@/components/common/AgentText';
 import { MessageAbout, rowAbout } from '@/components/sessions/message-about';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
@@ -55,9 +56,9 @@ function Fold({ children, className, testId }: { children: React.ReactNode; clas
         {children}
       </div>
       {(long || whole) && (
-        <button type="button" className="org-thread-toggle" data-testid={`${testId}-more`} aria-expanded={whole} onClick={() => setWhole(!whole)}>
-          <span aria-hidden="true">{whole ? '▴' : '▾'}</span>{whole ? 'Collapse' : 'Expand'}
-        </button>
+        <DisclosureButton expanded={whole} className="org-thread-toggle" data-testid={`${testId}-more`} onClick={() => setWhole(!whole)}>
+          {whole ? 'Collapse' : 'Expand'}
+        </DisclosureButton>
       )}
     </>
   );

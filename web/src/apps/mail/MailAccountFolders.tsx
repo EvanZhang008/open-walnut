@@ -486,6 +486,8 @@ function TailRow({ accountId, hidden, live, expanded, head, onToggle }: {
            ONE canonical control, which is the last li of the list, and two matches there is a strict-mode
            failure. */
         className={`mail-tail-row ${head ? 'mail-tail-head' : 'mail-tail-toggle'}`}
+        // A row of the folder tree, drawn as its sibling folder rows (the same twist and turn as .mail-twist).
+        data-choice-exempt="a folder tree row that shows the rest of the folders, drawn as its sibling rows"
         data-testid={head ? 'mail-tail-toggle-head' : 'mail-tail-toggle'}
         data-account-id={accountId}
         data-hidden={hidden.length}

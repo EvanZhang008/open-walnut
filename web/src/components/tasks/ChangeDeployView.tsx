@@ -104,6 +104,7 @@ function Segment({ stage, index, now, open, onPick }: { stage: ChangeStage; inde
     <button
       type="button"
       className="change-card-seg"
+      data-choice-exempt="a stage of the deploy progress bar, coloured by its status; a click opens that stage"
       data-status={stage.status}
       data-now={stage.name === now ? 'true' : undefined}
       data-open={open ? 'true' : undefined}

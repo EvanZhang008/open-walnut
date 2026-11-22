@@ -27,7 +27,11 @@ const FOLDED_AT: Record<BarTool, number> = { History: 1, 'Find in file': 3, Sour
 export async function pressBarTool(page: Page, bar: Locator, tool: BarTool): Promise<void> {
   const row = tool === 'Source' ? 'Show source' : tool === 'Preview' ? 'Show preview' : tool
   const name = tool === 'Source' ? /^(Source|Show source)$/ : tool === 'Preview' ? /^(Preview|Show preview)$/ : new RegExp(`^${tool}$`)
-  const button = bar.getByRole('button', { name })
+  // Wide and compact bars carry Preview / Source as a segmented control (role=radio); a tight bar
+  // has one "Show source" / "Show preview" button; the other tools are buttons.
+  const button = tool === 'Source' || tool === 'Preview'
+    ? bar.getByRole('radio', { name: tool, exact: true }).or(bar.getByRole('button', { name }))
+    : bar.getByRole('button', { name })
   const menuRow = page.getByTestId('fv-more-menu').getByRole('menuitem', { name: row, exact: true })
   // Pressed once it is found: on the bar, or as a row of an open ⋯ (a menu
   // opened just as the bar stepped back is closed, and the bar read again).

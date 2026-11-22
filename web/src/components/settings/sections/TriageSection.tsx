@@ -10,11 +10,15 @@ import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import { useCommitField } from '../inputs/useCommitField';
 import { useSerialSave, type OnSave } from './GeneralSection';
 import { TriageRoutingRules } from './TriageRoutingRules';
+import { ControlGroup, masterProps } from '@/components/controls';
 
 interface Props {
   config: Config;
   onSave: OnSave;
 }
+
+/** The boxes the Inbox triage switch governs: disabled and grey while it is off (ControlGroup). */
+const GOVERNED = { schedule: 'inbox-triage-schedule', sources: 'inbox-triage-sources-group', actions: 'inbox-triage-actions-group' };
 
 /** Slack only: new mail goes to the mail router since 2026-11-14 (an old 'mail' is ignored). */
 type TriageSource = 'slack';
@@ -84,7 +88,9 @@ export function TriageSection({ config, onSave }: Props) {
       <SettingsGroup>
         <SettingsRow label="Inbox triage" help="Works through new Slack messages against your projects and tasks." htmlFor="inbox-triage-enabled"
           error={enabled.error}
-          control={<ToggleSwitch id="inbox-triage-enabled" checked={enabled.value} busy={enabled.busy} onChange={enabled.set} />} />
+          control={<ToggleSwitch id="inbox-triage-enabled" checked={enabled.value} busy={enabled.busy} onChange={enabled.set}
+            {...masterProps(GOVERNED.schedule, GOVERNED.sources, GOVERNED.actions)} />} />
+        <ControlGroup id={GOVERNED.schedule} off={off} className="settings-rows-contents" reason="Inbox triage is off: turn it on to use these settings.">
         <SettingsRow indent disabled={off} label="Interval" help={'A duration such as 30m or 1h; at least 5m, and "0" turns it off.'}
           htmlFor="inbox-triage-every" error={every.error} data-testid="inbox-triage-every-row"
           control={<input id="inbox-triage-every" type="text" data-no-draft="autosave" className="settings-input settings-input--number" placeholder={DEFAULT_EVERY} disabled={off} {...every.inputProps} />} />
@@ -94,8 +100,10 @@ export function TriageSection({ config, onSave }: Props) {
         <SettingsRow indent disabled={off} label="Active hours" help="Empty runs around the clock." htmlFor="inbox-triage-hours"
           error={hours.error} data-testid="inbox-triage-hours-row"
           control={<input id="inbox-triage-hours" type="text" data-no-draft="autosave" className="settings-input settings-input--number" placeholder={DEFAULT_ACTIVE_HOURS} disabled={off} {...hours.inputProps} />} />
+        </ControlGroup>
       </SettingsGroup>
 
+      <ControlGroup id={GOVERNED.sources} off={off} className="settings-rows-contents">
       <SettingsGroup heading="Sources" className="settings-checklist" footer="With no source ticked, Inbox Triage does not run."
         disabled={off} data-testid="inbox-triage-sources">
         {ALL_SOURCES.map((source) => (
@@ -110,7 +118,9 @@ export function TriageSection({ config, onSave }: Props) {
         ))}
         {sources.error && <p className="settings-row-error" role="alert">{sources.error}</p>}
       </SettingsGroup>
+      </ControlGroup>
 
+      <ControlGroup id={GOVERNED.actions} off={off} className="settings-rows-contents">
       <SettingsGroup heading="Actions">
         <SettingsRow disabled={off} label="Mode" help="Posting to Slack always needs your approval." error={mode.error}
           data-testid="inbox-triage-mode-row"
@@ -128,6 +138,7 @@ export function TriageSection({ config, onSave }: Props) {
             />
           } />
       </SettingsGroup>
+      </ControlGroup>
 
       <TriageRoutingRules off={off} />
     </SectionCard>

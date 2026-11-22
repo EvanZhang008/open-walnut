@@ -125,7 +125,7 @@ export function ThreadStackHeader(p: ThreadStackHeaderProps) {
         {!iconOnly && <span className="thread-stack-done-label">{label}</span>}
       </button>
       {depth >= 2 && (
-        <button ref={caretRef} type="button" className="thread-stack-done-caret" aria-haspopup="menu"
+        <button ref={caretRef} type="button" data-choice-exempt="split button caret that opens the archive menu" className="thread-stack-done-caret" aria-haspopup="menu"
           aria-expanded={menu?.kind === 'done'} aria-label="Archive, back to start" title="Archive, back to start"
           onClick={() => setMenu(menu?.kind === 'done' ? null : { kind: 'done' })}>
           <ThreadChevronIcon size={10} className="thread-icon--down" />

@@ -11,7 +11,7 @@ import { useFullscreen } from '@/hooks/useFullscreen';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import { usePageView } from '@/utils/view-memory';
 import { taskStatusLabel, taskUserState } from '@/utils/session-status';
-import { ICON_CLOSE, ICON_CHEVRON_DOWN, ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
+import { ICON_CLOSE } from '@/components/common/Icons';
 import { OptionPickerFlyout, useCursorFlyout } from './CursorFlyout';
 import { QuickSortView } from './QuickSortView';
 import { SnoozeDateFlyout, SnoozeFlyout, SnoozeRows } from './SnoozeChoices';
@@ -20,6 +20,7 @@ import { boardMoveIds, buildHomeBoard, homeBoardTier, pinBoardColumns, type Boar
 import { projectDisplayName } from '@/utils/project-display';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import '@/styles/home-board.css';
+import { DisclosureButton, SegmentedControl } from '@/components/controls';
 import { MicInput } from '@/components/common/BoxMic';
 import { useFocusView } from '@/focus-spaces/useFocusView';
 
@@ -55,7 +56,7 @@ function BoardTask({ family, mode, onOpen, onMove, onSnooze, onDone, depth = 0, 
     </div>
     {!depth && parent && <div className="home-board-parent" title={orgDisplayTitle(parent)}>Under {orgDisplayTitle(parent)}</div>}
     {children.length > 0 && <div className="home-board-family">
-      <button type="button" className="home-board-family-toggle" aria-expanded={!closed} aria-label={`Subtasks of ${orgDisplayTitle(task)}`} onClick={() => onFold(task.id)}>{closed ? ICON_CHEVRON_RIGHT : ICON_CHEVRON_DOWN}{children.length} {children.length === 1 ? 'subtask' : 'subtasks'}</button>
+      <DisclosureButton block className="home-board-family-toggle" expanded={!closed} aria-label={`Subtasks of ${orgDisplayTitle(task)}`} onClick={() => onFold(task.id)}>{children.length} {children.length === 1 ? 'subtask' : 'subtasks'}</DisclosureButton>
       {!closed && children.map(child => <BoardTask key={child.task.id} family={child} mode={mode} onOpen={onOpen} onMove={onMove} onSnooze={onSnooze} onDone={onDone} depth={depth + 1} folded={folded} onFold={onFold} tierLabel={tierLabel} moving={moving} snoozed={snoozed} />)}
     </div>}
   </article>;
@@ -75,6 +76,12 @@ function BoardColumn({ column, mode, doneLimit, onMoreDone, ...props }: { column
     </div>
   </section>;
 }
+
+const BOARD_MODES = [
+  { value: 'pin', label: 'By pin' },
+  { value: 'status', label: 'By status' },
+  { value: 'sort', label: 'Sort', title: 'Decide a few tasks at a time, one tap each' },
+] as const satisfies ReadonlyArray<{ value: HomeBoardView; label: string; title?: string }>;
 
 export function HomeBoardSheet() {
   const openTask = useOpenTask();
@@ -317,13 +324,13 @@ export function HomeBoardSheet() {
     if (e.key === 'Escape' && (e.target as HTMLElement | null)?.closest?.('textarea, [contenteditable="true"]')) return;
     if (e.key === 'Escape' && searching) { e.preventDefault(); e.stopPropagation(); setQuery(''); return; }
     if (e.key !== 'Tab' || picker.state || datePicker.state || snoozePicker.state) return;
-    const items = [...(sheetRef.current?.querySelectorAll<HTMLElement>('button, input') ?? [])].filter(el => el.getClientRects().length && !el.hasAttribute('disabled'));
+    const items = [...(sheetRef.current?.querySelectorAll<HTMLElement>('button, input:not(.wn-seg-input), [role=radio][tabindex="0"]') ?? [])].filter(el => el.getClientRects().length && !el.hasAttribute('disabled'));
     const current = items.indexOf(document.activeElement as HTMLElement);
     if (e.shiftKey && current <= 0) { e.preventDefault(); items.at(-1)?.focus(); }
     else if (!e.shiftKey && current === items.length - 1) { e.preventDefault(); items[0]?.focus(); }
   }} role="dialog" aria-modal="true" aria-label="Task board" data-testid="home-board" data-mode={mode}>
     <header className="home-board-head"><h1>Board</h1><span className="home-board-count">{total} open {total === 1 ? 'task' : 'tasks'}{mode === 'status' && ` · ${completed} completed`}</span>
-      <div className="home-board-controls"><div className="home-board-switch" aria-label="Group board"><button type="button" aria-pressed={mode === 'pin'} onClick={() => setMode('pin')}>By pin</button><button type="button" aria-pressed={mode === 'status'} onClick={() => setMode('status')}>By status</button><button type="button" aria-pressed={mode === 'sort'} onClick={() => setMode('sort')} title="Decide a few tasks at a time, one tap each">Sort</button></div>
+      <div className="home-board-controls"><SegmentedControl className="home-board-mode" aria-label="Group board" value={mode} onChange={setMode} options={BOARD_MODES} />
         <MicInput fieldClassName="home-board-search" data-no-draft="search" aria-label="Search board tasks" placeholder="Search tasks" value={query} setText={setQuery} />
         <button type="button" className="home-board-close" aria-label="Close board" title="Close board" onClick={fullscreen.exitFullscreen}>{ICON_CLOSE}</button>
       </div>

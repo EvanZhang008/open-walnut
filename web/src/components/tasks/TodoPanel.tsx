@@ -189,6 +189,8 @@ import { DEFAULT_HIDDEN_TABS, allViews, tabBarTabs } from './tab-bar-model';
 import { FLAT_BATCH_KEY, FRESH_BATCH, LIST_BATCH, cutListBatch, isPastBatch, type ListBatchState } from './list-batch';
 import { BUILTIN_TIERS, isBuiltinTier, isRetiredTier, type FocusTier, type CustomTierDef } from '@/api/focus';
 import { useInlineTitleEdit } from './useInlineTitleEdit';
+// Every fold chevron is the shared icon-only DisclosureButton (`.collapse-chevron` places it).
+import { DisclosureButton } from '@/components/controls';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
 import { openTaskHere } from '@/utils/open-session';
 import { projectDisplayName, projectGroupKey, projectIdentity, taskProjectLabel } from '@/utils/project-display';
@@ -358,11 +360,6 @@ function useFrozenWhile<T>(value: T, frozen: boolean): T {
   if (!frozen) ref.current = value;
   return ref.current;
 }
-
-// One glyph for every collapse-chevron button (CSS rotation handles the expanded
-// state). It lives in Icons.tsx so the pinned tier's folder chip can share it:
-// FocusSatelliteCards importing this file would be an import cycle.
-const CHEVRON_ICON = ICONS.CHEVRON_GLYPH;
 
 // Shared empty set for the tierGraceUnion fast path — one identity so memos
 // keyed on the result don't churn. Never mutate.
@@ -1025,14 +1022,13 @@ function FolderHeaderRow({ groupId, label, count, project, depth, folderDepth: n
         onContextMenu={(e) => folderMenu.open(e, { groupId, label, project, collapsed })}
       >
         {onToggleCollapse && (
-          <button
-            className={`collapse-chevron${!collapsed ? ' expanded' : ''}`}
+          <DisclosureButton
+            className="collapse-chevron"
+            expanded={!collapsed}
             onClick={(e) => { e.stopPropagation(); onToggleCollapse(groupId); }}
             title={collapsed ? `Expand ${count} task(s)` : 'Collapse folder'}
             aria-label={collapsed ? 'Expand folder' : 'Collapse folder'}
-          >
-            {CHEVRON_ICON}
-          </button>
+          />
         )}
         <span className="task-group-chip-icon" aria-hidden="true">
           {ICONS.ICON_FOLDER_OUTLINE}
@@ -1270,13 +1266,12 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
 
       {/* Chevron — absolutely positioned in left padding area (only for parent tasks) */}
       {(childCount ?? 0) > 0 && (
-        <button
-          className={`collapse-chevron${isExpanded ? ' expanded' : ''}`}
+        <DisclosureButton
+          className="collapse-chevron"
+          expanded={!!isExpanded}
           title={isExpanded ? 'Collapse child tasks' : `Expand ${childCount} child task(s)`}
           onClick={(e) => { e.stopPropagation(); onToggleExpand?.(task.id); }}
-        >
-          {CHEVRON_ICON}
-        </button>
+        />
       )}
 
       {/* — content area: single-line [attention] [phase] [title] [badges] [⋮] — */}
@@ -1549,9 +1544,7 @@ function ProjectHeaderRow({
                   the mouse sensor arms at 5px, so a slip on this 13px glyph starts a
                   project reorder and dnd-kit then swallows the click: the user asked
                   to fold and got a reorder instead. The ··· below guards the same way. */}
-              <button className={`collapse-chevron${!collapsed ? ' expanded' : ''}`} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onToggleCollapse(project); }} title="Collapse/Expand">
-                {CHEVRON_ICON}
-              </button>
+              <DisclosureButton className="collapse-chevron" expanded={!collapsed} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onToggleCollapse(project); }} title="Collapse/Expand" />
               {/* The name FOLDS the project, like every other pixel of this row —
                   one row, one meaning. Details moved to the ··· / right-click menu:
                   a name that navigated away was the surprise, since the row around
@@ -8665,16 +8658,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                 });
               };
               const renderFold = (kind: 'completed' | 'related', label: string, count: number, expanded: boolean, toggle: () => void, what: string) => count > 0 && (
-                <button
-                  type="button"
-                  className={`todo-search-fold-toggle todo-search-${kind}-toggle${expanded ? ' expanded' : ''}`}
-                  aria-expanded={expanded}
+                <DisclosureButton
+                  block
+                  className={`todo-search-fold-toggle todo-search-${kind}-toggle`}
+                  expanded={expanded}
                   title={`${expanded ? 'Hide' : 'Show'} ${what}`}
                   onClick={toggle}
                 >
-                  <span>{label} ({count})</span>
-                  <span className="todo-search-fold-chevron" aria-hidden="true">{'\u203A'}</span>
-                </button>
+                  {label} ({count})
+                </DisclosureButton>
               );
               return (
                 <>

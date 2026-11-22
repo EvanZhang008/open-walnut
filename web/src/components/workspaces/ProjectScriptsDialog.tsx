@@ -15,6 +15,7 @@ import { useDraftValue } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import { focusUnlessTyping } from '@/utils/focus-unless-typing';
 import { ScriptCommand } from './ScriptCommand';
+import { Checkbox } from '@/components/controls';
 import { allowScriptsFile, fetchScripts, saveProjectScripts, type ProjectScript, type ScriptsAnswer } from '@/api/workspaces';
 import { log } from '@/utils/log';
 import '@/styles/workspaces.css';
@@ -232,33 +233,34 @@ export function ProjectScriptsDialog({ project, cwd, host, onClose, onSaved }: {
                 onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); gate.send(); } }}
               />
             </label>
-            <div className="project-scripts-check">
-              <input id="project-script-setup" type="checkbox" checked={draft.setup} onChange={(e) => setDraft({ ...draft, setup: e.target.checked })} data-testid="project-script-setup" aria-describedby="project-script-setup-hint" />
-              <span>
-                <label htmlFor="project-script-setup">Run when a new isolated workspace is made</label>
-                <small id="project-script-setup-hint">{setupOwner && draft.setup ? `Takes this over from "${setupOwner.name}".`
-                  : fileSetup && draft.setup && fileSetup.name.trim().toLowerCase() !== draft.name.trim().toLowerCase() ? `Runs instead of ${fileName}'s setup "${fileSetup.name}" in new workspaces.`
-                  : 'For example: install dependencies, copy .env from $WALNUT_SOURCE_REPO. List the files it makes in .gitignore: a workspace with new files is kept when its task completes.'}</small>
-              </span>
-            </div>
+            <Checkbox
+              checked={draft.setup}
+              onChange={(setup) => setDraft({ ...draft, setup })}
+              data-testid="project-script-setup"
+              label="Run when a new isolated workspace is made"
+              detail={setupOwner && draft.setup ? `Takes this over from "${setupOwner.name}".`
+                : fileSetup && draft.setup && fileSetup.name.trim().toLowerCase() !== draft.name.trim().toLowerCase() ? `Runs instead of ${fileName}'s setup "${fileSetup.name}" in new workspaces.`
+                : 'For example: install dependencies, copy .env from $WALNUT_SOURCE_REPO. List the files it makes in .gitignore: a workspace with new files is kept when its task completes.'}
+            />
             {draft.setup && (
-              <label className="project-scripts-check is-nested">
-                <input type="checkbox" checked={draft.wait} onChange={(e) => setDraft({ ...draft, wait: e.target.checked })} data-testid="project-script-wait" />
-                <span>
-                  The first session waits until it finishes
-                  <small>{draft.wait ? 'The session starts once setup ends, so what it installs is there.' : 'The session starts at once; setup runs beside it.'}</small>
-                </span>
-              </label>
+              <Checkbox
+                rowClassName="project-scripts-check-nested"
+                checked={draft.wait}
+                onChange={(wait) => setDraft({ ...draft, wait })}
+                data-testid="project-script-wait"
+                label="The first session waits until it finishes"
+                detail={draft.wait ? 'The session starts once setup ends, so what it installs is there.' : 'The session starts at once; setup runs beside it.'}
+              />
             )}
-            <div className="project-scripts-check">
-              <input id="project-script-teardown" type="checkbox" checked={draft.teardown} onChange={(e) => setDraft({ ...draft, teardown: e.target.checked })} data-testid="project-script-teardown" aria-describedby="project-script-teardown-hint" />
-              <span>
-                <label htmlFor="project-script-teardown">Run when the task completes</label>
-                <small id="project-script-teardown-hint">{teardownOwner && draft.teardown ? `Takes this over from "${teardownOwner.name}".`
-                  : fileTeardown && draft.teardown && fileTeardown.name.trim().toLowerCase() !== draft.name.trim().toLowerCase() ? `Runs instead of ${fileName}'s cleanup "${fileTeardown.name}" when a task completes.`
-                  : 'In its workspace, before Walnut cleans it up. For example: docker compose down.'}</small>
-              </span>
-            </div>
+            <Checkbox
+              checked={draft.teardown}
+              onChange={(teardown) => setDraft({ ...draft, teardown })}
+              data-testid="project-script-teardown"
+              label="Run when the task completes"
+              detail={teardownOwner && draft.teardown ? `Takes this over from "${teardownOwner.name}".`
+                : fileTeardown && draft.teardown && fileTeardown.name.trim().toLowerCase() !== draft.name.trim().toLowerCase() ? `Runs instead of ${fileName}'s cleanup "${fileTeardown.name}" when a task completes.`
+                : 'In its workspace, before Walnut cleans it up. For example: docker compose down.'}
+            />
             {error && <div className="project-scripts-error" data-testid="project-scripts-error">{error}</div>}
             {saveBlocked && !projectClash && <div className="project-scripts-save-hint" data-testid="project-script-save-hint">{saveBlocked}.</div>}
             <div className="app-modal-actions">

@@ -77,18 +77,16 @@
 }
 .camera-dock-side { min-width: 92px; display: flex; justify-content: flex-end; }
 .camera-dock-hint { color: var(--fg-muted); font-size: var(--font-size-sm); }
-.camera-seg { display: inline-flex; background: #2c2c2e; border-radius: 999px; padding: 2px; min-width: 92px; }
-.camera-seg button {
-  border: none;
-  background: none;
-  color: #aeaeb2;
-  border-radius: 999px;
-  padding: 3px 11px;
-  font: 500 var(--font-size-sm)/1.4 var(--font-sans);
-  cursor: pointer;
+/* The dock is dark in every theme: the shared segmented control reads the dark palette here
+   (the same values as the dark theme's), never a look of its own. */
+.camera-seg {
+  min-width: 92px;
+  --choice-track: rgba(118, 118, 128, 0.24);
+  --choice-thumb: rgba(255, 255, 255, 0.2);
+  --fg: #F5F5F7;
+  --fg-secondary: #D1D1D6;
+  --bg-hover: rgba(255, 255, 255, 0.06);
 }
-.camera-seg button.is-on { background: #fff; color: #111; }
-.camera-seg button:disabled { cursor: default; }
 .camera-shutter {
   width: 40px;
   height: 40px;

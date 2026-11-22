@@ -50,6 +50,7 @@ import { useFocusRequest } from '@/utils/focus-when-shown';
 import { caretBackOnMount } from '@/utils/composer-caret-keep';
 import { caretOnEdgeLine, noteSentPrompt, recallPrompts, stepRecall, type RecallPos } from './prompt-recall';
 import { composerDrawing, type DrawingPlace } from './drawing-place';
+import { ToggleSwitch } from '@/components/controls';
 
 // Picture types, limit, read and paste rule are shared with every answer box (image-attachments.ts).
 
@@ -2361,7 +2362,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                   {plusMenuToggles.map((t) => (
                     <button
                       key={t.id}
-                      className={`chat-plus-menu-item chat-plus-menu-toggle${t.on ? ' is-on' : ''}`}
+                      className="chat-plus-menu-item chat-plus-menu-toggle"
                       onClick={() => t.onToggle(!t.on)}
                       type="button"
                       role="menuitemcheckbox"
@@ -2369,7 +2370,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                       title={t.title}
                       data-toggle-id={t.id}
                     >
-                      <span className="chat-plus-menu-switch" aria-hidden="true" />
+                      <ToggleSwitch decorative size="sm" checked={t.on} className="chat-plus-menu-switch" />
                       <span>{t.label}</span>
                     </button>
                   ))}
@@ -2428,6 +2429,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
             <>
               <button
                 className="chat-send-caret"
+                data-choice-exempt="split-button caret that opens the send menu, not a disclosure"
                 onClick={() => setSendMenuOpen((o) => !o)}
                 type="button"
                 aria-label="More send options"

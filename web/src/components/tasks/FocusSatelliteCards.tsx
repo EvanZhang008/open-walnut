@@ -30,6 +30,7 @@ import * as ICONS from '../common/Icons';
 import { projectDisplayName } from '@/utils/project-display';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { PrPill } from './PrPill';
+import { DisclosureButton } from '@/components/controls';
 
 
 // The sentinel id scheme (`group:<gid>:<tier>`) and its helpers live in
@@ -176,14 +177,13 @@ export function GroupChip({ groupId, tier, label, path, leafId, project, showPro
       onContextMenu={(e) => folderMenu.open(e, { groupId: target, label, project, collapsed })}
     >
       {onToggleCollapse && (
-        <button
-          className={`collapse-chevron${!collapsed ? ' expanded' : ''}`}
+        <DisclosureButton
+          className="collapse-chevron"
+          expanded={!collapsed}
           onClick={(e) => { e.stopPropagation(); toggleCollapse(); }}
           title={collapsed ? 'Expand folder' : 'Collapse folder'}
           aria-label={collapsed ? 'Expand folder' : 'Collapse folder'}
-        >
-          {ICONS.CHEVRON_GLYPH}{/* same glyph as the main list; CSS rotates it when expanded */}
-        </button>
+        />
       )}
       <span className="task-group-chip-icon" aria-hidden="true">
         {ICONS.ICON_FOLDER_OUTLINE}

@@ -23,6 +23,7 @@ import { type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { log } from '@/utils/log';
+import { Checkbox } from '@/components/controls';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import {
@@ -180,12 +181,11 @@ export function MailGroupCard({ request }: { request: MailGroupCardRequest }) {
             <p className="mail-group-card-body">{filterCardBody(request.label)}</p>
             {request.unread > 0 && (
               <label className="mail-group-card-check">
-                <input
+                <Checkbox
                   ref={(el) => { fieldRef.current = el; }}
-                  type="checkbox"
                   data-testid="mail-group-filter-move-now"
                   checked={moveNow}
-                  onChange={(event) => setMoveNow(event.target.checked)}
+                  onChange={setMoveNow}
                 />
                 <span>{filterMoveNowLabel(request.unread)}</span>
               </label>

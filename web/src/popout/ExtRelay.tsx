@@ -87,7 +87,7 @@ export function RelayPanel({ relay, here, tasks, anchorRef, onClose, settings }:
       <div className="ext-relay-head">
         <span className="ext-relay-title">Browser relay</span>
         {relay && (
-          <label className="ext-relay-switch">
+          <label className="ext-relay-agents-row">
             <ToggleSwitch checked={on} data-testid="ext-relay-agents" aria-label="Let Walnut agents use this browser"
               onChange={(v) => { setWant(v); toParent({ type: 'relay-set', on: v }); }} />
             <span>{on ? 'Agents on' : 'Agents off'}</span>

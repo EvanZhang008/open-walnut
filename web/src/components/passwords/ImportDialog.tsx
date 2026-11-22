@@ -9,6 +9,7 @@ import { useModalOverlay } from '@/hooks/useModalOverlay'
 import { vaultApi, VaultApiError, type ImportReport } from '@/api/vault'
 import { IMPORT_FORMATS } from '../../../../src/core/vault/import'
 import { ImportIcon, CloseIcon } from './pw-icons'
+import { Chip, ChipGroup } from '@/components/controls'
 
 const MAX_FILE_BYTES = 12 * 1024 * 1024
 
@@ -80,11 +81,12 @@ export function ImportDialog({ onClose, onImported }: { onClose: () => void; onI
               <span>{name || 'Choose an exported file'}</span>
             </button>
             {text && (
-              <div className="pw-seg pw-seg-wrap" role="radiogroup" aria-label="Format">
+              // Six formats with long names that wrap: chips, one on (standard.md, "Choice controls").
+              <ChipGroup role="radiogroup" aria-label="Format">
                 {Object.entries(IMPORT_FORMATS).map(([id, label]) => (
-                  <button key={id} type="button" role="radio" aria-checked={format === id} className={format === id ? 'on' : ''} onClick={() => { setFormat(id); void review(text, name, id) }}>{label}</button>
+                  <Chip key={id} role="radio" pressed={format === id} onClick={() => { setFormat(id); void review(text, name, id) }}>{label}</Chip>
                 ))}
-              </div>
+              </ChipGroup>
             )}
             {busy && <p className="pw-hint">Reading…</p>}
             {error && <p className="pw-hint pw-hint-bad" role="alert">{error}</p>}

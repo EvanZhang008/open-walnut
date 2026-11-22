@@ -74,7 +74,6 @@
     overflow-y: hidden;
     overscroll-behavior-x: contain;
     scrollbar-width: none;
-    gap: 2px;
   }
   .app-shell-navigation .todo-section-tabs-list::-webkit-scrollbar { display: none; }
   .app-shell-navigation .todo-section-tab {
@@ -82,16 +81,13 @@
     min-height: 44px;
     min-width: 44px;
     justify-content: center;
-    padding: 0 10px;
-    font-size: 14px;
   }
   .app-shell-navigation .todo-section-tabs .todo-section-tab .todo-section-tab-label {
     max-width: none;
     opacity: 1;
     overflow: visible;
   }
-  .app-shell-navigation .todo-section-tab-count,
-  .app-shell-navigation .todo-section-tabs .todo-section-tab:not(.is-active) .todo-section-tab-count {
+  .app-shell-navigation .todo-section-tabs .todo-section-tab .wn-tab-count {
     display: inline;
     font-size: var(--font-size-sm);
   }
@@ -276,6 +272,10 @@
     min-height: 44px;
     font-size: var(--font-size-md);
   }
+  /* A card's Details disclosure (the shared DisclosureButton): only the phone's 44 px tap height. */
+  html body .notification-panel.nfc-panel-wide .nfc-detail-toggle {
+    min-height: 44px;
+  }
   html body .notification-panel.nfc-panel-wide .notification-feed-empty {
     display: flex;
     align-items: center;
@@ -290,7 +290,6 @@
     scrollbar-width: none;
   }
 }
-.nfc-card-toggle-icon { display: inline-flex; }
 
 /* N15: one note on a phone. The top bar (Back, the note's name, Edit) is the
    only navigation: no desktop tab strip with its own "Notes" back pill, no

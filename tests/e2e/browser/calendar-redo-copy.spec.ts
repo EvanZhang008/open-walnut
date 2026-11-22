@@ -349,7 +349,7 @@ test('the calendar page: a drag to another day moves, Alt-drag there copies, bot
     await page.goto('/')
     await page.click('a[href="/calendar"]')
     await expect(page.locator('.cal-toolbar')).toBeVisible()
-    await page.getByRole('tab', { name: 'Week', exact: true }).click()
+    await page.getByRole('radio', { name: 'Week', exact: true }).click()
     const grid = page.locator('.cal-view')
     const chip = grid.locator(`[data-item-id="event:${ev.id}"]`)
     await expect(chip).toBeVisible()

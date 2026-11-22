@@ -12,6 +12,7 @@ import { KanbanCardPrompt } from './KanbanCardPrompt';
 import { OneCardFrame } from '@/components/actions/AskCard';
 import { leaderReason } from './KanbanRollup';
 import { useOpenTask } from '@/hooks/useOpenTask';
+import { DisclosureButton } from '@/components/controls';
 
 export function KanbanLeaderRow({ leader }: KanbanLeaderRowProps) {
   const openTask = useOpenTask();
@@ -23,18 +24,17 @@ export function KanbanLeaderRow({ leader }: KanbanLeaderRowProps) {
       <div className="kanban-leader-row-head">
         <span className="kanban-card-dot" aria-hidden />
         {prompt ? (
-          <button
-            type="button"
+          <DisclosureButton
             className="kanban-leader-row-toggle"
             data-testid="kanban-leader-row-toggle"
-            aria-expanded={open}
+            expanded={open}
             title={leader.status.tooltip || text}
             onClick={() => setOpen((v) => !v)}
-          >{text}</button>
+          >{text}</DisclosureButton>
         ) : (
           <button
             type="button"
-            className="kanban-leader-row-toggle"
+            className="kanban-leader-row-link"
             data-testid="kanban-leader-row-toggle"
             title={leader.status.tooltip || text}
             onClick={() => openTask(leader.taskId)}

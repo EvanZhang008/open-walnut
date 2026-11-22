@@ -1,6 +1,7 @@
 import { useCallback, useState, type ReactNode } from 'react';
 import { SessionDiffView } from './SessionDiffView';
 import { SessionTurnsView } from './SessionTurnsView';
+import { SegmentedControl, type SegmentedOption } from '@/components/controls';
 import '@/styles/turn-snapshots.css';
 
 /**
@@ -38,27 +39,13 @@ interface SessionChangedTabProps {
   onOpenFile?: (path: string, line?: number, term?: string) => void;
 }
 
+const CHANGED_VIEWS: ReadonlyArray<SegmentedOption<ChangedView>> = [
+  { value: 'files', label: 'Files', title: 'Files this session changed' },
+  { value: 'turns', label: 'Turns', title: 'The working tree as each turn left it' },
+];
+
 export function ChangedViewSwitch({ view, onChange }: { view: ChangedView; onChange: (v: ChangedView) => void }) {
-  return (
-    <div className="session-diff-viewtoggle changed-view-switch" role="tablist" aria-label="Changed view">
-      <button
-        type="button"
-        role="tab"
-        aria-selected={view === 'files'}
-        className={`session-diff-viewtoggle-btn${view === 'files' ? ' is-active' : ''}`}
-        onClick={() => onChange('files')}
-        title="Files this session changed"
-      >Files</button>
-      <button
-        type="button"
-        role="tab"
-        aria-selected={view === 'turns'}
-        className={`session-diff-viewtoggle-btn${view === 'turns' ? ' is-active' : ''}`}
-        onClick={() => onChange('turns')}
-        title="The working tree as each turn left it"
-      >Turns</button>
-    </div>
-  );
+  return <SegmentedControl className="changed-view-switch" aria-label="Changed view" value={view} options={CHANGED_VIEWS} onChange={onChange} />;
 }
 
 export function SessionChangedTab(props: SessionChangedTabProps) {

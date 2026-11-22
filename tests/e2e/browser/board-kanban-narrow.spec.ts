@@ -335,7 +335,7 @@ test('C95: a double click on a section head renames nothing; Add lane scrolls in
   await expect(status).toHaveAttribute('data-tone', 'red')
   await status.scrollIntoViewIfNeeded()
   await status.click()
-  await expect(pane.getByTestId('board-view-custom')).toHaveAttribute('aria-pressed', 'true')
+  await expect(pane.getByTestId('board-view-custom')).toHaveAttribute('aria-checked', 'true')
   await expect(pane.getByTestId('board-kanban')).toBeHidden()
   const choice = pane.frameLocator('iframe.task-board-frame').locator('walnut-choice#c95-ship')
   await expect(choice).toBeInViewport({ timeout: 15_000 })

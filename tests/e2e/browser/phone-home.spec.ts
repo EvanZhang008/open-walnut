@@ -328,7 +328,7 @@ test('C68: a collapsed leader says 1 Needs you, and the tap shows the worker', a
   await expect(parent).toBeVisible({ timeout: 15_000 })
   await parent.scrollIntoViewIfNeeded()
   const chevron = parent.locator('.collapse-chevron')
-  if (await chevron.evaluate((el) => el.classList.contains('expanded'))) await chevron.tap()
+  if (await chevron.evaluate((el) => el.getAttribute('aria-expanded') === 'true')) await chevron.tap()
   await expect(page.locator(`.todo-panel .todo-panel-item[data-task-id="${worker}"]`)).toHaveCount(0)
   const pill = parent.locator('.phone-row-need-you-parent')
   await expect(pill).toHaveText('1 Needs you')

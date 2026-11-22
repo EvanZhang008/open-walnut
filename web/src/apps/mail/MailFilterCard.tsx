@@ -13,6 +13,7 @@ import { createPortal } from 'react-dom';
 import { previewMailRule } from '@/api/mail-groups';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { log } from '@/utils/log';
+import { Checkbox } from '@/components/controls';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import { getMailSnapshot } from './mail-store';
@@ -179,12 +180,11 @@ export function MailFilterCard({ request }: { request: MailFilterRequest }) {
         )}
         {!problem && (shown?.matches ?? 0) > 0 && (
           <label className="mail-group-card-check">
-            <input
-              type="checkbox"
+            <Checkbox
               data-testid="mail-filter-move-now"
               checked={moveNow}
               disabled={saving}
-              onChange={(event) => setMoveNow(event.target.checked)}
+              onChange={setMoveNow}
             />
             <span>{FOLDER_FILTER_MOVE_NOW}</span>
           </label>

@@ -161,7 +161,7 @@ describe('which page the panel shows', () => {
 describe('the drawing of the first page, from the task panel', () => {
   const doc = parseHTML(`<!doctype html><html><body><div class="ext-home"><div class="todo-panel">
     <div class="todo-section-tabs">
-      <button class="todo-section-tab is-active"><span class="todo-section-tab-label">All</span><span class="todo-section-tab-count">128</span></button>
+      <button class="todo-section-tab" aria-selected="true"><span class="todo-section-tab-label">All</span><span class="todo-section-tab-count">128</span></button>
       <button class="todo-section-tab"><span class="todo-section-tab-label">Focus</span><span class="todo-section-tab-count">12</span></button>
       <button class="todo-section-tab"><span class="todo-section-tab-label"></span></button>
       ${Array.from({ length: 8 }, (_, i) => `<button class="todo-section-tab"><span class="todo-section-tab-label">Tab ${i}</span></button>`).join('')}

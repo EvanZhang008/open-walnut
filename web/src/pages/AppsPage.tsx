@@ -42,6 +42,7 @@ import '@/styles/settings-shell.css'
 import '@/styles/settings-controls.css'
 import '@/styles/apps-page.css'
 import { MicInput } from '@/components/common/BoxMic'
+import { Chip, ChipGroup } from '@/components/controls'
 
 /** Saves from this page report Saved / Not saved like a Settings pane does. */
 const APPS_PANE_ID = 'apps'
@@ -203,20 +204,18 @@ function AppsPageBody() {
           </label>
         </header>
 
-        <div className="apps-chips" role="group" aria-label="Show">
+        <ChipGroup className="apps-chips" role="group" aria-label="Show">
           {chips.map((chip) => (
-            <button
+            <Chip
               key={chip.id}
-              type="button"
-              aria-pressed={filter === chip.id}
-              className={`apps-chip${filter === chip.id ? ' is-on' : ''}`}
+              pressed={filter === chip.id}
               onClick={() => setFilter(chip.id)}
               data-testid={`apps-chip-${chip.id}`}
             >
               {chip.label}
-            </button>
+            </Chip>
           ))}
-        </div>
+        </ChipGroup>
 
         {nothing && (
           <div className="apps-empty" data-testid="apps-no-match">

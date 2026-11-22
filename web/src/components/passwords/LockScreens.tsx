@@ -9,6 +9,7 @@ import { copySecret, vaultApi, VaultApiError, type RecoveryKit, type VaultStatus
 import { passwordStrength, type StrengthLevel } from '../../../../src/core/vault/strength'
 import { KeyIcon, LockIcon } from './pw-icons'
 import { CopyButton as SharedCopyButton } from '@/components/common/CopyButton'
+import { Checkbox } from '@/components/controls'
 import { log } from '@/utils/log'
 import { unlockFootText } from './unlock-words'
 import { unlockRefusalText } from '../../../../src/core/vault/unlock-retry'
@@ -78,10 +79,7 @@ export function RecoveryKitCard({ kit, confirmLabel, onConfirmed }: { kit: Recov
         <p className="pw-kit-note">If you forget your master password, it lets you set a new one.</p>
       </div>
       <button type="button" className="btn btn-block pw-btn-block" onClick={() => downloadRecoveryKit(kit)}>Download recovery kit</button>
-      <label className="pw-check">
-        <input type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} />
-        I saved my recovery kit somewhere safe, away from this computer.
-      </label>
+      <Checkbox rowClassName="pw-check" checked={saved} onChange={setSaved} label="I saved my recovery kit somewhere safe, away from this computer." />
       {error && <div className="pw-hint pw-hint-bad" role="alert">{error}</div>}
       <button type="button" className="btn btn-primary btn-block pw-btn-block" disabled={!saved || busy} onClick={() => void confirm()}>{confirmLabel}</button>
     </div>

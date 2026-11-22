@@ -6,6 +6,7 @@
  * from the server through `mail-correct-model.ts`; this file only lays them out.
  */
 import { useId } from 'react';
+import { Radio } from '@/components/controls';
 import {
   COPY,
   matchesLine,
@@ -52,8 +53,7 @@ function OptionRow(props: StepRuleProps & { option: RuleOption; name: string }) 
   return (
     <div className="mail-correct-option" data-testid="mail-correct-option" data-kind={option.kind}>
       <label className="mail-correct-choice">
-        <input
-          type="radio"
+        <Radio
           name={props.name}
           value={option.key}
           checked={props.selectedKey === option.key}
@@ -131,7 +131,7 @@ export function MailCorrectStepRule(props: StepRuleProps) {
           <button type="button" className="mail-correct-link" onClick={props.onRetryLoad}>Try again</button>
         </p>
       ) : (
-        <div className="mail-correct-choices" role="radiogroup" aria-labelledby={titleId}>
+        <div className="mail-correct-choices" role="group" aria-labelledby={titleId}>
           {props.modelState !== 'none' && (
             <div className="mail-correct-model-cell" data-testid="mail-correct-model-cell" data-state={modelOption ? 'ok' : props.modelState}>
               {modelOption ? (

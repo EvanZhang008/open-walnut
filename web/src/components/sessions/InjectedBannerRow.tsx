@@ -27,6 +27,7 @@ export function InjectedBannerRow({ banner, disclosureId }: {
       data-banner-name={banner.name}
     >
       <button
+        data-choice-exempt="transcript fold row: the whole row is the button, drawn by the one step-row rule (step-rows.css)"
         className="tool-run-toggle"
         onClick={() => setOpen((p) => !p)}
         aria-expanded={open}

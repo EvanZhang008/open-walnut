@@ -137,13 +137,14 @@ test('one quiet line, no Save, and typing reaches disk on its own', async ({ pag
   await expect(bar(page)).toBeVisible()
   const barBox = (await bar(page).boundingBox())!
   expect(barBox.height).toBeLessThanOrEqual(48)
-  for (const el of await bar(page).locator('button, [role="status"]').all()) {
+  for (const el of await bar(page).locator('button, [role="status"], [role="radiogroup"]').all()) {
     if (!(await el.isVisible())) continue
     const b = (await el.boundingBox())!
     expect(b.height, await el.evaluate((n) => n.outerHTML.slice(0, 80))).toBeLessThanOrEqual(30)
   }
-  await expect(bar(page).getByRole('button', { name: 'Preview' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(bar(page).getByRole('button', { name: 'Source' })).toBeVisible()
+  // Preview / Source is the shared segmented control (role=radio segments).
+  await expect(bar(page).getByRole('radiogroup', { name: 'View' }).getByRole('radio', { name: 'Preview' })).toHaveAttribute('aria-checked', 'true')
+  await expect(bar(page).getByRole('radiogroup', { name: 'View' }).getByRole('radio', { name: 'Source' })).toBeVisible()
   await expect(bar(page).getByRole('button', { name: 'Find in file' })).toBeVisible()
   await expect(bar(page).getByRole('button', { name: 'History' })).toBeVisible()
   await expect(bar(page).getByRole('button', { name: 'More file actions' })).toBeVisible()
@@ -419,7 +420,7 @@ test('the file name comes first: tools fold into ⋯ one at a time while it is c
     history: await bar(page).getByRole('button', { name: 'History', exact: true }).isVisible(),
     nav: await bar(page).getByRole('button', { name: 'Back to the previously viewed file' }).isVisible(),
     find: await bar(page).getByRole('button', { name: 'Find in file' }).isVisible(),
-    view: await bar(page).getByRole('button', { name: /^(Preview|Source|Show source|Show preview)$/ }).first().isVisible(),
+    view: await bar(page).getByRole('radio', { name: /^(Preview|Source)$/ }).or(bar(page).getByRole('button', { name: /^(Show source|Show preview)$/ })).first().isVisible(),
     terminal: await bar(page).getByTestId('terminal-dock-toggle').isVisible(),
   })
 

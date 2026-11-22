@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { Checkbox } from '@/components/controls';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import {
   TP_DEFAULT_COLUMNS, offerColumns, toggleColumn,
@@ -77,8 +78,7 @@ export function TasksColumnsMenu({ columns, scope, onChange }: TasksColumnsMenuP
               data-column={def.id}
               title={disabledReason}
             >
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={checked && !disabledReason}
                 disabled={!!disabledReason}
                 onChange={() => onChange(toggleColumn(columns, def.id))}

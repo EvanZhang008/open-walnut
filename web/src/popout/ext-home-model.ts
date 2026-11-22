@@ -78,7 +78,7 @@ export function homeSnapOf(root: ParentNode): HomeSnap | null {
   const tabs = Array.from(list.querySelectorAll('.todo-section-tab')).slice(0, HOME_SNAP_TABS).map((t) => {
     const count = textOf(t.querySelector('.todo-section-tab-count'));
     const label = textOf(t.querySelector('.todo-section-tab-label'));
-    return { label: cut(label, 30), ...(count ? { count: cut(count, 8) } : {}), ...(t.classList.contains('is-active') ? { on: true } : {}) };
+    return { label: cut(label, 30), ...(count ? { count: cut(count, 8) } : {}), ...(t.getAttribute('aria-selected') === 'true' ? { on: true } : {}) };
   }).filter((t) => t.label);
   // The rows as the panel draws them: its sections' two-line cards and its project rows.
   const rows = Array.from(list.querySelectorAll('.todo-pinned-card, .todo-panel-item')).slice(0, HOME_SNAP_ROWS).map((r) => ({

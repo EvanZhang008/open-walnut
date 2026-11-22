@@ -9,7 +9,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { useInRouterContext } from 'react-router-dom'
 import { hashTargetId, readDisclosureOpen, RouterHashWatcher, sessionStore, SettingsGroup, writeDisclosureOpen } from './SettingsSection'
-import { ChevronGlyph } from './settings-glyphs'
+import { DisclosureChevron } from '@/components/controls'
 import { lastSettingsAnchor, SETTINGS_ANCHOR_EVENT } from './settings-anchor-event'
 import '@/styles/settings-fold.css'
 import { useLeanCallback } from '@/hooks/useLeanCallback'
@@ -83,13 +83,13 @@ export function SettingsFoldGroup({ id, heading, summary, footer, bare, children
         <button
           type="button"
           tabIndex={0}
-          className="settings-fold-group-toggle"
+          className="settings-fold-group-head"
           aria-expanded={open}
           aria-controls={bodyId}
           data-testid={testId ? `${testId}-toggle` : undefined}
           onClick={() => { asked.current = { id: null, at: 0 }; setAndStore(!open) }}
         >
-          <ChevronGlyph size={12} className="settings-disclosure-chevron" />
+          <DisclosureChevron open={open} className="settings-disclosure-chevron" />
           <span className="settings-fold-group-title">{heading}</span>
           <span className="settings-fold-group-summary" data-testid={testId ? `${testId}-summary` : undefined}>{summary}</span>
         </button>

@@ -22,6 +22,7 @@ import { usePageViewOf } from '@/utils/view-memory';
 import { log } from '@/utils/log';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import { apiPost } from '@/api/client';
+import { Chip, ChipGroup } from '@/components/controls';
 import { LiveActivityLine } from './LiveActivityLine';
 import { WithdrawAnswerButton } from '@/components/tasks/AnsweredForLine';
 import { AgentText } from '@/components/common/AgentText';
@@ -287,23 +288,24 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenPag
           {briefCountsLine(brief)}
         </p>
         {!solo && <TeamStopControl owner={owner} ownerId={ownerId} working={board.counts.working} />}
-        <div className="bs-filters" role="group" aria-label="Show">
-          <button type="button" className={`bs-chip${filter === 'open' ? ' is-on' : ''}`} aria-pressed={filter === 'open'} onClick={() => pick('open')} data-testid="board-status-filter-open">
-            All open <b>{open}</b>
-          </button>
+        <ChipGroup className="bs-filters" role="group" aria-label="Show">
+          <Chip className="bs-chip" pressed={filter === 'open'} count={open} onClick={() => pick('open')} data-testid="board-status-filter-open">
+            All open
+          </Chip>
           {STATUS_CHIPS.map((s: StatusChip) => (
-            <button
+            <Chip
               key={s}
-              type="button"
-              className={`bs-chip bs-chip-${s}${filter === s ? ' is-on' : ''}`}
-              aria-pressed={filter === s}
+              className={`bs-chip bs-chip-${s}`}
+              pressed={filter === s}
+              leading={s === 'notstarted' ? <span className="bs-ring">{ICONS.ICON_NOT_STARTED}</span> : <span className="bs-dot" />}
+              count={chipCount(board, s)}
               onClick={() => pick(s)}
               data-testid={`board-status-filter-${s}`}
             >
-              {s === 'notstarted' ? <span className="bs-ring">{ICONS.ICON_NOT_STARTED}</span> : <span className="bs-dot" />}<b>{chipCount(board, s)}</b> {chipLabel(s)}
-            </button>
+              {chipLabel(s)}
+            </Chip>
           ))}
-        </div>
+        </ChipGroup>
       </div>
       {rows.length === 0 ? (
         <p className="bs-empty" data-testid="board-status-empty">

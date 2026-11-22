@@ -20,6 +20,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
+import { Checkbox } from '@/components/controls';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import type { Task } from '@open-walnut/core';
 import { routerAreaFolders, routerAreaSources, useRouterAreaNames, type RouterAreaSourceRow } from './router-area-names';
@@ -336,9 +337,8 @@ export function RouterSettingsBody({ id, draftKey: key, area, sources = [], valu
                       const ticks = value.filters![sourceKey(src)]!;
                       return (
                         <label key={one.label} className="org-router-check" data-label={one.label}>
-                          <input type="checkbox" checked={ticks.includes(one.label)} data-draft-key={draftAttr} disabled={busy}
-                            onChange={(e) => {
-                              const on = e.target.checked;
+                          <Checkbox checked={ticks.includes(one.label)} data-draft-key={draftAttr} disabled={busy}
+                            onChange={(on) => {
                               onEdit((v) => {
                                 const now = v.filters?.[sourceKey(src)] ?? ticks;
                                 const next = on ? [...new Set([...now, one.label])] : now.filter((label) => label !== one.label);
@@ -391,13 +391,12 @@ export function RouterSettingsBody({ id, draftKey: key, area, sources = [], valu
         <span className="org-router-label">State</span>
         <div className="org-router-value">
           <label className="org-router-check">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={value.paused}
               data-draft-key={draftAttr}
               data-testid="org-router-paused"
               disabled={busy}
-              onChange={(e) => { const paused = e.target.checked; onEdit((v) => ({ ...v, paused })); }}
+              onChange={(paused) => onEdit((v) => ({ ...v, paused }))}
             />
             Paused
           </label>
@@ -430,13 +429,13 @@ export function RouterSettingsBody({ id, draftKey: key, area, sources = [], valu
         {shownLeads.length === 0 && leads.length > 0 && <p className="org-router-hint" data-testid="org-router-link-none">No VP matches “{linkFilter.trim()}”.</p>}
         {shownLeads.map((lead) => (
           <label key={lead.id} className="org-router-check" data-testid="org-router-link" data-task-id={lead.id} data-link-state="open">
-            <input type="checkbox" checked={value.links.includes(lead.id)} data-draft-key={draftAttr} disabled={busy} onChange={() => onToggleLink(lead.id)} />
+            <Checkbox checked={value.links.includes(lead.id)} data-draft-key={draftAttr} disabled={busy} onChange={() => onToggleLink(lead.id)} />
             {lead.org_name || lead.title}
           </label>
         ))}
         {stale.map((row) => (
           <label key={row.id} className="org-router-check is-stale" data-testid="org-router-link" data-task-id={row.id} data-link-state={row.state}>
-            <input type="checkbox" checked={value.links.includes(row.id)} data-draft-key={draftAttr} disabled={busy} onChange={() => onToggleLink(row.id)} />
+            <Checkbox checked={value.links.includes(row.id)} data-draft-key={draftAttr} disabled={busy} onChange={() => onToggleLink(row.id)} />
             {staleLinkLabel(row)}
           </label>
         ))}

@@ -52,6 +52,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { cardView, exchangesOf, listedForHim, orderedForHim, overdueLine, threadDeadline, pinnedNow, sharedAnswers, snoozedNow, type SummaryLine, type ThreadExchange } from '@open-walnut/thread-view';
 import { ThreadPinIcon } from '@/components/sessions/ThreadIcons';
+import { DisclosureButton } from '@/components/controls';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { ReplyComposer } from '@/components/chat/ReplyComposer';
@@ -407,10 +408,9 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
       {/* The card is its title and summary: the new answers fold behind one line until a click
           (2026-11-08, the user: "the history should all be collapsed unless I click to expand"). */}
       {!open && card.unread.length > 0 && (
-        <button type="button" className="org-thread-toggle org-thread-unread-toggle" data-testid="org-thread-unread-toggle" aria-expanded={unfolded} onClick={() => setUnfolded(!unfolded)}>
-          <span aria-hidden="true">{unfolded ? '\u25b4' : '\u25be'}</span>
+        <DisclosureButton expanded={unfolded} className="org-thread-toggle" data-testid="org-thread-unread-toggle" onClick={() => setUnfolded(!unfolded)}>
           {newLine(card.unread)}
-        </button>
+        </DisclosureButton>
       )}
       {!open && unfolded && card.unread.length > 0 && (
         <ol className="org-thread-unread" data-testid="org-thread-unread">
@@ -424,10 +424,9 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
         </ol>
       )}
       {count > 0 && (
-        <button type="button" className="org-thread-toggle org-thread-history" data-testid="org-thread-history" aria-expanded={open} aria-controls={`${t.id}-conversation`} onClick={() => setOpen(!open)}>
-          <span aria-hidden="true">{open ? '\u25b4' : '\u25be'}</span>
+        <DisclosureButton expanded={open} className="org-thread-toggle" data-testid="org-thread-history" aria-controls={`${t.id}-conversation`} onClick={() => setOpen(!open)}>
           {open ? 'Hide the conversation' : 'Conversation'} · <span data-testid="org-thread-count">{count} {count === 1 ? 'message' : 'messages'}</span>
-        </button>
+        </DisclosureButton>
       )}
       {open && (
         <ol id={`${t.id}-conversation`} className="org-thread-conversation" data-testid="org-thread-messages">
@@ -565,21 +564,21 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
       )}
       {!!open.length && <ul className="org-thread-list" data-testid="org-thread-list" data-show="open">{open.map(card)}</ul>}
       {snoozed.length > 0 && (
-        <button type="button" className="org-threads-closed-toggle" data-testid="org-threads-snoozed" aria-expanded={showSnoozed} onClick={() => setShowSnoozed(!showSnoozed)}>
-          {snoozed.length} snoozed{showSnoozed ? ' ▾' : ' ▸'}
-        </button>
+        <DisclosureButton expanded={showSnoozed} className="org-threads-closed-toggle" data-testid="org-threads-snoozed" onClick={() => setShowSnoozed(!showSnoozed)}>
+          {snoozed.length} snoozed
+        </DisclosureButton>
       )}
       {showSnoozed && snoozed.length > 0 && <ul className="org-thread-list" data-testid="org-thread-list-snoozed" data-show="snoozed">{snoozed.map(card)}</ul>}
       {hidden.length > 0 && (
-        <button type="button" className="org-threads-closed-toggle" data-testid="org-threads-hidden" aria-expanded={showHidden} onClick={() => setShowHidden(!showHidden)}>
-          {hidden.length} in progress, nothing for you{showHidden ? ' ▾' : ' ▸'}
-        </button>
+        <DisclosureButton expanded={showHidden} className="org-threads-closed-toggle" data-testid="org-threads-hidden" onClick={() => setShowHidden(!showHidden)}>
+          {hidden.length} in progress, nothing for you
+        </DisclosureButton>
       )}
       {showHidden && hidden.length > 0 && <ul className="org-thread-list" data-testid="org-thread-list-hidden" data-show="hidden">{hidden.map(card)}</ul>}
       {closed.length > 0 && (
-        <button type="button" className="org-threads-closed-toggle" data-testid="org-threads-closed" aria-expanded={showClosed} onClick={() => setShowClosed(!showClosed)}>
-          {closed.length} closed this week{showClosed ? ' ▾' : ' ▸'}
-        </button>
+        <DisclosureButton expanded={showClosed} className="org-threads-closed-toggle" data-testid="org-threads-closed" onClick={() => setShowClosed(!showClosed)}>
+          {closed.length} closed this week
+        </DisclosureButton>
       )}
       {showClosed && closed.length > 0 && <ul className="org-thread-list" data-testid="org-thread-list-closed" data-show="closed">{closed.map(card)}</ul>}
       </>)}

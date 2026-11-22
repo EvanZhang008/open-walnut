@@ -96,6 +96,7 @@ import { SyncChoiceChip } from '@/components/tasks/SyncChoice';
 import { DraftWorkInPill, DraftWorkInSuggest, useDraftProjectStart, useWorkIn, type DraftRowUpdate } from './DraftWorkInPill';
 import { DraftProjectSourceRow } from './DraftProjectSourceRow';
 import { projectStartEligible } from './draft-project-start';
+import { Chip, ChipGroup } from '@/components/controls';
 
 /** `host::cwd`: one directory's identity (same as draft-column's dirKey). */
 function chipKey(d: { cwd: string; host: string | null }): string {
@@ -284,19 +285,19 @@ export function DraftLaunchBar({
               the stack shares ONE left edge and the chips get the full width. A
               caption, not a control: no tab stop, no click target. */}
           <span className="draft-quick-key">Quick folders</span>
-          <div className="draft-quick-chips" role="group" aria-label="Quick folders">
+          <ChipGroup className="draft-quick-chips" role="group" aria-label="Quick folders">
             {chips.map(d => {
               const active = chipKey({ cwd: d.cwd, host: d.host ?? null }) === currentKey;
               const dot = d.host ? chipDot(d.host, d.hostLabel) : null;
               const saysSomething = !!dot && CHIP_DOT_KINDS.includes(dot.kind);
               return (
-                <button
+                <Chip
                   key={chipKey({ cwd: d.cwd, host: d.host ?? null })}
                   className={`draft-quick-chip${active ? ' draft-quick-chip-active' : ''}`}
-                  aria-pressed={active}
+                  pressed={active}
                   // Truly disabled (not a click-less button): a focusable control
                   // that ignores Enter is a keyboard dead end. The active style
-                  // sets its own colors, so no default disabled dimming shows.
+                  // reads on (the shared chip never dims a picked chip that is disabled).
                   disabled={active}
                   onClick={() => pickDir(d)}
                   // The same one sentence as the host's picker tab when the host has something to say.
@@ -305,10 +306,10 @@ export function DraftLaunchBar({
                   {chipName(d)}
                   {chipHostLabel(d) && <>{' '}<span className="draft-quick-chip-host">· {chipHostLabel(d)}</span></>}
                   {saysSomething && <HostStatusDot dot={dot!} host={d.host ?? undefined} className="draft-pill-dot" />}
-                </button>
+                </Chip>
               );
             })}
-          </div>
+          </ChipGroup>
         </div>
       )}
 

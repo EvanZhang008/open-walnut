@@ -208,11 +208,11 @@ test.describe('By project', () => {
     const collapse = async (id: string) => {
       await expect(async () => {
         await chevron(id).scrollIntoViewIfNeeded()
-        if (/expanded/.test((await chevron(id).getAttribute('class')) ?? '')) await chevron(id).click({ timeout: 3_000 })
-        await expect(chevron(id)).not.toHaveClass(/expanded/, { timeout: 2_000 })
+        if ((await chevron(id).getAttribute('aria-expanded')) === 'true') await chevron(id).click({ timeout: 3_000 })
+        await expect(chevron(id)).toHaveAttribute('aria-expanded', 'false', { timeout: 2_000 })
       }).toPass({ timeout: 30_000 })
     }
-    await expect(chevron(mid)).toHaveClass(/expanded/, { timeout: 30_000 })
+    await expect(chevron(mid)).toHaveAttribute('aria-expanded', 'true', { timeout: 30_000 })
     await collapse(mid)
     await collapse(top)
     await expect(page.locator(`#home-task-navigation [data-task-id="${leaf}"]:visible`)).toHaveCount(0)

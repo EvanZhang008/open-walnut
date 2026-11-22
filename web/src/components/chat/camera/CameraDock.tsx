@@ -20,7 +20,10 @@ import { captureBaseName, recordingLabel, sttFormatFor } from './camera-model';
 import { blobToBase64, grabStill, recorderAvailable } from './camera-frames';
 import { useCameraStream } from './useCameraStream';
 import { useClipRecorder, type RecordedClip } from './useClipRecorder';
+import { SegmentedControl } from '@/components/controls';
 import './camera-dock.css';
+
+const CAMERA_MODES = [{ value: 'photo', label: 'Photo' }, { value: 'video', label: 'Video' }] as const;
 
 type Mode = 'photo' | 'video';
 const isMode = (v: unknown): v is Mode => v === 'photo' || v === 'video';
@@ -230,11 +233,14 @@ export function CameraDock({ onClose, onPhoto, onClip, onSend, onPickFile, micBu
           ) : (
             <>
               {videoOk && (
-                <div className="camera-seg" role="radiogroup" aria-label="Camera mode">
-                  {(['photo', 'video'] as const).map((m) => (
-                    <button key={m} type="button" role="radio" aria-checked={mode === m} className={mode === m ? 'is-on' : ''} disabled={recorder.recording || recorder.starting} onClick={() => setMode(m)}>{m === 'photo' ? 'Photo' : 'Video'}</button>
-                  ))}
-                </div>
+                <SegmentedControl
+                  className="camera-seg"
+                  aria-label="Camera mode"
+                  value={mode}
+                  options={CAMERA_MODES}
+                  disabled={recorder.recording || recorder.starting}
+                  onChange={setMode}
+                />
               )}
               <span className="camera-dock-spacer" />
               {mode === 'photo' || !videoOk ? (

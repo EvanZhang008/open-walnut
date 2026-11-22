@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
-import { CHEVRON_GLYPH } from '@/components/common/Icons';
+import { DisclosureChevron } from '@/components/controls';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { log } from '@/utils/log';
 import { apiPost } from '@/api/client';
@@ -92,6 +92,7 @@ export function TeamMenuItems({ task, afterAction }: {
           className="task-kebab-item task-kebab-team-toggle"
           data-testid="kebab-team-toggle"
           aria-expanded={expanded}
+          data-choice-exempt="a menu row that opens its sub-rows in place, with the shared DisclosureChevron"
           title={summary ? `Team: ${summary}` : 'Team: adopt a worker'}
           onClick={(e) => {
             e.stopPropagation();
@@ -103,7 +104,7 @@ export function TeamMenuItems({ task, afterAction }: {
           <span className="task-kebab-team-label">
             Team{summary ? <>: <b>{summary}</b></> : ''}
           </span>
-          <span className={`task-kebab-team-caret${expanded ? ' open' : ''}`} aria-hidden="true">{CHEVRON_GLYPH}</span>
+          <DisclosureChevron open={expanded} />
         </button>
         {expanded && (
           <div className="task-kebab-team-rows">

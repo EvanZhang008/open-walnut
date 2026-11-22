@@ -51,7 +51,7 @@ async function bootWithColumns(page: Page, baseURL: string, sids: readonly strin
 const columns = (page: Page) => page.locator('.main-page-sessions-area > .main-page-session-column')
 const panelsRow = (page: Page) => page.locator('.fb-menu [data-view-option="session-panels"]')
 const choice = (page: Page, key: string) => panelsRow(page).locator(`[data-choice="${key}"]`)
-const checked = (page: Page) => panelsRow(page).locator('button[aria-pressed="true"]')
+const checked = (page: Page) => panelsRow(page).locator('[role="radio"][aria-checked="true"]')
 /** The session panel's own kebab and its Columns row (the other in-context surface of the setting). */
 async function kebabPanels(page: Page) {
   const kebab = page.locator('.main-page-session-column .session-panel').first().getByRole('button', { name: 'More actions' })

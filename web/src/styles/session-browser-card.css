@@ -65,27 +65,15 @@
 /* Buttons are the family's small keys (.btn-sm; the × is .btn-icon). */
 .session-browser-btn--icon { flex: 0 0 auto; }
 
-.session-browser-tabs {
-  display: flex;
-  gap: 4px;
-  margin-bottom: 8px;
-  overflow-x: auto;
-}
-.session-browser-tab {
-  max-width: 180px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--fg-secondary);
-  font: inherit;
-  font-size: var(--font-size-xs);
-  padding: 1px 8px;
-  cursor: pointer;
+.session-browser-tabs { margin-bottom: 8px; }
+/* A long page title is cut off: the span does it (a bare text node in a flex button never does). */
+.session-browser-tab { max-width: 180px; }
+.session-browser-tab-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.session-browser-tab.is-on { border-color: var(--accent); color: var(--fg); background: var(--accent-subtle); }
 .session-browser-shot {
   border: 1px solid var(--border);
   border-radius: 10px;

@@ -25,6 +25,12 @@ import type { DraftColumn } from './draft-column';
 import { draftHostOf, pickStartHost } from './draft-project-start';
 import { detectProjectForFolder, workInFolderKey, workInProjectLine, workInProjectOrder } from './draft-work-in';
 import { isInboxProject } from '@open-walnut/core';
+import { Tabs, type TabItem } from '@/components/controls';
+
+const WORK_IN_TABS: ReadonlyArray<TabItem<Tab>> = [
+  { value: 'projects', label: 'Projects', className: 'wip-tab', testId: 'work-in-tab-projects' },
+  { value: 'folders', label: 'Folders', className: 'wip-tab', testId: 'work-in-tab-folders' },
+];
 
 type Tab = 'projects' | 'folders';
 const isTab = (v: unknown): v is Tab => v === 'projects' || v === 'folders';
@@ -99,14 +105,7 @@ function WorkInBody({ draft, ps, rows, folders, onPickFolder, onBrowse, onUpdate
           }}
           autoFocus
         />
-        <div className="wip-tabs" role="tablist" aria-label="Work in">
-          {(['projects', 'folders'] as const).map((t) => (
-            <button key={t} type="button" role="tab" aria-selected={tab === t} className={`wip-tab${tab === t ? ' is-on' : ''}`}
-              data-testid={`work-in-tab-${t}`} onClick={() => setTab(t)}>
-              {t === 'projects' ? 'Projects' : 'Folders'}
-            </button>
-          ))}
-        </div>
+        <Tabs className="wip-tabs" aria-label="Work in" value={tab} onChange={setTab} items={WORK_IN_TABS} />
       </div>
       {tab === 'projects' ? (
         <div className="wip-list" role="tabpanel">

@@ -96,7 +96,7 @@ test('a check with a wall-clock trigger is refused in the form with the reason',
   await form.locator('#routine-f-instructions').fill('Say hello.')
   await form.getByRole('button', { name: /Add a check script/ }).click()
   await form.locator('#routine-check-run').fill(`echo '{"fire": false}'`)
-  await form.getByRole('tab', { name: 'Daily' }).click()
+  await form.getByRole('radiogroup', { name: 'Schedule' }).getByRole('radio', { name: 'Daily' }).click()
   await form.getByRole('button', { name: 'Create' }).click()
   await expect(form.locator('.cron-form-error')).toContainText('polls on an interval')
   await expect(form).toBeVisible()

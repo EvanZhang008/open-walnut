@@ -545,7 +545,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     })
     const panel = await openSession(page)
     const view = await openSessionFile(panel, MD_FILE)
-    await view.getByRole('button', { name: 'Source', exact: true }).click()
+    await view.getByRole('radio', { name: 'Source', exact: true }).click()
     const cm = view.locator('.cm-content')
     await expect(cm).toContainText(MD_SOURCE_LINE)
     await dragSelect(page, await textRects(cm, MD_SOURCE_LINE))
@@ -654,8 +654,8 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
     const panel = await openSession(page)
     const historyOf = () => page.waitForResponse((r) => r.url().includes(`/api/sessions/${TAGGED_SESSION}/history`) && r.ok(), { timeout: 30_000 })
     const sourceOf = async (view: Locator) => {
-      const source = view.getByRole('button', { name: 'Source', exact: true })
-      if ((await source.getAttribute('aria-pressed')) !== 'true') await source.click()
+      const source = view.getByRole('radio', { name: 'Source', exact: true })
+      if ((await source.getAttribute('aria-checked')) !== 'true') await source.click()
       const cm = view.locator('.cm-content')
       await expect(cm).toContainText(MD_SOURCE_LINE, { timeout: 15_000 })
       return cm
@@ -749,20 +749,20 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
       const values = JSON.parse(localStorage.getItem('open-walnut-file-view-scroll') ?? '{}') as Record<string, { top: number; source?: boolean }>
       return Object.entries(values).find(([key]) => key.endsWith(` ${file}`))?.[1] ?? null
     }, filePath)
-    await humanPress(page, view.getByRole('button', { name: 'Source', exact: true }))
+    await humanPress(page, view.getByRole('radio', { name: 'Source', exact: true }))
     await expect(view.locator('.cm-content')).toContainText('Keep this short file')
     await expect.poll(stored).toEqual({ top: 0, source: true })
     await page.reload()
     panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${TAGGED_SESSION}"]`)
     view = panel.locator('.file-content-view')
     await expect(view.locator('.cm-content')).toContainText('Keep this short file', { timeout: 30_000 })
-    await humanPress(page, view.getByRole('button', { name: 'Preview', exact: true }))
+    await humanPress(page, view.getByRole('radio', { name: 'Preview', exact: true }))
     await expect(view.locator('.cm-content')).toHaveCount(0)
     await expect.poll(stored).toBeNull()
     await openSessionFile(panel, MD_FILE)
     view = await openSessionFile(panel, shortFile)
-    await expect(view.getByRole('button', { name: 'Preview', exact: true })).toHaveAttribute('aria-pressed', 'true')
-    await humanPress(page, view.getByRole('button', { name: 'Source', exact: true }))
+    await expect(view.getByRole('radio', { name: 'Preview', exact: true })).toHaveAttribute('aria-checked', 'true')
+    await humanPress(page, view.getByRole('radio', { name: 'Source', exact: true }))
     await expect.poll(stored).toEqual({ top: 0, source: true })
     await openSessionFile(panel, HTML_FILE)
     view = await openSessionFile(panel, shortFile)
@@ -935,7 +935,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
       // Whether the pane beside the chat is wide enough depends on the chat's own width
       // (2026-11-09: at 1760px it split with the chat shown), so either way is right here:
       // narrow, it says so, and hiding the chat splits it.
-      await diff.getByRole('button', { name: 'Split', exact: true }).click()
+      await diff.getByRole('radio', { name: 'Split', exact: true }).click()
       const tooNarrow = diff.getByText('unified: too narrow to split')
       const split = diff.locator('.diff-split').first()
       await expect(tooNarrow.or(split)).toBeVisible({ timeout: 10_000 })

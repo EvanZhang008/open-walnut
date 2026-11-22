@@ -1,7 +1,7 @@
 /**
  * Add a lane (spec 7.5): wide mode a dashed column after the last lane, narrow
  * mode a text button under the last section. It opens a name field and five
- * kind choices (a custom radiogroup, no native control; `In progress` by
+ * kind choices (a column of the shared Radio; `In progress` by
  * default, `Waiting` while the name says wait), Add and Cancel; Enter adds,
  * Escape cancels. The lane goes before a trailing done lane, else last, in ONE
  * api.saveLanes(next). Its id is made here (`ln-` + 8 hex, the server's own
@@ -10,7 +10,8 @@
  */
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
-import { useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { Radio } from '@/components/controls';
 import { ICON_PLUS } from '@/components/common/Icons';
 import { log } from '@/utils/log';
 import {
@@ -45,6 +46,7 @@ export function KanbanAddLane({ lanes, mode, api, onAdded }: KanbanAddLaneProps)
   const [saving, setSaving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const nameMic = useRef<BoxMicHandle | null>(null);
+  const kindName = useId();
   const full = lanes.length >= MAX_LANES;
   const blocked = api.readOnly ? READ_ONLY_TITLE : full ? MAX_LANES_TITLE : '';
   const kind = picked ?? defaultLaneKind(name);
@@ -71,16 +73,6 @@ export function KanbanAddLane({ lanes, mode, api, onAdded }: KanbanAddLaneProps)
     if (e.key === 'Enter') { e.preventDefault(); gate.send(); }
     if (e.key === 'Escape') { e.preventDefault(); close(); }
   };
-  const onRadioKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (!['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp'].includes(e.key)) return;
-    e.preventDefault();
-    const i = LANE_KINDS.indexOf(kind);
-    const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : LANE_KINDS.length - 1;
-    const next = LANE_KINDS[(i + step) % LANE_KINDS.length];
-    setPicked(next);
-    e.currentTarget.querySelector<HTMLButtonElement>(`[data-kind="${next}"]`)?.focus();
-  };
-
   if (!open) {
     return (
       <div className={`kanban-add-lane-wrap is-${mode}`}>
@@ -112,22 +104,18 @@ export function KanbanAddLane({ lanes, mode, api, onAdded }: KanbanAddLaneProps)
           micRef={nameMic}
         />
         {error && <div className="kanban-lane-rename-error" data-testid="kanban-add-lane-error" role="alert">{error}</div>}
-        <div className="kanban-add-lane-kinds" data-testid="kanban-add-lane-kinds" role="radiogroup" aria-label="Lane kind" onKeyDown={onRadioKey}>
+        <div className="kanban-add-lane-kinds" data-testid="kanban-add-lane-kinds" role="group" aria-label="Lane kind">
           {LANE_KINDS.map((k) => (
-            <button
+            <Radio
               key={k}
-              type="button"
-              role="radio"
-              className={`kanban-kind-radio${k === kind ? ' is-checked' : ''}`}
+              name={kindName}
+              rowClassName="kanban-kind-radio"
               data-testid={`kanban-add-lane-kind-${k}`}
               data-kind={k}
-              aria-checked={k === kind}
-              tabIndex={k === kind ? 0 : -1}
-              onClick={() => setPicked(k)}
-            >
-              <span className="kanban-kind-radio-dot" data-kind={k} aria-hidden />
-              {LANE_KIND_LABELS[k]}
-            </button>
+              checked={k === kind}
+              onChange={() => setPicked(k)}
+              label={<><span className="kanban-kind-radio-dot" data-kind={k} aria-hidden />{LANE_KIND_LABELS[k]}</>}
+            />
           ))}
         </div>
         <div className="kanban-add-lane-actions">

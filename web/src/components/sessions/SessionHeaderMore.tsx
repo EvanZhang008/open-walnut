@@ -161,6 +161,7 @@ export function SessionHeaderMoreMenu({ rowRef, ids: folded, spacerIds }: MoreMe
         // Changed folded in here and open: "..." reads as the open view's chip.
         className={`session-action-chip session-header-more-btn${open || (ids.includes('changed') && changed.value === 'Open') ? ' session-action-chip-active' : ''}`}
         data-header-more="true"
+        data-choice-exempt="opens the More menu of folded header items; active while it is open"
         data-testid="session-header-more-btn"
         onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
         aria-haspopup="menu"

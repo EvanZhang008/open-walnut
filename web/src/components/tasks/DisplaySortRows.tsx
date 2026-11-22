@@ -5,7 +5,8 @@
  * switch, and the plain choice rows (Group, Session columns). Presentational;
  * DisplaySections.tsx wires them to its props.
  */
-import { useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useId, useRef, useState, type ReactNode } from 'react';
+import { SegmentedControl, ToggleSwitch } from '@/components/controls';
 import type { SortBy } from './ViewDropdown';
 
 export interface SegChoice<K extends string> {
@@ -16,45 +17,33 @@ export interface SegChoice<K extends string> {
   option?: string;
 }
 
-/** A segmented pick. `value` null = mixed: no segment pressed, the first one takes Tab. */
+/**
+ * A segmented pick: the shared SegmentedControl (Left/Right move AND pick; Up/Down stay the
+ * menu's, which moves between its rows). `value` null = mixed: no segment checked, the first
+ * one takes Tab. The `tp-seg-btn` / `data-choice` hooks are what the Filter menu's keys and the
+ * specs find a segment by.
+ */
 export function Segmented<K extends string>({ label, choices, value, onPick }: {
   label: string;
   choices: readonly SegChoice<K>[];
   value: K | null;
   onPick(key: K): void;
 }) {
-  const refs = useRef<(HTMLButtonElement | null)[]>([]);
-  const tabIndexAt = Math.max(0, choices.findIndex((c) => c.key === value));
-  const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>, i: number) => {
-    const n = choices.length;
-    let next = -1;
-    if (e.key === 'ArrowRight') next = (i + 1) % n;
-    else if (e.key === 'ArrowLeft') next = (i - 1 + n) % n;
-    else if (e.key === 'Home') next = 0;
-    else if (e.key === 'End') next = n - 1;
-    if (next < 0) return;
-    e.preventDefault();
-    refs.current[next]?.focus();
-    onPick(choices[next].key);
-  };
   return (
-    <span className="tp-seg dm-seg" role="group" aria-label={label}>
-      {choices.map((c, i) => (
-        <button
-          key={c.key}
-          ref={(el) => { refs.current[i] = el; }}
-          type="button"
-          className="tp-seg-btn dm-seg-btn"
-          data-choice={c.key}
-          data-view-option={c.option}
-          aria-pressed={c.key === value}
-          tabIndex={i === tabIndexAt ? 0 : -1}
-          title={c.title}
-          onClick={() => onPick(c.key)}
-          onKeyDown={(e) => onKeyDown(e, i)}
-        >{c.label}</button>
-      ))}
-    </span>
+    <SegmentedControl
+      className="tp-seg dm-seg"
+      aria-label={label}
+      horizontalKeys
+      value={(value ?? '') as K}
+      onChange={onPick}
+      options={choices.map((c) => ({
+        value: c.key,
+        label: c.label,
+        title: c.title,
+        className: 'tp-seg-btn dm-seg-btn',
+        data: { 'data-choice': c.key, 'data-view-option': c.option },
+      }))}
+    />
   );
 }
 
@@ -75,7 +64,11 @@ export function DisplayRow({ option, label, title, flash, children }: {
   );
 }
 
-/** The tab bar switch: the whole row is the switch (role="switch"), no native checkbox. */
+/**
+ * A switch row: the shared ToggleSwitch at the end of a labelled row; a click anywhere on the
+ * row flips it (the row is its label). The switch carries `dm-switch-row`, the hook the Filter
+ * menu's Up/Down move between.
+ */
 export function SwitchRow({ option, label, title, checked, onChange }: {
   option: string;
   label: string;
@@ -83,19 +76,12 @@ export function SwitchRow({ option, label, title, checked, onChange }: {
   checked: boolean;
   onChange(next: boolean): void;
 }) {
+  const id = useId();
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      className="dm-row dm-switch-row"
-      data-view-option={option}
-      title={title}
-      onClick={() => onChange(!checked)}
-    >
-      <span className="dm-row-label">{label}</span>
-      <span className="dm-switch-track" aria-hidden="true" />
-    </button>
+    <label className="dm-row dm-switch-line" htmlFor={id} data-view-option={option} title={title}>
+      <span className="dm-row-label" id={`${id}-label`}>{label}</span>
+      <ToggleSwitch id={id} size="sm" className="dm-switch-row" checked={checked} onChange={onChange} aria-labelledby={`${id}-label`} title={title} />
+    </label>
   );
 }
 

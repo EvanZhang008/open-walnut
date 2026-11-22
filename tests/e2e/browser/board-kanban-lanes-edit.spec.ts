@@ -155,10 +155,11 @@ test('C19: Add lane puts `Waiting on customer` before Resolved, kind Waiting, an
   await pane.getByTestId('kanban-add-lane').click()
   const input = pane.getByTestId('kanban-add-lane-input')
   await expect(input).toBeFocused()
-  await expect(pane.getByTestId('kanban-add-lane-kind-active')).toHaveAttribute('aria-checked', 'true')
+  await expect(pane.getByTestId('kanban-add-lane-kind-active')).toBeChecked()
   await input.fill('Waiting on customer')
-  await expect(pane.getByTestId('kanban-add-lane-kind-wait')).toHaveAttribute('aria-checked', 'true')
-  await expect(pane.getByTestId('kanban-add-lane-kinds')).toHaveAttribute('role', 'radiogroup')
+  await expect(pane.getByTestId('kanban-add-lane-kind-wait')).toBeChecked()
+  await expect(pane.getByTestId('kanban-add-lane-kind-active')).not.toBeChecked()
+  await expect(pane.getByTestId('kanban-add-lane-kinds').getByRole('radio')).toHaveCount(5)
   await input.press('Enter')
   await expect.poll(() => laneNames(pane)).toEqual(['New', 'Investigating', 'Mitigating', 'Waiting on partner team', 'Waiting on CR', 'Waiting on customer', 'Resolved'])
   const ids = await laneIds(pane)
@@ -247,7 +248,7 @@ test('C89: a stored Page pick opens on Page, Cards is one click away and is reme
     }
   }, team.leader)
   const pane = await openBoard2(page)
-  await expect(pane.getByTestId('board-view-custom')).toHaveAttribute('aria-pressed', 'true', { timeout: 15_000 })
+  await expect(pane.getByTestId('board-view-custom')).toHaveAttribute('aria-checked', 'true', { timeout: 15_000 })
   await expect(pane.locator('.task-board-frame')).toBeVisible()
   await expect(pane.getByTestId('board-view-custom')).toHaveText('Page')
   await expect(pane.getByTestId('board-view-custom')).toHaveAttribute('title', 'The page the leader wrote for this team')
@@ -260,7 +261,7 @@ test('C89: a stored Page pick opens on Page, Cards is one click away and is reme
   // The pick from before the kanban ('overview', the project board) reads as Status, the board's overview now.
   await page.evaluate((o) => localStorage.setItem(`walnut:board-view.v1:${o}`, 'overview'), team.leader)
   const again = await openBoard2(page)
-  await expect(again.getByTestId('board-view-status')).toHaveAttribute('aria-pressed', 'true', { timeout: 15_000 })
+  await expect(again.getByTestId('board-view-status')).toHaveAttribute('aria-checked', 'true', { timeout: 15_000 })
   await expect(again.getByTestId('board-status')).toBeVisible()
 })
 

@@ -10,6 +10,7 @@
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { projectService } from './private-task-model';
+import { SegmentedControl } from '@/components/controls';
 
 /** The project's outside service and its name, or null when the project does not sync. */
 export function useProjectService(project: string | undefined): { id: string; name: string } | null {
@@ -40,6 +41,7 @@ export function SyncChoiceChip({ project, local, onChange, disabled }: {
       type="button"
       className={`session-action-chip draft-sync-chip${local ? ' draft-sync-chip-local' : ''}`}
       data-testid="draft-sync-chip"
+      data-choice-exempt="a draft launch-bar pill that shows the sync value like its neighbour pills; a click flips it"
       data-sync={local ? 'local' : 'project'}
       disabled={disabled}
       aria-pressed={!local}
@@ -68,18 +70,16 @@ export function SyncChoiceField({ project, local, onChange, disabled }: {
   return (
     <div className="qtc-confirm-field" data-testid="qtc-sync-choice">
       <span className="qtc-confirm-label">Sync</span>
-      <div className="qtc-chips" role="radiogroup" aria-label="Where this task syncs">
-        <button type="button" role="radio" aria-checked={local} className={`qtc-chip${local ? ' qtc-chip-on' : ''}`}
-          data-testid="qtc-sync-local" disabled={disabled} onClick={() => onChange(true)}
-          title={`Stays in Walnut, never sent to ${service.name}`}>
-          Local
-        </button>
-        <button type="button" role="radio" aria-checked={!local} className={`qtc-chip${!local ? ' qtc-chip-on' : ''}`}
-          data-testid="qtc-sync-project" disabled={disabled} onClick={() => onChange(false)}
-          title={`Sent to ${service.name} once Walnut checked it is not private`}>
-          {service.name}
-        </button>
-      </div>
+      <SegmentedControl
+        aria-label="Where this task syncs"
+        value={local ? 'local' : 'project'}
+        onChange={(v) => onChange(v === 'local')}
+        disabled={disabled}
+        options={[
+          { value: 'local', label: 'Local', testId: 'qtc-sync-local', title: `Stays in Walnut, never sent to ${service.name}` },
+          { value: 'project', label: service.name, testId: 'qtc-sync-project', title: `Sent to ${service.name} once Walnut checked it is not private` },
+        ]}
+      />
     </div>
   );
 }

@@ -42,8 +42,8 @@
 /* ── Shared bits ── */
 /* The board's keys are the button family (styles/buttons.css); its text actions are .btn-link. */
 .kanban-chip:focus-visible, .kanban-lane-kebab:focus-visible,
-.kanban-lane-strip-item:focus-visible, .kanban-menu-row:focus-visible, .kanban-kind-radio:focus-visible,
-.kanban-lane-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.kanban-text-btn:focus-visible, .kanban-icon-btn:focus-visible, .kanban-lane-kebab:focus-visible,
+.kanban-lane-strip-item:focus-visible, .kanban-menu-row:focus-visible, .kanban-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .kanban-spinner {
   display: inline-block; width: 12px; height: 12px; border-radius: 50%; flex: 0 0 auto; vertical-align: -2px;
   border: 2px solid var(--border); border-top-color: var(--accent); animation: kanban-spin 0.8s linear infinite;
@@ -80,33 +80,10 @@
 .kanban-workers-sep { color: var(--kb-muted, #6e6e73); }
 
 .kanban-filters { display: flex; align-items: center; gap: 6px 10px; flex-wrap: wrap; min-width: 0; }
-.kanban-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 /* R3-17: their own line under the chips and the search, so turning Changed on never resizes the search. */
 .kanban-changed-actions { display: flex; align-items: center; gap: 6px 12px; flex: 0 0 100%; }
-.kanban-chip {
-  display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 9px; border-radius: 999px;
-  border: 1px solid var(--border-strong); background: var(--bg-elevated); color: var(--fg); font: inherit; font-size: var(--font-size-sm);
-  cursor: pointer; white-space: nowrap; font-variant-numeric: tabular-nums;
-}
-.kanban-chip:hover { background: var(--bg-hover); }
-/* N14: one count badge for every chip. */
-.kanban-chip-count {
-  display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 4px;
-  border-radius: var(--radius-sm); background: rgba(127, 127, 127, 0.16); font-weight: 600; font-size: var(--font-size-xs);
-}
-.kanban-chip.is-alert { border-color: var(--kc-red); color: var(--kc-red); }
-.kanban-chip.is-zero { color: var(--fg-muted); border-color: var(--border); background: transparent; cursor: default; }
-.kanban-chip.is-zero.is-active { cursor: pointer; }
-/* N10: a pressed chip is obviously on: filled, the count badge inverted (not bold: a wider chip moved the search, N18). */
-.kanban-chip.is-active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.kanban-chip.is-active:hover { background: var(--accent); filter: brightness(1.08); }
-.kanban-chip.is-active .kanban-chip-count { background: rgba(255, 255, 255, 0.28); color: var(--on-accent); }
-/* The dark theme's light red would put white text under 3:1; one deep red fill in both themes (5.4:1). */
-.kanban-chip.is-alert.is-active { background: #c4271d; border-color: #c4271d; color: var(--on-accent); }
-.kanban-chip.is-alert.is-active:hover { background: #c4271d; }
-
+/* The filter chips are the shared Chip (controls/Chip.tsx): this file only places them. */
 .kanban-project-filter { max-width: 240px; }
-.kanban-project-filter .kanban-chip-label { overflow: hidden; text-overflow: ellipsis; }
 .kanban-project-filter-x { display: inline-flex; width: 12px; height: 12px; }
 .kanban-project-filter-x svg { width: 12px; height: 12px; }
 .kanban-search-box { position: relative; display: flex; align-items: center; flex: 1 1 180px; min-width: 140px; max-width: 320px; }
@@ -166,11 +143,7 @@
   color: var(--fg-secondary); cursor: pointer; font-size: var(--font-size-lg); line-height: 1; padding: 0;
 }
 .kanban-lane-kebab:hover, .kanban-lane-kebab[aria-expanded="true"] { background: var(--bg-hover); color: var(--fg); }
-.kanban-lane-toggle {
-  display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; border: 0; background: none; padding: 2px 0;
-  font: inherit; color: inherit; cursor: pointer; text-align: left;
-}
-.kanban-lane-chevron { display: inline-flex; color: var(--fg-muted); flex: 0 0 auto; }
+.kanban-lane-toggle { flex: 1 1 auto; }
 .kanban-lane-head.is-flashing { animation: kanban-head-flash 600ms ease-out; }
 @keyframes kanban-head-flash { 0% { background: var(--accent-subtle); } 100% { background: transparent; } }
 @media (prefers-reduced-motion: reduce) { .kanban-lane-head.is-flashing { animation: none; box-shadow: inset 0 0 0 2px var(--accent); } }
@@ -197,15 +170,8 @@
   display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--bg-elevated); box-shadow: var(--card-shadow);
 }
-.kanban-add-lane-kinds { display: flex; flex-direction: column; gap: 2px; }
-.kanban-kind-radio {
-  display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 3px 6px; border-radius: var(--radius-xs); font: inherit;
-  font-size: var(--font-size-sm); color: var(--fg); cursor: pointer; text-align: left;
-}
-.kanban-kind-radio:hover { background: var(--bg-hover); }
-.kanban-kind-radio.is-checked { background: var(--accent-subtle); font-weight: 600; }
-.kanban-kind-radio-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--fg-muted); flex: 0 0 auto; }
-.kanban-kind-radio.is-checked .kanban-kind-radio-dot { box-shadow: 0 0 0 2px var(--bg-elevated), 0 0 0 3px var(--accent); }
+.kanban-add-lane-kinds { display: flex; flex-direction: column; gap: 6px; }
+.kanban-kind-radio-dot { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 50%; background: var(--fg-muted); vertical-align: -1px; }
 .kanban-add-lane-actions { display: flex; gap: 6px; }
 
 /* ── Menus and the What changed flyout (portalled to body) ── */
@@ -283,7 +249,8 @@
 }
 .kanban-leader-row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .kanban-leader-row .kanban-card-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--kc-red); flex: 0 0 auto; }
-.kanban-leader-row-toggle {
+.kanban-leader-row-toggle { flex: 1 1 auto; }
+.kanban-leader-row-link {
   flex: 1 1 auto; min-width: 0; border: 0; background: none; padding: 0; font: inherit; font-weight: 600; color: inherit; text-align: left;
   cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }

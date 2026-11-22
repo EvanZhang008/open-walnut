@@ -149,7 +149,7 @@ test('moving inside the app stays in its window, and the window keeps its addres
 
   // A view switch is a move inside the app: drawn here, the address untouched.
   const next = (await calendar.getAttribute('data-view')) === 'month' ? 'Week' : 'Month'
-  await popup.getByRole('tablist', { name: 'Calendar view' }).getByRole('tab', { name: next }).click()
+  await popup.getByRole('radiogroup', { name: 'Calendar view' }).getByRole('radio', { name: next }).click()
   await expect(calendar).toHaveAttribute('data-view', next.toLowerCase())
   expect(popup.url()).toBe(address)
   await expect(popup.locator('#primary-sidebar')).toHaveCount(0)

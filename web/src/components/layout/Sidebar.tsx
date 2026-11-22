@@ -228,6 +228,7 @@ export function Sidebar({
       {railShown['home-todo'] && (
       <button
         className={`sidebar-link sidebar-panel-toggle app-task-panel-toggle${todoVisible ? ' active' : ''}`}
+        data-choice-exempt="sidebar nav link that shows the Home task panel"
         onClick={handleToggleTodo}
         aria-label={todoVisible ? 'Hide task panel' : 'Show task panel'}
         aria-expanded={todoVisible} aria-controls="home-task-navigation"

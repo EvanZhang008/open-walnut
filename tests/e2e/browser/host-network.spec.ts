@@ -226,21 +226,23 @@ test('the relay choice: what each one shares, a companion means its relay, and w
   const picker = page.getByTestId('host-network-relay')
   await expect(picker).toBeVisible({ timeout: 30_000 })
   await expect(picker).toContainText('When two machines that joined with a link cannot connect directly, their traffic goes through the relay picked here.')
+  // Each choice is a shared Radio (the input carries data-relay) whose row holds its words.
   const own = picker.locator('[data-relay="own"]')
   const pub = picker.locator('[data-relay="public"]')
   const none = picker.locator('[data-relay="none"]')
+  const words = (radio: typeof own) => picker.locator('.wn-check-row', { has: radio })
   // A companion: its relay, and the other two say what they share but cannot be picked.
-  await expect(own).toHaveAttribute('aria-checked', 'true')
-  await expect(own).toContainText('On your cloud companion (wn.example.com). Only your machines use it.')
+  await expect(own).toBeChecked()
+  await expect(words(own)).toContainText('On your cloud companion (wn.example.com). Only your machines use it.')
   // Plain words; who runs the public relays only on request (2026-11-05 reviews: "run by n0, who
   // make iroh ... n0's lookup service" in the choice itself).
-  await expect(pub).toContainText('A free public service passes the traffic on when two of your machines cannot reach each other directly.')
-  await expect(pub).not.toContainText('n0')
+  await expect(words(pub)).toContainText('A free public service passes the traffic on when two of your machines cannot reach each other directly.')
+  await expect(words(pub)).not.toContainText('n0')
   const about = picker.getByTestId('host-network-relay-about')
   await about.click()
   await expect(picker).toContainText("n0, the makers of iroh, the network software Walnut uses. Their relays see your machines' internet addresses and which of them talk to each other")
   await about.click()
-  await expect(none).toContainText('Machines behind two home routers may not connect.')
+  await expect(words(none)).toContainText('Machines behind two home routers may not connect.')
   await expect(pub).toBeDisabled()
   await expect(none).toBeDisabled()
   await expect(picker).toContainText('While a cloud companion is paired, your machines use its relay.')
@@ -258,7 +260,7 @@ test('the relay choice: what each one shares, a companion means its relay, and w
   await expect(picker).toHaveCount(0)
   await page.getByTestId('settings-nav-remote-hosts').click()
   // More settings stays open for this tab.
-  await expect(pub).toHaveAttribute('aria-checked', 'true')
+  await expect(pub).toBeChecked()
   // Your own relay is said once, as the way to get one, not as a greyed choice beside it (2026-11-05 reviews).
   await expect(own).toHaveCount(0)
   await expect(picker.getByTestId('host-network-relay-own')).toContainText('Your own relay')
@@ -276,12 +278,12 @@ test('the relay choice: what each one shares, a companion means its relay, and w
   await none.click()
   await expect(page.getByTestId('host-network-relay-error')).toContainText('Could not change the relay')
   await expect(picker.getByRole('alert')).toContainText('No relay would cut off gpu-box')
-  await expect(pub).toHaveAttribute('aria-checked', 'true')
+  await expect(pub).toBeChecked()
 
   // No relay: the server is asked once, the choice, the row and the footer follow it.
   await none.click()
   await expect.poll(() => puts.at(-1)).toEqual({ relay: 'none' })
-  await expect(none).toHaveAttribute('aria-checked', 'true')
+  await expect(none).toBeChecked()
   await expect(page.getByTestId('host-network-relay-error')).toHaveCount(0)
   await expect(row.getByTestId('host-network-path')).toHaveText('Linux x86_64, direct, 40 ms')
 

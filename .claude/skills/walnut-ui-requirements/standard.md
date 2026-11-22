@@ -126,6 +126,54 @@ be one unified input box?"). Its look lives in one file, `web/src/styles/input-b
 - A plain field (a settings value, a label in a dialog, a search) takes the global
   `input, textarea, select` rules in `globals.css`; never its own border, radius or fill.
 
+## Choice controls
+
+A control that picks a value is one of six components from `web/src/components/controls/`
+(`index.ts`), drawn by `web/src/styles/choice-controls.css`. A view only places them (margin, flex,
+width); it never gives them a fill, border, corner or size of its own, and never a native
+`accent-color`. The selected state is always ARIA, one hook per kind, never a per-view `.active` /
+`.on` / `.is-active` class.
+
+| Kind | Component | Use it for | Look | On state |
+|---|---|---|---|---|
+| Tabs | `Tabs` (items), or `TabList` + `Tab` for tabs that carry a close button | switching between the panels or pages of one view, at the top of a pane | text tabs on one line, 12 px apart, 32 px, padding 0 4 px, 13 px weight 500 `--fg-secondary`; the selected one `--fg` with a 2 px `--accent` underline; a 1 px `--border` line under the strip (`flush` drops it on a header that has its own); a count in 11 px `--fg-muted` | `aria-selected` on `role=tab`; arrows, Home and End move and select |
+| Segmented | `SegmentedControl` (also exported as `Segmented`) | one of 2 to 6 values of a setting or a view mode, inline in a row or a toolbar | a 28 px `--choice-track` (`--bg-tertiary`) track, corner 8 px (`--radius-sm`), 2 px inset; segments 24 px, padding 0 12 px, corner 6 px (`--radius-sm` less the 2 px inset), 12 px weight 500 `--fg-secondary`; the selected one a lifted thumb (`--bg-elevated`, a white tint in dark) with a 1 px shadow and `--fg` text; `fill` makes equal segments across the line; icon segments are 28 px square | `aria-checked` on `role=radio` in a `role=radiogroup`; arrows move and select |
+| Chip | `Chip`, several in a `ChipGroup` | a filter over a list (one or many on), or a pick among options that wrap | 24 px, corner 8 px (a rounded rectangle, never a pill), padding 0 8 px, 12 px weight 500; off `--bg-secondary` fill and `--fg-secondary` text, hover `--bg-tertiary`; on `--accent-subtle` fill, `--accent-text` text and an accent hairline; a count in 11 px `--fg-muted` | `aria-pressed` (or `aria-checked` on a `role=radio` chip) |
+| Switch | `ToggleSwitch` | an on/off setting that takes effect at once | 38 x 22 track (`size="sm"`: 28 x 16 in a menu row or a dense toolbar), off `--choice-switch-off`, on `--accent`, white round thumb; the only round control besides a radio | `aria-checked` on `role=switch` |
+| Checkbox, Radio | `Checkbox`, `Radio` (`SettingsCheckbox` for a Settings list row) | picking items of a list, or a choice a form applies on Save; a radio for one of a few choices that each need a line of words | the native input drawn: 16 px, corner 4 px (half of `--radius-sm`; a radio is round), 1 px `--choice-box-border`; checked `--accent` with a white tick (a radio a 5 px accent ring); with `label` the box and words are one clickable row, 8 px apart, 13 px, an optional 12 px `--fg-muted` detail line | `:checked` (`:indeterminate` for "some") |
+| Disclosure | `DisclosureButton`, or `DisclosureChevron` inside a header that is its own button | showing or hiding what is under it | a 12 px chevron in `--fg-muted` that points right when closed and turns down when open (one rotation rule), the label 13 px weight 500 `--fg-secondary`; transparent, hover `--bg-hover`, corner 8 px | `aria-expanded` |
+
+Which one: a switch acts at once, a checkbox waits for Save. Tabs change what panel shows; a
+segmented control changes a value or a mode of the same content. A chip filters a list or picks
+from many options that wrap; it is never a status label (that is a `.badge`). One of a few short
+values inline is a segmented control; one of a few choices that each need a line of words is a
+column of radios. Several of a list of items (rows, calendars) are checkboxes; several filters
+over a list are chips.
+
+Heights next to the neighbours: a 28 px segmented control or a 24 px chip sits in a toolbar beside
+28 px tool buttons; in a card's 34 px answer row there is no segmented control or chip (its choices
+are the option rows of "The button family").
+
+Controls that only mean something while a master switch is on (an Inbox Triage rule under the
+Inbox Triage switch) sit in a `ControlGroup` that the master names with `aria-controls`
+(`masterProps(id)`). While the master is off the group is a disabled fieldset: every control in it
+is disabled and drawn off (an on switch or a ticked box is `--fg-muted` grey, never accent blue),
+with one line under the master saying why. A control is never shown on when what it belongs to is
+off. `tests/e2e/browser/choice-controls-dependent.spec.ts` walks every Settings section and fails on
+a master that is off while a control it names is not disabled.
+
+Every control keeps a visible 2 px `--accent` focus ring for the keyboard. A page's pick of tab,
+filter or mode is kept with `usePageView` (`tests/web/view-memory-guard.test.ts`).
+
+`tests/web/choice-controls-ratchet.test.ts` finds every tab, segmented control, switch, selectable
+chip, checkbox, radio and disclosure built by hand (by `role`, `input type`, and `-tab`, `-seg`,
+`-switch`, `-chip`, `-toggle` class names, plus stylesheet rules that draw one and every
+`accent-color`), per file (`tests/web/choice-controls-baseline.json`); the counts only go down.
+
+Source: the 2026-11-21 audit (14 segmented controls, 14 tab bars with five active-state names,
+nine switches in six sizes, 49 native checkboxes with 16 `accent-color` rules) and the user on
+round controls: "什么鬼东西都要是圆形的呀？所有东西都应该统一啊".
+
 ## Cards
 
 - Anything that waits on the user is an `AskCardFrame` card (frosted glass, one decision per page:

@@ -21,6 +21,7 @@ import { projectDisplayName } from '@/utils/project-display';
 import { useNavigate } from 'react-router-dom';
 import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
+import { Checkbox } from '@/components/controls';
 
 interface Props {
   item: CalendarItem;
@@ -308,10 +309,7 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
             </div>
           )}
           {!isEvent && (
-            <label className="cal-item-allday">
-              <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} />
-              All-day
-            </label>
+            <Checkbox rowClassName="cal-item-allday" label="All-day" checked={allDay} onChange={setAllDay} />
           )}
           {invalid && (
             <div className="cal-item-error">{malformed ? 'Invalid date.' : 'End must be after start.'}</div>

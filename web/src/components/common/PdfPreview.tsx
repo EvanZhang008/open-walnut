@@ -371,18 +371,18 @@ export function PdfPreview({ path, host, reloadToken, url, label }: Props) {
   return (
     <div className="fv-pdf-preview" data-scale={scale}>
       <div className="fv-pdf-toolbar" aria-label="PDF controls">
-        <button type="button" className="fv-html-tab" aria-label="Zoom out" disabled={!document || scale <= MIN_SCALE}
+        <button type="button" className="fv-tool-btn" aria-label="Zoom out" disabled={!document || scale <= MIN_SCALE}
           onClick={() => changeZoom(scale / 1.2)}>−</button>
         <output aria-label="PDF zoom">{Math.round(scale * 100)}%</output>
-        <button type="button" className="fv-html-tab" aria-label="Zoom in" disabled={!document || scale >= maxScale}
+        <button type="button" className="fv-tool-btn" aria-label="Zoom in" disabled={!document || scale >= maxScale}
           onClick={() => changeZoom(scale * 1.2)}>+</button>
-        <button type="button" className={`fv-html-tab${zoom === null ? ' active' : ''}`} disabled={!document}
+        <button type="button" className={`fv-tool-btn${zoom === null ? ' active' : ''}`} disabled={!document}
           onClick={() => changeZoom(null)}>Fit width</button>
         <PdfFind pdf={document?.pdf} root={scrollRef} />
         <span className="fv-pdf-page-count">{document ? `${pageNumber} / ${document.pdf.numPages}` : 'PDF'}</span>
       </div>
       <div ref={scrollRef} className="fv-pdf-scroll" onScroll={onScroll} tabIndex={0} aria-label="PDF document">
-        {error ? <div role="alert" className="fv-pdf-error">{error} <button type="button" className="fv-html-tab"
+        {error ? <div role="alert" className="fv-pdf-error">{error} <button type="button" className="fv-tool-btn"
           onClick={() => setAttempt((value) => value + 1)}>Retry</button></div>
           : passwordRequest ? <form className="fv-pdf-password" onSubmit={(event) => {
             event.preventDefault(); passwordRequest.submit(password);
@@ -392,7 +392,7 @@ export function PdfPreview({ path, host, reloadToken, url, label }: Props) {
                 onChange={(event) => setPassword(event.target.value)} />
             </label>
             {passwordRequest.incorrect && <div role="alert">Incorrect password. Try again.</div>}
-            <button type="submit" className="fv-html-tab">Unlock PDF</button>
+            <button type="submit" className="fv-tool-btn">Unlock PDF</button>
           </form>
           : !document ? <div className="fv-pdf-status" role="status">Loading PDF…</div> : null}
         <div ref={pagesRef} className="fv-pdf-pages">

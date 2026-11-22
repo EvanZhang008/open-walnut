@@ -24,6 +24,7 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { threadCountLabel } from '@open-walnut/thread-view';
 import { ThreadPinIcon } from '@/components/sessions/ThreadIcons';
+import { DisclosureButton } from '@/components/controls';
 import '@/styles/org-rail.css';
 import { readOrgPlace, writeOrgPlace } from './org-place';
 import { timeAgo } from '@/utils/time';
@@ -168,16 +169,9 @@ function MovedSection({ moved, query, onSelect, onMenu }: { moved: readonly Move
   const expanded = open || words.length > 0;
   return (
     <div className="org-moved" data-testid="org-moved">
-      <button
-        type="button"
-        className="org-list-section org-moved-toggle"
-        aria-expanded={expanded}
-        data-testid="org-moved-toggle"
-        onClick={() => setOpen((v) => !v)}
-      >
-        <span className="org-moved-chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</span>
+      <DisclosureButton block expanded={expanded} className="org-moved-toggle" data-testid="org-moved-toggle" onClick={() => setOpen((v) => !v)}>
         Archived · {shown.length}
-      </button>
+      </DisclosureButton>
       {expanded && shown.map((m) => (
         <button
           key={m.key}

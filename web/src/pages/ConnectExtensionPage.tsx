@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiPost } from '@/api/client';
 import { saveErrorMessage } from '@/components/settings/settings-pane-context';
 import { ExtensionInstallSteps, detectBrowser } from '@/components/passwords/ExtensionInstall';
+import { Checkbox } from '@/components/controls';
 import '@/styles/passwords.css';
 
 type Phase = 'looking' | 'missing' | 'ready' | 'connecting' | 'connected' | 'already' | 'error';
@@ -92,13 +93,16 @@ export function ConnectExtensionPage() {
           <>
             <h1>Connect this browser to Walnut?</h1>
             <p>Ask a quick question about the page you are on from the browser's side panel, and let your Walnut agents work in this browser. It also fills and saves passwords from your vault, after you unlock it with your master password.</p>
-            <label className="pw-ext-choice" data-testid="connect-extension-agents-row">
-              <input type="checkbox" checked={agents} onChange={(e) => setAgents(e.target.checked)} disabled={phase === 'connecting'} data-testid="connect-extension-agents" />
-              <span>
-                <span className="pw-ext-choice-title">Let Walnut agents use this browser</span>
-                <span className="pw-ext-choice-note">They open their own tabs in a separate window, signed in as you, and ask you before they send, buy, post or delete anything. You can change this in the extension's Settings.</span>
-              </span>
-            </label>
+            <div className="pw-ext-choice" data-testid="connect-extension-agents-row">
+              <Checkbox
+                checked={agents}
+                onChange={setAgents}
+                disabled={phase === 'connecting'}
+                data-testid="connect-extension-agents"
+                label="Let Walnut agents use this browser"
+                detail="They open their own tabs in a separate window, signed in as you, and ask you before they send, buy, post or delete anything. You can change this in the extension's Settings."
+              />
+            </div>
             <button type="button" className="btn btn-primary pw-ext-go" data-testid="connect-extension-go" disabled={phase === 'connecting'} onClick={() => void connect()}>
               {phase === 'connecting' ? 'Connecting…' : 'Connect'}
             </button>

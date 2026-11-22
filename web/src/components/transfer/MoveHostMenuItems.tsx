@@ -7,7 +7,7 @@
  */
 import { useEffect, useState } from 'react';
 import type { Task } from '@open-walnut/core';
-import { CHEVRON_GLYPH } from '@/components/common/Icons';
+import { DisclosureChevron } from '@/components/controls';
 import { apiGet, apiPost } from '@/api/client';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { log } from '@/utils/log';
@@ -93,7 +93,7 @@ export function MoveHostMenuItems({ task, afterAction }: { task: Task; afterActi
     <div className={`task-kebab-team${open ? ' open' : ''}`} data-testid="kebab-move-host">
       <button
         type="button"
-        className="task-kebab-item task-kebab-team-toggle"
+        className="task-kebab-item task-kebab-team-head"
         data-testid="kebab-move-host-toggle"
         aria-expanded={open}
         title="Move this task to another host: same task and conversation, its own work goes with it"
@@ -101,7 +101,8 @@ export function MoveHostMenuItems({ task, afterAction }: { task: Task; afterActi
       >
         <span className="task-kebab-icon">{ICON_MOVE}</span>
         <span className="task-kebab-team-label">Move to another host</span>
-        <span className={`task-kebab-team-caret${open ? ' open' : ''}`} aria-hidden="true">{CHEVRON_GLYPH}</span>
+        {/* A menu row that is its own button: the shared chevron, turned by its aria-expanded. */}
+        <DisclosureChevron />
       </button>
       {open && (
         <div className="task-kebab-team-rows">

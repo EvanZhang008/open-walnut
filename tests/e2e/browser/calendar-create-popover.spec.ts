@@ -43,7 +43,7 @@ async function openCalendar(page: Page, view: 'Week' | 'Day' = 'Week'): Promise<
   await page.waitForLoadState('networkidle')
   await page.click('a[href="/calendar"]')
   await expect(page.locator('.cal-toolbar')).toBeVisible()
-  await page.getByRole('tab', { name: view, exact: true }).click()
+  await page.getByRole('radio', { name: view, exact: true }).click()
   await expect(page.locator('.cal-grid')).toBeVisible()
 }
 
@@ -59,7 +59,7 @@ function overlaps(a: { x: number; y: number; width: number; height: number }, b:
 
 const popover = (page: Page) => page.locator('.cal-create-popover')
 const placeholder = (page: Page) => page.getByTestId('cal-create-placeholder')
-const tab = (page: Page, name: 'Event' | 'Task') => popover(page).getByRole('tab', { name, exact: true })
+const tab = (page: Page, name: 'Event' | 'Task') => popover(page).getByRole('radio', { name, exact: true })
 
 test.beforeEach(async ({ page }) => {
   await isolateUiPrefs(page)
@@ -78,7 +78,7 @@ test('a new item is an Event by default, and the side picked last is kept across
   // Nothing stored: Event.
   expect(await page.evaluate((k) => localStorage.getItem(k), KIND_KEY)).toBeNull()
   await open()
-  await expect(tab(page, 'Event')).toHaveAttribute('aria-selected', 'true')
+  await expect(tab(page, 'Event')).toHaveAttribute('aria-checked', 'true')
   await expect(popover(page).locator('.cal-event-form')).toBeVisible()
   await expect(placeholder(page)).toContainText('New Event')
 
@@ -96,7 +96,7 @@ test('a new item is an Event by default, and the side picked last is kept across
   await page.waitForLoadState('networkidle')
   await expect(page.locator('.cal-grid')).toBeVisible()
   await open()
-  await expect(tab(page, 'Task')).toHaveAttribute('aria-selected', 'true')
+  await expect(tab(page, 'Task')).toHaveAttribute('aria-checked', 'true')
   await expect(popover(page).locator('.quick-task-composer')).toBeVisible()
 
   // Back to Event, kept the same way.
@@ -107,7 +107,7 @@ test('a new item is an Event by default, and the side picked last is kept across
   await page.waitForLoadState('networkidle')
   await expect(page.locator('.cal-grid')).toBeVisible()
   await open()
-  await expect(tab(page, 'Event')).toHaveAttribute('aria-selected', 'true')
+  await expect(tab(page, 'Event')).toHaveAttribute('aria-checked', 'true')
   await page.keyboard.press('Escape')
 })
 
@@ -275,7 +275,7 @@ test('Home Today panel: the popover opens beside the narrow day column, off the 
   expect(overlaps(b, p)).toBe(false)
   // Beside the panel's column: the day stays readable under it.
   expect(p.x >= grid.x + grid.width - 1 || p.x + p.width <= grid.x + 1).toBe(true)
-  await expect(tab(page, 'Event')).toHaveAttribute('aria-selected', 'true')
+  await expect(tab(page, 'Event')).toHaveAttribute('aria-checked', 'true')
   await shot(page, 'home-panel-click')
 
   const title = `HomePanelCreate ${Date.now()}`
@@ -298,11 +298,11 @@ test('context menu: "New task…" opens on Task with the placeholder, and the sw
   const menu = page.locator('[data-testid="cal-ctx-menu"]')
   await expect(menu).toBeVisible()
   await menu.locator('button:has-text("New task…")').click()
-  await expect(tab(page, 'Task')).toHaveAttribute('aria-selected', 'true')
+  await expect(tab(page, 'Task')).toHaveAttribute('aria-checked', 'true')
   await expect(placeholder(page)).toContainText('New Task')
   expect(overlaps(await box(placeholder(page)), await box(popover(page)))).toBe(false)
   await tab(page, 'Event').click()
-  await expect(tab(page, 'Event')).toHaveAttribute('aria-selected', 'true')
+  await expect(tab(page, 'Event')).toHaveAttribute('aria-checked', 'true')
   await expect(popover(page).locator('.cal-event-form')).toBeVisible()
   await expect.poll(() => page.evaluate((k) => localStorage.getItem(k), KIND_KEY)).toBe('"event"')
   await page.keyboard.press('Escape')
@@ -456,7 +456,7 @@ for (const theme of ['light', 'dark'] as const) {
         if (r < 4.5) low.push(`${el.className || el.tagName} "${(el.textContent || (el as HTMLInputElement).value).trim().slice(0, 24)}" ${r.toFixed(2)}`)
       }
       const sw = getComputedStyle(document.querySelector('.cal-view-switch')!)
-      const active = getComputedStyle(document.querySelector('.cal-view-switch .cal-view-btn.active')!)
+      const active = getComputedStyle(document.querySelector('.cal-view-switch .cal-view-btn[aria-checked="true"]')!)
       return {
         dark,
         blur: popStyle.backdropFilter || (popStyle as unknown as Record<string, string>).webkitBackdropFilter,
@@ -476,8 +476,8 @@ for (const theme of ['light', 'dark'] as const) {
     expect(report.alpha).toBeLessThan(1)
     expect(report.checked).toBeGreaterThanOrEqual(6)
     expect(report.low, 'text under 4.5:1 on the glass').toEqual([])
-    // The view switch: a see-through track and a raised thumb.
-    expect(cssColorToRgba(report.track)[3]).toBeLessThan(0.5)
+    // The view switch is the shared segmented control (choice-controls.css): a track and a lifted thumb.
+    expect(cssColorToRgba(report.track)[3]).toBeGreaterThan(0)
     expect(report.thumbShadow).not.toBe('none')
     await shot(page, `glass-${theme}`)
   })

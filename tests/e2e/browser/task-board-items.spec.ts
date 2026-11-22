@@ -871,7 +871,7 @@ test('a worker has no Board tab; its board posts land on its leader\'s board, wh
   const leaderRow = page.locator(`.todo-panel-item[data-task-id="${leader}"]`)
   await expect(leaderRow).toBeVisible({ timeout: 90_000 })
   const chevron = leaderRow.locator('.collapse-chevron')
-  if (!(await chevron.evaluate((el) => el.classList.contains('expanded')))) await chevron.click()
+  if (!(await chevron.evaluate((el) => el.getAttribute('aria-expanded') === 'true'))) await chevron.click()
 
   // ── The worker's panel: no Board tab (2026-10-26, "for non leader, please don't show board") ──
   // Whether it leads is the page's task list (its open subtasks): the row came from that list, so the

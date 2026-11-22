@@ -10,7 +10,7 @@
 import '@/styles/board-kanban-controls.css';
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
-import { ICON_CHEVRON_DOWN, ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
+import { DisclosureButton } from '@/components/controls';
 import { log } from '@/utils/log';
 import { deletePreviewText, MAX_LANE_NAME, type BoardLane, type BoardLaneKind } from '../../../../../src/core/boards/board-lanes';
 import { READ_ONLY_TITLE, type KanbanLaneHeadProps } from './kanban-contract';
@@ -155,18 +155,15 @@ export function KanbanLaneHead({ lane: vm, lanes, index, mode, folded, onToggleF
     >
       <span className="kanban-lane-kind-bar" data-kind={lane.kind} aria-hidden />
       {narrow && !renaming ? (
-        <button
-          type="button"
+        <DisclosureButton
           className="kanban-lane-toggle"
           data-testid="kanban-lane-toggle"
-          aria-expanded={!folded}
+          expanded={!folded}
           onClick={onToggleFold}
+          trailing={<>{countEl}{needs}</>}
         >
-          <span className="kanban-lane-chevron" aria-hidden>{folded ? ICON_CHEVRON_RIGHT : ICON_CHEVRON_DOWN}</span>
           {nameEl}
-          {countEl}
-          {needs}
-        </button>
+        </DisclosureButton>
       ) : (
         <>{nameEl}{countEl}{needs}</>
       )}

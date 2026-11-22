@@ -13,6 +13,7 @@ import { GeneratorPanel } from './GeneratorPanel'
 import { AGENT_ACCESS_TEXT, SiteTile } from './ItemView'
 import { typeLabel } from './passwords-model'
 import { DiceIcon, EyeIcon, EyeOffIcon, PlusIcon, CloseIcon } from './pw-icons'
+import { Checkbox, Radio } from '@/components/controls'
 
 interface Form {
   type: VaultItemType
@@ -195,7 +196,7 @@ export function ItemEditor({ type, item, onSaved, onCancel }: {
           <div key={i} className="pw-input-group">
             <input data-no-draft="secret" className="pw-input pw-field-name" placeholder="Name" aria-label={`Field ${i + 1} name`} value={x.name} onChange={(e) => set('fields', f.fields.map((y, j) => (j === i ? { ...y, name: e.target.value } : y)))} />
             <input data-no-draft="secret" className="pw-input" type={x.hidden ? 'password' : 'text'} placeholder="Value" aria-label={`Field ${i + 1} value`} value={x.value} onChange={(e) => set('fields', f.fields.map((y, j) => (j === i ? { ...y, value: e.target.value } : y)))} />
-            <label className="pw-chip-check" title="Hide the value"><input type="checkbox" checked={!!x.hidden} onChange={(e) => set('fields', f.fields.map((y, j) => (j === i ? { ...y, hidden: e.target.checked } : y)))} />Hidden</label>
+            <Checkbox title="Hide the value" checked={!!x.hidden} onChange={(on) => set('fields', f.fields.map((y, j) => (j === i ? { ...y, hidden: on } : y)))} label="Hidden" />
             <button type="button" className="btn btn-icon" aria-label="Remove field" onClick={() => set('fields', f.fields.filter((_, j) => j !== i))}><CloseIcon /></button>
           </div>
         ))}
@@ -212,17 +213,17 @@ export function ItemEditor({ type, item, onSaved, onCancel }: {
       </div>
 
       <div className="pw-card pw-form">
-        <div className="pw-form-row pw-form-top"><span>Agent access</span>
-          <div className="pw-seg pw-seg-col" role="radiogroup" aria-label="Agent access">
+        <div className="pw-form-row pw-form-top"><span id="pw-editor-agent-access">Agent access</span>
+          {/* Three choices that each need words: a column of radios, applied on Save. */}
+          <div className="pw-radio-col" role="group" aria-labelledby="pw-editor-agent-access">
             {(['ask', 'allow', 'never'] as const).map((a) => (
-              <button key={a} type="button" role="radio" aria-checked={f.agentAccess === a} className={f.agentAccess === a ? 'on' : ''} onClick={() => set('agentAccess', a)}>{AGENT_ACCESS_TEXT[a]}</button>
+              <Radio key={a} name="pw-editor-agent-access" checked={f.agentAccess === a} onChange={() => set('agentAccess', a)} label={AGENT_ACCESS_TEXT[a]} />
             ))}
           </div>
         </div>
-        <label className="pw-form-row pw-check-row">
-          <span>Sensitive</span>
-          <span className="pw-check-text"><input type="checkbox" checked={f.sensitive} onChange={(e) => set('sensitive', e.target.checked)} /> An agent's use always asks you, whatever the switch says</span>
-        </label>
+        <div className="pw-form-row"><span>Sensitive</span>
+          <Checkbox checked={f.sensitive} onChange={(on) => set('sensitive', on)} label="An agent's use always asks you, whatever the switch says" />
+        </div>
       </div>
 
       {error && <div className="pw-hint pw-hint-bad" role="alert">{error}</div>}

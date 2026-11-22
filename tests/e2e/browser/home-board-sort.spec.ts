@@ -27,7 +27,7 @@ async function open(page: Page, search: string, tiers: string[] = ['unpinned']) 
   await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 90_000 });
   await page.getByRole('button', { name: 'Open task board', exact: true }).click();
   await expect(page.getByTestId('home-board')).toBeVisible();
-  await page.getByTestId('home-board').getByRole('button', { name: 'Sort', exact: true }).click();
+  await page.getByTestId('home-board').getByRole('radio', { name: 'Sort', exact: true }).click();
   await expect(page.getByTestId('quick-sort')).toBeVisible();
   await setTiers(page, tiers);
   await page.getByRole('textbox', { name: 'Search board tasks' }).fill(search);
@@ -151,7 +151,7 @@ test('projects: a whole project to one tier, its own queue, and the view is kept
   const before = { b1: tierOf(await read(request, ids.b1)), b2: tierOf(await read(request, ids.b2)) };
   await open(page, other);
   const sort = page.getByTestId('quick-sort');
-  await sort.getByRole('button', { name: 'Projects', exact: true }).click();
+  await sort.getByRole('radio', { name: 'Projects', exact: true }).click();
   const card = page.locator(`[data-sort-project="${other.toLowerCase()}"]`);
   await expect(card).toContainText('Project · 2 open');
   await expect(card).toContainText('Sort beta one');
@@ -181,7 +181,7 @@ test('projects: a whole project to one tier, its own queue, and the view is kept
 test('the pin board Move menu snoozes, clears a snooze and marks done', async ({ page, request }) => {
   const id = await create(request, 'Sort move menu task', { pinned: true, focus_tier: 'satellite' });
   await open(page, 'Sort move menu task');
-  await page.getByTestId('home-board').getByRole('button', { name: 'By pin', exact: true }).click();
+  await page.getByTestId('home-board').getByRole('radio', { name: 'By pin', exact: true }).click();
   const move = page.getByRole('button', { name: 'Move Sort move menu task to pin tier', exact: true });
   await move.click();
   const menu = page.getByRole('listbox', { name: 'Move to pin tier' });
@@ -282,7 +282,7 @@ test('the Inbox project card sorts the Inbox tasks, pinned ones included', async
   const id = await create(request, 'Sort inbox pinned task', { project: '', pinned: true, focus_tier: 'focus' });
   await open(page, '', []);
   const sort = page.getByTestId('quick-sort');
-  await sort.getByRole('button', { name: 'Projects', exact: true }).click();
+  await sort.getByRole('radio', { name: 'Projects', exact: true }).click();
   await page.getByRole('textbox', { name: 'Search board tasks' }).fill('Sort inbox pinned task');
   await page.locator('[data-sort-project=""] [data-sort-action="tasks"]').click();
   await expect(sort.locator('[data-sort-filter="project"]')).toHaveText('Inbox ▾');
@@ -294,7 +294,7 @@ test('each board card has Snooze and Done right on it, and Done can be undone', 
   const id = await create(request, 'Sort card buttons task', { pinned: true, focus_tier: 'focus' });
   await open(page, 'Sort card buttons task');
   const board = page.getByTestId('home-board');
-  await board.getByRole('button', { name: 'By pin', exact: true }).click();
+  await board.getByRole('radio', { name: 'By pin', exact: true }).click();
   await board.getByRole('button', { name: 'Snooze Sort card buttons task', exact: true }).click();
   const flyout = page.getByRole('dialog', { name: 'Snooze until', exact: true });
   await flyout.locator('[data-snooze="next-month"]').click();
@@ -309,7 +309,7 @@ test('each board card has Snooze and Done right on it, and Done can be undone', 
   await board.locator('.home-board-done-note').getByRole('button', { name: 'Undo', exact: true }).click();
   await expect.poll(async () => (await read(request, id)).phase).not.toBe('COMPLETE');
   await expect(page.locator(`[data-board-task="${id}"]`)).toBeVisible();
-  await board.getByRole('button', { name: 'By status', exact: true }).click();
+  await board.getByRole('radio', { name: 'By status', exact: true }).click();
   await expect(board.getByRole('button', { name: 'Snooze Sort card buttons task', exact: true })).toBeVisible();
 });
 
@@ -330,7 +330,7 @@ test('the deck opens on Focus and follows the tier, project, folder and no-actio
   await page.getByRole('link', { name: 'Open Walnut', exact: true }).click();
   await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 90_000 });
   await page.getByRole('button', { name: 'Open task board', exact: true }).click();
-  await page.getByTestId('home-board').getByRole('button', { name: 'Sort', exact: true }).click();
+  await page.getByTestId('home-board').getByRole('radio', { name: 'Sort', exact: true }).click();
   const sort = page.getByTestId('quick-sort');
   const filter = page.getByTestId('quick-sort-filter');
   // The default: Focus only, on screen.

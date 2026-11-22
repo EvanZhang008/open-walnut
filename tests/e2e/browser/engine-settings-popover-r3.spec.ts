@@ -250,9 +250,10 @@ test.describe('engine settings popover: round three, copy and chrome', () => {
     await expect(project).toHaveClass(/is-unavailable/)
     await expect(project.locator('svg.engine-settings-scope-lock')).toHaveCount(1)
     await expect(project).toHaveAttribute('title', 'This session has no working directory, so there is no project file to write.')
-    expect(await project.evaluate((el) => getComputedStyle(el).cursor)).toBe('not-allowed')
-    expect(await project.evaluate((el) => getComputedStyle(el).textDecorationLine)).toContain('line-through')
-    expect(await project.evaluate((el) => getComputedStyle(el).outlineStyle)).toBe('dotted')
+    // The shared segmented control's one disabled segment: aria-disabled, dimmed, its reason linked.
+    await expect(project).toHaveAttribute('aria-disabled', 'true')
+    await expect(project).toHaveAttribute('aria-describedby', /.+/)
+    expect(Number(await project.evaluate((el) => getComputedStyle(el).opacity))).toBeLessThan(1)
     // Not how the merely unselected side looks: the default option, when unchecked, has none of it.
     await shot(page, 'r4/project-unavailable-lock')
     await locked.unroute()

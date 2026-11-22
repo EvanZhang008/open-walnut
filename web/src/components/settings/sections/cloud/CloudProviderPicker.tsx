@@ -7,6 +7,9 @@
  * selectable: it routes to the manual paste path, which works everywhere. The
  * pill states that plainly instead of disabling the card and leaving the operator
  * with no next step.
+ *
+ * A card is a step forward, not a choice control: it opens that provider's set-up (CloudSection),
+ * so it is a button with a go chevron, and the provider picked last is aria-current.
  */
 
 import type { CloudSetupProvider } from '@/api/cloud-setup';
@@ -36,7 +39,7 @@ interface Props {
 export function CloudProviderPicker({ providers, selected, onSelect }: Props) {
   return (
     <SettingsGroup heading="Where should the companion live?" className="cloud-provider-grid">
-      <div role="radiogroup" aria-label="Cloud provider" className="settings-addons-contents">
+      <div role="group" aria-label="Cloud provider" className="settings-addons-contents">
         {providers.map((p) => {
           const pill = detectPill(p);
           const help = [p.costHint, p.detect.detail].filter(Boolean).join('. ').replace(/\.\./g, '.');
@@ -44,8 +47,7 @@ export function CloudProviderPicker({ providers, selected, onSelect }: Props) {
             <button
               key={p.id}
               type="button"
-              role="radio"
-              aria-checked={selected === p.id}
+              aria-current={selected === p.id ? 'true' : undefined}
               data-provider={p.id}
               className={`settings-row settings-addons-choice cloud-provider-card${selected === p.id ? ' cloud-provider-active' : ''}`}
               onClick={() => onSelect(p.id)}
@@ -61,7 +63,7 @@ export function CloudProviderPicker({ providers, selected, onSelect }: Props) {
                 <span className={`cloud-pill ${pill.cls}`}>
                   <SettingsTag tone={pill.tone}>{pill.text}</SettingsTag>
                 </span>
-                <ChevronGlyph size={12} className="settings-disclosure-chevron" />
+                <ChevronGlyph size={12} className="cloud-provider-go" />
               </span>
             </button>
           );

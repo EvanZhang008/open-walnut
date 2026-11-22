@@ -274,7 +274,7 @@ test('isolated workspaces on by default: a folder start under the Work in pill s
     await expect(panel.getByTestId('draft-work-in-isolated')).toBeVisible()
     // More keeps the switch, so the person can turn it off.
     const menu = await openDraftSettings(panel)
-    await expect(menu.getByTestId('draft-menu-workspace')).toHaveAttribute('aria-pressed', 'true')
+    await expect(menu.getByTestId('draft-menu-workspace')).toHaveAttribute('aria-checked', 'true')
     await page.keyboard.press('Escape')
     await expect(draftTaskMenu(page)).toHaveCount(0)
     await shot(page, 'folder-start-isolated', panel.locator('.session-panel-input'))

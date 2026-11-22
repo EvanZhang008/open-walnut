@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { Chip } from '@/components/controls';
 
 interface Props {
   active: boolean;                     // is a custom range currently the active selection
@@ -11,9 +12,9 @@ interface Props {
 }
 
 /**
- * "Custom" date-range control that lives alongside the preset tabs. Collapsed to
- * a single button; opens a popover with two date inputs. Applies only when both
- * dates are set and start <= end.
+ * "Custom" date-range control that lives alongside the preset periods. Collapsed to
+ * a single chip (on while a custom range is the period); opens a popover with two
+ * date inputs. Applies only when both dates are set and start <= end.
  *
  * The popover is portalled to <body> and placed by useMenuPlacement, so the
  * settings card (overflow hidden) or the window edge never cuts it off.
@@ -22,11 +23,11 @@ export function UsageDateRange({ active, start, end, bounds, onApply }: Props) {
   const [open, setOpen] = useState(false);
   const [s, setS] = useState(start ?? bounds.min ?? '');
   const [e, setE] = useState(end ?? bounds.max ?? '');
+  // The wrapper holds only the trigger, so it is the popover's anchor too.
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), []);
-  const placement = useMenuPlacement(open, triggerRef, popRef, { onAnchorLost: close });
+  const placement = useMenuPlacement(open, wrapperRef, popRef, { onAnchorLost: close });
 
   // Sync local inputs when an external selection changes.
   useEffect(() => { if (start) setS(start); }, [start]);
@@ -49,7 +50,7 @@ export function UsageDateRange({ active, start, end, bounds, onApply }: Props) {
     };
     const onScroll = (ev: Event) => {
       if (popRef.current?.contains(ev.target as Node)) return;
-      const r = triggerRef.current?.getBoundingClientRect();
+      const r = wrapperRef.current?.getBoundingClientRect();
       if (r && (r.bottom < 0 || r.top > window.innerHeight)) close();
     };
     document.addEventListener('mousedown', onDoc);
@@ -70,10 +71,13 @@ export function UsageDateRange({ active, start, end, bounds, onApply }: Props) {
 
   return (
     <div className="usage-daterange" ref={wrapperRef}>
-      <button
-        ref={triggerRef}
-        type="button"
-        className={`usage-period-tab${active ? ' active' : ''}`}
+      <Chip
+        pressed={active}
+        trailing={(
+          <svg className="usage-daterange-caret" width="10" height="10" viewBox="0 0 16 16" aria-hidden="true">
+            <polyline points="3.5 6 8 10.5 12.5 6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        )}
         data-testid="usage-period-custom"
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -84,8 +88,7 @@ export function UsageDateRange({ active, start, end, bounds, onApply }: Props) {
         }}
       >
         {label}
-        <span className="usage-daterange-caret">▾</span>
-      </button>
+      </Chip>
       {open && createPortal(
         <div
           ref={popRef}

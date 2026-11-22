@@ -5,7 +5,7 @@
  * relays unless the user picks No relay, and your own relay is said once, as the link to the page
  * that pairs one (Phones & Cloud). Each choice says in plain words what it shares; who runs the
  * public relays is one line further, on request (2026-11-05 reviews: the choice read as jargon).
- * The picked one carries a check in the control column, so every row's words start at one inset.
+ * The choices are a column of radios (each needs its line of words), one per row of the group.
  */
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -13,7 +13,7 @@ import { setNetRelay, type NetOverview, type NetRelay } from '@/api/hosts-net';
 import { ApiError } from '@/api/client';
 import { log } from '@/utils/log';
 import { SettingsGroup, SettingsRow } from '../SettingsSection';
-import { CheckGlyph, ChevronGlyph } from '../settings-glyphs';
+import { DisclosureButton, Radio } from '@/components/controls';
 
 function relayHost(relays: string[]): string | null {
   try { return relays[0] ? new URL(relays[0]).host : null } catch { return null }
@@ -69,27 +69,20 @@ export function HostNetworkRelay({ net, onChanged }: { net: NetOverview; onChang
       footer={`When two machines that joined with a link cannot connect directly, their traffic goes through the relay picked here.${companion ? ' While a cloud companion is paired, your machines use its relay.' : ''}`}
       data-testid="host-network-relay"
     >
-      <div role="radiogroup" aria-label="Relay" className="settings-addons-contents">
+      <div role="group" aria-label="Relay" className="settings-addons-contents">
         {choices.map((c) => (
-          <button
-            key={c.id}
-            type="button"
-            role="radio"
-            aria-checked={current === c.id}
-            aria-disabled={c.disabled || undefined}
-            disabled={c.disabled || (!!pending && pending !== c.id)}
-            data-relay={c.id}
-            className="settings-row settings-addons-choice rh-relay-choice"
-            onClick={() => void pick(c.id)}
-          >
-            <span className="settings-row-copy">
-              <span className="settings-row-label">{c.label}</span>
-              <span className="settings-row-help">{c.help}</span>
-            </span>
-            <span className="settings-row-actions">
-              <span className="rh-relay-check" aria-hidden="true">{current === c.id && <CheckGlyph size={14} />}</span>
-            </span>
-          </button>
+          <div key={c.id} className="settings-row rh-relay-choice">
+            <Radio
+              name="host-network-relay"
+              checked={current === c.id}
+              disabled={c.disabled || (!!pending && pending !== c.id)}
+              data-relay={c.id}
+              rowClassName="rh-relay-pick"
+              label={c.label}
+              detail={c.help}
+              onChange={() => void pick(c.id)}
+            />
+          </div>
         ))}
       </div>
       {!companion && (
@@ -101,10 +94,9 @@ export function HostNetworkRelay({ net, onChanged }: { net: NetOverview; onChang
       )}
       <SettingsRow
         label={
-          <button type="button" className="rh-join-more" aria-expanded={about} data-testid="host-network-relay-about" onClick={() => setAbout(!about)}>
-            <ChevronGlyph size={10} className="settings-disclosure-chevron" />
+          <DisclosureButton expanded={about} data-testid="host-network-relay-about" onClick={() => setAbout(!about)}>
             Who runs the public relays
-          </button>
+          </DisclosureButton>
         }
         help={about ? "n0, the makers of iroh, the network software Walnut uses. Their relays see your machines' internet addresses and which of them talk to each other, and their lookup service lists which relay each machine uses." : undefined}
       />

@@ -17,7 +17,7 @@ import { useCallback } from 'react';
 import { usePersistentState } from '@/hooks/usePersistentState';
 import { flashOnce, focusLanded } from '@/utils/focus-landed';
 import { SettingsButton } from '../inputs/SettingsButton';
-import { ChevronGlyph } from '../settings-glyphs';
+import { DisclosureButton } from '@/components/controls';
 import { isLive } from './host-fleet-dashboard-model';
 import { usd } from './host-fleet-model';
 import { readAgo } from './host-fleet-read-model';
@@ -74,10 +74,9 @@ export function HostFleetOverview({ fleet, onPickRow }: { fleet: HostFleet; onPi
     <section className="hf-dash" data-testid="host-fleet" data-open={open ? 'true' : 'false'} aria-labelledby="hf-dash-title">
       <div className="hf-dash-head">
         <h4 className="hf-dash-title" id="hf-dash-title">
-          <button type="button" className="hf-dash-toggle" aria-expanded={open} onClick={onToggle} data-testid="host-fleet-toggle">
-            <ChevronGlyph size={12} className="settings-disclosure-chevron" />
+          <DisclosureButton expanded={open} onClick={onToggle} data-testid="host-fleet-toggle">
             Overview
-          </button>
+          </DisclosureButton>
         </h4>
         <span className="hf-dash-read">
           {newest !== null && !refreshing && <span className="hf-dash-updated" data-testid="host-fleet-read" title={new Date(newest).toLocaleString()}>Read {readAgo(newest, now)}</span>}

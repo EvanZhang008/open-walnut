@@ -4,16 +4,27 @@
  * the segment (and Playwright `.check()`) goes through the browser's own label
  * activation in Chromium and WebKit alike. Arrow keys move and select.
  */
-import { useId, useRef, type KeyboardEvent } from 'react'
-import '@/styles/settings-controls.css'
+import { useId, useRef, type KeyboardEvent, type ReactNode } from 'react'
+import '@/styles/choice-controls.css'
 
 export interface SegmentedOption<V extends string> {
   value: V
-  label: string
+  /** Text, or an icon (then give `ariaLabel` and `icon`). */
+  label: ReactNode
+  /** Accessible name when the label is not text. */
+  ariaLabel?: string
+  /** An icon-only segment: square padding. */
+  icon?: boolean
   testId?: string
   title?: string
   /** Extra class on the segment, e.g. a stable hook that older test helpers select on. */
   className?: string
+  /** This one segment can't be picked now (aria-disabled, so its title still explains why on hover). */
+  disabled?: boolean
+  /** Extra `data-*` attributes on the segment: stable hooks for specs and the view's own code. */
+  data?: { [key: `data-${string}`]: string | undefined }
+  /** id of the element that says more about this segment (e.g. why it is disabled). */
+  describedBy?: string
 }
 
 export interface SegmentedControlProps<V extends string> {
@@ -25,6 +36,15 @@ export interface SegmentedControlProps<V extends string> {
   disabled?: boolean
   /** Native radio group name (defaults to a generated one). */
   name?: string
+  /** Extra classes on the group (placement only: margin, flex; never a look). */
+  className?: string
+  /** Stretch to the container's width, each segment the same width. */
+  fill?: boolean
+  /** Only Left/Right/Home/End move the pick: Up and Down are left to a menu that moves between its rows. */
+  horizontalKeys?: boolean
+  'data-testid'?: string
+  /** Tooltip on the whole group (e.g. why it is disabled). */
+  title?: string
 }
 
 /** Index reached by an arrow key from `from`, wrapping around. */
@@ -45,6 +65,11 @@ export function SegmentedControl<V extends string>({
   'aria-label': ariaLabel,
   disabled,
   name,
+  className,
+  fill,
+  horizontalKeys,
+  'data-testid': testId,
+  title,
 }: SegmentedControlProps<V>) {
   const autoName = useId()
   const groupName = name ?? `seg-${autoName}`
@@ -56,8 +81,9 @@ export function SegmentedControl<V extends string>({
   // the pick with no ring to see).
   const select = (index: number, byKey = false) => {
     const opt = options[index]
-    if (!opt || disabled) return
-    if (opt.value !== value) onChange(opt.value)
+    // Inside a disabled ControlGroup (a disabled fieldset) the keys pick nothing either.
+    if (!opt || disabled || rootRef.current?.closest('fieldset:disabled')) return
+    if (opt.value !== value && !opt.disabled) onChange(opt.value)
     const seg = rootRef.current?.querySelectorAll<HTMLElement>('[role="radio"]')[index]
     if (byKey && seg) {
       seg.setAttribute('data-keyed', 'true')
@@ -73,6 +99,7 @@ export function SegmentedControl<V extends string>({
       select(index, true)
       return
     }
+    if (horizontalKeys && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) return
     const next = segmentIndexForKey(e.key, index, options.length)
     if (next === null) return
     e.preventDefault()
@@ -86,7 +113,9 @@ export function SegmentedControl<V extends string>({
       role="radiogroup"
       aria-label={ariaLabel}
       aria-disabled={disabled ? true : undefined}
-      className="settings-segmented"
+      data-testid={testId}
+      title={title}
+      className={`wn-seg settings-segmented${fill ? ' wn-seg-fill' : ''}${className ? ` ${className}` : ''}`}
     >
       {options.map((opt, i) => {
         const selected = opt.value === value
@@ -96,11 +125,14 @@ export function SegmentedControl<V extends string>({
             key={opt.value}
             role="radio"
             aria-checked={selected}
-            aria-disabled={disabled ? true : undefined}
+            aria-disabled={disabled || opt.disabled ? true : undefined}
             tabIndex={disabled ? -1 : focusable ? 0 : -1}
+            {...opt.data}
             data-testid={opt.testId}
             title={opt.title}
-            className={`settings-segment${selected ? ' is-selected' : ''}${opt.className ? ` ${opt.className}` : ''}`}
+            aria-label={opt.ariaLabel}
+            aria-describedby={opt.describedBy}
+            className={`wn-seg-item settings-segment${opt.icon ? ' wn-seg-icon' : ''}${selected ? ' is-selected' : ''}${opt.className ? ` ${opt.className}` : ''}`}
             onKeyDown={(e) => onKeyDown(e, i)}
           >
             <input
@@ -108,10 +140,10 @@ export function SegmentedControl<V extends string>({
               name={groupName}
               value={opt.value}
               checked={selected}
-              disabled={disabled}
+              disabled={disabled || opt.disabled}
               tabIndex={-1}
               aria-hidden="true"
-              className="settings-segment-input"
+              className="wn-seg-input"
               onChange={() => onChange(opt.value)}
               // A click on the segment focuses this hidden radio (label activation): the focus goes
               // to the segment itself, which carries the ring and the arrow keys (2026-11-05 review).

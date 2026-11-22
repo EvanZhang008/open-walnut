@@ -89,7 +89,7 @@ async function toThreads(page: Page): Promise<void> {
   await page.locator(`[data-testid="org-channel"][data-key="project:${PROJECT.trim().toLowerCase()}"]`).click()
   await expect(page.getByTestId('org-detail-title')).toHaveText(`${PROJECT} VP`)
   // A lead opens on its Threads.
-  if ((await page.getByTestId('org-top-threads').getAttribute('aria-pressed')) !== 'true') await page.getByTestId('org-top-threads').click()
+  if ((await page.getByTestId('org-top-threads').getAttribute('aria-selected')) !== 'true') await page.getByTestId('org-top-threads').click()
   await expect(page.getByTestId('org-threads')).toBeVisible()
 }
 

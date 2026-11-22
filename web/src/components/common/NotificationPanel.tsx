@@ -58,7 +58,7 @@ import { useYieldsToTaskOpen } from '@/hooks/useOpenTask';
 import { fetchSelfRepair, type SelfRepairInfo } from '@/api/config';
 import { startNotificationFix } from '@/api/notifications';
 import { log } from '@/utils/log';
-import { ICON_CHEVRON_DOWN, ICON_CHEVRON_RIGHT } from './Icons';
+import { DisclosureButton } from '@/components/controls';
 import { useHumanInbox } from '@/hooks/useHumanInbox';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { useShiftClickGuard } from './useShiftClickGuard';
@@ -1277,13 +1277,13 @@ const FeedItem = memo(function FeedItem({
           also navigate away from the panel. */}
       {presented.detail && (
         <div className="nfc-card-detail">
-          <button
-            className="nfc-card-toggle"
+          <DisclosureButton
+            className="nfc-detail-toggle"
+            expanded={detailOpen}
             onClick={(e) => { e.stopPropagation(); setDetailOpen(v => !v); }}
-            aria-expanded={detailOpen}
           >
-            <span className="nfc-card-toggle-icon" aria-hidden="true">{detailOpen ? ICON_CHEVRON_DOWN : ICON_CHEVRON_RIGHT}</span> Details
-          </button>
+            Details
+          </DisclosureButton>
           {detailOpen && (
             <pre className="nfc-card-pre" onClick={(e) => e.stopPropagation()}>{presented.detail}</pre>
           )}

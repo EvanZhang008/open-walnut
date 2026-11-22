@@ -555,36 +555,14 @@
   text-transform: none;
 }
 
-/* The unread count, as the control it should always have been. Off it is the old label with a
-   hover; on it is accent filled, which is the one state a filter has to be unmistakable about,
-   because a list that is hiding rows and does not say so reads as lost mail. */
+/* The unread count, as the control it should always have been: a filter chip (the shared Chip),
+   at the end of the heading line. The heading's capitals and tracking are not the chip's. */
 .mail-unread-chip {
   margin-left: auto;
   flex: 0 0 auto;
-  padding: 2px 8px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background: none;
-  color: var(--accent);
-  font-family: inherit;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
   letter-spacing: 0;
   text-transform: none;
-  white-space: nowrap;
-  cursor: pointer;
 }
-
-.mail-unread-chip:hover { background: var(--accent-subtle); }
-
-/* White on the accent, exactly as the mailbox badge above draws the same fact. */
-.mail-unread-chip.on {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--on-accent);
-}
-
-.mail-unread-chip.on:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 
 /* The filter hid everything: one line, and the way back on the same line. */
 .mail-unread-empty {
@@ -964,7 +942,10 @@
 .mail-setup-input::placeholder { color: var(--fg-muted); }
 .mail-setup-help { font-size: var(--font-size-xs); color: var(--fg-muted); line-height: 1.4; }
 
-.mail-setup-options { display: flex; flex-wrap: wrap; gap: 6px; max-height: 132px; overflow-y: auto; }
+/* The service chips (a ChipGroup) wrap; a long list scrolls inside its own height. */
+.mail-setup-options { max-height: 132px; overflow-y: auto; }
+/* A pick (SegmentedControl) keeps its own width in the field's column. */
+.mail-setup-pick { align-self: flex-start; }
 
 .mail-setup-preset-help {
   margin: 0;
@@ -991,18 +972,6 @@
 }
 
 .mail-setup-steps li { padding-left: 1px; }
-
-.mail-setup-option {
-  padding: 5px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--fg-secondary);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-}
-
-.mail-setup-option.active { border-color: var(--accent); background: var(--accent-subtle); color: var(--accent); }
 
 .mail-setup-error {
   padding: 10px 12px;

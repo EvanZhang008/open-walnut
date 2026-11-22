@@ -24,6 +24,7 @@ import DOMPurify from 'dompurify';
 import { rawFileContentUrl } from '@/api/files';
 import { formatSize } from '@/utils/format';
 import { log } from '@/utils/log';
+import { Tabs } from '@/components/controls';
 
 export type OfficeKind = 'word' | 'sheet' | 'slides';
 
@@ -282,20 +283,13 @@ export function OfficePreview({ path, host, kind, reloadToken = 0 }: OfficePrevi
       {kind === 'sheet' && sheetDoc && phase === 'ready' && (
         <>
           {sheetDoc.names.length > 1 && (
-            <div className="fv-sheet-tabs" role="tablist">
-              {sheetDoc.names.map((name, i) => (
-                <button
-                  key={name}
-                  type="button"
-                  role="tab"
-                  aria-selected={i === activeSheet}
-                  className={`fv-sheet-tab${i === activeSheet ? ' active' : ''}`}
-                  onClick={() => setActiveSheet(i)}
-                >
-                  {name}
-                </button>
-              ))}
-            </div>
+            <Tabs
+              className="fv-sheet-tabs"
+              aria-label="Sheets"
+              value={String(activeSheet)}
+              onChange={(v) => setActiveSheet(Number(v))}
+              items={sheetDoc.names.map((name, i) => ({ value: String(i), label: name }))}
+            />
           )}
           <div
             className="fv-sheet-table"

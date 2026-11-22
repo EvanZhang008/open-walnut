@@ -142,7 +142,7 @@ test('the sidebar opens Main and the leads; a lead\'s red is its threads, its ta
   // work (2026-11-12: Status and Team became one list), and Board joins once the lead's board is known.
   await expectChatShown(detail)
   await detail.getByTestId('org-top-task').click()
-  await expect.poll(() => detail.getByTestId('org-task-modes').getByRole('button').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid'))), { timeout: 30_000 })
+  await expect.poll(() => detail.getByTestId('org-task-modes').getByRole('radio').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid'))), { timeout: 30_000 })
     .toEqual(['org-task-mode-all', 'org-task-mode-board'])
   await openTasksBy(detail, 'board')
   await detail.getByTestId('board-view-custom').click()

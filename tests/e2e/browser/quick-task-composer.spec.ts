@@ -104,13 +104,13 @@ test('sentence auto-fills the form and Create persists the parsed fields', async
   await expect(panel).toBeVisible()
   await expect(panel.locator('.qtc-confirm-title')).toHaveValue(title)
   await expect(panel.locator('.qtc-field').nth(2)).toContainText('Tomorrow 2:00')
-  // The pinned area shows the AI's tier as a pressed button — no click needed to read it,
+  // The pinned area shows the AI's tier as the picked segment — no click needed to read it,
   // and the ✦ on the PINNED label marks the tier as AI-suggested (same as the other fields).
   const pinnedField = panel.locator('.qtc-confirm-field', { hasText: 'Pinned' })
   await expect(pinnedField.locator('.qtc-confirm-ai')).toBeVisible()
-  const tiers = panel.getByRole('group', { name: 'Pin new task to tier' })
-  await expect(tiers.getByRole('button', { name: 'Satellite' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'false')
+  const tiers = panel.getByRole('radiogroup', { name: 'Pin new task to tier' })
+  await expect(tiers.getByRole('radio', { name: 'Satellite' })).toHaveAttribute('aria-checked', 'true')
+  await expect(tiers.getByRole('radio', { name: 'Focus' })).toHaveAttribute('aria-checked', 'false')
   await expect(panel.locator('.qtc-confirm-project')).toHaveValue(project)
   // The project already exists, so no "new" badge.
   await expect(panel.locator('.qtc-confirm-new')).toHaveCount(0)
@@ -267,14 +267,15 @@ test('plain note keeps Inbox defaults (no project, nothing pinned)', async ({ pa
   await expect(panel.locator('.qtc-confirm-title')).toHaveValue(rawTitle)
   // No project parsed → empty field, placeholder reads "Inbox".
   await expect(panel.locator('.qtc-confirm-project')).toHaveValue('')
-  // Pinned area is always present, with nothing pressed when the AI suggested no tier.
-  const tiers = panel.getByRole('group', { name: 'Pin new task to tier' })
+  // Pinned area is always present, with None picked when the AI suggested no tier.
+  const tiers = panel.getByRole('radiogroup', { name: 'Pin new task to tier' })
   await expect(tiers).toBeVisible()
+  await expect(tiers.getByRole('radio', { name: 'None' })).toHaveAttribute('aria-checked', 'true')
   for (const label of ['Focus', 'Satellite']) {
-    await expect(tiers.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'false')
+    await expect(tiers.getByRole('radio', { name: label })).toHaveAttribute('aria-checked', 'false')
   }
   // The retired Parked tier is offered nowhere (2026-11-11).
-  await expect(tiers.getByRole('button', { name: 'Parked' })).toHaveCount(0)
+  await expect(tiers.getByRole('radio', { name: 'Parked' })).toHaveCount(0)
   await panel.locator('.qtc-confirm-title').press('Enter')
 
   const created = await waitForNewTask(request, rawTitle, existingIds)
@@ -303,13 +304,13 @@ test('panel overrides pin, project, priority, and star before create', async ({ 
   await expect(panel.locator('.qtc-confirm-title')).toHaveValue(title)
   // Override the AI's Focus with Satellite in ONE click (the old cycling chip
   // needed two, and you couldn't see which tier was next).
-  const tiers = panel.getByRole('group', { name: 'Pin new task to tier' })
+  const tiers = panel.getByRole('radiogroup', { name: 'Pin new task to tier' })
   const pinnedField = panel.locator('.qtc-confirm-field', { hasText: 'Pinned' })
-  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(tiers.getByRole('radio', { name: 'Focus' })).toHaveAttribute('aria-checked', 'true')
   await expect(pinnedField.locator('.qtc-confirm-ai')).toBeVisible()
-  await tiers.getByRole('button', { name: 'Satellite' }).click()
-  await expect(tiers.getByRole('button', { name: 'Satellite' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'false')
+  await tiers.getByRole('radio', { name: 'Satellite' }).click()
+  await expect(tiers.getByRole('radio', { name: 'Satellite' })).toHaveAttribute('aria-checked', 'true')
+  await expect(tiers.getByRole('radio', { name: 'Focus' })).toHaveAttribute('aria-checked', 'false')
   // The tier is now the USER's pick, so the ✦ must go — otherwise the panel keeps
   // crediting the AI for a value the user just overrode.
   await expect(pinnedField.locator('.qtc-confirm-ai')).toHaveCount(0)
@@ -331,11 +332,11 @@ test('panel overrides pin, project, priority, and star before create', async ({ 
 })
 
 /**
- * Clicking the tier the AI already picked means "don't pin this one" — the task
- * must land UNPINNED, not fall through to some other tier. The old cycling chip
- * could only reach "not pinned" by clicking through the remaining tiers.
+ * "None" overrides the tier the AI picked: the task must land UNPINNED, not fall
+ * through to some other tier. The old cycling chip could only reach "not pinned"
+ * by clicking through the remaining tiers.
  */
-test('clicking the pressed tier unpins before create', async ({ page, request }) => {
+test('picking None unpins before create', async ({ page, request }) => {
   const title = unique('Unpin before create')
   await page.route('**/api/tasks/quick-parse', (route) => route.fulfill({
     status: 200,
@@ -347,14 +348,15 @@ test('clicking the pressed tier unpins before create', async ({ page, request })
   await openComposer(page)
   await page.locator('.qtc-input').fill('unpin before create')
   const panel = page.locator('.qtc-confirm-panel')
-  const tiers = panel.getByRole('group', { name: 'Pin new task to tier' })
-  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'true')
-  await tiers.getByRole('button', { name: 'Focus' }).click()
+  const tiers = panel.getByRole('radiogroup', { name: 'Pin new task to tier' })
+  await expect(tiers.getByRole('radio', { name: 'Focus' })).toHaveAttribute('aria-checked', 'true')
+  await tiers.getByRole('radio', { name: 'None' }).click()
+  await expect(tiers.getByRole('radio', { name: 'None' })).toHaveAttribute('aria-checked', 'true')
   for (const label of ['Focus', 'Satellite']) {
-    await expect(tiers.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'false')
+    await expect(tiers.getByRole('radio', { name: label })).toHaveAttribute('aria-checked', 'false')
   }
   // The retired Parked tier is offered nowhere (2026-11-11).
-  await expect(tiers.getByRole('button', { name: 'Parked' })).toHaveCount(0)
+  await expect(tiers.getByRole('radio', { name: 'Parked' })).toHaveCount(0)
   await panel.locator('.qtc-confirm-primary').click()
 
   // The task is created (the composer's pin state is the composer's to assert;

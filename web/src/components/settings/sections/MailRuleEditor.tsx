@@ -36,6 +36,7 @@ import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useDraftValue } from '@/hooks/useDraft';
 import { draftHash, draftKey } from '@/utils/drafts';
 import { SettingsButton } from '../inputs/SettingsButton';
+import { Checkbox, DisclosureButton } from '@/components/controls';
 import { MicField, type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import '@/styles/settings-mic.css';
@@ -430,11 +431,10 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
       </div>
       {errorFor('then') && <p className="mail-rule-field-error" role="alert">{errorFor('then')}</p>}
       {existingGroup && <p className="mail-rule-help" data-testid="mail-rule-group-exists">{existingGroupLine(existingGroup)}</p>}
-      <label className="mail-rule-skip-inbox" data-testid="mail-rule-skip-inbox">
-        <input type="checkbox" checked={skipInbox && !reservedTarget} disabled={reservedTarget}
-          onChange={(event) => { markDirty(); setSkipInbox(event.target.checked); }} />
-        <span>Keep out of the Inbox</span>
-      </label>
+      <div className="mail-rule-skip-inbox" data-testid="mail-rule-skip-inbox">
+        <Checkbox checked={skipInbox && !reservedTarget} disabled={reservedTarget} label="Keep out of the Inbox"
+          onChange={(checked) => { markDirty(); setSkipInbox(checked); }} />
+      </div>
       {folderShown && (
         <div className="mail-rule-then">
           {/* The help colour without its paragraph margin, so the label sits on the input's line. Empty: Archive. */}
@@ -460,10 +460,9 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
         {samples.length > 0 && (
           <>
             <span aria-hidden="true">{' \u00b7 '}</span>
-            <button type="button" className="mail-rule-hint-fix mail-rule-samples-toggle" aria-expanded={samplesOn} data-testid="mail-rule-samples"
-              onClick={() => setSamplesOn((on) => !on)}>
+            <DisclosureButton expanded={samplesOn} data-testid="mail-rule-samples" onClick={() => setSamplesOn((on) => !on)}>
               {samplesOn ? 'Hide them' : `Show ${samples.length === 1 ? 'it' : samples.length}`}
-            </button>
+            </DisclosureButton>
           </>
         )}
       </p>

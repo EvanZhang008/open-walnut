@@ -118,14 +118,14 @@ async function storedTeam(): Promise<StoredTask[]> {
 
 const stateOf = (t: StoredTask) => (t.phase === 'COMPLETE' ? 'done' : t.user_status?.state ?? '')
 const rows = (pane: Locator) => pane.getByTestId('board-status-row')
-const chipCount = async (pane: Locator, s: string) => Number(((await pane.getByTestId(`board-status-filter-${s}`).locator('b').textContent()) ?? '').trim())
+const chipCount = async (pane: Locator, s: string) => Number(((await pane.getByTestId(`board-status-filter-${s}`).locator('.wn-chip-count').textContent()) ?? '').trim())
 
 test('Status is the default; its states and counts are the stored status, the Org page\'s numbers', async ({ page }) => {
   test.setTimeout(240_000)
   const pane = await openBoard(page)
   const segs = await pane.getByTestId('board-view-toggle').locator('[data-view]').evaluateAll((els) => els.map((e) => e.getAttribute('data-view')))
   expect(segs).toEqual(['status', 'cards', 'custom'])
-  await expect(pane.getByTestId('board-view-status')).toHaveAttribute('aria-pressed', 'true')
+  await expect(pane.getByTestId('board-view-status')).toHaveAttribute('aria-checked', 'true')
   await expect(pane.getByTestId('board-view-custom')).toHaveAttribute('aria-disabled', 'true')
   await expect(pane.getByTestId('board-status')).toBeVisible({ timeout: 30_000 })
   // The kanban stays mounted but hidden under Status: none of its cards is on screen.

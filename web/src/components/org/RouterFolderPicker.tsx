@@ -19,6 +19,7 @@ import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { listMailboxes, type MailboxDto } from '@/api/mail';
 import '@/styles/router-settings.css';
 import { MicInput } from '@/components/common/BoxMic';
+import { Checkbox } from '@/components/controls';
 
 export const ROUTER_NO_INBOX_LINE = 'Inbox is not ticked: new Inbox mail of these mailboxes goes to no one. Tick Inbox to keep it.';
 export const ROUTER_NO_FOLDER_LINE = 'Pick at least one folder.';
@@ -178,7 +179,7 @@ export function RouterFolderPicker({ accounts, value, onChange, disabled, testId
         data-testid={`${testId}-option`}
         data-token={option.token}
       >
-        <input type="checkbox" checked={ticked} disabled={disabled} onChange={(e) => onChange(toggleFolder(value, option, e.target.checked))} />
+        <Checkbox checked={ticked} disabled={disabled} onChange={(on) => onChange(toggleFolder(value, option, on))} />
         <span className="router-folder-name wn-title">{option.label}</span>
       </label>
     );

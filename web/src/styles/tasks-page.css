@@ -215,23 +215,7 @@
   margin-right: 6px;
 }
 
-.tp-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 10px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-  background: none;
-  color: var(--fg-muted);
-  font-size: var(--font-size-sm);
-  font-family: inherit;
-  cursor: pointer;
-  flex: none;
-}
-.tp-chip:hover { background: var(--bg-hover); }
-.tp-chip.on { border-color: var(--accent); color: var(--accent); background: var(--accent-subtle); }
+/* The toolbar's filter chips are the shared Chip (controls/Chip.tsx). */
 
 .tp-search {
   margin-left: auto;
@@ -452,7 +436,6 @@
 }
 .tp-cols-opt:hover { background: var(--bg-hover); }
 .tp-cols-opt.disabled { color: var(--fg-muted); cursor: not-allowed; }
-.tp-cols-opt input { margin: 0; accent-color: var(--accent); }
 .tp-cols-reset {
   margin: 4px 6px 2px;
   border: none;

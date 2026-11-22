@@ -3,17 +3,10 @@
    and the pairing QR dialog (cloud/PairQrDialog.tsx). Colors through tokens; the
    tag tints are the ones .settings-tag uses (settings-controls-misc.css). */
 
-/* The tab bar: one tab per way, and Devices. Scrolls sideways when the pane is narrow. */
+/* The tab bar (the shared TabList and Tab, each with its hint as the detail line): one tab per
+   way, and Devices. Scrolls sideways when the pane is narrow. */
 .pc-head { margin: 0 0 18px; }
-.pc-tabs {
-  display: flex;
-  gap: 2px;
-  margin: 0 0 14px;
-  border-bottom: 1px solid var(--settings-group-border);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.pc-tabs::-webkit-scrollbar { display: none; }
+.pc-tabs { margin: 0 0 14px; }
 /* More tabs past an edge (PhonesCloudTabs.tsx TabBar): that edge fades out. */
 .pc-tabs[data-more='right'] {
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
@@ -27,24 +20,6 @@
   -webkit-mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
   mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
 }
-.pc-tab {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-bottom: -1px;
-  /* Five tabs with their hints fit a 680 px pane (Settings at a 1280 px window). */
-  padding: 6px 5px;
-  border-bottom: 2px solid transparent;
-  color: var(--fg-secondary);
-  font-size: var(--font-size-md);
-  line-height: 20px;
-  text-decoration: none;
-  white-space: nowrap;
-}
-.pc-tab:hover { color: var(--fg); }
-.pc-tab[aria-current='page'] { border-bottom-color: var(--accent); color: var(--fg); font-weight: 600; }
-.pc-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px; }
 /* A tab whose name is not known yet (the tunnel's, before its first answer): a blank of about its
    width, never a name that changes a moment later (cloud/tunnel-name.ts). */
 .pc-tab-label-pending {
@@ -106,7 +81,7 @@ a.pc-server:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .pc-intro-key { display: inline-block; min-width: 84px; margin-right: 8px; color: var(--fg-muted); }
 @media (max-width: 560px) {
   /* A finger's worth of height for each tab. */
-  .pc-tab { min-height: 44px; box-sizing: border-box; }
+  .wn-tab.pc-tab { min-height: 44px; }
 }
 
 /* "iphone reaches Walnut through the cloud companion", on the tab in use. */
@@ -204,19 +179,8 @@ a.pc-server:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .app-modal.devices-qr-dialog:focus { outline: none; }
 
 
-/* A tab's name over what it is for ("Browser, anywhere"), PhonesCloudTabs TAB_HINT. */
-.pc-tab-text { display: inline-flex; flex-direction: column; line-height: 1.2; }
-.pc-tab-hint { font-size: var(--font-size-xs); font-weight: 400; color: var(--fg); white-space: normal; max-width: 8em; line-height: 1.25; }
-.pc-tab { align-items: flex-start; }
-.pc-tab .devices-way-dot { margin-top: 6px; }
-@media (max-width: 560px) {
-  /* Text on a phone is at least 12 px (phone-settings.spec.ts). */
-  .pc-tab-hint { font-size: var(--font-size-sm); }
-}
 /* A link to another tab inside a sentence (DeviceList): a finger's worth on a phone. */
 @media (max-width: 560px) {
   .settings-addons-link.devices-go-link { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; min-width: 44px; padding: 0 4px; vertical-align: middle; }
 }
-/* The tab picked is bold: each label keeps room for its bold width, so the tabs never shift. */
-.pc-tab-text > .pc-tab-label { display: flex; flex-direction: column; }
-.pc-tab-text > .pc-tab-label::after { content: attr(data-text); content: attr(data-text) / ""; height: 0; overflow: hidden; visibility: hidden; font-weight: 600; user-select: none; pointer-events: none; }
+

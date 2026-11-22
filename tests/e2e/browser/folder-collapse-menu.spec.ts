@@ -296,7 +296,7 @@ test('main list: clicking the folder header row body folds it, and the fold surv
   await expect(header).toBeVisible({ timeout: 15_000 })
   await expect(rowA).toBeVisible()
   await expect(rowB).toBeVisible()
-  await expect(header.locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(header.locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
 
   // Click the folder NAME, not the chevron: the whole row folds, the name included.
   await header.locator('.task-group-chip-label').click()
@@ -305,7 +305,7 @@ test('main list: clicking the folder header row body folds it, and the fold surv
   await expect(rowB).toBeHidden()
   // The header row itself stays — it is what you click to unfold.
   await expect(header).toBeVisible()
-  await expect(header.locator('.collapse-chevron')).not.toHaveClass(/expanded/)
+  await expect(header.locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'false')
   await page.screenshot({ path: '/tmp/folder-collapse-menu/list-folder-collapsed.png' })
 
   // Persisted: a reload comes back folded.
@@ -345,7 +345,7 @@ test('pinned tier: clicking the folder chip folds it there, and the main list ke
   await expect(cardA).toBeVisible()
   await expect(cardB).toBeVisible()
   // The chip carries the same affordances as the main list header: a chevron + count.
-  await expect(chip.locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(chip.locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
   await expect(chip.locator('.task-group-chip-count')).toHaveText('2')
   await page.screenshot({ path: '/tmp/folder-collapse-menu/tier-chip-expanded.png' })
 
@@ -354,7 +354,7 @@ test('pinned tier: clicking the folder chip folds it there, and the main list ke
   await expect(cardA).toBeHidden()
   await expect(cardB).toBeHidden()
   await expect(chip).toBeVisible()
-  await expect(chip.locator('.collapse-chevron')).not.toHaveClass(/expanded/)
+  await expect(chip.locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'false')
   await page.screenshot({ path: '/tmp/folder-collapse-menu/tier-chip-collapsed.png' })
 
   // Each place folds on its own: the main list still shows the folder open. A shared
@@ -364,12 +364,12 @@ test('pinned tier: clicking the folder chip folds it there, and the main list ke
   await chooseViewOption(page, 'tasks')
   await expect(listHeader(page, groupId)).toBeVisible()
   await expect(page.locator(`.todo-group-project .todo-panel-item[data-task-id="${a.id}"]`).first()).toBeVisible()
-  await expect(listHeader(page, groupId).locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(listHeader(page, groupId).locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
   // And folding it there leaves the tier's fold as it was.
   await listHeader(page, groupId).locator('.task-group-chip-label').click()
   await expect(page.locator(`.todo-group-project .todo-panel-item[data-task-id="${a.id}"]`).first()).toBeHidden()
   await chooseViewOption(page, 'all')
-  await expect(chip.locator('.collapse-chevron')).not.toHaveClass(/expanded/)
+  await expect(chip.locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'false')
   await expect(cardA).toBeHidden()
 
 })
@@ -402,7 +402,7 @@ test('flat list mode: the folder header still folds (one collapse set, every lis
   await expect(header).toBeVisible({ timeout: 15_000 })
   await expect(rowA).toBeVisible()
   await expect(rowB).toBeVisible()
-  await expect(header.locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(header.locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
 
   // Rows above render lazily (content-visibility) as the list scrolls, so let the
   // header settle before aiming at it; otherwise the click lands on its neighbour.
@@ -417,7 +417,7 @@ test('flat list mode: the folder header still folds (one collapse set, every lis
   await expect(rowA).toBeHidden()
   await expect(rowB).toBeHidden()
   await expect(header).toBeVisible()
-  await expect(header.locator('.collapse-chevron')).not.toHaveClass(/expanded/)
+  await expect(header.locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'false')
   await page.screenshot({ path: '/tmp/folder-collapse-menu/flat-folder-collapsed.png' })
 
 })

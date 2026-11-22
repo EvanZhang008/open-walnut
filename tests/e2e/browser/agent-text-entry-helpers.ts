@@ -119,8 +119,8 @@ export async function showCustomBoard(pane: Locator): Promise<void> {
   const custom = pane.getByTestId('board-view-custom')
   await expect(custom).toBeVisible({ timeout: 15_000 })
   await expect(custom).not.toHaveAttribute('aria-disabled', 'true', { timeout: 15_000 })
-  if ((await custom.getAttribute('aria-pressed')) !== 'true') await click(pane.page(), custom)
-  await expect(custom).toHaveAttribute('aria-pressed', 'true')
+  if ((await custom.getAttribute('aria-checked')) !== 'true') await click(pane.page(), custom)
+  await expect(custom).toHaveAttribute('aria-checked', 'true')
 }
 
 /** Keyboard focus by real input: a press on a harmless start, then Tab (Option-Tab in WebKit) until the target holds it. */

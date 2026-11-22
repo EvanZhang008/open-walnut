@@ -817,7 +817,7 @@ test('the tab bar is one switch, in the Display menu and in every heading menu',
   await openViewMenu(page);
   const panelSwitch = page.locator('.fb-menu').getByRole('switch', { name: 'Show tab bar' });
   await expect(panelSwitch).not.toBeChecked();
-  await expect(page.locator('.fb-menu [data-view-option="quick-views"]')).toHaveAttribute('role', 'switch');
+  await expect(page.locator('.fb-menu [data-view-option="quick-views"] [role="switch"]')).toHaveCount(1);
   await expect(page.locator('.fb-menu [data-view-option="view"] + [data-view-option="quick-views"]')).toHaveCount(1);
   await panelSwitch.click();
   await expect(panelSwitch).toBeChecked();

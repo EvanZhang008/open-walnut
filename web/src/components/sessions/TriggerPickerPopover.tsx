@@ -24,6 +24,7 @@ import {
 } from './trigger-picker-model';
 import '@/styles/trigger-picker.css';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { SegmentedControl } from '@/components/controls';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 
 export type TriggerPickerCloseReason = 'escape' | 'close' | 'outside' | 'prefill' | 'anchor-lost';
@@ -309,21 +310,14 @@ function TemplateForm({ template, taskId, sessionId, onHandoff, onDone }: {
         </MicField>
       </label>
       <div className="trigger-picker-field">
-        <span className="trigger-picker-label" id={`every-${template.id}`}>Check every</span>
-        <div className="trigger-picker-every" role="radiogroup" aria-labelledby={`every-${template.id}`}>
-          {EVERY_CHOICES.map((choice) => (
-            <button
-              key={choice}
-              type="button"
-              role="radio"
-              aria-checked={every === choice}
-              className={`trigger-picker-chip${every === choice ? ' is-on' : ''}`}
-              onClick={() => setEvery(choice)}
-            >
-              {choice}
-            </button>
-          ))}
-        </div>
+        <span className="trigger-picker-label" aria-hidden="true">Check every</span>
+        <SegmentedControl
+          className="trigger-picker-every"
+          aria-label="Check every"
+          value={every}
+          onChange={setEvery}
+          options={EVERY_CHOICES.map((choice) => ({ value: choice, label: choice }))}
+        />
       </div>
       {error && <p className="trigger-picker-note is-error" role="alert">{error}</p>}
       <div className="trigger-picker-actions">

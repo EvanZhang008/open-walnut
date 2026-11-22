@@ -11,6 +11,7 @@
 import { useId, useRef, type RefObject } from 'react';
 import { type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
 import { AnswerBox } from '@/components/common/AnswerBox';
+import { Radio } from '@/components/controls';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import {
   COPY,
@@ -65,11 +66,10 @@ export function MailCorrectStepWhere(props: StepWhereProps) {
   return (
     <div className="mail-correct-step" data-step="where">
       <p className="mail-correct-title" id={titleId}>{whereSentence(props.currentLabel)}</p>
-      <div className="mail-correct-choices" role="radiogroup" aria-labelledby={titleId}>
+      <div className="mail-correct-choices" role="group" aria-labelledby={titleId}>
         {choices.map((choice, index) => (
           <label className="mail-correct-choice" key={choice.value}>
-            <input
-              type="radio"
+            <Radio
               name={name}
               value={choice.value}
               checked={value === choice.value}
@@ -83,8 +83,7 @@ export function MailCorrectStepWhere(props: StepWhereProps) {
           </label>
         ))}
         <label className="mail-correct-choice">
-          <input
-            type="radio"
+          <Radio
             name={name}
             value={NEW_GROUP_VALUE}
             checked={value === NEW_GROUP_VALUE}

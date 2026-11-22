@@ -30,7 +30,7 @@ async function openComposer(page: Page): Promise<Locator> {
   return input
 }
 
-const activeTab = (page: Page) => page.locator(`${PALETTE} .mention-tab.on`)
+const activeTab = (page: Page) => page.locator(`${PALETTE} .mention-tab[aria-selected="true"]`)
 const groupNames = (page: Page) => page.locator(`${PALETTE} .mention-group-name`)
 const selectedTitle = (page: Page) => page.locator(`${PALETTE} .mention-row.selected .mention-title`)
 const groupOf = (page: Page, id: string) => page.locator(`${PALETTE} [data-group="${id}"]`)

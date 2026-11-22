@@ -409,7 +409,7 @@ test('the "+" menu carries an OFF switch for the parse, one line tall, and toggl
   await expect(row).toHaveText(/Auto-fill/)
 
   // One line: the label's own box, compared with the line height it renders at.
-  const label = row.locator('span:not(.chat-plus-menu-switch)')
+  const label = row.locator(':scope > span:not(.chat-plus-menu-switch)')
   const lines = await label.evaluate((el) => {
     const cs = getComputedStyle(el)
     const lh = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2

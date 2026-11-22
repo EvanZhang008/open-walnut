@@ -363,7 +363,7 @@ test.describe('controls', () => {
     await expect(child).toBeAttached()
     await expect(child).toBeHidden()
     expect(await H(page).getByTestId('harness-form').evaluate((f) => new FormData(f as HTMLFormElement).get('child-field'))).toBe('kept')
-    await expect(row.locator('svg.settings-disclosure-chevron')).toHaveCount(1)
+    await expect(row.locator('.settings-disclosure-chevron svg')).toHaveCount(1)
     await row.click()
     await expect(row).toHaveAttribute('aria-expanded', 'true')
     await expect(child).toBeVisible()

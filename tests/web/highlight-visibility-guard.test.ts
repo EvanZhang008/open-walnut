@@ -205,8 +205,6 @@ const NO_PAINTED_WORDS: Record<string, string> = {
   'web/src/styles/globals.css :: .session-panel.has-host-header > .session-panel-header': HEADER,
   'web/src/styles/thread-map.css :: .thread-map-item:is(:hover, :focus-within) .thread-map-status': CONTROL,
   'web/src/styles/buttons.css :: .btn-reserve::before': SLOT,
-  // A Phones & Cloud tab label's bold twin, zero tall, kept only so the picked tab does not widen.
-  'web/src/styles/devices-ways.css :: .pc-tab-text > .pc-tab-label::after': SLOT,
   'web/src/styles/buttons.css :: .btn-reserve::after': SLOT,
   'web/src/styles/corner-stack.css :: .corner-stack.is-tucked, .corner-stack.under-drawer': 'the notice corner (toasts, the approval card): a portal of its own that no painter searches or marks',
   'web/src/components/approvals/approvals.css :: .corner-stack.approval-dialog-open': 'the notice corner (toasts, the approval card): a portal of its own that no painter searches or marks',
@@ -214,7 +212,7 @@ const NO_PAINTED_WORDS: Record<string, string> = {
   'web/src/styles/session-plain-chat.css :: .session-panel.is-plain-chat:not(.draft-session-panel) > .session-panel-header': HEADER,
   'web/src/styles/walnut-agent.css :: .draft-header-tool-spacer': SLOT,
   // Reserves the width of the other label (Show/Hide, Copy/Copied) so the button never resizes (8c4167e3b).
-  'web/src/styles/corner-stack.css :: .notice-details-toggle::after': SLOT,
+  'web/src/styles/corner-stack.css :: :is(.notice-details-words, .notice-cmd-copy-words)::after': SLOT,
   'web/src/components/tasks/LinkHoverCard.tsx :: inline (1)': PLACING,
   'web/src/popout/ExtRelay.tsx :: inline (1)': PLACING,
   'web/src/components/passwords/ItemEditor.tsx :: inline (1)': PLACING,

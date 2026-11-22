@@ -1,5 +1,6 @@
 /**
- * The one boolean control: a 38x22 switch, role=switch. Optimistic callers set
+ * The one boolean control: a 38x22 switch (28x16 with size="sm", for a menu row or a dense
+ * toolbar), role=switch. Optimistic callers set
  * `busy` while the write is in flight (aria-busy; the control stays enabled so
  * a second flip wins). With `name`, a visually hidden checkbox mirrors the value
  * for FormData forms, and a bubbling input + change event is dispatched on it
@@ -8,10 +9,12 @@
 import { useEffect, useRef } from 'react'
 import { keepPress } from './press-keeps-target'
 import '@/styles/settings-controls.css'
+import '@/styles/choice-controls.css'
 
 interface ToggleSwitchProps {
   checked: boolean
-  onChange: (v: boolean) => void
+  /** Not called when `decorative`. */
+  onChange?: (v: boolean) => void
   id?: string
   name?: string
   disabled?: boolean
@@ -20,7 +23,20 @@ interface ToggleSwitchProps {
   label?: string
   'aria-label'?: string
   'aria-labelledby'?: string
+  /** The ControlGroup this switch is the master of (controls/ControlGroup.tsx). */
+  'aria-controls'?: string
   'data-testid'?: string
+  /** 'sm' = 28x16, for a menu row or a dense toolbar. */
+  size?: 'md' | 'sm'
+  /** Extra classes (placement only: margin, flex; never a look). */
+  className?: string
+  title?: string
+  /**
+   * Drawn only: an aria-hidden span with no role, focus or click of its own, for a row that is
+   * itself the control (a menuitemcheckbox in a menu, whose aria-checked is the state). A button
+   * inside that row would nest one control in another.
+   */
+  decorative?: boolean
 }
 
 export function ToggleSwitch({
@@ -33,7 +49,12 @@ export function ToggleSwitch({
   label,
   'aria-label': ariaLabel,
   'aria-labelledby': ariaLabelledBy,
+  'aria-controls': ariaControls,
   'data-testid': testId,
+  size,
+  className,
+  title,
+  decorative,
 }: ToggleSwitchProps) {
   const mirror = useRef<HTMLInputElement>(null)
   const flipped = useRef(false)
@@ -47,6 +68,16 @@ export function ToggleSwitch({
     el.dispatchEvent(new Event('change', { bubbles: true }))
   }, [checked])
 
+  const classes = `toggle-switch settings-switch${size === 'sm' ? ' wn-switch-sm' : ''}${checked ? ' toggle-on' : ''}${className ? ` ${className}` : ''}`
+  if (decorative) {
+    // aria-checked only feeds the one stylesheet's on rule; the span is hidden from assistive tech.
+    return (
+      <span aria-hidden="true" aria-checked={checked} data-testid={testId} className={classes}>
+        <span className="toggle-thumb" />
+      </span>
+    )
+  }
+
   const button = (
     <button
       id={id}
@@ -56,15 +87,17 @@ export function ToggleSwitch({
       aria-busy={busy ? true : undefined}
       aria-label={ariaLabel}
       aria-labelledby={ariaLabelledBy}
+      aria-controls={ariaControls}
       data-testid={testId}
+      title={title}
       disabled={disabled}
       // WebKit only tabs to buttons with an explicit tabindex (N20).
       tabIndex={disabled ? undefined : 0}
-      className={`toggle-switch settings-switch${checked ? ' toggle-on' : ''}`}
+      className={classes}
       onClick={() => {
         if (disabled) return
         if (name) flipped.current = true
-        onChange(!checked)
+        onChange?.(!checked)
       }}
       // A press keeps this switch even if the row moves under it before the release (press-keeps-target.ts).
       onPointerDown={(e) => keepPress(e.currentTarget, e)}

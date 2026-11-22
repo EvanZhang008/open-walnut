@@ -19,6 +19,7 @@ import { buildTaskQueryContext, safeNormalizeTaskQuery } from './task-query-stat
 import type { TpSort } from './tasks-page-sort'
 import type { TaskViewProps } from '@/plugins/types'
 import '@/styles/tasks-page.css'
+import { Chip } from '@/components/controls'
 import { MicInput } from '@/components/common/BoxMic'
 
 // The plugin contract's onOpenTask is not taken: a row opens on Home (TasksPageTable, useOpenTask).
@@ -154,9 +155,9 @@ export function TaskViewSurface({
         <div className="plugin-task-view-toolbar">
           <strong>{filtered.length} task{filtered.length === 1 ? '' : 's'}</strong>
           {activeProject === null && (
-            <button type="button" className={`tp-chip${currentGrouped ? ' on' : ''}`} onClick={handleGroupedChange}>
+            <Chip className="tp-chip" pressed={currentGrouped} onClick={handleGroupedChange}>
               Group
-            </button>
+            </Chip>
           )}
           <MicInput fieldClassName="plugin-task-search" data-no-draft="search"
             type="search"

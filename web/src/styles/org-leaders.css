@@ -7,15 +7,11 @@
 .org-leaders.is-chart { padding: 0 4px 6px 38px; }
 .org-leaders.is-chart .org-leaders-list { margin-left: 5px; padding-left: 6px; border-left: 1.5px solid color-mix(in srgb, var(--fg) 12%, transparent); }
 
-.org-leaders-toggle {
-  display: flex; align-items: center; gap: 4px; width: max-content; max-width: 100%; padding: 2px 6px 2px 2px; line-height: 20px;
-  border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--fg-muted); font: inherit; font-size: var(--font-size-sm); text-align: left; cursor: pointer;
-}
-.org-leaders-toggle:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); color: var(--fg); }
-.org-leaders-chevron { flex: none; width: 12px; font-size: var(--font-size-xs); text-align: center; }
-/* In the list the chevron sits on the guide line, where a kept row's eye sits. */
-.org-leaders.is-list .org-leaders-chevron { width: 13px; margin-left: -11.25px; border-radius: var(--radius-xs); background: var(--bg-secondary); }
-.org-leaders.is-list .org-leaders-toggle:hover .org-leaders-chevron { background: transparent; }
+/* The fold is the shared DisclosureButton; these only place it. */
+.org-leaders-toggle { width: max-content; max-width: 100%; }
+/* In the list the chevron sits on the guide line, where a kept row's eye sits (its fill hides the line). */
+.org-leaders.is-list .org-leaders-toggle > .wn-disclosure-chevron { width: 13px; margin-left: -8.25px; border-radius: 4px; background: var(--bg-secondary); }
+.org-leaders.is-list .org-leaders-toggle:hover > .wn-disclosure-chevron { background: transparent; }
 
 .org-leaders-group { display: flex; flex-direction: column; min-width: 0; }
 .org-leaders-project { padding: 4px 2px 2px; font-size: var(--font-size-xs); font-weight: 600; color: var(--fg-muted); }
@@ -25,12 +21,9 @@
 .org-leader { display: flex; align-items: flex-start; min-width: 0; border-radius: var(--radius-xs); }
 .org-leader:hover { background: color-mix(in srgb, var(--fg) 5%, transparent); }
 .org-leader[data-open] { background: color-mix(in srgb, var(--accent) 8%, transparent); }
-.org-leader-fold {
-  flex: none; width: 12px; height: 18px; margin-top: 4px; padding: 0; border: 0; border-radius: var(--radius-xs); background: transparent;
-  color: var(--fg-muted); font-size: var(--font-size-xs); line-height: 18px; text-align: center; cursor: pointer;
-}
-.org-leader-fold:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 8%, transparent); }
-.org-leader-fold.is-none { cursor: default; }
+/* The fold is the shared icon DisclosureButton (20 px); a row with nothing under it keeps the room. */
+.org-leader-fold { flex: none; }
+.org-leader-fold.is-none { width: 20px; }
 .org-leader-open {
   flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 6px; padding: 2px 2px 2px 1px;
   border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--font-size-sm); text-align: left; cursor: pointer;
@@ -43,7 +36,7 @@
 .org-leader-eye { flex: none; display: inline-flex; height: 22px; align-items: center; color: var(--fg-muted); opacity: .85; }
 .org-leader-eye svg { width: 12px; height: 12px; }
 .org-leader-leads { flex: none; color: var(--fg-muted); font-size: var(--font-size-xs); line-height: 22px; }
-.org-leaders-toggle:focus-visible, .org-leader-open:focus-visible, .org-leader-fold:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.org-leader-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* "+ New Director": the last row of an opened fold and of the DIRECTORS section (OrgNewDirector.tsx). */
 .org-new-director {

@@ -136,33 +136,17 @@
 }
 .session-servers-overlay .session-servers-list { max-width: none; }
 
+/* One server: its pick (the shared Chip, controls/Chip.tsx) and a stop error beside it. */
 .session-server-chip {
   display: inline-flex;
   align-items: center;
-  height: 24px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-secondary);
-  overflow: hidden;
 }
-.session-server-chip-active {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-}
-.session-server-chip-open {
+/* The port and the name sit in a row so the name alone is cut off. */
+.session-server-chip-open .wn-chip-label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 100%;
-  padding: 0 8px;
-  border: none;
-  background: transparent;
-  color: var(--fg);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
 }
-.session-server-chip-open:hover:not(:disabled) { background: var(--bg-hover); }
-.session-server-chip-open:disabled { cursor: default; color: var(--fg-muted); }
 /* The shown page's Stop, inside its chip: a word with the usual square. */
 /* The shown page's Stop, at the row's end (it never moves when chips change). */
 .session-servers-strip-stop {
@@ -185,7 +169,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.session-server-chip .session-server-name { color: var(--fg-secondary); }
 
 /* What answered on the port: green for a web page, grey for anything else. */
 .session-server-dot {
@@ -203,7 +186,6 @@
 
 /* The list's keys are the family's small keys; .session-server-btn only sizes them for touch and
    narrow cards. Open, or where it would be: every row's buttons line up. */
-.session-server-chip-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .session-server-btn-open,
 .session-server-btn-slot { min-width: 64px; box-sizing: border-box; }
 .session-server-btn-slot { display: inline-block; height: 28px; }

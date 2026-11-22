@@ -14,6 +14,7 @@ import { useOpenTask } from '@/hooks/useOpenTask'
 import { enterFocus, leaveFocus, useFocusSnapshot, type ActiveFocus, type FocusSpace } from './focus-store'
 import { FOCUS_LENGTHS, durationWords, outsideCounts, outsideWords, scopeLine, summarize, untilWords, type FocusSummary } from './focus-model'
 import { SpaceForm } from './SpaceForm'
+import { Radio } from '@/components/controls'
 import '@/components/actions/ask-card.css'
 import '@/styles/inline-answer.css'
 
@@ -85,10 +86,11 @@ export function FocusPanel({ ended, onClose }: { ended: ActiveFocus | null; onCl
       {!active && !editing && others.length > 0 && (
         <>
           <div className="focus-panel-caption">Stay for</div>
-          <div className="ask-card"><div className="ask-card-answer focus-length" role="radiogroup" aria-label="Stay for">
+          {/* The card family's option rows, each with the shared Radio; the radios' one name makes them a group. */}
+          <div className="ask-card"><div className="ask-card-answer focus-length" role="group" aria-label="Stay for">
             {FOCUS_LENGTHS.map((l) => (
               <label key={l.label} className={`org-answer-check${length === l.minutes ? ' is-on' : ''}`}>
-                <input type="radio" name="focus-length" checked={length === l.minutes} onChange={() => setLength(l.minutes)} />{l.label}
+                <Radio name="focus-length" checked={length === l.minutes} onChange={() => setLength(l.minutes)} />{l.label}
               </label>
             ))}
           </div></div>

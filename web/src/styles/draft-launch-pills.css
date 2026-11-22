@@ -161,7 +161,6 @@
   color: var(--fg-muted);
 }
 
-.draft-quick-chip:hover .draft-quick-chip-host,
 .draft-quick-chip-active .draft-quick-chip-host {
   color: inherit;
 }

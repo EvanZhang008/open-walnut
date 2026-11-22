@@ -229,7 +229,7 @@
   transform: rotate(90deg);
 }
 
-.routine-row-switch {
+.routine-row-toggle-slot {
   flex: 0 0 auto;
   display: inline-flex;
 }
@@ -306,30 +306,6 @@
 
 .routine-fold {
   margin-top: 8px;
-}
-
-.routine-fold-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  padding: 2px 0;
-  border: 0;
-  background: none;
-  color: var(--fg-secondary);
-  font: inherit;
-  cursor: pointer;
-}
-
-.routine-fold-toggle:hover {
-  color: var(--fg);
-}
-
-/* The fold's chevron sits a little apart from its words, the same size open or shut. */
-.routine-fold-toggle .routine-row-chevron {
-  width: 12px;
-  margin-left: 2px;
-  text-align: center;
 }
 
 .routine-fold .trigger-audit-list {
@@ -485,27 +461,13 @@
   cursor: pointer;
 }
 
-/* The composer and the form's schedule tabs drew their borders from a variable no
-   theme sets; they use the page's own. */
-.routines-view .routine-composer-input,
-.routines-view .routine-trigger-presets {
+/* The composer drew its border from a variable no theme sets; it uses the page's own. */
+.routines-view .routine-composer-input {
   border: 1px solid var(--border);
 }
 
 .routines-view .routine-composer-input {
   background: var(--bg-secondary);
-}
-
-.routines-view .routine-trigger-preset + .routine-trigger-preset {
-  border-left: 1px solid var(--border);
-}
-
-/* A choice reads as words, not as one more all-caps field label. */
-.routines-view .form-group label.cron-form-radio {
-  text-transform: none;
-  letter-spacing: normal;
-  font-weight: 400;
-  color: var(--fg);
 }
 
 /* The task a session routine runs in, picked by its title (RoutineTaskField). */
@@ -594,34 +556,21 @@
   }
 }
 
-/* The form on a phone: the schedule tabs in two rows of three, and the "Run with"
-   choices as plain radios whose whole line is the target (N2-19 had grown each
-   radio into a 44px empty circle, under an all-caps label). */
+/* The form on a phone: the six schedule choices in two rows of three (placement only, the
+   segmented control draws itself), and each "Run with" radio a whole 44 px line to tap. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .app-shell-navigation .routines-view .routine-trigger-presets {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    display: flex;
+    flex-wrap: wrap;
     width: 100%;
   }
-  .app-shell-navigation .routines-view .routine-trigger-preset {
-    padding: 0 6px;
-  }
-  .app-shell-navigation .routines-view .routine-trigger-preset.routine-trigger-preset:nth-child(3n + 1) {
-    border-left: 0;
-  }
-  .app-shell-navigation .routines-view .routine-trigger-preset:nth-child(n + 4) {
-    border-top: 1px solid var(--border);
+  .app-shell-navigation .routines-view .routine-trigger-presets > .wn-seg-item {
+    flex: 1 1 30%;
   }
   .app-shell-navigation .routines-view .cron-form-radio {
+    align-items: center;
     min-height: 44px;
     padding-right: 8px;
-    font-size: var(--font-size-lg);
-  }
-  .app-shell-navigation .routines-view .cron-form-radio input[type='radio'] {
-    min-width: 0;
-    min-height: 0;
-    width: 20px;
-    height: 20px;
   }
   .app-shell-navigation .routines-view .routine-task-hit {
     min-height: 44px;

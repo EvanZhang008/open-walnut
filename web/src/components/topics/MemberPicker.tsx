@@ -7,6 +7,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
 import { ICON_PLUS } from '@/components/common/Icons';
+import { Checkbox } from '@/components/controls';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import type { PickedMember } from './topic-dialogs';
 import { useMemberCandidates } from './member-candidates';
@@ -99,10 +100,7 @@ export function MemberPicker({ picked, onChange, host, onHost, exclude, autoFocu
           <MicInput data-no-draft="picker" className="app-modal-input" placeholder="Name" aria-label="Their name" data-testid="topic-person-name" value={person.name} micRef={nameMic} setText={(name) => setPerson((p) => (p ? { ...p, name } : p))} />
           <input data-no-draft="picker" className="app-modal-input" type="email" placeholder="name@example.com" aria-label="Their email" data-testid="topic-person-email" value={person.email}
             onChange={(e) => setPerson({ ...person, email: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); personGate.send(); } }} />
-          <label className="topic-person-bot">
-            <input type="checkbox" data-testid="topic-person-bot" checked={person.bot} onChange={(e) => setPerson({ ...person, bot: e.target.checked })} />
-            It is a bot
-          </label>
+          <Checkbox rowClassName="topic-person-bot" data-testid="topic-person-bot" checked={person.bot} onChange={(bot) => setPerson({ ...person, bot })} label="It is a bot" />
           <span className="topic-person-actions">
             <button type="button" className="btn" onClick={() => setPerson(null)}>Cancel</button>
             <button type="button" className="btn btn-primary" data-testid="topic-person-add" disabled={!personOk && !personGate.micBusy && !personGate.waiting} onClick={personGate.send} {...dictationWaitProps(personGate)}>Add</button>

@@ -197,7 +197,8 @@ test.describe('the /notes editor and the session Files pane on one note', () => 
     // The raw-bytes tab: a markdown file opens in the WYSIWYG editor, and this
     // test is about the bytes both surfaces agree on.
     // "Source" in a wide bar, one "Show source" icon in a tight one.
-    await panel.locator('.fv-doc-bar').getByRole('button', { name: /^(Source|Show source)$/ }).click()
+    const docBar = panel.locator('.fv-doc-bar')
+    await docBar.getByRole('radio', { name: 'Source', exact: true }).or(docBar.getByRole('button', { name: 'Show source', exact: true })).click()
     const fileEditor = panel.locator('.fv-source-editor .cm-content')
     // The held PUT means this pane is looking at the PRE-edit bytes.
     await expect(fileEditor).toContainText('seed line', { timeout: 15_000 })

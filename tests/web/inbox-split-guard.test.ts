@@ -24,7 +24,9 @@ describe('inbox split uses one reader and kept view choices', () => {
     const source = read('components/inbox/LetterEnvelopeRow.tsx');
     expect(source).toContain('data-peek-row=""');
     expect(source).toContain('{!indexRow && <div id={bodyId}');
-    expect(source).toContain('if (indexRow) onOpen(); else toggleExpanded()');
+    // An index row's Read letter opens the reader; only a card's is the disclosure that unfolds it here.
+    expect(source).toMatch(/\{indexRow \? \(\s*<button[^>]*onClick=\{\(event\) => \{ event\.stopPropagation\(\); onOpen\(\); \}\}/);
+    expect(source).toMatch(/<DisclosureButton expanded=\{expanded\}[\s\S]*?toggleExpanded\(\)/);
     const css = read('styles/inbox-split.css');
     expect(css).toContain('@container (max-width: 620px)');
     expect(css).toContain('grid-template-rows: minmax(100px, 32%) minmax(0, 1fr)');

@@ -104,15 +104,15 @@ export function UsageBreakdownCard({ report, days, loading, onPick }: {
   return (
     <SettingsGroup className="usage-bd" data-testid="usage-breakdown" heading={`Cost per ${per}`}>
       <div className="settings-row settings-row-stacked usage-bd-body" data-wide="true" data-grain={grain} data-breakdown={breakdown}>
-        {/* Both switches sit above the chart, where they can wrap; the heading row is too narrow for six choices. */}
+        {/* Both choices sit above the chart, where they can wrap; the heading row is too narrow for six choices. */}
         <div className="usage-bd-toolbar">
-          <span className="usage-bd-switch">
-            <span className="usage-bd-switch-label">Break down by</span>
+          <span className="usage-bd-pick">
+            <span className="usage-bd-pick-label">Break down by</span>
             <SegmentedControl aria-label="Break down by" value={breakdown} onChange={(v) => { setBreakdown(v); setOpen(false); }}
               options={offered.map((b) => ({ value: b.value, label: b.label, testId: `usage-breakdown-${b.value}` }))} />
           </span>
-          <span className="usage-bd-switch">
-            <span className="usage-bd-switch-label">Each point is a</span>
+          <span className="usage-bd-pick">
+            <span className="usage-bd-pick-label">Each point is a</span>
             <SegmentedControl aria-label="Each point is a" value={grainPick === 'auto' ? grain : grainPick} onChange={(v) => setGrain(v)}
               options={GRAINS.map((g) => ({ value: g.value, label: g.label, testId: `usage-grain-${g.value}` }))} />
           </span>

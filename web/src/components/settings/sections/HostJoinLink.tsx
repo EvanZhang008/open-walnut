@@ -21,7 +21,8 @@ import { SettingsRow } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { CopyButton } from '../inputs/CopyButton';
 import { SegmentedControl } from '../inputs/SegmentedControl';
-import { ChevronGlyph, SpinnerGlyph } from '../settings-glyphs';
+import { SpinnerGlyph } from '../settings-glyphs';
+import { DisclosureButton } from '@/components/controls';
 
 type JoinOs = 'mac' | 'linux' | 'windows';
 const isOs = oneOf(['mac', 'linux', 'windows'] as const);
@@ -279,17 +280,14 @@ export function HostJoinLink({ invite, companion, relay, making, onNewLink, onDo
             </span>
             <SettingsButton onClick={onDone} title="Put this link away. It still works until it ends, and you can cancel it." data-testid="host-network-done">Close</SettingsButton>
           </span>
-          <button
-            type="button"
-            className="rh-join-more"
-            aria-expanded={notes}
+          <DisclosureButton
+            expanded={notes}
             aria-controls={notesId}
             data-testid="host-network-more"
             onClick={() => setNotes(!notes)}
           >
-            <ChevronGlyph size={10} className="settings-disclosure-chevron" />
             More about this link
-          </button>
+          </DisclosureButton>
           <span className="rh-join-notes" id={notesId} hidden={!notes}>
             {windowsNotes && invite.windowsApp && invite.windowsCommand && (
               <span className="rh-join-note">

@@ -87,9 +87,7 @@
 .mail-rule-condition { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .mail-rule-value-input { flex: 1 1 180px; min-width: 0; }
 .mail-rule-then { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.mail-rule-skip-inbox { display: flex; align-items: flex-start; gap: 7px; margin-top: 2px; font-size: var(--font-size-md); line-height: 1.45; color: var(--fg-secondary); cursor: pointer; }
-.mail-rule-skip-inbox input { margin: 2px 0 0; flex: 0 0 auto; }
-.mail-rule-skip-inbox:has(input:disabled) { opacity: 0.55; cursor: default; }
+.mail-rule-skip-inbox { margin-top: 2px; }
 .mail-rule-skip-badge { margin-left: 6px; font-size: var(--font-size-xs); color: var(--accent); white-space: nowrap; }
 .mail-rule-field-error { flex-basis: 100%; margin: 0; font-size: var(--font-size-sm); color: color-mix(in srgb, var(--error) 80%, var(--fg)); overflow-wrap: anywhere; }
 /* The calm lines under a condition: why it stays off, a hint, what the field takes. */
@@ -164,4 +162,3 @@
 .mail-rule-sample { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
 .mail-rule-sample-sender { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mail-rule-sample-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-secondary); }
-.mail-rule-samples-toggle { margin-left: 0; }

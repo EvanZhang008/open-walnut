@@ -64,6 +64,7 @@ import { AgentText } from '@/components/common/AgentText';
 import { taskTextSource } from '@/utils/agent-text-source';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import { threadCountLabel } from '@open-walnut/thread-view';
+import { DisclosureButton, Tab, TabList, SegmentedControl } from '@/components/controls';
 
 /** What the rows need from the page to answer in place. */
 export interface OrgAnswers {
@@ -86,13 +87,14 @@ const MODE_LABELS: Record<OrgTaskMode, string> = { all: 'All tasks', board: 'Boa
 
 function ModeSwitch({ mode, modes, onPick }: { mode: OrgTaskMode; modes: readonly OrgTaskMode[]; onPick: (m: OrgTaskMode) => void }) {
   return (
-    <div className="org-task-modes" role="group" aria-label="Show the tasks by" data-testid="org-task-modes">
-      {modes.map((m) => (
-        <button key={m} type="button" aria-pressed={mode === m} className={mode === m ? 'is-on' : ''} data-testid={`org-task-mode-${m}`} onClick={() => onPick(m)}>
-          {MODE_LABELS[m]}
-        </button>
-      ))}
-    </div>
+    <SegmentedControl
+      className="org-task-modes"
+      data-testid="org-task-modes"
+      aria-label="Show the tasks by"
+      value={mode}
+      onChange={onPick}
+      options={modes.map((m) => ({ value: m, label: MODE_LABELS[m], testId: `org-task-mode-${m}` }))}
+    />
   );
 }
 
@@ -415,30 +417,33 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped
   return (<>
     {FullscreenBackdrop}
     <aside className={`org-rail is-${placement}${isFullscreen ? ' is-wide' : ''}${fullscreenClass}`} data-testid="org-rail" data-placement={placement} {...(isFullscreen ? { 'data-fullscreen': '1' } : {})} {...(width && !isFullscreen ? { style: { width } } : {})}>
-      <div className="org-top has-switch" data-testid="org-top" data-view={view}>
+      <div className="org-top has-switch" data-choice-exempt="the header row that holds the tabs, not a switch" data-testid="org-top" data-view={view}>
         {/* Threads first (2026-11-04, the user: "this thread shoudl also be the first"), then Tasks and Brief. */}
-        <div className="org-top-tabs" role="group" aria-label={keepsBrief ? (briefOff ? 'Threads or Tasks' : 'Threads, Tasks or Brief') : 'Tasks'}>
+        <TabList flush className="org-top-tabs" aria-label={keepsBrief ? (briefOff ? 'Threads or Tasks' : 'Threads, Tasks or Brief') : 'Tasks'}>
           {keepsBrief && (
-            <button type="button" aria-pressed={view === 'threads'} className={`org-top-tab${view === 'threads' ? ' is-on' : ''}`} data-testid="org-top-threads" onClick={() => onView('threads')}>
-              Threads{threadsCount > 0 && <span className="org-top-count" title={`${threadCountLabel(threadsCount)} for you`}>{threadsCount}</span>}
-              {threadsNew && <i className="org-top-new" data-testid="org-top-threads-new"><span className="org-sr-only">, news since you looked</span></i>}
-            </button>
+            <Tab selected={view === 'threads'} className="org-top-tab" data-testid="org-top-threads" onClick={() => onView('threads')}
+              count={threadsCount > 0 ? <span className="org-top-count" title={`${threadCountLabel(threadsCount)} for you`}>{threadsCount}</span> : undefined}
+              trailing={threadsNew ? <i className="org-top-new" data-testid="org-top-threads-new"><span className="org-sr-only">, news since you looked</span></i> : undefined}>
+              Threads
+            </Tab>
           )}
-          <button type="button" aria-pressed={view === 'task'} className={`org-top-tab${view === 'task' ? ' is-on' : ''}`} data-testid="org-top-task" onClick={() => onView('task')}>
-            Tasks<span className="org-top-count">{row.counts.open}</span>
-          </button>
-          {keepsBrief && !briefOff && (<>
-            <button type="button" aria-pressed={view === 'brief'} className={`org-top-tab${view === 'brief' ? ' is-on' : ''}`} data-testid="org-top-brief" onClick={() => onView('brief')}>
-              Brief{briefNew && <i className="org-top-new" data-testid="org-top-brief-new"><span className="org-sr-only">, rewritten since you read it</span></i>}
-            </button>
-          </>)}
-        </div>
+          <Tab selected={view === 'task'} className="org-top-tab" data-testid="org-top-task" onClick={() => onView('task')}
+            count={<span className="org-top-count">{row.counts.open}</span>}>
+            Tasks
+          </Tab>
+          {keepsBrief && !briefOff && (
+            <Tab selected={view === 'brief'} className="org-top-tab" data-testid="org-top-brief" onClick={() => onView('brief')}
+              trailing={briefNew ? <i className="org-top-new" data-testid="org-top-brief-new"><span className="org-sr-only">, rewritten since you read it</span></i> : undefined}>
+              Brief
+            </Tab>
+          )}
+        </TabList>
         {/* Its refresh turn is on its way (core/sessions/brief-refresh.ts): the chat and the Brief are being brought up to date. */}
         {view === 'task' && briefUpdating && <span className="org-top-updating" data-testid="org-top-updating">Updating…</span>}
         {view === 'brief' && brief?.text && (
-          <button type="button" className="org-top-fold" data-testid="org-brief-fold" aria-expanded={!briefFolded} onClick={() => { onBriefFolded(!briefFolded); writeBriefFolded(!briefFolded); }}>
+          <DisclosureButton expanded={!briefFolded} className="org-top-fold" data-testid="org-brief-fold" onClick={() => { onBriefFolded(!briefFolded); writeBriefFolded(!briefFolded); }}>
             {briefFolded ? 'Show all' : 'Fold'}
-          </button>
+          </DisclosureButton>
         )}
         <span className="org-top-acts">
           <button type="button" className="org-rail-icon" data-testid="org-rail-fullscreen" aria-pressed={isFullscreen}

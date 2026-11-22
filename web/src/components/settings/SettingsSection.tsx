@@ -34,7 +34,8 @@ import {
   useSettingsPane,
   useSettingsPaneChrome,
 } from './settings-pane-context'
-import { ChevronGlyph, SpinnerGlyph } from './settings-glyphs'
+import { SpinnerGlyph } from './settings-glyphs'
+import { DisclosureChevron } from '@/components/controls'
 import { CopyButton } from './inputs/CopyButton'
 import '@/styles/settings-shell.css'
 import '@/styles/settings-controls.css'
@@ -514,7 +515,7 @@ export function SettingsDisclosure({
         </span>
         <span className="settings-row-actions">
           {hasContent(summary) && <span className="settings-disclosure-summary">{summary}</span>}
-          <ChevronGlyph size={12} className="settings-disclosure-chevron" />
+          <DisclosureChevron open={shown} className="settings-disclosure-chevron" />
         </span>
       </button>
       <div id={contentId} ref={contentRef} className="settings-disclosure-content" hidden={!shown}>

@@ -5,7 +5,7 @@
  * So the type scale is one step below the rest of Settings (13px label, 12px
  * help, 11px status line) and the rows sit in a tight stack, while the box, the
  * borders and the colours stay the shared settings language (.settings-row,
- * .settings-subcard, .settings-collapsible).
+ * .settings-subcard).
  *
  * Everything here is scoped under a class this section owns, so no other panel
  * inherits the compacted metrics.
@@ -200,12 +200,6 @@
 
 .engine-setting-reset:hover {
   color: var(--accent);
-}
-
-/* ── Collapsed group ── */
-
-.engine-settings-collapsible > .settings-collapsible-title {
-  font-size: var(--font-size-md);
 }
 
 /* ── Files footer ── */

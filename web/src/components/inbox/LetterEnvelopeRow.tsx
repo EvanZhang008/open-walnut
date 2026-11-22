@@ -9,6 +9,7 @@
 import { memo, useId, useState } from 'react';
 import { LetterCardBody } from './LetterCardBody';
 import { AgentText } from '@/components/common/AgentText';
+import { DisclosureButton } from '@/components/controls';
 import { formatRelative } from '@/contexts/notifications';
 import { LETTER_TYPE_LABEL, answeredByName, letterOriginOf, type LetterEnvelope } from '@/api/human-inbox';
 import { LetterOriginBadge } from './LetterOriginBadge';
@@ -114,9 +115,14 @@ export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
       )}
 
       <div className="hib-row-actions">
-        <button className="btn btn-sm hib-row-btn hib-card-toggle" aria-expanded={indexRow ? undefined : expanded} aria-controls={indexRow ? undefined : bodyId} onClick={(event) => { event.stopPropagation(); if (indexRow) onOpen(); else toggleExpanded(); }}>
-          <span className="hib-card-chevron" aria-hidden="true">›</span>{!indexRow && expanded ? 'Collapse' : 'Read letter'}
-        </button>
+        {/* An index row opens the letter in the reader (a command); a card unfolds its body here (a disclosure). */}
+        {indexRow ? (
+          <button className="btn btn-sm hib-row-btn hib-card-toggle" onClick={(event) => { event.stopPropagation(); onOpen(); }}>Read letter</button>
+        ) : (
+          <DisclosureButton expanded={expanded} className="hib-card-toggle" aria-controls={bodyId} onClick={(event) => { event.stopPropagation(); toggleExpanded(); }}>
+            {expanded ? 'Collapse' : 'Read letter'}
+          </DisclosureButton>
+        )}
         <button
           className="btn btn-sm hib-row-btn"
           onClick={(e) => { e.stopPropagation(); onTogglePin(); }}

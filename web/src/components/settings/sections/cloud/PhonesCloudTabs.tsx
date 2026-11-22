@@ -10,6 +10,8 @@
  * Walnut".
  */
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Tab, TabList } from '@/components/controls';
 import { SettingsSection } from '../../SettingsSection';
 import { useIsReplicaServer, useServerCapability } from '@/hooks/useServerRole';
 import { DEVICES_TAB, WAY_PANES, type PhonesCloudTab } from '../../settings-way-panes';
@@ -122,8 +124,9 @@ export function usePhonesCloudView(): PhonesCloudView {
 }
 
 export function TabBar({ tabs, current }: { tabs: readonly TabView[]; current: PhonesCloudTab | null }) {
+  const navigate = useNavigate();
   // A narrow pane scrolls the bar sideways: bring the open tab into it (the bar only, never the page).
-  const barRef = useRef<HTMLElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
   // A tab's tag and dot arrive with the data and widen it: the open tab is brought into
   // view again then (it stayed cut off at the right edge of a phone).
   const shape = tabs.map((t) => `${t.id}:${t.label}:${t.tag ?? ''}:${t.dot ?? ''}`).join('|');
@@ -153,28 +156,28 @@ export function TabBar({ tabs, current }: { tabs: readonly TabView[]; current: P
     return () => { bar.removeEventListener('scroll', read); ro?.disconnect(); };
   }, [shape]);
   return (
-    <nav ref={barRef} className="pc-tabs" aria-label={PANE_TITLE} data-testid="pc-tabs" data-more={more || undefined}>
-      {tabs.map((t) => (
-        // A same-page hash link: SettingsPage turns it into a hash replace, as for the nav.
-        <a
+    <TabList ref={barRef} className="pc-tabs" aria-label={PANE_TITLE} data-testid="pc-tabs" data-more={more || undefined}>
+      {tabs.map((t, i) => (
+        // Each tab is its own pane at its own hash: picked, the address is replaced, as a nav click does.
+        <Tab
           key={t.id}
-          href={`#${t.id}`}
+          selected={t.id === current}
+          tabIndex={t.id === current || (current === null && i === 0) ? 0 : -1}
           className="pc-tab"
           aria-current={t.id === current ? 'page' : undefined}
           data-testid={`pc-tab-${t.id}`}
+          onClick={() => { if (t.id !== current) navigate({ hash: `#${t.id}` }, { replace: true }); }}
+          detail={<span className="pc-tab-hint">{TAB_HINT[t.id]}</span>}
         >
           {t.dot && <span className="devices-way-dot" data-dot={t.dot} aria-hidden="true" />}
           {t.state && !t.tag && <span className="settings-visually-hidden">{`${t.state}: `}</span>}
-          <span className="pc-tab-text">
-            {t.label
-              ? <span className="pc-tab-label" data-text={t.label}>{t.label}</span>
-              : <span className="pc-tab-label pc-tab-label-pending" role="img" aria-label="Loading" data-testid="pc-tab-label-pending" />}
-            <span className="pc-tab-hint">{TAB_HINT[t.id]}</span>
-          </span>
+          {t.label
+            ? <span className="pc-tab-label">{t.label}</span>
+            : <span className="pc-tab-label pc-tab-label-pending" role="img" aria-label="Loading" data-testid="pc-tab-label-pending" />}
           {t.tag && <span className="devices-way-tag" data-dot={t.tag === 'In use' ? 'on' : t.dot}>{t.tag}</span>}
-        </a>
+        </Tab>
       ))}
-    </nav>
+    </TabList>
   );
 }
 

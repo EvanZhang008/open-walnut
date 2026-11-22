@@ -44,6 +44,7 @@ export function FocusRailButton() {
         ref={triggerRef}
         type="button"
         className={`sidebar-link sidebar-panel-toggle sidebar-focus-link${open ? ' is-open' : ''}`}
+        data-choice-exempt="sidebar nav link that opens the Focus popover"
         onClick={() => (open ? close() : setOpen(true))}
         aria-label={live ? `Focus: ${live.name}` : 'Focus'}
         aria-expanded={open}

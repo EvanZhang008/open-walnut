@@ -3,6 +3,7 @@ import { MicField, type BoxMicHandle, MicInput } from '@/components/common/BoxMi
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { useDraftValue } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
+import { Checkbox } from '@/components/controls';
 import type { AgentDefinition, CreateAgentInput, UpdateAgentInput, ContextSourceId, ContextSourceConfig } from '@/api/agents';
 
 interface AgentFormProps {
@@ -259,22 +260,19 @@ export function AgentForm({ agent, cloneFrom, onSave, onCancel }: AgentFormProps
                 const state = contextSources[def.id];
                 return (
                   <div key={def.id} className="context-source-row">
-                    <label className="context-source-toggle">
-                      <input
-                        type="checkbox"
-                        checked={def.auto || state.enabled}
-                        disabled={def.auto}
-                        onChange={(e) => {
-                          if (def.auto) return;
-                          setContextSources((prev) => ({
-                            ...prev,
-                            [def.id]: { ...prev[def.id], enabled: e.target.checked },
-                          }));
-                        }}
-                      />
-                      <span>{def.label}</span>
-                      {def.auto && <span className="context-source-auto-badge">AUTO</span>}
-                    </label>
+                    <Checkbox
+                      rowClassName="context-source-toggle"
+                      checked={def.auto || state.enabled}
+                      disabled={def.auto}
+                      onChange={(checked) => {
+                        if (def.auto) return;
+                        setContextSources((prev) => ({
+                          ...prev,
+                          [def.id]: { ...prev[def.id], enabled: checked },
+                        }));
+                      }}
+                      label={<>{def.label}{def.auto && <span className="context-source-auto-badge">AUTO</span>}</>}
+                    />
                     {!def.auto && state.enabled && (
                       <input
                         data-draft-key={kept.key ?? undefined}

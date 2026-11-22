@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { TIME_BASIS_OPTIONS } from './view-filter-model';
 import type { FilterBarController, FilterOrigin, FilterState } from './filter-bar-types';
 import type { FilterWriter } from './FilterValueList';
+import { SegmentedControl } from '@/components/controls';
 
 export function CustomTime({ c, w, origin }: { c: FilterBarController; w: FilterWriter; origin: FilterOrigin }) {
   const time = c.state.time;
@@ -30,20 +31,17 @@ export function CustomTime({ c, w, origin }: { c: FilterBarController; w: Filter
           if (Number.isFinite(n) && n > 0) write({ customValue: n });
         }}
       />
-      <span className="tp-seg" role="radiogroup" aria-label="Custom window unit">
-        {(['hours', 'days'] as const).map((unit) => (
-          <button
-            key={unit}
-            type="button"
-            role="radio"
-            className="tp-seg-btn"
-            aria-checked={time.customUnit === unit}
-            onClick={() => write({ customUnit: unit })}
-          >
-            {unit === 'hours' ? 'Hours' : 'Days'}
-          </button>
-        ))}
-      </span>
+      <SegmentedControl
+        className="tp-seg"
+        aria-label="Custom window unit"
+        horizontalKeys
+        value={time.customUnit}
+        onChange={(unit) => write({ customUnit: unit })}
+        options={[
+          { value: 'hours', label: 'Hours', className: 'tp-seg-btn' },
+          { value: 'days', label: 'Days', className: 'tp-seg-btn' },
+        ]}
+      />
     </div>
   );
 }
@@ -51,21 +49,19 @@ export function CustomTime({ c, w, origin }: { c: FilterBarController; w: Filter
 export function TimeBasis({ c, w, origin }: { c: FilterBarController; w: FilterWriter; origin: FilterOrigin }) {
   // No window set: the basis reads as a choice, not as a live filter (F21).
   return (
-    <span className={`tp-seg fb-time-basis${c.state.time.preset === null ? ' is-unset' : ''}`} role="radiogroup" aria-label="Time basis">
-      {TIME_BASIS_OPTIONS.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          role="radio"
-          className="tp-seg-btn"
-          aria-checked={c.state.time.basis === o.value}
-          data-time-basis={o.value}
-          title={o.value === 'created_or_updated' ? 'Created or updated in the window' : `${o.label} in the window`}
-          onClick={() => w.write((s) => ({ ...s, time: { ...s.time, basis: o.value } }), origin)}
-        >
-          {o.label}
-        </button>
-      ))}
-    </span>
+    <SegmentedControl
+      className={`tp-seg fb-time-basis${c.state.time.preset === null ? ' is-unset' : ''}`}
+      aria-label="Time basis"
+      horizontalKeys
+      value={c.state.time.basis}
+      onChange={(basis) => w.write((s) => ({ ...s, time: { ...s.time, basis } }), origin)}
+      options={TIME_BASIS_OPTIONS.map((o) => ({
+        value: o.value,
+        label: o.label,
+        className: 'tp-seg-btn',
+        data: { 'data-time-basis': o.value },
+        title: o.value === 'created_or_updated' ? 'Created or updated in the window' : `${o.label} in the window`,
+      }))}
+    />
   );
 }

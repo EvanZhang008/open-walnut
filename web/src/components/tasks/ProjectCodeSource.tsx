@@ -13,6 +13,7 @@ import { saveProjectMetadata, type ProjectMetadata, type WorkspaceSource } from 
 import { fetchWorkspaceCandidates, type WorkspaceCandidate } from '@/api/workspaces';
 import { refreshProjectRegistry, type ProjectRegistryRow } from '@/hooks/useProjectRegistry';
 import { log } from '@/utils/log';
+import { Checkbox, Chip, ChipGroup } from '@/components/controls';
 import '@/styles/project-start.css';
 
 const FOLDER = '';
@@ -91,30 +92,29 @@ export function ProjectCodeSource({ project, metadata, row, onSaved }: {
           </div>
         </div>
       )}
-      <div className="pcs-choices" role="radiogroup" aria-label="Code source">
-        <button type="button" role="radio" aria-checked={picked === FOLDER && !onLegacy} data-testid="project-code-source-folder"
-          className={`pcs-choice${picked === FOLDER && !onLegacy ? ' is-picked' : ''}`} onClick={() => setEdit(null)}
+      <ChipGroup className="pcs-choices" role="radiogroup" aria-label="Code source">
+        <Chip role="radio" pressed={picked === FOLDER && !onLegacy} data-testid="project-code-source-folder"
+          onClick={() => setEdit(null)}
           // A legacy project leaves the folder flow through its Workspace setting, not here.
           disabled={legacy}
           title={legacy ? 'To start in a folder, turn off the isolated workspace in this project\'s Workspace setting' : 'A new task starts in a folder you pick (today\'s way)'}>
           Folder
-        </button>
+        </Chip>
         {legacy && (
-          <button type="button" role="radio" aria-checked={onLegacy} data-testid="project-code-source-auto"
-            className={`pcs-choice${onLegacy ? ' is-picked' : ''}`} onClick={() => setEdit(null)}
+          <Chip role="radio" pressed={onLegacy} data-testid="project-code-source-auto"
+            onClick={() => setEdit(null)}
             title="Each start makes an isolated workspace of the Working Dir, by the project's Workspace setting">
             Workspace setting
-          </button>
+          </Chip>
         )}
         {(providers ?? []).map((p) => (
-          <button key={p.provider} type="button" role="radio" aria-checked={picked === p.provider}
+          <Chip key={p.provider} role="radio" pressed={picked === p.provider}
             data-testid={`project-code-source-${p.provider}`}
-            className={`pcs-choice${picked === p.provider ? ' is-picked' : ''}`}
             onClick={() => setEdit((e) => ({ provider: p.provider, ...(e?.anchor ? { anchor: e.anchor } : {}), inputs: e?.provider === p.provider ? e.inputs ?? {} : {} }))}>
             {p.displayName}
-          </button>
+          </Chip>
         ))}
-      </div>
+      </ChipGroup>
       {!providers && !loadError && <div className="pcs-note">Loading the workspace kinds…</div>}
       {loadError && <div className="pcs-note is-error">{loadError}</div>}
       {edit && (
@@ -183,22 +183,21 @@ function InputField({ name, field, value, onChange }: { name: string; field: Fie
   if (field.type === 'string' && field.enum?.length) {
     const current = typeof value === 'string' ? value : (field.default as string | undefined);
     return (
-      <div className="pcs-field" role="radiogroup" aria-label={title}>
+      <div className="pcs-field">
         <span className="pcs-field-label">{title}</span>
-        <div className="pcs-choices">
+        <ChipGroup className="pcs-choices" role="radiogroup" aria-label={title}>
           {field.enum.map((opt) => (
-            <button key={opt} type="button" role="radio" aria-checked={current === opt}
-              className={`pcs-choice${current === opt ? ' is-picked' : ''}`} onClick={() => onChange(opt)}>{opt}</button>
+            <Chip key={opt} role="radio" pressed={current === opt} onClick={() => onChange(opt)}>{opt}</Chip>
           ))}
-        </div>
+        </ChipGroup>
       </div>
     );
   }
   if (field.type === 'boolean') {
     return (
       <div className="pcs-field">
-        <button type="button" aria-pressed={value === true} className={`pcs-choice${value === true ? ' is-picked' : ''}`}
-          title={field.description} onClick={() => onChange(value !== true)}>{title}</button>
+        {/* A field of a form that waits for Save: a checkbox (standard.md, "Choice controls"). */}
+        <Checkbox checked={value === true} label={title} title={field.description} onChange={(on) => onChange(on)} />
       </div>
     );
   }

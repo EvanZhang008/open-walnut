@@ -60,6 +60,7 @@ import { useLiveEdit, liveUnreachablePausedMessage, CONFIG_WRITE_DEBOUNCE_MS, ty
 import { useEmbeddedImageFreshness, type EmbeddedImageFreshness } from '@/hooks/useEmbeddedImageFreshness';
 import { FileHistoryPanel } from '@/components/common/FileHistoryPanel';
 import { PdfPreview } from '@/components/common/PdfPreview';
+import { SegmentedControl } from '@/components/controls';
 import {
   ICON_NEW_TAB, ICON_NOTE, ICON_COPY, ICON_DOWNLOAD, ICON_FOLDER, ICON_OPEN_APP, ICON_EXPAND, ICON_COLLAPSE,
   ICON_SEARCH, ICON_HISTORY, ICON_MORE, ICON_CHECK, ICON_CLOSE, ICON_CODE, ICON_FILE, ICON_SKIP_BACK, ICON_SKIP_FORWARD,
@@ -2279,10 +2280,10 @@ export function FileContentView({
         {pathCopied && <span className="fv-draft-note" role="status">Path copied</span>}
         {saveStateEl}
         {isRenderable && tight && barFold < 4 && (
-          /* No room for two words: one switch to the other view. */
+          /* No room for two words: one button that flips to the other view. */
           <button
             type="button"
-            className="fv-doc-icon fv-mode-switch"
+            className="fv-doc-icon"
             onClick={() => switchTab(!showSource)}
             aria-label={showSource ? 'Show preview' : 'Show source'}
             title={showSource ? 'Show preview' : 'Show source'}
@@ -2291,31 +2292,24 @@ export function FileContentView({
           </button>
         )}
         {isRenderable && !tight && (
-          <span className="fv-mode-toggle" role="group" aria-label="View">
-            {/* Both tabs are LIVE EDITORS of the same file (rendered doc vs raw
-                bytes), so switching carries the unsaved buffer across: the
-                draft captured here seeds the next editor. No confirm needed. */}
-            <button
-              type="button"
-              className={`fv-html-tab fv-mode-tab${!showSource ? ' active' : ''}`}
-              aria-pressed={!showSource}
-              aria-label={barFit === 'compact' ? 'Preview' : undefined}
-              title={barFit === 'compact' ? 'Preview' : undefined}
-              onClick={() => switchTab(false)}
-            >
-              {barFit === 'compact' ? ICON_FILE : 'Preview'}
-            </button>
-            <button
-              type="button"
-              className={`fv-html-tab fv-mode-tab${showSource ? ' active' : ''}`}
-              aria-pressed={showSource}
-              aria-label={barFit === 'compact' ? 'Source' : undefined}
-              title={barFit === 'compact' ? 'Source' : undefined}
-              onClick={() => switchTab(true)}
-            >
-              {barFit === 'compact' ? ICON_CODE : 'Source'}
-            </button>
-          </span>
+          /* Both views are LIVE EDITORS of the same file (rendered doc vs raw
+             bytes), so switching carries the unsaved buffer across: the
+             draft captured here seeds the next editor. No confirm needed. */
+          <SegmentedControl
+            className="fv-mode-toggle"
+            aria-label="View"
+            value={showSource ? 'source' : 'preview'}
+            onChange={(v) => switchTab(v === 'source')}
+            options={barFit === 'compact'
+              ? [
+                { value: 'preview', label: ICON_FILE, ariaLabel: 'Preview', title: 'Preview', icon: true },
+                { value: 'source', label: ICON_CODE, ariaLabel: 'Source', title: 'Source', icon: true },
+              ]
+              : [
+                { value: 'preview', label: 'Preview' },
+                { value: 'source', label: 'Source' },
+              ]}
+          />
         )}
         {extra}
         {canFind && barFold < 3 && (
@@ -2405,7 +2399,7 @@ export function FileContentView({
         <span>10s</span>{ICON_SKIP_FORWARD}
       </button>
       <select
-        className="fv-html-tab fv-speed-select"
+        className="fv-speed-select"
         value={playbackRate}
         onChange={(e) => {
           const rate = Number(e.target.value);
@@ -2506,7 +2500,7 @@ export function FileContentView({
                 The document preview couldn’t load because this page is running an
                 older version of the app (a deploy replaced it).
                 {' '}
-                <button type="button" className="fv-html-tab" onClick={() => window.location.reload()}>
+                <button type="button" className="fv-tool-btn" onClick={() => window.location.reload()}>
                   Reload the page
                 </button>
                 {' '}
@@ -2567,17 +2561,17 @@ export function FileContentView({
           <span className="fv-save-error-text">{bannerText}</span>
           {conflictOpen && (
             <span className="fv-save-error-actions">
-              <button type="button" className="fv-html-tab fv-keep-mine-btn" onClick={() => { void keepMine(); }} disabled={saving}>
+              <button type="button" className="fv-tool-btn fv-keep-mine-btn" onClick={() => { void keepMine(); }} disabled={saving}>
                 Keep my version
               </button>
-              <button type="button" className="fv-html-tab fv-use-disk-btn" onClick={() => { void useDisk(); }} disabled={saving}>
+              <button type="button" className="fv-tool-btn fv-use-disk-btn" onClick={() => { void useDisk(); }} disabled={saving}>
                 Use the version on disk
               </button>
             </span>
           )}
           {retryOpen && (
             <span className="fv-save-error-actions">
-              <button type="button" className="fv-html-tab fv-retry-save-btn" onClick={() => { void retrySave(); }} disabled={saving}>
+              <button type="button" className="fv-tool-btn fv-retry-save-btn" onClick={() => { void retrySave(); }} disabled={saving}>
                 {saving ? 'Saving…' : 'Try again'}
               </button>
             </span>
@@ -2586,7 +2580,7 @@ export function FileContentView({
             <span className="fv-save-error-actions">
               <button
                 type="button"
-                className="fv-html-tab fv-retry-save-btn fv-reload-btn"
+                className="fv-tool-btn fv-retry-save-btn fv-reload-btn"
                 // The draft store already holds the text (every edit is captured),
                 // so the reloaded tab replays it and saves it on its own.
                 onClick={() => { void flushDraft().finally(() => window.location.reload()); }}
@@ -2616,13 +2610,13 @@ export function FileContentView({
           <span>You have unsaved changes to this file from an older version of it on disk.</span>
           <button
             type="button"
-            className="fv-html-tab"
+            className="fv-tool-btn"
             onClick={restoreStaleDraft}
             title="Put your unsaved text back in the editor. The copy on disk is newer, so you will be asked before it replaces that version."
           >
             Restore my changes
           </button>
-          <button type="button" className="fv-html-tab" onClick={discardStaleDraft}>
+          <button type="button" className="fv-tool-btn" onClick={discardStaleDraft}>
             Discard draft
           </button>
         </div>
@@ -2641,13 +2635,13 @@ export function FileContentView({
       )}
       {!loading && showPreview && isHtml && strayed && (
         <div className="fv-draft-banner fv-strayed-banner" role="status">
-          <button type="button" className="fv-html-tab" onClick={returnToFile}>
+          <button type="button" className="fv-tool-btn" onClick={returnToFile}>
             ← Back to {filePath.split('/').pop() || filePath}
           </button>
           {strayed.path && onOpenPath && (
             <button
               type="button"
-              className="fv-html-tab"
+              className="fv-tool-btn"
               onClick={() => { const p = strayed.path!; setStrayed(null); onOpenPath(p); }}
               title={strayed.path}
             >

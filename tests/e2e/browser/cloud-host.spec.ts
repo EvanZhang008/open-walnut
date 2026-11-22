@@ -72,7 +72,7 @@ test('the picker offers Cloud, lists the box folders, and a session starts there
 
   // 2. Selecting it lists the box's folders through the tunnel.
   await tab.click()
-  await expect(tab).toHaveClass(/active/)
+  await expect(tab).toHaveAttribute('aria-pressed', 'true')
   const input = picker(page).locator('.sps-search-input')
   const rows = picker(page).locator('.sps-path-item')
   // Let the box's home list first (its `projects` folder). Typing before that

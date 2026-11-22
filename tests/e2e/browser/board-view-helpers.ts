@@ -11,8 +11,8 @@ export async function showCustomBoard(pane: Locator): Promise<void> {
   const custom = pane.getByTestId('board-view-custom')
   await expect(custom).toBeVisible({ timeout: 15_000 })
   await expect(custom).not.toHaveAttribute('aria-disabled', 'true', { timeout: 15_000 })
-  if ((await custom.getAttribute('aria-pressed')) !== 'true') await custom.click()
-  await expect(custom).toHaveAttribute('aria-pressed', 'true')
+  if ((await custom.getAttribute('aria-checked')) !== 'true') await custom.click()
+  await expect(custom).toHaveAttribute('aria-checked', 'true')
 }
 
 /** The phone layout's query (web/src/hooks/usePhoneLayout.ts PHONE_LAYOUT_QUERY). */

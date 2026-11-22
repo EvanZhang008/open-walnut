@@ -13,6 +13,7 @@ import { SiteTile } from './ItemView'
 import { RobotIcon } from './pw-icons'
 import { ago } from './passwords-model'
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel'
+import { Radio } from '@/components/controls'
 
 export const SWITCH: Array<{ value: AgentsSwitch; label: string; help: string }> = [
   { value: 'allow', label: 'Any', help: 'Agents see the list and use what they need. Items marked sensitive still ask you; items set to never stay never.' },
@@ -95,14 +96,13 @@ export function AgentActivity({ items, onOpen, onLocked }: { items: VaultItemSum
         </div>
       </div>
 
-      <div className="pw-card pw-agents-switch">
-        <div className="pw-f-label pw-card-label">When an agent asks for a password</div>
-        <div className="pw-seg pw-seg-col" role="radiogroup" aria-label="When an agent asks for a password">
+      <div className="pw-card pw-agents-policy">
+        <div className="pw-f-label pw-card-label" id="pw-agents-policy-label">When an agent asks for a password</div>
+        {/* Each choice needs a line of words: a column of radios (standard.md, "Choice controls"). */}
+        <div className="pw-radio-col" role="group" aria-labelledby="pw-agents-policy-label">
           {SWITCH.map((o) => (
-            <button key={o.value} type="button" role="radio" aria-checked={policy?.agents === o.value} className={policy?.agents === o.value ? 'on' : ''}
-              disabled={!policy} onClick={() => setSwitch(o.value)} data-testid={`pw-agents-${o.value}`}>
-              <b>{o.label}</b><span>{o.help}</span>
-            </button>
+            <Radio key={o.value} name="pw-agents-policy" checked={policy?.agents === o.value} disabled={!policy}
+              onChange={() => setSwitch(o.value)} data-testid={`pw-agents-${o.value}`} label={o.label} detail={o.help} />
           ))}
         </div>
         {note && <p className="pw-hint" role="status">{note}</p>}

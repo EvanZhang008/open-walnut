@@ -1,12 +1,12 @@
 /**
  * A multi-select list row (calendars, session modes): checkbox on the LEFT,
- * label after it, the whole row clickable. The native input is kept (visually
- * transparent, stacked over the drawn box) so it stays focusable, Space toggles
- * it, and specs can `.check()` it.
+ * label after it, the whole row clickable. The box is the shared drawn native
+ * checkbox (`.wn-check`, controls/Checkbox.tsx), so it stays focusable, Space
+ * toggles it, and specs can `.check()` it.
  */
 import type { ReactNode } from 'react'
-import { CheckGlyph } from '../settings-glyphs'
 import '@/styles/settings-controls.css'
+import '@/styles/choice-controls.css'
 
 export interface SettingsCheckboxProps {
   id?: string
@@ -40,22 +40,17 @@ export function SettingsCheckbox({
       title={title}
       aria-disabled={disabled ? true : undefined}
     >
-      <span className="settings-checkbox-control">
-        <input
-          id={id}
-          type="checkbox"
-          className="settings-checkbox-input"
-          checked={checked}
-          disabled={disabled}
-          // WebKit only tabs to checkboxes with an explicit tabindex (N20).
-          tabIndex={disabled ? undefined : 0}
-          data-testid={testId}
-          onChange={(e) => onChange(e.target.checked)}
-        />
-        <span className="settings-checkbox-box" aria-hidden="true">
-          <CheckGlyph size={12} />
-        </span>
-      </span>
+      <input
+        id={id}
+        type="checkbox"
+        className="wn-check settings-checkbox-input"
+        checked={checked}
+        disabled={disabled}
+        // WebKit only tabs to checkboxes with an explicit tabindex (N20).
+        tabIndex={disabled ? undefined : 0}
+        data-testid={testId}
+        onChange={(e) => onChange(e.target.checked)}
+      />
       {leading}
       <span className="settings-checkbox-label">{label}</span>
       {trailing !== undefined && trailing !== null && trailing !== false && (

@@ -38,21 +38,7 @@
 .task-earlier-sessions { margin: 8px 0 4px; }
 .task-earlier-session { margin: 4px 0; }
 .task-earlier-head { display: flex; align-items: center; gap: 8px; }
-.task-earlier-toggle {
-  flex: 1 1 auto;
-  min-width: 0;
-  text-align: left;
-  border: none;
-  background: transparent;
-  color: var(--fg-muted);
-  font-size: var(--font-size-sm);
-  padding: 4px 0;
-  cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.task-earlier-toggle:hover { color: var(--fg); }
+.task-earlier-toggle { flex: 1 1 auto; min-width: 0; }
 .task-earlier-body { border-left: 2px solid var(--border); padding-left: 8px; }
 
 /* The model picker says what closing it does while another engine is picked. */

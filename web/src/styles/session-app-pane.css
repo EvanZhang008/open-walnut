@@ -23,8 +23,7 @@
   min-height: var(--split-bar-h);
 }
 
-.session-app-pane-title,
-.session-app-pane-tab {
+.session-app-pane-title {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -40,27 +39,8 @@
   text-overflow: ellipsis;
 }
 
-/* Many Apps scroll sideways in one row; the bar never grows a second line. */
-.session-app-pane-tabs {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.session-app-pane-tab {
-  border: 0;
-  background: transparent;
-  color: var(--fg-muted);
-  padding: 4px 8px;
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.session-app-pane-tab:hover { color: var(--fg); background: var(--bg-hover); }
-.session-app-pane-tab.is-active { color: var(--fg); font-weight: 600; background: var(--bg-tertiary); }
+/* Many Apps scroll sideways in one row (the shared Tabs do), the bar never grows a second line. */
+.session-app-pane-tabs { min-width: 0; }
 
 .session-app-pane-bar-right {
   margin-left: auto;

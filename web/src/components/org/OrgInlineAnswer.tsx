@@ -23,6 +23,7 @@ import type { Task } from '@open-walnut/core';
 import { apiGet, apiPut } from '@/api/client';
 import { answerLetter, humanReplyToLetter } from '@/api/human-inbox';
 import { respondToPermission, retrySession } from '@/api/sessions';
+import { Checkbox } from '@/components/controls';
 import { KanbanCardPrompt } from '@/components/board/kanban/KanbanCardPrompt';
 import { ReplyComposer } from '@/components/chat/ReplyComposer';
 import { buildImageRefsPayload } from '@/api/image-upload';
@@ -345,8 +346,7 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape, thre
         <div className="org-answer-multi" data-testid="org-answer-multi">
           {options.map((o) => (
             <label key={o.id} className={`org-answer-check${picked.has(o.id) ? ' is-on' : ''}`} data-testid="org-answer-check" data-value={o.id}>
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={picked.has(o.id)}
                 onChange={() => setPicked((s) => { const n = new Set(s); if (n.has(o.id)) n.delete(o.id); else n.add(o.id); return n; })}
               />{o.label}

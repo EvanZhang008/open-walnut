@@ -1,23 +1,24 @@
 /**
  * A script's command on one line, cut with an ellipsis when long: a click shows
- * all of it (wrapped) and a second click folds it again.
+ * all of it (wrapped) and a second click folds it again. The long one is a real
+ * disclosure button (Enter and Space come with it), the command inside it.
  */
 import { useState } from 'react';
+import { DisclosureButton } from '@/components/controls';
 
 export function ScriptCommand({ command, className }: { command: string; className: string }) {
   const [open, setOpen] = useState(false);
   const long = command.length > 40 || command.includes('\n');
   if (!long) return <code className={className}>{command}</code>;
   return (
-    <code
-      className={`${className} script-command-toggle${open ? ' is-open' : ''}`}
+    <DisclosureButton
+      expanded={open}
+      className="script-command-toggle"
       title={open ? 'Click to fold it' : `${command}\n(click to show all of it)`}
-      role="button" tabIndex={0} aria-expanded={open}
       onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen((v) => !v); }}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setOpen((v) => !v); } }}
       data-testid="script-command"
     >
-      {command}
-    </code>
+      <code className={className}>{command}</code>
+    </DisclosureButton>
   );
 }

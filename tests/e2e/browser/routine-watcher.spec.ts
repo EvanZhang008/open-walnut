@@ -56,8 +56,8 @@ test('builds a watcher routine by hand and stores exactly what the form showed',
 
     // Picking Watcher already defaults the trigger to an interval; drive the
     // controls anyway, so the explicit path stays covered on its own.
-    await form.getByRole('tab', { name: 'Custom' }).click()
-    await form.locator('input[type="radio"][name="routine-custom-kind"]').nth(1).check()
+    await form.getByRole('radiogroup', { name: 'Schedule' }).getByRole('radio', { name: 'Custom' }).click()
+    await form.getByRole('radiogroup', { name: 'Custom schedule' }).getByRole('radio', { name: 'Interval' }).check()
     await form.getByLabel('Interval minutes').fill('10')
 
     // 0 is a REAL setting here ("never start a session"). The number input used
@@ -123,7 +123,7 @@ test('picking Watcher turns an untouched trigger into an interval, and leaves a 
   await expect(form.getByLabel('Interval minutes')).toHaveValue('10')
 
   // But a schedule the user picked must survive the executor switch.
-  await form.getByRole('tab', { name: 'Daily' }).click()
+  await form.getByRole('radiogroup', { name: 'Schedule' }).getByRole('radio', { name: 'Daily' }).click()
   await expect(form.locator('.routine-trigger-header')).toContainText('every day at 9:00 AM')
   await form.locator('label.cron-form-radio', { hasText: 'Home Chat' }).locator('input').check()
   await form.locator('label.cron-form-radio', { hasText: 'Watcher' }).locator('input').check()

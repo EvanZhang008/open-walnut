@@ -16,6 +16,7 @@ import { serverKey } from '@/hooks/useSessionServers';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { CopyButton } from '@/components/common/CopyButton';
+import { Chip } from '@/components/controls';
 import { formatAge, serverAge, openable, serverLabel, shortCommand } from './session-server-label';
 
 export interface SessionServerListProps {
@@ -288,19 +289,18 @@ export function SessionServerList({
       const busy = stopping.has(key);
       return (
         <span key={`${key}-${form}`}
-          className={`session-server-chip${active ? ' session-server-chip-active' : ''}${busy ? ' session-server-chip-stopping' : ''} session-server-chip-${form}`}
+          className={`session-server-chip${busy ? ' session-server-chip-stopping' : ''} session-server-chip-${form}`}
           {...(measure
             ? { 'data-measure': key, 'data-form': form, 'data-active': active ? '' : undefined }
             : { 'data-testid': 'session-server-chip', 'data-port': s.port, 'data-active': active || undefined })}>
-          <button type="button" className="session-server-chip-open" tabIndex={measure ? -1 : undefined}
-            aria-current={!measure && active ? true : undefined}
+          <Chip className="session-server-chip-open" pressed={active} tabIndex={measure ? -1 : undefined}
             aria-label={form !== 'full' ? `${active ? 'Showing' : 'Open'} :${s.port} ${chipName(s)}` : undefined}
             onClick={measure ? undefined : () => onOpen(s)}
-            title={measure ? undefined : `${active ? 'Showing' : 'Open'} ${s.url}${s.title ? `\n${s.title}` : ''}\n${s.command}`}>
-            <span className={`session-server-dot session-server-dot-${s.kind}`} aria-hidden="true" />
+            title={measure ? undefined : `${active ? 'Showing' : 'Open'} ${s.url}${s.title ? `\n${s.title}` : ''}\n${s.command}`}
+            leading={<span className={`session-server-dot session-server-dot-${s.kind}`} aria-hidden="true" />}>
             <span className="session-server-port">:{s.port}</span>
             {form !== 'port' && <span className="session-server-name">{chipName(s)}</span>}
-          </button>
+          </Chip>
           {!measure && stopErrors.get(key) && <span className="session-server-error" role="alert" title={stopErrors.get(key)}>Couldn't stop</span>}
         </span>
       );

@@ -262,7 +262,7 @@ test('the kebab\'s Open group holds Changed, Files, Terminal and Board: Files op
   await openKebabGroup(menu, 'session-kebab-open')
   await menu.getByTestId('session-menu-board').click()
   await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'task')
-  await expect(detail.getByTestId('org-task-mode-board')).toHaveAttribute('aria-pressed', 'true')
+  await expect(detail.getByTestId('org-task-mode-board')).toHaveAttribute('aria-checked', 'true')
   await expect(detail.getByTestId('org-rail-board')).toBeVisible()
   await expect(chat).toBeVisible()
   await detail.getByTestId('org-rail-board').getByTestId('board-view-custom').click()
@@ -286,11 +286,11 @@ test('Tasks as All tasks or Board, kept per node; sections fold by default; an o
   await detail.getByTestId('org-top-task').click()
   await expect(detail.getByTestId('org-top-task')).toHaveText('Tasks2')
   // Two ways only (2026-11-12, the user: "under tasks, just show all taks, and then board").
-  await expect.poll(() => detail.getByTestId('org-task-modes').getByRole('button').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid'))), { timeout: 30_000 })
+  await expect.poll(() => detail.getByTestId('org-task-modes').getByRole('radio').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid'))), { timeout: 30_000 })
     .toEqual(['org-task-mode-all', 'org-task-mode-board'])
-  await expect(detail.getByTestId('org-task-modes').getByRole('button')).toHaveText(['All tasks', 'Board'])
+  await expect(detail.getByTestId('org-task-modes').getByRole('radio')).toHaveText(['All tasks', 'Board'])
   await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'all')
-  await expect(detail.getByTestId('org-task-mode-all')).toHaveAttribute('aria-pressed', 'true')
+  await expect(detail.getByTestId('org-task-mode-all')).toHaveAttribute('aria-checked', 'true')
   await expect(detail.getByTestId('org-task-tabs')).toHaveCount(0)
   await expect(detail.getByTestId('org-rail').getByTestId('org-team')).toHaveCount(0)
   // One list: each section open or folded by its default (what is in front of the user now open,

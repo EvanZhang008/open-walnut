@@ -11,6 +11,7 @@ import { useState, useCallback, useEffect, useRef, memo, useMemo } from 'react';
 import { useTeamStream, type TeamMember, type TeamAgentEvent } from '@/hooks/useTeamStream';
 import { wsClient } from '@/api/ws';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
+import { Tabs } from '@/components/controls';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 
 interface TeamCardProps {
@@ -246,19 +247,18 @@ export const TeamCard = memo(function TeamCard({
         <span className="team-card-title">Team: {teamName}</span>
         <span className="team-card-count">{doneCount}/{nonLeadMembers.length}</span>
       </div>
-      <div className="team-card-tabs">
-        {members.filter(m => !m.isLead).map(member => (
-          <button
-            key={member.name}
-            className={`team-tab ${activeAgent === member.name ? 'team-tab-active' : ''}`}
-            onClick={() => selectAgent(member.name)}
-            title={`${member.name} (${shortModel(member.model)})`}
-          >
-            <StatusDot status={agentStatuses?.get(member.name)} />
-            <span className="team-tab-name">{member.name}</span>
-          </button>
-        ))}
-      </div>
+      <Tabs
+        className="team-card-tabs"
+        aria-label="Team members"
+        value={activeAgent ?? ''}
+        onChange={selectAgent}
+        items={nonLeadMembers.map(member => ({
+          value: member.name,
+          className: 'team-tab',
+          title: `${member.name} (${shortModel(member.model)})`,
+          label: <><StatusDot status={agentStatuses?.get(member.name)} /><span className="team-tab-name">{member.name}</span></>,
+        }))}
+      />
       {activeAgent && (
         <AgentPanel
           agentName={activeAgent}

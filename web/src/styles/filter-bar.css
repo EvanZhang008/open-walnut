@@ -254,7 +254,6 @@
 
 /* Time window: the basis segments above the rows, the Custom editor under them. */
 .fb-time-basis { flex: none; }
-.fb-time-basis.is-unset .tp-seg-btn[aria-checked='true'] { color: var(--fg-secondary); }
 .fb-custom-time { display: flex; align-items: center; gap: 6px; padding: 6px 8px 4px; }
 .fb-custom-input {
   width: 64px;
@@ -325,7 +324,7 @@
 .fb-opt-body:focus-visible { outline: none; }
 /* After a key, the focused control shows the ring in every engine (WebKit skips
    :focus-visible on a focus moved by script, which is how the arrow keys move it). */
-.fb-menu[data-keyed] :is(.fb-item, .fb-back, .fb-text-btn, .dm-view, .dm-switch-row, .dm-action, .tp-seg-btn):focus,
+.fb-menu[data-keyed] :is(.fb-item, .fb-back, .fb-text-btn, .dm-view, .dm-action):focus,
 .fb-menu[data-keyed] .fb-opt:has(.fb-opt-body:focus) { outline: 2px solid var(--accent); outline-offset: -2px; }
 .fb-menu[data-keyed] .fb-opt-body:focus { outline: none; }
 

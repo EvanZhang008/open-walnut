@@ -37,6 +37,10 @@ const OWN_WORDS: Record<string, string> = {
   'components/settings/sections/SecretsGroup.tsx#tickLabel(h)': 'a picker of hosts to give a secret to (This Mac\'s own sessions, or a host to copy it to): taken only by Save',
   'components/agents/AgentForm.tsx#def.label': 'a picker of context sources in the agent form: taken only by Save',
   'components/tasks/TasksColumnsMenu.tsx#def.label': 'a column picker: the column\'s name is the option',
+  'components/tasks/DisplaySortRows.tsx#label': 'a Display menu switch row: the switch\'s own name, fixed text from DisplaySections.tsx',
+  'components/tasks/PrPill.tsx#label': 'a pull request card switch: its own name, fixed text from its caller',
+  'components/tasks/PrPill.tsx#hint': 'that switch\'s own line on what it does, fixed text from its caller',
+  'components/tasks/ProjectCodeSource.tsx#title': 'a workspace kind\'s yes/no field: the field\'s own title from its schema; taken only by Save',
   'components/org/OrgInlineAnswer.tsx#o.label': 'an answer option the user picks: its text is the option',
   'focus-spaces/SpaceForm.tsx#label': 'a picker of the projects, tasks and apps a focus space holds: the name is the option, taken only by Save',
   'focus-spaces/SpaceForm.tsx#detail': 'the option\'s own second line in the same picker (a task\'s project, an app\'s mode), taken only by Save',
@@ -68,7 +72,6 @@ const OWN_WORDS: Record<string, string> = {
 
 /** Elements, beyond text, a toggle's label may hold, by `file#tag`, and why. */
 const OWN_PARTS: Record<string, string> = {
-  'components/settings/inputs/SettingsCheckbox.tsx#CheckGlyph': 'the checkbox\'s own drawn box',
   'components/sessions/SessionCommitRepo.tsx#OwnerBadge': 'a picker of changes to commit: whose change it is; taken only by Commit',
   'components/settings/sections/CalendarSection.tsx#SettingsTag': 'a calendar the checklist shows: its Read only tag',
 };

@@ -97,7 +97,7 @@ test('two surfaces on the same day range issue ONE events GET', async ({ page })
   // Second surface, same range: /calendar switched to Day view on today.
   await page.click('a[href="/calendar"]')
   await expect(page.locator('.cal-toolbar')).toBeVisible()
-  await page.locator('.cal-page').getByRole('tab', { name: 'Day', exact: true }).click()
+  await page.locator('.cal-page').getByRole('radio', { name: 'Day', exact: true }).click()
   // Scoped to .cal-page: the home agenda renders a one-day grid too.
   await expect(page.locator('.cal-page .cal-grid[data-days="1"]')).toBeVisible()
 
@@ -124,7 +124,7 @@ test('an event edit on /calendar reaches the home agenda before the PATCH is ans
 
     await page.click('a[href="/calendar"]')
     await expect(page.locator('.cal-toolbar')).toBeVisible()
-    await page.locator('.cal-page').getByRole('tab', { name: 'Day', exact: true }).click()
+    await page.locator('.cal-page').getByRole('radio', { name: 'Day', exact: true }).click()
     // Scoped to .cal-page: the same chip also renders in the (hidden) home agenda.
     const pageChip = page.locator(`.cal-page .cal-day-col .cal-chip[data-item-id="event:${event.id}"]`)
     await pageChip.scrollIntoViewIfNeeded()

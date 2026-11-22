@@ -134,7 +134,7 @@ test('the Turns view lists each turn with its files, renders a turn diff, restor
   await waitSnapshot(page, sessionId, 2)
 
   await panel.getByRole('button', { name: 'Changed' }).click()
-  await panel.getByRole('tab', { name: 'Turns' }).click()
+  await panel.getByRole('radio', { name: 'Turns' }).click()
   const view = panel.getByTestId('session-turns-view')
   await expect(view).toBeVisible()
 

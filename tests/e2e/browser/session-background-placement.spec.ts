@@ -248,7 +248,7 @@ test.describe('Session background work placement', () => {
     await expect(menu).toHaveCount(0);
     await expect(tasksPanel).toHaveCount(1);
     await expect(tasksPanel.locator('.wf-modal-meta').first()).toHaveText('1 agent · 2 commands');
-    await expect(tasksPanel.locator('.bg-tasks-tab-count')).toHaveText(['1', '2']);
+    await expect(tasksPanel.locator('.bg-tasks-tab .wn-tab-count')).toHaveText(['1', '2']);
     await expect(tasksPanel.locator('.bg-tasks-section-title')).toHaveText(['Finished']);
     await expect(tasksPanel.locator('.bg-task-row')).toContainText('Audit the route deadlines');
     await tasksPanel.locator('.bg-tasks-tab', { hasText: 'Commands' }).click();

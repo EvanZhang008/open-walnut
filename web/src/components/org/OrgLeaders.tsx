@@ -21,6 +21,7 @@
 import { useEffect, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { ContextMenu, useContextMenu } from '@/components/common/ContextMenu';
 import { ICON_EYE } from '@/components/common/Icons';
+import { DisclosureButton } from '@/components/controls';
 import { USER_STATE_LABELS } from '@open-walnut/user-status';
 import { isBoolean, usePageViewOf } from '@/utils/view-memory';
 import { domId } from './OrgChartVp';
@@ -97,15 +98,15 @@ function LeaderRow({ leader: l, depth, surface, query, openTaskIds, onOpen, onMe
         onContextMenu={(e) => onMenu(e, l)}
       >
         {hasSubs ? (
-          <button
-            type="button"
+          <DisclosureButton
+            expanded={open}
             className="org-leader-fold"
             data-testid="org-leader-fold"
             // In the list the option carries the fold (Right, Left); in the chart this is its button.
-            {...(inList ? { 'aria-hidden': true, tabIndex: -1 } : { 'aria-expanded': open, ...(open ? { 'aria-controls': subsId } : {}), 'aria-label': `Directors under ${l.title}` })}
+            {...(inList ? { 'aria-hidden': true, tabIndex: -1, 'aria-expanded': undefined } : { ...(open ? { 'aria-controls': subsId } : {}), 'aria-label': `Directors under ${l.title}` })}
             title={open ? 'Hide the Directors under it' : 'Show the Directors under it'}
             onClick={() => setOpen(!open)}
-          >{open ? '▾' : '▸'}</button>
+          />
         ) : <span className="org-leader-fold is-none" aria-hidden="true" />}
         <button
           type="button"
@@ -201,22 +202,22 @@ export function OrgLeaders({ groups, surface, vpKey, vpName, projects, showProje
       data-key={vpKey}
       data-open={open || undefined}
     >
-      <button
-        type="button"
+      <DisclosureButton
+        expanded={open}
         className="org-leaders-toggle"
         data-testid="org-leaders-toggle"
         data-open={open}
         {...asOption(inList, true)}
+        // In the list it is an option (a listbox holds options, which take no aria-expanded).
         {...(inList
-          ? { 'aria-label': `${directorsLabel(total)} under ${vpName}, ${open ? 'shown' : 'folded'}` }
-          : { 'aria-expanded': open, ...(open ? { 'aria-controls': listId } : {}) })}
+          ? { 'aria-label': `${directorsLabel(total)} under ${vpName}, ${open ? 'shown' : 'folded'}`, 'aria-expanded': undefined }
+          : (open ? { 'aria-controls': listId } : {}))}
         title={`The Directors under ${vpName}: tasks that lead their own team, or that you made one`}
         onClick={() => setOpen(!open)}
         onKeyDown={foldKeys(open, setOpen)}
       >
-        <span className="org-leaders-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
         {directorsLabel(total)}
-      </button>
+      </DisclosureButton>
       {open && (
         <div id={listId} className="org-leaders-list" data-testid="org-leaders-list">
           {foldGroups(groups, showProjects).map((g) => (

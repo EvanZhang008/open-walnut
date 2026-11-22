@@ -46,9 +46,7 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-rail-icon:hover, .org-rail-icon:focus-visible { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
 .org-rail-icon[aria-pressed="true"] { color: var(--fg); }
 /* Tasks: all of them in one list, or as the Board. */
-.org-task-modes { flex: none; display: inline-flex; align-self: flex-start; gap: 2px; margin: 8px 10px 2px; padding: 2px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--fg) 6%, transparent); }
-.org-task-modes button { border: 0; border-radius: var(--radius-xs); padding: 2px 10px; background: transparent; color: var(--fg-secondary); font: inherit; font-size: var(--font-size-sm); cursor: pointer; }
-.org-task-modes button.is-on { background: var(--bg); color: var(--fg); box-shadow: var(--shadow-sm); }
+.org-task-modes { flex: none; align-self: flex-start; margin: 8px 10px 2px; }
 /* The Board fills the side bar below the switch. */
 .org-rail-board { flex: 1; min-height: 0; display: flex; flex-direction: column; margin-top: 6px; border-top: 1px solid var(--border); }
 .org-rail-board > * { flex: 1; min-height: 0; }

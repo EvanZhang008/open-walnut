@@ -1,0 +1,682 @@
+/*
+ * The choice controls: one look per kind (.claude/skills/walnut-ui-requirements/standard.md,
+ * "Choice controls"). Every control that picks a value is one of these components in
+ * web/src/components/controls/: Tabs, Segmented (SegmentedControl), Chip, ToggleSwitch,
+ * Checkbox / Radio, Disclosure. A view never restyles them; it may only place them (margin,
+ * flex, width). `tests/web/choice-controls-ratchet.test.ts` counts the ones still built by hand.
+ *
+ * 2026-11-21, the user: "why the ui still not consistent ... come on" and, on round controls,
+ * "什么鬼东西都要是圆形的呀" (why must everything be round): 14 segmented controls, 14 tab bars,
+ * 9 switches in 6 sizes and 49 native checkboxes with 16 accent rules became these six.
+ *
+ * The selected state is always read from ARIA, never from a per-view class:
+ *   tab: aria-selected, segment: aria-checked, chip: aria-pressed (or aria-checked in a radiogroup),
+ *   switch: aria-checked, checkbox / radio: :checked, disclosure: aria-expanded.
+ */
+
+:root {
+  --choice-track: var(--bg-tertiary);
+  --choice-thumb: var(--bg-elevated);
+  --choice-switch-off: rgba(120, 120, 128, 0.24);
+  --choice-box-border: rgba(60, 60, 67, 0.5);
+  --choice-box-fill: var(--bg);
+  /* A chip's off fill shows on any surface (page, card, sidebar): a tint, not a solid step. */
+  --choice-chip-off: rgba(0, 0, 0, 0.05);
+  --choice-chip-hover: rgba(0, 0, 0, 0.09);
+  /* What sits on an accent fill (tick, switch thumb) and the lift of a thumb. */
+  --choice-on-accent: #fff;
+  --choice-lift: 0 1px 2px rgba(0, 0, 0, 0.12);
+  --choice-knob-lift: 0 1px 2px rgba(0, 0, 0, 0.22), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  /* Corners inside a control: a segment sits 2 px inside its 8 px track; a box is half a control's. */
+  --choice-radius-inner: calc(var(--radius-sm) - 2px);
+  --choice-radius-box: calc(var(--radius-sm) / 2);
+}
+
+:root[data-theme='dark'] {
+  --choice-track: rgba(118, 118, 128, 0.24);
+  /* A step clearly lighter than the track on a dark group (F37), as a tint so it follows the surface. */
+  --choice-thumb: rgba(255, 255, 255, 0.2);
+  --choice-switch-off: rgba(120, 120, 128, 0.36);
+  --choice-box-border: rgba(255, 255, 255, 0.36);
+  --choice-box-fill: rgba(255, 255, 255, 0.06);
+  --choice-chip-off: rgba(255, 255, 255, 0.08);
+  --choice-chip-hover: rgba(255, 255, 255, 0.13);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --choice-track: rgba(118, 118, 128, 0.24);
+    --choice-thumb: rgba(255, 255, 255, 0.2);
+    --choice-switch-off: rgba(120, 120, 128, 0.36);
+    --choice-box-border: rgba(255, 255, 255, 0.36);
+    --choice-box-fill: rgba(255, 255, 255, 0.06);
+    --choice-chip-off: rgba(255, 255, 255, 0.08);
+    --choice-chip-hover: rgba(255, 255, 255, 0.13);
+  }
+}
+
+/* ── Tabs: switch between the panels of one view. Underline, 32 px. ── */
+.wn-tabs {
+  box-sizing: border-box;
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  min-width: 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: none;
+}
+
+.wn-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.wn-tabs.wn-tabs-flush {
+  border-bottom: 0;
+}
+
+.wn-tab {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  margin: 0 0 -1px;
+  padding: 0 4px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 120ms ease-out, border-color 120ms ease-out;
+}
+
+.wn-tabs.wn-tabs-flush .wn-tab {
+  margin-bottom: 0;
+}
+
+.wn-tab:hover {
+  color: var(--fg);
+}
+
+.wn-tab[aria-selected='true'] {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+}
+
+.wn-tab:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.wn-tab:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+  border-radius: var(--choice-radius-box) var(--choice-radius-box) 0 0;
+}
+
+.wn-tab-count {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.wn-tab-trailing {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* A tab with a line under its label (Tab `detail`): two lines, the same underline. */
+.wn-tab.wn-tab-tall {
+  height: auto;
+  min-height: 32px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  align-items: flex-start;
+}
+
+.wn-tab-text {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wn-tab-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.wn-tab-detail {
+  max-width: 9em;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 14px;
+  color: var(--fg-secondary);
+  text-align: left;
+  white-space: normal;
+}
+
+@media (max-width: 560px) {
+  /* Text on a phone is at least 12 px. */
+  .wn-tab-detail {
+    font-size: 12px;
+    line-height: 15px;
+  }
+}
+
+/* ── Segmented: one of 2 to 6 values, inline. Track 28 px, lifted thumb. ── */
+.wn-seg {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  padding: 2px;
+  overflow-x: auto;
+  border-radius: var(--radius-sm);
+  background: var(--choice-track);
+  vertical-align: middle;
+  scrollbar-width: none;
+}
+
+.wn-seg::-webkit-scrollbar {
+  display: none;
+}
+
+.wn-seg.wn-seg-fill {
+  display: flex;
+  width: 100%;
+}
+
+.wn-seg.wn-seg-fill > .wn-seg-item {
+  flex: 1 1 0;
+}
+
+.wn-seg-item {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 24px;
+  min-width: 24px;
+  margin: 0;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--choice-radius-inner);
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background-color 120ms ease-out, box-shadow 120ms ease-out, color 120ms ease-out;
+}
+
+.wn-seg-item:hover:not([aria-checked='true']) {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.wn-seg-item[aria-checked='true'] {
+  background: var(--choice-thumb);
+  color: var(--fg);
+  box-shadow: var(--choice-lift);
+}
+
+.wn-seg-item:focus-visible,
+.wn-seg-item[data-keyed='true']:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.wn-seg-item.wn-seg-icon {
+  width: 28px;
+  padding: 0;
+}
+
+.wn-seg-input {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.wn-seg[aria-disabled='true'] {
+  opacity: 0.55;
+}
+
+.wn-seg[aria-disabled='true'] .wn-seg-item {
+  cursor: default;
+}
+
+/* One segment that can't be picked now (its title says why). */
+.wn-seg:not([aria-disabled='true']) .wn-seg-item[aria-disabled='true'] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* ── Chip: a filter or option that is on or off. 24 px, 8 px corner (not a pill). ── */
+.wn-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.wn-chip {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  max-width: 100%;
+  margin: 0;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--choice-chip-off);
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out;
+}
+
+.wn-chip:hover {
+  background: var(--choice-chip-hover);
+  color: var(--fg);
+}
+
+.wn-chip[aria-pressed='true'],
+.wn-chip[aria-checked='true'],
+.wn-chip[aria-selected='true'] {
+  background: var(--accent-subtle);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--accent-text);
+}
+
+.wn-chip:disabled,
+.wn-chip[aria-disabled='true'] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* A picked chip that takes no click (it is already the current one) still reads on. */
+.wn-chip:disabled[aria-pressed='true'],
+.wn-chip:disabled[aria-checked='true'] {
+  opacity: 1;
+}
+
+.wn-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.wn-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wn-chip-count {
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.wn-chip[aria-pressed='true'] .wn-chip-count,
+.wn-chip[aria-checked='true'] .wn-chip-count,
+.wn-chip[aria-selected='true'] .wn-chip-count {
+  color: inherit;
+  opacity: 0.8;
+}
+
+/* ── Switch: on or off, takes effect at once. 38x22, or 28x16 in a menu or a dense row. ── */
+.toggle-switch.settings-switch {
+  position: relative;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--choice-switch-off);
+  cursor: pointer;
+  vertical-align: middle;
+  transition: background-color 140ms ease-out;
+}
+
+.toggle-switch.settings-switch .toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--choice-on-accent);
+  box-shadow: var(--choice-knob-lift);
+  transition: transform 140ms ease-out;
+}
+
+.toggle-switch.settings-switch[aria-checked='true'] {
+  background: var(--accent);
+}
+
+.toggle-switch.settings-switch[aria-checked='true'] .toggle-thumb {
+  transform: translateX(16px);
+}
+
+.toggle-switch.settings-switch.wn-switch-sm {
+  width: 28px;
+  height: 16px;
+}
+
+.toggle-switch.settings-switch.wn-switch-sm .toggle-thumb {
+  width: 12px;
+  height: 12px;
+}
+
+.toggle-switch.settings-switch.wn-switch-sm[aria-checked='true'] .toggle-thumb {
+  transform: translateX(12px);
+}
+
+.toggle-switch.settings-switch:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.toggle-switch.settings-switch[aria-busy='true'] {
+  cursor: progress;
+}
+
+.toggle-switch.settings-switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Checkbox and radio: the native input, drawn. 16 px. ── */
+.wn-check {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  position: relative;
+  flex: 0 0 16px;
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--choice-box-border);
+  border-radius: var(--choice-radius-box);
+  background: var(--choice-box-fill);
+  vertical-align: -3px;
+  cursor: pointer;
+  transition: background-color 120ms ease-out, border-color 120ms ease-out;
+}
+
+.wn-check[type='radio'] {
+  border-radius: 50%;
+}
+
+.wn-check:checked,
+.wn-check:indeterminate {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+/* The tick: two borders of a rotated box, white on the accent. */
+.wn-check[type='checkbox']:checked::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--choice-on-accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.wn-check[type='checkbox']:indeterminate::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 6px;
+  width: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--choice-on-accent);
+}
+
+.wn-check[type='radio']:checked {
+  background: var(--choice-box-fill);
+  border: 5px solid var(--accent);
+}
+
+.wn-check:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.wn-check:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.wn-check-row {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+/* A form's field-title rule (`.form-group label`: 12 px, bold, muted, all caps) must not reach a
+   box's words: they stay a sentence wherever the row sits. */
+.wn-check-row.wn-check-row {
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.wn-check-row > .wn-check {
+  margin-top: 1px;
+}
+
+.wn-check-row[aria-disabled='true'] {
+  cursor: default;
+  color: var(--fg-muted);
+}
+
+.wn-check-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wn-check-detail {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+/* ── Disclosure: a chevron and a label that show or hide what is under them. ── */
+.wn-disclosure {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 24px;
+  /* The chevron lines up with the column's edge; the hover fill reaches 4 px past it. */
+  margin: 0 0 0 -4px;
+  padding: 2px 8px 2px 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wn-disclosure:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.wn-disclosure:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.wn-disclosure:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.wn-disclosure.wn-disclosure-block {
+  display: flex;
+  width: 100%;
+}
+
+/* The chevron alone (a tree row's fold): a 20 px square, no label. */
+.wn-disclosure.wn-disclosure-icon {
+  justify-content: center;
+  width: 20px;
+  min-height: 20px;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+}
+
+.wn-disclosure-chevron {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  color: var(--fg-muted);
+  transition: transform 160ms ease-out;
+}
+
+[aria-expanded='true'] > .wn-disclosure-chevron,
+.wn-disclosure-chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.wn-disclosure-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wn-tab,
+  .wn-seg-item,
+  .wn-chip,
+  .wn-check,
+  .wn-disclosure-chevron,
+  .toggle-switch.settings-switch,
+  .toggle-switch.settings-switch .toggle-thumb {
+    transition: none;
+  }
+}
+
+/* ── ControlGroup: controls under a master switch. Off: disabled and grey, never accent. ── */
+.wn-group {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.wn-group-reason {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--fg-muted);
+}
+
+.wn-group[data-off='true'] .toggle-switch.settings-switch[aria-checked='true'],
+.wn-group[data-off='true'] .wn-check:checked,
+.wn-group[data-off='true'] .wn-check:indeterminate {
+  background-color: var(--fg-muted);
+  border-color: var(--fg-muted);
+}
+
+.wn-group[data-off='true'] .wn-check[type='radio']:checked {
+  background-color: var(--choice-box-fill);
+}
+
+.wn-group[data-off='true'] .wn-chip[aria-pressed='true'],
+.wn-group[data-off='true'] .wn-chip[aria-checked='true'],
+.wn-group[data-off='true'] .wn-tab[aria-selected='true'] {
+  color: var(--fg-muted);
+  border-color: var(--border-strong);
+  background-color: transparent;
+}
+
+.wn-group[data-off='true'] .wn-seg-item[aria-checked='true'] {
+  color: var(--fg-muted);
+  box-shadow: none;
+}
+
+fieldset:disabled .wn-seg {
+  opacity: 0.55;
+}
+
+fieldset:disabled .wn-seg-item {
+  cursor: default;
+}

@@ -16,6 +16,7 @@ import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { draftKey } from '@/utils/drafts';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
+import { Checkbox } from '@/components/controls';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { DatePicker } from '@/components/common/DatePicker';
 import { clockLabel, longDayLabel } from '@/utils/calendar-date';
@@ -261,10 +262,7 @@ export function EventCreateForm({
             </span>
           )}
         </div>
-        <label className="cal-when-allday">
-          <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} />
-          All-day
-        </label>
+        <Checkbox rowClassName="cal-when-allday" label="All-day" checked={allDay} onChange={setAllDay} />
         {misordered && <div className="cal-event-form-error">End must be after start.</div>}
       </div>
 

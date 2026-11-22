@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { TagChip } from './TagChip';
+import { DisclosureButton } from '@/components/controls';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { fetchTags } from '../../api/tasks';
 import { useTagDisplay } from '@/stores/tag-display-store';
@@ -166,16 +167,15 @@ export function TagEditor({ tags, onAdd, onRemove, derived = [], placeholder = '
           />
         ))}
         {hidden.length > 0 && (
-          <button
-            type="button"
+          <DisclosureButton
             className="tag-editor-hidden-toggle"
             data-testid="tag-editor-hidden-toggle"
-            aria-expanded={showHidden}
+            expanded={showHidden}
             title={showHidden ? 'Fold the hidden tags' : hidden.join(', ')}
             onClick={() => setShowHidden((open) => !open)}
           >
             {showHidden ? 'Fewer' : `${hidden.length} hidden`}
-          </button>
+          </DisclosureButton>
         )}
         <div className="tag-editor-input-wrapper">
           <input data-no-draft="picker"

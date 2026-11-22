@@ -3,6 +3,10 @@
  * the checked entries (`defaults.engine_split`, core/agents/engine-split.ts); Usage & Costs
  * compares how each did. An entry is an engine, or an engine on a named model ("Claude Code
  * on sonnet"), added in place. Saves on each change, like the default engine row above it.
+ *
+ * With two or more entries the switch is the master of the rows under it (a ControlGroup): switched
+ * off, they read disabled and grey, kept as they are. With fewer, the entries are what turn it on,
+ * so they stay live and the switch is the one that is disabled.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Config } from '@open-walnut/core';
@@ -10,6 +14,7 @@ import { SettingsRow } from '../SettingsSection';
 import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
+import { ControlGroup, masterProps } from '@/components/controls';
 import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import { useEngineCatalog, useEngineCatalogHydration } from '@/hooks/useEngineCatalog';
 import { engineName } from './DefaultEngineRow';
@@ -25,6 +30,7 @@ import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterD
 const ROW_KEY = 'sessions.engine-split';
 const SWITCH_KEY = 'sessions.engine-split-switch';
 const PROJECTS_KEY = 'sessions.engine-split-projects';
+const ENTRIES_ID = 'engine-split-entries';
 
 export function EngineSplitRow({ config, save }: { config: Config; save: ReturnType<typeof useSerialSave> }) {
   const catalog = useEngineCatalog();
@@ -105,14 +111,15 @@ export function EngineSplitRow({ config, save }: { config: Config; save: ReturnT
         error={pick.error ?? offPick.error}
         data-testid="engine-split-row"
         control={(
-          <span className="engine-split-switch">
+          <span className="engine-split-control">
             <span className="settings-addons-muted" data-testid="engine-split-state" data-on={on || undefined}>{on ? 'On' : 'Off'}</span>
             {/* Off keeps the entries; with fewer than two there is nothing to switch on. */}
             <ToggleSwitch checked={on} disabled={!enough || !ready} onChange={(v) => offPick.set(!v)}
-              aria-label="Share new tasks" data-testid="engine-split-switch" />
+              aria-label="Share new tasks" data-testid="engine-split-switch" {...(enough ? masterProps(ENTRIES_ID) : {})} />
           </span>
         )}
       />
+      <ControlGroup id={ENTRIES_ID} off={enough && !on} className="settings-rows-contents" reason="Switch Share new tasks on to change its entries.">
       {catalog.filter((e) => e.availability.installed || checked.has(e.id)).map((e) => (
         <SettingsCheckbox
           key={e.id}
@@ -185,6 +192,7 @@ export function EngineSplitRow({ config, save }: { config: Config; save: ReturnT
           )}
         />
       )}
+      </ControlGroup>
     </>
   );
 }

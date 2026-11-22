@@ -115,9 +115,9 @@ describe('C83: the dot shapes (color is never the only signal)', () => {
     expect(rule('failed')).toMatch(/var\(--error\)/)
     // The base rule gives every dot a 1px border box and a round shape.
     expect(css).toMatch(/\.sps-host-dot\.hsd \{[^}]*border: 1px solid transparent;[^}]*border-radius: 50%;[^}]*animation: none;/)
-    // No new colors: only variables; the active tab's dot takes the tab's own text color.
+    // No new colors: only variables; the selected chip's dot takes the chip's own text color.
     expect(css.match(/#[0-9a-fA-F]{3,6}\b/g) ?? []).toEqual([])
-    expect(css).toMatch(/\.sps-host-tab\.active [^{]*\{ background: currentColor; \}/)
+    expect(css).toMatch(/\.sps-host-tab\[aria-pressed="true"\] [^{]*\{ background: currentColor; \}/)
   })
 
   it('renders data-kind and an aria-label, never a title of its own', async () => {

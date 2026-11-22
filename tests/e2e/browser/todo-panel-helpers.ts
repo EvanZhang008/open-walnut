@@ -29,9 +29,9 @@ export async function openListProject(page: Page, project: string): Promise<void
   const header = listProjectHeader(page, project)
   await expect(header).toBeVisible({ timeout: 15_000 })
   const chevron = header.locator('.collapse-chevron')
-  if (!(await chevron.evaluate((el) => el.classList.contains('expanded')))) {
+  if (!(await chevron.evaluate((el) => el.getAttribute('aria-expanded') === 'true'))) {
     await header.locator('.todo-group-name-btn').click()
-    await expect(chevron).toHaveClass(/expanded/)
+    await expect(chevron).toHaveAttribute('aria-expanded', 'true')
   }
 }
 
@@ -266,7 +266,7 @@ export async function showEverything(page: Page): Promise<void> {
  * per header took most of a 30 s test on a fixture with dozens of projects.
  */
 export async function openAllListProjects(page: Page): Promise<void> {
-  const folded = page.locator('.todo-group-project-header').filter({ has: page.locator('.collapse-chevron:not(.expanded)') })
+  const folded = page.locator('.todo-group-project-header').filter({ has: page.locator('.collapse-chevron[aria-expanded="false"]') })
   if ((await folded.count()) === 0) return
   // What a fold writes is a synced layout pref: keep it in this tab, never on the
   // shared fixture server, where every later page would open with all projects open.

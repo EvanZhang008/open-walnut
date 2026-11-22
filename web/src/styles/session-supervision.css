@@ -25,7 +25,6 @@
 .session-supervision p { margin: 4px 0; }
 .session-supervision [role="alert"] { color: var(--error); }
 .session-supervision-toggle { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
-.session-supervision-toggle input { accent-color: var(--accent); margin: 0; }
 .session-supervision-footer { color: var(--fg-muted); }
 .session-supervision-footer button {
   font: inherit;
@@ -144,22 +143,8 @@ button.session-cron-pill[aria-expanded="true"] {
 .session-cron-job-facts { color: var(--fg-muted); margin-top: 1px; }
 
 .session-cron-prompt { margin-top: 4px; }
-.session-cron-prompt-toggle {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  width: 100%;
-  min-width: 0;
-  font: inherit;
-  text-align: left;
-  color: inherit;
-  border: 0;
-  background: transparent;
-  padding: 0;
-  cursor: pointer;
-}
-.session-cron-prompt-label { color: var(--accent); flex: 0 0 auto; }
-.session-cron-prompt-toggle[aria-expanded="true"] .session-cron-prompt-label::after { content: ' (hide)'; color: var(--fg-muted); }
+/* The disclosure (controls/Disclosure.tsx) draws the toggle; here only its placement. */
+.session-cron-prompt-toggle .wn-disclosure-label { flex: 0 0 auto; }
 .session-cron-prompt-preview {
   flex: 1 1 auto;
   min-width: 0;
@@ -167,6 +152,7 @@ button.session-cron-pill[aria-expanded="true"] {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--fg-muted);
+  font-weight: 400;
 }
 .session-cron-prompt-text {
   margin: 4px 0 0;

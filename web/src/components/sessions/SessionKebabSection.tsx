@@ -190,7 +190,7 @@ interface SessionKebabSectionProps {
  * Its text is the path itself, so selecting and copying it gives the path unchanged.
  */
 function PathSegments({ path }: { path: string }) {
-  return <>{(path.match(/[^/]*\/|[^/]+$/g) ?? [path]).map((seg, i) => <span key={i} className="task-kebab-meta-seg">{seg}</span>)}</>;
+  return <>{(path.match(/[^/]*\/|[^/]+$/g) ?? [path]).map((seg, i) => <span key={i} className="task-kebab-meta-seg" data-choice-exempt="a piece of a path that wraps at its slashes, not a segmented control">{seg}</span>)}</>;
 }
 
 /** A single copy-to-clipboard kebab item with a transient "Copied!" label. */

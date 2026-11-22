@@ -318,7 +318,7 @@
 /* The title doubles as the agent switcher when there is more than one agent:
    same type as the plain title, a caret, and only a hover tint to say it is a
    control — a button-shaped title would read as a second header. */
-.ask-walnut-agent-switch {
+.ask-walnut-agent-picker {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -330,16 +330,10 @@
   font-family: inherit;
   cursor: pointer;
 }
-.ask-walnut-agent-switch:hover,
-.ask-walnut-agent-switch.is-open {
+.ask-walnut-agent-picker:hover,
+.ask-walnut-agent-picker.is-open {
   background: color-mix(in srgb, var(--walnut-accent) 10%, transparent);
 }
-.ask-walnut-agent-caret {
-  display: inline-flex;
-  opacity: 0.85;
-  transition: transform 0.15s;
-}
-.ask-walnut-agent-caret.is-open { transform: rotate(180deg); }
 /* The agent list: an accordion under the title, above the search, so the
    drawer's own scroll area stays the ask list. */
 .ask-walnut-agent-list {

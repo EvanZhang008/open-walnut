@@ -25,6 +25,7 @@ import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterD
 import { useOrgAvatars } from './useOrgAvatars';
 import { useStoreTask } from '@/contexts/TasksContext';
 import { avatarFileValue } from './avatar-upload';
+import { Tabs } from '@/components/controls';
 import '@/styles/org-avatar-dialog.css';
 
 type Tab = 'presets' | 'ai' | 'upload';
@@ -150,11 +151,8 @@ export function OrgAvatarDialog({ target, onRename, onClose }: Props) {
               <small>{renameKind === 'vp' ? 'Blank gives it its project’s name.' : renameKind ? 'The task’s title.' : 'The CEO keeps its name.'}</small>
             </label>
           </div>
-          <div className="org-avatar-tabs" role="tablist">
-            {TABS.map(([id, label]) => (
-              <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? 'is-on' : ''} data-testid={`org-avatar-tab-${id}`} onClick={() => setTab(id)}>{label}</button>
-            ))}
-          </div>
+          <Tabs className="org-avatar-tabs" aria-label="Pick the picture from" value={tab} onChange={setTab}
+            items={TABS.map(([id, label]) => ({ value: id, label, testId: `org-avatar-tab-${id}` }))} />
           <div className="org-avatar-body">
             {tab === 'presets' && (<>
               <div className="org-avatar-grid" data-testid="org-avatar-characters">

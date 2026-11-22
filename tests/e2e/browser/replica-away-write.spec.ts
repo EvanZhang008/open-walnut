@@ -82,9 +82,9 @@ async function openAcme(page: Page): Promise<void> {
   const header = page.locator('.todo-group-project-header').filter({ has: page.locator('.todo-group-project-name').filter({ hasText: /^Acme$/ }) }).first()
   await expect(header).toBeVisible({ timeout: 15_000 })
   const chevron = header.locator('.collapse-chevron')
-  if (!(await chevron.evaluate((el) => el.classList.contains('expanded')))) {
+  if (!(await chevron.evaluate((el) => el.getAttribute('aria-expanded') === 'true'))) {
     await header.click()
-    await expect(chevron).toHaveClass(/expanded/)
+    await expect(chevron).toHaveAttribute('aria-expanded', 'true')
   }
 }
 
@@ -252,7 +252,7 @@ test('the console writes while the Mac sleeps: each write is kept on the host wi
     await expect(pane).toBeVisible({ timeout: 30_000 })
     const custom = pane.getByTestId('board-view-custom')
     await expect(custom).toBeVisible({ timeout: 15_000 })
-    if ((await custom.getAttribute('aria-pressed')) !== 'true') await custom.click()
+    if ((await custom.getAttribute('aria-checked')) !== 'true') await custom.click()
     const frame = page.frameLocator('.task-board-frame')
     const thread = frame.locator('walnut-thread[id="drill"]')
     await expect(thread.locator('.wn-thread-title')).toHaveText('Drill', { timeout: 30_000 })

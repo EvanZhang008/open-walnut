@@ -7,27 +7,22 @@
   gap: 4px;
   min-width: 0;
 }
-/* A bound draft's inline toggle (it has no More menu). */
+/* A bound draft's inline switch and its words (it has no More menu); the switch draws itself. */
 .draft-workspace-toggle {
   align-self: flex-start;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 9px 2px 5px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
   color: var(--fg-muted);
-  font-family: inherit;
   font-size: var(--font-size-xs);
   line-height: 1.5;
   cursor: pointer;
 }
-.draft-workspace-hint { margin: 4px 0 0 24px; font-size: var(--font-size-xs); line-height: 1.4; color: var(--fg-muted); }
-.draft-workspace-toggle:hover { border-color: var(--accent); color: var(--accent); }
-.draft-workspace-toggle:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 2px; }
-.draft-workspace-toggle.is-on { border-color: var(--accent); color: var(--accent); background: var(--accent-subtle); }
-/* A new draft's switch is a row of its More menu (DraftWorkspaceMenuItem). */
+.draft-workspace-hint { margin: 4px 0 0 34px; font-size: 11px; line-height: 1.4; color: var(--fg-muted); }
+.draft-workspace-toggle:hover { color: var(--fg); }
+/* A new draft's switch is a row of its More menu (DraftWorkspaceMenuItem): the row is its label. */
+.draft-workspace-menu-item[aria-disabled='true'] { color: var(--fg-muted); cursor: default; }
+.draft-workspace-menu-item[aria-disabled='true']:hover { background: none; }
 .draft-workspace-menu-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .draft-workspace-menu-hint { font-size: var(--font-size-xs); color: var(--fg-muted); }
 /* While on: one quiet pill leads the body, its × turns the option off. */
@@ -70,29 +65,6 @@
 }
 .draft-workspace-off:hover { background: var(--accent-subtle); color: var(--fg); }
 .draft-workspace-off:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 1px; }
-/* On or off is a switch (a picker's current choice is a colour, never a checkmark). */
-.draft-workspace-switch {
-  position: relative;
-  flex: 0 0 auto;
-  width: 22px;
-  height: 12px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--fg-muted) 45%, transparent);
-  transition: background 0.12s;
-}
-.draft-workspace-switch::after {
-  content: '';
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #fff;
-  transition: transform 0.12s;
-}
-.draft-workspace-switch.is-on { background: var(--accent); }
-.draft-workspace-switch.is-on::after { transform: translateX(10px); }
 .draft-workspace-body {
   display: flex;
   flex-wrap: wrap;
@@ -101,25 +73,7 @@
   min-width: 0;
   padding-left: 2px;
 }
-.draft-workspace-providers { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
-.draft-workspace-provider {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 2px 9px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--fg-secondary);
-  font-family: inherit;
-  font-size: var(--font-size-xs);
-  line-height: 1.5;
-  cursor: pointer;
-}
-/* Hover is a hint, the pick is the state: they must not look alike. */
-.draft-workspace-provider:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
-.draft-workspace-provider.is-picked { border-color: var(--accent); color: var(--accent); background: var(--accent-subtle); font-weight: 600; }
+.draft-workspace-providers { min-width: 0; }
 .draft-workspace-provider-meta { color: var(--fg-muted); }
 .draft-workspace-field {
   display: inline-flex;
@@ -417,12 +371,8 @@
 .project-scripts-form .app-modal-actions { margin-top: 2px; }
 .project-scripts-field { display: flex; flex-direction: column; font-size: var(--font-size-sm); color: var(--fg-secondary); }
 .project-scripts-textarea { font-family: var(--font-mono); font-size: var(--font-size-md); line-height: 1.5; resize: vertical; min-height: 60px; }
-.project-scripts-check { display: flex; align-items: flex-start; gap: 8px; font-size: var(--font-size-md); color: var(--fg); }
-.project-scripts-check input { margin-top: 2px; accent-color: var(--accent); cursor: pointer; }
-.project-scripts-check label { cursor: pointer; }
-.project-scripts-check span { display: flex; flex-direction: column; gap: 1px; }
-.project-scripts-check small { font-size: var(--font-size-sm); color: var(--fg-muted); }
-.project-scripts-check.is-nested { margin-left: 22px; margin-top: -4px; }
+/* Under its parent box, indented to the parent's words (16 px box + 8 px gap). */
+.project-scripts-check-nested { margin-left: 24px; margin-top: -4px; }
 .project-scripts-error { margin-top: 8px; font-size: var(--font-size-sm); color: var(--error); overflow-wrap: anywhere; }
 .project-scripts-form .project-scripts-error { margin-top: 0; }
 .project-scripts-file { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
@@ -494,8 +444,8 @@
 .workspace-preparing-fix .project-scripts-link { color: var(--accent); }
 .workspace-preparing-fix { margin-top: 10px; font-size: var(--font-size-sm); color: var(--fg-muted); text-align: center; max-width: 420px; }
 
-/* A long command folded to one line: a click shows all of it. */
-.script-command-toggle { cursor: zoom-in; }
-.script-command-toggle.is-open { cursor: zoom-out; white-space: pre-wrap; overflow-wrap: anywhere; text-overflow: clip; overflow: visible; }
-.script-command-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* A long command folded to one line (ScriptCommand, a disclosure button): a click shows all of it. */
+.script-command-toggle { max-width: calc(100% + 4px); }
+.project-scripts-row-main > .script-command-toggle { flex-basis: 100%; }
+.script-command-toggle[aria-expanded='true'] :is(.wn-disclosure-label, code) { white-space: pre-wrap; overflow-wrap: anywhere; text-overflow: clip; overflow: visible; }
 .project-scripts-save-hint { font-size: var(--font-size-sm); color: var(--fg-muted); margin-top: 2px; }

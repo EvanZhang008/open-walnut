@@ -63,7 +63,7 @@ describe('pickers show the current item by colour', () => {
     const css = fs.readFileSync(path.join(ROOT, 'web/src/styles/composer-controls.css'), 'utf8')
     // An on/off toggle is a switch.
     const ws = fs.readFileSync(path.join(ROOT, 'web/src/components/workspaces/DraftWorkspaceRow.tsx'), 'utf8')
-    expect(ws).toContain('draft-workspace-switch')
+    expect(ws).toContain('<ToggleSwitch')
     expect(css).toMatch(/\.picker-row-current[^{]*\{[^}]*var\(--accent\)/)
   })
 })

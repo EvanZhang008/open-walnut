@@ -178,32 +178,18 @@
 /* A command's Copy sits in the line of text: the family's small icon key, its extra height
    taken out of the line so the line keeps its height. */
 .notice-cmd-copy { margin: -4px 0 -4px 2px; vertical-align: middle; }
-/* "Details" / "Less": the rest of a notice cut to its few lines. */
-.notice-details-toggle {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 2px 0;
-  margin: 0 0 6px;
-  border: none;
-  background: none;
-  font: inherit;
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  color: var(--fg-secondary);
-  cursor: pointer;
-}
-.notice-details-toggle:hover { color: var(--fg); }
+/* "Details" / "Less": the rest of a notice cut to its few lines (the shared DisclosureButton; placement only). */
+.notice-details-toggle { margin-bottom: 6px; }
 /* Its other label, unseen, keeps "Details" and "Less" (and "Copy command" and "Copied") one width. */
-.notice-details-toggle::after { content: attr(data-other); height: 0; overflow: hidden; visibility: hidden; }
+:is(.notice-details-words, .notice-cmd-copy-words) { display: inline-flex; flex-direction: column; align-items: flex-start; }
+:is(.notice-details-words, .notice-cmd-copy-words)::after { content: attr(data-other); height: 0; overflow: hidden; visibility: hidden; }
 .notice-details-toggle:last-child { margin-bottom: 0; }
 /* Details and the command's Copy, one row under the words. */
 /* A narrow corner (beside a full-screen sheet) wraps Copy command under Details instead of past the card. */
 .notice-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 0 0 6px; }
 .notice-tools:last-child { margin-bottom: 0; }
-.notice-tools .notice-details-toggle { margin: 0; }
-.nfc-perm-cmd-tools .notice-details-toggle { margin: 0; }
+.notice-tools .notice-details-toggle { margin-bottom: 0; }
+.nfc-perm-cmd-tools .notice-details-toggle { margin-bottom: 0; }
 /* The raw line behind a toast (the record's detail), opened from Details, under its label. */
 .notification-toast-log { flex: 0 0 100%; min-width: 0; margin: 2px 0 6px; cursor: text; }
 .notification-toast-log-label { font-size: var(--font-size-xs); font-weight: 500; color: var(--fg-muted); margin-bottom: 2px; }
@@ -231,7 +217,7 @@
   overflow: hidden;
 }
 .corner-stack .kanban-toast-text.is-open { display: block; overflow: visible; }
-.corner-stack .kanban-toast-main .notice-details-toggle { margin: 0 auto 0 0; }
+.corner-stack .kanban-toast-main .notice-details-toggle { margin-right: auto; margin-bottom: 0; }
 
 .corner-slot {
   display: flex;
@@ -261,7 +247,7 @@
   .corner-stack .notification-toast:not(.nfc-perm-toast):not(.is-open) .wn-notice-head { padding-bottom: 7px; }
   .corner-stack .notification-toast:not(.nfc-perm-toast):not(.is-open) .wn-notice-line { -webkit-line-clamp: 1; }
   .corner-stack .notification-toast:not(.nfc-perm-toast) .notice-tools > button { min-height: 32px; }
-  .corner-stack .wn-notice-end > .notice-details-toggle { flex: none; margin: -6px 0; min-height: 32px; padding: 0 4px; }
+  .corner-stack .wn-notice-end > .notice-details-toggle { flex: none; margin-top: -6px; margin-bottom: -6px; min-height: 32px; }
   .corner-stack .notification-toast.is-open:not(.nfc-perm-toast) .notification-toast-detail { max-height: min(25vh, 160px); }
   /* Opened on a phone, the words and their Copy come first; the log is under them. */
   .corner-stack .notification-toast.is-open:not(.nfc-perm-toast) .wn-notice-body { display: flex; flex-direction: column; }

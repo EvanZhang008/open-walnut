@@ -182,6 +182,13 @@
   padding-left: var(--settings-row-indent);
 }
 
+/* A ControlGroup's reason line (controls/ControlGroup.tsx) inside a settings box: at the rows'
+   inset, right under the master row. */
+.settings-group .wn-group-reason {
+  margin: 0;
+  padding: 0 var(--settings-row-pad-x, 14px) 10px;
+}
+
 /* Hairline between rows, inset from the label edge; the first row has none. */
 .settings-group .settings-row:not(:first-child)::before,
 .settings-disclosure-content > .settings-row:first-child::before {

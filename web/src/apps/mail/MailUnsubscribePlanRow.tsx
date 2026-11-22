@@ -7,6 +7,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { log } from '@/utils/log';
+import { Checkbox } from '@/components/controls';
 import { formatCount } from './mail-format';
 import { CheckCircleIcon } from './mail-icons';
 import {
@@ -65,12 +66,11 @@ export function MailUnsubscribePlanRow({ item, ticked, onTick, disabled, run, fr
       data-kind={kind}
     >
       <label className="mail-unsub-label">
-        <input
-          type="checkbox"
+        <Checkbox
           data-testid="mail-unsub-check"
           checked={tickable && ticked}
           disabled={!tickable || disabled}
-          onChange={(event) => onTick(event.target.checked)}
+          onChange={onTick}
         />
         <span className="mail-unsub-name wn-title">{item.label}</span>
         <span className="mail-unsub-method" data-testid="mail-unsub-method">{methodText(item)}</span>

@@ -1596,6 +1596,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
           floating chevron + collapsed rail were unfindable/unreadable. */}
       <button
         type="button"
+        data-choice-exempt="layout tool button with a panel glyph that shows or hides a pane, not a disclosure row"
         className="sfe-btn sfe-tree-toggle"
         onClick={toggleTreeCollapsed}
         title={treeCollapsed ? 'Show file tree' : 'Hide file tree'}

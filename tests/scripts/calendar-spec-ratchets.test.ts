@@ -73,9 +73,9 @@ describe('a task made from the calendar\'s new-item popover', () => {
   const TASK_SIDE = /\.qtc-|quick-task-composer|'Task title'/
   /** ...goes there through the helper, or picks Event itself (a test of the switch's own fallback). */
   const PICKS = /\b(?:openCalendarTaskCreator|pickCalendarTaskSide)\(/
-  const PICKS_EVENT = /cal-create-tabs[^\n]*Event|\btab\(\s*\w+\s*,\s*['"]Event['"]\s*\)\.click\(|getByRole\(\s*['"]tab['"]\s*,\s*\{\s*name:\s*['"]Event['"][^\n]*\.click\(/
-  /** A hand-written click on the Task tab. */
-  const HAND_CLICK = /(?:cal-create-tabs[^\n]*Task[^\n]*|\btab\(\s*\w+\s*,\s*['"]Task['"]\s*\)|getByRole\(\s*['"]tab['"]\s*,\s*\{\s*name:\s*['"]Task['"][^)]*\)\s*)\.click\(/
+  const PICKS_EVENT = /cal-create-tabs[^\n]*Event|\btab\(\s*\w+\s*,\s*['"]Event['"]\s*\)\.click\(|getByRole\(\s*['"](?:tab|radio)['"]\s*,\s*\{\s*name:\s*['"]Event['"][^\n]*\.click\(/
+  /** A hand-written click on the Task side (a segment of the Event | Task switch; a tab before 2026-11-21). */
+  const HAND_CLICK = /(?:cal-create-tabs[^\n]*Task[^\n]*|\btab\(\s*\w+\s*,\s*['"]Task['"]\s*\)|getByRole\(\s*['"](?:tab|radio)['"]\s*,\s*\{\s*name:\s*['"]Task['"][^)]*\)\s*)\.click\(/
 
   /** The text of the function or closure defined on line `i`, to its closing brace at the same indent. */
   function bodyFrom(lines: string[], i: number): string {
@@ -126,14 +126,15 @@ describe('a task made from the calendar\'s new-item popover', () => {
     expect(offendersOf(wrapped)).toEqual([])
     expect(offendersOf(wrapped.replace('  await pickCalendarTaskSide(page)\n', ''))).toHaveLength(1)
     // A test of the switch that picks Event and waits for the fallback to Task.
-    expect(offendersOf(`test('fallback', async ({ page }) => {\n${slot}  await popover.locator('.cal-create-tabs button:has-text("Event")').click()\n  await expect(popover.locator('.quick-task-composer')).toBeVisible()\n})`)).toEqual([])
+    expect(offendersOf(`test('fallback', async ({ page }) => {\n${slot}  await popover.locator('.cal-create-tabs [role="radio"]:has-text("Event")').click()\n  await expect(popover.locator('.quick-task-composer')).toBeVisible()\n})`)).toEqual([])
     for (const line of [
       "await page.locator('.cal-create-popover').getByRole('tab', { name: 'Task', exact: true }).click()",
+      "await page.locator('.cal-create-popover').getByRole('radio', { name: 'Task', exact: true }).click()",
       "await creator.getByRole('tab', { name: 'Task', exact: true }).click();",
       "await tab(page, 'Task').click()",
       "await popover.locator('.cal-create-tabs button:has-text(\"Task\")').click()",
     ]) expect(HAND_CLICK.test(line), line).toBe(true)
-    expect(HAND_CLICK.test("await expect(tab(page, 'Task')).toHaveAttribute('aria-selected', 'true')")).toBe(false)
-    expect(HAND_CLICK.test("await expect(tabs.getByRole('tab', { name: 'Task', exact: true }), `${where}: kind`).toHaveAttribute('aria-selected', 'true')")).toBe(false)
+    expect(HAND_CLICK.test("await expect(tab(page, 'Task')).toHaveAttribute('aria-checked', 'true')")).toBe(false)
+    expect(HAND_CLICK.test("await expect(tabs.getByRole('radio', { name: 'Task', exact: true }), `${where}: kind`).toHaveAttribute('aria-checked', 'true')")).toBe(false)
   })
 })

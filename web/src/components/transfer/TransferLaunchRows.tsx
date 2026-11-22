@@ -16,6 +16,7 @@ import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { engineCaps } from '@/utils/engine-capabilities';
 import { formatModelName } from '@/utils/model-name';
 import { blockedReason, launchDefaults, withEngine, type TransferForm } from './transfer-model';
+import { TransferChoice } from './TransferChoice';
 
 const EFFORT_LABELS: Record<string, string> = Object.fromEntries(SESSION_EFFORTS.map((e) => [e.id, e.label]));
 
@@ -112,22 +113,16 @@ export function TransferLaunchRows({ options, source, form, onChange, group }: {
         </>
       ), true)}
       {group('Permissions', modes.map((m) => (
-        <button
+        <TransferChoice
           key={m.id}
-          type="button"
-          role="radio"
-          aria-checked={form.permissionMode === m.id}
-          className={`xfer-opt${form.permissionMode === m.id ? ' is-checked' : ''}`}
+          group="Permissions"
+          checked={form.permissionMode === m.id}
           title={m.description}
-          onClick={() => onChange({ permissionMode: m.id as SessionMode })}
-          data-testid={`xfer-perm-${m.id}`}
-        >
-          <span className="xfer-opt-line">
-            <span className="xfer-opt-dot" aria-hidden="true" />
-            <span className="xfer-opt-name">{m.label}</span>
-            {source.permissionMode === m.id && <span className="xfer-now">Now</span>}
-          </span>
-        </button>
+          onPick={() => onChange({ permissionMode: m.id as SessionMode })}
+          name={m.label}
+          now={source.permissionMode === m.id}
+          testId={`xfer-perm-${m.id}`}
+        />
       )))}
     </>
   );

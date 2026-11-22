@@ -131,7 +131,7 @@
   "web/src/components/sessions/DraftLaunchBar.tsx": [4, 2],
   "web/src/components/sessions/DraftSessionPanel.tsx": [14, 0],
   "web/src/components/sessions/EngineFallbackBanner.tsx": [2, 0],
-  "web/src/components/sessions/EngineSettingsPopover.tsx": [9, 0],
+  "web/src/components/sessions/EngineSettingsPopover.tsx": [8, 0],
   "web/src/components/sessions/EngineSwitch.tsx": [7, 0],
   "web/src/components/sessions/FolderGoneBanner.tsx": [1, 0],
   "web/src/components/sessions/IdleCompactLine.tsx": [2, 0],

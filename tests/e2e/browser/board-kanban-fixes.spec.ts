@@ -239,7 +239,8 @@ test('N13 N14 N18: the Sev 1 chip has the count badge every chip has; the worker
   const pane = await openBoard(page)
   await letGo(page)
   const sev = pane.getByTestId('kanban-chip-sev')
-  await expect(sev).toHaveText(/^Sev 1 \d+$/)
+  await expect(sev.locator('.wn-chip-label')).toHaveText('Sev 1')
+  await expect(sev.getByTestId('kanban-chip-count')).toHaveText(/^\d+$/)
   // One count style: the same badge box on Sev 1 and on Needs you.
   const badge = async (testId: string) => pane.getByTestId(testId).getByTestId('kanban-chip-count').evaluate((el) => {
     const cs = getComputedStyle(el)

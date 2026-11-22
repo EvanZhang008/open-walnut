@@ -27,6 +27,7 @@ import {
 } from './quick-sort-model';
 import { pageShortcutBlocked } from '@/utils/page-shortcut';
 import '@/styles/quick-sort.css';
+import { SegmentedControl } from '@/components/controls';
 
 const SHOWN = 3;
 /** A project pick moving this many tasks asks once more first (the group menus' rule). */
@@ -305,10 +306,13 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
   return <div ref={rootRef} className="quick-sort" data-testid="quick-sort" data-view={view}>
     <div className="quick-sort-bar">
       <QuickSortFilter filter={filter} setFilter={setFilter} tiers={tiers} counts={counts} showProject={view === 'tasks'} />
-      <div className="home-board-switch quick-sort-view" aria-label="Sort tasks or projects">
-        <button type="button" aria-pressed={view === 'tasks'} onClick={() => { setView('tasks'); setCursor(0); }}>Tasks</button>
-        <button type="button" aria-pressed={view === 'projects'} onClick={() => { setView('projects'); setCursor(0); setReplying(null); }}>Projects</button>
-      </div>
+      <SegmentedControl
+        className="quick-sort-view"
+        aria-label="Sort tasks or projects"
+        value={view}
+        onChange={(next) => { setView(next); setCursor(0); if (next === 'projects') setReplying(null); }}
+        options={[{ value: 'tasks', label: 'Tasks' }, { value: 'projects', label: 'Projects' }]}
+      />
     </div>
     <div className="quick-sort-progress" aria-hidden="true"><i style={{ width: `${total ? Math.round(decided / total * 100) : 0}%` }} /></div>
     <div className="quick-sort-progress-text"><span>{decided} sorted this round</span><span data-testid="quick-sort-left">{left} left</span></div>

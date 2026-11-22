@@ -487,7 +487,7 @@ async function openFromMidHome(page: Page): Promise<number> {
   let lastHeads = -1
   await expect.poll(async () => { const n = await heads.count(); const same = n > 1 && n === lastHeads; lastHeads = n; return same }, { intervals: [500], timeout: 20_000 }).toBe(true)
   for (let i = 0; i < 24 && (await room()) < 1400; i++) {
-    const closed = box.locator('.todo-group-project-header').filter({ has: page.locator('.collapse-chevron:not(.expanded)') })
+    const closed = box.locator('.todo-group-project-header').filter({ has: page.locator('.collapse-chevron[aria-expanded="false"]') })
     if (await closed.count() === 0) break
     const h = closed.first()
     await h.scrollIntoViewIfNeeded()
@@ -728,8 +728,8 @@ test.describe('the fixture task\'s Board', () => {
       // The leader's own page (the `Page` view), not the Cards view of the team.
       const custom = pane.getByTestId('board-view-custom')
       await expect(custom).toBeVisible({ timeout: 15_000 })
-      if ((await custom.getAttribute('aria-pressed')) !== 'true') await custom.click()
-      await expect(custom).toHaveAttribute('aria-pressed', 'true')
+      if ((await custom.getAttribute('aria-checked')) !== 'true') await custom.click()
+      await expect(custom).toHaveAttribute('aria-checked', 'true')
       const frame = page.frameLocator('.task-board-frame')
       await expect(frame.locator('walnut-choice[id="water-when"]')).toBeVisible({ timeout: 15_000 })
       const pb = (await pane.boundingBox())!
@@ -837,7 +837,7 @@ test('Files is the tree or one file (back returns to the tree); Changed is one c
   await expect(topbar(page).locator('.phone-topbar-title-text')).toHaveText('Changed')
   await page.waitForTimeout(800)
   await expect(overlay(page).locator('.session-diff-table.is-split')).toHaveCount(0)
-  await expect(overlay(page).getByRole('group', { name: 'Diff layout' })).toBeHidden()
+  await expect(overlay(page).getByRole('radiogroup', { name: 'Diff layout' })).toBeHidden()
   await expectNoHorizontalOverflow(page)
 })
 
@@ -955,7 +955,7 @@ async function boardCardsCheck(page: Page): Promise<void> {
   // it rather than look once (a fast pane skipped the click and stayed on Status).
   const cards = pane.getByTestId('board-view-cards')
   await expect(cards).toBeVisible({ timeout: 15_000 })
-  if ((await cards.getAttribute('aria-pressed')) !== 'true') await cards.click()
+  if ((await cards.getAttribute('aria-checked')) !== 'true') await cards.click()
   await expect(pane.locator('.kanban-root')).toBeVisible({ timeout: 15_000 })
   await page.waitForTimeout(800)
   // No form opened on its own: the iOS keyboard would cover the board.

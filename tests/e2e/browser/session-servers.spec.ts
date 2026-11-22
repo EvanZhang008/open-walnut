@@ -237,7 +237,7 @@ test('a session\'s servers are listed, open in the Web view, and stop without to
   await expect(strip.getByTestId('session-servers-others')).toHaveCount(0)
   const webChip = strip.locator(`[data-testid="session-server-chip"][data-port="${webPort}"]`)
   const termChip = strip.locator(`[data-testid="session-server-chip"][data-port="${termPort}"]`)
-  await expect(webChip).toHaveClass(/session-server-chip-active/)
+  await expect(webChip).toHaveAttribute('data-active', 'true')
   // The page shown has one Stop, at the row's end (not in a chip, which would move under a click).
   await expect(strip.getByTestId('session-server-stop')).toHaveCount(1)
   await expect(strip.getByTestId('session-server-stop')).toHaveAttribute('aria-label', `Stop the server on port ${webPort}`)
@@ -362,7 +362,7 @@ test('a session\'s servers are listed, open in the Web view, and stop without to
   // ── A second round: open the terminal job and stop it from its chip ──
   await termRow.getByTestId('session-server-open').click()
   await expect(view.locator('.session-web-address')).toHaveValue(`http://localhost:${termPort}/`)
-  await expect(termChip).toHaveClass(/session-server-chip-active/)
+  await expect(termChip).toHaveAttribute('data-active', 'true')
   await confirmStop(page, strip)
   await expect.poll(() => alive(term.pid), { timeout: 10_000 }).toBe(false)
   await expect(view.getByTestId('session-servers-notice')).toContainText(`Stopped :${termPort}`, { timeout: 15_000 })

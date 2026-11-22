@@ -42,6 +42,7 @@ export function KebabGroup({ label, hint, icon, badge, testId, openWhen, childre
     <div className={`task-kebab-group${open ? ' open' : ''}`} data-testid={testId}>
       <button
         type="button"
+        data-choice-exempt="menu row that opens its group of rows, drawn like the menu rows around it"
         className="task-kebab-item task-kebab-group-toggle"
         aria-expanded={open}
         aria-label={label}

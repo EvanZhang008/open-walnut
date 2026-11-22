@@ -35,6 +35,7 @@ import { ICON_SEARCH, ICON_SLIDERS } from '@/components/common/Icons';
 import { GENERAL_AGENT_ID, type AskAgent } from './ask-walnut-slot-model';
 import { DrawerItem, heldRowView, TaskDot } from './AskWalnutDrawerItem';
 import { MicInput } from '@/components/common/BoxMic';
+import { DisclosureChevron } from '@/components/controls';
 
 /** A row in the drawer's list. The just-launched task is not in the store yet,
  *  so a row is `{ id, title }` plus the Task when the store has it. */
@@ -43,12 +44,6 @@ export interface DrawerRow {
   title: string;
   task?: Task;
 }
-
-const ICON_CHEVRON = (
-  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <polyline points="4,6 8,10 12,6" />
-  </svg>
-);
 
 const ICON_PIN = (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -264,7 +259,7 @@ export function AskWalnutDrawer({
           {canSwitch ? (
             <button
               type="button"
-              className={`ask-walnut-drawer-title ask-walnut-agent-switch${agentsOpen ? ' is-open' : ''}`}
+              className={`ask-walnut-drawer-title ask-walnut-agent-picker${agentsOpen ? ' is-open' : ''}`}
               data-testid="ask-walnut-agent-switch"
               aria-haspopup="true"
               aria-expanded={agentsOpen}
@@ -272,7 +267,7 @@ export function AskWalnutDrawer({
               onClick={() => setAgentsOpen((v) => !v)}
             >
               {shown}
-              <span className={`ask-walnut-agent-caret${agentsOpen ? ' is-open' : ''}`} aria-hidden="true">{ICON_CHEVRON}</span>
+              <DisclosureChevron open={agentsOpen} />
             </button>
           ) : (
             <span className="ask-walnut-drawer-title">{shown}</span>

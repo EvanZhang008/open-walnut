@@ -8,7 +8,8 @@ import { NumberInput } from '@/components/settings/inputs/NumberInput';
 import { SettingsButton } from '@/components/settings/inputs/SettingsButton';
 import { couldntSave } from '@/components/settings/inputs/useOptimisticSetting';
 import { saveErrorMessage, useSettingsSaved } from '../settings-pane-context';
-import { ChevronGlyph, CloseGlyph } from '../settings-glyphs';
+import { CloseGlyph } from '../settings-glyphs';
+import { DisclosureChevron } from '@/components/controls';
 import { hookDescription, hookHelp, hookNames } from './hook-text';
 import { HOOK_COPY } from './hook-copy';
 import { CodeText } from './code-text';
@@ -147,7 +148,7 @@ function HookRow({ hook, name, error, showTag, onToggle, onSettingCommit }: {
           >
             <span className="settings-row-label hook-row-name" title={hook.name}>{name}</span>
             {tag && <SettingsTag>{tag}</SettingsTag>}
-            <ChevronGlyph size={12} className="settings-disclosure-chevron" />
+            <DisclosureChevron open={open} className="settings-disclosure-chevron" />
           </button>
           {help && <span className="settings-row-help settings-help-oneline" title={hook.description}><CodeText text={help} /></span>}
         </div>

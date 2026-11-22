@@ -35,6 +35,7 @@ import {
 } from './draft-workspace-store';
 import { autoGivesWay, defaultIsolationOn, suggestedText } from './draft-workspace-model';
 import { WORKSPACE_HINT } from './draft-workspace-model';
+import { Chip, ChipGroup, ToggleSwitch } from '@/components/controls';
 import '@/styles/workspaces.css';
 
 export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: {
@@ -180,19 +181,23 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: 
   return (
     <div className={`draft-workspace-row${choice.enabled ? ' is-on' : ''}`} data-testid="draft-workspace-row">
       {bound && (
-        <button
-          type="button"
-          className={`draft-workspace-toggle${choice.enabled && !quiet ? ' is-on' : ''}`}
-          aria-pressed={choice.enabled && !quiet}
-          data-testid="draft-workspace-toggle"
+        <label
+          htmlFor={`${fieldIdBase}-switch`}
+          className="draft-workspace-toggle"
           title={choice.enabled
             ? 'The task gets its own working copy; its session starts there once it is ready'
             : 'Give this task its own working copy (a git worktree, or a plugin workspace)'}
-          onClick={() => pick(!(choice.enabled && !quiet), 'bound-toggle')}
         >
-          <span className={`draft-workspace-switch${choice.enabled && !quiet ? ' is-on' : ''}`} aria-hidden />
-          Isolated workspace
-        </button>
+          <ToggleSwitch
+            id={`${fieldIdBase}-switch`}
+            size="sm"
+            checked={choice.enabled && !quiet}
+            onChange={(next) => pick(next, 'bound-toggle')}
+            aria-labelledby={`${fieldIdBase}-switch-name`}
+            data-testid="draft-workspace-toggle"
+          />
+          <span id={`${fieldIdBase}-switch-name`}>Isolated workspace</span>
+        </label>
       )}
       {/* Said on the row, not only in a tooltip (2026-11-12, the user: "what ... is isolated workspace, have no idea?"). */}
       {bound && !choice.enabled && (
@@ -218,23 +223,21 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: 
           {choice.loading && <span className="draft-workspace-note" data-testid="draft-workspace-loading">Checking this folder…</span>}
           {!choice.loading && choice.error && <span className="draft-workspace-note is-error">{choice.error}</span>}
           {!choice.loading && pickable.length > 0 && (
-            <div className="draft-workspace-providers" role="radiogroup" aria-label="Workspace provider">
+            <ChipGroup className="draft-workspace-providers" role="radiogroup" aria-label="Workspace provider">
               {pickable.map((c) => (
-                <button
+                <Chip
                   key={c.provider}
-                  type="button"
                   role="radio"
-                  aria-checked={picked?.provider === c.provider}
-                  className={`draft-workspace-provider${picked?.provider === c.provider ? ' is-picked' : ''}`}
+                  pressed={picked?.provider === c.provider}
                   data-testid={`draft-workspace-provider-${c.provider}`}
                   title={c.claimed ? (c.root ? `Matches ${c.root}` : 'Matches this folder') : (c.reason ?? 'Pick it to use it here')}
                   onClick={() => setDraftWorkspace(draftId, { provider: c.provider, auto: false })}
                 >
                   {c.displayName}
                   {c.claimed && c.branch && <span className="draft-workspace-provider-meta"> · from {c.branch}</span>}
-                </button>
+                </Chip>
               ))}
-            </div>
+            </ChipGroup>
           )}
           {!choice.loading && pickable.length === 0 && !choice.error && (
             <span className="draft-workspace-note is-warn" data-testid="draft-workspace-none">
@@ -250,35 +253,31 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: 
             const label = `${field.title ?? key}${required.has(key) ? '' : ' (optional)'}`;
             if (field.type === 'boolean') {
               return (
-                <button
+                <Chip
                   key={key}
-                  type="button"
-                  className={`draft-workspace-provider${value === true ? ' is-picked' : ''}`}
-                  aria-pressed={value === true}
+                  pressed={value === true}
                   title={field.description}
                   onClick={() => setValues({ ...choice.values, [key]: value !== true })}
                 >
                   {field.title ?? key}
-                </button>
+                </Chip>
               );
             }
             if (field.type === 'string' && field.enum?.length) {
               return (
-                <div key={key} className="draft-workspace-field" role="radiogroup" aria-label={field.title ?? key}>
+                <ChipGroup key={key} className="draft-workspace-field" role="radiogroup" aria-label={field.title ?? key}>
                   <span className="draft-workspace-field-label">{label}</span>
                   {field.enum.map((opt) => (
-                    <button
+                    <Chip
                       key={opt}
-                      type="button"
                       role="radio"
-                      aria-checked={(value ?? field.default) === opt}
-                      className={`draft-workspace-provider${(value ?? field.default) === opt ? ' is-picked' : ''}`}
+                      pressed={(value ?? field.default) === opt}
                       onClick={() => setValues({ ...choice.values, [key]: opt })}
                     >
                       {opt}
-                    </button>
+                    </Chip>
                   ))}
-                </div>
+                </ChipGroup>
               );
             }
             return (

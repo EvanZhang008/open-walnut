@@ -10,19 +10,15 @@
 :root {
   --thread-row-hover: rgba(0, 0, 0, 0.04);
   --thread-drawer-shadow: 0 12px 32px rgba(0, 0, 0, 0.16), 0 2px 8px rgba(0, 0, 0, 0.08);
-  --thread-chip-on: #ffffff; --thread-chip-on-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
 }
 :root[data-theme="dark"] {
   --thread-row-hover: rgba(255, 255, 255, 0.06);
   --thread-drawer-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.35);
-  --thread-chip-on: var(--bg-tertiary); --thread-chip-on-shadow: none;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     --thread-row-hover: rgba(255, 255, 255, 0.06);
     --thread-drawer-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.35);
-    --thread-chip-on: var(--bg-tertiary);
-    --thread-chip-on-shadow: none;
   }
 }
 
@@ -92,22 +88,11 @@
   padding: 2px 4px; border-radius: var(--radius-xs); cursor: pointer;
 }
 .thread-drawer-search-clear:hover { color: var(--fg); background: var(--bg-hover); }
-.thread-drawer-chips {
-  display: flex; gap: 2px; margin: 0 10px 6px; padding: 2px; border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-}
-.thread-drawer-chip {
-  flex: 1; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-secondary);
-  font: inherit; font-size: var(--font-size-sm); font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer;
-}
-.thread-drawer-chip[aria-pressed="true"] { background: var(--thread-chip-on); color: var(--fg); box-shadow: var(--thread-chip-on-shadow); }
-.thread-drawer-chip-count { color: var(--fg-muted); }
+.thread-drawer-chips { margin: 0 10px 6px; }
 .thread-drawer-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 4px 8px; }
 .thread-drawer-close:focus-visible,
-.thread-drawer-chip:focus-visible,
 .thread-drawer-search-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.thread-drawer-close:focus:not(:focus-visible),
-.thread-drawer-chip:focus:not(:focus-visible) { outline: none; }
+.thread-drawer-close:focus:not(:focus-visible) { outline: none; }
 
 /* ── Tree rows (spec 6.4): 44px two-line, 30px single-line, 16px indent per
    depth with one 1px guide per level. ── */

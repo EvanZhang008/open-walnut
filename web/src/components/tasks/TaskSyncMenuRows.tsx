@@ -15,7 +15,7 @@
  */
 import { useState } from 'react';
 import type { SyncHold, Task } from '@open-walnut/core';
-import { CHEVRON_GLYPH } from '@/components/common/Icons';
+import { DisclosureChevron } from '@/components/controls';
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { changeOutsideCopy, makeTaskLocal, syncTaskToProject, type OutsideCopyAction } from '@/api/private-tasks';
@@ -73,12 +73,13 @@ export function TaskSyncMenuRows({ task, afterAction, onError }: {
           className="task-kebab-item task-kebab-team-toggle"
           data-testid="kebab-sync-toggle"
           aria-expanded={expanded}
+          data-choice-exempt="a menu row that opens its sub-rows in place, with the shared DisclosureChevron"
           title={line || summary}
           onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
         >
           <span className="task-kebab-icon">{ICON_LOCK}</span>
           <span className="task-kebab-team-label">Sync: <b>{summary}</b></span>
-          <span className={`task-kebab-team-caret${expanded ? ' open' : ''}`} aria-hidden="true">{CHEVRON_GLYPH}</span>
+          <DisclosureChevron open={expanded} />
         </button>
         {expanded && (
           <div className="task-kebab-team-rows" data-testid="kebab-sync-rows">

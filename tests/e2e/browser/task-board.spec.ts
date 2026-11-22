@@ -431,7 +431,7 @@ test('the Worker pill, Adopt a worker… from the kebab and the Leader pill, and
   await expect(row(third).locator('[data-testid="leader-pill"]')).toHaveText('Leader · 1')
   // A new parent starts folded; unfold it to see the worker's own row.
   const chevron = row(third).locator('.collapse-chevron')
-  if (!(await chevron.evaluate((el) => el.classList.contains('expanded')))) await chevron.click()
+  if (!(await chevron.evaluate((el) => el.getAttribute('aria-expanded') === 'true'))) await chevron.click()
   await expect(row(fourth).locator('[data-testid="subtask-pill"]')).toContainText('Worker')
   await expect.poll(() => parentOf(fourth)).toBe(third)
 

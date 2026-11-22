@@ -30,6 +30,7 @@ import { CSS } from '@dnd-kit/utilities';
 import * as ICONS from '../common/Icons';
 import { useProjectContextMenu } from './ProjectContextMenu';
 import { projectDisplayName } from '../../utils/project-display';
+import { DisclosureButton } from '@/components/controls';
 
 export interface TierProjectLabelRowProps {
   /** '' = Inbox (a legal drag participant and a legal fold target; it just has
@@ -117,8 +118,9 @@ export function TierProjectLabelRow({
         onClick={() => { if (!inert) onToggleCollapse(project); }}
         onContextMenu={(e) => projectMenu.open(e, { project, collapsed, favorite: isFavorite })}
       >
-        <button
-          className={`collapse-chevron${collapsed ? '' : ' expanded'}`}
+        <DisclosureButton
+          className="collapse-chevron"
+          expanded={!collapsed}
           onClick={(e) => { e.stopPropagation(); if (!inert) onToggleCollapse(project); }}
           // Same disarm trick the "+" uses, and needed for the same measured
           // reason: a 14px target lets the pointer slip past Chromium's native
@@ -130,9 +132,7 @@ export function TierProjectLabelRow({
           onPointerLeave={(e) => { const label = e.currentTarget.parentElement; if (label) label.draggable = !inert; }}
           title={collapsed ? 'Expand project' : 'Collapse project'}
           aria-label={collapsed ? 'Expand project' : 'Collapse project'}
-        >
-          {ICONS.CHEVRON_GLYPH}{/* same glyph as every other collapse row; CSS rotates it when expanded */}
-        </button>
+        />
         {/* SOLID icon + kind-tag = project; folders inside render with the
             hollow icon + indent, so the two levels never read the same. */}
         <span className="tier-project-label-icon">{ICONS.ICON_FOLDER_SOLID}</span>

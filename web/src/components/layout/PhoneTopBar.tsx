@@ -86,6 +86,7 @@ export function PhoneTopBar({ pageTitle, menuRef, menuExpanded, onMenu }: PhoneT
           ref={menuRef}
           type="button"
           className="btn btn-icon sidebar-toggle phone-topbar-btn"
+          data-choice-exempt="menu button that opens the navigation drawer"
           onClick={onMenu}
           aria-label="Menu"
           aria-controls="primary-sidebar"

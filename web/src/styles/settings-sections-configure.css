@@ -182,12 +182,6 @@
   top: 50%;
   right: 6px;
   margin-top: -6px;
-  color: var(--fg-muted);
-  transition: transform 120ms ease-out;
-}
-
-.hook-row-disclose[aria-expanded='true'] .settings-disclosure-chevron {
-  transform: rotate(90deg);
 }
 
 .hook-detail-value {
@@ -195,12 +189,6 @@
   color: var(--fg-secondary);
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .hook-row-disclose .settings-disclosure-chevron {
-    transition: none;
-  }
 }
 
 .settings-row-error.settings-row-error-inline {

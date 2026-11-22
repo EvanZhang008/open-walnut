@@ -35,6 +35,7 @@ import { ICON_CLOSE, ICON_EXPAND, ICON_PANEL_BOTTOM, ICON_PLUS, ICON_SPLIT_DOWN,
 import { TerminalStatusPill } from './TerminalModeNotices';
 import { SessionTerminalPane, type TerminalPaneHandle, type TerminalPaneState } from './SessionTerminalPane';
 import type { TerminalPathLink } from './terminal-links';
+import { Tab, TabList } from '@/components/controls';
 import {
   MAX_PANES_PER_TAB, activateTab, activeTab, addTab, allSlots, canAddTerminal, canSplit, focusSlot, focusedSlot, initialLayout,
   isPaneLeaf, loadLayout, paneRects, reconcileLayout, removeSlot, saveLayout, splitActive, type SplitDir, type TerminalLayout, type TerminalTab,
@@ -472,17 +473,16 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
   // The strip sits on a backing of its own colour: its fade (a mask) shows that, not the terminal under it.
   const tabStrip = viewTabs.length > 1 && (
     <div className="session-terminal-tabs-wrap">
-    <div className={`session-terminal-tabs${tabsFade}`} role="tablist" aria-label="Terminals" ref={tabsRef} onKeyDown={onTabKey} onScroll={measureTabs}>
+    <TabList className={`session-terminal-tabs${tabsFade}`} aria-label="Terminals" ref={tabsRef} onKeyDown={onTabKey} onScroll={measureTabs}>
       {viewTabs.map((tab) => {
         const on = tab.id === viewActive;
         const name = tabLabel(tab, states);
         return (
-          <div key={tab.id} className={`session-terminal-tab${on ? ' is-active' : ''}`} data-testid="terminal-tab">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={on}
-              tabIndex={on ? 0 : -1}
+          // The close button is the tab's sibling (a button never holds another), so the two share a box.
+          <div key={tab.id} className={`session-terminal-tab${on ? ' is-active' : ''}`} data-testid="terminal-tab"
+            data-choice-exempt="the box of one tab and its close button; the tab in it is the shared Tab">
+            <Tab
+              selected={on}
               className="session-terminal-tab-btn"
               // A key (Enter, Space) keeps the focus on the tabs; a click hands it to the terminal.
               onClick={(e) => { setTabKeys(e.detail === 0); activateViewTab(tab); }}
@@ -490,7 +490,7 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
             >
               {!isPaneLeaf(tab.root) && <span className="session-terminal-tab-split">{tab.root.dir === 'row' ? ICON_SPLIT_RIGHT : ICON_SPLIT_DOWN}</span>}
               <span className="session-terminal-tab-name">{name}</span>
-            </button>
+            </Tab>
             <button
               type="button"
               className="session-terminal-tab-close"
@@ -501,7 +501,7 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
           </div>
         );
       })}
-    </div>
+    </TabList>
     </div>
   );
 

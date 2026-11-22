@@ -90,7 +90,7 @@ async function showPage(pane: Locator): Promise<void> {
   await expect(custom.or(pane.locator('.task-board-frame')).first()).toBeVisible({ timeout: 15_000 })
   if (await custom.isVisible()) {
     await expect(custom).not.toHaveAttribute('aria-disabled', 'true', { timeout: 15_000 })
-    if ((await custom.getAttribute('aria-pressed')) !== 'true') await custom.click()
+    if ((await custom.getAttribute('aria-checked')) !== 'true') await custom.click()
   }
   await expect(pane.locator('.task-board-frame')).toBeVisible()
 }

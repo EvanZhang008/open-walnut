@@ -31,7 +31,7 @@ import { HostCommands } from '@/components/hosts/HostCommands';
 import { demoHostMessage, demoSignInCopy, DEMO_HOST_SIGN_IN_UNCONFIRMED } from '@/utils/demo-generation';
 import { SetupProgress } from '@/components/common/SetupProgress';
 import { SettingsButton } from '../inputs/SettingsButton';
-import { ChevronGlyph } from '../settings-glyphs';
+import { DisclosureButton } from '@/components/controls';
 import '@/styles/host-picker-settings.css';
 
 /** 'just now', '2m ago', '1h ago'. */
@@ -98,10 +98,9 @@ function ByHand({ problem, verb, alias, actions, failed }: { problem: HostReadin
   return (
     <div className="rh-readiness-line rh-by-hand" data-tone={failed ? 'warn' : 'info'} data-host={alias} data-problem={problem.kind}>
       {failed && <span className="rh-readiness" data-fix="failed" title={failed.detail}>{`The ${verb} did not work: ${failed.text}`}</span>}
-      <button type="button" tabIndex={0} className="rh-by-hand-toggle" aria-expanded={open} aria-controls={id} data-testid="rh-by-hand" onClick={() => setOpen(!open)}>
-        <ChevronGlyph size={10} className="settings-disclosure-chevron" />
+      <DisclosureButton tabIndex={0} expanded={open} aria-controls={id} data-testid="rh-by-hand" onClick={() => setOpen(!open)}>
         {verb === 'install' ? 'Install by hand' : 'Update by hand'}
-      </button>
+      </DisclosureButton>
       <div id={id} className="rh-by-hand-body" hidden={!open}>
         <HostCommands commands={problem.commands} testId={`rh-readiness-commands-${problem.kind}`} />
         <span className="rh-readiness-actions"><CheckAgainButton actions={actions} /></span>

@@ -173,7 +173,7 @@
   padding: 4px 8px 2px;
 }
 
-.trigger-picker-chip {
+.trigger-picker-idea {
   padding: 3px 9px;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -183,15 +183,8 @@
   cursor: pointer;
 }
 
-.trigger-picker-chip:hover {
+.trigger-picker-idea:hover {
   background: var(--bg-hover);
-}
-
-.trigger-picker-chip.is-on {
-  border-color: var(--accent);
-  background: var(--bg-hover);
-  color: var(--accent-text);
-  font-weight: 600;
 }
 
 .trigger-picker-form {
@@ -282,11 +275,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.trigger-picker-every {
-  display: flex;
-  gap: 6px;
 }
 
 .trigger-picker-actions {

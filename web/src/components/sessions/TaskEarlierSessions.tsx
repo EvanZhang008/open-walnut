@@ -15,6 +15,7 @@ import { log } from '@/utils/log';
 import { AgentText } from '@/components/common/AgentText';
 import { earlierParts, type ChatEarlierMessage } from './chat-earlier-parts';
 import { markOpenedOnPurpose } from './EngineSwitch';
+import { DisclosureButton } from '@/components/controls';
 import '@/styles/chat-earlier.css';
 import '@/styles/engine-switch.css';
 
@@ -61,12 +62,11 @@ function EarlierSessionBlock({ row, onOpen }: { row: TaskSessionRow; onOpen?: (s
   return (
     <section className="task-earlier-session" data-testid="task-earlier-session" data-session-id={row.session_id}>
       <div className="task-earlier-head">
-        <button type="button" className="task-earlier-toggle" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-          <span aria-hidden="true">{open ? '▾' : '▸'}</span>
-          {' '}{name} session{row.model ? ` · ${formatModelName(row.model)}` : ''}
+        <DisclosureButton className="task-earlier-toggle" expanded={open} onClick={() => setOpen((o) => !o)}>
+          {name} session{row.model ? ` · ${formatModelName(row.model)}` : ''}
           {row.message_count ? ` · ${row.message_count} messages` : ''}
           {row.started_at ? ` · ${when(row.started_at)}` : ''}
-        </button>
+        </DisclosureButton>
         {onOpen && (
           <button type="button" className="btn btn-sm" onClick={() => { markOpenedOnPurpose(row.session_id); onOpen(row.session_id); }}>Open</button>
         )}

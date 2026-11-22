@@ -485,7 +485,7 @@ test.describe('Themes, narrow panels and the view item', () => {
     await stubBoard(page, MIA, MIA_PINS, { tabBar: true })
     await openHome(page)
     await openDisplayMenu(page)
-    const tabBarSwitch = filterMenu(page).locator('[data-view-option="quick-views"]')
+    const tabBarSwitch = filterMenu(page).locator('[data-view-option="quick-views"] [role="switch"]')
     await expect(tabBarSwitch).toHaveAttribute('aria-checked', 'true')
     await tabBarSwitch.click()
     // A switch: the menu stays open, the switch reads off, the bar is gone.

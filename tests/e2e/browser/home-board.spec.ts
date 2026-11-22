@@ -23,7 +23,7 @@ async function open(page: Page) {
   await page.getByRole('button', { name: 'Open task board', exact: true }).click();
   await expect(page.getByTestId('home-board')).toBeVisible();
   await expect(page.getByTestId('home-board').locator('.home-board-columns')).toBeVisible();
-  await page.getByRole('button', { name: 'By pin', exact: true }).click();
+  await page.getByRole('radio', { name: 'By pin', exact: true }).click();
   await page.getByRole('textbox', { name: 'Search board tasks' }).fill(project);
 }
 const card = (page: Page, id: string) => page.locator(`[data-board-task="${id}"]`);
@@ -63,7 +63,7 @@ test('pin columns, project sections, deep family, retained view and popup margin
   await page.getByRole('textbox', { name: 'Search board tasks' }).fill('');
   await board.locator('button').last().focus();
   await page.keyboard.press('Tab');
-  await expect(page.getByRole('button', { name: 'By pin', exact: true })).toBeFocused();
+  await expect(page.getByRole('radio', { name: 'By pin', exact: true })).toBeFocused();
   await page.keyboard.press('Shift+Tab');
   await expect(board.locator('button').last()).toBeFocused();
   await page.getByRole('button', { name: 'Subtasks of Board leader', exact: true }).click();
@@ -82,13 +82,13 @@ test('pin columns, project sections, deep family, retained view and popup margin
   await page.getByRole('textbox', { name: 'Search board tasks' }).fill('');
   await expect(card(page, ids.child)).toHaveCount(0);
   await page.getByRole('button', { name: 'Subtasks of Board leader', exact: true }).click();
-  await page.getByRole('button', { name: 'By status', exact: true }).click();
+  await page.getByRole('radio', { name: 'By status', exact: true }).click();
   await expect(board).toHaveAttribute('data-mode', 'status');
   await expect(board.locator('.home-board-drag')).toHaveCount(0);
   await page.reload();
   await expect(board).toBeVisible();
   await expect(board).toHaveAttribute('data-mode', 'status');
-  await page.getByRole('button', { name: 'By pin', exact: true }).click();
+  await page.getByRole('radio', { name: 'By pin', exact: true }).click();
   await page.getByRole('textbox', { name: 'Search board tasks' }).fill(project);
   await page.getByRole('button', { name: 'Drag Board leader', exact: true }).focus();
   await page.keyboard.press('Space');
@@ -306,7 +306,7 @@ test('late move failures cannot cross a close, reopen or read-only mode change',
         await page.getByRole('button', { name: 'Open task board', exact: true }).click();
         await board.getByRole('textbox', { name: 'Search board tasks' }).fill(project);
       } else {
-        await board.getByRole('button', { name: 'By status', exact: true }).click();
+        await board.getByRole('radio', { name: 'By status', exact: true }).click();
         await expect(board.locator('.home-board-meta [data-board-move]')).toHaveCount(0);
       }
       release();
@@ -314,7 +314,7 @@ test('late move failures cannot cross a close, reopen or read-only mode change',
       await expect(board.getByRole('alert')).toHaveCount(0);
       await expect(board.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0);
       expect(posts).toBe(before + 1);
-      await board.getByRole('button', { name: 'By pin', exact: true }).click();
+      await board.getByRole('radio', { name: 'By pin', exact: true }).click();
       await expect(board.getByRole('button', { name: 'Move Board lifecycle leader to pin tier', exact: true })).toBeEnabled();
       await expect(column(page, 'focus').locator(`[data-board-task="${id}"]`)).toBeVisible();
       expect((await (await request.get(`/api/tasks/${id}`)).json()).task.focus_tier).toBe('focus');
@@ -329,7 +329,7 @@ test('late move failures cannot cross a close, reopen or read-only mode change',
     await page.getByRole('option', { name: 'Satellite', exact: true }).click();
     await expect(board.getByRole('alert')).toBeVisible();
     const before = posts;
-    await board.getByRole('button', { name: 'By status', exact: true }).click();
+    await board.getByRole('radio', { name: 'By status', exact: true }).click();
     await expect(board.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0);
     await expect(board.getByRole('alert')).toHaveCount(0);
     expect(posts).toBe(before);
@@ -481,7 +481,7 @@ test('completed totals stay stable when the archive contains hidden organization
   const expectedOpen = visible.length - expected;
   const openCount = `${expectedOpen} open ${expectedOpen === 1 ? 'task' : 'tasks'}`;
   await expect(page.locator('.home-board-count')).toHaveText(openCount);
-  await page.getByRole('button', { name: 'By status', exact: true }).click();
+  await page.getByRole('radio', { name: 'By status', exact: true }).click();
   const doneCount = column(page, 'done').locator('.home-board-column-head > span');
   // The server's hidden count, which leaves the organization nodes out, matches the full list.
   await expect(doneCount).toHaveText(String(expected));
@@ -515,7 +515,7 @@ test('custom tiers, live completion, completed batches and opening a task', asyn
     await expect.poll(async () => (await (await request.get(`/api/tasks/${ids.spare}`)).json()).task.focus_tier).toBe(custom.id);
     await request.patch(`/api/tasks/${ids.spare}`, { data: { phase: 'COMPLETE' } });
     await expect(card(page, ids.spare)).toHaveCount(0);
-    await page.getByRole('button', { name: 'By status', exact: true }).click();
+    await page.getByRole('radio', { name: 'By status', exact: true }).click();
     await expect(column(page, 'done').locator('[data-board-task]')).toHaveCount(30);
     await column(page, 'done').getByRole('button', { name: 'Show more completed tasks', exact: true }).click();
     await expect(column(page, 'done').locator('[data-board-task]')).toHaveCount(32);

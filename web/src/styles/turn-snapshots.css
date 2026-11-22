@@ -4,7 +4,6 @@
    -tree / -main), so the two read as one tab. */
 
 .changed-view-switch { flex: none; }
-.changed-view-switch .session-diff-viewtoggle-btn { padding: 3px 9px; }
 
 .session-turns-view .turns-toolbar { justify-content: flex-start; }
 .session-turns-view .turns-toolbar .session-diff-toolbar-title { flex: 1 1 auto; min-width: 0; }

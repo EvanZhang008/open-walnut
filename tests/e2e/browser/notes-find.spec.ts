@@ -617,7 +617,7 @@ test('the caret stays where the reader was across a view toggle, and Aa shows it
   // nothing had focus): the caret goes back to the note.
   await page.locator('.page-find .fv-search-case').click()
   await page.keyboard.press('Escape')
-  await page.locator('.notes-tab.active').click()
+  await page.locator('.notes-tab[aria-selected="true"]').click()
   await chord(page)
   await findInput(page).fill(NEEDLE)
   await page.locator('.page-find button[aria-label="Next match"]').click()

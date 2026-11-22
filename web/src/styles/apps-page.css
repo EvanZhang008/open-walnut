@@ -96,30 +96,7 @@
 }
 
 /* ── Chips ── */
-.apps-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0 0 8px;
-}
-.apps-chip {
-  border: 1px solid var(--border);
-  background: var(--settings-group-bg);
-  color: var(--fg);
-  border-radius: var(--radius-lg);
-  padding: 4px 12px;
-  font: inherit;
-  font-size: var(--font-size-md);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-.apps-chip:hover { border-color: var(--fg-muted); }
-.apps-chip.is-on {
-  background: var(--fg);
-  border-color: var(--fg);
-  color: var(--bg-secondary);
-}
-.apps-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.apps-chips { margin: 0 0 8px; }
 
 /* ── Sections ── */
 .apps-section { margin-top: 26px; }

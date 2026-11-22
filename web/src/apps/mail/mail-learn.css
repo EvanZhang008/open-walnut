@@ -28,7 +28,8 @@
   min-width: 0;
 }
 .mail-correct-choice:hover { background: var(--accent-subtle); }
-.mail-correct-choice input[type='radio'] { margin: 3px 0 0; flex-shrink: 0; accent-color: var(--accent); }
+/* The radio (the shared Radio) lines up with the first line of its words. */
+.mail-correct-choice > .wn-check { margin-top: 2px; }
 .mail-correct-choice-label,
 .mail-correct-summary { min-width: 0; overflow-wrap: anywhere; }
 

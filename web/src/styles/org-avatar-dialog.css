@@ -11,9 +11,7 @@
 .org-avatar-name input, .org-avatar-ask input { box-sizing: border-box; width: 100%; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--fg); font: inherit; font-size: 14px; }
 .org-avatar-name input:disabled { opacity: .6; }
 .org-avatar-name small { font-size: var(--font-size-xs); }
-.org-avatar-tabs { display: flex; gap: 6px; padding: 10px 18px 6px; }
-.org-avatar-tabs button { padding: 4px 11px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: none; color: var(--fg-secondary); font: inherit; font-size: var(--font-size-md); cursor: pointer; }
-.org-avatar-tabs button.is-on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.org-avatar-tabs { margin: 6px 18px 6px; }
 .org-avatar-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 18px 6px; }
 .org-avatar-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); gap: 6px; }
 .org-avatar-cell { display: flex; align-items: center; justify-content: center; padding: 3px; border: 2px solid transparent; border-radius: var(--radius-lg); background: none; cursor: pointer; }

@@ -104,6 +104,7 @@ function PinnedWebServers({ sessionId, hid, webOpen, onOpenWeb }: { sessionId: s
       <button
         type="button"
         className={`session-action-chip${webOpen ? ' session-action-chip-active' : ''}`}
+        data-choice-exempt="header tool button that opens or closes its view beside the chat; active marks the open view"
         onClick={onOpenWeb}
         data-header-value={`${n} running`}
         data-testid="session-web-servers-chip"

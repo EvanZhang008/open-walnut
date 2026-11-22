@@ -5,6 +5,7 @@
  * ellipsized line with the command it named cut off, and no way to read or copy the rest.
  */
 import { useLayoutEffect, useState, type RefObject } from 'react';
+import { DisclosureButton } from '@/components/controls';
 import { CopyButton } from './CopyButton';
 
 export type NoticePart = { text: string } | { command: string };
@@ -113,15 +114,17 @@ export function useCutOff(refs: ReadonlyArray<RefObject<HTMLElement | null>>, ke
  */
 export function NoticeDetailsToggle({ open, onToggle, log = false }: { open: boolean; onToggle: () => void; log?: boolean }) {
   return (
-    <button
-      type="button"
+    <DisclosureButton
       className="notice-details-toggle"
       data-testid="notice-details"
-      aria-expanded={open}
-      // The other label holds its width (CSS ::after), so the Copy beside it never moves.
-      data-other={log ? (open ? 'Show log' : 'Hide log') : (open ? 'Details' : 'Less')}
+      expanded={open}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => { e.stopPropagation(); onToggle(); }}
-    >{log ? (open ? 'Hide log' : 'Show log') : (open ? 'Less' : 'Details')}</button>
+    >
+      {/* The other label holds its width (CSS ::after), so the Copy beside it never moves. */}
+      <span className="notice-details-words" data-other={log ? (open ? 'Show log' : 'Hide log') : (open ? 'Details' : 'Less')}>
+        {log ? (open ? 'Hide log' : 'Show log') : (open ? 'Less' : 'Details')}
+      </span>
+    </DisclosureButton>
   );
 }

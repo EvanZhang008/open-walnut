@@ -8,6 +8,7 @@
  */
 import { useRef, useState } from 'react';
 import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
+import { Checkbox, Radio } from '@/components/controls';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import type { Task } from '@open-walnut/core';
 import { apiPost } from '@/api/client';
@@ -66,7 +67,7 @@ export function OrgRouterSetup({ tasks, onDone, onCancel }: {
     <h3>New router</h3>
     <p>A router sits beside the VPs, not under them. {ROUTER_LINK_NOTE}</p>
     <fieldset><legend>Area</legend>{AREAS.map((area) => <label key={area.id}>
-      <input type="radio" name="router-area" checked={draft.value.area === area.id} data-draft-key={draft.key ?? undefined} onChange={() => draft.setValue((value) => ({ ...value, area: area.id }))} disabled={busy} />{area.name}
+      <Radio name="router-area" checked={draft.value.area === area.id} data-draft-key={draft.key ?? undefined} onChange={() => draft.setValue((value) => ({ ...value, area: area.id }))} disabled={busy} />{area.name}
     </label>)}</fieldset>
     {existing ? <>
       <p data-testid="router-setup-existing" data-task-id={existing.id}>This area already has a router: <strong>{existing.org_name || existing.title}</strong>. Open it to change its name or VP links.</p>
@@ -85,7 +86,7 @@ export function OrgRouterSetup({ tasks, onDone, onCancel }: {
         <div className="org-router-link-list">
           {shownLeads.length === 0 && leads.length > 0 && <p className="org-router-hint" data-testid="router-setup-vp-none">No VP matches “{vpQuery.trim()}”.</p>}
           {shownLeads.map((lead) => <label key={lead.id} className="org-router-check" data-testid="router-setup-vp" data-task-id={lead.id}>
-            <input type="checkbox" checked={draft.value.links.includes(lead.id)} data-draft-key={draft.key ?? undefined} disabled={busy} onChange={() => draft.setValue((value) => ({ ...value, links: value.links.includes(lead.id) ? value.links.filter((id) => id !== lead.id) : [...value.links, lead.id] }))} />{lead.org_name || lead.title}
+            <Checkbox checked={draft.value.links.includes(lead.id)} data-draft-key={draft.key ?? undefined} disabled={busy} onChange={() => draft.setValue((value) => ({ ...value, links: value.links.includes(lead.id) ? value.links.filter((id) => id !== lead.id) : [...value.links, lead.id] }))} />{lead.org_name || lead.title}
           </label>)}
         </div>
       </fieldset>

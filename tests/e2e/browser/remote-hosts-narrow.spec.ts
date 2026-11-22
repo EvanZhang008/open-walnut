@@ -155,7 +155,7 @@ test.describe('Settings > Remote Hosts at 700 px', () => {
     await expect(details.getByTestId('rh-this-host-devbox')).toHaveCount(0)
     await openHostParts(details, ['this-host'])
     // Each part's chevron inside the card (it hung in an indent the phone layout does not have).
-    for (const chev of await details.locator('.rh-details-part-toggle .settings-disclosure-chevron').all()) {
+    for (const chev of await details.locator('.rh-details-part-head .settings-disclosure-chevron').all()) {
       expect((await box(chev)).x).toBeGreaterThanOrEqual(listBox.x + 4)
     }
     const part = details.getByTestId('rh-this-host-devbox')

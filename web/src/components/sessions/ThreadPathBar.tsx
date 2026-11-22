@@ -86,7 +86,7 @@ export const ThreadPathBar = memo(function ThreadPathBar(p: ThreadPathBarProps) 
           const ahead = current >= 0 && j > current;
           const name = seg.number ? `${seg.number} ${label}` : label;
           return (
-            <li key={seg.key || 'root'} className="tree-path-seg" data-role={seg.role ?? undefined}
+            <li key={seg.key || 'root'} className="tree-path-seg" data-choice-exempt="a level of the breadcrumb path, not a segmented control" data-role={seg.role ?? undefined}
               data-first={j === 0 ? 'true' : undefined} data-shown={shownHere ? 'true' : undefined} data-ahead={ahead ? 'true' : undefined}>
               <button type="button" className="tree-path-seg-main" title={ahead ? `Open again: ${name}` : name}
                 aria-current={seg.role === 'R' || seg.role === 'only' ? 'page' : undefined} onClick={() => p.onSegment(j)}>
@@ -103,6 +103,7 @@ export const ThreadPathBar = memo(function ThreadPathBar(p: ThreadPathBarProps) 
                 type="button"
                 ref={(el) => { caretRefs.current[j] = el; }}
                 className="tree-path-caret"
+                data-choice-exempt="opens the menu of questions at this level"
                 aria-haspopup="menu"
                 aria-expanded={open === j}
                 aria-label={j === 0 ? 'Questions on the main conversation' : `Questions beside ${seg.number ?? label}`}

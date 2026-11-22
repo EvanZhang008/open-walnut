@@ -10,6 +10,7 @@ import { fetchSession } from '@/api/sessions';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { SessionRow } from './TaskDetailRows';
 import type { SessionOwner } from '@/utils/project-display';
+import { DisclosureButton } from '@/components/controls';
 import '@/styles/transfer.css';
 
 type SessionFields = Pick<Task, 'session_id' | 'session_ids' | 'plan_session_id' | 'exec_session_id' | 'legacy_session_ids'>;
@@ -56,10 +57,9 @@ export function EarlierSessions({ ids, owner, onOpen }: { ids: string[]; owner?:
   if (ids.length === 0) return null;
   return (
     <div className="tsh" data-testid="earlier-sessions">
-      <button type="button" className="tsh-toggle" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-        <span className="tsh-arrow" aria-hidden="true">{open ? '▾' : '▸'}</span>
+      <DisclosureButton className="tsh-toggle" expanded={open} onClick={() => setOpen((o) => !o)}>
         Earlier sessions ({ids.length})
-      </button>
+      </DisclosureButton>
       {open && (
         <div className="tsh-list">
           {ids.map((sid) => {

@@ -14,6 +14,7 @@ import { draftHash, draftKey } from '@/utils/drafts';
 import { RoutineTaskField } from './RoutineTaskField';
 import { editKey } from './routine-groups';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { Radio, SegmentedControl, type SegmentedOption } from '@/components/controls';
 
 interface RoutineFormProps {
   /** Prefill from an AI draft or an existing routine (edit mode). */
@@ -29,13 +30,18 @@ interface RoutineFormProps {
 
 type TriggerPreset = 'once' | 'hourly' | 'daily' | 'weekdays' | 'weekly' | 'custom';
 
-const PRESETS: Array<{ key: TriggerPreset; label: string }> = [
-  { key: 'once', label: 'Once' },
-  { key: 'hourly', label: 'Hourly' },
-  { key: 'daily', label: 'Daily' },
-  { key: 'weekdays', label: 'Weekdays' },
-  { key: 'weekly', label: 'Weekly' },
-  { key: 'custom', label: 'Custom' },
+const PRESETS: ReadonlyArray<SegmentedOption<TriggerPreset>> = [
+  { value: 'once', label: 'Once' },
+  { value: 'hourly', label: 'Hourly' },
+  { value: 'daily', label: 'Daily' },
+  { value: 'weekdays', label: 'Weekdays' },
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'custom', label: 'Custom' },
+];
+
+const CUSTOM_KINDS: ReadonlyArray<SegmentedOption<'cron' | 'every'>> = [
+  { value: 'cron', label: 'Cron expression' },
+  { value: 'every', label: 'Interval' },
 ];
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -662,20 +668,14 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
               <div className="routine-trigger-header">
                 <span>{headerLine}</span>
               </div>
-              <div className="routine-trigger-presets" role="tablist">
-                {PRESETS.map((p) => (
-                  <button
-                    key={p.key}
-                    type="button"
-                    role="tab"
-                    aria-selected={trigger.preset === p.key}
-                    className={`routine-trigger-preset${trigger.preset === p.key ? ' active' : ''}`}
-                    onClick={() => setTrigger({ ...trigger, preset: p.key })}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
+              <SegmentedControl<TriggerPreset>
+                aria-label="Schedule"
+                className="routine-trigger-presets"
+                fill
+                value={trigger.preset}
+                options={PRESETS}
+                onChange={(preset) => setTrigger({ ...trigger, preset })}
+              />
 
               {(trigger.preset === 'daily' || trigger.preset === 'weekdays' || trigger.preset === 'weekly') && (
                 <div className="routine-trigger-row">
@@ -728,16 +728,13 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
               {trigger.preset === 'custom' && (
                 <div className="routine-trigger-custom">
                   <div className="routine-trigger-row">
-                    <label className="cron-form-radio">
-                      <input type="radio" name="routine-custom-kind" checked={trigger.customKind === 'cron'}
-                        onChange={() => setTrigger({ ...trigger, customKind: 'cron' })} />
-                      <span>Cron expression</span>
-                    </label>
-                    <label className="cron-form-radio">
-                      <input type="radio" name="routine-custom-kind" checked={trigger.customKind === 'every'}
-                        onChange={() => setTrigger({ ...trigger, customKind: 'every' })} />
-                      <span>Interval</span>
-                    </label>
+                    <SegmentedControl<'cron' | 'every'>
+                      aria-label="Custom schedule"
+                      name="routine-custom-kind"
+                      value={trigger.customKind}
+                      options={CUSTOM_KINDS}
+                      onChange={(customKind) => setTrigger({ ...trigger, customKind })}
+                    />
                   </div>
                   {trigger.customKind === 'cron' ? (
                     <div className="form-row">
@@ -886,11 +883,8 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
             <label>Run with</label>
             <div className="cron-form-radio-group">
               {executors.filter((ex) => !ex.internal || ex.type === executorType).map((ex) => (
-                <label key={ex.type} className="cron-form-radio" title={ex.description}>
-                  <input type="radio" name="routine-executor" checked={executorType === ex.type}
-                    onChange={() => pickExecutor(ex.type)} />
-                  <span>{ex.label}</span>
-                </label>
+                <Radio key={ex.type} rowClassName="cron-form-radio" title={ex.description} name="routine-executor"
+                  checked={executorType === ex.type} onChange={() => pickExecutor(ex.type)} label={ex.label} />
               ))}
             </div>
             {executorInfo && <p className="text-xs text-muted">{executorInfo.description}</p>}

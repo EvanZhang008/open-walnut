@@ -184,7 +184,7 @@ async function firstInRecent(id: string): Promise<void> {
     await panel.keyboard.press('Escape')
   }
   await tab.click()
-  await expect(tab).toHaveClass(/is-active/)
+  await expect(tab).toHaveAttribute('aria-selected', 'true')
   await expect(v.locator('.todo-pinned-list-recent [data-task-id]').first()).toHaveAttribute('data-task-id', id, { timeout: 15_000 })
   // The synced list is written a moment after the open (the touch save waits a little), so read
   // it until it holds the open rather than once.
@@ -246,7 +246,7 @@ test('the side panel opens on Chat: the side bar, the list filling the page, New
   expect(dock.height).toBeLessThan(100)
   expect(dock.y + dock.height).toBeGreaterThan(760 - 20)
   // Home's task panel: its tabs (over the search box) and its Needs you rows with their status line.
-  await expect(v.locator('.todo-section-tab').filter({ hasText: 'All' })).toHaveClass(/is-active/, { timeout: 60_000 })
+  await expect(v.locator('.todo-section-tab').filter({ hasText: 'All' })).toHaveAttribute('aria-selected', 'true', { timeout: 60_000 })
   // Never All and Pinned alone (review round 5, Opus #2): the tiers are there too.
   await expect(v.locator('.todo-section-tab').filter({ hasText: 'Pinned' })).toBeVisible()
   // (an empty tier hides, as on Home: this board's pinned tasks are in Satellite)
@@ -329,7 +329,7 @@ test('the tabs and a list of more than 100 tasks are Home\'s own', async () => {
   const v = askView(panel)
   const pinnedTab = v.locator('.todo-section-tab').filter({ hasText: 'Pinned' })
   await pinnedTab.click()
-  await expect(pinnedTab).toHaveClass(/is-active/)
+  await expect(pinnedTab).toHaveAttribute('aria-selected', 'true')
   // Pinned holds the tasks pinned to a tier, never an ask that is in no tier.
   await expect(needsCard(v)).toBeVisible({ timeout: 20_000 })
   await expect(v.getByTestId('status-section-notstarted')).toBeVisible()
@@ -337,7 +337,7 @@ test('the tabs and a list of more than 100 tasks are Home\'s own', async () => {
   await shots(panel, 'panel-tab-pinned')
   const allTab = v.locator('.todo-section-tab').filter({ hasText: 'All' })
   await allTab.click()
-  await expect(allTab).toHaveClass(/is-active/)
+  await expect(allTab).toHaveAttribute('aria-selected', 'true')
   // The board's more than 100 open tasks nobody started, unfolded under Not started.
   const waiting = v.getByTestId('status-section-notstarted').locator('.navigation-heading-open')
   if ((await waiting.getAttribute('aria-expanded')) !== 'true') await waiting.click()

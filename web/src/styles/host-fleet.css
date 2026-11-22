@@ -178,27 +178,6 @@
 
 .hf-dash-updated { font-size: var(--font-size-sm); color: var(--settings-help-fg); font-variant-numeric: tabular-nums; }
 
-/* The title opens and closes the Overview (opening it reads the hosts again). */
-.hf-dash-toggle {
-  appearance: none;
-  border: 0;
-  background: none;
-  padding: 0;
-  margin: 0;
-  font: inherit;
-  color: inherit;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-}
-
-.hf-dash-toggle:hover { color: var(--fg); }
-
-.hf-dash-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-xs); }
-
-.hf-dash-toggle[aria-expanded='true'] .settings-disclosure-chevron { transform: rotate(90deg); }
-
 .hf-dash-read { display: inline-flex; align-items: baseline; gap: 10px; min-width: 0; white-space: nowrap; }
 
 .hf-dash .hf-refreshing { font-size: var(--font-size-sm); color: var(--accent-text); }

@@ -102,18 +102,15 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
 /* Last in its run: the gap to the next section is the section's own (36 px above Projects). */
 .project-status-folds:last-child { margin-bottom: 0; }
 .project-status-fold-row { display: flex; flex-wrap: wrap; gap: 4px; padding-left: 18px; }
-.project-status-fold { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted); font: inherit; font-size: var(--font-size-sm); cursor: pointer; }
-.project-status-fold:hover, .project-status-fold.open { background: var(--bg-hover); color: var(--fg-secondary); }
-.project-status-fold .project-status-count-icon svg { width: 11px; height: 11px; }
-.project-status-fold .navigation-chevron { width: 8px; height: 8px; }
+.project-status-fold .project-status-count-icon { display: inline-flex; margin-right: 4px; vertical-align: -1px; }
+.project-status-fold .project-status-count-icon svg { width: 12px; height: 12px; }
 .home-navigation-scroll .project-status-folds-project { margin-top: 12px; }
 /* On a phone no text is under 12 px and every button takes a finger (phone-home.spec.ts
    C18, C19): the counts and fold lines above are 10 and 11.5 px, and a fold is 22 px tall. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  html .app-shell-navigation .project-status-counts,
-  html .app-shell-navigation .project-status-fold { font-size: var(--font-size-sm); }
+  html .app-shell-navigation .project-status-counts { font-size: 12px; }
   html .app-shell-navigation .project-status-count-icon svg { width: 12px; height: 12px; }
-  html .app-shell-navigation .project-status-fold { min-height: 44px; padding: 0 10px; }
+  html .app-shell-navigation .project-status-fold { min-height: 44px; }
   html .app-shell-navigation .status-section-more { min-height: 44px; font-size: var(--font-size-md); }
 }
 

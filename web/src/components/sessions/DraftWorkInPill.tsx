@@ -109,6 +109,7 @@ export function DraftWorkInPill({ draft, ps, work, pillRef, folders, onPickFolde
         ref={pillRef}
         type="button"
         className={`session-action-chip draft-work-in-pill${open ? ' session-action-chip-active' : ''}${face.kind === 'empty' ? ' is-empty' : ''}`}
+        data-choice-exempt="opens the Work in picker; active only while the picker is open"
         data-testid="draft-work-in-pill"
         data-kind={face.kind}
         aria-haspopup="dialog"

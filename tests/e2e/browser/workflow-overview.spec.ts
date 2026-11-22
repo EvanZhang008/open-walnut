@@ -445,7 +445,7 @@ test.describe('Background work', () => {
     // Agents come first; their tab lists only the two agents, as cards.
     const tabs = tasksPanel.locator('.bg-tasks-tab')
     await expect(tabs.locator('.bg-tasks-tab-label')).toHaveText(['Agents', 'Commands', 'Other'])
-    await expect(tabs.locator('.bg-tasks-tab-count')).toHaveText(['2', '150', '1'])
+    await expect(tabs.locator('.wn-tab-count')).toHaveText(['2', '150', '1'])
     await expect(tabs.nth(0)).toHaveAttribute('aria-selected', 'true')
     await expect(tabs.nth(0).locator('.bg-tasks-tab-live')).toHaveCount(1)
     await expect(tabs.nth(1).locator('.bg-tasks-tab-live')).toHaveCount(1)

@@ -73,28 +73,5 @@
   gap: 6px;
 }
 .ceo-composer-hint { margin-right: auto; color: var(--fg-muted); font-size: var(--font-size-xs); }
-/* Who reads it: one quiet row of names, the picked one filled. */
-.ceo-composer-to {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: -2px;
-}
-.ceo-composer-to-btn {
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--fg-secondary);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  line-height: 18px;
-  cursor: pointer;
-}
-.ceo-composer-to-btn:hover:not(:disabled) { background: var(--bg-secondary); }
-.ceo-composer-to-btn[aria-checked='true'] {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--fg);
-}
-.ceo-composer-to-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Who reads it: one row of name chips (the shared Chip), the picked one on. */
+.ceo-composer-to { margin-top: -2px; }

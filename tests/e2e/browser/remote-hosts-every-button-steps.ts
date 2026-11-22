@@ -423,7 +423,7 @@ export async function checkMoreSettings(ctx: StepCtx): Promise<void> {
   await expect(pair).toHaveText('Phones & Cloud')
   await expect(pair).toHaveAttribute('href', '/settings#cloud')
   // Plain words; who runs the public relays only on request.
-  await expect(relay.locator('[data-relay="public"]')).toContainText('A free public service passes the traffic on')
+  await expect(relay.locator('.wn-check-row', { has: relay.locator('[data-relay="public"]') })).toContainText('A free public service passes the traffic on')
   await expect(relay).not.toContainText('n0')
   await expect(relay).not.toContainText('iroh')
   const about = relay.getByTestId('host-network-relay-about')
@@ -438,7 +438,7 @@ export async function checkMoreSettings(ctx: StepCtx): Promise<void> {
     const puts = routes.callsTo('PUT', '/api/hosts/net/relay').length
     await radio.click()
     expect((await routes.nth('PUT', '/api/hosts/net/relay', puts + 1)).body).toEqual({ relay: choice })
-    await expect(radio).toHaveAttribute('aria-checked', 'true')
+    await expect(radio).toBeChecked()
   }
   await ctx.sweep()
   ctx.ran('Relay/button#host-network-relay-about', 'Relay/radio[relay=public]', 'Relay/radio[relay=none]', 'Relay/link#host-network-relay-pair')

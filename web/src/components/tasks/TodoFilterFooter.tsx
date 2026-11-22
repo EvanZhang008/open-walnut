@@ -5,7 +5,8 @@
  * the one condition the item is about let go (passesChips `except`), so
  * `3 Complete hidden` under `Project: Garden` means three Garden rows appear.
  */
-import { Fragment, memo, useMemo, type ReactNode } from 'react';
+import { memo, useMemo, type ReactNode } from 'react';
+import { Chip } from '@/components/controls';
 import type { Task, TaskPhase } from '@open-walnut/core';
 import * as ICONS from '../common/Icons';
 import type { FilterDim, FilterState } from './filter-bar-types';
@@ -112,21 +113,18 @@ export const TodoFilterFooter = memo(function TodoFilterFooter({ tasks, ctx, arc
   if (items.length === 0) return null;
   return (
     <div className="todo-filter-footer" data-testid="todo-filter-footer">
-      {items.map((item, i) => (
-        <Fragment key={item.key}>
-          {i > 0 && <span className="todo-filter-footer-sep" aria-hidden="true">, </span>}
-          <button
-            type="button"
-            className={`todo-filter-footer-chip${item.on ? ' on' : ''}`}
-            data-testid={`todo-filter-footer-${item.key}`}
-            aria-pressed={item.key === 'date' ? undefined : item.on}
-            title={item.title}
-            onClick={() => onApply(item.next)}
-          >
-            {item.icon && <span className="todo-filter-footer-icon" aria-hidden="true">{item.icon}</span>}
-            {item.text}
-          </button>
-        </Fragment>
+      {items.map((item) => (
+        <Chip
+          key={item.key}
+          className="todo-filter-footer-chip"
+          data-testid={`todo-filter-footer-${item.key}`}
+          pressed={item.on}
+          title={item.title}
+          leading={item.icon && <span className="todo-filter-footer-icon" aria-hidden="true">{item.icon}</span>}
+          onClick={() => onApply(item.next)}
+        >
+          {item.text}
+        </Chip>
       ))}
     </div>
   );

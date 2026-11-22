@@ -17,6 +17,7 @@ import { KanbanChanges } from './KanbanChanges';
 import { KANBAN_PANE_SELECTOR } from './kanban-toasts';
 import { pageShortcutBlocked } from '@/utils/page-shortcut';
 import { MicInput } from '@/components/common/BoxMic';
+import { Chip, ChipGroup } from '@/components/controls';
 
 export interface KanbanFiltersProps {
   board: KanbanBoardVM;
@@ -105,7 +106,7 @@ export function KanbanFilters({ board, filter, seen, mode, searchRef, onRevealCa
 
   return (
     <div className={`kanban-filters is-${mode}`} data-testid="kanban-filters">
-      <div className="kanban-chips" role="group" aria-label="Filter cards">
+      <ChipGroup className="kanban-chips" role="group" aria-label="Filter cards">
         {chips.map((chip) => {
           // R3-03: no count while the board loads (cards not known yet): a number that later goes away is a lie.
           const loading = board.loading;
@@ -114,39 +115,37 @@ export function KanbanFilters({ board, filter, seen, mode, searchRef, onRevealCa
           const zero = n === 0;
           const label = chipLabel(chip);
           return (
-            <button
+            <Chip
               key={chip}
-              type="button"
-              className={`kanban-chip${active ? ' is-active' : ''}${zero ? ' is-zero' : ''}${chip === 'needs' && !zero ? ' is-alert' : ''}`}
+              className={`kanban-chip${zero ? ' is-zero' : ''}`}
+              pressed={active}
               data-testid={CHIP_TEST_ID[chip]}
               data-chip={chip}
               data-count={loading ? undefined : n}
               aria-busy={loading || undefined}
-              aria-pressed={active}
               aria-disabled={zero && !active ? true : undefined}
               title={chipTooltip(chip, n, seen.baselineAt)}
               onClick={() => clickChip(chip, n)}
+              // N14: every chip's count is the same count, so `Sev 1` + `2` reads as a count.
+              count={loading ? undefined : <span className="kanban-chip-count" data-testid="kanban-chip-count">{n}</span>}
             >
-              <span className="kanban-chip-label">{label}</span>{' '}
-              {/* N14: every chip's count is the same badge, so `Sev 1` + `2` reads as a count. */}
-              {!loading && <span className="kanban-chip-count" data-testid="kanban-chip-count">{n}</span>}
-            </button>
+              {label}
+            </Chip>
           );
         })}
-      </div>
+      </ChipGroup>
       {filter.project && (
-        <button
-          type="button"
-          className="kanban-chip kanban-project-filter is-active"
+        <Chip
+          className="kanban-project-filter"
+          pressed
           data-testid="kanban-project-filter"
           data-project-id={filter.project}
-          aria-pressed="true"
           title={`Only the cards of ${filter.projectTitle}. Click to show every project's cards`}
           onClick={() => filter.setProject(null)}
+          trailing={<span className="kanban-project-filter-x" aria-hidden>{ICON_CLOSE}</span>}
         >
-          <span className="kanban-chip-label">Project: {filter.projectTitle}</span>
-          <span className="kanban-project-filter-x" aria-hidden>{ICON_CLOSE}</span>
-        </button>
+          Project: {filter.projectTitle}
+        </Chip>
       )}
       <div className="kanban-search-box">
         <span className="kanban-search-icon" aria-hidden>{ICON_SEARCH}</span>

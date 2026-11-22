@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Config } from '@open-walnut/core'
 import { SectionCard } from '../inputs/SectionCard'
 import { ToggleSwitch } from '../inputs/ToggleSwitch'
+import { ControlGroup, masterProps } from '@/components/controls'
 import { SettingsGroup, SettingsRow } from '../SettingsSection'
 import { SettingsButton } from '../inputs/SettingsButton'
 import { NumberInput } from '../inputs/NumberInput'
@@ -678,7 +679,7 @@ export function BackupSection({ config, onSave }: Props) {
           state={blocked && enabled && !loading ? 'warning' : undefined}
           data-testid="backup-enabled-row"
           // On but paused (the reason is the help): the switch reads as paused too, not plainly on.
-          control={<span className={enabled && blocked && !loading ? 'backup-toggle-paused' : undefined}><ToggleSwitch id="backup-enabled" checked={enabled} onChange={setAutomatic} disabled={!!blocked && !enabled} /></span>}
+          control={<span className={enabled && blocked && !loading ? 'backup-toggle-paused' : undefined}><ToggleSwitch id="backup-enabled" checked={enabled} onChange={setAutomatic} disabled={!!blocked && !enabled} {...masterProps('backup-interval-group')} /></span>}
         />
         {!legacyMode && (
           <SettingsRow
@@ -691,11 +692,13 @@ export function BackupSection({ config, onSave }: Props) {
             control={<ToggleSwitch id="backup-encrypt" checked={encrypted} onChange={setEncryption} />}
           />
         )}
+        {/* Only automatic backups run on a clock: while they are off, Every reads disabled. */}
+        <ControlGroup id="backup-interval-group" off={!enabled} className="settings-rows-contents"
+          reason="Turn on Back up automatically to choose how often.">
         <SettingsRow
           label="Every"
           htmlFor="backup-interval"
-          help={!enabled ? 'Turn on Back up automatically to choose how often.'
-            : legacyMode ? `1 to ${MAX_INTERVAL_HOURS} hours.` : `1 to ${MAX_INTERVAL_HOURS} hours. ${RETENTION_NOTE}`}
+          help={legacyMode ? `1 to ${MAX_INTERVAL_HOURS} hours.` : `1 to ${MAX_INTERVAL_HOURS} hours. ${RETENTION_NOTE}`}
           error={intervalOk ? (intervalNote ?? undefined) : `Enter whole hours from 1 to ${MAX_INTERVAL_HOURS}. Backups keep running every ${saved.interval_hours ?? 24} hours until then.`}
           data-testid="backup-interval-row"
           disabled={!enabled}
@@ -713,6 +716,7 @@ export function BackupSection({ config, onSave }: Props) {
               }} />
           }
         />
+        </ControlGroup>
         {otherWriter && (confirmAdopt ? (
           <SettingsRow
             state="warning"

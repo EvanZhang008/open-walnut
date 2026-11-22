@@ -77,16 +77,8 @@
   min-width: 0;
 }
 .scd-file-head:hover { background: var(--bg-hover); border-radius: 6px; }
-.scd-disclose {
-  border: none;
-  background: transparent;
-  color: var(--fg-muted);
-  width: 18px;
-  padding: 0;
-  cursor: pointer;
-  font-size: var(--font-size-xs);
-}
-.scd-disclose-spacer { width: 18px; flex: none; }
+.scd-disclose { flex: none; }
+.scd-disclose-spacer { width: 20px; flex: none; }
 .scd-status-letter { font-family: var(--font-mono); font-size: var(--font-size-xs); width: 12px; flex: none; color: var(--fg-muted); }
 .scd-st-added { color: var(--success); }
 .scd-st-deleted { color: var(--error); }

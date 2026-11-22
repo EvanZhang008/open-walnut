@@ -37,6 +37,7 @@ import {
   FRAME_EVERY_MS, FRAME_RETRY_MS, UNCHANGED_AGAIN_MS, agoLine, lateLine, endedLine, followedTab, handLine, liveGrantOffer, noPictureLine, tabKey, windowLine,
   type BrowserFrame,
 } from './browser-view-model';
+import { Tab, TabList } from '@/components/controls';
 import '@/styles/session-browser-card.css';
 
 /** The × of the popover's title row, the servers popover's own (SessionServerList.tsx). */
@@ -310,13 +311,14 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
         <div className="session-browser-where" data-testid="session-browser-where" title={whereFull}>{where}</div>
       </div>
       {tabs.length > 1 && (
-        <div className="session-browser-tabs" role="tablist" aria-label="The task's tabs">
+        <TabList className="session-browser-tabs" aria-label="The task's tabs">
           {tabs.map((t) => (
-            <button key={tabKey(t)} type="button" role="tab" aria-selected={tabKey(t) === tabKey(followed)}
-              className={`session-browser-tab${tabKey(t) === tabKey(followed) ? ' is-on' : ''}`}
-              onClick={() => setPrefs((p) => ({ ...p, pick: tabKey(t) }))}>{t.title || t.url || `tab ${t.tab}`}{tabs.some((o) => o !== t && o.tab === t.tab) ? ` · ${t.browser}` : ''}</button>
+            <Tab key={tabKey(t)} selected={tabKey(t) === tabKey(followed)} className="session-browser-tab"
+              onClick={() => setPrefs((p) => ({ ...p, pick: tabKey(t) }))}>
+              <span className="session-browser-tab-label">{t.title || t.url || `tab ${t.tab}`}{tabs.some((o) => o !== t && o.tab === t.tab) ? ` · ${t.browser}` : ''}</span>
+            </Tab>
           ))}
-        </div>
+        </TabList>
       )}
       {asks && (
         <div className={`session-browser-hand${driving ? ' is-driving' : ''}`} role="status" data-testid="session-browser-hand">

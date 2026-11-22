@@ -51,6 +51,7 @@ import { ICON_REFRESH, ICON_WARNING, ICON_PANEL_LEFT, ICON_PANEL_LEFT_FILLED } f
 import { log } from '@/utils/log';
 import { pointerOwnedElsewhere } from '@/utils/find-scope';
 import { SessionCommitButton } from '@/components/sessions/SessionCommitDialog';
+import { Checkbox, SegmentedControl, type SegmentedOption } from '@/components/controls';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 
@@ -58,6 +59,11 @@ export type DiffViewType = 'split' | 'unified';
 /** The toolbar layout mode: 'auto' picks per file — split only when some line
  *  changed IN PLACE (there's a left/right to compare), unified otherwise. */
 export type DiffViewMode = DiffViewType | 'auto';
+const DIFF_LAYOUT_OPTIONS: ReadonlyArray<SegmentedOption<DiffViewMode>> = [
+  { value: 'auto', label: 'Auto', title: 'Unified normally; split only where lines changed in place, when the pane is wide enough' },
+  { value: 'split', label: 'Split' },
+  { value: 'unified', label: 'Unified' },
+];
 
 /** A file shown TEMPORARILY inside the Changed tab because a reference jump
  *  landed outside the change set. Read-only, visually grayed — it's context,
@@ -1384,14 +1390,13 @@ export const FileDiffPane = memo(function FileDiffPane({
               </button>
             )}
             {onToggleViewed && (
-              <label className={`session-diff-viewed-toggle${viewedState === 'viewed' ? ' is-checked' : ''}`} title={viewedState === 'viewed' ? 'Viewed: the tree marks it until the file changes again (V)' : 'Mark this file as viewed (V)'}>
-                <input
-                  type="checkbox"
-                  checked={viewedState === 'viewed'}
-                  onChange={() => onToggleViewed(change.filePath)}
-                />
-                Viewed
-              </label>
+              <Checkbox
+                rowClassName="session-diff-viewed-toggle"
+                title={viewedState === 'viewed' ? 'Viewed: the tree marks it until the file changes again (V)' : 'Mark this file as viewed (V)'}
+                checked={viewedState === 'viewed'}
+                onChange={() => onToggleViewed(change.filePath)}
+                label="Viewed"
+              />
             )}
           </span>
         )}
@@ -2907,6 +2912,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         {/* VS Code-style layout toggle — same control as the Files tab. */}
         <button
           type="button"
+          data-choice-exempt="layout tool button with a panel glyph that shows or hides a pane, not a disclosure row"
           className="sfe-btn sfe-tree-toggle"
           onClick={() => setTreeCollapsed((c) => !c)}
           title={treeCollapsed ? 'Show file tree' : 'Hide file tree'}
@@ -2978,34 +2984,20 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
             disabled={rendered}
             title={ignoreWhitespace ? 'Whitespace changes hidden: lines that differ only in spaces, tabs or line endings read as unchanged. Click to show them.' : 'Hide whitespace changes (lines that differ only in spaces, tabs or line endings)'}
           >{ignoreWhitespace ? ICON_VIEWED_CHECK : ICON_WHITESPACE}<span>Hide whitespace</span></button>
-          <div
+          <SegmentedControl
             className="session-diff-viewtoggle"
-            role="group"
             aria-label="Diff layout"
             title={rendered ? 'The rendered Markdown view has no diff layout' : selectedWholeFile ? 'New and deleted files always show the whole file' : undefined}
-          >
-            <button
-              className={`session-diff-viewtoggle-btn${viewType === 'auto' && !selectedWholeFile ? ' is-active' : ''}`}
-              onClick={() => setViewType('auto')}
-              disabled={rendered || selectedWholeFile}
-              title="Unified normally; split only where lines changed in place, when the pane is wide enough"
-            >Auto</button>
-            <button
-              className={`session-diff-viewtoggle-btn${viewType === 'split' && !selectedWholeFile ? ' is-active' : ''}`}
-              onClick={() => setViewType('split')}
-              disabled={rendered || selectedWholeFile}
-            >Split</button>
-            <button
-              className={`session-diff-viewtoggle-btn${(viewType === 'unified' || selectedWholeFile) ? ' is-active' : ''}`}
-              onClick={() => setViewType('unified')}
-              disabled={rendered || selectedWholeFile}
-            >Unified</button>
-          </div>
+            value={selectedWholeFile ? 'unified' : viewType}
+            disabled={rendered || selectedWholeFile}
+            onChange={setViewType}
+            options={DIFF_LAYOUT_OPTIONS}
+          />
           {/* Hidden when there's nothing to search — the toolbar also renders in
               the loading/error/empty states, where an open bar can't render. */}
           {!empty && (
             <button
-              className={`fv-html-tab${searchOpen ? ' active' : ''}`}
+              className={`fv-tool-btn${searchOpen ? ' active' : ''}`}
               onClick={() => (searchOpen ? closeSearch() : openSearch())}
               title="Find in diff (⌘F)"
               aria-pressed={searchOpen}

@@ -30,6 +30,7 @@ import { HostConnectSteps } from './HostConnectSteps';
 import { pickerNoteOf, type PickerNote } from './host-status-merge';
 import type { HostLiveState } from './useLiveDirs';
 import { REMOVED_TAB, foundHostDot, tabTitle, type HostTab } from './host-tabs';
+import { Chip } from '@/components/controls';
 import '@/styles/host-picker-settings.css';
 
 /**
@@ -49,11 +50,10 @@ export function HostTabBar({ tabs, selected, dots, onSelect }: {
         const dot = tab.kind === 'host' ? dots.get(tab.key) : tab.kind === 'found' ? foundHostDot(tab.label) : undefined;
         const title = tabTitle(tab, dot);
         return (
-          <button
+          <Chip
             key={tab.key}
-            type="button"
-            className={`sps-host-tab${selected === tab.key ? ' active' : ''}${tab.kind === 'removed' ? ' sps-host-tab-removed' : ''}`}
-            aria-pressed={selected === tab.key}
+            className={`sps-host-tab${tab.kind === 'removed' ? ' sps-host-tab-removed' : ''}`}
+            pressed={selected === tab.key}
             data-host={tab.kind === 'host' || tab.kind === 'found' ? tab.key : tab.kind === 'removed' ? REMOVED_TAB : undefined}
             {...(tab.kind === 'found' ? { 'data-found': '' } : {})}
             title={title}
@@ -61,11 +61,11 @@ export function HostTabBar({ tabs, selected, dots, onSelect }: {
             // used to add the same sentence again, so the host was read twice).
             {...(dot ? { 'aria-label': title } : {})}
             onClick={() => onSelect(tab.key)}
+            leading={dot && <HostStatusDot dot={dot} host={tab.key} decorative />}
+            trailing={tab.rawName && <span className="sps-host-tab-raw" aria-hidden>✎</span>}
           >
-            {dot && <HostStatusDot dot={dot} host={tab.key} decorative />}
             <span className="sps-host-tab-label">{tab.label}</span>
-            {tab.rawName && <span className="sps-host-tab-raw" aria-hidden>✎</span>}
-          </button>
+          </Chip>
         );
       })}
       <span className="sps-host-hint">Shift+Tab</span>

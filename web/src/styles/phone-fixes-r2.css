@@ -255,15 +255,9 @@
 }
 
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  /* N2-28: the footer's chips are separate taps, not one sentence that wraps
-     with a comma left hanging at the end of a line. */
+  /* N2-28: the footer's chips are separate taps, a finger apart. */
   .app-shell-navigation .todo-filter-footer {
-    display: flex;
-    flex-wrap: wrap;
     column-gap: 16px;
-  }
-  .app-shell-navigation .todo-filter-footer .todo-filter-footer-sep {
-    display: none;
   }
 }
 
@@ -304,7 +298,8 @@
   .app-shell-navigation .page-header:has(+ .routines-view) .page-title {
     display: none;
   }
-  .app-shell-navigation .routines-view :is(button, [role='button'], [role='switch'], input:not([type='hidden']), select) {
+  /* A box or a radio keeps its 16 px; its whole row is the finger's target (.cron-form-radio). */
+  .app-shell-navigation .routines-view :is(button, [role='button'], [role='switch'], input:not([type='hidden'], .wn-check, .wn-seg-input), select) {
     min-height: 44px;
     min-width: 44px;
     box-sizing: border-box;

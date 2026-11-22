@@ -192,6 +192,7 @@ export function IdleCompactLine({ message, time, noticeId, inOpenedRun }: {
     <div className="idle-compact-line" data-testid="idle-compact-line">
       <button
         type="button"
+        data-choice-exempt="transcript system line: the whole row is the button, drawn like every notice row"
         className="session-system-line session-system-line--info idle-compact-toggle"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}

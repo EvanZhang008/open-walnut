@@ -57,25 +57,8 @@
 
 .board-status .bs-link:hover { text-decoration-color: currentColor; }
 
-.board-status .bs-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
-
-.board-status .bs-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 26px;
-  padding: 0 11px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
-  font-size: var(--font-size-md);
-  cursor: pointer;
-}
-
-.board-status .bs-chip.is-on { border-color: var(--fg); box-shadow: inset 0 0 0 1px var(--fg); }
-.board-status .bs-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The filter chips are the shared Chip (controls/Chip.tsx); this file only places them. */
+.board-status .bs-filters { margin-bottom: 12px; }
 
 .board-status .bs-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--bs-waiting); }
 .board-status .bs-chip-needs .bs-dot, .board-status .bs-pill-needs .bs-dot { background: var(--bs-needs); }

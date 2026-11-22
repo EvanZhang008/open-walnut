@@ -1,7 +1,7 @@
 /**
  * The Transfer dialog: pick a harness, a host, the model, effort and
  * permissions the new session runs with, a directory and how the new task
- * starts. Every choice is a row of radio-style buttons (no native
+ * starts. Every choice is a row of radios (TransferChoice; no native
  * <select>); a pair the server marks blocked stays visible, disabled, with its
  * reason. State lives in TransferDialogHost so it survives a hide; the two text
  * boxes are also kept as drafts of the task being moved, so a Cancel-less close
@@ -21,6 +21,8 @@ import {
   type DirChoice, type TransferForm,
 } from './transfer-model';
 import { TransferLaunchRows } from './TransferLaunchRows';
+import { TransferChoice } from './TransferChoice';
+import { Checkbox } from '@/components/controls';
 import '@/styles/transfer.css';
 
 interface Props {
@@ -35,35 +37,11 @@ interface Props {
   onRetryLoad: () => void;
 }
 
-function Choice({ checked, disabled, onPick, name, now, tag, sub, testId }: {
-  checked: boolean; disabled?: boolean; onPick: () => void; name: ReactNode; now?: boolean; tag?: ReactNode; sub?: ReactNode; testId?: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={checked}
-      disabled={disabled}
-      className={`xfer-opt${checked ? ' is-checked' : ''}`}
-      onClick={onPick}
-      data-testid={testId}
-    >
-      <span className="xfer-opt-line">
-        <span className="xfer-opt-dot" aria-hidden="true" />
-        <span className="xfer-opt-name">{name}</span>
-        {now && <span className="xfer-now">Now</span>}
-        {tag && <span className="xfer-opt-tag">{tag}</span>}
-      </span>
-      {sub && <span className="xfer-opt-sub">{sub}</span>}
-    </button>
-  );
-}
-
 function Group({ label, children, wide }: { label: string; children: ReactNode; wide?: boolean }) {
   return (
     <div className="xfer-group">
       <div className="xfer-label" id={`xfer-${label.toLowerCase()}`}>{label}</div>
-      <div className={`xfer-opts${wide ? ' is-wide' : ''}`} role="radiogroup" aria-labelledby={`xfer-${label.toLowerCase()}`}>{children}</div>
+      <div className={`xfer-opts${wide ? ' is-wide' : ''}`} role="group" aria-labelledby={`xfer-${label.toLowerCase()}`}>{children}</div>
     </div>
   );
 }
@@ -125,7 +103,8 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
           {options.engines.map((e) => {
             const reason = blockedReason(options, e.id, form.host);
             return (
-              <Choice
+              <TransferChoice
+                group="Harness"
                 key={e.id}
                 checked={form.engine === e.id}
                 disabled={!!reason}
@@ -142,7 +121,8 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
           {options.hosts.map((h) => {
             const reason = blockedReason(options, form.engine, h.alias);
             return (
-              <Choice
+              <TransferChoice
+                group="Host"
                 key={h.alias}
                 checked={form.host === h.alias}
                 disabled={!!reason}
@@ -164,8 +144,9 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
           group={(label, children, wide) => <Group label={label} wide={wide}>{children}</Group>}
         />
         <Group label="Directory" wide>
-          <Choice checked={dir === 'auto'} onPick={() => onChange({ dir: 'auto' })} name="Let Walnut choose" sub="Walnut finds or makes the repository on the target." testId="xfer-dir-auto" />
-          <Choice
+          <TransferChoice group="Directory" checked={dir === 'auto'} onPick={() => onChange({ dir: 'auto' })} name="Let Walnut choose" sub="Walnut finds or makes the repository on the target." testId="xfer-dir-auto" />
+          <TransferChoice
+            group="Directory"
             checked={dir === 'same'}
             disabled={!source.cwd}
             onPick={() => onChange({ dir: 'same' })}
@@ -173,7 +154,7 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
             sub={source.cwd ? <span className="xfer-mono">{source.cwd}</span> : 'The session has no directory.'}
             testId="xfer-dir-same"
           />
-          <Choice checked={dir === 'custom'} onPick={() => onChange({ dir: 'custom' })} name="Another directory" testId="xfer-dir-custom" />
+          <TransferChoice group="Directory" checked={dir === 'custom'} onPick={() => onChange({ dir: 'custom' })} name="Another directory" testId="xfer-dir-custom" />
           {dir === 'custom' && (
             <input
               ref={customRef}
@@ -188,13 +169,10 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
           )}
         </Group>
         <Group label="Start">
-          <Choice checked={form.mode === 'carry'} onPick={() => onChange({ mode: 'carry' })} name="Carry the conversation" sub="The new task picks up the whole conversation." testId="xfer-mode-carry" />
-          <Choice checked={form.mode === 'brief'} onPick={() => onChange({ mode: 'brief' })} name="Start from a brief" sub="Walnut writes a short handoff, and the new task starts from it." testId="xfer-mode-brief" />
+          <TransferChoice group="Start" checked={form.mode === 'carry'} onPick={() => onChange({ mode: 'carry' })} name="Carry the conversation" sub="The new task picks up the whole conversation." testId="xfer-mode-carry" />
+          <TransferChoice group="Start" checked={form.mode === 'brief'} onPick={() => onChange({ mode: 'brief' })} name="Start from a brief" sub="Walnut writes a short handoff, and the new task starts from it." testId="xfer-mode-brief" />
         </Group>
-        <label className="xfer-check">
-          <input type="checkbox" checked={form.keepSource} onChange={(e) => onChange({ keepSource: e.target.checked })} data-testid="xfer-keep-source" />
-          <span>Keep the original task open</span>
-        </label>
+        <Checkbox checked={form.keepSource} onChange={(keepSource) => onChange({ keepSource })} data-testid="xfer-keep-source" label="Keep the original task open" />
         <label className="xfer-label xfer-label-field" htmlFor="xfer-message">First instruction (optional)</label>
         <MicField boxRef={messageBox} text={form.message} setText={setMessage} handleRef={messageMic} disabled={busy}>
           <textarea

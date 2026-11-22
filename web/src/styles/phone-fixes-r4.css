@@ -227,7 +227,7 @@
   .app-shell-navigation .fv-html-toolbar::-webkit-scrollbar {
     display: none;
   }
-  .app-shell-navigation .fv-html-tab {
+  .app-shell-navigation .fv-tool-btn {
     flex: 0 0 auto;
     min-height: 44px;
     padding: 0 12px;

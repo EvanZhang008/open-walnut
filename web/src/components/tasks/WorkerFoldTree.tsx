@@ -14,6 +14,7 @@ import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { taskUserState } from '@/utils/session-status';
 import { foldMixLine, stateSectionKey, type FoldEntry, foldStateWords } from './worker-fold';
 import { installFoldTip } from './fold-tip';
+import { DisclosureButton } from '@/components/controls';
 import '@/styles/worker-fold.css';
 
 /** What a section row needs to draw its folded team: TodoPanel's fold state and its writers. */
@@ -51,18 +52,16 @@ export function FoldSummaryLine({ host, entries, ctl }: { host: Task; entries: r
   const needs = foldMixLine(entries);
   return (
     <span className="worker-fold-line" data-testid="worker-fold-line">
-      <button
-        type="button"
-        className={`worker-fold-toggle${open ? ' is-open' : ''}`}
+      <DisclosureButton
+        className="worker-fold-toggle"
         data-testid="worker-fold-toggle"
-        aria-expanded={open}
+        expanded={open}
         title={open ? 'Hide the team' : 'Show the team'}
         onClick={(e) => { e.stopPropagation(); ctl.toggleOpen(host.id); }}
         onKeyDown={(e) => e.stopPropagation()}
       >
-        <span className="worker-fold-chevron" aria-hidden="true">{ICONS.ICON_CHEVRON_RIGHT}</span>
         {workerWord(entries.length)}
-      </button>
+      </DisclosureButton>
       {needs ? <span className="worker-fold-mix" data-testid="worker-fold-mix">{needs}</span> : null}
     </span>
   );

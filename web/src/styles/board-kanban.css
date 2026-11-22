@@ -51,21 +51,7 @@
 }
 
 /* ── The view switch in the bar ── */
-.board-view-toggle {
-  display: inline-flex; flex: 0 0 auto; gap: 2px; padding: 2px; border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--fg) 7%, transparent);
-}
-.board-view-toggle .board-view-seg {
-  display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border: 0; border-radius: 6px;
-  background: transparent; color: var(--fg-muted); font: inherit; font-size: var(--font-size-sm); font-weight: 550; line-height: 1;
-  white-space: nowrap; cursor: pointer; transition: color 0.15s, background 0.15s;
-}
-.board-view-toggle .board-view-seg:hover { color: var(--fg); }
-.board-view-toggle .board-view-seg:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.board-view-toggle .board-view-seg.is-active {
-  color: var(--fg); background: var(--bg); box-shadow: var(--shadow-sm), 0 0 0 1px var(--border);
-}
-.board-view-toggle .board-view-seg[aria-disabled="true"] { color: var(--fg-muted); opacity: 0.55; cursor: not-allowed; }
+.board-view-toggle { flex: 0 0 auto; }
 .board-view-toggle .board-view-count {
   min-width: 16px; height: 16px; padding: 0 4px; border-radius: var(--radius-sm); background: var(--error); color: var(--on-accent);
   font-size: var(--font-size-xs); font-weight: 700; line-height: 16px; text-align: center; font-variant-numeric: tabular-nums;

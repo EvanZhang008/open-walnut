@@ -34,6 +34,7 @@ import type { SessionThreadMetaPatch } from '@/types/session';
 import { log } from '@/utils/log';
 import { isModifierOnly, markKeyboardFocus } from '@/utils/keyboard-focus';
 import '@/styles/thread-stack.css';
+import { Chip, ChipGroup } from '@/components/controls';
 import { SELECTION_BAR_LAYERS } from './selection-bar-layers';
 import { MicInput } from '@/components/common/BoxMic';
 
@@ -291,7 +292,7 @@ export function ThreadTreeDrawer(p: ThreadTreeDrawerProps) {
               segments, never between a number and its noun (N10). */}
           <span className="thread-drawer-summary">
             {summary.split(' · ').map((seg, i) => (
-              <Fragment key={seg}>{i > 0 && ' · '}<span className="thread-drawer-summary-seg">{seg}</span></Fragment>
+              <Fragment key={seg}>{i > 0 && ' · '}<span className="thread-drawer-summary-seg" data-choice-exempt="a piece of the summary text, not a segmented control">{seg}</span></Fragment>
             ))}
           </span>
           <button type="button" className="thread-drawer-close" title="Close (Esc)" aria-label="Close (Esc)" onClick={() => close()}>
@@ -331,14 +332,15 @@ export function ThreadTreeDrawer(p: ThreadTreeDrawerProps) {
           />
           {query && <button type="button" className="thread-drawer-search-clear" aria-label="Clear search" onClick={clearSearch}>Clear</button>}
         </div>
-        <div className="thread-drawer-chips" role="group" aria-label="Filter">
+        <ChipGroup className="thread-drawer-chips" role="group" aria-label="Filter">
           {(['all', 'open', 'pinned'] as const).map((f) => (
-            <button key={f} type="button" className="thread-drawer-chip" aria-pressed={filter === f} onClick={() => setFilter(f)}
-              title={f === 'open' ? openChipTitle(c) : undefined}>
-              {f === 'all' ? 'All' : f === 'open' ? 'Open' : 'Pinned'} <span className="thread-drawer-chip-count">{chips[f]}</span>
-            </button>
+            <Chip key={f} className="thread-drawer-chip" pressed={filter === f} onClick={() => setFilter(f)}
+              title={f === 'open' ? openChipTitle(c) : undefined} count={chips[f]}>
+              {/* The space keeps the chip's text "All 3", as it reads aloud. */}
+              {f === 'all' ? 'All' : f === 'open' ? 'Open' : 'Pinned'}{' '}
+            </Chip>
           ))}
-        </div>
+        </ChipGroup>
         <div className="thread-drawer-scroll">
           <ThreadTreeRows
             ref={rowsRef}

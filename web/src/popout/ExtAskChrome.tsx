@@ -9,6 +9,7 @@
  */
 import { forwardRef, type ReactNode, type RefObject } from 'react';
 import { ICON_FILE } from '@/components/common/Icons';
+import { Chip } from '@/components/controls';
 import { timeAgo } from '@/utils/time';
 import { askActivityAt, askProjectDisplay } from '@open-walnut/ask-list';
 import { AskWalnutDrawer, AskWalnutMenuButton, type DrawerRow } from '@/components/chat/AskWalnutDrawer';
@@ -185,38 +186,36 @@ export function ExtComposerChips({ page, pageOn, onPage, act }: ChipsProps) {
   return (
     <div className="ext-chips">
       {page && (
-        <span className={`ext-chip ext-chip-page${pageOn ? ' is-on' : ''}`}>
-          <button
-            type="button"
+        <span className="ext-chip-page">
+          <Chip
             role="switch"
-            aria-checked={pageOn}
-            className="ext-chip-body"
+            pressed={pageOn}
+            className="ext-chip-page-body"
             data-testid="ext-panel-include"
             aria-label={tip}
             title={tip}
+            leading={<span className="ext-chip-fav" aria-hidden="true">{ICON_FILE}</span>}
             onClick={() => onPage(!pageOn)}
           >
-            <span className="ext-chip-fav" aria-hidden="true">{ICON_FILE}</span>
-            <span className="ext-chip-kind">{pageOn ? 'Page' : 'Add page'}</span>
-            <span className="ext-chip-label">{page.title ? `${page.title} · ${site}` : site}</span>
-          </button>
+            <span className="ext-chip-kind">{pageOn ? 'Page' : 'Add page'}</span> {page.title ? `${page.title} · ${site}` : site}
+          </Chip>
           {pageOn && (
             <button type="button" className="ext-chip-x" data-testid="ext-panel-page-drop" aria-label="Leave the page out of the next message" title="Leave the page out of the next message" onClick={() => onPage(false)}>&times;</button>
           )}
         </span>
       )}
       {act && (
-        <button
-          type="button"
+        <Chip
           role="switch"
-          aria-checked={act.on}
-          className={`ext-chip ext-chip-act${act.on ? ' is-on' : ''}`}
+          pressed={act.on}
+          className="ext-chip-act"
           data-testid="ext-panel-act"
           title={act.on ? "Walnut's agents may act in this tab only, until you take it back. Click to take it back." : 'Let Walnut act in this tab. Stop on the page gives it back.'}
+          leading={ICON_POINTER}
           onClick={() => act.onToggle(!act.on)}
         >
-          {ICON_POINTER}<span>Act in tab</span>
-        </button>
+          Act in tab
+        </Chip>
       )}
     </div>
   );

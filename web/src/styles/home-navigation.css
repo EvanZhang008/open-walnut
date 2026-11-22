@@ -362,7 +362,7 @@
 .home-navigation-scroll .tier-project-label-name { order: 1; padding-left: 0; }
 .home-navigation-scroll .todo-group-project-header .collapse-chevron,
 .home-navigation-scroll .tier-project-label .collapse-chevron,
-.home-navigation-scroll .task-group-chip .collapse-chevron { order: 3; --chevron-size: 16px; margin: 0; font-size: 0; opacity: .7; }
+.home-navigation-scroll .task-group-chip .collapse-chevron { order: 3; }
 .home-navigation-scroll .todo-group-header-controls > :not(.todo-group-name-btn):not(.collapse-chevron):not(.todo-group-count),
 .home-navigation-scroll .tier-project-label > :not(.tier-project-label-name):not(.collapse-chevron):not(.tier-project-label-count) { order: 4; }
 /* A project's task count sits right after its name, in both lists. */
@@ -444,12 +444,6 @@
   .home-navigation-scroll .focus-inline-add-trigger { opacity: .65; }
 }
 .home-navigation-scroll .task-grouped::before { display: none; }
-/* The shared ▶ glyph reads as a filled triangle at this size; draw the same stroke chevron the headings use. */
-.home-navigation-scroll .todo-group-project-header .collapse-chevron::before,
-.home-navigation-scroll .tier-project-label .collapse-chevron::before,
-.home-navigation-scroll .task-group-chip .collapse-chevron::before {
-  content: ''; width: 4.5px; height: 4.5px; border-right: 1.4px solid currentColor; border-bottom: 1.4px solid currentColor; transform: translateX(-1px) rotate(-45deg);
-}
 /* Groups are quieter than their section heading and than the 13px rows they hold. A project
    reads the same under a tier and under Projects; a folder steps down to muted. */
 .home-navigation-scroll .todo-pinned-sublabel .navigation-heading-open { font-size: var(--font-size-sm); font-weight: 600; color: var(--fg-secondary); }
@@ -460,11 +454,8 @@
 .home-navigation-scroll .task-group-chip-more { margin-left: auto; }
 .home-navigation-scroll .task-group-chip:hover { background: var(--bg-hover); }
 .home-navigation-scroll .todo-pinned-subgroup + .todo-pinned-subgroup { margin-top: 24px; }
-/* Parent tasks: the same stroke chevron as the headings, trailing the row, and a plain count instead of a blue pill. */
-.home-navigation-scroll .todo-panel-item > .collapse-chevron { position: static; order: 2; align-self: center; font-size: 0; --chevron-size: 16px; opacity: .7; }
-.home-navigation-scroll .todo-panel-item > .collapse-chevron::before {
-  content: ''; width: 4.5px; height: 4.5px; border-right: 1.4px solid currentColor; border-bottom: 1.4px solid currentColor; transform: translateX(-1px) rotate(-45deg);
-}
+/* Parent tasks: the shared fold chevron trails the row, and a plain count instead of a blue pill. */
+.home-navigation-scroll .todo-panel-item > .collapse-chevron { position: static; order: 2; align-self: center; }
 .home-navigation-scroll .task-children-badge { background: none; color: var(--fg-muted); padding: 0; font-weight: 400; }
 /* A long project draws in batches; the next batch hangs off this row (list-batch.ts). Its
    text starts on the title column. */
@@ -475,27 +466,10 @@
 .todo-list-show-more:hover { color: var(--fg); background: var(--bg-hover); }
 .todo-list-show-more:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .home-navigation-scroll .todo-list-show-more { margin-left: -8px; width: calc(100% + 8px); padding-left: 46px; }
-/* An on/off setting in the filter menu's View section reads as a switch, not as one more chip. */
-.vd-toggle {
-  grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 5px 10px; font-size: var(--font-size-sm); border-radius: 6px; background: var(--bg-secondary); color: var(--fg-secondary); cursor: pointer;
-}
-.vd-switch {
-  appearance: none; -webkit-appearance: none; position: relative; flex-shrink: 0; width: 28px; height: 16px; margin: 0;
-  border-radius: var(--radius-sm); background: var(--border-strong); cursor: pointer; transition: background .15s;
-}
-.vd-switch::before {
-  content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%;
-  background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 20%); transition: transform .15s;
-}
-.vd-switch:checked { background: var(--accent); }
-.vd-switch:checked::before { transform: translateX(12px); }
-.vd-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
 /* Tab bar: the tabs, then the search "Done" chip, then the bar's own menu at the right edge.
    The active tab never shrinks, so its name reads whole ("Fc 12" was Focus squeezed by 8 tabs). */
-.todo-section-tabs-list { display: flex; align-items: center; gap: 2px; flex: 1 1 auto; min-width: 0; overflow: hidden; }
-.todo-section-tab.is-active { flex-shrink: 0; }
+.todo-section-tabs-list { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+.todo-section-tab[aria-selected='true'] { flex-shrink: 0; }
 .todo-section-tab-all .todo-section-tab-label { max-width: none; opacity: 1; }
 .todo-section-tabs-menu {
   flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin-left: 2px;
@@ -579,10 +553,6 @@
 }
 .todo-filter-empty-clear:hover { border-color: var(--accent); }
 .todo-filter-empty-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.todo-filter-footer-sep { color: var(--fg-secondary); margin-left: -7px; }
-/* F18: the comma touches the word before it (no " , "); muted text stays >= 4.5:1 (F28). */
-.todo-filter-footer .todo-filter-footer-chip { padding: 0 3px; color: var(--fg-secondary); }
-.todo-filter-footer .todo-filter-footer-chip.on { color: var(--accent-text); }
 .todo-filter-footer { color: var(--fg-secondary); }
 .task-filter-override-show {
   font: inherit; font-size: inherit; margin-left: 4px; padding: 0 2px; border: 0; border-radius: var(--radius-xs);

@@ -45,7 +45,8 @@ import {
   EngineSettingsRowsArea,
   EngineSettingsScopeNotes,
 } from './EngineSettingsPopoverBody';
-import { AboutButton, ScopeOptionButton } from './EngineSettingsPopoverChrome';
+import { AboutButton, ScopeLockIcon } from './EngineSettingsPopoverChrome';
+import { SegmentedControl, type SegmentedOption } from '@/components/controls';
 import { useScopedEngineSettings } from './engine-settings-scope-memory';
 import '@/styles/engine-settings.css';
 import '@/styles/engine-settings-popover.css';
@@ -201,14 +202,6 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
     pickScope(next);
   }, [pickScope]);
 
-  const onScopeKeyDown = useCallback((e: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
-    e.preventDefault();
-    const next: EngineSettingsWriteScope = scope === 'default' ? 'project' : 'default';
-    pickScope(next);
-    e.currentTarget.querySelector<HTMLButtonElement>(`[data-scope="${next}"]`)?.focus();
-  }, [scope, pickScope]);
-
   const placed = placement !== null;
   // Focus lands on the dialog itself so a screen reader announces its name.
   useEffect(() => {
@@ -333,25 +326,21 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
   if (!open) return null;
   const projectLockedReason = view && !projectAvailable ? scopeUnavailableReason({ cwd: view.cwd, displayName }) : null;
   const scopeTitle = saving ? 'Wait for the current save to finish' : undefined;
-  // One Tab stop for the radiogroup (the checked option); arrows move
-  // between the options (onScopeKeyDown). an unavailable side wears a
-  // lock glyph and its reason as the tooltip, so it reads as "cannot be picked"
+  // One Tab stop for the radiogroup (the checked option); the arrows move
+  // between the options (SegmentedControl). An unavailable side wears a lock
+  // glyph and its reason as the tooltip, so it reads as "cannot be picked"
   // before a click, not as "merely unselected".
-  const scopeOption = (value: EngineSettingsWriteScope, label: string) => {
+  const scopeOption = (value: EngineSettingsWriteScope, label: string): SegmentedOption<EngineSettingsWriteScope> => {
     const unavailable = value === 'project' && !!view && !projectAvailable;
-    return (
-      <ScopeOptionButton
-        value={value}
-        label={label}
-        checked={scope === value}
-        disabled={switchLocked || unavailable}
-        unavailable={unavailable}
-        reasonId={reasonId}
-        title={unavailable ? projectLockedReason ?? undefined : scopeTitle}
-        onPointerDown={onScopePointerDown}
-        onClick={() => onScopeClick(value)}
-      />
-    );
+    return {
+      value,
+      label: unavailable ? <><ScopeLockIcon />{label}</> : label,
+      disabled: unavailable,
+      className: `engine-settings-scope-option${unavailable ? ' is-unavailable' : ''}`,
+      data: { 'data-scope': value },
+      describedBy: unavailable ? reasonId : undefined,
+      title: unavailable ? projectLockedReason ?? undefined : scopeTitle,
+    };
   };
 
   return createPortal(
@@ -406,16 +395,17 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
       <div className="engine-settings-popover-scope-block">
         <div className="engine-settings-scope-row">
           <span className="engine-settings-scope-label" aria-hidden>Save changes to</span>
-          <div
-            className="engine-settings-scope"
-            role="radiogroup"
-            aria-label="Save changes to"
-            aria-disabled={switchLocked || undefined}
-            onKeyDown={onScopeKeyDown}
-          >
-            {scopeOption('default', `Same as ${displayName}`)}
-            {scopeOption('project', 'This project only')}
-          </div>
+          {/* The press guard runs before the segment's own click (onScopePointerDown). */}
+          <span className="engine-settings-scope-press" onPointerDownCapture={onScopePointerDown}>
+            <SegmentedControl
+              className="engine-settings-scope"
+              aria-label="Save changes to"
+              value={scope}
+              disabled={switchLocked}
+              options={[scopeOption('default', `Same as ${displayName}`), scopeOption('project', 'This project only')]}
+              onChange={onScopeClick}
+            />
+          </span>
         </div>
         {projectLockedReason && <p className="engine-settings-scope-reason" id={reasonId}>{projectLockedReason}</p>}
         <EngineSettingsScopeNotes

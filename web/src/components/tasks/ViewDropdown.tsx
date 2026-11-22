@@ -38,6 +38,7 @@ import { STATUS_OPTIONS } from './TaskStatusControl';
 import { STATUS_FILTER_ORDER, foldQueryStatus, statusChipLabel } from './filter-bar-model';
 import { projectDisplayName } from '@/utils/project-display';
 import { MicInput } from '@/components/common/BoxMic';
+import { SegmentedControl } from '@/components/controls';
 import {
   QUERY_PRIORITY_OPTIONS,
   QUERY_SORT_OPTIONS,
@@ -468,16 +469,13 @@ function TimeSection({ query, patchQuery }: {
     <>
       <div className="vd-field">
         <span className="vd-label">Time basis</span>
-        <div className="vd-seg">
-          {TIME_BASIS_OPTIONS.map((o) => (
-            <button
-              key={o.value}
-              className={`vd-seg-btn${query.timeBasis === o.value ? ' vd-active' : ''}`}
-              data-time-basis={o.value}
-              onClick={() => patchQuery({ timeBasis: o.value })}
-            >{o.label}</button>
-          ))}
-        </div>
+        <SegmentedControl
+          fill
+          aria-label="Time basis"
+          value={query.timeBasis}
+          onChange={(timeBasis) => patchQuery({ timeBasis })}
+          options={TIME_BASIS_OPTIONS.map((o) => ({ value: o.value, label: o.label, className: 'vd-seg-btn', data: { 'data-time-basis': o.value } }))}
+        />
       </div>
       <div className="vd-cats" style={{ marginTop: 6 }}>
         <button
@@ -510,15 +508,13 @@ function TimeSection({ query, patchQuery }: {
           </div>
           <div className="vd-field">
             <span className="vd-label">Unit</span>
-            <div className="vd-seg">
-              {(['hours', 'days'] as const).map((unit) => (
-                <button
-                  key={unit}
-                  className={`vd-seg-btn${query.timeCustomUnit === unit ? ' vd-active' : ''}`}
-                  onClick={() => patchQuery({ timeCustomUnit: unit })}
-                >{unit === 'hours' ? 'Hours' : 'Days'}</button>
-              ))}
-            </div>
+            <SegmentedControl
+              fill
+              aria-label="Unit"
+              value={query.timeCustomUnit}
+              onChange={(timeCustomUnit) => patchQuery({ timeCustomUnit })}
+              options={[{ value: 'hours', label: 'Hours' }, { value: 'days', label: 'Days' }]}
+            />
           </div>
         </div>
       )}
@@ -608,7 +604,7 @@ function TriStateField({ label, value, onChange }: {
   value: TriState;
   onChange: (v: TriState) => void;
 }) {
-  const choices: { key: string; v: TriState; label: string }[] = [
+  const choices: { key: 'any' | 'yes' | 'no'; v: TriState; label: string }[] = [
     { key: 'any', v: undefined, label: 'Any' },
     { key: 'yes', v: true, label: 'Yes' },
     { key: 'no', v: false, label: 'No' },
@@ -616,12 +612,13 @@ function TriStateField({ label, value, onChange }: {
   return (
     <div className="vd-field">
       <span className="vd-label">{label}</span>
-      <div className="vd-seg">
-        {choices.map((c) => (
-          <button key={c.key} className={`vd-seg-btn${value === c.v ? ' vd-active' : ''}`}
-            data-tri-state={c.key} onClick={() => onChange(c.v)}>{c.label}</button>
-        ))}
-      </div>
+      <SegmentedControl
+        fill
+        aria-label={label}
+        value={choices.find((c) => c.v === value)?.key ?? 'any'}
+        onChange={(key) => onChange(choices.find((c) => c.key === key)?.v)}
+        options={choices.map((c) => ({ value: c.key, label: c.label, data: { 'data-tri-state': c.key } }))}
+      />
     </div>
   );
 }

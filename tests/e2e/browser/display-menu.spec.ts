@@ -132,7 +132,7 @@ test('one menu: the filter rows, then the display rows; the View page lists the 
   expect(await menu.innerText()).not.toMatch(TIER_WORDS)
   // C12: no native checkbox; the tab bar switch is a role="switch".
   await expect(menu.locator('input[type="checkbox"]')).toHaveCount(0)
-  expect(await option(page, 'quick-views').evaluate((el) => [el.getAttribute('role'), el.getAttribute('aria-checked'), el.getAttribute('title')]))
+  expect(await option(page, 'quick-views').getByRole('switch').evaluate((el) => [el.getAttribute('role'), el.getAttribute('aria-checked'), el.getAttribute('title')]))
     .toEqual(['switch', 'true', 'All, Pinned and the other views as tabs across the top'])
   for (const key of ['session-panels', 'sort', 'group', 'collapse']) await expect(option(page, key)).toHaveCount(1)
   await expect(option(page, 'session-panels').locator('[data-choice]')).toHaveCount(6)
@@ -188,7 +188,7 @@ test('a view picked on the View page switches the list and the tab bar, closes t
   // its Group); both pick and the menu stays open. No row says it only works elsewhere.
   for (const [row, key] of [['group', 'none'], ['group', 'project'], ['sort', 'priority'], ['sort', 'manual']] as const) {
     await option(page, row).locator(`[data-choice="${key}"]`).click()
-    await expect(option(page, row).locator(`[data-choice="${key}"]`)).toHaveAttribute('aria-pressed', 'true')
+    await expect(option(page, row).locator(`[data-choice="${key}"]`)).toHaveAttribute('aria-checked', 'true')
   }
   await expect(displayMenu(page)).toBeVisible()
   await expect(option(page, 'sort').locator('[data-choice]')).toHaveCount(4)
@@ -331,7 +331,7 @@ test('Sort, Group and Collapse write the board settings; Sort never drops a proj
   // C52: two projects keep their own order: no segment is pressed, the menu says so.
   await openDisplayMenu(page)
   const sort = option(page, 'sort')
-  await expect(sort.locator('[aria-pressed="true"]')).toHaveCount(0)
+  await expect(sort.locator('[aria-checked="true"]')).toHaveCount(0)
   await expect(displayMenu(page).locator('.dm-order .dm-note')).toHaveText('2 projects use their own order')
   const before = await sortKeys(page)
   await sort.locator('[data-choice="priority"]').click()
@@ -341,7 +341,7 @@ test('Sort, Group and Collapse write the board settings; Sort never drops a proj
   expect(await sortKeys(page)).toEqual(before)
   await sort.locator('[data-choice="date"]').click()
   await displayMenu(page).getByRole('button', { name: 'Replace', exact: true }).click()
-  await expect(sort.locator('[data-choice="date"]')).toHaveAttribute('aria-pressed', 'true')
+  await expect(sort.locator('[data-choice="date"]')).toHaveAttribute('aria-checked', 'true')
   await expect(displayMenu(page).locator('.dm-order .dm-note')).toHaveCount(0)
   expect(JSON.parse((await readLs(page, 'walnut-todo-project-sort')) ?? '{}')).toEqual({})
   expect(await readLs(page, 'walnut-todo-sortBy')).toContain('date')
@@ -349,7 +349,7 @@ test('Sort, Group and Collapse write the board settings; Sort never drops a proj
   // C37: Sort writes the legacy sortBy and the list follows (Created: newest first).
   await expect.poll(() => rowOrder(page, ids)).toEqual([ids[2], ids[1], ids[0]])
   await sort.locator('[data-choice="updated"]').click()
-  await expect(sort.locator('[data-choice="updated"]')).toHaveAttribute('aria-pressed', 'true')
+  await expect(sort.locator('[data-choice="updated"]')).toHaveAttribute('aria-checked', 'true')
   expect(await readLs(page, 'walnut-todo-sortBy')).toContain('updated')
   await expect.poll(async () => (await rowOrder(page, ids))[0]).toBe(ids[0])
   // With no project orders left, re-picking the pressed segment writes nothing.
@@ -361,11 +361,11 @@ test('Sort, Group and Collapse write the board settings; Sort never drops a proj
   // Group: Flat and back.
   const group = option(page, 'group')
   await group.locator('[data-choice="none"]').click()
-  await expect(group.locator('[data-choice="none"]')).toHaveAttribute('aria-pressed', 'true')
+  await expect(group.locator('[data-choice="none"]')).toHaveAttribute('aria-checked', 'true')
   expect(await readLs(page, 'walnut-todo-groupBy')).toContain('none')
   await expect(page.locator('.todo-group-project-header')).toHaveCount(0)
   await group.locator('[data-choice="project"]').click()
-  await expect(group.locator('[data-choice="project"]')).toHaveAttribute('aria-pressed', 'true')
+  await expect(group.locator('[data-choice="project"]')).toHaveAttribute('aria-checked', 'true')
   await expect(page.locator('.todo-group-project-header').first()).toBeVisible()
 
   // Collapse all / Expand all: the menu stays open and the words flip at once.
@@ -390,9 +390,9 @@ test('turning the tab bar off from its own menu lands focus on Display and says 
   await expect.poll(() => page.evaluate(() => document.activeElement?.getAttribute('aria-label'))).toBe('Display')
   await expect(page.getByText('Tab bar hidden. Turn it back on in Display', { exact: true }).first()).toBeVisible()
   await openDisplayMenu(page)
-  await expect(option(page, 'quick-views')).toHaveAttribute('aria-checked', 'false')
+  await expect(option(page, 'quick-views').getByRole('switch')).toHaveAttribute('aria-checked', 'false')
   await option(page, 'quick-views').click()
-  await expect(option(page, 'quick-views')).toHaveAttribute('aria-checked', 'true')
+  await expect(option(page, 'quick-views').getByRole('switch')).toHaveAttribute('aria-checked', 'true')
   await expect(page.locator('.todo-section-tabs')).toBeVisible()
   await closeDisplayMenu(page)
 })
@@ -408,7 +408,7 @@ test('with the tab bar off, the filter row names the view and opens Display', as
   // A switch (2026-10-04: "don't make the menu disappear, it is a toggle"): the menu stays
   // open both ways, so the bar is seen going and coming back, and no toast is needed.
   await expect(displayMenu(page)).toBeVisible()
-  await expect(option(page, 'quick-views')).toHaveAttribute('aria-checked', 'false')
+  await expect(option(page, 'quick-views').getByRole('switch')).toHaveAttribute('aria-checked', 'false')
   await expect(page.getByText('Tab bar hidden. Turn it back on in Display', { exact: true })).toHaveCount(0)
   await option(page, 'quick-views').click()
   await expect(page.locator('.todo-section-tabs')).toBeVisible()
@@ -537,7 +537,7 @@ test('keyboard reaches every Display control, with a visible ring and readable c
   await openDisplayMenu(page)
   // C42: no motion when the system asks for none.
   expect(await displayMenu(page).evaluate((el) => getComputedStyle(el).animationDuration)).toMatch(/^0s$|^0ms$/)
-  expect(await option(page, 'quick-views').locator('.dm-switch-track').evaluate((el) => getComputedStyle(el).transitionDuration)).toMatch(/^0s/)
+  expect(await option(page, 'quick-views').locator('.toggle-thumb').evaluate((el) => getComputedStyle(el).transitionDuration)).toMatch(/^0s/)
   // C32: focus starts in the search box; Down enters the rows, Up from the first row returns
   // to the box, and the focused row shows the ring.
   const status = displayMenu(page).locator('.fb-prop[data-filter-dim="status"]')
@@ -553,9 +553,9 @@ test('keyboard reaches every Display control, with a visible ring and readable c
   await group.locator('[data-choice="project"]').focus()
   await page.keyboard.press('ArrowRight')
   await expect(group.locator('[data-choice="status"]')).toBeFocused()
-  await expect(group.locator('[data-choice="status"]')).toHaveAttribute('aria-pressed', 'true')
+  await expect(group.locator('[data-choice="status"]')).toHaveAttribute('aria-checked', 'true')
   await page.keyboard.press('ArrowLeft')
-  await expect(group.locator('[data-choice="project"]')).toHaveAttribute('aria-pressed', 'true')
+  await expect(group.locator('[data-choice="project"]')).toHaveAttribute('aria-checked', 'true')
   expect(await group.locator('[data-choice]').evaluateAll((els) => els.map((el) => (el as HTMLElement).tabIndex))).toEqual([0, -1, -1])
   expect(await group.locator('[data-choice="project"]').evaluate((el) => getComputedStyle(el).outlineStyle)).toBe('solid')
   // Down from Group (its active segment) is the View row; Right opens the View page on the current view.

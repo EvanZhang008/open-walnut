@@ -3299,6 +3299,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 <ChangedChip sessionId={sessionId} active={activeView === 'changed'} hidden={hid('changed')} onToggle={toggleView} />
                 <button
                   className={`session-action-chip${activeView === 'files' ? ' session-action-chip-active' : ''}`}
+                  data-choice-exempt="header tool button that opens or closes its view beside the chat; active marks the open view"
                   onClick={() => toggleView('files')}
                   title="Browse the session working directory, full-screen alongside the chat"
                   data-header-id="files"
@@ -3308,6 +3309,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 </button>
                 <button
                   className={`session-action-chip${activeView === 'terminal' ? ' session-action-chip-active' : ''}${terminalBlockedWhy ? ' session-action-chip-unavailable' : ''}`}
+                  data-choice-exempt="header tool button that opens or closes its view beside the chat; active marks the open view"
                   onClick={() => toggleView('terminal')}
                   title={terminalBlockedWhy ? `${terminalBlockedWhy}. Open to see how to fix it.` : 'Open a terminal in the session working directory, full-screen alongside the chat'}
                   data-header-id="terminal"
@@ -3331,6 +3333,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 {boardChipLive && (
                   <button
                     className={`session-action-chip${activeView === 'board' ? ' session-action-chip-active' : ''}`}
+                    data-choice-exempt="header tool button that opens or closes its view beside the chat; active marks the open view"
                     onClick={() => { if (!boardWaitReason) toggleView('board'); }}
                     disabled={!!boardWaitReason}
                     title={boardWaitReason ?? "The task's Board: the page its leader keeps, with a thread and a mark per section, beside the chat"}
@@ -3344,6 +3347,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 {threadsOn && (
                   <button
                     className={`session-action-chip${activeView === 'threads' ? ' session-action-chip-active' : ''}`}
+                    data-choice-exempt="header tool button that opens or closes its view beside the chat; active marks the open view"
                     onClick={() => toggleView('threads')}
                     title="Your requests to this task, one thread per subject, beside the chat"
                     data-testid="session-threads-chip"
@@ -3358,6 +3362,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 {keptPaneApp && (
                   <button
                     className={`session-action-chip${activeView === 'app' ? ' session-action-chip-active' : ''}`}
+                    data-choice-exempt="header tool button that opens or closes its view beside the chat; active marks the open view"
                     onClick={() => openAppView(keptPaneApp.key, { toggle: true })}
                     title={`${keptPaneApp.title} beside the chat`}
                     data-testid="session-app-chip"
@@ -3380,6 +3385,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               <>
                 <button
                   className={`session-action-chip${planPopoverOpen ? ' session-action-chip-active' : ''}`}
+                  data-choice-exempt="opens the Plan and Execute popup; active while it is open"
                   onClick={() => setPlanPopoverOpen(o => !o)}
                   title="Plan & Execute"
                   data-header-id="plan"
@@ -3872,6 +3878,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             ) : chatCollapsed ? (
               <button
                 type="button"
+                data-choice-exempt="layout tool button with a panel glyph that shows or hides a pane, not a disclosure row"
                 className="sfe-btn sfe-tree-toggle session-chat-collapse-btn"
                 onClick={() => collapseChat(false)}
                 title="Show chat"
@@ -4078,6 +4085,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               const hideChat = (
                 <button
                   type="button"
+                  data-choice-exempt="layout tool button with a panel glyph that shows or hides a pane, not a disclosure row"
                   className="sfe-btn sfe-tree-toggle session-chat-collapse-btn"
                   onClick={() => collapseChat(true)}
                   title="Hide chat"
@@ -4475,6 +4483,7 @@ const ChangedChip = memo(function ChangedChip({ sessionId, active, hidden, onTog
     <button
       className={`session-action-chip${active ? ' session-action-chip-active' : ''}`}
       onClick={() => onToggle('changed')}
+      data-choice-exempt="header tool button that opens or closes its view beside the chat; active marks the open view"
       title={changedChipTitle(gitGlance)}
       data-header-id="changed"
       data-hidden={hidden}

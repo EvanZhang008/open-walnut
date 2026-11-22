@@ -162,6 +162,7 @@ import { planSkipsForReveal, resolveSkips, turnStart, type RenderSkip, type Reso
 import { foldKey, openMessageFolds } from './message-fold';
 import { RenderSkipDivider } from './RenderSkipDivider';
 import { publishRecallRows } from '@/components/chat/prompt-recall';
+import { Tab, TabList } from '@/components/controls';
 
 /** A merged tool run's member rows, for the find bar: a member's words are
  *  not drawn while the run is shut, and the bar opens it to land on them. */
@@ -6711,27 +6712,29 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     <DeniedNowContext.Provider value={deniedNow}>
       {/* Team tab bar — shown when session has team(s) */}
       {teams.length > 0 && !leftHalf && (
-        <div className="team-tab-bar">
-          <button
-            className={`team-tab-bar-item ${activeTeamTab === null ? 'team-tab-bar-item-active' : ''}`}
+        <TabList className="team-tab-bar" aria-label="Lead and teams">
+          <Tab
+            selected={activeTeamTab === null}
+            className="team-tab-bar-item"
             onClick={() => setActiveTeamTab(null)}
           >
             Lead
-          </button>
+          </Tab>
           {teams.map(t => {
             const doneCount = [...t.agentStatuses.values()].filter(s => s === 'done').length;
             return (
-              <button
+              <Tab
                 key={t.teamName}
-                className={`team-tab-bar-item ${activeTeamTab === t.teamName ? 'team-tab-bar-item-active' : ''}`}
+                selected={activeTeamTab === t.teamName}
+                className="team-tab-bar-item"
+                count={`${doneCount}/${t.agentStatuses.size}`}
                 onClick={() => setActiveTeamTab(t.teamName)}
               >
                 {t.teamName}
-                <span className="team-tab-bar-count">{doneCount}/{t.agentStatuses.size}</span>
-              </button>
+              </Tab>
             );
           })}
-        </div>
+        </TabList>
       )}
 
       {/* Team view — shown when a team tab is active */}

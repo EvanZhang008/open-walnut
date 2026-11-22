@@ -11,6 +11,7 @@ import { SettingsDisclosure, SettingsRow } from '../../SettingsSection'
 import { SettingsButton } from '../../inputs/SettingsButton'
 import { CopyButton } from '../../inputs/CopyButton'
 import { SegmentedControl } from '../../inputs/SegmentedControl'
+import { Radio } from '@/components/controls'
 import { saveErrorMessage } from '../../settings-pane-context'
 import { apiGet, apiPost } from '@/api/client'
 import { fmtBytes, type BackupDestinationConfig } from './backup-model'
@@ -295,23 +296,28 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
       )}
       {items && items.length > 0 && (
         <>
-          <div className="settings-row settings-row-indent backup-restore-list" role="radiogroup" aria-label="Backups" data-testid="backup-restore-list">
+          <div className="settings-row settings-row-indent backup-restore-list" role="group" aria-label="Backups" data-testid="backup-restore-list">
             {items.map((it, i) => (
-              <label key={it.id} className="backup-restore-item" data-picked={picked === it.id ? 'true' : undefined}>
-                <input type="radio" name="backup-restore-pick" value={it.id} checked={picked === it.id} onChange={() => setPicked(it.id)} />
-                <span className="backup-restore-when">
-                  {whenOf(it.createdAt, listSeconds)}
-                  {/* The list is newest first; the newest one says so, not only by its place. */}
-                  {(it.isLatest || i === 0) && <span className="settings-tag settings-tag-neutral backup-restore-latest" data-testid="backup-restore-latest">Latest</span>}
-                  {/* Both kinds are kept at one destination: the encrypted ones need their recovery key. */}
-                  {it.encrypted && <span className="settings-tag settings-tag-neutral" data-testid="backup-restore-encrypted">Encrypted</span>}
-                </span>
-                <span className="backup-restore-meta">
-                  {[it.fileCount !== undefined ? `${it.fileCount.toLocaleString()} files` : null,
-                    it.totalBytes !== undefined ? fmtBytes(it.totalBytes) : null,
-                    it.hostname ? `from ${it.hostname}` : null].filter(Boolean).join(' · ')}
-                </span>
-              </label>
+              <Radio
+                key={it.id}
+                name="backup-restore-pick"
+                value={it.id}
+                checked={picked === it.id}
+                onChange={() => setPicked(it.id)}
+                rowClassName="backup-restore-item"
+                label={(
+                  <span className="backup-restore-when">
+                    {whenOf(it.createdAt, listSeconds)}
+                    {/* The list is newest first; the newest one says so, not only by its place. */}
+                    {(it.isLatest || i === 0) && <span className="settings-tag settings-tag-neutral backup-restore-latest" data-testid="backup-restore-latest">Latest</span>}
+                    {/* Both kinds are kept at one destination: the encrypted ones need their recovery key. */}
+                    {it.encrypted && <span className="settings-tag settings-tag-neutral" data-testid="backup-restore-encrypted">Encrypted</span>}
+                  </span>
+                )}
+                detail={[it.fileCount !== undefined ? `${it.fileCount.toLocaleString()} files` : null,
+                  it.totalBytes !== undefined ? fmtBytes(it.totalBytes) : null,
+                  it.hostname ? `from ${it.hostname}` : null].filter(Boolean).join(' · ') || undefined}
+              />
             ))}
           </div>
           <SettingsRow

@@ -539,7 +539,7 @@ test('pinned tier: clicking the project label folds its run — cards and folder
 
   const label = tierLabel(page, f.projA)
   await expect(label).toBeVisible({ timeout: 15_000 })
-  await expect(label.locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(label.locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
   // Rows this project contributes to THIS tier. The home CSS hides the badge, but
   // it is still rendered (toHaveText reads textContent, visible or not).
   await expect(label.locator('.tier-project-label-count')).toHaveText('2')
@@ -558,7 +558,7 @@ test('pinned tier: clicking the project label folds its run — cards and folder
   await expect(tierChip(page, f.groupId)).toBeAttached()
   // The label row itself stays: it is what you click to unfold.
   await expect(label).toBeVisible()
-  await expect(label.locator('.collapse-chevron')).not.toHaveClass(/expanded/)
+  await expect(label.locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'false')
   // The OTHER project's run is untouched.
   await expect(tierCard(page, f.b1.id)).toBeVisible()
   await page.screenshot({ path: '/tmp/project-collapse/tier-project-collapsed.png' })
@@ -603,7 +603,7 @@ test('two collapse sets: the tier and the main list fold independently, and each
   await chooseViewOption(page, 'tasks')
   await expect(listHeader(page, f.projA)).toBeVisible({ timeout: 15_000 })
   await expect(row).toBeVisible()
-  await expect(listHeader(page, f.projA).locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(listHeader(page, f.projA).locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
 
   // Fold the list group itself. The main list UNMOUNTS a folded group's rows (no
   // live SortableContext to protect), hence toHaveCount(0) here and toBeHidden()
@@ -631,7 +631,7 @@ test('two collapse sets: the tier and the main list fold independently, and each
   await expect(tierCard(page, f.a1.id)).toBeHidden()
   await tierLabel(page, f.projA).locator('.tier-project-label-name').click()
   await expect(tierCard(page, f.a1.id)).toBeVisible()
-  await expect(tierLabel(page, f.projA).locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(tierLabel(page, f.projA).locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
 })
 
 test('main list: the header body and the NAME fold the group, the "···" menu opens the project pane', async ({ page }) => {
@@ -648,7 +648,7 @@ test('main list: the header body and the NAME fold the group, the "···" menu 
   const row = listRow(page, project, task.id)
   await expect(header).toBeVisible({ timeout: 15_000 })
   await expect(row).toBeVisible()
-  await expect(header.locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(header.locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
 
   // The NAME folds, like every other pixel of the row (one row, one meaning). It
   // used to open the detail pane; that moved to the "···" / right-click menu,
@@ -657,18 +657,18 @@ test('main list: the header body and the NAME fold the group, the "···" menu 
   const pane = page.locator('.project-detail-pane')
   await header.locator('.todo-group-name-btn').click()
   await expect(row).toHaveCount(0)
-  await expect(header.locator('.collapse-chevron')).not.toHaveClass(/expanded/)
+  await expect(header.locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'false')
   await expect(pane).toHaveCount(0)
   await header.locator('.todo-group-name-btn').click()
   await expect(listRow(page, project, task.id)).toBeVisible()
-  await expect(header.locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(header.locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
 
   // The pane now opens from the row's "···" menu, and opening it folds nothing.
   const menu = await openProjectMenuFromButton(page, header, 'View project details')
   await menu.getByRole('menuitem', { name: 'View project details', exact: true }).click()
   await expect(pane).toBeVisible({ timeout: 10_000 })
   await expect(pane.locator('.todo-detail-project')).toHaveText(project)
-  await expect(header.locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(header.locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
   await expect(listRow(page, project, task.id)).toBeVisible()
   await page.screenshot({ path: '/tmp/project-collapse/main-list-menu-opens-pane.png' })
   await pane.locator('.todo-detail-close').click()
@@ -677,7 +677,7 @@ test('main list: the header body and the NAME fold the group, the "···" menu 
   // The row BODY folds.
   await clickListHeaderBody(page, project)
   await expect(row).toHaveCount(0)
-  await expect(header.locator('.collapse-chevron')).not.toHaveClass(/expanded/)
+  await expect(header.locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'false')
   await page.screenshot({ path: '/tmp/project-collapse/main-list-header-collapsed.png' })
 
   // And unfolds: the header row is the way back.
@@ -707,14 +707,14 @@ test('Inbox (the falsy empty-string project) folds and unfolds on each surface',
   const label = tierLabel(page, '')
   await expect(label).toBeVisible({ timeout: 15_000 })
   await expect(label.locator('.tier-project-label-name')).toHaveText('Inbox')
-  await expect(label.locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(label.locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
   await expect(tierCard(page, inboxTask.id)).toBeVisible()
   // The main-list half is read in the PROJECTS view: both tasks are pinned, and the
   // All view lists a pinned task only in its tier (`dedupePinned`).
   await chooseViewOption(page, 'tasks')
   const header = listHeader(page, 'Inbox')
   await expect(header).toBeVisible({ timeout: 15_000 })
-  await expect(header.locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(header.locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
   await expect(listRow(page, 'Inbox', inboxTask.id)).toBeVisible()
   await chooseViewOption(page, 'all')
 
@@ -722,7 +722,7 @@ test('Inbox (the falsy empty-string project) folds and unfolds on each surface',
   await tierLabel(page, '').locator('.tier-project-label-name').click()
   await expect(tierCard(page, inboxTask.id)).toBeHidden()
   await expect(tierCard(page, inboxTask.id)).toBeAttached()
-  await expect(tierLabel(page, '').locator('.collapse-chevron')).not.toHaveClass(/expanded/)
+  await expect(tierLabel(page, '').locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'false')
   // The named neighbour is untouched, so this really was Inbox's own run.
   await expect(tierCard(page, other.id)).toBeVisible()
 
@@ -733,7 +733,7 @@ test('Inbox (the falsy empty-string project) folds and unfolds on each surface',
   await expect(listRow(page, 'Inbox', inboxTask.id)).toBeVisible()
   await clickListHeaderBody(page, 'Inbox')
   await expect(listRow(page, 'Inbox', inboxTask.id)).toHaveCount(0)
-  await expect(listHeader(page, 'Inbox').locator('.collapse-chevron')).not.toHaveClass(/expanded/)
+  await expect(listHeader(page, 'Inbox').locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'false')
   await expect(listRow(page, neighbour, other.id)).toBeVisible()
   await page.screenshot({ path: '/tmp/project-collapse/inbox-folded-both-surfaces.png' })
 
@@ -745,7 +745,7 @@ test('Inbox (the falsy empty-string project) folds and unfolds on each surface',
   await expect(tierCard(page, inboxTask.id)).toBeHidden()
   await tierLabel(page, '').locator('.tier-project-label-name').click()
   await expect(tierCard(page, inboxTask.id)).toBeVisible()
-  await expect(tierLabel(page, '').locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(tierLabel(page, '').locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
 })
 
 test('a tier with ONE project draws no label, and a fold from the main list cannot hide its cards', async ({ page }) => {
@@ -793,7 +793,7 @@ test('a tier with ONE project draws no label, and a fold from the main list cann
   await expect(listHeader(page, project)).toBeVisible({ timeout: 15_000 })
   await clickListHeaderBody(page, project)
   await expect(listRow(page, project, t1.id)).toHaveCount(0)
-  await expect(listHeader(page, project).locator('.collapse-chevron')).not.toHaveClass(/expanded/)
+  await expect(listHeader(page, project).locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'false')
   await chooseViewOption(page, 'all')
   await expect(zone).toBeVisible({ timeout: 15_000 })
 
@@ -1011,7 +1011,7 @@ test('a renamed project starts folded like any new one, and its old opened name 
 
   await expect(projectBucket(page, after)).toBeVisible({ timeout: 15_000 })
   await expect(listRow(page, after, task.id)).toHaveCount(0)
-  await expect(listHeader(page, after).locator('.collapse-chevron')).not.toHaveClass(/expanded/)
+  await expect(listHeader(page, after).locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'false')
   await expect.poll(openKeys, { timeout: 10_000 }).not.toContain(before)
   expect(await openKeys()).not.toContain(after)
   await page.screenshot({ path: '/tmp/project-collapse/renamed-project-folded.png' })
@@ -1019,7 +1019,7 @@ test('a renamed project starts folded like any new one, and its old opened name 
   // The new name is a first-class key: opening it works and is remembered.
   await clickListHeaderBody(page, after)
   await expect(listRow(page, after, task.id)).toBeVisible()
-  await expect(listHeader(page, after).locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(listHeader(page, after).locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
   expect(await openKeys()).toContain(after)
 })
 
@@ -1034,7 +1034,7 @@ test('pressing the "···" on a project row opens its menu and never folds it (
   await expect(label).toBeVisible({ timeout: 15_000 })
   const tierMenu = await openProjectMenuFromButton(page, label, 'Collapse project')
   // The whole point: the press reached the "···", not the row underneath it.
-  await expect(label.locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(label.locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
   await expect(tierCard(page, f.a1.id)).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(tierMenu).toHaveCount(0)
@@ -1045,7 +1045,7 @@ test('pressing the "···" on a project row opens its menu and never folds it (
   const header = listHeader(page, f.projA)
   await expect(header).toBeVisible({ timeout: 15_000 })
   const listMenu = await openProjectMenuFromButton(page, header, 'Collapse project')
-  await expect(header.locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(header.locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
   await expect(listRow(page, f.projA, f.a1.id)).toBeVisible()
   await page.screenshot({ path: '/tmp/project-collapse/more-button-does-not-fold.png' })
   await page.keyboard.press('Escape')
@@ -1071,7 +1071,7 @@ test('a pointer SLIP on the "···", the chevron and the star still does what t
   const menu = page.locator('[data-testid="project-ctx-menu"]')
   await slipClick(page, label.locator('.navigation-more'))
   await expect(menu.getByRole('menuitem', { name: 'Collapse project', exact: true })).toBeVisible()
-  await expect(label.locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(label.locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
   await expect(tierCard(page, f.a1.id)).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(menu).toHaveCount(0)
@@ -1090,7 +1090,7 @@ test('a pointer SLIP on the "···", the chevron and the star still does what t
   const header = listHeader(page, f.projA)
   await slipClick(page, header.locator('.collapse-chevron'))
   await expect(listRow(page, f.projA, f.a1.id)).toHaveCount(0)
-  await expect(listHeader(page, f.projA).locator('.collapse-chevron')).not.toHaveClass(/expanded/)
+  await expect(listHeader(page, f.projA).locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'false')
   await listHeader(page, f.projA).locator('.collapse-chevron').click()
   await expect(listRow(page, f.projA, f.a1.id)).toBeVisible()
 
@@ -1100,7 +1100,7 @@ test('a pointer SLIP on the "···", the chevron and the star still does what t
   await expect(star).toHaveText('☆')
   await slipClick(page, star)
   await expect(listHeader(page, f.projA).locator('.todo-group-fav-btn')).toHaveText('★', { timeout: 10_000 })
-  await expect(listHeader(page, f.projA).locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(listHeader(page, f.projA).locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
   await expect(listRow(page, f.projA, f.a1.id)).toBeVisible()
   await page.screenshot({ path: '/tmp/project-collapse/slip-still-presses-controls.png' })
   // Favorites are shared server state: put it back.
@@ -1142,8 +1142,8 @@ test('dragging one project label onto another still reorders the runs, and folds
 
   // The drag must not ALSO fold either project: Chromium fires no click after a
   // completed native drag, and this is the test that keeps it that way.
-  await expect(tierLabel(page, f.projA).locator('.collapse-chevron')).toHaveClass(/expanded/)
-  await expect(tierLabel(page, f.projB).locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(tierLabel(page, f.projA).locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
+  await expect(tierLabel(page, f.projB).locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
   await expect(tierCard(page, f.a1.id)).toBeVisible()
   await expect(tierCard(page, f.b1.id)).toBeVisible()
   await page.screenshot({ path: '/tmp/project-collapse/label-drag-reorder.png' })
@@ -1205,8 +1205,8 @@ test('a real dnd-kit reorder of MAIN-LIST project groups folds neither group', a
   }, { timeout: 15_000, message: 'the dragged project group never landed after its target' }).toBe(true)
 
   // Neither group folded, on the row that was dragged or the one it landed on.
-  await expect(listHeader(page, projA).locator('.collapse-chevron')).toHaveClass(/expanded/)
-  await expect(listHeader(page, projB).locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(listHeader(page, projA).locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
+  await expect(listHeader(page, projB).locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
   await expect(listRow(page, projA, a.id)).toBeVisible()
   await expect(listRow(page, projB, b.id)).toBeVisible()
   await page.screenshot({ path: '/tmp/project-collapse/main-list-group-drag-reorder.png' })
@@ -1292,7 +1292,7 @@ test('a card drag while another project run is folded lands where it was dropped
   expect(await taskProjectViaApi(b2.id)).toBe(projB)
   // And the folded run is still folded, with both members still hidden.
   await expect(tierCard(page, a1.id)).toBeHidden()
-  await expect(tierLabel(page, projA).locator('.collapse-chevron')).not.toHaveClass(/expanded/)
+  await expect(tierLabel(page, projA).locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'false')
   await page.screenshot({ path: '/tmp/project-collapse/drag-with-folded-run.png' })
 
   // ── Gesture 2: drag toward the VIEWPORT ORIGIN, which is where the folded run's
@@ -1320,7 +1320,7 @@ test('a card drag while another project run is folded lands where it was dropped
   await expect(landed).toBeVisible()
   await expect(landed).not.toHaveClass(/tier-project-collapsed/)
   // The fold itself survived the drag untouched: still shut, still two members.
-  await expect(tierLabel(page, projA).locator('.collapse-chevron')).not.toHaveClass(/expanded/)
+  await expect(tierLabel(page, projA).locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'false')
   await expect(tierLabel(page, projA).locator('.tier-project-label-count')).toHaveText('2')
   await expect(tierCard(page, a1.id)).toBeHidden()
   await expect(tierCard(page, a2.id)).toBeHidden()
@@ -1390,7 +1390,7 @@ test('while a pinned card drag is live, the project label refuses to fold', asyn
   // the assertion here is the user-visible promise: the run stays open.
   await label.dispatchEvent('click')
   await expect(tierCard(page, f.a1.id)).toBeVisible()
-  await expect(label.locator('.collapse-chevron')).toHaveClass(/expanded/)
+  await expect(label.locator('.collapse-chevron')).toHaveAttribute('aria-expanded', 'true')
   await page.screenshot({ path: '/tmp/project-collapse/inert-label-refuses-fold.png' })
 
   // Release where it started, so the drop is a no-op reorder.

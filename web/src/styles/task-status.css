@@ -48,40 +48,14 @@
 }
 
 /* Two columns: five labelled pills in one line would push the menu past 360px. */
-.task-status-options {
+.task-status-options.wn-chips {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px;
   min-width: 200px;
 }
-
-.task-status-pill {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  padding: 3px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg-secondary);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  line-height: 18px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.task-status-pill:hover { background: var(--bg-hover); }
+.task-status-options > .task-status-pill { width: 100%; }
 .task-status-pill-icon { display: inline-flex; flex: none; }
 .task-status-pill-icon svg { width: 12px; height: 12px; }
-
-.task-status-pill.is-current { font-weight: 600; border-color: transparent; }
-.task-status-pill-todo.is-current { background: var(--bg-tertiary); color: var(--fg); box-shadow: inset 0 0 0 1px var(--border-strong); }
-.task-status-pill-waiting.is-current { background: color-mix(in srgb, var(--phase-waiting) 14%, transparent); color: var(--phase-waiting); }
-.task-status-pill-in_progress.is-current { background: rgba(0, 122, 255, 0.12); color: var(--accent); }
-.task-status-pill-need_action.is-current { background: rgba(255, 59, 48, 0.12); color: var(--error); }
-.task-status-pill-complete.is-current { background: rgba(52, 199, 89, 0.12); color: var(--success); }
 
 /* The detail pane badge becomes a button: same look, plus a caret. */
 button.task-status-badge {
@@ -187,6 +161,3 @@ button.task-status-badge:hover { filter: brightness(0.96); }
 .task-waiting-card-head { color: var(--fg); font-weight: 600; margin-bottom: 4px; }
 .task-waiting-card-line + .task-waiting-card-line { margin-top: 2px; }
 
-/* Task detail selection uses colour alone, without a second checkmark or phase glyph. */
-.task-status-menu-quiet .task-status-pill { font-weight: 400; }
-.task-status-menu-quiet .task-status-pill.is-current { font-weight: 500; }

@@ -5,6 +5,7 @@ import { fetchRewindGuard, type RewindGuardResult } from '@/api/session-turns';
 import { RewindGuardStep } from './RewindGuardStep';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { log } from '@/utils/log';
+import { Checkbox } from '@/components/controls';
 
 /**
  * Confirm dialog for "rewind to this message". Same skin as every other confirm
@@ -213,23 +214,14 @@ export function SessionRewindDialog({
 
         {preview && (
           <div className="rewind-dialog-options">
-            <label className={`rewind-dialog-option${filesAvailable ? '' : ' is-disabled'}`}>
-              <input
-                type="checkbox"
-                checked={restoreFiles}
-                disabled={!filesAvailable || busy}
-                onChange={(e) => setRestoreFiles(e.target.checked)}
-              />
-              <span className="rewind-dialog-option-text">
-                <span>
-                  Also restore files to this point
-                  {filesAvailable && fileStats && <span className="rewind-dialog-stats"> · {fileStats}</span>}
-                </span>
-                {!filesAvailable && filesReason && (
-                  <span className="rewind-dialog-hint">{filesReason}</span>
-                )}
-              </span>
-            </label>
+            <Checkbox
+              rowClassName={`rewind-dialog-option${filesAvailable ? '' : ' is-disabled'}`}
+              checked={restoreFiles}
+              disabled={!filesAvailable || busy}
+              onChange={setRestoreFiles}
+              label={<>Also restore files to this point{filesAvailable && fileStats && <span className="rewind-dialog-stats"> · {fileStats}</span>}</>}
+              detail={!filesAvailable && filesReason ? filesReason : undefined}
+            />
             {filesAvailable && restoreFiles && files.length > 0 && (
               <div className="rewind-dialog-files">
                 {files.slice(0, MAX_FILE_ROWS).map((f) => {
@@ -249,18 +241,14 @@ export function SessionRewindDialog({
                 )}
               </div>
             )}
-            <label className="rewind-dialog-option">
-              <input
-                type="checkbox"
-                checked={intoCopy}
-                disabled={busy}
-                onChange={(e) => setIntoCopy(e.target.checked)}
-              />
-              <span className="rewind-dialog-option-text">
-                <span>Rewind into a copy instead</span>
-                <span className="rewind-dialog-hint">This conversation stays as it is.</span>
-              </span>
-            </label>
+            <Checkbox
+              rowClassName="rewind-dialog-option"
+              checked={intoCopy}
+              disabled={busy}
+              onChange={setIntoCopy}
+              label="Rewind into a copy instead"
+              detail="This conversation stays as it is."
+            />
           </div>
         )}
 

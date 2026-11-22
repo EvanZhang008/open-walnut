@@ -119,17 +119,12 @@ html:root {
   --glass-legible-border: rgba(0, 0, 0, 0.1);
   --glass-legible-highlight: rgba(255, 255, 255, 0.75);
   --glass-legible-shadow: 0 18px 44px rgba(0, 0, 0, 0.16), 0 2px 8px rgba(0, 0, 0, 0.08);
-  /* A control's track on glass (a segmented switch) and its raised thumb. */
-  --glass-legible-track: rgba(118, 118, 128, 0.14);
-  --glass-legible-thumb: rgba(255, 255, 255, 0.92);
 }
 
 html:root[data-theme="dark"] {
   --glass-legible-border: rgba(255, 255, 255, 0.14);
   --glass-legible-highlight: rgba(255, 255, 255, 0.16);
   --glass-legible-shadow: 0 18px 44px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.35);
-  --glass-legible-track: rgba(118, 118, 128, 0.26);
-  --glass-legible-thumb: rgba(99, 99, 102, 0.9);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -137,8 +132,6 @@ html:root[data-theme="dark"] {
     --glass-legible-border: rgba(255, 255, 255, 0.14);
     --glass-legible-highlight: rgba(255, 255, 255, 0.16);
     --glass-legible-shadow: 0 18px 44px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.35);
-    --glass-legible-track: rgba(118, 118, 128, 0.26);
-    --glass-legible-thumb: rgba(99, 99, 102, 0.9);
   }
 }
 

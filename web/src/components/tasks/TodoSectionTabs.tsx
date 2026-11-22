@@ -4,6 +4,7 @@ import { PHONE_SHOW_SECTION_EVENT } from './PhoneTierEmpty';
 import * as ICONS from '../common/Icons';
 import '@/styles/view-menu-choices.css';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
+import { Tab, TabList } from '@/components/controls';
 import type { CustomTierDef } from '@/api/focus';
 import {
   TAB_BAR_HIDDEN_TABS_KEY, TAB_BAR_HIDE_EMPTY_KEY, TASK_SHORTCUTS_KEY,
@@ -77,7 +78,7 @@ export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange,
   const listRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!phone) return;
-    const el = listRef.current?.querySelector<HTMLElement>('.todo-section-tab.is-active');
+    const el = listRef.current?.querySelector<HTMLElement>('.todo-section-tab[aria-selected="true"]');
     el?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
   }, [phone, active]);
   // The empty tier's "Show recent tasks" (PhoneTierEmpty) switches tabs here.
@@ -128,33 +129,33 @@ export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange,
   ];
 
   return (
-    <div className={`todo-section-tabs${roomy ? ' is-roomy' : ''}`} onContextMenu={(event) => openMenu(event, true)}>
-      <div className="todo-section-tabs-list" role="tablist" aria-label="Todo panel sections" ref={listRef}>
+    <div
+      className={`todo-section-tabs${roomy ? ' is-roomy' : ''}`}
+      data-choice-exempt="the bar around the shared TabList: the tab list and its options button"
+      ref={listRef}
+      onContextMenu={(event) => openMenu(event, true)}
+    >
+      <TabList className="todo-section-tabs-list" flush aria-label="Todo panel sections">
         {shown.map(({ id, label, title }) => {
-          const isActive = id === active;
           const count = counts[id];
           return (
-            <button
+            <Tab
               key={id}
-              type="button"
-              role="tab"
-              aria-selected={isActive}
-              className={`todo-section-tab${isActive ? ' is-active' : ''} todo-section-tab-${id.startsWith('ct_') ? 'custom' : id}`}
+              selected={id === active}
+              className={`todo-section-tab todo-section-tab-${id.startsWith('ct_') ? 'custom' : id}`}
               onClick={() => onChange(id)}
               title={title}
+              count={count != null && count > 0 ? <span className="todo-section-tab-count">{count > 99 ? '99+' : count}</span> : undefined}
             >
               {id !== 'all' && <span className="todo-section-tab-icon" aria-hidden="true">{icon(id)}</span>}
-              {/* The label is always in the DOM (screen readers, and it's what makes
-                  the active pill readable); CSS collapses it on inactive tier tabs
-                  once the bar is crowded (`is-roomy` keeps every name). */}
+              {/* The label is always in the DOM (screen readers, and it names the selected
+                  tab); CSS collapses it on unselected tier tabs once the bar is crowded
+                  (`is-roomy` keeps every name). */}
               <span className="todo-section-tab-label">{label}</span>
-              {count != null && count > 0 && (
-                <span className="todo-section-tab-count">{count > 99 ? '99+' : count}</span>
-              )}
-            </button>
+            </Tab>
           );
         })}
-      </div>
+      </TabList>
       <button
         type="button"
         className="todo-section-tabs-menu"

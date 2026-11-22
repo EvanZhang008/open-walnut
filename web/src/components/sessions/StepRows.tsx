@@ -22,7 +22,7 @@ export function FoldedWordsRow({ text, foldKey, children }: { text: string; fold
   const toggleRef = useCutCue<HTMLButtonElement>(`${open}\n${line}`);
   return (
     <div className="tool-run-row tool-run-row--step tool-run-row--words" data-testid="folded-words">
-      <button ref={toggleRef} type="button" className="tool-run-toggle" aria-expanded={open} onClick={toggle}>
+      <button ref={toggleRef} type="button" data-choice-exempt="transcript fold row: the whole row is the button, drawn by the one step-row rule (step-rows.css)" className="tool-run-toggle" aria-expanded={open} onClick={toggle}>
         <StepIcon name="message" className="tool-run-icon" />
         {!open && <span className="tool-run-detail tool-run-detail--words" data-find-skip="">{line}</span>}
         {open && <span className="tool-run-label">Note</span>}

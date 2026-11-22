@@ -303,7 +303,7 @@ test('/tasks reached through the UI matches the homepage hit set', async ({ page
   await expect(tasksChip(page, 'phase:COMPLETE').locator('.usage-chip-dim')).toHaveText('Status')
   const controls = `${await page.locator(`${TASKS_PAGE} .tp-toolbar`).innerText()}\n${await page.locator(`${TASKS_PAGE} .task-filter-chips`).innerText()}`
   expect(controls).not.toMatch(/\b(Done|Doing|Phase)\b/)
-  await expect(page.locator(`${TASKS_PAGE} .tp-toolbar .tp-chip`, { hasText: 'Complete' })).toHaveClass(/\bon\b/)
+  await expect(page.locator(`${TASKS_PAGE} .tp-toolbar .tp-chip`, { hasText: 'Complete' })).toHaveAttribute('aria-pressed', 'true')
   await expect(tasksChip(page, 'time')).toBeVisible()
   await page.screenshot({ path: `${SHOTS}/04-tasks-page-parity.png`, fullPage: true })
 

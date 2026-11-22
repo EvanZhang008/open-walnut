@@ -14,6 +14,7 @@
 
 import { useIntegrations } from '@/hooks/useIntegrations';
 import { sourceExplanation } from './source-explanation';
+import { Chip, ChipGroup } from '@/components/controls';
 
 export function ProjectSourcePicker({ value, onChange }: {
   /** 'local' or a plugin id. */
@@ -29,25 +30,24 @@ export function ProjectSourcePicker({ value, onChange }: {
   const chosen = integrations.find((i) => i.id === value);
   return (
     <div className="proj-src-picker-wrap">
-      <div className="proj-src-picker" role="radiogroup" aria-label="Project sync provider">
+      <ChipGroup className="proj-src-picker" role="radiogroup" aria-label="Project sync provider">
         {options.map((o) => (
-          <button
+          <Chip
             key={o.id}
-            type="button"
             role="radio"
-            aria-checked={value === o.id}
-            className={`proj-src-chip${value === o.id ? ' on' : ''}`}
+            pressed={value === o.id}
+            className="proj-src-chip"
             // Keep focus on the name input — a click here must not blur-cancel
             // the create flow (both hosts cancel on input blur).
             onPointerDown={(e) => e.preventDefault()}
             onClick={(e) => { e.stopPropagation(); onChange(o.id); }}
             title={sourceExplanation(o.id, integrations.find((i) => i.id === o.id))}
+            leading={o.badgeColor && <span className="proj-src-chip-dot" style={{ background: o.badgeColor }} />}
           >
-            {o.badgeColor && <span className="proj-src-chip-dot" style={{ background: o.badgeColor }} />}
             {o.name}
-          </button>
+          </Chip>
         ))}
-      </div>
+      </ChipGroup>
       {/* Said in words, not only on hover: choosing a service other people read is the step
           that put private tasks on a work tracker (2026-11-01). */}
       <div

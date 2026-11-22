@@ -332,22 +332,5 @@ html .thread-toast.wn-notice.wn-notice.is-bare { padding: 8px 10px 8px 14px; }
 .thread-turn-head { display: flex; align-items: center; gap: 2px; min-width: 0; margin: 10px 0 2px -5px; }
 .thread-turn-head > .thread-turn-label { margin: 0; }
 .thread-turn-head[data-folded="true"] { margin-bottom: 8px; }
-.thread-turn-fold {
-  flex: none;
-  display: inline-grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-.thread-turn-fold:hover { background: var(--bg-tertiary); color: var(--fg); }
-.thread-turn-fold .thread-icon { fill: currentColor; transform: rotate(90deg); transition: transform 120ms ease; }
-.thread-turn-head[data-folded="true"] .thread-turn-fold .thread-icon { transform: none; }
-.thread-turn-fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.thread-turn-fold:focus:not(:focus-visible) { outline: none; }
-@media (prefers-reduced-motion: reduce) { .thread-turn-fold .thread-icon { transition: none; } }
+/* The fold is the shared icon-only disclosure (controls/Disclosure.tsx); here only its place. */
+.thread-turn-fold { flex: none; }

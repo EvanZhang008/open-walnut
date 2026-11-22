@@ -221,7 +221,6 @@
 .topic-add-list { margin-top: 12px; }
 .topic-person { display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px dashed var(--border); border-radius: var(--radius-sm); }
 .topic-person .app-modal-input { margin-top: 0; }
-.topic-person-bot { display: inline-flex; align-items: center; gap: 6px; font-size: var(--font-size-md); }
 .topic-person-actions { display: flex; justify-content: flex-end; gap: 6px; }
 
 /* A thread card that is a topic's */

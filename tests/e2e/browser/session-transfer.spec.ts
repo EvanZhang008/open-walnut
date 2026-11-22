@@ -18,7 +18,7 @@
  *   PW_WEBKIT=1 npx playwright test tests/e2e/browser/session-transfer.spec.ts --project webkit
  */
 import { mkdirSync } from 'node:fs'
-import { expect, test, type Page, type Route } from '@playwright/test'
+import { expect, test, type Locator, type Page, type Route } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { openKebabGroup } from './kebab-group-helpers'
 import { openMoreMenu } from './engine-settings-popover-helpers'
@@ -32,6 +32,8 @@ const NEW_TASK_TITLE = 'Tagged ticket run fixture task'
 const NEW_SESSION_ID = 'pw-tags-session'
 const SHOTS = '/tmp/session-transfer'
 const BLOCKED = 'Codex runs on this machine only for now'
+/** A Transfer choice's whole row: its radio carries the test id, its words sit in the label around it. */
+const choiceRow = (dialog: Locator, testId: string) => dialog.locator('label', { has: dialog.getByTestId(testId) })
 
 const OPTIONS = {
   taskId: TASK_ID,
@@ -143,27 +145,27 @@ test('transfer from the session menu: blocked pair, nothing-changes guard, submi
   const dialog = await openTransferFromPanel(page)
   await expect(dialog).toContainText('Now: Claude Code on This Mac')
   // Pre-selected: the current engine and host.
-  await expect(dialog.getByTestId('xfer-engine-claude')).toHaveAttribute('aria-checked', 'true')
-  await expect(dialog.getByTestId('xfer-host-__local__')).toHaveAttribute('aria-checked', 'true')
-  await expect(dialog.getByTestId('xfer-host-devbox')).toContainText('Dev box')
-  await expect(dialog.getByTestId('xfer-host-__local__')).toContainText('Laptop')
+  await expect(dialog.getByTestId('xfer-engine-claude')).toBeChecked()
+  await expect(dialog.getByTestId('xfer-host-__local__')).toBeChecked()
+  await expect(choiceRow(dialog, 'xfer-host-devbox')).toContainText('Dev box')
+  await expect(choiceRow(dialog, 'xfer-host-__local__')).toContainText('Laptop')
   // An internal alias shows the host's name, never the alias.
-  await expect(dialog.getByTestId('xfer-host-__cloudbox__')).toContainText('Cloud')
-  await expect(dialog.getByTestId('xfer-host-__cloudbox__')).not.toContainText('__cloudbox__')
+  await expect(choiceRow(dialog, 'xfer-host-__cloudbox__')).toContainText('Cloud')
+  await expect(choiceRow(dialog, 'xfer-host-__cloudbox__')).not.toContainText('__cloudbox__')
 
   // Nothing would change: same engine, host and directory.
   const submit = dialog.getByTestId('xfer-submit')
   await expect(submit).toBeDisabled()
   await expect(dialog.getByTestId('xfer-hint')).toHaveText(/Nothing would change/)
-  await expect(dialog.getByTestId('xfer-dir-same')).toHaveAttribute('aria-checked', 'true')
+  await expect(dialog.getByTestId('xfer-dir-same')).toBeChecked()
   await dialog.screenshot({ path: `${SHOTS}/1-nothing-changes.png` })
 
   // Another host: Codex cannot go there, and says why; the directory follows the host.
   await dialog.getByTestId('xfer-host-devbox').click()
   const codex = dialog.getByTestId('xfer-engine-codex')
   await expect(codex).toBeDisabled()
-  await expect(codex).toContainText(BLOCKED)
-  await expect(dialog.getByTestId('xfer-dir-auto')).toHaveAttribute('aria-checked', 'true')
+  await expect(choiceRow(dialog, 'xfer-engine-codex')).toContainText(BLOCKED)
+  await expect(dialog.getByTestId('xfer-dir-auto')).toBeChecked()
   await expect(submit).toBeEnabled()
   await expect(dialog.getByTestId('xfer-hint')).toHaveCount(0)
 
@@ -204,8 +206,8 @@ test('the new session starts on the source model, effort and permissions, and th
   await expect(pill).toContainText('Opus')
   await expect(pill).toContainText('High')
   await expect(pill).toContainText('Now')
-  await expect(dialog.getByTestId('xfer-perm-accept')).toHaveAttribute('aria-checked', 'true')
-  await expect(dialog.getByTestId('xfer-perm-accept')).toContainText('Now')
+  await expect(dialog.getByTestId('xfer-perm-accept')).toBeChecked()
+  await expect(choiceRow(dialog, 'xfer-perm-accept')).toContainText('Now')
   await dialog.screenshot({ path: `${SHOTS}/6-launch-defaults.png` })
 
   // Escape closes the picker, not the dialog.
@@ -228,7 +230,7 @@ test('the new session starts on the source model, effort and permissions, and th
   await expect(pill).not.toContainText('Now')
   await expect(pill).toContainText(otherName.split(' ')[0])
   await dialog.getByTestId('xfer-perm-plan').click()
-  await expect(dialog.getByTestId('xfer-perm-plan')).toHaveAttribute('aria-checked', 'true')
+  await expect(dialog.getByTestId('xfer-perm-plan')).toBeChecked()
   await dialog.screenshot({ path: `${SHOTS}/7-launch-picked.png` })
 
   // A model change alone in the same place is a transfer.
@@ -243,7 +245,7 @@ test('the new session starts on the source model, effort and permissions, and th
   await dialog.getByTestId('xfer-engine-codex').click()
   await expect(pill).toContainText('Auto')
   await expect(pill).not.toContainText('Low')
-  await expect(dialog.getByTestId('xfer-perm-plan')).toHaveAttribute('aria-checked', 'true')
+  await expect(dialog.getByTestId('xfer-perm-plan')).toBeChecked()
   // Back on Claude Code, the source's model and effort come back.
   await dialog.getByTestId('xfer-engine-claude').click()
   await expect(pill).toContainText('High')
@@ -273,8 +275,8 @@ test('a refused transfer shows the server error inline and keeps the choices', a
   await dialog.getByTestId('xfer-submit').click()
   await expect(dialog.getByTestId('xfer-error')).toHaveText(err)
   await expect(dialog).toBeVisible()
-  await expect(dialog.getByTestId('xfer-engine-codex')).toHaveAttribute('aria-checked', 'true')
-  await expect(dialog.getByTestId('xfer-mode-brief')).toHaveAttribute('aria-checked', 'true')
+  await expect(dialog.getByTestId('xfer-engine-codex')).toBeChecked()
+  await expect(dialog.getByTestId('xfer-mode-brief')).toBeChecked()
   await expect(dialog.getByTestId('xfer-submit')).toBeEnabled()
   await dialog.screenshot({ path: `${SHOTS}/4-error.png` })
   // Changing a choice clears the stale error.
@@ -297,8 +299,8 @@ test('the task kebab has Transfer for a task with a session, and the dialog read
   const dialog = page.getByTestId('transfer-dialog')
   await expect(dialog).toBeVisible()
   // The real route: Claude Code on This Mac is the source and both are listed.
-  await expect(dialog.getByTestId('xfer-engine-claude')).toHaveAttribute('aria-checked', 'true', { timeout: 20_000 })
-  await expect(dialog.getByTestId('xfer-host-__local__')).toContainText('This Mac')
+  await expect(dialog.getByTestId('xfer-engine-claude')).toBeChecked({ timeout: 20_000 })
+  await expect(choiceRow(dialog, 'xfer-host-__local__')).toContainText('This Mac')
   await expect(dialog.getByTestId('xfer-submit')).toBeDisabled()
   await page.keyboard.press('Escape')
   await expect(dialog).toBeHidden()

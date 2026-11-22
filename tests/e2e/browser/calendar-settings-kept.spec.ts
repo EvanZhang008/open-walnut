@@ -78,11 +78,11 @@ async function clickEmptySlot(page: Page): Promise<void> {
 }
 
 const viewTab = (page: Page, name: 'Day' | 'Week' | 'Month') =>
-  page.locator('.cal-view-switch').getByRole('tab', { name, exact: true })
+  page.locator('.cal-view-switch').getByRole('radio', { name, exact: true })
 
 /** What every kept setting reads as on this page. */
 async function expectChanged(page: Page, where: string): Promise<void> {
-  await expect(viewTab(page, 'Day'), `${where}: view`).toHaveAttribute('aria-selected', 'true')
+  await expect(viewTab(page, 'Day'), `${where}: view`).toHaveAttribute('aria-checked', 'true')
   await expect(page.locator('.cal-page'), `${where}: view`).toHaveAttribute('data-view', 'day')
   await expect(page.getByTestId('cal-rail'), `${where}: task list hidden`).toHaveCount(0)
   await expect(page.locator('.cal-zoom-value'), `${where}: zoom`).toHaveText('125%')
@@ -90,7 +90,7 @@ async function expectChanged(page: Page, where: string): Promise<void> {
   // The new-item kind: a click on an empty slot opens on Task.
   await clickEmptySlot(page)
   const tabs = page.locator('.cal-create-popover .cal-create-tabs')
-  await expect(tabs.getByRole('tab', { name: 'Task', exact: true }), `${where}: new-item kind`).toHaveAttribute('aria-selected', 'true')
+  await expect(tabs.getByRole('radio', { name: 'Task', exact: true }), `${where}: new-item kind`).toHaveAttribute('aria-checked', 'true')
   await page.keyboard.press('Escape')
   await expect(page.locator('.cal-create-popover')).toHaveCount(0)
 }
@@ -101,7 +101,7 @@ test('every calendar setting holds after a reload and on another device', async 
   await openCalendar(a)
 
   // Defaults, nothing stored: Week, task list shown, 100%, 7 AM to 1 AM, Event.
-  await expect(viewTab(a, 'Week')).toHaveAttribute('aria-selected', 'true')
+  await expect(viewTab(a, 'Week')).toHaveAttribute('aria-checked', 'true')
   await expect(a.getByTestId('cal-rail')).toBeVisible()
   await expect(a.locator('.cal-zoom-value')).toHaveText('100%')
   await expect(a.locator('.cal-hours-toggle')).toHaveAttribute('aria-pressed', 'false')

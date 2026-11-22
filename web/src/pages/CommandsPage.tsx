@@ -4,6 +4,7 @@ import { useCommands } from '@/hooks/useCommands';
 import { CommandCard } from '@/components/commands/CommandCard';
 import { CommandForm } from '@/components/commands/CommandForm';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { Chip, ChipGroup } from '@/components/controls';
 import { useAlert } from '@/hooks/useConfirm';
 import type { CommandDef } from '@/api/commands';
 
@@ -84,17 +85,18 @@ export function CommandsPage() {
         </div>
       )}
 
-      <div className="cmd-filter-tabs">
+      <ChipGroup className="cmd-filter-chips" role="group" aria-label="Show">
         {(['all', 'builtin', 'user'] as const).map((tab) => (
-          <button
+          <Chip
             key={tab}
-            className={`cmd-filter-tab${filter === tab ? ' active' : ''}`}
+            pressed={filter === tab}
+            count={counts[tab]}
             onClick={() => setFilter(tab)}
           >
-            {tab.charAt(0).toUpperCase() + tab.slice(1)} ({counts[tab]})
-          </button>
+            {tab.charAt(0).toUpperCase() + tab.slice(1)}
+          </Chip>
         ))}
-      </div>
+      </ChipGroup>
 
       {filtered.length === 0 ? (
         <div className="empty-state">

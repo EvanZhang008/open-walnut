@@ -87,7 +87,7 @@ function drawn(page: Page, tier: string): Promise<string[]> {
 }
 
 const pressedChoice = async (page: Page, row: 'sort' | 'group'): Promise<string | null> => {
-  const on = displayMenu(page).locator(`[data-view-option="${row}"] [data-choice][aria-pressed="true"]`)
+  const on = displayMenu(page).locator(`[data-view-option="${row}"] [data-choice][aria-checked="true"]`)
   return (await on.count()) ? on.first().getAttribute('data-choice') : null
 }
 

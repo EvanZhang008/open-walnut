@@ -228,20 +228,8 @@ button.plugin-update-chip--current:hover {
   color: var(--priority-immediate);
 }
 
-/* Details / Hide details: one width for both labels (the cell trick above), so the control
-   the user just clicked stays put and never wraps onto its own line (N3-6). */
-.plugin-update-feedback-toggle {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--accent-text);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
+/* Details / Hide details (the shared DisclosureButton): one width for both labels (the cell
+   trick above), so the control the user just clicked stays put and never wraps (N3-6). */
 .plugin-update-feedback-toggle .plugin-update-label {
   justify-items: start;
   text-align: left;

@@ -319,7 +319,7 @@ test('status button stays clickable while ghost text is visible', async ({ page 
   const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
   if (await localTab.isVisible()) {
     await localTab.click()
-    await expect(localTab).toHaveClass(/active/)
+    await expect(localTab).toHaveAttribute('aria-pressed', 'true')
   }
 
   // 'wal' has sibling completions (walnut/wallets) so the ghost overlay renders,

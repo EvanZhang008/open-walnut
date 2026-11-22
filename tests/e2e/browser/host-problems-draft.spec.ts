@@ -70,7 +70,7 @@ async function openPicker(page: Page): Promise<Locator> {
 /** In the open picker: the host's tab, then a folder the fixture tree has, confirmed with Shift+Enter. */
 async function pickRemoteFolder(page: Page, panel: Locator, host: string, dir: string): Promise<void> {
   await hostTab(page, host).click()
-  await expect(hostTab(page, host)).toHaveClass(/active/)
+  await expect(hostTab(page, host)).toHaveAttribute('aria-pressed', 'true')
   const input = picker(page).locator('.sps-search-input')
   await input.fill(dir)
   await expect(picker(page).locator('.sps-path-item').first()).toBeVisible({ timeout: 20_000 })

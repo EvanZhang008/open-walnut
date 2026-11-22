@@ -21,6 +21,7 @@ import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { QuickTaskComposer } from '@/components/tasks/QuickTaskComposer';
 import type { CreateTaskInput } from '@/api/tasks';
 import { usePageView } from '@/utils/view-memory';
+import { SegmentedControl, type SegmentedOption } from '@/components/controls';
 import { clockRange, minutesOfDay } from '@/utils/calendar-date';
 import { EventCreateForm, type CreateEventInput, type EventPreview } from './EventCreateForm';
 import { NEW_TASK_TINT, useNewEventTint } from './item-tint';
@@ -30,6 +31,7 @@ export type CreateKind = 'event' | 'task';
 /** A block shorter than this shows its title and time on one line. */
 export const ONE_LINE_BELOW_PX = 30;
 export const isCreateKind = (v: unknown): v is CreateKind => v === 'event' || v === 'task';
+const KIND_OPTIONS: ReadonlyArray<SegmentedOption<CreateKind>> = [{ value: 'event', label: 'Event' }, { value: 'task', label: 'Task' }];
 
 /** Where the grid draws the block being created while the popover is open. */
 export interface CreatePlaceholder {
@@ -185,18 +187,14 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
         onMouseDown={(e) => e.stopPropagation()}
       >
         {onCreateEvent && (
-          <div
+          <SegmentedControl
             className="cal-create-tabs"
-            role="tablist"
             aria-label="New item kind"
-          >
-            <button role="tab" aria-selected={shown === 'event'} className={shown === 'event' ? 'active' : ''} onClick={() => pick('event')}>
-              Event
-            </button>
-            <button role="tab" aria-selected={shown === 'task'} className={shown === 'task' ? 'active' : ''} onClick={() => pick('task')}>
-              Task
-            </button>
-          </div>
+            fill
+            value={shown}
+            onChange={pick}
+            options={KIND_OPTIONS}
+          />
         )}
         {/* The event form stays mounted while Task shows, so a switch there and
             back keeps the times and calendar the user set. */}

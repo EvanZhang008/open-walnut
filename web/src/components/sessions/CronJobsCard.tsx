@@ -4,6 +4,7 @@ import { useActiveSessionCron } from '@/hooks/useSessionStatus';
 import { changeSessionSupervision, type SupervisionSnapshot } from '@/stores/session-supervision-store';
 import { cronPromptPreview, formatCronClock, formatCronDistance } from '@/utils/cron-job-text';
 import { onPageVisible } from '@/utils/page-visibility';
+import { DisclosureButton, ToggleSwitch } from '@/components/controls';
 import '@/styles/session-supervision.css';
 
 const RECOVERY_STATE: Record<string, string> = {
@@ -62,15 +63,15 @@ function JobRow({ job, now }: { job: SessionCronJob; now: number }) {
       <div className="session-cron-job-facts">{facts.join(' · ')}</div>
       {job.prompt ? (
         <div className="session-cron-prompt" data-open={promptOpen}>
-          <button
-            type="button"
+          <DisclosureButton
+            block
             className="session-cron-prompt-toggle"
-            aria-expanded={promptOpen}
+            expanded={promptOpen}
             onClick={() => setPromptOpen((open) => !open)}
+            trailing={!promptOpen && <span className="session-cron-prompt-preview">{preview}</span>}
           >
-            <span className="session-cron-prompt-label">Prompt</span>
-            {!promptOpen && <span className="session-cron-prompt-preview">{preview}</span>}
-          </button>
+            Prompt
+          </DisclosureButton>
           {promptOpen && (
             <>
               <pre className="session-cron-prompt-text">{job.prompt}</pre>
@@ -140,9 +141,9 @@ export function CronJobsCard({ sid, snapshot, open, onClose, archived }: {
       {supervision && !archived && !recoveryStale && (
         <div className="session-cron-recovery">
           <label className="session-supervision-toggle" title="Only changes automatic recovery after a host restart; it never touches the cron job or the running session">
-            <input type="checkbox" role="switch" aria-label="Automatic cron recovery" checked={recoveryEnabled}
+            <ToggleSwitch size="sm" aria-label="Automatic cron recovery" checked={recoveryEnabled}
               disabled={writing || stopping || stopPending}
-              onChange={(event) => { void changeSessionSupervision(sid, event.target.checked); }} />
+              onChange={(next) => { void changeSessionSupervision(sid, next); }} />
             Auto-recover after host restart
           </label>
           <span className="session-cron-recovery-state" title={recoveryTitle || undefined}>

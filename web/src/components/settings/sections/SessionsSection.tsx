@@ -4,6 +4,7 @@ import type { Config, SessionMode, SessionOutputMode } from '@open-walnut/core';
 import { SettingsGroup, SettingsRow, SettingsSection } from '../SettingsSection';
 import { NumberInput } from '../inputs/NumberInput';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
+import { ControlGroup, masterProps } from '@/components/controls';
 import { SegmentedControl } from '../inputs/SegmentedControl';
 import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
 import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
@@ -194,9 +195,12 @@ export function SessionsSection({ config, onSave }: Props) {
           htmlFor="idle-compaction"
           error={idleCompact.error}
           control={
-            <ToggleSwitch id="idle-compaction" checked={idleCompact.value} busy={idleCompact.busy} onChange={idleCompact.set} />
+            <ToggleSwitch id="idle-compaction" checked={idleCompact.value} busy={idleCompact.busy} onChange={idleCompact.set}
+              {...masterProps('idle-compaction-group')} />
           }
         />
+        <ControlGroup id="idle-compaction-group" off={!idleCompact.value} className="settings-rows-contents"
+          reason="Turn on Compact idle sessions to set when it runs.">
         <SettingsRow
           indent
           disabled={!idleCompact.value}
@@ -213,6 +217,7 @@ export function SessionsSection({ config, onSave }: Props) {
             />
           )}
         />
+        </ControlGroup>
       </SettingsGroup>
 
       <SettingsGroup heading="Permissions">
@@ -222,9 +227,12 @@ export function SessionsSection({ config, onSave }: Props) {
           htmlFor="permission-prompt"
           error={permission.error}
           control={
-            <ToggleSwitch id="permission-prompt" checked={permission.value} busy={permission.busy} onChange={permission.set} />
+            <ToggleSwitch id="permission-prompt" checked={permission.value} busy={permission.busy} onChange={permission.set}
+              {...masterProps('permission-prompt-group')} />
           }
         />
+        <ControlGroup id="permission-prompt-group" off={!permission.value} className="settings-rows-contents"
+          reason="Turn on Intercept permission prompts to change this.">
         <SettingsRow
           indent
           disabled={!permission.value}
@@ -242,6 +250,7 @@ export function SessionsSection({ config, onSave }: Props) {
             />
           }
         />
+        </ControlGroup>
       </SettingsGroup>
 
       {/* Turn-error auto-retry is a DAEMON POLICY, so it lives in Hooks with the

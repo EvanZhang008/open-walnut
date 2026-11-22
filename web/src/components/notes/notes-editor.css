@@ -735,12 +735,12 @@ mark.notes-search-mark {
   min-height: 0;
 }
 
+/* The open notes' tab strip (the shared TabList) and the same bar with no tabs open. */
 .notes-tab-strip {
   flex: 0 0 auto;
   display: flex;
   align-items: stretch;
-  gap: 2px;
-  padding: 4px 6px 0;
+  padding: 0 8px;
   overflow-x: auto;
   overflow-y: hidden;
   border-bottom: 1px solid var(--border);
@@ -780,31 +780,9 @@ mark.notes-search-mark {
   display: none;
 }
 
+/* A tab is the shared Tab: placement only. */
 .notes-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
   max-width: 200px;
-  padding: 6px 8px 6px 12px;
-  border: 1px solid transparent;
-  border-bottom: none;
-  border-top-left-radius: var(--radius-sm);
-  border-top-right-radius: var(--radius-sm);
-  font-size: var(--font-size-md);
-  color: var(--fg-secondary);
-  cursor: pointer;
-  user-select: none;
-  white-space: nowrap;
-  flex: 0 0 auto;
-}
-.notes-tab:hover { background: var(--bg-hover); color: var(--fg); }
-.notes-tab.active {
-  background: var(--bg);
-  color: var(--fg);
-  border-color: var(--border);
-  /* Visually bridge the strip's bottom border so the active tab "owns" the pane. */
-  margin-bottom: -1px;
-  padding-bottom: 7px;
 }
 
 .notes-tab-label {
@@ -828,7 +806,7 @@ mark.notes-search-mark {
   flex: 0 0 auto;
 }
 .notes-tab:hover .notes-tab-close,
-.notes-tab.active .notes-tab-close { opacity: 1; }
+.notes-tab[aria-selected='true'] .notes-tab-close { opacity: 1; }
 .notes-tab-close:hover { background: var(--bg-tertiary); color: var(--fg); }
 
 .notes-tab-new {

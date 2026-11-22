@@ -255,7 +255,7 @@ test.describe('the picker against the default host fixture', () => {
     ])
     await loadHome(page)
     await openPicker(page)
-    await expect(picker(page).locator('.sps-host-tab.active')).toHaveText('All')
+    await expect(picker(page).locator('.sps-host-tab[aria-pressed="true"]')).toHaveText('All')
 
     const rowOn = (label: string): Locator => list(page).locator('.sps-path-item', { has: page.locator('.sps-path-host-tag', { hasText: label }) })
     const buildRow = rowOn('Build box')
@@ -372,13 +372,13 @@ test.describe('twelve hosts', () => {
 
     // Pick a folder on Box 09 (a later line), then reopen: its tab is selected and in view.
     await hostTab(page, 'box09').click()
-    await expect(hostTab(page, 'box09')).toHaveClass(/active/)
+    await expect(hostTab(page, 'box09')).toHaveAttribute('aria-pressed', 'true')
     await input(page).fill('~/work/')
     await expect(list(page).locator('.sps-path-item.sps-live', { hasText: 'api' })).toBeVisible({ timeout: 15_000 })
     await input(page).press('Shift+Enter')
     await expect(picker(page)).toHaveCount(0)
     await draftCwdPill(panel).click()
-    await expect(hostTab(page, 'box09')).toHaveClass(/active/)
+    await expect(hostTab(page, 'box09')).toHaveAttribute('aria-pressed', 'true')
     expect(await allInside()).toBe(true)
     await strip.screenshot({ path: `${SHOTS}/c84-selected-in-view-${test.info().project.name}.png` })
   })

@@ -15,6 +15,7 @@ import {
   type RepoSelection,
 } from '@/components/sessions/sessionCommitModel';
 import { log } from '@/utils/log';
+import { Checkbox, DisclosureButton } from '@/components/controls';
 import { BoxMic, MicField, type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 
@@ -71,7 +72,7 @@ function HunkView({ hunk, checked, onToggle }: { hunk: CommitHunk; checked: bool
   return (
     <div className={`scd-hunk scd-hunk-${hunk.owner}`} data-testid="scd-hunk" data-owner={hunk.owner} data-checked={checked ? '1' : '0'}>
       <label className="scd-hunk-head">
-        <input type="checkbox" checked={checked} onChange={onToggle} aria-label={`Include the change at line ${hunk.newStart + 1}`} />
+        <Checkbox checked={checked} onChange={() => onToggle()} aria-label={`Include the change at line ${hunk.newStart + 1}`} />
         <span className="scd-hunk-pos">Line {hunk.newStart + 1}</span>
         <span className="scd-stat"><span className="scd-add">+{hunk.newLines.length}</span> <span className="scd-del">-{hunk.oldLines.length}</span></span>
         <OwnerBadge label={hunkOwnerLabel(hunk.owner)} owner={hunk.owner} />
@@ -94,16 +95,14 @@ function FileRow({ file, sel, onSel }: { file: CommitPlanFile; sel: RepoSelectio
   const splittable = isSplittable(file);
   const [open, setOpen] = useState(file.owner === 'mixed');
   const state = fileCheckState(file, sel);
-  const cb = useRef<HTMLInputElement>(null);
-  useEffect(() => { if (cb.current) cb.current.indeterminate = state === 'some'; }, [state]);
   const chosen = sel.get(file.path);
   const note = fileKindNote(file) ?? (file.session ? reasonNote(file.reason) : null);
   return (
     <div className="scd-file" data-testid="scd-file" data-path={file.path} data-owner={file.owner} data-state={state}>
       <div className="scd-file-head">
-        <input ref={cb} type="checkbox" checked={state === 'all'} onChange={() => onSel(toggleFile(file, sel))} aria-label={`Include ${file.path}`} />
+        <Checkbox checked={state === 'all'} indeterminate={state === 'some'} onChange={() => onSel(toggleFile(file, sel))} aria-label={`Include ${file.path}`} />
         {splittable
-          ? <button type="button" className="scd-disclose" aria-expanded={open} aria-label={open ? 'Hide changes' : 'Show changes'} onClick={() => setOpen((o) => !o)}>{open ? '▾' : '▸'}</button>
+          ? <DisclosureButton className="scd-disclose" expanded={open} aria-label={open ? 'Hide changes' : 'Show changes'} onClick={() => setOpen((o) => !o)} />
           : <span className="scd-disclose-spacer" />}
         <span className={`scd-status-letter scd-st-${file.status}`}>{file.status === 'added' ? 'A' : file.status === 'deleted' ? 'D' : 'M'}</span>
         <span className="scd-path">{file.path}</span>

@@ -199,8 +199,8 @@ test('default hours, zoom bounds, persistence, and both surfaces share the setti
   await expect(full.locator('.cal-grid-range-end')).toHaveText('12 AM');
   await full.getByRole('button', { name: 'Show 7 AM to 1 AM' }).click();
   await expectFittedGrid(full, 1);
-  await full.getByRole('tab', { name: 'Week', exact: true }).click();
-  await full.getByRole('tab', { name: 'Day', exact: true }).click();
+  await full.getByRole('radio', { name: 'Week', exact: true }).click();
+  await full.getByRole('radio', { name: 'Day', exact: true }).click();
   await expectTopMinute(full, 7 * 60);
   await page.setViewportSize({ width: 1280, height: 640 });
   await expectFittedGrid(full, 1);
@@ -215,7 +215,7 @@ test('zooming out from a late hour preserves the pre-layout minute up to the scr
   await openAgenda(page);
   await page.click('a[href="/calendar"]');
   const full = page.locator('.cal-page');
-  await full.getByRole('tab', { name: 'Day', exact: true }).click();
+  await full.getByRole('radio', { name: 'Day', exact: true }).click();
   await page.setViewportSize({ width: 1280, height: 640 });
   for (let i = 0; i < 3; i++) await full.getByRole('button', { name: 'Zoom in calendar' }).click();
   await expectFittedGrid(full, 2);
@@ -232,7 +232,7 @@ test('a horizontal move keeps the real start of an early event', async ({ page }
     await openAgenda(page);
     await page.click('a[href="/calendar"]');
     const full = page.locator('.cal-page');
-    await full.getByRole('tab', { name: 'Week', exact: true }).click();
+    await full.getByRole('radio', { name: 'Week', exact: true }).click();
     // The extended tail can also draw this event in the previous day's column.
     const chip = full.locator(`.cal-day-col[data-day="${localDay()}"] [data-item-id="event:${one.id}"]`);
     await chip.scrollIntoViewIfNeeded();
@@ -430,7 +430,7 @@ test('zoomed creation, moving, and resizing preserve wall-clock times', async ({
     const p = await point(panel, 14);
     await page.mouse.click(p.x, p.y);
     await expect(page.locator('.cal-create-popover')).toBeVisible();
-    await page.locator('.cal-create-popover').getByRole('tab', { name: 'Event', exact: true }).click();
+    await page.locator('.cal-create-popover').getByRole('radio', { name: 'Event', exact: true }).click();
     await expect(page.locator('.cal-create-popover').locator('input[type="time"]').first()).toHaveValue('14:00');
     await page.keyboard.press('Escape');
   } finally { await fetch(`${API}/api/calendar/events/${encodeURIComponent(one.id)}`, { method: 'DELETE' }); }

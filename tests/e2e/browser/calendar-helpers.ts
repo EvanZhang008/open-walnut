@@ -86,9 +86,9 @@ export async function calendarEmptySlotPoint(
  */
 export async function pickCalendarTaskSide(page: Page): Promise<Locator> {
   const popover = page.locator('.cal-create-popover')
-  const task = popover.getByRole('tab', { name: 'Task', exact: true })
+  const task = popover.getByRole('radio', { name: 'Task', exact: true })
   await task.click()
-  await expect(task).toHaveAttribute('aria-selected', 'true')
+  await expect(task).toHaveAttribute('aria-checked', 'true')
   const composer = popover.locator('.quick-task-composer')
   await expect(composer).toBeVisible()
   return composer

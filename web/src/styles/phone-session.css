@@ -639,7 +639,7 @@
     .sfe-arrow, .session-diff-base-help, .session-diff-ai-toggle, .session-diff-ws-toggle,
     .chat-earlier-label, .chat-earlier-divider span
   ),
-  html body .task-kebab-menu :is(.task-kebab-date-caret, .task-kebab-project-caret, .task-kebab-status-caret) {
+  html body .task-kebab-menu :is(.task-kebab-project-caret, .task-kebab-status-caret) {
     font-size: var(--font-size-sm);
   }
 
@@ -685,9 +685,8 @@
 /* A session's terminals on a phone: one at a time, a tab per terminal. Every
    control a finger hits is 44 px; the tab strip scrolls sideways. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  .session-panel.is-phone-layer .session-terminal-tabs { padding: 0 6px; gap: 4px; }
-  .session-panel.is-phone-layer .session-terminal-tab { margin-bottom: 0; border-radius: var(--radius-sm) var(--radius-sm) 0 0; }
-  .session-panel.is-phone-layer .session-terminal-tab-btn { min-height: 44px; padding: 0 4px 0 12px; font-size: var(--font-size-md); }
+  .session-panel.is-phone-layer .session-terminal-tabs { padding: 0 6px; }
+  .session-panel.is-phone-layer .session-terminal-tab-btn { min-height: 44px; }
   .session-panel.is-phone-layer .session-terminal-tab-close { width: 44px; height: 44px; margin-right: 0; }
   .session-panel.is-phone-layer .session-terminal-selection-pop { padding: 2px; }
   .session-panel.is-phone-layer .session-terminal-panel .btn { min-height: 44px; }

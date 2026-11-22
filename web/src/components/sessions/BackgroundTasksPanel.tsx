@@ -37,6 +37,7 @@ import '@/styles/light-subagent.css';
 import { agentModelLabel } from './SessionMessage';
 import { TranscriptBody } from './WorkflowTranscriptModal';
 import { ICON_CLOSE } from '../common/Icons';
+import { Tab, TabList } from '@/components/controls';
 import { AgentText } from '../common/AgentText';
 import type { SessionHistoryMessage } from '@/types/session';
 import { commandOutput, commandView, findToolInBlocks, findToolInHistory, type ToolSource } from '@/stream/command-view';
@@ -403,26 +404,25 @@ export function BackgroundTasksPanel({
         <div className="bg-tasks-body">
           <div className="bg-tasks-side">
             {present.length > 1 && (
-              <div className="bg-tasks-tabs" role="tablist" aria-label="Kind of background task">
+              <TabList className="bg-tasks-tabs" aria-label="Kind of background task">
                 {present.map(k => {
                   const live = groups[k].filter(r => RUNNING.has(r.status)).length;
                   return (
-                    <button
+                    <Tab
                       key={k}
-                      role="tab"
-                      aria-selected={k === tab}
+                      selected={k === tab}
                       data-kind={k}
-                      className={`bg-tasks-tab${k === tab ? ' bg-tasks-tab--active' : ''}`}
+                      className="bg-tasks-tab"
                       onClick={() => setChosenTab(k)}
                       title={live > 0 ? `${plural(groups[k].length, KIND_NOUN[k])}, ${live} running` : plural(groups[k].length, KIND_NOUN[k])}
+                      count={groups[k].length}
                     >
                       {live > 0 && <span className="bg-tasks-tab-live" aria-hidden="true"><span className="task-group-streaming-dot" /></span>}
                       <span className="bg-tasks-tab-label">{KIND_LABEL[k]}</span>
-                      <span className="bg-tasks-tab-count">{groups[k].length}</span>
-                    </button>
+                    </Tab>
                   );
                 })}
-              </div>
+              </TabList>
             )}
             <div className="bg-tasks-list" role={present.length > 1 ? 'tabpanel' : undefined} data-kind={tab}>
               {rows.length === 0 && <div className="wf-modal-loading">No background tasks yet</div>}

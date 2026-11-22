@@ -104,7 +104,7 @@ test.describe('Calendar view', () => {
     await openCalendar(page)
     await expect(page).toHaveURL(/\/calendar/)
     // Default view = week; toolbar shows segmented control with Week active
-    await expect(page.locator('.cal-view-btn.active')).toHaveText('Week')
+    await expect(page.locator('.cal-view-btn[aria-checked="true"]')).toHaveText('Week')
     await expect(page.locator('.cal-grid[data-days="7"]')).toBeVisible()
   })
 
@@ -347,7 +347,7 @@ test.describe('Calendar view', () => {
 
     const popover = page.locator('.cal-create-popover')
     await expect(popover).toBeVisible()
-    await popover.locator('.cal-create-tabs button:has-text("Event")').click()
+    await popover.locator('.cal-create-tabs [role="radio"]:has-text("Event")').click()
 
     const title = `CalEvtCreate ${Date.now()}`
     const input = popover.locator('.cal-event-form-title')
@@ -701,7 +701,7 @@ test.describe('Calendar view', () => {
     await page.mouse.click(point.x, point.y)
     const tabs = page.locator('.cal-create-popover .cal-create-tabs')
     await expect(tabs).toBeVisible({ timeout: 2000 })
-    await tabs.locator('button:has-text("Event")').click()
+    await tabs.locator('[role="radio"]:has-text("Event")').click()
     // Popover must survive the tab click and show the event form.
     await expect(page.locator('.cal-create-popover input.cal-event-form-title')).toBeVisible()
     await page.keyboard.press('Escape')
@@ -727,7 +727,7 @@ test.describe('Calendar view', () => {
     const point = await columnPoint(page, localDay(0), 21)
     await page.mouse.click(point.x, point.y)
     const popover = page.locator('.cal-create-popover')
-    await popover.locator('.cal-create-tabs button:has-text("Event")').click()
+    await popover.locator('.cal-create-tabs [role="radio"]:has-text("Event")').click()
     await expect(popover.locator('input.cal-event-form-title')).toBeVisible()
 
     // Delayed unwritable sources land → auto-fallback to the Task tab.
@@ -783,7 +783,7 @@ test.describe('Calendar view', () => {
 
     const popover = page.locator('.cal-create-popover')
     await expect(popover).toBeVisible()
-    await popover.locator('.cal-create-tabs button:has-text("Event")').click()
+    await popover.locator('.cal-create-tabs [role="radio"]:has-text("Event")').click()
 
     const title = `CalEvtEndTime ${Date.now()}`
     await popover.locator('.cal-event-form-title').fill(title)
@@ -862,7 +862,7 @@ test.describe('Calendar view', () => {
     await page.mouse.click(point.x, point.y)
     const popover = page.locator('.cal-create-popover')
     await expect(popover).toBeVisible()
-    await popover.locator('.cal-create-tabs button:has-text("Event")').click()
+    await popover.locator('.cal-create-tabs [role="radio"]:has-text("Event")').click()
     await expect(popover.locator('input[aria-label="Start time"]')).toHaveValue('23:00')
     await expect(popover.locator('input[aria-label="End time"]')).toHaveValue('23:59')
     await expect(popover.locator('.cal-event-form-error')).toHaveCount(0)

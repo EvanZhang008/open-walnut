@@ -11,7 +11,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Routine } from '@/api/routines';
-import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch';
+import { DisclosureButton, ToggleSwitch } from '@/components/controls';
 import { AuditRow } from './RoutineAuditRow';
 import {
   auditHistory, clockHostTitle, describeAgo, describeCheck, describeClockHost, describeClockWait,
@@ -161,7 +161,7 @@ export function RoutineRow({
           </span>
           <Chevron open={open} />
         </button>
-        <span className="routine-row-switch" title={switchWord}>
+        <span className="routine-row-toggle-slot" title={switchWord}>
           <ToggleSwitch
             checked={routine.enabled}
             onChange={(on) => onToggle(routine.id, on)}
@@ -277,19 +277,17 @@ export function RoutineRow({
 
           {prompt && (
             <div className="routine-fold">
-              <button type="button" className="routine-fold-toggle" aria-expanded={showPrompt} onClick={() => setShowPrompt((v) => !v)}>
-                <span>{routine.check ? 'What it sends when it fires' : 'What it sends when it runs'}</span>
-                <Chevron open={showPrompt} />
-              </button>
+              <DisclosureButton className="routine-fold-toggle" expanded={showPrompt} onClick={() => setShowPrompt((v) => !v)}>
+                {routine.check ? 'What it sends when it fires' : 'What it sends when it runs'}
+              </DisclosureButton>
               {showPrompt && <pre className="trigger-audit-injected">{prompt}</pre>}
             </div>
           )}
           {runs.length > 0 ? (
             <div className="routine-fold">
-              <button type="button" className="routine-fold-toggle" aria-expanded={showHistory} onClick={() => setShowHistory((v) => !v)} data-testid="routine-history-toggle">
-                <span>History ({runs.length} {runs.length === 1 ? 'run' : 'runs'})</span>
-                <Chevron open={showHistory} />
-              </button>
+              <DisclosureButton className="routine-fold-toggle" expanded={showHistory} onClick={() => setShowHistory((v) => !v)} data-testid="routine-history-toggle">
+                History ({runs.length} {runs.length === 1 ? 'run' : 'runs'})
+              </DisclosureButton>
               {showHistory && (
                 <ul className="routine-history-list trigger-audit-list" data-testid="routine-history-list">
                   {runs.map((e) => (
@@ -302,10 +300,9 @@ export function RoutineRow({
             </div>
           ) : history.length > 0 && (
             <div className="routine-fold">
-              <button type="button" className="routine-fold-toggle" aria-expanded={showHistory} onClick={() => setShowHistory((v) => !v)} data-testid="routine-history-toggle">
-                <span>History ({history.length} recorded {history.length === 1 ? (routine.check ? 'check' : 'run') : (routine.check ? 'checks' : 'runs')})</span>
-                <Chevron open={showHistory} />
-              </button>
+              <DisclosureButton className="routine-fold-toggle" expanded={showHistory} onClick={() => setShowHistory((v) => !v)} data-testid="routine-history-toggle">
+                History ({history.length} recorded {history.length === 1 ? (routine.check ? 'check' : 'run') : (routine.check ? 'checks' : 'runs')})
+              </DisclosureButton>
               {showHistory && (
                 <ul className="trigger-audit-list">
                   {collapseRepeats(history, (e) => `${e.outcome}|${e.delivery?.status ?? ''}|${describeAuditEntry(e)}`).map(({ item: entry, count }, i) => (

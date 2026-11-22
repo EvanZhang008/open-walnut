@@ -4,6 +4,7 @@ import { useAgents } from '@/hooks/useAgents';
 import { AgentCard } from '@/components/agents/AgentCard';
 import { AgentForm } from '@/components/agents/AgentForm';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { Chip, ChipGroup } from '@/components/controls';
 import type { AgentDefinition, CreateAgentInput, UpdateAgentInput } from '@/api/agents';
 
 type FilterTab = 'all' | 'builtin' | 'config';
@@ -105,17 +106,18 @@ export function AgentsPage() {
         </div>
       )}
 
-      <div className="agent-filter-tabs">
+      <ChipGroup className="agent-filter-chips" role="group" aria-label="Show">
         {(['all', 'builtin', 'config'] as const).map((tab) => (
-          <button
+          <Chip
             key={tab}
-            className={`agent-filter-tab${filter === tab ? ' active' : ''}`}
+            pressed={filter === tab}
+            count={counts[tab]}
             onClick={() => setFilter(tab)}
           >
-            {tab.charAt(0).toUpperCase() + tab.slice(1)} ({counts[tab]})
-          </button>
+            {tab.charAt(0).toUpperCase() + tab.slice(1)}
+          </Chip>
         ))}
-      </div>
+      </ChipGroup>
 
       {filtered.length === 0 ? (
         <div className="empty-state">

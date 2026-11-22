@@ -28,6 +28,8 @@
 .xfer-opts { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 6px; }
 .xfer-opts.is-wide { grid-template-columns: 1fr; }
 
+/* The Model pill (TransferLaunchRows.tsx): a button that opens the model picker; the other
+   choices are radios (TransferChoice.tsx). */
 .xfer-opt {
   display: flex; flex-direction: column; gap: 2px; align-items: stretch; text-align: left;
   padding: 6px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border);
@@ -39,22 +41,16 @@
 .xfer-opt:disabled { cursor: not-allowed; opacity: 0.55; }
 .xfer-opt:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 1px; }
 .xfer-opt-line { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.xfer-opt-dot {
-  flex: none; width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--fg-muted);
-  box-sizing: border-box;
-}
-.xfer-opt.is-checked .xfer-opt-dot { border-color: var(--accent); background: radial-gradient(var(--accent) 45%, transparent 50%); }
 .xfer-opt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .xfer-opt-tag, .xfer-now {
   flex: none; font-size: var(--font-size-xs); color: var(--fg-muted); border: 1px solid var(--border);
   border-radius: 999px; padding: 0 6px; line-height: 16px;
 }
 .xfer-now { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
-.xfer-opt-sub { font-size: var(--font-size-sm); color: var(--fg-muted); padding-left: 19px; overflow-wrap: anywhere; }
+.xfer-opt-sub { font-size: 11.5px; color: var(--fg-muted); overflow-wrap: anywhere; }
 .xfer-mono { font-family: var(--font-mono); font-size: var(--font-size-xs); }
 .xfer-path { margin-top: 0; font-family: var(--font-mono); font-size: var(--font-size-md); }
 
-.xfer-check { display: flex; align-items: center; gap: 8px; font-size: var(--font-size-md); cursor: pointer; }
 .xfer-message { margin-top: 0; resize: vertical; min-height: 52px; font: inherit; font-size: var(--font-size-md); }
 
 .xfer-error {
@@ -72,17 +68,10 @@
 .xfer-link-item .task-link { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
 
 /* Earlier sessions (one-session-per-task history). */
-.tsh-toggle {
-  display: inline-flex; align-items: center; gap: 6px; border: none; background: none; padding: 2px 0;
-  font: inherit; font-size: var(--font-size-sm); color: var(--fg-muted); cursor: pointer;
-}
-.tsh-toggle:hover { color: var(--fg); }
-.tsh-arrow { display: inline-block; width: 10px; }
 .tsh-list { margin-top: 4px; }
 .tdp-transfer { margin-bottom: 2px; }
 .tdv2-transfer { margin: -4px 0 12px; }
 /* The Model row: one pill that opens the model picker (TransferLaunchRows.tsx). */
-.xfer-model-pill .xfer-opt-sub { padding-left: 0; }
 .xfer-model-caret { margin-left: auto; color: var(--fg-muted); font-size: var(--font-size-xs); }
 
 /* "Move to another host" (MoveHostMenuItems): each host with how busy it is. */

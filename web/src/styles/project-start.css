@@ -194,19 +194,7 @@
   padding: 8px 8px 6px;
   background: var(--bg-elevated);
 }
-.wip-tabs { display: flex; gap: 2px; padding: 2px; border-radius: var(--radius-sm); background: var(--bg-secondary); }
-.wip-tab {
-  flex: 1;
-  height: 24px;
-  border: none;
-  border-radius: 6px;
-  background: none;
-  color: var(--fg-muted);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-}
-.wip-tab.is-on { background: var(--bg-elevated); color: var(--fg); font-weight: 600; box-shadow: var(--shadow-sm); }
+.wip-tabs { flex: none; }
 .wip-list { display: flex; flex-direction: column; padding: 0 4px; }
 .wip-row { position: relative; display: flex; align-items: center; border-radius: var(--radius-sm); }
 .wip-row:hover, .wip-row:focus-within { background: var(--bg-hover); }
@@ -291,7 +279,6 @@
 
 /* Project settings: Code source. */
 .project-code-source { display: flex; flex-direction: column; gap: 8px; }
-.pcs-choices { display: flex; flex-wrap: wrap; gap: 4px; }
 .pcs-choice {
   padding: 3px 10px;
   border: 1px solid var(--border);
@@ -302,7 +289,6 @@
   font-size: var(--font-size-sm);
   cursor: pointer;
 }
-.pcs-choice.is-picked { border-color: var(--accent); background: var(--accent-subtle); color: var(--accent); }
 .pcs-field { display: flex; flex-direction: column; gap: 4px; font-size: var(--font-size-sm); }
 .pcs-field-label { color: var(--fg-muted); }
 .pcs-input {

@@ -29,7 +29,7 @@ import { HostProfileDisclosure, profileSystemLine, useHostProfile } from './Host
 import { HostThisPart } from './HostThisPart';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { keepPress } from '../inputs/press-keeps-target';
-import { ChevronGlyph } from '../settings-glyphs';
+import { DisclosureChevron } from '@/components/controls';
 import { readDisclosureOpen, sessionStore, writeDisclosureOpen } from '../SettingsSection';
 import { hostKindLabel } from '@/components/transfer/transfer-model';
 
@@ -59,13 +59,13 @@ function Part({ id, title, summary, defaultOpen, titleTestId, children }: { id: 
       <button
         type="button"
         tabIndex={0}
-        className="rh-details-part-toggle"
+        className="rh-details-part-head"
         aria-expanded={open}
         data-testid={`rh-details-part-${id}`}
         onClick={() => { setOpen(!open); writeDisclosureOpen(sessionStore(), key, !open); }}
         onPointerDown={(e) => keepPress(e.currentTarget, e)}
       >
-        <ChevronGlyph size={10} className="settings-disclosure-chevron" />
+        <DisclosureChevron open={open} className="settings-disclosure-chevron" />
         <span className="rh-details-part-title" data-testid={titleTestId}>{title}</span>
         {summary && !open && <span className="rh-details-part-summary">{summary}</span>}
       </button>

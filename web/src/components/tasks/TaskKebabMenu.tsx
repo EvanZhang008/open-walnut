@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom';
 import type { Task, TaskPriority } from '@open-walnut/core';
 import { shownTier, type FocusTier } from '@/api/focus';
 import * as ICONS from '../common/Icons';
+import { DisclosureChevron } from '@/components/controls';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { useTaskUndo } from '@/undo/TaskUndoContext';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
@@ -126,6 +127,7 @@ export function KebabDateRow({ label, date, display, onChange, extra, testId, cl
         type="button"
         className="task-kebab-item task-kebab-date-toggle"
         aria-expanded={open}
+        data-choice-exempt="a menu row that opens its sub-rows in place, with the shared DisclosureChevron"
         title={display ? `${label}: ${display}` : undefined}
         onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
       >
@@ -133,7 +135,7 @@ export function KebabDateRow({ label, date, display, onChange, extra, testId, cl
         <span className="task-kebab-date-label">
           {label}{display ? <>: <b>{display}</b></> : ''}
         </span>
-        <span className={`task-kebab-date-caret${open ? ' open' : ''}`}>{ICONS.CHEVRON_GLYPH}</span>
+        <DisclosureChevron open={open} />
       </button>
       {open && <DatePicker date={date} onChange={onChange} inline withTime={withTime} />}
       {open && extra}

@@ -93,6 +93,7 @@ import {
   applySideThreadTitle,
 } from '@/stores/side-threads';
 import { SELECTION_BAR_LAYERS } from './selection-bar-layers';
+import { Chip, DisclosureButton } from '@/components/controls';
 
 interface SideQuestionDrawerProps {
   /** The PARENT Claude session id. Drawer is disabled until the session has one. */
@@ -722,16 +723,15 @@ function SideQuestionDrawerBody({
               const pending = t.id.startsWith(PENDING_THREAD_PREFIX);
               return (
                 <span key={t.id} className="side-thread-chip-wrap">
-                  <button
-                    className={`side-thread-chip${isActive ? ' is-active' : ''}`}
+                  <Chip
+                    className="side-thread-chip"
+                    pressed={isActive}
                     onClick={() => setActiveSideThread(sessionId, t.id)}
                     title={sideThreadLabel(t)}
-                  >
-                    {pending
+                    leading={pending
                       ? <span className="side-question-spinner side-thread-chip-spinner" />
                       : <ThreadStatusDot threadSessionId={t.threadSessionId} />}
-                    <span className="side-thread-chip-title">{sideThreadLabel(t)}</span>
-                    {t.promotedTaskId && (
+                    trailing={t.promotedTaskId && (
                       <span
                         className="side-thread-chip-badge"
                         title={t.promotedTaskId === PENDING_PROMOTE ? 'Creating task…' : 'Task created'}
@@ -739,7 +739,9 @@ function SideQuestionDrawerBody({
                         {'✓task'}
                       </span>
                     )}
-                  </button>
+                  >
+                    <span className="side-thread-chip-title">{sideThreadLabel(t)}</span>
+                  </Chip>
                   {/* Not rendered for a pending row: there is no server-side thread to
                       file yet, and the id would be the optimistic one. */}
                   {!pending && (
@@ -755,24 +757,25 @@ function SideQuestionDrawerBody({
                 </span>
               );
             })}
-            <button
-              className={`side-thread-chip side-thread-chip-new${state.activeThreadId === null ? ' is-active' : ''}`}
+            <Chip
+              className="side-thread-chip side-thread-chip-new"
+              pressed={state.activeThreadId === null}
               onClick={startNewThread}
               title="Start a new side thread"
             >
               {'+ New'}
-            </button>
+            </Chip>
             {archivedThreads.length > 0 && (
-              <button
+              <DisclosureButton
                 ref={archivedToggleRef}
-                className={`side-thread-chip side-thread-chip-archived-toggle${archivedOpen ? ' is-active' : ''}`}
+                className="side-thread-chip-archived-toggle"
                 onClick={() => setArchivedOpen((v) => !v)}
                 title="Side threads you filed away — still readable, and restorable"
-                aria-expanded={archivedOpen}
+                expanded={archivedOpen}
                 aria-controls={`${instanceId}-archived-shelf`}
               >
-                {`${archivedOpen ? '▾' : '▸'} Archived (${archivedThreads.length})`}
-              </button>
+                {`Archived (${archivedThreads.length})`}
+              </DisclosureButton>
             )}
           </div>
 
@@ -783,14 +786,15 @@ function SideQuestionDrawerBody({
                   key={t.id}
                   className={`side-thread-chip-wrap${t.id === state.activeThreadId ? ' is-active' : ''}`}
                 >
-                  <button
-                    className={`side-thread-chip is-archived${t.id === state.activeThreadId ? ' is-active' : ''}`}
+                  <Chip
+                    className="side-thread-chip is-archived"
+                    pressed={t.id === state.activeThreadId}
                     onClick={() => setActiveSideThread(sessionId, t.id)}
                     title={`${sideThreadLabel(t)} — open (read-only until restored)`}
+                    trailing={t.promotedTaskId && <span className="side-thread-chip-badge">{'✓task'}</span>}
                   >
                     <span className="side-thread-chip-title">{sideThreadLabel(t)}</span>
-                    {t.promotedTaskId && <span className="side-thread-chip-badge">{'✓task'}</span>}
-                  </button>
+                  </Chip>
                   <button
                     className="side-thread-chip-archive"
                     onClick={() => void setSideThreadArchivedOptimistic(sessionId, t.id, false)}

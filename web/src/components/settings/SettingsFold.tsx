@@ -11,7 +11,7 @@
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useInRouterContext } from 'react-router-dom'
 import { hashTargetId, readDisclosureOpen, RouterHashWatcher, sessionStore, writeDisclosureOpen } from './SettingsSection'
-import { ChevronGlyph } from './settings-glyphs'
+import { DisclosureChevron } from '@/components/controls'
 import { landOnRow } from '@/utils/scroll-land'
 import '@/styles/settings-fold.css'
 
@@ -67,7 +67,7 @@ export function SettingsFold({ id, label, summary, children, 'data-testid': test
       {inRouter && <RouterHashWatcher onHash={openForHash} />}
       <button
         type="button"
-        className="settings-fold-toggle"
+        className="settings-fold-head"
         aria-expanded={open}
         aria-controls={bodyId}
         data-testid={testId ? `${testId}-toggle` : undefined}
@@ -77,7 +77,7 @@ export function SettingsFold({ id, label, summary, children, 'data-testid': test
           if (!open) requestAnimationFrame(() => { if (foldRef.current) landOnRow(foldRef.current, { focus: false }) })
         }}
       >
-        <ChevronGlyph size={12} className="settings-disclosure-chevron" />
+        <DisclosureChevron open={open} className="settings-disclosure-chevron" />
         <span className="settings-fold-copy">
           <span className="settings-fold-label">{label}</span>
           <span className="settings-fold-summary">

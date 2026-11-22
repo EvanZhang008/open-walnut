@@ -97,7 +97,7 @@ export function ProcessFoldRow({ foldId, phrase, lead, children, foldKey, failed
   const label = lead && phrase === EMPTY_FOLD_PHRASE ? '' : phrase;
   return (
     <div className="tool-run-row process-fold" data-testid={testId} data-fold-id={foldId} data-open={open ? 'true' : 'false'} {...(running ? { 'data-running': 'true' } : {})} {...(findMembers ? { 'data-find-members': findMembers } : {})}>
-      <button type="button" className="tool-run-toggle" aria-expanded={open} onClick={toggle}>
+      <button type="button" data-choice-exempt="transcript fold row: the whole row is the button, drawn by the one step-row rule (step-rows.css)" className="tool-run-toggle" aria-expanded={open} onClick={toggle}>
         <span className={`tool-run-chevron process-fold-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
         {lead && <span className="tool-run-lead" data-testid="turn-fold-lead">{lead}{label && <span className="tool-run-sep" aria-hidden="true"> · </span>}</span>}
         {label && <span className="tool-run-label" title={lead ? `${lead} · ${label}` : label}>{label}</span>}

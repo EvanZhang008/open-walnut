@@ -3723,41 +3723,10 @@ select {
   font-family: inherit;
 }
 
-/* ── Team Tab Bar (top-level: Lead | Team1 | Team2) ── */
+/* ── Team Tab Bar (top-level: Lead | Team1 | Team2): the shared Tabs; only its inset here. ── */
 .team-tab-bar {
-  display: flex;
-  gap: 0;
-  padding: 0 8px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-secondary);
   flex-shrink: 0;
-}
-.team-tab-bar-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
-  font-size: var(--font-size-md);
-  font-weight: 500;
-  color: var(--fg-muted);
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: color 0.15s, border-color 0.15s;
-}
-.team-tab-bar-item:hover { color: var(--fg); }
-.team-tab-bar-item-active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
-}
-.team-tab-bar-count {
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  background: var(--bg-tertiary);
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
+  padding: 0 8px;
 }
 
 /* ── Team Card (Claude Code Teams) ── */
@@ -3794,36 +3763,7 @@ select {
   padding: 2px 8px;
   border-radius: var(--radius-sm);
 }
-.team-card-tabs {
-  display: flex;
-  gap: 0;
-  overflow-x: auto;
-  padding: 0 4px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
-}
-.team-tab {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 7px 12px;
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: color 0.15s, border-color 0.15s;
-}
-.team-tab:hover {
-  color: var(--fg);
-}
-.team-tab-active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
-  font-weight: 500;
-}
+.team-card-tabs { padding: 0 8px; }
 .team-tab-name {
   max-width: 120px;
   overflow: hidden;
@@ -3856,25 +3796,9 @@ select {
   border-bottom: 1px solid var(--border);
   font-size: var(--font-size-md);
 }
-/* Clickable title region — toggles collapse. Looks like plain text, acts as a button. */
-.wf-card-collapse {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: none;
-  border: none;
-  padding: 0;
-  margin: 0;
-  cursor: pointer;
-  color: inherit;
-  font: inherit;
-}
-.wf-card-caret {
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  width: 10px;
-  flex: none;
-}
+/* The title region is the disclosure (controls/Disclosure.tsx) that collapses the card. */
+.wf-card-collapse { min-width: 0; }
+.wf-card-collapse .wn-disclosure-label { display: inline-flex; align-items: center; gap: 8px; }
 .wf-card-title { font-weight: 600; color: var(--fg); white-space: nowrap; }
 /* Collapsed: header has no bottom border (it's the whole card). */
 .wf-card-collapsed .wf-card-header { border-bottom: none; }
@@ -4437,51 +4361,11 @@ select {
   border-right: 1px solid var(--border);
   background: var(--bg-tertiary);
 }
-/* Agents | Commands | Other: a segmented control, each segment with its count and a
-   live dot while something in it runs. */
+/* Agents | Commands | Other: tabs over the list, each with its count and a live dot while
+   something in it runs. */
 .bg-tasks-tabs {
   flex: none;
-  display: flex;
-  gap: 2px;
-  margin: 10px 10px 2px;
-  padding: 3px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--fg) 7%, transparent);
-}
-.bg-tasks-tab {
-  display: inline-flex;
-  flex: 1 1 0;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-width: 0;
-  padding: 6px 8px;
-  color: var(--fg-muted);
-  background: transparent;
-  border: 0;
-  border-radius: var(--radius-sm);
-  font: inherit;
-  font-size: var(--font-size-md);
-  font-weight: 550;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: color 0.15s, background 0.15s;
-}
-.bg-tasks-tab:hover { color: var(--fg); }
-.bg-tasks-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.bg-tasks-tab--active {
-  color: var(--fg);
-  background: var(--bg);
-  box-shadow: var(--shadow-sm), 0 0 0 1px var(--border);
-}
-.bg-tasks-tab-count {
-  padding: 0 6px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--fg) 8%, transparent);
-  color: var(--fg-muted);
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
+  margin: 6px 10px 2px;
 }
 .bg-tasks-tab-live { display: inline-flex; }
 .bg-tasks-tab-live .task-group-streaming-dot { margin: 0; }
@@ -7078,17 +6962,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   background: rgba(0, 0, 0, 0.02);
 }
 
-.session-plan-card-icon {
-  font-size: 9px;
-  flex-shrink: 0;
-  opacity: 0.5;
-}
-
-.session-plan-card-title {
-  font-weight: 500;
-  letter-spacing: 0.01em;
-}
-
 .session-plan-card-body {
   padding: 4px 20px 16px;
   max-height: 500px;
@@ -7570,37 +7443,15 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 .chat-plus-menu-item svg { color: var(--fg-muted); flex-shrink: 0; }
 .chat-send-menu-item.danger { color: var(--error); }
 
-/* "+" menu on/off row (role=menuitemcheckbox). The switch is a plain span, not a
-   native checkbox: a native control inside a styled menu looks foreign AND its
-   macOS popup swallows pointerup (see web/src/AGENTS.md → Menus & overlays).
-   Fixed box in both states — a row that changes size when toggled would resize
-   the open menu, which is the inline-growth bug those rules forbid. */
-.chat-plus-menu-switch {
-  position: relative;
-  flex: 0 0 auto;
-  width: 26px;
-  height: 16px;
-  border-radius: var(--radius-sm);
-  background: var(--border);
-  transition: background 0.14s;
-}
-.chat-plus-menu-switch::after {
-  content: '';
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
-  transition: transform 0.14s;
-}
-.chat-plus-menu-toggle.is-on .chat-plus-menu-switch { background: var(--accent); }
-.chat-plus-menu-toggle.is-on .chat-plus-menu-switch::after { transform: translateX(10px); }
+/* "+" menu on/off row (role=menuitemcheckbox). The switch is ToggleSwitch's
+   drawn-only `decorative` span (size sm), not a native checkbox: a native control
+   inside a styled menu looks foreign AND its macOS popup swallows pointerup (see
+   web/src/AGENTS.md → Menus & overlays). Fixed box in both states — a row that
+   changes size when toggled would resize the open menu, which is the inline-growth
+   bug those rules forbid. */
 /* Off reads as secondary text; on reads as normal. The label must not shift, so
    only the colour changes, never the weight. */
-.chat-plus-menu-toggle:not(.is-on) { color: var(--fg-muted); }
+.chat-plus-menu-toggle[aria-checked='false'] { color: var(--fg-muted); }
 /* One line, always: the longest label WIDENS the menu (it is max-content wide up
    to the 260px cap in composer-controls.css) instead of wrapping to a second line
    and changing its row's height. Rows too, not only toggles: "Snooze until
@@ -7738,28 +7589,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 .mention-into { flex-shrink: 0; color: var(--fg-muted); font-size: var(--font-size-sm); }
 .mention-size { flex-shrink: 0; color: var(--fg-muted); font-size: var(--font-size-xs); }
 /* Source tabs (All · Notes · Slack · Mail): ⇥ / ⇧⇥ or ←→ at the query's edges. */
-.mention-tabs {
-  display: flex;
-  gap: 2px;
-  padding: 4px 6px 0;
-  border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.mention-tab {
-  flex-shrink: 0;
-  border: none;
-  background: none;
-  padding: 5px 10px 6px;
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  color: var(--fg-muted);
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  cursor: pointer;
-}
-.mention-tab:hover { color: var(--fg); }
-.mention-tab.on { color: var(--fg); border-bottom-color: var(--accent); }
+.mention-tabs { padding: 0 10px; }
 .mention-pick-btn {
   flex-shrink: 0;
   display: none;
@@ -9718,18 +9548,7 @@ body.walnut-dragging {
   to   { opacity: 1; }
 }
 
-/* --- Plan Card Header (restructured: toggle button + expand button as siblings) --- */
-.session-plan-card-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: inherit;
-  font: inherit;
-  padding: 0;
-}
+/* --- Plan Card Header: the disclosure (controls/Disclosure.tsx) + the expand button as siblings --- */
 
 /* --- Plan Card Expand Button --- */
 .plan-card-expand-btn {
@@ -10445,22 +10264,6 @@ body.walnut-dragging {
 .vd-sel:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* Sort + Group: segmented controls fill their grid cell */
-.vd-seg {
-  display: flex; width: 100%;
-  border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
-}
-.vd-seg-btn {
-  flex: 1; min-width: 0;
-  padding: 4px 6px; font-size: var(--font-size-xs); font-weight: 500;
-  background: var(--bg-secondary); color: var(--fg-secondary);
-  border: none; border-right: 1px solid var(--border);
-  cursor: pointer; transition: all 0.1s;
-  white-space: nowrap;
-}
-.vd-seg-btn:last-child { border-right: none; }
-.vd-seg-btn:hover { background: var(--hover-bg, rgba(0,0,0,0.04)); }
-.vd-seg-btn.vd-active { background: var(--accent); color: var(--on-accent); }
-
 /* Footer: Clear all (flex row pinned under the body) */
 .vd-footer {
   display: flex; align-items: center; justify-content: space-between;
@@ -10543,13 +10346,14 @@ body.walnut-dragging {
 /* ── Section tab strip ──
    One row under the toolbar; the picked section owns the whole panel below it.
    Replaces the old "7 stacked regions each a few rows tall" layout (the panel got
-   unusable once any tier had real volume). Icon-only at rest + a text pill on the
-   active tab is what makes 7 tabs fit a ~420px panel without scrolling. */
+   unusable once any tier had real volume). The tabs are the shared TabList (controls);
+   icon-only at rest + the name on the selected tab is what makes 7 tabs fit a ~420px
+   panel without scrolling. */
 .todo-section-tabs {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 5px 8px;
+  padding: 0 8px;
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
   /* No horizontal scrollbar: the tabs shrink (icon+count only) before they'd overflow. */
@@ -10596,62 +10400,20 @@ body.walnut-dragging {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 2px 4px;
+  gap: 4px;
   min-height: 26px;
-  padding: 2px 10px;
+  padding: 4px 10px;
   flex-shrink: 0;
   border-top: 1px solid var(--border);
   background: transparent;
   font-size: var(--font-size-xs);
   color: var(--fg-muted);
 }
-.todo-filter-footer-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 20px;
-  padding: 0 7px;
-  border: none;
-  border-radius: 6px;
-  background: none;
-  color: var(--fg-muted);
-  font-size: var(--font-size-xs);
-  font-family: inherit;
-  line-height: 1;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.todo-filter-footer-chip:hover { background: var(--bg-hover); color: var(--fg); }
-.todo-filter-footer-chip.on { color: var(--accent); background: var(--accent-subtle); }
 .todo-filter-footer-icon { display: inline-flex; }
 .todo-filter-footer-icon svg { width: 12px; height: 12px; }
 
 .todo-section-tab {
-  display: flex;
-  align-items: center;
-  gap: 4px;
   min-width: 0;
-  padding: 4px 7px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg-muted);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  line-height: 1;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-
-.todo-section-tab:hover {
-  background: var(--hover-bg, rgba(0,0,0,0.04));
-  color: var(--fg-secondary);
-}
-
-.todo-section-tab.is-active {
-  background: var(--accent-subtle);
-  color: var(--accent);
-  font-weight: 600;
 }
 
 .todo-section-tab-icon {
@@ -10660,7 +10422,7 @@ body.walnut-dragging {
   flex-shrink: 0;
 }
 
-/* Only the active tab spells out its name — inactive tabs collapse to icon+count.
+/* Only the selected tab spells out its name — the others collapse to icon+count.
    Kept in the DOM (not display:none) so screen readers still announce the tab. */
 .todo-section-tab-label {
   white-space: nowrap;
@@ -10670,7 +10432,7 @@ body.walnut-dragging {
   transition: max-width 0.18s ease, opacity 0.15s ease;
 }
 
-.todo-section-tab.is-active .todo-section-tab-label,
+.todo-section-tab[aria-selected='true'] .todo-section-tab-label,
 /* A short bar (All + Pinned by default) has room to name every tab, and a bar of two
    bare icons would not say what it is. */
 .todo-section-tabs.is-roomy .todo-section-tab-label {
@@ -10690,21 +10452,11 @@ body.walnut-dragging {
 
 .todo-section-tab-count {
   flex-shrink: 0;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  color: var(--fg-muted);
-  opacity: 0.85;
-}
-
-.todo-section-tab.is-active .todo-section-tab-count {
-  color: var(--accent);
-  opacity: 1;
 }
 
 /* Narrow panel: shed the count badges before anything wraps or clips. */
 @container (max-width: 300px) {
-  .todo-section-tab:not(.is-active) .todo-section-tab-count { display: none; }
+  .todo-section-tab:not([aria-selected='true']) .wn-tab-count { display: none; }
 }
 
 /* ── Pinned tasks section (between filters and task list) ── */
@@ -11678,23 +11430,10 @@ body.walnut-dragging {
 }
 
 /* Unified collapse/expand chevron — used at category, project, and parent-task levels */
+/* A fold chevron is the shared icon-only DisclosureButton (controls/Disclosure.tsx): it draws
+   the chevron and turns it; this hook only places it. */
 .collapse-chevron {
-  --chevron-size: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex-shrink: 0;
-  width: var(--chevron-size);
-  height: var(--chevron-size);
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  background: none;
-  border: none;
-  border-radius: var(--radius-xs);
-  cursor: pointer;
-  transition: color 0.15s, background 0.15s, transform 0.2s;
-  padding: 0;
-  line-height: 1;
 }
 /* Task-item chevrons: absolute-position inside left padding to save space */
 .todo-panel-item > .collapse-chevron {
@@ -11702,13 +11441,6 @@ body.walnut-dragging {
   left: 2px;
   top: 4px;
   z-index: 1;
-}
-.collapse-chevron:hover {
-  color: var(--fg);
-  background: var(--hover-bg, rgba(0,0,0,0.04));
-}
-.collapse-chevron.expanded {
-  transform: rotate(90deg);
 }
 /* collapse-chevron-spacer removed — chevron is now absolutely positioned in padding area */
 .task-children-badge {
@@ -14052,11 +13784,6 @@ body.walnut-dragging {
 }
 /* Slimmer than the 18px default: this row is an 11px label, and a full-size
    chevron would make the project line taller than the folder chips under it. */
-.tier-project-label .collapse-chevron {
-  --chevron-size: 13px;
-  font-size: 9px;
-  margin-left: -2px;
-}
 /* .tier-project-label-count (the cards this project has in the tier) is styled up
    with .task-group-chip-count: one rule serves both levels. */
 
@@ -15242,17 +14969,6 @@ a.task-kebab-info:hover {
   font-weight: 500;
   color: var(--fg-secondary);
 }
-.task-kebab-date-caret {
-  /* inline-block: transform is a no-op on an inline span. */
-  display: inline-block;
-  flex-shrink: 0;
-  font-size: 9px;
-  color: var(--fg-muted);
-  transition: transform 0.12s ease;
-}
-.task-kebab-date-caret.open {
-  transform: rotate(90deg);
-}
 .task-kebab-date.open > .dp-content {
   padding: 2px 12px 8px;
 }
@@ -15977,22 +15693,6 @@ a.task-kebab-info:hover {
   flex-wrap: wrap;
 }
 
-.cron-form-radio {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--font-size-md);
-  color: var(--fg-secondary);
-  cursor: pointer;
-}
-
-.cron-form-radio input[type="radio"] {
-  accent-color: var(--accent);
-  margin: 0;
-  padding: 0;
-  width: auto;
-}
-
 /* ===== Cron Toast Notifications ===== */
 
 /* ===== Unified Notification Toaster ===== */
@@ -16328,36 +16028,9 @@ a.task-kebab-info:hover {
   opacity: 0.85;
 }
 
-/* Agent filter tabs */
-.agent-filter-tabs {
-  display: flex;
-  gap: 6px;
+/* Agent filter chips (the shared ChipGroup): placement only */
+.agent-filter-chips {
   margin-bottom: 16px;
-}
-
-.agent-filter-tab {
-  padding: 6px 14px;
-  border-radius: 20px;
-  font-size: var(--font-size-md);
-  font-weight: 500;
-  color: var(--fg-muted);
-  background: transparent;
-  border: 1px solid var(--border-strong);
-  white-space: nowrap;
-  transition: all 0.15s;
-  cursor: pointer;
-}
-
-.agent-filter-tab:hover {
-  color: var(--fg);
-  background: var(--bg-secondary);
-  border-color: var(--border-strong);
-}
-
-.agent-filter-tab.active {
-  color: var(--on-accent);
-  background: var(--accent);
-  border-color: var(--accent);
 }
 
 /* Agent form */
@@ -16549,27 +16222,13 @@ a.task-kebab-info:hover {
 }
 
 .context-source-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   min-width: 180px;
-  font-size: var(--font-size-md);
-  cursor: pointer;
   white-space: nowrap;
-}
-
-.context-source-toggle input[type="checkbox"] {
-  accent-color: var(--accent);
-  margin: 0;
-  width: auto;
-}
-
-.context-source-toggle input[type="checkbox"]:disabled {
-  opacity: 0.5;
 }
 
 .context-source-auto-badge {
   display: inline-block;
+  margin-left: 6px;
   padding: 1px 5px;
   border-radius: var(--radius-xs);
   font-size: 9px;
@@ -17459,23 +17118,6 @@ a.task-kebab-info:hover {
   align-items: center;
 }
 
-.sps-host-tab {
-  padding: 2px 10px;
-  border-radius: var(--radius-md);
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-  transition: all 0.12s;
-}
-.sps-host-tab:hover { background: var(--bg-secondary); }
-.sps-host-tab.active {
-  background: var(--accent);
-  color: var(--on-accent);
-  border-color: var(--accent);
-}
 
 .sps-path-list {
   flex: 1;
@@ -17729,11 +17371,6 @@ a.task-kebab-info:hover {
 
 /* The tab row is crowded (see the tooltip note in SessionPathSelector), so the
    dot is smaller than the ✎ marker it sits next to. */
-.sps-host-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
 .sps-host-dot {
   flex: none;
   width: 6px;
@@ -17748,9 +17385,9 @@ a.task-kebab-info:hover {
   background: var(--accent);
   animation: status-pulse 1s infinite;
 }
-/* On the active (accent-filled) tab, an accent dot would vanish into it. */
-.sps-host-tab.active .sps-host-dot-connecting,
-.sps-host-tab.active .sps-host-dot-unknown { background: #fff; }
+/* On the selected (accent-tinted) chip, an accent dot takes the chip's text color. */
+.sps-host-tab[aria-pressed='true'] .sps-host-dot-connecting,
+.sps-host-tab[aria-pressed='true'] .sps-host-dot-unknown { background: currentColor; }
 
 /* All tab and multi-host cards: a host still connecting keeps going if this closes. */
 .sps-host-line-bg { color: var(--fg-muted); font-size: var(--font-size-xs); }
@@ -17910,40 +17547,6 @@ a.task-kebab-info:hover {
   color: var(--fg-muted);
   flex-shrink: 0;
 }
-/* ONE segmented control: the tiers are
-   mutually exclusive answers to one question, so they share a frame with
-   hairline dividers instead of reading as a row of unrelated pills. */
-.pin-tier-seg {
-  display: inline-flex;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  overflow: hidden;
-}
-/* Unpicked tiers stay muted so the picked one reads as picked — the tier color
-   lands only on .active. */
-.pin-tier-btn {
-  padding: 2px 10px;
-  border: none;
-  background: transparent;
-  color: var(--fg-muted);
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-}
-.pin-tier-btn + .pin-tier-btn { border-left: 1px solid var(--border); }
-.pin-tier-btn:hover:not(:disabled) { background: var(--accent-subtle); }
-.pin-tier-btn:disabled { cursor: default; opacity: 0.55; }
-.pin-tier-focus.active { color: var(--tier-focus); }
-.pin-tier-satellite.active { color: var(--tier-satellite); }
-.pin-tier-backlog.active { color: var(--tier-backlog); }
-.pin-tier-wait.active { color: var(--tier-wait); }
-.pin-tier-custom.active { color: var(--tier-custom); }
-.pin-tier-btn.active {
-  background: color-mix(in srgb, currentColor 12%, transparent);
-  font-weight: 600;
-}
-
 /* ===== Model Picker ===== */
 
 .model-picker {
@@ -18662,32 +18265,9 @@ a.task-kebab-info:hover {
   gap: 8px;
 }
 
-/* Filter tabs (pill style) */
-.cmd-filter-tabs {
-  display: flex;
-  gap: 6px;
+/* Filter chips (the shared ChipGroup): placement only */
+.cmd-filter-chips {
   margin-bottom: 16px;
-}
-.cmd-filter-tab {
-  padding: 6px 14px;
-  border-radius: 20px;
-  font-size: var(--font-size-md);
-  font-weight: 500;
-  color: var(--fg-muted);
-  background: transparent;
-  border: 1px solid var(--border-strong);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all 0.15s;
-}
-.cmd-filter-tab:hover {
-  color: var(--fg);
-  background: var(--bg-secondary);
-}
-.cmd-filter-tab.active {
-  color: var(--on-accent);
-  background: var(--accent);
-  border-color: var(--accent);
 }
 
 /* Command card */
@@ -18895,25 +18475,6 @@ a.task-kebab-info:hover {
    The Usage & Costs settings pane owns its own layout (settings rows and
    settings-usage tables); the old page chrome rules were removed (F10, F12). */
 
-.usage-period-tab {
-  padding: 6px 16px;
-  border-radius: 6px;
-  font-size: var(--font-size-md);
-  font-weight: 500;
-  color: var(--fg-secondary);
-  transition: all 0.15s;
-}
-
-.usage-period-tab:hover {
-  color: var(--fg);
-}
-
-.usage-period-tab.active {
-  background: var(--card-bg);
-  color: var(--fg);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-
 .usage-summary-cards {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -19083,9 +18644,9 @@ a.task-kebab-info:hover {
 }
 
 .usage-daterange-caret {
-  margin-left: 4px;
-  font-size: 9px;
-  opacity: 0.6;
+  flex: none;
+  margin-left: 2px;
+  color: var(--fg-muted);
 }
 
 /* Portalled to <body>; useMenuPlacement sets position, top, right and maxHeight.
@@ -20456,19 +20017,6 @@ a.tag-chip:focus-visible,
   color: var(--error);
 }
 /* "3 hidden": the tags the display rules keep off the pills, and the task's own dates. */
-.tag-editor-hidden-toggle {
-  border: none;
-  background: none;
-  padding: 1px 4px;
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  cursor: pointer;
-  border-radius: 6px;
-}
-.tag-editor-hidden-toggle:hover {
-  color: var(--fg);
-  background: var(--accent-subtle);
-}
 /* A tag reads the same in the editor as on the pills ("sev:2", no gap after the key). */
 .tag-editor .tag-chip {
   gap: 0;
@@ -21878,13 +21426,7 @@ a.tag-chip:focus-visible,
   min-width: 0;
 }
 .draft-quick-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  min-width: 0;
-  row-gap: 4px;
-  align-items: center;
-  padding-bottom: 5px;
+  padding-bottom: 4px;
   border-bottom: 1px solid var(--border);
 }
 .draft-quick-key {
@@ -21897,41 +21439,6 @@ a.tag-chip:focus-visible,
   color: var(--fg-muted);
   user-select: none;
 }
-.draft-quick-chip {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 3px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--fg-secondary);
-  font-family: inherit;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
-}
-.draft-quick-chip:hover {
-  background: var(--accent-subtle);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.draft-quick-chip:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
-  outline-offset: 2px;
-}
-/* The chip for the draft's CURRENT folder — stays in the row (stable membership,
-   see DraftLaunchBar) but reads as the selected state and takes no clicks. */
-.draft-quick-chip-active,
-.draft-quick-chip-active:hover {
-  background: var(--accent-subtle);
-  border-color: var(--accent);
-  color: var(--accent);
-  cursor: default;
-}
-
 /* ── AI back-fill marks (R9) ──
    The background parse of what the user is typing may pre-fill the project, the
    folder that project declares, and the tier/priority/star — each marked with the
@@ -22757,7 +22264,7 @@ a.tag-chip:focus-visible,
 /* Wrapper when the live CC session renders the real SessionPanel: a slim
    mode-tab strip on top, the panel filling the rest. */
 .notes-session-host { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-.notes-session-host-tabs { padding: 8px 12px 6px; }
+.notes-session-host-head { padding: 8px 12px 6px; }
 .notes-session-host-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .notes-session-host-panel .session-panel { flex: 1; min-height: 0; }
 
@@ -23873,7 +23380,9 @@ a.file-link:hover {
   z-index: 1;
 }
 
-.fv-html-tab {
+/* The file viewer's small text buttons (Retry, Reload the page, Restore my
+   changes, the PDF zoom and find steps): actions, never a choice. */
+.fv-tool-btn {
   font-size: var(--font-size-xs);
   font-weight: 600;
   padding: 3px 10px;
@@ -23884,33 +23393,16 @@ a.file-link:hover {
   cursor: pointer;
 }
 
-.fv-html-tab:hover {
+.fv-tool-btn:hover {
   background: var(--bg-tertiary);
 }
 
-.fv-html-tab.active {
+.fv-tool-btn.active {
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
-/* Edit mode: Save is the primary action (filled), the exit is quiet, and a dot
-   marks unsaved work so a half-typed file is never mistaken for a saved one. */
-.fv-html-tab.fv-edit-btn:hover {
-  color: var(--accent);
-}
-.fv-html-tab.fv-save-btn {
-  color: var(--on-accent);
-  background: var(--accent);
-  border-color: var(--accent);
-}
-.fv-html-tab.fv-save-btn:hover:not(:disabled) {
-  filter: brightness(1.08);
-}
-.fv-html-tab.fv-save-btn:disabled {
-  opacity: 0.45;
-  cursor: default;
-  filter: none;
-}
+/* A dot marks unsaved work so a half-typed file is never mistaken for a saved one. */
 .fv-dirty-dot {
   align-self: center;
   font-size: var(--font-size-md);
@@ -24384,32 +23876,10 @@ a.file-link:hover {
   gap: 12px;
 }
 
-/* Spreadsheets: sheet tab bar (multi-sheet workbooks) + the rendered table. */
+/* Spreadsheets: sheet tabs (multi-sheet workbooks; the shared Tabs draw them) + the rendered table. */
 .fv-sheet-tabs {
-  display: flex;
-  gap: 4px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border);
-  overflow-x: auto;
   flex-shrink: 0;
-}
-.fv-sheet-tab {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg-muted);
-  padding: 2px 10px;
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.fv-sheet-tab:hover {
-  background: var(--bg-tertiary);
-}
-.fv-sheet-tab.active {
-  background: var(--bg-tertiary);
-  color: var(--fg);
-  font-weight: 600;
+  margin: 0 8px;
 }
 .fv-sheet-table {
   flex: 1;
@@ -24934,55 +24404,24 @@ a.file-link:hover {
 }
 .session-terminal-dock-btn svg { display: block; width: 14px; height: 14px; }
 
-.session-terminal-tabs {
-  display: flex;
-  align-items: stretch;
-  gap: 2px;
-  padding: 4px 8px 0;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-  flex-shrink: 0;
-  scrollbar-width: none;
-}
-.session-terminal-tabs::-webkit-scrollbar { display: none; }
+/* The strip is the shared Tabs (controls/Tabs.tsx); here only its place. */
+.session-terminal-tabs { padding: 0 8px; flex-shrink: 0; }
 .session-terminal-tabs-wrap { flex-shrink: 0; background: var(--bg-secondary); }
 /* More tabs than fit: the strip fades out where more are (it scrolls; the shown one is kept in view). */
 .session-terminal-tabs.fade-right { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); }
 .session-terminal-tabs.fade-left { -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(to left, #000 calc(100% - 32px), transparent); }
 .session-terminal-tabs.fade-left.fade-right { -webkit-mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent); }
+/* One tab and its close button. */
 .session-terminal-tab {
   display: flex;
   align-items: center;
+  gap: 2px;
   max-width: 220px;
   min-width: 0;
   flex-shrink: 0;
-  border: 1px solid transparent;
-  border-bottom: none;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  color: var(--fg-muted);
-  margin-bottom: -1px;
 }
-.session-terminal-tab:hover { color: var(--fg); }
-.session-terminal-tab.is-active {
-  background: #1a1b26;
-  border-color: var(--border);
-  color: #c0caf5;
-}
-.session-terminal-tab-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  padding: 5px 4px 5px 10px;
-  border: none;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-}
-.session-terminal-tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
+.session-terminal-tab-btn { min-width: 0; }
+.session-terminal-tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-terminal-tab-split { display: inline-flex; opacity: 0.75; }
 .session-terminal-tab-split svg { width: 12px; height: 12px; }
 .session-terminal-tab-close {
@@ -24991,12 +24430,11 @@ a.file-link:hover {
   justify-content: center;
   width: 20px;
   height: 20px;
-  margin-right: 4px;
   padding: 0;
   border: none;
   border-radius: var(--radius-xs);
   background: transparent;
-  color: inherit;
+  color: var(--fg-muted);
   opacity: 0.6;
   cursor: pointer;
   flex-shrink: 0;
@@ -25077,7 +24515,6 @@ a.file-link:hover {
 /* Docked under a view, a split gives its room to the output: slimmer strips. */
 .session-terminal-panel.is-docked .session-terminal-pane-strip { height: 20px; font-size: var(--font-size-xs); }
 .session-terminal-panel.is-docked .session-terminal-pane-close { width: 18px; height: 18px; }
-.session-terminal-panel.is-docked .session-terminal-tab-btn { padding-top: 3px; padding-bottom: 3px; }
 
 /* "Add to chat" beside a selection: an overlay over the terminal (border, solid
    background, shadow), never a change to the layout under it. */
@@ -25626,33 +25063,13 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   max-height: 90px;
   overflow-y: auto;
 }
-.side-thread-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  max-width: 220px;
-  padding: 3px 9px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg);
-  color: var(--fg-muted);
-  font-size: var(--font-size-sm);
-  line-height: 1.5;
-  cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
-}
-.side-thread-chip:hover { color: var(--fg); border-color: var(--fg-muted); }
-.side-thread-chip.is-active {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-}
+/* The thread picks are the shared Chip (controls/Chip.tsx); here only their width. */
+.side-thread-chip { max-width: 220px; }
 .side-thread-chip-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.side-thread-chip-new { font-weight: 600; }
 /* Chip + its archive affordance. A wrapper rather than a nested button (invalid
    HTML), so the × can be its own control while looking like part of the pill. */
 .side-thread-chip-wrap {
@@ -25683,9 +25100,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .side-thread-chip-archive:focus-visible { opacity: 1; }
 .side-thread-chip-archive:hover { color: var(--fg); background: var(--bg-secondary); }
 .side-thread-chip-purge:hover { color: var(--error); }
-.side-thread-chip.is-archived { opacity: 0.72; border-style: dashed; }
-.side-thread-chip.is-archived:hover { opacity: 1; }
-.side-thread-chip-archived-toggle { color: var(--fg-muted); }
 .side-thread-archived {
   display: flex;
   flex-wrap: wrap;
@@ -26174,7 +25588,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
      alone (its tooltip and the picker say "Compare"), tighter segments. */
   .session-diff-compare-trigger .session-diff-base-label { display: none; }
   .session-diff-toolbar .session-diff-base-wrap { flex-basis: 180px; }
-  .session-diff-toolbar .session-diff-viewtoggle .session-diff-viewtoggle-btn { padding: 3px 7px; }
 }
 /* Comparison-base selector — keeps it grouped with the title on the left,
    pushing the action buttons (Rendered/Split/Refresh) to the far right. */
@@ -26428,25 +25841,8 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   flex: 0 0 auto;
   font-family: var(--font-sans);
 }
-.session-diff-viewed-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 8px 2px 6px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--fg);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  user-select: none;
-  background: var(--bg);
-}
-.session-diff-viewed-toggle input { margin: 0; accent-color: var(--accent); cursor: pointer; }
-.session-diff-viewed-toggle.is-checked {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-}
+/* The Viewed box is the shared Checkbox (controls/Checkbox.tsx); here only its place in the row. */
+.session-diff-viewed-toggle { align-items: center; user-select: none; }
 .session-diff-viewed-changed {
   font-size: var(--font-size-xs);
   color: var(--warning);
@@ -26674,24 +26070,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   color: var(--fg-secondary);
 }
 .compare-graph-warn { display: block; margin-top: 4px; color: var(--warning); }
-.session-diff-viewtoggle {
-  display: inline-flex;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
-}
-.session-diff-viewtoggle-btn {
-  border: none;
-  background: var(--bg);
-  color: var(--fg-muted);
-  font-size: var(--font-size-sm);
-  padding: 3px 10px;
-  cursor: pointer;
-}
-.session-diff-viewtoggle-btn.is-active {
-  background: var(--accent);
-  color: var(--on-accent);
-}
 .session-diff-refresh {
   border: 1px solid var(--border);
   background: var(--bg);
@@ -26727,7 +26105,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 }
 .session-diff-rendered-toggle.is-active { background: var(--accent); color: var(--on-accent); }
 .session-diff-filepane-head .session-diff-rendered-toggle { flex: 0 0 auto; padding: 2px 8px; font-size: var(--font-size-sm); }
-.session-diff-viewtoggle-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* Body = [ file tree | resize | single-file diff ] */
 .session-diff-body {
@@ -28027,36 +27404,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   font-size: var(--font-size-md);
 }
 
-.routine-trigger-presets {
-  display: flex;
-  gap: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  width: fit-content;
-  max-width: 100%;
-}
-
-.routine-trigger-preset {
-  padding: 5px 12px;
-  border: none;
-  background: transparent;
-  color: var(--fg-muted);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.routine-trigger-preset + .routine-trigger-preset {
-  border-left: 1px solid var(--border);
-}
-
-.routine-trigger-preset.active {
-  background: var(--bg-tertiary);
-  color: inherit;
-  font-weight: 600;
-}
-
 .routine-trigger-row {
   display: flex;
   align-items: center;
@@ -28297,23 +27644,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .trigger-jobs-tally[data-fired="true"] { color: var(--accent); font-weight: 600; }
 
 .trigger-jobs-fold { margin-top: 2px; }
-.trigger-jobs-fold-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  width: 100%;
-  padding: 2px 0;
-  font: inherit;
-  font-size: var(--font-size-xs);
-  color: var(--fg-secondary);
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  text-align: left;
-}
-.trigger-jobs-fold-toggle:hover:not(:disabled) { color: var(--fg); }
-.trigger-jobs-fold-toggle:disabled { cursor: default; opacity: 0.7; }
 
 .trigger-audit-chevron { transition: transform 0.12s ease; }
 .trigger-audit-chevron.open { transform: rotate(90deg); }
@@ -29102,44 +28432,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .cal-nav-btns button:hover,
 .cal-rail-toggle:hover {
   background: var(--bg-secondary);
-}
-
-/* Segmented switches on the calendar (Day | Week | Month here, Event | Task in
-   the new-item popover): a see-through track and a raised glass thumb
-   (overlay-glass.css, --glass-legible-*). */
-.cal-view-switch,
-.cal-create-tabs {
-  display: inline-flex;
-  padding: 2px;
-  border-radius: var(--radius-sm);
-  background: var(--glass-legible-track, var(--bg-secondary));
-}
-
-.cal-view-btn,
-.cal-create-tabs button {
-  height: 26px;
-  padding: 0 14px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg);
-  font-size: var(--font-size-md);
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.cal-view-btn:not(.active):hover,
-.cal-create-tabs button:not(.active):hover {
-  background: color-mix(in srgb, var(--fg) 6%, transparent);
-}
-
-.cal-view-btn.active,
-.cal-create-tabs button.active {
-  background: var(--glass-legible-thumb, var(--card-bg));
-  color: var(--fg);
-  font-weight: 600;
-  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.06), 0 3px 8px rgba(0, 0, 0, 0.12), 0 1px 1px rgba(0, 0, 0, 0.04);
 }
 
 /* --- permission banner ----------------------------------------------------- */
@@ -30056,14 +29348,9 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 }
 
 /* --- new-item popover: Event | Task switch + event form ---------------------- */
-/* The track and thumb are the calendar's shared segmented switch (.cal-view-switch). */
+/* The switch is the shared SegmentedControl (fill: two equal halves); it keeps its height. */
 .cal-create-tabs {
-  display: flex;
   flex-shrink: 0;
-}
-
-.cal-create-tabs button {
-  flex: 1;
 }
 
 .cal-event-form {
@@ -30310,14 +29597,9 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   color: var(--fg-secondary);
 }
 
+/* The All-day box is the shared Checkbox row; it keeps the form's 30 px line. */
 .cal-when-allday {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   min-height: 30px;
-  font-size: var(--font-size-md);
-  color: var(--fg-secondary);
-  cursor: pointer;
 }
 
 .cal-event-form-error {
@@ -30727,14 +30009,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   font-size: var(--font-size-sm);
 }
 
-.cal-item-allday {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--font-size-md);
-  color: var(--fg);
-}
-
 .cal-item-error {
   font-size: var(--font-size-sm);
   color: var(--error);
@@ -30929,31 +30203,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 /* ── ProjectSourcePicker — provider chips under the New-Project inputs ──
    Shared by the /tasks rail and the home panel's NewProjectRow. */
 .proj-src-picker {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
   padding: 6px 2px 2px;
-}
-.proj-src-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 22px;
-  padding: 0 9px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-  background: none;
-  color: var(--fg-muted);
-  font-size: var(--font-size-sm);
-  font-family: inherit;
-  cursor: pointer;
-  flex: none;
-}
-.proj-src-chip:hover { background: var(--bg-hover); }
-.proj-src-chip.on {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-subtle);
 }
 .proj-src-chip-dot {
   width: 7px;
@@ -32684,26 +31934,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   padding-top: 12px;
   border-top: 1px solid var(--border);
 }
-.rewind-dialog-option {
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  font-size: var(--font-size-md);
-  line-height: 1.45;
-  color: var(--fg);
-  cursor: pointer;
-}
-.rewind-dialog-option input[type="checkbox"] {
-  flex: none;
-  width: 15px;
-  height: 15px;
-  margin: 2px 0 0;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-.rewind-dialog-option.is-disabled { cursor: default; color: var(--fg-muted); }
-.rewind-dialog-option.is-disabled input[type="checkbox"] { cursor: default; }
-.rewind-dialog-option-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .rewind-dialog-stats { color: var(--fg-muted); }
 .rewind-dialog-hint { font-size: var(--font-size-sm); color: var(--fg-muted); }
 .rewind-dialog-files {

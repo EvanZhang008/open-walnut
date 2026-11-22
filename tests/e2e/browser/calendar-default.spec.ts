@@ -111,7 +111,7 @@ test('quick-create preselects the default calendar and the event lands there', a
     await page.mouse.click(slot.x, slot.y)
     const popover = page.locator('.cal-create-popover')
     await expect(popover).toBeVisible()
-    await popover.locator('.cal-create-tabs button:has-text("Event")').click()
+    await popover.locator('.cal-create-tabs [role="radio"]:has-text("Event")').click()
     return popover
   }
 
@@ -175,7 +175,7 @@ test('quick-create picks nothing when the configured default is unusable, and sa
   await page.mouse.click(slot.x, slot.y)
   const popover = page.locator('.cal-create-popover')
   await expect(popover).toBeVisible()
-  await popover.locator('.cal-create-tabs button:has-text("Event")').click()
+  await popover.locator('.cal-create-tabs [role="radio"]:has-text("Event")').click()
 
   const select = popover.getByTestId('cal-event-form-calendar')
   await expect(select).toHaveAttribute('data-value', '')

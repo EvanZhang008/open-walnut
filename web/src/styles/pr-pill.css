@@ -290,51 +290,17 @@ html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill[data-their
 }
 
 .pr-card .pr-card-switches { margin-top: 12px; padding-top: 6px; border-top: 1px solid var(--border); display: flex; flex-direction: column; }
-.pr-card .pr-card-switch {
+.pr-card .pr-card-switch-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  /* The text lines up with the card's other labels; the hover fill reaches past it. */
-  width: calc(100% + 8px);
-  margin: 0 -4px;
-  padding: 6px 4px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg);
-  font: inherit;
-  text-align: left;
+  padding: 6px 0;
   cursor: pointer;
 }
-.pr-card .pr-card-switch:hover { background: var(--bg-hover); }
-.pr-card .pr-card-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .pr-card .pr-card-switch-text { display: flex; flex-direction: column; min-width: 0; }
 .pr-card .pr-card-switch-label { font-size: var(--font-size-sm); font-weight: 500; }
 .pr-card .pr-card-switch-hint { font-size: var(--font-size-xs); color: var(--fg-muted); }
-.pr-card .pr-card-switch-track {
-  position: relative;
-  flex: 0 0 30px;
-  width: 30px;
-  height: 18px;
-  border-radius: 9px;
-  background: var(--fg-muted);
-  transition: background-color 120ms ease-out;
-}
-.pr-card .pr-card-switch-track::after {
-  content: '';
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-  transition: transform 120ms ease-out;
-}
-.pr-card .pr-card-switch[aria-checked="true"] .pr-card-switch-track { background: var(--accent); }
-.pr-card .pr-card-switch[aria-checked="true"] .pr-card-switch-track::after { transform: translateX(12px); }
 
 .pr-card .pr-card-foot {
   display: flex;

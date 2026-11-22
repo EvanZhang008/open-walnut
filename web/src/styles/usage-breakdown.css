@@ -19,8 +19,8 @@
   }
 }
 
-.usage-bd-switch { display: inline-flex; align-items: center; gap: 8px; }
-.usage-bd-switch-label { font-size: var(--font-size-sm); color: var(--fg-muted); }
+.usage-bd-pick { display: inline-flex; align-items: center; gap: 8px; }
+.usage-bd-pick-label { font-size: 12px; color: var(--fg-muted); }
 .usage-bd-body { display: block; padding-top: 12px; container: usage-bd / inline-size; }
 
 .usage-bd-chart { position: relative; width: 100%; min-height: 240px; touch-action: pan-y; cursor: crosshair; }
@@ -86,7 +86,7 @@
 .usage-bd-unrecorded text { font-size: var(--font-size-xs); fill: var(--fg-muted); }
 .usage-bd-col-share2 { width: 76px; }
 /* A switch wider than the card wraps its label above it instead of overflowing. */
-.usage-bd-switch { flex-wrap: wrap; min-width: 0; }
+.usage-bd-pick { flex-wrap: wrap; min-width: 0; }
 /* Token type has two share columns: in a narrow card its trend goes, so the names stay readable. */
 @container usage-bd (max-width: 600px) {
   .usage-bd-body[data-breakdown="token"] .usage-bd-trend { display: none; }

@@ -7,6 +7,7 @@ import {
   changeSessionSupervision, getSessionSupervision, holdSessionSupervision, refreshSessionSupervision, refreshSessionSupervisionSoon,
   subscribeSessionSupervision, type SupervisionSnapshot,
 } from '@/stores/session-supervision-store';
+import { ToggleSwitch } from '@/components/controls';
 import '@/styles/session-supervision.css';
 
 const STATE_LABELS = {
@@ -118,8 +119,8 @@ export function SessionSupervisionBar({ sid, snapshot, onRetryStop, archived }: 
         <strong role="status">{title}</strong>
         {supervision && !archived && (
           <label className="session-supervision-toggle" title="Only changes automatic recovery; it does not stop a running session">
-            <input type="checkbox" role="switch" aria-label="Automatic cron recovery" checked={enabled}
-              disabled={writing || stopPending || stale} onChange={(event) => change(event.target.checked)} />
+            <ToggleSwitch size="sm" aria-label="Automatic cron recovery" checked={enabled}
+              disabled={writing || stopPending || stale} onChange={change} />
             Auto-recover
           </label>
         )}

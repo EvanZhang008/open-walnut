@@ -25,6 +25,7 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import type { Routine } from '@/api/routines';
 import { useTaskTriggers } from '@/hooks/useTaskTriggers';
+import { DisclosureButton } from '@/components/controls';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { removeRoutine, runRoutineNow, setRoutineEnabled } from '@/stores/routines-store';
 import {
@@ -196,19 +197,18 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
       {/* What it WILL inject: the prompt, before any fire has happened. */}
       {prompt && (
         <div className="trigger-jobs-fold">
-          <button type="button" className="trigger-jobs-fold-toggle" aria-expanded={showPrompt} onClick={() => setShowPrompt((v) => !v)}>
-            <span>{clock ? 'What it injects when it runs' : 'What it injects when it fires'}</span>
-            <span className={`trigger-audit-chevron${showPrompt ? ' open' : ''}`}>›</span>
-          </button>
+          <DisclosureButton block className="trigger-jobs-fold-toggle" expanded={showPrompt} onClick={() => setShowPrompt((v) => !v)}>
+            {clock ? 'What it injects when it runs' : 'What it injects when it fires'}
+          </DisclosureButton>
           {showPrompt && <pre className="trigger-audit-injected">{prompt}</pre>}
         </div>
       )}
       {/* The audit trail: every check the daemon reported, newest first. */}
       <div className="trigger-jobs-fold">
-        <button
-          type="button"
+        <DisclosureButton
+          block
           className="trigger-jobs-fold-toggle"
-          aria-expanded={showHistory}
+          expanded={showHistory}
           disabled={history.length === 0}
           onClick={() => setShowHistory((v) => !v)}
           data-testid="trigger-audit-toggle"
@@ -217,13 +217,10 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
               did: the fire tally above is the total. Saying "0 fired" here read as
               "it has never fired" on a trigger that fired before this trail
               existed, which is the opposite of the truth. */}
-          <span>
-            {history.length
-              ? `History (${history.length} recorded ${clock ? (history.length === 1 ? 'run' : 'runs') : (history.length === 1 ? 'check' : 'checks')})`
-              : clock ? 'No runs recorded yet' : 'No checks recorded yet'}
-          </span>
-          {history.length > 0 && <span className={`trigger-audit-chevron${showHistory ? ' open' : ''}`}>›</span>}
-        </button>
+          {history.length
+            ? `History (${history.length} recorded ${clock ? (history.length === 1 ? 'run' : 'runs') : (history.length === 1 ? 'check' : 'checks')})`
+            : clock ? 'No runs recorded yet' : 'No checks recorded yet'}
+        </DisclosureButton>
         {showHistory && (
           <ul className="trigger-audit-list" data-testid="trigger-audit-list">
             {history.map((entry, i) => (

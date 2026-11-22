@@ -11,6 +11,7 @@
 
 import { useEffect, useRef, type ReactNode } from 'react';
 import { ICON_CLOSE } from '@/components/common/Icons';
+import { Tab, TabList } from '@/components/controls';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { revealNote } from '@/api/notes-v2';
 import { copyTextDeferred } from '@/utils/clipboard';
@@ -62,7 +63,7 @@ export function NotesTabStrip({
   tabs, activePath, onActivate, onClose, onNewTab, trailing, leading,
   onCloseOthers, onCloseAll, onLocate, onOpenInNewWindow, isFavorite, onToggleFavorite,
 }: NotesTabStripProps) {
-  const activeRef = useRef<HTMLDivElement>(null);
+  const activeRef = useRef<HTMLButtonElement>(null);
   const menu = useContextMenu<OpenTab>({ ignorePressSelection: true });
 
   // Keep the active tab visible when activated (the strip scrolls horizontally on overflow).
@@ -122,36 +123,42 @@ export function NotesTabStrip({
   };
 
   return (
-    <div className="notes-tab-strip" role="tablist">
+    <TabList className="notes-tab-strip" aria-label="Open notes">
       {leading && <div className="notes-tab-leading">{leading}</div>}
       {tabs.map((tab) => {
         const isActive = tab.path === activePath;
+        const label = tabLabel(tab.path);
         return (
-          <div
+          <Tab
             key={tab.path}
             ref={isActive ? activeRef : undefined}
-            className={`notes-tab ${isActive ? 'active' : ''} ${tab.kind === 'attachment' ? 'attachment' : ''}`}
-            role="tab"
-            aria-selected={isActive}
+            selected={isActive}
+            className={`notes-tab${tab.kind === 'attachment' ? ' attachment' : ''}`}
             title={tab.path}
             onClick={() => onActivate(tab.path)}
             // Middle-click closes (browser convention).
             onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); onClose(tab.path); } }}
+            // From the keyboard, Delete closes the focused tab (the × is not in the Tab order).
+            onKeyDown={(e) => { if (e.key === 'Delete') { e.preventDefault(); onClose(tab.path); } }}
             // A tab is an app object: the browser's own menu ("Back / Reload /
             // Inspect Element" in the Mac app) says nothing about this note.
             onContextMenu={(e) => menu.open(e, tab)}
+            trailing={
+              // A span, not a button: the tab is a button and one cannot hold another.
+              <span
+                role="button"
+                className="notes-tab-close"
+                aria-label={`Close ${label}`}
+                title="Close tab"
+                // stopPropagation so × doesn't also activate the tab.
+                onClick={(e) => { e.stopPropagation(); onClose(tab.path); }}
+              >
+                {ICON_CLOSE}
+              </span>
+            }
           >
-            <span className="notes-tab-label">{tabLabel(tab.path)}</span>
-            <button
-              className="notes-tab-close"
-              aria-label={`Close ${tabLabel(tab.path)}`}
-              title="Close tab"
-              // stopPropagation so × doesn't also activate the tab.
-              onClick={(e) => { e.stopPropagation(); onClose(tab.path); }}
-            >
-              {ICON_CLOSE}
-            </button>
-          </div>
+            <span className="notes-tab-label">{label}</span>
+          </Tab>
         );
       })}
       <button className="notes-tab-new" aria-label="New tab" title="New tab" onClick={onNewTab}>
@@ -170,6 +177,6 @@ export function NotesTabStrip({
           testId="notes-tab-ctx-menu"
         />
       )}
-    </div>
+    </TabList>
   );
 }

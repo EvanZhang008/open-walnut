@@ -9,6 +9,7 @@ import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterD
 import { SettingsGroup, SettingsLoadingRow, SettingsNotice } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
+import { ControlGroup } from '@/components/controls';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useDraft } from '@/hooks/useDraft';
 import { discardDraft, draftKey } from '@/utils/drafts';
@@ -324,10 +325,16 @@ export function TriageRoutingRules({ off = false }: { off?: boolean }) {
                   onClick={() => setRemoving(rule.id)}>Remove</SettingsButton>
               </>
             )}
-            {/* Hidden while a removal is asked, so the red Remove has no switch beside it. */}
-            {removing !== rule.id && <ToggleSwitch id={`triage-rule-on-${rule.id}`} checked={rule.enabled}
-              aria-label={`Rule ${rule.enabled ? 'on' : 'off'}: ${rule.matchText}`} data-testid="triage-rule-toggle"
-              onChange={(on) => { void act(() => updateTriageRule(rule.id, { enabled: on })); }} />}
+            {/* Hidden while a removal is asked, so the red Remove has no switch beside it. While Inbox
+                triage is off a rule routes nothing: its switch reads disabled and grey (its saved
+                state kept), and the line above the list says why. The rule itself stays editable. */}
+            {removing !== rule.id && (
+              <ControlGroup id={`triage-rule-on-group-${rule.id}`} off={off}>
+                <ToggleSwitch id={`triage-rule-on-${rule.id}`} checked={rule.enabled}
+                  aria-label={`Rule ${rule.enabled ? 'on' : 'off'}: ${rule.matchText}`} data-testid="triage-rule-toggle"
+                  onChange={(on) => { void act(() => updateTriageRule(rule.id, { enabled: on })); }} />
+              </ControlGroup>
+            )}
           </div>
         </div>
       ))}

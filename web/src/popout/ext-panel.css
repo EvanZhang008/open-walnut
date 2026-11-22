@@ -210,21 +210,18 @@
 
 /* The composer's chips, in its bottom row after "+" (SessionPanel / DraftSessionPanel `composerBar`). */
 .ext-chips { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 0 1 auto; overflow: hidden; }
-.ext-chip { flex: 0 1 auto; min-width: 0; height: 24px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px 0 6px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-secondary); color: var(--fg-secondary); font: inherit; font-size: var(--font-size-sm); white-space: nowrap; cursor: pointer; }
-.ext-chip.is-on { border-color: color-mix(in srgb, var(--walnut-accent) 45%, transparent); background: var(--hover-bg); color: var(--walnut-accent); }
-.ext-chip-page { max-width: 220px; padding: 0 4px 0 0; overflow: hidden; }
+/* The chips are the shared Chip (role=switch); here they are only placed. The page chip is the
+   chip and, while on, its x beside it. */
+.ext-chip-page { flex: 0 1 auto; min-width: 0; max-width: 220px; display: inline-flex; align-items: center; gap: 2px; }
 /* The page chip says what it is: a page icon, the word "Page", then the page's name (2026-11-09). */
 .ext-chip-page .ext-chip-fav { width: 14px; height: 14px; background: none; color: inherit; }
 .ext-chip-page .ext-chip-fav svg { width: 13px; height: 13px; }
-.ext-chip-kind { flex: none; font-weight: 650; }
-.ext-chip-page:not(.is-on) { opacity: .75; }
-.ext-chip-body { min-width: 0; height: 100%; display: inline-flex; align-items: center; gap: 5px; padding: 0 2px 0 5px; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
-.ext-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ext-chip-kind { font-weight: 650; }
 .ext-chip-fav { flex: none; width: 14px; height: 14px; border-radius: var(--radius-xs); background: #2f6f8f; color: var(--on-accent); font-size: 8.5px; font-weight: 700; display: grid; place-items: center; }
 .ext-chip-x { flex: none; width: 16px; height: 16px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--fg-muted); font-size: 14px; line-height: 1; cursor: pointer; }
 .ext-chip-x:hover { color: var(--fg); background: var(--bg-secondary); }
 .ext-chip-act { flex: none; }
-.ext-chip:focus-visible, .ext-chip-body:focus-visible, .ext-chip-x:focus-visible { outline: 2px solid var(--walnut-accent); outline-offset: 1px; }
+.ext-chip-x:focus-visible { outline: 2px solid var(--walnut-accent); outline-offset: 1px; }
 
 /* What a message took from the page, in the person's bubble. */
 .ext-panel-attached-page { display: flex; align-items: center; gap: 5px; margin-top: 6px; padding: 4px 8px; border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.16); font-size: var(--font-size-sm); line-height: 1.35; overflow: hidden; white-space: nowrap; }
@@ -315,7 +312,7 @@
 .ext-relay-panel { position: fixed; z-index: 60; left: 8px; width: auto; max-width: 360px; overflow: auto; display: flex; flex-direction: column; gap: 4px; padding: 10px 10px 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--bg); box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16); font-size: var(--font-size-md); }
 .ext-relay-head { display: flex; align-items: center; gap: 8px; }
 .ext-relay-title { flex: 1; font-weight: 700; font-size: 14px; }
-.ext-relay-switch { display: inline-flex; align-items: center; gap: 6px; font-size: var(--font-size-md); cursor: pointer; }
+.ext-relay-agents-row { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer; }
 .ext-relay-note { margin: 0 0 4px; color: var(--fg-muted); line-height: 1.4; }
 .ext-relay-label { margin: 6px 0 2px; font-size: var(--font-size-xs); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-muted); }
 .ext-relay-row { display: flex; align-items: center; gap: 8px; padding: 6px 6px; border-radius: var(--radius-sm); }
@@ -434,7 +431,7 @@ html body .is-plain-chat-pickers .mode-toggle-pill:hover, html body .is-plain-ch
 .ext-control-status-title { font-size: 16px; font-weight: 700; color: var(--fg); }
 .ext-control-status-line { font-size: var(--font-size-md); line-height: 1.4; color: var(--fg-muted); }
 .ext-control-group { display: flex; flex-direction: column; gap: 2px; font-size: var(--font-size-md); }
-.ext-control-tab { display: flex; flex-direction: column; }
+.ext-control-tab-row { display: flex; flex-direction: column; }
 .ext-control-recent { margin: 0 6px 4px 32px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 1px; font-size: var(--font-size-sm); color: var(--fg-muted); }
 .ext-control-recent li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ext-control-recent li::before { content: '↳ '; opacity: .7; }

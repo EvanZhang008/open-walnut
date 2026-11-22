@@ -71,9 +71,29 @@ test.describe('Walnut Health', () => {
     expect(errors).toEqual([])
   })
 
-  test('the fix-task switch shows the saved choice and changes it on the server, both ways', async ({ page }) => {
+  /** Answer the page's reads of the monitor with its actions on or off (the server's own reads are left alone). */
+  async function actionsSay(page: Page, on: boolean): Promise<void> {
+    await page.route((url) => url.pathname === '/api/v1/health-monitor', async (route) => {
+      if (route.request().method() !== 'GET') return route.fallback()
+      const res = await route.fetch()
+      return route.fulfill({ response: res, json: { ...(await res.json()), actions: on } })
+    })
+  }
+
+  test('on a server whose actions are off, the fix-task choice reads disabled and says why', async ({ page }) => {
+    await actionsSay(page, false)
     await openHealth(page)
     const row = page.getByTestId('health-fix-tasks')
+    await expect(row.getByRole('radiogroup', { name: 'When an alarm needs a fix' })).toHaveAttribute('aria-disabled', 'true')
+    for (const id of ['health-fix-start', 'health-fix-record', 'health-fix-off']) await expect(row.getByTestId(id).locator('input')).toBeDisabled()
+    await expect(row.getByTestId('health-fix-actions-off')).toHaveText('Actions are off on this server: alarms only show here, nothing is filed or started.')
+  })
+
+  test('the fix-task switch shows the saved choice and changes it on the server, both ways', async ({ page }) => {
+    await actionsSay(page, true)
+    await openHealth(page)
+    const row = page.getByTestId('health-fix-tasks')
+    await expect(row.getByTestId('health-fix-actions-off')).toHaveCount(0)
     await expect(row).toContainText('When an alarm needs a fix')
     const read = async () => (await (await page.request.get('/api/v1/health-monitor')).json()).fixTasks
     const start = row.getByTestId('health-fix-start')

@@ -1251,7 +1251,7 @@ export function NotesPage() {
                 if (activeCcTab.sessionId) {
                   return (
                     <div className="notes-chat notes-session-host">
-                      <div className="notes-chat-header notes-session-host-tabs">{tabs}</div>
+                      <div className="notes-chat-header notes-session-host-head">{tabs}</div>
                       <div className="notes-session-host-panel">
                         <SessionPanel
                           key={activeCcTab.sessionId}

@@ -28,6 +28,7 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { DEFAULT_WAIT_LABEL, type Task, type TaskPhase } from '@open-walnut/core';
 import * as ICONS from '../common/Icons';
+import { Chip, ChipGroup, DisclosureChevron } from '@/components/controls';
 import { DatePicker } from '../common/DatePicker';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
@@ -129,6 +130,7 @@ function WaitUntilRow({ task, onSet }: { task: Pick<Task, 'id' | 'phase' | 'wait
           type="button"
           className="task-status-until-toggle"
           aria-expanded={open}
+          data-choice-exempt="a menu row that opens its sub-rows in place, with the shared DisclosureChevron"
           data-testid="task-status-until-toggle"
           title="When the task comes back by itself if nothing has happened by then"
           onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
@@ -137,7 +139,7 @@ function WaitUntilRow({ task, onSet }: { task: Pick<Task, 'id' | 'phase' | 'wait
           <span className="task-status-until-label">
             {until ? <>Until: <b>{until}</b></> : noClockLabel}
           </span>
-          <span className={`task-kebab-status-caret${open ? ' open' : ''}`} aria-hidden="true">{ICONS.CHEVRON_GLYPH}</span>
+          <DisclosureChevron open={open} />
         </button>
         {task.wait_until && (
           <button
@@ -197,25 +199,21 @@ function StatusOptions({ task, onPick, onPickWaiting, onSetWaitUntil, quiet = fa
 
 function StatusPills({ task, onPick, quiet = false }: { task: Pick<Task, 'id' | 'phase'>; onPick: (phase: TaskPhase) => void; quiet?: boolean }) {
   return (
-    <div className="task-status-options" role="radiogroup" aria-label="Status">
-      {STATUS_OPTIONS.map((o) => {
-        const current = task.phase === o.value;
-        return (
-          <button
-            key={o.value}
-            type="button"
-            role="radio"
-            aria-checked={current}
-            className={`task-status-pill task-status-pill-${o.value.toLowerCase()}${current ? ' is-current' : ''}`}
-            data-phase={o.value}
-            onClick={(e) => { e.stopPropagation(); onPick(o.value); }}
-          >
-            {!quiet && <span className="task-status-pill-icon" aria-hidden="true">{o.icon}</span>}
-            <span>{o.label}</span>
-          </button>
-        );
-      })}
-    </div>
+    <ChipGroup className="task-status-options" role="radiogroup" aria-label="Status">
+      {STATUS_OPTIONS.map((o) => (
+        <Chip
+          key={o.value}
+          role="radio"
+          pressed={task.phase === o.value}
+          className={`task-status-pill task-status-pill-${o.value.toLowerCase()}`}
+          data-phase={o.value}
+          leading={quiet ? undefined : <span className="task-status-pill-icon" aria-hidden="true">{o.icon}</span>}
+          onClick={(e) => { e.stopPropagation(); onPick(o.value); }}
+        >
+          {o.label}
+        </Chip>
+      ))}
+    </ChipGroup>
   );
 }
 
@@ -268,6 +266,7 @@ export function TaskStatusMenuSection({ task, onSetPhase, onSetWaitUntil, afterA
           type="button"
           className="task-kebab-item task-kebab-status-toggle"
           aria-expanded={open}
+          data-choice-exempt="a menu row that opens its sub-rows in place, with the shared DisclosureChevron"
           data-testid="task-status-toggle"
           onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
         >
@@ -276,7 +275,7 @@ export function TaskStatusMenuSection({ task, onSetPhase, onSetWaitUntil, afterA
             Status: <b>{taskStatusLabel(task)}</b>
             {until ? <span className="task-kebab-status-until"> · until {until}</span> : null}
           </span>
-          <span className={`task-kebab-status-caret${open ? ' open' : ''}`}>{ICONS.CHEVRON_GLYPH}</span>
+          <DisclosureChevron open={open} />
         </button>
         {open && (
           <div className="task-kebab-status">

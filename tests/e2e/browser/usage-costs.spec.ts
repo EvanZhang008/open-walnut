@@ -272,7 +272,7 @@ test('the chart axis text is readable, and a click on a day opens that day', asy
   const today = localDay(new Date())
   await expect.poll(() => asked.at(-1)?.searchParams.get('start')).toBe(today)
   expect(asked.at(-1)!.searchParams.get('end')).toBe(today)
-  await expect(page.getByTestId('usage-period-custom')).toHaveClass(/active/)
+  await expect(page.getByTestId('usage-period-custom')).toHaveAttribute('aria-pressed', 'true')
   // The pointer stays on the chart while it turns into one day: the hover follows, nothing breaks.
   await expect(chart).toHaveAttribute('data-buckets', '1')
   await page.mouse.move(box.x + box.width / 2, box.y + 110)
@@ -367,7 +367,7 @@ test('the Custom period opens in full above the card edge, applies a range and c
   await expect.poll(() => asked.at(-1)?.searchParams.get('start')).toBe('2026-09-10')
   expect(asked.at(-1)!.searchParams.get('end')).toBe('2026-09-12')
   await expect(trigger).toHaveText(/09-10 to 09-12/)
-  await expect(trigger).toHaveClass(/active/)
+  await expect(trigger).toHaveAttribute('aria-pressed', 'true')
   // Escape closes it too.
   await trigger.click()
   await expect(pop).toBeVisible()

@@ -1,8 +1,13 @@
 import { memo } from 'react';
 import { addDays, formatDateOnly, weekRange } from '@/utils/calendar-date';
 import { CalendarGridControls } from './CalendarGridControls';
+import { SegmentedControl, type SegmentedOption } from '@/components/controls';
 
 export type CalendarViewKind = 'day' | 'week' | 'month';
+
+/** The view switch: one of three modes of the same grid (a segmented control, not tabs). */
+const VIEW_OPTIONS: ReadonlyArray<SegmentedOption<CalendarViewKind>> = (['day', 'week', 'month'] as const)
+  .map((v) => ({ value: v, label: v[0].toUpperCase() + v.slice(1), className: 'cal-view-btn' }));
 
 interface Props {
   view: CalendarViewKind;
@@ -101,19 +106,13 @@ export const CalendarToolbar = memo(function CalendarToolbar({
             <span className="cal-cals-label">Calendars</span>
           </button>
         )}
-        <div className="cal-view-switch" role="tablist" aria-label="Calendar view">
-          {(['day', 'week', 'month'] as const).map((v) => (
-            <button
-              key={v}
-              role="tab"
-              aria-selected={view === v}
-              className={`cal-view-btn${view === v ? ' active' : ''}`}
-              onClick={() => onViewChange(v)}
-            >
-              {v[0].toUpperCase() + v.slice(1)}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl
+          className="cal-view-switch"
+          aria-label="Calendar view"
+          value={view}
+          onChange={onViewChange}
+          options={VIEW_OPTIONS}
+        />
       </div>
     </div>
   );

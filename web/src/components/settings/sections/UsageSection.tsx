@@ -98,7 +98,7 @@ export function UsageSection() {
         <SettingsRow
           label="Period"
           control={
-            <span className="settings-addons-inline usage-period-tabs">
+            <span className="settings-addons-inline">
               <SegmentedControl aria-label="Period" value={presetValue} onChange={(v) => setTime({ preset: v })}
                 options={PRESETS.map((p) => ({ value: p.value, label: p.label, testId: `usage-period-${p.value}` }))} />
               <UsageDateRange active={time.preset === 'custom'} start={time.start} end={time.end}

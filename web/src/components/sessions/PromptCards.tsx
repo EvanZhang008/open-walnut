@@ -177,7 +177,7 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, ans
     <div
       ref={setCardRef}
       onClickCapture={arm.guard}
-      // Esc takes back the last digit pick (the panel's own Esc runs when there is none).
+      // Esc takes back the last digit pick (with none to take back, the Esc of the panel runs).
       onKeyDown={(e) => {
         if (e.key !== 'Escape' || !keyPick || !keysOn) return;
         const q = questions[keyPick.qi];

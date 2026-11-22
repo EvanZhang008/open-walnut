@@ -15,6 +15,7 @@ import { WorkflowTranscriptModal, type TranscriptTarget } from './WorkflowTransc
 import { useFullscreen } from '@/hooks/useFullscreen';
 import { ICON_EXPAND, ICON_COLLAPSE } from '../common/Icons';
 import { useShedToFit } from './shed-to-fit';
+import { DisclosureButton } from '@/components/controls';
 
 export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { sessionId: string }) {
   const { workflowName, workflowDescription, scriptSource, inFlight, foregroundActive, tasks, phases, agents } = useBackgroundTasks(sessionId);
@@ -96,18 +97,17 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
     {FullscreenBackdrop}
     <div className={`wf-card ${collapsed ? 'wf-card-collapsed' : ''}${fullscreenClass}`}>
       <div className="wf-card-header">
-        <button
+        <DisclosureButton
           className="wf-card-collapse"
           onClick={() => !isFullscreen && setCollapseOverride(!collapsed)}
-          aria-expanded={!collapsed}
+          expanded={!collapsed}
           title={isFullscreen ? '' : collapsed ? 'Expand' : 'Collapse'}
         >
-          <span className="wf-card-caret">{collapsed ? '▸' : '▾'}</span>
           {stateIcon}
           <span className="wf-card-title" title={workflowDescription}>
             {workflowName ? <><span className="wf-card-title-kind">Workflow: </span>{workflowName}</> : 'Background'}
           </span>
-        </button>
+        </DisclosureButton>
         <div className="wf-card-header-meta" ref={setMetaEl}>
           {counts}
           {meter}

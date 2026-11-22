@@ -28,11 +28,11 @@
   background: var(--fg-muted);
   animation: status-pulse 2s infinite;
 }
-/* On the active (accent-filled) tab an accent dot would vanish: it takes the tab's text color instead. */
-.sps-host-tab.active .sps-host-dot.hsd[data-kind="connecting"],
-.sps-host-tab.active .sps-host-dot.hsd[data-kind="checking"],
-.sps-host-tab.active .sps-host-dot.hsd[data-kind="unknown"] { background: currentColor; }
-.sps-host-tab.active .sps-host-dot.hsd[data-kind="off"] { border-color: currentColor; }
+/* On the selected (accent-tinted) chip an accent dot would blend in: it takes the chip's text color instead. */
+.sps-host-tab[aria-pressed="true"] .sps-host-dot.hsd[data-kind="connecting"],
+.sps-host-tab[aria-pressed="true"] .sps-host-dot.hsd[data-kind="checking"],
+.sps-host-tab[aria-pressed="true"] .sps-host-dot.hsd[data-kind="unknown"] { background: currentColor; }
+.sps-host-tab[aria-pressed="true"] .sps-host-dot.hsd[data-kind="off"] { border-color: currentColor; }
 @media (prefers-reduced-motion: reduce) {
   .sps-host-dot.hsd[data-kind] { animation: none; }
 }

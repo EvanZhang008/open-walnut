@@ -182,9 +182,11 @@ test('XLSX renders as tables with a tab per sheet (SheetJS)', async ({ page }) =
   // Multi-sheet workbook → tab bar; switching tabs SWAPS the table (asserting
   // the old sheet is gone, not merely that the new text appeared — concatenated
   // tables would pass a contains-only check).
-  const tabs = pane.locator('.fv-sheet-tab')
+  const tabs = pane.getByRole('tablist', { name: 'Sheets' }).getByRole('tab')
   await expect(tabs).toHaveCount(2)
+  await expect(tabs.nth(0)).toHaveAttribute('aria-selected', 'true')
   await tabs.nth(1).click()
+  await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true')
   await expect(pane.locator('.fv-sheet-table')).toContainText('SECOND SHEET MARKER')
   await expect(pane.locator('.fv-sheet-table')).not.toContainText('WALNUT XLSX MARKER')
 

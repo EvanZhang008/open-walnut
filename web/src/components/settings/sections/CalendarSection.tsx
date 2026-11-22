@@ -12,6 +12,7 @@ import { SettingsGroup, SettingsRow, SettingsNotice, SettingsTag, SettingsLoadin
 import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
+import { ControlGroup, masterProps } from '@/components/controls';
 import { useOptimisticSetting, couldntSave } from '../inputs/useOptimisticSetting';
 import { saveErrorMessage, useSettingsSaved } from '../settings-pane-context';
 import { PermissionFixDialog } from '@/components/common/PermissionFixDialog';
@@ -37,6 +38,10 @@ import '@/styles/settings-sections-addons.css';
 
 /** Row error for one calendar (`cal:<id>`) or one account (`acct:<name>`). */
 interface WriteError { key: string; message: string }
+
+/** The boxes the Show external calendar events switch governs (ControlGroup). */
+const CAL_ROWS = 'calendar-source-rows';
+const CAL_ACCOUNTS = 'calendar-account-groups';
 
 /** Settings › Calendar Accounts: the accounts in their own Settings section. */
 export function CalendarSection() {
@@ -186,6 +191,13 @@ export function CalendarAccounts({ heading }: { heading?: string } = {}) {
   }
   const on = enabled.value;
   const denied = !!status && !status.available && status.reason === 'permission-denied';
+  // This machine cannot read calendars at all (not a Mac, or the cloud companion): the switch reads
+  // disabled and off, its saved choice kept, and its row says why (2026-11-21 review: it showed a
+  // bright blue On over a line saying the platform it needs is missing).
+  const unsupported = !!status && !status.available && (status.reason === 'cloud' || status.reason === 'not-configured');
+  const unsupportedWhy = status?.reason === 'cloud'
+    ? "macOS calendars can't be reached from the cloud companion; open Walnut on the Mac to see them."
+    : 'Needs a Mac: Walnut reads these calendars through macOS, and this machine runs another system.';
 
   const rowError = (key: string) => (writeError?.key === key ? couldntSave(writeError.message) : undefined);
 
@@ -211,19 +223,25 @@ export function CalendarAccounts({ heading }: { heading?: string } = {}) {
             <SettingsRow
               label="Show external calendar events"
               htmlFor="calendar-enabled"
-              help="Events from every account added in macOS Internet Accounts."
+              help={unsupported ? unsupportedWhy : 'Events from every account added in macOS Internet Accounts.'}
+              state={unsupported ? 'warning' : undefined}
               error={enabled.error ?? undefined}
+              data-testid="calendar-enabled-row"
               control={
                 <ToggleSwitch
                   id="calendar-enabled"
-                  checked={on}
+                  checked={on && !unsupported}
+                  disabled={unsupported}
                   busy={enabled.busy}
                   onChange={enabled.set}
                   data-testid="calendar-enabled-switch"
+                  {...masterProps(CAL_ROWS, CAL_ACCOUNTS)}
                 />
               }
             />
+            {/* Only a machine that reads calendars has rows to govern (unsupported: the row says why). */}
             {status.available && (
+            <ControlGroup id={CAL_ROWS} off={!on} className="settings-rows-contents" reason="Turn on Show external calendar events to use these.">
               <SettingsRow
                 // Names what the line reports, so "Not refreshed yet" never
                 // sits under a "Last refreshed" label (N3-31).
@@ -244,8 +262,7 @@ export function CalendarAccounts({ heading }: { heading?: string } = {}) {
                   </SettingsButton>
                 }
               />
-            )}
-            {status.available && (writableByAccount.size > 0 || !!defaultCal?.configuredId) && (
+            {(writableByAccount.size > 0 || !!defaultCal?.configuredId) && (
               <SettingsRow
                 label="Default calendar"
                 htmlFor="calendar-default"
@@ -283,9 +300,11 @@ export function CalendarAccounts({ heading }: { heading?: string } = {}) {
                 }
               />
             )}
+            </ControlGroup>
+            )}
           </SettingsGroup>
 
-          {!status.available && on && (
+          {!status.available && !unsupported && on && (
             denied ? (
               <SettingsNotice
                 kind="warn"
@@ -303,11 +322,7 @@ export function CalendarAccounts({ heading }: { heading?: string } = {}) {
                 Walnut can't read calendars until macOS allows it.
               </SettingsNotice>
             ) : (
-              <SettingsNotice kind="warn">
-                {status.reason === 'cloud'
-                  ? "macOS calendars can't be reached from the cloud companion; open Walnut on the Mac to see them."
-                  : (status.message ?? 'Calendar source unavailable.')}
-              </SettingsNotice>
+              <SettingsNotice kind="warn">{status.message ?? 'Calendar source unavailable.'}</SettingsNotice>
             )
           )}
 
@@ -317,6 +332,7 @@ export function CalendarAccounts({ heading }: { heading?: string } = {}) {
             </SettingsGroup>
           )}
 
+          <ControlGroup id={CAL_ACCOUNTS} off={!on || unsupported} className="settings-rows-contents">
           {[...byAccount.entries()].map(([account, list]) => {
             const ids = list.map((c) => c.id);
             const acctKey = `acct:${account}`;
@@ -371,6 +387,7 @@ export function CalendarAccounts({ heading }: { heading?: string } = {}) {
           {/* Only on a list the server read with the calendars on (its answer, never the switch's
               optimistic value) and no failed reload since: an empty list would call every account missing. */}
           {status.available && status.enabled && !loadError && <CalendarMailAccounts calendars={calendars} />}
+          </ControlGroup>
         </>
       )}
       {fixReport && (() => {

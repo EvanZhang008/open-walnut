@@ -27,6 +27,7 @@ import { useAppCatalog } from '@/apps/hooks';
 import { appNavigateTarget, sessionPaneApps, type RegisteredApp, type SessionAppProps } from '@/apps/registry';
 import { log } from '@/utils/log';
 import type { PanelAppRecord } from './panel-view';
+import { Tab, TabList } from '@/components/controls';
 import '@/styles/session-app-pane.css';
 
 export interface SessionPluginAppPaneProps {
@@ -137,22 +138,20 @@ export function SessionPluginAppPane({
     <div className="session-app-pane" data-testid="session-app-pane" data-app-key={key ?? undefined}>
       <div className="session-app-pane-bar">
         {tabs.length > 1 ? (
-          <div className="session-app-pane-tabs" role="tablist" aria-label="Apps">
+          <TabList className="session-app-pane-tabs" aria-label="Apps" flush>
             {tabs.map((tab) => (
-              <button
+              <Tab
                 key={tab.key}
-                type="button"
-                role="tab"
-                aria-selected={tab.key === key}
-                className={`session-app-pane-tab${tab.key === key ? ' is-active' : ''}`}
+                selected={tab.key === key}
+                className="session-app-pane-tab"
                 data-app-key={tab.key}
                 onClick={() => { if (tab.key !== key) onPickApp(tab.key); }}
               >
                 <PaneAppIcon app={tab} size={13} />
                 <span>{tab.title}</span>
-              </button>
+              </Tab>
             ))}
-          </div>
+          </TabList>
         ) : (
           <span className="session-app-pane-title">
             {app && <PaneAppIcon app={app} size={13} />}

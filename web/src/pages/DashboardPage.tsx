@@ -49,6 +49,9 @@ import { visibleInterval } from '@/utils/page-visibility';
 import { projectDisplayName, projectGroupKey } from '@/utils/project-display';
 import { useUndoableTaskActions } from '@/undo/TaskUndoContext';
 import '@/styles/tasks-page.css';
+// .tp-btn: the toolbar's one-shot buttons (Collapse all).
+import '@/styles/filter-toolbar-base.css';
+import { Chip } from '@/components/controls';
 import { MicInput } from '@/components/common/BoxMic';
 import { useFocusView } from '@/focus-spaces/useFocusView';
 import { FocusBanner } from '@/focus-spaces/FocusBanner';
@@ -404,36 +407,40 @@ export function DashboardPage() {
               other dimension lives in the shared View panel next to them. Both
               write the SAME query state, so a chip and a panel chip can never
               disagree. */}
-          <button
-            type="button"
-            className={`tp-chip${showTodoChip ? ' on' : ''}`}
+          <Chip
+            className="tp-chip"
+            pressed={showTodoChip}
+            leading={<span className="tp-chip-icon" aria-hidden="true">{ICON_PHASE_TODO}</span>}
             onClick={() => toggleCompletionChip('todo')}
           >
-            <span className="tp-chip-icon" aria-hidden="true">{ICON_PHASE_TODO}</span>Open
-          </button>
-          <button
-            type="button"
-            className={`tp-chip${showDoneChip ? ' on' : ''}`}
+            Open
+          </Chip>
+          <Chip
+            className="tp-chip"
+            pressed={showDoneChip}
+            leading={<span className="tp-chip-icon" aria-hidden="true">{ICON_PHASE_COMPLETE}</span>}
             onClick={() => toggleCompletionChip('done')}
           >
-            <span className="tp-chip-icon" aria-hidden="true">{ICON_PHASE_COMPLETE}</span>Complete
-          </button>
+            Complete
+          </Chip>
           {showPriority && (
             <>
-              <button
-                type="button"
-                className={`tp-chip${query.priorities.includes('immediate') ? ' on' : ''}`}
+              <Chip
+                className="tp-chip"
+                pressed={query.priorities.includes('immediate')}
+                leading={<span className="tp-p-dot p0" />}
                 onClick={() => togglePriorityChip('immediate')}
               >
-                <span className="tp-p-dot p0" />P0
-              </button>
-              <button
-                type="button"
-                className={`tp-chip${query.priorities.includes('important') ? ' on' : ''}`}
+                P0
+              </Chip>
+              <Chip
+                className="tp-chip"
+                pressed={query.priorities.includes('important')}
+                leading={<span className="tp-p-dot p1" />}
                 onClick={() => togglePriorityChip('important')}
               >
-                <span className="tp-p-dot p1" />P1
-              </button>
+                P1
+              </Chip>
             </>
           )}
           <ViewDropdown
@@ -447,18 +454,18 @@ export function DashboardPage() {
           />
           {isAll && (
             <>
-              <button
-                type="button"
-                className={`tp-chip${grouped ? ' on' : ''}`}
+              <Chip
+                className="tp-chip"
+                pressed={grouped}
                 title={grouped ? 'Grouped by project: click for a flat list' : 'Flat list: click to group by project'}
                 onClick={handleGroupedToggle}
               >
                 ⊟ Group
-              </button>
+              </Chip>
               {grouped && (
                 <button
                   type="button"
-                  className="tp-chip"
+                  className="tp-btn"
                   title={allGroupsCollapsed ? 'Expand all projects' : 'Collapse all projects'}
                   onClick={handleCollapseExpandAll}
                 >

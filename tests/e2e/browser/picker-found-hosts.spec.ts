@@ -113,7 +113,7 @@ test('a host found in ~/.ssh/config has its own tab in the new task panel, and C
   await expect(picker(page).locator('.sps-path-item', { hasText: 'lab-notes' })).toHaveCount(0)
 
   await tab.click()
-  await expect(tab).toHaveClass(/active/)
+  await expect(tab).toHaveAttribute('aria-pressed', 'true')
   const note = picker(page).locator('.sps-host-note[data-host="labbox"]')
   await expect(note).toHaveAttribute('data-type', 'found')
   await expect(note.locator('.sps-host-note-text')).toHaveText(
@@ -132,7 +132,7 @@ test('a host found in ~/.ssh/config has its own tab in the new task panel, and C
   await expect.poll(() => fake.yes).toEqual(['labbox'])
   // Now an added host: the tab is its own, the found note is gone, and it reads Connected.
   await expect(tab).not.toHaveAttribute('data-found', '', { timeout: 10_000 })
-  await expect(tab).toHaveClass(/active/)
+  await expect(tab).toHaveAttribute('aria-pressed', 'true')
   await expect(picker(page).locator('.sps-host-note[data-type="found"]')).toHaveCount(0)
   await expect(tab.locator('.sps-host-dot')).toHaveAttribute('data-kind', 'connected', { timeout: 10_000 })
   expect(fake.yes).toEqual(['labbox'])
@@ -146,7 +146,7 @@ test('an added host that is not connected says so on its tab, with Connect', asy
   const tab = hostTab(page, 'idlebox')
   await expect(tab).toBeVisible({ timeout: 20_000 })
   await tab.click()
-  await expect(tab).toHaveClass(/active/)
+  await expect(tab).toHaveAttribute('aria-pressed', 'true')
   const note = picker(page).locator('.sps-host-note[data-host="idlebox"]')
   await expect(note).toHaveAttribute('data-type', 'idle', { timeout: 10_000 })
   await expect(note.locator('.sps-host-note-text')).toHaveText('Idle box is not connected.')

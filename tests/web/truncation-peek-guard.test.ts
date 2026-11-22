@@ -58,7 +58,7 @@ const NOT_A_ROW: Record<string, string> = {
   // drag copy, the Adopt and Release headings, the Leader flyout's heading.
   'components/board/kanban/KanbanCard.tsx kanban-card-title': 'a loading skeleton, or the drag overlay whose row marker is disabled at runtime; real Board cards carry data-peek-row',
   'components/calendar/CalendarItemPopover.tsx cal-item-title-static': 'the heading of an open popover, not a row; it peeks when hovered itself',
-  'components/sessions/SessionBrowserCard.tsx session-browser-tab': 'a web page tab of the agent browser, not a task',
+  'components/sessions/SessionBrowserCard.tsx session-browser-tab-label': 'a web page tab of the agent browser, not a task',
   'components/tasks/TodoPanel.tsx todo-pinned-title': 'the pinned card drag overlay, never hovered (the pinned card itself is marked)',
   // The Worker pill's leader name is metadata (`.wn-meta`, text-fit.css), cut only when the row has no room.
   'components/tasks/SubtaskPill.tsx wn-meta': 'a pill drawn inside a task row, which is marked where the row is built',

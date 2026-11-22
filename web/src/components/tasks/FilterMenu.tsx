@@ -119,7 +119,7 @@ export function PanelMenu({ filters: c, display: d, flashOption }: PanelMenuProp
   // The hint that opened the menu points at a display row: start there, not in the box.
   useLayoutEffect(() => {
     if (flashOption) {
-      const row = bodyRef.current?.querySelector<HTMLElement>(`[data-view-option="${flashOption}"] [aria-pressed="true"], [data-view-option="${flashOption}"] button`);
+      const row = bodyRef.current?.querySelector<HTMLElement>(`[data-view-option="${flashOption}"] [aria-pressed="true"], [data-view-option="${flashOption}"] [aria-checked="true"], [data-view-option="${flashOption}"] button`);
       if (row) { row.focus({ preventScroll: true }); return; }
     }
     focusInput();

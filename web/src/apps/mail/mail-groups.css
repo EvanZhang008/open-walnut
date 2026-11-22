@@ -384,7 +384,7 @@
   color: var(--fg);
   cursor: pointer;
 }
-.mail-group-card-check input { margin: 2px 0 0; flex: 0 0 auto; }
+.mail-group-card-check > .wn-check { margin-top: 2px; }
 .mail-group-card-note { margin: 0; font-size: var(--font-size-sm); line-height: 1.45; color: var(--fg-muted); }
 
 /* ── the unsubscribe checklist (spec 10) ── */

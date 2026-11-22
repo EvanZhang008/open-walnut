@@ -122,7 +122,7 @@ test('a click previews and keeps the search; a double click opens and closes it'
   const tabs = page.locator('.notes-tab')
   const firstName = (await first.locator('.notes-search-file-name').innerText()).trim()
   await first.click()
-  await expect(page.locator('.notes-tab.active .notes-tab-label')).toHaveText(firstName, { timeout: 15_000 })
+  await expect(page.locator('.notes-tab[aria-selected="true"] .notes-tab-label')).toHaveText(firstName, { timeout: 15_000 })
   await expect(input).toHaveValue(q)
   await expect(first).toHaveClass(/selected/)
   expect(await scrollTop(page)).toBe(kept)
@@ -132,7 +132,7 @@ test('a click previews and keeps the search; a double click opens and closes it'
   const second = rows(page).nth(5)
   const secondName = (await second.locator('.notes-search-file-name').innerText()).trim()
   await second.click()
-  await expect(page.locator('.notes-tab.active .notes-tab-label')).toHaveText(secondName, { timeout: 15_000 })
+  await expect(page.locator('.notes-tab[aria-selected="true"] .notes-tab-label')).toHaveText(secondName, { timeout: 15_000 })
   await expect(input).toHaveValue(q)
   await expect(rows(page)).not.toHaveCount(0)
   // A preview replaces the previewed note in its tab: no tab per click.
@@ -142,7 +142,7 @@ test('a click previews and keeps the search; a double click opens and closes it'
   const third = rows(page).nth(1)
   const thirdName = (await third.locator('.notes-search-file-name').innerText()).trim()
   await third.dblclick()
-  await expect(page.locator('.notes-tab.active .notes-tab-label')).toHaveText(thirdName, { timeout: 15_000 })
+  await expect(page.locator('.notes-tab[aria-selected="true"] .notes-tab-label')).toHaveText(thirdName, { timeout: 15_000 })
   await expect(input).toHaveValue('')
   await expect(page.locator('.notes-search-results')).toHaveCount(0)
   await expect(tabs).toHaveCount(tabCount)
@@ -174,7 +174,7 @@ test('Escape and the clear button close the search; arrows and Enter open a hit'
   await expect(active).toHaveAttribute('data-search-idx', '1')
   const name = (await active.locator('.notes-search-file-name').innerText()).trim()
   await input.press('Enter')
-  await expect(page.locator('.notes-tab.active .notes-tab-label')).toHaveText(name, { timeout: 15_000 })
+  await expect(page.locator('.notes-tab[aria-selected="true"] .notes-tab-label')).toHaveText(name, { timeout: 15_000 })
   await expect(input).toHaveValue('')
   await expect(page.locator('.notes-search-results')).toHaveCount(0)
 
@@ -195,7 +195,7 @@ test('Escape and the clear button close the search; arrows and Enter open a hit'
   await input.fill(q2)
   await input.press('Enter')
   await expect(input).toHaveValue('', { timeout: 15_000 })
-  const tabLabel = page.locator('.notes-tab.active .notes-tab-label')
+  const tabLabel = page.locator('.notes-tab[aria-selected="true"] .notes-tab-label')
   await expect.poll(async () => {
     const label = (await tabLabel.textContent())?.trim() ?? ''
     return firstHits.includes(label) ? 'a first hit' : `${label} (first hits: ${firstHits.join(', ') || 'none yet'})`

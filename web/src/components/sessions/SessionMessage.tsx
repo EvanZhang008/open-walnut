@@ -76,6 +76,7 @@ import { log } from '@/utils/log';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { KebabVerticalIcon } from '@/components/common/PhoneIcons';
 import { computeLineDiff, editDiffIsLarge, toolCardKind, toolDescription, toolInputSummary } from '@open-walnut/tool-header-text';
+import { DisclosureButton } from '@/components/controls';
 
 // ── Edit Diff View ──
 
@@ -303,7 +304,7 @@ export function SessionThinking({ text, live, disclosureId }: { text: string; li
   if (!inStepList) {
     return (
       <div className="tool-run-row process-fold" data-testid="thought-fold" data-open={open ? 'true' : 'false'} {...(live ? { 'data-running': 'true' } : {})}>
-        <button type="button" className="tool-run-toggle" aria-expanded={open} onClick={() => setOpen((p) => !p)}>
+        <button type="button" data-choice-exempt="transcript fold row: the whole row is the button, drawn by the one step-row rule (step-rows.css)" className="tool-run-toggle" aria-expanded={open} onClick={() => setOpen((p) => !p)}>
           <span className={`tool-run-chevron process-fold-chevron${open ? ' tool-run-chevron--open' : ''}`}><StepIcon name="chevron" /></span>
           <span className="tool-run-label">Thinking</span>
           {live && <span className="tool-run-live-dot" />}
@@ -318,7 +319,7 @@ export function SessionThinking({ text, live, disclosureId }: { text: string; li
   const firstLine = open ? '' : thinkingFirstLine(text);
   return (
     <div className="tool-run-row tool-run-row--step">
-      <button ref={stepRef} className="tool-run-toggle" aria-expanded={open} onClick={() => setOpen((p) => !p)}>
+      <button ref={stepRef} data-choice-exempt="transcript fold row: the whole row is the button, drawn by the one step-row rule (step-rows.css)" className="tool-run-toggle" aria-expanded={open} onClick={() => setOpen((p) => !p)}>
         <StepIcon name="thought" className="tool-run-icon" />
         <span className="tool-run-label">Thinking</span>
         {firstLine && <span className="tool-run-detail" data-find-skip="">{firstLine}</span>}
@@ -400,10 +401,9 @@ export function PlanCard({ content, disclosureId, sessionId, sessionCwd, session
   return (
     <div className="session-plan-card">
       <div className="session-plan-card-header">
-        <button className="session-plan-card-toggle" aria-expanded={open} onClick={() => setOpen((p) => !p)}>
-          <span className="session-plan-card-icon">{open ? '\u25BC' : '\u25B6\uFE0E'}</span>
-          <span className="session-plan-card-title">Plan</span>
-        </button>
+        <DisclosureButton className="session-plan-card-toggle" expanded={open} onClick={() => setOpen((p) => !p)}>
+          Plan
+        </DisclosureButton>
         <button
           className="btn btn-icon btn-sm plan-card-expand-btn"
           onClick={handleExpandClick}
@@ -521,7 +521,7 @@ export function ToolRunShell({ phrase, calls, failCount, running, count, disclos
   const showAnswers = answers.length > 0 && !open;
   return (
     <div className="tool-run-row">
-      <button className={`tool-run-toggle${showAnswers ? ' tool-run-toggle--answered' : ''}`} aria-expanded={open} onClick={() => setOpen((p) => !p)}>
+      <button data-choice-exempt="transcript fold row: the whole row is the button, drawn by the one step-row rule (step-rows.css)" className={`tool-run-toggle${showAnswers ? ' tool-run-toggle--answered' : ''}`} aria-expanded={open} onClick={() => setOpen((p) => !p)}>
         {/* The answers under the line, not squeezed beside its count. */}
         {showAnswers ? (
           <>

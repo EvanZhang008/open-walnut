@@ -96,7 +96,7 @@ test('a host replica: sign in through it, read away, an away complete kept on th
   await expect(pane).toBeVisible({ timeout: 30_000 })
   const custom = pane.getByTestId('board-view-custom')
   await expect(custom).toBeVisible({ timeout: 15_000 })
-  if ((await custom.getAttribute('aria-pressed')) !== 'true') await custom.click()
+  if ((await custom.getAttribute('aria-checked')) !== 'true') await custom.click()
   await expect(page.frameLocator('.task-board-frame').locator('#build')).toHaveText('Build: green', { timeout: 30_000 })
   const read = await boardRead
   expect(read.status()).toBe(200)

@@ -4,7 +4,7 @@
  */
 import { useMemo } from 'react';
 import { LS_PROJECT_FOLDS_KEY, projectFoldKey, type ProjectFoldTasks } from './panel-design';
-import { NavigationChevron } from './NavigationSections';
+import { DisclosureButton } from '@/components/controls';
 import { SECTION_ICONS, SectionRows, type SectionRowHandlers } from './StatusSections';
 import { FOLD_KEY_ATTR, foldIsOpen, projectFoldKind } from './section-fold-rule';
 import { useFoldStore } from './useFoldStore';
@@ -45,10 +45,9 @@ export function ProjectStatusFolds({ region, project, tasks, open, onToggle, han
         </div>
       )}
       <div className="project-status-fold-row">
-        <button
-          type="button"
-          className={`project-status-fold project-status-fold-waiting${isOpen ? ' open' : ''}`}
-          aria-expanded={isOpen}
+        <DisclosureButton
+          className="project-status-fold project-status-fold-waiting"
+          expanded={isOpen}
           data-testid="project-status-fold-waiting"
           {...{ [FOLD_KEY_ATTR]: key }}
           title={statusFoldTooltip('waiting', isOpen)}
@@ -56,8 +55,7 @@ export function ProjectStatusFolds({ region, project, tasks, open, onToggle, han
         >
           <span className="project-status-count-icon" aria-hidden="true">{SECTION_ICONS.waiting}</span>
           {tasks.waiting.length} Waiting / snoozed
-          <NavigationChevron collapsed={!isOpen} />
-        </button>
+        </DisclosureButton>
       </div>
       {isOpen && (
         <div className="project-status-fold-rows" {...{ [FOLD_KEY_ATTR]: key }}>

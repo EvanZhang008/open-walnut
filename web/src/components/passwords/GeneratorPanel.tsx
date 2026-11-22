@@ -12,6 +12,15 @@ import { usePageView } from '@/utils/view-memory'
 import { copySecret } from '@/api/vault'
 import { DiceIcon } from './pw-icons'
 import { CopyButton } from '@/components/common/CopyButton'
+import { Checkbox, SegmentedControl, type SegmentedOption } from '@/components/controls'
+
+const KIND_OPTIONS: ReadonlyArray<SegmentedOption<GeneratorOptions['kind']>> = [
+  { value: 'random', label: 'Random' },
+  { value: 'words', label: 'Words' },
+]
+const SEPARATOR_OPTIONS: ReadonlyArray<SegmentedOption<string>> = [
+  { value: '-', label: '-' }, { value: '.', label: '.' }, { value: '_', label: '_' }, { value: ' ', label: 'space' },
+]
 
 function isOptions(v: unknown): v is GeneratorOptions {
   const o = v as Partial<GeneratorOptions> | null
@@ -37,10 +46,13 @@ export function GeneratorPanel({ onUse }: { onUse?: (password: string) => void }
         <button type="button" className="btn btn-icon" title="Generate another" aria-label="Generate another" onClick={again}><DiceIcon /></button>
       </div>
       <div className="pw-gen-bits">{bits} bits · {bits >= 80 ? 'very strong' : bits >= 60 ? 'strong' : 'fair'}</div>
-      <div className="pw-seg" role="tablist">
-        <button type="button" role="tab" aria-selected={!!random} className={random ? 'on' : ''} onClick={() => setOpts(random ?? DEFAULT_PASSWORD)}>Random</button>
-        <button type="button" role="tab" aria-selected={!!words} className={words ? 'on' : ''} onClick={() => setOpts(words ?? DEFAULT_PASSPHRASE)}>Words</button>
-      </div>
+      <SegmentedControl<GeneratorOptions['kind']>
+        aria-label="Kind of password"
+        className="pw-gen-kind"
+        value={opts.kind}
+        options={KIND_OPTIONS}
+        onChange={(k) => setOpts(k === 'random' ? DEFAULT_PASSWORD : DEFAULT_PASSPHRASE)}
+      />
       {random && (
         <>
           <label className="pw-gen-row">
@@ -50,9 +62,9 @@ export function GeneratorPanel({ onUse }: { onUse?: (password: string) => void }
           </label>
           <div className="pw-gen-checks">
             {([['upper', 'A-Z'], ['lower', 'a-z'], ['digits', '0-9'], ['symbols', '!@#']] as const).map(([k, label]) => (
-              <label key={k} className="pw-chip-check"><input type="checkbox" checked={random[k]} onChange={(e) => setR({ [k]: e.target.checked })} />{label}</label>
+              <Checkbox key={k} checked={random[k]} onChange={(on) => setR({ [k]: on })} label={label} />
             ))}
-            <label className="pw-chip-check"><input type="checkbox" checked={random.avoidAmbiguous} onChange={(e) => setR({ avoidAmbiguous: e.target.checked })} />No look-alikes</label>
+            <Checkbox checked={random.avoidAmbiguous} onChange={(on) => setR({ avoidAmbiguous: on })} label="No look-alikes" />
           </div>
         </>
       )}
@@ -64,13 +76,9 @@ export function GeneratorPanel({ onUse }: { onUse?: (password: string) => void }
             <span className="pw-gen-num">{words.words}</span>
           </label>
           <div className="pw-gen-checks">
-            <label className="pw-chip-check"><input type="checkbox" checked={words.capitalize} onChange={(e) => setW({ capitalize: e.target.checked })} />Capitalize</label>
-            <label className="pw-chip-check"><input type="checkbox" checked={words.number} onChange={(e) => setW({ number: e.target.checked })} />Add a digit</label>
-            <span className="pw-sep" role="group" aria-label="Separator">
-              {[['-', '-'], ['.', '.'], ['_', '_'], [' ', 'space']].map(([sep, label]) => (
-                <button key={label} type="button" className={words.separator === sep ? 'on' : ''} aria-pressed={words.separator === sep} onClick={() => setW({ separator: sep })}>{label}</button>
-              ))}
-            </span>
+            <Checkbox checked={words.capitalize} onChange={(on) => setW({ capitalize: on })} label="Capitalize" />
+            <Checkbox checked={words.number} onChange={(on) => setW({ number: on })} label="Add a digit" />
+            <SegmentedControl aria-label="Separator" value={words.separator} options={SEPARATOR_OPTIONS} onChange={(sep) => setW({ separator: sep })} />
           </div>
         </>
       )}

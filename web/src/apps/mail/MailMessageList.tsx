@@ -41,6 +41,7 @@ import { FolderIcon, SearchIcon } from './mail-icons';
 import { MailGroupedList, MailGroupsFallback, useGroupedMode } from './MailGroupedList';
 import { MailViewMenu } from './MailGroupedHeader';
 import { MicInput } from '@/components/common/BoxMic';
+import { Chip } from '@/components/controls';
 
 interface Props {
   snapshot: MailSnapshot;
@@ -250,18 +251,17 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
               Kept on screen while the filter is on even at zero unread, or turning the last one read
               would take the way out with it. */}
           {!draftsView && (section.unread > 0 || unreadOnly) && (
-            <button
-              type="button"
-              className={`mail-unread-chip${unreadOnly ? ' on' : ''}`}
+            <Chip
+              pressed={unreadOnly}
+              className="mail-unread-chip"
               data-testid="mail-unread-filter"
               data-on={unreadOnly}
               data-loaded={section.unreadLoaded}
-              aria-pressed={unreadOnly}
               title={chipTitle(unreadOnly, section.unreadLoaded)}
               onClick={() => toggleFilter(!unreadOnly)}
             >
               {unreadChipLabel(formatCount(section.unread), unreadOnly)}
-            </button>
+            </Chip>
           )}
           {/* An inbox in All mail mode: the way back to Grouped, on the same line as the grouped header's. */}
           {groupedMode && <MailViewMenu grouped={false} warn={groupedMode.failed} />}

@@ -77,7 +77,7 @@ export function ExtControl({ relay, here, tasks, owner, agents, keyed, vault, ke
           <div className="ext-relay-label">In use now</div>
           {now.length === 0 && <p className="ext-relay-note" data-testid="ext-control-none">No agent is using a tab now.</p>}
           {now.map((t) => (
-            <div key={t.tab} className="ext-control-tab">
+            <div key={t.tab} className="ext-control-tab-row">
               <RelayRow t={t} here={here} task={byId.get(taskOfOwner(t.owner))} action="Stop" onAction={() => stop(t.tab)} />
               {t.recent && t.recent.length > 0 && (
                 <ol className="ext-control-recent" data-testid="ext-control-recent" aria-label="Pages it went to, newest first">

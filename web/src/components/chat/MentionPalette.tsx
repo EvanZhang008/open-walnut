@@ -46,6 +46,7 @@ import {
   useImperativeHandle,
   forwardRef,
 } from 'react';
+import { Tab, TabList } from '@/components/controls';
 import { ICON_FILE, ICON_FOLDER, ICON_MAIL, ICON_NOTE, ICON_PERSON } from '@/components/common/Icons';
 import { fetchDirList, type DirEntry } from '@/api/files';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
@@ -608,25 +609,28 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
     return (
       <div className="mention-palette" role="listbox" aria-label="Mention picker">
         {tabs.length > 1 && (
-          <div className="mention-tabs" role="tablist" aria-label="Sources">
-            {tabs.map((id) => (
-              <button
-                key={id}
-                type="button"
-                role="tab"
-                aria-selected={id === tab}
-                className={`mention-tab${id === tab ? ' on' : ''}`}
-                data-tab={id}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  setPickedTab(id);
-                  if (scope && id !== scope.sourceId) onSetQuery?.(scope.rest);
-                }}
-              >
-                {id === ALL_TAB ? 'All' : id === TASKS_TAB ? 'Tasks' : labelOf(id)}
-              </button>
-            ))}
-          </div>
+          <TabList className="mention-tabs" aria-label="Sources">
+            {tabs.map((id) => {
+              const pick = () => {
+                setPickedTab(id);
+                if (scope && id !== scope.sourceId) onSetQuery?.(scope.rest);
+              };
+              return (
+                <Tab
+                  key={id}
+                  selected={id === tab}
+                  className="mention-tab"
+                  data-tab={id}
+                  // Mouse: pick on press and keep the focus in the composer. Keys (the tab list's
+                  // arrows click the next tab, detail 0) pick on click.
+                  onMouseDown={(e) => { e.preventDefault(); pick(); }}
+                  onClick={(e) => { if (e.detail === 0) pick(); }}
+                >
+                  {id === ALL_TAB ? 'All' : id === TASKS_TAB ? 'Tasks' : labelOf(id)}
+                </Tab>
+              );
+            })}
+          </TabList>
         )}
         <div className="mention-list" ref={listRef}>
           {onTasks

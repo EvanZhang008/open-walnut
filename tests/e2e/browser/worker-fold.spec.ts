@@ -125,7 +125,7 @@ test.describe('worker fold', () => {
 
     // Display: off lists every worker as before, and stays off after a reload.
     await openDisplayMenu(page)
-    const sw = displayMenu(page).locator('[data-view-option="worker-fold"]')
+    const sw = displayMenu(page).locator('[data-view-option="worker-fold"] [role="switch"]')
     await expect(sw).toHaveAttribute('aria-checked', 'true')
     await sw.click()
     await expect(sw).toHaveAttribute('aria-checked', 'false')

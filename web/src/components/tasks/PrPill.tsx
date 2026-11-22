@@ -15,7 +15,7 @@
  * stops pointerdown (rows are dnd-kit draggables), and closes on an outside pointerdown or Escape.
  */
 import { useTasksContextSafe } from '@/contexts/TasksContext';
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task } from '@open-walnut/core';
 import {
@@ -33,6 +33,7 @@ import { log } from '@/utils/log';
 import { useExperimental } from '@/hooks/useExperimental';
 import type { ChangeSnapshot } from '../../../../src/core/changes/model';
 import { ChangeDeployView } from './ChangeDeployView';
+import { ToggleSwitch } from '@/components/controls';
 import '@/styles/pr-pill.css';
 import '@/styles/change-card.css';
 
@@ -333,22 +334,16 @@ function PrSection({ pr, alone, onComplete, completing, done, errorAbove, waitin
 function Switch({ label, hint, checked, onChange, testId }: {
   label: string; hint: string; checked: boolean; onChange(next: boolean): void; testId: string;
 }) {
+  // The whole row is the switch's label: a click on its words flips it too.
+  const id = useId();
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      className="pr-card-switch"
-      data-testid={testId}
-      title={hint}
-      onClick={() => onChange(!checked)}
-    >
+    <label className="pr-card-switch-row" htmlFor={id} title={hint}>
       <span className="pr-card-switch-text">
-        <span className="pr-card-switch-label">{label}</span>
+        <span className="pr-card-switch-label" id={`${id}-label`}>{label}</span>
         <span className="pr-card-switch-hint">{hint}</span>
       </span>
-      <span className="pr-card-switch-track" aria-hidden="true" />
-    </button>
+      <ToggleSwitch id={id} size="sm" checked={checked} onChange={onChange} aria-labelledby={`${id}-label`} data-testid={testId} title={hint} />
+    </label>
   );
 }
 

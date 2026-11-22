@@ -22,6 +22,7 @@ import { useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useDraft } from '@/hooks/useDraft';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { AnswerBox } from '@/components/common/AnswerBox';
+import { Chip, ChipGroup } from '@/components/controls';
 import type { BoxMicHandle } from '@/components/common/BoxMic';
 import { useImageAttachments } from '@/components/common/image-attachments';
 import type { ImageAttachment } from '@/api/chat';
@@ -148,14 +149,12 @@ export function CeoComposer({ req, onClose }: { req: CeoComposerRequest; onClose
         <span>Talk to {target.kind === 'ceo' ? 'CEO' : target.name}</span>
         <button type="button" className="ceo-composer-close" aria-label="Close" disabled={sending} onClick={() => onClose(false)}>×</button>
       </div>
-      <div className="ceo-composer-to" role="radiogroup" aria-label="Send to" data-testid="ceo-composer-to">
+      <ChipGroup className="ceo-composer-to" role="radiogroup" aria-label="Send to" data-testid="ceo-composer-to">
         {targets.map((one) => (
-          <button
+          <Chip
             key={one.id}
-            type="button"
             role="radio"
-            aria-checked={one.id === target.id}
-            className="ceo-composer-to-btn"
+            pressed={one.id === target.id}
             data-testid="ceo-composer-to-option"
             data-target-id={one.id}
             data-target-kind={one.kind}
@@ -164,9 +163,9 @@ export function CeoComposer({ req, onClose }: { req: CeoComposerRequest; onClose
             onClick={() => { setChosen(one); inputRef.current?.focus(); }}
           >
             {one.name}
-          </button>
+          </Chip>
         ))}
-      </div>
+      </ChipGroup>
       <AnswerBox
         boxRef={inputRef}
         micRef={mic}

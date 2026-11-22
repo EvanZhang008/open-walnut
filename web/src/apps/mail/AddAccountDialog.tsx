@@ -29,6 +29,7 @@ import {
   type MailProviderSummary,
 } from '@/api/mail';
 import { focusUnlessTyping } from '@/utils/focus-unless-typing';
+import { Chip, ChipGroup, SegmentedControl } from '@/components/controls';
 import { log } from '@/utils/log';
 import { addMailAccount } from './mail-actions';
 import {
@@ -322,21 +323,19 @@ function PresetChips({ presets, chosen, onChoose }: {
   return (
     <div className="mail-setup-field">
       <span className="mail-setup-label" id="mail-preset-row-label">Which service is this?</span>
-      <span className="mail-setup-options" role="radiogroup" aria-labelledby="mail-preset-row-label">
+      <ChipGroup className="mail-setup-options" role="radiogroup" aria-labelledby="mail-preset-row-label">
         {[...presets, { id: OTHER_PRESET_ID, label: 'Other', values: {} }].map((preset) => (
-          <button
-            type="button"
+          <Chip
             key={preset.id}
-            className={`mail-setup-option${preset.id === chosen ? ' active' : ''}`}
-            data-testid={`mail-preset-${preset.id === OTHER_PRESET_ID ? 'other' : preset.id}`}
             role="radio"
-            aria-checked={preset.id === chosen}
+            pressed={preset.id === chosen}
+            data-testid={`mail-preset-${preset.id === OTHER_PRESET_ID ? 'other' : preset.id}`}
             onClick={() => onChoose(preset.id)}
           >
             {preset.label}
-          </button>
+          </Chip>
         ))}
-      </span>
+      </ChipGroup>
       <span className="mail-setup-help">
         Picking one fills the server details. Typing your address picks it for you, and anything you
         have typed yourself is left alone.
@@ -427,40 +426,49 @@ function SetupField({ field, value, draftKey: keptUnder, inputRef, onChange, sup
   supersededBy?: boolean;
 }) {
   const id = `mail-setup-${field.name}`;
+  const heading = (
+    <span className="mail-setup-label">
+      {field.label}
+      {field.required && <span className="mail-setup-required" aria-hidden="true">*</span>}
+    </span>
+  );
+  // A pick is its own radiogroup of labelled segments: a <label> around it would nest labels.
+  if (field.kind === 'select') {
+    return (
+      <div className="mail-setup-field">
+        {heading}
+        <SelectField field={field} value={value} onChange={onChange} />
+        {field.help && !supersededBy && <span className="mail-setup-help">{field.help}</span>}
+      </div>
+    );
+  }
   return (
     <label className="mail-setup-field" htmlFor={id}>
-      <span className="mail-setup-label">
-        {field.label}
-        {field.required && <span className="mail-setup-required" aria-hidden="true">*</span>}
-      </span>
-      {field.kind === 'select' ? (
-        <SelectField field={field} value={value} onChange={onChange} />
-      ) : (
-        <input
-          id={id}
-          ref={inputRef}
-          data-draft-key={field.kind === 'password' ? undefined : keptUnder ?? undefined}
-          data-no-draft={field.kind === 'password' ? 'secret' : undefined}
-          className="app-modal-input mail-setup-input"
-          data-testid={`mail-setup-${field.name}`}
-          type={field.kind === 'password' ? 'password' : 'text'}
-          value={value}
-          placeholder={field.placeholder}
-          autoComplete={field.kind === 'password' ? 'new-password' : 'off'}
-          onChange={(event) => onChange(event.target.value)}
-        />
-      )}
+      {heading}
+      <input
+        id={id}
+        ref={inputRef}
+        data-draft-key={field.kind === 'password' ? undefined : keptUnder ?? undefined}
+        data-no-draft={field.kind === 'password' ? 'secret' : undefined}
+        className="app-modal-input mail-setup-input"
+        data-testid={`mail-setup-${field.name}`}
+        type={field.kind === 'password' ? 'password' : 'text'}
+        value={value}
+        placeholder={field.placeholder}
+        autoComplete={field.kind === 'password' ? 'new-password' : 'off'}
+        onChange={(event) => onChange(event.target.value)}
+      />
       {field.help && !supersededBy && <span className="mail-setup-help">{field.help}</span>}
     </label>
   );
 }
 
 /**
- * A choice rendered as option ROWS, never a native `<select>`.
+ * A choice rendered as a segmented control, never a native `<select>` (a few short values, e.g.
+ * the encryption: TLS or STARTTLS).
  *
  * Two reasons, both shipped incidents: a native popup looks foreign inside a styled overlay, and
- * on macOS it swallows the pointerup, so whatever is behind the dialog sees a held pointer. The
- * list is bounded by its own max height instead of growing the dialog.
+ * on macOS it swallows the pointerup, so whatever is behind the dialog sees a held pointer.
  */
 function SelectField({ field, value, onChange }: {
   field: AccountSetupField;
@@ -469,20 +477,12 @@ function SelectField({ field, value, onChange }: {
 }) {
   const options = field.options ?? [];
   return (
-    <span className="mail-setup-options" role="radiogroup" aria-label={field.label}>
-      {options.map((option) => (
-        <button
-          type="button"
-          key={option.value}
-          className={`mail-setup-option${option.value === value ? ' active' : ''}`}
-          data-testid={`mail-setup-${field.name}-${option.value}`}
-          role="radio"
-          aria-checked={option.value === value}
-          onClick={() => onChange(option.value)}
-        >
-          {option.label}
-        </button>
-      ))}
-    </span>
+    <SegmentedControl
+      className="mail-setup-pick"
+      aria-label={field.label}
+      value={value}
+      onChange={onChange}
+      options={options.map((option) => ({ value: option.value, label: option.label, testId: `mail-setup-${field.name}-${option.value}` }))}
+    />
   );
 }

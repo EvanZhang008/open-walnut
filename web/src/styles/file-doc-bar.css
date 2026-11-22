@@ -84,28 +84,11 @@
 .fv-doc-icon.active { background: var(--bg-tertiary); color: var(--fg); }
 .fv-doc-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-/* Preview · Source: two words, the current one in the text colour. */
+/* Preview · Source: the shared segmented control, placed in the bar. */
 .fv-mode-toggle {
   flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
   margin: 0 6px 0 2px;
 }
-.fv-doc-bar .fv-html-tab.fv-mode-tab {
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  font-size: var(--font-size-md);
-  font-weight: 500;
-  padding: 0 7px;
-  border: none;
-  border-radius: 6px;
-  background: none;
-  color: var(--fg-muted);
-}
-.fv-doc-bar .fv-html-tab.fv-mode-tab:hover { color: var(--fg); background: var(--bg-hover); }
-.fv-doc-bar .fv-html-tab.fv-mode-tab.active { color: var(--fg); font-weight: 600; background: none; }
 
 /* Media controls keep their words, at the bar's height: the skips are the family's quiet small
    keys (.btn.btn-ghost.btn-sm); the speed is a select drawn to match. */
@@ -192,8 +175,8 @@
 .fv-save-error-text { flex: 1 1 260px; min-width: 0; }
 /* The choices wrap inside a narrow pane rather than running past its edge. */
 .fv-save-error-actions { flex: 0 1 auto; min-width: 0; max-width: 100%; display: inline-flex; flex-wrap: wrap; gap: 6px; }
-.fv-save-error-actions .fv-html-tab { max-width: 100%; white-space: normal; text-align: left; }
-.fv-save-error-actions .fv-html-tab {
+.fv-save-error-actions .fv-tool-btn { max-width: 100%; white-space: normal; text-align: left; }
+.fv-save-error-actions .fv-tool-btn {
   font-size: var(--font-size-sm);
   font-weight: 600;
   padding: 3px 10px;
@@ -202,8 +185,8 @@
   background: var(--bg);
   color: var(--fg);
 }
-.fv-save-error-actions .fv-html-tab:hover:not(:disabled) { background: var(--bg-secondary); }
-.fv-save-error-actions .fv-html-tab:disabled { opacity: 0.55; cursor: default; }
+.fv-save-error-actions .fv-tool-btn:hover:not(:disabled) { background: var(--bg-secondary); }
+.fv-save-error-actions .fv-tool-btn:disabled { opacity: 0.55; cursor: default; }
 .fv-save-error-actions .fv-keep-mine-btn,
 .fv-save-error-actions .fv-retry-save-btn {
   border-color: var(--accent);
@@ -501,19 +484,6 @@
 /* The path suggestions float in a portal (SessionFileExplorer PathSuggestions):
    placed by useMenuPlacement, so the old in-flow offsets must not apply. */
 .sfe-path-suggest.sfe-path-suggest-floating { left: auto; margin-top: 0; overflow-y: auto; }
-
-/* compact: Preview / Source as two icons, a small segmented pair. */
-.fv-doc-bar[data-fit='compact'] .fv-html-tab.fv-mode-tab {
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm);
-}
-.fv-doc-bar[data-fit='compact'] .fv-html-tab.fv-mode-tab svg { width: 15px; height: 15px; display: block; }
-.fv-doc-bar[data-fit='compact'] .fv-html-tab.fv-mode-tab.active { background: var(--bg-tertiary); color: var(--fg); }
 
 /* Menus here are solid (border, solid background, shadow), not the app's glass:
    a see-through menu over the file tree read as the tree's words under it in

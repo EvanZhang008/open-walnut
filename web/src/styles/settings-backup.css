@@ -41,20 +41,9 @@
   padding-top: 6px;
   padding-bottom: 6px;
 }
-.backup-restore-item {
-  display: grid;
-  /* One width for every row, room for the date and the Latest tag: the details line up. */
-  grid-template-columns: 18px 232px 1fr;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  font-size: var(--font-size-md);
-  color: var(--fg);
-  cursor: pointer;
-}
-.backup-restore-item[data-picked='true'] { background: var(--bg-tertiary); }
-.backup-restore-meta { color: var(--fg-muted); font-size: var(--font-size-md); }
+/* Each backup is a shared Radio (the date and its tags, the files under them). */
+.backup-restore-item { padding: 4px 8px; }
+.backup-restore-when { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .backup-key-shown { padding-top: 10px; padding-bottom: 10px; }
 .backup-key-shown .backup-key { white-space: normal; word-break: break-all; font-size: var(--font-size-md); }
 /* The restore list spans the row: each backup lines up under the Restore label. */
@@ -82,8 +71,6 @@
   position: relative;
   top: -1px;
 }
-
-.backup-restore-latest { margin-left: 8px; vertical-align: 1px; }
 
 .backup-contents { display: contents; }
 /* Backups on, paused for a reason the row says: the switch is shown dimmed. */

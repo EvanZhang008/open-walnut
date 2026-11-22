@@ -129,7 +129,7 @@ test.describe('task rows', () => {
     const leaderRow = page.locator(`.todo-panel .todo-panel-item[data-task-id="${leader}"]`)
     await expect(leaderRow).toBeVisible({ timeout: 15_000 })
     const chevron = leaderRow.locator('.collapse-chevron')
-    if (await chevron.count() && !(await chevron.evaluate((el) => el.classList.contains('expanded')))) await chevron.tap()
+    if (await chevron.count() && !(await chevron.evaluate((el) => el.getAttribute('aria-expanded') === 'true'))) await chevron.tap()
     const workerRow = page.locator(`.todo-panel .todo-panel-item[data-task-id="${worker}"]`)
     await expect(workerRow).toBeVisible({ timeout: 15_000 })
     await workerRow.scrollIntoViewIfNeeded()

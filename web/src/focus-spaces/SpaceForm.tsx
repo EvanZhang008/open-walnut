@@ -14,6 +14,7 @@ import { createFocusSpace, deleteFocusSpace, enterFocus, updateFocusSpace, useFo
 import { focusAppMode } from '@open-walnut/focus-scope'
 import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic'
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation'
+import { Checkbox } from '@/components/controls'
 
 const NO_TASKS: readonly Task[] = []
 
@@ -28,7 +29,7 @@ const PROJECT_FIND_AT = 8
 function Tick({ on, label, detail, onToggle, testId }: { on: boolean; label: string; detail?: string; onToggle(): void; testId?: string }) {
   return (
     <label className={`org-answer-check${on ? ' is-on' : ''}`} title={detail} {...(testId ? { 'data-testid': testId } : {})}>
-      <input type="checkbox" checked={on} onChange={onToggle} />
+      <Checkbox checked={on} onChange={onToggle} />
       <span className="focus-tick-text">
         <span className="focus-tick-label">{label}</span>
         {detail && <span className="focus-tick-detail">{detail}</span>}

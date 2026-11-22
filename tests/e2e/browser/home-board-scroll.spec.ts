@@ -33,9 +33,9 @@ test('board header controls stay reachable in narrow windows', async ({ page }) 
         return box.left >= sheet.left && box.right <= sheet.right && box.top >= sheet.top && box.bottom <= sheet.bottom;
       });
     })).toBe(true);
-    await board.getByRole('button', { name: 'By status', exact: true }).click();
+    await board.getByRole('radio', { name: 'By status', exact: true }).click();
     await expect(board).toHaveAttribute('data-mode', 'status');
-    await board.getByRole('button', { name: 'By pin', exact: true }).click();
+    await board.getByRole('radio', { name: 'By pin', exact: true }).click();
   }
   await board.getByRole('button', { name: 'Close board', exact: true }).click();
   await expect(board).toHaveCount(0);
@@ -55,7 +55,7 @@ test('every nested card body activates only its own drag and leaves controls cli
   await openHome(page);
   await page.getByRole('button', { name: 'Open task board', exact: true }).click();
   const board = page.getByTestId('home-board');
-  await board.getByRole('button', { name: 'By pin', exact: true }).click();
+  await board.getByRole('radio', { name: 'By pin', exact: true }).click();
   const cards = board.locator('[data-board-task]');
   await expect(cards).toHaveCount(rows.length);
   for (const node of await cards.all()) {

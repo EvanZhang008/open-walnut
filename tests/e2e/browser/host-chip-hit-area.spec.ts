@@ -138,7 +138,7 @@ async function clickMisses(page: Page, between?: () => Promise<void>): Promise<s
       const ob = await other.boundingBox()
       if (!ob) { out.push(`${i} no box for the other chip`); continue }
       await page.mouse.click(ob.x + ob.width / 2, ob.y + ob.height / 2)
-      await expect(other).toHaveClass(/\bactive\b/)
+      await expect(other).toHaveAttribute('aria-pressed', 'true')
       if (between) await between()
       const box = await target.boundingBox()
       if (!box) { out.push(`${i} no box`); continue }

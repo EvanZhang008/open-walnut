@@ -99,9 +99,9 @@ test('keys: ArrowDown/Up walk every row, ArrowRight and Enter open a page, Backs
   await expect(filterMenu(page)).toHaveAttribute('data-page', 'home')
   await expect(viewRow(page)).toBeFocused()
   await page.keyboard.press('ArrowDown')
-  await expect(filterMenu(page).locator('[data-view-option="quick-views"]')).toBeFocused()
+  await expect(filterMenu(page).locator('[data-view-option="quick-views"] [role="switch"]')).toBeFocused()
   await page.keyboard.press('ArrowDown')
-  await expect(filterMenu(page).locator('[data-view-option="status-lines"]')).toBeFocused()
+  await expect(filterMenu(page).locator('[data-view-option="status-lines"] [role="switch"]')).toBeFocused()
   await page.keyboard.press('ArrowDown')
   await expect(activeSeg('session-panels')).toBeFocused()
   // Typing on page two filters its rows; Backspace with text left only deletes.

@@ -196,8 +196,25 @@ test('a routing rule is added, turned off, edited and removed in Settings', asyn
   expect(actions!.y).toBeGreaterThanOrEqual(main!.y + main!.height - 1)
   await page.setViewportSize({ width: 1280, height: 900 })
 
-  await row.getByTestId('triage-rule-toggle').click()
-  await expect(row.getByTestId('triage-rule-toggle')).toHaveAttribute('aria-checked', 'false')
+  const ruleSwitch = row.getByTestId('triage-rule-toggle')
+  if (triageOn) {
+    await ruleSwitch.click()
+  } else {
+    // While Inbox triage is off a rule routes nothing: its switch reads disabled and grey, never
+    // accent blue (ControlGroup). The rule is turned off by the call the switch makes.
+    await expect(ruleSwitch).toBeDisabled()
+    expect(await ruleSwitch.evaluate((el) => {
+      const probe = document.createElement('span')
+      probe.style.color = 'var(--accent)'
+      document.body.appendChild(probe)
+      const accent = getComputedStyle(probe).color
+      probe.remove()
+      return getComputedStyle(el).backgroundColor === accent
+    })).toBe(false)
+    await fetch(`${API}/triage/routing-rules/${ruleId}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: false }) })
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  }
+  await expect(ruleSwitch).toHaveAttribute('aria-checked', 'false')
   await expect(row).toHaveClass(/trr-rule-off/)
   expect((await stored())?.enabled).toBe(false)
 

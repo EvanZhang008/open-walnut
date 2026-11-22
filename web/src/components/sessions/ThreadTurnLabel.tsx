@@ -9,7 +9,7 @@
  */
 import { memo } from 'react';
 import { ThreadStatusWord } from '@/components/sessions/ThreadStatusWord';
-import { ThreadChevronIcon } from '@/components/sessions/ThreadIcons';
+import { DisclosureButton } from '@/components/controls';
 import type { ThreadViewStatus } from '@/utils/thread-meta';
 import '@/styles/thread-stack.css';
 
@@ -49,16 +49,13 @@ export const ThreadTurnLabel = memo(function ThreadTurnLabel(p: ThreadTurnLabelP
   const toggle = p.onToggleFold;
   return (
     <div className="thread-turn-head" data-folded={p.folded ? 'true' : undefined}>
-      <button
-        type="button"
+      <DisclosureButton
         className="thread-turn-fold"
-        aria-expanded={!p.folded}
+        expanded={!p.folded}
         aria-label={p.folded ? `Show “${p.title}”` : `Fold “${p.title}”`}
         title={p.folded ? 'Show this question here' : 'Fold this question'}
         onClick={() => toggle(p.threadKey)}
-      >
-        <ThreadChevronIcon size={9} />
-      </button>
+      />
       {label}
     </div>
   );

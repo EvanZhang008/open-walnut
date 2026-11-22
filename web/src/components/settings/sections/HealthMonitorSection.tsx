@@ -173,9 +173,8 @@ export function HealthMonitorSection() {
               <span className="health-count">{view.counts.OK} OK</span>
               <span className="health-count">{view.counts.INSUFFICIENT_DATA} no data</span>
               <span className="health-count health-dim">Fix tasks today: {view.fixesToday} of {view.fixesPerDay}</span>
-              {!view.actions && <span className="health-count health-dim">Actions are off on this server</span>}
             </div>
-            <FixTasksRow mode={view.fixTasks ?? 'record'} onChanged={() => void load()} />
+            <FixTasksRow mode={view.fixTasks ?? 'record'} actionsOn={view.actions} onChanged={() => void load()} />
             <table className="health-table">
               <thead>
                 <tr><th>State</th><th>Alarm</th><th>Now</th><th>Last 24 h</th><th>What Walnut did</th></tr>
@@ -196,7 +195,12 @@ export function HealthMonitorSection() {
   );
 }
 
-function FixTasksRow({ mode, onChanged }: { mode: FixTasksMode; onChanged: () => void }) {
+/**
+ * The saved choice for an alarm that needs a fix. On a server whose actions are off (an isolated
+ * one) nothing is filed or started whatever it says, so it reads disabled with the reason beside it
+ * (2026-11-21 review: "Start fixing it" looked like a live pick while nothing could act on it).
+ */
+function FixTasksRow({ mode, actionsOn, onChanged }: { mode: FixTasksMode; actionsOn: boolean; onChanged: () => void }) {
   const [shown, setShown] = useState<FixTasksMode>(mode);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => { setShown(mode); }, [mode]);
@@ -209,7 +213,8 @@ function FixTasksRow({ mode, onChanged }: { mode: FixTasksMode; onChanged: () =>
     <div className="health-fix-row" data-testid="health-fix-tasks">
       <span className="health-fix-label">When an alarm needs a fix</span>
       <SegmentedControl<FixTasksMode> value={shown} options={FIX_OPTIONS} onChange={(v) => void pick(v)}
-        aria-label="When an alarm needs a fix" />
+        aria-label="When an alarm needs a fix" disabled={!actionsOn} />
+      {!actionsOn && <span className="health-fix-note" data-testid="health-fix-actions-off">Actions are off on this server: alarms only show here, nothing is filed or started.</span>}
       {error && <SettingsNotice kind="error" role="alert">{`Couldn't change it: ${error}`}</SettingsNotice>}
     </div>
   );
