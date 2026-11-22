@@ -34,6 +34,7 @@ vi.mock('../../../src/core/session-message-queue.js', () => ({
   deleteMessage: async () => false,
   isMessageQueued: async () => false,
   getQueue: async () => [],
+  queuedRowOfUserLine: async () => undefined,
   revertToPending: async () => {},
 }));
 

@@ -877,6 +877,16 @@ export async function getQueue(sessionId: string): Promise<QueuedMessage[]> {
   return s.queues[sessionId] ?? [];
 }
 
+/**
+ * The row queued under a send's own user line uuid, if any: the same send again (a resend whose
+ * first answer was lost) is that row, never a second copy (web/routes/session-chat.ts).
+ * An internal look, not a listing: nothing of it is shown.
+ */
+export async function queuedRowOfUserLine(sessionId: string, userUuid: string): Promise<QueuedMessage | undefined> {
+  const s = await getStore();
+  return (s.queues[sessionId] ?? []).find((m) => m.userUuid === userUuid);
+}
+
 export async function withUndeliveredMessageGuard<T>(
   check: (hasUndelivered: (sessionId: string) => boolean) => Promise<T>,
 ): Promise<T> {

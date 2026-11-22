@@ -13,7 +13,7 @@ import type { SessionEffort, SessionEngine, SessionMode } from '../../core/types
 import { normalizeEngine } from '../../core/agents/engine-registry.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tracker.js'
 import { getSessionPendingPermissions } from '../../core/sessions/session-lifecycle.js'
-import { sendMessageToSession, editMessage, deleteMessage, getQueue, settledLineUuid } from '../../core/session-message-queue.js'
+import { sendMessageToSession, editMessage, deleteMessage, getQueue, queuedRowOfUserLine, settledLineUuid } from '../../core/session-message-queue.js'
 import { heldRows, PROMPT_HOLD_REASON } from '../../providers/line-consumption.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
 import { prepareHintedSend } from '../../core/hints/hint-send.js'
@@ -333,8 +333,7 @@ export function registerSessionChatRpc(): void {
       // server took it): the bubble still knows it by its own client id, the row by its user line.
       // The same send again is that row, never a second copy (the client resends by itself once the
       // connection is back, hooks/send-auto-retry.ts).
-      const { withoutWalnutRows } = await import('../../core/sessions/session-extras.js')
-      const twin = userUuid ? (await withoutWalnutRows(await getQueue(data.sessionId))).find((m) => m.userUuid === userUuid) : undefined
+      const twin = userUuid ? await queuedRowOfUserLine(data.sessionId, userUuid) : undefined
       if (twin) {
         log.web.info('session:send retry: the send is already queued under its user line', {
           sessionId: data.sessionId, retryOf: data.retryOf, messageId: twin.id,

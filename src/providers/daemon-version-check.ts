@@ -244,6 +244,7 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/history-ready-worker.ts',
   'src/core/history-parse.ts',
   'src/core/history-parser-version.ts',
+  'src/core/drained-sends.ts',
   'src/core/sessions/legacy-hint-lines.ts',
   'src/core/sessions/user-text-projection.ts',
   'src/core/hints/hint-format.ts',
