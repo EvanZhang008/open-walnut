@@ -1,6 +1,6 @@
 ---
 name: walnut-ui-requirements
-description: The requirements every change the user can see in Walnut must meet (cards, panels, lists, inbox, chat, states and tabs, styling, proof videos), the UI standard (one look per kind of control) and the Sol review prompt. MUST read before planning, building, testing or shipping any change to web/src/, the Mac app's web pages or the phone's views. Each rule is one line with a real incident.
+description: The requirements every change the user can see in Walnut must meet (cards, panels, lists, inbox, chat, states and tabs, styling, proof videos), the user's taste (round, quiet, consistent), the UI standard (one look per kind of control) and the Sol review prompt. MUST read before planning, building, testing or shipping any change to web/src/, the Mac app's web pages or the phone's views. Each rule is one line with a real incident.
 ---
 
 # Walnut UI requirements
@@ -31,8 +31,8 @@ detail lives elsewhere and is linked, never copied: [web/src/AGENTS.md](../../..
 
 3. **Use as few states and tabs as possible, named with the user's own words, and a tab shows only its own kind.**
    Example (2026-11-20): Threads shipped All / Needs you / To read / Waiting / Done plus a "Known" group, which the user could not read; he asked for Needs you / Waiting / Closed.
-4. **A new design ships once its review and tests pass; tell the user in one line in its thread after it is live. Only a real choice of look (which of several designs) goes to him first, and his own kinds of decision (a public release, an outward send, spending, credentials, deleting data) stay his.**
-   Example (2026-11-21): the user said "just ship it when it is ready to ship, don't ask me about this"; go-live of a Walnut change is not his to ask. A choice of look is ONE HTML page with every option's picture inline, your pick and why first; the rest of the work goes on meanwhile.
+4. **A new design ships once its review and tests pass; tell the user in one line in its thread after it is live. Only a real choice of look (which of several designs) goes to him first, and so does any change to a look he did not ask about (a shape, colour, icon or layout beyond his words), as ONE before/after page; his own kinds of decision (a public release, an outward send, spending, credentials, deleting data) stay his.**
+   Example (2026-11-22): asked to unify the input boxes, a task also turned every round key square and shipped it, and the user said "you did not align with me, you just changed all of these things"; on 2026-11-21 he had said "just ship it when it is ready to ship, don't ask me about this" about go-live. The page has every option's picture inline, your pick and why first; the rest of the work goes on meanwhile.
 5. **Plain input is a plain message: never attach what the user types to a question or thread on its own.**
    Example (2026-11-20): every message in the main chat was labelled "Answer to ...".
 6. **A card that asks the user to decide holds one decision at a time; several decisions page left and right.**
@@ -56,16 +56,33 @@ detail lives elsewhere and is linked, never copied: [web/src/AGENTS.md](../../..
 13. **No toast for what the user can already see: a toast is only for a failure he cannot see, news from out of sight, or the Undo of a change that takes its object out of view.**
     Example (2026-11-21): creating a calendar event popped an "Event created" card with an Undo in the far corner while the new block sat on the grid under his pointer; the user complained. Rules: [standard.md](standard.md#toasts).
 
+## Taste: round, quiet, consistent
+
+The user's own taste, from his words of 2026-11-21 and 2026-11-22. They hold for every surface (web,
+the Mac app, the phone). When in doubt, take the simpler, rounder, quieter one.
+
+14. **Round, not square: boxes and controls are soft and rounded, keys and icon buttons are circles; a box one line tall is a rounded rectangle, never an oval pill.**
+    Example (2026-11-22): the input boxes went to 8 px corners with square keys; the user: "it was so cute and round before, now you made everything into little squares", "It should be round instead of square for our UI". A message box is 20 px, a one-line box 12 px, keys 50 % ([standard.md](./standard.md#inputs); guard `tests/web/ui-taste-guard.test.ts`); on 11-21 he called the oval Threads box ugly.
+15. **One shape per kind of element: when one chip, key or box of a kind is a pill, they all are, and when one is not, none is.**
+    Example (2026-11-22): "why is this a pill and the others are not, let's keep it consistent ... so simple, very clean". Look at the neighbours before you give an element a shape.
+16. **Quiet by default: no colour, icon, badge or line that carries no meaning; keep the user's own icons and their plain colour.**
+    Example (2026-11-22): "I want my old nice icon back, I don't want this much color", "avoid too much visual element", "We need to be super simple".
+17. **A signal is one plain dot: unread or needs-you is a small red dot, never a red number, a "!" mark, a blue dot beside it, or a word saying the same.**
+    Example (2026-11-22): on the Org rows, "the number of red change to simple red dot", "the blue dot remove", "no ... the ! mark", "VP also show a status nonono".
+18. **A row shows its name and its one signal; counts, relative times ("+7"), summaries ("1 thread ...") and statuses belong in the detail view, not the row.**
+    Example (2026-11-22): "remove the text of 1 thread xxx", "the time remove +7", "just show name of vp icon, red dot for thread", "avoid too much info".
+
 ## Proof and shipping
 
-14. **Proof is a Playwright video recorded on a Linux dev host with a copy of the user's data, his window size and his flags, at least 1280 px wide, slow enough to see each step and its result.**
+19. **Proof is a Playwright video recorded on a Linux dev host with a copy of the user's data, his window size and his flags, at least 1280 px wide, slow enough to see each step and its result.**
     Example (2026-11-20): a demo on toy fixtures looked good while the real product with real data looked bad.
-15. **One task ships one thing; when many asks pile onto one task, split them and land them one at a time.**
+20. **One task ships one thing; when many asks pile onto one task, split them and land them one at a time.**
     Example (2026-11-20): one task carried the Needs you card's new look, one-decision paging and the full-window expand fix at once, so each slipped behind the others.
-16. **Report to the user briefly, with pictures or GIFs instead of long text.**
+21. **Report to the user briefly, with pictures or GIFs instead of long text.**
     Example (2026-11-20): the user's standing rule after long reports: pictures or GIFs over long text, his exact question answered first.
 
 ## Before you land
 
 Go through this list for the change: every item of rule 1 checked, the core flows of rule 2 walked,
-the video of rule 14 watched by you frame by frame, and, after it is live, the one-line note to the user in its thread (rule 4).
+rules 14 to 18 held on every screen you touched (and nothing restyled that the user did not ask about, rule 4),
+the video of rule 19 watched by you frame by frame, and, after it is live, the one-line note to the user in its thread (rule 4).

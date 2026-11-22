@@ -144,5 +144,7 @@ describe('a new design ships after review and tests, the user hears after', () =
     expect(text).toMatch(/4\. \*\*A new design ships once its review and tests pass; tell the user in one line in its thread after it is live\./)
     expect(text).toMatch(/Only a real choice of look \(which of several designs\) goes to him first/)
     expect(text).toMatch(/a public release, an outward send, spending, credentials, deleting data\) stay his/)
+    // 2026-11-22: a look the user did not ask about changed without him ("you did not align with me").
+    expect(text).toMatch(/any change to a look he did not ask about \(a shape, colour, icon or layout beyond his words\), as ONE before\/after page/)
   })
 })
