@@ -56,7 +56,9 @@ describe('a host replica boots with no capability', () => {
     expect(logs.data('server role')).toMatchObject({ role: 'replica', placement: 'host', capabilities: [] })
     const boot = logs.data('boot policy') as { on: string[]; capabilities: string[] }
     expect(boot.capabilities).toEqual([])
-    expect([...boot.on].sort()).toEqual(['self-api-credential', 'trust-proxy'])
+    // disk-watermark and topics-runtime ran on every server before they were rows (no role gate),
+    // so the replica column has them on: boot-policy.test.ts pins that to the gates they replaced.
+    expect([...boot.on].sort()).toEqual(['disk-watermark', 'self-api-credential', 'topics-runtime', 'trust-proxy'])
     expect(logs.data('WALNUT_CAPABILITIES is ignored here: only the companion reads it')).toMatchObject({ value: ALL, placement: 'host' })
   })
 

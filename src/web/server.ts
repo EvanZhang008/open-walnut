@@ -7574,6 +7574,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   localDaemonLane = null
   // The next boot in this process decides its own mode (a trial's must not outlive it).
   setBootMode('normal')
+  // A session that dies from here on died with this computer's shutdown (sessions/shutdown-death.ts).
+  markServerStopping()
   // A handed-over home's standby started nothing else: it only stops listening, within a bounded step.
   if (handedOverServer) {
     const s = handedOverServer
@@ -7582,8 +7584,6 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
     await shutdownStep('handed-over standby', () => s.close(), { budgetMs: 2_000 })
     return
   }
-  // A session that dies from here on died with this computer's shutdown (sessions/shutdown-death.ts).
-  markServerStopping()
   // A stopping leader acts on nothing more: its outward doors close now, and its write
   // permission goes back to the witnesses (a release, at most 3 s) so the next process of this
   // machine holds at once (core/leader/switch/runtime.ts). Awaited before the stop ends.

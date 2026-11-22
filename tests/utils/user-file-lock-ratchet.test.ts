@@ -35,6 +35,8 @@ const STORE_LOCKS = new Set<string>([
   'src/core/triage/routing-rules.ts: file',                     // WALNUT_HOME/triage/routing-rules.json
   'src/commands/demo.ts: root.state',                           // Walnut's own Demo state, not user content
   'src/core/standby/target.ts: this.t.state',                   // the standby copy's own state, owner-only, never a person's file
+  'src/core/leader/switch/local-witnesses.ts: file',           // a local witness's permit-record.json in its own 0700 dir (walnut leader witnesses init), never a person's file
+  'src/core/deferred-door-work.ts: file',                       // WALNUT_HOME/cache/leader-deferred-work.json
   'src/core/boards/board-store.ts: file',                       // WALNUT_HOME/boards/<task>.json
   'src/core/topics/topics-store.ts: file',                     // WALNUT_HOME/topics/<id>.json
   'src/core/bounded-memory.ts: this.filePath',                  // an agent's memory under WALNUT_HOME
