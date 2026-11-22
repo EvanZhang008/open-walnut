@@ -246,8 +246,10 @@
 /* The ticket is the card's identity: its whole value, not the 80px inline-chip cap. */
 .kanban-card-ticket .tag-chip-inline { max-width: 100%; }
 /* R3-12: violet means Waiting on this board, so the ticket is a neutral chip like `Sev 2`.
-   R3-13: as a link it says so: an arrow, and a darker chip with the value underlined on hover. */
-:is(.board-kanban, .kanban-card-detail, .kanban-drag-overlay) .kanban-card-ticket .tag-chip {
+   R3-13: as a link it says so: an arrow, and a darker chip with the value underlined on hover.
+   The doubled class outranks the generic violet chip in dark (`:root:not([data-theme]) .tag-chip`,
+   globals.css) in whatever order the two stylesheets load (globals.css loads late, at boot). */
+:is(.board-kanban, .kanban-card-detail, .kanban-drag-overlay) .kanban-card-ticket .tag-chip.tag-chip {
   height: 18px; padding: 0 6px; border-radius: var(--radius-sm); font-size: var(--font-size-xs); font-weight: 600; line-height: 16px;
   border: 1px solid var(--border-strong); color: var(--fg-secondary); background: transparent;
 }

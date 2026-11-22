@@ -5,6 +5,7 @@
  * activation in Chromium and WebKit alike. Arrow keys move and select.
  */
 import { useId, useRef, type KeyboardEvent, type ReactNode } from 'react'
+import { useControlGroupOff } from '@/components/controls/ControlGroup'
 import '@/styles/choice-controls.css'
 
 export interface SegmentedOption<V extends string> {
@@ -42,6 +43,9 @@ export interface SegmentedControlProps<V extends string> {
   fill?: boolean
   /** Only Left/Right/Home/End move the pick: Up and Down are left to a menu that moves between its rows. */
   horizontalKeys?: boolean
+  /** A pick of the segment already shown as picked calls onChange too: for a control whose shown
+   *  pick can differ from the saved value (a fallback, a retired value drawn as its successor). */
+  reselect?: boolean
   'data-testid'?: string
   /** Tooltip on the whole group (e.g. why it is disabled). */
   title?: string
@@ -63,14 +67,19 @@ export function SegmentedControl<V extends string>({
   options,
   onChange,
   'aria-label': ariaLabel,
-  disabled,
+  disabled: ownDisabled,
   name,
   className,
   fill,
   horizontalKeys,
+  reselect,
   'data-testid': testId,
   title,
 }: SegmentedControlProps<V>) {
+  // Inside a ControlGroup that is off (a disabled fieldset) the segments are disabled too: the
+  // fieldset reaches the hidden radios, not the labels that take the focus.
+  const groupOff = useControlGroupOff()
+  const disabled = !!ownDisabled || groupOff
   const autoName = useId()
   const groupName = name ?? `seg-${autoName}`
   const rootRef = useRef<HTMLDivElement>(null)
@@ -83,7 +92,7 @@ export function SegmentedControl<V extends string>({
     const opt = options[index]
     // Inside a disabled ControlGroup (a disabled fieldset) the keys pick nothing either.
     if (!opt || disabled || rootRef.current?.closest('fieldset:disabled')) return
-    if (opt.value !== value && !opt.disabled) onChange(opt.value)
+    if ((opt.value !== value || reselect) && !opt.disabled) onChange(opt.value)
     const seg = rootRef.current?.querySelectorAll<HTMLElement>('[role="radio"]')[index]
     if (byKey && seg) {
       seg.setAttribute('data-keyed', 'true')
@@ -145,6 +154,8 @@ export function SegmentedControl<V extends string>({
               aria-hidden="true"
               className="wn-seg-input"
               onChange={() => onChange(opt.value)}
+              // A checked radio fires no change event on a click: `reselect` hears the click.
+              onClick={reselect && selected ? () => onChange(opt.value) : undefined}
               // A click on the segment focuses this hidden radio (label activation): the focus goes
               // to the segment itself, which carries the ring and the arrow keys (2026-11-05 review).
               onFocus={(e) => (e.currentTarget.parentElement as HTMLElement | null)?.focus({ preventScroll: true })}

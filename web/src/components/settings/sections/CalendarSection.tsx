@@ -193,8 +193,9 @@ export function CalendarAccounts({ heading }: { heading?: string } = {}) {
   const denied = !!status && !status.available && status.reason === 'permission-denied';
   // This machine cannot read calendars at all (not a Mac, or the cloud companion): the switch reads
   // disabled and off, its saved choice kept, and its row says why (2026-11-21 review: it showed a
-  // bright blue On over a line saying the platform it needs is missing).
-  const unsupported = !!status && !status.available && (status.reason === 'cloud' || status.reason === 'not-configured');
+  // bright blue On over a line saying the platform it needs is missing). A Mac whose helper is not
+  // set up yet ('not-configured') is not that: its switch stays usable and the notice says what to do.
+  const unsupported = !!status && !status.available && (status.reason === 'cloud' || status.reason === 'unsupported-platform');
   const unsupportedWhy = status?.reason === 'cloud'
     ? "macOS calendars can't be reached from the cloud companion; open Walnut on the Mac to see them."
     : 'Needs a Mac: Walnut reads these calendars through macOS, and this machine runs another system.';

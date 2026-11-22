@@ -458,14 +458,12 @@
     min-height: 44px;
     box-sizing: border-box;
   }
-  .app-shell-navigation .settings-layout[data-phone-settings] .settings-checkbox-control,
+  /* N20: a larger box in the 44 px row (the shared box's tick is placed from its centre, so it
+     stays centred at this size). */
   .app-shell-navigation .settings-layout[data-phone-settings] .settings-checkbox-input {
     width: 22px;
     height: 22px;
     flex-basis: 22px;
-  }
-  .app-shell-navigation .settings-layout[data-phone-settings] .settings-checkbox-input {
-    border-radius: 6px;
   }
   /* A select is a finger target too (Default engine, When it is out of usage): 28 px on a
      computer, the iOS row height here. */

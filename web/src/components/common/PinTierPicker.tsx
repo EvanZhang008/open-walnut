@@ -45,6 +45,8 @@ export function PinTierPicker({ value, onChange, label, disabled }: Props) {
         value={current ?? NO_TIER}
         options={options}
         disabled={disabled}
+        // A retired tier is drawn as Satellite: a click on Satellite then really moves it there.
+        reselect
         onChange={(v) => onChange(v === NO_TIER ? undefined : v)}
       />
     </div>

@@ -234,7 +234,7 @@ export function CameraDock({ onClose, onPhoto, onClip, onSend, onPickFile, micBu
             <>
               {videoOk && (
                 <SegmentedControl
-                  className="camera-seg"
+                  className="camera-seg wn-on-dark"
                   aria-label="Camera mode"
                   value={mode}
                   options={CAMERA_MODES}

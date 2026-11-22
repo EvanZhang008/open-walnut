@@ -423,7 +423,7 @@ export async function checkMoreSettings(ctx: StepCtx): Promise<void> {
   await expect(pair).toHaveText('Phones & Cloud')
   await expect(pair).toHaveAttribute('href', '/settings#cloud')
   // Plain words; who runs the public relays only on request.
-  await expect(relay.locator('.wn-check-row', { has: relay.locator('[data-relay="public"]') })).toContainText('A free public service passes the traffic on')
+  await expect(relay.locator('.wn-check-row', { has: page.locator('[data-relay="public"]') })).toContainText('A free public service passes the traffic on')
   await expect(relay).not.toContainText('n0')
   await expect(relay).not.toContainText('iroh')
   const about = relay.getByTestId('host-network-relay-about')

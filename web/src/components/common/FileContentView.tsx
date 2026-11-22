@@ -2500,7 +2500,7 @@ export function FileContentView({
                 The document preview couldn’t load because this page is running an
                 older version of the app (a deploy replaced it).
                 {' '}
-                <button type="button" className="fv-tool-btn" onClick={() => window.location.reload()}>
+                <button type="button" className="btn btn-sm" onClick={() => window.location.reload()}>
                   Reload the page
                 </button>
                 {' '}
@@ -2561,17 +2561,17 @@ export function FileContentView({
           <span className="fv-save-error-text">{bannerText}</span>
           {conflictOpen && (
             <span className="fv-save-error-actions">
-              <button type="button" className="fv-tool-btn fv-keep-mine-btn" onClick={() => { void keepMine(); }} disabled={saving}>
+              <button type="button" className="btn btn-sm btn-primary fv-keep-mine-btn" onClick={() => { void keepMine(); }} disabled={saving}>
                 Keep my version
               </button>
-              <button type="button" className="fv-tool-btn fv-use-disk-btn" onClick={() => { void useDisk(); }} disabled={saving}>
+              <button type="button" className="btn btn-sm fv-use-disk-btn" onClick={() => { void useDisk(); }} disabled={saving}>
                 Use the version on disk
               </button>
             </span>
           )}
           {retryOpen && (
             <span className="fv-save-error-actions">
-              <button type="button" className="fv-tool-btn fv-retry-save-btn" onClick={() => { void retrySave(); }} disabled={saving}>
+              <button type="button" className="btn btn-sm btn-primary fv-retry-save-btn" onClick={() => { void retrySave(); }} disabled={saving}>
                 {saving ? 'Saving…' : 'Try again'}
               </button>
             </span>
@@ -2580,7 +2580,7 @@ export function FileContentView({
             <span className="fv-save-error-actions">
               <button
                 type="button"
-                className="fv-tool-btn fv-retry-save-btn fv-reload-btn"
+                className="btn btn-sm btn-primary fv-retry-save-btn fv-reload-btn"
                 // The draft store already holds the text (every edit is captured),
                 // so the reloaded tab replays it and saves it on its own.
                 onClick={() => { void flushDraft().finally(() => window.location.reload()); }}
@@ -2610,13 +2610,13 @@ export function FileContentView({
           <span>You have unsaved changes to this file from an older version of it on disk.</span>
           <button
             type="button"
-            className="fv-tool-btn"
+            className="btn btn-sm"
             onClick={restoreStaleDraft}
             title="Put your unsaved text back in the editor. The copy on disk is newer, so you will be asked before it replaces that version."
           >
             Restore my changes
           </button>
-          <button type="button" className="fv-tool-btn" onClick={discardStaleDraft}>
+          <button type="button" className="btn btn-sm" onClick={discardStaleDraft}>
             Discard draft
           </button>
         </div>
@@ -2635,13 +2635,13 @@ export function FileContentView({
       )}
       {!loading && showPreview && isHtml && strayed && (
         <div className="fv-draft-banner fv-strayed-banner" role="status">
-          <button type="button" className="fv-tool-btn" onClick={returnToFile}>
+          <button type="button" className="btn btn-sm" onClick={returnToFile}>
             ← Back to {filePath.split('/').pop() || filePath}
           </button>
           {strayed.path && onOpenPath && (
             <button
               type="button"
-              className="fv-tool-btn"
+              className="btn btn-sm"
               onClick={() => { const p = strayed.path!; setStrayed(null); onOpenPath(p); }}
               title={strayed.path}
             >

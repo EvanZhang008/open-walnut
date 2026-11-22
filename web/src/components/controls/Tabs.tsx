@@ -1,8 +1,8 @@
 /**
  * Tabs: switch between the panels of one view (standard.md, "Choice controls"). One look: an
  * underline under the selected tab, 32 px, 13 px. role=tablist / role=tab with aria-selected; the
- * arrow keys, Home and End move between tabs and select (automatic activation), and only the
- * selected tab is in the Tab order.
+ * Left and Right arrows, Home and End move between tabs and select (automatic activation), and only
+ * the selected tab is in the Tab order.
  *
  * `Tabs` takes a list of items; `TabList` + `Tab` are for a strip whose tabs carry more (a close
  * button, a drag handle): the look and the keys are the same.
@@ -39,8 +39,11 @@ export interface TabsProps<V extends string> {
   panelId?: (v: V) => string
 }
 
-/** Move the focus to the tab the key names and select it. */
+/** Move the focus to the tab the key names and select it. A strip is a row: Left and Right move
+ *  along it, Up and Down are left to the page (they move a tab only in an aria-orientation=vertical list). */
 function onListKey(e: KeyboardEvent<HTMLElement>) {
+  const vertical = e.currentTarget.getAttribute('aria-orientation') === 'vertical'
+  if (vertical ? e.key === 'ArrowLeft' || e.key === 'ArrowRight' : e.key === 'ArrowUp' || e.key === 'ArrowDown') return
   const tabs = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]:not([disabled])')]
   const at = tabs.indexOf(document.activeElement as HTMLElement)
   if (at < 0) return

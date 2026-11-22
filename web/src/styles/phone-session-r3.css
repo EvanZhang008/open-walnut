@@ -73,7 +73,9 @@
     min-height: 44px;
     min-width: 44px;
   }
-  html body .hib-row-btn {
+  /* A letter's Read letter / Collapse and an email's Show more are the shared Disclosure: the
+     same floor. */
+  html body :is(.hib-row-btn, .hib-card-toggle, .hii-summary-toggle) {
     min-height: 44px;
     min-width: 44px;
   }

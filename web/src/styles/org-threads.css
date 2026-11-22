@@ -74,16 +74,9 @@
 .org-thread-unread .org-thread-answer-body { -webkit-line-clamp: 4; }
 .org-thread-re { font-size: var(--font-size-sm); color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Expand / Collapse, on the text it opens (left, under it), and the card's Conversation toggle. */
-.org-thread-toggle {
-  align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px 2px 4px; margin-left: -4px;
-  border: 0; border-radius: 6px; background: transparent; color: var(--accent); font: inherit; font-size: var(--font-size-sm); font-weight: 500; cursor: pointer;
-  transition: background-color 120ms ease-out;
-}
-.org-thread-toggle:hover { background: var(--bg-secondary); }
-.org-thread-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.org-thread-toggle > span[aria-hidden] { width: 12px; text-align: center; }
-.org-thread-history { color: var(--fg-secondary); }
+/* Expand / Collapse, on the text it opens (left, under it), and the card's Conversation toggle: the
+   shared Disclosure draws them (choice-controls.css); here only their place. */
+.org-thread-toggle { align-self: flex-start; }
 .org-thread-fold.is-folded { cursor: pointer; }
 
 /* The conversation: his words beside their number, the node's answer under them. */
@@ -131,11 +124,7 @@
 .org-thread-closed { font-size: var(--font-size-sm); color: var(--fg-muted); margin-right: auto; }
 .org-thread-follow { display: flex; flex-direction: column; gap: 4px; }
 .org-thread-error { margin: 0 auto 0 0; font-size: var(--font-size-sm); color: var(--error); }
-.org-threads-closed-toggle {
-  align-self: flex-start; border: 0; padding: 4px 0; background: transparent; color: var(--fg-muted);
-  font: inherit; font-size: var(--font-size-sm); cursor: pointer;
-}
-.org-threads-closed-toggle:hover { color: var(--fg-secondary); }
+.org-threads-closed-toggle { align-self: flex-start; }
 
 /* Threads in their groups (experiment brief_off, components/org/OrgThreadsByState.tsx): a heading
    per group; Needs you and Done open, the rest a fold (a button head with a chevron) until opened. */

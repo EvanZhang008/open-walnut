@@ -225,6 +225,9 @@ export function countAll(): Counts {
     if (n) out.rawAccent[path.relative(WEB_SRC, file)] = n;
   }
   for (const file of walk(WEB_SRC, ['.tsx']).sort()) {
+    // The choice controls' own buttons (a chip, a disclosure) are their family, not the button one
+    // (standard.md, "Choice controls").
+    if (path.relative(WEB_SRC, file).startsWith('components/controls/')) continue;
     const n = buttonTags(fs.readFileSync(file, 'utf8')).filter(isBareButton).length;
     if (n) out.bareButton[path.relative(WEB_SRC, file)] = n;
   }

@@ -108,7 +108,7 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
 /* On a phone no text is under 12 px and every button takes a finger (phone-home.spec.ts
    C18, C19): the counts and fold lines above are 10 and 11.5 px, and a fold is 22 px tall. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  html .app-shell-navigation .project-status-counts { font-size: 12px; }
+  html .app-shell-navigation .project-status-counts { font-size: var(--font-size-sm); }
   html .app-shell-navigation .project-status-count-icon svg { width: 12px; height: 12px; }
   html .app-shell-navigation .project-status-fold { min-height: 44px; }
   html .app-shell-navigation .status-section-more { min-height: 44px; font-size: var(--font-size-md); }

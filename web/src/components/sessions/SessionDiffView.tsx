@@ -2997,7 +2997,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               the loading/error/empty states, where an open bar can't render. */}
           {!empty && (
             <button
-              className={`fv-tool-btn${searchOpen ? ' active' : ''}`}
+              className="btn btn-ghost btn-sm"
               onClick={() => (searchOpen ? closeSearch() : openSearch())}
               title="Find in diff (⌘F)"
               aria-pressed={searchOpen}

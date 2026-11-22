@@ -28,7 +28,7 @@
 import {
   useCallback, useEffect, useId, useRef, useState,
   type CSSProperties, type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent, type RefObject,
+  type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { LOCAL_HOST, type EngineSettingsWriteScope } from '@/api/engine-settings';
@@ -197,10 +197,18 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
     showGuard();
   }, [view, showGuard]);
 
-  const onScopeClick = useCallback((next: EngineSettingsWriteScope) => {
-    if (suppressClickRef.current) { suppressClickRef.current = false; return; }
-    pickScope(next);
-  }, [pickScope]);
+  // A segment is a label over a hidden radio: its mouse press focuses the label and its click
+  // focuses and checks the radio (label activation). Both would blur the draft into the old scope,
+  // so a guarded press cancels them before the segment sees them.
+  const onScopeMouseDown = useCallback((e: ReactMouseEvent) => {
+    if (suppressClickRef.current) e.preventDefault();
+  }, []);
+  const onScopeClickCapture = useCallback((e: ReactMouseEvent) => {
+    if (!suppressClickRef.current) return;
+    suppressClickRef.current = false;
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
 
   const placed = placement !== null;
   // Focus lands on the dialog itself so a screen reader announces its name.
@@ -395,15 +403,20 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
       <div className="engine-settings-popover-scope-block">
         <div className="engine-settings-scope-row">
           <span className="engine-settings-scope-label" aria-hidden>Save changes to</span>
-          {/* The press guard runs before the segment's own click (onScopePointerDown). */}
-          <span className="engine-settings-scope-press" onPointerDownCapture={onScopePointerDown}>
+          {/* The press guard runs before the segment's own press and click (onScopePointerDown). */}
+          <span
+            className="engine-settings-scope-press"
+            onPointerDownCapture={onScopePointerDown}
+            onMouseDownCapture={onScopeMouseDown}
+            onClickCapture={onScopeClickCapture}
+          >
             <SegmentedControl
               className="engine-settings-scope"
               aria-label="Save changes to"
               value={scope}
               disabled={switchLocked}
               options={[scopeOption('default', `Same as ${displayName}`), scopeOption('project', 'This project only')]}
-              onChange={onScopeClick}
+              onChange={pickScope}
             />
           </span>
         </div>

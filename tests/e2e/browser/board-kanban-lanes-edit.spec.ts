@@ -159,7 +159,9 @@ test('C19: Add lane puts `Waiting on customer` before Resolved, kind Waiting, an
   await input.fill('Waiting on customer')
   await expect(pane.getByTestId('kanban-add-lane-kind-wait')).toBeChecked()
   await expect(pane.getByTestId('kanban-add-lane-kind-active')).not.toBeChecked()
-  await expect(pane.getByTestId('kanban-add-lane-kinds').getByRole('radio')).toHaveCount(5)
+  // One radio group, named, of the five lane kinds (the shared Radio inputs).
+  await expect(pane.getByTestId('kanban-add-lane-kinds')).toHaveAttribute('role', 'radiogroup')
+  await expect(pane.getByRole('radiogroup', { name: 'Lane kind' }).getByRole('radio')).toHaveCount(5)
   await input.press('Enter')
   await expect.poll(() => laneNames(pane)).toEqual(['New', 'Investigating', 'Mitigating', 'Waiting on partner team', 'Waiting on CR', 'Waiting on customer', 'Resolved'])
   const ids = await laneIds(pane)

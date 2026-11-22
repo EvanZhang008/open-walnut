@@ -33,7 +33,8 @@ const NEW_SESSION_ID = 'pw-tags-session'
 const SHOTS = '/tmp/session-transfer'
 const BLOCKED = 'Codex runs on this machine only for now'
 /** A Transfer choice's whole row: its radio carries the test id, its words sit in the label around it. */
-const choiceRow = (dialog: Locator, testId: string) => dialog.locator('label', { has: dialog.getByTestId(testId) })
+// `has` is queried inside each label, so the inner locator is page-rooted (a dialog-rooted one matches nothing).
+const choiceRow = (dialog: Locator, testId: string) => dialog.locator('label', { has: dialog.page().getByTestId(testId) })
 
 const OPTIONS = {
   taskId: TASK_ID,

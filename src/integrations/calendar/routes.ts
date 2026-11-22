@@ -51,7 +51,7 @@ function errorReply(walnut: WalnutServerPluginApi, err: unknown): PluginRouteRep
       : code === 'human-approval-required' || code === 'approval-canceled' ? 403
       : code === 'readonly' ? 409
       : code === 'permission-denied' ? 403
-      : code === 'disabled' || code === 'not-configured' || code === 'cloud' ? 503
+      : code === 'disabled' || code === 'not-configured' || code === 'unsupported-platform' || code === 'cloud' ? 503
       : 502
     return { status, json: { error: err instanceof Error ? err.message : String(err), code } }
   }

@@ -455,8 +455,15 @@ for (const theme of ['light', 'dark'] as const) {
         checked++
         if (r < 4.5) low.push(`${el.className || el.tagName} "${(el.textContent || (el as HTMLInputElement).value).trim().slice(0, 24)}" ${r.toFixed(2)}`)
       }
-      const sw = getComputedStyle(document.querySelector('.cal-view-switch')!)
+      const swEl = document.querySelector<HTMLElement>('.cal-view-switch')!
+      const sw = getComputedStyle(swEl)
       const active = getComputedStyle(document.querySelector('.cal-view-switch .cal-view-btn[aria-checked="true"]')!)
+      // The shared track colour where the switch sits (the theme's tokens), to hold the switch to it.
+      const probe = document.createElement('span')
+      probe.style.background = 'var(--choice-track)'
+      swEl.parentElement!.appendChild(probe)
+      const trackWant = getComputedStyle(probe).backgroundColor
+      probe.remove()
       return {
         dark,
         blur: popStyle.backdropFilter || (popStyle as unknown as Record<string, string>).webkitBackdropFilter,
@@ -465,6 +472,7 @@ for (const theme of ['light', 'dark'] as const) {
         low,
         checked,
         track: sw.backgroundColor,
+        trackWant,
         thumb: active.backgroundColor,
         thumbShadow: active.boxShadow,
       }
@@ -476,8 +484,11 @@ for (const theme of ['light', 'dark'] as const) {
     expect(report.alpha).toBeLessThan(1)
     expect(report.checked).toBeGreaterThanOrEqual(6)
     expect(report.low, 'text under 4.5:1 on the glass').toEqual([])
-    // The view switch is the shared segmented control (choice-controls.css): a track and a lifted thumb.
+    // The view switch is the shared segmented control (choice-controls.css): its own track colour
+    // (no view paints it), a thumb that stands apart from the track, and the thumb's lift.
+    expect(report.track).toBe(report.trackWant)
     expect(cssColorToRgba(report.track)[3]).toBeGreaterThan(0)
+    expect(report.thumb).not.toBe(report.track)
     expect(report.thumbShadow).not.toBe('none')
     await shot(page, `glass-${theme}`)
   })

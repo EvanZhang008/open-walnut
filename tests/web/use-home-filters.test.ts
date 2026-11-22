@@ -142,6 +142,8 @@ describe('footerCounts / footerItems (5.6, C9, C39, C49)', () => {
     expect(items[0].next.status).toEqual(['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'WAITING']);
     expect(items[1].next.status).toEqual(['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'COMPLETE']);
     expect(items[2].next.date).toBe('');
+    // Waiting and Complete are toggles (aria-pressed); the date item is a one-shot action with no state.
+    expect(items.map((i) => i.on)).toEqual([false, false, undefined]);
     const shown = footerItems(st({ status: ['TODO', 'IN_PROGRESS', 'NEED_ACTION', 'WAITING', 'COMPLETE'] }), { waiting: 2, complete: 3, notAvailable: 0 });
     expect(shown.map((i) => i.text)).toEqual(['2 Waiting shown', '3 Complete shown']);
   });

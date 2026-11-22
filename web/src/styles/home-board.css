@@ -4,7 +4,8 @@
 .home-board-count { color: var(--fg-muted); font-size: var(--font-size-sm); }
 .home-board-controls { display: flex; align-items: center; gap: 12px; margin-left: auto; }
 .home-board-controls > .home-board-search { width: 150px; }
-.home-board-controls input:not(.wn-seg-input) { width: 150px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; font-size: 12px; }
+/* :where keeps this at the old weight, so the mic field's own input rule (full width, room for the mic) still wins. */
+.home-board-controls input:where(:not(.wn-seg-input)) { width: 150px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--fg); font: inherit; font-size: var(--font-size-sm); }
 .home-board-close { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: var(--radius-xs); color: var(--fg-muted); background: transparent; }
 .home-board-close:hover { color: var(--fg); background: var(--bg-secondary); }
 .home-board-hint { display: flex; align-items: center; flex: 0 0 48px; box-sizing: border-box; padding: 8px 18px; color: var(--fg-muted); font-size: var(--font-size-sm); line-height: 1.5; border-bottom: 1px solid var(--border); }
@@ -55,7 +56,7 @@
 @media (max-width: 700px) {
   .home-board-head { flex-wrap: wrap; padding: 12px; }
   .home-board-controls { flex-wrap: wrap; gap: 7px; width: 100%; margin-left: 0; }
-  .home-board-controls input:not(.wn-seg-input) { flex: 1; min-width: 70px; width: auto; }
+  .home-board-controls input:where(:not(.wn-seg-input)) { flex: 1; min-width: 70px; width: auto; }
   .home-board-controls > .home-board-search { flex: 1; min-width: 70px; width: auto; }
   .home-board-close { margin-left: auto; }
   .home-board-hint { flex-basis: 76px; padding: 9px 12px; }

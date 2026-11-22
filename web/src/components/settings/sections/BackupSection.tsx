@@ -681,18 +681,8 @@ export function BackupSection({ config, onSave }: Props) {
           // On but paused (the reason is the help): the switch reads as paused too, not plainly on.
           control={<span className={enabled && blocked && !loading ? 'backup-toggle-paused' : undefined}><ToggleSwitch id="backup-enabled" checked={enabled} onChange={setAutomatic} disabled={!!blocked && !enabled} {...masterProps('backup-interval-group')} /></span>}
         />
-        {!legacyMode && (
-          <SettingsRow
-            label="Encrypt backups"
-            htmlFor="backup-encrypt"
-            help={encrypted
-              ? 'On: encrypted on this computer first, and only your recovery key opens them. Keep the key somewhere safe. Backups made before stay restorable.'
-              : 'Off: stored as they are, with no key to keep. Anyone who can open your backups can read or change them. Backups made before stay restorable.'}
-            data-testid="backup-encrypt-row"
-            control={<ToggleSwitch id="backup-encrypt" checked={encrypted} onChange={setEncryption} />}
-          />
-        )}
-        {/* Only automatic backups run on a clock: while they are off, Every reads disabled. */}
+        {/* Only automatic backups run on a clock: while they are off, Every reads disabled. It sits
+            right under its master, so the line that says why reads as about it, not about Encrypt. */}
         <ControlGroup id="backup-interval-group" off={!enabled} className="settings-rows-contents"
           reason="Turn on Back up automatically to choose how often.">
         <SettingsRow
@@ -717,6 +707,17 @@ export function BackupSection({ config, onSave }: Props) {
           }
         />
         </ControlGroup>
+        {!legacyMode && (
+          <SettingsRow
+            label="Encrypt backups"
+            htmlFor="backup-encrypt"
+            help={encrypted
+              ? 'On: encrypted on this computer first, and only your recovery key opens them. Keep the key somewhere safe. Backups made before stay restorable.'
+              : 'Off: stored as they are, with no key to keep. Anyone who can open your backups can read or change them. Backups made before stay restorable.'}
+            data-testid="backup-encrypt-row"
+            control={<ToggleSwitch id="backup-encrypt" checked={encrypted} onChange={setEncryption} />}
+          />
+        )}
         {otherWriter && (confirmAdopt ? (
           <SettingsRow
             state="warning"

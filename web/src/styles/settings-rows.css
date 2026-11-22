@@ -36,7 +36,9 @@
 :is(.settings-group-block[aria-disabled='true'] > .settings-group, .settings-group[aria-disabled='true'])
   > :not(.settings-rows-contents, .settings-disclosure-content),
 :is(.settings-group-block[aria-disabled='true'], .settings-group[aria-disabled='true'])
-  :is(.settings-rows-contents, .settings-disclosure-content) > :not(.settings-rows-contents, .settings-disclosure-content) {
+  :is(.settings-rows-contents, .settings-disclosure-content) > :not(.settings-rows-contents, .settings-disclosure-content, .wn-group-rows),
+:is(.settings-group-block[aria-disabled='true'], .settings-group[aria-disabled='true'])
+  .settings-rows-contents > .wn-group-rows > :not(.settings-rows-contents, .settings-disclosure-content) {
   opacity: 0.45;
 }
 

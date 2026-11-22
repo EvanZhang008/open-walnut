@@ -230,19 +230,20 @@ test('the relay choice: what each one shares, a companion means its relay, and w
   const own = picker.locator('[data-relay="own"]')
   const pub = picker.locator('[data-relay="public"]')
   const none = picker.locator('[data-relay="none"]')
-  const words = (radio: typeof own) => picker.locator('.wn-check-row', { has: radio })
+  // `has` is queried inside each row, so it takes a page-rooted locator (a picker-rooted one matches nothing).
+  const words = (relay: string) => picker.locator('.wn-check-row', { has: page.locator(`[data-relay="${relay}"]`) })
   // A companion: its relay, and the other two say what they share but cannot be picked.
   await expect(own).toBeChecked()
-  await expect(words(own)).toContainText('On your cloud companion (wn.example.com). Only your machines use it.')
+  await expect(words('own')).toContainText('On your cloud companion (wn.example.com). Only your machines use it.')
   // Plain words; who runs the public relays only on request (2026-11-05 reviews: "run by n0, who
   // make iroh ... n0's lookup service" in the choice itself).
-  await expect(words(pub)).toContainText('A free public service passes the traffic on when two of your machines cannot reach each other directly.')
-  await expect(words(pub)).not.toContainText('n0')
+  await expect(words('public')).toContainText('A free public service passes the traffic on when two of your machines cannot reach each other directly.')
+  await expect(words('public')).not.toContainText('n0')
   const about = picker.getByTestId('host-network-relay-about')
   await about.click()
   await expect(picker).toContainText("n0, the makers of iroh, the network software Walnut uses. Their relays see your machines' internet addresses and which of them talk to each other")
   await about.click()
-  await expect(words(none)).toContainText('Machines behind two home routers may not connect.')
+  await expect(words('none')).toContainText('Machines behind two home routers may not connect.')
   await expect(pub).toBeDisabled()
   await expect(none).toBeDisabled()
   await expect(picker).toContainText('While a cloud companion is paired, your machines use its relay.')

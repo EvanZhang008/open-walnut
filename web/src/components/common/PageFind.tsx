@@ -703,7 +703,10 @@ export function PageFind() {
       return;
     }
     const next = resolveScope();
-    if (active && active !== document.body && !active.closest('.page-find')) restoreFocusRef.current = active;
+    // A tab that only shows the searched document (the note's tab, clicked) is not where the reader
+    // was: closing goes back to the document itself, as when nothing had focus.
+    const tabOfDoc = next.kind === 'doc' && !!active?.closest('[role="tab"]');
+    if (active && active !== document.body && !active.closest('.page-find') && !tabOfDoc) restoreFocusRef.current = active;
     // Seed from a one-line selection, the way a browser or VS Code does.
     const seed = selectionNeedle(window.getSelection(), { inDocs: true });
     if (seed) setQuery(seed);

@@ -18,7 +18,7 @@
   line-height: 1.5;
   cursor: pointer;
 }
-.draft-workspace-hint { margin: 4px 0 0 34px; font-size: 11px; line-height: 1.4; color: var(--fg-muted); }
+.draft-workspace-hint { margin: 4px 0 0 36px; font-size: var(--font-size-xs); line-height: 1.4; color: var(--fg-muted); }
 .draft-workspace-toggle:hover { color: var(--fg); }
 /* A new draft's switch is a row of its More menu (DraftWorkspaceMenuItem): the row is its label. */
 .draft-workspace-menu-item[aria-disabled='true'] { color: var(--fg-muted); cursor: default; }

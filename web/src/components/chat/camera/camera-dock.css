@@ -77,16 +77,7 @@
 }
 .camera-dock-side { min-width: 92px; display: flex; justify-content: flex-end; }
 .camera-dock-hint { color: var(--fg-muted); font-size: var(--font-size-sm); }
-/* The dock is dark in every theme: the shared segmented control reads the dark palette here
-   (the same values as the dark theme's), never a look of its own. */
-.camera-seg {
-  min-width: 92px;
-  --choice-track: rgba(118, 118, 128, 0.24);
-  --choice-thumb: rgba(255, 255, 255, 0.2);
-  --fg: #F5F5F7;
-  --fg-secondary: #D1D1D6;
-  --bg-hover: rgba(255, 255, 255, 0.06);
-}
+.camera-seg { min-width: 92px; }
 .camera-shutter {
   width: 40px;
   height: 40px;

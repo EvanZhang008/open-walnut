@@ -55,6 +55,7 @@ import { usePhoneSettingsPane } from '@/components/settings/usePhoneSettingsPane
 import '@/styles/phone-settings.css'
 import { announceSettingsAnchor } from '@/components/settings/settings-anchor-event'
 import { recordVisit, settingsVisitKey } from '@/api/page-visits'
+import { rememberLocation } from '@/utils/last-location'
 import { useSettingsGutter } from '@/components/settings/useSettingsGutter'
 
 /** Any of these means the person took the wheel: hash anchoring lets go. */
@@ -305,9 +306,14 @@ function SettingsPageLayout({ model, paneId, targetId, rowTarget, hash }: Layout
     return () => clearTimeout(t)
   }, [config])
 
+  const { pathname, search } = useLocation()
   const openPane = useCallback((id: string) => {
     navigate({ hash: `#${id}` }, { replace: true })
-  }, [navigate])
+    // Kept for the sidebar link now, not when the new pane commits: a router navigation renders
+    // in a transition, and a click away (Home) before a heavy pane finishes drops that render,
+    // so App's record of the committed location never saw this pane.
+    rememberLocation({ pathname, search, hash: `#${id}` })
+  }, [navigate, pathname, search])
 
   // Pending work from a nav open (focus the title, scroll to a filter row hit).
   const phoneOpen = useRef<() => void>(() => {})

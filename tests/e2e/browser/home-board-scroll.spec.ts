@@ -26,13 +26,17 @@ test('board header controls stay reachable in narrow windows', async ({ page }) 
   const board = page.getByTestId('home-board');
   for (const width of [250, 320, 390, 700, 1193]) {
     await page.setViewportSize({ width, height: 650 });
+    // Every control a person reaches: buttons, the search box, and each segment of the mode
+    // switch (a role=radio label; its hidden native radio is not one). Names the ones cut off.
     await expect.poll(() => board.evaluate(el => {
       const sheet = el.getBoundingClientRect();
-      return [...el.querySelectorAll('.home-board-controls button, .home-board-controls input')].every(node => {
+      const controls = [...el.querySelectorAll('.home-board-controls :is(button, input:not(.wn-seg-input), [role="radio"])')];
+      if (!controls.length) return ['no controls found'];
+      return controls.filter(node => {
         const box = node.getBoundingClientRect();
-        return box.left >= sheet.left && box.right <= sheet.right && box.top >= sheet.top && box.bottom <= sheet.bottom;
-      });
-    })).toBe(true);
+        return !(box.left >= sheet.left && box.right <= sheet.right && box.top >= sheet.top && box.bottom <= sheet.bottom);
+      }).map(node => `${node.getAttribute('aria-label') || node.textContent?.trim() || node.tagName} @${Math.round(node.getBoundingClientRect().left)}..${Math.round(node.getBoundingClientRect().right)} of ${Math.round(sheet.right)}`);
+    }), `controls outside the sheet at ${width}px`).toEqual([]);
     await board.getByRole('radio', { name: 'By status', exact: true }).click();
     await expect(board).toHaveAttribute('data-mode', 'status');
     await board.getByRole('radio', { name: 'By pin', exact: true }).click();

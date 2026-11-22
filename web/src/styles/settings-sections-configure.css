@@ -36,7 +36,9 @@
   display: contents;
 }
 
-.settings-group .settings-rows-contents > .settings-row:first-child::before {
+/* A ControlGroup's rows (controls/ControlGroup.tsx) sit in its own boxless wrapper: the same. */
+.settings-group .settings-rows-contents > .settings-row:first-child::before,
+.settings-group .settings-rows-contents > .wn-group-rows > .settings-row:first-child::before {
   content: '';
   position: absolute;
   top: 0;
@@ -47,7 +49,8 @@
   pointer-events: none;
 }
 
-.settings-group .settings-rows-contents > .settings-row.settings-row-indent:first-child::before {
+.settings-group .settings-rows-contents > .settings-row.settings-row-indent:first-child::before,
+.settings-group .settings-rows-contents > .wn-group-rows > .settings-row.settings-row-indent:first-child::before {
   left: var(--settings-row-indent);
 }
 
@@ -237,7 +240,8 @@
 }
 
 /* A boxless wrapper that opens its group draws no hairline above its first row. */
-.settings-group > .settings-rows-contents:first-child > .settings-row:first-child::before {
+.settings-group > .settings-rows-contents:first-child > .settings-row:first-child::before,
+.settings-group > .settings-rows-contents:first-child > .wn-group-rows:first-child > .settings-row:first-child::before {
   content: none;
 }
 

@@ -175,26 +175,6 @@
 .fv-save-error-text { flex: 1 1 260px; min-width: 0; }
 /* The choices wrap inside a narrow pane rather than running past its edge. */
 .fv-save-error-actions { flex: 0 1 auto; min-width: 0; max-width: 100%; display: inline-flex; flex-wrap: wrap; gap: 6px; }
-.fv-save-error-actions .fv-tool-btn { max-width: 100%; white-space: normal; text-align: left; }
-.fv-save-error-actions .fv-tool-btn {
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  padding: 3px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
-}
-.fv-save-error-actions .fv-tool-btn:hover:not(:disabled) { background: var(--bg-secondary); }
-.fv-save-error-actions .fv-tool-btn:disabled { opacity: 0.55; cursor: default; }
-.fv-save-error-actions .fv-keep-mine-btn,
-.fv-save-error-actions .fv-retry-save-btn {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--on-accent);
-}
-.fv-save-error-actions .fv-keep-mine-btn:hover:not(:disabled),
-.fv-save-error-actions .fv-retry-save-btn:hover:not(:disabled) { background: var(--accent-hover); }
 .fv-save-error-dismiss {
   flex: none;
   display: inline-flex;

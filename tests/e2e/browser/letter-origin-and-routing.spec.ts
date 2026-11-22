@@ -6,7 +6,8 @@
  *     Letters are invented and seeded straight into the fixture's store; the server derives the
  *     origin on read, so this also proves a letter written before the field reads right.
  *  2. Settings > Inbox Triage > Routing rules: add a rule by picking a task, turn it off, edit it,
- *     remove it; what is on screen matches the rules file.
+ *     remove it; what is on screen matches the rules file. While Inbox triage is off a rule's switch
+ *     is disabled; with it on, the switch turns the rule off.
  */
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
@@ -197,26 +198,35 @@ test('a routing rule is added, turned off, edited and removed in Settings', asyn
   await page.setViewportSize({ width: 1280, height: 900 })
 
   const ruleSwitch = row.getByTestId('triage-rule-toggle')
-  if (triageOn) {
-    await ruleSwitch.click()
-  } else {
-    // While Inbox triage is off a rule routes nothing: its switch reads disabled and grey, never
-    // accent blue (ControlGroup). The rule is turned off by the call the switch makes.
-    await expect(ruleSwitch).toBeDisabled()
-    expect(await ruleSwitch.evaluate((el) => {
-      const probe = document.createElement('span')
-      probe.style.color = 'var(--accent)'
-      document.body.appendChild(probe)
-      const accent = getComputedStyle(probe).color
-      probe.remove()
-      return getComputedStyle(el).backgroundColor === accent
-    })).toBe(false)
-    await fetch(`${API}/triage/routing-rules/${ruleId}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: false }) })
-    await page.evaluate(() => window.dispatchEvent(new Event('focus')))
-  }
+  const triageSwitch = page.locator('#inbox-triage-enabled')
+  // While Inbox triage is off a rule routes nothing: its switch reads disabled and grey, never
+  // accent blue (ControlGroup), with its saved state kept.
+  if (triageOn) await triageSwitch.click()
+  await expect(triageSwitch).toHaveAttribute('aria-checked', 'false')
+  await expect(ruleSwitch).toBeDisabled()
+  await expect(ruleSwitch).toHaveAttribute('aria-checked', 'true')
+  expect(await ruleSwitch.evaluate((el) => {
+    const probe = document.createElement('span')
+    probe.style.color = 'var(--accent)'
+    document.body.appendChild(probe)
+    const accent = getComputedStyle(probe).color
+    probe.remove()
+    return getComputedStyle(el).backgroundColor === accent
+  })).toBe(false)
+
+  // With Inbox triage on, the rule is turned off with its own switch.
+  await triageSwitch.click()
+  await expect(triageSwitch).toHaveAttribute('aria-checked', 'true')
+  await expect(ruleSwitch).toBeEnabled()
+  await ruleSwitch.click()
   await expect(ruleSwitch).toHaveAttribute('aria-checked', 'false')
   await expect(row).toHaveClass(/trr-rule-off/)
-  expect((await stored())?.enabled).toBe(false)
+  await expect.poll(async () => (await stored())?.enabled).toBe(false)
+  // Inbox triage goes back to how this spec found it.
+  if (!triageOn) {
+    await triageSwitch.click()
+    await expect(triageSwitch).toHaveAttribute('aria-checked', 'false')
+  }
 
   await row.getByTestId('triage-rule-edit').click()
   const edit = group.getByTestId('triage-rule-editor')

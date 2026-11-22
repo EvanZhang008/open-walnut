@@ -787,7 +787,7 @@ function SideQuestionDrawerBody({
                   className={`side-thread-chip-wrap${t.id === state.activeThreadId ? ' is-active' : ''}`}
                 >
                   <Chip
-                    className="side-thread-chip is-archived"
+                    className="side-thread-chip is-archived is-muted"
                     pressed={t.id === state.activeThreadId}
                     onClick={() => setActiveSideThread(sessionId, t.id)}
                     title={`${sideThreadLabel(t)} — open (read-only until restored)`}

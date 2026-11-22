@@ -37,6 +37,8 @@ import type { Decl } from './css-scan';
 const BASELINE = path.join(__dirname, 'ui-standard-baseline.json');
 /** The one home of the card button family (standard.md, "The button family"). */
 const FAMILY_HOME = 'components/actions/ask-card.css';
+/** The one home of the choice controls (standard.md, "Choice controls"). */
+const CHOICE_HOME = 'styles/choice-controls.css';
 const STANDARD = '.claude/skills/walnut-ui-requirements/standard.md';
 
 function current(): Counts {
@@ -44,6 +46,10 @@ function current(): Counts {
   // The family's home gives every card control the family's look, an approval's own buttons included.
   delete c.restyledBtn[FAMILY_HOME];
   delete c.ownControl[FAMILY_HOME];
+  // The choice controls' home draws the chip and the one round control the standard names, the
+  // switch (standard.md, "Choice controls").
+  delete c.ownControl[CHOICE_HOME];
+  delete c.pillRadius[CHOICE_HOME];
   // The family's own stylesheet draws `.btn` and its slots.
   delete c.restyledBtn[FAMILY_CSS];
   return c;

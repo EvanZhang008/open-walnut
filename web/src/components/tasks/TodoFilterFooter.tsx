@@ -62,7 +62,8 @@ interface FooterItem {
   key: 'waiting' | 'completed' | 'date';
   text: string;
   title: string;
-  on: boolean;
+  /** Shown or hidden; undefined for a one-shot item (Date: it widens the filter once, never "on"). */
+  on: boolean | undefined;
   icon?: ReactNode;
   next: FilterState;
 }
@@ -90,7 +91,7 @@ export function footerItems(state: FilterState, counts: FooterCounts): FooterIte
   // Only while Date is the default: any other Date value is a chip already.
   if (state.date === 'now' && counts.notAvailable > 0) {
     items.push({
-      key: 'date', on: false,
+      key: 'date', on: undefined,
       text: `${counts.notAvailable} not available yet: show`,
       title: 'Tasks that start later are hidden by Date: Available now. Click to show every date.',
       next: { ...state, date: '' },

@@ -117,7 +117,7 @@ export function KanbanFilters({ board, filter, seen, mode, searchRef, onRevealCa
           return (
             <Chip
               key={chip}
-              className={`kanban-chip${zero ? ' is-zero' : ''}`}
+              className={`kanban-chip${zero ? ' is-zero' : ''}${chip === 'needs' && !zero ? ' is-alert' : ''}`}
               pressed={active}
               data-testid={CHIP_TEST_ID[chip]}
               data-chip={chip}

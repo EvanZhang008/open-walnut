@@ -8,8 +8,9 @@ import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from 'react'
 import '@/styles/choice-controls.css'
 
 export interface ChipProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  /** On. Sets aria-pressed (or aria-checked when role="radio" or "switch"). */
-  pressed: boolean
+  /** On. Sets aria-pressed (or aria-checked when role="radio" or "switch"). Left out: a one-shot
+   *  action among chips (it does something once, it is never on), drawn off with no state. */
+  pressed: boolean | undefined
   /** A number after the label (muted). */
   count?: ReactNode
   /** Before the label, e.g. a colour dot or an icon. */
@@ -20,9 +21,10 @@ export interface ChipProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 export function Chip({ pressed, count, leading, trailing, className, children, role, ...rest }: ChipProps) {
   // role=switch: an on/off chip in a composer row (a page that goes with the next message).
-  const state = role === 'radio' || role === 'option' || role === 'menuitemradio' || role === 'switch'
-    ? { 'aria-checked': pressed }
-    : { 'aria-pressed': pressed }
+  const state = pressed === undefined ? {}
+    : role === 'radio' || role === 'option' || role === 'menuitemradio' || role === 'switch'
+      ? { 'aria-checked': pressed }
+      : { 'aria-pressed': pressed }
   return (
     <button type="button" role={role} {...state} {...rest} className={`wn-chip${pressed ? ' is-on' : ''}${className ? ` ${className}` : ''}`}>
       {leading}

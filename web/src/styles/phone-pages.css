@@ -830,6 +830,11 @@
     min-height: 44px;
   }
 
+  /* The tab holds its 44 px close button: the tab grows to it, so nothing is cut. */
+  .app-shell-navigation .notes-split-view .notes-tab {
+    min-height: 44px;
+  }
+
   .app-shell-navigation .notes-split-view .notes-editor-meta {
     flex-wrap: wrap;
   }

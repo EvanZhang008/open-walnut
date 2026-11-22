@@ -59,9 +59,11 @@ function Row({ label, detail, rowClassName, disabled, title, children }: { label
 export function Checkbox({ checked, onChange, indeterminate, label, detail, rowClassName, className, disabled, title, ref: outerRef, ...rest }: CheckboxProps) {
   const ref = useRef<HTMLInputElement | null>(null)
   useEffect(() => { if (ref.current) ref.current.indeterminate = !!indeterminate }, [indeterminate])
-  // Our own ref (the dash state) and the caller's, on the one input.
+  // Our own ref (the dash state) and the caller's, on the one input. A new input (the row came or
+  // went with its label) gets the dash here: the effect above runs only when `indeterminate` changes.
   const setRef = useLeanCallback((el: HTMLInputElement | null) => {
     ref.current = el
+    if (el) el.indeterminate = !!indeterminate
     if (typeof outerRef === 'function') outerRef(el)
     else if (outerRef) outerRef.current = el
   }, [outerRef])

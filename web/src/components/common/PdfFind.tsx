@@ -89,7 +89,7 @@ export function PdfFind({ pdf, root }: { pdf?: PDFDocumentProxy; root: React.Ref
   }
 
   return <>
-    <button type="button" className={`fv-tool-btn${open ? ' active' : ''}`} disabled={!pdf}
+    <button type="button" className="btn btn-ghost btn-sm" aria-pressed={open} disabled={!pdf}
       title="Find in PDF (⌘F)" onClick={() => { setOpen((value) => !value); requestAnimationFrame(() => inputRef.current?.focus()); }}>Find</button>
     {open && <div className="fv-pdf-find">
       <input data-no-draft="search" ref={inputRef} type="search" aria-label="Find in PDF" placeholder="Find in PDF" value={query}
@@ -98,9 +98,9 @@ export function PdfFind({ pdf, root }: { pdf?: PDFDocumentProxy; root: React.Ref
           if (event.key === 'Escape') { event.stopPropagation(); setOpen(false); }
         }} />
       <span role="status">{searching ? 'Searching…' : error ? 'Search failed. Try again.' : matches.length ? `${index + 1} / ${matches.length} pages` : query ? 'No matches' : ''}</span>
-      <button type="button" className="fv-tool-btn" aria-label="Previous matching page" disabled={!matches.length} onClick={() => next(-1)}>↑</button>
-      <button type="button" className="fv-tool-btn" aria-label="Next matching page" disabled={!matches.length} onClick={() => next(1)}>↓</button>
-      <button type="button" className="fv-tool-btn" aria-label="Close PDF search" onClick={() => setOpen(false)}>×</button>
+      <button type="button" className="btn btn-ghost btn-sm" aria-label="Previous matching page" disabled={!matches.length} onClick={() => next(-1)}>↑</button>
+      <button type="button" className="btn btn-ghost btn-sm" aria-label="Next matching page" disabled={!matches.length} onClick={() => next(1)}>↓</button>
+      <button type="button" className="btn btn-ghost btn-sm" aria-label="Close PDF search" onClick={() => setOpen(false)}>×</button>
     </div>}
   </>;
 }

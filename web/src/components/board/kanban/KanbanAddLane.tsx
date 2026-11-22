@@ -104,7 +104,8 @@ export function KanbanAddLane({ lanes, mode, api, onAdded }: KanbanAddLaneProps)
           micRef={nameMic}
         />
         {error && <div className="kanban-lane-rename-error" data-testid="kanban-add-lane-error" role="alert">{error}</div>}
-        <div className="kanban-add-lane-kinds" data-testid="kanban-add-lane-kinds" role="group" aria-label="Lane kind">
+        <div className="kanban-add-lane-kinds" data-testid="kanban-add-lane-kinds" role="radiogroup" aria-label="Lane kind"
+          data-choice-exempt="the group of shared Radio inputs (one name), not a segmented control">
           {LANE_KINDS.map((k) => (
             <Radio
               key={k}

@@ -193,6 +193,9 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
             fill
             value={shown}
             onChange={pick}
+            // The side shown can be a one-off (a context menu's, or Task with no calendar): a click
+            // on it makes it the kept choice.
+            reselect
             options={KIND_OPTIONS}
           />
         )}

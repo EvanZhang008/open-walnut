@@ -8,8 +8,8 @@
  * pill states that plainly instead of disabling the card and leaving the operator
  * with no next step.
  *
- * A card is a step forward, not a choice control: it opens that provider's set-up (CloudSection),
- * so it is a button with a go chevron, and the provider picked last is aria-current.
+ * A card picks the provider and opens its set-up (CloudSection) in one click, so it carries a go
+ * chevron, not a disclosure one.
  */
 
 import type { CloudSetupProvider } from '@/api/cloud-setup';
@@ -39,7 +39,7 @@ interface Props {
 export function CloudProviderPicker({ providers, selected, onSelect }: Props) {
   return (
     <SettingsGroup heading="Where should the companion live?" className="cloud-provider-grid">
-      <div role="group" aria-label="Cloud provider" className="settings-addons-contents">
+      <div role="radiogroup" aria-label="Cloud provider" className="settings-addons-contents" data-choice-exempt="settings rows that each open their provider's setup step (the chevron); the row family draws them">
         {providers.map((p) => {
           const pill = detectPill(p);
           const help = [p.costHint, p.detect.detail].filter(Boolean).join('. ').replace(/\.\./g, '.');
@@ -47,7 +47,9 @@ export function CloudProviderPicker({ providers, selected, onSelect }: Props) {
             <button
               key={p.id}
               type="button"
-              aria-current={selected === p.id ? 'true' : undefined}
+              role="radio"
+              data-choice-exempt="a settings row that opens this provider's setup step"
+              aria-checked={selected === p.id}
               data-provider={p.id}
               className={`settings-row settings-addons-choice cloud-provider-card${selected === p.id ? ' cloud-provider-active' : ''}`}
               onClick={() => onSelect(p.id)}

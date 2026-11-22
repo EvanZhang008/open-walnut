@@ -227,12 +227,9 @@
   .app-shell-navigation .fv-html-toolbar::-webkit-scrollbar {
     display: none;
   }
-  .app-shell-navigation .fv-tool-btn {
+  .app-shell-navigation .fv-html-toolbar > .btn {
     flex: 0 0 auto;
     min-height: 44px;
-    padding: 0 12px;
-    font-size: var(--font-size-md);
-    white-space: nowrap;
   }
   /* The document bar's icon buttons and its path are touch targets too (C19). */
   .app-shell-navigation .fv-doc-bar .fv-doc-icon,

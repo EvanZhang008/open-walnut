@@ -47,7 +47,7 @@
   border-radius: 999px; padding: 0 6px; line-height: 16px;
 }
 .xfer-now { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
-.xfer-opt-sub { font-size: 11.5px; color: var(--fg-muted); overflow-wrap: anywhere; }
+.xfer-opt-sub { font-size: var(--font-size-sm); color: var(--fg-muted); overflow-wrap: anywhere; }
 .xfer-mono { font-family: var(--font-mono); font-size: var(--font-size-xs); }
 .xfer-path { margin-top: 0; font-family: var(--font-mono); font-size: var(--font-size-md); }
 

@@ -409,6 +409,9 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped
   const brief = keepsBrief && !briefOff ? contact?.brief : undefined;
   // A Board picked on a node that keeps none (any more) shows all its tasks.
   const shownMode: OrgTaskMode = mode === 'board' && !renderBoard ? 'all' : mode;
+  // Brief picked on a node whose Brief is off shows the tasks: the Tasks tab reads picked (and so
+  // keeps a tab in the Tab order), and a click on it writes Tasks back as the choice.
+  const shownView: OrgTopView = view === 'brief' && briefOff ? 'task' : view;
   // Full screen is the same pop-up sheet a session panel opens into, and the same one state of the
   // tab (2026-11-02, the user: "that thread ... all full screens are that pop-up window"; it was a
   // widen beside the chat before): entering it here leaves a session's, a reload keeps it.
@@ -421,18 +424,18 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, approvals, flipped
         {/* Threads first (2026-11-04, the user: "this thread shoudl also be the first"), then Tasks and Brief. */}
         <TabList flush className="org-top-tabs" aria-label={keepsBrief ? (briefOff ? 'Threads or Tasks' : 'Threads, Tasks or Brief') : 'Tasks'}>
           {keepsBrief && (
-            <Tab selected={view === 'threads'} className="org-top-tab" data-testid="org-top-threads" onClick={() => onView('threads')}
+            <Tab selected={shownView === 'threads'} className="org-top-tab" data-testid="org-top-threads" onClick={() => onView('threads')}
               count={threadsCount > 0 ? <span className="org-top-count" title={`${threadCountLabel(threadsCount)} for you`}>{threadsCount}</span> : undefined}
               trailing={threadsNew ? <i className="org-top-new" data-testid="org-top-threads-new"><span className="org-sr-only">, news since you looked</span></i> : undefined}>
               Threads
             </Tab>
           )}
-          <Tab selected={view === 'task'} className="org-top-tab" data-testid="org-top-task" onClick={() => onView('task')}
+          <Tab selected={shownView === 'task'} className="org-top-tab" data-testid="org-top-task" onClick={() => onView('task')}
             count={<span className="org-top-count">{row.counts.open}</span>}>
             Tasks
           </Tab>
           {keepsBrief && !briefOff && (
-            <Tab selected={view === 'brief'} className="org-top-tab" data-testid="org-top-brief" onClick={() => onView('brief')}
+            <Tab selected={shownView === 'brief'} className="org-top-tab" data-testid="org-top-brief" onClick={() => onView('brief')}
               trailing={briefNew ? <i className="org-top-new" data-testid="org-top-brief-new"><span className="org-sr-only">, rewritten since you read it</span></i> : undefined}>
               Brief
             </Tab>

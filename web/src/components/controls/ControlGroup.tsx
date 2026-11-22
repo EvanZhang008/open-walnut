@@ -11,8 +11,13 @@
  * 2026-11-21 Settings review on the user's data: the Inbox Triage switch was off while its rule
  * switches were still bright blue; a Sessions switch was off with live-looking boxes under it.
  */
-import type { ReactNode } from 'react'
+import { createContext, useContext, type ReactNode } from 'react'
 import '@/styles/choice-controls.css'
+
+/** True inside a ControlGroup that is off: a control that is not a native input (a segment is a
+ *  label) reads it to leave the Tab order and say aria-disabled, as the fieldset does for inputs. */
+const GroupOffContext = createContext(false)
+export const useControlGroupOff = () => useContext(GroupOffContext)
 
 export interface ControlGroupProps {
   /** id the master switch names in aria-controls. */
@@ -27,6 +32,9 @@ export interface ControlGroupProps {
 }
 
 export function ControlGroup({ id, off, reason, className, children, 'data-testid': testId }: ControlGroupProps) {
+  // The rows sit in a boxless wrapper of their own, so the first row stays a first child (a
+  // settings box draws its row hairlines by :first-child) whether the reason line shows or not.
+  const outer = useContext(GroupOffContext)
   return (
     <fieldset
       id={id}
@@ -36,7 +44,9 @@ export function ControlGroup({ id, off, reason, className, children, 'data-testi
       className={`wn-group${className ? ` ${className}` : ''}`}
     >
       {off && reason ? <p className="wn-group-reason">{reason}</p> : null}
-      {children}
+      <GroupOffContext.Provider value={off || outer}>
+        <div className="wn-group-rows">{children}</div>
+      </GroupOffContext.Provider>
     </fieldset>
   )
 }

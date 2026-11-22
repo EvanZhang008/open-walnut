@@ -25,11 +25,26 @@
   --choice-chip-hover: rgba(0, 0, 0, 0.09);
   /* What sits on an accent fill (tick, switch thumb) and the lift of a thumb. */
   --choice-on-accent: #fff;
-  --choice-lift: 0 1px 2px rgba(0, 0, 0, 0.12);
+  --choice-lift: var(--shadow-sm);
   --choice-knob-lift: 0 1px 2px rgba(0, 0, 0, 0.22), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
   /* Corners inside a control: a segment sits 2 px inside its 8 px track; a box is half a control's. */
   --choice-radius-inner: calc(var(--radius-sm) - 2px);
-  --choice-radius-box: calc(var(--radius-sm) / 2);
+  --choice-radius-box: var(--radius-xs);
+  /* The dark palette, for a control on a surface that is dark in every theme (the camera dock). */
+  --choice-dark-track: rgba(118, 118, 128, 0.24);
+  --choice-dark-thumb: rgba(255, 255, 255, 0.2);
+  --choice-dark-fg: #f5f5f7;
+  --choice-dark-fg-secondary: #d1d1d6;
+  --choice-dark-hover: rgba(255, 255, 255, 0.06);
+}
+
+/* A choice control on a surface that is dark in every theme reads the dark palette. */
+.wn-on-dark {
+  --choice-track: var(--choice-dark-track);
+  --choice-thumb: var(--choice-dark-thumb);
+  --fg: var(--choice-dark-fg);
+  --fg-secondary: var(--choice-dark-fg-secondary);
+  --bg-hover: var(--choice-dark-hover);
 }
 
 :root[data-theme='dark'] {
@@ -56,6 +71,9 @@
 }
 
 /* ── Tabs: switch between the panels of one view. Underline, 32 px. ── */
+/* The line under the strip is an inset shadow, inside the box the strip scrolls and clips: the
+   selected tab's underline (its own bottom border, painted over the shadow) covers it, and nothing
+   overflows by a pixel to clip the underline or scroll the strip up and down. */
 .wn-tabs {
   box-sizing: border-box;
   display: flex;
@@ -63,7 +81,8 @@
   gap: 12px;
   min-width: 0;
   overflow-x: auto;
-  border-bottom: 1px solid var(--border);
+  overflow-y: hidden;
+  box-shadow: inset 0 -1px 0 var(--border);
   scrollbar-width: none;
 }
 
@@ -72,7 +91,7 @@
 }
 
 .wn-tabs.wn-tabs-flush {
-  border-bottom: 0;
+  box-shadow: none;
 }
 
 .wn-tab {
@@ -85,7 +104,7 @@
   align-items: center;
   gap: 4px;
   height: 32px;
-  margin: 0 0 -1px;
+  margin: 0;
   padding: 0 4px;
   border: 0;
   border-bottom: 2px solid transparent;
@@ -93,7 +112,7 @@
   background: transparent;
   color: var(--fg-secondary);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 500;
   line-height: 18px;
   white-space: nowrap;
@@ -101,11 +120,7 @@
   transition: color 120ms ease-out, border-color 120ms ease-out;
 }
 
-.wn-tabs.wn-tabs-flush .wn-tab {
-  margin-bottom: 0;
-}
-
-.wn-tab:hover {
+.wn-tab:hover:not(:disabled):not([aria-disabled='true']) {
   color: var(--fg);
 }
 
@@ -126,7 +141,7 @@
 }
 
 .wn-tab-count {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 500;
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
@@ -162,7 +177,7 @@
 
 .wn-tab-detail {
   max-width: 9em;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   font-weight: 400;
   line-height: 14px;
   color: var(--fg-secondary);
@@ -171,9 +186,9 @@
 }
 
 @media (max-width: 560px) {
-  /* Text on a phone is at least 12 px. */
+  /* Text on a phone is at least 12 px (the counts: at the end of this file, after their rules). */
   .wn-tab-detail {
-    font-size: 12px;
+    font-size: var(--font-size-sm);
     line-height: 15px;
   }
 }
@@ -225,7 +240,7 @@
   background: transparent;
   color: var(--fg-secondary);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   line-height: 16px;
   white-space: nowrap;
@@ -235,7 +250,7 @@
   transition: background-color 120ms ease-out, box-shadow 120ms ease-out, color 120ms ease-out;
 }
 
-.wn-seg-item:hover:not([aria-checked='true']) {
+.wn-seg-item:hover:not([aria-checked='true']):not([aria-disabled='true']) {
   background: var(--bg-hover);
   color: var(--fg);
 }
@@ -244,6 +259,12 @@
   background: var(--choice-thumb);
   color: var(--fg);
   box-shadow: var(--choice-lift);
+}
+
+/* The picked segment is only a default while nothing it applies to is set (the time basis with no
+   time window): it reads as a choice to make, not as a live filter. */
+.wn-seg.is-unset .wn-seg-item[aria-checked='true'] {
+  color: var(--fg-secondary);
 }
 
 .wn-seg-item:focus-visible,
@@ -310,7 +331,7 @@
   background: var(--choice-chip-off);
   color: var(--fg-secondary);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   line-height: 16px;
   white-space: nowrap;
@@ -318,7 +339,7 @@
   transition: background-color 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out;
 }
 
-.wn-chip:hover {
+.wn-chip:hover:not(:disabled):not([aria-disabled='true']) {
   background: var(--choice-chip-hover);
   color: var(--fg);
 }
@@ -329,6 +350,30 @@
   background: var(--accent-subtle);
   border-color: color-mix(in srgb, var(--accent) 35%, transparent);
   color: var(--accent-text);
+}
+
+/* An alert chip (a filter for what needs the user, while there is any): its words read in the
+   alert colour, and its on state is the alert tint instead of the accent one. */
+.wn-chip.is-alert {
+  color: var(--error);
+}
+
+.wn-chip.is-alert[aria-pressed='true'],
+.wn-chip.is-alert[aria-checked='true'] {
+  background: var(--error-subtle);
+  border-color: color-mix(in srgb, var(--error) 35%, transparent);
+  color: var(--error);
+}
+
+/* A chip for something set aside (an archived thread, the hosts no longer in Settings): a dashed
+   edge, and muted words while it is off. */
+.wn-chip.is-muted {
+  border-style: dashed;
+}
+
+.wn-chip.is-muted:not([aria-pressed='true']):not([aria-checked='true']) {
+  border-color: var(--border-strong);
+  color: var(--fg-muted);
 }
 
 .wn-chip:disabled,
@@ -355,7 +400,7 @@
 }
 
 .wn-chip-count {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -462,27 +507,28 @@
   background: var(--accent);
 }
 
-/* The tick: two borders of a rotated box, white on the accent. */
+/* The tick: two borders of a rotated box, white on the accent. Placed from the box's centre (a
+   pixel above it, as a tick sits), so a box drawn larger (a phone's settings rows) keeps it centred. */
 .wn-check[type='checkbox']:checked::after {
   content: '';
   position: absolute;
-  left: 4px;
-  top: 1px;
+  left: 50%;
+  top: 50%;
   width: 4px;
   height: 8px;
   border: solid var(--choice-on-accent);
   border-width: 0 2px 2px 0;
-  transform: rotate(45deg);
+  transform: translate(-50%, -60%) rotate(45deg);
 }
 
 .wn-check[type='checkbox']:indeterminate::after {
   content: '';
   position: absolute;
-  left: 3px;
-  top: 6px;
+  left: 50%;
+  top: 50%;
+  margin: -1px 0 0 -4px;
   width: 8px;
   height: 2px;
-  border-radius: 1px;
   background: var(--choice-on-accent);
 }
 
@@ -507,7 +553,7 @@
   gap: 8px;
   min-width: 0;
   color: var(--fg);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 18px;
   cursor: pointer;
 }
@@ -516,7 +562,7 @@
    box's words: they stay a sentence wherever the row sits. */
 .wn-check-row.wn-check-row {
   color: var(--fg);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 400;
   letter-spacing: normal;
   text-transform: none;
@@ -526,8 +572,18 @@
   margin-top: 1px;
 }
 
-.wn-check-row[aria-disabled='true'] {
+.wn-check-row[aria-disabled='true'],
+fieldset:disabled .wn-check-row.wn-check-row {
   cursor: default;
+  color: var(--fg-muted);
+}
+
+/* A Settings checklist row (SettingsCheckbox) in a ControlGroup that is off reads off too. */
+fieldset:disabled .settings-checkbox-row {
+  cursor: default;
+}
+
+fieldset:disabled .settings-checkbox-row .settings-checkbox-label {
   color: var(--fg-muted);
 }
 
@@ -539,7 +595,7 @@
 }
 
 .wn-check-detail {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--fg-muted);
 }
 
@@ -561,14 +617,14 @@
   background: transparent;
   color: var(--fg-secondary);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 500;
   line-height: 18px;
   text-align: left;
   cursor: pointer;
 }
 
-.wn-disclosure:hover {
+.wn-disclosure:hover:not(:disabled):not([aria-disabled='true']) {
   background: var(--bg-hover);
   color: var(--fg);
 }
@@ -642,9 +698,13 @@
   border: 0;
 }
 
+.wn-group-rows {
+  display: contents;
+}
+
 .wn-group-reason {
   margin: 0 0 8px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 16px;
   color: var(--fg-muted);
 }
@@ -679,4 +739,12 @@ fieldset:disabled .wn-seg {
 
 fieldset:disabled .wn-seg-item {
   cursor: default;
+}
+
+@media (max-width: 560px) {
+  /* A count on a tab or a chip reads 12 px on a phone, like every other text there. */
+  .wn-tab-count,
+  .wn-chip-count {
+    font-size: var(--font-size-sm);
+  }
 }

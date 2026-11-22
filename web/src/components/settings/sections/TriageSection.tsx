@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { Config } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
@@ -73,6 +74,8 @@ export function TriageSection({ config, onSave }: Props) {
     { rowKey: 'triage.hours', kind: 'text' },
   );
   const off = !enabled.value;
+  // Each routing rule's switch is a group of its own (TriageRoutingRules): the master names them too.
+  const [ruleGroups, setRuleGroups] = useState<readonly string[]>([]);
 
   // Cmd+S submits this form: commit whatever text is still being typed.
   const handleSubmit = async () => {
@@ -89,7 +92,7 @@ export function TriageSection({ config, onSave }: Props) {
         <SettingsRow label="Inbox triage" help="Works through new Slack messages against your projects and tasks." htmlFor="inbox-triage-enabled"
           error={enabled.error}
           control={<ToggleSwitch id="inbox-triage-enabled" checked={enabled.value} busy={enabled.busy} onChange={enabled.set}
-            {...masterProps(GOVERNED.schedule, GOVERNED.sources, GOVERNED.actions)} />} />
+            {...masterProps(GOVERNED.schedule, GOVERNED.sources, GOVERNED.actions, ...ruleGroups)} />} />
         <ControlGroup id={GOVERNED.schedule} off={off} className="settings-rows-contents" reason="Inbox triage is off: turn it on to use these settings.">
         <SettingsRow indent disabled={off} label="Interval" help={'A duration such as 30m or 1h; at least 5m, and "0" turns it off.'}
           htmlFor="inbox-triage-every" error={every.error} data-testid="inbox-triage-every-row"
@@ -140,7 +143,7 @@ export function TriageSection({ config, onSave }: Props) {
       </SettingsGroup>
       </ControlGroup>
 
-      <TriageRoutingRules off={off} />
+      <TriageRoutingRules off={off} onGroupIds={setRuleGroups} />
     </SectionCard>
   );
 }

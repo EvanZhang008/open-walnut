@@ -349,12 +349,23 @@ test('picking None unpins before create', async ({ page, request }) => {
   await page.locator('.qtc-input').fill('unpin before create')
   const panel = page.locator('.qtc-confirm-panel')
   const tiers = panel.getByRole('radiogroup', { name: 'Pin new task to tier' })
+  const pinnedField = panel.locator('.qtc-confirm-field', { hasText: 'Pinned' })
   await expect(tiers.getByRole('radio', { name: 'Focus' })).toHaveAttribute('aria-checked', 'true')
+  await expect(pinnedField.locator('.qtc-confirm-ai')).toBeVisible()
   await tiers.getByRole('radio', { name: 'None' }).click()
   await expect(tiers.getByRole('radio', { name: 'None' })).toHaveAttribute('aria-checked', 'true')
   for (const label of ['Focus', 'Satellite']) {
     await expect(tiers.getByRole('radio', { name: label })).toHaveAttribute('aria-checked', 'false')
   }
+  // "Not pinned" is now the user's own pick, not the AI's: the AI mark goes, so a later parse
+  // never pins it again.
+  await expect(pinnedField.locator('.qtc-confirm-ai')).toHaveCount(0)
+  // Picking a tier and then None again unpins again (a radio group has no click-again to clear).
+  await tiers.getByRole('radio', { name: 'Satellite' }).click()
+  await expect(tiers.getByRole('radio', { name: 'Satellite' })).toHaveAttribute('aria-checked', 'true')
+  await tiers.getByRole('radio', { name: 'None' }).click()
+  await expect(tiers.getByRole('radio', { name: 'None' })).toHaveAttribute('aria-checked', 'true')
+  await expect(tiers.getByRole('radio', { name: 'Satellite' })).toHaveAttribute('aria-checked', 'false')
   // The retired Parked tier is offered nowhere (2026-11-11).
   await expect(tiers.getByRole('radio', { name: 'Parked' })).toHaveCount(0)
   await panel.locator('.qtc-confirm-primary').click()

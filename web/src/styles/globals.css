@@ -23380,28 +23380,6 @@ a.file-link:hover {
   z-index: 1;
 }
 
-/* The file viewer's small text buttons (Retry, Reload the page, Restore my
-   changes, the PDF zoom and find steps): actions, never a choice. */
-.fv-tool-btn {
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  padding: 3px 10px;
-  border-radius: var(--radius-xs);
-  border: 1px solid transparent;
-  background: none;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-
-.fv-tool-btn:hover {
-  background: var(--bg-tertiary);
-}
-
-.fv-tool-btn.active {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-}
-
 /* A dot marks unsaved work so a half-typed file is never mistaken for a saved one. */
 .fv-dirty-dot {
   align-self: center;
@@ -24420,7 +24398,8 @@ a.file-link:hover {
   min-width: 0;
   flex-shrink: 0;
 }
-.session-terminal-tab-btn { min-width: 0; }
+/* The tab gives way inside its 220 px box, so a long name ends in an ellipsis and the x keeps its place. */
+.session-terminal-tab > .session-terminal-tab-btn { flex: 0 1 auto; min-width: 0; }
 .session-terminal-tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-terminal-tab-split { display: inline-flex; opacity: 0.75; }
 .session-terminal-tab-split svg { width: 12px; height: 12px; }
@@ -27644,6 +27623,8 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .trigger-jobs-tally[data-fired="true"] { color: var(--accent); font-weight: 600; }
 
 .trigger-jobs-fold { margin-top: 2px; }
+/* No check recorded yet: a plain line, no chevron (there is nothing to open). */
+.trigger-jobs-fold-empty { margin: 0; font-size: var(--font-size-md); line-height: 18px; color: var(--fg-muted); padding: 2px 0; }
 
 .trigger-audit-chevron { transition: transform 0.12s ease; }
 .trigger-audit-chevron.open { transform: rotate(90deg); }

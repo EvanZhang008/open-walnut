@@ -41,7 +41,7 @@ export function SyncChoiceChip({ project, local, onChange, disabled }: {
       type="button"
       className={`session-action-chip draft-sync-chip${local ? ' draft-sync-chip-local' : ''}`}
       data-testid="draft-sync-chip"
-      data-choice-exempt="a draft launch-bar pill that shows the sync value like its neighbour pills; a click flips it"
+      data-choice-exempt="a pill of the draft launch row: its words name where the task goes (Sync: Local or the service), drawn like the Project and Work in pills beside it"
       data-sync={local ? 'local' : 'project'}
       disabled={disabled}
       aria-pressed={!local}

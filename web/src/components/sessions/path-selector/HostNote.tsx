@@ -52,7 +52,7 @@ export function HostTabBar({ tabs, selected, dots, onSelect }: {
         return (
           <Chip
             key={tab.key}
-            className={`sps-host-tab${tab.kind === 'removed' ? ' sps-host-tab-removed' : ''}`}
+            className={`sps-host-tab${tab.kind === 'removed' ? ' sps-host-tab-removed is-muted' : ''}`}
             pressed={selected === tab.key}
             data-host={tab.kind === 'host' || tab.kind === 'found' ? tab.key : tab.kind === 'removed' ? REMOVED_TAB : undefined}
             {...(tab.kind === 'found' ? { 'data-found': '' } : {})}

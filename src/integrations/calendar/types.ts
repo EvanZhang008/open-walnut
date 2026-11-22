@@ -77,6 +77,8 @@ export type CalendarSourceReason =
   | 'cloud'
   | 'permission-denied'
   | 'not-configured'
+  /** This machine's system has no calendar source Walnut can read (EventKit needs macOS). */
+  | 'unsupported-platform'
   | 'fetch-error'
   | 'disabled';
 

@@ -173,20 +173,6 @@
   padding: 4px 8px 2px;
 }
 
-.trigger-picker-idea {
-  padding: 3px 9px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--fg);
-  font: inherit;
-  cursor: pointer;
-}
-
-.trigger-picker-idea:hover {
-  background: var(--bg-hover);
-}
-
 .trigger-picker-form {
   display: grid;
   gap: 10px;

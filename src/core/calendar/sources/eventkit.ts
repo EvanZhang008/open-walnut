@@ -700,7 +700,7 @@ export function createEventKitSource(): CalendarSource {
         return { ok: false, reason: 'cloud', message: `macOS calendars are not reachable from ${followerName().replace(/^The /, 'the ')}.` };
       }
       if (process.platform !== 'darwin') {
-        return { ok: false, reason: 'not-configured', message: 'EventKit calendars require macOS.' };
+        return { ok: false, reason: 'unsupported-platform', message: 'EventKit calendars require macOS.' };
       }
       return { ok: true };
     },

@@ -48,7 +48,7 @@ export interface CalendarSourceStatus {
   id: 'eventkit';
   available: boolean;
   enabled: boolean;
-  reason?: 'cloud' | 'permission-denied' | 'not-configured' | 'fetch-error' | 'disabled';
+  reason?: 'cloud' | 'permission-denied' | 'not-configured' | 'unsupported-platform' | 'fetch-error' | 'disabled';
   message?: string;
   /** Reads work, but through a fallback the user has to fix (see CalendarPage). */
   degraded?: string;

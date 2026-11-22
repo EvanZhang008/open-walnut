@@ -31,11 +31,10 @@ import { forwardRef, useEffect, useMemo, useRef, useState, type ReactNode, type 
 import type { Task } from '@open-walnut/core';
 import { holdOrder, matchesAskQuery, nextHeldOrder, type HeldOrder, askProjectDisplay, } from '@open-walnut/ask-list';
 import { isPhoneLayout } from '@/hooks/usePhoneLayout';
-import { ICON_SEARCH, ICON_SLIDERS } from '@/components/common/Icons';
+import { ICON_CHEVRON_DOWN, ICON_SEARCH, ICON_SLIDERS } from '@/components/common/Icons';
 import { GENERAL_AGENT_ID, type AskAgent } from './ask-walnut-slot-model';
 import { DrawerItem, heldRowView, TaskDot } from './AskWalnutDrawerItem';
 import { MicInput } from '@/components/common/BoxMic';
-import { DisclosureChevron } from '@/components/controls';
 
 /** A row in the drawer's list. The just-launched task is not in the store yet,
  *  so a row is `{ id, title }` plus the Task when the store has it. */
@@ -267,7 +266,8 @@ export function AskWalnutDrawer({
               onClick={() => setAgentsOpen((v) => !v)}
             >
               {shown}
-              <DisclosureChevron open={agentsOpen} />
+              {/* A menu opener: a down caret that turns over while the list is open, not a disclosure's chevron. */}
+              <span className={`ask-walnut-agent-caret${agentsOpen ? ' is-open' : ''}`} aria-hidden="true">{ICON_CHEVRON_DOWN}</span>
             </button>
           ) : (
             <span className="ask-walnut-drawer-title">{shown}</span>

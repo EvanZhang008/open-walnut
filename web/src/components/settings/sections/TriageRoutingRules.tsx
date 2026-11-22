@@ -206,7 +206,11 @@ function RuleEditor({ rule, tasks, onSaved, onCancel }: {
   );
 }
 
-export function TriageRoutingRules({ off = false }: { off?: boolean }) {
+/** The id of one rule's ControlGroup (its on/off switch), named by the Inbox triage master. */
+const ruleGroupId = (ruleId: string) => `triage-rule-on-group-${ruleId}`;
+
+/** `onGroupIds`: the rules' ControlGroup ids, for the master switch's aria-controls. */
+export function TriageRoutingRules({ off = false, onGroupIds }: { off?: boolean; onGroupIds?: (ids: readonly string[]) => void }) {
   const [rules, setRules] = useState<TriageRoutingRuleView[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -227,6 +231,8 @@ export function TriageRoutingRules({ off = false }: { off?: boolean }) {
     }
   }, []);
   useEffect(() => { void load(); }, [load]);
+  const groupKey = (rules ?? []).map((r) => r.id).join(' ');
+  useEffect(() => { onGroupIds?.(groupKey ? groupKey.split(' ').map(ruleGroupId) : []); }, [groupKey, onGroupIds]);
   // Main or a VP may add a rule while this is open: read again when the window comes back.
   useEffect(() => {
     const onFocus = () => { if (document.visibilityState === 'visible') void load(); };
@@ -329,7 +335,7 @@ export function TriageRoutingRules({ off = false }: { off?: boolean }) {
                 triage is off a rule routes nothing: its switch reads disabled and grey (its saved
                 state kept), and the line above the list says why. The rule itself stays editable. */}
             {removing !== rule.id && (
-              <ControlGroup id={`triage-rule-on-group-${rule.id}`} off={off}>
+              <ControlGroup id={ruleGroupId(rule.id)} off={off}>
                 <ToggleSwitch id={`triage-rule-on-${rule.id}`} checked={rule.enabled}
                   aria-label={`Rule ${rule.enabled ? 'on' : 'off'}: ${rule.matchText}`} data-testid="triage-rule-toggle"
                   onChange={(on) => { void act(() => updateTriageRule(rule.id, { enabled: on })); }} />

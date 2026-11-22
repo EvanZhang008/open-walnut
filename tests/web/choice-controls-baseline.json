@@ -5,9 +5,7 @@
   "segment": {},
   "switch": {},
   "check": {},
-  "chip": {
-    "components/org/ThreadsFilterBar.tsx": 2
-  },
+  "chip": {},
   "pressed": {
     "components/apps-page/AppQuickOpen.tsx": 1,
     "components/board/kanban/KanbanCard.tsx": 1,
@@ -16,8 +14,6 @@
     "components/common/FileContentView.tsx": 2,
     "components/common/FileSearchBar.tsx": 1,
     "components/layout/Sidebar.tsx": 2,
-    "components/notes/MarkdownEditorPanel.tsx": 3,
-    "components/notes/NotesFormatToolbar.tsx": 1,
     "components/org/OrgAvatarDialog.tsx": 2,
     "components/org/OrgNodeDetail.tsx": 1,
     "components/passwords/VaultBrowser.tsx": 1,
@@ -25,7 +21,7 @@
     "components/sessions/DraftSessionPanel.tsx": 2,
     "components/sessions/DraftTaskMenu.tsx": 1,
     "components/sessions/PhoneSessionHeaderRows.tsx": 1,
-    "components/sessions/SessionDiffView.tsx": 4,
+    "components/sessions/SessionDiffView.tsx": 3,
     "components/sessions/SessionFileExplorer.tsx": 1,
     "components/sessions/SessionKebabSection.tsx": 4,
     "components/sessions/SessionMenuOpen.tsx": 1,
@@ -36,9 +32,11 @@
     "components/tasks/ViewDropdown.tsx": 2,
     "pages/NotesPage.tsx": 1
   },
-  "disclose": {},
+  "disclose": {
+    "components/org/OrgThreadsByState.tsx": 1
+  },
   "ownLook": {
-    "popout/ext-panel.css": 4,
+    "popout/ext-panel.css": 1,
     "styles/board-kanban-controls.css": 1,
     "styles/change-card.css": 5,
     "styles/engine-settings-popover-rows.css": 1,

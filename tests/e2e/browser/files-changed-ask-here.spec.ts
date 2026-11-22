@@ -1000,7 +1000,7 @@ test.describe('Ask here on every Files and Changed selection toolbar responds, a
       await expect(quoteBtn(page)).toHaveAttribute('title', /Removed lines are not in the file/)
       await humanPress(page, quoteBtn(page))
       await expectComposerQuoted(page, panel, GO_REMOVED, 'changed-split-removed-quote')
-      await diff.getByRole('button', { name: 'Auto', exact: true }).click().catch(() => undefined)
+      await diff.getByRole('radio', { name: 'Auto', exact: true }).click({ timeout: 10_000 }).catch(() => undefined)
     })
 
     test('Changed: a rendered markdown diff: Ask here, the card stays on screen while the diff scrolls, Quote in chat', async ({ page, request }) => {

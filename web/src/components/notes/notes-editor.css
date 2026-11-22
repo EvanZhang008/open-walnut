@@ -743,7 +743,9 @@ mark.notes-search-mark {
   padding: 0 8px;
   overflow-x: auto;
   overflow-y: hidden;
-  border-bottom: 1px solid var(--border);
+  /* The strip's line is the shared tab strip's (an inset shadow, choice-controls.css), so the tabs
+     version draws it once and the empty bar the same. */
+  box-shadow: inset 0 -1px 0 var(--border);
   background: var(--bg-secondary);
 }
 /* Firefox only: elsewhere the ::-webkit-scrollbar rules below draw it. */
@@ -772,6 +774,8 @@ mark.notes-search-mark {
   padding-left: 8px;
   padding-bottom: 4px;
   background: var(--bg-secondary);
+  /* Its fill covers the strip's line: it draws the line again. */
+  box-shadow: inset 0 -1px 0 var(--border);
 }
 
 /* The way back from a note to the tree. Only a phone, which shows one of the two,

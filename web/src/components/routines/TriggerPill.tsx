@@ -205,23 +205,27 @@ function TriggerRow({ routine, onOpenSession }: { routine: Routine; onOpenSessio
       )}
       {/* The audit trail: every check the daemon reported, newest first. */}
       <div className="trigger-jobs-fold">
-        <DisclosureButton
-          block
-          className="trigger-jobs-fold-toggle"
-          expanded={showHistory}
-          disabled={history.length === 0}
-          onClick={() => setShowHistory((v) => !v)}
-          data-testid="trigger-audit-toggle"
-        >
-          {/* The count is of RECORDED checks, not of everything the trigger ever
-              did: the fire tally above is the total. Saying "0 fired" here read as
-              "it has never fired" on a trigger that fired before this trail
-              existed, which is the opposite of the truth. */}
-          {history.length
-            ? `History (${history.length} recorded ${clock ? (history.length === 1 ? 'run' : 'runs') : (history.length === 1 ? 'check' : 'checks')})`
-            : clock ? 'No runs recorded yet' : 'No checks recorded yet'}
-        </DisclosureButton>
-        {showHistory && (
+        {/* The count is of RECORDED checks, not of everything the trigger ever
+            did: the fire tally above is the total. Saying "0 fired" here read as
+            "it has never fired" on a trigger that fired before this trail
+            existed, which is the opposite of the truth. With none recorded there
+            is nothing to open: a plain line, no chevron. */}
+        {history.length ? (
+          <DisclosureButton
+            block
+            className="trigger-jobs-fold-toggle"
+            expanded={showHistory}
+            onClick={() => setShowHistory((v) => !v)}
+            data-testid="trigger-audit-toggle"
+          >
+            {`History (${history.length} recorded ${clock ? (history.length === 1 ? 'run' : 'runs') : (history.length === 1 ? 'check' : 'checks')})`}
+          </DisclosureButton>
+        ) : (
+          <p className="trigger-jobs-fold-empty" data-testid="trigger-audit-toggle">
+            {clock ? 'No runs recorded yet' : 'No checks recorded yet'}
+          </p>
+        )}
+        {showHistory && history.length > 0 && (
           <ul className="trigger-audit-list" data-testid="trigger-audit-list">
             {history.map((entry, i) => (
               <AuditRow key={`${entry.atMs}-${entry.outcome}-${entry.seq ?? i}`} entry={entry} check={routine.check} onOpenSession={onOpenSession} />

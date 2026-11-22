@@ -99,7 +99,7 @@ test('the Display menu shows the column count and a pick moves the strip at once
   const keys = await page.locator('.fb-menu .dm-settings > [data-view-option]').evaluateAll((els) => els.map((el) => el.getAttribute('data-view-option')))
   expect(keys).toEqual(['view', 'quick-views', 'status-lines', 'session-panels'])
   await expect(panelsRow(page)).toContainText('Session columns')
-  await expect(panelsRow(page).locator('button')).toHaveText(['1', '2', '3', '4', '5', 'Auto'])
+  await expect(panelsRow(page).locator('[role="radio"]')).toHaveText(['1', '2', '3', '4', '5', 'Auto'])
   await expect(checked(page)).toHaveText(['3'])
   expect(await viewFits(page)).toBe(true)
   await page.locator('.fb-menu').screenshot({ path: `${SHOTS}/${test.info().project.name}-display-menu-columns.png` })
