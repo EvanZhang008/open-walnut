@@ -7,6 +7,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import path from 'node:path'
 import { discoverBrowserFixture } from './codex-test-audit'
+import { isolateUiPrefs } from './todo-panel-helpers'
 
 const PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${PORT}`
@@ -31,6 +32,8 @@ async function rows(): Promise<Row[]> {
 }
 
 async function openRealUse(page: Page) {
+  // Opening the sidebar is a synced pref: keep it off the shared fixture.
+  await isolateUiPrefs(page)
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   if ((await page.locator('.sidebar.collapsed').count()) > 0) await page.locator('.sidebar-collapse-btn').click()

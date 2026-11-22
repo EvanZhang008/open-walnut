@@ -197,6 +197,7 @@ export const AWAY_OP_DECISIONS: Readonly<Record<string, AwayOpDecision>> = {
   day_review: host(LOCAL_ONLY),
   health_monitor: leader('the health monitor runs on the leader only: its route answers not_running on every follower', 'src/web/routes/health-monitor-v1.ts'),
   health_alarm_set: macWrite('A health alarm'),
+  usage_watch: leader('real use is counted by the leader\'s server only, and a watch or an exemption is the leader\'s to write: its route has no away row (needs_leader)', 'src/web/routes/usage-watch-v1.ts'),
   health_monitor_settings: macWrite('Health monitor settings'),
   places_status: host(LOCAL_ONLY),
   places_visits: host(LOCAL_ONLY),

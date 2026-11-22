@@ -334,7 +334,7 @@ describe('where an alarm goes', () => {
 describe('ships and the completion check', () => {
   it('knows a ship command, and a failed one', () => {
     expect(shipOfCommand('cd x && ~/walnut-dev/bin/walnut-dev land')).toBe('walnut-dev land')
-    expect(shipOfCommand('git push origin main')).toBe('git push to main')
+    expect(shipOfCommand('git push origin main')).toBe('a push to main')
     expect(shipOfCommand('git push origin wt/feature')).toBeNull()
     expect(shipOfCommand('npm publish --dry-run')).toBeNull()
     expect(shipOfCommand('walnut-cloud result 123')).toBeNull()
@@ -347,7 +347,7 @@ describe('ships and the completion check', () => {
     expect(shipOfCommand('bun run check && walnut-cloud land t1 --from x --queue')).toBe('walnut-cloud land')
     expect(shipOfCommand('timeout 7200 ~/walnut-dev/bin/walnut-dev land > out.txt 2>&1')).toBe('walnut-dev land')
     expect(shipOfCommand("bash -c 'cd /x && bash scripts/deploy-committed.sh'")).toBe('deploy-committed')
-    expect(shipOfCommand('git -C /repo push origin HEAD:main')).toBe('git push to main')
+    expect(shipOfCommand('git -C /repo push origin HEAD:main')).toBe('a push to main')
     expect(shipOfCommand('FOO=1 bun run dev:prod')).toBe('dev:prod')
     // A here-string or a quoted `<<` starts no heredoc: the land after it still counts.
     expect(shipOfCommand('cat <<< "$x"\nwalnut-dev land')).toBe('walnut-dev land')
@@ -483,7 +483,7 @@ describe('the session hook', () => {
     const { lastShipOf } = await import('../../../src/core/usage-watch/ships.js')
     _resetRealUseHookForTesting()
     await realUseHook.handler!({ taskId: 'tk', sessionId: 's1', toolName: 'Bash', toolUseId: 'b1', input: { command: 'git push origin main' } } as never)
-    expect(lastShipOf('tk')?.how).toBe('git push to main')
+    expect(lastShipOf('tk')?.how).toBe('a push to main')
     await realUseHook.handler!({ taskId: 'tk', sessionId: 's1', toolUseId: 'b1', result: 'Exit code 1\n ! [rejected] main -> main (fetch first)' } as never)
     expect(lastShipOf('tk')).toBeNull()
     await realUseHook.handler!({ taskId: 'tk', sessionId: 's1', toolName: 'Bash', toolUseId: 'b2', input: { command: '~/walnut-dev/bin/walnut-dev land' } } as never)

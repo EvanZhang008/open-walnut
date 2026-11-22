@@ -91,6 +91,7 @@ const DYNAMIC_OUTCOMES: Record<string, string[]> = {
  * A new one fails until it is listed with its reason.
  */
 const NO_OUTCOME_WAKES: Record<string, string> = {
+  'src/core/usage-watch/runtime.ts': 'a real-use alarm on a change the task shipped or leads, or its watch\'s verdict: the task fixes it there',
   'src/core/offline-handover.ts': 'changes the session made while the server was away were not applied: it must redo them',
   'src/core/session-requests.ts': 'a fork is handed the requests its parent still owes: the new session answers them',
   'src/core/sessions/missing-walnut-tool.ts': 'a tool the session just called is not offered: it is told what to use and goes on',

@@ -5,7 +5,8 @@
  * problem rings an alarm in Walnut Health. The tables are RealUseTables.tsx, the watches and
  * notes RealUseWatches.tsx, the words and order real-use-model.ts.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { Link } from 'react-router-dom';
 import { fetchUsageWatch, type UsageRange, type UsageWatchView } from '@/api/usage-watch';
 import { useEvent } from '@/hooks/useWebSocket';
@@ -93,7 +94,7 @@ export function RealUseSection() {
   // Only the newest read lands: a range switched mid-read never shows the old range's answer.
   const seq = useRef(0);
 
-  const load = useCallback(async () => {
+  const load = useLeanCallback(async () => {
     const mine = ++seq.current;
     setLoading(true);
     try {

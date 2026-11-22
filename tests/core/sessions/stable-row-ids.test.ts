@@ -147,6 +147,7 @@ const CALLERS: Record<string, { kind: 'resend' | 'unique' | 'event' | 'forward';
   'src/core/sessions/context-full-recovery.ts': { kind: 'unique', why: 'context-compact-<uuid>, qm-context-resend-<uuid>' },
   'src/core/sessions/safeguard-switch.ts': { kind: 'unique', why: 'qm-safeguard-switch-<uuid>' },
   'src/core/session-auto-recover.ts': { kind: 'unique', why: 'qm-recover-<uuid>, or the released row it sends again' },
+  'src/core/usage-watch/runtime.ts': { kind: 'resend', why: 'qm-usage-<note row id>: one batched note (or one watch verdict) to one task, once; a retry of that row is the same note' },
   'src/core/router/service.ts': { kind: 'resend', why: 'qm-route-<hash of area, item and task>: one external item to one task, once' },
   'src/web/routes/messages-v1.ts': { kind: 'forward', why: "task_send's own messageId, for its retry" },
   'src/core/subagents/registry.ts': { kind: 'resend', why: 'one id per turn of a run; told again only after a restart' },

@@ -9,6 +9,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import Database, { type Database as DB } from '../../lib/sqlite.js'
+import { reopenIfWiped } from '../../lib/sqlite-wiped.js'
 import { WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { emptyAgg, mergeAgg, type Agg, type UsageKind } from './agg.js'
@@ -36,8 +37,13 @@ export function closeUsageWatchStore(): void {
 }
 
 function open(): DB {
-  if (db) return db
   const file = usageWatchFile()
+  // A test that wipes the data home under a kept handle gets a fresh file (src/lib/sqlite-wiped.ts).
+  if (db) return (db = reopenIfWiped(file, db, () => create(file), (old) => old.close()))
+  return (db = create(file))
+}
+
+function create(file: string): DB {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const d = new Database(file)
   d.pragma('journal_mode = WAL')
@@ -64,7 +70,6 @@ function open(): DB {
     CREATE INDEX IF NOT EXISTS sends_day ON sends (recipient, family, day);
     CREATE TABLE IF NOT EXISTS alive (hour INTEGER PRIMARY KEY, minutes INTEGER NOT NULL);
   `)
-  db = d
   return d
 }
 

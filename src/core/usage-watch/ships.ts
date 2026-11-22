@@ -41,7 +41,7 @@ function shipOfWords(raw: string[], depth: number): string | null {
     let i = 0
     while (args[i] !== undefined && args[i]!.startsWith('-')) i += args[i] === '-C' || args[i] === '-c' ? 2 : 1
     if (args[i] !== 'push') return null
-    return args.slice(i + 1).some((a) => !a.startsWith('-') && MAIN_REF_RE.test(a)) ? 'git push to main' : null
+    return args.slice(i + 1).some((a) => !a.startsWith('-') && MAIN_REF_RE.test(a)) ? 'a push to main' : null
   }
   return null
 }

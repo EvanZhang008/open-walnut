@@ -83,7 +83,7 @@ function NoteRow({ n, now, titles }: { n: UsageNote; now: number; titles: Map<st
         To <TaskLink id={n.recipient} titles={titles} fallback={noteRecipientName(n)} />: {n.items} alarm{n.items === 1 ? '' : 's'}
         {n.titles.length > 0 && <> ({n.titles.join('; ')})</>}
       </span>
-      <NoticeStatus tone={status.tone} title={status.text}>{status.text}</NoticeStatus>
+      <NoticeStatus tone={status.tone}>{status.text}</NoticeStatus>
     </li>
   );
 }
