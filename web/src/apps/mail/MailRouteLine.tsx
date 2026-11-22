@@ -63,6 +63,8 @@ export function MailRouteLine({ route, surface, subject, routingArea, routingCov
       })
       .catch(() => navigate('/org'));
   };
+  // A row's words are metadata, one line, cut first (text-fit.css); the reader shows them whole.
+  const fit = surface === 'row' ? ' wn-meta' : '';
   const line = (
     <Tag
       className={`mail-route mail-route-${surface}`}
@@ -97,7 +99,7 @@ export function MailRouteLine({ route, surface, subject, routingArea, routingCov
       {view.name && (view.link ? (
         <button
           type="button"
-          className="mail-route-link"
+          className={`mail-route-link${fit}`}
           data-testid={`${surface === 'row' ? 'mail-row' : 'mail-reader'}-route-link`}
           title={view.title}
           aria-label={view.link.kind === 'vp' ? `Open ${view.name} in Org` : view.link.kind === 'letter' ? 'Open the letter' : `Open task ${view.name}`}
@@ -113,7 +115,7 @@ export function MailRouteLine({ route, surface, subject, routingArea, routingCov
           {view.name}
         </button>
       ) : (
-        <span className="mail-route-name" data-testid={`${surface === 'row' ? 'mail-row' : 'mail-reader'}-route-name`}>
+        <span className={`mail-route-name${fit}`} data-testid={`${surface === 'row' ? 'mail-row' : 'mail-reader'}-route-name`}>
           {view.name}
         </span>
       ))}
@@ -122,7 +124,7 @@ export function MailRouteLine({ route, surface, subject, routingArea, routingCov
           {' '}
           <span className="mail-route-sep" aria-hidden="true">·</span>
           {' '}
-          <span className="mail-route-detail">{view.detail}</span>
+          <span className={`mail-route-detail${fit}`}>{view.detail}</span>
         </>
       )}
     </Tag>

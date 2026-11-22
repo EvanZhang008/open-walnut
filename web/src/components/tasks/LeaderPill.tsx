@@ -162,7 +162,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="leader-subtasks-title">
+              <div className="leader-subtasks-title wn-title">
                 {subtasks.length === 1 ? 'Open subtask' : `${subtasks.length} open subtasks`} of &ldquo;{orgDisplayTitle(task)}&rdquo;
               </div>
               <ul className="leader-subtasks-list">
@@ -181,7 +181,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
                         <span className={`task-phase-icon-btn leader-sub-phase ${taskCircleClass(sub, null)}`} aria-hidden="true">
                           {binaryPhaseIcon(false, sub.phase, taskUserState(sub))}
                         </span>
-                        <span className="leader-sub-title">{orgDisplayTitle(sub)}</span>
+                        <span className="leader-sub-title wn-title">{orgDisplayTitle(sub)}</span>
                         {place && <span className="leader-sub-place" title={`In project ${place}`}>{place}</span>}
                         <span className="leader-sub-phase-label">{taskStatusLabel(sub)}</span>
                       </button>
@@ -208,7 +208,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
                   title={`Make another open task a worker of "${orgDisplayTitle(task)}"`}
                   onClick={() => { close(false); setAdoptOpen(true); }}
                 >
-                  <span className="leader-sub-title">Adopt a task…</span>
+                  <span className="leader-sub-title wn-title">Adopt a task…</span>
                 </button>
               </div>
             </div>,

@@ -21,7 +21,7 @@
  * (one cron job's runs, one session's permissions) still collapse into an
  * expandable group, and a collapsed group never hides a pending ask.
  */
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { takeInboxReturn } from '@/components/inbox/item-drafts';
@@ -852,7 +852,7 @@ function RailSubButton({ label, count, active, onClick }: {
       aria-current={active}
       onClick={onClick}
     >
-      <span className="nfc-rail-name">{label}</span>
+      <span className="nfc-rail-name wn-title">{label}</span>
       {count > 0 && (
         <span className="nfc-rail-subcount">{count > 99 ? '99+' : count}</span>
       )}
@@ -877,7 +877,7 @@ function RailButton({ label, count, active, warn, danger, dot, onClick }: {
       aria-current={active}
       onClick={onClick}
     >
-      <span className="nfc-rail-name">{label}</span>
+      <span className="nfc-rail-name wn-title">{label}</span>
       {count > 0 ? (
         <span className={`nfc-rail-badge${warn ? ' nfc-warn' : ''}${danger ? ' nfc-danger' : ''}`}>{count > 99 ? '99+' : count}</span>
       ) : dot ? (
@@ -1029,7 +1029,7 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
     <div data-peek-row="" data-peek-grow="down" className={`notification-feed-item nfc-perm-card notification-feed-item--${n.severity}${n.read ? '' : ' unread'}`}>
       <div className="notification-feed-item-head">
         <span className={`notification-feed-dot notification-feed-dot--${n.severity}`} />
-        <span className="notification-feed-item-title">{title}</span>
+        <span className="notification-feed-item-title wn-title">{title}</span>
         {/* Click-through, on EVERY permission card that has a session — pending or
             settled. The card body stays inert (decision surface, see the class
             comment), so this small header link is the only way to get from a
@@ -1040,18 +1040,18 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
             it navigated to is visible. */}
         {target && (
           <button
-            className="nfc-open-session"
+            className="nfc-open-session wn-fixed"
             title="Open the session this came from"
             onClick={(e) => { e.stopPropagation(); onNavigate(target); }}
           >
             Open session ↗
           </button>
         )}
-        <span className="notification-feed-item-time">
+        <span className="notification-feed-item-time wn-fixed">
           {formatRelative(effectiveTs(n))}
         </span>
         <button
-          className="notification-feed-item-dismiss"
+          className="notification-feed-item-dismiss wn-fixed"
           onClick={onDismiss}
           aria-label="Dismiss notification"
         >
@@ -1102,7 +1102,9 @@ function ContextChips({ n }: { n: Notification }) {
   if (!label && !n.host && !n.project) return null;
   return (
     <div className="nfc-card-chips">
-      {label && <span className="nfc-chip">{label}</span>}
+      {/* The session's label is the long one: it gives up its words first (.wn-meta), so a short
+          host or project beside it stays whole. */}
+      {label && <span className="nfc-chip wn-meta">{label}</span>}
       {n.host && <span className="nfc-chip">{hostName}</span>}
       {n.project && <span className="nfc-chip">{n.project}</span>}
     </div>
@@ -1125,12 +1127,9 @@ const FeedItem = memo(function FeedItem({
   fixNeedsClone?: boolean;
   agentBlocked?: boolean;
 }) {
-  // Entries without a navigation target (e.g. plugin/system errors) expand on
-  // click instead — otherwise a truncated error message is simply unreadable.
-  const [expanded, setExpanded] = useState(false);
-  // The raw technical block, opened deliberately. Separate from `expanded`
-  // (which unclamps the human body) so unclamping a long sentence doesn't dump
-  // JSON on the user, and reading the JSON doesn't force the body open.
+  // The raw technical block, opened deliberately: the human title and body are
+  // always shown in full (standard.md, "Text that does not fit"), the JSON only
+  // when asked for.
   const [detailOpen, setDetailOpen] = useState(false);
   // "Ask AI to fix" in flight / its failure text. Per card: two error cards can
   // be handed to two repair sessions independently. The in-flight flag seeds
@@ -1165,9 +1164,11 @@ const FeedItem = memo(function FeedItem({
   // A letter envelope in the All feed opens the LETTER, never its origin session:
   // the envelope is a pointer at a document, and the document is the point.
   const letterId = n.kind === 'letter' && onOpenLetter ? letterIdOf(n) : null;
+  // A card with neither a letter nor a target has nothing to open: its words are
+  // already whole, so it is not a button.
   const activate = letterId
     ? () => onOpenLetter?.(letterId)
-    : target ? () => onNavigate(target) : () => setExpanded(v => !v);
+    : target ? () => onNavigate(target) : null;
 
   // The repair session this error already has (server-owned `fix`). A record can
   // carry a task without a session id (the launch answered late), so the task
@@ -1226,35 +1227,37 @@ const FeedItem = memo(function FeedItem({
 
   return (
     <div
-      className={`notification-feed-item notification-feed-item--${n.severity}${n.read ? '' : ' unread'}${target || letterId ? ' clickable' : ''}${expanded ? ' expanded' : ''}${recovered || stale ? ' recovered' : ''}`}
-      onClick={activate}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          activate();
-        }
-      }}
+      className={`notification-feed-item notification-feed-item--${n.severity}${n.read ? '' : ' unread'}${activate ? ' clickable' : ''}${recovered || stale ? ' recovered' : ''}`}
+      {...(activate ? {
+        onClick: activate,
+        role: 'button',
+        tabIndex: 0,
+        onKeyDown: (e: ReactKeyboardEvent) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            activate();
+          }
+        },
+      } : {})}
     >
       <div className="notification-feed-item-head">
         <span className={`notification-feed-dot notification-feed-dot--${n.severity}`} />
-        <span className={`notification-feed-item-title${expanded ? ' expanded' : ''}`}>{presented.title}</span>
+        <span className="notification-feed-item-title wn-title">{presented.title}</span>
         {/* All-section only: the Errors rail has category HEADERS, so a chip
             there would repeat the header on every row. */}
-        {category && <span className="nfc-chip nfc-chip-category">{category}</span>}
-        {recovered && <span className="nfc-chip nfc-chip-recovered">{resolvedLabelOf(n)}</span>}
-        {stale && <span className="nfc-chip">{resolvedLabelOf(n)}</span>}
+        {category && <span className="nfc-chip nfc-chip-category wn-fixed">{category}</span>}
+        {recovered && <span className="nfc-chip nfc-chip-recovered wn-fixed">{resolvedLabelOf(n)}</span>}
+        {stale && <span className="nfc-chip wn-fixed">{resolvedLabelOf(n)}</span>}
         {/* Occurrence fold: the server collapses repeats into one record so 36
             identical failures are one line, with how often it happened. Clamped
             at 99+ like the rail badge — a 4-digit count would push the row's
             timestamp and dismiss button out of the card. */}
-        {count >= 2 && <span className="nfc-count-badge">&times;{count > 99 ? '99+' : count}</span>}
-        <span className="notification-feed-item-time">
+        {count >= 2 && <span className="nfc-count-badge wn-fixed">&times;{count > 99 ? '99+' : count}</span>}
+        <span className="notification-feed-item-time wn-fixed">
           {formatRelative(effectiveTs(n))}
         </span>
         <button
-          className="notification-feed-item-dismiss"
+          className="notification-feed-item-dismiss wn-fixed"
           onClick={(e) => { e.stopPropagation(); onDismiss(); }}
           aria-label="Dismiss notification"
         >
@@ -1262,7 +1265,7 @@ const FeedItem = memo(function FeedItem({
         </button>
       </div>
       {presented.body && (
-        <div className={`notification-feed-item-body${expanded ? '' : ' clamped'}`}>{presented.body}</div>
+        <div className="notification-feed-item-body">{presented.body}</div>
       )}
       {/* The raw technical line, opt-in. This is where the old JSON-as-body went:
           a developer still gets every byte, and the user is no longer shown a log

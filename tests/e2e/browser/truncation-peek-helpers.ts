@@ -180,34 +180,29 @@ export async function followingOf(row: Locator, tag: string): Promise<Locator | 
 }
 
 /**
- * A dense inbox card widens as a whole and keeps its actions (shared by the fixture spec and the
- * real-letter walk-through): the pointer on blank card padding opens it at its own top and height,
- * its subject shows whole, its long preview stays one line (it is longer than the window, so it
- * may still end in an ellipsis), the neighbouring cards never move, and leaving restores it, three
- * times over. Its real buttons work while it is open, and it opens again after the window narrows.
+ * A dense inbox card in the Notifications drawer shows its words whole without a hover (2026-11-21,
+ * standard.md "Text that does not fit": a letter's subject and who it is from are titles, they wrap;
+ * the preview is shown in full, rule 11). So nothing on it is cut, the hover opens nothing and moves
+ * nothing, its buttons work, and at a narrow window the subject still wraps instead of cutting.
  */
-export async function expectInboxCardWidens(page: Page, card: Locator, neighbours: Locator[], info: TestInfo): Promise<void> {
+export async function expectInboxCardWhole(page: Page, card: Locator, neighbours: Locator[], info: TestInfo): Promise<void> {
   await card.scrollIntoViewIfNeeded()
   await page.mouse.move(1, 1)
   const before = (await card.boundingBox())!
   const tops = await topsOf(neighbours)
-  expect(await fits(card.locator('.hib-subject')), 'the subject is cut before the hover').toBe(false)
-  await page.screenshot({ path: info.outputPath('before.png') })
-  for (let round = 0; round < 3; round++) {
-    // Blank card padding is enough, not only the text itself.
-    await card.hover({ position: { x: before.width - 6, y: 6 } })
-    await expectWidensInPlace(card, before, { label: `card round ${round}`, capped: true })
-    await expect.poll(() => fits(card.locator('.hib-subject'))).toBe(true)
-    expect(await isOpen(card.locator('.hib-preview'))).toBe(true)
-    await expectStill(neighbours, tops, 'card')
-    await expect(card.locator('.hib-card-toggle')).toHaveAttribute('aria-expanded', 'false')
-    if (round === 0) await page.screenshot({ path: info.outputPath('whole-card.png') })
-    await page.mouse.move(1, 1)
-    await expectRestored(card, before, `card round ${round}`)
-  }
-  // The open card is the real one: its buttons get the press, and nothing else opens.
+  expect(await fits(card.locator('.hib-subject')), 'the subject is whole before any hover').toBe(true)
+  expect(await fits(card.locator('.hib-preview')), 'the preview is whole before any hover').toBe(true)
+  expect(await fits(card.locator('.hib-origin-name')), 'who it is from is whole').toBe(true)
+  await page.screenshot({ path: info.outputPath('whole-card.png') })
+  // Nothing is cut, so the hover opens nothing: the card keeps its box and its neighbours stay.
   await card.hover({ position: { x: before.width - 6, y: 6 } })
-  await expectWidensInPlace(card, before, { label: 'card before Pin', capped: true })
+  await page.waitForTimeout(400)
+  const hovered = (await card.boundingBox())!
+  expect(Math.abs(hovered.width - before.width), 'the hover does not widen a card with nothing cut').toBeLessThanOrEqual(1)
+  expect(Math.abs(hovered.height - before.height)).toBeLessThanOrEqual(1)
+  await expectStill(neighbours, tops, 'card')
+  await expect(card.locator('.hib-card-toggle')).toHaveAttribute('aria-expanded', 'false')
+  // Its buttons get the press, and nothing else opens.
   await card.getByRole('button', { name: 'Pin', exact: true }).click()
   await expect(card.getByRole('button', { name: 'Unpin', exact: true })).toBeVisible()
   await expect(page.locator('.hib-reader')).toHaveCount(0)
@@ -217,16 +212,11 @@ export async function expectInboxCardWidens(page: Page, card: Locator, neighbour
   await expect(card.locator('.hib-card-expand')).toHaveClass(/is-expanded/)
   await card.getByRole('button', { name: 'Collapse', exact: true }).click()
   await page.mouse.move(1, 1)
-  // A narrow window: it still opens sideways inside the window.
+  // A narrow window: the subject wraps onto more lines, still whole.
   await page.setViewportSize({ width: 720, height: 800 })
   await card.scrollIntoViewIfNeeded()
-  const narrow = (await card.boundingBox())!
-  await card.hover({ position: { x: 5, y: 5 } })
-  await expectWidensInPlace(card, narrow, { label: 'card at 720px', capped: true })
-  // This subject itself may exceed a narrow viewport. It stays one line at the width cap.
-  expect(await card.locator('.hib-subject').evaluate(el => getComputedStyle(el).whiteSpace)).toBe('nowrap')
-  await page.mouse.move(1, 1)
-  await expectRestored(card, narrow, 'card at 720px')
+  expect(await card.locator('.hib-subject').evaluate(el => getComputedStyle(el).whiteSpace)).toBe('normal')
+  expect(await fits(card.locator('.hib-subject')), 'the subject is whole at 720px').toBe(true)
   await card.locator('.hib-subject').focus()
   await page.keyboard.press('Enter')
   await expect(page.locator('.hib-reader')).toBeVisible()

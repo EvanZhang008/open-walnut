@@ -290,9 +290,9 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name, degrad
           <>
             {drawn.length > 0 && (
               <p className="mail-list-section mail-not-important-head" data-testid="mail-not-important-head">
-                <span className="mail-list-section-name">Not important</span>
+                <span className="mail-list-section-name wn-title">Not important</span>
                 {(numbers?.groupedUnread ?? 0) > 0 && (
-                  <span className="mail-important-unread" data-testid="mail-not-important-unread">{unreadWord(numbers!.groupedUnread)}</span>
+                  <span className="mail-important-unread wn-fixed" data-testid="mail-not-important-unread">{unreadWord(numbers!.groupedUnread)}</span>
                 )}
                 {markAll.total > 0 && (
                   <button
@@ -334,9 +334,9 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name, degrad
             )}
             <div className="mail-important">
               <p className="mail-list-section mail-important-head" data-testid="mail-important-head" title={numbers?.explain}>
-                <span className="mail-list-section-name">Important</span>
+                <span className="mail-list-section-name wn-title">Important</span>
                 {(numbers?.importantUnread ?? 0) > 0 && (
-                  <span className="mail-important-unread" data-testid="mail-important-unread">{unreadWord(numbers!.importantUnread)}</span>
+                  <span className="mail-important-unread wn-fixed" data-testid="mail-important-unread">{unreadWord(numbers!.importantUnread)}</span>
                 )}
               </p>
               {important.rows.length === 0 ? (

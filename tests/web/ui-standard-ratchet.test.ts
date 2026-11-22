@@ -21,6 +21,8 @@
  *     the TSX writes beside `wn-input`), its send key (beside `wn-input-send`) or the mic and
  *     attach keys inside it a corner, fill, edge or size of its own (2026-11-21, the user on the
  *     Threads reply box: "it's oval ... can there be one unified input box?").
+ *   - cutTitle: a rule that cuts a title, name, subject or summary class with an ellipsis or a line
+ *     clamp (standard.md, "Text that does not fit"): titles wrap (`.wn-title`), only metadata cuts.
  * The counts that exist today are in ui-standard-baseline.json and may only go down. A new file or
  * a higher count fails: use the family the standard names. A lower count fails too until the
  * baseline is lowered with `UI_STANDARD_RECORD=1` on this file, so the ratchet stays tight.
@@ -28,7 +30,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { countAll, restylesBtn, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, inputParts, restylesInput, type Counts } from './ui-standard-scan';
+import { countAll, restylesBtn, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, inputParts, restylesInput, cutsTitle, type Counts } from './ui-standard-scan';
 import { tokenBreaks } from './ui-token-scan';
 import type { Decl } from './css-scan';
 
@@ -70,7 +72,7 @@ describe('UI standard: one look per kind of control', () => {
   const recorded = JSON.parse(fs.readFileSync(BASELINE, 'utf8')) as Partial<Counts>;
   const was = Object.fromEntries(Object.keys(now).map((k) => [k, recorded[k as keyof Counts] ?? {}])) as Counts;
 
-  for (const kind of ['restyledBtn', 'ownControl', 'rawAccent', 'bareButton', 'restyledInput', ...TOKEN_KINDS] as const) {
+  for (const kind of ['restyledBtn', 'ownControl', 'rawAccent', 'bareButton', 'restyledInput', 'cutTitle', ...TOKEN_KINDS] as const) {
     it(`${kind}: no new second style`, () => {
       const { grew } = compare(kind, now[kind], was[kind]);
       expect(grew, `A second style of a shared control. Use the family in ${STANDARD} instead:\n${grew.join('\n')}`).toEqual([]);
@@ -98,6 +100,10 @@ describe('UI standard: one look per kind of control', () => {
     expect(bare("<button className={`btn${on ? ' btn-primary' : ''}`}>y</button>")).toEqual([false]);
     expect(bare('<button className="foo-btn" onClick={() => { if (x > 1) y() }}>z</button>')).toEqual([true]);
     expect(bare('<button onClick={f}>n</button><button role="tab" className="t">t</button>')).toEqual([true, false]);
+    expect(cutsTitle('.home-navigation-scroll .todo-item-title')).toBe(true);
+    expect(cutsTitle('.org-rail-name:hover')).toBe(true);
+    expect(cutsTitle('.mail-row .mail-subject-line')).toBe(false);
+    expect(cutsTitle('.todo-item-title .task-project-label')).toBe(false);
   });
 
   it('finds each value that is not a token', () => {

@@ -97,14 +97,14 @@ function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; select
       <span className="org-channel-mid">
         <span className="org-channel-top">
           {/* A VP the user named goes by that name, as on the org chart. */}
-          <span className="org-channel-name">{shownName(row)}</span>
+          <span className="org-channel-name wn-title">{shownName(row)}</span>
           {!!row.led?.length && (
-            <span className="org-channel-led" data-testid="org-channel-led" title={`Also leads ${row.led.map((l) => l.name).join(', ')}`}>+{row.led.length}</span>
+            <span className="org-channel-led wn-fixed" data-testid="org-channel-led" title={`Also leads ${row.led.map((l) => l.name).join(', ')}`}>+{row.led.length}</span>
           )}
           {/* The time of the line under it (when that news was written), else of the last move. */}
-          <span className="org-channel-time">{shortAgo(row.latestAt || row.lastAt, now)}</span>
+          <span className="org-channel-time wn-fixed">{shortAgo(row.latestAt || row.lastAt, now)}</span>
         </span>
-        <span className={`org-channel-latest${row.state === 'alert' ? ' is-alert' : ''}`} data-testid="org-channel-latest" title={row.latestTask ? `${row.latestTask}: ${row.latest}` : row.latest}>
+        <span className={`org-channel-latest wn-title${row.state === 'alert' ? ' is-alert' : ''}`} data-testid="org-channel-latest" title={row.latestTask ? `${row.latestTask}: ${row.latest}` : row.latest}>
           {/* A pinned thread named on the line wears the Threads card's pin. */}
           {row.latestPinned && <ThreadPinIcon size={11} className="org-channel-pin" />}{row.latest}
         </span>
@@ -144,7 +144,7 @@ function KeptChildren({ row, kept, open, onUnwatch, onToggleLock }: { row: Chann
               onKeyDown={(e) => { if (watched && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); onUnwatch(t.id); } }}
             >
               <i style={{ background: TAB_DOT[st] }} aria-hidden="true" />
-              <span className="org-watched-title">{title}</span>
+              <span className="org-watched-title wn-title">{title}</span>
             </button>
             {watched && <button type="button" className="org-watched-stop" data-testid="org-watched-stop" aria-hidden="true" tabIndex={-1} title="Stop watching" onClick={() => onUnwatch(t.id)}>×</button>}
           </div>
@@ -189,8 +189,8 @@ function MovedSection({ moved, query, onSelect, onMenu }: { moved: readonly Move
         >
           <NodeAvatar taskId={undefined} name={m.project} size={26} className="is-moved" />
           <span className="org-channel-mid">
-            <span className="org-channel-name">{m.project}</span>
-            <span className="org-channel-latest" data-testid="org-moved-line">
+            <span className="org-channel-name wn-title">{m.project}</span>
+            <span className="org-channel-latest wn-title" data-testid="org-moved-line">
               Moved to the {m.vpName} VP{m.from ? (m.from.open ? ' · handing over' : ' · closed') : ''}
             </span>
           </span>

@@ -350,7 +350,7 @@ function FolderRow({
       }}
     >
       <MailboxRoleIcon role={mailbox.role} />
-      <span className="mail-mailbox-name">{label}</span>
+      <span className="mail-mailbox-name wn-title">{label}</span>
       {/* One small dot, the row's own, so two fetches running at once are two marks and not one
           sentence about whichever answered last. The words are in the hover text and in the pane. */}
       {fetch && (
@@ -429,7 +429,7 @@ function DraftsRow({ accountId, count, active, onPicked }: {
       }}
     >
       <DraftsIcon />
-      <span className="mail-mailbox-name">Drafts</span>
+      <span className="mail-mailbox-name wn-title">Drafts</span>
       {/* Exact and grouped, like the mailbox badges above: the two sit in the same column of the
           same list, and one of them capping while the other does not is a difference with no
           meaning behind it. */}

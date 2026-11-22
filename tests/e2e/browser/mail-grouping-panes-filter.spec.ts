@@ -39,6 +39,12 @@ async function widthOf(page: Page, selector: string): Promise<number> {
   return page.locator(selector).first().evaluate((node) => Math.round(node.getBoundingClientRect().width))
 }
 
+/** The list's default width: mail.css `clamp(360px, 36%, 560px)` of the console (2026-11-21: by content, no longer a fixed 336px). */
+async function defaultListWidth(page: Page): Promise<number> {
+  const consoleWidth = await widthOf(page, '.mail-console')
+  return Math.round(Math.min(560, Math.max(360, consoleWidth * 0.36)))
+}
+
 async function stored(page: Page): Promise<Record<string, number> | null> {
   return page.evaluate((key) => {
     const text = window.localStorage.getItem(key)
@@ -73,7 +79,7 @@ test.describe('resizable columns', () => {
     const folders = '.mail-console > .mail-accounts-pane'
     const reader = '.mail-console > :last-child'
     const start = await widthOf(page, list)
-    expect(start).toBe(336)
+    expect(Math.abs(start - await defaultListWidth(page))).toBeLessThanOrEqual(1)
 
     // Open a mail first: the reader's body is an iframe, and the drag must survive the pointer over it.
     await groupLine(page, (await getGroups(fixture, ALL_INBOXES)).groups[0].id).getByTestId('mail-group-name').click()
@@ -122,7 +128,7 @@ test.describe('resizable columns', () => {
     // Double-click: back to the stylesheet's defaults, and nothing left in storage.
     await page.getByTestId('mail-splitter-list').dblclick()
     await page.getByTestId('mail-splitter-accounts').dblclick()
-    await expect.poll(() => widthOf(page, list)).toBe(336)
+    await expect.poll(() => widthOf(page, list)).toBe(start)
     expect(await widthOf(page, folders)).toBe(232)
     expect(await stored(page)).toBeNull()
     await expect(page.getByTestId('mail-compose-new').locator('.mail-compose-new-label')).toBeVisible()
@@ -151,14 +157,16 @@ test.describe('the summary line under each group', () => {
       await expect(summary).toHaveText(group.summary)
       await expect(summary).toHaveAttribute('data-by', group.summaryBy ?? 'subject')
       if (group.unread === 1) expect(group.summaryBy).toBeUndefined()
-      const [height, lines] = await line.evaluate((node) => {
+      const [height, lines, cut] = await line.evaluate((node) => {
         const text = node.querySelector('.mail-group-summary') as HTMLElement
-        return [node.getBoundingClientRect().height, Math.round(text.getBoundingClientRect().height / parseFloat(getComputedStyle(text).lineHeight))]
+        return [node.getBoundingClientRect().height, Math.round(text.getBoundingClientRect().height / parseFloat(getComputedStyle(text).lineHeight)), text.scrollWidth > text.clientWidth + 1]
       })
+      // The whole summary shows: it wraps onto more lines rather than end in an ellipsis
+      // (standard.md "Text that does not fit", 2026-11-21); the line grows 16px per extra line.
+      expect(cut).toBe(false)
+      expect(lines).toBeGreaterThanOrEqual(1)
       expect(height).toBeGreaterThanOrEqual(40)
-      expect(height).toBeLessThanOrEqual(56)
-      // One line, cut with an ellipsis, never wrapped.
-      expect(lines).toBe(1)
+      expect(height).toBeLessThanOrEqual(56 + (lines - 1) * 16)
     }
     await page.mouse.move(0, 0)
     await shoot(page, shots, 'group-summaries')

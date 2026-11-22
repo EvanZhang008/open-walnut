@@ -31,6 +31,10 @@ import { OrgNewDirector } from './OrgNewDirector';
 import '@/styles/org-leaders.css';
 import { NodeAvatar } from './OrgAvatar';
 
+/** How far each level of Directors steps in: enough for the tree to read, little enough that a deep
+ *  level keeps the width its title wraps in (2026-11-21, the UI audit: names cut at every level). */
+const LEVEL_INDENT_PX = 10;
+
 type Surface = 'list' | 'chart';
 
 /** A fold kept per key, shown open while a search finds something under it. A click on a fold the
@@ -89,7 +93,7 @@ function LeaderRow({ leader: l, depth, surface, query, openTaskIds, onOpen, onMe
         data-state={l.state}
         data-depth={depth}
         data-open={openTaskIds?.has(l.id) || undefined}
-        style={depth ? { paddingLeft: `min(${14 * depth}px, 40%)` } : undefined}
+        style={depth ? { paddingLeft: `min(${LEVEL_INDENT_PX * depth}px, 40%)` } : undefined}
         onContextMenu={(e) => onMenu(e, l)}
       >
         {hasSubs ? (
@@ -116,9 +120,9 @@ function LeaderRow({ leader: l, depth, surface, query, openTaskIds, onOpen, onMe
         >
           <i style={{ background: TAB_DOT[l.state] }} aria-hidden="true" />
           <NodeAvatar taskId={l.id} name={l.title} size={20} className="org-leader-avatar" />
-          <span className="org-leader-title">{l.title}</span>
-          {l.watched && <span className="org-leader-eye" data-testid="org-leader-eye" title="Watched" aria-hidden="true">{ICON_EYE}</span>}
-          <span className="org-leader-leads" data-testid="org-leader-leads">leads {l.leads}</span>
+          <span className="org-leader-title wn-title">{l.title}</span>
+          {l.watched && <span className="org-leader-eye wn-fixed" data-testid="org-leader-eye" title="Watched" aria-hidden="true">{ICON_EYE}</span>}
+          <span className="org-leader-leads wn-fixed" data-testid="org-leader-leads">leads {l.leads}</span>
         </button>
       </div>
       {hasSubs && open && (
@@ -217,7 +221,7 @@ export function OrgLeaders({ groups, surface, vpKey, vpName, projects, showProje
         <div id={listId} className="org-leaders-list" data-testid="org-leaders-list">
           {foldGroups(groups, showProjects).map((g) => (
             <div key={g.key} className="org-leaders-group" role={inList ? 'group' : undefined} aria-label={inList ? (g.name || `Directors under ${vpName}`) : undefined} data-testid="org-leaders-group" data-project={g.project}>
-              {g.name && <div className="org-leaders-project" data-testid="org-leaders-project" aria-hidden={inList || undefined}>{g.name}</div>}
+              {g.name && <div className="org-leaders-project wn-title" data-testid="org-leaders-project" aria-hidden={inList || undefined}>{g.name}</div>}
               {g.leaders.map((l) => <LeaderRow key={l.id} leader={l} depth={0} surface={surface} query={query} openTaskIds={openTaskIds} onOpen={onOpen} onMenu={onMenu} />)}
             </div>
           ))}

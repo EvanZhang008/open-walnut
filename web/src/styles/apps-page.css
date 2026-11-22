@@ -223,15 +223,14 @@
 .apps-card-main::after { content: ''; position: absolute; inset: 0; border-radius: inherit; }
 .apps-card-main:focus-visible { outline: none; }
 .apps-card-main:focus-visible::after { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 14px; }
+/* The name and the line under it are .wn-title (text-fit.css): shown whole, wrapping; a card row
+   grows to its longest card instead of cutting a description to two lines (standard.md rule 11). */
 .apps-card-name {
   display: block;
   font-weight: 600;
   font-size: 14px;
   line-height: 18px;
   color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .apps-card-text > .apps-card-badge {
   position: relative;
@@ -248,10 +247,6 @@
   font-size: var(--font-size-sm);
   line-height: 16px;
   color: var(--fg-muted);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 .apps-card-note {
   margin-top: 4px;
@@ -645,7 +640,9 @@
 .apps-quick-open:hover { background: var(--accent-subtle); }
 .apps-quick-icon { flex: none; display: inline-flex; }
 .apps-quick-icon svg, .apps-quick-icon img { width: 18px; height: 18px; }
-.apps-quick-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+/* .wn-title: the app's name wraps rather than cut; it stays at its words' width so the badge follows it. */
+.apps-quick-name { min-width: 0; font-weight: 500; }
+.apps-quick-open > .apps-quick-name { flex: 0 1 auto; }
 .apps-quick-pin {
   flex: none;
   width: 28px;

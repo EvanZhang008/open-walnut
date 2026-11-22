@@ -41,14 +41,11 @@
     background: var(--hover-bg, rgb(0 0 0 / 6%));
   }
   /* A title with a long path or hash breaks inside it: at its unbroken width the row grew past
-     the screen and Home scrolled sideways (2026-11-20). */
+     the screen and Home scrolled sideways (2026-11-20). It shows in full (`.wn-title`), never
+     cut to two lines (2026-11-21). */
   .app-shell-navigation .phone-needs-you-title {
     max-width: 100%;
     overflow-wrap: anywhere;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
     font-size: var(--font-size-lg);
     line-height: 20px;
   }

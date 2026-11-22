@@ -146,12 +146,34 @@
 .home-navigation-scroll .todo-focus-card, .home-navigation-scroll .todo-pinned-card, .home-navigation-scroll .todo-panel-item { border-radius: 6px; border-left-color: transparent; box-shadow: none; touch-action: pan-y; }
 .home-navigation-scroll .todo-panel-item { border-bottom: 0; }
 .home-navigation-scroll .todo-pinned-title, .home-navigation-scroll .todo-item-title { font-size: var(--font-size-md); }
-.home-navigation-scroll .todo-item-title { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; word-break: break-all; }
+/* A title is never cut to one line (`.wn-title`, text-fit.css): it wraps, and its row's pills follow it. */
 /* One row rhythm (29px pitch). */
 .home-navigation-scroll .todo-pinned-card, .home-navigation-scroll .todo-focus-card { min-height: 27px; padding: 2px 6px 2px 14px; margin-left: 0; }
 .home-navigation-scroll .todo-focus-card.task-grouped, .home-navigation-scroll .todo-pinned-card.task-grouped { margin-left: calc(16px + var(--folder-depth, 0) * 16px); }
 .home-navigation-scroll .todo-panel-item, .home-navigation-scroll .todo-group-project .todo-panel-item { margin-left: -8px; padding: 3px 6px 3px 22px; }
 .home-navigation-scroll .todo-item-title-row { gap: 6px; }
+/* A card whose title wraps keeps its circle, tier mark, time and actions on the band a one-line
+   title gives them (--row-band: 23 px, a Flat card's meta line plus first title line 36 px),
+   never centred on the whole block (standard.md "Text that does not fit"). Each fixed part
+   names its own height (--kid-h); a part that names none starts at the band's top. */
+/* Desktop only: a phone row lays its parts out on its own 44 px grid (phone-pages.css). */
+@media (min-width: 769px) and (min-height: 501px), (min-width: 769px) and (pointer: fine) {
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card) { --row-band: 23px; align-items: flex-start; }
+  .home-navigation-scroll .status-section-card.status-card-two-line { --row-band: 36px; align-items: flex-start; }
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card) > :not(.task-unread-dot) {
+    margin-top: max(0px, calc((var(--row-band) - var(--kid-h, var(--row-band))) / 2));
+  }
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card) > :is(.task-phase-icon-btn, .pinned-phase-picker) { --kid-h: 18px; }
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card) > .todo-recent-tier-dot { --kid-h: 12px; }
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card) > .task-kebab-wrapper { --kid-h: 23px; }
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card) > :is(.task-start-btn, .worker-fold-row-back) { --kid-h: 20px; }
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card) > :is(.todo-pinned-title, .task-row-pill, .todo-item-due-pill, .todo-recent-ago, .status-card-reason, .task-tag-pills, .status-card-also-working, .worker-fold-line, .away-sync-mark, .todo-item-limit-pill) { --kid-h: 17px; }
+  .home-navigation-scroll .status-section-card.status-card-two-line > .status-card-body { --kid-h: 34px; }
+  .home-navigation-scroll :is(.todo-pinned-card, .todo-focus-card) > .task-unread-dot { top: calc(var(--row-band) / 2 + 2px); }
+  .home-navigation-scroll .status-section-card.status-card-two-line > .task-unread-dot { top: calc(var(--row-band) / 2 + 4px); }
+  .home-navigation-scroll .todo-pinned-card-session-open::after { top: calc(var(--row-band) / 2 + 2px); }
+  .home-navigation-scroll .status-section-card.status-card-two-line.todo-pinned-card-session-open::after { top: calc(var(--row-band) / 2 + 4px); }
+}
 
 @media (min-width: 769px) and (min-height: 501px), (min-width: 769px) and (pointer: fine) {
   .home-navigation-scroll .todo-item-title-row {
@@ -166,13 +188,15 @@
     left: 0;
     top: 2px;
   }
+  /* A wrapped title keeps the 22 px first line the circle and kebab sit on (18 px lines, 2 px above). */
   .home-navigation-scroll .todo-item-title-row > .todo-item-title {
     flex: 1 0 auto;
     width: max-content;
     max-width: 100%;
     min-width: 0;
     min-height: 22px;
-    line-height: 22px;
+    padding-block: 2px;
+    line-height: 18px;
   }
   .home-navigation-scroll .todo-item-title-row > .task-start-btn {
     position: absolute;
@@ -512,8 +536,9 @@
   margin: 2px 8px 4px; padding: 5px 6px 5px 10px; border-radius: 6px;
   background: var(--bg-secondary); color: var(--fg-muted); font-size: var(--font-size-sm);
 }
-.todo-offview-text { display: flex; flex: 1 1 190px; min-width: 0; white-space: nowrap; }
-.todo-offview-title { min-width: 2em; overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
+.todo-offview-text { display: flex; flex-wrap: wrap; flex: 1 1 190px; min-width: 0; }
+/* The task's title wraps in full (`.wn-title`); "is in <tab>" follows it. */
+.todo-offview-title { color: var(--fg); }
 .todo-offview-where { flex-shrink: 0; white-space: pre; }
 .todo-offview-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
 /* Its keys are the family's (.btn-sm, the × .btn-icon.btn-sm). */
@@ -540,4 +565,25 @@
 @container todo-toolbar (max-width: 419px) {
   .app-shell-navigation .todo-panel-toolbar { gap: 4px; }
   .app-shell-navigation .todo-panel-toolbar .todo-search-bar { padding: 0 6px; }
+}
+
+/* A search hit's ask, folded to one line (SearchAskLine.tsx): "Needs you", the question, and a
+   chevron that opens the full card under it. The results keep scanning as a list (2026-11-21). */
+.search-ask-line { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.search-ask-toggle {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 24px;
+  margin: 0; padding: 0 8px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--fg-secondary); font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+.search-ask-toggle:hover { background: var(--bg-hover); color: var(--fg); }
+.search-ask-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.search-ask-mark { font-size: 11px; font-weight: 600; color: var(--error); }
+.search-ask-summary { flex: 1 1 auto; }
+/* Agent text wraps by default (AgentText): the folded line stays one line. */
+.search-ask-toggle .search-ask-summary[data-agent-text] { white-space: nowrap; overflow-wrap: normal; }
+.search-ask-more { font-size: 11px; color: var(--fg-muted); }
+.search-ask-chevron { font-size: 14px; line-height: 1; }
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  html .app-shell-navigation .search-ask-toggle { min-height: 44px; font-size: 13px; }
+  html .app-shell-navigation .search-ask-mark, html .app-shell-navigation .search-ask-more { font-size: 12px; }
 }

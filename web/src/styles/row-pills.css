@@ -73,14 +73,21 @@ html .todo-panel .tag-pill-group > .tag-chip-overflow { padding-left: 3px; }
     flex: 1 0 100%;
     width: auto;
   }
-  /* The tier and project take what the pills leave (basis 0), the project name cut short
-     first, so a crowded row still fits its pills on the second line. */
+  /* The tier and project keep their own width (cut only when the line is full), then the pills
+     follow. A Worker pill counts as its minimum when the line is laid out and grows into the room
+     left, up to its whole leader name, so it is cut only when the line has no room
+     (2026-11-21: it was cut at 152 px beside empty room). */
   .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] > .todo-search-meta-row {
     order: 1;
-    flex: 1 1 0;
-    min-width: 64px;
+    flex: 0 1 auto;
+    min-width: 0;
     overflow: hidden;
     padding-left: 0;
+  }
+  .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] > .todo-item-title-row > .todo-item-subtask-pill {
+    flex: 1 1 0;
+    min-width: 64px;
+    max-width: max-content;
   }
   .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] > .todo-item-title-row > :not(.todo-item-title, .task-phase-icon-btn, .task-kebab-wrapper, .task-unread-dot, .task-start-btn) {
     order: 2;

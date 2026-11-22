@@ -28,7 +28,7 @@ export function MailRouterRows({ onPicked }: { onPicked: () => void }) {
           <li>
             <button type="button" className="mail-mailbox mail-router-row" data-testid="mail-router-setup" tabIndex={0}
               title="Create a router in Org: it reads the mail of the mailboxes you give it" onClick={() => go(ORG_ROUTER_SETUP_PATH)}>
-              <span className="mail-router-name">Set up a router</span>
+              <span className="mail-router-name wn-title">Set up a router</span>
             </button>
           </li>
         )}
@@ -48,7 +48,7 @@ export function MailRouterRows({ onPicked }: { onPicked: () => void }) {
               <span className="mail-router-dot" data-tone={r.tone} aria-hidden="true" />
               {/* Name above its state: in the narrow pane a name beside the state was cut to "Personal mail r…". */}
               <span className="mail-router-text">
-                <span className="mail-router-name" data-testid="mail-router-name">{r.name}</span>
+                <span className="mail-router-name wn-title" data-testid="mail-router-name">{r.name}</span>
                 <span className="mail-router-state" data-testid="mail-router-state">{r.state}</span>
               </span>
             </button>

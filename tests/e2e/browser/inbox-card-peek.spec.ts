@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { home } from './inbox-items-helpers'
-import { expectInboxCardWidens, expectRestored, expectStill, expectWidensInPlace, expectWorkerRowWidens, isOpen, openInRow, topsOf } from './truncation-peek-helpers'
+import { expectInboxCardWhole, expectRestored, expectStill, expectWidensInPlace, expectWorkerRowWidens, isOpen, openInRow, topsOf } from './truncation-peek-helpers'
 
 // A whole card widens sideways at its own height (2026-11-15, the user: wider, not taller).
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
@@ -8,7 +8,7 @@ test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
 const SUBJECT = 'A letter with a full-length subject: review the garden schedule, the tool inventory and the next steps before the weekend'
 const PREVIEW = 'The garden group needs a reply about the whole schedule. Check the tools, confirm the available dates, and bring the inventory notes from the last meeting. '.repeat(4)
 
-test('dense inbox cards widen as a whole, keep their height and actions, and recover after leaving and resizing', async ({ page, request }, info) => {
+test('dense inbox cards show their subject and preview whole, keep their actions, and wrap at a narrow window', async ({ page, request }, info) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
   const ids: string[] = []
@@ -23,7 +23,7 @@ test('dense inbox cards widen as a whole, keep their height and actions, and rec
     const panel = page.locator('.notification-panel')
     await panel.locator('.nfc-rail-btn').filter({ hasText: 'Inbox' }).click()
     const card = (id: string) => panel.locator(`[data-letter-id="${id}"]`)
-    await expectInboxCardWidens(page, card(ids[11]), [card(ids[10]), card(ids[9])], info)
+    await expectInboxCardWhole(page, card(ids[11]), [card(ids[10]), card(ids[9])], info)
     expect(errors).toEqual([])
   } finally {
     for (const id of ids) await request.post(`/api/v1/human-inbox/${id}/archive`, { data: { archived: true } })

@@ -72,9 +72,9 @@ export function OrgDirectorSection({ vps, groupsOf, projectsOf, query, openTaskI
               <NodeAvatar taskId={d.id} name={vp.name} size={26} className="is-director" />
               <span className="org-channel-mid">
                 <span className="org-channel-top">
-                  <span className="org-channel-name">{d.title}</span>
+                  <span className="org-channel-name wn-title">{d.title}</span>
                 </span>
-                <span className="org-channel-latest" data-testid="org-director-line">
+                <span className="org-channel-latest wn-meta" data-testid="org-director-line">
                   <i className="org-director-dot" style={{ background: TAB_DOT[d.state] }} aria-hidden="true" />{state} · {vpName}
                 </span>
               </span>

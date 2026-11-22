@@ -81,7 +81,7 @@ export function AgentsPage() {
   if (error) return <div className="empty-state"><p>Error: {error}</p></div>;
 
   return (
-    <div>
+    <div className="page-readable">
       <div className="page-header flex justify-between items-center">
         <div>
           <h1 className="page-title">Agents</h1>

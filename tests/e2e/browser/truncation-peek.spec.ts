@@ -6,8 +6,8 @@ import { expectPeeksInPlace, expectRestored, expectStill, expectWidensInPlace, f
 /**
  * Cut-off text peeks in place (web/src/utils/truncation-peek.ts). A task row widens in place
  * (2026-11-15, the user: the whole card gets wider, not taller; design 01 with 02's right-edge
- * fallback): with a real mouse anywhere on a row whose title is cut off, the real row opens in the
- * top layer at its own top and height, wide enough for its title on one line, over whatever is
+ * fallback): with a real mouse anywhere on a row whose metadata is cut off, the real row opens in the
+ * top layer at its own top and height, wide enough for that text on one line, over whatever is
  * beside it; an empty placeholder keeps its place, so no row moves. No native title is left above
  * the pointer, so no dark box opens; it closes when the pointer leaves or the list scrolls; a row
  * that fits shows nothing. Text outside a row that a column clips opens its own container the same
@@ -29,9 +29,13 @@ const ids = new Map<string, string>()
 // Pinned rows: the Home tier rows of the report (a pinned row's title is what showed the dark tooltip).
 const row = (page: Page, title: string) => page.locator(`.todo-pinned-section [data-task-id="${ids.get(title)}"]`).first()
 const titleOf = (page: Page, title: string) => row(page, title).locator('.todo-pinned-title').first()
+// A task title is never cut any more (`.wn-title` wraps, standard.md "Text that does not fit",
+// 2026-11-21): what a row cuts is its metadata, here a long tag, so the peek is driven by that.
+const LONG_TAG = `label:${WORD} the long label that holds every word of the garden and the sourdough notes`
+const cutOf = (page: Page, title: string) => row(page, title).locator('.task-tag-pills .tag-chip-value').first()
 
-async function createTask(request: APIRequestContext, title: string): Promise<string> {
-  const res = await request.post('/api/tasks', { data: { title, source: 'local', project: 'Peek Spec' } })
+async function createTask(request: APIRequestContext, title: string, tags: string[] = title === SHORT ? [] : [LONG_TAG]): Promise<string> {
+  const res = await request.post('/api/tasks', { data: { title, source: 'local', project: 'Peek Spec', tags } })
   expect(res.status()).toBe(201)
   const id = ((await res.json()) as { task: { id: string } }).task.id
   expect((await request.post(`/api/focus/tasks/${id}`)).ok()).toBe(true)
@@ -66,8 +70,9 @@ test('a cut-off Home row widens in place: as tall as it was, nothing below moves
     await page.mouse.move(1200, 780)
     await page.waitForTimeout(300)
 
-    // The row's own title is cut off: the page shows less than the text.
-    expect(await titleOf(page, LONG_A).evaluate((el) => el.scrollWidth > el.clientWidth + 1)).toBe(true)
+    // The title shows whole (it wraps); the row's tag is cut off: the page shows less than the text.
+    expect(await titleOf(page, LONG_A).evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
+    expect(await cutOf(page, LONG_A).evaluate((el) => el.scrollWidth > el.clientWidth + 1)).toBe(true)
     const before = await box(row(page, LONG_A))
     const beforeB = await box(row(page, LONG_B))
     const neighbours = [row(page, LONG_B), row(page, SHORT)]
@@ -75,10 +80,10 @@ test('a cut-off Home row widens in place: as tall as it was, nothing below moves
 
     const a = await centerOf(page, titleOf(page, LONG_A))
     await page.mouse.move(a.x, a.y)
-    // The whole row opens wider at its own top and height, its title whole on one line.
+    // The whole row opens wider at its own top and height, its cut tag whole on one line.
     const after = await expectWidensInPlace(row(page, LONG_A), before, { label: 'Home row' })
-    await expect.poll(() => openInRow(titleOf(page, LONG_A))).toBe(true)
-    const t = await box(titleOf(page, LONG_A))
+    await expect.poll(() => openInRow(cutOf(page, LONG_A))).toBe(true)
+    const t = await box(cutOf(page, LONG_A))
     expect(t.x + t.width).toBeLessThanOrEqual(after.x + after.width + 1)
     await expectStill(neighbours, tops, 'Home row below')
     // No native title above the pointer, so no dark tooltip.
@@ -88,7 +93,7 @@ test('a cut-off Home row widens in place: as tall as it was, nothing below moves
     // The widened part is the row too: the pointer out on it, over what was beside the row, keeps it open.
     await page.mouse.move(after.x + after.width - 6, a.y, { steps: 4 })
     await page.waitForTimeout(250)
-    expect(await isOpen(titleOf(page, LONG_A))).toBe(true)
+    expect(await isOpen(cutOf(page, LONG_A))).toBe(true)
     await page.mouse.move(a.x, a.y, { steps: 4 })
 
     // A re-render under the resting pointer (a rename the server pushes) opens the row again on
@@ -116,17 +121,17 @@ test('a cut-off Home row widens in place: as tall as it was, nothing below moves
     const painted = await page.evaluate(() => { const w = window as unknown as { __peekMinW: number; __peekDH: number; __peekStop: boolean }; w.__peekStop = true; return { minW: w.__peekMinW, dh: w.__peekDH } })
     expect(painted.minW, 'the open row never painted closed while it re-rendered').toBeGreaterThan(before.width + 8)
     expect(painted.dh, 'nor any taller or shorter').toBeLessThanOrEqual(0.5)
-    await expect.poll(() => openInRow(titleOf(page, LONG_A))).toBe(true)
+    await expect.poll(() => openInRow(cutOf(page, LONG_A))).toBe(true)
 
     // On to the next cut-off row: it opens and the first is back as it was.
     await page.mouse.move(beforeB.x + 120, beforeB.y + beforeB.height / 2, { steps: 6 })
     await expectWidensInPlace(row(page, LONG_B), beforeB, { label: 'next Home row' })
     await expectRestored(row(page, LONG_A), before, 'the row left')
-    await expect.poll(() => openInRow(titleOf(page, LONG_B))).toBe(true)
+    await expect.poll(() => openInRow(cutOf(page, LONG_B))).toBe(true)
 
     // A press lands on the open row as it is (it does not close under the press).
     await page.mouse.down()
-    expect(await isOpen(titleOf(page, LONG_B))).toBe(true)
+    expect(await isOpen(cutOf(page, LONG_B))).toBe(true)
     await page.mouse.up()
     // Off the list: every row is back.
     await page.mouse.move(1200, 780)
@@ -136,12 +141,12 @@ test('a cut-off Home row widens in place: as tall as it was, nothing below moves
     // Back on a row, then a scroll: it closes while the list moves.
     const b = await centerOf(page, titleOf(page, LONG_B))
     await page.mouse.move(b.x, b.y, { steps: 6 })
-    await expect.poll(() => isOpen(titleOf(page, LONG_B))).toBe(true)
+    await expect.poll(() => isOpen(cutOf(page, LONG_B))).toBe(true)
     await page.mouse.wheel(0, 40)
-    await expect.poll(() => isOpen(titleOf(page, LONG_B))).toBe(false)
+    await expect.poll(() => isOpen(cutOf(page, LONG_B))).toBe(false)
     await expect(page.locator('[data-peek-placeholder]')).toHaveCount(0)
 
-    // A row whose title fits shows nothing.
+    // A row with nothing cut (a short title, no tag) shows nothing.
     await page.mouse.move(1200, 780)
     const s = await centerOf(page, titleOf(page, SHORT))
     const shortBefore = await box(row(page, SHORT))
@@ -209,6 +214,7 @@ test('moving down a list: one row open at a time, no row and no scroll moves, an
     const order = await page.evaluate((ids) => ids.map((id) => [id, document.querySelector(`.todo-pinned-section [data-task-id="${id}"]`)!.getBoundingClientRect().top] as const).sort((a, b) => a[1] - b[1]).map(([id]) => id), made)
     const rowById = (id: string) => page.locator(`.todo-pinned-section [data-task-id="${id}"]`).first()
     const titleById = (id: string) => rowById(id).locator('.todo-pinned-title').first()
+    const cutById = (id: string) => rowById(id).locator('.task-tag-pills .tag-chip-value').first()
     const scrollTop = () => rowById(order[0]).evaluate((el) => {
       let l = el.parentElement
       while (l && !(/(auto|scroll)/.test(getComputedStyle(l).overflowY) && l.scrollHeight > l.clientHeight)) l = l.parentElement
@@ -230,7 +236,7 @@ test('moving down a list: one row open at a time, no row and no scroll moves, an
       const at = { x: boxes[i + 1].x + 120, y: boxes[i + 1].y + boxes[i + 1].height / 2 }
       await page.mouse.move(at.x, at.y, { steps: 6 })
       await expectWidensInPlace(rows[i + 1], boxes[i + 1], { label: `row ${i + 1}` })
-      expect(await isOpen(titleById(order[i]))).toBe(false)
+      expect(await isOpen(cutById(order[i]))).toBe(false)
       expect(await page.evaluate(([x, y, id]) => !!document.elementFromPoint(x, y)?.closest(`[data-task-id="${id}"]`), [at.x, at.y, order[i + 1]] as const)).toBe(true)
       await expectStill(rows, tops, `moving from row ${i}`)
       expect(await scrollTop(), 'nothing scrolls to make up for a closing row').toBe(scrolled)
@@ -241,13 +247,13 @@ test('moving down a list: one row open at a time, no row and no scroll moves, an
     // A press that moves a little (under a drag's start) keeps the open row as it is.
     const last = await box(titleById(order[3]))
     await page.mouse.move(last.x + 20, last.y + 6, { steps: 4 })
-    await expect.poll(() => isOpen(titleById(order[3]))).toBe(true)
+    await expect.poll(() => isOpen(cutById(order[3]))).toBe(true)
     await page.mouse.down()
     await page.mouse.move(last.x + 23, last.y + 7)
-    expect(await isOpen(titleById(order[3]))).toBe(true)
+    expect(await isOpen(cutById(order[3]))).toBe(true)
     await page.mouse.up()
     await page.mouse.move(1200, 780)
-    await expect.poll(() => isOpen(titleById(order[3]))).toBe(false)
+    await expect.poll(() => isOpen(cutById(order[3]))).toBe(false)
   } finally {
     for (const id of made) await request.delete(`/api/tasks/${id}?force=true`).catch(() => undefined)
   }
@@ -355,16 +361,24 @@ test('a task row widens as a whole: the pointer anywhere on a status row opens i
   const panel = page.locator('.todo-panel').first()
   await setStatusSectionOpen(panel, 'needs', true)
   await page.mouse.move(1200, 780)
-  // A status row of the fixture whose title the row cuts off, on screen.
-  const findCut = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.status-section-card[data-peek-row]')].find((c) => {
-    const t = c.querySelector<HTMLElement>('.todo-pinned-title')
-    const r = c.getBoundingClientRect()
-    return t && t.scrollWidth > t.clientWidth + 1 && r.top > 60 && r.bottom < innerHeight - 20
-  })?.dataset.taskId ?? '')
+  // A status row of the fixture whose metadata the row cuts off, on screen (its title wraps whole,
+  // `.wn-title`; the cut text is marked so the steps below can name it).
+  const findCut = () => page.evaluate(() => {
+    for (const c of document.querySelectorAll<HTMLElement>('.status-section-card[data-peek-row]')) {
+      const r = c.getBoundingClientRect()
+      if (r.top <= 60 || r.bottom >= innerHeight - 20) continue
+      const cut = [...c.querySelectorAll<HTMLElement>('.status-card-body *, .status-section-card > *')].find((e) => e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).overflow !== 'visible')
+      if (!cut) continue
+      document.querySelectorAll('[data-spec-cut]').forEach((e) => e.removeAttribute('data-spec-cut'))
+      cut.setAttribute('data-spec-cut', '')
+      return c.dataset.taskId ?? ''
+    }
+    return ''
+  })
   await expect.poll(findCut, { timeout: 20_000 }).not.toBe('')
   const cutId = await findCut()
   const card = panel.locator(`.status-section-card[data-task-id="${cutId}"]`).first()
-  const full = (await card.locator('.todo-pinned-title').textContent()) ?? ''
+  const full = (await card.locator('[data-spec-cut]').textContent()) ?? ''
 
   // On the row, right of its title (the time and project side), not on the title's own text
   // nor on the row's own ⋮.
@@ -376,7 +390,7 @@ test('a task row widens as a whole: the pointer anywhere on a status row opens i
     const x = Math.max(t.right + 4 - r.left, (k ? k.left : r.right) - r.left - 40)
     return { x, y: t.top + t.height / 2 - r.top }
   })
-  const title = card.locator('.todo-pinned-title')
+  const title = card.locator('[data-spec-cut]')
   const cardBefore = await box(card)
   const following = await followingOf(card, 'status-row')
   const tops = following ? await topsOf([following]) : []

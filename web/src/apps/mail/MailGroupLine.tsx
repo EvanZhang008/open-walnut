@@ -111,9 +111,9 @@ const MailKidRow = memo(function MailKidRow({ message, selected, openMenu, menuO
       }}
     >
       <span className="mail-kid-dot" aria-hidden="true">{unread && <span className="mail-row-dot" />}</span>
-      <span className="mail-kid-from">{senderLabel(message.from)}</span>
-      <span className="mail-kid-subject">{message.subject || '(no subject)'}</span>
-      <span className="mail-row-time">{formatMailTime(message.sentAt)}</span>
+      <span className="mail-kid-from wn-title">{senderLabel(message.from)}</span>
+      <span className="mail-kid-subject wn-title">{message.subject || '(no subject)'}</span>
+      <span className="mail-row-time wn-fixed">{formatMailTime(message.sentAt)}</span>
       {showsRouteLine(message) && <MailRouteLine route={message.route} unavailable={message.routingUnavailable} routingArea={message.routingArea} routingCoverage={message.routingCoverage} surface="row" />}
       {outgoing && <MailRouteLine route={undefined} outgoing={outgoing} surface="row" />}
     </div>
@@ -236,10 +236,10 @@ export function MailGroupLine({
       >
         <span className="mail-group-title">
           <span className="mail-group-twist" aria-hidden="true"><TwistIcon size={10} /></span>
-          <span className="mail-group-name" data-testid="mail-group-name">{group.label}</span>
+          <span className="mail-group-name wn-title" data-testid="mail-group-name">{group.label}</span>
           <span className={`mail-group-pill${unread > 0 ? '' : ' zero'}`} data-testid="mail-group-unread">{formatCount(unread)}</span>
           {/* The senders already are the summary line when there is no subject to show. */}
-          <span className="mail-group-who" data-testid="mail-group-senders" title={senders}>{open || summary === senders ? '' : senders}</span>
+          <span className="mail-group-who wn-meta" data-testid="mail-group-senders" title={senders}>{open || summary === senders ? '' : senders}</span>
           {running ? (
             <span className="mail-group-progress" data-testid="mail-bulk-progress" aria-busy="true">
               {progressLabel(slot!.kind, slot!.phase === 'running' ? slot!.done : null, slot!.total)}
@@ -256,7 +256,7 @@ export function MailGroupLine({
             </span>
           ) : (
             <>
-              <span className="mail-group-time">{formatMailTime(group.newestAt)}</span>
+              <span className="mail-group-time wn-fixed">{formatMailTime(group.newestAt)}</span>
               <span className="mail-group-tools">
                 {unread > 0 && (
                   <button
@@ -292,7 +292,7 @@ export function MailGroupLine({
         {summary && (
           <span
             id={summaryId}
-            className="mail-group-summary"
+            className="mail-group-summary wn-title"
             data-testid="mail-group-summary"
             data-by={group.summary?.trim() ? group.summaryBy ?? 'subject' : 'senders'}
             title={group.summaryBy === 'ai' ? `${summary}\nSummary by Walnut` : summary}

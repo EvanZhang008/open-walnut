@@ -85,13 +85,11 @@
   overflow: auto;
 }
 
+/* The flyout's heading names the leader in full (`.wn-title`). */
 .leader-subtasks-title {
   padding: 2px 6px 6px;
   color: var(--fg-muted);
   font-size: var(--font-size-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .leader-subtasks-list {
@@ -100,9 +98,11 @@
   list-style: none;
 }
 
+/* A wrapped title keeps the circle and the state on its first line (18 px lines). */
 .leader-sub-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  line-height: 18px;
   gap: 8px;
   width: 100%;
   min-height: 28px;
@@ -157,20 +157,14 @@
 .leader-sub-row .leader-sub-phase { cursor: inherit; }
 .leader-sub-row .leader-sub-phase:hover { background: none; }
 
+/* A worker's or subtask's title wraps in full (`.wn-title`); its place (`.wn-meta`) gives way first. */
 .leader-sub-title {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .leader-sub-place {
-  flex: 0 1 auto;
   max-width: 40%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   color: var(--fg-secondary);
   font-size: var(--font-size-xs);
 }
@@ -205,9 +199,6 @@
   padding: 2px 6px 6px;
   color: var(--fg-muted);
   font-size: var(--font-size-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .adopt-worker-filter {
@@ -257,12 +248,10 @@
   outline: none;
 }
 
+/* The title wraps in full (`.wn-title`); the project line under it stays one line (`.wn-meta`). */
 .adopt-worker-row-title,
 .adopt-worker-row-meta {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .adopt-worker-row-meta {
@@ -333,22 +322,20 @@
 .worker-team-flyout .leader-sub-row.is-self .leader-sub-title { font-weight: 600; }
 .worker-team-flyout .leader-subtasks-list + .leader-subtasks-title { margin-top: 4px; }
 
-/* The parent fits beside Worker and gives its room back before the row's time or actions.
-   Squeezed below the word plus the parent's minimum, the pill clips its parent instead of
-   running it under the next pill. */
+/* The parent fits beside Worker and gives its room back first, before the title, the row's
+   time or actions. Squeezed below the word plus the parent's minimum, the pill clips its
+   parent instead of running it under the next pill. */
 .task-team-pill.todo-item-subtask-pill {
-  flex: 0 1 auto;
+  flex: 0 1000 auto;
   min-width: 64px;
   overflow: hidden;
-  max-width: 152px;
+  max-width: 100%;
   gap: 4px;
 }
 .todo-item-subtask-pill > .task-pill-long { flex: none; }
+/* The leader's title on a Worker pill is metadata (`.wn-meta`): as long as the row has room,
+   cut only when the row has none (2026-11-21: a 96 px cap cut it beside empty room). */
 .task-worker-parent {
   min-width: 40px;
-  max-width: 96px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .home-navigation-scroll[data-row-fit="tight"] .todo-item-subtask-pill::after { order: -1; }

@@ -50,7 +50,7 @@
 .hib-index-row .hib-row-actions { order: 4; flex-wrap: wrap; display: flex; visibility: hidden; }
 .hib-index-row:is(:hover, :focus-within) .hib-row-actions { visibility: visible; }
 .hib-index-row .hib-answered-chip { order: 5; }
-.hib-index-row .hib-subject { font-weight: 500; display: block; white-space: nowrap; }
+.hib-index-row .hib-subject { font-weight: 500; display: block; }
 .hib-index-row .hib-origin-kind, .hib-index-row .hib-origin-badge { display: none; }
 .hib-index-row .hib-origin-name { font-weight: 400; color: var(--fg-muted); font-size: var(--font-size-xs); }
 .hib-inbox-reader { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }

@@ -133,3 +133,30 @@ export function saveColWeights(weights: number[], storage: WritableStorage): voi
     storage.setItem(STORE_KEY, JSON.stringify(store));
   } catch { /* storage unavailable (private mode / quota) — layout just won't persist */ }
 }
+
+// ── Home's row: task panel | Quick question slot | session columns ──
+// Width goes by what the user opened, never by a pane that merely stayed open
+// (standard.md "Panes": "Width goes by content").
+
+/**
+ * The most the session-columns area may take (as % of the row it shares with the
+ * Quick question slot) when the user opens that slot beside `count` columns: the
+ * slot he just opened gets at least one column's share. One column used to keep its
+ * 65% and leave the new slot a third of the row beside an old session (2026-11-21
+ * audit). Columns already narrower than that keep the width they have.
+ */
+export function sessionAreaPctBesideChat(count: number): number {
+  if (count <= 0) return 0;
+  return (100 * count) / (count + 1);
+}
+
+/**
+ * The task panel's CSS width for its stored share `pct`. The share is of the window
+ * less the collapsed rail (`--home-rail-width` on `.main-page`), so it reads the same
+ * as before with the rail collapsed, and expanding the sidebar takes its room from
+ * the columns beside the panel, never from the task list. A plain `pct%` was a share
+ * of Home's own width, which shrank with the sidebar and cut more of every row.
+ */
+export function todoPanelWidth(pct: number): string {
+  return `calc((100vw - var(--home-rail-width, 56px)) * ${Math.round(pct * 100) / 10000})`;
+}

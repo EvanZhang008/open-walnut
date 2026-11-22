@@ -156,6 +156,10 @@
   border-top: 2px solid var(--border);
   list-style: none;
 }
+/* Packed by useMasonryRows: 4px rows, each card spans its own height plus the gap, so cards flow by
+   content in their order (VPs, then routers, then "+ New") with no tall gap under a short one. */
+.oc-vps[data-packed] { grid-auto-rows: 4px; row-gap: 0; }
+.oc-vps[data-packed] > * { align-self: start; }
 .oc-vp {
   position: relative;
   min-width: 0;
@@ -359,6 +363,6 @@
 .oc-vp-empty { margin: 0; padding: 4px 2px 0; border-top: 1px solid var(--border); font-size: var(--font-size-sm); color: var(--fg-muted); }
 .oc-ceo-wrap { position: relative; display: flex; justify-content: center; width: min(320px, 100%); }
 
-/* A router's card (OrgChartSheet.tsx): in the VPs' row, because a router sits beside the VPs, but
-   drawn apart from them: a Router label, no drag, no drop. */
+/* A router's card (OrgChartSheet.tsx): in the VPs' grid after them, because a router sits beside the
+   VPs, but drawn apart from them: a Router label, no drag, no drop. */
 .oc-router .oc-card-btn { align-items: center; }

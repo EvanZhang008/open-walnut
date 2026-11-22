@@ -102,8 +102,8 @@ export function FoldTree({ host, entries, ctl, focusedTaskId, onOpen, twoLine }:
               <span className={`worker-fold-icon worker-fold-icon-${key}`} aria-hidden="true">
                 {ICONS.sectionRowIcon(key, key === 'done', task.phase, false, taskUserState(task))}
               </span>
-              <span className="worker-fold-title">{orgDisplayTitle(task)}</span>
-              {back ? null : <span className="worker-fold-state">{out ? `${foldStateWords(key)} · in the list` : foldStateWords(key)}</span>}
+              <span className="worker-fold-title wn-title">{orgDisplayTitle(task)}</span>
+              {back ? null : <span className="worker-fold-state wn-meta">{out ? `${foldStateWords(key)} · in the list` : foldStateWords(key)}</span>}
             </button>
             {!out || back ? (
               <button

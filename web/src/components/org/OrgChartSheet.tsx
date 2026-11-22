@@ -26,6 +26,7 @@ import { setProjectVp } from '@/api/org';
 import { projectDisplayName, projectGroupKey } from '@/utils/project-display';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
+import { useMasonryRows } from '@/hooks/useMasonryRows';
 import { log } from '@/utils/log';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { orgNodeMember, topicMenuItems } from '@/components/topics/topic-entry';
@@ -125,6 +126,9 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
   // The drag's project, known from dragstart on: the state above is set a tick later, and a
   // quick drop lands before it.
   const dragRef = useRef<string | null>(null);
+  // The cards flow by their own height (useMasonryRows): no tall gap under a short card.
+  const vpsRef = useRef<HTMLUListElement>(null);
+  useMasonryRows(vpsRef);
   const planFor = (target: VpCard | null) => {
     const p = projectOf(dragRef.current ?? dragKey);
     return p ? dropPlan(cards, p, target) : null;
@@ -342,20 +346,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
           {cards.length === 0 && routers.length === 0 && (
             <p className="org-empty" data-testid="org-chart-empty">No open work yet. Ask the CEO to start something, or make a VP or a project here.</p>
           )}
-          <ul className="oc-vps" data-testid="org-chart-vps">
-            {routers.map((r) => (
-              <li key={r.key} className="oc-vp oc-router" data-testid="org-chart-router" data-key={r.key}>
-                <div className="oc-card-btn" data-testid="org-chart-router-open" title={`Open ${r.name}`} {...pressable(() => pick(r.key))}>
-                  <span className="oc-card-main">
-                    <span className="oc-card-headline">
-                      <span className="oc-card-title" data-testid="org-chart-router-name">{r.name}</span>
-                      <span className="oc-role">Router</span>
-                    </span>
-                    <span className="oc-doing" data-testid="org-chart-router-line">{r.latest}</span>
-                  </span>
-                </div>
-              </li>
-            ))}
+          <ul ref={vpsRef} className="oc-vps" data-testid="org-chart-vps">
             {cards.map((c) => {
               const plan = dragged ? planFor(c) : null;
               const over = overKey === c.key && !!plan;
@@ -394,6 +385,20 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
                 </OrgChartVp>
               );
             })}
+            {/* The routers after the VPs: they sit beside the VPs, never among them, and fill the short columns. */}
+            {routers.map((r) => (
+              <li key={r.key} className="oc-vp oc-router" data-testid="org-chart-router" data-key={r.key}>
+                <div className="oc-card-btn" data-testid="org-chart-router-open" title={`Open ${r.name}`} {...pressable(() => pick(r.key))}>
+                  <span className="oc-card-main">
+                    <span className="oc-card-headline">
+                      <span className="oc-card-title" data-testid="org-chart-router-name">{r.name}</span>
+                      <span className="oc-role">Router</span>
+                    </span>
+                    <span className="oc-doing" data-testid="org-chart-router-line">{r.latest}</span>
+                  </span>
+                </div>
+              </li>
+            ))}
             <li className="oc-vp-new" data-testid="org-chart-new">
               <button type="button" data-testid="org-chart-new-vp" onClick={(e) => openEditor({ kind: 'new-vp' }, e.currentTarget)}>+ New VP</button>
               <button type="button" data-testid="org-chart-new-project" onClick={(e) => openEditor({ kind: 'new-project' }, e.currentTarget)}>+ New project</button>

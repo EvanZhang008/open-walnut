@@ -119,7 +119,7 @@ export function MailRow({ message, selected, accounts, outbound, menu, flagFaile
     >
       <span className="mail-row-top">
         {unread && <span className="mail-row-dot" aria-hidden="true" />}
-        <span className="mail-row-from" data-field={outbound ? 'to' : 'from'}>
+        <span className="mail-row-from wn-title" data-field={outbound ? 'to' : 'from'}>
           {/* `To` only in front of somebody. A live sent folder does hold rows whose cached envelope never
               carried recipients (they live in the provider's payload, not in a column), and the stand-in
               has to say that WE do not know rather than that the mail had nobody: `No recipient` was a
@@ -130,7 +130,7 @@ export function MailRow({ message, selected, accounts, outbound, menu, flagFaile
         </span>
         {account && (
           <span
-            className="mail-row-account"
+            className="mail-row-account wn-fixed"
             data-testid="mail-row-account"
             data-account-id={account.accountId}
             /* A stable tone per account, so two accounts whose names start with the same letter are
@@ -143,12 +143,12 @@ export function MailRow({ message, selected, accounts, outbound, menu, flagFaile
             {mark}
           </span>
         )}
-        <span className="mail-row-time">{formatMailTime(message.sentAt)}</span>
+        <span className="mail-row-time wn-fixed">{formatMailTime(message.sentAt)}</span>
       </span>
       <span className="mail-row-subject">
-        {/* Its own span, so the ellipsis has a block to happen in: the row's subject line is a flex
-            container, and a bare text node there is an anonymous item that clips without one. */}
-        <span className="mail-row-subject-text">{message.subject || '(no subject)'}</span>
+        {/* Its own span, so the subject wraps as one block beside the marks after it: the row's subject
+            line is a flex container, and a bare text node there is an anonymous item. */}
+        <span className="mail-row-subject-text wn-title">{message.subject || '(no subject)'}</span>
         {message.attachments.length > 0 && (
           <span className="mail-row-clip" aria-label="has attachments"><AttachmentIcon /></span>
         )}

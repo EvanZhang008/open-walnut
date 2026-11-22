@@ -122,7 +122,7 @@ export function RouterSettingsDialog({ router, tasks, tasksLoading = false, onCl
         >
           <header className="router-settings-dialog-head">
             <div className="router-settings-dialog-titles">
-              <h2 className="router-settings-dialog-title" id={titleId}>{value.name.trim() || fresh.org_name || fresh.title}</h2>
+              <h2 className="router-settings-dialog-title wn-title" id={titleId}>{value.name.trim() || fresh.org_name || fresh.title}</h2>
               <span className="router-settings-dialog-sub">Router · {areaLabel || 'Area not configured'} · {routerStateWord(baseline.paused)}</span>
             </div>
             <button type="button" className="router-settings-dialog-close" aria-label="Close" data-testid="router-settings-close" onClick={onClose}>×</button>

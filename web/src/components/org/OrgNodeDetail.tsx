@@ -177,9 +177,9 @@ function TeamBoard({ columns, onPick, emptyText }: {
                 <button type="button" className="org-team-item" data-testid="org-team-item" data-peek-row="" data-task-id={it.id} onClick={() => onPick(it)} title={it.title}>
                   <span className="org-team-ring" style={{ borderColor: COLUMN_DOT[c.key] }} aria-hidden="true" />
                   <span className="org-team-text">
-                    <span className="org-team-title">{it.title}</span>
+                    <span className="org-team-title wn-title">{it.title}</span>
                     {it.live && <TeamLiveLine live={it.live} />}
-                    {it.note && <span className="org-team-note" data-testid="org-team-note">{it.note}</span>}
+                    {it.note && <span className="org-team-note wn-meta" data-testid="org-team-note">{it.note}</span>}
                   </span>
                   {it.workers > 0 && <span className="org-team-meta" title={`${it.workers} more under it`}>{it.workers}</span>}
                 </button>

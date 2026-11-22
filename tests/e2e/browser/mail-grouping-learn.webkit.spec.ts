@@ -1,7 +1,7 @@
 /**
  * Learning in WebKit, the engine of the Mac app (design v2): the correction card from a group row's
  * menu, saved and undone; a group's `These are important...` and `Rename group` cards, at the default
- * 336px middle column and at a 900px window (the one-column narrow mode). Every card opens fully
+ * default middle column and at a 900px window (the one-column narrow mode). Every card opens fully
  * inside the viewport, never scrolls sideways, and completes its main path.
  */
 import { devices, expect, test, type Locator, type Page } from '@playwright/test'

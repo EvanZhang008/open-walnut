@@ -226,7 +226,7 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
           finished loading looked the same. */}
       {section && (
         <p className="mail-list-section" data-testid="mail-list-section">
-          <span className="mail-list-section-name">{section.name}</span>
+          <span className="mail-list-section-name wn-title">{section.name}</span>
           {/* How big the FOLDER is, from the same mailbox row the badge on the left is drawn from. It
               used to be the rows on screen, so a 103-message inbox read "INBOX 50" under a folder row
               badged 53 and a person had three numbers and no way to line them up. When it is the

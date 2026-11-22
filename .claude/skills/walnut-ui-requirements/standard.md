@@ -191,6 +191,36 @@ kind.
 - A state is a dot and a word (`NoticeStatus`), or a `.badge` for a count or a tag. Never a new
   `*-badge`, `*-pill` or `*-chip` class with its own colours.
 
+## Text that does not fit
+
+One rule for every list row, tree row, card and header (`web/src/styles/text-fit.css`):
+
+- **The words that tell one item from another never cut.** A task title, a person's or agent's
+  name, a mail subject, a notification's title and a card's summary are `.wn-title`: they wrap onto
+  as many lines as they need. Never `text-overflow: ellipsis` or a line clamp on them.
+- **Only secondary metadata cuts**, and it gives up its room first: a project, a source, a router
+  reason, a chip's label are `.wn-meta` (one line, shrinks before anything else, its full text shown
+  on hover in place by `utils/truncation-peek.ts`).
+- **Times, counts, icons and buttons are `.wn-fixed`**: never cut, never grow, and never take a
+  title's line; when a row is narrow they move under the title, never squeeze it.
+- A view never writes its own ellipsis or clamp on a title class: `cutTitle` in
+  `tests/web/ui-standard-ratchet.test.ts` counts those that exist today (they only go down), and
+  `tests/e2e/browser/text-fit-scan.spec.ts` measures the main screens at 1512, 1280 and their
+  narrowest column and fails when a title is cut.
+
+Why (2026-11-21, the UI audit on the user's own data): task titles in the task panel and search
+results lost the part that tells tasks apart while the small icons and time beside them kept their
+room; Org names were cut at every tree level while right-edge counts stayed.
+
+## Panes
+
+- **An empty area says what it is for.** A pane with nothing open shows its title and the one next
+  step (a hint, a button), or the panes reflow so no blank half of the window is left.
+- **The next step sits next to the choice.** A form or draft keeps its choices right above or beside
+  the field or button they lead to, never hundreds of pixels away.
+- **Width goes by content.** A list whose rows are cut never sits beside an empty reader or an empty
+  form at its full width: the list takes the room first, the empty pane shrinks to its content.
+
 ## Tokens (from `globals.css` `:root`)
 
 | Kind | Tokens |

@@ -32,19 +32,14 @@
     flex-wrap: nowrap;
   }
 
-  /* Two lines, then an ellipsis; never the inline editor (renaming is in detail). */
+  /* The whole title, on as many lines as it needs (`.wn-title`, standard.md "Text that does not
+     fit"; 2026-11-21 it was cut to two with an ellipsis). Never the inline editor (renaming is
+     in detail). Break between words; only a token longer than the line breaks inside. */
   .app-shell-navigation .todo-panel .todo-item-title,
   .app-shell-navigation .todo-panel .todo-pinned-title {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    overflow: hidden;
     white-space: normal;
-    /* Break between words (home-navigation's one-line clamp breaks anywhere);
-       only a token longer than the line breaks inside. */
     word-break: normal;
-    overflow-wrap: break-word;
+    overflow-wrap: anywhere;
     min-width: 0;
     flex: 1 1 auto;
     line-height: 1.3;

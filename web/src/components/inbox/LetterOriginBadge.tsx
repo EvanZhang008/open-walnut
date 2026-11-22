@@ -50,14 +50,14 @@ export function LetterOriginBadge({ letter, variant = 'row', linkTask = false }:
       </span>
       {linkTask && origin.taskId ? (
         <a
-          className="hib-origin-name task-link"
+          className="hib-origin-name task-link wn-title"
           data-task-id={origin.taskId}
           href={taskPath(origin.taskId)}
         >
           {name}
         </a>
       ) : (
-        <span className="hib-origin-name">{name}</span>
+        <span className="hib-origin-name wn-title">{name}</span>
       )}
     </span>
   );

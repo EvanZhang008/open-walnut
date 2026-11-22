@@ -67,27 +67,30 @@
   border-left: 1.5px solid var(--worker-fold-rule);
 }
 .worker-fold-tree.is-one-line { margin-left: 24px; }
+/* A worker's title wraps in full (`.wn-title`): its icon, state and actions stay on the first line. */
 .worker-fold-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 4px;
   min-height: 28px;
   padding: 0 2px 0 4px;
   border-radius: var(--radius-sm);
 }
+/* The line's actions (20 px) sit on the first line's middle, 14 px down. */
+.worker-fold-item > :not(.worker-fold-open) { margin-top: 4px; }
 .worker-fold-item:hover,
 .worker-fold-item:focus-within { background: var(--bg-hover); }
 .worker-fold-item.is-focused { background: var(--worker-fold-bg); }
 .worker-fold-item.is-out .worker-fold-open { opacity: 0.6; }
 .worker-fold-open {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   flex: 1;
   min-width: 0;
-  height: 28px;
+  min-height: 28px;
   margin: 0;
-  padding: 0;
+  padding: 6px 0;
   border: 0;
   background: transparent;
   color: var(--fg);
@@ -99,11 +102,17 @@
 .worker-fold-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px; }
 .worker-fold-icon { display: inline-grid; place-items: center; flex: none; width: 16px; height: 16px; }
 .worker-fold-icon svg { width: 14px; height: 14px; }
-.worker-fold-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The state gives its room up before the title: the line's icon already says it. */
-.worker-fold-state { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-size-xs); color: var(--fg-muted); }
+.worker-fold-title { flex: 1 1 auto; min-width: 0; line-height: 16px; }
+/* The state gives its room up before the title (`.wn-meta`): the line's icon already says it. */
+.worker-fold-state { flex: 0 1000 auto; font-size: var(--font-size-xs); line-height: 16px; color: var(--fg-muted); }
 .worker-fold-tree { container-type: inline-size; }
-@container (max-width: 240px) { .worker-fold-state { display: none; } }
+/* A narrow tree (the panel at its minimum): the state goes, and the line's actions move under the
+   title instead of squeezing it to a sliver. */
+@container (max-width: 240px) {
+  .worker-fold-state { display: none; }
+  .worker-fold-item { flex-wrap: wrap; }
+  .worker-fold-open { min-width: min(100%, 96px); }
+}
 /* The actions are icons at the end of a line, the size and colours of the row's start button
    (globals.css .task-start-btn): the take-out arrow on the line's hover or focus, the put-back arrow
    always on a worker that is out, and the same arrow on that worker's own row. */

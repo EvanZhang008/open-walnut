@@ -6,6 +6,8 @@ import {
   loadColWeights,
   saveColWeights,
   minColPct,
+  sessionAreaPctBesideChat,
+  todoPanelWidth,
 } from '../../web/src/pages/columnSizing';
 
 /**
@@ -230,5 +232,25 @@ describe('columnSizing: persistence', () => {
     const s = fakeStorage();
     saveColWeights([], s);
     expect(s.raw.size).toBe(0);
+  });
+});
+
+// Home's row goes by what the user opened (standard.md "Panes": width goes by content).
+describe("Home's row: the pane just opened gets its share", () => {
+  it('the Quick question slot opened beside N columns gets at least one column\'s share', () => {
+    expect(sessionAreaPctBesideChat(0)).toBe(0);
+    // One old column used to keep 65% and leave the new slot a third of the row.
+    expect(sessionAreaPctBesideChat(1)).toBe(50);
+    for (const n of [1, 2, 3, 4, 6]) {
+      const area = sessionAreaPctBesideChat(n);
+      expect(100 - area).toBeCloseTo(area / n);
+    }
+  });
+
+  it('the task panel width is a share of the window less the collapsed rail, never of Home itself', () => {
+    // Expanding the sidebar narrows Home; a share of the viewport does not move with it.
+    expect(todoPanelWidth(25)).toBe('calc((100vw - var(--home-rail-width, 56px)) * 0.25)');
+    expect(todoPanelWidth(33.37)).toBe('calc((100vw - var(--home-rail-width, 56px)) * 0.3337)');
+    expect(todoPanelWidth(25)).not.toMatch(/%/);
   });
 });

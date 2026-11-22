@@ -1,0 +1,48 @@
+/*
+ * Text that does not fit: the one rule for the whole app (standard.md, "Text that does not fit").
+ *
+ * 2026-11-21, the UI audit on the user's own data: task titles, Org names, mail subjects and
+ * notification titles lost the words that tell one item from the next to an ellipsis, while the
+ * small icons, times and counts beside them kept all of their room.
+ *
+ *   .wn-title  the words that tell one item from another (a task title, a person or agent name, a
+ *              mail subject, a notification title). Never cut: it wraps onto as many lines as it
+ *              needs, breaking between words, and inside a word only when one word is longer than
+ *              the line.
+ *   .wn-meta   secondary metadata (project, source, router reason, a chip's label). It stays on one
+ *              line and gives up its room first; a cut one shows its full text on hover in place
+ *              (utils/truncation-peek.ts widens the row).
+ *   .wn-fixed  times, counts, icons and buttons: never cut and never grow.
+ *
+ * Loaded last (global-styles.ts), so a utility wins over a component rule just as specific; a view
+ * never re-declares an ellipsis or a line clamp on its own title class
+ * (tests/web/ui-standard-ratchet.test.ts, cutTitle).
+ */
+.wn-title {
+  min-width: 0;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  -webkit-line-clamp: unset;
+  line-clamp: none;
+}
+
+/* A title inside a flex row takes the row's free width before any metadata does. */
+.wn-title:where(:not(:only-child)) {
+  flex: 1 1 auto;
+}
+
+.wn-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1000 auto;
+}
+
+.wn-fixed {
+  flex: none;
+  white-space: nowrap;
+}

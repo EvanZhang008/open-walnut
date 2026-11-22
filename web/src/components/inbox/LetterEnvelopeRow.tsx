@@ -86,12 +86,12 @@ export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
         />
         {letter.pinned && <span className="hib-pin" title="Pinned"><PinIcon /></span>}
         <LetterOriginBadge letter={letter} />
-        <span className="hib-time">{formatRelative(letter.createdAt)}</span>
+        <span className="hib-time wn-fixed">{formatRelative(letter.createdAt)}</span>
       </div>
 
       <div className="hib-row-subject-line">
-        <button className="hib-subject hib-subject-open" onClick={(event) => { event.stopPropagation(); onOpen(); }}>{letter.subject || '(no subject)'}</button>
-        <span className={`hib-type hib-type--${letter.type}`}>
+        <button className="hib-subject hib-subject-open wn-title" onClick={(event) => { event.stopPropagation(); onOpen(); }}>{letter.subject || '(no subject)'}</button>
+        <span className={`hib-type hib-type--${letter.type} wn-fixed`}>
           {LETTER_TYPE_LABEL[letter.type] ?? letter.type}
         </span>
       </div>

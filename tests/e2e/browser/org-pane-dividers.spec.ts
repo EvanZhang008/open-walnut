@@ -120,7 +120,7 @@ test('neither the node nor the opened task gets unreadable; the keys move it; a 
   await expect(page.getByTestId('org-side-handle')).toBeHidden()
 })
 
-test('the list\'s edge drags too: 200 to 480px, kept; double-click puts back 300px', async ({ page }) => {
+test('the list\'s edge drags too: 200 to 480px, kept; double-click puts back 340px', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 860 })
   await isolateUiPrefs(page)
   await loadHome(page)
@@ -129,15 +129,16 @@ test('the list\'s edge drags too: 200 to 480px, kept; double-click puts back 300
   const handle = page.getByTestId('org-list-handle')
   await expect(handle).toBeVisible()
   const before = await widthOf(page, '.org-list')
-  expect(Math.abs(before - 300)).toBeLessThan(2)
+  // 340px since 2026-11-21: 300px cut VP names and Director titles.
+  expect(Math.abs(before - 340)).toBeLessThan(2)
   // A click that never moves sets nothing.
   await handle.click()
   expect(await page.evaluate((k) => localStorage.getItem(k), LIST_KEY)).toBeNull()
 
   await drag(page, 'org-list-handle', 80)
   const wider = await widthOf(page, '.org-list')
-  expect(wider).toBeGreaterThan(370)
-  expect(wider).toBeLessThan(390)
+  expect(wider).toBeGreaterThan(410)
+  expect(wider).toBeLessThan(430)
   expect(Number(await page.evaluate((k) => localStorage.getItem(k), LIST_KEY))).toBeGreaterThan(0)
   await page.reload()
   await expect(page.getByTestId('org-page')).toBeVisible()
@@ -149,7 +150,7 @@ test('the list\'s edge drags too: 200 to 480px, kept; double-click puts back 300
   expect(await widthOf(page, '.org-list')).toBeGreaterThanOrEqual(199)
   expect(await widthOf(page, '.org-list')).toBeLessThan(210)
   await page.getByTestId('org-list-handle').dblclick()
-  await expect.poll(() => widthOf(page, '.org-list')).toBeLessThan(302)
-  expect(await widthOf(page, '.org-list')).toBeGreaterThan(298)
+  await expect.poll(() => widthOf(page, '.org-list')).toBeLessThan(342)
+  expect(await widthOf(page, '.org-list')).toBeGreaterThan(338)
   expect(await page.evaluate((k) => localStorage.getItem(k), LIST_KEY)).toBeNull()
 })

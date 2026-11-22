@@ -101,25 +101,25 @@
   -webkit-user-select: none;
 }
 
+/* The name is .wn-title and wraps (text-fit.css): the line is at least 24px tall, never cut to it.
+   Baseline keeps the twist, pill, time and tools on the name's first line. */
 .mail-group-title {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 7px;
   min-width: 0;
-  height: 24px;
+  min-height: 24px;
+  line-height: 24px;
 }
 
-/* Under the name (twist 10px + gap 7px), one line, the words that say what the mail is about. */
-.mail-group-summary [data-agent-text] { white-space: nowrap; overflow-wrap: normal; }
+/* Under the name (twist 10px + gap 7px), the words that say what the mail is about: .wn-title, so
+   they wrap rather than lose the end of the subject. */
 .mail-group-summary {
   display: block;
   min-width: 0;
   padding: 0 0 1px 17px;
   user-select: text;
   -webkit-user-select: text;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: var(--font-size-sm);
   line-height: 16px;
   color: var(--fg-secondary);
@@ -146,17 +146,19 @@
 .mail-group-twist svg { transition: transform 0.12s ease; }
 .mail-group.open .mail-group-twist svg { transform: rotate(90deg); }
 
-/* The name keeps its words before the senders give up theirs; past 60% of the line it truncates too. */
+/* The name keeps all its words (.wn-title wraps it); the senders (.wn-meta) give up theirs first. */
 .mail-group-name {
   flex: 0 1 auto;
-  max-width: 60%;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 18px;
   font-weight: 600;
   color: var(--fg);
 }
+
+/* The name stays at its words' width (the pill follows it) and the senders take what is left: these
+   beat the text-fit utilities' flex on purpose. */
+.mail-group-title > .mail-group-name { flex: 0 1 auto; }
+.mail-group-title > .mail-group-who { flex: 1 1 0; }
 
 .mail-group-pill {
   flex: 0 0 auto;
@@ -178,9 +180,6 @@
 .mail-group-who {
   flex: 1 1 0;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   color: var(--fg-muted);
 }
 
@@ -243,38 +242,32 @@
 .mail-group-kids { padding-bottom: 4px; }
 .mail-group-kids-note { margin: 0; padding: 4px 12px 4px 29px; font-size: var(--font-size-sm); color: var(--fg-muted); }
 
+/* One message of an open group: dot, sender, subject, time on a grid row. The sender takes up to 40%
+   and the subject the rest; both are .wn-title and wrap in their own column, the time keeps its own.
+   The route line spans the row under them. */
 .mail-row.mail-kid {
-  flex-direction: row;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 6px fit-content(40%) minmax(0, 1fr) auto;
   align-items: baseline;
-  gap: 6px;
+  gap: 2px 6px;
   padding: 6px 12px 6px 17px;
   border-bottom: none;
   font-size: var(--font-size-md);
 }
 
-.mail-row.mail-kid .mail-route { flex: 1 0 100%; max-width: 100%; padding-left: 12px; box-sizing: border-box; }
+.mail-row.mail-kid .mail-route { grid-column: 1 / -1; max-width: 100%; padding-left: 12px; box-sizing: border-box; }
 .mail-kid-dot { flex: 0 0 6px; display: inline-flex; width: 6px; }
 .mail-kid-dot .mail-row-dot { transform: translateY(-1px); }
 
 .mail-kid-from {
-  flex: 0 1 auto;
-  max-width: 40%;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   color: var(--fg-secondary);
 }
 
 .mail-row.mail-kid.unread .mail-kid-from { font-weight: 600; color: var(--fg); }
 
 .mail-kid-subject {
-  flex: 1 1 0;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   color: var(--fg-secondary);
 }
 

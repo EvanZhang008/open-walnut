@@ -34,8 +34,9 @@
 .navigation-heading-rule { flex: 1; height: 1px; background: var(--border); }
 .status-section-list { display: flex; flex-direction: column; padding-bottom: 8px; }
 
-/* A flat row: the phase circle beside the two lines, the time at the meta line's end. */
-.home-navigation-scroll .status-section-card.status-card-two-line { min-height: 44px; padding-top: 4px; padding-bottom: 4px; align-items: center; }
+/* A flat row: the phase circle beside the two lines, the time at the meta line's end. Its parts
+   keep the band of a one-line title when the title wraps (home-navigation.css, --row-band). */
+.home-navigation-scroll .status-section-card.status-card-two-line { min-height: 44px; padding-top: 4px; padding-bottom: 4px; }
 .status-card-body { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 1px; }
 .status-card-body > .todo-pinned-title { line-height: 18px; }
 .status-card-meta { display: flex; align-items: center; gap: 6px; min-width: 0; height: 15px; font-size: var(--font-size-xs); line-height: 15px; color: var(--fg-muted); white-space: nowrap; }
@@ -213,6 +214,7 @@ html .home-navigation-scroll .status-card-meta .todo-item-subtask-pill.task-row-
 html .home-navigation-scroll .status-card-meta .todo-item-subtask-pill.task-row-pill:hover,
 html .home-navigation-scroll .status-card-meta .todo-item-subtask-pill.task-row-pill:focus-visible,
 html .home-navigation-scroll .status-card-meta .todo-item-subtask-pill.task-row-pill[aria-expanded="true"] {
-  flex: 0 1 auto;
+  /* Metadata gives its room up first (`.wn-meta`): the leader's name before the project. */
+  flex: 0 1000 auto;
   min-width: 64px;
 }

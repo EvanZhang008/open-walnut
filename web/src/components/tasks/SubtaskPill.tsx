@@ -117,8 +117,8 @@ export function SubtaskPill({ task, className }: { task: { id?: string; parent_t
         <span className={`task-phase-icon-btn leader-sub-phase ${taskCircleClass(t, null)}`} aria-hidden="true">
           {binaryPhaseIcon(false, t.phase, taskUserState(t))}
         </span>
-        <span className="leader-sub-title">{orgDisplayTitle(t)}</span>
-        {place && <span className="leader-sub-place" title={`In project ${place}`}>{place}</span>}
+        <span className="leader-sub-title wn-title">{orgDisplayTitle(t)}</span>
+        {place && <span className="leader-sub-place wn-meta" title={`In project ${place}`}>{place}</span>}
         <span className="leader-sub-phase-label">
           {role === 'leader' ? leaderWord(t) : isSelf ? 'This task' : taskStatusLabel(t)}
         </span>
@@ -155,7 +155,7 @@ export function SubtaskPill({ task, className }: { task: { id?: string; parent_t
         }}
       >
         <span className="task-pill-long">Worker</span>
-        {parentTitle && <span className="task-worker-parent" data-testid="worker-parent-title">{parentTitle}</span>}
+        {parentTitle && <span className="task-worker-parent wn-meta" data-testid="worker-parent-title">{parentTitle}</span>}
       </button>
       {open && typeof document !== 'undefined'
         ? createPortal(
@@ -169,12 +169,12 @@ export function SubtaskPill({ task, className }: { task: { id?: string; parent_t
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="leader-subtasks-title">Team</div>
+              <div className="leader-subtasks-title wn-title">Team</div>
               <ul className="leader-subtasks-list">
                 <li className="leader-sub-item">
                   {parent ? row(parent, 'leader') : (
                     <button type="button" className="leader-sub-row" data-testid="worker-team-leader" data-task-id={leaderId} onClick={() => goTo(leaderId, null)}>
-                      <span className="leader-sub-title">{parentTitle ?? 'The leader task'}</span>
+                      <span className="leader-sub-title wn-title">{parentTitle ?? 'The leader task'}</span>
                       <span className="leader-sub-phase-label">Leader</span>
                     </button>
                   )}
@@ -182,7 +182,7 @@ export function SubtaskPill({ task, className }: { task: { id?: string; parent_t
               </ul>
               {team.length > 0 && (
                 <>
-                  <div className="leader-subtasks-title">
+                  <div className="leader-subtasks-title wn-title">
                     {team.length === 1 ? 'Worker' : `${team.length} workers`}
                   </div>
                   <ul className="leader-subtasks-list">

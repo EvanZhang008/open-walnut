@@ -442,7 +442,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       {/* Editable title */}
       <span
         {...titleProps}
-        className={`todo-pinned-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
+        className={`todo-pinned-title wn-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
         onClick={isEditing ? (e) => e.stopPropagation() : undefined}
       >
         {orgDisplayTitle(task)}

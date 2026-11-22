@@ -98,6 +98,7 @@ const SURFACES: Record<string, 'hook' | 'fallback' | 'renderer'> = {
   'components/tasks/AgentSearchPanel.tsx': 'renderer',
   'components/tasks/ProjectDetailPane.tsx': 'renderer',
   'components/tasks/StatusSections.tsx': 'renderer',
+  'components/tasks/SearchAskLine.tsx': 'renderer',
   'components/tasks/WaitingChip.tsx': 'renderer',
   'components/sessions/SessionTaskbar.tsx': 'renderer',
   'popout/PopoutExtTasks.tsx': 'renderer',

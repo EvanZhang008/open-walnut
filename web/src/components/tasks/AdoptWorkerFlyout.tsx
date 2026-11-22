@@ -122,7 +122,7 @@ export function AdoptWorkerFlyout({ open, anchorRef, anchorPoint, align, leader,
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="adopt-worker-title">Adopt a worker for &ldquo;{orgDisplayTitle(leader)}&rdquo;</div>
+      <div className="adopt-worker-title wn-title">Adopt a worker for &ldquo;{orgDisplayTitle(leader)}&rdquo;</div>
       <MicInput fieldClassName="adopt-worker-filter-field mic-field-compact" data-no-draft="search"
         className="adopt-worker-filter"
         placeholder="Filter tasks…"
@@ -151,8 +151,8 @@ export function AdoptWorkerFlyout({ open, anchorRef, anchorPoint, align, leader,
                 onMouseEnter={() => setActive(i)}
                 onClick={() => pick(t)}
               >
-                <span className="adopt-worker-row-title">{orgDisplayTitle(t)}</span>
-                <span className="adopt-worker-row-meta">
+                <span className="adopt-worker-row-title wn-title">{orgDisplayTitle(t)}</span>
+                <span className="adopt-worker-row-meta wn-meta">
                   {projectDisplayName(t.project)}
                   {currentLeader ? ` · Worker of ${orgDisplayTitle(currentLeader)}` : ''}
                 </span>

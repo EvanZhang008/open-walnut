@@ -90,7 +90,7 @@ export const OffViewNote = memo(function OffViewNote({ title, here, there, onSho
       {/* Only the title shortens; "is not in <tab>." always shows. A narrow panel puts the
           buttons on a line of their own rather than cut the sentence. */}
       <span className="todo-offview-text">
-        <span className="todo-offview-title">{title}</span>
+        <span className="todo-offview-title wn-title">{title}</span>
         <span className="todo-offview-where">{` is not in ${here}.`}</span>
       </span>
       <span className="todo-offview-actions">

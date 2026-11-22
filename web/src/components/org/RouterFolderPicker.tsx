@@ -179,7 +179,7 @@ export function RouterFolderPicker({ accounts, value, onChange, disabled, testId
         data-token={option.token}
       >
         <input type="checkbox" checked={ticked} disabled={disabled} onChange={(e) => onChange(toggleFolder(value, option, e.target.checked))} />
-        <span className="router-folder-name">{option.label}</span>
+        <span className="router-folder-name wn-title">{option.label}</span>
       </label>
     );
   };
@@ -202,13 +202,13 @@ export function RouterFolderPicker({ accounts, value, onChange, disabled, testId
       <div className="router-folder-list" role="group" aria-label="Folders it watches">
         {shownGroups.map((g) => (
           <div key={g.key} className="router-folder-group" data-testid={`${testId}-group`} data-account={g.account}>
-            {(g.account || shownGroups.length > 1) && <div className="router-folder-group-title">{g.title}</div>}
+            {(g.account || shownGroups.length > 1) && <div className="router-folder-group-title wn-title">{g.title}</div>}
             {g.options.map((o) => row(o, g.key))}
           </div>
         ))}
         {unlisted.length > 0 && (
           <div className="router-folder-group" data-testid={`${testId}-unlisted`}>
-            <div className="router-folder-group-title">Saved earlier, not found now</div>
+            <div className="router-folder-group-title wn-title">Saved earlier, not found now</div>
             {unlisted.map((entry) => row({ token: entry, label: entry, depth: 0, aliases: [] }, 'unlisted'))}
           </div>
         )}

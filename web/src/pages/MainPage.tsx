@@ -9,6 +9,7 @@ import { getEngineCatalog } from '@/hooks/useEngineCatalog';
 import { launchEngineForHost, normalizeEngine } from '@/utils/engines';
 import { knownFallbackEngine } from '@/api/engine-fallback';
 import { stripEntityRefsToText } from '@/utils/markdown';
+import { focusWhenShown } from '@/utils/focus-when-shown';
 import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { seedDraftComposer, waitUntilPrefix, WAIT_UNTIL_EVENT } from '@/utils/wait-until';
@@ -133,7 +134,8 @@ import { withDetectedOwner } from '@/components/sessions/draft-work-in';
 import { knownHomeOf } from '@/utils/home-folder';
 import { withHomeFolder } from '@/components/sessions/draft-home-default';
 import { reconcileActiveSession } from '@/stores/active-session';
-import { loadColWeights, saveColWeights, resizeAtBoundary } from './columnSizing';
+import { loadColWeights, saveColWeights, resizeAtBoundary, sessionAreaPctBesideChat, todoPanelWidth } from './columnSizing';
+import { HomeEmptyPane } from './HomeEmptyPane';
 import {
   HOME_CHAT_VISIBLE_DEFAULT, LS_HOME_CHAT_VISIBLE_KEY, autoDraftMayTakeFocus, firstDraftDecisionReady, focusHolderOf, homeChatChosenOpen, homeTaskPanelShown, readHomeChatVisible, shouldAutoOpenFirstDraft,
 } from './home-panel-flags';
@@ -924,6 +926,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // Resizable panels
   const todoPanel = useResizablePanel('open-walnut-todo-width', 25, 'left');
+  const todoWidth = todoPanelWidth(todoPanel.pct);
   const sessionPanel = useResizablePanel('walnut-session-panel-width-v2', 35);
 
   // Merge sessionPanel.panelRef (for width resize observer) with auto-animate's
@@ -1007,6 +1010,19 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       sessionPanel.setPct(sessionWidthForCount(count));
     }
   }, [sessionColumns.length, triagePanelOpen, sessionPanel.setPct, sessionWidthKept]);
+
+  // The Quick question slot opening beside open columns (the rail, a task shown in it, a
+  // draft giving it back): the slot gets at least one column's share of the row
+  // (sessionAreaPctBesideChat). Only on the opening itself, so a later drag stays the user's.
+  const prevChatVisibleRef = useRef(chatVisible);
+  useEffect(() => {
+    const opened = chatVisible && !prevChatVisibleRef.current;
+    prevChatVisibleRef.current = chatVisible;
+    if (!opened || phoneLayout) return;
+    const count = sessionColumns.length + (triagePanelOpen ? 1 : 0);
+    const cap = sessionAreaPctBesideChat(count);
+    if (count > 0 && sessionPanel.pct > cap) sessionPanel.setPct(cap);
+  }, [chatVisible]); // eslint-disable-line react-hooks/exhaustive-deps -- only the opening counts
 
   // Swap in the layout saved for THIS column count. Layouts are stored per count,
   // so opening a 3rd panel doesn't destroy the 2-column split the user tuned —
@@ -1187,8 +1203,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // Toggle main chat panel visibility. Turning it ON while a draft has
       // borrowed its spot is an EXPLICIT ask for both — cancel the borrow, so
       // closing that draft later leaves the chat where the user put it.
-      if (!chatVisibleRef.current) chatBorrowedByDraftRef.current = null;
+      const opening = !chatVisibleRef.current;
+      if (opening) chatBorrowedByDraftRef.current = null;
       setChatVisible(prev => !prev);
+      // The slot the user just opened is where he types next: its box takes the caret
+      // (once it mounts), so there is one clear input beside the open columns.
+      if (opening) focusWhenShown(() => document.querySelector<HTMLTextAreaElement>('.main-page-chat textarea.chat-input-textarea'));
     };
     // `/session` (src/commands/session.ts) — one verb "New": grow a draft column
     // instead of opening the chat-anchored picker. Via the ref because this
@@ -3769,7 +3789,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         id="home-task-navigation"
         inert={!todoShown}
         className={`main-page-todo${todoShown ? '' : ' collapsed'}`}
-        style={todoShown ? { width: todoPanel.width } : undefined}
+        style={todoShown ? { width: todoWidth } : undefined}
       >
         <FocusBanner />
         <TodoPanel
@@ -3860,7 +3880,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onCloseScratchpad={closeScratchpad}
           tasks={tasks}
           focusedTaskId={focusedTask?.id}
-          overlayLeft={todoShown ? todoPanel.width : undefined}
+          overlayLeft={todoShown ? todoWidth : undefined}
         />
       )}
 
@@ -4106,6 +4126,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           </Fragment>);
         })}
       </div>
+
+      {/* Nothing open beside the task panel: the room says what it is for and the next step,
+          never a blank two thirds of the window. */}
+      {!phoneLayout && !chatVisible && sessionColumns.length === 0 && !triagePanelOpen && (
+        <HomeEmptyPane onNewTask={handleToolbarOpenLauncher} />
+      )}
 
       </div>{/* end .main-page-content-row */}
 

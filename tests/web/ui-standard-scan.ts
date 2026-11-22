@@ -129,6 +129,19 @@ export function restylesInput(selector: string, decls: { prop: string }[], parts
   if (inBox && last.some((c) => c === 'mic-btn' || c === 'picture-attach')) return sets(KEY_LOOK);
   return false;
 }
+/**
+ * A class that names the words telling one item from another (standard.md, "Text that does not
+ * fit"): `.todo-item-title`, `.org-rail-name`, `.mail-subject`, `.nfc-summary`.
+ */
+export const TITLE_CLASS = /(^|-)(title|name|subject|summary|heading|headline)$/;
+
+/** `.x-title { text-overflow: ellipsis }` or a line clamp on it: a view cutting its own title. */
+export function cutsTitle(selector: string): boolean {
+  const parts = compounds(selector);
+  return classesOf(parts[parts.length - 1] ?? '').some((c) => TITLE_CLASS.test(c));
+}
+
+const CUTS = (prop: string, value: string) => (prop === 'text-overflow' && /ellipsis/.test(value)) || (/(^|-)line-clamp$/.test(prop) && !/^(none|unset|initial)$/.test(value.trim()));
 
 export type Counts = {
   restyledBtn: Record<string, number>;
@@ -136,6 +149,7 @@ export type Counts = {
   rawAccent: Record<string, number>;
   bareButton: Record<string, number>;
   restyledInput: Record<string, number>;
+cutTitle: Record<string, number>;
 } & Record<TokenKind, Record<string, number>>;
 
 /** Roles of a choice control (segmented, tabs, switches, boxes): their own components, not buttons. */
@@ -185,7 +199,7 @@ export function isBareButton(tag: string): boolean {
 
 /** Rules (one per file and selector list) in each file that break each rule of the standard. */
 export function countAll(): Counts {
-  const out = { restyledBtn: {}, ownControl: {}, rawAccent: {}, ...Object.fromEntries(TOKEN_KINDS.map((k) => [k, {}])), bareButton: {}, restyledInput: {} } as Counts;
+  const out =  { restyledBtn: {}, ownControl: {}, rawAccent: {}, ...Object.fromEntries(TOKEN_KINDS.map((k) => [k, {}])), bareButton: {}, restyledInput: {}, cutTitle: {} } as Counts;
   const bump = (m: Record<string, number>, f: string) => { m[f] = (m[f] ?? 0) + 1; };
   const companions = btnCompanions();
   const parts = inputParts();
@@ -203,6 +217,7 @@ export function countAll(): Counts {
       if (decls.some((d) => LOOK.test(d.prop)) && !fingerSize(decls) && sels.some((x) => restylesBtn(x, companions))) bump(out.restyledBtn, rel);
       else if (sets(/^background(-color)?$/) && sets(/^border-radius$/) && sels.some(isOwnControl)) bump(out.ownControl, rel);
       if (rel !== INPUT_HOME && sels.some((x) => restylesInput(x, decls, parts))) bump(out.restyledInput, rel);
+      if (rel !== 'styles/text-fit.css' && decls.some((d) => CUTS(d.prop, d.value)) && sels.some(cutsTitle)) bump(out.cutTitle, rel);
     }
   }
   for (const file of walk(WEB_SRC, ['.css', '.ts', '.tsx']).sort()) {

@@ -47,7 +47,7 @@ detail lives elsewhere and is linked, never copied: [web/src/AGENTS.md](../../..
    Example (2026-11-20): the user found the Needs you card ugly for its hard square corners and its solid orange block, beside frosted glass notices.
 10. **Lists scroll up and down only, never sideways.**
     Example (2026-11-20): the Threads view scrolled sideways and had to lose its horizontal overflow.
-11. **Show text in full in a compact layout; never cut it to two lines with an ellipsis.**
+11. **Show text in full in a compact layout; never cut it to two lines with an ellipsis.** Titles and names wrap; only secondary metadata cuts, and a cut shows its full text on hover ([standard.md, "Text that does not fit"](./standard.md)); an empty pane says what it is for (standard.md, "Panes").
     Example (2026-11-20): the user asked for card text in full and compact, after summaries cut to two lines hid the part he needed.
 12. **Menus and overlays follow the hard rules in [web/src/AGENTS.md](../../../web/src/AGENTS.md#menus--overlays--hard-rules), and a page's view choice is kept with `usePageView`.**
     Example (2026-10): menus that overflowed the viewport and tabs that reset on reload; each rule there is a shipped incident.

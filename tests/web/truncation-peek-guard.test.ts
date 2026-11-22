@@ -54,15 +54,14 @@ describe('truncated rows rely on the in-place peek, not a native title', () => {
  * Keyed by file and class, so a moved line does not fail; a stale entry does.
  */
 const NOT_A_ROW: Record<string, string> = {
+  // Task titles that wrap (`.wn-title`, 2026-11-21) cut nothing and need no entry: the list row's
+  // drag copy, the Adopt and Release headings, the Leader flyout's heading.
   'components/board/kanban/KanbanCard.tsx kanban-card-title': 'a loading skeleton, or the drag overlay whose row marker is disabled at runtime; real Board cards carry data-peek-row',
   'components/calendar/CalendarItemPopover.tsx cal-item-title-static': 'the heading of an open popover, not a row; it peeks when hovered itself',
   'components/sessions/SessionBrowserCard.tsx session-browser-tab': 'a web page tab of the agent browser, not a task',
-  'components/tasks/TodoPanel.tsx todo-item-title': 'TaskItemOverlay: the copy that follows the pointer in a drag, never hovered (the other todo-item-title is in the marked list row)',
   'components/tasks/TodoPanel.tsx todo-pinned-title': 'the pinned card drag overlay, never hovered (the pinned card itself is marked)',
-  'components/tasks/AdoptWorkerFlyout.tsx adopt-worker-title': 'the heading of the Adopt dialog, not a row; it peeks when hovered itself',
-  'components/tasks/ReleaseWorkerFlyout.tsx adopt-worker-title': 'the heading of the Release dialog, not a row; it peeks when hovered itself',
-  'components/tasks/LeaderPill.tsx leader-subtasks-title': 'the heading of the Leader flyout, not a row; its subtask rows are marked',
-  'components/tasks/SubtaskPill.tsx task-worker-parent': 'a pill drawn inside a task row, which is marked where the row is built',
+  // The Worker pill's leader name is metadata (`.wn-meta`, text-fit.css), cut only when the row has no room.
+  'components/tasks/SubtaskPill.tsx wn-meta': 'a pill drawn inside a task row, which is marked where the row is built',
 };
 
 describe('a task row whose text is cut off expands as a whole', () => {
@@ -133,12 +132,14 @@ describe('all truncation peeks widen the real row, never taller, never cloned te
     expect(calendar).not.toMatch(/\btitle=\{/);
   });
 
-  it('every truncated letter subject belongs to a whole expandable card', () => {
+  it('a letter subject is a title that wraps, and any still cut belongs to a whole expandable card', () => {
+    // 2026-11-21 (standard.md "Text that does not fit"): the inbox card's subject is .wn-title, so it
+    // no longer cuts and the peek has nothing to open on it.
+    expect(read('components/inbox/LetterEnvelopeRow.tsx')).toContain('className="hib-subject hib-subject-open wn-title"');
     const sites = findTaskTitleSites(WEB_SRC, /\bletter\.subject\b/);
-    expect(sites.length).toBeGreaterThan(0);
     expect(sites.filter((s) => !s.inRow).map((s) => `${s.file}:${s.line}`)).toEqual([]);
     const worker = read('components/tasks/SubtaskPill.tsx');
-    expect(worker).toContain('className="task-worker-parent"');
+    expect(worker).toContain('className="task-worker-parent wn-meta"');
     // The acceptance of both: the shared flows in truncation-peek-helpers.ts.
     const browser = path.resolve(__dirname, '../e2e/browser');
     const helpers = fs.readFileSync(path.join(browser, 'truncation-peek-helpers.ts'), 'utf8');
@@ -146,6 +147,6 @@ describe('all truncation peeks widen the real row, never taller, never cloned te
     expect(helpers).toContain('the metadata stays above the title');
     const acceptance = fs.readFileSync(path.join(browser, 'inbox-card-peek.spec.ts'), 'utf8');
     expect(acceptance).toContain('expectWorkerRowWidens(');
-    expect(acceptance).toContain('expectInboxCardWidens(');
+    expect(acceptance).toContain('expectInboxCardWhole(');
   });
 });

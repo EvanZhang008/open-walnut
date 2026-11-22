@@ -1,7 +1,7 @@
 /**
  * The grouped inbox's main paths (design v2) in WebKit, the Mac app's engine: the group lines, their
  * hover tools and more (...) menu, an open group, reading from it, the correction card's entry point, the
- * unsubscribe checklist; no horizontal overflow at the default 336px column; every overlay inside the
+ * unsubscribe checklist; no horizontal overflow at the default list column; every overlay inside the
  * viewport.
  */
 import { devices, expect, test, type Page } from '@playwright/test'

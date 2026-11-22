@@ -51,11 +51,13 @@ describe('the Org chart draws each router beside the VPs', () => {
     const sheet = read('web/src/components/org/OrgChartSheet.tsx');
     expect(sheet).toContain('data-testid="org-chart-router"');
     expect(sheet).toContain('<span className="oc-role">Router</span>');
-    // In the same row as the VP cards, before them, and never a drop zone or a drag handle.
+    // In the same grid as the VP cards, after them (2026-11-21: VPs first, routers fill the short
+    // columns), before "+ New", and never a drop zone or a drag handle.
     const routerAt = sheet.indexOf('routers.map((r)');
-    expect(routerAt).toBeGreaterThan(sheet.indexOf('<ul className="oc-vps"'));
-    expect(routerAt).toBeLessThan(sheet.indexOf('cards.map((c)'));
-    const card = sheet.slice(routerAt, sheet.indexOf('cards.map((c)'));
+    expect(routerAt).toBeGreaterThan(sheet.indexOf('className="oc-vps"'));
+    expect(routerAt).toBeGreaterThan(sheet.indexOf('cards.map((c)'));
+    const card = sheet.slice(routerAt, sheet.indexOf('data-testid="org-chart-new"'));
+    expect(card.length).toBeGreaterThan(0);
     expect(card).not.toMatch(/dropZone|draggable|onDragStart/);
     // A chart with routers and no VP yet is not "no open work".
     expect(sheet).toContain('cards.length === 0 && routers.length === 0 && (');

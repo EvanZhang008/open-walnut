@@ -99,14 +99,14 @@ export function MailGroupedHeader({ name, unread, explain, ai, unreadOnly, onUnr
   const sorting = ai?.state === 'on' && ai.pending > 0;
   return (
     <p className="mail-list-section mail-grouped-head" data-testid="mail-list-section">
-      <span className="mail-list-section-name">{name}</span>
+      <span className="mail-list-section-name wn-title">{name}</span>
       {sorting ? (
         <span className="mail-grouped-sorting" data-testid="mail-grouped-sorting" title={`${SORTING_TITLE}\n${explain}`} aria-live="polite">
           <span className="mail-grouped-spin" aria-hidden="true" />
           {sortingText(ai!.pending)}
         </span>
       ) : unread > 0 ? (
-        <span className="mail-grouped-unread" data-testid="mail-grouped-unread" title={explain}>{unreadWord(unread)}</span>
+        <span className="mail-grouped-unread wn-fixed" data-testid="mail-grouped-unread" title={explain}>{unreadWord(unread)}</span>
       ) : null}
       {ai?.state === 'down' && (
         <span className="mail-grouped-no-ai" data-testid="mail-grouped-no-ai" title={SORTED_WITHOUT_AI_TITLE}>

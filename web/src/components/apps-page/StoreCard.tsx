@@ -52,10 +52,10 @@ export function StoreCard({ testId, icon, name, badge, line, note, parts, status
         <span className="apps-card-icon">{icon}</span>
         <div className="apps-card-text">
           <button type="button" className="apps-card-main" onClick={onSelect} data-testid={`${testId}-details`}>
-            <span className="apps-card-name">{name}</span>
+            <span className="apps-card-name wn-title">{name}</span>
           </button>
           {badge}
-          <div className="apps-card-line">{line}</div>
+          <div className="apps-card-line wn-title">{line}</div>
           {note && <div className="apps-card-note">{note}</div>}
         </div>
       </div>

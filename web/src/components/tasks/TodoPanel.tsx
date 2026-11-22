@@ -146,6 +146,7 @@ import { useHomeFilters, useArchiveFetch, useCreatedOutsideToast } from './useHo
 import { archiveNarrowed, footerScope } from './TodoFilterFooter';
 import { LimitedSummary, StatusSectionGroup, sectionRowsOf, type SectionRowHandlers } from './StatusSections';
 import { ActionNeeded } from '@/components/actions/ActionNeeded';
+import { SearchAskLine } from './SearchAskLine';
 import { ProjectStatusFolds, useProjectFolds } from './PanelDesignParts';
 import { bottomStatusSections, foldTasksByProject, leftoverFoldProjects, projectFoldKey, usePanelDesign, type ProjectFoldTasks } from './panel-design';
 import { FOLD_PANEL_ATTR, statusSectionFoldKind, statusSectionsOpen } from './section-fold-rule';
@@ -818,6 +819,8 @@ interface SortableTaskItemProps {
   searchContext?: string; // Project label shown at the end of a search / flat-list row
   /** Search rows only: the tier a pinned hit lives in, as a pill (search is one flat list). */
   searchTierLabel?: string;
+  /** A search result: what it asks folds to one line under it (SearchAskLine). */
+  foldAsks?: boolean;
   filterOverrideReason?: ReactNode;  // Why this task is outside current filters (focus override)
   isFadingOverride?: boolean;     // Task is fading out after focus moved away
   /** Virtual-group rendering: present when this task is part of a multi-member group. */
@@ -1101,7 +1104,7 @@ interface TaskRowBodyProps extends SortableTaskItemProps {
   dragListeners: DraggableSyntheticListeners;
 }
 
-const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, isRecentlyDone, isVanishing, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onStartSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveToProject, isPinned, pinnedTier, searchContext, searchTierLabel, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup, folderCollapsed, onToggleFolder, folderProject, onMoveFolderToProject, sortableRef, sortableTransform, sortableTransition, isDragging, dragAttributes: attributes, dragListeners: listeners }: TaskRowBodyProps) {
+const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, isRecentlyDone, isVanishing, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onStartSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveToProject, isPinned, pinnedTier, searchContext, searchTierLabel, foldAsks, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup, folderCollapsed, onToggleFolder, folderProject, onMoveFolderToProject, sortableRef, sortableTransform, sortableTransition, isDragging, dragAttributes: attributes, dragListeners: listeners }: TaskRowBodyProps) {
   // Live circle: error red / waiting red-pulse / running green-pulse.
   const circleClass = useTaskCircle(task);
   const setNodeRef = sortableRef;
@@ -1302,7 +1305,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           </button>
           <span
             {...titleProps}
-            className={`todo-item-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}${watchablePrUrls(task.tags).length ? ' todo-item-title-own-line' : ''}`}
+            className={`todo-item-title wn-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}${watchablePrUrls(task.tags).length ? ' todo-item-title-own-line' : ''}`}
             onClick={isEditing ? (e) => e.stopPropagation() : handleTitleClick}
           >
             {orgDisplayTitle(task)}
@@ -1400,7 +1403,10 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
     </div>
     {/* What it asks of the user, each with its answer and its own Snooze (ActionNeeded): under the
         row, never inside it, as the row is a button and a box to type in cannot live in one. */}
-    {!isDone && task.user_status?.actions?.length ? <div className="todo-row-actions-below" data-asks-for={task.id}><ActionNeeded task={task} /></div> : null}
+    {!isDone && task.user_status?.actions?.length ? <div className="todo-row-actions-below" data-asks-for={task.id}>
+      {/* A search list folds it to one line (SearchAskLine), so the results still scan. */}
+      {foldAsks ? <SearchAskLine task={task} /> : <ActionNeeded task={task} />}
+    </div> : null}
     </>
   );
 });
@@ -1412,7 +1418,7 @@ function TaskItemOverlay({ task }: { task: Task }) {
   return (
     <div className="todo-panel-item drag-overlay-item">
       <div className="todo-item-content">
-        <span className={`todo-item-title${task.walnut_agent ? ' walnut-task-title' : ''}`}>{orgDisplayTitle(task)}</span>
+        <span className={`todo-item-title wn-title${task.walnut_agent ? ' walnut-task-title' : ''}`}>{orgDisplayTitle(task)}</span>
       </div>
       {showPriority && (
         <span className={`badge badge-${task.priority}`}>{task.priority === 'immediate' ? '!!' : task.priority === 'important' ? '!' : task.priority === 'backlog' ? '~' : '--'}</span>
@@ -1559,7 +1565,7 @@ function ProjectHeaderRow({
               >
                 {/* SOLID icon + kind-tag = project (folders inside use the hollow icon + indent). */}
                 <span className="todo-group-project-icon">{ICONS.ICON_FOLDER_SOLID}</span>
-                <span className="todo-group-project-name">{projectDisplayName(project)}</span>
+                <span className="todo-group-project-name wn-title">{projectDisplayName(project)}</span>
               </button>
               {/* Tag / badge / count sit on the ROW, not inside the name button, and
                   that placement is the feature: the button is the "open the project
@@ -2310,7 +2316,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isOpe
       {/* Editable title */}
       <span
         {...titleProps}
-        className={`todo-pinned-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
+        className={`todo-pinned-title wn-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
         onClick={isEditing ? (e) => e.stopPropagation() : undefined}
       >
         {orgDisplayTitle(task)}
@@ -8651,6 +8657,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       pinnedTier={getTier(task.id)}
                       searchContext={taskProjectLabel(task)}
                       searchTierLabel={tier ? tierDisplayLabel(tier, customTiers) : undefined}
+                      foldAsks
                       filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideNode : undefined}
                       isFadingOverride={fadingOverrideId === task.id}
                     />

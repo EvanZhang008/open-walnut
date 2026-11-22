@@ -19,7 +19,7 @@
 
 .org-list {
   /* The width the divider after it sets (OrgPage), else the page's own. */
-  width: var(--org-list-w, 300px);
+  width: var(--org-list-w, 340px);
   flex: none;
   display: flex;
   flex-direction: column;
@@ -66,7 +66,8 @@
 
 .org-channel {
   display: flex;
-  align-items: center;
+  /* Names and the line under them wrap (.wn-title): the avatar and the count stay at the top. */
+  align-items: flex-start;
   gap: 10px;
   width: 100%;
   padding: 7px 8px;
@@ -90,10 +91,12 @@
 }
 .org-channel.is-main.is-selected { background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
 .org-channel-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.org-channel-top { display: flex; justify-content: space-between; gap: 6px; }
+.org-channel-top { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; }
+/* The name keeps its own width so the +N chip follows it; the time takes the line's end. A narrow list
+   moves the chip and the time under the name before it breaks a word of it. */
+.org-channel-top > .org-channel-name { flex: 0 1 auto; overflow-wrap: break-word; }
 .org-channel-led {
   flex-shrink: 0;
-  margin-right: auto;
   padding: 0 5px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -106,9 +109,6 @@
 .org-channel-name {
   font-weight: 600;
   font-size: var(--font-size-md);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .org-channel.is-unread .org-channel-name::after {
   content: '';
@@ -120,19 +120,18 @@
   background: var(--accent);
   vertical-align: middle;
 }
-.org-channel-time { flex: none; font-size: var(--font-size-sm); color: var(--fg-muted); }
+.org-channel-time { flex: none; margin-left: auto; font-size: var(--font-size-sm); color: var(--fg-muted); }
 .org-channel-latest {
   font-size: var(--font-size-sm);
   color: var(--fg-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .org-channel-latest.is-alert { color: var(--error); }
 .org-channel-pin { display: inline-block; vertical-align: -1px; margin-right: 3px; color: var(--accent); }
 
 .org-badge {
   flex: none;
+  /* Level with the middle of the row's top: a 34px avatar beside the name and its first line. */
+  margin-top: 7px;
   min-width: 20px;
   height: 20px;
   padding: 0 6px;
@@ -210,10 +209,13 @@
 
 .org-detail-pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .org-router-setup { padding: 20px; overflow-y: auto; min-width: 0; color: var(--fg); background: var(--bg); }
+/* A readable column (2026-11-21, the UI audit: two short radio labels in a box across the whole pane).
+   The form itself still fills the pane, so it scrolls at the pane's edge. */
+.org-router-setup > * { max-width: 640px; box-sizing: border-box; }
 .org-router-setup > label { display: flex; flex-direction: column; gap: 6px; max-width: 480px; }
 .org-router-setup fieldset { margin: 16px 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .org-router-setup fieldset label { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
-.org-router-setup p { font-size: var(--font-size-md); color: var(--fg-secondary); max-width: 560px; }
+.org-router-setup p { font-size: var(--font-size-md); color: var(--fg-secondary); }
 .org-router-setup .btn { margin-right: 8px; }
 /* A router's own settings (OrgRouterSettings): folded inline under its header, never a menu. Open, it
    takes the height its form needs, up to all but the chat's floor below (.is-router-split), and a
@@ -339,7 +341,7 @@
 .org-team-item {
   width: 100%;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 7px;
   padding: 6px 8px;
   border: none;
@@ -352,9 +354,9 @@
   cursor: pointer;
 }
 .org-team-item:hover { box-shadow: 0 0 0 1px var(--border); }
-.org-team-ring { flex: none; width: 11px; height: 11px; border-radius: 50%; border: 2px solid; }
+.org-team-ring { flex: none; width: 11px; height: 11px; margin-top: 3px; border-radius: 50%; border: 2px solid; }
 .org-team-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.org-team-title, .org-team-note { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The title wraps (.wn-title); the note is metadata and stays one line (.wn-meta). */
 /* Where the task stands, in its status's words. */
 .org-team-note { font-size: var(--font-size-xs); color: var(--fg-muted); }
 .org-team-meta { flex: none; font-size: var(--font-size-xs); color: var(--fg-muted); }

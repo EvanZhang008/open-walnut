@@ -34,7 +34,10 @@
   display: grid;
   position: relative;
   --mail-accounts-default: 232px;
-  --mail-list-default: 336px;
+  /* The list takes its width by what it holds (subjects, senders, the router's reason) and the
+     reader the rest: a fixed 336px cut every subject beside a reader that was more than half the
+     window and often empty (2026-11-21 audit). 36% is 524px at 1512 and 440px at 1280. */
+  --mail-list-default: clamp(360px, 36%, 560px);
   /* A dragged width (`--mail-*-w`, set inline by MailApp) wins over the default. The list is also
      capped so the reader keeps 380px (READER_MIN in mail-pane-widths.ts) when the window gets
      narrower than it was during the drag; the floor of 260px is the list's own minimum. */
@@ -46,7 +49,7 @@
 /* The reader is the pane that needs the room, and the window also holds the app's sidebar, so the
    two left columns give some back before the drill breakpoint takes over (see MailApp.tsx). */
 @media (max-width: 1360px) {
-  .mail-console { --mail-accounts-default: 204px; --mail-list-default: 300px; }
+  .mail-console { --mail-accounts-default: 204px; }
 }
 
 /* The splitters (MailPaneSplitter.tsx): out of the grid, straddling a column's right edge. The
@@ -375,16 +378,14 @@
   font-weight: 600;
 }
 
+/* .wn-title: a folder's name wraps rather than cut (text-fit.css). */
 .mail-mailbox-name {
   flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* The badge holds an EXACT count now (1,284, not "99+"), so it has to be able to be wide. It keeps
    its own width whatever it says (`flex: 0 0 auto`) and never breaks the number over two lines;
-   `.mail-mailbox-name` above is the flex item that gives up the room, and it already ellipsizes. */
+   `.mail-mailbox-name` above is the flex item that gives up the room, and it wraps. */
 .mail-unread-badge {
   flex: 0 0 auto;
   min-width: 18px;
@@ -511,12 +512,10 @@
   color: var(--fg-muted);
 }
 
+/* .wn-title: the folder's name wraps rather than cut (text-fit.css). */
 .mail-list-section-name {
   font-weight: 700;
   color: var(--fg-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .mail-list-section-count {
@@ -688,6 +687,7 @@
   background: var(--accent-subtle);
 }
 
+/* Who and when: the name is .wn-title (wraps, never cut), the account mark and time .wn-fixed. */
 .mail-row-top {
   display: flex;
   align-items: baseline;
@@ -711,9 +711,6 @@
   min-width: 0;
   font-size: var(--font-size-md);
   color: var(--fg-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .mail-row-time {
@@ -724,23 +721,20 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The subject line: its text is .wn-title and wraps; the marks after it keep their size. */
 .mail-row-subject {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
   min-width: 0;
   font-size: var(--font-size-md);
   color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.mail-row-subject-text {
+/* Its marks (attachment, task) follow the words, not the row's end. */
+.mail-row-subject > .mail-row-subject-text {
+  flex: 0 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .mail-row-clip { flex: 0 0 auto; color: var(--fg-muted); display: inline-flex; }
@@ -1444,19 +1438,12 @@
   padding: 0 0 8px;
   border-bottom: 1px solid var(--border);
 }
-/* The name sits above its state and wraps (two lines at most) rather than being cut beside it: the
-   pane is as narrow as 200px and a router's name is the one word that says which area it reads. */
+/* The name sits above its state and wraps (.wn-title, every line it needs) rather than being cut
+   beside it: the pane is as narrow as 200px and a router's name is the one word that says which area
+   it reads. */
 .mail-router-row { gap: 8px; padding-left: 8px; align-items: flex-start; text-align: left; }
 .mail-router-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.mail-router-name {
-  color: var(--fg);
-  white-space: normal;
-  overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-}
+.mail-router-name { color: var(--fg); }
 .mail-router-state { font-size: var(--font-size-sm); color: var(--fg-secondary); }
 .mail-router-dot { flex: 0 0 auto; width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--fg-muted); }
 .mail-router-dot[data-tone='ready'] { background: var(--success); }

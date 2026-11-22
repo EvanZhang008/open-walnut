@@ -71,9 +71,18 @@ test.describe('the model answering', () => {
     const headBox = (await page.getByTestId('mail-not-important-head').boundingBox())!
     const firstLine = (await page.getByTestId('mail-group-row').first().boundingBox())!
     expect(headBox.y).toBeLessThan(firstLine.y)
-    // A title row and one summary line each, and the tools only on hover.
-    const heights = await page.getByTestId('mail-group-row').evaluateAll((rows) => rows.map((row) => row.getBoundingClientRect().height))
-    for (const height of heights) expect(height).toBeLessThanOrEqual(56)
+    // A title row and the summary under it, and the tools only on hover. The summary wraps rather than
+    // end in an ellipsis (2026-11-21, standard.md "Text that does not fit"): a line grows 16px for each
+    // extra line of it, and nothing else.
+    const heights = await page.getByTestId('mail-group-row').evaluateAll((rows) => rows.map((row) => {
+      const summary = row.querySelector('.mail-group-summary') as HTMLElement | null
+      const lines = summary ? Math.round(summary.getBoundingClientRect().height / parseFloat(getComputedStyle(summary).lineHeight)) : 1
+      return { height: row.getBoundingClientRect().height, lines, cut: !!summary && summary.scrollWidth > summary.clientWidth + 1 }
+    }))
+    for (const { height, lines, cut } of heights) {
+      expect(cut).toBe(false)
+      expect(height).toBeLessThanOrEqual(56 + (lines - 1) * 16)
+    }
     for (const group of groups.groups) await expect(groupLine(page, group.id).getByTestId('mail-group-summary')).toHaveText(group.summary)
     const first = groupLine(page, ids[0]!)
     await expect(first.getByTestId('mail-group-mark')).toBeHidden()
@@ -401,12 +410,13 @@ test.describe('the model answering', () => {
     await writeRulesFile(fixture, 'version: 1\ngroups: []\nrules: []\n')
   })
 
-  test('336px column, light and dark: nothing overflows, only names truncate', async ({ page }) => {
+  test('default column, light and dark: nothing overflows', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 })
     await openGrouped(page, fixture)
+    // The list takes clamp(360px, 36%, 560px) of the console (2026-11-21: by content, no longer 336px).
     const width = await page.locator('.mail-list-pane').evaluate((el) => el.clientWidth)
-    expect(width).toBeGreaterThanOrEqual(330)
-    expect(width).toBeLessThanOrEqual(340)
+    expect(width).toBeGreaterThanOrEqual(360)
+    expect(width).toBeLessThanOrEqual(560)
     const overflow = () => page.evaluate(() => {
       const bad: string[] = []
       const check = (el: Element | null, name: string) => { if (el && el.scrollWidth > el.clientWidth + 1) bad.push(name) }
@@ -422,12 +432,12 @@ test.describe('the model answering', () => {
       return bad
     })
     expect(await overflow()).toEqual([])
-    await shoot(page, SHOTS, 'overview-336-light')
+    await shoot(page, SHOTS, 'overview-default-light')
     await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'))
     const groups = await getGroups(fixture, ALL_INBOXES)
     await openGroupLine(page, groups.groups[0].id)
     expect(await overflow()).toEqual([])
-    await shoot(page, SHOTS, 'overview-336-dark')
+    await shoot(page, SHOTS, 'overview-default-dark')
   })
 
   test('all caught up: every group read, only the words and the read Important mail remain', async ({ page }) => {

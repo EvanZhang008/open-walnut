@@ -41,6 +41,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
 .hib-dot {
@@ -55,15 +56,13 @@
 
 .hib-pin { color: var(--accent); display: inline-flex; }
 
+/* .wn-title on the element: the subject wraps, never cut (text-fit.css). */
 .hib-subject {
   flex: 1;
   min-width: 0;
   font-size: var(--font-size-md);
   font-weight: 600;
   color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .hib-type {
@@ -111,14 +110,12 @@
 .hib-chip-task { background: var(--accent-subtle); color: var(--accent); }
 .hib-chip-thread { background: var(--bg-tertiary); }
 
+/* The whole preview (at most LETTER_PREVIEW_MAX_CHARS): never a clamp (standard.md rule 11). */
 .hib-preview {
   font-size: var(--font-size-sm);
   line-height: 1.45;
   color: var(--fg-secondary);
-  display: -webkit-box;
-  -webkit-line-clamp: 1;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 
 .hib-answered-chip {
@@ -619,25 +616,15 @@
   display: block;
 }
 
+/* .wn-title on the element: who it is from wraps, never cut (text-fit.css). */
 .hib-origin-name {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--accent);
 }
 
-.hib-origin--reader .hib-origin-name {
-  font-size: var(--font-size-md);
-  /* A long sender name wraps (two lines at most) instead of shrinking to "Acm…". */
-  white-space: normal;
-  overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
+.hib-origin--reader .hib-origin-name { font-size: var(--font-size-md); }
 a.hib-origin-name { text-decoration: none; }
 a.hib-origin-name:hover { text-decoration: underline; }
 
@@ -667,7 +654,7 @@ a.hib-origin-name:hover { text-decoration: underline; }
 
 .hib-row-subject-line {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
   min-width: 0;
 }

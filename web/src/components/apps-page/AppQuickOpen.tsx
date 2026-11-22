@@ -18,7 +18,7 @@ function QuickTile({ app, pinned, onOpen }: { app: RegisteredApp; pinned: boolea
     <div className="apps-quick-tile" data-testid={`apps-quick-${pinned ? 'pinned' : 'recent'}-${app.key}`}>
       <button type="button" className="apps-quick-open" onClick={() => onOpen(app)} aria-label={`Open ${app.title}`}>
         <span className="apps-quick-icon" aria-hidden="true"><AppGlyph app={app} size={18} /></span>
-        <span className="apps-quick-name">{app.title}</span>
+        <span className="apps-quick-name wn-title">{app.title}</span>
         <AppBadge app={app} />
       </button>
       <button

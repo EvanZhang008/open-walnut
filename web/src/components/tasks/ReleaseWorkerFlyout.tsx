@@ -108,7 +108,7 @@ export function ReleaseWorkerFlyout({ open, anchorRef, leader, onClose, onPicked
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="adopt-worker-title">Release a worker of &ldquo;{orgDisplayTitle(leader)}&rdquo;</div>
+      <div className="adopt-worker-title wn-title">Release a worker of &ldquo;{orgDisplayTitle(leader)}&rdquo;</div>
       {all.length >= RELEASE_FILTER_FROM && (
         <MicInput fieldClassName="adopt-worker-filter-field mic-field-compact" data-no-draft="search"
           className="adopt-worker-filter"
@@ -138,8 +138,8 @@ export function ReleaseWorkerFlyout({ open, anchorRef, leader, onClose, onPicked
                 onMouseEnter={() => setActive(i)}
                 onClick={() => pick(t)}
               >
-                <span className="adopt-worker-row-title">{orgDisplayTitle(t)}</span>
-                <span className="adopt-worker-row-meta">
+                <span className="adopt-worker-row-title wn-title">{orgDisplayTitle(t)}</span>
+                <span className="adopt-worker-row-meta wn-meta">
                   {taskStatusLabel(t)}
                   {place ? ` · ${place}` : ''}
                 </span>

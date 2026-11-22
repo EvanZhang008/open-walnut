@@ -81,8 +81,10 @@ import { onOpenTaskOnPage, type OpenTaskOptions } from '@/utils/open-session';
 import { yieldFullscreen } from '@/hooks/useFullscreen';
 import '@/styles/org-page.css';
 
-/** The page's own panes (the dividers below): the list, the node between, an opened task. */
-const ORG_LIST_DEFAULT_PX = 300;
+/** The page's own panes (the dividers below): the list, the node between, an opened task. The list's
+ *  default fits a VP name and a Director title on a line or two (2026-11-21: 300px cut them); keep it in
+ *  step with `.org-list`'s width in org-page.css. */
+const ORG_LIST_DEFAULT_PX = 340;
 const ORG_LIST_MIN_PX = 200;
 const ORG_LIST_MAX_PX = 480;
 const ORG_DETAIL_MIN_PX = 480;

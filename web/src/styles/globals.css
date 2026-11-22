@@ -816,9 +816,11 @@ select {
   background: color-mix(in srgb, var(--accent) 6%, var(--card-bg));
 }
 
+/* Baseline, not center: a title that wraps keeps its dot, time and close on its
+   first line (text-fit.css). */
 .notification-feed-item-head {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
 }
 
@@ -835,19 +837,12 @@ select {
 .notification-feed-dot--warning { background: var(--warning); }
 .notification-feed-dot--error { background: var(--error); }
 
+/* .wn-title on the element: the title wraps, never cut (text-fit.css). */
 .notification-feed-item-title {
   flex: 1;
   font-size: var(--font-size-md);
   font-weight: 600;
   color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* Expanded (clicked): un-truncate the title so the full message is readable. */
-.notification-feed-item-title.expanded {
-  white-space: normal;
-  word-break: break-word;
 }
 
 .notification-feed-item-time {
@@ -865,22 +860,15 @@ select {
 }
 
 /* iPhone-style notification center: clickable cards, per-item ×, groups.
-   Every card is clickable now: with a target it navigates, without one it
-   expands to show the full title/body. */
-.notification-feed-item {
+   A card with a target or a letter opens it; the others have nothing to open,
+   since their title and body already show in full. */
+.notification-feed-item.clickable {
   cursor: pointer;
 }
 
 .notification-feed-item.clickable:hover {
   border-color: var(--border-strong);
   background: color-mix(in srgb, var(--accent) 10%, var(--card-bg));
-}
-
-.notification-feed-item-body.clamped {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 
 .notification-feed-item-dismiss {
@@ -1434,6 +1422,13 @@ select {
   color: var(--fg-muted);
   font-size: 14px;
   margin-top: 4px;
+}
+
+/* A page that is one list of cards (Agents, Commands): a readable width, so a card's
+   menu sits beside its short text and a long description wraps, instead of the card
+   stretching across a wide window. */
+.page-readable {
+  max-width: 880px;
 }
 
 /* ===== Empty State ===== */
@@ -9200,6 +9195,10 @@ img[data-lightbox-src],
 /* ===== Main Page Layout (Chat + Todo) ===== */
 
 .main-page {
+  /* The collapsed sidebar's width (.sidebar.collapsed): the task panel's share is of the
+     window less it (columnSizing.ts todoPanelWidth), so expanding the sidebar never
+     narrows the task panel. */
+  --home-rail-width: 56px;
   display: flex;
   flex: 1;
   min-height: 0;
@@ -9428,6 +9427,38 @@ body.walnut-dragging {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+}
+
+/* Nothing open beside the task panel (pages/HomeEmptyPane.tsx): the room's title and its
+   one next step, centred and quiet, never a blank two thirds of the window. */
+.home-empty-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg);
+}
+.home-empty-pane-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 320px;
+  text-align: center;
+}
+.home-empty-pane-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+.home-empty-pane-hint {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg-muted);
 }
 
 /* .session-resize-handle + .session-col-resize-handle — styled by the unified
@@ -10944,13 +10975,12 @@ body.walnut-dragging {
   border-radius: var(--radius-sm);
 }
 
+/* The title wraps in full (`.wn-title`, text-fit.css): the words that tell tasks apart are never
+   cut, the circle, time and kebab beside it keep the first line (standard.md, "Text that does not fit"). */
 .todo-pinned-title {
   flex: 1;
   font-size: var(--font-size-sm);
   color: var(--fg);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   line-height: 1.3;
 }
 
@@ -10968,13 +10998,11 @@ body.walnut-dragging {
   height: 12px;
 }
 
-/* Editable title in pinned cards — stays single-line (nowrap/hidden inherited);
-   the browser auto-scrolls the hidden overflow to keep the caret visible. */
+/* Editable title in pinned cards: it wraps while editing as it does at rest. */
 .todo-pinned-title.editing {
   outline: 1px solid var(--accent);
   border-radius: var(--radius-xs);
   padding: 0 3px;
-  text-overflow: clip;
   cursor: text;
 }
 
@@ -13597,11 +13625,9 @@ body.walnut-dragging {
   font-size: var(--font-size-md);
 }
 
-/* A name too long for the row ellipsizes instead of overflowing into the star. */
+/* A name too long for the row wraps (`.wn-title`) instead of overflowing into the star. */
 .todo-group-project-header .todo-group-project-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
 }
 /* The row-level count keeps its width under that pressure — it is part of the fold
    strip, and a strip that can shrink to nothing is not a target. (.project-kind-tag
@@ -21791,21 +21817,25 @@ a.tag-chip:focus-visible,
   width: min(560px, calc(100vw - 24px));
   height: min(60vh, 600px);
 }
-/* ── Empty body = ONE muted line ──
-   "What happens next", centered, nothing else: every control lives in the bottom
-   stack now, within reach of the composer. */
+/* ── Empty body: the mode cards (or ONE muted line) ──
+   Anchored to the BOTTOM, right above the "Work in" row and the composer they lead to:
+   centred in the pane they sat hundreds of pixels above the input (2026-11-21 audit,
+   standard.md "Panes": the next step sits next to the choice). The child's auto top
+   margin (not align-items: flex-end) keeps a stack taller than the pane scrollable
+   from its top. */
 .draft-session-body {
   flex: 1;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  padding: 20px 16px;
+  padding: 20px 16px 12px;
   text-align: center;
   overflow-y: auto;
   font-size: var(--font-size-sm);
   line-height: 1.6;
   color: var(--fg-muted);
 }
+.draft-session-body > * { margin-top: auto; }
 .draft-quick-hint {
   max-width: 34ch;
 }
@@ -30949,9 +30979,12 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
    maxHeight, so it needs `flex: 0 1 <basis>`), this panel is a fixed slide-out
    pinned top:0/bottom:0 — the viewport already determines the height, so
    flex:1 + min-height:0 is the correct pairing here. */
+/* The rail is as wide as its longest label, up to 176px (a long error family
+   wraps there), and the cards take the rest: a fixed 150px column took over a
+   quarter of the drawer for labels of a word or two (2026-11-21 audit). */
 .nfc-body {
   display: grid;
-  grid-template-columns: 150px 1fr;
+  grid-template-columns: fit-content(176px) minmax(0, 1fr);
   flex: 1;
   min-height: 0;
 }
@@ -30984,7 +31017,8 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   font-weight: 600;
 }
 
-.nfc-rail-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* .wn-title on the element: a label never cuts, the rail takes its width. */
+.nfc-rail-name { min-width: 0; }
 
 .nfc-rail-badge {
   margin-left: auto;
@@ -31094,12 +31128,16 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 /* ── Card context + detail blocks (shared by permission + error cards) ── */
 
+/* Where it came from, on one line: the session label is .wn-meta and gives up
+   its words first; the host and project chips shrink only past that (their
+   words show on hover, truncation-peek.ts). */
 .nfc-card-chips {
   display: flex;
-  flex-wrap: wrap;
   gap: 4px;
   margin-top: 5px;
+  min-width: 0;
 }
+.nfc-card-chips > .nfc-chip { min-width: 0; }
 
 .nfc-chip {
   max-width: 100%;
