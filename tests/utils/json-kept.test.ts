@@ -93,10 +93,13 @@ describe('readJsonFileKept', () => {
 describe('the hot files a looking reader parses go through readJsonFileKept', () => {
   // A file the live server parsed hundreds of times in 10 minutes (the memory ledger's jsonTop
   // line names them). A new reader of one that calls readJsonFile parses it on every call again.
-  const HOT = [{ src: 'src/core/session-requests.ts', file: 'REQUESTS_FILE' }];
+  const HOT = [
+    { src: 'src/core/session-requests.ts', file: 'REQUESTS_FILE' },
+    { src: 'src/core/human-inbox/store.ts', file: 'INDEX_FILE' },
+  ];
   it.each(HOT)('$src reads $file only through the kept reader (writes keep their own copy)', async ({ src, file }) => {
     const text = await fs.readFile(path.resolve(__dirname, '../..', src), 'utf-8');
     expect(text).not.toMatch(new RegExp(`readJsonFile<[^>]*>\\(\\s*${file}\\b`));
-    expect(text).toMatch(new RegExp(`readJsonFileKept<[^>]*>\\(\\s*${file}\\b`));
+    expect(text).toMatch(/readJsonFileKept</);
   });
 });

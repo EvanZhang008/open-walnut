@@ -20,6 +20,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { WALNUT_HOME } from '../../constants.js';
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
+import { readJsonFileKept } from '../../utils/json-kept.js';
 import { log } from '../../logging/index.js';
 import { bus, EventNames } from '../event-bus.js';
 import { ensureLetterBridge, mirrorLetterReadState } from '../notifications/letter-bridge.js';
@@ -111,9 +112,18 @@ function withOrigins(store: LetterStoreFile): LetterStoreFile {
   return store;
 }
 
+/**
+ * The index as stored, parsed once per version of the file and shared (utils/json-kept.ts): the
+ * live server read it about 240 times in 10 minutes (2026-11-21) while it changed a few times.
+ * Frozen; normalizeStore builds every record afresh, so a reader may change what it gets.
+ */
+async function readIndexRaw(file: string, opts: { readErrors?: 'fallback' | 'throw' } = {}): Promise<unknown> {
+  return await readJsonFileKept<unknown>(file, null, opts);
+}
+
 async function readStore(dir = INBOX_DIR): Promise<LetterStoreFile> {
   try {
-    return withOrigins(normalizeStore(await readJsonFile<unknown>(dir === INBOX_DIR ? INDEX_FILE : path.join(dir, 'index.json'), null)));
+    return withOrigins(normalizeStore(await readIndexRaw(dir === INBOX_DIR ? INDEX_FILE : path.join(dir, 'index.json'))));
   } catch (err) {
     log.notif.warn('human-inbox: failed to read index', { error: errMsg(err) });
     return emptyStore();
@@ -176,7 +186,7 @@ export function onLetterStoreWritten(cb: () => void): () => void {
  * and the copy round then skips the inbox instead of removing the host's letters.
  */
 export async function readLetterIndexForReplica(opts: { readErrors?: 'fallback' | 'throw' } = {}): Promise<LetterRecord[]> {
-  return withOrigins(normalizeStore(await readJsonFile<unknown>(INDEX_FILE, null, opts))).letters;
+  return withOrigins(normalizeStore(await readIndexRaw(INDEX_FILE, opts))).letters;
 }
 
 // ── Ids + body files ──
@@ -540,7 +550,7 @@ export async function findLetterIdsByOps(opKeys: readonly string[]): Promise<Map
   const wanted = new Set(opKeys.filter(Boolean));
   const found = new Map<string, string>();
   if (wanted.size === 0) return found;
-  const raw = await readJsonFile<unknown>(INDEX_FILE, null, { readErrors: 'throw' });
+  const raw = await readIndexRaw(INDEX_FILE, { readErrors: 'throw' });
   for (const letter of normalizeStore(raw).letters) {
     if (letter.createdByOp && wanted.has(letter.createdByOp)) found.set(letter.createdByOp, letter.id);
   }
@@ -549,7 +559,7 @@ export async function findLetterIdsByOps(opKeys: readonly string[]): Promise<Map
 
 /** Read older letter scopes before admission. A failed read is retried, never "no prior ask". */
 async function credentialCandidates(ask: import('./credential-ask.js').CredentialAsk): Promise<Map<string, import('./credential-ask.js').CredentialAsk>> {
-  const raw = await readJsonFile<unknown>(INDEX_FILE, null, { readErrors: 'throw' });
+  const raw = await readIndexRaw(INDEX_FILE, { readErrors: 'throw' });
   const letters = normalizeStore(raw).letters.filter(l => !l.archived || (ask.expiresAt !== undefined && !!l.createdByOp));
   const context = await credentialAskContext();
   const out = new Map<string, import('./credential-ask.js').CredentialAsk>();
