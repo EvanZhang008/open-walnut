@@ -94,7 +94,6 @@ const LOCAL_ENTRIES: readonly HomeEntry[] = [
   mach('local.machine-id', 'local/machine-id', 'file', 'This machine\'s id for daemon updates'),
   mach('local.leader-switch', 'local/leader-switch', 'dir', 'The leader switch of this home: its steps and lock, the handed-over marker, the promotion record, permission log'),
   mach('local.restore-drill', 'local/restore-drill.json', 'file', 'The last restore drill of this machine\'s backups: when, which backup, each check'),
-  mach('local.usage-watch', 'local/usage-watch.sqlite', 'sqlite', 'The real-use monitor of this machine\'s server: hourly counts per tool, route and page error, recent problems, the watches tasks registered'),
   mach('local.health-monitor', 'local/health-monitor', 'dir', 'Walnut Health records of this machine'),
   mach('local.feature-nodes', 'local/feature-nodes', 'dir', 'Connection journal of feature nodes'),
   mach('local.runtime', 'local/runtime', 'dir', 'The runtime tree of this install'),
