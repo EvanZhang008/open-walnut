@@ -33,6 +33,7 @@ const runnerCalls: string[] = []
 let seenAtStart: { bundle: StartBundle | null; data: Record<string, unknown> } | null = null
 let undone = 0
 const dropped: string[][] = []
+const terminated: Array<{ sid: string; opts: unknown }> = []
 
 const session = {
   getUsage: async (n: number) => ({ tokens: n * 2 }),
@@ -67,6 +68,7 @@ async function startDoor(withRoutes: boolean): Promise<void> {
     spillDir: path.join(dir, 'prompts'),
     commandRunsOp: (c, op) => c.includes(op),
     drop: async (sids) => { dropped.push(sids); return sids.length },
+    lifecycle: { terminateSession: async (sid, opts) => { terminated.push({ sid, opts }); return { status: 'terminated', sessionId: sid } } },
   }) : null
   door = createLeaderDoor({ devices: {} as never, sessions: () => routes })
   server = net.createServer((sock) => door.accept(sock))
@@ -82,6 +84,7 @@ beforeEach(async () => {
   seenAtStart = null
   undone = 0
   dropped.length = 0
+  terminated.length = 0
   bundles = new StartBundles()
   log = await FactLog.open({ dir: path.join(dir, 'log'), walnutId: 'w1', flushMs: 1, durable: false })
   channel = new HostChannel({ log, walnutId: 'w1', hostId: 'marina-box', ownRows: async () => [] })
@@ -170,8 +173,15 @@ describe('/call', () => {
   })
 })
 
-describe('drop', () => {
+describe('lifecycle and drop', () => {
   beforeEach(async () => { await startDoor(true) })
+
+  it('a lifecycle control runs whole on this host for the session named, also with no live object of it', async () => {
+    expect((await post('/host-api/sessions/call', { sid: 'sid-gone', target: 'lifecycle', member: 'terminateSession', args: [{ force: true }] })).body)
+      .toEqual({ ok: true, value: { status: 'terminated', sessionId: 'sid-gone' } })
+    expect(terminated).toEqual([{ sid: 'sid-gone', opts: { force: true } }])
+    expect((await post('/host-api/sessions/call', { sid: 'sid-1', target: 'lifecycle', member: 'changeSessionMode', args: [] })).body).toEqual({ ok: false, error: 'not_allowed' })
+  })
 
   it('drop hands the leader\'s deletes to this host, also with the switch off', async () => {
     enabled = false

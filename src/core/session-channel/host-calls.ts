@@ -4,6 +4,8 @@
  * inventory of what the leader uses is design/C3b-live-surface.md in the task that built this.
  *
  * A member that takes a callback cannot cross; it has a named op instead (bashCallMatchingOp).
+ * `lifecycle` members are the session controls the host carries out whole for its own session
+ * (sessions/session-lifecycle.ts): the leader hands them over instead of running them itself.
  * State the leader reads synchronously (turnGen, processStatus, isInTurn ...) is not here: it comes
  * with the `live` records of the channel.
  */
@@ -24,7 +26,8 @@ export const HOST_CALL_ALLOWLIST = {
     'reinitialize', 'respawnOnCurrentPrompt', 'recoverCancelledForSession', 'markExpectedTeardown', 'undoExpectedTeardown',
     'settleInFlightTurn', 'syncTask', 'syncLane', 'adoptNewCwd', 'getOrAttachLiveSession', 'findOrAttachAcpSession',
   ],
-} as const satisfies Record<'session' | 'acp' | 'runner', readonly string[]>
+  lifecycle: ['terminateSession'],
+} as const satisfies Record<'session' | 'acp' | 'runner' | 'lifecycle', readonly string[]>
 
 export type HostCallTarget = keyof typeof HOST_CALL_ALLOWLIST
 

@@ -4,8 +4,8 @@
  * A session that its host's own service assembles, runs and judges (`judge: 'host'`) is the
  * host's row: the host writes it and the leader keeps a copy of it. Inside that row a few fields
  * are the leader's own: what a person sets about a session from any screen (its title, archive
- * flag, note, output mode, pins, comments, thread fields), the summaries the leader's hooks write,
- * and a stop a person asked for. The leader writes those on its own row and sends them down in the
+ * flag, note, output mode, pins, comments, thread fields) and the summaries the leader's hooks
+ * write. The leader writes those on its own row and sends them down in the
  * `sessions` copy (replication/kinds/sessions.ts); the host never writes them. Every other field
  * is the host's: the leader never overwrites it, and the host's copy step never replaces it with
  * the leader's value.
@@ -46,12 +46,16 @@ export const SESSION_FIELD_OWNER = {
   status_reason: H, status_changed_by: H, status_history: H, errorCount: H, statusRevision: H,
   statusUpdatedAt: H, pendingPermission: H, promptAnswerLines: H, consumedOffset: H, streamEpoch: H,
   costWatermark: H, costWatermarkPid: H, lineLifecyclePid: H, lineQueuedPid: H, profile: H, lane: H, judge: H,
+  // A stop is carried out where the session runs: the leader hands a person's stop of a host's
+  // session to that host (sessions/session-lifecycle.ts terminateSession), whose stop coordinator
+  // keeps it on its own row and fences its own queue with it (session-stop.ts).
+  stopRequest: H,
   // The leader's: set by a person (any screen) or by the leader's own hooks.
   // The hints a send carries are planned where the send is made, on the leader (hints/hint-send.ts).
   output_mode_injected: L, hintState: L,
   title: L, archived: L, archive_reason: L, human_note: L, output_mode: L, threadAnchors: L, threadMeta: L,
   pinnedMessages: L, passageComments: L, summary: L, summaryGeneratedAt: L, recap: L, recapAt: L, overview: L,
-  overviewAt: L, stopRequest: L,
+  overviewAt: L,
 } as const satisfies Record<keyof SessionRecord, SessionFieldOwner>
 
 export type LeaderSessionField = { [K in keyof typeof SESSION_FIELD_OWNER]: typeof SESSION_FIELD_OWNER[K] extends 'leader' ? K : never }[keyof typeof SESSION_FIELD_OWNER]

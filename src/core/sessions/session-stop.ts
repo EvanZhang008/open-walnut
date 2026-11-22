@@ -346,8 +346,9 @@ export const sessionStops = new SessionStopCoordinator({
     }, (current) => current.stopRequest?.id === request.id && current.stopRequest.state === 'pending')
   },
   probe: async (host) => (await import('./host-lost.js')).probeHost(host),
-  pending: async (host) => (await import('../session-tracker.js')).listPendingSessionStops(host),
-  pendingAll: async () => (await import('../session-tracker.js')).listPendingSessionStops(),
+  // A host that runs its own sessions carries out their stops itself (session-lifecycle.ts terminateSession).
+  pending: async (host) => (await import('./judge-of.js')).leaderJudgedRecords(await (await import('../session-tracker.js')).listPendingSessionStops(host)),
+  pendingAll: async () => (await import('./judge-of.js')).leaderJudgedRecords(await (await import('../session-tracker.js')).listPendingSessionStops()),
   park: async (sid) => {
     const { getQueue, parkMessages } = await import('../session-message-queue.js')
     const { STOP_PARKED_REASON } = await import('../relay-fates.js')

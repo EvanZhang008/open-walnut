@@ -59,6 +59,8 @@ export interface HostRoutesOptions {
   drop?(sids: string[]): Promise<number>
   /** Where a start's large prompt is spilled (0700, files 0600). */
   spillDir: string
+  /** The session controls of host-calls.ts `lifecycle` (sessions/session-lifecycle.ts); tests pass their own. */
+  lifecycle?: { terminateSession(sid: string, opts?: unknown): Promise<unknown> }
   /** The op test of a Bash call (lib/walnut-op-command.ts commandRunsOp); tests pass their own. */
   commandRunsOp?(command: string, op: string, file?: string): boolean
   now?: () => number
@@ -171,6 +173,13 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
       undos.delete(String(args[0] ?? ''))
       if (u) u.fn()
       return { status: 200, body: { ok: true, value: !!u } }
+    }
+    // A control the host carries out whole for its own session (host-calls.ts `lifecycle`).
+    if (body.target === 'lifecycle') {
+      const lifecycle = o.lifecycle ?? await import('../sessions/session-lifecycle.js')
+      const fn = (lifecycle as unknown as Record<string, unknown>)[body.member]
+      if (typeof fn !== 'function') return { status: 200, body: { ok: false, error: 'no_such_member' } }
+      return { status: 200, body: { ok: true, value: jsonValue(await (fn as AnyFn)(body.sid, ...args)) } }
     }
     const runner = await o.runner()
     let target: Record<string, unknown> | null

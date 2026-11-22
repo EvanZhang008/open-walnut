@@ -25,6 +25,7 @@ import { SESSION_MODE_IDS, SESSION_OUTPUT_MODE_IDS } from '../types.js';
 import type { SessionHistoryMessage } from '../session-history.js';
 import { DEFAULT_ENGINE, engineCaps, isAcpEngine } from '../agents/engine-registry.js';
 import { unavailableHistoryReason } from './history-unavailable.js';
+import { judgeOf } from './judge-of.js';
 
 // ── Shared helpers (moved from src/web/routes/sessions.ts) ──────────────────
 
@@ -673,7 +674,8 @@ export async function patchSession(sessionId: string, input: SessionPatchInput):
     throw new SessionControlError('Stop session before archiving', 400);
   }
 
-  if (archived === true && !isAcpEngine(existingRecord.engine)) {
+  // A session its host runs is stopped there already (its row says so): the host judged it.
+  if (archived === true && !isAcpEngine(existingRecord.engine) && judgeOf(sessionId) !== 'host') {
     const { sessionStops } = await import('./session-stop.js');
     await sessionStops.request(sessionId);
   }
@@ -761,6 +763,11 @@ export async function terminateSession(
   const { getSessionByClaudeId, updateSessionRecord, emitSessionStatusChanged } = await import('../session-tracker.js');
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw new SessionControlError('Session not found', 404);
+
+  // A session its host runs and judges: its host stops it, whole (host-calls.ts `lifecycle`).
+  const { hostJudgedSession } = await import('../../providers/host-judged-runner.js');
+  const onHost = hostJudgedSession(sessionId);
+  if (onHost) return await onHost.call('terminateSession', [opts], 'lifecycle') as TerminateResult;
 
   const { sessionRunner } = await import('../../providers/claude-code-session.js');
 
