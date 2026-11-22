@@ -15,6 +15,7 @@ import { PhoneConfirmSheet } from '@/components/common/PhoneConfirmSheet';
 import { SIGN_IN_SIGNED_OUT_FLAG } from '@/components/common/sign-in-copy';
 import { requestFailureText } from '@/utils/request-failure';
 import { log } from '@/utils/log';
+import { SettingsButton } from '../../inputs/SettingsButton';
 
 const TIMEOUT_MS = 15_000;
 
@@ -52,14 +53,9 @@ export function OwnDeviceSignOut({ name, touch }: { name: string; touch: boolean
 
   return (
     <>
-      <button
-        type="button"
-        className="devices-sign-out"
-        data-testid="devices-sign-out"
-        onClick={() => { setError(null); setOpen(true); }}
-      >
-        Sign out this {device}
-      </button>
+      <SettingsButton variant="danger" data-testid="devices-sign-out" onClick={() => { setError(null); setOpen(true); }}>
+        {`Sign out this ${device}`}
+      </SettingsButton>
       <PhoneConfirmSheet
         open={open}
         name="sign-out"

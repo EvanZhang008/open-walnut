@@ -135,7 +135,7 @@ export function HostThisPart({ host, name, limitKey, server = false, secrets = t
               help={grantSummary(g)}
               control={
                 <SettingsButton
-                  variant="text"
+                  variant="danger"
                   holdFocus
                   busy={exec.busy === g.id}
                   busyLabel="Revoking..."
@@ -159,7 +159,6 @@ export function HostThisPart({ host, name, limitKey, server = false, secrets = t
                 help={`You declined it ${when(d.answeredAt ?? d.askedAt)}.`}
                 control={
                   <SettingsButton
-                    variant="text"
                     holdFocus
                     busy={exec.busy === key}
                     busyLabel="Allowing..."

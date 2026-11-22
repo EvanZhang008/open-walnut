@@ -274,7 +274,7 @@ export function SearchSection({ config, onSave }: Props) {
           </>
         )}
         {fetchError && (
-          <SettingsNotice kind="error" role="alert" action={<SettingsButton variant="text" onClick={() => void fetchStatus()}>Retry</SettingsButton>}>
+          <SettingsNotice kind="error" role="alert" action={<SettingsButton onClick={() => void fetchStatus()}>Retry</SettingsButton>}>
             Couldn&apos;t load the index status: {fetchError}
           </SettingsNotice>
         )}

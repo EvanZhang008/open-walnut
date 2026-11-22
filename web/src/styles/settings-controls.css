@@ -91,9 +91,9 @@
 }
 
 /* A text button's label hugs the right edge of its reserved width, so it lines up with the other
-   controls in the column (F26). A quiet key ending a row's controls (Remove, which reserves its
-   "Click again" width) does too, and its padding hangs past the edge, so its word ends where the
-   inputs and filled keys end. */
+   controls in the column (F26). A quiet key ending a row's controls (Cancel, Keep) does too, and
+   its padding hangs past the edge, so its word ends where the inputs and filled keys end. A
+   destructive key (Remove) has a fill, so it ends where the other keys end. */
 .btn-link .btn-reserve > *,
 .settings-control-cluster > .btn-ghost:last-child .btn-reserve > * { text-align: right; }
 .settings-control-cluster > .btn-ghost:last-child { margin-right: -10px; }
@@ -166,7 +166,7 @@ textarea.settings-input {
 .settings-secret-saved {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
   max-width: 100%;
 }
 

@@ -139,10 +139,10 @@ export function BugReportSection() {
             <div className="settings-mono-head">
               <span className="settings-row-label">Report</span>
               <span className="settings-addons-inline">
-                <SettingsButton variant="text" reserve={['Copy as text', 'Copied']} onClick={handleCopy}>
+                <SettingsButton variant="ghost" reserve={['Copy as text', 'Copied']} onClick={handleCopy}>
                   {copied ? 'Copied' : 'Copy as text'}
                 </SettingsButton>
-                <SettingsButton variant="text" onClick={handleDownload}>Download .txt</SettingsButton>
+                <SettingsButton variant="ghost" onClick={handleDownload}>Download .txt</SettingsButton>
               </span>
             </div>
             <pre className="settings-mono-block" style={{ maxHeight: 320 }} tabIndex={0} data-testid="bug-report-text">

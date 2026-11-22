@@ -99,7 +99,7 @@ export function BrowserExtensionGroup({ status }: { status?: ExtensionStatus | n
             data-update={r.update}
             label={<><span className="ext-live-dot" data-live={r.live ? 'true' : 'false'} aria-hidden="true" />{r.label}</>}
             help={r.line}
-            control={<SettingsButton busy={busy === r.device} onClick={() => void remove(r.device)}>Remove</SettingsButton>}
+            control={<SettingsButton variant="danger" busy={busy === r.device} onClick={() => void remove(r.device)}>Remove</SettingsButton>}
           />
         ))}
         {error && <p className="settings-test-result" data-kind="fail" role="alert">{error}</p>}

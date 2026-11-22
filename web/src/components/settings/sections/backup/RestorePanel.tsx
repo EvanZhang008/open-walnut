@@ -425,7 +425,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
           error={deleteError ?? undefined}
           control={
             <span className="settings-inline-pair">
-              <SettingsButton onClick={() => { setConfirmDeletePrevious(false); setDeleteError(null) }} data-testid="backup-restore-delete-previous-cancel">Cancel</SettingsButton>
+              <SettingsButton variant="ghost" onClick={() => { setConfirmDeletePrevious(false); setDeleteError(null) }} data-testid="backup-restore-delete-previous-cancel">Cancel</SettingsButton>
               <SettingsButton variant="danger-confirm" onClick={() => void deletePrevious()} busy={deleting} busyLabel="Deleting..."
                 data-testid="backup-restore-delete-previous-yes">Delete</SettingsButton>
             </span>
@@ -437,7 +437,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
             control={
               <span className="settings-inline-pair">
                 <SettingsButton onClick={cancelUse} data-testid="backup-restore-switch-done-dismiss">Keep it</SettingsButton>
-                <SettingsButton onClick={() => setConfirmDeletePrevious(true)} data-testid="backup-restore-delete-previous">Delete it</SettingsButton>
+                <SettingsButton variant="danger" onClick={() => setConfirmDeletePrevious(true)} data-testid="backup-restore-delete-previous">Delete it</SettingsButton>
               </span>
             } />
           <SettingsDisclosure id="backup-restore-previous-where" label="Where it is" data-testid="backup-restore-previous-where">

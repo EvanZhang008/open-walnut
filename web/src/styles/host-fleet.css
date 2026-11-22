@@ -321,4 +321,3 @@
 .hf-dash .hf-numbers .hf-why, .hf-dash .hf-stat .hf-why { white-space: normal; overflow-wrap: anywhere; }
 
 /* Refresh in the Overview's head is a text button (holds the focus while it reads, WebKit too). */
-.hf-dash .hf-dash-refresh { font-size: var(--font-size-sm); }

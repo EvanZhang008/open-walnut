@@ -83,7 +83,7 @@ function CheckAgainButton({ actions }: { actions: HostActions }) {
   const checking = actions.pending === 'check';
   return (
     <SettingsButton
-      variant="text" disabled={checking} holdFocus reserve={['Check again', 'Checking...']}
+      disabled={checking} holdFocus reserve={['Check again', 'Checking...']}
       onClick={() => { void actions.checkAgain(); }} data-testid="rh-readiness-recheck"
     >
       {checking ? 'Checking...' : 'Check again'}

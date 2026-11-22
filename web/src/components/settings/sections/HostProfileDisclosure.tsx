@@ -120,7 +120,6 @@ export function profileSystemLine(hp: HostProfileState, fallback: string): { tex
     meta,
     action: (
       <SettingsButton
-        variant="text"
         holdFocus
         busy={busy === 'probe'}
         busyLabel="Probing..."
@@ -203,8 +202,8 @@ export function HostProfileDisclosure({ hp, alias, name }: { hp: HostProfileStat
                 control={
                   <span ref={kindBtn}>
                   <SettingsButton
-                    variant="text"
                     aria-haspopup="listbox"
+                    aria-expanded={picker !== null}
                     aria-label={`Kind of ${name}`}
                     disabled={busy === 'kind'}
                     holdFocus

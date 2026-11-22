@@ -75,8 +75,8 @@ export function SignOutAllBrowsers({ names, onDone }: { names: readonly string[]
       data-testid="devices-sign-out-browsers-row"
       control={asking ? (
         <span className="settings-addons-inline" onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); cancel(); } }}>
-          <SettingsButton variant="text" onClick={cancel} data-testid="devices-sign-out-browsers-cancel">Cancel</SettingsButton>
-          <SettingsButton variant="danger" onClick={(e) => { if (!isRepeatClick(e)) confirm(); }} autoFocus data-testid="devices-sign-out-browsers-confirm">Confirm sign out</SettingsButton>
+          <SettingsButton variant="ghost" onClick={cancel} data-testid="devices-sign-out-browsers-cancel">Cancel</SettingsButton>
+          <SettingsButton variant="danger-confirm" onClick={(e) => { if (!isRepeatClick(e)) confirm(); }} autoFocus data-testid="devices-sign-out-browsers-confirm">Confirm sign out</SettingsButton>
         </span>
       ) : (
         <SettingsButton

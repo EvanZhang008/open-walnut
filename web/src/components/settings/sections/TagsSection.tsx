@@ -228,7 +228,7 @@ export function TagsSection() {
                         />
                       </span>
                       <SettingsButton
-                        variant="text"
+                        variant="ghost"
                         reserve={['Edit link', 'Add link']}
                         aria-expanded={editingLink === row.pattern}
                         aria-label={`${linked ? 'Edit' : 'Add'} the link ${row.label} opens`}

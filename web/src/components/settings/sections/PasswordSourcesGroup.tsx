@@ -104,7 +104,7 @@ export function PasswordSourcesGroup({ config, onSave, unlocked, needUnlock }: P
           })}>Sync now</SettingsButton>}
       />
       <SettingsRow label="Remove this source" help="Stops syncing. Items already copied stay in your vault."
-        control={<SettingsButton busy={busy === 'bw-remove'} data-testid="pw-source-remove-bitwarden" onClick={remove}>Remove</SettingsButton>} />
+        control={<SettingsButton variant="danger" busy={busy === 'bw-remove'} data-testid="pw-source-remove-bitwarden" onClick={remove}>Remove</SettingsButton>} />
       {note && <p className="settings-test-result" data-kind="ok" role="status">{note}</p>}
       {error && <p className="settings-test-result" data-kind="fail" role="alert">{error}</p>}
     </SettingsGroup>

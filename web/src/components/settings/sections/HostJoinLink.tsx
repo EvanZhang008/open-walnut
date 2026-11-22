@@ -113,7 +113,7 @@ export function HostJoinError({ error, liveLink, starting, onRetry, onStart, onS
       }
       control={
         <>
-          <SettingsButton variant="text" onClick={onDone} data-testid="host-network-error-done">Close</SettingsButton>
+          <SettingsButton variant="ghost" onClick={onDone} data-testid="host-network-error-done">Close</SettingsButton>
           {fix === 'start' && (
             <SettingsButton holdFocus busy={starting} busyLabel="Starting..." reserve={['Start the host network', 'Starting...']} onClick={onStart} data-testid="host-network-start">
               Start the host network
@@ -163,7 +163,7 @@ export function HostJoinClosed({ invite, cancelling, error, onCancel, onDone }: 
         data-invite-state="cancelled"
         label={<span role="status">Link cancelled.</span>}
         help="No machine can join with it now."
-        control={<SettingsButton variant="text" onClick={onDone} id={doneId} data-testid="host-network-closed-done">Close</SettingsButton>}
+        control={<SettingsButton variant="ghost" onClick={onDone} id={doneId} data-testid="host-network-closed-done">Close</SettingsButton>}
       />
     );
   }
@@ -177,7 +177,7 @@ export function HostJoinClosed({ invite, cancelling, error, onCancel, onDone }: 
       help="A machine that runs it still joins. Add host, Join a machine with a link, shows it again."
       error={error ?? undefined}
       control={
-        <SettingsButton variant="text" holdFocus busy={cancelling} busyLabel="Cancelling..." reserve={['Cancel link', 'Cancelling...']} onClick={onCancel} data-testid="host-network-cancel">
+        <SettingsButton variant="ghost" holdFocus busy={cancelling} busyLabel="Cancelling..." reserve={['Cancel link', 'Cancelling...']} onClick={onCancel} data-testid="host-network-cancel">
           Cancel link
         </SettingsButton>
       }
@@ -217,7 +217,7 @@ export function HostJoinLink({ invite, companion, relay, making, onNewLink, onDo
         help={state === 'joined' ? 'It is in the list below.' : 'A link works once, for 10 minutes.'}
         control={
           <>
-            <SettingsButton variant={state === 'joined' ? 'default' : 'text'} onClick={onDone} data-testid="host-network-done">Close</SettingsButton>
+            <SettingsButton variant={state === 'joined' ? 'default' : 'ghost'} onClick={onDone} data-testid="host-network-done">Close</SettingsButton>
             {state !== 'joined' && <SettingsButton onClick={onNewLink} disabled={making} data-testid="host-network-new-link">New link</SettingsButton>}
           </>
         }

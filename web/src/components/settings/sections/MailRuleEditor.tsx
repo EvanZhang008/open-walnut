@@ -406,7 +406,7 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
         })}
       </ul>
       {attempted && problems.get(-1) && <p className="mail-rule-field-error" role="alert">{problems.get(-1)}</p>}
-      <SettingsButton variant="text" className="mail-rule-add-condition" data-testid="mail-rule-add-condition"
+      <SettingsButton variant="ghost" className="mail-rule-add-condition" data-testid="mail-rule-add-condition"
         onClick={() => { markDirty(); typedRef.current = false; setRows((prev) => [...prev, { key: nextKeyOf(prev), field: 'subject', value: '' }]); }}>
         + Add condition
       </SettingsButton>
@@ -467,7 +467,7 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
         </ul>
       )}
       <div className="mail-rule-editor-actions">
-        <SettingsButton onClick={() => { form.clear(); props.onCancel(); }} data-testid="mail-rule-cancel" disabled={props.saving}>Cancel</SettingsButton>
+        <SettingsButton variant="ghost" onClick={() => { form.clear(); props.onCancel(); }} data-testid="mail-rule-cancel" disabled={props.saving}>Cancel</SettingsButton>
         <SettingsButton variant="primary" onClick={saveGate.send} busy={props.saving} busyLabel="Saving…" data-testid="mail-rule-save"
           disabled={saveOff} {...dictationWaitProps(saveGate)}>
           Save

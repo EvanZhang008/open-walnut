@@ -152,7 +152,7 @@ function RuleEditor({ rule, tasks, onSaved, onCancel }: {
         {chosen ? (
           <span className="trr-chosen" data-testid="triage-rule-task-chosen">
             <a className="task-link" data-task-id={chosen.id} href={taskPath(chosen.id)}>{chosen.title}</a>
-            <SettingsButton variant="text" data-testid="triage-rule-task-change"
+            <SettingsButton variant="ghost" data-testid="triage-rule-task-change"
               onClick={() => { setChangedFrom(taskId); setTaskId(''); setPicking(true); }}>Change</SettingsButton>
           </span>
         ) : null}
@@ -203,7 +203,7 @@ function RuleEditor({ rule, tasks, onSaved, onCancel }: {
         {/* mousedown keeps focus where it is: closing the task list on blur moved these buttons
             under the pointer, and the first click landed nowhere. */}
         <SettingsButton variant="primary" data-testid="triage-rule-save" onMouseDown={(e) => e.preventDefault()} busy={saving} busyLabel="Saving…" onClick={gate.send} {...dictationWaitProps(gate)}>Save rule</SettingsButton>
-        <SettingsButton variant="text" onMouseDown={(e) => e.preventDefault()} onClick={() => { clearAll(); onCancel(); }}>Cancel</SettingsButton>
+        <SettingsButton variant="ghost" onMouseDown={(e) => e.preventDefault()} onClick={() => { clearAll(); onCancel(); }}>Cancel</SettingsButton>
       </div>
     </div>
   );
@@ -263,7 +263,7 @@ export function TriageRoutingRules({ off = false, onGroupIds }: { off?: boolean;
       heading={ROUTING_COPY.heading}
       data-testid="triage-routing-rules"
       headingTrailing={
-        <SettingsButton variant="ghost" data-testid="triage-rule-add" disabled={!rules}
+        <SettingsButton data-testid="triage-rule-add" disabled={!rules}
           onClick={() => openEditor(NEW)}>{ROUTING_COPY.add}</SettingsButton>
       }
       footer={ROUTING_COPY.help}
@@ -302,7 +302,7 @@ export function TriageRoutingRules({ off = false, onGroupIds }: { off?: boolean;
                   {by.matchText === rule.matchText
                     ? <>Never used: a rule above has the same match ({by.matchText}) and goes first. Remove one of them, or </>
                     : <>Never used: the rule above ({by.matchText}) matches all of these first.{' '}</>}
-                  <button type="button" className="trr-inline-btn" data-testid="triage-rule-move-up"
+                  <button type="button" className="btn btn-link trr-inline-btn" data-testid="triage-rule-move-up"
                     onClick={() => { void act(() => updateTriageRule(rule.id, { before: by.id })); }}>
                     Move this rule above it
                   </button>
@@ -322,7 +322,7 @@ export function TriageRoutingRules({ off = false, onGroupIds }: { off?: boolean;
             {removing === rule.id ? (
               <>
                 <span className="trr-confirm-q">Remove this rule?</span>
-                <SettingsButton variant="danger" autoFocus aria-label={`Remove rule: ${rule.matchText}`} data-testid="triage-rule-delete-confirm"
+                <SettingsButton variant="danger-confirm" autoFocus aria-label={`Remove rule: ${rule.matchText}`} data-testid="triage-rule-delete-confirm"
                   onClick={() => { setRemoving(null); void act(() => deleteTriageRule(rule.id)); }}>Remove</SettingsButton>
                 <SettingsButton variant="ghost" onClick={() => setRemoving(null)}>Keep</SettingsButton>
               </>
@@ -330,7 +330,7 @@ export function TriageRoutingRules({ off = false, onGroupIds }: { off?: boolean;
               <span className="trr-rule-keys">
                 <SettingsButton variant="ghost" aria-label={`Edit rule: ${rule.matchText}`} data-testid="triage-rule-edit"
                   onClick={() => openEditor(rule.id)}>Edit</SettingsButton>
-                <SettingsButton variant="ghost" aria-label={`Remove rule: ${rule.matchText}`} data-testid="triage-rule-delete"
+                <SettingsButton variant="danger" aria-label={`Remove rule: ${rule.matchText}`} data-testid="triage-rule-delete"
                   onClick={() => setRemoving(rule.id)}>Remove</SettingsButton>
               </span>
             )}

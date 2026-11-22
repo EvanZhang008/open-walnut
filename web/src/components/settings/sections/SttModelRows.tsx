@@ -211,7 +211,7 @@ export function WhisperModelRows({ detection, config, engine, onSave, onRefresh 
           />
           {(hidden > 0 || showAll) && (
             <SettingsRow indent className="stt-show-all-models" control={
-              <SettingsButton variant="text" data-testid="stt-show-all-models" onClick={() => setShowAll((v) => !v)}>
+              <SettingsButton variant="ghost" data-testid="stt-show-all-models" onClick={() => setShowAll((v) => !v)}>
                 {showAll ? 'Show fewer models' : 'Show all models'}
               </SettingsButton>
             } />

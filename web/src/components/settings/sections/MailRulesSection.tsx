@@ -318,7 +318,7 @@ function MailRulesPanel() {
         <SettingsNotice kind="warn" action={
           <span className="mail-rules-inline-actions">
             <SettingsButton data-testid="mail-rules-changed-reload" onClick={() => { setEditing(null); void load(); }}>Reload</SettingsButton>
-            <SettingsButton variant="text" data-testid="mail-rules-keep-editing" onClick={() => setChangedOnDisk(false)}>Keep editing</SettingsButton>
+            <SettingsButton variant="ghost" data-testid="mail-rules-keep-editing" onClick={() => setChangedOnDisk(false)}>Keep editing</SettingsButton>
           </span>
         }>
           <span data-testid="mail-rules-changed">{COPY.changedOnDisk}</span>
@@ -338,7 +338,7 @@ function MailRulesPanel() {
         onBuiltinOnly={() => { void fileAction('builtin'); }}
       />
       <SettingsGroup heading="Your rules" headingTrailing={
-        <SettingsButton variant="text" data-testid="mail-rules-add" disabled={fileBroken || editing !== null}
+        <SettingsButton data-testid="mail-rules-add" disabled={fileBroken || editing !== null}
           onClick={() => { setServerErrors([]); setEditing(NEW_RULE); }}>
           Add rule
         </SettingsButton>

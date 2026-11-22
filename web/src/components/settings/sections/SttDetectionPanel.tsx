@@ -277,7 +277,7 @@ export function SttDetectionPanel({ config, onSave, onConfigured, draft, onDraft
             {loading ? `Scanning ${scanPlace(detection)}...` : error ? `Couldn't scan ${scanPlace(detection)}: ${error}` : detection ? sttScanSummary(detection) : ''}
           </span>
         }
-        control={!loading && error ? <SettingsButton variant="text" onClick={() => void runDetection(true)}>Retry</SettingsButton> : undefined}
+        control={!loading && error ? <SettingsButton onClick={() => void runDetection(true)}>Retry</SettingsButton> : undefined}
       />
 
       {showSetupRow && plan && <SttSetupRow plan={plan} onSetup={startOneClickSetup} error={applyError} />}

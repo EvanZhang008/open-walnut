@@ -126,7 +126,7 @@ export function PasswordsSection({ config, onSave }: Props) {
         <SettingsRow
           label="Vault"
           help={state}
-          control={<SettingsButton onClick={() => navigate('/passwords')}>{status?.setUp ? 'Open Passwords' : 'Set up'}</SettingsButton>}
+          control={<SettingsButton variant={status && !status.setUp ? 'primary' : 'default'} onClick={() => navigate('/passwords')}>{status?.setUp ? 'Open Passwords' : 'Set up'}</SettingsButton>}
         />
         {/* With no vault these rows depend on one being set up: disabled, with that reason line,
             and the help says what the length will do, not what it does now (2026-11-22 audit).
@@ -153,8 +153,8 @@ export function PasswordsSection({ config, onSave }: Props) {
             control={
               <span style={{ display: 'inline-flex', gap: 8 }}>
                 <input id="pw-forever-pw" type="password" data-no-draft="secret" autoComplete="current-password" className="settings-input settings-input--short" disabled={!unlocked} value={foreverPw} onChange={(e) => setForeverPw(e.target.value)} />
-                <SettingsButton busy={busy === 'forever'} disabled={!unlocked || !foreverPw} onClick={confirmForever} data-testid="pw-forever-confirm">{foreverTo === 'always' ? 'Turn on' : 'Remove'}</SettingsButton>
-                <SettingsButton onClick={() => { setForeverTo(null); setForeverPw('') }}>Cancel</SettingsButton>
+                <SettingsButton variant={foreverTo === 'always' ? 'default' : 'danger'} busy={busy === 'forever'} disabled={!unlocked || !foreverPw} onClick={confirmForever} data-testid="pw-forever-confirm">{foreverTo === 'always' ? 'Turn on' : 'Remove'}</SettingsButton>
+                <SettingsButton variant="ghost" onClick={() => { setForeverTo(null); setForeverPw('') }}>Cancel</SettingsButton>
               </span>
             }
           />
@@ -166,7 +166,7 @@ export function PasswordsSection({ config, onSave }: Props) {
               ? 'On: the keychain holds your master password, so Walnut unlocks at start and for the daily sync.'
               : 'Off. To turn it on, run: security add-generic-password -s walnut-vault-master -a "$USER" -w'}
             control={keychain.present
-              ? <SettingsButton busy={busy === 'keychain'} disabled={!unlocked} onClick={() => void run('keychain', async () => { await vaultApi.removeKeychain(); return 'Removed from the keychain.' })} data-testid="pw-keychain-remove">Remove from keychain</SettingsButton>
+              ? <SettingsButton variant="danger" busy={busy === 'keychain'} disabled={!unlocked} onClick={() => void run('keychain', async () => { await vaultApi.removeKeychain(); return 'Removed from the keychain.' })} data-testid="pw-keychain-remove">Remove from keychain</SettingsButton>
               : <span className="settings-test-result" data-kind="neutral">Off</span>}
           />
         )}

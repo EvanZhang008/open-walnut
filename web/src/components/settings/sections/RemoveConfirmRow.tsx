@@ -42,9 +42,9 @@ export function RemoveConfirmRow({ question, note, action = 'Remove', busy, onCa
       onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onCancel(); } }}
       control={
         <>
-          <SettingsButton id={cancelId} variant="text" onClick={onCancel} aria-describedby={questionId} data-testid={`${testId}-cancel`}>Cancel</SettingsButton>
+          <SettingsButton id={cancelId} variant="ghost" onClick={onCancel} aria-describedby={questionId} data-testid={`${testId}-cancel`}>Cancel</SettingsButton>
           <SettingsButton
-            variant="danger"
+            variant="danger-confirm"
             holdFocus
             busy={busy}
             busyLabel={action === 'Delete' ? 'Deleting...' : 'Removing...'}

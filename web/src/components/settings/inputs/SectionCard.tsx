@@ -17,6 +17,11 @@ interface SectionCardProps {
   onSave?: () => Promise<void>
   /** Show save button. Default: true when onSave provided. */
   showSave?: boolean
+  /**
+   * Save is the view's one main action (blue) only while there is something to save; a form that
+   * knows it has nothing unsaved passes false and Save is the plain key (default: true).
+   */
+  saveIsMain?: boolean
   /** Attention style for unconfigured sections. */
   attention?: boolean
   /** Persistent state banner text (e.g. "Connected"). */
@@ -32,6 +37,7 @@ export function SectionCard({
   children,
   onSave,
   showSave,
+  saveIsMain = true,
   attention,
   banner,
   actions,
@@ -82,8 +88,7 @@ export function SectionCard({
             <div className="form-actions settings-form-actions">
               <SettingsButton
                 type="submit"
-                variant="primary"
-                className="btn-primary"
+                variant={saveIsMain ? 'primary' : 'default'}
                 busy={saving}
                 busyLabel="Saving..."
                 disabled={!onSave}

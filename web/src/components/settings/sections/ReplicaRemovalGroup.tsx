@@ -123,7 +123,7 @@ export function ReplicaRemovalGroup({ only, labels }: { only?: ReplicaTargetKind
               error={errors[row.id]?.about === row.about ? errors[row.id].text : undefined}
               control={row.state === 'refused' ? (
                 <SettingsButton
-                  variant="text"
+                  variant="danger"
                   holdFocus
                   disabled={asking === row.id || busy === row.id}
                   aria-label={`Remove them from the copy on ${name}`}

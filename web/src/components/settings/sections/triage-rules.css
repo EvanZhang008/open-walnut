@@ -88,7 +88,6 @@ textarea.settings-input.trr-note-input { width: 100%; height: auto; min-height: 
    rule's text does not reflow narrower. */
 .trr-rule-removing { flex-wrap: wrap; }
 .trr-rule-removing .trr-rule-actions { flex: 1 0 100%; justify-content: flex-end; gap: 8px; }
-.trr-inline-btn { border: none; background: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline; }
 @media (max-width: 600px) {
   .trr-pick { min-height: 44px; }
   .trr-inline-btn { display: flex; align-items: center; min-height: 44px; }

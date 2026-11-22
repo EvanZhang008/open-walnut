@@ -59,7 +59,7 @@
    glance on both themes' backgrounds. */
 .mail-rule-off,
 .mail-rule-hint[data-warn='true'] { font-size: var(--font-size-sm); color: color-mix(in srgb, var(--warning) 60%, var(--fg)); overflow-wrap: anywhere; }
-.mail-rule-actions { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.mail-rule-actions { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .mail-rule-toggle-wrap { display: inline-flex; }
 
 .mail-rules-move { display: inline-flex; gap: 2px; flex-shrink: 0; }

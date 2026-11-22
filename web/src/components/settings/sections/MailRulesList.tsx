@@ -106,18 +106,18 @@ export function MailRulesRulesList(props: RulesListProps) {
               </div>
               <MovedNote show={props.movedKey === rule.id} />
               <span className="mail-rule-actions" title={props.disabled ? props.disabledTitle : undefined}>
-                {/* A rule off for its pattern turns on only once the pattern is fixed (Edit), so its
-                    switch says the row's own reason; the title is on a wrapper because a disabled
-                    control shows no tooltip in every engine. */}
-                <span className="mail-rule-toggle-wrap" title={off || undefined} data-testid="mail-rule-toggle-wrap">
-                  <ToggleSwitch checked={on && !off} disabled={props.disabled || editing || Boolean(off)} aria-label={`Use rule ${rule.summary}`}
-                    data-testid="mail-rule-toggle" onChange={(value) => props.onToggle(index, value)} />
-                </span>
-                <SettingsButton variant="text" disabled={props.disabled || editing} data-testid="mail-rule-edit" onClick={() => props.onEdit(index)}>
+                <SettingsButton variant="ghost" disabled={props.disabled || editing} data-testid="mail-rule-edit" onClick={() => props.onEdit(index)}>
                   Edit
                 </SettingsButton>
                 <InlineConfirmButton label="Delete" confirmLabel="Delete rule?" aria-label={`Delete rule ${rule.summary}`}
                   disabled={props.disabled || editing} data-testid="mail-rule-delete" onConfirm={() => props.onDelete(index)} />
+                {/* Last in the row, as on Inbox Triage's rules. A rule off for its pattern turns on only
+                    once the pattern is fixed (Edit), so its switch says the row's own reason; the title
+                    is on a wrapper because a disabled control shows no tooltip in every engine. */}
+                <span className="mail-rule-toggle-wrap" title={off || undefined} data-testid="mail-rule-toggle-wrap">
+                  <ToggleSwitch checked={on && !off} disabled={props.disabled || editing || Boolean(off)} aria-label={`Use rule ${rule.summary}`}
+                    data-testid="mail-rule-toggle" onChange={(value) => props.onToggle(index, value)} />
+                </span>
               </span>
             </div>
             {editing && props.renderEditor(index)}

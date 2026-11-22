@@ -122,7 +122,7 @@ export function JevSettings({ config, onSave, onReload }: Props) {
     <span className="settings-control-cluster">
       <SecretInput id="jev-key" value={keyDraft} onChange={setKeyDraft} placeholder="API key" />
       {replacing && (
-        <SettingsButton variant="text" data-testid="jev-key-replace-cancel" onClick={() => { setReplacing(false); setKeyDraft(''); }}>
+        <SettingsButton variant="ghost" data-testid="jev-key-replace-cancel" onClick={() => { setReplacing(false); setKeyDraft(''); }}>
           Cancel
         </SettingsButton>
       )}
@@ -145,7 +145,7 @@ export function JevSettings({ config, onSave, onReload }: Props) {
     keyControl = (
       <span className="settings-control-cluster">
         <span className="settings-secret-saved-text" data-testid="jev-key-status">Saved in secrets, never synced.</span>
-        <SettingsButton variant="text" data-testid="jev-key-replace" disabled={keyBusy} onClick={() => setReplacing(true)}>
+        <SettingsButton data-testid="jev-key-replace" disabled={keyBusy} onClick={() => setReplacing(true)}>
           Replace
         </SettingsButton>
         <InlineConfirmButton data-testid="jev-key-remove" disabled={keyBusy} onConfirm={() => keyWrite('DELETE')} />

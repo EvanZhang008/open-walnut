@@ -195,25 +195,6 @@
 /* "This phone": the one `.badge`, accent because it is yours (DeviceList.tsx). */
 .devices-own-tag { flex: none; }
 
-.devices-sign-out {
-  min-height: 44px;
-  padding: 0 4px;
-  border: 0;
-  background: none;
-  color: var(--error);
-  font: inherit;
-  font-size: var(--font-size-lg);
-  font-weight: 500;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.devices-sign-out:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: var(--radius-full);
-}
-
 /* The pane's actions in the phone bar's right slot, once its header scrolled away
    (SettingsPaneStickyBar `phoneHost`): one row with the bar, never a strip under it. */
 .settings-phone-bar-actions,

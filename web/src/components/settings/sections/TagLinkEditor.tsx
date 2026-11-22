@@ -150,7 +150,7 @@ export function TagLinkEditor({ pattern, probe, example, links, onClose }: TagLi
           {secondary && (
             <SettingsButton disabled={busy} onClick={() => void write(secondary.next)} data-testid="tag-link-clear">{secondary.label}</SettingsButton>
           )}
-          <SettingsButton variant="text" disabled={busy} onClick={() => { draft.clear(); onClose(); }} data-testid="tag-link-cancel">Cancel</SettingsButton>
+          <SettingsButton variant="ghost" disabled={busy} onClick={() => { draft.clear(); onClose(); }} data-testid="tag-link-cancel">Cancel</SettingsButton>
         </span>
       }
     />

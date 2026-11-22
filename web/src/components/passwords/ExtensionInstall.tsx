@@ -52,7 +52,10 @@ const isMac = () => /Mac/.test(navigator.platform || navigator.userAgent);
 
 interface SetupResult { dir: string; copied: boolean; opened: boolean }
 
-/** Chrome on the machine Walnut runs on: Walnut sets the folder up, the person makes the two clicks. */
+/**
+ * Chrome on the machine Walnut runs on: Walnut sets the folder up, the person makes the two clicks.
+ * The developer way, so its key is the quiet one; the store's key above is the main step.
+ */
 function ChromeSetupSteps() {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<SetupResult | null>(null);
@@ -70,7 +73,7 @@ function ChromeSetupSteps() {
   return (
     <ol className="pw-ext-steps" data-testid="ext-steps-chrome-setup">
       <li>
-        <button type="button" className="btn btn-sm" data-testid="ext-setup" disabled={busy} onClick={() => void setup()}>
+        <button type="button" className="btn btn-sm btn-ghost" data-testid="ext-setup" disabled={busy} onClick={() => void setup()}>
           {busy ? 'Setting up…' : done ? 'Set up again' : 'Set up in Chrome'}
         </button>{' '}
         Walnut puts the extension in a folder on this computer{isMac() ? ', copies the folder\'s path' : ''} and opens Chrome&apos;s Extensions page. The rest happens in Chrome.
@@ -96,11 +99,11 @@ function ChromeSetupSteps() {
   );
 }
 
-/** Chrome's one-click way: its store adds the extension and keeps it updated. */
+/** Chrome's one-click way, the recommended one and so the view's main key: its store adds the extension and keeps it updated. */
 function ChromeStoreStep() {
   return (
     <div className="pw-ext-store" data-testid="ext-store-step">
-      <a className="btn btn-sm" data-testid="ext-store" href={CHROME_STORE_URL} target="_blank" rel="noopener noreferrer">
+      <a className="btn btn-sm btn-primary" data-testid="ext-store" href={CHROME_STORE_URL} target="_blank" rel="noopener noreferrer">
         Add from Chrome Web Store
       </a>{' '}
       Click <b>Add to Chrome</b>, pin Walnut from the puzzle-piece icon in the toolbar, click the Walnut icon, then <b>Connect</b>. Updates come through the store.

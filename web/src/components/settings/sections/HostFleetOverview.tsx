@@ -82,7 +82,6 @@ export function HostFleetOverview({ fleet, onPickRow }: { fleet: HostFleet; onPi
         <span className="hf-dash-read">
           {newest !== null && !refreshing && <span className="hf-dash-updated" data-testid="host-fleet-read" title={new Date(newest).toLocaleString()}>Read {readAgo(newest, now)}</span>}
           <SettingsButton
-            variant="text"
             holdFocus
             busy={refreshing}
             busyLabel="Refreshing..."

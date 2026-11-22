@@ -176,7 +176,7 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
           data-testid="backup-gdrive-disconnect-warning"
           control={
             <span className="settings-inline-pair" data-testid="backup-gdrive-disconnect-confirm">
-              <SettingsButton onClick={() => setConfirmingDisconnect(false)} data-testid="backup-gdrive-disconnect-cancel">Keep</SettingsButton>
+              <SettingsButton variant="ghost" onClick={() => setConfirmingDisconnect(false)} data-testid="backup-gdrive-disconnect-cancel">Keep</SettingsButton>
               <SettingsButton variant="danger-confirm" onClick={disconnect} data-testid="backup-gdrive-disconnect-yes">Disconnect</SettingsButton>
             </span>
           }
@@ -198,7 +198,7 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
             {/* The connection is this row's, never a mark on the Service segment. */}
             <span data-testid="backup-gdrive-status"><SettingsTag tone="success">Connected</SettingsTag></span>
             {!inUse && <SettingsButton variant="primary" onClick={onUse} data-testid="backup-gdrive-use">Use Google Drive</SettingsButton>}
-            <SettingsButton onClick={() => setConfirmingDisconnect(true)} data-testid="backup-gdrive-disconnect">Disconnect</SettingsButton>
+            <SettingsButton variant="danger" onClick={() => setConfirmingDisconnect(true)} data-testid="backup-gdrive-disconnect">Disconnect</SettingsButton>
           </span>
         }
       >

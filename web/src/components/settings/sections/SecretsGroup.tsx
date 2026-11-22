@@ -270,7 +270,7 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
         onChange={(on) => edit({ ...draft, sessions: on })} />
       <SettingsRow className="secret-editor-actions" error={error?.field === 'form' ? error.text : undefined} control={
         <>
-          <SettingsButton variant="text" onClick={() => close()} disabled={busy} data-testid="secret-cancel">Cancel</SettingsButton>
+          <SettingsButton variant="ghost" onClick={() => close()} disabled={busy} data-testid="secret-cancel">Cancel</SettingsButton>
           <SettingsButton variant="primary" holdFocus busy={busy} busyLabel="Saving..." onClick={saveGate.send} {...dictationWaitProps(saveGate)} data-testid="secret-save">Save</SettingsButton>
         </>
       } />
@@ -294,9 +294,9 @@ export function SecretsGroup({ hostLabels }: { hostLabels: Record<string, string
                 <>
                   {/* Open already: its form is right below. */}
                   {!s.deletedAt && editing !== s.name && (
-                    <SettingsButton variant="text" disabled={busy} onClick={() => open(s)} aria-label={`Edit ${s.name}`} data-secret-edit="">Edit</SettingsButton>
+                    <SettingsButton variant="ghost" disabled={busy} onClick={() => open(s)} aria-label={`Edit ${s.name}`} data-secret-edit="">Edit</SettingsButton>
                   )}
-                  <SettingsButton variant="text" disabled={busy || !!deleting} onClick={() => setDeleting({ name: s.name, busy: false })} aria-label={`Delete ${s.name}`} data-secret-delete="">Delete</SettingsButton>
+                  <SettingsButton variant="danger" disabled={busy || !!deleting} onClick={() => setDeleting({ name: s.name, busy: false })} aria-label={`Delete ${s.name}`} data-secret-delete="">Delete</SettingsButton>
                 </>
               }
             />

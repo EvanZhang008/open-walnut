@@ -58,7 +58,7 @@ export function SecretInput({
     return (
       <span className="settings-secret-saved" data-testid={testId ? `${testId}-saved` : undefined}>
         <span className="settings-secret-saved-text">Saved in secrets, never synced.</span>
-        <SettingsButton variant="text" onClick={() => setReplacing(true)} disabled={disabled}>
+        <SettingsButton onClick={() => setReplacing(true)} disabled={disabled}>
           Replace
         </SettingsButton>
         {onRemove && <InlineConfirmButton onConfirm={onRemove} disabled={disabled} />}

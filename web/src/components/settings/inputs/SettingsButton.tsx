@@ -10,11 +10,12 @@ import { keepPress } from './press-keeps-target'
 import '@/styles/settings-controls.css'
 
 /**
- * Each variant is a variant of the family: ghost is the quiet tool key (a list row's Edit and
- * Remove), text the link key, danger the quiet red key, and danger-confirm the solid red key that
- * confirms a destructive step.
+ * Each variant is a variant of the family: ghost is the quiet tool key (a list row's Edit, Cancel,
+ * Keep), text the link key (only for a link inside a sentence), danger the red label on the plain
+ * grey key that every destructive action uses (Remove, Delete, Disconnect, Sign out), and
+ * danger-confirm the solid red key that confirms a destructive step.
  */
-const VARIANT_CLASS = { default: '', primary: ' btn-primary', ghost: ' btn-ghost', text: ' btn-link', danger: ' btn-ghost btn-danger', 'danger-confirm': ' btn-primary btn-danger' } as const
+const VARIANT_CLASS = { default: '', primary: ' btn-primary', ghost: ' btn-ghost', text: ' btn-link', danger: ' btn-danger', 'danger-confirm': ' btn-primary btn-danger' } as const
 
 export interface SettingsButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: keyof typeof VARIANT_CLASS

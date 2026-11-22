@@ -4,7 +4,8 @@
  * the Mac app).
  * First click arms it (`Confirm remove`) for 3s; only the second click calls
  * onConfirm, never the second click of a double-click. Width is reserved for the
- * longer label, so nothing shifts.
+ * longer label, so nothing shifts. It reads as every destructive key does (the red
+ * label on the grey key), and armed as the solid red confirm.
  */
 import { useEffect, useRef, useState, type MouseEvent } from 'react'
 import { SettingsButton } from './SettingsButton'
@@ -25,10 +26,6 @@ export interface InlineConfirmButtonProps {
   label?: string
   confirmLabel?: string
   disabled?: boolean
-  /** `text` for a non-destructive two-step action (Show QR); default `danger`. */
-  variant?: 'danger' | 'text'
-  /** Drawn as a plain text button until armed, red only while it asks to confirm (a list's row action). */
-  quiet?: boolean
   'data-testid'?: string
   'aria-label'?: string
 }
@@ -38,8 +35,6 @@ export function InlineConfirmButton({
   label = 'Remove',
   confirmLabel = 'Confirm remove',
   disabled,
-  variant = 'danger',
-  quiet,
   'data-testid': testId,
   'aria-label': ariaLabel,
 }: InlineConfirmButtonProps) {
@@ -64,7 +59,7 @@ export function InlineConfirmButton({
   }
   return (
     <SettingsButton
-      variant={quiet ? (armed ? 'danger' : 'text') : variant}
+      variant={armed ? 'danger-confirm' : 'danger'}
       reserve={[label, confirmLabel]}
       onClick={onClick}
       onKeyDown={(e) => {

@@ -6,53 +6,14 @@
  * offers `Create rules file` (a commented example, `POST /rules/init`); one that exists opens in
  * Walnut's own file viewer, so a person editing it by hand never has to find a dot folder.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import type { MailRulesResponse } from '@/api/mail-groups';
 import { log } from '@/utils/log';
+import { CopyButton } from '@/components/common/CopyButton';
 import { SettingsNotice } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
 import { COPY, fileErrorSentence, isMissingFileError } from './mail-rules-model';
-
-async function writeClipboard(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  const area = document.createElement('textarea');
-  area.value = text;
-  area.setAttribute('readonly', '');
-  area.style.position = 'fixed';
-  area.style.opacity = '0';
-  document.body.appendChild(area);
-  area.select();
-  try { document.execCommand('copy'); } finally { area.remove(); }
-}
-
-function CopyPathButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
-  return (
-    <SettingsButton
-      variant="text"
-      reserve={['Copy path', 'Copied']}
-      data-testid="mail-rules-copy-path"
-      onClick={() => {
-        writeClipboard(text).then(
-          () => {
-            setCopied(true);
-            clearTimeout(timer.current);
-            timer.current = setTimeout(() => setCopied(false), 1500);
-          },
-          (error: unknown) => log.warn('settings', 'copy of the rules path failed', { error: String(error) }),
-        );
-      }}
-    >
-      {copied ? 'Copied' : 'Copy path'}
-    </SettingsButton>
-  );
-}
 
 /**
  * Loaded on the first `Open in Walnut`: the viewer brings the whole file explorer and the
@@ -95,9 +56,9 @@ export function MailRulesFileRow({ rules, busy, onCreate, onReload, onRestore, o
       <div className="mail-rules-file-line">
         <span className="mail-rules-file-label">Rules file</span>
         <span className="mail-rules-file-actions">
-          <CopyPathButton text={rules.path} />
+          <CopyButton kind="ghost" label="Copy path" text={rules.path} data-testid="mail-rules-copy-path" />
           {rules.exists && (
-            <SettingsButton variant="text" data-testid="mail-rules-open" busy={opening} busyLabel="Opening…" onClick={open}>
+            <SettingsButton variant="ghost" data-testid="mail-rules-open" busy={opening} busyLabel="Opening…" onClick={open}>
               Open in Walnut
             </SettingsButton>
           )}
@@ -126,7 +87,6 @@ export function MailRulesFileRow({ rules, busy, onCreate, onReload, onRestore, o
                   Restore from backup
                 </SettingsButton>
                 <InlineConfirmButton
-                  variant="danger"
                   label="Start with built-in rules only"
                   confirmLabel="Remove my rules?"
                   data-testid="mail-rules-builtin-only"

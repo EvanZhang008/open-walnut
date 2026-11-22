@@ -94,7 +94,7 @@ export function BrowserSection() {
             key={s.site}
             label={s.site}
             help={`Allowed ${new Date(s.addedAt).toLocaleDateString()}`}
-            control={<SettingsButton busy={busy === s.site} onClick={() => void save(s.site, { removeSite: s.site })}>Remove</SettingsButton>}
+            control={<SettingsButton variant="danger" busy={busy === s.site} onClick={() => void save(s.site, { removeSite: s.site })}>Remove</SettingsButton>}
           />
         ))}
         <SettingsRow

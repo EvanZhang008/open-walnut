@@ -118,7 +118,7 @@ export function WifiSignInRow({ origin }: { origin: string }) {
         error={error ?? undefined}
         // Making another sits where the first was made, on the row's right: one place for the action.
         control={(
-          <SettingsButton variant={code ? 'text' : 'default'} disabled={busy} onClick={() => void mint()} data-testid="devices-wifi-get-code">
+          <SettingsButton variant={code ? 'ghost' : 'default'} disabled={busy} onClick={() => void mint()} data-testid="devices-wifi-get-code">
             {code ? 'New code' : 'Get sign-in code'}
           </SettingsButton>
         )}

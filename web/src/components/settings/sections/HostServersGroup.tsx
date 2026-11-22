@@ -98,7 +98,6 @@ export function HostServerPart({ hostKey }: { hostKey: string }) {
           <span className="settings-addons-inline">
             {on && line.retry && (
               <SettingsButton
-                variant="text"
                 holdFocus
                 busy={pressing('retry')}
                 disabled={hostBusy && !pressing('retry')}
@@ -228,7 +227,6 @@ export function HostServerPart({ hostKey }: { hostKey: string }) {
               <span className="settings-addons-inline">
                 {running && exposeSettings.enabled && tunnelLine.retry && (
                   <SettingsButton
-                    variant="text"
                     holdFocus
                     busy={pressing('tunnel')}
                     disabled={hostBusy && !pressing('tunnel')}

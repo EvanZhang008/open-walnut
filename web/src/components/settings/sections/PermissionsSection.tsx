@@ -118,7 +118,7 @@ export function PermissionsSection() {
             <SettingsNotice
               kind="error"
               role="alert"
-              action={<SettingsButton variant="text" onClick={() => load(true)}>Retry</SettingsButton>}
+              action={<SettingsButton onClick={() => load(true)}>Retry</SettingsButton>}
             >
               {`Couldn't load permissions: ${loadError}`}
             </SettingsNotice>

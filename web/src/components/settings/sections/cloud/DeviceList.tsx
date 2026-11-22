@@ -272,11 +272,11 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
       error={rowErrorFor(d.name)}
       control={unpairArmed ? (
         <>
-          <SettingsButton variant="text" data-testid="devices-unpair-self-cancel" onClick={() => setUnpairArmed(false)}>
+          <SettingsButton variant="ghost" data-testid="devices-unpair-self-cancel" onClick={() => setUnpairArmed(false)}>
             Cancel
           </SettingsButton>
           <SettingsButton
-            variant="danger"
+            variant="danger-confirm"
             data-testid="devices-unpair-self-confirm"
             onClick={(e) => { if (isRepeatClick(e)) return; setUnpairArmed(false); void revoke(d.name, ['cloud'], 'unpair'); }}
           >
@@ -315,11 +315,11 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
     const tags = wayTags(d, { scope, replica });
     const phoneRemove = armed ? (
       <>
-        <SettingsButton variant="text" data-testid="devices-remove-cancel" onKeyDown={disarmOnEscape} onClick={disarmRemove}>
+        <SettingsButton variant="ghost" data-testid="devices-remove-cancel" onKeyDown={disarmOnEscape} onClick={disarmRemove}>
           Cancel
         </SettingsButton>
         <SettingsButton
-          variant="danger"
+          variant="danger-confirm"
           data-testid="devices-remove-confirm"
           onKeyDown={disarmOnEscape}
           onClick={(e) => { if (isRepeatClick(e)) return; setRemoveArmed(null); void revoke(d.name, d.kinds); }}
@@ -361,7 +361,7 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
           <>
             {role === 'phone' && !armed && repairKind(d) !== null && (
               <SettingsButton
-                variant="text"
+                variant="ghost"
                 disabled={busy}
                 aria-label={`Show a new pairing QR code for ${shownName}`}
                 data-testid="devices-show-qr"

@@ -47,6 +47,9 @@ export function SttSection({ config, onSave, onReload }: Props) {
   const [draft, setDraft] = useState<VoiceDraft>(() => draftOf(config));
   const voiceConversation = useExperimental('voice_conversation');
   const dirty = useRef(false);
+  // Mirrors `dirty` for the render: Save is the page's main action only while a draft is unsaved,
+  // so it never competes with "Set up" for the one blue key.
+  const [unsaved, setUnsaved] = useState(false);
   const save = useSerialSave(config, onSave);
   // A config refresh (our own save, another window) re-seeds the drafts only
   // while nothing is being edited here.
@@ -55,6 +58,7 @@ export function SttSection({ config, onSave, onReload }: Props) {
   }, [config]);
   const onDraft = (patch: Partial<VoiceDraft>) => {
     dirty.current = true;
+    setUnsaved(true);
     setDraft((d) => ({ ...d, ...patch }));
   };
 
@@ -65,6 +69,7 @@ export function SttSection({ config, onSave, onReload }: Props) {
 
   const handleSave = async () => {
     dirty.current = false;
+    setUnsaved(false);
     await save((c) => ({
       stt: {
         ...c.stt,
@@ -101,7 +106,7 @@ export function SttSection({ config, onSave, onReload }: Props) {
   }, []);
 
   return (
-    <SectionCard id="stt" title="Voice" onSave={handleSave}>
+    <SectionCard id="stt" title="Voice" onSave={handleSave} saveIsMain={unsaved}>
       {/* Every take is kept on the server, so a lost reply is never lost words. */}
       <SettingsGroup heading="Recent recordings" id="voice-history" data-testid="stt-recordings">
         <VoiceHistoryList />
