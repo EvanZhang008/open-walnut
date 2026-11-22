@@ -51,6 +51,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     noteLive: remote.noteLiveState,
     noteRename: (from, to) => {
       remote.renameRemoteJudgedSession(from, to)
+      void import('./leader-tasks.js').then((m) => m.noteHostSessionRenamed(from, to))
     },
     noteHostJudged,
     log: (level, msg, data) => log.session[level](msg, data),

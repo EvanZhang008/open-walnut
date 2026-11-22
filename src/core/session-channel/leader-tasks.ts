@@ -65,6 +65,21 @@ export async function noteHostSessionStarted(sid: string, taskId: string | undef
 }
 
 /** A message the leader sent to a host-judged session: the task's input edge and its last update. */
+/**
+ * A host session's CLI answered under another id (resume, fork) and the channel renamed its row
+ * here: the task's slot and link follow the new id, as they do for a session this server runs
+ * (claude-code-session.ts persists the renamed record, then links it).
+ */
+export async function noteHostSessionRenamed(from: string, to: string): Promise<void> {
+  try {
+    const { getSessionByClaudeId } = await import('../session-tracker.js')
+    const row = await getSessionByClaudeId(to)
+    if (row?.taskId) await noteHostSessionStarted(to, row.taskId, row.mode)
+  } catch (err) {
+    log.session.warn('host-run session: moving its task link to the new id failed', { from, to, error: err instanceof Error ? err.message : String(err) })
+  }
+}
+
 export async function noteHostSessionSend(sid: string, source: string, endsWait: boolean): Promise<void> {
   try {
     const { getSessionByClaudeId } = await import('../session-tracker.js')

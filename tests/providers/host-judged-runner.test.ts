@@ -272,6 +272,23 @@ describe('a host-judged session', () => {
   })
 })
 
+describe('a host session renamed by its CLI', () => {
+  it('moves its task\'s slot and link to the new id', async () => {
+    harness()
+    const { getTask } = await import('../../src/core/task-manager.js')
+    const { noteHostSessionRenamed } = await import('../../src/core/session-channel/leader-tasks.js')
+    const from = '50000000-0000-4000-8000-0000000000f1'
+    const to = '50000000-0000-4000-8000-0000000000f2'
+    const row = { claudeSessionId: from, taskId: 'gate-task-b', project: 'p', host: 'devbox', judge: 'host', process_status: 'running', mode: 'default', startedAt: 'x', lastActiveAt: 'x', messageCount: 0 }
+    await applyHostChannelBatch({ hostId: 'devbox', renames: [], cursor: { logId: 'L', seq: 4 }, rows: [{ sid: from, born: true, patch: row }] })
+    await applyHostChannelBatch({ hostId: 'devbox', rows: [], cursor: { logId: 'L', seq: 5 }, renames: [{ from, to, seq: 5 }] })
+    await noteHostSessionRenamed(from, to)
+    const t = await getTask('gate-task-b')
+    expect(t.exec_session_id).toBe(to)
+    expect(t.session_id).toBe(to)
+  })
+})
+
 describe('the leader parses no line of a host-judged session', () => {
   it('its sends, results and lookups parse none and attach no session manager here; a line handed over as text is counted', async () => {
     _resetLineParseCountForTesting()

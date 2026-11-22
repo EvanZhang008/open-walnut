@@ -46,11 +46,12 @@ describe('experimental choices', () => {
     expect(validExperimentalFlags(flags)).toBe(true);
   });
 
-  it('an experiment that copies or downloads all of the data keeps its own switch: "every experiment on" never turns it on', () => {
+  it('an experiment that copies or downloads all of the data, or moves where sessions run, keeps its own switch: "every experiment on" never turns it on', () => {
     // The standby copy and the weekly restore drill: on a machine with every experiment on they
     // would start copying the data folder and downloading the whole backup without being asked.
+    // Each computer running its own sessions changes which machine runs and watches them.
     const own = EXPERIMENTAL_FEATURES.filter((f) => keepsOwnSwitch(f.id)).map((f) => f.id);
-    expect(own.sort()).toEqual(['restore_drill', 'switchable_leader']);
+    expect(own.sort()).toEqual(['host_runs_sessions', 'restore_drill', 'switchable_leader']);
     for (const id of own) {
       expect(experimentalEnabled({ [EVERY_EXPERIMENT]: true }, id)).toBe(false);
       expect(effectiveExperimentalFlags({ [EVERY_EXPERIMENT]: true })[id]).toBe(false);
