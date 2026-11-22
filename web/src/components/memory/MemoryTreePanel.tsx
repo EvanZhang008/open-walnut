@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import { usePersistentState, isString, isStringArray } from '@/hooks/usePersistentState';
 import type { MemoryBrowseTree, BrowseItem, BrowseDailyItem } from '@/api/memory';
+import { SearchField } from '@/components/common/SearchField';
 
 interface MemoryTreePanelProps {
   tree: MemoryBrowseTree | null;
@@ -135,12 +136,15 @@ export function MemoryTreePanel({ tree, selectedPath, onSelect }: MemoryTreePane
         <span className="memory-tree-header-title">Memory</span>
       </div>
       <div className="memory-tree-filter">
-        <input data-no-draft="search"
+        <SearchField data-no-draft="search"
           type="text"
           className="memory-filter-input"
-          placeholder="Filter files..."
+          placeholder="Filter files"
+          aria-label="Filter memory files"
           value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          setText={setFilter}
+          onKeyDown={(e) => { if (e.key === 'Escape' && filter) { e.stopPropagation(); setFilter(''); } }}
+          onClear={() => setFilter('')}
         />
       </div>
       <div className="memory-tree-sections">

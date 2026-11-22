@@ -227,7 +227,6 @@
   }
   .app-shell-navigation .ask-walnut-drawer-search { min-height: 44px; }
   .app-shell-navigation .ask-walnut-drawer-search-input {
-    min-height: 44px;
     font-size: 16px;
   }
   .app-shell-navigation .ask-walnut-drawer-item {
@@ -465,11 +464,6 @@
     width: 22px;
     height: 22px;
     flex-basis: 22px;
-  }
-  /* A select is a finger target too (Default engine, When it is out of usage): 28 px on a
-     computer, the iOS row height here. */
-  .app-shell-navigation .settings-layout[data-phone-settings] .settings-select {
-    height: 44px;
   }
 }
 

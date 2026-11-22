@@ -102,10 +102,6 @@
   flex: 1;
   min-width: 0;
   padding: 2px 4px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xs);
-  background: var(--bg);
-  color: var(--fg);
   font-size: var(--font-size-sm);
 }
 .detail-setting-select:disabled { opacity: 0.6; }

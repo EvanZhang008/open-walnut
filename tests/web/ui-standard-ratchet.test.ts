@@ -23,6 +23,11 @@
  *     Threads reply box: "it's oval ... can there be one unified input box?").
  *   - cutTitle: a rule that cuts a title, name, subject or summary class with an ellipsis or a line
  *     clamp (standard.md, "Text that does not fit"): titles wrap (`.wn-title`), only metadata cuts.
+ *   - restyledField: a rule outside web/src/styles/input-box.css that gives a field (an input,
+ *     textarea or select, a class the TSX writes on one, or a class beside `wn-field`) a fill, edge,
+ *     corner, shadow, outline, height or placeholder colour of its own (2026-11-21 UI audit: the
+ *     Home, Display menu, Mail, Apps, Memory and Settings searches and the plain fields beside them
+ *     each looked different). A rule that takes a field's look away (`border: 0` inside a box) is fine.
  * The counts that exist today are in ui-standard-baseline.json and may only go down. A new file or
  * a higher count fails: use the family the standard names. A lower count fails too until the
  * baseline is lowered with `UI_STANDARD_RECORD=1` on this file, so the ratchet stays tight.
@@ -30,7 +35,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { countAll, restylesBtn, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, inputParts, restylesInput, cutsTitle, type Counts } from './ui-standard-scan';
+import { countAll, restylesBtn, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, inputParts, restylesInput, cutsTitle, fieldClasses, restylesField, type Counts } from './ui-standard-scan';
 import { tokenBreaks } from './ui-token-scan';
 import type { Decl } from './css-scan';
 
@@ -78,7 +83,7 @@ describe('UI standard: one look per kind of control', () => {
   const recorded = JSON.parse(fs.readFileSync(BASELINE, 'utf8')) as Partial<Counts>;
   const was = Object.fromEntries(Object.keys(now).map((k) => [k, recorded[k as keyof Counts] ?? {}])) as Counts;
 
-  for (const kind of ['restyledBtn', 'ownControl', 'rawAccent', 'bareButton', 'restyledInput', 'cutTitle', ...TOKEN_KINDS] as const) {
+  for (const kind of ['restyledBtn', 'ownControl', 'rawAccent', 'bareButton', 'restyledInput', 'restyledField', 'cutTitle', ...TOKEN_KINDS] as const) {
     it(`${kind}: no new second style`, () => {
       const { grew } = compare(kind, now[kind], was[kind]);
       expect(grew, `A second style of a shared control. Use the family in ${STANDARD} instead:\n${grew.join('\n')}`).toEqual([]);
@@ -153,6 +158,29 @@ describe('UI standard: one look per kind of control', () => {
     expect(restylesInput('.session-notes-heading-actions .mic-btn', [{ prop: 'height' }], parts)).toBe(false);
     expect(restylesInput('.answer-box .mic-btn', [{ prop: 'height' }], parts)).toBe(true);
     expect(restylesInput('.answer-box', [{ prop: 'flex-wrap' }], parts)).toBe(false);
+  });
+  it('finds every field and the second looks given to one', () => {
+    const fields = fieldClasses();
+    for (const f of ['todo-search-input', 'fb-search-input', 'settings-input', 'apps-search', 'memory-filter-input']) expect(fields.has(f), f).toBe(true);
+    const d = (prop: string, value: string) => [{ prop, value }];
+    expect(restylesField('.memory-filter-input', d('border', '1px solid var(--border)'), fields)).toBe(true);
+    expect(restylesField('.settings-input:focus', d('box-shadow', 'var(--settings-focus-ring)'), fields)).toBe(true);
+    expect(restylesField('.my-search input', d('background', 'var(--bg)'), fields)).toBe(true);
+    expect(restylesField('.my-search input', d('border', '0'), fields)).toBe(false);
+    expect(restylesField('.todo-search-input::placeholder', d('opacity', '0.6'), fields)).toBe(true);
+    expect(restylesField('.apps-search', d('--input-fill', 'var(--bg)'), fields)).toBe(true);
+    expect(restylesField('.apps-hero', d('--input-fill', 'var(--bg)'), fields)).toBe(false);
+    expect(restylesField('.apps-search', d('width', '260px'), fields)).toBe(false);
+    expect(restylesField('.row input[type="checkbox"]', d('border', '1px solid red'), fields)).toBe(false);
+    expect(restylesField('.wrap :is(input, textarea)', d('border-radius', 'var(--radius-md)'), fields)).toBe(true);
+    // A text area's starting height is its lines, not a look; a one-line field's height is.
+    expect(restylesField('.wrap textarea', d('min-height', '96px'), fields)).toBe(false);
+    expect(restylesField('.wrap textarea', d('border', '1px solid var(--border)'), fields)).toBe(true);
+    expect(restylesField('.wrap input', d('min-height', '44px'), fields)).toBe(true);
+    expect(restylesField('.toggle:has(input:checked)::before', d('background', 'var(--accent)'), fields)).toBe(false);
+    expect(restylesField('.chat-input-textarea::selection', d('background', 'var(--accent)'), fields)).toBe(false);
+    // A field's keys are its own (wn-field-key), not bare buttons.
+    expect(buttonTags('<button type="button" className="wn-field-key x">c</button>').map(isBareButton)).toEqual([false]);
   });
 
   it('the standard it enforces exists and names this test', () => {

@@ -46,7 +46,7 @@ test.describe('Owner: dense board', () => {
       .filter((k) => ['sort', 'group', 'view', 'quick-views', 'session-panels'].includes(k ?? '')))
     expect(rows).toEqual(['sort', 'group', 'view', 'quick-views', 'session-panels'])
     // The menu is the search box and its body, nothing more: no footer.
-    expect(await filterMenu(page).evaluate((el) => Array.from(el.children).map((c) => c.className))).toEqual(['fb-search fb-menu-search', 'fb-menu-body'])
+    expect(await filterMenu(page).evaluate((el) => Array.from(el.children).map((c) => c.className))).toEqual(['fb-menu-search', 'fb-menu-body'])
     // Home's panel has the layout Group row, so page one says which of its picks are
     // experimental, below every row and above Collapse all (d7715e5b1).
     expect(await filterMenu(page).locator('.fb-menu-body').evaluate((el) => Array.from(el.children).map((c) => c.className)))

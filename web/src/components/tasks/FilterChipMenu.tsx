@@ -7,7 +7,6 @@
  */
 import { useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { ICON_CLOSE, ICON_SEARCH } from '../common/Icons';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer, type OverlayCloseReason } from '@/hooks/useOverlayLayer';
 import { dimLabel, dimValues, pickValue } from './filter-bar-model';
@@ -15,7 +14,7 @@ import type { FilterBarController, FilterDim } from './filter-bar-types';
 import { COUNT_DIMS, FilterValueList, SEARCHABLE_DIMS, SEARCH_AFTER, useFilterWriter } from './FilterValueList';
 import { CustomTime, TimeBasis } from './FilterTimeControls';
 import type { RemoveHow } from './FilterOverflowMenu';
-import { MicInput } from '@/components/common/BoxMic';
+import { SearchField } from '@/components/common/SearchField';
 
 function searchWord(dim: FilterDim): string {
   if (dim === 'project') return 'projects';
@@ -61,9 +60,8 @@ export function FilterChipMenu({ controller: c, dim, anchorRef, onClose, onRemov
       onPointerDown={(e) => e.stopPropagation()}
     >
       {searchable && (
-        <div className="fb-search fb-list-search">
-          <span className="fb-search-icon" aria-hidden="true">{ICON_SEARCH}</span>
-          <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="search"
+        <div className="fb-list-search">
+          <SearchField fieldClassName="fb-search" data-no-draft="search"
             ref={inputRef}
             type="text"
             className="fb-search-input"
@@ -72,12 +70,9 @@ export function FilterChipMenu({ controller: c, dim, anchorRef, onClose, onRemov
             value={query}
             autoFocus
             setText={setQuery}
+            onClear={() => setQuery('')}
+            clearClassName="fb-search-clear"
           />
-          {query && (
-            <button type="button" className="fb-search-clear" aria-label="Clear search" onClick={() => { setQuery(''); inputRef.current?.focus(); }}>
-              {ICON_CLOSE}
-            </button>
-          )}
         </div>
       )}
       {dim === 'time' && <div className="fb-page-sub"><TimeBasis c={c} w={w} origin="chip-menu" /></div>}

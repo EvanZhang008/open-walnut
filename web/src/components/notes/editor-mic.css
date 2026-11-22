@@ -18,17 +18,12 @@
   display: inline-flex;
   align-items: center;
   pointer-events: auto;
-  border-radius: 999px;
+  /* The field key's rounded square (styles/input-box.css), at full strength: a faded pill read as
+     disabled (2026-11-21 UI audit). Its backdrop and hairline keep it clear of the words under it. */
+  border-radius: var(--input-key-radius);
   background: var(--bg);
   box-shadow: 0 0 0 1px var(--border);
-  opacity: 0.75;
-  transition: opacity 0.15s ease;
 }
-.editor-mic-dock .editor-mic:hover,
-.editor-mic-dock .editor-mic:focus-within,
-.editor-mic-dock .editor-mic:has(.mic-recording) {
-  opacity: 1;
-}
-.editor-mic-dock .editor-mic .mic-btn { min-width: 28px; height: 28px; }
+.editor-mic-dock .editor-mic .mic-btn { min-width: var(--input-key); height: var(--input-key); border-radius: var(--input-key-radius); }
 /* Room under the last line, so text that ends at the right edge never sits under the mic. */
 :has(> .editor-mic-dock) .ProseMirror { padding-bottom: 36px; }

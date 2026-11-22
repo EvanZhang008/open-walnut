@@ -56,7 +56,7 @@ export function HardRulesEditor({ id, words, invalid, busy, onChange }: {
   const unused = words.filter((w) => bad.has(w))
   return (
     <div className="tp-rules-field">
-      <div className="tp-rules" data-busy={busy ? 'true' : undefined} onClick={(e) => {
+      <div className="tp-rules wn-field is-sm" data-busy={busy ? 'true' : undefined} onClick={(e) => {
         if (e.target === e.currentTarget) (e.currentTarget.querySelector('input') as HTMLInputElement | null)?.focus()
       }}>
         {words.length > 0 && (

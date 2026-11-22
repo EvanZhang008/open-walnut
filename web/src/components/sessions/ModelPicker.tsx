@@ -1078,7 +1078,7 @@ export function ModelPicker({
               {acpFilterable && !acpLoading && (
                 <input
                   data-no-draft="search"
-                  className="model-picker-filter"
+                  className="model-picker-filter is-sm"
                   type="text"
                   placeholder={`Filter ${acpAllFamilies.length} models…`}
                   value={acpQuery}

@@ -321,20 +321,10 @@
 /* ── Filter ── */
 
 .engine-settings-filter-bar {
+  display: flex;
   padding: 0 14px 6px;
   flex: 0 0 auto;
 }
+.engine-settings-filter-bar > .wn-field { flex: 1 1 auto; }
 
-.engine-settings-filter {
-  box-sizing: border-box;
-  width: 100%;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-  color: var(--fg);
-  font-size: var(--font-size-sm);
-}
-
-.engine-settings-filter:focus { outline: none; border-color: var(--accent); }
 

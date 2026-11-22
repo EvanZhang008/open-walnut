@@ -27,7 +27,7 @@ import { APPS_PATH } from '@/utils/open-link'
 import { pageShortcutBlocked } from '@/utils/page-shortcut'
 import '@/styles/settings-nav.css'
 import '@/styles/settings-nav-state.css'
-import { MicInput } from '@/components/common/BoxMic'
+import { SearchField } from '@/components/common/SearchField'
 
 export { NAV_OWNER, resolvePane } from './settings-routing'
 
@@ -382,8 +382,7 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
         <SettingsIcon glyph="magnifier" size={16} />
       </button>
       <div className="settings-filter-wrap">
-        <SettingsIcon glyph="magnifier" size={13} className="settings-filter-glyph" />
-        <MicInput fieldClassName="mic-field-compact"
+        <SearchField small
           ref={inputRef}
           type="search"
           data-no-draft="search"
@@ -401,12 +400,10 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
           value={query}
           setText={setQuery}
           onKeyDown={onInputKey}
+          onClear={clearQuery}
+          clearLabel="Clear"
+          clearClassName="settings-filter-clear"
         />
-        {query && (
-          <button type="button" className="settings-filter-clear" aria-label="Clear" onClick={clearQuery}>
-            <SettingsIcon glyph="circle-x" size={14} />
-          </button>
-        )}
       </div>
       <div
         id="settings-nav-list"

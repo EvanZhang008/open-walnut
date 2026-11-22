@@ -42,7 +42,6 @@
 
 .app-shell-navigation .todo-panel { min-height: 0; background: transparent; }
 .app-shell-navigation .todo-panel-toolbar { gap: 8px; padding: 7px 8px 6px 12px; flex-wrap: nowrap; }
-.app-shell-navigation .todo-panel-toolbar .todo-search-input { text-overflow: ellipsis; }
 .todo-panel-hide, .todo-panel-board {
   width: 24px; height: 28px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
   padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted); cursor: pointer;
@@ -57,10 +56,6 @@
 .app-shell-navigation .todo-panel-toolbar .vd-dot { background: var(--fg-secondary); }
 .tier-solo-heading { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 2px 8px 0 12px; flex-shrink: 0; font-size: var(--font-size-md); font-weight: 600; color: var(--fg-secondary); }
 .tier-solo-heading > :last-child { margin-left: auto; }
-.app-shell-navigation .todo-panel-toolbar .todo-search-bar {
-  height: 28px; padding: 0 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg);
-}
-.app-shell-navigation .todo-panel-toolbar .todo-search-bar:focus-within { border-color: var(--accent); }
 
 /* One grid (the user's call, 2026-09-23): heading text and the status dots share the
    column 12px in from the panel edge (the toolbar's search field starts there too), task
@@ -576,12 +571,9 @@
 }
 .todo-minibar-icon { display: inline-flex; margin-right: 4px; }
 .todo-minibar-icon svg { width: 12px; height: 12px; }
-/* On a narrow toolbar the result count gives its room to the typed text: the filter
-   row already shows it (5.7). New task and Display fold to icons while the field
-   would be too narrow to read (styles/toolbar-fit.css). */
-@container (max-width: 340px) {
-  .app-shell-navigation .todo-panel-toolbar .todo-search-count { display: none; }
-}
+/* The result count is shown once, in the section row under the toolbar (5.7), never in the
+   field. New task and Display fold to icons while the field would be too narrow to read
+   (styles/toolbar-fit.css). */
 /* A headless tier (5.10: the board uses one tier, so its heading is not drawn) has no
    tier heading to stick under: its project labels and scroll targets sit right under
    the Pinned heading, or a label would be pushed down over its own first card. */
@@ -591,7 +583,6 @@
    tighter gaps between the toolbar's buttons give most of it back. */
 @container todo-toolbar (max-width: 419px) {
   .app-shell-navigation .todo-panel-toolbar { gap: 4px; }
-  .app-shell-navigation .todo-panel-toolbar .todo-search-bar { padding: 0 6px; }
 }
 
 /* A search hit's ask, folded to its question (SearchAskLine.tsx): "Needs you", the question in full

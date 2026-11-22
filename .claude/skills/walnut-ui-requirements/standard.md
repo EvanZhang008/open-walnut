@@ -99,7 +99,7 @@ be one unified input box?"). Its look lives in one file, `web/src/styles/input-b
 
 | Part | Look |
 |---|---|
-| Box | class `wn-input`; corner `--input-radius` (8 px, the buttons' corner); `--bg-secondary` fill, a transparent 1 px edge that turns `--border-strong` on focus, no shadow, no ring |
+| Box | class `wn-input`; corner `--input-radius` (8 px, the buttons' corner); `--input-fill` (the fields' fill, below), a transparent 1 px edge that turns `--input-focus-edge` (`--border-strong`) on focus, no shadow, no ring |
 | One line (`is-line`) | 34 px tall with its edges, a button's height; 46 px on a phone (a 44 px key and the two edges); it grows with the text |
 | Mic, attach | 28 px rounded squares (corner 6 px), transparent, `--fg-muted`; `--bg-hover` on hover |
 | Send (`wn-input-send`) | the same 28 px rounded square, solid blue (`--chat-hue-accent`, blue even inside a chat), white arrow (`ICON_SEND`); grey while there is nothing to send |
@@ -123,8 +123,56 @@ be one unified input box?"). Its look lives in one file, `web/src/styles/input-b
 - The quick bar (`web/src/components/quickbar/`) is a launcher panel, not a box in a page: its
   panel keeps the dialog corner and its 34 px row; only its mic takes the key's shape (a rounded
   square, `--radius-sm`).
-- A plain field (a settings value, a label in a dialog, a search) takes the global
-  `input, textarea, select` rules in `globals.css`; never its own border, radius or fill.
+
+### Fields
+
+Every other field (a search, a name, a number, a select) looks like the message box (2026-11-21
+UI audit: the Home, Display menu, Mail, Apps, Memory and Settings searches, "Your name", Rhythm's
+goal and minutes and Build a plugin's "Describe it" were nine looks: an underlined bar, a flat
+bar, a tall white box, a darker bar beside an outlined one, round clear keys, a faded
+placeholder). Its look is in the same file, `web/src/styles/input-box.css` ("Fields"):
+
+| Part | Look |
+|---|---|
+| Field | the bare `input, textarea, select`: corner `--input-radius` (8 px), fill `--input-fill` (4% of the text colour, 10% in dark), a transparent 1 px edge that turns `--input-focus-edge` on focus, no glow; keyboard focus adds a 2 px `--accent` ring (below) |
+| Height | as tall as the buttons beside it: 34 px (`.btn`), or 28 px with `is-sm` beside `.btn-sm` (a toolbar, Settings, a plugin's small row, a lane or name rename); every one-line field 46 px on a phone (`.app-shell-navigation` or a portalled `.is-phone-layer`). Give a small field `is-sm`, never a height, and no vertical padding of its own. A text area's `min-height` is how many lines it starts with, not a look |
+| Placeholder | `--input-placeholder` (`--fg-notice`, 4.6:1 on the fill over white), never faded with opacity |
+| Error | one red edge (`aria-invalid="true"`), on every field |
+| A field with parts | `wn-field` on the box: an icon first (`wn-field-icon`), then the words, then a busy ring, a count, a unit (`wn-field-unit`) and its keys |
+| Keys (clear, mic) | the message box's rounded squares (`wn-field-key`, 28 px, 22 px in `is-sm`), never a circle |
+| Pick-one and suggestions | a `select` and an `input[list]` draw one chevron |
+
+- A search is `SearchField` (`web/src/components/common/SearchField.tsx`): the magnifier, the
+  words, a busy ring, the clear key and the mic. Never build a search bar of your own.
+- Show a hit count once: where a row below already shows it (Home's section row), the field does
+  not.
+- A shortcut goes in the field's tooltip, not its placeholder ("Search tasks", not
+  "Search tasks... Cmd K"): the words need the room.
+- A unit belongs inside its field ("min" in Rhythm's minutes), not beside it.
+- The fill is the text colour over whatever is under the field (`color-mix` with `transparent`), so
+  one field shows on a white card, the grey Apps page and a dark card alike; never give a field a
+  fill of its own for one surface. On a coloured banner, where a tint cannot be read (the Apps
+  page's "Describe an app"), put `wn-on-color` on the field: it sits on the page's colour.
+- An inline rename (a session, lane, note or tier name) is the same field, kept to its text's line
+  (its own small padding), never an accent box of its own.
+- What stays different, on purpose (each one is the only entry left in the `restyledField`
+  baseline for its file): a title typed in place, drawn as the heading it edits (Passwords' item
+  title, a calendar event's title); a calendar time read as words in its "when" sentence that is a
+  field only while edited; the media bar's speed pick-one, drawn as the toolbar keys beside it;
+  the mail folder filter, which stands in for a folder row (32 px, its words in the folder column);
+  the sign-in page's pairing code (52 px for its 22 px digits); the session folder picker's
+  path mode (an accent edge: the words are a path, not a search); the idle-compact share out of
+  range (a `--warning` edge: a warning, not an error); text typed onto a drawing (the
+  paper's own white and ink); the quick bar's placeholders in its own window palette; and the
+  side panel's docked one-line composer.
+- No other file gives a field, its placeholder or its keys a fill, edge, corner, shadow, outline
+  or height: `tests/web/ui-standard-ratchet.test.ts` (`restyledField`) fails on a new one. A
+  rule that takes a field's look away (`border: 0` for the words inside a `wn-field`) is fine.
+- Keyboard focus is always visible (3:1 or more), never only the faint edge: a 2 px `--accent`
+  ring (`:focus-visible`) on the field, or on the `wn-field` or `wn-input` box holding the words,
+  never on the words inside one; checkboxes, radios and ranges keep the engine's control and get
+  the same ring. No rule draws a glow around every focused field
+  (`tests/web/focus-ring-owner-guard.test.ts`).
 
 ## Choice controls
 

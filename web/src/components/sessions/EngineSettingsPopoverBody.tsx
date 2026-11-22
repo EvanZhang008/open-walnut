@@ -19,6 +19,7 @@ import {
 } from '@/utils/engine-settings-copy';
 import { EngineSettingRow } from '@/components/settings/sections/EngineSettingRows';
 import { log } from '@/utils/log';
+import { SearchField } from '@/components/common/SearchField';
 
 const SLOW_LOAD_MS = 2000;
 const SKELETON_ROWS = 6;
@@ -74,7 +75,7 @@ export interface FilterBarProps {
 export function EngineSettingsFilterBar({ inputRef, value, onChange, disabled }: FilterBarProps) {
   return (
     <div className="engine-settings-filter-bar">
-      <input data-no-draft="search"
+      <SearchField small data-no-draft="search"
         ref={inputRef}
         type="search"
         className="engine-settings-filter"
@@ -84,7 +85,9 @@ export function EngineSettingsFilterBar({ inputRef, value, onChange, disabled }:
         spellCheck={false}
         autoComplete="off"
         disabled={disabled}
-        onChange={(e) => onChange(e.target.value)}
+        setText={onChange}
+        onClear={() => onChange('')}
+        clearLabel="Clear"
       />
     </div>
   );

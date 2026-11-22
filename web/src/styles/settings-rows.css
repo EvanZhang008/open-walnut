@@ -266,7 +266,9 @@
   align-self: stretch;
 }
 
-.settings-row.settings-row-stacked > .settings-row-actions > :is(span, div):has(> :is(input, textarea)) {
+/* A control that holds a field (bare, or in its mic's MicField, as Build a plugin's) takes the
+   row's width, so the field is never a short box in a wide card. */
+.settings-row.settings-row-stacked > .settings-row-actions > :is(span, div):has(> :is(input, textarea, .mic-field)) {
   flex: 1 1 auto;
   min-width: 0;
 }

@@ -293,8 +293,10 @@ async function stubSearch(page: Page): Promise<void> {
 
 async function openSearch(page: Page): Promise<void> {
   const input = page.locator('.todo-search-input')
-  const mic = input.locator('..').locator('.mic-btn')
-  const box = (await input.boundingBox())!
+  // The field (SearchField, `wn-field`) holds its words and, after them, its mic.
+  const field = input.locator('..')
+  const mic = field.locator('.mic-btn')
+  const box = (await field.boundingBox())!
   const button = (await mic.boundingBox())!
   expect(button.width).toBeGreaterThanOrEqual(44)
   expect(button.height).toBeGreaterThanOrEqual(44)

@@ -19,6 +19,9 @@ import { expect, test } from './shortcut-test-fixture';
 import { type APIRequestContext, type Page } from '@playwright/test';
 import { isolateUiPrefs } from './todo-panel-helpers';
 
+/** The search's hit count, shown once: on the All tab of the section row (never in the field). */
+const searchCount = (page: Page) => page.locator('#home-task-navigation .todo-section-tab-all .todo-section-tab-count');
+
 const PROJECT = 'Marina Dockside Operations';
 const SERVER_DELAY_MS = 700;
 
@@ -105,7 +108,8 @@ test('literal hits lead and survive the server pass; loose hits fold into Relate
   await expect(page.locator('#home-task-navigation [data-pw-first-paint="1"]')).toHaveCount(2);
   const related = page.locator('#home-task-navigation .todo-search-related-toggle');
   await expect(related).toHaveText(/Related \(6\)/);
-  await expect(page.locator('#home-task-navigation .todo-search-count')).toHaveText('4');
+  await expect(searchCount(page)).toHaveText('4');
+  await expect(page.locator('#home-task-navigation .todo-search-bar .wn-field-count')).toHaveCount(0);
   expect(await searchFocused(page)).toBe(true);
 
   // Flat: no tier regions, no Projects heading; the pin is a pill, the project a label.
@@ -135,7 +139,7 @@ test('literal hits lead and survive the server pass; loose hits fold into Relate
   // Related opens in place, after the strong rows, and folds again.
   await related.click();
   await expect.poll(() => rowIds(page)).toEqual([...head, strong[0], strong[1], ...weak]);
-  await expect(page.locator('#home-task-navigation .todo-search-count')).toHaveText('10');
+  await expect(searchCount(page)).toHaveText('10');
   await related.click();
   await expect.poll(() => rowIds(page)).toEqual([...head, strong[0], strong[1]]);
 
@@ -260,10 +264,10 @@ test('a completed task is found by its own title: the three latest inline, the r
   await expect.poll(() => rowIds(page), { timeout: 10_000 }).toEqual([...inline, serverOpen]);
   await expect(completed).toHaveText(/Completed \(2\)/);
   await expect(page.locator('#home-task-navigation .todo-search-related-toggle')).toHaveCount(0);
-  await expect(page.locator('#home-task-navigation .todo-search-count')).toHaveText('5');
+  await expect(searchCount(page)).toHaveText('5');
 
   await completed.click();
   await expect.poll(() => rowIds(page)).toEqual([...inline, serverOpen, olderDone[0], serverDone]);
-  await expect(page.locator('#home-task-navigation .todo-search-count')).toHaveText('7');
+  await expect(searchCount(page)).toHaveText('7');
   expect(await rowIds(page)).not.toContain(looseDone);
 });

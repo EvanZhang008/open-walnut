@@ -606,8 +606,7 @@
     justify-content: center;
   }
 
-  html body .task-kebab-menu .task-kebab-project-current,
-  .app-shell-navigation .session-panel select {
+  html body .task-kebab-menu .task-kebab-project-current {
     min-height: 44px;
   }
 

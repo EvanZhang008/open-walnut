@@ -148,13 +148,6 @@ export function MoreIcon({ size = 14 }: IconProps) {
   );
 }
 
-export function SearchIcon({ size = 14 }: IconProps) {
-  return frame(size, <>
-    <circle cx="11" cy="11" r="6.5" />
-    <path d="M16 16l4.5 4.5" />
-  </>);
-}
-
 /** A task: a box with a tick, which is what a Walnut todo row looks like. */
 export function TaskIcon({ size = 15 }: IconProps) {
   return frame(size, <>

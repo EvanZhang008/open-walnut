@@ -58,7 +58,7 @@ export function GeneratorPanel({ onUse }: { onUse?: (password: string) => void }
           <label className="pw-gen-row">
             <span>Length</span>
             <input type="range" min={MIN_LENGTH} max={64} value={Math.min(random.length, 64)} onChange={(e) => setR({ length: Number(e.target.value) })} aria-label="Length" />
-            <input data-no-draft="number" type="number" className="pw-gen-num" min={MIN_LENGTH} max={MAX_LENGTH} value={random.length} onChange={(e) => setR({ length: Number(e.target.value) })} aria-label="Length value" />
+            <input data-no-draft="number" type="number" className="pw-gen-num is-sm" min={MIN_LENGTH} max={MAX_LENGTH} value={random.length} onChange={(e) => setR({ length: Number(e.target.value) })} aria-label="Length value" />
           </label>
           <div className="pw-gen-checks">
             {([['upper', 'A-Z'], ['lower', 'a-z'], ['digits', '0-9'], ['symbols', '!@#']] as const).map(([k, label]) => (

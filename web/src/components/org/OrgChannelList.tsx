@@ -46,7 +46,7 @@ import { stateTab, type KeptTask } from './org-task-tabs';
 import { TaskStateIcon } from '@/components/common/TaskStateIcon';
 import { taskIconState } from '@/utils/task-icon-state';
 import { KeptWhy } from './OrgKeptWhy';
-import { MicInput } from '@/components/common/BoxMic';
+import { SearchField } from '@/components/common/SearchField';
 import { OrgLeaders } from './OrgLeaders';
 import { OrgDirectorSection } from './OrgDirectorSection';
 import type { OrgDirectorsView } from './useOrgLeaders';
@@ -298,7 +298,7 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
           <OrgSettingsMenu />
         </span>
       </header>
-      <MicInput data-no-draft="search"
+      <SearchField data-no-draft="search"
         className="org-search"
         fieldClassName="org-search-field"
         type="search"
@@ -307,6 +307,7 @@ export function OrgChannelList({ main, rows, routers = [], moved = [], rowMenu, 
         aria-label="Search VPs and routers"
         data-testid="org-search"
         setText={onQuery}
+        onClear={() => onQuery('')}
       />
       <OrgReorgReminder vps={vps} onOpenChart={onOpenChart} />
       <div

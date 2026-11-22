@@ -497,7 +497,7 @@ function TimeSection({ query, patchQuery }: {
           <div className="vd-field">
             <span className="vd-label">Last</span>
             <input data-no-draft="number"
-              className="vd-sel"
+              className="vd-sel is-sm"
               type="number"
               min={1}
               step={1}

@@ -76,7 +76,7 @@ export function OrgNewDirector({ projects, defaultProject, inList, editing, onEd
     >
       <MicInput
         ref={input}
-        className="org-new-director-input"
+        className="org-new-director-input is-sm"
         fieldClassName="mic-field-compact mic-field-grow"
         // A one-line name, made on Enter (as a rename is): nothing long to keep.
         data-no-draft="rename"
@@ -98,7 +98,7 @@ export function OrgNewDirector({ projects, defaultProject, inList, editing, onEd
       />
       {projects.length > 1 && (
         <select
-          className="org-new-director-project"
+          className="org-new-director-project is-sm"
           data-testid="org-new-director-project"
           aria-label="Its project"
           value={project}

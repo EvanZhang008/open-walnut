@@ -25,26 +25,12 @@
   padding-left: 38px;
 }
 
-/* ── Hard rules: chips in a field ── */
+/* ── Hard rules: chips in a field (a field box, input-box.css "Fields"), wrapping its chips ── */
 .tp-rules {
-  box-sizing: border-box;
-  display: flex;
   flex-wrap: wrap;
-  align-items: center;
   gap: 4px;
   width: 100%;
-  min-height: 32px;
   padding: 3px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--settings-input-bg);
-  cursor: text;
-  transition: border-color 120ms ease, box-shadow 120ms ease;
-}
-
-.tp-rules:focus-within {
-  border-color: var(--accent);
-  box-shadow: var(--settings-focus-ring);
 }
 
 .tp-rule-list {
@@ -119,22 +105,10 @@
   box-shadow: var(--settings-focus-ring);
 }
 
-.tp-rule-input {
+.tp-rules > .tp-rule-input {
   flex: 1 1 160px;
   min-width: 120px;
-  height: 24px;
   padding: 0 6px;
-  border: 0;
-  outline: none;
-  background: transparent;
-  color: var(--fg);
-  font: inherit;
-  font-size: var(--font-size-md);
-}
-
-.tp-rule-input::placeholder,
-.tp-try-input::placeholder {
-  color: var(--fg-muted);
 }
 
 .tp-rules[data-busy='true'] .tp-rule {

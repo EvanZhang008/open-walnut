@@ -211,13 +211,16 @@ export const RHYTHM_CSS = `
 .rhythm-start p { margin: 0; }
 .rhythm-start-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .rhythm-start-label { width: 44px; flex: none; color: var(--fg-secondary); font-size: 12.5px; font-weight: 500; }
-.rhythm-start-number { display: inline-flex; align-items: center; gap: 4px; }
-.rhythm-start-number input {
-  width: 46px; height: 26px; padding: 0 6px;
-  border: 1px solid var(--border); border-radius: 6px;
-  background: var(--bg); color: var(--fg); font: inherit; font-size: 13px; text-align: right;
+/* Minutes: the host's one field (\`wn-field is-sm\`, its styles/input-box.css), "min" inside it. */
+.rhythm-start-number { flex: none; }
+.rhythm-start-number input { width: 3ch; text-align: right; }
+/* A Walnut before the one field (no \`wn-field\`, \`is-sm\` or \`--input-line-sm\`; manifest walnut >=0.4.0):
+   the minutes and "min" stay on one line and the small fields keep 28 px. Weightless, so the
+   host's field rules win wherever it has them; the height follows its token where it has one. */
+:where(.rhythm-start-number) { display: inline-flex; align-items: center; gap: 4px; }
+:where(.rhythm-goal-input, .rhythm-spotify-add input, .rhythm-start-number input) {
+  box-sizing: border-box; height: var(--input-line-sm, 28px); padding-top: 0; padding-bottom: 0;
 }
-.rhythm-start-number input[aria-invalid="true"] { border-color: var(--settings-error-text, #c4221a); }
 .rhythm-start-music { display: grid; gap: 4px; }
 .rhythm-start .rhythm-picker { max-height: 196px; }
 .rhythm-start-compact .rhythm-picker { max-height: 150px; }
@@ -255,12 +258,8 @@ export const RHYTHM_CSS = `
 .rhythm-goal-editing { justify-items: stretch; }
 .rhythm-goal-buttons { display: flex; gap: 8px; }
 .rhythm-goal-field { flex-wrap: nowrap; }
-.rhythm-goal-input {
-  flex: 1; min-width: 0; height: 28px; padding: 0 8px;
-  border: 1px solid var(--border); border-radius: 6px;
-  background: var(--bg); color: var(--fg); font: inherit; font-size: 13px;
-}
-.rhythm-goal-input:focus { outline: none; border-color: var(--accent); }
+/* The goal: the host's one field, small beside the small buttons (\`is-sm\`). */
+.rhythm-goal-input { flex: 1; min-width: 0; }
 .rhythm-now-playing { display: grid; gap: 6px; justify-self: stretch; width: 100%; font-size: 13px; color: var(--fg); }
 .rhythm-now-playing p { margin: 0; }
 .rhythm-now-playing .rhythm-start-label { width: auto; }
@@ -274,7 +273,7 @@ export const RHYTHM_CSS = `
 .rhythm-spotify { display: grid; gap: 6px; }
 .rhythm-option-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: default; }
 .rhythm-spotify-add { display: flex; gap: 8px; }
-.rhythm-spotify-add input { flex: 1; min-width: 0; height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); color: var(--fg); font: inherit; font-size: 13px; }
+.rhythm-spotify-add input { flex: 1; min-width: 0; }
 .rhythm-music-folder { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
 .rhythm-music-folder .rhythm-actions { flex: none; flex-wrap: nowrap; }
 .rhythm-music-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

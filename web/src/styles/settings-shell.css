@@ -398,10 +398,7 @@
 .settings-plugin-body :is(input[type='text'], input[type='number'], input[type='password'],
   input[type='url'], input[type='email'], input[type='search'], select) {
   box-sizing: border-box;
-  height: 28px;
   max-width: 100%;
-  padding: 0 8px;
-  border-radius: var(--radius-sm);
   font-size: var(--font-size-md);
 }
 

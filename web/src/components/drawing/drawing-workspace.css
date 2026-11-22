@@ -61,8 +61,7 @@
 }
 .drawing-primary-button:hover { border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
 :is(.drawing-quiet-button, .drawing-primary-button):disabled { opacity: .45; cursor: default; }
-:is(.drawing-quiet-button, .drawing-primary-button, .drawing-workspace-file):focus-visible,
-.drawing-library-dialog input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+:is(.drawing-quiet-button, .drawing-primary-button, .drawing-workspace-file):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* The list of drawings. */
 .drawing-workspace-files {
@@ -149,14 +148,7 @@
 .drawing-name-button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .drawing-name-input {
   min-width: 0;
-  height: 28px;
   padding: 0 8px;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
-  outline: none;
 }
 .drawing-workspace-bar .drawing-name-field { flex: 0 1 320px; }
 .drawing-name-field > .drawing-name-input { width: 100%; }
@@ -241,14 +233,8 @@
   width: 100%;
   box-sizing: border-box;
   padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
   resize: vertical;
 }
-.drawing-text-diagram textarea:focus { outline: none; border-color: var(--accent); }
 .drawing-text-diagram-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 
 .drawing-workspace-credit {
@@ -370,17 +356,6 @@
 }
 .drawing-library-head h2 { margin: 0; font-size: 14px; font-weight: 500; }
 .drawing-library-search-field { flex: 1; }
-.drawing-library-search {
-  width: 100%;
-  height: 28px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
-}
-.drawing-library-search:focus { outline: none; border-color: var(--accent); }
 .drawing-library-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .drawing-library-note { display: flex; align-items: center; gap: 12px; margin: 0; padding: 20px; color: var(--fg-muted); }
 .drawing-library-note[role="alert"] { color: var(--error); }

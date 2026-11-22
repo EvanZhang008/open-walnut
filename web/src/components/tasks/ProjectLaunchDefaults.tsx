@@ -108,7 +108,7 @@ export function ProjectLaunchDefaults({ project, row }: { project: string; row: 
         <label className="detail-setting-label" htmlFor={`pld-engine-${project}`}>Engine</label>
         <select
           id={`pld-engine-${project}`}
-          className="detail-setting-select"
+          className="detail-setting-select is-sm"
           data-testid="project-default-engine"
           value={engine ?? ''}
           disabled={busy}
@@ -126,7 +126,7 @@ export function ProjectLaunchDefaults({ project, row }: { project: string; row: 
         <label className="detail-setting-label" htmlFor={`pld-model-${project}`}>Model</label>
         <select
           id={`pld-model-${project}`}
-          className="detail-setting-select"
+          className="detail-setting-select is-sm"
           data-testid="project-default-model"
           value={model ?? ''}
           // A model belongs to one engine: the project picks its engine first.
@@ -147,7 +147,7 @@ export function ProjectLaunchDefaults({ project, row }: { project: string; row: 
         <label className="detail-setting-label" htmlFor={`pld-effort-${project}`}>Effort</label>
         <select
           id={`pld-effort-${project}`}
-          className="detail-setting-select"
+          className="detail-setting-select is-sm"
           data-testid="project-default-effort"
           value={effort ?? ''}
           disabled={busy || !startsClaude}
@@ -165,7 +165,7 @@ export function ProjectLaunchDefaults({ project, row }: { project: string; row: 
         <label className="detail-setting-label" htmlFor={`pld-mode-${project}`}>Permission</label>
         <select
           id={`pld-mode-${project}`}
-          className="detail-setting-select"
+          className="detail-setting-select is-sm"
           data-testid="project-default-mode"
           value={mode ?? ''}
           disabled={busy}
@@ -181,7 +181,7 @@ export function ProjectLaunchDefaults({ project, row }: { project: string; row: 
         <label className="detail-setting-label" htmlFor={`pld-isolation-${project}`}>Workspace</label>
         <select
           id={`pld-isolation-${project}`}
-          className="detail-setting-select"
+          className="detail-setting-select is-sm"
           data-testid="project-isolated-workspace"
           value={isolation ?? ''}
           disabled={busy}

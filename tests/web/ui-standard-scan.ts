@@ -143,6 +143,89 @@ export function cutsTitle(selector: string): boolean {
 
 const CUTS = (prop: string, value: string) => (prop === 'text-overflow' && /ellipsis/.test(value)) || (/(^|-)line-clamp$/.test(prop) && !/^(none|unset|initial)$/.test(value.trim()));
 
+/** The words of a JSX attribute's value in a tag: a plain string or a template's fixed words. */
+function attrWords(tag: string, attr: string): string[] {
+  const out: string[] = [];
+  for (const m of tag.matchAll(new RegExp(`\\b${attr}=\\{?\\s*(?:\`((?:[^\`$]|\\$\\{[^}]*\\})*)\`|'([^']*)'|"([^"]*)")`, 'g'))) {
+    const fixed = (m[1] ?? m[2] ?? m[3] ?? '').replace(/\$\{[^}]*\}/g, ' ');
+    out.push(...fixed.split(/\s+/).filter((w) => /^[A-Za-z][A-Za-z0-9_-]*$/.test(w)));
+  }
+  return out;
+}
+
+/** Inputs that are not a field a person types in. */
+const NOT_A_FIELD = /\btype=["'{`]*(checkbox|radio|range|color|file|hidden|button|submit|reset|image)\b/;
+const FIELD_STATE = /^(is-|has-|wn-)/;
+
+/**
+ * Every field's classes (styles/input-box.css, "Fields"): the classes the TSX writes on an
+ * `<input>`, `<textarea>` or `<select>` (or a MicInput's or SearchField's own input), and the
+ * classes written beside `wn-field` (a field box, its wrapper drawn as the field).
+ * 2026-11-21 UI audit: nine searches and plain fields, nine looks.
+ */
+export function fieldClasses(): FieldClasses {
+  const out: FieldClasses = new Set<string>();
+  const lines = new Set<string>();
+  const add = (words: string[], oneLine = true) => {
+    for (const w of words) if (!FIELD_STATE.test(w)) { out.add(w); if (oneLine) lines.add(w); }
+  };
+  for (const file of walk(WEB_SRC, ['.tsx'])) {
+    const src = fs.readFileSync(file, 'utf8');
+    for (const name of ['input', 'textarea', 'select', 'MicInput', 'SearchField']) {
+      for (const tag of openingTags(src, name)) {
+        if (NOT_A_FIELD.test(tag)) continue;
+        add(attrWords(tag, 'className'), name !== 'textarea');
+        const wrapper = attrWords(tag, 'fieldClassName');
+        if (name === 'SearchField' || wrapper.includes('wn-field')) add(wrapper);
+      }
+    }
+    for (const m of src.matchAll(/className=\{?\s*(?:`((?:[^`$]|\$\{[^}]*\})*)`|'([^']*)'|"([^"]*)")/g)) {
+      const words = (m[1] ?? m[2] ?? m[3] ?? '').replace(/\$\{[^}]*\}/g, ' ').split(/\s+/);
+      if (words.includes('wn-field')) add(words.filter((w) => /^[A-Za-z][A-Za-z0-9_-]*$/.test(w)));
+    }
+  }
+  out.areas = new Set([...out].filter((c) => !lines.has(c)));
+  return out;
+}
+
+/** Field classes, and those written only on a `<textarea>` (`areas`). */
+export type FieldClasses = Set<string> & { areas?: Set<string> };
+
+/** What draws a field: its fill, edge, corner, shadow, outline or height, or a re-pointed `--input-*`. */
+const FIELD_LOOK = /^(background(-color|-image)?|border(-(top|right|bottom|left))?(-(color|width|style))?|border(-(top|bottom)-(left|right))?-radius|box-shadow|outline(-(color|width|style))?|height|min-height|--input-[a-z-]+)$/;
+/** A value that takes a field's own look away (a bare field inside a box), not a second look. */
+const RESET = /^(none|0|0px|transparent|inherit|initial|unset|auto|100%|0 0 0 0|0 solid transparent)(\s*!important)?$/;
+
+/** The last compound of a selector, top-level combinators only (`:is(a, b)` stays whole). */
+function lastCompound(selector: string): string {
+  let depth = 0;
+  let at = 0;
+  for (let i = 0; i < selector.length; i++) {
+    const c = selector[i];
+    if (c === '(' || c === '[') depth++;
+    else if (c === ')' || c === ']') depth--;
+    else if (depth === 0 && /[\s>+~]/.test(c)) at = i + 1;
+  }
+  return selector.slice(at);
+}
+
+/** A rule outside styles/input-box.css that gives a field a look of its own. */
+export function restylesField(selector: string, decls: { prop: string; value?: string }[], fields: FieldClasses): boolean {
+  const last = lastCompound(selector.trim());
+  if (/\[type=["']?(checkbox|radio|range|color|file|hidden|button|submit)/.test(last)) return false;
+  // A text selection's wash is not the field's look; what a `:not()` or `:has()` names is not the field.
+  if (/::selection/.test(last)) return false;
+  const named = last.replace(/:(?:not|has)\((?:[^()]|\([^()]*\))*\)/g, '');
+  const elements = [...named.matchAll(/(?:^|[^\w.-])(input|textarea|select)(?![\w-])/g)].map((m) => m[1]);
+  const classes = [...named.matchAll(/\.([A-Za-z0-9_-]+)/g)].map((m) => m[1]).filter((c) => fields.has(c));
+  if (!elements.length && !classes.length) return false;
+  if (/::placeholder/.test(last)) return decls.some((d) => /^(color|opacity)$/.test(d.prop));
+  // A text area's starting height is how many lines it shows before it grows, not a look: the
+  // height rule is for one-line fields (34 px, 28 px, 46 px on the phone).
+  const area = elements.length ? elements.every((e) => e === 'textarea') : classes.some((c) => fields.areas?.has(c));
+  return decls.some((d) => FIELD_LOOK.test(d.prop) && !RESET.test((d.value ?? '').trim()) && !(area && d.prop === 'min-height'));
+}
+
 export type Counts = {
   restyledBtn: Record<string, number>;
   ownControl: Record<string, number>;
@@ -150,6 +233,7 @@ export type Counts = {
   bareButton: Record<string, number>;
   restyledInput: Record<string, number>;
   cutTitle: Record<string, number>;
+  restyledField: Record<string, number>;
 } & Record<TokenKind, Record<string, number>>;
 
 /** Roles of a choice control (segmented, tabs, switches, boxes): their own components, not buttons. */
@@ -169,11 +253,11 @@ function valueEnd(src: string, i: number): number {
   return i;
 }
 
-/** The opening tags of every `<button` in a TSX source (strings and `{...}` values skipped whole). */
-export function buttonTags(src: string): string[] {
+/** The opening tags of every `<name` element in a TSX source (strings and `{...}` values skipped whole). */
+export function openingTags(src: string, name: string): string[] {
   const out: string[] = [];
-  for (const m of src.matchAll(/<button\b/g)) {
-    let i = m.index! + 7;
+  for (const m of src.matchAll(new RegExp(`<${name}\\b`, 'g'))) {
+    let i = m.index! + name.length + 1;
     while (i < src.length && src[i] !== '>') {
       i = src[i] === '"' || src[i] === "'" || src[i] === '{' ? valueEnd(src, i) : i + 1;
     }
@@ -181,6 +265,9 @@ export function buttonTags(src: string): string[] {
   }
   return out;
 }
+
+/** The opening tags of every `<button` in a TSX source. */
+export const buttonTags = (src: string): string[] => openingTags(src, 'button');
 
 /**
  * A `<button>` drawn outside the family: no `btn` among the words of its className (a static
@@ -192,17 +279,19 @@ export function isBareButton(tag: string): boolean {
   if (at < 0) return true;
   const start = at + 'className='.length;
   const value = tag.slice(start, valueEnd(tag, start));
-  // The input box's send key is its own control (styles/input-box.css, standard.md "Inputs").
-  if (/(^|[\s"'`{(])wn-input-send(?=$|[\s"'`}$])/.test(value)) return false;
+  // The input box's send key and a field's keys are their own controls (styles/input-box.css,
+  // standard.md "Inputs").
+  if (/(^|[\s"'`{(])(wn-input-send|wn-field-key)(?=$|[\s"'`}$])/.test(value)) return false;
   return !/(^|[\s"'`{(])btn(?=$|[\s"'`}$])/.test(value);
 }
 
 /** Rules (one per file and selector list) in each file that break each rule of the standard. */
 export function countAll(): Counts {
-  const out =  { restyledBtn: {}, ownControl: {}, rawAccent: {}, ...Object.fromEntries(TOKEN_KINDS.map((k) => [k, {}])), bareButton: {}, restyledInput: {}, cutTitle: {} } as Counts;
+  const out =  { restyledBtn: {}, ownControl: {}, rawAccent: {}, ...Object.fromEntries(TOKEN_KINDS.map((k) => [k, {}])), bareButton: {}, restyledInput: {}, cutTitle: {}, restyledField: {} } as Counts;
   const bump = (m: Record<string, number>, f: string) => { m[f] = (m[f] ?? 0) + 1; };
   const companions = btnCompanions();
   const parts = inputParts();
+  const fields = fieldClasses();
   for (const file of walk(WEB_SRC, ['.css']).sort()) {
     const rel = path.relative(WEB_SRC, file);
     const rules = new Map<string, Decl[]>();
@@ -218,6 +307,7 @@ export function countAll(): Counts {
       else if (sets(/^background(-color)?$/) && sets(/^border-radius$/) && sels.some(isOwnControl)) bump(out.ownControl, rel);
       if (rel !== INPUT_HOME && sels.some((x) => restylesInput(x, decls, parts))) bump(out.restyledInput, rel);
       if (rel !== 'styles/text-fit.css' && decls.some((d) => CUTS(d.prop, d.value)) && sels.some(cutsTitle)) bump(out.cutTitle, rel);
+      if (rel !== INPUT_HOME && sels.some((x) => restylesField(x, decls, fields))) bump(out.restyledField, rel);
     }
   }
   for (const file of walk(WEB_SRC, ['.css', '.ts', '.tsx']).sort()) {

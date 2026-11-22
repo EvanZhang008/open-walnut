@@ -2083,6 +2083,7 @@ function InlineAdd({ onAdd, draftId, label = 'Add to Focus…', openSignal, onOp
         <input
           ref={inputRef}
           type="text"
+          className="is-sm"
           data-draft-key={draft.key ?? undefined}
           value={value}
           placeholder="Task title — Enter to add, Esc to close"
@@ -2355,7 +2356,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const phoneToolbar = usePhoneLayout();
   useToolbarFit(toolbarRef, {
-    inputSelector: '.todo-search-input', typingSelector: '.todo-search-clear, .todo-search-count, .todo-search-spinner',
+    inputSelector: '.todo-search-input', typingSelector: '.todo-search-clear, .todo-search-spinner',
     enabled: !phoneToolbar,
   });
   const pinIntoTier = useLeanCallback((id: string, tier: FocusTier, order?: string[]) => {
@@ -8091,7 +8092,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           onQueryChange={setSearchQuery}
           onClear={clearSearch}
           isSearching={isSearching}
-          resultCount={searchResultCount}
         />
         {onOpenLauncher && <NewLauncherButton onOpen={onOpenLauncher} />}
         <DisplayButton {...displayProps} filters={filterBar} />

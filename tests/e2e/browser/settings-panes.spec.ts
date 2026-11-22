@@ -534,7 +534,7 @@ test('C70: one Clear button and no native search chrome', async ({ page, browser
       let list: CSSRuleList
       try { list = sheet.cssRules } catch { continue }
       for (const rule of [...list]) {
-        if (rule instanceof CSSStyleRule && rule.selectorText.includes('settings-filter::-webkit-search-cancel-button')
+        if (rule instanceof CSSStyleRule && rule.selectorText.includes('::-webkit-search-cancel-button')
           && el.matches(rule.selectorText.replace(/::-webkit-search-cancel-button/g, ''))) rules.push(rule.style.display)
       }
     }
@@ -743,7 +743,12 @@ for (const theme of ['light', 'dark'] as const) {
         const el = document.activeElement as HTMLElement | null
         if (!el || !el.closest('.settings-layout')) return null
         const cs = getComputedStyle(el)
+        // A field's words show keyboard focus on the field box they sit in: its 2 px ring
+        // (styles/input-box.css, "Fields"). A faint edge is not a ring.
+        const field = el.closest('.wn-field')
+        const box = field ? getComputedStyle(field) : null
         const ring = (cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0) || cs.boxShadow !== 'none'
+          || (!!box && box.outlineStyle !== 'none' && parseFloat(box.outlineWidth) >= 2)
         return { ring, name: el.getAttribute('data-testid') ?? el.id ?? el.tagName, inNav: !!el.closest('.settings-nav') }
       })
       if (!info) break

@@ -32,7 +32,7 @@ export function GoalInput({ value, onChange, testId }: {
       <span className="rhythm-start-label">Goal</span>
       <input
         type="text"
-        className="rhythm-goal-input"
+        className="rhythm-goal-input is-sm"
         value={value}
         maxLength={GOAL_MAX}
         placeholder={GOAL_PLACEHOLDER}
@@ -73,7 +73,7 @@ export function GoalRow({ store, goal, compact }: { store: RhythmStore; goal: st
         <input
           ref={input}
           type="text"
-          className="rhythm-goal-input"
+          className="rhythm-goal-input is-sm"
           value={text}
           maxLength={GOAL_MAX}
           placeholder={GOAL_PLACEHOLDER}

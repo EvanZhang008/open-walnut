@@ -13,10 +13,10 @@
 .org-router-value > .mic-field { width: 100%; max-width: 380px; }
 .org-router-value > input:not([type]),
 .org-router-value > .mic-field > input:not([type]) {
-  box-sizing: border-box; width: 100%; max-width: 380px; height: 30px; padding: 0 10px; font: inherit;
-  color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 380px;
 }
-.org-router-value > input:not([type]):focus-visible, .org-router-value > .mic-field > input:not([type]):focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
 .org-router-hint { font-size: var(--font-size-sm); line-height: 1.45; color: var(--fg-secondary); }
 .org-router-sources { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
 .org-router-kind { margin-left: 4px; font-size: var(--font-size-sm); color: var(--fg-secondary); }
@@ -28,12 +28,13 @@
 .org-router-check.is-stale { color: var(--fg-secondary); font-style: italic; }
 /* Many VPs: a finder above, and the list scrolls inside its own box so Save stays near. */
 .org-router-link-filter {
-  width: 100%; max-width: 320px; margin: 0 0 6px; padding: 5px 8px; font: inherit; font-size: var(--font-size-md);
-  color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  width: 100%;
+  max-width: 320px;
+  margin: 0 0 6px;
+  font-size: var(--font-size-md);
 }
 .mic-field.org-router-link-filter-field { width: 100%; max-width: 320px; margin: 0 0 6px; }
 .org-router-link-filter-field > .org-router-link-filter { max-width: none; margin: 0; }
-.org-router-link-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
 .org-router-link-list { max-height: 228px; overflow-y: auto; }
 .org-router-links .org-router-value > .org-router-hint { margin: 0 0 4px; }
 .org-router-warn { margin: 6px 0 0; font-size: var(--font-size-sm); color: var(--warning); }
@@ -43,10 +44,10 @@
 
 .router-folder-picker { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: 440px; }
 .router-folder-filter {
-  box-sizing: border-box; width: 100%; height: 30px; padding: 0 10px; font: inherit; font-size: var(--font-size-md);
-  color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  box-sizing: border-box;
+  width: 100%;
+  font-size: var(--font-size-md);
 }
-.router-folder-filter:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
 .router-folder-list {
   max-height: 260px; overflow-y: auto; padding: 4px 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg);
 }

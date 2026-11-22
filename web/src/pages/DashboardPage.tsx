@@ -52,7 +52,7 @@ import '@/styles/tasks-page.css';
 // .tp-btn: the toolbar's one-shot buttons (Collapse all).
 import '@/styles/filter-toolbar-base.css';
 import { Chip } from '@/components/controls';
-import { MicInput } from '@/components/common/BoxMic';
+import { SearchField } from '@/components/common/SearchField';
 import { useFocusView } from '@/focus-spaces/useFocusView';
 import { FocusBanner } from '@/focus-spaces/FocusBanner';
 
@@ -475,12 +475,14 @@ export function DashboardPage() {
               )}
             </>
           )}
-          <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="search"
+          <SearchField small fieldClassName="tp-search-field" data-no-draft="search"
             className="tp-search"
             type="search"
             placeholder="Search tasks…"
+            aria-label="Search tasks"
             value={search}
             setText={setSearch}
+            onClear={() => setSearch('')}
           />
           <button type="button" className="btn btn-sm btn-primary tp-newtask-btn" onClick={() => setShowForm(true)}>＋ Task</button>
         </div>

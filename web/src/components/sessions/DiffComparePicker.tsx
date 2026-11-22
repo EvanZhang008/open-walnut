@@ -410,6 +410,7 @@ export function DiffComparePicker({ sessionId, compare, resolved, onChange }: {
             <input
               ref={inputRef}
               type="text"
+              className="is-sm"
               value={query}
               data-no-draft="search"
               placeholder="Filter branches and commits"

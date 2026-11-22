@@ -18,7 +18,7 @@ import { noteHitLabel } from '../../../../src/core/note-hit-label';
 import { usePhoneOverlay } from '@/hooks/usePhoneOverlayHistory';
 import { log } from '@/utils/log';
 import { useOpenTask } from '@/hooks/useOpenTask';
-import { MicInput } from '@/components/common/BoxMic';
+import { SearchField } from '@/components/common/SearchField';
 
 const DEBOUNCE_MS = 250;
 const TIMEOUT_MS = 10_000;
@@ -186,9 +186,9 @@ export function PhoneSearchLayer({ open, onClose }: PhoneSearchLayerProps) {
   if (!open) return null;
   const empty = phase === 'done' && isEmptyGroups(groups);
   return createPortal(
-    <div className="phone-search-layer" role="dialog" aria-label="Search" data-testid="phone-search-layer">
+    <div className="phone-search-layer is-phone-layer" role="dialog" aria-label="Search" data-testid="phone-search-layer">
       <form className="phone-search-field" role="search" onSubmit={(e) => { e.preventDefault(); inputRef.current?.blur(); }}>
-        <MicInput fieldClassName="mic-field-grow" data-no-draft="search"
+        <SearchField data-no-draft="search"
           ref={inputRef}
           type="search"
           enterKeyHint="search"
@@ -201,6 +201,7 @@ export function PhoneSearchLayer({ open, onClose }: PhoneSearchLayerProps) {
           value={query}
           setText={setQuery}
           onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); layer.close(); } }}
+          onClear={() => setQuery('')}
         />
       </form>
       <div className="phone-search-results" data-phase={phase}>

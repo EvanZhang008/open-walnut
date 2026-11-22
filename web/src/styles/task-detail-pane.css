@@ -309,13 +309,7 @@
 .tdp-dep-picker input,
 .tdp-note-add input {
   min-width: 0;
-  padding: 4px 8px;
-  font: inherit;
   font-size: var(--font-size-md);
-  color: var(--fg);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: 6px;
 }
 .tdp-dep-result {
   padding: 4px 8px;

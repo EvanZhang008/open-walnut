@@ -36,7 +36,7 @@ import { isModifierOnly, markKeyboardFocus } from '@/utils/keyboard-focus';
 import '@/styles/thread-stack.css';
 import { Chip, ChipGroup } from '@/components/controls';
 import { SELECTION_BAR_LAYERS } from './selection-bar-layers';
-import { MicInput } from '@/components/common/BoxMic';
+import { SearchField } from '@/components/common/SearchField';
 
 const EXIT_MS = 160;
 const LAZY_NAME_LIMIT = 10;
@@ -317,21 +317,20 @@ export function ThreadTreeDrawer(p: ThreadTreeDrawerProps) {
             </button>
           </div>
         )}
-        <div className="thread-drawer-search">
-          <ThreadSearchIcon size={13} />
-          <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="search"
-            ref={searchRef}
-            type="search"
-            className="thread-drawer-search-input"
-            placeholder="Search questions and pins"
-            aria-label="Search questions and pins"
-            value={query}
-            spellCheck={false}
-            setText={setQuery}
-            onKeyDown={onSearchKey}
-          />
-          {query && <button type="button" className="thread-drawer-search-clear" aria-label="Clear search" onClick={clearSearch}>Clear</button>}
-        </div>
+        <SearchField small fieldClassName="thread-drawer-search" data-no-draft="search"
+          icon={<ThreadSearchIcon size={13} />}
+          ref={searchRef}
+          type="search"
+          className="thread-drawer-search-input"
+          placeholder="Search questions and pins"
+          aria-label="Search questions and pins"
+          value={query}
+          spellCheck={false}
+          setText={setQuery}
+          onKeyDown={onSearchKey}
+          onClear={clearSearch}
+          clearClassName="thread-drawer-search-clear"
+        />
         <ChipGroup className="thread-drawer-chips" role="group" aria-label="Filter">
           {(['all', 'open', 'pinned'] as const).map((f) => (
             <Chip key={f} className="thread-drawer-chip" pressed={filter === f} onClick={() => setFilter(f)}

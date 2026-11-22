@@ -90,7 +90,9 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   const bottomOf = (selector: string) => page.locator(selector).first().evaluate(el => Math.round(el.getBoundingClientRect().bottom));
   expect(await bottomOf('.sidebar-header')).toBe(await bottomOf('#home-task-navigation .todo-panel-toolbar'));
   await expect(homeToolbar(page).locator('.new-launcher-btn')).toHaveAttribute('aria-label', 'New task');
-  expect((await homeToolbar(page).locator('.todo-search-input').boundingBox())!.width).toBeGreaterThanOrEqual(112);
+  // The field's input holds only its words now (its mic and clear sit after it, SearchField); an
+  // input of 112 px used to hold 84 px of words and 28 px of room for the mic over it.
+  expect((await homeToolbar(page).locator('.todo-search-input').boundingBox())!.width).toBeGreaterThanOrEqual(112 - 28);
   // One quiet toolbar, no accent colour: New task is a bare word like Display, no frame
   // (2026-10-03: "keep the button, drop the box around it"), and the Display icon is the
   // same grey glyph as the hide button.

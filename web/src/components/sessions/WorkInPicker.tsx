@@ -89,7 +89,7 @@ function WorkInBody({ draft, ps, rows, folders, onPickFolder, onBrowse, onUpdate
     <>
       <div className="wip-head">
         <input
-          className="psp-search"
+          className="psp-search is-sm"
           data-no-draft="search"
           data-testid="work-in-search"
           placeholder="Search projects and folders…"

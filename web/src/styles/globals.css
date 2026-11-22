@@ -329,33 +329,8 @@ button {
   background: none;
 }
 
-input, textarea, select {
-  font: inherit;
-  color: var(--fg);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  padding: 8px 12px;
-  outline: none;
-  transition: border-color 0.2s, box-shadow 0.2s;
-}
-
-input:focus, textarea:focus, select:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-subtle);
-}
-
-/* focus-ring-owners: a box that draws the focus ring itself (its :focus-within)
-   owns focus, so the field inside draws none. Without this the rule above adds a
-   second ring inside the box's own (measured on the comment box: a blue border
-   around a 3px blue glow). Every box with such a ring is listed here;
-   tests/web/focus-ring-owner-guard.test.ts fails when one is added without it. */
-:is(.wn-input, .search-bar, .chat-input-box, .pw-search, .routine-instructions-box,
-  .todo-search-bar, .thread-drawer-search, .apps-search, .tp-rules, .ask-walnut-drawer-search,
-  .mail-compose-field)
-  :is(input, textarea, select):focus {
-  box-shadow: none;
-}
+/* Every field's look (input, textarea, select: corner, fill, edge, focus, placeholder) is in
+   styles/input-box.css, "Fields", beside the message box it matches. */
 
 /* A textarea wraps its text, so it never scrolls sideways. Under page zoom
    (Cmd + / Cmd -) the UA default `overflow: auto` still showed a horizontal
@@ -368,22 +343,6 @@ input:focus, textarea:focus, select:focus {
    instead of being cut there. Ratchet: tests/e2e/browser/textarea-zoom-no-squash.spec.ts */
 textarea { overflow-x: hidden; }
 textarea::placeholder { max-width: 100%; }
-
-/* Native <select> chrome varies wildly per engine — Safari/WKWebView renders
-   the legacy aqua double-arrow stepper. Flatten it everywhere: no native
-   appearance, our own chevron glyph, room for it on the right. Component
-   styles that recolor a select must use `background-color`, never the
-   `background` shorthand (which would wipe the chevron image). */
-select {
-  appearance: none;
-  -webkit-appearance: none;
-  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' fill='none' stroke='%23868690' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 8px center;
-  background-size: 12px;
-  padding-right: 28px;
-  cursor: pointer;
-}
 
 /* iOS-style text selection: translucent accent wash, keep original text color
    (solid blue + forced white read harsh, especially over code). */
@@ -2513,7 +2472,7 @@ select {
 /* Placeholder for an empty contentEditable (textarea ::placeholder analogue). */
 .session-notes-editor:empty::before {
   content: attr(data-placeholder);
-  color: var(--fg-muted);
+  color: var(--input-placeholder);
   pointer-events: none;
 }
 
@@ -4066,16 +4025,9 @@ select {
 .wf-search {
   width: 100%;
   min-width: 0;
-  padding: 7px 10px;
-  font: inherit;
   font-size: var(--font-size-sm);
-  color: var(--fg);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
 }
 .wf-overview--wide .wf-search { max-width: 340px; }
-.wf-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .wf-overview-main { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
 .wf-overview-heading { display: flex; align-items: baseline; gap: 9px; min-width: 0; padding: 12px 20px 8px; }
 .wf-overview--narrow .wf-overview-heading { padding: 10px 12px 6px; }
@@ -4645,16 +4597,7 @@ select {
 }
 .team-chat-input-field {
   flex: 1;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
   font-size: var(--font-size-sm);
-  outline: none;
-}
-.team-chat-input-field:focus {
-  border-color: var(--accent);
 }
 .team-chat-send-btn {
   padding: 6px 12px;
@@ -4823,26 +4766,6 @@ select {
 
 .memory-tree-filter {
   padding: 0 12px 8px;
-}
-
-.memory-filter-input {
-  width: 100%;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-  color: var(--fg);
-  font-size: var(--font-size-md);
-  outline: none;
-  transition: border-color 0.15s;
-}
-
-.memory-filter-input:focus {
-  border-color: var(--accent);
-}
-
-.memory-filter-input::placeholder {
-  color: var(--fg-muted);
 }
 
 .memory-tree-sections {
@@ -8353,16 +8276,7 @@ select {
 .mic-vocab-input {
   flex: 1;
   min-width: 0;
-  padding: 4px 8px;
   font-size: var(--font-size-md);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
-  outline: none;
-}
-.mic-vocab-input:focus {
-  border-color: var(--accent);
 }
 
 .mic-vocab-add-btn { flex-shrink: 0; }
@@ -9397,19 +9311,13 @@ body.walnut-dragging {
 }
 
 .session-panel-title-input {
-  /* Must match .session-panel-title metrics — otherwise the row jumps on edit. */
   font-size: var(--font-size-md);
   font-weight: 600;
   letter-spacing: -0.1px;
   flex: 1;
   min-width: 0;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-xs);
   padding: 2px 4px;
   margin: -2px -4px;
-  background: var(--card-bg);
-  color: var(--fg);
-  outline: none;
   font-family: inherit;
 }
 
@@ -9892,76 +9800,9 @@ body.walnut-dragging {
   overflow: hidden;
 }
 
-/* ── Search bar ── */
-.todo-search-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
-.todo-search-icon {
-  font-size: var(--font-size-md);
-  opacity: 0.5;
-  flex-shrink: 0;
-}
-
-.todo-search-input {
-  flex: 1;
-  background: none;
-  border: none;
-  outline: none;
-  font-size: var(--font-size-md);
-  font-family: inherit;
-  color: var(--fg);
-  padding: 3px 0;
-  min-width: 0;
-}
-
-.todo-search-input::placeholder {
-  color: var(--fg-muted);
-  opacity: 0.6;
-}
-
-.todo-search-spinner {
-  width: 14px;
-  height: 14px;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.6s linear infinite;
-  flex-shrink: 0;
-}
-
-.todo-search-count {
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
-}
-
-.todo-search-clear {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border: none;
-  background: var(--bg-tertiary);
-  color: var(--fg-muted);
-  border-radius: 50%;
-  cursor: pointer;
-  font-size: var(--font-size-xs);
-  flex-shrink: 0;
-  padding: 0;
-}
-
-.todo-search-clear:hover {
-  background: var(--bg-secondary);
-  color: var(--fg);
-}
+/* ── Search bar: the one search field (SearchField, styles/input-box.css) ── */
+.todo-search-bar { display: flex; min-width: 0; }
+.todo-search-bar > .todo-search-field { flex: 1 1 auto; }
 
 /* Search results container (flat list, no grouping) */
 .todo-search-results {
@@ -9991,17 +9832,11 @@ body.walnut-dragging {
      shrink below its content width when the tasks panel is dragged narrow —
      otherwise it pushes the View trigger past the panel's overflow:hidden edge. */
   min-width: 0;
-  margin: 0;
-  padding: 0;
-  border-bottom: none;
 }
-/* Panel dragged narrow: shed the search bar's secondary controls (mic first,
-   then result count) so the input and the View trigger always stay visible. */
+/* Panel dragged narrow: shed the search field's mic so the words and the View trigger always
+   stay visible. */
 @container (max-width: 240px) {
   .todo-panel-toolbar .mic-btn-wrapper { display: none; }
-}
-@container (max-width: 170px) {
-  .todo-panel-toolbar .todo-search-count { display: none; }
 }
 
 /* ── Task Session Badge ("S" pill, same size as source badge) ── */
@@ -10086,7 +9921,6 @@ body.walnut-dragging {
   flex: 1; min-width: 0; background: none; border: none; outline: none;
   font-size: var(--font-size-md); color: var(--fg);
 }
-.vd-search input::placeholder { color: var(--fg-muted); }
 .vd-search-clear {
   background: none; border: none; color: var(--fg-muted); cursor: pointer;
   font-size: 14px; line-height: 1; padding: 2px 6px; border-radius: 6px;
@@ -10188,12 +10022,11 @@ body.walnut-dragging {
 .vd-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .vd-label { font-size: var(--font-size-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-muted); }
 .vd-sel {
-  width: 100%; min-width: 0;
-  font-size: var(--font-size-sm); padding: 4px 8px; border: 1px solid var(--border);
-  border-radius: 6px; background: var(--bg-secondary); color: var(--fg);
+  width: 100%;
+  min-width: 0;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
-.vd-sel:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* Sort + Group: segmented controls fill their grid cell */
 /* Footer: Clear all (flex row pinned under the body) */
@@ -11134,11 +10967,6 @@ body.walnut-dragging {
 }
 .focus-inline-add input {
   width: 100%;
-  padding: 4px 8px;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  background: var(--bg);
-  color: inherit;
   font-size: var(--font-size-sm);
 }
 
@@ -12780,13 +12608,13 @@ body.walnut-dragging {
   color: var(--fg-muted);
 }
 
-/* Placeholder */
+/* Placeholder: every field's placeholder colour (styles/input-box.css), never a faded grey
+   (2026-11-21 UI audit: the Scratchpad's read as disabled). */
 .notes-editor .tiptap p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   float: left;
-  color: var(--fg-muted);
+  color: var(--input-placeholder);
   font-style: normal;
-  opacity: 0.5;
   pointer-events: none;
   height: 0;
 }
@@ -12965,10 +12793,6 @@ body.walnut-dragging {
   color: var(--fg);
   font-size: var(--font-size-md);
   padding: 6px 8px;
-}
-
-.notes-task-search-input::placeholder {
-  color: var(--fg-muted);
 }
 
 .notes-task-search-list {
@@ -13433,13 +13257,7 @@ body.walnut-dragging {
 .detail-setting-input {
   flex: 1;
   min-width: 0;
-  padding: 2px 6px;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-xs);
-  background: var(--bg);
-  color: var(--fg);
   font-size: var(--font-size-sm);
-  outline: none;
 }
 
 .detail-stat-grid {
@@ -13877,20 +13695,13 @@ body.walnut-dragging {
 .tier-separator-inert .tier-separator-edit { visibility: hidden; }
 .tier-separator-label-form { flex: none; display: inline-flex; }
 .tier-separator-label-input {
-  /* The row's user-select:none would otherwise block drag-selecting the text. */
   user-select: text;
   width: 120px;
   padding: 1px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  background: var(--bg-elevated);
-  color: var(--fg);
   font-size: var(--font-size-xs);
   font-weight: 600;
   letter-spacing: 0.4px;
-  outline: none;
 }
-.tier-separator-label-input:focus { border-color: var(--accent); }
 /* The heading box with its mic (MicInput): the wrapper keeps the box's width, a little wider for the mic. */
 .tier-separator-label-field { width: 148px; }
 /* The floating copy under the cursor during a dnd-kit line drag. */
@@ -14820,15 +14631,8 @@ a.task-kebab-info:hover {
   position: sticky;
   top: 0;
   margin: 6px 6px 4px;
-  padding: 4px 8px;
   font-size: var(--font-size-sm);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
-  outline: none;
 }
-.task-kebab-project-filter:focus { border-color: var(--accent); }
 /* The filter with its mic (MicInput): the wrapper sticks, the box fills it. */
 .mic-field.task-kebab-project-filter-field { position: sticky; top: 0; margin: 6px 6px 4px; }
 .task-kebab-project-filter-field > .task-kebab-project-filter { position: static; margin: 0; }
@@ -14957,11 +14761,9 @@ a.task-kebab-info:hover {
 .dp-time-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-height: 26px; }
 .dp-time-label { display: inline-flex; align-items: center; gap: 6px; }
 .dp-time-input {
-  font: inherit; font-size: var(--font-size-sm); padding: 2px 6px; border: 1px solid var(--border); border-radius: var(--radius-sm);
-  background: var(--bg); color: var(--fg); width: 84px;
+  font-size: var(--font-size-sm);
+  width: 84px;
 }
-.dp-time-input::placeholder { color: var(--fg-muted); }
-.dp-time-input:focus { outline: none; border-color: var(--accent); }
 .dp-time-note { flex-basis: 100%; font-size: var(--font-size-xs); color: var(--error); }
 /* DatePicker's month (MonthGrid.tsx): Walnut's own, never the browser's date field. */
 .dp-month { display: flex; flex-direction: column; gap: 2px; min-width: 210px; }
@@ -16165,14 +15967,9 @@ a.task-kebab-info:hover {
 
 .context-source-budget {
   width: 70px;
-  padding: 2px 6px;
   font-size: var(--font-size-sm);
   font-family: var(--font-mono);
   text-align: right;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  background: var(--bg-secondary);
-  color: var(--fg);
 }
 
 .context-source-desc {
@@ -16814,17 +16611,7 @@ a.task-kebab-info:hover {
 .qtc-input {
   width: calc(100% - 20px);
   margin: 8px 10px 4px;
-  padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
   font-size: var(--font-size-md);
-  outline: none;
-}
-.qtc-input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-subtle);
 }
 /* Reserved height: the ✦ Analyzing/applied line appears and disappears as the
    background parse runs — without min-height the whole form jumps each time. */
@@ -16898,18 +16685,7 @@ a.task-kebab-info:hover {
 }
 .qtc-confirm-input {
   width: 100%;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
   font-size: var(--font-size-sm);
-  outline: none;
-}
-.qtc-confirm-input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-subtle);
 }
 .qtc-confirm-title {
   font-size: var(--font-size-md);
@@ -16984,23 +16760,13 @@ a.task-kebab-info:hover {
 
 .sps-search-input {
   width: 100%;
-  padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
   font-size: var(--font-size-md);
-  outline: none;
 }
-.sps-search-input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-subtle);
-}
+/* Typing a path, not a search: the words in mono and an accent edge (its fill is the ghost
+   wrap's, below), so the mode shows before Enter starts a session there. */
 .sps-search-input.editing {
   font-family: 'SF Mono', Menlo, monospace;
-  background: var(--accent-subtle);
   border-color: var(--accent);
-  /* Reserve measured from the actual button width (set in SessionPathSelector), falling back to 72px before first measure. */
   padding-right: calc(var(--sps-status-w, 72px) + 4px);
 }
 
@@ -17411,7 +17177,7 @@ a.task-kebab-info:hover {
    input with identical font/padding; wrapper carries the visual background. */
 .sps-ghost-wrap {
   position: relative;
-  border-radius: 6px;
+  border-radius: var(--input-radius);
 }
 .sps-ghost-wrap.editing {
   background: var(--accent-subtle);
@@ -17419,15 +17185,15 @@ a.task-kebab-info:hover {
 .sps-ghost-overlay {
   position: absolute;
   inset: 0;
-  padding: 7px 10px;
+  /* The field's own padding and line (input-box.css "Fields"). */
+  padding: 6px 10px;
   /* Mirror the input's measured status-button reserve exactly. */
   padding-right: calc(var(--sps-status-w, 72px) + 4px);
   font-family: 'SF Mono', Menlo, monospace;
   font-size: var(--font-size-md);
-  /* MUST match the input's inherited line-height (body 1.5 → 19.5px). The input
-     centers its text in that line box; 'normal' (~15px) floats the ghost ~2px
-     higher than the typed text — visible baseline mismatch. */
-  line-height: 1.5;
+  /* MUST match the input's line-height (20 px, input-box.css): 'normal' (~15px)
+     floated the ghost ~2px higher than the typed text, a visible baseline mismatch. */
+  line-height: 20px;
   white-space: pre;
   overflow: hidden;
   pointer-events: none;
@@ -17683,21 +17449,7 @@ a.task-kebab-info:hover {
   width: 100%;
   box-sizing: border-box;
   margin: 2px 0 6px;
-  padding: 5px 8px;
   font-size: var(--font-size-sm);
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--fg);
-}
-
-.model-picker-filter:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-.model-picker-filter::placeholder {
-  color: var(--fg-muted);
 }
 
 /* Provider tag on cross-group filter matches ("Sonnet 4.6 — Amazon Bedrock"). */
@@ -18601,11 +18353,6 @@ a.task-kebab-info:hover {
 }
 
 .usage-daterange-field input {
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-  color: var(--fg);
   font-size: var(--font-size-md);
   font-variant-numeric: tabular-nums;
 }
@@ -18908,20 +18655,9 @@ td.usage-share-col {
 
 .session-msg-edit-textarea {
   width: 100%;
-  min-height: 48px;
   padding: 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
   font-size: var(--font-size-md);
-  font-family: inherit;
   resize: vertical;
-}
-
-.session-msg-edit-textarea:focus {
-  outline: none;
-  border-color: var(--accent);
 }
 
 .session-msg-edit-actions {
@@ -19304,14 +19040,9 @@ td.usage-share-col {
 .sfe-path-edit .sfe-root-path-input {
   flex: 1;
   width: 100%;
-  color: var(--fg);
-  background: var(--bg);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
   padding: 2px 6px;
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
-  outline: none;
 }
 
 /* Path edit wrapper + fuzzy recent-folder suggestion dropdown */
@@ -19514,15 +19245,7 @@ td.usage-share-col {
   flex: 1;
   min-width: 0;
   padding: 0 3px;
-  font: inherit;
   font-size: var(--font-size-md);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-xs);
-  /* BOTH are set on purpose: inheriting either one loses the pair — the row's
-     hover tint or `.selected`'s accent colour would leave the text unreadable. */
-  background: var(--bg);
-  color: var(--fg);
-  outline: none;
 }
 
 .sfe-edit-error {
@@ -19803,21 +19526,12 @@ a.tag-chip:focus-visible,
 }
 
 .tag-editor-input {
-  border: none;
-  outline: none;
-  background: transparent;
   font-size: var(--font-size-sm);
   padding: 2px 4px;
-  color: var(--fg);
   min-width: 20px;
-  border-bottom: 1.5px dashed var(--border-strong);
 }
 .tag-editor-input::placeholder {
-  color: var(--fg-muted);
   font-style: italic;
-}
-.tag-editor-input:focus {
-  border-bottom-color: var(--accent);
 }
 .tag-editor-input-invalid,
 .tag-editor-input-invalid:focus {
@@ -20148,11 +19862,6 @@ a.tag-chip:focus-visible,
 
 .dock-quick-add-form input {
   width: 180px;
-  padding: 6px 10px;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
   font-size: var(--font-size-md);
 }
 
@@ -21533,18 +21242,7 @@ a.tag-chip:focus-visible,
 .repos-search-input {
   flex: 1;
   max-width: 400px;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
   font-size: 14px;
-}
-
-.repos-search-input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-subtle);
 }
 
 .repos-count {
@@ -21753,23 +21451,12 @@ a.tag-chip:focus-visible,
 
 .repo-form-input {
   width: 100%;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
   font-size: 14px;
 }
 
 .repo-form-input-mono {
   font-family: 'SF Mono', Menlo, monospace;
   font-size: var(--font-size-md);
-}
-
-.repo-form-input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-subtle);
 }
 
 .repo-form-input:disabled {
@@ -21816,20 +21503,10 @@ a.tag-chip:focus-visible,
 .repo-form-textarea {
   width: 100%;
   padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
   font-size: var(--font-size-md);
   font-family: 'SF Mono', Menlo, monospace;
   line-height: 1.5;
   resize: vertical;
-}
-
-.repo-form-textarea:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-subtle);
 }
 
 .repo-form-actions {
@@ -22202,50 +21879,10 @@ a.tag-chip:focus-visible,
 }
 
 .notes-tree-search {
+  display: flex;
   padding: 10px 14px;
-  position: relative;
 }
-
-/* Clears the query and closes the search, as Escape does. */
-.notes-search-clear {
-  position: absolute;
-  right: 20px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--fg-muted);
-  font-size: var(--font-size-lg);
-  line-height: 20px;
-  cursor: pointer;
-}
-.notes-search-clear:hover { background: var(--bg-hover); color: var(--fg); }
-.notes-tree-search .notes-search-input { padding-right: 30px; }
-
-.notes-search-input {
-  width: 100%;
-  padding: 7px 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-secondary);
-  color: var(--fg);
-  font-size: var(--font-size-md);
-  outline: none;
-  box-sizing: border-box;
-  transition: border-color 0.15s;
-}
-
-.notes-search-input:focus {
-  border-color: var(--accent);
-}
-
-.notes-search-input::placeholder {
-  color: var(--fg-muted);
-}
+.notes-tree-search > .wn-field { flex: 1 1 auto; }
 
 .notes-tree-body {
   flex: 1;
@@ -22349,12 +21986,7 @@ a.tag-chip:focus-visible,
   flex: 1;
   min-width: 0;
   padding: 2px 6px;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-xs);
-  background: var(--bg);
-  color: var(--fg);
   font-size: var(--font-size-md);
-  outline: none;
 }
 
 /* ─── Search Results ─── */
@@ -23597,17 +23229,6 @@ a.file-link:hover {
 }
 
 /* Playback speed selector — a <select> styled like the toolbar tabs */
-.fv-speed-select {
-  appearance: none;
-  -webkit-appearance: none;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 3px 22px 3px 8px;
-  background-position: right 6px center;
-}
-.fv-speed-select:hover {
-  background-color: var(--bg-tertiary);
-}
 
 /* Fullscreen button sits at the right end of the toolbar */
 .fv-fullscreen-btn {
@@ -24370,16 +23991,10 @@ a.file-link:hover {
 .session-web-address {
   flex: 1 1 auto;
   min-width: 80px;
-  height: 26px;
   padding: 0 8px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg);
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
 }
-.session-web-address:focus { outline: none; border-color: var(--accent); }
 .session-web-address-invalid,
 .session-web-address-invalid:focus { border-color: var(--error); }
 .session-web-iframe {
@@ -24889,18 +24504,8 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .app-modal-input {
   width: 100%;
   margin-top: 14px;
-  padding: 8px 11px;
   font-size: 14px;
-  color: var(--fg);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  outline: none;
   box-sizing: border-box;
-}
-.app-modal-input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.25);
 }
 .app-modal-actions {
   display: flex;
@@ -25234,25 +24839,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   flex: 0 1 auto;
   min-width: 140px;
 }
-.session-diff-base-select {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
-}
 .session-diff-base-label { font-weight: 600; }
-.session-diff-base-select select {
-  border: 1px solid var(--border);
-  background-color: var(--bg);
-  color: var(--fg);
-  border-radius: 6px;
-  padding: 3px 22px 3px 6px;
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  background-position: right 6px center;
-}
-.session-diff-base-select select:hover { border-color: var(--accent); }
 
 /* Compare picker (DiffComparePicker.tsx): a button naming the comparison and a
    popover portalled to <body> with the working-tree comparisons, the branches
@@ -25307,14 +24894,8 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .sdc-search input {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg);
-  border-radius: 6px;
-  padding: 5px 28px 5px 8px;
   font-size: var(--font-size-sm);
 }
-.sdc-search input:focus { outline: none; border-color: var(--accent); }
 .sdc-spinner {
   position: absolute;
   right: 16px;
@@ -26655,15 +26236,9 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   width: 100%;
   box-sizing: border-box;
   resize: vertical;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
   font-size: var(--font-size-md);
   padding: 7px 9px;
 }
-.session-diff-comment-input:focus { outline: none; border-color: var(--accent); }
 .session-diff-comment-actions {
   display: flex;
   justify-content: flex-end;
@@ -26849,17 +26424,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .routine-composer-input {
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-  color: inherit;
-  font: inherit;
   resize: vertical;
-}
-
-.routine-composer-input:focus {
-  outline: none;
-  border-color: var(--color-primary, #4a7dff);
 }
 
 .routine-composer-templates {
@@ -27434,9 +26999,12 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .cloud-userdata-label { font-size: var(--font-size-sm); font-weight: 600; color: var(--fg-secondary); }
 .cloud-userdata-warn { margin: 0; font-size: var(--font-size-xs); color: var(--warning); }
 .cloud-userdata-box {
-  width: 100%; font-family: var(--font-mono); font-size: var(--font-size-xs); line-height: 1.5;
-  padding: 10px 12px; background: var(--bg-secondary);
-  border: 1px solid var(--border); border-radius: var(--radius-sm); resize: vertical;
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  padding: 10px 12px;
+  resize: vertical;
 }
 
 /* Done / already-configured. */
@@ -27462,10 +27030,11 @@ button.focus-tiers-label-editable {
 }
 button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .focus-tiers-edit-input {
-  flex: 1; font-size: 14px; font-weight: 500;
-  padding: 2px 4px; margin: -2px -4px;
-  border: 1px solid var(--accent); border-radius: var(--radius-xs);
-  background: var(--bg); color: var(--fg);
+  flex: 1;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 2px 4px;
+  margin: -2px -4px;
 }
 .focus-tiers-tag {
   padding: 1px 8px; border-radius: 999px; flex-shrink: 0;
@@ -28092,12 +27661,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 .cal-rail-search {
   width: 100%;
-  height: 26px;
   padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-  color: var(--fg);
   font-size: var(--font-size-sm);
 }
 
@@ -28988,10 +28552,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   box-shadow: none;
 }
 
-.cal-event-form-title::placeholder {
-  color: color-mix(in srgb, var(--fg) 35%, transparent);
-}
-
 .cal-form-row {
   display: flex;
   align-items: center;
@@ -29527,14 +29087,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 .cal-item-title {
   width: 100%;
-  /* The popover is a flex column with a max-height: when the error row appears
-     the title input was the flexible item and squashed to a 9px sliver. */
   flex-shrink: 0;
-  padding: 5px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
   font-size: var(--font-size-lg);
   font-weight: 600;
 }
@@ -29582,12 +29135,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 .cal-item-row input[type='date'],
 .cal-item-row input[type='time'] {
-  height: 28px;
-  padding: 0 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
   font-size: var(--font-size-md);
 }
 
@@ -30502,11 +30049,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 .plugin-task-view-toolbar input {
   min-width: 120px;
   max-width: 240px;
-  padding: 6px 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--card-bg);
-  color: var(--fg);
 }
 
 .plugin-task-view .tp-table-scroll { flex: 1; min-height: 0; }
@@ -30607,17 +30149,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 .build-plugin-form {
   display: flex;
   gap: 8px;
-}
-
-.build-plugin-form input {
-  flex: 1;
-  min-width: 0;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
-  font-size: var(--font-size-md);
 }
 
 .build-plugin-manual {

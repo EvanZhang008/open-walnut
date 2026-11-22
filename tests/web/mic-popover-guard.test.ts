@@ -30,12 +30,13 @@ it('the shared mic owns its phone-sized target outside overlay-only page styles'
   expect(mobile).toContain('min-width: 44px;');
   expect(mobile).toContain('min-height: 44px;');
   expect(mobile).toContain('padding-right: 52px;');
-  expect(mobile).toContain('padding-right: 96px;');
-  for (const clear of ['.kanban-search-clear', '.notes-search-clear', '.settings-filter-clear']) {
-    expect(mobile).toContain(clear);
-  }
-  expect(mobile).toContain('right: 48px;');
-  expect(mobile).toContain('right: 62px;');
+  // A search field's clear and mic are its keys (SearchField): one phone rule sizes both.
+  const box = read('styles/input-box.css');
+  const boxMobile = box.slice(box.indexOf(`@media ${query} {`));
+  expect(boxMobile).toContain('.app-shell-navigation .wn-field-key,');
+  expect(boxMobile).toContain('.app-shell-navigation .wn-field > .box-mic .mic-btn,');
+  // The board's and the notes' searches are SearchFields too: no clear-key offsets of their own.
+  for (const clear of ['.kanban-search-clear', '.notes-search-clear']) expect(css).not.toContain(clear);
   expect(mobile).toContain('min-width: 148px;');
   expect(mobile).toContain('.todo-panel-toolbar { flex-wrap: wrap; }');
   expect(mobile).not.toContain('.is-phone-layer');

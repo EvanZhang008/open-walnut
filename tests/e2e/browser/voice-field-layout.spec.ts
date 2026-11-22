@@ -29,7 +29,9 @@ async function field(page: Page, input: Locator, name: string) {
   const wrapper = input.locator('xpath=..');
   const mic = wrapper.locator('.mic-btn').first();
   await expect(mic).toBeVisible();
-  const box = (await input.boundingBox())!;
+  // A field box (`wn-field`) holds its mic beside the words; a bare field has it over its right end.
+  const drawn = (await input.evaluate((el) => !!el.parentElement?.classList.contains('wn-field'))) ? wrapper : input;
+  const box = (await drawn.boundingBox())!;
   const button = (await mic.boundingBox())!;
   expect(button.x).toBeGreaterThanOrEqual(box.x);
   expect(button.x + button.width).toBeLessThanOrEqual(box.x + box.width + 1);

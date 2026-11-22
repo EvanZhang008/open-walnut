@@ -171,10 +171,6 @@
 .engine-setting-custom {
   max-width: 220px;
   padding: 4px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
   font-size: var(--font-size-sm);
 }
 

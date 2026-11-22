@@ -331,13 +331,14 @@ export async function filterShape(page: Page): Promise<Record<string, number | s
     const style = getComputedStyle(input)
     return {
       // Where the TEXT starts, which is the column a person reads down, not where the box starts.
-      inputText: Math.round(input.getBoundingClientRect().left - left + Number.parseFloat(style.paddingLeft)),
+      inputText: Math.round(input.getBoundingClientRect().left - left + Number.parseFloat(style.borderLeftWidth) + Number.parseFloat(style.paddingLeft)),
       folderText: Math.round(name.getBoundingClientRect().left - left),
       inputHeight: Math.round(input.getBoundingClientRect().height),
       rowHeight: Math.round(
         (document.querySelector('.mail-account .mail-mailbox') as HTMLElement).getBoundingClientRect().height,
       ),
-      border: style.borderTopWidth,
+      // The field's resting edge (input-box.css "Fields"): there, but transparent.
+      border: style.borderTopColor === 'rgba(0, 0, 0, 0)' ? '0px' : style.borderTopWidth,
       emptyText: empty ? Math.round(empty.getBoundingClientRect().left
         + Number.parseFloat(getComputedStyle(empty).paddingLeft) - left) : -1,
     }

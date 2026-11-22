@@ -5,19 +5,17 @@
  */
 
 :root {
-  --settings-input-bg: var(--bg-secondary);
+  --settings-input-bg: var(--input-fill);
   --settings-tag-success-fg: #1f7a35;
   --settings-focus-ring: 0 0 0 3px var(--accent-subtle);
 }
 
 :root[data-theme='dark'] {
-  --settings-input-bg: rgba(255, 255, 255, 0.06);
   --settings-tag-success-fg: var(--success);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    --settings-input-bg: rgba(255, 255, 255, 0.06);
     --settings-tag-success-fg: var(--success);
   }
 }
@@ -98,29 +96,13 @@
 .settings-control-cluster > .btn-ghost:last-child { margin-right: -10px; }
 
 /* ── Text inputs, numbers, selects ── */
+/* Their corner, fill, edge, focus, error edge and 28 px height are every field's
+   (styles/input-box.css, "Fields"); only their widths are Settings'. */
 .settings-input {
   box-sizing: border-box;
   max-width: 100%;
   min-width: 0;
-  height: 28px;
-  padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--settings-input-bg);
-  color: var(--fg);
-  font: inherit;
   font-size: var(--font-size-md);
-  line-height: 18px;
-}
-
-.settings-input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: var(--settings-focus-ring);
-}
-
-.settings-input[aria-invalid='true'] {
-  border-color: var(--settings-error-text, var(--error));
 }
 
 .settings-input.settings-input--short { width: 240px; }
@@ -130,9 +112,7 @@
 
 textarea.settings-input {
   width: 100%;
-  height: auto;
   min-height: 160px;
-  padding: 8px;
   resize: vertical;
   font-family: var(--font-mono);
   font-size: var(--font-size-md);
@@ -168,13 +148,6 @@ textarea.settings-input {
   box-sizing: border-box;
   width: auto;
   max-width: min(100%, 60cqi);
-  height: 28px;
-  padding: 0 28px 0 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background-color: var(--settings-input-bg);
-  color: var(--fg);
-  font: inherit;
   font-size: var(--font-size-md);
 }
 
@@ -185,12 +158,6 @@ textarea.settings-input {
 /* A select in a column of short inputs (the remote history Profile row): the inputs' width, so a
    long name cannot push the control past its share of the row at 660px (N3-01). */
 .settings-select.settings-select--short { width: 240px; }
-
-.settings-select:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: var(--settings-focus-ring);
-}
 
 .settings-secret,
 .settings-secret-saved {

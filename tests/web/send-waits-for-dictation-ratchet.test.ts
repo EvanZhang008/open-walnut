@@ -33,6 +33,7 @@ const MIC_COMPONENTS = new Set([
   'components/common/BoxMic.tsx',
   'components/common/EditorMic.tsx',
   'components/common/AnswerBox.tsx',
+  'components/common/SearchField.tsx',
   'plugins/views.tsx',
 ]);
 
@@ -62,7 +63,7 @@ const DIRECT_OK: Record<string, { near: string; why: string }> = {
   },
 };
 
-const MIC_TAG = /<(MicButton|BoxMic|MicField|EditorMic|AnswerBox|MicInput)\b/g;
+const MIC_TAG = /<(MicButton|BoxMic|MicField|EditorMic|AnswerBox|MicInput|SearchField)\b/g;
 
 /** The JSX element starting at `start` (`<Tag ... >` or `/>`), braces respected. */
 function elementAt(text: string, start: number): string {
@@ -138,7 +139,7 @@ function bypasses(text: string): string[] {
   return out;
 }
 
-const owners = files.filter((f) => !MIC_COMPONENTS.has(f.rel) && /<(MicButton|BoxMic|MicField|EditorMic|AnswerBox|MicInput)\b/.test(f.text));
+const owners = files.filter((f) => !MIC_COMPONENTS.has(f.rel) && /<(MicButton|BoxMic|MicField|EditorMic|AnswerBox|MicInput|SearchField)\b/.test(f.text));
 
 describe('send waits for the dictation in every composer with a mic', () => {
   it('finds the composers (the scan is alive)', () => {
@@ -172,7 +173,7 @@ describe('send waits for the dictation in every composer with a mic', () => {
         // A MicInput that keeps its mic (no micRef) is judged one by one, by its role, in
         // 'every MicInput without micRef has a role' below; one that hands its owner the mic must
         // be in that owner's gate, as every other mic here.
-        if (m[1] === 'MicInput' && !/\bmicRef=/.test(el)) continue;
+        if ((m[1] === 'MicInput' || m[1] === 'SearchField') && !/\bmicRef=/.test(el)) continue;
         if (!ref) { problems.push(`<${m[1]}> hands its owner no handle (controlRef/handleRef/micRef)`); continue; }
         if (!gated.has(ref)) problems.push(`<${m[1]}> ${ref} is in no useSendAfterDictation([...]) of this file`);
       }
@@ -219,6 +220,7 @@ const SELF_GATED: Record<string, Role> = {
   'components/notes/NotesTreePanel.tsx|MicInput aria-label="Search notes"': FILTER,
   'components/notes/slash-commands/NoteLinkPanel.tsx|MicInput placeholder="Link to note..."': FILTER,
   'components/notes/slash-commands/TaskSearchPanel.tsx|MicInput placeholder="Search tasks..."': FILTER,
+  'components/memory/MemoryTreePanel.tsx|MicInput aria-label="Filter memory files"': FILTER,
   'components/org/OrgChannelList.tsx|MicInput data-testid="org-search"': FILTER,
   'components/org/OrgEditableName.tsx|MicInput data-testid=`${testId}-input`': OWN_ENTER,
   // A New Director's title: only its own Enter makes the task; leaving it empty closes it, sending nothing.
@@ -255,10 +257,11 @@ const SELF_GATED: Record<string, Role> = {
     why: 'a heading rename that saves when left; its form has no submit button, so only the box\'s Enter submits it, and the MicInput holds an Enter while its words are coming',
   },
   'components/tasks/TodoPanel.tsx|MicInput aria-label="New project name"': OWN_ENTER,
-  "components/tasks/TodoSearchBar.tsx|MicInput placeholder=phone ? 'Search' : 'Search tasks... \\u2318K'": FILTER,
+  'components/tasks/TodoSearchBar.tsx|MicInput aria-label="Search tasks"': FILTER,
   'components/tasks/ViewDropdown.tsx|MicInput aria-label="Search filters"': FILTER,
   'pages/AppsPage.tsx|MicInput data-testid="apps-search"': FILTER,
-  'pages/DashboardPage.tsx|MicInput placeholder="Search tasks…"': FILTER,
+  'pages/DashboardPage.tsx|MicInput aria-label="Search tasks"': FILTER,
+  'components/sessions/EngineSettingsPopoverBody.tsx|MicInput aria-label="Find a setting"': FILTER,
 };
 
 /** What submits a MicInput's words from outside the box: buttons and forms that run its submit or read its value. */
@@ -299,7 +302,7 @@ function micInputProblems(text: string, use: { key: string; attrs: Map<string, s
 }
 
 describe('every MicInput without micRef has a role, and nothing outside it submits its words', () => {
-  const uses = files.filter((f) => f.rel.endsWith('.tsx')).flatMap((f) => micInputsOf(f.rel, f.text).map((u) => ({ ...u, text: f.text })));
+  const uses = files.filter((f) => f.rel.endsWith('.tsx') && !MIC_COMPONENTS.has(f.rel)).flatMap((f) => micInputsOf(f.rel, f.text).map((u) => ({ ...u, text: f.text })));
 
   it('finds the MicInputs (the scan is alive)', () => {
     expect(uses.length).toBeGreaterThan(50);

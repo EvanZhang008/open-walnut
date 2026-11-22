@@ -20,7 +20,7 @@ export function CustomTime({ c, w, origin }: { c: FilterBarController; w: Filter
     <div className="fb-custom-time">
       <input data-no-draft="number"
         type="number"
-        className="fb-custom-input"
+        className="fb-custom-input is-sm"
         min={1}
         step={1}
         aria-label="Custom window length"

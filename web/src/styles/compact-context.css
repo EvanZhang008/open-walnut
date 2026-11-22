@@ -30,16 +30,12 @@
 .idle-compact-percent {
   width: 2.9em;
   padding: 2px 6px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
   text-align: right;
 }
-.idle-compact-percent:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.idle-compact-percent[aria-invalid='true'] { border-color: var(--warning); }
 .idle-compact-percent:disabled { opacity: 0.5; }
+/* A share out of range is a warning (the line says what it will use), not an error: the one
+   field edge that is not --error. */
+.idle-compact-percent[aria-invalid='true'] { border-color: var(--warning); }
 .idle-compact-saved { color: var(--fg-muted); font-size: var(--font-size-xs); }
 .idle-compact-setting-help { color: var(--fg-muted); font-size: var(--font-size-xs); }
 .idle-compact-setting-help a { color: var(--accent); }

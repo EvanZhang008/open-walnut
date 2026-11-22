@@ -416,7 +416,6 @@
   appearance: none;
 }
 .ask-walnut-drawer-search-input::-webkit-search-cancel-button { -webkit-appearance: none; }
-.ask-walnut-drawer-search-input::placeholder { color: var(--fg-muted); }
 /* The list owns whatever height is left and scrolls inside. */
 .ask-walnut-drawer-list {
   flex: 1;

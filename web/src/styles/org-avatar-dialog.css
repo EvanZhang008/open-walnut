@@ -8,7 +8,7 @@
 .org-avatar-who { display: flex; gap: 14px; align-items: center; padding: 6px 18px 4px; }
 .org-avatar-now { flex: none; width: 64px; height: 64px; border-radius: var(--radius-lg); }
 .org-avatar-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; font-size: var(--font-size-sm); color: var(--fg-secondary); }
-.org-avatar-name input, .org-avatar-ask input { box-sizing: border-box; width: 100%; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--fg); font: inherit; font-size: 14px; }
+.org-avatar-name input, .org-avatar-ask input { box-sizing: border-box; width: 100%; font-size: 14px; }
 .org-avatar-name input:disabled { opacity: .6; }
 .org-avatar-name small { font-size: var(--font-size-xs); }
 .org-avatar-tabs { margin: 6px 18px 6px; }
@@ -27,7 +27,7 @@
 .org-avatar-ask { display: flex; gap: 8px; }
 .org-avatar-drawn { display: flex; gap: 12px; justify-content: center; margin-top: 12px; }
 .org-avatar-drop { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 26px 12px; border: 2px dashed var(--border); border-radius: var(--radius-md); color: var(--fg); font-size: var(--font-size-md); text-align: center; cursor: pointer; }
-.org-avatar-drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.org-avatar-drop input[type='file'] { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .org-avatar-drop small { color: var(--fg-secondary); font-size: var(--font-size-sm); }
 .org-avatar-error { margin: 8px 0 0; font-size: var(--font-size-md); color: var(--error); }
 .org-avatar-foot { display: flex; gap: 8px; align-items: center; padding: 12px 18px 16px; border-top: 1px solid var(--border); }

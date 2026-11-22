@@ -190,9 +190,6 @@
   outline: none;
 }
 .thread-card-input::placeholder {
-  color: var(--fg-muted);
-  /* One line, cut with an ellipsis: the card's head already names the question
-     (2026-11-11 review: 'Reply in "What Would Break"…' wrapped in the 296px card). */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

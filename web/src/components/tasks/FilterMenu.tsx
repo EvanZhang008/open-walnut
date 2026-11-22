@@ -16,7 +16,7 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { ICON_CHEVRON_LEFT, ICON_CLOSE, ICON_SEARCH } from '../common/Icons';
+import { ICON_CHEVRON_LEFT } from '../common/Icons';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { clampToPanelLeft, panelLeftOf } from './panel-menu-clamp';
 import { useOverlayLayer, type OverlayCloseReason } from '@/hooks/useOverlayLayer';
@@ -33,7 +33,7 @@ import { DisplaySections, DisplayViewsPage, useMenuViews } from './DisplaySectio
 import { viewLabel } from './tab-bar-model';
 import '@/styles/filter-toolbar-base.css';
 import '@/styles/filter-bar.css';
-import { MicInput } from '@/components/common/BoxMic';
+import { SearchField } from '@/components/common/SearchField';
 
 export const PANEL_MENU_MAX_HEIGHT = 520;
 export const PANEL_MENU_WIDTH = 320;
@@ -259,9 +259,8 @@ export function PanelMenu({ filters: c, display: d, flashOption }: PanelMenuProp
       onPointerDown={(e) => e.stopPropagation()}
       onKeyDownCapture={() => { if (!keyed) setKeyed(true); }}
     >
-      <div className="fb-search fb-menu-search">
-        <span className="fb-search-icon" aria-hidden="true">{ICON_SEARCH}</span>
-        <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="search"
+      <div className="fb-menu-search">
+        <SearchField fieldClassName="fb-search" data-no-draft="search"
           ref={inputRef}
           type="text"
           className="fb-search-input"
@@ -273,17 +272,9 @@ export function PanelMenu({ filters: c, display: d, flashOption }: PanelMenuProp
           value={query}
           setText={onQuery}
           onKeyDown={onKeyDown}
+          onClear={() => onQuery('')}
+          clearClassName="fb-search-clear"
         />
-        {query && (
-          <button
-            type="button"
-            className="fb-search-clear"
-            aria-label="Clear search"
-            onClick={() => { onQuery(''); focusInput(); }}
-          >
-            {ICON_CLOSE}
-          </button>
-        )}
       </div>
       <div ref={bodyRef} className="fb-menu-body" onKeyDown={onBodyKeyDown}>
         {searching ? (

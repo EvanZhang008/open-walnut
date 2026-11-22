@@ -70,28 +70,10 @@
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 0 12px 4px; color: var(--fg-muted);
   font-size: var(--font-size-sm);
 }
-.thread-drawer-search {
-  position: relative; display: flex; align-items: center; gap: 6px; margin: 4px 10px 6px; padding: 0 8px;
-  height: 28px; border-radius: var(--radius-sm); background: var(--bg-secondary); color: var(--fg-muted);
-}
-.thread-drawer-search:focus-within { box-shadow: 0 0 0 2px var(--accent-subtle), inset 0 0 0 1px var(--accent); }
-.thread-drawer-search-input {
-  flex: 1; min-width: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--font-size-md);
-  outline: none; -webkit-appearance: none; appearance: none;
-}
-.thread-drawer-search-input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; display: none; }
-.thread-drawer-search-input::placeholder { color: var(--fg-muted); }
-/* The container draws the one ring (N25): the input's own UA focus glow goes. */
-.thread-drawer-search-input:focus, .thread-drawer-search-input:focus-visible { outline: none; box-shadow: none; }
-.thread-drawer-search-clear {
-  border: 0; background: transparent; color: var(--fg-secondary); font: inherit; font-size: var(--font-size-sm);
-  padding: 2px 4px; border-radius: var(--radius-xs); cursor: pointer;
-}
-.thread-drawer-search-clear:hover { color: var(--fg); background: var(--bg-hover); }
+.thread-drawer-search { margin: 4px 10px 6px; }
 .thread-drawer-chips { margin: 0 10px 6px; }
 .thread-drawer-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 4px 8px; }
-.thread-drawer-close:focus-visible,
-.thread-drawer-search-clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.thread-drawer-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .thread-drawer-close:focus:not(:focus-visible) { outline: none; }
 
 /* ── Tree rows (spec 6.4): 44px two-line, 30px single-line, 16px indent per

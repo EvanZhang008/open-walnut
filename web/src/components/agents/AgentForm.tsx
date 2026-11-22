@@ -277,7 +277,7 @@ export function AgentForm({ agent, cloneFrom, onSave, onCancel }: AgentFormProps
                       <input
                         data-draft-key={kept.key ?? undefined}
                         type="number"
-                        className="context-source-budget"
+                        className="context-source-budget is-sm"
                         min="100"
                         placeholder={String(def.defaultBudget)}
                         value={state.budget}

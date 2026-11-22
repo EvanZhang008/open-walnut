@@ -142,7 +142,7 @@ function NameField({ value, label, className, onCommit, onDone }: {
     if (e.key === 'Escape') { e.preventDefault(); done.current = true; onDone(null); }
   };
   // A name is words: the mic too. Its wrapper takes the field's place in the row (`className`).
-  return <MicInput fieldClassName={`${className} drawing-name-field`} className="drawing-name-input" aria-label={label} value={draft} setText={setDraft}
+  return <MicInput fieldClassName={`${className} drawing-name-field`} className="drawing-name-input is-sm" aria-label={label} value={draft} setText={setDraft}
     maxLength={120} autoFocus data-no-draft="rename" onFocus={(e) => e.currentTarget.select()} onKeyDown={onKeyDown} onBlur={() => void commit()} />;
 }
 

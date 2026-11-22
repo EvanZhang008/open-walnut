@@ -9,7 +9,7 @@ import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import type { UsageKind, UsageRange, UsageRow } from '@/api/usage-watch';
 import { NoticeStatus } from '@/components/common/NoticeCard';
-import { MicInput } from '@/components/common/BoxMic';
+import { SearchField } from '@/components/common/SearchField';
 import { ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import { SegmentedControl } from '../inputs/SegmentedControl';
@@ -195,11 +195,10 @@ function UsageRowView({ row, cols, open, span, range, now, onToggle }: { row: Us
 
 function FindBox({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
-    <div className="settings-filter-wrap ru-find">
-      <SettingsIcon glyph="magnifier" size={13} className="settings-filter-glyph" />
-      <MicInput fieldClassName="mic-field-compact" type="search" data-no-draft="search" className="settings-filter" data-testid="real-use-find"
-        placeholder="Find a tool" aria-label="Find a tool" autoComplete="off" spellCheck={false} value={value} setText={onChange} />
-    </div>
+    <SearchField small fieldClassName="ru-find" icon={<SettingsIcon glyph="magnifier" size={13} />}
+      type="search" data-no-draft="search" className="settings-filter" data-testid="real-use-find"
+      placeholder="Find a tool" aria-label="Find a tool" autoComplete="off" spellCheck={false}
+      value={value} setText={onChange} onClear={() => onChange('')} clearLabel="Clear the search" />
   );
 }
 

@@ -234,7 +234,7 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
           <span className="detail-setting-label">Working Dir</span>
           {editingField === 'default_cwd' ? (
             <input data-no-draft="autosave"
-              className="detail-setting-input"
+              className="detail-setting-input is-sm"
               value={editValue}
               onChange={(e) => setEditValue(e.target.value)}
               onBlur={() => saveEdit('default_cwd')}
@@ -256,7 +256,7 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
           <span className="detail-setting-label">Host</span>
           {editingField === 'default_host' ? (
             <input data-no-draft="autosave"
-              className="detail-setting-input"
+              className="detail-setting-input is-sm"
               value={editValue}
               onChange={(e) => setEditValue(e.target.value)}
               onBlur={() => saveEdit('default_host')}

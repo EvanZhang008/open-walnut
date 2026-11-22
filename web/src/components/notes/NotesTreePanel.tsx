@@ -11,6 +11,7 @@ import { jumpNeedles, findQueries } from './jump-target';
 import { useConfirm, useAlert } from '@/hooks/useConfirm';
 import { copyTextDeferred } from '@/utils/clipboard';
 import { MicInput } from '@/components/common/BoxMic';
+import { SearchField } from '@/components/common/SearchField';
 import { folderNoteOf, visibleFolderChildren, folderOfFolderNote, folderRowClickAction, isAttachmentFolder } from './folder-note';
 
 /**
@@ -977,7 +978,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
       </div>
 
       <div className="notes-tree-search">
-        <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="search"
+        <SearchField data-no-draft="search"
           type="text"
           placeholder="Search notes..."
           value={searchQuery}
@@ -985,18 +986,10 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           onKeyDown={handleSearchKeyDown}
           className="notes-search-input"
           aria-label="Search notes"
+          onClear={() => handleSearchChange('')}
+          clearLabel="Clear search (Esc)"
+          clearClassName="notes-search-clear"
         />
-        {searchQuery && (
-          <button
-            type="button"
-            className="notes-search-clear"
-            aria-label="Clear search"
-            title="Clear search (Esc)"
-            onClick={() => handleSearchChange('')}
-          >
-            ×
-          </button>
-        )}
       </div>
 
       {/* Bookmarks group (§2.6) — collapsible, at the TOP of the tree. Hidden while

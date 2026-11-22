@@ -1,6 +1,7 @@
-/* Settings boxes with the composer's mic (MicField). A settings input is 28px tall: a smaller mic fits inside it. */
-.settings-mic-field .mic-field-mic .mic-btn { min-width: 24px; height: 24px; }
-.settings-mic-field.mic-field-inline .mic-field-mic { right: 2px; }
+/* Settings boxes with the composer's mic (MicField). A settings field is small (28 px): its mic is
+   the small field key, 3 px in from the edge (styles/input-box.css, "Fields"). */
+.settings-mic-field .mic-field-mic .mic-btn { min-width: var(--input-key-sm); height: var(--input-key-sm); }
+.settings-mic-field.mic-field-inline .mic-field-mic { right: 3px; }
 
 /* Build a plugin: the field takes the row's free width, as the bare input did. */
 .build-plugin-form > .settings-mic-field { flex: 1; min-width: 0; }

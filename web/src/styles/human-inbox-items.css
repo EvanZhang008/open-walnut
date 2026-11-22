@@ -33,7 +33,7 @@
 .hii-error { color: var(--error); }
 .hii-confirm { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 8px; font-size: var(--font-size-sm); }
 .hii-confirm label { display: block; margin: 8px 0; }
-.hii-confirm input, .hii-confirm textarea, .hii-selector input { display: block; width: 100%; min-width: 0; box-sizing: border-box; margin-top: 4px; color: var(--fg); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px; font: inherit; }
+.hii-confirm input, .hii-confirm textarea, .hii-selector input { display: block; width: 100%; min-width: 0; box-sizing: border-box; margin-top: 4px; }
 .hii-confirm textarea { resize: vertical; }
 .hii-projects { display: flex; flex-wrap: wrap; gap: 4px; max-height: 120px; overflow-y: auto; }
 .hii-projects [aria-pressed="true"] { outline: 1px solid var(--accent); }

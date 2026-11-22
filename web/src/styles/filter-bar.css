@@ -27,50 +27,8 @@
   padding: 4px;
 }
 
-/* The one search box: a quiet row, no border of its own, a hairline under it. */
-.fb-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: none;
-  height: 36px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--border);
-  color: var(--fg-muted);
-}
-.fb-search-icon { display: inline-flex; flex: none; }
-.fb-search-icon svg { width: 14px; height: 14px; }
-.fb-search-input {
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  border: none;
-  outline: none;
-  background: transparent;
-  color: var(--fg);
-  font-size: var(--font-size-md);
-  font-family: inherit;
-  padding: 0;
-}
-.fb-search-input::placeholder { color: var(--fg-muted); }
-/* One focus indicator (F16): the caret; the global input ring stays out. */
-.fb-search-input:focus,
-.fb-search-input:focus-visible { box-shadow: none; border: none; outline: none; }
-.fb-search-clear {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-.fb-search-clear:hover { background: var(--bg-hover); color: var(--fg); }
-.fb-search-clear svg { width: 12px; height: 12px; }
+/* The menu's search: the one search field (SearchField, styles/input-box.css), inset at the top. */
+.fb-menu-search, .fb-list-search { flex: none; padding: 6px 6px 2px; }
 
 /* ── Rows shared by both pages ── */
 .fb-item,
@@ -257,16 +215,9 @@
 .fb-custom-time { display: flex; align-items: center; gap: 6px; padding: 6px 8px 4px; }
 .fb-custom-input {
   width: 64px;
-  height: 26px;
   padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-secondary);
-  color: var(--fg);
   font-size: var(--font-size-sm);
-  font-family: inherit;
 }
-.fb-custom-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* ── Search results (6.3): `Status  In Progress` or `View  Pinned`, the kind muted ── */
 .fb-search-results { display: flex; flex-direction: column; }
@@ -319,7 +270,6 @@
 .fb-back:focus-visible,
 .fb-only:focus-visible,
 .fb-text-btn:focus-visible,
-.fb-search-clear:focus-visible,
 .fb-chip-menu-remove:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .fb-opt-body:focus-visible { outline: none; }
 /* After a key, the focused control shows the ring in every engine (WebKit skips

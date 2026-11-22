@@ -286,7 +286,7 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId, project }: 
                 <input
                   id={id}
                   data-draft-key={kept.key ?? undefined}
-                  className="draft-workspace-input"
+                  className="draft-workspace-input is-sm"
                   data-testid={`draft-workspace-input-${key}`}
                   value={typeof value === 'string' ? value : suggestedText(picked, key)}
                   // "current commit" beside "from main" read as two bases: say they are the same one.

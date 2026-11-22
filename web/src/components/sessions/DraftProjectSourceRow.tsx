@@ -74,7 +74,7 @@ function AddFlyout({ open, anchorRef, field, onAdd, onClose }: {
     <ProjectStartFlyout open={open} anchorRef={anchorRef} onClose={() => { setTyped(''); onClose(); }} label={`Add to ${field.title}`}
       className="project-start-add" testId="draft-source-add-flyout" minHeight={120}>
       <input
-        className="psp-search"
+        className="psp-search is-sm"
         data-no-draft="search"
         data-testid="draft-source-add-input"
         placeholder={field.placeholder ? `Search or type, e.g. ${field.placeholder}` : 'Search or type a name…'}

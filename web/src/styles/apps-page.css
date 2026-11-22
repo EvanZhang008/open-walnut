@@ -71,28 +71,11 @@
   margin: 2px 0 0;
   color: var(--fg-muted);
 }
+/* The page's search: the one search field (SearchField, styles/input-box.css). */
 .apps-search {
   margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 6px;
   width: 260px;
   flex: none;
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--settings-group-bg);
-  color: var(--fg-muted);
-}
-.apps-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
-.apps-search input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--fg);
-  font: inherit;
 }
 
 /* ── Chips ── */
@@ -480,39 +463,8 @@
   letter-spacing: -0.01em;
 }
 .apps-make-sub { margin: 4px 0 14px; opacity: 0.92; }
-.apps-make-ask {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 6px 6px 6px 14px;
-  border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.97);
-}
-.apps-make-ask input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: #1d1d1f;
-  font: inherit;
-  font-size: 14px;
-  line-height: 20px;
-}
-.apps-make-ask input::placeholder { color: var(--fg-muted); }
-.apps-make-go {
-  border: 0;
-  border-radius: var(--radius-sm);
-  padding: 7px 16px;
-  background: var(--accent);
-  color: var(--on-accent);
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.apps-make-go:disabled { opacity: 0.55; cursor: default; }
-.apps-make-go:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+/* The request: one field (input-box.css "Fields"), its mic and the Build key inside it. */
+.apps-make-ask .apps-make-go { flex: none; margin-left: 4px; }
 .apps-make-error {
   margin-top: 8px;
   padding: 6px 10px;
@@ -570,7 +522,6 @@
   /* A plugin's own panel gets the page's width back on a phone. */
   .plugin-settings-panel { padding: 10px 12px; }
   .apps-make { padding: 18px; }
-  .apps-make-ask { flex-direction: column; align-items: stretch; padding: 8px; }
 }
 
 /* The update chip is the same 18px pill as the tags in the page header (N3-7): its own

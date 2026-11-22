@@ -311,17 +311,10 @@
 .oc-field input, .oc-field textarea {
   width: 100%;
   box-sizing: border-box;
-  padding: 7px 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
   font-weight: 400;
   font-size: var(--font-size-md);
 }
 .oc-field textarea { resize: vertical; min-height: 96px; max-height: 40vh; line-height: 1.45; }
-.oc-field input:focus-visible, .oc-field textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
 .oc-field-count { align-self: flex-end; font-size: var(--font-size-xs); font-weight: 400; color: var(--fg-muted); }
 .oc-link { align-self: flex-start; margin-top: -4px; border: none; background: none; padding: 0; font: inherit; font-size: var(--font-size-sm); color: var(--accent); cursor: pointer; }
 .oc-link:hover:not(:disabled) { text-decoration: underline; }

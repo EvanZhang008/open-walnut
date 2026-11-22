@@ -129,7 +129,6 @@
   }
 
   /* The search row: field, New task, Display and Board at 44 px. */
-  .app-shell-navigation .todo-panel .todo-search-input,
   .app-shell-navigation .todo-panel .new-launcher-btn,
   .app-shell-navigation .todo-panel .tp-btn,
   .app-shell-navigation .todo-panel .todo-panel-board {
@@ -407,8 +406,7 @@
   html body .is-phone-layer .task-watch-btn,
   html body .is-phone-layer .tdp-action,
   html body .is-phone-layer .tdp-link,
-  html body .is-phone-layer .mic-btn,
-  html body .is-phone-layer .tdp-note-add input {
+  html body .is-phone-layer .mic-btn {
     min-height: 44px;
   }
 
@@ -443,7 +441,6 @@
   }
 
   html body .is-phone-layer .tag-editor-input {
-    min-height: 44px;
     font-size: 16px;
   }
 
@@ -468,20 +465,15 @@
   }
 
   .phone-detail-title {
-    box-sizing: border-box;
-    width: 100%;
-    min-height: 44px;
-    padding: 8px 10px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--bg);
-    color: var(--fg);
-    font: inherit;
-    font-size: 16px;
-    font-weight: 600;
-    line-height: 1.35;
-    resize: none;
-  }
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.35;
+  resize: none;
+}
 
   .phone-detail-save {
     margin: 0;
@@ -570,17 +562,6 @@
     border-bottom: 1px solid var(--border);
   }
 
-  .phone-search-input {
-    box-sizing: border-box;
-    width: 100%;
-    height: 44px;
-    padding: 0 12px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--bg-secondary);
-    color: var(--fg);
-    font-size: 16px;
-  }
 
   .phone-search-results {
     flex: 1 1 auto;
@@ -661,21 +642,8 @@
     font-size: var(--font-size-xl);
   }
 
-  /* The home search row: 44 px, 16 px text. */
-  .app-shell-navigation .todo-panel .todo-search-bar {
-    position: relative;
-    min-height: 44px;
-  }
-
-  .app-shell-navigation .todo-panel .todo-search-input {
-    min-height: 44px;
-    font-size: 16px;
-  }
-
-  .app-shell-navigation .todo-panel .todo-search-input::-webkit-search-cancel-button {
-    -webkit-appearance: none;
-    appearance: none;
-  }
+  /* The home search row holds the phone extras under its field (the updates pill). */
+  .app-shell-navigation .todo-panel .todo-search-bar { position: relative; }
 
   .app-shell-navigation .phone-updates-pill {
     position: absolute;
@@ -812,11 +780,6 @@
     min-height: 44px;
   }
 
-  .app-shell-navigation .notes-split-view .notes-search-input {
-    min-height: 44px;
-    font-size: 16px;
-  }
-
   /* One note: its tab, header and (while editing) format buttons are 44 px. */
   .app-shell-navigation .notes-split-view .notes-tab-close,
   .app-shell-navigation .notes-split-view .notes-tab-new,
@@ -867,11 +830,6 @@
   .app-shell-navigation .mail-app .mail-icon-btn {
     min-width: 44px;
     min-height: 44px;
-  }
-
-  .app-shell-navigation .mail-app .mail-search-input {
-    min-height: 44px;
-    font-size: 16px;
   }
 
   .app-shell-navigation .mail-app .mail-view-menu-btn,

@@ -471,15 +471,6 @@
   cursor: pointer;
 }
 
-/* The composer drew its border from a variable no theme sets; it uses the page's own. */
-.routines-view .routine-composer-input {
-  border: 1px solid var(--border);
-}
-
-.routines-view .routine-composer-input {
-  background: var(--bg-secondary);
-}
-
 /* The task a session routine runs in, picked by its title (RoutineTaskField). */
 .routine-task-field {
   display: flex;

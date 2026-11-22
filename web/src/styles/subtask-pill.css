@@ -207,15 +207,7 @@
   z-index: 1;
   margin: 0 0 6px;
   padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
-  outline: none;
 }
-
-.adopt-worker-filter:focus { border-color: var(--accent); }
 /* The filter with its mic (MicInput): the wrapper sticks, the box fills it. */
 .mic-field.adopt-worker-filter-field { position: sticky; top: 0; z-index: 1; margin: 0 0 6px; }
 .adopt-worker-filter-field > .adopt-worker-filter { position: static; margin: 0; }

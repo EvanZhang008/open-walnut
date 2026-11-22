@@ -9,14 +9,14 @@
  * in the board and the focus is not in a text field.
  */
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
-import { ICON_CLOSE, ICON_SEARCH } from '@/components/common/Icons';
+import { ICON_CLOSE } from '@/components/common/Icons';
 import { KANBAN_CHIP_ORDER, type KanbanChipId, type KanbanFilterApi, type KanbanMode, type KanbanSeenApi } from './kanban-contract';
 import { chipLabel, chipTooltip } from './kanban-filter-model';
 import type { KanbanBoardVM } from './kanban-model';
 import { KanbanChanges } from './KanbanChanges';
 import { KANBAN_PANE_SELECTOR } from './kanban-toasts';
 import { pageShortcutBlocked } from '@/utils/page-shortcut';
-import { MicInput } from '@/components/common/BoxMic';
+import { SearchField } from '@/components/common/SearchField';
 import { Chip, ChipGroup } from '@/components/controls';
 
 export interface KanbanFiltersProps {
@@ -148,8 +148,7 @@ export function KanbanFilters({ board, filter, seen, mode, searchRef, onRevealCa
         </Chip>
       )}
       <div className="kanban-search-box">
-        <span className="kanban-search-icon" aria-hidden>{ICON_SEARCH}</span>
-        <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="search"
+        <SearchField small fieldClassName="kanban-search-field" data-no-draft="search"
           ref={inputRef}
           type="text"
           className="kanban-search"
@@ -164,17 +163,11 @@ export function KanbanFilters({ board, filter, seen, mode, searchRef, onRevealCa
             e.stopPropagation();
             filter.setQuery('');
           }}
+          onClear={() => filter.setQuery('')}
+          clearLabel="Clear search"
+          clearClassName="kanban-search-clear"
+          clearTestId="kanban-search-clear"
         />
-        {filter.query && (
-          <button
-            type="button"
-            className="kanban-search-clear"
-            data-testid="kanban-search-clear"
-            aria-label="Clear search"
-            title="Clear"
-            onClick={() => { filter.setQuery(''); inputRef.current?.focus(); }}
-          >{ICON_CLOSE}</button>
-        )}
       </div>
       {/* N18: after the search, so turning Changed on never moves it. */}
       {filter.chip === 'changed' && (

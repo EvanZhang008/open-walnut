@@ -209,22 +209,6 @@
   color: var(--priority-important-text);
 }
 
-/* N3-16: a text field with suggestions (datalist) draws the settings chevron,
-   never Chromium's black picker triangle. */
-.settings-input[list] {
-  padding-right: 28px;
-  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' fill='none' stroke='%23868690' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 8px center;
-  background-size: 12px;
-}
-
-.settings-input[list]::-webkit-calendar-picker-indicator,
-.settings-input[list]::-webkit-list-button {
-  display: none !important;
-  opacity: 0;
-}
-
 /* ── Tags rows: the display switch + its link button; the link editor's field + buttons ── */
 .tags-settings-controls {
   display: inline-flex;

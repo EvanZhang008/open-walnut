@@ -16,6 +16,8 @@ export interface MicInputUse {
 }
 
 const SIGNATURE_ATTRS = ['data-testid', 'id', 'aria-label', 'placeholder', 'className'];
+/** MicInput, and SearchField (a MicInput drawn as the one search field): both are judged as `MicInput`. */
+const MIC_INPUT_TAGS = new Set(['MicInput', 'SearchField']);
 
 function valueText(init: ts.JsxAttributeValue | undefined): string {
   if (!init) return 'true';
@@ -29,7 +31,7 @@ export function micInputsOf(file: string, source: string): MicInputUse[] {
   const out: MicInputUse[] = [];
   const seen = new Map<string, number>();
   const visit = (n: ts.Node) => {
-    if ((ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) && n.tagName.getText() === 'MicInput') {
+    if ((ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) && MIC_INPUT_TAGS.has(n.tagName.getText())) {
       const attrs = new Map<string, string>();
       const spreads: string[] = [];
       for (const p of n.attributes.properties) {

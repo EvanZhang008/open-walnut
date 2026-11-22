@@ -107,7 +107,7 @@ export function KanbanLaneHead({ lane: vm, lanes, index, mode, folded, onToggleF
     <span className="kanban-lane-rename">
       <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="rename"
         ref={inputRef}
-        className="kanban-lane-rename-input"
+        className="kanban-lane-rename-input is-sm"
         data-testid="kanban-lane-rename-input"
         aria-label="Lane name"
         aria-invalid={error ? true : undefined}

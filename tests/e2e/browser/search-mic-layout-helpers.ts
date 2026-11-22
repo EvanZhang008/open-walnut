@@ -9,7 +9,11 @@ export async function clearBesideMic(input: Locator, clear: Locator, query: stri
   await expect(clear).toBeVisible()
   await expect(mic).toHaveCount(1)
   await expect(mic).toBeVisible()
-  const box = (await input.boundingBox())!
+  // A field box (`wn-field`, SearchField) holds its keys beside the words; a bare field has them
+  // over its right end. Either way the keys stay inside what is drawn as the field.
+  const field = (await input.evaluate((el) => !!el.parentElement?.classList.contains('wn-field'))) ? input.locator('..') : input
+  const box = (await field.boundingBox())!
+  const words = (await input.boundingBox())!
   const c = (await clear.boundingBox())!
   const m = (await mic.boundingBox())!
   for (const b of [c, m]) {
@@ -20,7 +24,7 @@ export async function clearBesideMic(input: Locator, clear: Locator, query: stri
   }
   expect(c.x + c.width).toBeLessThanOrEqual(m.x)
   const padding = await input.evaluate((el) => parseFloat(getComputedStyle(el).paddingRight))
-  expect(box.x + box.width - padding).toBeLessThanOrEqual(c.x)
+  expect(words.x + words.width - padding).toBeLessThanOrEqual(c.x + 1)
   for (const control of [clear, mic]) {
     expect(await control.evaluate((el) => {
       const r = el.getBoundingClientRect()

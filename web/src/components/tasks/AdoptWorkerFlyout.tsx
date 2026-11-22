@@ -124,7 +124,7 @@ export function AdoptWorkerFlyout({ open, anchorRef, anchorPoint, align, leader,
     >
       <div className="adopt-worker-title wn-title">Adopt a worker for &ldquo;{orgDisplayTitle(leader)}&rdquo;</div>
       <MicInput fieldClassName="adopt-worker-filter-field mic-field-compact" data-no-draft="search"
-        className="adopt-worker-filter"
+        className="adopt-worker-filter is-sm"
         placeholder="Filter tasks…"
         value={filter}
         setText={(text) => { setFilter(text); setActive(0); setError(null); }}

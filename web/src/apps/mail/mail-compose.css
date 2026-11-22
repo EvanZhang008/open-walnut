@@ -291,8 +291,6 @@
   letter-spacing: -0.005em;
 }
 
-.mail-compose-input::placeholder { color: var(--fg-muted); }
-
 /* The focused row lights its own RULE, and nothing else.
    globals.css gives every `input`/`textarea` a border, a radius and a 3px focus ring, which is
    right for a settings form and wrong here: it drew a rounded blue box around the To field and
@@ -323,8 +321,6 @@
   outline: none;
   overflow: hidden;
 }
-
-.mail-compose-body::placeholder { color: var(--fg-muted); }
 
 /* ── the quote: real body text, and read-only on purpose ── */
 

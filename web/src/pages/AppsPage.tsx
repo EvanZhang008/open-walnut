@@ -41,7 +41,7 @@ import '@/plugins/dev-test-hooks'
 import '@/styles/settings-shell.css'
 import '@/styles/settings-controls.css'
 import '@/styles/apps-page.css'
-import { MicInput } from '@/components/common/BoxMic'
+import { SearchField } from '@/components/common/SearchField'
 import { Chip, ChipGroup } from '@/components/controls'
 
 /** Saves from this page report Saved / Not saved like a Settings pane does. */
@@ -190,18 +190,16 @@ function AppsPageBody() {
           </div>
           {/* One indicator, in whichever view is showing (the grid stays mounted, hidden). */}
           {!detailOpen && <SettingsSavedIndicator placement="header" />}
-          <label className="apps-search">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" /></svg>
-            <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="search"
-              type="search"
-              value={query}
-              setText={setQuery}
-              onKeyDown={(e) => { if (e.key === 'Escape' && query) { e.stopPropagation(); setQuery('') } }}
-              placeholder="Search apps and plugins"
-              aria-label="Search apps and plugins"
-              data-testid="apps-search"
-            />
-          </label>
+          <SearchField fieldClassName="apps-search" data-no-draft="search"
+            type="search"
+            value={query}
+            setText={setQuery}
+            onKeyDown={(e) => { if (e.key === 'Escape' && query) { e.stopPropagation(); setQuery('') } }}
+            onClear={() => setQuery('')}
+            placeholder="Search apps and plugins"
+            aria-label="Search apps and plugins"
+            data-testid="apps-search"
+          />
         </header>
 
         <ChipGroup className="apps-chips" role="group" aria-label="Show">

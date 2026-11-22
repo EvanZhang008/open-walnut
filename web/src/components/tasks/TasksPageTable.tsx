@@ -269,7 +269,7 @@ function ProjectCell({ task, sourceByName, projectNames, onUpdate }: {
         >
           {options.length > 6 && (
             <MicInput fieldClassName="tp-proj-filter-field mic-field-compact" data-no-draft="search"
-              className="tp-proj-filter"
+              className="tp-proj-filter is-sm"
               placeholder="Filter projects…"
               value={filter}
               setText={setFilter}

@@ -147,19 +147,11 @@
 .scd-message {
   flex: 1;
   width: 100%;
-  min-height: 56px;
   resize: vertical;
   font-size: var(--font-size-md);
-  font-family: inherit;
   padding: 7px 10px;
-  color: var(--fg);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
   box-sizing: border-box;
-  outline: none;
 }
-.scd-message:focus { border-color: var(--accent); }
 .scd-suggest { white-space: nowrap; }
 
 .scd-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }

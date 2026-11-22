@@ -92,7 +92,7 @@ export function KanbanAddLane({ lanes, mode, api, onAdded }: KanbanAddLaneProps)
       <div className="kanban-add-lane-form" data-testid="kanban-add-lane-form" onKeyDown={onKeyDown} onPointerDown={(e) => e.stopPropagation()}>
         <MicInput fieldClassName="mic-field-compact" data-draft-key={nameDraft.key ?? undefined}
           ref={inputRef}
-          className="kanban-add-lane-input"
+          className="kanban-add-lane-input is-sm"
           data-testid="kanban-add-lane-input"
           placeholder="Lane name"
           aria-label="Lane name"

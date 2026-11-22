@@ -141,7 +141,7 @@ function TextSettingControl({ id, item, onSet }: ControlProps) {
         id={id}
         type="text"
         data-no-draft="autosave"
-        className="engine-setting-text"
+        className="engine-setting-text is-sm"
         value={draft ?? stored}
         list={listId}
         placeholder={item.placeholder ?? 'default'}
@@ -181,7 +181,7 @@ function SelectSettingControl({ id, item, onSet }: ControlProps) {
     <>
       <select
         id={id}
-        className="engine-setting-select"
+        className="engine-setting-select is-sm"
         value={custom !== null ? CUSTOM_OPTION : current}
         onChange={(e) => {
           const next = e.target.value;
@@ -206,7 +206,7 @@ function SelectSettingControl({ id, item, onSet }: ControlProps) {
         <input
           type="text"
           data-no-draft="autosave"
-          className="engine-setting-custom"
+          className="engine-setting-custom is-sm"
           // Safe to steal focus: this input exists only because the user just
           // picked "Custom..." in the select next to it.
           autoFocus
@@ -242,7 +242,7 @@ function TriStateBooleanControl({ id, item, onSet, onReset }: ControlProps & { o
   return (
     <select
       id={id}
-      className="engine-setting-select"
+      className="engine-setting-select is-sm"
       value={current}
       onChange={(e) => {
         const next = e.target.value;

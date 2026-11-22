@@ -314,7 +314,7 @@ export function SessionWebView({ sessionId, host, request, onNavigate, barRightS
           <span className="session-code-label">Web</span>
           <input data-no-draft="search"
             ref={addressRef}
-            className={`session-web-address${addressError ? ' session-web-address-invalid' : ''}`}
+            className={`session-web-address is-sm${addressError ? ' session-web-address-invalid' : ''}`}
             value={address}
             onChange={(e) => { setAddress(e.target.value); setAddressError(false); }}
             onKeyDown={(e) => {

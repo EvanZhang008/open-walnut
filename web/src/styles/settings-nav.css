@@ -75,112 +75,11 @@
   mask-image: linear-gradient(to bottom, transparent 0, #000 10px);
 }
 
-/* ── Find a setting ── */
+/* ── Find a setting: the one search field (SearchField, styles/input-box.css) ── */
 .settings-container .settings-filter-wrap {
   position: relative;
   flex: 0 0 auto;
   margin: 0 0 2px;
-}
-
-.settings-container .settings-filter-glyph {
-  position: absolute;
-  top: 50%;
-  left: 8px;
-  transform: translateY(-50%);
-  color: var(--fg-muted);
-  pointer-events: none;
-}
-
-.settings-container input.settings-filter {
-  appearance: none;
-  -webkit-appearance: none;
-  box-sizing: border-box;
-  width: 100%;
-  height: 28px;
-  margin: 0;
-  padding: 0 26px 0 27px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  color: var(--fg);
-  font: inherit;
-  font-size: var(--font-size-md);
-  line-height: 28px;
-  outline: none;
-  box-shadow: none;
-}
-
-.settings-container input.settings-filter::placeholder {
-  color: var(--fg-muted);
-  opacity: 1;
-}
-
-.settings-container input.settings-filter:focus,
-.settings-container input.settings-filter:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--accent);
-}
-
-/* Native search chrome off: WebKit and Chrome would add a second clear button.
-   One rule per pseudo-element: an engine that does not know one of them drops
-   a whole selector list, and with it the cancel button rule. */
-.settings-container input.settings-filter::-webkit-search-cancel-button {
-  -webkit-appearance: none;
-  appearance: none;
-  display: none;
-}
-
-.settings-container input.settings-filter::-webkit-search-decoration {
-  -webkit-appearance: none;
-  appearance: none;
-  display: none;
-}
-
-.settings-container input.settings-filter::-webkit-search-results-button {
-  -webkit-appearance: none;
-  display: none;
-}
-
-.settings-container input.settings-filter::-webkit-search-results-decoration {
-  -webkit-appearance: none;
-  display: none;
-}
-
-:root[data-theme='dark'] .settings-container input.settings-filter {
-  background: rgba(255, 255, 255, 0.08);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .settings-container input.settings-filter {
-    background: rgba(255, 255, 255, 0.08);
-  }
-}
-
-.settings-container .settings-filter-clear {
-  position: absolute;
-  top: 50%;
-  right: 5px;
-  transform: translateY(-50%);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: none;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-
-.settings-container .settings-filter-clear:hover {
-  color: var(--fg-secondary);
-}
-
-.settings-container .settings-filter-clear:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
 .settings-container .settings-nav-find-button {

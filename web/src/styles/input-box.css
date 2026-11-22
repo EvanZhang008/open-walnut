@@ -10,7 +10,11 @@
  * its mic and send keys. `is-line` is a box that is one row: the text with its keys on its right.
  * A box that floats over scrolling content (the session and Home composers) keeps its glass
  * fill and shadow from globals.css; everything else here applies to it too.
- * Guard: tests/web/ui-standard-ratchet.test.ts (inputs).
+ *
+ * Every other field (a search, a name, a number, a select) is drawn the same way, in the
+ * "Fields" part below: the bare `input, textarea, select`, and `wn-field` for a field that holds
+ * more than its words (a search's icon, clear and mic; a number's unit).
+ * Guard: tests/web/ui-standard-ratchet.test.ts (restyledInput, restyledField).
  */
 :root {
   --input-radius: var(--radius-sm);   /* 8 px: the corner of the buttons beside it */
@@ -18,14 +22,28 @@
   --input-key: 28px;                  /* the mic and send inside the box */
   --input-key-radius: 6px;            /* the box's corner less the key's inset */
   --input-key-hit-radius: calc(var(--input-key-radius) + 4px); /* a phone key's 4 px clear ring */
+  --input-line-sm: 28px;              /* a field in a row of small buttons (.btn-sm, Settings) */
+  --input-key-sm: 22px;               /* the keys of such a field */
+  /* Every box's and field's fill: the text colour over whatever is under it, so a field shows one
+     step darker on a white card, a grey page and (lighter) on a dark card alike. On white it is
+     the old --bg-secondary. */
+  --input-fill: color-mix(in srgb, var(--fg) 4%, transparent);
+  --input-focus-edge: var(--border-strong);
+  --input-placeholder: var(--fg-notice); /* 4.6:1 on the fill over white (--fg-muted is 3.3:1) */
+  --input-phone-text: 16px;           /* a phone zooms into a field whose words are smaller */
   --input-unread-edge: rgba(255, 59, 48, 0.6);  /* an unread reply: the red edge and its fill */
   --input-unread-fill: rgba(255, 59, 48, 0.05);
 }
-/* A phone (the app shell's phone layout only: a narrow desktop window or the browser's side panel
-   keeps the desktop sizes): each key is a finger's 44 px, and one line holds a key and the box's
-   two 1 px edges. */
+:root[data-theme='dark'] { --input-fill: color-mix(in srgb, var(--fg) 10%, transparent); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) { --input-fill: color-mix(in srgb, var(--fg) 10%, transparent); }
+}
+/* A phone: each key is a finger's 44 px, and one line holds a key and the box's two 1 px edges.
+   The width query decides it (`.app-shell-navigation` is on every app shell), so a desktop window
+   narrower than 768 px gets the phone sizes too. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  .app-shell-navigation { --input-line: 46px; --input-key: 44px; }
+  /* A phone layer portalled out of the shell (a task's detail) is the phone layout too. */
+  :is(.app-shell-navigation, .is-phone-layer) { --input-line: 46px; --input-key: 44px; --input-line-sm: 46px; --input-key-sm: 44px; }
 }
 /* What centres one 20 px line, and a key, in a one-line box: worked out on each box, so a box
    whose line is set nearer it (the phone above) gets its own. */
@@ -36,11 +54,11 @@
 
 .wn-input {
   border-radius: var(--input-radius);
-  background: var(--bg-secondary);
+  background: var(--input-fill);
   border: 1px solid transparent;
   box-shadow: none;
 }
-.wn-input:focus-within { border-color: var(--border-strong); }
+.wn-input:focus-within { border-color: var(--input-focus-edge); }
 /* A picture dragged over the box: the drop cue, the same on every box. */
 .wn-input.is-drag-over { border-color: var(--accent); outline: 2px dashed var(--accent); outline-offset: -3px; }
 /* A session window whose new reply is not read yet (task.unread): one red edge and a faint red
@@ -81,7 +99,9 @@
    a band the box holds, such as a session note's heading (globals.css .session-notes-heading-actions). */
 .wn-input :is(.chat-input-controls, .chat-input-compact-actions, .answer-box-tools) :is(.mic-btn, .picture-attach),
 .wn-input > :is(.mic-btn, .picture-attach),
-.wn-input > .box-mic .mic-btn {
+.wn-input > .box-mic .mic-btn,
+.wn-field > .box-mic .mic-btn,
+.wn-field-key {
   width: var(--input-key);
   min-width: var(--input-key);
   height: var(--input-key);
@@ -91,7 +111,9 @@
 }
 .wn-input :is(.chat-input-controls, .chat-input-compact-actions, .answer-box-tools) :is(.mic-btn, .picture-attach):hover:not(:disabled),
 .wn-input > :is(.mic-btn, .picture-attach):hover:not(:disabled),
-.wn-input > .box-mic .mic-btn:hover:not(:disabled) {
+.wn-input > .box-mic .mic-btn:hover:not(:disabled),
+.wn-field > .box-mic .mic-btn:hover:not(:disabled),
+.wn-field-key:hover {
   color: var(--fg);
   background-color: var(--bg-hover);
 }
@@ -134,9 +156,181 @@
   .app-shell-navigation .wn-input :is(.chat-input-controls, .chat-input-compact-actions, .answer-box-tools) :is(.mic-btn, .picture-attach),
   .app-shell-navigation .wn-input > :is(.mic-btn, .picture-attach),
   .app-shell-navigation .wn-input > .box-mic .mic-btn,
+  .app-shell-navigation .wn-field > .box-mic .mic-btn,
+  .app-shell-navigation .wn-field-key,
   .app-shell-navigation .wn-input-send {
     padding: 4px;
     background-clip: content-box;
     border-radius: var(--input-key-hit-radius);
   }
 }
+
+/* ── Fields ──
+   2026-11-21 UI audit: every search and plain field had its own look (an underlined bar in the
+   Display menu, a flat bar in Mail, a tall white box on Apps, a darker bar in Settings' sidebar
+   beside an outlined "Your name", round clear keys, a pale placeholder). A field is drawn as the
+   message box: the same corner, fill, edge and focus, as tall as the buttons beside it (34 px, or
+   28 px with `is-sm` beside `.btn-sm`), its keys the same rounded squares. Only fields a person
+   types or picks in: a checkbox, radio, range, colour or file input keeps the engine's own control
+   (and its focus, below). Weightless (`:where`), so any rule of a place wins over it. */
+:where(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='hidden'], [type='button'], [type='submit'], [type='reset'], [type='image']), textarea, select) {
+  font: inherit;
+  color: var(--fg);
+  background-color: var(--input-fill);
+  border: 1px solid transparent;
+  border-radius: var(--input-radius);
+  padding: 6px 10px;
+  line-height: 20px;
+  outline: none;
+}
+/* A pick-one, and a field with suggestions (datalist), draws one chevron: Safari's own select is
+   an aqua double arrow, Chromium's datalist a black triangle (N3-16). A rule that recolours a select
+   sets `background-color`, never the `background` shorthand, which wipes the chevron. A list, not
+   one `:is()`, so a select stays as easy to restyle as a bare element. */
+select, input[list] {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 28px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' fill='none' stroke='%23868690' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 12px;
+}
+select { cursor: pointer; }
+input[list]::-webkit-calendar-picker-indicator,
+input[list]::-webkit-list-button { display: none !important; opacity: 0; }
+:where(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='hidden'], [type='button'], [type='submit'], [type='reset'], [type='image']), textarea, select):focus { border-color: var(--input-focus-edge); }
+/* Keyboard focus always shows, at 3:1 or more: a 2 px accent ring on the field, the field box or
+   the message box holding the words (never on the words inside one, which would ring twice). The
+   faint edge above alone is 1.4:1 (review, 2026-11-22). A browser counts every focus of a text
+   field as keyboard focus, so a text field shows it on a click too; a select only from the keys. */
+:where(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='hidden'], [type='button'], [type='submit'], [type='reset'], [type='image']), textarea, select):not(.wn-field > *, .wn-input *):focus-visible,
+.wn-field:has(> :is(input, textarea):focus-visible),
+.wn-input:not(.is-drag-over):has(:is(input, textarea, [contenteditable='true']):focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+/* The engine's own controls draw no field look, and their keyboard focus is the same ring. */
+:where(input:is([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'])):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+::placeholder { color: var(--input-placeholder); opacity: 1; }
+/* A field the person got wrong: one red edge, on every field. */
+:is(input, textarea, select)[aria-invalid='true'],
+.wn-field:has(> [aria-invalid='true']) { border-color: var(--error); }
+
+/* A small field (`is-sm`, beside `.btn-sm`): 28 px. Settings draws every field small, a plugin's
+   own settings form too. Weightless (`:where`), so one class of a place (its own padding) wins. */
+:where(input.is-sm, select.is-sm, .settings-input:not(textarea), .settings-select) {
+  height: var(--input-line-sm);
+  padding-top: 0;
+  padding-bottom: 0;
+  padding-left: 8px;
+}
+:where(.settings-plugin-body) :where(input[type='text'], input[type='number'], input[type='password'],
+  input[type='url'], input[type='email'], input[type='search'], select) {
+  height: var(--input-line-sm);
+  padding-top: 0;
+  padding-bottom: 0;
+  padding-left: 8px;
+}
+
+/* A field that holds more than its words: an icon before them, keys or a unit after them. Its
+   words carry no look of their own (`.wn-field > input`); the field draws them. A MicInput is one
+   when its `fieldClassName` says `wn-field`: its mic is then the field's last key. */
+.wn-field {
+  --input-key-inset: max(0px, calc((var(--input-line) - 2px - var(--input-key)) / 2));
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: var(--input-line);
+  padding: 0 var(--input-key-inset) 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--input-radius);
+  background-color: var(--input-fill);
+  color: var(--fg-muted);
+  cursor: text;
+}
+/* A field on a coloured card (the Apps page's banner) sits on the page's own colour: a tint of
+   the text colour over a gradient cannot be read. */
+.wn-on-color { --input-fill: var(--bg); }
+.wn-field.is-sm { --input-line: var(--input-line-sm); --input-key: var(--input-key-sm); padding-left: 8px; }
+.wn-field:focus-within { border-color: var(--input-focus-edge); }
+.wn-field > :is(input, textarea) {
+  flex: 1 1 auto;
+  align-self: stretch;
+  width: auto;
+  min-width: 0;
+  height: auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg);
+  font-size: var(--font-size-md);
+  line-height: 20px;
+  text-overflow: ellipsis;
+  -webkit-appearance: none;
+  appearance: none;
+}
+/* The browser's own clear key off: a search has one, the field's. One rule per pseudo-element (an
+   engine that does not know one drops the whole list). */
+.wn-field > input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; display: none; }
+.wn-field > input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
+/* Its mic is its last key, in the row (box-mic.css overlays it on a bare field instead). */
+.wn-field > .mic-field-mic { position: static; transform: none; }
+.wn-field-icon { display: inline-flex; flex: none; margin-right: 6px; color: var(--fg-muted); }
+.wn-field-icon svg { width: 14px; height: 14px; }
+.wn-field-count {
+  flex: none;
+  padding: 0 4px;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+/* A number's unit ("min"), inside its field, where the keys would be. */
+.wn-field-unit { flex: none; padding: 0 calc(8px - var(--input-key-inset)) 0 4px; color: var(--fg-muted); }
+.wn-field-busy {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0 4px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+.wn-field-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.wn-field-key svg { width: 12px; height: 12px; }
+.wn-field-key:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* A mic over a bare field's right end (MicField) is the same rounded square, no taller than the
+   size box-mic.css gives it: the mic is a `.btn`, whose 34 px min-height stood it out of a 28 px
+   Settings field. */
+.mic-field:not(.wn-field) > .mic-field-mic .mic-btn { min-height: 0; border-radius: var(--input-key-radius); }
+/* A phone: the field's words at 16 px, or the phone zooms the page into the field; and every
+   one-line field a finger's height (46 px), whatever height its row gives it on a desktop. Low
+   specificity, so a field box's own words (`.wn-field > input`) keep no height of their own. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .wn-field > :is(input, textarea) { font-size: var(--input-phone-text); }
+  /* The magnifier grows with the 46 px field, small fields (`is-sm`) too. */
+  .app-shell-navigation .wn-field-icon svg { width: 16px; height: 16px; }
+  :is(.app-shell-navigation, .is-phone-layer) :where(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='hidden'], [type='button'], [type='submit'], [type='image']), select) {
+    min-height: var(--input-line);
+  }
+}
+.mic-field:not(.wn-field) > .mic-field-mic .mic-btn:hover:not(:disabled) { color: var(--fg); background-color: var(--bg-hover); }

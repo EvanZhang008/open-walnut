@@ -474,38 +474,9 @@
 
 /* ── message list ── */
 
-/* The glyph sits INSIDE the field (it is what a search box looks like everywhere else), so the
-   field is the positioning context and the input carries the left padding for it. */
-.mail-search {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  position: relative;
-}
-
-.mail-search-glyph {
-  position: absolute;
-  left: 9px;
-  display: inline-flex;
-  color: var(--fg-muted);
-  pointer-events: none;
-}
-
-.mail-search-input {
-  width: 100%;
-  padding: 6px 9px 6px 28px;
-  font-size: var(--font-size-md);
-  color: var(--fg);
-  background: var(--bg-secondary);
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  outline: none;
-}
-
-.mail-search-input::placeholder { color: var(--fg-muted); }
-.mail-search-input:focus { border-color: var(--accent); background: var(--bg); }
-.mail-search:focus-within .mail-search-glyph { color: var(--accent); }
+/* The list's search: the one search field (SearchField, styles/input-box.css), filling the row. */
+.mail-search { flex: 1; min-width: 0; display: flex; }
+.mail-search > .wn-field { flex: 1; }
 
 /* ── the folder header ── */
 
@@ -939,7 +910,6 @@
 .mail-setup-required { color: var(--error); margin-left: 3px; }
 
 .mail-setup-input { margin-top: 0; }
-.mail-setup-input::placeholder { color: var(--fg-muted); }
 .mail-setup-help { font-size: var(--font-size-xs); color: var(--fg-muted); line-height: 1.4; }
 
 /* The service chips (a ChipGroup) wrap; a long list scrolls inside its own height. */
@@ -1215,28 +1185,19 @@
    ring and a clear button it was the heaviest element in a 204px column of 58 navigation rows, and its own
    text started 19px left of every folder name, so the pane had two text columns. Its text now starts in
    the folder column (4px padding + 15px of glyph column and gap = the rows' 31px). */
+/* The folder filter stands in for the folder rows it filters: the field's look, as tall as a row
+   (32 px against 31 px rows, not 34), its words in the folder text column (22 px and its 1 px edge).
+   `appearance` and the font are stated: WebKit's own `type="search"` metrics and control font made
+   it taller than its row. */
 .mail-tail-filter {
   display: block;
   box-sizing: border-box;
   width: 100%;
-  margin: 2px 0 4px;
-  /* The ROW's own box, stated OUTRIGHT: an input's intrinsic height is the engine's business (WebKit made
-     this 34px against 31px rows through `type="search"` metrics, and neither `line-height` nor
-     `appearance: none` moved it), so the height is set and the padding keeps the text in the folder column. */
   height: 32px;
-  padding: 6px 8px 6px 23px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: var(--bg-hover);
-  color: var(--fg);
-  /* `appearance: none` is load-bearing on a `type="search"` box: WebKit gives that type its own control
-     appearance with its own intrinsic metrics, which is what kept this 34px against 31px rows. */
+  margin: 2px 0 4px;
+  padding: 6px 8px 6px 22px;
   appearance: none;
   -webkit-appearance: none;
-  /* `font-family: inherit` is load-bearing: an input's default face in WebKit is a system control font
-     whose metrics made this box 34px against 31px rows even with the row's own padding and size. The line
-     height is stated too, so the box is 20 + 12 = 32px in both engines rather than each engine's idea of
-     `normal` for a control. */
   font-family: inherit;
   font-size: var(--font-size-md);
   line-height: 20px;
@@ -1256,8 +1217,7 @@
    the scroll container, which would move every folder row of every install by two pixels. */
 .mail-mailbox:focus-visible,
 .mail-twist:focus-visible,
-.mail-tail-row:focus-visible,
-.mail-tail-filter:focus-visible {
+.mail-tail-row:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }

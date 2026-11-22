@@ -21,7 +21,6 @@ import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic'
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation'
 import { useDraft } from '@/hooks/useDraft'
 import { draftKey } from '@/utils/drafts'
-import '@/styles/apps-make-mic.css'
 
 /** The by-hand loop, one command per line, as README.md shows it. */
 export const MANUAL_PLUGIN_COMMANDS = [
@@ -97,7 +96,7 @@ export function MakeAppCard() {
       {replica === false && (
         <>
           <form
-            className="apps-make-ask"
+            className="apps-make-ask wn-field wn-on-color"
             onSubmit={(e) => { e.preventDefault(); gate.send() }}
           >
             <input
@@ -114,7 +113,7 @@ export function MakeAppCard() {
             <BoxMic boxRef={requestRef} text={request} setText={setRequest} handleRef={mic} disabled={busy} />
             <button
               type="submit"
-              className="apps-make-go"
+              className="btn btn-primary btn-sm apps-make-go"
               disabled={busy || (!request.trim() && !gate.micBusy && !gate.waiting)}
               data-testid="build-plugin-start"
               {...dictationWaitProps(gate, !request.trim() ? 'Describe it first.' : undefined)}

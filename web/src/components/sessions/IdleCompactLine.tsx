@@ -148,7 +148,7 @@ export function IdleCompactSetting() {
         <span className="idle-compact-setting-at">at</span>
         <span className="idle-compact-percent-group">
         <input
-          className="idle-compact-percent"
+          className="idle-compact-percent is-sm"
           data-testid="idle-compact-percent"
           data-no-draft="number"
           aria-label="Share of the auto-compaction limit"

@@ -163,10 +163,10 @@
 .board-kanban .kanban-add-icon { display: inline-flex; }
 .board-kanban .kanban-add-task-form { display: flex; flex-direction: column; gap: 6px; }
 .board-kanban .kanban-add-task-input {
-  width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 6px;
-  background: var(--bg); color: var(--fg); font: inherit; font-size: var(--font-size-md);
+  width: 100%;
+  box-sizing: border-box;
+  font-size: var(--font-size-md);
 }
-.board-kanban .kanban-add-task-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .board-kanban .kanban-add-task-tags { display: flex; flex-wrap: wrap; gap: 4px; }
 /* N22: the preview shows each value whole (a ticket number is what the user checks); long ones wrap. */
 .board-kanban .kanban-add-task-tags .tag-chip-inline { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }

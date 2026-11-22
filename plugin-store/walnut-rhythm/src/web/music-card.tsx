@@ -68,6 +68,7 @@ function SpotifyPlaylists({ player, store, spotify }: { player: MusicPlayer; sto
       >
         <input
           type="text"
+          className="is-sm"
           value={link}
           placeholder="https://open.spotify.com/playlist/…"
           aria-label="Spotify playlist link"

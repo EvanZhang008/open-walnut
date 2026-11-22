@@ -37,10 +37,10 @@ import { isOpenRow, MailRow } from './MailMessageRow';
 import { useMailRowContextMenu, type MailRowMenuHandle } from './MailRowContextMenu';
 import { MailDraftsList } from './compose/MailDraftsList';
 import { GroupHeader, MailSmartDraftsSections } from './MailSmartDraftsSections';
-import { FolderIcon, SearchIcon } from './mail-icons';
+import { FolderIcon } from './mail-icons';
 import { MailGroupedList, MailGroupsFallback, useGroupedMode } from './MailGroupedList';
 import { MailViewMenu } from './MailGroupedHeader';
-import { MicInput } from '@/components/common/BoxMic';
+import { SearchField } from '@/components/common/SearchField';
 import { Chip } from '@/components/controls';
 
 interface Props {
@@ -184,8 +184,7 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
           className="mail-search"
           onSubmit={(event) => { event.preventDefault(); void runMailSearch(draft); }}
         >
-          <span className="mail-search-glyph" aria-hidden="true"><SearchIcon size={13} /></span>
-          <MicInput fieldClassName="mic-field-grow mic-field-compact"
+          <SearchField fieldClassName="mail-search-field"
             data-no-draft="search"
             className="mail-search-input"
             data-testid="mail-search-input"
@@ -195,13 +194,11 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
             aria-label="Search mail"
             setText={setDraft}
             onKeyDown={(event) => { if (event.key === 'Escape' && search.active) { event.preventDefault(); clear(); } }}
+            onClear={clear}
+            showClear={search.active || !!draft}
+            clearTestId="mail-search-clear"
           />
         </form>
-        {search.active && (
-          <button type="button" className="mail-text-btn" data-testid="mail-search-clear" onClick={clear}>
-            Clear
-          </button>
-        )}
       </div>
 
       {grouped ? (

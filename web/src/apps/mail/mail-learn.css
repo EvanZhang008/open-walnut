@@ -37,12 +37,6 @@
 .mail-correct-input {
   width: 100%;
   box-sizing: border-box;
-  font: inherit;
-  color: var(--fg);
-  background: var(--bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  padding: 4px 6px;
 }
 /* The why box is the shared AnswerBox (styles/answer-box.css). */
 .mail-correct-why-box { width: 100%; box-sizing: border-box; }

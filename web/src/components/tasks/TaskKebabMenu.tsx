@@ -478,7 +478,7 @@ export function ProjectPickerFlyout({ open, anchorRef, anchorPoint, align, curre
     >
       {options.length > 6 && (
         <MicInput fieldClassName="task-kebab-project-filter-field mic-field-compact" data-no-draft="search"
-          className="task-kebab-project-filter"
+          className="task-kebab-project-filter is-sm"
           placeholder="Filter projects…"
           value={filter}
           setText={setFilter}

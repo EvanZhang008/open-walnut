@@ -256,7 +256,7 @@ function DatePickerContent({ date, onChange, minDate, withTime }: Pick<DatePicke
             At
             <input
               type="text"
-              className="dp-time-input"
+              className="dp-time-input is-sm"
               aria-label="Snooze time"
               data-no-draft="picker"
               placeholder="3:30 PM"

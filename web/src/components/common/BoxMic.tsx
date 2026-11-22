@@ -125,6 +125,9 @@ export interface MicInputProps extends Omit<InputHTMLAttributes<HTMLInputElement
   /** A smaller mic for a compact row. */
   compact?: boolean;
   micDisabled?: boolean;
+  /** Parts of a field box (`wn-field`, SearchField) before and after the words: an icon, a clear key. */
+  before?: ReactNode;
+  after?: ReactNode;
 }
 
 /** Input types whose Enter submits their form when no other such field shares it (HTML implicit submission). */
@@ -170,7 +173,7 @@ type Pending =
  *
  * With nothing being dictated every event passes straight through, as on a plain input.
  */
-export function MicInput({ value, setText, onEnter, target, ref, micRef, fieldClassName, compact, micDisabled, onChange, onKeyDown, onBlur, onFocus, disabled, readOnly, ...input }: MicInputProps) {
+export function MicInput({ value, setText, onEnter, target, ref, micRef, fieldClassName, compact, micDisabled, before, after, onChange, onKeyDown, onBlur, onFocus, disabled, readOnly, ...input }: MicInputProps) {
   const box = useRef<HTMLInputElement | null>(null);
   const ownMic = useRef<BoxMicHandle | null>(null);
   const mic = micRef ?? ownMic;
@@ -296,6 +299,7 @@ export function MicInput({ value, setText, onEnter, target, ref, micRef, fieldCl
   const cls = [compact ? 'mic-field-compact' : '', fieldClassName].filter(Boolean).join(' ') || undefined;
   return (
     <MicField inline boxRef={dictationBox} text={value} setText={setText} handleRef={mic} target={target} disabled={disabled || readOnly || micDisabled} fieldClassName={cls}>
+      {before}
       {/* The caller's own data-draft-key or data-no-draft (in `input`) wins: its MicInput tag is the box. */}
       <input
         data-no-draft="mirror"
@@ -309,6 +313,7 @@ export function MicInput({ value, setText, onEnter, target, ref, micRef, fieldCl
         onBlur={blur}
         onFocus={focus}
       />
+      {after}
     </MicField>
   );
 }

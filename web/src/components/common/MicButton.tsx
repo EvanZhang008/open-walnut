@@ -626,7 +626,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
             <input
               ref={vocabInputRef}
               data-draft-key={vocabDraft.key ?? undefined}
-              className="mic-vocab-input"
+              className="mic-vocab-input is-sm"
               type="text"
               placeholder="Add word..."
               value={vocabInput}

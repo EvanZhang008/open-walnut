@@ -163,15 +163,7 @@
 }
 .tp-rail-newproj-input {
   width: 100%;
-  height: 32px;
-  border: 1.5px solid var(--accent);
-  border-radius: var(--radius-sm);
-  padding: 0 10px;
   font-size: var(--font-size-md);
-  font-family: inherit;
-  outline: none;
-  background: var(--bg);
-  color: var(--fg);
 }
 
 /* one-letter provider badge: base sizing lives in globals.css (.project-src-badge);
@@ -217,22 +209,7 @@
 
 /* The toolbar's filter chips are the shared Chip (controls/Chip.tsx). */
 
-.tp-search {
-  margin-left: auto;
-  width: 190px;
-  min-width: 110px;
-  height: 28px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-  color: var(--fg);
-  font-size: var(--font-size-md);
-  font-family: inherit;
-  outline: none;
-}
-.tp-search::placeholder { color: var(--fg-muted); }
-.tp-search:focus { border-color: var(--accent); background: var(--bg); }
+.tp-search-field { margin-left: auto; width: 190px; min-width: 110px; }
 
 .tp-newtask-btn { flex: none; }
 
@@ -548,18 +525,10 @@
 }
 .tp-proj-filter {
   margin: 2px 2px 4px;
-  height: 26px;
   padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-  color: var(--fg);
   font-size: var(--font-size-sm);
-  font-family: inherit;
-  outline: none;
   flex: none;
 }
-.tp-proj-filter:focus { border-color: var(--accent); }
 /* The filter with its mic (MicInput): the wrapper keeps the box's place. */
 .tp-proj-filter-field { margin: 2px 2px 4px; flex: none; }
 .tp-proj-filter-field > .tp-proj-filter { margin: 0; }
@@ -644,7 +613,6 @@
   font-family: inherit;
   color: var(--fg);
 }
-.tp-ghost-input::placeholder { color: var(--fg-muted); }
 /* The title box with its mic (MicField) takes the cell's free width, as the bare box did. */
 .tp-ghost-field { flex: 1; min-width: 0; }
 

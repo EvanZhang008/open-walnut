@@ -483,7 +483,6 @@
   color: var(--fg);
   font-size: var(--font-size-lg);
 }
-.notes-cmdk-input::placeholder { color: var(--fg-muted); }
 .notes-cmdk-spinner {
   color: var(--fg-muted);
   font-size: 14px;

@@ -4,7 +4,6 @@
  */
 
 import { useRef, useEffect, useLayoutEffect, useCallback, useState, startTransition } from 'react';
-import { ICON_SEARCH } from '@/components/common/Icons';
 import { log } from '@/utils/log';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { PhoneSearchLayer } from './PhoneSearchLayer';
@@ -12,8 +11,8 @@ import { PhonePullToRefresh } from './PhonePullToRefresh';
 import { PhoneQueuedUpdatesPill } from './PhoneQueuedUpdatesPill';
 import { homeListScroller } from './phone-row-behavior';
 import { pageShortcutBlocked } from '@/utils/page-shortcut';
-import { isCommand } from '@/keyboard/shortcut-overrides';
-import { MicInput } from '@/components/common/BoxMic';
+import { commandLabel, isCommand } from '@/keyboard/shortcut-overrides';
+import { SearchField } from '@/components/common/SearchField';
 
 /** A blur this soon after a keystroke, with no user gesture, was not the user's. */
 const TYPING_GUARD_MS = 2000;
@@ -32,7 +31,6 @@ interface TodoSearchBarProps {
   onQueryChange: (q: string) => void;
   onClear: () => void;
   isSearching: boolean;
-  resultCount?: number | null; // null = no server results yet
 }
 
 export function TodoSearchBar({
@@ -41,7 +39,6 @@ export function TodoSearchBar({
   onQueryChange,
   onClear,
   isSearching,
-  resultCount,
 }: TodoSearchBarProps) {
   // Phone (spec 4.7 Search): the box is the door to a full-screen search layer.
   // It also hosts the home list's phone extras: pull to refresh and the
@@ -147,34 +144,31 @@ export function TodoSearchBar({
     }
   }, [clear]);
 
+  // One field (SearchField): the magnifier, the words, a busy ring while the server refines, the
+  // clear key and the mic. The hit count is not repeated here: the section row under the toolbar
+  // shows it. The shortcut (Cmd+K or /) is in the tooltip, not the placeholder, so the words have
+  // the room.
   return (
     <div className="todo-search-bar">
-      <span className="todo-search-icon">{ICON_SEARCH}</span>
-      <MicInput fieldClassName="mic-field-grow mic-field-compact" data-no-draft="search"
+      <SearchField small fieldClassName="todo-search-field" data-no-draft="search"
         ref={inputRef}
         type={phone ? 'search' : 'text'}
         enterKeyHint={phone ? 'search' : undefined}
         className="todo-search-input"
-        placeholder={phone ? 'Search' : 'Search tasks...  \u2318K'}
+        placeholder={phone ? 'Search' : 'Search tasks'}
+        title={phone ? undefined : `Search tasks (${commandLabel('task.search') ?? '\u2318K'} or /)`}
+        aria-label="Search tasks"
         onFocus={phone ? openLayer : undefined}
         value={draftQuery}
         setText={updateQuery}
         onKeyDown={handleKeyDown}
         onBlur={handleBlur}
+        busy={isSearching}
+        busyClassName="todo-search-spinner"
+        onClear={clear}
+        clearLabel="Clear search (Esc)"
+        clearClassName="todo-search-clear"
       />
-      {isSearching && <span className="todo-search-spinner" />}
-      {draftQuery && resultCount != null && (
-        <span className="todo-search-count" title={isSearching ? 'Quick results — refining…' : undefined}>{resultCount}</span>
-      )}
-      {draftQuery && (
-        <button
-          className="todo-search-clear"
-          onClick={clear}
-          title="Clear search (Esc)"
-        >
-          &#x2715;
-        </button>
-      )}
       {phone && (
         <>
           <PhoneSearchLayer open={layerOpen} onClose={() => setLayerOpen(false)} />

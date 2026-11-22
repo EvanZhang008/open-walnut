@@ -121,7 +121,7 @@ export function ProjectCodeSource({ project, metadata, row, onSaved }: {
         <>
           <label className="pcs-field">
             <span className="pcs-field-label">Made from</span>
-            <input className="pcs-input" data-no-draft="autosave" data-testid="project-code-source-anchor"
+            <input className="pcs-input is-sm" data-no-draft="autosave" data-testid="project-code-source-anchor"
               value={edit.anchor ?? ''} placeholder={row?.defaultCwd ? `${row.defaultCwd} (the Working Dir)` : '/path/to/a/checkout'}
               onChange={(e) => setEdit({ ...edit, anchor: e.target.value })} />
           </label>
@@ -171,7 +171,7 @@ function InputField({ name, field, value, onChange }: { name: string; field: Fie
               <button type="button" className="draft-source-remove" aria-label={`Remove ${v}`} onClick={() => onChange(list.filter((x) => x !== v))}>×</button>
             </span>
           ))}
-          <input className="pcs-input" data-no-draft="autosave" data-testid={`project-code-source-add-${name}`}
+          <input className="pcs-input is-sm" data-no-draft="autosave" data-testid={`project-code-source-add-${name}`}
             placeholder={field.placeholder ? `Add, e.g. ${field.placeholder}` : 'Add a name'} value={typed}
             onChange={(e) => setTyped(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}
@@ -204,7 +204,7 @@ function InputField({ name, field, value, onChange }: { name: string; field: Fie
   return (
     <label className="pcs-field" title={field.description}>
       <span className="pcs-field-label">{title}</span>
-      <input className="pcs-input" data-no-draft="autosave" value={typeof value === 'string' ? value : ''} placeholder={field.placeholder ?? ''}
+      <input className="pcs-input is-sm" data-no-draft="autosave" value={typeof value === 'string' ? value : ''} placeholder={field.placeholder ?? ''}
         onChange={(e) => onChange(e.target.value)} />
     </label>
   );

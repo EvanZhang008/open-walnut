@@ -148,14 +148,8 @@
   margin: 0;
   padding: 5px 8px;
   font-size: var(--font-size-sm);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
-  outline: none;
 }
 .project-start-add .psp-search { margin: 4px 8px; width: calc(100% - 16px); }
-.psp-search:focus { border-color: var(--accent); }
 .psp-group {
   padding: 8px 10px 2px;
   font-size: var(--font-size-xs);
@@ -292,14 +286,8 @@
 .pcs-field-label { color: var(--fg-muted); }
 .pcs-input {
   padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
   font-size: var(--font-size-sm);
 }
-.pcs-input:focus { outline: none; border-color: var(--accent); }
 .pcs-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .pcs-chips .pcs-input { width: 140px; }
 .pcs-note { font-size: var(--font-size-xs); color: var(--fg-muted); line-height: 1.4; }

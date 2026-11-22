@@ -147,7 +147,7 @@
   /* C19: the Board's Cards view in a phone session. Its controls were desktop
      sized (22 px view toggle, 24 px lane kebabs, a 26 px search field, 11 px
      counts). Every control outside a card takes a finger; text reads 12 px. */
-  .app-shell-navigation .task-board-pane :is(button, [role='button'], [role='tab'], input, select):not(.kanban-card, .kanban-card *) {
+  .app-shell-navigation .task-board-pane :is(button, [role='button'], [role='tab']):not(.kanban-card, .kanban-card *) {
     min-height: 44px;
     box-sizing: border-box;
   }

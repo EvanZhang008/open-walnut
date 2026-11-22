@@ -129,7 +129,7 @@ function MinutesRow({ label, presets, limits, value, onChange, testId }: {
           </button>
         ))}
       </div>
-      <label className="rhythm-start-number">
+      <label className="rhythm-start-number wn-field is-sm">
         <input
           type="text"
           inputMode="numeric"
@@ -139,7 +139,7 @@ function MinutesRow({ label, presets, limits, value, onChange, testId }: {
           data-testid={`${testId}-input`}
           onChange={(event) => onChange(event.currentTarget.value)}
         />
-        <span className="rhythm-muted">min</span>
+        <span className="wn-field-unit">min</span>
       </label>
     </div>
   )

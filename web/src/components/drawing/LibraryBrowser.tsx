@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
-import { MicInput } from '@/components/common/BoxMic';
+import { SearchField } from '@/components/common/SearchField';
 import { addCatalogLibrary, drawingLibraryApi, searchCatalog, tabLibrary, type CatalogItem, type DrawingLibraryApi, type LibraryStore } from './drawing-library';
 import { OutsidePress } from './drawing-overlay';
 import { drawingErrorMessage } from './drawing-api';
@@ -93,8 +93,8 @@ export function LibraryBrowser({ onClose, onAdded, api = drawingLibraryApi, stor
       <div ref={panel} className="drawing-library-dialog" role="dialog" aria-modal="true" aria-label="Browse libraries">
         <header className="drawing-library-head">
           <h2>Libraries</h2>
-          <MicInput ref={search} fieldClassName="drawing-library-search-field" type="search" data-no-draft="search" className="drawing-library-search" placeholder="Search"
-            aria-label="Search libraries" value={query} setText={setQuery} />
+          <SearchField small ref={search} fieldClassName="drawing-library-search-field" type="search" data-no-draft="search" className="drawing-library-search" placeholder="Search"
+            aria-label="Search libraries" value={query} setText={setQuery} onClear={() => setQuery('')} />
           <button type="button" className="btn btn-icon" aria-label="Close libraries" title="Close" onClick={onClose}>
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
           </button>

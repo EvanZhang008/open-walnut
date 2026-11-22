@@ -206,17 +206,7 @@
   box-sizing: border-box;
   width: 100%;
   padding: 6px 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
   resize: vertical;
-}
-
-.trigger-picker-input:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: -1px;
 }
 
 /* Over the fields below it, not between them: a list that pushed them down would
