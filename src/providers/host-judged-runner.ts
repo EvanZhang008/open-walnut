@@ -25,6 +25,7 @@ import { remoteJudgedSession, type RemoteJudgedSession } from './remote-judged-s
 import type { HostCallTarget } from '../core/session-channel/host-calls.js'
 import type { QueuedLine, StartBody, StartBundle } from '../core/session-channel/host-api.js'
 import type { QueuedMessage } from '../core/session-queue-store.js'
+import { claimHostStarted, hostStartedSaid, noteHostSessionStarted } from '../core/session-channel/leader-tasks.js'
 
 type AnyFn = (...args: any[]) => any
 type Proto = Record<string, unknown>
@@ -249,36 +250,35 @@ export async function startOnJudgingHost<T extends StartData>(data: T, commit: (
   kinds.set(a.sessionId, isAcpEngine(data.engine) ? 'acp' : 'native')
   void commit(a.sessionId).catch(() => {})
   // The start is this leader's, so its session:started is too, as the runner says it for a start
-  // it runs (handleStart), now with the id the host named. The host's own copy of it (an engine
-  // whose start names its id) is not said again (startAnnouncedHere).
-  announced.add(a.sessionId)
-  if (announced.size > ANNOUNCED_MAX) announced.delete(announced.values().next().value!)
-  const { bus } = await import('../core/event-bus.js')
-  bus.emit(EventNames.SESSION_STARTED, {
-    sessionId: a.sessionId, claudeSessionId: a.sessionId, taskId: data.taskId,
-    project: (data as { project?: string }).project ?? payload.startBundle?.task?.project ?? '', host,
-  }, ['main-ai'], { source: 'session-runner' })
-  // The task is the leader's: its slot, link and phase are set here (leader-tasks.ts).
-  const { noteHostSessionStarted } = await import('../core/session-channel/leader-tasks.js')
+  // it runs (handleStart), now with the id the host named; unless the channel said it first (the
+  // host's born row of it, or its own fact, beat this answer): one per session (claimHostStarted).
+  if (claimHostStarted(a.sessionId)) {
+    const { bus } = await import('../core/event-bus.js')
+    bus.emit(EventNames.SESSION_STARTED, {
+      sessionId: a.sessionId, claudeSessionId: a.sessionId, taskId: data.taskId,
+      project: (data as { project?: string }).project ?? payload.startBundle?.task?.project ?? '', host,
+    }, ['main-ai'], { source: 'session-runner' })
+  }
+  // The task is the leader's: its slot, link and phase are set here (leader-tasks.ts), once.
   void noteHostSessionStarted(a.sessionId, data.taskId, data.mode)
   return { claudeSessionId: a.sessionId, title: typeof a.title === 'string' ? a.title : '' }
 }
 
-/** Sessions whose session:started this leader said itself (a start it handed to their host). */
-const announced = new Set<string>()
-const ANNOUNCED_MAX = 5_000
-
-/** Did this leader say `sid`'s session:started itself? */
+/** Was `sid`'s session:started said on this leader already (its handed start, or the channel's first word)? */
 export function startAnnouncedHere(sid: string): boolean {
-  return announced.has(sid)
+  return hostStartedSaid(sid)
 }
 
-/** A host's fact this leader already said itself (the session:started of a start it handed on): the channel does not say it again. */
+/**
+ * The channel's re-emit asks this for each fact: a session:started said here already (the start
+ * this leader handed on, or the one said from the host's born row) is not said again; one not said
+ * yet is claimed, so the answer of a handed start that comes after it says none either.
+ */
 export function saidHereAlready(name: string, data: unknown): boolean {
   if (name !== EventNames.SESSION_STARTED) return false
   const d = data as { sessionId?: unknown; claudeSessionId?: unknown } | null
   const sid = d?.sessionId ?? d?.claudeSessionId
-  return typeof sid === 'string' && announced.has(sid)
+  return typeof sid === 'string' && !!sid && !claimHostStarted(sid)
 }
 
 /** Lookups: the runner's own object first, then a host-judged session's proxy. */
@@ -357,5 +357,4 @@ export function installHostJudgedRouting(proto: object): void {
 
 export function _resetHostJudgedRunnerForTesting(): void {
   kinds.clear()
-  announced.clear()
 }

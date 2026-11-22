@@ -19,10 +19,10 @@ vi.mock('../../src/providers/cloud-session-link.js', () => ({ CloudSessionLink: 
 
 import { SID, harness, probeSetup, probeTeardown, settle } from '../helpers/runner-probe-harness.js'
 import { SessionRunner } from '../../src/providers/claude-code-session.js'
-import { HOST_JUDGED_RUNNER_METHODS, _resetHostJudgedRunnerForTesting, installHostJudgedRouting, startAnnouncedHere, startGoesToHost } from '../../src/providers/host-judged-runner.js'
+import { HOST_JUDGED_RUNNER_METHODS, _resetHostJudgedRunnerForTesting, installHostJudgedRouting, saidHereAlready, startAnnouncedHere, startGoesToHost } from '../../src/providers/host-judged-runner.js'
 import { _resetJudgeOfForTesting, noteHostJudged, setHostJudgeProbe } from '../../src/core/sessions/judge-of.js'
 import { _setActiveLeaderSideForTesting } from '../../src/core/session-channel/leader-boot.js'
-import { _resetHostSessionTasksForTesting } from '../../src/core/session-channel/leader-tasks.js'
+import { _resetHostSessionTasksForTesting, startHostSessionTasks } from '../../src/core/session-channel/leader-tasks.js'
 import { _resetRemoteJudgedSessionsForTesting, noteLiveState, setRemoteJudgedCaller, type HostCallBody, isRemoteJudgedSession } from '../../src/providers/remote-judged-session.js'
 import type { LeaderSide } from '../../src/core/session-channel/leader-side.js'
 import { applyHostChannelBatch, getSessionByClaudeId } from '../../src/core/session-tracker.js'
@@ -232,6 +232,43 @@ describe('a host-judged session', () => {
     // A host whose service does not judge it: today's path.
     expect(startGoesToHost('other')).toBe(false)
     expect(startGoesToHost(undefined)).toBe(false)
+  })
+
+  it('a session its host started itself: its born row links the task here, moves it to In Progress and says one session:started', async () => {
+    harness()
+    const stopTasks = startHostSessionTasks()
+    const said: unknown[] = []
+    bus.subscribe('test-born-started', (e) => { said.push(e.data) }, { global: true, interest: [EventNames.SESSION_STARTED] })
+    try {
+      const { getTask, updateTask } = await import('../../src/core/task-manager.js')
+      await updateTask('gate-task-b', { phase: 'TODO' })
+      const sid = '50000000-0000-4000-8000-0000000000e1'
+      // The channel's apply (leader-side.ts applyRecs): the row in its batch, then its facts through
+      // the channel's emit (leader-boot.ts), the started said from the born row first.
+      await applyHostChannelBatch({
+        hostId: 'devbox', renames: [], cursor: { logId: 'L', seq: 3 },
+        rows: [{ sid, born: true, patch: { claudeSessionId: sid, taskId: 'gate-task-b', project: 'p', host: 'devbox', judge: 'host', process_status: 'running', mode: 'default', startedAt: 'x', lastActiveAt: 'x', messageCount: 0 } }],
+      })
+      noteHostJudged(sid, 'devbox')
+      const channelEmit = (name: string, data: unknown) => { if (!saidHereAlready(name, data)) bus.emit(name, data, ['*'], { source: 'host-channel' }) }
+      const started = { sessionId: sid, claudeSessionId: sid, taskId: 'gate-task-b', project: 'p', host: 'devbox' }
+      channelEmit(EventNames.SESSION_STARTED, started)
+      // The host's own session:started of it (an engine whose start names its id): not said again.
+      channelEmit(EventNames.SESSION_STARTED, started)
+      await vi.waitFor(async () => {
+        const t = await getTask('gate-task-b')
+        expect(t.session_id).toBe(sid)
+        expect(t.exec_session_id).toBe(sid)
+        expect(t.phase).toBe('IN_PROGRESS')
+      })
+      await settle(30)
+      expect(said).toEqual([expect.objectContaining({ sessionId: sid, taskId: 'gate-task-b', host: 'devbox' })])
+      // A handed start's answer that comes after says none either.
+      expect(startAnnouncedHere(sid)).toBe(true)
+    } finally {
+      bus.unsubscribe('test-born-started')
+      stopTasks()
+    }
   })
 })
 

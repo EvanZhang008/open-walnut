@@ -17,6 +17,7 @@
 import type { Duplex } from 'node:stream'
 import { attachLeaderChannel, isChannelFrame, type AppliedFact, type ChannelCursor, type ChannelFrame, type ChannelLink } from './channel.js'
 import { channelClassOf } from './event-classes.js'
+import { EventNames } from '../event-bus.js'
 import { HOST_CHANNEL_PATH, HOST_SESSIONS_PATH, type LiveState } from './host-api.js'
 import { SESSION_JUDGE_CAP } from './switch.js'
 import type { HostChannelBatch } from '../session-tracker.js'
@@ -70,6 +71,12 @@ interface HostState {
 
 const defaultBackoff = (attempt: number): number => Math.min(30_000, 500 * 2 ** Math.min(attempt, 6))
 
+/** The session:started of a session born on `hostId`, from its row (as the runner says one: handleStart). */
+function startedOf(hostId: string, sid: string, row: Record<string, unknown>): Record<string, unknown> {
+  const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
+  return { sessionId: sid, claudeSessionId: sid, taskId: str(row.taskId), project: str(row.project) ?? '', host: hostId }
+}
+
 export function createLeaderSide(deps: LeaderSideDeps) {
   const hosts = new Map<string, HostState>()
   let flag = false
@@ -101,9 +108,19 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     }
     const { written } = await deps.applyBatch({ hostId, rows, renames, cursor: next })
     for (const sid of written) deps.noteHostJudged(sid, hostId)
+    const wrote = new Set(written)
     // After the commit, in log order: the rows a fact's subscribers read are already there.
     for (const r of recs) {
-      if (r.name === 'row' || r.name === 'drop' || r.name === 'turn-summary') continue
+      if (r.name === 'row') {
+        // A session born on the host: said as started here, at its row's place. A start the host
+        // began itself says none the leader hears (a native one has no id yet), so this is its
+        // only one; for a start this leader handed on, the channel's emit keeps one in all
+        // (leader-tasks.ts claimHostStarted). A rows frame (applyRows) is a resync, never a start.
+        const d = (r.data ?? {}) as { born?: unknown; patch?: Record<string, unknown> }
+        if (d.born === true && wrote.has(r.sid)) emitFact(hostId, r.sid, EventNames.SESSION_STARTED, startedOf(hostId, r.sid, d.patch ?? {}), r.late)
+        continue
+      }
+      if (r.name === 'drop' || r.name === 'turn-summary') continue
       if (r.name === 'rename') {
         const d = r.data as { from?: string; to?: string }
         if (d?.from && d?.to) deps.noteRename(d.from, d.to)
@@ -114,9 +131,13 @@ export function createLeaderSide(deps: LeaderSideDeps) {
         continue
       }
       if (channelClassOf(r.name) !== 'fact') continue
-      try { deps.emit(r.name, r.data, { late: r.late }) } catch (err) {
-        deps.log('warn', 'session channel: a re-emitted fact failed', { hostId, name: r.name, sessionId: r.sid, error: err instanceof Error ? err.message : String(err) })
-      }
+      emitFact(hostId, r.sid, r.name, r.data, r.late)
+    }
+  }
+
+  function emitFact(hostId: string, sid: string, name: string, data: unknown, late: boolean): void {
+    try { deps.emit(name, data, { late }) } catch (err) {
+      deps.log('warn', 'session channel: a re-emitted fact failed', { hostId, name, sessionId: sid, error: err instanceof Error ? err.message : String(err) })
     }
   }
 

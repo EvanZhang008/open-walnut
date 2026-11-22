@@ -4,9 +4,11 @@
  * them (until the machine credential lets it call the leader's API, it gets needs_leader), so the
  * leader does from what it sees what its runner does for a session of its own:
  *
- *   start      the start the host answered, or a `session:started` fact of a session the host
- *              started itself: the task's exec (or plan) slot and its session link, and its phase
- *              to IN_PROGRESS (handleStart does both for a session of the leader's)
+ *   start      the start the host answered, or a session the host started itself (its `born`
+ *              row, which leader-side.ts says as a session:started; a native start on the host says
+ *              its own with no id yet): the task's exec (or plan) slot and its session link, and
+ *              its phase to IN_PROGRESS (handleStart does both for a session of the leader's). One
+ *              session:started per session on this bus, whoever says it first (claimHostStarted).
  *   send       a message the leader forwarded: the phase edge of an input (session:input, with the
  *              send's source) and the task's last session update (handleSend does both)
  *   turn end   nothing here: server.ts applies the phase of every session:result and session:error
@@ -19,6 +21,27 @@ import { judgingHostOf } from '../sessions/judge-of.js'
 /** Sessions whose start effects ran here (a start answered, then its started fact). */
 const linked = new Set<string>()
 const LINKED_MAX = 5_000
+
+/** Sessions whose session:started this leader said (the start it handed on, or the channel's first word of it). */
+const said = new Set<string>()
+const SAID_MAX = 5_000
+
+/**
+ * Take the one session:started of a host-run session on this bus: true the first time (the caller
+ * says it now), false after. The start the leader handed on, the host's born row of it and the
+ * host's own session:started fact all ask, in whatever order they come.
+ */
+export function claimHostStarted(sid: string): boolean {
+  if (!sid || said.has(sid)) return false
+  if (said.size >= SAID_MAX) said.delete(said.values().next().value!)
+  said.add(sid)
+  return true
+}
+
+/** Was the session:started of `sid` said on this bus already? */
+export function hostStartedSaid(sid: string): boolean {
+  return said.has(sid)
+}
 
 /** Link a host-judged session to its task and move the task to IN_PROGRESS, once per session. */
 export async function noteHostSessionStarted(sid: string, taskId: string | undefined, mode?: string): Promise<void> {
@@ -75,4 +98,5 @@ export function startHostSessionTasks(): () => void {
 
 export function _resetHostSessionTasksForTesting(): void {
   linked.clear()
+  said.clear()
 }

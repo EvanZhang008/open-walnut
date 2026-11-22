@@ -72,19 +72,24 @@ async function hostDoor(channel: HostChannel, calls: Array<{ route: string; body
 
 /** The leader's data, as the batch apply keeps it. */
 function leaderStore() {
-  const store = { batches: [] as HostChannelBatch[], cursor: null as ChannelCursor | null, emitted: [] as Array<{ name: string; late: boolean; i?: number }>, live: [] as Array<{ sid: string; turnGen?: number }>, renames: [] as string[], judged: [] as string[] }
+  const store = { batches: [] as HostChannelBatch[], cursor: null as ChannelCursor | null, emitted: [] as Array<{ name: string; late: boolean; i?: number; data?: unknown }>, live: [] as Array<{ sid: string; turnGen?: number }>, renames: [] as string[], judged: [] as string[] }
   return store
 }
 
-function makeSide(port: number, store: ReturnType<typeof leaderStore>, opts: { opened?: string[]; flag?: { on: boolean } } = {}) {
+function makeSide(port: number, store: ReturnType<typeof leaderStore>, opts: { opened?: string[]; flag?: { on: boolean }; refuse?: string[] } = {}) {
   return createLeaderSide({
     walnutId: async () => 'w1',
     permitNumber: () => 1,
     flagOn: async () => opts.flag?.on ?? true,
     openStream: async (_host, purpose) => { opts.opened?.push(purpose); return net.connect(port, '127.0.0.1') },
-    applyBatch: async (b) => { store.batches.push(b); store.cursor = b.cursor; return { written: b.rows.map((r) => r.sid), skipped: [] } },
+    applyBatch: async (b) => {
+      store.batches.push(b)
+      store.cursor = b.cursor
+      const refused = new Set(opts.refuse ?? [])
+      return { written: b.rows.map((r) => r.sid).filter((s) => !refused.has(s)), skipped: b.rows.map((r) => r.sid).filter((s) => refused.has(s)) }
+    },
     loadCursor: async () => store.cursor,
-    emit: (name, data, o) => { store.emitted.push({ name, late: o.late, i: (data as { i?: number })?.i }) },
+    emit: (name, data, o) => { store.emitted.push({ name, late: o.late, i: (data as { i?: number })?.i, data }) },
     noteLive: (sid, state) => { store.live.push({ sid, turnGen: state.turnGen }) },
     noteRename: (from, to) => { store.renames.push(`${from}->${to}`) },
     noteHostJudged: (sid) => { store.judged.push(sid) },
@@ -199,6 +204,30 @@ describe('the leader side of a host that runs its sessions', () => {
     await expect(side.callHost('devbox', { sid: 's1', target: 'session', member: 'getUsage', args: [] })).resolves.toEqual({ member: 'getUsage' })
     expect(calls.map((c) => c.route)).toEqual(['/host-api/sessions/start', '/host-api/sessions/send', '/host-api/sessions/interrupt', '/host-api/sessions/call'])
     expect(opened).toEqual(['session-call', 'session-call', 'session-call', 'session-call'])
+  })
+
+  it('a session born on the host is said as started at its row\'s place, once; a refused row or a resync of the rows says none', async () => {
+    const { log, channel } = await hostOf()
+    const port = await hostDoor(channel, [])
+    const store = leaderStore()
+    side = makeSide(port, store, { refuse: ['s3'] })
+    await side.noteHost('devbox', { connected: true, judges: true })
+    await until(() => side!.linked('devbox'))
+    log.append('s2', 'row', { born: true, patch: { claudeSessionId: 's2', taskId: 'task-h', project: 'Marina', host: 'devbox', judge: 'host', mode: 'plan' } })
+    log.append('s2', 'session:tool-use', { sessionId: 's2', i: 1 })
+    log.append('s2', 'row', { patch: { process_status: 'idle' } })
+    log.append('s3', 'row', { born: true, patch: { claudeSessionId: 's3', taskId: 'task-x', host: 'devbox', judge: 'host' } })
+    log.append('s3', 'session:tool-use', { sessionId: 's3', i: 2 })
+    await log.flush()
+    await until(() => factIs(store).length === 2)
+    await side.idle('devbox')
+    const started = store.emitted.filter((e) => e.name === 'session:started')
+    expect(started.map((e) => e.data)).toEqual([{ sessionId: 's2', claudeSessionId: 's2', taskId: 'task-h', project: 'Marina', host: 'devbox' }])
+    expect(started[0]!.late).toBe(false)
+    // At its row's place: before the session's first fact.
+    expect(store.emitted.filter((e) => (e.data as { sessionId?: string })?.sessionId === 's2').map((e) => e.name)).toEqual(['session:started', 'session:tool-use'])
+    // The rows frame of the first link (s1, a resync) said no start.
+    expect(store.emitted.some((e) => e.name === 'session:started' && (e.data as { sessionId?: string }).sessionId === 's1')).toBe(false)
   })
 
   it('reads the capability from a host\'s report', () => {
