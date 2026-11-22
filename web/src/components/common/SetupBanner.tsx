@@ -86,7 +86,8 @@ export interface LocalClaudeNotice {
   /** The card title: 'Get Walnut talking' / 'Update Claude Code' / 'Sign in to Claude Code'. */
   title: string | null;
   /** The state in one sentence, for a card that shows only its head. */
-  summary: string | null;
+  /** Walnut's own one-line status of the setup, never agent words. */
+  statusLine: string | null;
   /** The section, without a card frame and without its x. */
   node: ReactNode;
   /** The section's x (named for what it hides); the card that frames it places it. */
@@ -105,7 +106,7 @@ const TITLES: Record<ClaudeBannerView['kind'], string> = {
   'sign-in': 'Sign in to Claude Code',
 };
 
-const NONE: LocalClaudeNotice = { present: false, title: null, summary: null, node: null, dismiss: null, action: null, kind: null };
+const NONE: LocalClaudeNotice = { present: false, title: null, statusLine: null, node: null, dismiss: null, action: null, kind: null };
 
 /** The state in one sentence (the server's first, when it named one). */
 function summaryOf(kind: LocalNoticeKind | ClaudeBannerView['kind'], view: ClaudeBannerView | null, health: SystemHealth): string {
@@ -178,10 +179,10 @@ export function useLocalClaudeNotice({ health, loading, firstUse, onNavigateSett
     <button type="button" tabIndex={0} className="setup-banner-dismiss ab-local-x wn-notice-x" onClick={onDismiss}
       aria-label={dismissLabel} title={dismissLabel}>&times;</button>
   );
-  const summary = summaryOf(kind, view, health);
+  const statusLine = summaryOf(kind, view, health);
   if (kind === 'provider') {
     return {
-      present: true, title, summary, kind, dismiss,
+      present: true, title, statusLine, kind, dismiss,
       action: <ProviderActions panel onNavigateSettings={onNavigateSettings} />,
       node: <ProviderSection header={header} panel={!firstUse} health={health} onNavigateSettings={onNavigateSettings} />,
     };
@@ -189,7 +190,7 @@ export function useLocalClaudeNotice({ health, loading, firstUse, onNavigateSett
   const fixPending = { pending, error: actionError, panel: true } as const;
   if (kind !== 'install' && view) {
     return {
-      present: true, title, summary, kind, dismiss,
+      present: true, title, statusLine, kind, dismiss,
       action: view.kind === 'outdated' && view.fixable
         ? <FixRow view={view} label="Update Claude Code" {...fixPending} onFix={() => act(() => fixLocalClaude('claude_outdated'), 'update')} />
         : null,
@@ -209,7 +210,7 @@ export function useLocalClaudeNotice({ health, loading, firstUse, onNavigateSett
   }
   const install = view?.kind === 'install' && view.fixable && view.problem ? view : null;
   return {
-    present: true, title, summary, kind, dismiss,
+    present: true, title, statusLine, kind, dismiss,
     action: install
       ? <FixRow view={install} label="Install Claude Code" {...fixPending} onFix={() => act(() => fixLocalClaude(install.problem!.kind), 'install')} />
       : <div className="ask-card-answer setup-actions"><ApiSettingsButton onNavigateSettings={onNavigateSettings} /></div>,

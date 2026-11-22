@@ -132,7 +132,7 @@ function LocalClaudeCard({ local, health }: { local: ReturnType<typeof useLocalC
       avatar={{ glyph: <WarningTriangleIcon size={13} />, tone }}
       who={who}
       status={{ tone, text: LOCAL_STATUS[kind] ?? 'Needs setup' }}
-      line={expanded ? undefined : local.summary}
+      line={expanded ? undefined : local.statusLine}
       {...(blocking ? {} : { onOpen: () => setOpen(!open), expanded, openTitle: expanded ? 'Show less' : 'Show how to set it up' })}
       end={local.dismiss}
       bodyFlush

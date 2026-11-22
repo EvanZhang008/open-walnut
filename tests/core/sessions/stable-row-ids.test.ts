@@ -160,7 +160,6 @@ const CALLERS: Record<string, { kind: 'resend' | 'unique' | 'event' | 'forward';
   'src/core/sessions/lane-turn.ts': { kind: 'resend', why: "the chat client's own message id, kept on its retry" },
   'src/core/sessions/engine-switch-resume.ts': { kind: 'resend', why: 'one id per engine switch' },
   'src/web/routes/session-send-v1.ts': { kind: 'resend', why: "the phone's message id, kept on its retry" },
-  'src/web/routes/session-chat.ts': { kind: 'resend', why: "the console's explicit Retry of one bubble" },
   'src/providers/daemon-connection.ts': { kind: 'resend', why: 'a phone message the companion relayed' },
   'src/providers/claude-code-session.ts': { kind: 'resend', why: "a session's carried first line" },
   'src/providers/follower-trigger-delivery-core.ts': { kind: 'forward', why: "a trigger fire's own message id (fireMessageId), handed to the host's server that delivers it" },

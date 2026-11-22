@@ -59,6 +59,7 @@ const SESSION_FILES: Record<string, string> = {
   'utils/path-machine-memory.ts': "the machine this tab's user named for a path whose writer Walnut did not record: a per-tab answer to a question, not Home or Org layout",
   'utils/scroll-debug.ts': 'a debug timer',
   'utils/stale-assets.ts': 'reload bookkeeping of one tab',
+  'components/quickbar/useQuickReceipts.ts': 'the quick bar receipts of this tab that could still lose words (waiting, failed, held, sending), kept across a reload of this tab only; a relaunch counts them as unsaved work first (utils/unsaved-work.ts)',
   'utils/thread-stack-persist.ts': 'the question stack inside one panel, per tab by spec C69; the panel is in the layout record',
   'utils/ui-prefs-sync.ts': 'the one-boot skip flag crash recovery sets',
   'undo/TaskUndoContext.tsx': 'the Undos on screen when this tab reloads, for the seconds they had left (undo/undo-persist.ts); a relaunch rightly ends them',
@@ -67,6 +68,7 @@ const SESSION_FILES: Record<string, string> = {
 /** sessionStorage keys read or written directly by name. */
 const SESSION_KEYS: Record<string, string> = {
   'walnut-test-run': 'test-run marker',
+  'walnut:quick-receipts': 'the quick bar receipts of this tab that could still lose words (components/quickbar/useQuickReceipts.ts)',
   'walnut-drawing-tab': 'the id of this tab for its unsaved drawing drafts (components/drawing/drawing-store.ts)',
   'walnut.vault.session': 'the Passwords unlock of this tab (a secret, never on disk)',
   'open-walnut-debug-crash-once': 'debug crash switch',

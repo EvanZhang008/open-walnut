@@ -27,6 +27,7 @@ import path from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 import { bpSetup, railButton } from './host-attention-helpers'
 import { connected } from './host-problems-helpers'
+import { cssColorToRgba } from './css-color'
 import { bell, openBell } from './host-problems-fixture-helpers'
 
 const SHOTS = process.env.PANEL_SHOTS || ''
@@ -188,7 +189,7 @@ for (const scheme of ['light', 'dark'] as const) {
     const rail = (await panel.locator('.nfc-rail').boundingBox())!
     expect(rail.width).toBeLessThanOrEqual(120)
     const active = await railButton(page, 'All').evaluate((e) => getComputedStyle(e).backgroundColor)
-    const alpha = Number(/rgba?\(([^)]+)\)/.exec(active)?.[1]?.split(',')[3] ?? 1)
+    const alpha = cssColorToRgba(active)[3]
     expect(alpha).toBeLessThan(0.3)
 
     // The header: tool buttons in one group, saying what they do.
