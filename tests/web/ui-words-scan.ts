@@ -156,7 +156,7 @@ export function scanFile(file: string, text: string): WordHit[] {
     if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) {
       let init: ts.Expression = n.initializer;
       while (ts.isParenthesizedExpression(init) || ts.isAsExpression(init)) init = init.expression;
-      if (ts.isJsxElement(init) || ts.isJsxSelfClosingElement(init) || ts.isJsxFragment(init)) fileConsts.set(n.name.text, 'icon');
+      if (ts.isJsxElement(init) || ts.isJsxSelfClosingElement(init) || ts.isJsxFragment(init)) fileConsts.set(n.name.text, showsWords(init) ? 'words' : 'icon');
       else if (ts.isStringLiteral(init) || ts.isNoSubstitutionTemplateLiteral(init) || ts.isTemplateExpression(init)) fileConsts.set(n.name.text, 'words');
     }
     ts.forEachChild(n, collect);

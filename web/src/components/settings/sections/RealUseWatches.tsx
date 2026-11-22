@@ -60,7 +60,7 @@ export function WatchesBlock({ watches, now }: { watches: UsageWatch[]; now: num
         </thead>
         <tbody>
           {watches.length === 0
-            ? <tr><td className="ru-empty" colSpan={5}>No watches yet. A task that ships a change names what real use should show with usage_watch.</td></tr>
+            ? <tr><td className="ru-empty" colSpan={5}>No watches yet. A task that ships a change names here what real use should show.</td></tr>
             : watches.map((w) => <WatchRow key={w.id} w={w} now={now} titles={titles} />)}
         </tbody>
       </table>

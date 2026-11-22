@@ -57,6 +57,7 @@ describe('UI standard: plain words', () => {
     expect(kinds('const a = <button title="Close" onClick={f}><svg /></button>;')).toEqual([]);
     expect(kinds('const a = <button aria-label="Close"><svg /></button>;')).toEqual([]);
     expect(kinds('const T = "Not right?"; const a = <button>{T}</button>;')).toEqual([]);
+    expect(kinds('const words = (<><b>Waiting</b> <i>3</i></>); const a = <button>{words}</button>;')).toEqual([]);
     expect(kinds('const a = <button><svg /><span>Back</span></button>;')).toEqual([]);
     expect(kinds('const a = <button>{label}</button>;')).toEqual([]);
     expect(kinds('const a = <span title="Stops org_send">x</span>;')).toEqual(['rawId']);
