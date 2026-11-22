@@ -30,13 +30,25 @@ export function writerTask(by: ThreadWriter): string | null {
  * it opened it or it holds its letter: a lead writes the summary of every thread on its Threads, and
  * his own asks there are each their own matter. Pure.
  */
-export function ownNeedsThreads(file: ThreadsFile, taskId: string, except?: string, openLetters?: ReadonlySet<string>): OpenAsk[] {
+export function ownNeedsThreads(file: ThreadsFile, taskId: string, except?: string, openLetters?: ReadonlySet<string>, ref?: string): OpenAsk[] {
   const by = `task:${taskId}`;
   return file.threads
-    .filter((t: OrgThread) => t.id !== except && !t.closed
+    .filter((t: OrgThread) => t.id !== except && !t.closed && !otherItem(t, ref)
       && (t.opener?.by === by || t.letter?.task === taskId)
       && (t.state === 'needs' || (!!t.letter && t.letter.task === taskId && t.state !== 'pending' && !!openLetters?.has(t.letter.id))))
     .map((t) => ({ id: t.id, kind: 'thread' as const, title: t.title }));
+}
+
+/**
+ * Each points at its own outside item (a mail, a ticket: the opener's ref) and they differ: two
+ * matters by construction (a lead opening one thread per mail he must answer), never one asked twice.
+ */
+function otherItem(t: OrgThread, ref?: string): boolean {
+  // A letter's thread always counts: its buttons are an ask of the task's own.
+  if (t.letter) return false;
+  const a = (t.opener?.ref ?? '').trim();
+  const b = (ref ?? '').trim();
+  return !!a && !!b && a !== b;
 }
 
 /** Why the write is refused, or null. `others`: the writer's other open asks. Pure. */
@@ -59,7 +71,7 @@ export function supersededAsks(others: readonly OpenAsk[], supersedes: unknown):
 }
 
 /** The writer task's other open asks: its needs threads here and its decision letters he has not answered. */
-export async function otherOpenAsks(nodeTaskId: string, by: ThreadWriter, except?: string): Promise<OpenAsk[]> {
+export async function otherOpenAsks(nodeTaskId: string, by: ThreadWriter, except?: string, ref?: string): Promise<OpenAsk[]> {
   const taskId = writerTask(by);
   if (!taskId) return [];
   const { readThreads } = await import('./threads-store.js');
@@ -69,7 +81,7 @@ export async function otherOpenAsks(nodeTaskId: string, by: ThreadWriter, except
   const [{ listLetters }, { showsDecisionButtons }] = await Promise.all([import('../human-inbox/store.js'), import('../human-inbox/open-decision.js')]);
   const open = (await listLetters().catch(() => ({ letters: [] }))).letters
     .filter((l) => l.sender?.taskId === taskId && showsDecisionButtons(l));
-  const threads = ownNeedsThreads(file, taskId, except, new Set(open.map((l) => l.id)));
+  const threads = ownNeedsThreads(file, taskId, except, new Set(open.map((l) => l.id)), ref ?? file.threads.find((t) => t.id === except)?.opener?.ref);
   // A letter a thread here holds is asked there: counted once, as that thread.
   const held = new Set(file.threads.map((t) => t.letter?.id).filter(Boolean));
   const letters = open.filter((l) => !held.has(l.id)).map((l) => ({ id: l.id, kind: 'letter' as const, title: l.subject }));
@@ -77,8 +89,8 @@ export async function otherOpenAsks(nodeTaskId: string, by: ThreadWriter, except
 }
 
 /** Refuse a write that leaves the writer's other asks unnamed (409 other_open_asks). */
-export async function refuseOtherOpenAsks(nodeTaskId: string, by: ThreadWriter, input: { supersedes?: unknown; separate_reason?: unknown }, except?: string): Promise<OpenAsk[]> {
-  const others = await otherOpenAsks(nodeTaskId, by, except);
+export async function refuseOtherOpenAsks(nodeTaskId: string, by: ThreadWriter, input: { supersedes?: unknown; separate_reason?: unknown; ref?: unknown }, except?: string): Promise<OpenAsk[]> {
+  const others = await otherOpenAsks(nodeTaskId, by, except, typeof input.ref === 'string' ? input.ref : undefined);
   const why = otherAsksRefusal(others, input);
   if (why) throw new ThreadError('other_open_asks', 409, why);
   return supersededAsks(others, input.supersedes);

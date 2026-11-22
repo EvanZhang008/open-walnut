@@ -118,6 +118,16 @@ describe('one matter is asked in one place', () => {
     expect(otherAsksRefusal(others, { separate_reason: 'That one is the prod approval; this is the test account' })).toBeNull()
     // Another task's threads and his own are not this task's.
     expect(ownNeedsThreads(file, 'other-task')).toEqual([])
+    // A letter's thread counts whatever outside item the new one points at.
+    expect(ownNeedsThreads(file, 'triage-1', 'th-new000001', undefined, 'Mail: orchard invoice').map((o) => o.id)).toEqual([id])
+  })
+
+  it('threads that each point at their own outside item (one per mail) are separate matters; one without a ref still counts', () => {
+    const lead = 'task:lead-7' as const
+    const a = openThread(emptyThreads('lead-7'), { title: 'Reply to the orchard invoice mail?', text: 'Please decide', from: 'mail', ref: 'Mail: orchard invoice', ...KIND }, lead, at(3, 0))
+    expect(ownNeedsThreads(a.file, 'lead-7', undefined, undefined, 'Mail: barn repair quote')).toEqual([])
+    expect(ownNeedsThreads(a.file, 'lead-7', undefined, undefined, 'Mail: orchard invoice').map((o) => o.id)).toEqual([a.thread.id])
+    expect(ownNeedsThreads(a.file, 'lead-7').map((o) => o.id)).toEqual([a.thread.id])
   })
 })
 
