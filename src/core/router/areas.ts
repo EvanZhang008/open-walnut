@@ -1,5 +1,6 @@
 import path from 'node:path'
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js'
+import { readJsonFileKept } from '../../utils/json-kept.js'
 import { ROUTER_SOURCE_KINDS, type RouterSource, type RouterSourceKind } from './types.js'
 import { ensureRouterDataVersion, RouterDataVersionError } from './data-version.js'
 
@@ -412,9 +413,14 @@ export function assertNoReassignment(before: RouterAreasFile, after: RouterAreas
   }
 }
 
+/**
+ * The areas as stored. The file is parsed once per version of it and shared (utils/json-kept.ts):
+ * the live server read it about 560 times in 10 minutes (2026-11-22) while it changed a few
+ * times a day. normalizeRouterAreas copies every field, so a reader may change what it gets.
+ */
 export async function readRouterAreas(home: string): Promise<RouterAreasFile> {
   const file = routerAreasPath(home)
-  const raw = await readJsonFile<unknown>(file, emptyFile(), { readErrors: 'throw' })
+  const raw = await readJsonFileKept<unknown>(file, emptyFile(), { readErrors: 'throw' })
   return normalizeRouterAreas(raw)
 }
 

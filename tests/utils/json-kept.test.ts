@@ -103,3 +103,16 @@ describe('the hot files a looking reader parses go through readJsonFileKept', ()
     expect(text).toMatch(/readJsonFileKept</);
   });
 });
+
+describe('router areas: a looking reader parses the file once per version', () => {
+  it('reads areas.json once for many readRouterAreas calls, and again after a write', async () => {
+    const { readRouterAreas, routerAreasPath } = await import('../../src/core/router/areas.js');
+    const home = dir;
+    const areas = routerAreasPath(home);
+    await fs.mkdir(path.dirname(areas), { recursive: true });
+    await writeJsonFile(areas, { version: 1, areas: [], routers: [], items: [] });
+    await settle();
+    for (let i = 0; i < 5; i += 1) expect((await readRouterAreas(home)).areas).toEqual([]);
+    expect(jsonIoTop(50).find((r) => r.file === areas)?.reads).toBe(1);
+  });
+});
