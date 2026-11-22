@@ -61,6 +61,7 @@ describe('every card in the corner stack can be closed', () => {
   it('the × is the one NoticeCard draws', () => {
     const card = read('web/src/components/common/NoticeCard.tsx');
     expect(card).toMatch(/onClose\?: \(\) => void;/);
-    expect(card).toMatch(/className="wn-notice-x"/);
+    // The family's quiet icon square (buttons.css), not a button of its own (ui-standard-ratchet).
+    expect(card).toMatch(/className="btn btn-ghost btn-icon btn-sm wn-notice-close"/);
   });
 });

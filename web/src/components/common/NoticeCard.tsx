@@ -108,7 +108,7 @@ export function NoticeCard(p: NoticeCardProps) {
   );
   const hasHead = !!(p.avatar || p.who !== undefined || p.status || p.line || p.end || p.onClose);
   const close = p.onClose && (
-    <button type="button" className="wn-notice-x" aria-label={p.closeLabel ?? 'Dismiss'} title={p.closeLabel ?? 'Dismiss'}
+    <button type="button" className="btn btn-ghost btn-icon btn-sm wn-notice-close" aria-label={p.closeLabel ?? 'Dismiss'} title={p.closeLabel ?? 'Dismiss'}
       onClick={(e) => { e.stopPropagation(); p.onClose!(); }}>
       &times;
     </button>
