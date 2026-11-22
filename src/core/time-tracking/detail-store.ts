@@ -199,7 +199,8 @@ const MAX_MARKED_IDS = 2000
 /** Record every message a person sends, once per message id. Idempotent (same subscriber name replaces). */
 export function startSentMarkers(): void {
   bus.subscribe(SUBSCRIBER, (event) => {
-    const marker = sentMarkerOf((event.data ?? {}) as Record<string, unknown>, new Date())
+    // When it was sent: a host's queued line read back late keeps its own time (EmitOptions.timestamp).
+    const marker = sentMarkerOf((event.data ?? {}) as Record<string, unknown>, new Date(event.timestamp || Date.now()))
     if (!marker) return
     if (marker.messageId) {
       if (markedIds.has(marker.messageId)) return

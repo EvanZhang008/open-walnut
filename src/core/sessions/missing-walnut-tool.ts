@@ -124,6 +124,9 @@ export function startMissingWalnutTool(): () => void {
   if (started) return () => {};
   started = true;
   bus.subscribe('missing-walnut-tool', (event) => {
+    // A host's refusal read back long after it happened (a leader that was away): the session went
+    // on without the hint, and a hint now would land in a later turn it does not belong to.
+    if (event.late) return;
     void noteToolResult((event.data ?? {}) as Parameters<typeof noteToolResult>[0]);
   }, { global: true, interest: [EventNames.SESSION_TOOL_RESULT] });
   return () => {

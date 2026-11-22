@@ -389,7 +389,8 @@ export function startThreadAnswers(): { stop: () => void } {
       // An intermediate result (a team or a background job still running) is not the turn's end.
       if (!d.sessionId || intermediateResult(d) || isQuietTurn(d.sessionId, d.turnGen)) return;
       // A moment later: the turn's last words reach its transcript just after its result.
-      const endedAt = new Date().toISOString();
+      // When the turn ended: a host's result read back late (a leader that was away) keeps its own time.
+      const endedAt = new Date(event.timestamp || Date.now()).toISOString();
       const timer = setTimeout(() => { void answersForSession(d.sessionId!, d.taskId, endedAt); }, RESULT_SETTLE_MS);
       timer.unref?.();
     }, { global: true, interest: ['session:result'] });

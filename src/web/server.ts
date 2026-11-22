@@ -5510,7 +5510,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         })
         sessionStreamBuffer.appendToolUse(sessionId, toolUseId, toolName, input, planContent, parentToolUseId, subagentType, taskDescription, msgId)
         sendStreamEvent(sessionId, event.name, event.data)
-        enforceStreamingPhase(sessionId, eventData<'session:tool-use'>(event).taskId, eventData<'session:tool-use'>(event).replayed)
+        // A host's tool call read back long after it happened (event.late) is history, as a replayed one is.
+        enforceStreamingPhase(sessionId, eventData<'session:tool-use'>(event).taskId, event.late || eventData<'session:tool-use'>(event).replayed)
       }
     } else if (event.name === 'session:tool-result') {
       const { sessionId, toolUseId, result } = eventData<'session:tool-result'>(event)

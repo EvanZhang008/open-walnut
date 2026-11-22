@@ -394,6 +394,8 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
   async function onRunSettled(
     task: Task,
     outcome: { status: 'ok' | 'error'; error?: string },
+    /** When the run ended: a host's result read back late (a leader that was away) keeps its own time. */
+    endedAtMs: number = Date.now(),
   ): Promise<void> {
     if (settledTasks.has(task.id)) return;
     // COMPLETE is terminal, so a task already there was settled by an earlier
@@ -403,7 +405,7 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
     settled += 1;
 
     const startedAtMs = createdAtMs(task);
-    const nowMs = Date.now();
+    const nowMs = endedAtMs;
 
     try {
       await completeTask(task.id);
@@ -507,8 +509,9 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
         if (!runTasks.has(taskId)) return;
         const task = await getTask(taskId);
         if (!isTriageRunTask(task)) return;
+        const endedAtMs = event.timestamp || Date.now();
         if (event.name === EventNames.SESSION_ERROR) {
-          await onRunSettled(task!, { status: 'error', error: data?.error });
+          await onRunSettled(task!, { status: 'error', error: data?.error }, endedAtMs);
           return;
         }
         // A turn that ended on "Prompt is too long" answered nothing: the context recovery compacts and
@@ -517,7 +520,7 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
         if (recoveryHeld || await turnEndAnsweredNothing(eventSid, { event: 'result', isError: !!data?.isError, result: data?.isError ? data.result : undefined })) return;
         await onRunSettled(task!, data?.isError
           ? { status: 'error', error: data?.result }
-          : { status: 'ok' });
+          : { status: 'ok' }, endedAtMs);
       } catch (err) {
         log.cron.warn('triage: run bookkeeping failed', {
           event: event.name, error: err instanceof Error ? err.message : String(err),

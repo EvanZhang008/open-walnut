@@ -268,12 +268,16 @@ export class HookDispatcher {
     // Track activity for turn-state bookkeeping.
     getOrCreateSessionState(this.sessionState, sessionId).lastActivityAt = Date.now();
 
+    // A host's fact read back long after it happened: the turn state above follows it, and only the
+    // turn-end kind fires (firesLate), marked late with the time it happened (types.ts firesLate).
+    const late = event.late === true;
     for (const { hookPoint, extraPayload } of hookPoints) {
-      const matching = this.hooks.filter(h => h.hooks.includes(hookPoint));
+      const matching = this.hooks.filter(h => h.hooks.includes(hookPoint) && (!late || h.firesLate === true));
       if (matching.length === 0) continue;
 
       // Build context (cached per session)
-      const context = await this.payloadBuilder.build(sessionId, taskId, event.traceId);
+      const built = await this.payloadBuilder.build(sessionId, taskId, event.traceId);
+      const context = late ? { ...built, late: true as const, timestamp: new Date(event.timestamp).toISOString() } : built;
       // Side threads are hidden asides with no task: session hooks (on-stop
       // deploys, phase transitions, summaries) are written for the session the
       // user launched, and firing them per aside would be pure noise + spend.

@@ -79,6 +79,8 @@ export interface SessionHookContext {
   session?: SessionRecord;
   timestamp: string;
   traceId: string;
+  /** A host's fact read back long after it happened (firesLate): `timestamp` is when it happened. */
+  late?: true;
   /** Discriminator for cross-domain handlers. Absent = session (legacy). */
   domain?: 'session' | 'cron';
   /** Bus event name that fired this hook. */
@@ -253,6 +255,12 @@ export interface SessionHookDefinition {
   /** Set when enforcement lives outside the dispatcher (inline session reader,
    *  daemon policy) — the entry exists for registry/UI visibility only. */
   enforcedElsewhere?: { where: string; note: string };
+  /** Also fires for a host's late session fact (BusEvent.late: a leader that was away read it back),
+   *  its payload marked `late` with the time it happened. Only a hook that tells someone a turn
+   *  ended (the turn-end kind: an asker or a parent hears its child stopped) sets it; every other
+   *  session hook (one that adds text to a session, asks it, titles or summarizes it) is for what
+   *  happens now and never fires for a late fact. Task-domain hooks fire on task events, never late. */
+  firesLate?: true;
 }
 
 /** Alias for the unified system — same shape, domain-agnostic naming. */

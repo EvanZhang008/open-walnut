@@ -305,13 +305,16 @@ export function startTopics(): { stop: () => void; ready: Promise<void> } {
       if (isQuietTurn(d.sessionId, d.turnGen)) return;
       if (indexed && !waiting.has(d.sessionId)) return;
       const sid = d.sessionId;
+      // When the turn ended: a host's result read back late (a leader that was away) is judged at its
+      // own time (a topic turn's age, its settle), and its reply is posted as any (the topic's record).
+      const endedAt = event.timestamp || Date.now();
       const timer = setTimeout(() => {
         timers.delete(timer);
         inOrder(sid, async () => {
           const { topicsEnabled } = await import('./topics-store.js');
           if (!(await topicsEnabled())) return;
           if (!indexed) await indexPendingTurns().catch(() => {});
-          await (ending ? endTurnsOf(sid) : captureReplies(sid));
+          await (ending ? endTurnsOf(sid, endedAt) : captureReplies(sid, endedAt));
         });
       }, RESULT_SETTLE_MS);
       timer.unref?.();

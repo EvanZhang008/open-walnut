@@ -26,6 +26,7 @@ import { bus, EventNames } from './event-bus.js';
 import { log } from '../logging/index.js';
 import { bootPolicy } from './boot-policy.js';
 import { routineRunToClose } from './routines/run-close.js';
+import { createLateGather } from './session-channel/late-gather.js';
 import { deriveUserStatus, fallbackUserState, reportIsCurrent, rollUpAsks, TURN_TO_READ, type UserStatus, type UserStatusInput } from './user-status.js';
 import { answeredAbove, answerContextOf, answerFor, answersOf, askKey, foldSameAsk, withdrawnAtOf, type RelativeAsk } from './same-ask.js';
 import { isSignInAsk, readSignInState, signInStateStamp, signInWaitWords, type SignInState } from './sign-in-ask.js';
@@ -1396,7 +1397,15 @@ async function experimentSwitched(): Promise<boolean> {
   return moved || threadsMoved || popMoved || lettersMoved || oneCardMoved || briefOffMoved;
 }
 
-function onEvent(event: { name: string; data: unknown; source?: string }): void {
+/**
+ * A host's facts read back long after they happened (a leader that was away, BusEvent.late): the
+ * whole backlog's tasks are derived once, after it has gone quiet, in the ordinary lane; never the
+ * fast lane, and never once per fact (session-channel/late-gather.ts).
+ */
+const lateTasks = createLateGather((ids) => { for (const id of ids) mark(id); });
+const markLate = (taskId: unknown): void => { if (typeof taskId === 'string') lateTasks.add(taskId); };
+
+function onEvent(event: { name: string; data: unknown; source?: string; late?: true }): void {
   // Its own writes, and the activity stamp a session writes on every event, move nothing here.
   if (event.source === OWN_SOURCE || event.source === 'session-touch') return;
   const d = (event.data ?? {}) as Record<string, any>;
@@ -1443,7 +1452,7 @@ function onEvent(event: { name: string; data: unknown; source?: string }): void 
       // A running turn reads Working whatever the phase, so nothing later corrects it. A turn that
       // ends keeps the debounce: its report and phase write follow it and fold into one pass.
       // Status events come only on a change, and the lane rests as long as its last pass ran.
-      const lane = sessionMovesNow(event.name, d) ? markNow : mark;
+      const lane = event.late ? markLate : sessionMovesNow(event.name, d) ? markNow : mark;
       if (d.taskId) lane(d.taskId); else markSession(d.sessionId, lane);
       return;
     }
@@ -1540,6 +1549,7 @@ export function holdStatusWritesForTest(fn: typeof holdWrite): void { holdWrite 
  * the debounce window (2026-10-26: an SSE "no replay" check read a late status write as one).
  */
 export async function settleUserStatusSync(): Promise<void> {
+  lateTasks.flush();
   for (let i = 0; i < 8; i++) {
     if (fastTimer) { clearTimeout(fastTimer); fastTimer = null; void runFastPass(); }
     if (fastRunning) { await fastRunning; continue; }
@@ -1551,6 +1561,7 @@ export async function settleUserStatusSync(): Promise<void> {
 
 export function stopUserStatusSync(): void {
   bus.unsubscribe(SUBSCRIBER);
+  lateTasks.stop();
   onReportPendingChange(null);
   stopRetryFollow?.();
   stopRetryFollow = null;

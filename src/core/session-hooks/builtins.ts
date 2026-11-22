@@ -2247,6 +2247,8 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
   priority: 60,
   source: 'builtin',
   enabled: true,
+  // The turn-end kind: an asker still hears that a host's turn ended while this leader was away.
+  firesLate: true,
   // Not a `phases` filter: that dimension also gates the session-domain turn
   // edges (on the task's phase at dispatch), which the handler reads fresh itself.
   filter: {

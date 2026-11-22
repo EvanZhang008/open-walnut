@@ -175,17 +175,18 @@ async function onSessionStatus(sessionId: string, taskId: string | null, status:
   await patchCard(task, 'session-running', laneAutoPatch({ type: 'session-running' }, true));
 }
 
-async function onSessionResult(taskId: string | undefined, replayed: boolean): Promise<void> {
+async function onSessionResult(taskId: string | undefined, replayed: boolean, endedAt: string): Promise<void> {
   if (replayed || !taskId) return;
   const start = turnStart.get(taskId);
   turnStart.delete(taskId);
   if (!start) return;
   const task = await taskById(taskId);
   if (!task?.parent_task_id || hash(task) === start.hash) return;
-  await patchCard(task, 'output', (card, _lanes, now) => ({
+  // The turn's end, not this write's: a host's result read back late keeps its own time.
+  await patchCard(task, 'output', (card) => ({
     ...card,
-    output_at: now,
-    worker_summary_at: card.worker_summary_at && card.worker_summary_at >= start.at ? card.worker_summary_at : now,
+    output_at: endedAt,
+    worker_summary_at: card.worker_summary_at && card.worker_summary_at >= start.at ? card.worker_summary_at : endedAt,
   }));
 }
 
@@ -223,7 +224,7 @@ function onEvent(event: BusEvent): void {
       return;
     }
     case EventNames.SESSION_RESULT:
-      track(onSessionResult(typeof d.taskId === 'string' ? d.taskId : undefined, d.replayed === true));
+      track(onSessionResult(typeof d.taskId === 'string' ? d.taskId : undefined, d.replayed === true, new Date(event.timestamp || Date.now()).toISOString()));
       return;
     default:
   }

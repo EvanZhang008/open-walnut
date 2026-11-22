@@ -115,7 +115,9 @@ export function startAgentTimeCollector(): void {
     // A quiet turn (Walnut's idle compaction) is no work of the task's.
     if (isQuietTurn(ev.sessionId, ev.turnGen)) return;
     if (alreadySeen(ev)) return;
-    void bank(ev, ms);
+    // The turn ended when it happened: a host's result read back late (a leader that was away)
+    // counts at its own time, never at the time it was received (event-bus.ts EmitOptions.timestamp).
+    void bank(ev, ms, event.timestamp);
   }, { global: true, interest: [EventNames.SESSION_RESULT] });
 }
 
@@ -124,12 +126,12 @@ export function stopAgentTimeCollector(): void {
   seenTurns.clear();
 }
 
-async function bank(ev: ResultLike, ms: number): Promise<void> {
+async function bank(ev: ResultLike, ms: number, endedAtMs: number = Date.now()): Promise<void> {
   try {
     const sessionId = ev.sessionId!;
     // The ACP/SDK emitter does not carry taskId — one indexed lookup fills it.
     const taskId = ev.taskId || await resolveTaskId(sessionId);
-    const now = new Date();
+    const now = new Date(endedAtMs);
     // `ts` is the START of the counted window for EVERY kind (types.ts), and a
     // turn result arrives at its END — so the interval opened `ms` ago. Recording
     // the arrival instant instead drew a turn on the day timeline entirely after
