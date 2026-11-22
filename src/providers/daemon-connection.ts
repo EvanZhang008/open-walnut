@@ -9295,7 +9295,9 @@ export class DaemonConnection {
         updateSessionRecordConditionally,
         getSessionsForTaskSync,
       } = await import('../core/session-tracker.js')
-      const sessions = await listSessions()
+      // A session its host runs and judges is that host's to recover (R2-M8): its row here is a copy.
+      const { judgedHereRecords } = await import('../core/sessions/judge-of.js')
+      const sessions = judgedHereRecords(await listSessions())
 
       // Bound the stopped-record rescue probes per pass: each is one `status`
       // RPC, and the 24h recency window in isRescuableStoppedRecord already

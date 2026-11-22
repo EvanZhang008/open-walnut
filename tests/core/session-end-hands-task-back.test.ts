@@ -305,6 +305,31 @@ describe('ACP reconnect hands the task back', () => {
     }
   }
 
+  it('R2-M8: a session its host runs and judges is left to that host: the leader\'s reconnect probes nothing and moves no phase', async () => {
+    const taskId = await seedTask('host-run reconnect')
+    await updateTask(taskId, { phase: 'IN_PROGRESS' })
+    await createSessionRecord('sid-host-acp', taskId, 'proj', '/w', { host: 'devbox' })
+    const { writingAsHost } = await import('../../src/core/sessions/session-row-owner.js')
+    await writingAsHost(() => updateSessionRecord('sid-host-acp', { judge: 'host', engine: 'opencode', acpRuntimeId: 'runtime-host', process_status: 'running' }))
+    const { DaemonConnection } = await import('../../src/providers/daemon-connection.js')
+    const { bus } = await import('../../src/core/event-bus.js')
+    const said: string[] = []
+    bus.subscribe('m8-probe', (e) => { if (e.source === 'daemon-reconnect') said.push(e.name) }, { global: true, interest: ['session:'] })
+    const conn = new DaemonConnection('devbox', null)
+    const probes: string[] = []
+    const send = vi.spyOn(conn, 'send').mockImplementation(async (command) => { probes.push(String(command)); return { ok: false, errorKind: 'no_worker' } as never })
+    try {
+      await (conn as unknown as { recoverDisconnectedSessions(): Promise<void> }).recoverDisconnectedSessions()
+    } finally {
+      send.mockRestore()
+      bus.unsubscribe('m8-probe')
+    }
+    expect(probes).toEqual([])
+    expect(said).toEqual([])
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+    expect(await getSessionByClaudeId('sid-host-acp')).toMatchObject({ process_status: 'running', judge: 'host' })
+  })
+
   it('hands back a missing worker without losing the lazy-resume identity or repeating the edge', async () => {
     const taskId = await seedAcp()
     await updateSessionRecord('sid-acp', { pendingPermission: { toolName: 'Bash' } as never })
