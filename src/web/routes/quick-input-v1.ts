@@ -280,7 +280,12 @@ async function quickSend(req: Request, res: Response, taskId: string | null, bad
     // The same send again (the bar resends by itself once Walnut answers) is that send, run once.
     const first = send
     const { sendOnce } = await import('../../core/sessions/send-once.js')
-    send = () => sendOnce(`quick\n${line.userUuid}`, first, { again: wentInSince })
+    // A held answer sent nothing (a permission prompt stands in the way): never kept, so the same
+    // line again tries again instead of being told "held" for eleven minutes.
+    // Known gap: a send that STARTED the task's session carries the session's own first line uuid,
+    // not this one, so if Walnut restarts before it answers, a resend finds neither a queued row
+    // nor a ran line under this uuid and goes in a second time (start, then restart, then resend).
+    send = () => sendOnce(`quick\n${line.userUuid}`, first, { again: wentInSince, keep: (a) => !a.held })
   }
   if (req.body?.follow === true) {
     await sendAndFollow(send, res, { kept: opts.kept })

@@ -57,11 +57,18 @@ function keepAnswer(key: string, answer: unknown, now: number): void {
 /**
  * Run the send `key` names once: the same key again (at once or later) gets the first answer,
  * through `again` when given (what became of it since: a queued row that went in is delivered).
- * Only an answer is kept; a send that threw runs again next time. No key runs every time.
+ * Only an answer is kept (and only one `keep` takes); a send that threw runs again next time.
+ * No key runs every time.
  */
 export function sendOnce<T>(
   key: string | undefined, run: () => Promise<T>,
-  opts: { now?: () => number; again?: (answer: T) => Promise<T> } = {},
+  opts: {
+    now?: () => number
+    again?: (answer: T) => Promise<T>
+    /** Whether this answer stands for the send (default: every answer). One that sent nothing
+     *  (held behind a permission prompt) is not kept, so the same send again runs again. */
+    keep?: (answer: T) => boolean
+  } = {},
 ): Promise<T> {
   if (!key) return run()
   const now = opts.now ?? Date.now
@@ -72,7 +79,7 @@ export function sendOnce<T>(
       return opts.again ? opts.again(hit.answer as T) : hit.answer as T
     }
     const answer = await run()
-    keepAnswer(key, answer, now())
+    if (!opts.keep || opts.keep(answer)) keepAnswer(key, answer, now())
     return answer
   })
 }

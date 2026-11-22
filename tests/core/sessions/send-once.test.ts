@@ -126,6 +126,17 @@ describe('sendOnce: an answer given is given again for the same uuid', () => {
     expect(plain).toBe(2)
   })
 
+  it('an answer that sent nothing (held behind a permission prompt) is not kept: the same send runs again', async () => {
+    let runs = 0
+    const run = async () => ({ held: ++runs === 1 })
+    const keep = (a: { held: boolean }) => !a.held
+    expect(await sendOnce('s\nheld-line', run, { keep })).toEqual({ held: true })
+    expect(await sendOnce('s\nheld-line', run, { keep })).toEqual({ held: false })
+    // Once it went in, that answer is kept like any other.
+    expect(await sendOnce('s\nheld-line', run, { keep })).toEqual({ held: false })
+    expect(runs).toBe(2)
+  })
+
   it('the kept answers stay a little past the clients\' 10 minute limit on sending by themselves', () => {
     expect(SEND_ANSWER_KEPT_MS).toBeGreaterThan(10 * 60_000)
     expect(SEND_ANSWER_KEPT_MS).toBeLessThanOrEqual(15 * 60_000)
