@@ -163,6 +163,7 @@ const CALLERS: Record<string, { kind: 'resend' | 'unique' | 'event' | 'forward';
   'src/providers/daemon-connection.ts': { kind: 'resend', why: 'a phone message the companion relayed' },
   'src/providers/claude-code-session.ts': { kind: 'resend', why: "a session's carried first line" },
   'src/providers/follower-trigger-delivery-core.ts': { kind: 'forward', why: "a trigger fire's own message id (fireMessageId), handed to the host's server that delivers it" },
+  'src/core/session-channel/host-boot.ts': { kind: 'forward', why: "a host that runs its sessions queues the lines its leader queued under the leader's own row ids (host-api.ts SendBody.queued)" },
 }
 
 function sourceFiles(dir: string): string[] {
