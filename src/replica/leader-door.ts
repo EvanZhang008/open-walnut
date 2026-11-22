@@ -11,11 +11,16 @@
  * door is the credential. The public app answers 404 for `/bridge/*` and
  * `/git/data` (replicaPublicRefusal below), so a browser or anything else
  * reaching the tunnel port can never write a copy.
+ *
+ * The session routes of a host that runs its sessions (`/host-api/sessions/*` and the
+ * `/host-api/session-channel` WebSocket, core/session-channel/host-routes.ts) live here too;
+ * without them (the switch off at boot) each answers `host_runs_sessions_off`.
  */
 
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import type { DeviceCopy } from '../host-server/device-copy.js'
+import { answerHostSessionsOff, isHostSessionsPath, refuseChannelUpgrade, type HostSessionRoutes } from '../core/session-channel/host-routes.js'
 
 export interface LeaderDoor {
   /** A stream the host daemon accepted from the Mac (`primary`): served here. */
@@ -27,6 +32,8 @@ export interface LeaderDoorOptions {
   devices: DeviceCopy
   /** What `GET /host-api/status` answers (the replica's report). */
   status?: () => Record<string, unknown>
+  /** The session routes of a host that runs its sessions, once installed (null: none). */
+  sessions?: () => HostSessionRoutes | null
   log?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 }
 
@@ -57,6 +64,12 @@ export function createLeaderDoor(opts: LeaderDoorOptions): LeaderDoor {
         replicaRouter(req, res)
         return
       }
+      if (isHostSessionsPath(url.pathname)) {
+        const routes = opts.sessions?.() ?? null
+        if (routes?.handle(req, res)) return
+        req.resume()
+        return answerHostSessionsOff(res)
+      }
       // `/git/data` and the rest of `/bridge/*` belong here too; a host replica
       // keeps no data hub yet, so they answer 404 on this side as well.
       sendJson(res, 404, { ok: false, error: 'not_found' })
@@ -68,6 +81,15 @@ export function createLeaderDoor(opts: LeaderDoorOptions): LeaderDoor {
 
   const server = http.createServer((req, res) => { void handle(req, res) })
   server.on('clientError', (_err, socket) => { try { socket.end('HTTP/1.1 400 Bad Request\r\n\r\n') } catch { /* gone */ } })
+  // Only the session channel upgrades here; any other upgrade is refused.
+  server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    socket.on('error', () => { /* a stream that went: nothing to answer */ })
+    const routes = opts.sessions?.() ?? null
+    if (routes?.upgrade(req, socket, head)) return
+    const pathname = new URL(req.url ?? '/', 'http://leader-door').pathname
+    if (isHostSessionsPath(pathname)) return refuseChannelUpgrade(socket)
+    socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+  })
 
   return {
     accept(stream) {
