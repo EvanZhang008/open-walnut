@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const { followerFact } = vi.hoisted(() => ({ followerFact: vi.fn(() => ({ kind: 'replica' })) }))
 vi.mock('../../src/core/host-server/index.js', async (importOriginal) => ({ ...(await importOriginal<Record<string, unknown>>()), hostFollowerFact: followerFact }))
 
-import { NetDaemonUpdater, decideNetUpdate, type NetServiceModeDeps, type NetUpdateFacts, type NetUpdaterDeps, type NetUpdateLink } from '../../src/providers/daemon-net-update.js'
+import { NetDaemonUpdater, STAGE_TRIES_BEFORE_UNFIT, decideNetUpdate, type NetServiceModeDeps, type NetUpdateFacts, type NetUpdaterDeps, type NetUpdateLink } from '../../src/providers/daemon-net-update.js'
 import { updateRemoteDaemonService } from '../../src/providers/daemon-service-update.js'
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 import { resetInProcessDaemonWantedForTests } from '../../src/providers/in-process-daemon.js'
@@ -148,15 +148,32 @@ describe('NetDaemonUpdater carries the mode', () => {
     b.u.stop()
   })
 
-  it('a walnut file that could not be staged takes the offer away and is no failure; a failure past it is an ask that failed', async () => {
+  it('a walnut file that could not be staged is tried again; its last try takes the offer away and is no failure; a failure past it is an ask that failed', async () => {
     const stageError = Object.assign(new Error('the file did not answer __daemon --version'), { name: 'DaemonUpdateStageError' })
     const m = mode({ due: true, serve: ON })
-    const { u } = updater({ mode: m, update: vi.fn(async () => { throw stageError }) as never })
+    const update = vi.fn(async () => { throw stageError })
+    let triesAtUnfit: number | null = null
+    m.unfit.mockImplementation(() => { triesAtUnfit ??= update.mock.calls.length })
+    const { u } = updater({ mode: m, update: update as never, cooldownMs: 30 })
     u.schedule(0)
-    await vi.waitFor(() => expect(u.state.phase).toBe('postponed'))
-    expect(m.unfit).toHaveBeenCalledWith(NEW, expect.stringContaining('__daemon --version'))
-    expect(m.asked).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(m.unfit).toHaveBeenCalled())
     u.stop()
+    // Tries 1 and 2 were postponements with the offer kept; the third took it away for this build.
+    expect(triesAtUnfit).toBe(STAGE_TRIES_BEFORE_UNFIT)
+    expect(m.unfit).toHaveBeenCalledWith(NEW, expect.stringContaining('__daemon --version'))
+    expect(u.state.phase).toBe('postponed')
+    expect(m.asked).not.toHaveBeenCalled()
+
+    // A passing fault: the second try puts the file there, and the offer was never taken away.
+    const m1 = mode({ due: true, serve: ON })
+    let tries = 0
+    const once = vi.fn(async () => { if (++tries === 1) throw stageError; return 'applied' as const })
+    const t = updater({ mode: m1, update: once as never, cooldownMs: 30 })
+    t.u.schedule(0)
+    await vi.waitFor(() => expect(m1.asked).toHaveBeenCalledWith({ expected: NEW, want: 'walnut-serve' }))
+    expect(once).toHaveBeenCalledTimes(2)
+    expect(m1.unfit).not.toHaveBeenCalled()
+    t.u.stop()
 
     const m2 = mode({ due: true, serve: ON })
     const f = updater({ mode: m2, update: vi.fn(async () => { throw new Error('the new daemon did not answer') }) as never })

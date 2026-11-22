@@ -252,6 +252,8 @@ export interface NetUpdateState { phase: NetUpdatePhase; host: string; running: 
 const MAX_BACKOFF_MS = 6 * 3600_000
 /** Uploads the link cut while the host stays on one build before the next cut is a failure (Walnut Health's "3 times or more"). */
 export const LINK_CUTS_BEFORE_FAILURE = 3
+/** Tries of one build whose walnut file did not reach the host before that build goes without the switch. */
+export const STAGE_TRIES_BEFORE_UNFIT = 3
 /** Answers that need no word in the log: nothing to do, or not this path's host. */
 /** Why another build's daemon on this link is kept (daemon-shared.ts), or null. */
 function sharedWhy(c: NetUpdateLink, expected: string | null, now: number): string | null {
@@ -278,6 +280,8 @@ export class NetDaemonUpdater {
   private failed: { expected: string; count: number } | null = null
   /** Uploads the link cut (stageCutByLink) while the host ran `from`: a postponement until LINK_CUTS_BEFORE_FAILURE. */
   private linkCuts: { from: string | null; count: number } | null = null
+  /** Tries of a build whose walnut file did not reach the host: a postponement until STAGE_TRIES_BEFORE_UNFIT. */
+  private stageFails: { expected: string; count: number } | null = null
   /** The build this server put on the host (its update answered ok). */
   private installed: string | null = null
   /** No automatic try before this (ms epoch, wall clock: it must run out across sleep): the backoff after a failed one. */
@@ -555,14 +559,21 @@ export class NetDaemonUpdater {
           return this.postpone(`the link dropped while the new daemon was put on the host, so nothing changed there (${msg.split('\n')[0].slice(0, 200)})`, this.d.cooldownMs)
         }
       }
-      // Nothing went onto the host (DaemonUpdateStageError, by name as on the SSH path): a walnut file
-      // that cannot go there takes the offer away for this build, and the build is asked again without it.
+      // Nothing went onto the host (DaemonUpdateStageError, by name as on the SSH path). A walnut file
+      // that did not go there is tried again after the cooldown (a passing fault: a full disk, a slow link);
+      // the third try of the same build takes the offer away for it, and the build is asked again without it.
       const staging = err instanceof Error && err.name === 'DaemonUpdateStageError'
       if (staging && serve?.on) {
-        this.d.mode?.unfit(expected, msg.slice(0, 300))
+        const tries = this.stageFails?.expected === expected ? this.stageFails.count + 1 : 1
+        this.stageFails = { expected, count: tries }
         this.lastAttempt = null
         this.launched.outcome(expected, null)
-        return this.postpone(`the walnut file could not be put on the host, so the update goes without the switch (${msg.split('\n')[0].slice(0, 200)})`)
+        const first = msg.split('\n')[0].slice(0, 200)
+        if (tries < STAGE_TRIES_BEFORE_UNFIT) {
+          return this.postpone(`the walnut file did not reach the host (try ${tries} of ${STAGE_TRIES_BEFORE_UNFIT}), so nothing changed there; tried again after the cooldown (${first})`, this.d.cooldownMs)
+        }
+        this.d.mode?.unfit(expected, msg.slice(0, 300))
+        return this.postpone(`the walnut file could not be put on the host, so the update goes without the switch (${first})`)
       }
       // A switch whose update failed past its staging is not asked again with this build (each try restarts the host's service).
       if (asked && !staging) this.d.mode?.asked({ expected, want: asked, failed: msg.split('\n')[0].slice(0, 300) })
@@ -579,6 +590,7 @@ export class NetDaemonUpdater {
     } finally { release?.() }
     this.failed = null
     this.linkCuts = null
+    this.stageFails = null
     this.retryAt = 0
     this.installed = expected
     // The switch went with an update that ran: not asked again with this build, whatever the host chose.

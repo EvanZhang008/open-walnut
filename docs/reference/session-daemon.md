@@ -401,7 +401,15 @@ the row connected to then), and the `hosts` aliases with one id are one machine 
 (`src/core/hosts/daemon-twins.ts`), though their links were never up at once. A daemon older than
 the id sends none, and its aliases are joined only by the pair both links confirmed together, as
 before. The backup writer keeps an existing `local/backup/machine-id` and uses the stable id only
-where none exists. Tests: `tests/core/machine-id.test.ts`, `tests/core/hosts/machine-id-twins.test.ts`,
+where none exists. Known limit: the id is a file in the account's home, not read from the system, so a
+machine cloned from a disk image of another (a VM template, a restored home) carries the same id.
+Walnut then counts the two as one machine: their aliases join into one row, usage reads one of them,
+and naming one in `host_service_offer` offers the other too (the one-service lock is not affected: it
+is a lock per machine and daemon dir); the id is also the holder id of a switchable leader's write
+permission, so two clones read as one holder there. Walnut does not tell clones apart by a second fact:
+the facts that would (the host name, a disk id, `/etc/machine-id`) also change on one machine in
+normal life, and a changed id makes a data dir read as copied to another machine
+(`src/core/home-move.ts`). Tests: `tests/core/machine-id.test.ts`, `tests/core/hosts/machine-id-twins.test.ts`,
 `tests/providers/daemon-machine-id-twins-e2e.test.ts`.
 
 ## A Walnut has one key on a host, whatever its data dir
@@ -435,7 +443,10 @@ still speaks as it gets `walnut_home_busy` with `movedTo`, so two diverged copie
 one Walnut's state, and its server shows one Walnut Health item for that host
 (`src/core/leader/home-busy-health.ts`). Another Walnut (another id) at a path one left gets
 `walnut_home_taken`, and its item says to run it from another data folder: the host keeps the
-first Walnut's state under that path, so it cannot be let in there. A declared move back flips it. A copy that declares nothing
+first Walnut's state under that path, so it cannot be let in there. Known limit: that other Walnut
+cannot use this host under that path at all (sessions, host_exec and the follower there all refuse it)
+until it runs from another data folder, or the first Walnut declares a move back; letting it in would
+mix two Walnuts' state under one key. A declared move back flips it. A copy that declares nothing
 is a Walnut of its own by its path. No file is moved or rewritten, and every file's embedded `home`
 still hashes to its name, so a rollback reads every file as before; a rollback to a daemon without
 aliases reads the new home as a separate Walnut (its epoch starts at 0 and its trigger memory is
