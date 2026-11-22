@@ -95,6 +95,10 @@ async function toolUseFor(sid: string, op: string, filePath: string | undefined,
     const { sessionRunner } = await import('../../providers/claude-code-session.js')
     const { commandRunsOp } = await import('../../lib/walnut-op-command.js')
     const live = sessionRunner.findByClaudeId(sid)
+    // A session its host runs: the predicate cannot cross, the host matches the same op itself.
+    const { isRemoteJudgedSession } = await import('../../providers/remote-judged-session.js')
+    const remote: unknown = live
+    if (isRemoteJudgedSession(remote)) return await remote.bashCallMatchingOp(op, filePath, [...taken])
     return live?.bashCallMatching((command) => commandRunsOp(command, op, filePath), taken)
   } catch {
     return undefined

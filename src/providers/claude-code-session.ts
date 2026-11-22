@@ -34,6 +34,8 @@ import { walnutCoordinationAllowRules } from './claude-walnut-allow.js'
 import { unwritableSettingsFile } from './settings-file-access.js'
 import { registerSessionServerProbe } from '../core/sessions/session-server-state.js'
 import { frameStartData } from '../core/sessions/send-frame.js'
+import { installHostJudgedRouting, routeHostJudgedEvent, startGoesToHost, startOnJudgingHost } from './host-judged-runner.js'
+import { execHostOf } from '../core/sessions/session-row-owner.js'
 import { assertDemoAdmission } from '../core/sessions/demo-admission.js'
 import { CostWatermark } from '../core/usage/cost-watermark.js'
 import { readUserSettingsEnv, slimChildSettingsArg } from './inline-subagent.js'
@@ -3824,7 +3826,7 @@ export class ClaudeCodeSession {
     const session = new ClaudeCodeSession(record.taskId, record.project, cliCommand)
     session._testDaemonUrl = testDaemonUrl
     session.claudeSessionId = record.claudeSessionId
-    session._host = record.host ?? null
+    session._host = execHostOf(record) ?? null
     session._cwd = record.cwd ?? null
     return session
   }
@@ -3939,7 +3941,7 @@ export class ClaudeCodeSession {
     session._activity = record.activity
     session.planFile = record.planFile ?? null
     session.planCompleted = record.planCompleted ?? false
-    session._host = record.host ?? null
+    session._host = execHostOf(record) ?? null
     // Restore _permissionPromptEnabled. The record does NOT persist spawn args, so
     // the only authority available here is the same config key the spawn path reads
     // (config.session.permission_prompt). Without this, a server restart would leave
@@ -4093,11 +4095,12 @@ export class ClaudeCodeSession {
     // different directory after server restart (e.g. if WALNUT_HOME changed).
     if (record.claudeSessionId) {
       let sshTarget: SshTarget | undefined
-      if (record.host) {
+      const execHost = execHostOf(record)
+      if (execHost) {
         try {
           const { getConfig } = await sessionPort().config.loadConfigManager()
           const config = await getConfig()
-          if (config.hosts?.[record.host]) sshTarget = linkTarget(record.host, config)
+          if (config.hosts?.[execHost]) sshTarget = linkTarget(execHost, config)
         } catch {
           log.session.warn('failed to resolve host config for attach', {
             sessionId: record.claudeSessionId,
@@ -4108,7 +4111,7 @@ export class ClaudeCodeSession {
 
       const transport = createSessionManager(
         record.claudeSessionId,
-        record.host ?? undefined,
+        execHost,
         sshTarget,
         record.outputFile ?? undefined,
         cliCommand,
@@ -12523,6 +12526,9 @@ export class SessionRunner {
     setUnreadFirstLineProbe((sid) => this.findSessionByClaudeId(sid)?.hasUnreadFirstLine() ?? false)
 
     bus.subscribe('session-runner', async (event) => {
+      // A session its host runs and judges: the host handles it (host-judged-runner.ts).
+      const hostRouted = routeHostJudgedEvent(event)
+      if (hostRouted) return hostRouted
       switch (event.name) {
         case EventNames.SESSION_START: {
           // Text no emitter attributed is framed as Walnut's before any engine reads it (sessions/send-frame.ts).
@@ -12547,7 +12553,9 @@ export class SessionRunner {
             // A new conversation's first message carries the hints due at its start (hints/hint-send.ts).
             const { prepareStartHints } = await sessionPort().messages.loadHintSend()
             const started = await prepareStartHints(startData)
-            if (isAcpEngine(startData.engine)) {
+            if (startGoesToHost(started.data.host)) {
+              await startOnJudgingHost(started.data, (sid) => started.commit(sid), event.source)
+            } else if (isAcpEngine(startData.engine)) {
               log.session.info('session routing', { taskId: startData.taskId, type: 'acp' })
               void started.commit((await this.handleAcpStart(started.data)).claudeSessionId)
             } else if (this.sdkClient?.connected) {
@@ -13324,6 +13332,7 @@ export class SessionRunner {
     const started = await prepareStartHints(data)
     data = started.data
     assertDemoAdmission() // a stopping Demo starts no session (core/sessions/demo-admission.ts)
+    if (startGoesToHost(data.host)) return startOnJudgingHost(data, (sid) => started.commit(sid), framedBy)
     if (isAcpEngine(data.engine)) {
       const r = await this.handleAcpStart(data)
       void started.commit(r.claudeSessionId)
@@ -16214,10 +16223,11 @@ export class SessionRunner {
     // An unresolvable host must FAIL, not fall through — sshTarget=undefined would
     // route the send to the LOCAL daemon and silently resume a remote session here.
     let sshTarget: SshTarget | undefined
-    if (record.host) {
-      const hostDef = cfg.hosts?.[record.host]
-      if (!hostDef) throw new Error(`reinitialize: host "${record.host}" not found in config.hosts`)
-      sshTarget = linkTarget(record.host, cfg)
+    const execHost = execHostOf(record)
+    if (execHost) {
+      const hostDef = cfg.hosts?.[execHost]
+      if (!hostDef) throw new Error(`reinitialize: host "${execHost}" not found in config.hosts`)
+      sshTarget = linkTarget(execHost, cfg)
     }
 
     // Reuse the live session object if we have one (send() detaches its old
@@ -16313,7 +16323,7 @@ export class SessionRunner {
     // Empty message ⇒ daemon spawns idle: init event + SessionStart hook fire,
     // no user turn runs. onSpawnSettled reports spawn success/failure only.
     await new Promise<void>((resolve, reject) => {
-      target.send('', record.cwd ?? undefined, sessionId, resumeMode, model, resumePrompt, record.host ?? undefined, sshTarget, undefined, cfg.session?.permission_prompt, undefined, cfg.session?.stream_partial_messages, effort,
+      target.send('', record.cwd ?? undefined, sessionId, resumeMode, model, resumePrompt, execHostOf(record), sshTarget, undefined, cfg.session?.permission_prompt, undefined, cfg.session?.stream_partial_messages, effort,
         (ok, err) => {
           if (ok) {
             // No turn runs here, so the record says idle: Running would promise a
@@ -17220,9 +17230,10 @@ export class SessionRunner {
 
           // Resolve SSH target if session has a stored host
           let sshTarget: SshTarget | undefined
-          if (record.host) {
+          const execHost = execHostOf(record)
+          if (execHost) {
             try {
-              if (resumeConfig.hosts?.[record.host]) sshTarget = linkTarget(record.host, resumeConfig)
+              if (resumeConfig.hosts?.[execHost]) sshTarget = linkTarget(execHost, resumeConfig)
             } catch {
               log.session.warn('failed to resolve host config for resume', { sessionId, host: record.host })
             }
@@ -17253,7 +17264,7 @@ export class SessionRunner {
             return this.cancelBeforeColdSend(sessionId, session, msgs, claimedFenceMoved)
           }
           this.endDeliveryPrep(sessionId, prep)
-          session.send(combined, record.cwd ?? undefined, sessionId, resumeMode, resolvedModel, spawnPrompt, record.host ?? undefined, sshTarget, undefined, resumeConfig.session?.permission_prompt, undefined, resumeConfig.session?.stream_partial_messages, resolvedEffort,
+          session.send(combined, record.cwd ?? undefined, sessionId, resumeMode, resolvedModel, spawnPrompt, execHost, sshTarget, undefined, resumeConfig.session?.permission_prompt, undefined, resumeConfig.session?.stream_partial_messages, resolvedEffort,
             (ok, err, line) => {
               if (ok) { this.settleResumeSuccess(sessionId, session, msgs, { lineUuid, line, endsBefore }); this.deliverRest(sessionId) }
               else this.settleResumeFailure(sessionId, msgs, err ?? new Error('resume spawn failed'))
@@ -17390,6 +17401,9 @@ export class SessionRunner {
 }
 
 // ── Singleton ──
+
+// Sessions a host runs and judges are answered through their proxy (host-judged-runner.ts).
+installHostJudgedRouting(SessionRunner.prototype)
 
 export const sessionRunner = new SessionRunner()
 

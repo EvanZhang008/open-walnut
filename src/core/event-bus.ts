@@ -245,6 +245,9 @@ export interface BusEvent {
    *  Global subscribers automatically skip re-emitted events to prevent double-processing.
    *  Typed as `true` (not `boolean`) — `false` is meaningless; absence means "not a re-emit". */
   reemit?: true;
+  /** A host's fact the leader applies long after it happened (a leader that was away read it
+   *  back; session-channel/channel.ts): a subscriber that acts only on what happens now skips it. */
+  late?: true;
 }
 
 export interface EmitOptions {
@@ -254,6 +257,8 @@ export interface EmitOptions {
    *  Only set this when forwarding an already-processed event (e.g. enrichment pass).
    *  Typed as `true` — `false` is a no-op and should never be passed. */
   reemit?: true;
+  /** See BusEvent.late. */
+  late?: true;
 }
 
 export type SubscriberHandler = (event: BusEvent) => void | Promise<void>;
@@ -422,6 +427,7 @@ export class EventBus {
       source: options?.source ?? 'unknown',
       traceId: randomBytes(4).toString('hex'),
       ...(options?.reemit ? { reemit: true } : {}),
+      ...(options?.late ? { late: true } : {}),
     };
 
     // Ring buffer for live debugging

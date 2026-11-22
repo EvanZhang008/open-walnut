@@ -2479,6 +2479,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // a companion never drains, an ephemeral server only what it queued itself.
     // A message lined up for after a running turn goes out when that turn ends (src/core/sessions/queue-after-turn.ts).
     if (role() === 'leader') void import('../core/sessions/queue-after-turn.js').then((m) => m.startQueueAfterTurn()).catch(() => {})
+    // ── Leader side of hosts that run and judge their sessions (land 3b; src/core/session-channel/leader-boot.ts) ──
+    // Only with the switch on (session-channel/switch.ts): a session channel per host that names
+    // session-judge-v1, and the starts and commands of its sessions go there. Off: nothing starts.
+    if (role() === 'leader') {
+      void import('../core/session-channel/switch.js').then(async (m) => {
+        if (await m.hostRunsSessionsNow()) await (await import('../core/session-channel/leader-boot.js')).startLeaderSessionChannels()
+      }).catch((err) => log.session.warn('session channels: the leader side did not start', { error: err instanceof Error ? err.message : String(err) }))
+    }
+    // ── end of the land 3b leader block ──
     // Messages held for a cold session's next wake go out by their max hold, a restart's included (src/core/sessions/cold-hold.ts).
     if (role() === 'leader') void import('../core/sessions/cold-hold.js').then((m) => m.startColdHold()).catch(() => {})
     if (bootPolicy('start-queue')) void import('../core/sessions/start-queue.js').then((m) => m.startStartQueue({ ephemeral: IS_EPHEMERAL })).catch(() => {})

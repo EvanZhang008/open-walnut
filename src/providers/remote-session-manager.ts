@@ -15,6 +15,7 @@
  *   daemon → Claude CLI (FIFO + JSONL monitoring) → WebSocket → Walnut
  */
 
+import { noteLineParsed } from './line-parse-count.js'
 import fs from 'node:fs'
 import { statusReplyAlive } from './daemon-status-reply.js'
 import path from 'node:path'
@@ -2007,12 +2008,16 @@ function isDaemonConnError(err: unknown): boolean {
 // Re-export for convenience
 export { findLocalImagePaths, findRemoteImagePaths, findRelativeImageNames }
 
+/** Tests: the one parse of a jsonl event's line on this server, counted per session. */
+export const _parsedJsonlLineForTesting = (event: DaemonEvent) => parsedJsonlLine(event)
+
 /**
  * A jsonl event's line as an object: the daemon's own parse when it runs in this process
  * (event.parsed), else one JSON.parse here. Undefined for a line that is no JSON object.
  */
 function parsedJsonlLine(event: DaemonEvent): Record<string, unknown> | undefined {
   if (event.parsed && typeof event.parsed === 'object') return event.parsed
+  if (event.sid) noteLineParsed(event.sid)
   try {
     const value = JSON.parse(event.line!) as unknown
     return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined

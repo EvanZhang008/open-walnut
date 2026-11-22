@@ -1,0 +1,198 @@
+/**
+ * SessionRunner's routing of the sessions a host runs and judges (src/providers/host-judged-runner.ts):
+ * a start on such a host goes to it with the leader's start bundle, a send and an interrupt go to
+ * it, the runner's own turn-end handling (processNext, the record write, the queue drain) skips a
+ * host's session, and the lookups and Table-B methods answer through the session's proxy. A legacy
+ * session runs exactly as before.
+ *
+ * Real: SessionRunner and its bus subscription, the session store, judge-of. Faked: the leader
+ * side's requests to the host (a recorder that answers as the host's door does).
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import fsp from 'node:fs/promises'
+import path from 'node:path'
+import { createMockConstants } from '../helpers/mock-constants.js'
+
+vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-judged-runner'))
+vi.mock('../../src/providers/daemon-connection.js', () => ({ disconnectAllDaemons: vi.fn() }))
+vi.mock('../../src/providers/cloud-session-link.js', () => ({ CloudSessionLink: vi.fn() }))
+
+import { SID, harness, probeSetup, probeTeardown, settle } from '../helpers/runner-probe-harness.js'
+import { SessionRunner } from '../../src/providers/claude-code-session.js'
+import { HOST_JUDGED_RUNNER_METHODS, _resetHostJudgedRunnerForTesting, installHostJudgedRouting, startGoesToHost } from '../../src/providers/host-judged-runner.js'
+import { _resetJudgeOfForTesting, noteHostJudged, setHostJudgeProbe } from '../../src/core/sessions/judge-of.js'
+import { _setActiveLeaderSideForTesting } from '../../src/core/session-channel/leader-boot.js'
+import { _resetHostSessionTasksForTesting } from '../../src/core/session-channel/leader-tasks.js'
+import { _resetRemoteJudgedSessionsForTesting, noteLiveState, setRemoteJudgedCaller, type HostCallBody, isRemoteJudgedSession } from '../../src/providers/remote-judged-session.js'
+import type { LeaderSide } from '../../src/core/session-channel/leader-side.js'
+import { applyHostChannelBatch, getSessionByClaudeId } from '../../src/core/session-tracker.js'
+import { bus, EventNames } from '../../src/core/event-bus.js'
+import { WALNUT_HOME } from '../../src/constants.js'
+import { _resetLineParseCountForTesting, lineParsesOf } from '../../src/providers/line-parse-count.js'
+import { _parsedJsonlLineForTesting } from '../../src/providers/remote-session-manager.js'
+import { getRegisteredSessionManager } from '../../src/providers/session-manager.js'
+
+const HOST_SID = '50000000-0000-4000-8000-0000000000c1'
+
+function fakeSide() {
+  const sent: Array<{ op: string; host: string; body: Record<string, unknown> }> = []
+  const calls: Array<{ host: string } & HostCallBody> = []
+  const side = {
+    startOnHost: async (host: string, body: Record<string, unknown>) => { sent.push({ op: 'start', host, body }); return { ok: true, sessionId: 'started-on-host', title: 'Host title' } },
+    sendToHost: async (host: string, body: Record<string, unknown>) => { sent.push({ op: 'send', host, body }); return { ok: true } },
+    interruptOnHost: async (host: string, body: Record<string, unknown>) => { sent.push({ op: 'interrupt', host, body }); return { ok: true } },
+    callHost: async (host: string, body: HostCallBody) => { calls.push({ host, ...body }); return body.member === 'isBackgroundWorkActive' ? true : body.member === 'markExpectedTeardown' ? { undoId: 'u-1' } : null },
+  }
+  _setActiveLeaderSideForTesting(side as unknown as LeaderSide)
+  setRemoteJudgedCaller((host, body) => side.callHost(host, body))
+  return { sent, calls }
+}
+
+async function hostRow(sid = HOST_SID, status = 'running') {
+  await applyHostChannelBatch({
+    hostId: 'devbox', renames: [], cursor: { logId: 'L', seq: 1 },
+    rows: [{ sid, born: true, patch: { claudeSessionId: sid, taskId: '', project: 'p', host: 'devbox', judge: 'host', process_status: status, startedAt: 'x', lastActiveAt: 'x', messageCount: 0 } }],
+  })
+  noteHostJudged(sid, 'devbox')
+}
+
+beforeEach(async () => {
+  await probeSetup()
+  _resetJudgeOfForTesting()
+  _resetRemoteJudgedSessionsForTesting()
+  _resetHostJudgedRunnerForTesting()
+  _resetHostSessionTasksForTesting()
+})
+afterEach(async () => {
+  _setActiveLeaderSideForTesting(null)
+  _resetJudgeOfForTesting()
+  _resetRemoteJudgedSessionsForTesting()
+  await probeTeardown()
+})
+
+describe('the routing is installed on SessionRunner', () => {
+  it('every method it wraps exists on the runner', () => {
+    const proto = SessionRunner.prototype as unknown as Record<string, unknown>
+    for (const m of HOST_JUDGED_RUNNER_METHODS) expect(typeof proto[m], m).toBe('function')
+    // Installing again is a no-op (one wrap per method).
+    expect(() => installHostJudgedRouting(SessionRunner.prototype)).not.toThrow()
+  })
+})
+
+describe('a host-judged session', () => {
+  it('a send and an interrupt go to its host, with their source; nothing is delivered here', async () => {
+    const h = harness()
+    h.runner.init()
+    await settle(100)
+    const { sent } = fakeSide()
+    await hostRow()
+    bus.emit(EventNames.SESSION_SEND, { sessionId: HOST_SID, message: 'hello' }, ['*'], { source: 'mobile' })
+    bus.emit(EventNames.SESSION_INTERRUPT, { sessionId: HOST_SID }, ['*'], { source: 'mobile' })
+    await settle(50)
+    expect(sent.map((s) => `${s.op}:${s.host}`)).toEqual(['send:devbox', 'interrupt:devbox'])
+    expect(sent[0].body).toMatchObject({ sessionId: HOST_SID, message: 'hello', source: 'mobile' })
+    expect(h.writes).toEqual([])
+  })
+
+  it('its result runs no turn end here: no processNext, no record write; a legacy result still does', async () => {
+    const h = harness()
+    h.runner.init()
+    await settle(100)
+    fakeSide()
+    await hostRow()
+    const next = vi.spyOn(h.internals, 'processNext')
+    bus.emit(EventNames.SESSION_RESULT, { sessionId: HOST_SID, result: 'done', taskId: '' }, ['*'], { source: 'host-channel' })
+    await settle(80)
+    expect(next).not.toHaveBeenCalledWith(HOST_SID)
+    expect((await getSessionByClaudeId(HOST_SID))!.status_changed_by).toBeUndefined()
+    // The runner's own session: today's path.
+    bus.emit(EventNames.SESSION_RESULT, { sessionId: SID, result: 'done', taskId: 'gate-task' }, ['*'], { source: 'session' })
+    await vi.waitFor(async () => expect((await getSessionByClaudeId(SID))!.status_changed_by).toBe('session-runner'))
+  })
+
+  it('the lookups answer with its one proxy, and Table B answers from the mirrored state or the host', async () => {
+    const h = harness()
+    const { calls } = fakeSide()
+    await hostRow()
+    noteLiveState(HOST_SID, { inTurn: true, teamActive: true, cronArmed: true, pendingPermission: true, timestamps: { lastClaudeOutputAt: 7, lastMessageDeliveryAt: 8 }, turnRunning: true, deliveryWait: { reason: 'r' } })
+    const r = h.runner
+    const p = r.findSessionByClaudeId(HOST_SID)
+    expect(isRemoteJudgedSession(p)).toBe(true)
+    expect(r.findByClaudeId(HOST_SID)).toBe(p)
+    expect(await r.getOrAttachLiveSession(HOST_SID)).toBe(p)
+    expect(r.findAcpSession(HOST_SID)).toBeUndefined()
+    expect(r.isInTurn(HOST_SID)).toBe(true)
+    expect(r.isTeamActive(HOST_SID)).toBe(true)
+    expect(r.isCronArmed(HOST_SID)).toBe(true)
+    expect(r.hasPendingPermission(HOST_SID)).toBe(true)
+    expect(r.getSessionTimestamps(HOST_SID)).toEqual({ lastClaudeOutputAt: 7, lastMessageDeliveryAt: 8 })
+    expect(r.isTurnRunning(HOST_SID)).toBe(true)
+    expect(r.deliveryWait(HOST_SID)).toEqual({ reason: 'r' })
+    await expect(r.isBackgroundWorkActive(HOST_SID)).resolves.toBe(true)
+    await r.respawnOnCurrentPrompt(HOST_SID, () => true, { folder: true })
+    r.syncLane(HOST_SID, 'lane-x')
+    const undo = r.markExpectedTeardown(HOST_SID, 'restart')
+    undo?.()
+    await settle(20)
+    expect(calls.map((c) => `${c.target}.${c.member}`)).toEqual([
+      'runner.isBackgroundWorkActive', 'runner.respawnOnCurrentPrompt', 'runner.syncLane', 'session.markExpectedTeardown', 'session.undoExpectedTeardown',
+    ])
+    // The callback never crosses.
+    expect(calls[1].args).toEqual([{ folder: true }])
+    // The runner's own session is untouched by any of it.
+    expect(isRemoteJudgedSession(r.findSessionByClaudeId(SID))).toBe(false)
+    expect(r.findSessionByClaudeId('no-such-session')).toBeUndefined()
+  })
+
+  it('a start on a host whose service judges it goes there with the start bundle and the spilled text', async () => {
+    const h = harness()
+    const { sent } = fakeSide()
+    setHostJudgeProbe((host) => host === 'devbox')
+    const spill = path.join(WALNUT_HOME, 'spill.txt')
+    await fsp.writeFile(spill, 'the whole long prompt')
+    // A task with no session yet (gate-task already has the harness's own).
+    const { getTask, updateTask } = await import('../../src/core/task-manager.js')
+    await updateTask('gate-task-b', { phase: 'TODO' })
+    const r = await h.runner.startSession({ taskId: 'gate-task-b', message: 'see file', host: 'devbox', largePromptFile: { localPath: spill, originalLength: 21 } } as never, 'test')
+    expect(r).toEqual({ claudeSessionId: 'started-on-host', title: 'Host title' })
+    expect(sent).toHaveLength(1)
+    expect(sent[0].op).toBe('start')
+    expect(sent[0].body.largePrompt).toBe('the whole long prompt')
+    expect(sent[0].body.largePromptFile).toBeUndefined()
+    expect(sent[0].body.startBundle).toMatchObject({ hintsApplied: true, task: { id: 'gate-task-b' } })
+    expect(sent[0].body.source).toBe('test')
+    // The new session is the host's at once, before its row arrives.
+    expect(isRemoteJudgedSession(h.runner.findSessionByClaudeId('started-on-host'))).toBe(true)
+    // Its task is the leader's: linked and In Progress here (leader-tasks.ts).
+    await vi.waitFor(async () => {
+      const t = await getTask('gate-task-b')
+      expect(t.session_id).toBe('started-on-host')
+      expect(t.phase).toBe('IN_PROGRESS')
+    })
+    // A host whose service does not judge it: today's path.
+    expect(startGoesToHost('other')).toBe(false)
+    expect(startGoesToHost(undefined)).toBe(false)
+  })
+})
+
+describe('the leader parses no line of a host-judged session', () => {
+  it('its sends, results and lookups parse none and attach no session manager here; a line handed over as text is counted', async () => {
+    _resetLineParseCountForTesting()
+    const h = harness()
+    h.runner.init()
+    await settle(100)
+    fakeSide()
+    await hostRow()
+    bus.emit(EventNames.SESSION_SEND, { sessionId: HOST_SID, message: 'hello' }, ['*'], { source: 'mobile' })
+    bus.emit(EventNames.SESSION_TOOL_USE, { sessionId: HOST_SID, toolName: 'Bash', input: {} }, ['*'], { source: 'host-channel' })
+    bus.emit(EventNames.SESSION_RESULT, { sessionId: HOST_SID, result: 'done', taskId: '' }, ['*'], { source: 'host-channel' })
+    await h.runner.getOrAttachLiveSession(HOST_SID)
+    h.runner.isInTurn(HOST_SID)
+    await settle(80)
+    expect(lineParsesOf(HOST_SID)).toBe(0)
+    expect(getRegisteredSessionManager(HOST_SID)).toBeUndefined()
+    // The counter counts: a line of a session this server runs, handed over as text.
+    _parsedJsonlLineForTesting({ ev: 'jsonl', sid: SID, line: '{"type":"assistant"}' } as never)
+    expect(lineParsesOf(SID)).toBe(1)
+  })
+})
