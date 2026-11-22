@@ -99,6 +99,7 @@ describe('observedClaudeDefaultEfforts: Claude Code\'s own effort per model, as 
       row({ claudeSessionId: 'opus', model: 'claude-opus-5-5', effectiveEffort: 'high', lastActiveAt: '2026-11-21T07:00:00Z' }),
       row({ claudeSessionId: 'picked', model: 'claude-sonnet-5-5', effort: 'low', effectiveEffort: 'low' }),
       row({ claudeSessionId: 'codex', engine: 'codex', model: 'gpt', effectiveEffort: 'high' }),
+      row({ claudeSessionId: 'no-engine-gpt', model: 'gpt-6.2-sol', effectiveEffort: 'high' }),
       row({ claudeSessionId: 'unread', model: 'claude-haiku-5-5' }),
     ])
     expect(out.map((r) => [r.sessionId, r.effort])).toEqual([['fable', 'medium'], ['opus', 'high']])

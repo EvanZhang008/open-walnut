@@ -141,7 +141,8 @@ export function observedClaudeDefaultEfforts(
     if (r.effort !== undefined && r.effort !== null) continue;
     const effort = effortOf(r.effectiveEffort);
     const model = typeof r.model === 'string' ? r.model.trim() : '';
-    if (!effort || !model) continue;
+    // A record from before `engine` was stored names no engine: its model says whether it was Claude.
+    if (!effort || !model || !isClaudeModelName(model)) continue;
     const key = model.toLowerCase().replace(/\[1m\]$/, '');
     const at = r.lastActiveAt ?? '';
     const prev = byModel.get(key);
