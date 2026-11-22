@@ -14,6 +14,7 @@
  * copied from the real Walnut.
  */
 import { log } from '../../logging/index.js';
+import { doorTimerFloorMs, leaderPermitActive, outwardDoorRefusal } from '../leader/switch/doors.js';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import type { Task } from '../types.js';
 import type { StatusReport } from '../user-status.js';
@@ -128,15 +129,22 @@ function arm(): void {
   timer = null;
   if (!live || alarms.size === 0) return;
   const next = Math.min(...alarms.values());
+  // Without the write permission a due alarm is not fired here: no 1 s loop over it.
+  const floor = doorTimerFloorMs();
   timer = setTimeout(() => {
     timer = null;
     void firePromiseAlarms().catch((err) => log.task.warn('promise alarm sweep failed', { error: err instanceof Error ? err.message : String(err) }));
-  }, Math.max(1_000, Math.min(next - Date.now(), RECHECK_MS)));
+  }, Math.max(floor, Math.min(next - Date.now(), RECHECK_MS)));
   timer.unref?.();
 }
 
 /** Fire every alarm that is due: clear it, then wake the task's session with the note. Exported for tests. */
 export async function firePromiseAlarms(nowMs = Date.now()): Promise<string[]> {
+  // The outward door, before any alarm is cleared: a refused sweep keeps them and looks again later.
+  if (leaderPermitActive() && outwardDoorRefusal('session-wake', `promise-alarm:${nowMs}`)) {
+    arm();
+    return [];
+  }
   const due = [...alarms.entries()].filter(([, at]) => at <= nowMs).map(([id]) => id);
   const fired: string[] = [];
   for (const id of due) {

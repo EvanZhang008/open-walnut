@@ -22,6 +22,10 @@
 import { IS_EPHEMERAL } from '../../constants.js';
 import { bootPolicy } from '../boot-policy.js';
 import { log } from '../../logging/index.js';
+import {
+  assertOutwardDoor, DOORS_CLOSED_RECHECK_MS, doorsClosed, doorTimerFloorMs, holdUntilDoorsOpen, isPermitRefusal,
+  leaderPermitActive,
+} from '../leader/switch/doors.js';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import { own } from './board-html.js';
 import type { BoardFile, BoardReminder } from './board-store.js';
@@ -80,7 +84,7 @@ function arm(): void {
   timer = null;
   const next = live ? nearest() : null;
   if (next === null) return;
-  const delay = Math.max(1_000, Math.min(next - Date.now(), RECHECK_MS));
+  const delay = Math.max(doorTimerFloorMs(), Math.min(next - Date.now(), RECHECK_MS));
   timer = setTimeout(() => {
     timer = null;
     void sweepBoardReminders().catch((err) => log.task.warn('board reminder sweep failed', { error: errText(err) }));
@@ -94,6 +98,13 @@ function arm(): void {
  * reminder cleared, answered or re-timed since it was tracked is left alone.
  */
 export async function sweepBoardReminders(nowMs = Date.now()): Promise<string[]> {
+  // Without the write permission no reminder fires here: every deadline stays, the timer looks
+  // again a minute later, and the sweep runs the moment the permission arrives.
+  if (doorsClosed()) {
+    holdForDoors();
+    arm();
+    return [];
+  }
   const due: Array<[string, string]> = [];
   for (const [taskId, targets] of deadlines) {
     for (const [target, at] of targets) if (at <= nowMs) due.push([taskId, target]);
@@ -104,6 +115,12 @@ export async function sweepBoardReminders(nowMs = Date.now()): Promise<string[]>
     try {
       if (await fire(taskId, target, nowMs)) acted.push(`${taskId}/${target}`);
     } catch (err) {
+      if (isPermitRefusal(err)) {
+        // The permission was lost during this sweep: not a failure, the reminder waits for it.
+        holdForDoors();
+        setDeadline(taskId, target, nowMs + DOORS_CLOSED_RECHECK_MS);
+        continue;
+      }
       // A write that keeps failing waits a retry slot, never the timer's 1 s floor.
       log.task.warn('board reminder failed; trying again later', { taskId, target, error: errText(err) });
       setDeadline(taskId, target, nowMs + BOARD_REMINDER_RETRY_MS);
@@ -113,6 +130,15 @@ export async function sweepBoardReminders(nowMs = Date.now()): Promise<string[]>
   return acted;
 }
 
+/** Closed doors: one log line for the period, and a sweep once the permission arrives. */
+function holdForDoors(): void {
+  holdUntilDoorsOpen(
+    'board-reminders',
+    () => { if (live) void sweepBoardReminders().catch((err) => log.task.warn('board reminder sweep failed', { error: errText(err) })); },
+    () => log.task.info('board reminders held: this machine does not hold the write permission'),
+  );
+}
+
 function setDeadline(taskId: string, target: string, at: number): void {
   const targets = deadlines.get(taskId) ?? new Map<string, number>();
   targets.set(target, at);
@@ -120,6 +146,9 @@ function setDeadline(taskId: string, target: string, at: number): void {
 }
 
 async function fire(taskId: string, target: string, nowMs: number): Promise<boolean> {
+  // The outward door, before the reminder is marked fired: a refusal throws, and the sweep
+  // tries it again in BOARD_REMINDER_RETRY_MS.
+  if (leaderPermitActive()) assertOutwardDoor('session-wake', `board-reminder:${taskId}:${target}`);
   const key = `${taskId}\n${target}`;
   if (inFlight.has(key)) return false;
   inFlight.add(key);

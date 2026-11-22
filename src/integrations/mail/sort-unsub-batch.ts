@@ -10,6 +10,7 @@
  * and starts no other. Batches live in memory.
  */
 import crypto from 'node:crypto'
+import { doorsClosed, NOT_LEADER_MESSAGE } from '../../core/leader/switch/doors.js'
 import { PRIMARY_ONLY, readBody, segmentsAfter } from './contract.js'
 import type { MailUnsubBatchEvent } from './events.js'
 import type { MailSortWriteDeps } from './sort-types.js'
@@ -196,6 +197,8 @@ export function registerUnsubBatchRoutes(
 
   walnut.http.route('post', '/unsubscribe/batch', async (request) => {
     if (walnut.replica) return PRIMARY_ONLY
+    // A server without the write permission (leader switch) would refuse every item one by one.
+    if (doorsClosed()) return { status: 503, json: { error: 'not_leader', message: NOT_LEADER_MESSAGE } }
     const body = await readBody(request)
     if (!body) return { status: 400, json: { error: 'invalid', message: 'body must be JSON' } }
     const items = parseBatchItems(body.items)

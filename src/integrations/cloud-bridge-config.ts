@@ -29,6 +29,7 @@ import { getConfig } from '../core/config-manager.js'
 import { MACHINE_PROOF_HEADER } from '../core/device-actor.js'
 import { log } from '../logging/index.js'
 import { isFollower } from '../core/server-role.js'
+import { leaderPermitActive, outwardDoorRefusal } from '../core/leader/switch/doors.js'
 
 export interface BridgeConfigPayload {
   enabled: boolean
@@ -126,6 +127,9 @@ const adoptionsSent = new Set<string>()
  */
 function adoptOnce(localToken: string | undefined, cloud: { domain: string; token: string; secure: boolean }): void {
   if (!localToken || adoptionsSent.has(PRIMARY_DEVICE_NAME)) return
+  // The outward door (leader switch: a no-op with the experiment off): a machine without the
+  // write permission offers nothing, and the offer stays for its next mint or start.
+  if (leaderPermitActive() && outwardDoorRefusal('companion-upload', `bridge-adopt:${PRIMARY_DEVICE_NAME}`)) return
   adoptionsSent.add(PRIMARY_DEVICE_NAME)
   const base = `${cloud.secure ? 'https' : 'http'}://${cloud.domain}`
   void fetch(`${base}/api/devices/${encodeURIComponent(PRIMARY_DEVICE_NAME)}/adopt`, {
@@ -162,6 +166,16 @@ async function mintMachineToken(
   if (!opts.remint && remintBlocked(deviceName)) {
     log.session.info('bridge: no machine token until the re-mint window passes or Retry', { hostAlias, deviceName })
     return null
+  }
+  // The outward door before the companion's devices are touched (a create, a revoke): a machine
+  // without the write permission mints nothing and does not spend the re-mint window; the
+  // periodic bridge push of the server holding the permission mints it.
+  if (leaderPermitActive()) {
+    const refused = outwardDoorRefusal('companion-upload', `bridge-token:${deviceName}`)
+    if (refused) {
+      log.session.info('bridge: no machine token minted: this server does not hold the write permission', { hostAlias, deviceName })
+      return null
+    }
   }
   if (opts.remint) lastRemintAt.set(deviceName, Date.now())
 

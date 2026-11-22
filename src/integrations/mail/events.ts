@@ -223,6 +223,9 @@ export class MailEvents {
    */
   private readonly accountListeners = new Set<(event: MailAccountChangedEvent) => void>()
 
+  /** In-process subscribers for a send's outcome (the unsubscribe ledger settles its mail's row). */
+  private readonly sendListeners = new Set<(event: MailSendSettledEvent) => void>()
+
   private readonly pendingPairs = new Map<string, { accountId: string; mailboxId: string }>()
   private groupsTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -231,6 +234,11 @@ export class MailEvents {
   onAccountsChanged(handler: (event: MailAccountChangedEvent) => void): Disposable {
     this.accountListeners.add(handler)
     return { dispose: () => { this.accountListeners.delete(handler) } }
+  }
+
+  onSendSettled(handler: (event: MailSendSettledEvent) => void): Disposable {
+    this.sendListeners.add(handler)
+    return { dispose: () => { this.sendListeners.delete(handler) } }
   }
 
   /**
@@ -349,7 +357,11 @@ export class MailEvents {
   }
 
   sendSettled(sendId: string, draftId: string, state: string): void {
-    this.emit(MAIL_EVENT.sendSettled, { sendId, draftId, state } satisfies MailSendSettledEvent)
+    const event = { sendId, draftId, state } satisfies MailSendSettledEvent
+    this.emit(MAIL_EVENT.sendSettled, event)
+    for (const listener of [...this.sendListeners]) {
+      try { listener(event) } catch { /* one listener never stops the others */ }
+    }
   }
 
   accountHealth(accountId: string, state: string): void {

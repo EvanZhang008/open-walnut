@@ -20,6 +20,7 @@
  * later edit failed).
  */
 import type { SyncRetrySchedule } from './sync-retry-schedule.js'
+import { holdUntilDoorsOpen, isPermitRefusal } from './leader/switch/doors.js'
 
 /** How many creates one tick may attempt. Matches Step 1.5's batch size. */
 export const MAX_CREATE_RETRIES_PER_CYCLE = 5
@@ -166,6 +167,7 @@ export async function retryUnsyncedCreates<T extends UnsyncedCreateTask>(
   let succeeded = 0
   let failed = 0
   let counter = 0
+  let attempted = 0
 
   for (const task of batch) {
     // Yield periodically so HTTP/WS handlers don't starve while we await serial
@@ -177,6 +179,7 @@ export async function retryUnsyncedCreates<T extends UnsyncedCreateTask>(
     const attemptsBefore = schedule.attemptsOf(task.id)
     try {
       const ext = await createTask(task)
+      attempted++
       if (ext) {
         // ext is already scoped by the plugin: { 'ms-todo': { id, list_id } }, so spread to merge
         const mergedExt = { ...task.ext, ...(ext as Record<string, unknown>) }
@@ -204,6 +207,15 @@ export async function retryUnsyncedCreates<T extends UnsyncedCreateTask>(
         taskId: task.id, title: task.title, attempts: schedule.attemptsOf(task.id),
       })
     } catch (err) {
+      // The outward door refused it (this machine does not hold the write permission): nothing
+      // was sent, so nothing was tried. No back-off grows and no card; the rest of the batch
+      // waits too, and the tick after the permission arrives creates them.
+      if (isPermitRefusal(err)) {
+        // One line per period of closed doors; the sync tick after they open creates them.
+        holdUntilDoorsOpen(`sync-create:${pluginId}`, () => {}, () => log.info('sync: creates wait for the write permission', { pluginId, waiting: batch.length - attempted }))
+        break
+      }
+      attempted++
       failed++
       schedule.noteFailure(task.id)
       const attempts = schedule.attemptsOf(task.id)
@@ -232,9 +244,9 @@ export async function retryUnsyncedCreates<T extends UnsyncedCreateTask>(
 
   if (unsynced.length > 0) {
     log.info('sync: unsynced batch done', {
-      pluginId, attempted: batch.length, succeeded, failed, backlog: unsynced.length,
+      pluginId, attempted, succeeded, failed, backlog: unsynced.length,
     })
   }
 
-  return { attempted: batch.length, succeeded, failed, extUpdates }
+  return { attempted, succeeded, failed, extUpdates }
 }

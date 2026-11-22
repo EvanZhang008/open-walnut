@@ -26,6 +26,7 @@
 import { IS_EPHEMERAL } from '../constants.js';
 import { bootPolicy } from './boot-policy.js';
 import { log } from '../logging/index.js';
+import { doorTimerFloorMs, leaderPermitActive, outwardDoorRefusal } from './leader/switch/doors.js';
 import { bus, EventNames, type BusEvent } from './event-bus.js';
 import type { Task } from './types.js';
 import type { CronJob } from './cron/types.js';
@@ -80,7 +81,9 @@ function arm(): void {
   timer = null;
   if (!live || (inherited && !scanned) || deadlines.size === 0) return;
   const next = Math.min(...deadlines.values());
-  const delay = Math.max(1_000, Math.min(next - Date.now(), RECHECK_MS));
+  // Without the write permission a passed deadline is not woken here: no 1 s loop over it.
+  const floor = doorTimerFloorMs();
+  const delay = Math.max(floor, Math.min(next - Date.now(), RECHECK_MS));
   timer = setTimeout(() => {
     timer = null;
     void sweepWaitUntil().catch((err) => log.task.warn('wait_until sweep failed', { error: errText(err) }));
@@ -94,6 +97,12 @@ function arm(): void {
  * that left WAITING or got a later time since it was tracked is left alone.
  */
 export async function sweepWaitUntil(nowMs = Date.now()): Promise<string[]> {
+  // The outward door, before any deadline is dropped: a refused sweep keeps them all and looks
+  // again later (arm), so the server holding the write permission wakes each once.
+  if (leaderPermitActive() && outwardDoorRefusal('session-wake', `wait-until:${nowMs}`)) {
+    arm();
+    return [];
+  }
   const due = [...deadlines.entries()].filter(([, at]) => at <= nowMs).map(([id]) => id);
   const woke: string[] = [];
   for (const id of due) {

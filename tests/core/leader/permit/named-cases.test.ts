@@ -4,8 +4,8 @@
  * safety part removed and must go red.
  */
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_PERMIT_PARAMS, genesisConfigId, maxSafeDrift, sameRecord, type PermitParams, type PermitReply } from '../../../../src/core/leader/permit/index.js'
-import { CALM, SimStore, World, firstStart, lastStop, pilot, sample } from './sim.js'
+import { DEFAULT_PERMIT_PARAMS, genesisConfigId, maxSafeDrift, sameRecord, witnessHoldMs, type PermitClient, type PermitParams, type PermitReply } from '../../../../src/core/leader/permit/index.js'
+import { CALM, SimStore, World, firstStart, lastStop, pilot, releaseOnAnyLive, sample, takeOnMinorityRelease } from './sim.js'
 
 const W = ['w1', 'w2', 'w3']
 
@@ -442,5 +442,163 @@ describe('changing the witness list', () => {
     expect(b.c.witnessList()).toEqual(['w1', 'w2', 'w4'])
     expect(b.c.mayAct()).toBe(true)
     expect(w.violations).toEqual([])
+  })
+})
+
+describe('planned stop: release', () => {
+  /**
+   * A holds from t=0 and renews at 15 s and 30 s (with progress stamps, so the takeover rule lets
+   * a rival ask once it ran out); at 40 s its process stops: planned (a release,
+   * World.plannedStop) or a crash. The next process of A starts once the old one exited and asks
+   * as the wiring should: read; once a majority answers grantable, the core's back-off (drawn at
+   * its longest, 2 s), read, grant; looks again every second until it holds. (Asking before a
+   * majority is grantable only grows the back-off: each grant that did not stand doubles it.)
+   * `patchNext` (a negative control) also asks once any witness shows A's release. B, with `rival`, asks whenever the rule lets it.
+   */
+  function restartAt40s(o: { stop: 'release' | 'crash'; reach?: string[]; rival?: boolean; patchNext?: (c: PermitClient) => void }) {
+    const w = world()
+    const a = aHolds(w)
+    w.at(15_000, () => { a.c.renew({ seq: 1, writtenAt: 15_000 }) })
+    w.at(30_000, () => { a.c.renew({ seq: 2, writtenAt: 30_000 }) })
+    if (o.rival) {
+      w.addMachine('B', W)
+      pilot(w, 'B', { wantsLead: true, tickMs: 250 })
+    }
+    const old = a.c
+    let heldAtStop = false
+    w.at(40_000, () => {
+      heldAtStop = old.mayAct()
+      if (o.stop === 'release') w.plannedStop('A', W, { reach: o.reach, downMs: 0 })
+      else w.restartMachine('A', W, 0)
+    })
+    let patched = false
+    const step = (): void => {
+      const c = a.c
+      if (c === old) return void w.after(20, step)
+      if (o.patchNext && !patched) { o.patchNext(c); patched = true }
+      if (c.mayAct()) return
+      c.read()
+      w.after(50, () => {
+        const reads = c.readBack()
+        const free = reads.filter((r) => r.grantable).length >= 2
+        const sawRelease = !!o.patchNext && reads.some((r) => r.held?.kind === 'release' && r.held.from === 'A')
+        if (!free && !sawRelease) return void w.after(1_000, step)
+        w.after(c.grantDelayMs(() => 0.999), () => {
+          c.read()
+          w.after(50, () => {
+            if (!c.mayAct()) c.requestGrant()
+            w.after(1_000, step)
+          })
+        })
+      })
+    }
+    w.at(40_000, step)
+    sample(w, 10, 180_000)
+    w.run(180_000)
+    expect(heldAtStop).toBe(true)
+    return { w, release: w.releases[0] ?? null }
+  }
+  // The old process's last renew reached the witnesses at 30 s: they hold it for A until then.
+  const heldUntil = 30_000 + witnessHoldMs(DEFAULT_PERMIT_PARAMS)
+  /** Who may act at real time t, from the timeline. */
+  const actingAt = (w: World, t: number): string[] => [...w.timeline].reverse().find(([at]) => at <= t)![1]
+
+  it('a planned restart: the next process holds within about 2 s of the release, not after the witness hold', () => {
+    const { w, release } = restartAt40s({ stop: 'release' })
+    expect(release!.record!.kind).toBe('release')
+    // The old process stopped acting the instant it released, and saw its release stand at once.
+    expect(actingAt(w, 39_999)).toEqual(['A'])
+    expect(actingAt(w, 40_000)).toEqual([])
+    expect(release!.stoodAt! - 40_000).toBeLessThan(50)
+    const next = firstStart(w, 'A', 40_001)!
+    expect(next - 40_000).toBeLessThan(2_200)
+    // Without the release it would have waited until the witnesses' hold ran out, 52 s later.
+    expect(heldUntil).toBe(92_000)
+    expect(w.violations).toEqual([])
+  })
+
+  it('a crash (no release): the next process waits for the old record to run out at the witnesses, as before', () => {
+    const { w, release } = restartAt40s({ stop: 'crash' })
+    expect(release).toBeNull()
+    expect(firstStart(w, 'A', 40_001)!).toBeGreaterThanOrEqual(heldUntil)
+    expect(w.violations).toEqual([])
+  })
+
+  it('a release that reached one witness of three: the next process holds only once the old record ran out at the other two', () => {
+    const { w, release } = restartAt40s({ stop: 'release', reach: ['w1'] })
+    // It never stood: the old process exited after its 3 s cap.
+    expect(release!.stoodAt).toBeNull()
+    expect(release!.exitAt).toBe(43_000)
+    const next = firstStart(w, 'A', 40_001)!
+    expect(next).toBeGreaterThanOrEqual(heldUntil)
+    expect(next).toBeLessThan(heldUntil + 5_000)
+    expect(w.violations).toEqual([])
+  })
+
+  it('the same with a rival asking whenever the rule lets it: nobody holds before the old record ran out, never two at once', () => {
+    const { w } = restartAt40s({ stop: 'release', reach: ['w1'], rival: true })
+    const next = Math.min(...['A', 'B'].map((id) => firstStart(w, id, 40_001) ?? Infinity))
+    expect(next).toBeGreaterThanOrEqual(heldUntil)
+    expect(next).toBeLessThan(180_000)
+    expect(w.violations).toEqual([])
+  })
+
+  it('negative control: a next process that takes it on the release seen at that one witness acts beside the next holder', () => {
+    const { w } = restartAt40s({ stop: 'release', reach: ['w1'], rival: true, patchNext: takeOnMinorityRelease })
+    expect(firstStart(w, 'A', 40_001)!).toBeLessThan(heldUntil)
+    expect(w.violations.length).toBeGreaterThan(0)
+  })
+})
+
+describe('planned stop of a process whose lease ran out but was never cleared', () => {
+  /**
+   * A holds from t=0. At 5 s A loses w2 and w3 (it keeps w1) and B loses w1. A renews at w1 alone
+   * every 15 s: its numbers climb there, and its lease runs out on its clock at 58 s, never
+   * cleared (w1 shows it nothing newer). B, which never sees w1, takes the permission at w2 and w3
+   * once A's grant ran out there (62 s), with a lower number. At 75 s the cuts heal and A stops
+   * at once (a deploy), before it heard anything: its release is numbered above B's record at w2
+   * and w3. C asks whenever the rule lets it.
+   */
+  function staleRelease(relaxed: boolean) {
+    const w = world()
+    if (relaxed) for (const n of w.witnesses.values()) releaseOnAnyLive(n.w!)
+    const a = w.addMachine('A', W)
+    a.c.requestGrant({ seq: 1, writtenAt: 0 })
+    w.run(1_000)
+    w.at(5_000, () => {
+      w.partition('A', 'w2')
+      w.partition('A', 'w3')
+      w.partition('B', 'w1')
+    })
+    for (const t of [15_000, 30_000, 45_000]) w.at(t, () => { a.c.renew({ seq: t / 1_000, writtenAt: t }) })
+    w.addMachine('B', W)
+    w.addMachine('C', W)
+    pilot(w, 'B', { wantsLead: true, tickMs: 250 })
+    let releasedOver: number | null = null
+    w.at(75_000, () => {
+      for (const id of ['w2', 'w3']) w.partition('A', id, false)
+      w.partition('B', 'w1', false)
+      releasedOver = w.witnesses.get('w2')!.w!.handle({ type: 'read' }).held!.number
+      w.plannedStop('A', W, { downMs: 60_000 })
+    })
+    w.at(75_000, () => pilot(w, 'C', { wantsLead: true, tickMs: 250 }))
+    sample(w, 10, 150_000)
+    w.run(150_000)
+    return { w, release: w.releases[0]!, releasedOver: releasedOver! }
+  }
+
+  it('the witnesses that hold the next holder\'s record refuse the release: never two at once', () => {
+    const { w, release, releasedOver } = staleRelease(false)
+    // The timing: B held at w2 with a lower number than A's release, and A had its stale lease.
+    expect(firstStart(w, 'B')!).toBeLessThan(75_000)
+    expect(release.record!.number).toBeGreaterThan(releasedOver)
+    expect(release.stoodAt).toBeNull()
+    expect(w.violations).toEqual([])
+  })
+
+  it('negative control: witnesses that take a release on any live record let C act beside B', () => {
+    const { w } = staleRelease(true)
+    expect(w.violations.length).toBeGreaterThan(0)
+    expect(w.violations[0]!.who.sort()).toEqual(['B', 'C'])
   })
 })

@@ -2069,6 +2069,17 @@ export interface Config {
     /** Seconds between batches (default 30, at least 5). */
     interval_seconds?: number;
   };
+  /**
+   * A switchable leader (experiment `switchable_leader`): the witnesses of the write
+   * permission and the machines the lead moves between (src/core/leader/switch/settings.ts,
+   * docs/reference/leader-switch.md). Off, or absent, nothing of it runs.
+   */
+  leader_switch?: {
+    witnesses?: { id: string; dir: string }[];
+    machines?: { id: string; home: string; standby_dir: string; port: number; start_command?: string[]; env?: Record<string, string> }[];
+    /** `walnut leader switch --back` is offered this long after a switch (default 168). */
+    back_window_hours?: number;
+  };
   /** Keep the Mac awake (lid closed included) while local sessions run.
    *  Advanced, opt-in, macOS console only — see src/core/keep-awake.ts. */
   keep_awake?: import('./keep-awake.js').KeepAwakeConfig;

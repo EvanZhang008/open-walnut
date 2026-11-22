@@ -166,6 +166,36 @@ describe('letter push', () => {
     expect(JSON.stringify((sendApns.mock.calls[0] as unknown as [unknown, unknown])[1])).toContain('Subject')
   })
 
+  it('a server without the write permission holds a letter push, and sends one push once it may', async () => {
+    const doors = await import('../../src/core/leader/switch/doors.js')
+    let open = false
+    doors.setOutwardDoorChecker(() => {
+      if (!open) throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' })
+    }, () => open)
+    try {
+      const out = await pushLetter(letter('action_required'))
+      expect(out).toMatchObject({ attempted: false, sent: 0, reason: expect.stringMatching(/not the leader now/) })
+      expect(sendApns).not.toHaveBeenCalled()
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(heldPushes().count).toBe(1)
+
+      open = true
+      doors.notifyOutwardDoorsOpened()
+      for (let i = 0; i < 50 && sendApns.mock.calls.length === 0; i++) await new Promise((r) => setTimeout(r, 10))
+      expect(sendApns).toHaveBeenCalledTimes(1)
+      const payload = JSON.stringify((sendApns.mock.calls[0] as unknown as [unknown, unknown])[1])
+      expect(payload).toContain('Subject')
+      expect(payload).toContain('could not notify you')
+      expect(heldPushes().count).toBe(0)
+      // Once: a second opening sends nothing more.
+      doors.notifyOutwardDoorsOpened()
+      await new Promise((r) => setTimeout(r, 30))
+      expect(sendApns).toHaveBeenCalledTimes(1)
+    } finally {
+      doors.setOutwardDoorChecker(null)
+    }
+  })
+
   it('pushes normally when not quiet', async () => {
     const out = await pushLetter(letter('info'))
     expect(out.sent).toBeGreaterThan(0)

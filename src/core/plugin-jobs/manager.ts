@@ -32,6 +32,7 @@
 import path from 'node:path'
 import { maskByKey } from '../config-secret-shape.js'
 import { servingJobOf, type PluginJobDeclaration } from './manifest.js'
+import { assertOutwardDoor, holdUntilDoorsOpen, isPermitRefusal, leaderPermitActive } from '../leader/switch/doors.js'
 import type { PluginJobSpec, PluginJobStatus } from '../../providers/plugin-jobs-core.js'
 
 export const PLUGIN_JOBS_CAPABILITY = 'plugin-jobs-v1'
@@ -253,6 +254,9 @@ export function createPluginJobsManager(deps: ManagerDeps) {
   async function reconcileOnce(hostKey: string): Promise<void> {
     const rec = hosts.get(hostKey)
     if (!rec || !rec.handle.connected) return
+    // The outward door, before any upload: a refusal throws, and reconcile waits for the
+    // permission (no error phase, no back-off).
+    if (leaderPermitActive()) assertOutwardDoor('plugin-jobs', hostKey)
     // A reconnect while this pass runs swaps the handle and asks for one more pass, whose
     // snapshot is newer: this one sends nothing then (it would land after and win).
     const handle = rec.handle
@@ -319,10 +323,21 @@ export function createPluginJobsManager(deps: ManagerDeps) {
         try {
           await reconcileOnce(hostKey)
         } catch (err) {
-          rec.phase = 'error'
-          rec.message = err instanceof Error ? err.message : String(err)
-          rec.retryWanted = true
-          deps.log('warn', 'plugin jobs: could not configure', { host: hostKey, error: rec.message })
+          if (isPermitRefusal(err)) {
+            // Not a failure: the pass runs again the moment this server gets the permission.
+            rec.phase = 'checking'
+            rec.message = 'waits for the write permission: this server is not the leader now'
+            holdUntilDoorsOpen(
+              `plugin-jobs:${hostKey}`,
+              () => { if (hosts.get(hostKey) === rec && rec.handle.connected) void reconcile(hostKey) },
+              () => deps.log('info', 'plugin jobs: wait for the write permission', { host: hostKey }),
+            )
+          } else {
+            rec.phase = 'error'
+            rec.message = err instanceof Error ? err.message : String(err)
+            rec.retryWanted = true
+            deps.log('warn', 'plugin jobs: could not configure', { host: hostKey, error: rec.message })
+          }
         }
         for (const w of waiters) w()
       } while (rec.again && hosts.get(hostKey) === rec)

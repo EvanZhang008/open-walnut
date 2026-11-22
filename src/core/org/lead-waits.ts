@@ -29,6 +29,7 @@ import { createHash } from 'node:crypto';
 import { IS_EPHEMERAL } from '../../constants.js';
 import { bus, EventNames } from '../event-bus.js';
 import { log } from '../../logging/index.js';
+import { leaderPermitActive, onceOutwardDoorsOpened, outwardDoorRefusal } from '../leader/switch/doors.js';
 import type { Task } from '../types.js';
 
 const SUBSCRIBER = 'org-lead-waits';
@@ -139,6 +140,13 @@ export async function tellLead(leadId: string, nowMs = Date.now()): Promise<bool
       note.release(); // the rest rides its next message
       const soonest = Math.min(...due);
       if (Number.isFinite(soonest)) schedule(leadId, soonest - nowMs + 1_000);
+      return false;
+    }
+    // The outward door, before the wake is counted: a machine without the write permission
+    // wakes no session; the note stays untold and the lead is told once the permission arrives.
+    if (leaderPermitActive() && outwardDoorRefusal('session-wake', `lead-wait:${lead.id}`)) {
+      note.release();
+      onceOutwardDoorsOpened(`lead-wait:${leadId}`, () => { void tellLead(leadId); });
       return false;
     }
     // Set first: a slow delivery is still this wake, never a second one from the sweep.

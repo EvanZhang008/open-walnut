@@ -25,6 +25,7 @@ import { createHash } from 'node:crypto';
 import { bus, EventNames } from '../../core/event-bus.js';
 import { getConfig } from '../../core/config-manager.js';
 import { log } from '../../logging/index.js';
+import { assertOutwardDoor, leaderPermitActive } from '../../core/leader/switch/doors.js';
 // The error CLASS only, from its own leaf module: importing it from sources/eventkit.js
 // dragged the helper client and helper-build.js (Swift compile + codesign) into this
 // bundle. The source itself arrives through `core:calendar-source`, and classification goes
@@ -565,6 +566,7 @@ export class CalendarService {
   /** Moves or renames in place: an event never changes calendar here, whatever the default is. */
   async updateEvent(id: string, patch: CalendarEventPatch, opts?: CalendarWriteOptions): Promise<CalendarEvent> {
     this.assertUsable();
+    if (leaderPermitActive()) assertOutwardDoor('calendar-write', `update:${id}`);
     await this.guardWrite(id, opts);
     // Only the fields an update may carry: nothing a caller adds can move it to another calendar.
     const event = await this.source.updateEvent(id, {
@@ -579,6 +581,7 @@ export class CalendarService {
   /** No `calendarId` (absent or blank) creates on the configured default calendar. */
   async createEvent(input: CalendarEventCreateInput): Promise<CalendarEvent> {
     this.assertUsable();
+    if (leaderPermitActive()) assertOutwardDoor('calendar-write', `create:${input.start}:${input.title}`);
     const calendarId = await this.createTarget(input.calendarId);
     const event = await this.source.createEvent({ ...input, calendarId });
     await this.writeThrough();
@@ -599,6 +602,7 @@ export class CalendarService {
 
   async deleteEvent(id: string, opts?: CalendarWriteOptions): Promise<void> {
     this.assertUsable();
+    if (leaderPermitActive()) assertOutwardDoor('calendar-write', `delete:${id}`);
     await this.guardWrite(id, opts);
     await this.source.deleteEvent(id, opts);
     await this.writeThrough();

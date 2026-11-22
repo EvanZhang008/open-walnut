@@ -4,6 +4,7 @@
 
 import { generateId } from '../../utils/format.js';
 import { isFollower } from '../server-role.js';
+import { doorsClosed } from '../leader/switch/doors.js';
 import type {
   CronJob,
   CronJobCreate,
@@ -224,6 +225,9 @@ function wakeAtMsOf(state: CronServiceState, j: CronJob): number | undefined {
   // nextRunAtMs is a daemon REPORT, routinely already in the past, and the timer
   // would then re-arm with delay 0 forever over a job it must never run.
   if (!j.enabled || !j.state || clockOnDaemon(j) || cloudModeSkipsJob(j)) return undefined;
+  // Without the write permission findDueJobs takes nothing: no slot may wake the timer at once
+  // (armTimer polls instead until the permission arrives).
+  if (doorsClosed()) return undefined;
   // A run in flight re-arms the timer when it ends; a marker left by a run that
   // never ended is cleared by the recompute once it is stuck.
   if (typeof j.state.runningAtMs === 'number') return j.state.runningAtMs + STUCK_RUN_MS;

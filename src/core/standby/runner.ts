@@ -100,7 +100,8 @@ export async function defaultStandbyDeps(): Promise<StandbyRunnerDeps> {
       const raw = Number(config.standby?.interval_seconds)
       const walnut = config.standby?.walnut
       return {
-        on: !isFollower() && experimentalEnabled(config.experimental, 'switchable_leader'),
+        // Never on a leader switch's trial start (core/leader/switch/): that home has not led yet.
+        on: !isFollower() && experimentalEnabled(config.experimental, 'switchable_leader') && process.env.WALNUT_LEADER_TRIAL !== '1',
         home: WALNUT_HOME,
         dir: config.standby?.dir,
         ...(config.standby?.host ? { host: config.standby.host } : {}),

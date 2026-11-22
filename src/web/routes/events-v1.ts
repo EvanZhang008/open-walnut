@@ -35,6 +35,7 @@
  */
 
 import { logRouteError } from './route-error-log.js'
+import { leaderPermitActive, outwardDoorRefusal } from '../../core/leader/switch/doors.js'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
 import { isFollower } from '../../core/server-role.js'
@@ -161,6 +162,8 @@ function forwardToBridge(event: string, data: unknown): void {
  */
 export async function forwardMobileEventToBridge(kind: string, data: unknown): Promise<boolean> {
   if (isFollower()) return false
+  // The outward door: a server without the write permission pushes no frame (no lane, as above).
+  if (leaderPermitActive() && outwardDoorRefusal('companion-upload', `mobile-event:${kind}`)) return false
   const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js')
   const conn = getConnectedDaemonConnection('__local__')
   if (!conn || !conn.hasCapability('mobile-event')) return false

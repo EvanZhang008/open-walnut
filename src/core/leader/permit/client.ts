@@ -4,11 +4,13 @@
  * validMs - holderMarginMs counted from when it first SENT that record, on its own
  * clock. No answer is never a yes: a machine that is unsure reads the witnesses back,
  * and the old holder of a handover resumes only by getting a cancel of its own accepted.
+ * A planned stop hands the permission back first (release()), so the next process need not
+ * wait for this one's record to run out at the witnesses.
  *
  * Event driven (send now, receive later), so a simulated network can drive it.
  */
 import type { ElapsedClock, OpEntry, PermitParams, PermitRecord, PermitReply, PermitTransport } from './types.js'
-import { genesisConfigId, majorityOf, nextConfigId, recordKey, sameList, sameRecord } from './types.js'
+import { NO_HOLDER, genesisConfigId, majorityOf, nextConfigId, recordKey, sameList, sameRecord } from './types.js'
 import { randomBytes } from 'node:crypto'
 import { backoffDelayMs, holderLeaseMs } from './rules.js'
 import { OpBook, type OpStatus } from './ops.js'
@@ -51,6 +53,8 @@ interface Pending {
 
 export type ProposalOutcome = 'chosen' | 'short' | 'open'
 
+const RELEASED = 'permit client released for a planned stop: it proposes nothing more'
+
 export class PermitClient {
   readonly id: string
   private list: string[]
@@ -69,6 +73,9 @@ export class PermitClient {
   private lease: { record: PermitRecord; until: number } | null = null
   /** Set by handover(): acts on nothing until its own cancel is accepted or the handover is known. */
   private frozen = false
+  /** Set by release(): this client never acts again, and proposes nothing but its release. */
+  private releasing = false
+  private release_: { record: PermitRecord; stood: boolean } | null = null
   private stopped: string | null = null
   private top = 0
   private reads = new Map<string, PermitReply>()
@@ -79,6 +86,7 @@ export class PermitClient {
   private grantTries = 0
 
   constructor(private readonly opts: ClientOptions) {
+    if (!opts.id) throw new Error('permit client: a machine id cannot be empty (the empty holder means nobody)')
     this.id = opts.id
     this.list = [...opts.list].sort()
     this.cfg = opts.cfg ?? genesisConfigId(this.list)
@@ -112,7 +120,7 @@ export class PermitClient {
   }
 
   remainingMs(): number {
-    if (this.stopped || this.frozen || !this.lease || this.lease.record.holder !== this.id) return 0
+    if (this.stopped || this.frozen || this.releasing || !this.lease || this.lease.record.holder !== this.id) return 0
     if (this.opts.guard && !this.opts.guard()) return 0
     return Math.max(0, this.lease.until - this.opts.clock.now())
   }
@@ -120,7 +128,10 @@ export class PermitClient {
   /** The check every write makes first: refuses with less than minSendRemainingMs left. */
   assertMayAct(opId: string, minRemainingMs = this.opts.params.minSendRemainingMs): void {
     const left = this.remainingMs()
-    if (left <= 0) throw new PermitNotHeld(opId, this.stopped ? `stopped: ${this.stopped}` : this.frozen ? 'a handover is in progress' : 'no live permission')
+    if (left <= 0) {
+      const why = this.stopped ? `stopped: ${this.stopped}` : this.releasing ? 'released for a planned stop' : this.frozen ? 'a handover is in progress' : 'no live permission'
+      throw new PermitNotHeld(opId, why)
+    }
     if (left < minRemainingMs) throw new PermitNotHeld(opId, `only ${Math.round(left)} ms left, ${minRemainingMs} ms needed`)
   }
 
@@ -156,7 +167,8 @@ export class PermitClient {
 
   /**
    * After a send: whether it left. `sent: false` only when it surely did not (it never reached
-   * the network); when unsure, report nothing and the op stays unknown. Rides the next renew.
+   * the network); when unsure, report nothing and the op stays unknown. Rides the next renew, or
+   * the release; one reported after release() rides nothing, and the op stays unknown.
    * The same reports an outcome the user checked for an op another holder left unknown.
    */
   reportOutcome(opId: string, sent: boolean): void {
@@ -210,9 +222,9 @@ export class PermitClient {
     return backoffDelayMs(this.grantTries, random, this.opts.params)
   }
 
-  /** Extend this machine's permission. null while a handover is open: the old holder never renews then. */
+  /** Extend this machine's permission. null while a handover is open (the old holder never renews then), or once released. */
   renew(progress?: PermitRecord['progress']): PermitRecord | null {
-    if (this.frozen || this.stopped) return null
+    if (this.frozen || this.stopped || this.releasing) return null
     const ops = this.ops.changes()
     return this.propose({ kind: 'renew', holder: this.id, ...(progress ? { progress } : {}), ...(ops ? { ops } : {}) })
   }
@@ -225,6 +237,7 @@ export class PermitClient {
 
   /** Manual switch: stop acting at once, then propose the handover. */
   handover(to: string): PermitRecord {
+    if (this.releasing) throw new Error(RELEASED)
     this.frozen = true
     return this.propose({ kind: 'handover', holder: to, from: this.id, to })
   }
@@ -235,6 +248,59 @@ export class PermitClient {
   }
 
   /**
+   * Planned stop (a deploy, a restart): stop acting at once and for good, then hand the
+   * permission back. The release record gives it to nobody; a witness that takes it holds
+   * nothing for anyone from then on, so the next process (of this machine or another) gets a
+   * grant at once instead of waiting validMs + witnessMarginMs for this record to run out.
+   * It carries the outcomes reported and not yet carried (reportOutcome before calling this),
+   * and 'not-sent' for every op a majority registered for this process that it never began
+   * (OpBook.abandonUnbegun), never a registration. Call it again to resend it to the witnesses
+   * that have not taken it; released() says whether a majority did. Exit whether or not it
+   * stood: one that did not leaves the record to run out as after a crash.
+   *
+   * It ends the margin assertMayAct promised: an action that passed assertMayAct with 15 s or
+   * more left may still be running, and the next holder may act about 2 s after the release.
+   * So call it only once nothing of this process acts any more: close the doors (no new
+   * assertMayAct passes), let the actions in flight end (the op-id sends, and report their
+   * outcomes), then release. Work that outlives the process's own control (a detached child
+   * process, a job on another daemon) is not covered by anything here: stop it first, or do
+   * not release (exit and let the record run out). The next process of the same home cannot
+   * start before this one exited (the instance lock), so the window is only such detached work.
+   *
+   * null (and nothing sent, nothing changed) when there is nothing to hand back: no record of
+   * this incarnation gives it the permission (never held, superseded, stopped), or a handover
+   * is open (the permission is on its way to its new holder).
+   */
+  release(): PermitRecord | null {
+    if (this.release_) {
+      if (!this.stopped && !this.release_.stood && this.pending?.record === this.release_.record) this.retransmit()
+      return this.release_.record
+    }
+    if (this.stopped || this.frozen || this.releasing || !this.lease || this.lease.record.holder !== this.id) return null
+    // Not acting from this instant, before the record leaves (as handover's freeze).
+    this.releasing = true
+    this.ops.abandonUnbegun()
+    const ops = this.ops.changes()
+    try {
+      return this.propose({ kind: 'release', holder: NO_HOLDER, from: this.id, ...(ops ? { ops } : {}) })
+    } finally {
+      // Kept even when a send threw (the record may have left to other witnesses), unless a
+      // transport that answers inside send() already had it chosen (onChosen).
+      const p = this.pending?.record
+      if (!this.release_ && p?.kind === 'release') this.release_ = { record: p, stood: false }
+    }
+  }
+
+  /**
+   * After release(): 'stood' once a majority took the release (the next process may take a
+   * grant at once), 'open' until then (also when it never will: exit after a short cap);
+   * null when this client never released.
+   */
+  released(): 'open' | 'stood' | null {
+    return this.release_ ? (this.release_.stood ? 'stood' : 'open') : null
+  }
+
+  /**
    * Replace the witness list, in two steps (rules.ts judge): the pair step, judged by the
    * old and the new list, then, once it reached a majority of both, the final step, sent by
    * itself. Called again for the same new list while the pair step stands, it sends the
@@ -242,6 +308,9 @@ export class PermitClient {
    * finishes a change its holder left half done; repairChange() finds it by itself).
    */
   changeWitnesses(newList: string[], from?: { list: string[]; cfg: string; epoch: number }): PermitRecord {
+    // Before `from` moves the list: a stopped or released client changes nothing.
+    if (this.stopped) throw new Error(`permit client stopped: ${this.stopped}`)
+    if (this.releasing) throw new Error(RELEASED)
     const next = [...newList].sort()
     if (from) {
       this.list = [...from.list].sort()
@@ -262,7 +331,7 @@ export class PermitClient {
    */
   repairChange(): { plan: RepairPlan; record: PermitRecord | null } {
     const plan = this.changePlan()
-    if (plan.kind === 'none' || plan.kind === 'blocked' || this.stopped || this.frozen) return { plan, record: null }
+    if (plan.kind === 'none' || plan.kind === 'blocked' || this.stopped || this.frozen || this.releasing) return { plan, record: null }
     const p = this.pending
     if (p && p.record.kind === 'members' && sameList(p.record.newList, plan.pair.next) && this.outcome() === 'open') {
       this.retransmit()
@@ -368,6 +437,7 @@ export class PermitClient {
 
   private propose(fields: Omit<PermitRecord, 'number' | 'by' | 'nonce' | 'validMs' | 'list' | 'joint' | 'cfg' | 'epoch'>, joint: string[] | null = this.joint): PermitRecord {
     if (this.stopped) throw new Error(`permit client stopped: ${this.stopped}`)
+    if (this.releasing && fields.kind !== 'release') throw new Error(RELEASED)
     if (fields.progress) this.progress = { ...fields.progress, by: this.id }
     const kind = this.opts.clock.kind
     const record: PermitRecord = {
@@ -408,9 +478,10 @@ export class PermitClient {
       if (!this.lease || until > this.lease.until) this.lease = { record: r, until }
       if (r.kind === 'cancel') this.frozen = false
     } else {
-      // Our handover stands: the permission is the other machine's now.
+      // Our handover stands: the permission is the other machine's now. Or our release: nobody's.
       this.lease = null
       this.frozen = false
+      if (r.kind === 'release') this.release_ = { record: r, stood: true }
     }
     this.pending = null
     // The pair step reached both majorities (its acks are in the evidence): no majority of the

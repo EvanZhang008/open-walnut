@@ -58,9 +58,11 @@ void warmMock
 import {
   ingestUrlFromBridgeUrl, postToCloudIngest, runLatestPerKey, cloudIngestResting, _resetCloudIngestForTesting,
   postToCloudReplica, cloudReplicaAvailable, postToCloudSessionSend, postToCloudSessionPermission,
+  postToCloudJournal, postToCloudHostReplica,
 } from '../../src/core/cloud-ingest.js'
 import { _resetRoundOutagesForTesting } from '../../src/core/replication/round-outage.js'
 import { log } from '../../src/logging/index.js'
+import { setOutwardDoorChecker } from '../../src/core/leader/switch/doors.js'
 
 let status = 200
 let responseBody: string | null = null
@@ -500,5 +502,34 @@ describe('runLatestPerKey', () => {
   it('a rejected run does not wedge the key', async () => {
     await expect(runLatestPerKey('k2', async () => { throw new Error('boom') })).rejects.toThrow('boom')
     expect(await runLatestPerKey('k2', async () => 'ok')).toBe('ok')
+  })
+})
+
+describe('a machine without the write permission (leader switch)', () => {
+  afterEach(() => { setOutwardDoorChecker(null) })
+
+  it('uploads nothing to the companion on any lane, and the bridge is not offered instead', async () => {
+    point()
+    const asked: string[] = []
+    setOutwardDoorChecker((kind, opId) => {
+      asked.push(`${kind} ${opId}`)
+      throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' })
+    }, () => false)
+    // 'failed' (the sweep carries it later), never 'unsupported' (which would take the bridge).
+    expect(await postToCloudIngest('projection-upsert', '{"which":"tasks","data":{}}')).toBe('failed')
+    expect(await postToCloudReplica({ step: 'manifest' })).toMatchObject({ ok: false, outcome: 'failed' })
+    await expect(postToCloudJournal('offline.drain')).rejects.toMatchObject({ name: 'PermitNotHeld' })
+    expect(await postToCloudHostReplica('manifest')).toMatchObject({ ok: false, errorKind: 'not-permitted' })
+    expect(seen).toEqual([])
+    expect(asked).toEqual([
+      'companion-upload projection-upsert', 'companion-upload replica',
+      'companion-upload journal:offline.drain', 'companion-upload host-replica:manifest',
+    ])
+    expect(cloudIngestResting()).toBe(false)
+
+    // Once it may send, the same upload goes.
+    setOutwardDoorChecker(null)
+    expect(await postToCloudIngest('projection-upsert', '{"which":"tasks","data":{}}')).toBe('sent')
+    expect(seen).toHaveLength(1)
   })
 })

@@ -1,11 +1,12 @@
 /**
- * Model-checking style: many random schedules from seeds, one invariant. At no real
- * instant do two machines both have mayAct() === true. Each negative control turns one
- * safety part off and must find a violation, so the invariant check is known to bite.
+ * Model-checking style: many random schedules from seeds, two invariants. At no real
+ * instant do two processes both have mayAct() === true, and no op id is sent by two
+ * processes. Each negative control turns one safety part off and must find a violation,
+ * so the invariant check is known to bite.
  */
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_PERMIT_PARAMS, type PermitParams } from '../../../../src/core/leader/permit/index.js'
-import { SimStore, World, pilot } from './sim.js'
+import { SimStore, World, actUntilReleaseStood, pilot, releaseOnAnyLive, takeOnMinorityRelease } from './sim.js'
 
 const W = ['w1', 'w2', 'w3']
 const M = ['A', 'B', 'C']
@@ -49,6 +50,19 @@ interface Variant {
   twins?: boolean
   /** Negative control (twins): both processes of a machine share one incarnation. */
   twinsShareNonce?: boolean
+  /**
+   * Planned stops: about every 1 to 2.5 minutes a process releases and exits (World.plannedStop),
+   * the one that acts or any other, and half the machines that sleep or are cut off do so the
+   * instant they wake or the cut heals; the next process of its machine starts; the release reaches every witness, or only a
+   * majority, or only one.
+   */
+  releases?: boolean
+  /** Negative control (releases): the releaser keeps acting until its release stood. */
+  actUntilStood?: boolean
+  /** Negative control (releases): a new process takes it on a release of its machine seen at a minority. */
+  minorityTakes?: boolean
+  /** Negative control (releases): a witness takes a release on any live record, whoever holds it. */
+  releaseAnyOwner?: boolean
 }
 
 function schedule(seed: number, v: Variant = {}): { world: World; totalMs: number } {
@@ -70,10 +84,16 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
       world.after(20_000 * r(), flush)
     }
   }
-  for (const id of M) {
-    const m = world.addMachine(id, W, { drift: drift(-1), wallOffset: (r() * 2 - 1) * 30_000, pureMonotonic: v.pureMonotonic, ...(v.twinsShareNonce ? { nonce: `${id}-one` } : {}) })
+  // Every process a negative control changes, the first ones and every restarted one.
+  world.onNewClient = (m) => {
     if (v.reachableMajority) patchReachableMajority(m.c)
     if (v.dropLedger) dropLedger(m.c)
+    if (v.actUntilStood) actUntilReleaseStood(m.c)
+    if (v.minorityTakes) takeOnMinorityRelease(m.c)
+  }
+  if (v.releaseAnyOwner) world.onNewWitness = (n) => releaseOnAnyLive(n.w!)
+  for (const id of M) {
+    world.addMachine(id, W, { drift: drift(-1), wallOffset: (r() * 2 - 1) * 30_000, pureMonotonic: v.pureMonotonic, ...(v.twinsShareNonce ? { nonce: `${id}-one` } : {}) })
     if (v.twins) world.addMachine(id, W, { key: `${id}#2`, clockOf: id, pureMonotonic: v.pureMonotonic, ...(v.twinsShareNonce ? { nonce: `${id}-one` } : {}) })
   }
   const processes = v.twins ? M.flatMap((id) => [id, `${id}#2`]) : M
@@ -105,6 +125,26 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
     })
   }
   const totalMs = (v.minutes ?? 15) * 60_000
+  /** A planned stop of process `key`, unless it is asleep, down or already stopping. */
+  const plannedStop = (key: string): void => {
+    const m = world.machines.get(key)!
+    if (m.clock.asleep() || world.now < m.downUntil || m.c.released()) return
+    const list = m.c.witnessList()
+    const x = r()
+    const start = Math.floor(r() * list.length)
+    const turned = list.map((_, i) => list[(start + i) % list.length])
+    const reach = x < 0.7 ? null : x < 0.85 ? turned.slice(0, Math.floor(list.length / 2) + 1) : turned.slice(0, 1)
+    world.plannedStop(key, W, { reach, downMs: 200 + r() * 2_000, keepConfig: true })
+  }
+  /**
+   * Half the time a machine that was cut off from witnesses stops the instant the cut heals,
+   * before it heard anything: it kept renewing at the witnesses it still reached, so its
+   * numbers may be above the next holder's record at the others, and its lease ran out on its
+   * clock but is not cleared. The rule refuses its release there (not its writer's record).
+   */
+  const healStop = (key: string): void => {
+    if (v.releases && r() < 0.5) world.after(r() * 200, () => plannedStop(key))
+  }
   // Faults, spread over the run.
   const faults = 6 + Math.floor(r() * 8)
   for (let i = 0; i < faults; i++) {
@@ -116,11 +156,18 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
       if (kind === 0) world.crashWitness(pool[Math.floor(r() * pool.length)], 1_000 + r() * 60_000)
       else if (kind === 1) {
         const m = world.machines.get(M[Math.floor(r() * 3)])!
-        m.clock.sleeps.push([world.now, world.now + 10_000 + r() * 110_000])
+        const wake = world.now + 10_000 + r() * 110_000
+        m.clock.sleeps.push([world.now, wake])
+        // A planned stop the instant it wakes, before any answer: its lease ran out in the sleep
+        // but is not cleared yet, and another machine may hold by now.
+        if (v.releases && r() < 0.5) world.at(wake + r() * 200, () => plannedStop(m.key))
       } else if (kind === 2) {
         const a = M[Math.floor(r() * 3)], b = pool[Math.floor(r() * pool.length)]
         world.partition(a, b, true)
-        world.after(20_000 + r() * 120_000, () => world.partition(a, b, false))
+        world.after(20_000 + r() * 120_000, () => {
+          world.partition(a, b, false)
+          healStop(a)
+        })
       } else if (kind === 3) {
         const m = world.machines.get(M[Math.floor(r() * 3)])!
         m.clock.wallJumps.push([world.now, (r() * 2 - 1) * 120_000])
@@ -134,7 +181,19 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
         const keep = list[Math.floor(r() * list.length)]
         const cut = list.filter((w) => w !== keep)
         for (const w of cut) world.partition(a, w, true)
-        world.after(30_000 + r() * 120_000, () => { for (const w of cut) world.partition(a, w, false) })
+        // With planned stops, half the time the other machines lose the witness `a` keeps, for as
+        // long: the next holder then never sees the numbers `a` goes on renewing there, so `a`'s
+        // numbers can be above its record when `a` stops at the heal (healStop). That split heals
+        // after 65 to 105 s: after the next holder took over at the other two witnesses, while
+        // the record `a` renewed at the one it kept still holds there.
+        const others = v.releases && r() < 0.5 ? M.filter((x) => x !== a) : []
+        for (const o of others) world.partition(o, keep, true)
+        const span = r()
+        world.after(others.length ? 65_000 + span * 40_000 : 30_000 + span * 120_000, () => {
+          for (const w of cut) world.partition(a, w, false)
+          for (const o of others) world.partition(o, keep, false)
+          healStop(a)
+        })
       } else if (kind === 7) {
         const a = M[Math.floor(r() * 3)]
         for (const w of pool) world.partition(a, w, true)
@@ -142,10 +201,19 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
       } else {
         const id = (v.restarts && world.acting()[0]) || processes[Math.floor(r() * processes.length)]
         world.restartMachine(id, W, 1_000 + r() * 20_000, undefined, v.ops)
-        if (v.reachableMajority) patchReachableMajority(world.machines.get(id)!.c)
-        if (v.dropLedger) dropLedger(world.machines.get(id)!.c)
       }
     })
+  }
+  if (v.releases) {
+    // Planned stops (a deploy), each released before the process exits: half of them of whoever
+    // acts, half of any process (one whose lease ran out but is not cleared, a twin, one just
+    // superseded): the witnesses must take a release only on its writer's own live record.
+    for (let t = 30_000 + r() * 60_000; t < totalMs; t += 60_000 + r() * 90_000) {
+      world.at(t, () => {
+        const key = r() < 0.5 ? world.acting()[0] : processes[Math.floor(r() * processes.length)]
+        if (key) plannedStop(key)
+      })
+    }
   }
   // Now and then a witness dies after it accepted a record and before it answered. (Per
   // accepted record: per message would restart the witnesses every few seconds, and each
@@ -185,6 +253,11 @@ async function sweep(seeds: number, v: Variant = {}, from = 1, stopAtFirst = fal
   let total = 0
   let sent = 0
   let unknown = 0
+  let releases = 0
+  let stood = 0
+  /** Planned stops whose release reached every witness and stood, and those of them taken over within 10 s. */
+  let fullStood = 0
+  let fast = 0
   for (let seed = from; seed < from + seeds; seed++) {
     await new Promise((res) => setImmediate(res))
     const { world, totalMs } = schedule(seed, v)
@@ -197,8 +270,18 @@ async function sweep(seeds: number, v: Variant = {}, from = 1, stopAtFirst = fal
     }
     for (const ms of world.activeMs.values()) active += ms
     total += totalMs
+    for (const e of world.releases) {
+      if (!e.record) continue
+      releases++
+      if (e.stoodAt === null) continue
+      stood++
+      if (e.reach) continue
+      fullStood++
+      const next = world.timeline.find(([t, who]) => t > e.at && who.length > 0)
+      if (next && next[0] - e.at < 10_000) fast++
+    }
   }
-  return { violations, firstBad, activeShare: active / total, sent, unknown }
+  return { violations, firstBad, activeShare: active / total, sent, unknown, releases, stood, fastShare: fullStood ? fast / fullStood : 0 }
 }
 
 describe('write permission: random schedules', () => {
@@ -283,6 +366,51 @@ describe('write permission: random schedules', () => {
     expect(r.activeShare).toBeGreaterThan(0.3)
   }, 120_000)
 
+  // Planned stops (deploys): the holder releases, exits, and the next process takes it at once.
+  for (let from = 1; from <= 150; from += 50) {
+    it(`never lets two processes act at once across planned stops with a release, and the next one takes it within seconds (seeds ${from} to ${from + 49})`, async () => {
+      const r = await sweep(50, { releases: true, tickMs: 1_000 }, from)
+      expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+      expect(r.releases).toBeGreaterThan(200)
+      // Not vacuous: most releases that reached every witness were taken over within 10 s.
+      expect(r.fastShare).toBeGreaterThan(0.8)
+      expect(r.activeShare).toBeGreaterThan(0.3)
+    }, 120_000)
+  }
+
+  it('never lets two processes act at once across planned stops when candidates ask the instant they may (100 seeds)', async () => {
+    const r = await sweep(100, { releases: true, tickMs: 250, noBackoff: true })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    expect(r.stood).toBeGreaterThan(200)
+  }, 120_000)
+
+  // Every fault the split, half of them with the other machines cut from the witness it keeps,
+  // and the cut machine stopping the instant the split heals (with its lease run out, not cleared).
+  it('never lets two processes act at once across planned stops of processes cut off in splits (100 seeds)', async () => {
+    const r = await sweep(100, { releases: true, splitsOnly: true, tickMs: 1_000 })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    expect(r.stood).toBeGreaterThan(200)
+  }, 120_000)
+
+  it('never lets two processes act at once across planned stops when each machine runs two (60 seeds)', async () => {
+    const r = await sweep(60, { releases: true, twins: true, tickMs: 1_000 })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    expect(r.stood).toBeGreaterThan(100)
+  }, 120_000)
+
+  it('never sends one op twice across planned stops, crashes and restarts (80 seeds)', async () => {
+    const r = await sweep(80, { releases: true, ops: true, restarts: true, tickMs: 1_000 })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    expect(r.sent).toBeGreaterThan(1_500)
+    expect(r.stood).toBeGreaterThan(100)
+  }, 120_000)
+
+  it('never lets two processes act at once across planned stops during list changes over five witnesses (60 seeds)', async () => {
+    const r = await sweep(60, { releases: true, members: true, pool5: true, tickMs: 1_000 })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    expect(r.stood).toBeGreaterThan(100)
+  }, 120_000)
+
   it('holds with no faults beyond the network across longer runs', async () => {
     const r = await sweep(20, { minutes: 60 })
     expect(r.firstBad).toBeNull()
@@ -328,6 +456,24 @@ describe('write permission: random schedules', () => {
 
     it('two processes of a machine with one incarnation: they act at once', async () => {
       const r = await sweep(100, { twins: true, twinsShareNonce: true, tickMs: 1_000 }, 1, true)
+      expect(r.violations).toBeGreaterThan(0)
+    }, 120_000)
+
+    it('a releaser that keeps acting until its release stood: another candidate acts beside it', async () => {
+      const r = await sweep(200, { releases: true, tickMs: 250, noBackoff: true, actUntilStood: true }, 1, true)
+      expect(r.violations).toBeGreaterThan(0)
+    }, 120_000)
+
+    // Rare in random schedules: a stale process stops proposing once its lease ran out, so its
+    // numbers are below the next holder's record unless that holder never saw the witness it kept
+    // (the cross cut of the splits). Named case: 'planned stop of a process whose lease ran out'.
+    it('a witness that takes a release on another holder\'s record: a stale releaser frees the holder\'s witnesses', async () => {
+      const r = await sweep(200, { releases: true, splitsOnly: true, tickMs: 1_000, releaseAnyOwner: true }, 1, true)
+      expect(r.violations).toBeGreaterThan(0)
+    }, 120_000)
+
+    it('a new process that takes it on a release seen at a minority: it acts beside the next holder', async () => {
+      const r = await sweep(200, { releases: true, tickMs: 1_000, minorityTakes: true }, 1, true)
       expect(r.violations).toBeGreaterThan(0)
     }, 120_000)
 

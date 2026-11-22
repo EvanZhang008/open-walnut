@@ -187,9 +187,8 @@ export async function deliverThreadPush(
   )
   if (!chosen.length) return { attempted: false, sent: 0, reason: 'all devices are foreground-active or muted decisions', fields: { devices: tokens.length, targeted: 0 } }
   // Quiet holds it (quiet-hold.ts), asked once a device would take it.
-  if (await holdPushForQuiet('thread-push', { key: `thread:${thread.id}`, title: thread.title }, { taskId: node.id })) {
-    return { attempted: false, sent: 0, reason: 'quiet mode is on', fields: {} }
-  }
+  const heldWhy = await holdPushForQuiet('thread-push', { key: `thread:${thread.id}`, title: thread.title }, { taskId: node.id })
+  if (heldWhy) return { attempted: false, sent: 0, reason: heldWhy, fields: {} }
   const res = await deliverPush(chosen.map(({ device }) => device.entry), content)
   return { attempted: res.attempted, sent: res.sent, ...(res.reason ? { reason: res.reason } : {}), fields: { devices: tokens.length, targeted: chosen.length, failed: res.failed } }
 }

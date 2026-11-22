@@ -17,6 +17,7 @@ import { updatePushTokens } from '../config-manager.js'
 import { log } from '../../logging/index.js'
 import type { PushTokenEntry } from '../types.js'
 import { sendApns, type ApnsTarget } from './apns.js'
+import { leaderPermitActive, outwardDoorRefusal } from '../leader/switch/doors.js'
 import { partitionByPairing, pruneUnpairedRows } from './paired-rows.js'
 import { apnsPayload, expoMessages, tokenKind, tokenTag, withoutTokens, type PushContent } from './send.js'
 
@@ -32,6 +33,8 @@ export interface PushDeliveryOutcome {
   failed: number
   /** Why APNs attempted nothing, when it had targets. */
   reason?: string
+  /** A transport's outward door refused it: this server does not hold the write permission now. */
+  notPermitted?: true
   /** Distinct targets per service. */
   apns: number
   expo: number
@@ -85,12 +88,15 @@ export async function deliverPush(
     outcome.sent += out.sent
     outcome.failed += out.failed
     if (!out.attempted && out.reason) outcome.reason = out.reason
+    if (out.notPermitted) outcome.notPermitted = true
     outcome.deadTokens.push(...out.deadTokens)
   }
 
   if (targets.expo.length > 0) {
     const out = await sendExpo(targets.expo, content)
     outcome.attempted = outcome.attempted || out.attempted
+    if (!out.attempted && out.reason) outcome.reason ??= out.reason
+    if (out.notPermitted) outcome.notPermitted = true
     outcome.sent += out.sent
     outcome.failed += out.failed
     outcome.deadTokens.push(...out.deadTokens)
@@ -112,9 +118,12 @@ interface ExpoPushTicket {
 async function sendExpo(
   tokens: string[],
   content: PushContent,
-): Promise<{ attempted: boolean; sent: number; failed: number; deadTokens: string[] }> {
+): Promise<{ attempted: boolean; reason?: string; notPermitted?: true; sent: number; failed: number; deadTokens: string[] }> {
   const messages = expoMessages(tokens, content)
   if (messages.length === 0) return { attempted: false, sent: 0, failed: 0, deadTokens: [] }
+  // The outward door: a machine without the write permission posts nothing to Expo.
+  const refused = leaderPermitActive() ? outwardDoorRefusal('push', content.collapseId ?? 'expo') : null
+  if (refused) return { attempted: false, reason: refused, notPermitted: true, sent: 0, failed: 0, deadTokens: [] }
   try {
     const resp = await fetch(EXPO_PUSH_URL, {
       method: 'POST',

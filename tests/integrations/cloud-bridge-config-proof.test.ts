@@ -154,4 +154,30 @@ describe('the Mac proves it owns its companion', () => {
     await settle()
     expect(box.seen.filter((s) => s.url.endsWith('/adopt'))).toHaveLength(1)
   })
+
+  it('without the write permission (leader switch doors) no device is created, revoked or adopted, and the re-mint window is not spent', async () => {
+    const doors = await import('../../src/core/leader/switch/doors.js')
+    const asked: string[] = []
+    let open = false
+    doors.setOutwardDoorChecker((kind, opId) => {
+      asked.push(`${kind} ${opId}`)
+      if (!open) throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' })
+    }, () => open)
+    try {
+      await expect(getBridgeConfigForHost('devbox')).rejects.toThrow('Bridge credential unavailable')
+      await writeCache({ 'bridge-local': 'the-local-token' })
+      expect(await getBridgeConfigForHost('__local__')).toMatchObject({ enabled: true, token: 'the-local-token' })
+      await settle()
+      expect(box.seen).toEqual([])
+      expect(asked).toEqual(['companion-upload bridge-token:bridge-devbox', 'companion-upload bridge-adopt:bridge-local'])
+      // The permission arrives: the same calls mint and offer, once each.
+      open = true
+      expect(await getBridgeConfigForHost('devbox')).toMatchObject({ enabled: true, token: expect.stringMatching(/^minted-/) })
+      expect(await getBridgeConfigForHost('__local__')).toMatchObject({ enabled: true, token: 'the-local-token' })
+      await settle()
+      expect(box.seen.map((s) => `${s.method} ${s.url}`)).toEqual(['POST /api/devices', 'POST /api/devices/bridge-local/adopt'])
+    } finally {
+      doors.setOutwardDoorChecker(null)
+    }
+  })
 })

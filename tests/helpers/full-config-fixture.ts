@@ -48,6 +48,7 @@ export function fullConfigFixture(): Record<string, unknown> {
     engines: { alt: { command: 'claude', env: { ANTHROPIC_API_KEY: engineKey } } },
     usage: { proxy_log_dirs: { acme: '/Users/marina/proxy-logs' } },
     standby: { dir: '/Volumes/standby/walnut', interval_seconds: 30 },
+    leader_switch: { witnesses: [{ id: 'w1', dir: '/srv/witness/w1' }], machines: [{ id: 'machine-a', home: '/srv/a/home', standby_dir: '/srv/a/standby', port: 3456 }], back_window_hours: 168 },
     agent: { main_model: 'acme-model-large', fast_model: 'acme-model-small', available_models: ['acme-model-large', 'acme-model-small'], session_effort: 'high', quick_parse: true, agents: [{ id: 'mentor', mcp: { env: { TOKEN: engineKey } } }] },
     plugins: { mailbox: { enabled: true, password: pluginPass, client_secret: pluginSecret } },
     calendar: { accounts: [{ user: 'marina', password: calPass }] },

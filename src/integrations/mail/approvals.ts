@@ -35,6 +35,7 @@ import {
   type MailApprovalNote,
 } from '../../core/human-inbox/walnut-letters/mail-approval.js'
 import type { MailService } from './service.js'
+import { assertOutwardDoor, isPermitRefusal, leaderPermitActive } from '../../core/leader/switch/doors.js'
 import { toSendDto } from './sends.js'
 import type { MailSends } from './sends.js'
 import type { AccountRow, DraftRow, MailStore, SendRow } from './store.js'
@@ -52,6 +53,14 @@ export const LETTER_ACTIONS = MAIL_APPROVAL_WORDS.en.actions
  * seconds, so two minutes can only be reached by a process that is no longer running.
  */
 export const FROZEN_DRAFT_GRACE_MS = 2 * 60_000
+
+/**
+ * How old an approved send that never started may be and still go out without asking again
+ * (reconcile, leader switch only): a day. Past it the moment the person meant has passed.
+ */
+export const RESUME_APPROVED_MAX_MS = 24 * 60 * 60_000
+const RESUME_TOO_OLD = 'this send was approved more than a day ago and never started (this server did not hold the write permission),'
+  + ' so Walnut did not send it this late.'
 
 /** Frozen drafts examined per sweep. Bounded because each one can cost a letter read. */
 const RECONCILE_BATCH = 20
@@ -159,7 +168,9 @@ export class MailApprovals {
       const { send, draft } = await this.consoleSend(draftId, revision, undefined, 'approvals-off')
       this.deps.log.info('mail sent with no letter: approvals are off', { draftId, revision: draft.revision, sendId: send.sendId })
       const to = draft.to.map((a) => a.address).filter(Boolean).slice(0, 3).join(', ')
-      await this.deps.recordUnasked?.(`Sent the mail “${draft.subject || '(no subject)'}”${to ? ` to ${to}` : ''}`)
+      // Still `approved`: queued at its door (runQueued), so it is not sent yet.
+      const did = send.state === 'approved' ? 'Queued' : 'Sent'
+      await this.deps.recordUnasked?.(`${did} the mail “${draft.subject || '(no subject)'}”${to ? ` to ${to}` : ''}`)
       return { draft, letterId: '', sent: send }
     }
     const first = await this.deps.drafts.require(draftId)
@@ -241,6 +252,9 @@ export class MailApprovals {
   ): Promise<{ send: SendDto; draft: DraftDto }> {
     const first = await this.deps.drafts.require(draftId)
     this.assertRevision(first, revision)
+    // The outward door before the revision bump and the freeze below, so a refusal leaves the
+    // draft exactly as the caller found it.
+    if (leaderPermitActive()) assertOutwardDoor('mail-send', `${draftId}:${revision}`)
     await this.requireActiveAccount(first.account_id)
     this.deps.drafts.assertSendable(
       first,
@@ -257,7 +271,18 @@ export class MailApprovals {
     )
     if (frozen === 0) throw stale(`Draft ${draftId} changed before the console send reached it.`)
 
-    const send = await this.mintAndSend(row, row.revision, 'console', approvalRef, onMinted)
+    let send: SendRow | undefined
+    try {
+      send = await this.mintAndSend(row, row.revision, 'console', approvalRef, onMinted)
+    } catch (error) {
+      // Refused at mintAndSend's door, before the approval: nothing was minted, so the freeze
+      // above is undone now rather than by a reconcile two minutes later.
+      if (isPermitRefusal(error) && await this.deps.store.write.unfreezeDraft(draftId, this.now) > 0) {
+        const fresh = await this.deps.drafts.require(draftId)
+        this.deps.events.draftChanged(draftId, fresh.state, fresh.revision)
+      }
+      throw error
+    }
     if (!send) throw stale(`Draft ${draftId} changed before the console send reached it.`)
     if (outstanding) await this.withdraw(outstanding, (w) => w.consoleSent)
     return { send: toSendDto(send), draft: this.deps.drafts.toDto(await this.deps.drafts.require(draftId)) }
@@ -332,6 +357,14 @@ export class MailApprovals {
         letterId: answer.letterId, actionId: answer.actionId,
       })
     } catch (error) {
+      if (isPermitRefusal(error)) {
+        // Nothing changed: the answered letter stays bound, and the server holding the write
+        // permission resumes it in its reconcile. No reply, because nothing went wrong.
+        this.deps.log.info('mail letter answer left for the server holding the write permission', {
+          letterId: answer.letterId, actionId: answer.actionId,
+        })
+        return
+      }
       this.deps.log.warn('mail letter answer could not be carried out', {
         letterId: answer.letterId, actionId: answer.actionId, error: reasonOf(error).slice(0, 300),
       })
@@ -385,8 +418,11 @@ export class MailApprovals {
    *   `pending_approval`, and the human believes the mail went. That one is RESUMED, because the
    *   human's decision is on record and the ledger's gates still apply.
    *
-   * Anything with a ledger row for its current revision is left alone: a send exists, and
-   * `sends.reap` owns whatever state that send is in.
+   * A ledger row for its current revision means a send exists: one still `approved` never started
+   * (a door refused it, or a stop came before its claim). With the write permission guarding this
+   * process it is run through `sends.execute`, whose claim keeps it to one attempt, or settled
+   * failed when its approval is over a day old; without it, it is left alone as before. Any other
+   * state is `sends.reap`'s.
    */
   async reconcile(deadlineAt?: number): Promise<{ unfrozen: number; resumed: number }> {
     const outcome = { unfrozen: 0, resumed: 0 }
@@ -397,7 +433,33 @@ export class MailApprovals {
     for (const row of rows) {
       if (deadlineAt !== undefined && Date.now() >= deadlineAt) break
       try {
-        if (await this.deps.store.write.getSendByKey(`${row.draft_id}:${row.revision}`)) continue
+        const existing = await this.deps.store.write.getSendByKey(`${row.draft_id}:${row.revision}`)
+        if (existing) {
+          // A ledger row still `approved` is an attempt that never started: the door refused it
+          // (the permission was lost after the row was written) or the process stopped before the
+          // claim. Only with the write permission guarding this process (leader switch) is it
+          // resumed, since there a refusal is what leaves such rows and the person was told the
+          // send is queued; without it the row is left as it always was. The claim inside
+          // `execute` keeps it to one attempt. An approval older than RESUME_APPROVED_MAX_MS is
+          // not sent without asking again: it settles failed, nothing sent, and the person may
+          // send it again.
+          if (existing.state === 'approved' && leaderPermitActive()) {
+            if (!this.resumesApproved(existing)) {
+              await this.deps.sends.settleUnsent(existing, RESUME_TOO_OLD)
+              outcome.unfrozen += 1
+              this.deps.log.info('mail settled an approved send too old to resume', {
+                draftId: row.draft_id, revision: row.revision, sendId: existing.send_id,
+              })
+              continue
+            }
+            await this.deps.sends.execute(existing)
+            outcome.resumed += 1
+            this.deps.log.info('mail resumed an approved send that had not started', {
+              draftId: row.draft_id, revision: row.revision, sendId: existing.send_id,
+            })
+          }
+          continue
+        }
         if (row.state === 'approved') {
           await this.unfreezeStuck(row, (w) => w.stoppedBeforeOut)
           outcome.unfrozen += 1
@@ -426,6 +488,8 @@ export class MailApprovals {
         await this.unfreezeStuck(row, (w) => w.unfrozenEditable)
         outcome.unfrozen += 1
       } catch (error) {
+        // A refused door is not a bad row: the server holding the write permission resumes it.
+        if (isPermitRefusal(error)) continue
         // One bad row must not stop the sweep, and a reconcile failure is never fatal: the row
         // stays frozen and the next tick tries again.
         this.deps.log.warn('mail could not reconcile a frozen draft', {
@@ -473,6 +537,9 @@ export class MailApprovals {
     onMinted?: (send: SendDto) => void,
   ): Promise<SendRow | undefined> {
     const draftId = draft.draft_id
+    // The outward door, before the approval is minted: a machine without the write permission
+    // changes nothing, so an answered letter stays where the leader's reconcile resumes it.
+    if (leaderPermitActive()) assertOutwardDoor('mail-send', `${draftId}:${revision}`)
     const approved = await this.deps.store.write.approveDraft(draftId, revision, this.now)
     if (approved === 0) {
       this.deps.log.info('mail approval was not minted, nothing sent', { draftId, revision })
@@ -496,12 +563,15 @@ export class MailApprovals {
   ): Promise<SendRow | undefined> {
     const draftId = draft.draft_id
     const idempotencyKey = `${draftId}:${revision}`
+    // No door here: the approval may already be minted, and a refusal between it and the ledger
+    // row would leave an `approved` draft the reconcile can only unfreeze (the human's Send lost).
+    // The row is written, and `sends.execute` checks the door before its claim (runQueued).
     const existing = await this.deps.store.write.getSendByKey(idempotencyKey)
     if (existing) {
       // A row still in `approved` is an attempt that never started, so it is picked up.
       if (existing.state === 'approved') {
         onMinted?.(toSendDto(existing))
-        return this.deps.sends.execute(existing)
+        return this.runQueued(existing)
       }
       // Anything else means this revision's send ALREADY RAN. Returning that row would report a
       // previous outcome as this request's answer (a spent key used to leave the draft parked in
@@ -540,7 +610,37 @@ export class MailApprovals {
     const row = await this.deps.store.write.getSend(sendId)
     if (!row) throw new MailServiceError('internal', 'the send ledger row disappeared', 500)
     onMinted?.(toSendDto(row))
-    return this.deps.sends.execute(row)
+    return this.runQueued(row)
+  }
+
+  /**
+   * `sends.execute` for a ledger row this request wrote or picked up. Refused at the send's door
+   * (this server does not hold the write permission: a handover, a stop, a lease running low), the
+   * approval is already recorded and the row stays `approved`, so the reconcile of the server that
+   * holds the permission sends it (resumesApproved). That is QUEUED, not a failure: the row is the
+   * answer, to every caller (a console Send, a request with approvals off, a retry, an agent's
+   * tool, an unsubscribe mail). Telling the caller "did not act" would have it draft again, and the
+   * recipient would get two mails.
+   */
+  private async runQueued(row: SendRow): Promise<SendRow> {
+    try {
+      return await this.deps.sends.execute(row)
+    } catch (error) {
+      if (!isPermitRefusal(error)) throw error
+      this.deps.log.info('mail send queued: it goes out once this server holds the write permission', {
+        draftId: row.draft_id, revision: row.revision, sendId: row.send_id,
+      })
+      return (await this.deps.store.write.getSend(row.send_id)) ?? row
+    }
+  }
+
+  /**
+   * Whether the reconcile still sends this `approved` row that never started: only while the write
+   * permission guards this process (leader switch; without it such rows are left as they always
+   * were) and for an approval under RESUME_APPROVED_MAX_MS old.
+   */
+  resumesApproved(send: SendRow): boolean {
+    return send.state === 'approved' && leaderPermitActive() && this.now - send.created_at <= RESUME_APPROVED_MAX_MS
   }
 
   /**

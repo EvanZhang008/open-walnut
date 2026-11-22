@@ -100,6 +100,7 @@ export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.free
   providers: 'provider credentials and request headers',
   usage: 'proxy log paths on the Mac',
   standby: 'the standby copy is the leader\'s own job, to a directory on the leader or on the host it names',
+  leader_switch: 'the switchable leader\'s machines and witnesses: only a leader server asks for the write permission',
   tts: 'the voice engine and its key: each server speaks with its own',
   plugins: 'plugin settings and credentials never leave the Mac',
   plugin_sources: 'plugin install sources',

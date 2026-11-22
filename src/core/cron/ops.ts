@@ -20,8 +20,9 @@ import {
   scheduleNextRunAtMs,
 } from './jobs.js';
 import { ensureLoaded, persist, warnIfDisabled } from './store.js';
-import { armTimer, emit, executeJob, findDueJobs, locked, replayGuardOf, settleSentRuns, stopTimer } from './timer.js';
+import { armTimer, cronFireOpId, emit, executeJob, findDueJobs, locked, replayGuardOf, settleSentRuns, stopTimer } from './timer.js';
 import { WALNUT_HOME } from '../../constants.js';
+import { leaderPermitActive, outwardDoorRefusal } from '../leader/switch/doors.js';
 import { CronJobChangedError, cronJobRevision } from './job-revision.js';
 
 export async function start(state: CronServiceState): Promise<void> {
@@ -293,6 +294,11 @@ export async function remove(state: CronServiceState, id: string) {
  * accepted the request.
  */
 async function relayCheckRun(job: CronJob) {
+  // The outward door before the daemon is asked: the check's fire would come back to a server
+  // that may not act on it, so a machine without the write permission does not start it.
+  if (leaderPermitActive() && outwardDoorRefusal('trigger-fire', `run:${job.id}`)) {
+    return { ok: true, ran: false, reason: 'not-permitted' as const };
+  }
   const host = job.check?.host || '__local__';
   const { triggerDaemonOrReason } = await import('../routines/trigger-daemon.js');
   const resolved = await triggerDaemonOrReason(host);
@@ -339,6 +345,11 @@ export async function run(state: CronServiceState, id: string, mode?: 'due' | 'f
         return { ok: true, ran: false, reason: 'already-ran-this-slot' as const };
       }
     }
+    // The outward door, before the slot is taken: a refused run leaves it due for the server
+    // that holds the write permission.
+    if (leaderPermitActive() && outwardDoorRefusal('cron-fire', cronFireOpId(job))) {
+      return { ok: true, ran: false, reason: 'not-permitted' as const };
+    }
     // Mark running and persist so the lock can be released
     job.state.runningAtMs = now;
     job.state.lastError = undefined;
@@ -373,6 +384,8 @@ export async function run(state: CronServiceState, id: string, mode?: 'due' | 'f
     });
   }
 
+  // The backstop door refused it (the permission was lost after the slot was taken): nothing ran.
+  if (outcome.notPermitted) return { ok: true, ran: false, reason: 'not-permitted' as const };
   // A run that failed or declined says so: `ran: true` alone read as "it worked" to Run now
   // while the run had timed out and made nothing (2026-11-10 CI, the Inbox Triage e2e).
   if (outcome.status === 'ok') return { ok: true, ran: true } as const;

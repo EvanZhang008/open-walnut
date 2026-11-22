@@ -10,6 +10,7 @@ import type { HomeEntry } from './types.js'
 const CACHE_ENTRIES: readonly HomeEntry[] = [
   // Ledgers and queue state that sit in cache/ only so git sync leaves them out: no other copy exists.
   lead('cache.applied-ops', 'cache/applied-ops.sqlite', 'sqlite', 'Offline-merge ledger of ops already applied, so none applies twice'),
+  lead('cache.leader-op-outcomes', 'cache/leader-op-outcomes.json', 'file', 'Outcomes of outward ops the leader permit\'s witnesses reported, so none goes out twice'),
   lead('cache.status-riding', 'cache/status-riding.json', 'file', 'Status lines and turn notices waiting to ride a session\'s next message'),
   lead('cache.status-reconcile', 'cache/status-reconcile.json', 'file', 'Status asks already made per session and turn, so none is asked again'),
   lead('cache.task-dir-size-notices', 'cache/task-dir-size-notices.json', 'file', 'Oversized task folder notices already given'),
@@ -90,6 +91,7 @@ const LOCAL_ENTRIES: readonly HomeEntry[] = [
   lead('local.preview-storage', 'local/preview-storage', 'dir', 'Saved state of rich previews'),
   lead('local.quiet-held-push', 'local/quiet-held-push.json', 'file', 'Phone pushes held during quiet hours'),
   mach('local.machine-id', 'local/machine-id', 'file', 'This machine\'s id for daemon updates'),
+  mach('local.leader-switch', 'local/leader-switch', 'dir', 'The leader switch of this home: its steps and lock, the handed-over marker, the promotion record, permission log'),
   mach('local.restore-drill', 'local/restore-drill.json', 'file', 'The last restore drill of this machine\'s backups: when, which backup, each check'),
   mach('local.health-monitor', 'local/health-monitor', 'dir', 'Walnut Health records of this machine'),
   mach('local.feature-nodes', 'local/feature-nodes', 'dir', 'Connection journal of feature nodes'),

@@ -51,7 +51,8 @@ import {
   type MailUnsubscribeWords,
 } from '../../core/human-inbox/walnut-letters/mail-unsubscribe.js'
 import type { MailService, UnsubscribeSubject } from './service.js'
-import type { MailStore } from './store.js'
+import { toSendDto } from './sends.js'
+import type { MailStore, SendRow } from './store.js'
 import { UNSUBSCRIBE_RECLAIM_MS, type UnsubscribeRow } from './store-write.js'
 import {
   fetchUnsubscribe,
@@ -59,6 +60,7 @@ import {
   type UnsubscribeHttpSeam,
 } from './unsubscribe-http.js'
 import { parseUnsubscribeMailto } from './unsubscribe-mailto.js'
+import { assertOutwardDoor, isPermitRefusal, leaderPermitActive, onceOutwardDoorsOpened } from '../../core/leader/switch/doors.js'
 import { unsubscribeSentence, unsubscribeVerdict } from './unsubscribe-verdict.js'
 
 export { UNSUBSCRIBE_DEADLINE_MS, UNSUBSCRIBE_RECLAIM_MS }
@@ -254,6 +256,11 @@ export interface UnsubscribeApprovals {
     onMinted?: (send: SendDto) => void,
     approvalRef?: string,
   ): Promise<{ send: SendDto; draft: DraftDto }>
+  /**
+   * Whether the mail reconcile still sends this `approved` row that never started (a send queued
+   * at its door). Absent: it does not (an older harness, or no permit), and the row is reclaimable.
+   */
+  resumesApproved?(send: SendRow): boolean
 }
 
 export interface MailUnsubscribeDeps {
@@ -322,8 +329,13 @@ export class MailUnsubscribe {
     const subject = await this.deps.service.unsubscribeSubject(accountId, messageId)
     const method = this.chooseRung(subject, request.method)
 
+    // The outward door before the claim: a refusal takes no ledger row, so nothing waits on a lock.
+    if (leaderPermitActive()) assertOutwardDoor('mail-unsubscribe', `${subject.accountId}:${subject.messageId}`)
     const startedAt = this.now
-    const claimed = await this.deps.store.write.claimUnsubscribe({
+    // A mailto attempt's row is settled from its send first, and never reclaimed while that mail
+    // may still go out: a second click would mint a second mail.
+    const mailStillOut = await this.settleHeldMailto(subject.accountId, subject.messageId)
+    const claimed = mailStillOut ? 0 : await this.deps.store.write.claimUnsubscribe({
       accountId: subject.accountId,
       messageId: subject.messageId,
       listKey: subject.listKey,
@@ -622,6 +634,13 @@ export class MailUnsubscribe {
       return work
     }
     const sendId = mintedSend.sendId
+    // The send id goes on the claimed row now (status and `at` unchanged), so the row settles from
+    // its send whenever that settles (onSendSettled, settleHeldMailto), not only from this
+    // continuation: a send queued at its door goes out later, through the mail reconcile.
+    await this.deps.store.write.settleUnsubscribe({
+      accountId: subject.accountId, messageId: subject.messageId, claimedAt,
+      status: 'in-flight', method: 'mailto', ref: sendId, now: claimedAt,
+    }).catch(() => 0)
     // `authority.ref ?? sendId` at the CALL SITE, not inside `settle`: a letter id is what a later answer
     // finds this row by, so it has to win, and the send id is the trace link that is worth having when
     // there is no letter. Deciding it here keeps `settle` one statement with one meaning.
@@ -680,6 +699,43 @@ export class MailUnsubscribe {
       detail: `the unsubscribe mail is ${send.state}`,
       ref: send.sendId,
     })
+  }
+
+  /**
+   * A send settled (MailSends, `send-settled`): when it is a mailto rung's unsubscribe mail, its
+   * ledger row settles with it. Never throws.
+   */
+  async onSendSettled(sendId: string, state: string): Promise<void> {
+    if (state !== 'sent' && state !== 'failed' && state !== 'unknown') return
+    try {
+      const row = await this.deps.store.write.unsubscribeByRef(sendId)
+      if (row?.status !== 'in-flight' || row.method !== 'mailto') return
+      await this.settleHeldMailto(row.account_id, row.message_id)
+    } catch (error) {
+      this.deps.log.warn('mail could not settle an unsubscribe from its mail', { sendId, error: reasonOf(error).slice(0, 200) })
+    }
+  }
+
+  /**
+   * The row of a mailto attempt still `in-flight`, settled from its send's final state. True while
+   * that mail may still go out: `sending`, or `approved` and still sent by the mail reconcile
+   * (resumesApproved). An `approved` row nothing sends any more is not out, so the row stays
+   * reclaimable, as it always was.
+   */
+  private async settleHeldMailto(accountId: string, messageId: string): Promise<boolean> {
+    const row = await this.deps.store.write.getUnsubscribe(accountId, messageId)
+    if (row?.status !== 'in-flight' || row.method !== 'mailto' || !row.ref) return false
+    const send = await this.deps.store.write.getSend(row.ref)
+    if (!send) return false
+    if (send.state === 'sending') return true
+    if (send.state === 'approved') return this.deps.approvals.resumesApproved?.(send) ?? false
+    await this.settle(
+      { accountId: row.account_id, messageId: row.message_id, listKey: row.list_key },
+      row.at,
+      this.sendOutcome(toSendDto(send)),
+      row.ref,
+    )
+    return false
   }
 
   /**
@@ -755,7 +811,7 @@ export class MailUnsubscribe {
    * not whichever writer happened to be last.
    */
   private async settle(
-    subject: UnsubscribeSubject,
+    subject: Pick<UnsubscribeSubject, 'accountId' | 'messageId' | 'listKey'>,
     claimedAt: number,
     outcome: UnsubscribeOutcome,
     /** What authorised this attempt, when it was not a console click: the letter id. */
@@ -975,6 +1031,16 @@ export class MailUnsubscribe {
           : outcome.message,
       )
     } catch (error) {
+      if (isPermitRefusal(error)) {
+        // Refused before the claim (this machine does not hold the write permission): nothing
+        // was done and nothing went wrong, so no reply. The answer is carried out once the
+        // permission arrives.
+        this.deps.log.info('mail unsubscribe answer waits for the write permission', {
+          letterId: answer.letterId, messageId: row.message_id,
+        })
+        onceOutwardDoorsOpened(`mail-unsubscribe:${answer.letterId}`, () => { void this.onLetterAnswered(answer) })
+        return true
+      }
       const said = (w: MailUnsubscribeWords) => error instanceof MailServiceError
         ? error.message
         : w.couldNot(String(error).slice(0, 300))

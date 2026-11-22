@@ -182,6 +182,19 @@ export class OpBook {
     ;(sent ? this.wantNotSent : this.wantSent).delete(id)
   }
 
+  /**
+   * A planned stop: every op whose registration a majority took from this process and whose send
+   * it never began is surely not sent (it sends only through beginSend, and never acts again), so
+   * it is reported 'not-sent' instead of being left for the next holder as unknown. Only those: an
+   * id whose registration did not reach a majority may collide with an earlier holder's
+   * registration this process never heard of, and a 'not-sent' would overwrite that entry. (One
+   * that did reach a majority cannot: the two majorities share a witness, which refuses the second.)
+   */
+  abandonUnbegun(): void {
+    for (const id of [...this.mine]) if (!this.done.has(id)) this.askOutcome(id, false)
+    this.wantRegister.clear()
+  }
+
   /** What the next proposal carries, or undefined when nothing is waiting. */
   changes(): OpChanges | undefined {
     const c: OpChanges = {}

@@ -27,6 +27,7 @@ import {
   onTopicMailArrivals, topicMailTransport,
   type TopicMailIncoming, type TopicMailSendOutcome, type TopicMailTransport,
 } from './topic-mail-port.js'
+import { doorsClosed, isPermitRefusal } from '../leader/switch/doors.js'
 import { createTopicMailState, lineKey, memberKey, pruneState, type TopicMailState } from './topic-mail-state.js'
 import { claimTopicMail, postClaimedMails, releaseTopicMailClaims, type TopicMailClaim } from './topic-mail-inbound.js'
 import { canonicalMessageId, INVITE_CONTEXT_LINES, topicMailBody, topicMailSubject } from './topic-mail-text.js'
@@ -293,6 +294,12 @@ export function createTopicMailBridge(deps: TopicMailBridgeDeps): TopicMailBridg
         ...(thread ? { inReplyTo: thread, references } : {}),
       })
     } catch (error) {
+      if (isPermitRefusal(error)) {
+        // This machine lost the write permission before the send: nothing went out, so the marker
+        // goes and the lines wait for the next pass (on whichever server may send), not a failure.
+        await deps.state.update((state) => { delete (state.members[key] ??= {}).pending })
+        return
+      }
       // Refused before anything went out (no account, a draft the plugin would not take).
       await failed(topic, member, reason(error))
       return
@@ -309,6 +316,9 @@ export function createTopicMailBridge(deps: TopicMailBridgeDeps): TopicMailBridg
       toldHeld = true
       return
     }
+    // Like the held server above: a machine without the write permission skips the pass silently,
+    // and the server holding it mails these lines at its own next pass.
+    if (doorsClosed()) return
     const t = deps.transport()
     let accounts: Awaited<ReturnType<TopicMailTransport['accounts']>> | null = null
     let owner: string | null = null

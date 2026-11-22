@@ -33,8 +33,9 @@
  */
 
 import {
-  FIRE_BUDGET_WINDOW_MS, MAX_FIRES_PER_DAY_DEFAULT, isHostDelivery,
+  FIRE_BUDGET_WINDOW_MS, MAX_FIRES_PER_DAY_DEFAULT, fireMessageId, isHostDelivery,
 } from '../../providers/trigger-check-core.js';
+import { leaderPermitActive, outwardDoorRefusal } from '../leader/switch/doors.js';
 import type {
   HostDelivery, TriggerCheckedEvent, TriggerClaimReply, TriggerEvent, TriggerFiredEvent,
 } from '../../providers/trigger-check-core.js';
@@ -317,6 +318,15 @@ async function deliverFires(host: string, batch: TriggerFiredEvent[]): Promise<v
   const head = batch[0];
   if (!head) return;
   const seqs = batch.map((e) => e.seq);
+  // The outward door again, at delivery: claimFire asked it when the fire arrived, and the
+  // permission may have gone since. A refused batch is not acked: the daemon replays it.
+  if (leaderPermitActive()) {
+    const refused = outwardDoorRefusal('trigger-fire', fireMessageId(head.id, head.epoch, seqs));
+    if (refused) {
+      log.cron.info('trigger.fired left for the daemon to replay: this server may not deliver it now', { host, jobId: head.id, seqs, why: refused });
+      return;
+    }
+  }
   const service = await resolveService();
   if (!service) {
     // Deliberately NOT acked: the daemon keeps it in pendingFires and replays it
@@ -351,7 +361,6 @@ async function deliverFires(host: string, batch: TriggerFiredEvent[]): Promise<v
     }
     const { runExecutor } = await import('./registry.js');
     // The same fires get the same id on every try: delivered before a restart lost the mark, the session keeps one.
-    const { fireMessageId } = await import('../../providers/trigger-check-core.js');
     return await runExecutor(job, job.executor, message, { messageId: fireMessageId(job.id, head.epoch, fresh.map((e) => e.seq)) });
   }, { fromHost: await clockOwnerAlias(host, head) });
   // A clock run left for the daemon's replay is never acked (clock-fire.ts `held`).
@@ -499,6 +508,12 @@ async function unrecordedHostTrigger(id: string): Promise<boolean> {
 const recordedHostTriggers = new Set<string>();
 
 async function claimFire(host: string, event: TriggerFiredEvent): Promise<FireVerdict> {
+  // The outward door, before any claim: a machine without the write permission neither claims
+  // nor acks, so the daemon replays the fire to whichever server holds it.
+  if (leaderPermitActive()) {
+    const refused = outwardDoorRefusal('trigger-fire', fireMessageId(event.id, event.epoch, [event.seq]));
+    if (refused) return { kind: 'wait', reason: refused };
+  }
   if (isHostDelivery(event.host)) return { kind: 'host', host: event.host };
   if (await unrecordedHostTrigger(event.id)) return { kind: 'wait', reason: 'created on its host while this server was away; not recorded yet' };
   return claimBatched(host, event);

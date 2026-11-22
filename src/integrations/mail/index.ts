@@ -239,6 +239,9 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     store, service, events, drafts, approvals, letters: walnut.letters, log: walnut.log, asksPerson,
     recordUnasked: (what) => recordUnasked('mailUnsubscribe', { what }),
   })
+  // An unsubscribe mail's ledger row settles with its send, however late that is (a send queued at
+  // its door goes out through the reconcile).
+  events.onSendSettled((event) => { void unsubscribe.onSendSettled(event.sendId, event.state) })
   // Everything that deletes, in one place, so a read path cannot reach a delete by accident.
   const retention = new MailRetention({
     store,

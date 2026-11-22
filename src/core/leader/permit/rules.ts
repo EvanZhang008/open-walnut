@@ -3,7 +3,7 @@
  * whether a set of timing parameters is safe for the assumed clock drift.
  */
 import type { PermitParams, PermitProgress, PermitRecord } from './types.js'
-import { MAX_CLOCK_MARK_LENGTH, majorityOf, nextConfigId, sameList } from './types.js'
+import { MAX_CLOCK_MARK_LENGTH, NO_HOLDER, majorityOf, nextConfigId, sameList } from './types.js'
 import { applyOps, ledgerError, opChangesError, registrationConflict, type HeldOp } from './ops.js'
 
 /** What one witness holds. `acceptedAt` is on the witness's own elapsed clock. */
@@ -73,9 +73,12 @@ export function checkTiming(p: PermitParams): void {
   if (!(p.backoffBaseMs > 0) || p.backoffMaxMs < p.backoffBaseMs) throw new Error('permit timing: backoffBaseMs must be positive and at most backoffMaxMs')
 }
 
-/** The witness still keeps its record for that record's holder. */
+/**
+ * The witness still keeps its record for that record's holder. A release is a hold that is
+ * already over: its writer stopped acting before it sent it, and never acts again.
+ */
 export function holdsForHolder(s: WitnessState, now: number, p: PermitParams): boolean {
-  return !!s.held && now < s.acceptedAt + witnessHoldMs(p)
+  return !!s.held && s.held.kind !== 'release' && now < s.acceptedAt + witnessHoldMs(p)
 }
 
 /** The witness would accept a grant to another machine now. */
@@ -93,6 +96,8 @@ function shapeError(r: PermitRecord, p: PermitParams): string | null {
   if (!Number.isSafeInteger(r.number) || r.number < 1) return 'bad-number'
   if (r.validMs !== p.validMs) return 'bad-validity'
   if (typeof r.nonce !== 'string' || r.nonce.length === 0) return 'bad-nonce'
+  // No machine id is empty: the empty holder is the release's "nobody" (NO_HOLDER).
+  if (typeof r.by !== 'string' || r.by.length === 0) return 'bad-holder'
   if (!uniqueList(r.list) || typeof r.cfg !== 'string' || r.cfg.length === 0) return 'bad-list'
   if (!Number.isSafeInteger(r.epoch) || r.epoch < 0) return 'bad-epoch'
   if (r.progress && (!Number.isSafeInteger(r.progress.seq) || !Number.isFinite(r.progress.writtenAt) || (r.progress.by !== undefined && r.progress.by !== r.by))) {
@@ -102,7 +107,8 @@ function shapeError(r: PermitRecord, p: PermitParams): string | null {
   // The clock mark only informs: a kind this witness does not know yet (a newer holder) is
   // taken, so an upgrade never splits holders from older witnesses; only a malformed one is not.
   if (r.clock !== undefined && (typeof r.clock !== 'string' || r.clock.length === 0 || r.clock.length > MAX_CLOCK_MARK_LENGTH)) return 'bad-clock'
-  if (r.ops !== undefined && (r.kind !== 'renew' || opChangesError(r.ops))) return 'bad-ops'
+  // A release carries outcomes only: its writer never sends again, so it registers nothing.
+  if (r.ops !== undefined && (!(r.kind === 'renew' || (r.kind === 'release' && !r.ops.register)) || opChangesError(r.ops))) return 'bad-ops'
   if (r.ledger !== undefined && (r.kind !== 'members' || ledgerError(r.ledger))) return 'bad-ledger'
   if (r.pairBy !== undefined && (r.kind !== 'members' || r.stage !== 'final' || !uniqueList(r.pairBy))) return 'bad-evidence'
   switch (r.kind) {
@@ -113,6 +119,8 @@ function shapeError(r: PermitRecord, p: PermitParams): string | null {
       return r.from === r.by && r.to === r.holder && !!r.to && r.to !== r.from ? null : 'bad-handover'
     case 'cancel':
       return r.from === r.by && r.holder === r.by ? null : 'bad-cancel'
+    case 'release':
+      return r.from === r.by && r.holder === NO_HOLDER && r.to === undefined ? null : 'bad-release'
     case 'members':
       // Both steps of a change are judged by both lists: `joint` is the new list.
       if (r.holder !== r.by || !uniqueList(r.newList) || !sameList(r.joint, r.newList)) return 'bad-members'
@@ -194,7 +202,9 @@ function ownLive(h: PermitRecord, r: PermitRecord): boolean {
  * number must be above what it holds, and the record must follow what it holds:
  * the permission changes hands only by a grant once the old record ran out here
  * (plus margin), or by a handover its holder wrote; a cancel stands only on its own
- * handover or on its writer's live record.
+ * handover or on its writer's live record. A release, from the same writer as a handover,
+ * gives it to nobody: the witness holds nothing for anyone from then on (holdsForHolder), so
+ * a grant is taken at once, and a renew, handover or cancel on it is refused.
  *
  * The witness list changes in two steps (joint consensus). A `members` record of stage
  * `joint` moves a witness from the old list to the pair (old, new): from then on it
@@ -247,6 +257,10 @@ export function judge(s: WitnessState, self: string, r: PermitRecord, now: numbe
       const onOwnLive = !!h && live && ownLive(h, r)
       return onOwnHandover || onOwnLive ? accept() : { ok: false, reason: 'nothing-to-cancel' }
     }
+    case 'release':
+      // As a handover: only on the writer's own live record, same incarnation. A witness that
+      // holds another holder's record (or a handover) keeps holding it for them.
+      return h && live && ownLive(h, r) ? accept() : { ok: false, reason: 'not-holder' }
   }
 }
 

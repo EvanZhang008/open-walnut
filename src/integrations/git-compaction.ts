@@ -19,6 +19,7 @@ import {
   git, gitSafe, gitAsync, isOwnRepoAt, setCompactionInProgress, compactionInProgress, clearStaleLock, waitForSyncSettled,
 } from './git-sync.js';
 import { pushViaBundle } from './git-bundle-client.js';
+import { leaderPermitActive, outwardDoorRefusal } from '../core/leader/switch/doors.js';
 import { log } from '../logging/index.js';
 
 // ---------------------------------------------------------------------------
@@ -599,6 +600,16 @@ export function markCompactionDone(repoDir = WALNUT_HOME): void {
     new Date().toISOString(),
     'utf-8',
   );
+}
+
+/**
+ * The outward door of a compaction, asked by the server BEFORE it forks the worker: the run ends
+ * in a force push of rewritten history (step 7), and the worker is another process that holds no
+ * permission to ask. A machine without the write permission skips the run (null: it may start);
+ * the daily timer tries again, and the one that leads compacts.
+ */
+export function compactionDoorRefusal(): string | null {
+  return leaderPermitActive() ? outwardDoorRefusal('git-push', 'compaction') : null;
 }
 
 /**

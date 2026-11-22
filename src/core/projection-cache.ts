@@ -33,6 +33,7 @@ import { PROJECTION_CACHE_DIR, TRANSCRIPT_CACHE_DIR, WALNUT_HOME } from '../cons
 import { writeJsonFile } from '../utils/fs.js';
 import { log } from '../logging/index.js';
 import { isFollower } from './server-role.js';
+import { leaderPermitActive, outwardDoorRefusal } from './leader/switch/doors.js';
 import * as ingest from './cloud-ingest.js';
 import {
   INGEST_LANE, SELF_HEAL_INTERVAL_MS, alreadyHeld, forgetDelivery, noteUnread, preparePush, rememberDelivery, unreadResting,
@@ -338,6 +339,13 @@ async function pushViaBridge(
   payload: unknown,
   bridgeConnId: () => Promise<string | null>,
 ): Promise<ProjectionPushOutcome> {
+  // The outward door (the ingest lane asks it in cloud-ingest.ts): a server without the write
+  // permission uploads nothing; the periodic sweep of one that may send heals the gap.
+  if (leaderPermitActive() && outwardDoorRefusal('companion-upload', `bridge:${kind}`)) {
+    forgetDelivery(key);
+    if (kind === 'transcript-upsert') notePendingTranscriptPush(payload);
+    return 'failed';
+  }
   const { getConnectedDaemonConnection } = await import('../providers/daemon-connection.js');
   const conn = getConnectedDaemonConnection('__local__');
   if (!conn || !conn.hasCapability('mobile-event')) {

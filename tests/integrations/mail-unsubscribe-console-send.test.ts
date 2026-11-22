@@ -32,6 +32,7 @@ import { MailStore } from '../../src/integrations/mail/store.js';
 import type { DraftRow, SendRow } from '../../src/integrations/mail/store.js';
 import type { UnsubscribeRow } from '../../src/integrations/mail/store-write.js';
 import { MailUnsubscribe, unsubscribeApprovalRef } from '../../src/integrations/mail/unsubscribe.js';
+import { isPermitRefusal, setOutwardDoorChecker } from '../../src/core/leader/switch/doors.js';
 import {
   UNSUBSCRIBE_MAILTO_RECLAIM_MS, UNSUBSCRIBE_RECLAIM_MS,
 } from '../../src/integrations/mail/store-write.js';
@@ -155,6 +156,8 @@ async function openHarness(): Promise<Harness> {
     log,
     now: () => clock.at,
   });
+  // As index.ts wires it: an unsubscribe mail's row settles with its send.
+  mailEvents.onSendSettled((event) => { void unsubscribe.onSendSettled(event.sendId, event.state) });
 
   await store.upsertAccount({
     accountId: ACCOUNT,
@@ -174,6 +177,7 @@ async function openHarness(): Promise<Harness> {
 beforeEach(() => { vi.restoreAllMocks() });
 
 afterEach(async () => {
+  setOutwardDoorChecker(null);
   for (const db of open.splice(0)) await db.dispose().catch(() => undefined);
   for (const root of roots.splice(0)) await fsp.rm(root, { recursive: true, force: true }).catch(() => undefined);
 });
@@ -499,5 +503,172 @@ describe('a ledger key that was already spent (`unfreezeAfterSpentKey`)', () => 
     // rule stated from the other side: the KIND decides, and a console send has no thread whatever its
     // ref says. The letter-kinded mint lives behind `onLetterAnswered`.
     expect(one.letters.reply).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The write permission (switchable_leader): the door refuses from its `from`-th check on (0:
+ * every check). Returns the checks asked, as `kind opId`.
+ */
+function refuseDoors(from = 0): string[] {
+  const asked: string[] = [];
+  setOutwardDoorChecker((kind, opId) => {
+    asked.push(`${kind} ${opId}`);
+    if (asked.length > from) {
+      throw Object.assign(new Error('this machine does not hold the write permission'), { name: 'PermitNotHeld' });
+    }
+  }, () => false);
+  return asked;
+}
+
+describe('a machine without the write permission sends nothing', () => {
+  it('a console send is refused before the draft changes: no ledger row, nothing on the wire', async () => {
+    const one = await openHarness();
+    const draft = await one.drafts.create({
+      accountId: ACCOUNT, to: [{ address: 'friend@example.invalid' }], subject: 'Hello', bodyMarkdown: 'Hi.',
+    });
+    const asked = refuseDoors();
+    const refused = await one.approvals.consoleSend(draft.draftId, draft.revision).catch((error: unknown) => error);
+    expect(isPermitRefusal(refused)).toBe(true);
+    expect(asked).toEqual([`mail-send ${draft.draftId}:${draft.revision}`]);
+    expect(one.sent).toEqual([]);
+    expect(await sendRows(one)).toEqual([]);
+    const after = (await draftRows(one)).find((row) => row.draft_id === draft.draftId)!;
+    expect({ state: after.state, revision: after.revision }).toEqual({ state: draft.state, revision: draft.revision });
+
+    // The same send on the machine that may act goes out once.
+    setOutwardDoorChecker(null);
+    await one.approvals.consoleSend(draft.draftId, draft.revision);
+    expect(one.sent).toHaveLength(1);
+  });
+
+  it('the backstop in execute refuses before the attempt is claimed: the send is queued, and the reconcile sends the row once the doors open', async () => {
+    const one = await openHarness();
+    const draft = await one.drafts.create({
+      accountId: ACCOUNT, to: [{ address: 'friend@example.invalid' }], subject: 'Hello', bodyMarkdown: 'Hi.',
+    });
+    // consoleSend and mintAndSend pass; the permission is gone by execute (the ledger row is
+    // written between them, with no door of its own). The caller is answered with the queued row.
+    const asked = refuseDoors(2);
+    const queued = await one.approvals.consoleSend(draft.draftId, draft.revision);
+    expect(queued.send).toMatchObject({ state: 'approved' });
+    expect(asked).toHaveLength(3);
+    expect(one.sent).toEqual([]);
+    const rows = await sendRows(one);
+    expect(rows.map((row) => row.state)).toEqual(['approved']);
+    expect(rows[0]!.attempted_at ?? null).toBeNull();
+
+    // Past the grace window, still without the permission: the reconcile neither sends nor unfreezes.
+    const later = Date.now() + 3 * 60_000;
+    vi.spyOn(Date, 'now').mockReturnValue(later);
+    await one.approvals.reconcile();
+    expect(one.sent).toEqual([]);
+    expect((await draftRows(one)).find((row) => row.draft_id === draft.draftId)?.state).toBe('approved');
+
+    // With it, the human's Send goes out, once.
+    setOutwardDoorChecker(() => {}, () => true);
+    expect(await one.approvals.reconcile()).toMatchObject({ resumed: 1 });
+    expect(one.sent).toHaveLength(1);
+    expect((await sendRows(one)).map((row) => row.state)).toEqual(['sent']);
+    await one.approvals.reconcile();
+    expect(one.sent).toHaveLength(1);
+  });
+
+  it('a mailto unsubscribe refused at the send door is queued: its row settles done when the mail goes, and a click 10 min later mints nothing', async () => {
+    const one = await openHarness();
+    await one.service.ingestPage(ACCOUNT, [mailtoOnly()]);
+    // The unsubscribe door, consoleSend and mintAndSend pass; execute's begin is refused.
+    const asked = refuseDoors(3);
+    await one.unsubscribe.run(ACCOUNT, MESSAGE);
+    await one.unsubscribe.whenMailtoSendsSettle();
+    expect(asked).toHaveLength(4);
+    expect(one.sent).toEqual([]);
+    expect((await ledgerRow(one))?.status).toBe('in-flight');
+    expect((await sendRows(one)).map((row) => row.state)).toEqual(['approved']);
+
+    // The doors open: the reconcile sends the queued mail, and the unsubscribe row settles with it.
+    setOutwardDoorChecker(() => {}, () => true);
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 3 * 60_000);
+    expect(await one.approvals.reconcile()).toMatchObject({ resumed: 1 });
+    expect(one.sent).toHaveLength(1);
+    await vi.waitFor(async () => expect((await ledgerRow(one))?.status).toBe('done'));
+
+    // Past the mailto reclaim window, a second click mints no second mail.
+    one.clock.at += 11 * 60_000;
+    const again = await one.unsubscribe.run(ACCOUNT, MESSAGE);
+    await one.unsubscribe.whenMailtoSendsSettle();
+    expect(again).toMatchObject({ status: 'conflict', conflict: 'already' });
+    expect(one.sent).toHaveLength(1);
+    expect(await sendRows(one)).toHaveLength(1);
+  });
+
+  it('a mailto unsubscribe whose mail is still queued is never reclaimed, and one settled while nobody listened is read from its send', async () => {
+    const one = await openHarness();
+    await one.service.ingestPage(ACCOUNT, [mailtoOnly()]);
+    refuseDoors(3);
+    await one.unsubscribe.run(ACCOUNT, MESSAGE);
+    await one.unsubscribe.whenMailtoSendsSettle();
+    expect((await sendRows(one)).map((row) => row.state)).toEqual(['approved']);
+
+    // Still queued (the doors stay closed) 11 minutes on: a click reclaims nothing and mints nothing.
+    one.clock.at += 11 * 60_000;
+    // Only the send door is closed; the unsubscribe door passes, so the click reaches the ledger.
+    setOutwardDoorChecker((kind) => {
+      if (kind === 'mail-send') throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' });
+    }, () => false);
+    const queued = await one.unsubscribe.run(ACCOUNT, MESSAGE);
+    expect(queued).toMatchObject({ status: 'conflict', conflict: 'in-flight' });
+    expect(await draftRows(one)).toHaveLength(1);
+    expect(one.sent).toEqual([]);
+
+    // The mail goes out with no listener (a restart, say): the next click reads its send and says done.
+    vi.spyOn(one.unsubscribe, 'onSendSettled').mockResolvedValue(undefined);
+    setOutwardDoorChecker(() => {}, () => true);
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 3 * 60_000);
+    expect(await one.approvals.reconcile()).toMatchObject({ resumed: 1 });
+    expect(one.sent).toHaveLength(1);
+    expect((await ledgerRow(one))?.status).toBe('in-flight');
+    one.clock.at += 11 * 60_000;
+    const done = await one.unsubscribe.run(ACCOUNT, MESSAGE);
+    expect(done).toMatchObject({ status: 'conflict', conflict: 'already' });
+    expect((await ledgerRow(one))?.status).toBe('done');
+    expect(one.sent).toHaveLength(1);
+    expect(await draftRows(one)).toHaveLength(1);
+  });
+
+  it('an answered unsubscribe letter refused at the door is carried out once the doors open, with no error reply', async () => {
+    const one = await openHarness();
+    await one.service.ingestPage(ACCOUNT, [mailtoOnly()]);
+    const doors = await import('../../src/core/leader/switch/doors.js');
+    refuseDoors();
+    // The ledger row a letter names (requestFromAgent writes it); only its message is read here.
+    vi.spyOn(one.store.write, 'unsubscribeByRef')
+      .mockResolvedValue({ account_id: ACCOUNT, message_id: MESSAGE } as UnsubscribeRow);
+    const run = vi.spyOn(one.unsubscribe, 'run');
+    expect(await one.unsubscribe.onLetterAnswered({ letterId: 'lt-unsub', actionId: 'unsubscribe' } as never)).toBe(true);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(one.letters.reply).not.toHaveBeenCalled();
+    setOutwardDoorChecker(null);
+    run.mockResolvedValue({ status: 'done', method: 'mailto', at: one.clock.at, message: 'Done.' } as never);
+    doors.notifyOutwardDoorsOpened();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(one.letters.reply).toHaveBeenCalledTimes(1));
+  });
+
+  it('a mailto unsubscribe is refused before its ledger claim', async () => {
+    const one = await openHarness();
+    await one.service.ingestPage(ACCOUNT, [mailtoOnly()]);
+    const asked = refuseDoors();
+    const refused = await one.unsubscribe.run(ACCOUNT, MESSAGE).catch((error: unknown) => error);
+    expect(isPermitRefusal(refused)).toBe(true);
+    expect(asked).toEqual([`mail-unsubscribe ${ACCOUNT}:${MESSAGE}`]);
+    expect(await ledgerRow(one)).toBeUndefined();
+    expect(await draftRows(one)).toEqual([]);
+    expect(one.sent).toEqual([]);
+
+    setOutwardDoorChecker(null);
+    await one.unsubscribe.run(ACCOUNT, MESSAGE);
+    await one.unsubscribe.whenMailtoSendsSettle();
+    expect(one.sent).toHaveLength(1);
   });
 });

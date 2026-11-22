@@ -13,6 +13,7 @@
  * failed push.
  */
 import { log } from '../../logging/index.js';
+import { assertOutwardDoor, leaderPermitActive } from '../leader/switch/doors.js';
 import type { IntegrationSync } from '../integration-types.js';
 import type { Task } from '../types.js';
 import { matchPrivateWords } from './private-words.js';
@@ -61,6 +62,32 @@ export const LOCAL_ONLY_TASK_METHODS: Readonly<Record<string, string>> = {
 
 /** A project deletion's task list: the tasks Walnut keeps local are left out (nothing of them is sent). */
 export const TASK_LIST_METHODS = new Set<string>(['deleteProjectRemote']);
+
+/**
+ * Every IntegrationSync method, by what it does to the plugin's service, for the outward door
+ * (src/core/leader/switch/doors.ts): a `write` changes something there and passes the door
+ * first; a `read` only reads it (a pull writes into Walnut, through its context); a `local`
+ * runs in Walnut and reaches no service. The type lists every method, so a new one does not
+ * compile until it is placed (and tests/core/leader/switch/outward-doors-ratchet.test.ts reads
+ * the interface for it too).
+ */
+export const SYNC_METHOD_DOORS: Readonly<Record<keyof IntegrationSync, 'write' | 'read' | 'local'>> = {
+  createTask: 'write', deleteTask: 'write', pushTask: 'write',
+  updateTitle: 'write', updateDescription: 'write', updateSummary: 'write', updateNote: 'write',
+  updateConversationLog: 'write', updatePriority: 'write', updatePhase: 'write', updateDueDate: 'write',
+  updateProject: 'write', updateDependencies: 'write',
+  associateSubtask: 'write', disassociateSubtask: 'write',
+  renameProjectRemote: 'write', deleteProjectRemote: 'write',
+  // Retries a remote delete (Graph DELETE): a write.
+  confirmRemoteDeleted: 'write',
+  syncPoll: 'read', fullPull: 'read',
+  // A new task's defaults: may read the service, sends nothing of the task.
+  prepareNewTask: 'read',
+  validateContent: 'local', contentRequirement: 'local', mergePulledTags: 'local',
+  extractRemoteId: 'local', extractRemoteIdAliases: 'local',
+};
+
+const writesOut = (prop: string): boolean => (SYNC_METHOD_DOORS as Record<string, string>)[prop] === 'write';
 
 const isTask = (v: unknown): v is Task => !!v && typeof v === 'object' && typeof (v as Task).id === 'string' && 'source' in (v as object);
 
@@ -171,15 +198,31 @@ export function guardSync(pluginId: string, sync: IntegrationSync): IntegrationS
       if (prop === GUARDED) return true;
       const value = Reflect.get(target, prop, receiver);
       if (typeof prop !== 'string' || typeof value !== 'function') return value;
+      // The outward door, before anything reaches the plugin: a machine without the write
+      // permission changes nothing at the plugin's service. The push paths stamp the task for the
+      // sync loop's retry (task-manager.ts); a remote delete stays pending in the ledger.
+      const door = (args: unknown[]) => {
+        if (leaderPermitActive() && writesOut(prop)) {
+          assertOutwardDoor('task-sync', `${pluginId}:${prop}:${isTask(args[0]) ? args[0].id : ''}`);
+        }
+      };
       if (TASK_LIST_METHODS.has(prop)) {
         return async (args: { tasks?: unknown[] } & Record<string, unknown>, ...rest: unknown[]) => {
+          door([]);
           const tasks = Array.isArray(args?.tasks) ? args.tasks.filter((t) => !(isTask(t) && (t.source === 'local' || t.sync_hold))) : args?.tasks;
           return (value as (...a: unknown[]) => unknown).apply(target, [{ ...args, tasks }, ...rest]);
         };
       }
-      if (!TASK_ARG_METHODS.has(prop)) return value;
+      if (TASK_ARG_METHODS.has(prop)) {
+        return async (...args: unknown[]) => {
+          door(args);
+          await check(pluginId, prop, args);
+          return (value as (...a: unknown[]) => unknown).apply(target, args);
+        };
+      }
+      if (!writesOut(prop)) return value;
       return async (...args: unknown[]) => {
-        await check(pluginId, prop, args);
+        door(args);
         return (value as (...a: unknown[]) => unknown).apply(target, args);
       };
     },

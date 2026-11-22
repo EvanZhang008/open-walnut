@@ -227,6 +227,7 @@ describe('the manifest against the backup\'s excluded dirs (src/core/backup/scan
    */
   const KNOWN: Record<string, string> = {
     'cache.applied-ops': 'the offline-merge ledger: in cache/ so git sync skips it',
+    'cache.leader-op-outcomes': 'outcomes of outward ops the witnesses reported: in cache/ so git sync skips it',
     'cache.status-riding': 'queue state of what rides the next message: in cache/ so git sync skips it',
     'cache.status-reconcile': 'the asks already made: in cache/ so git sync skips it',
     'cache.task-dir-size-notices': 'notices already given: in cache/ so git sync skips it',

@@ -16,10 +16,11 @@ a majority of two). A record is `{ number, kind, holder, by, nonce, from, to, va
 
 | kind | written by | gives the permission to | a witness takes it when |
 |---|---|---|---|
-| `grant` | the asker | the asker | the record it holds ran out on its own clock, plus `witnessMarginMs` |
+| `grant` | the asker | the asker | the record it holds ran out on its own clock, plus `witnessMarginMs`, or is a release |
 | `renew` | the holder | the holder | it still holds the holder's record, written by the same incarnation (or a handover to it) |
 | `handover` | the holder | `to` | it still holds the holder's record of the same incarnation (not a handover) |
 | `cancel` | the old holder | the old holder | it holds that incarnation's handover, or its live record |
+| `release` | the holder, on a planned stop | nobody (`holder` is `NO_HOLDER`, the empty id) | as a handover: it still holds the holder's record of the same incarnation (not a handover); from then on it holds nothing for anyone (below) |
 | `members` | the holder (or anyone, as a grant) | the writer | as a renew, or as a grant once the record ran out; it changes the witness list in two steps (below) |
 
 Every witness takes only a number above the one it holds, so a duplicate, a replay or a late
@@ -47,7 +48,7 @@ server started beside the first, or one restarted while the old one still runs) 
 holder, and waits for the permission to run out like any other machine. So two processes of one
 machine can never both hold it (the random schedules run two processes per machine; with one
 shared incarnation they go red). A restarted process therefore waits out its old permission
-before it holds again.
+before it holds again, unless the old process released it on a planned stop (below).
 
 A machine acts only on a record of its **own** that a majority of the **fixed** list accepted,
 never a majority of whoever answered. It counts that record for `validMs - holderMarginMs` from
@@ -116,6 +117,85 @@ still shows my old record" is not enough, since the handover may be half written
 and a cancel cannot both stand: at the witness both majorities share, whichever came first
 blocks the other (a cancel never stands on the new holder's renew, and the new holder's renew
 never stands on a cancel).
+
+## Planned stop: release
+
+Since a witness takes a renew only from the incarnation that wrote its record, a restarted server
+waits until its previous process's record ran out at the witnesses (`validMs + witnessMarginMs`,
+62 s by default) before it may act. Production redeploys several times an hour, and mail, pushes
+and timers would stop for a minute each time. So a planned stop (a deploy, a restart) hands the
+permission back first:
+
+1. `release()` makes `mayAct()` false at once and for good, before the record leaves (as the
+   handover's freeze). That client never acts again and proposes nothing but its release
+   (`renew()` is null, `repairChange()` does nothing, the other proposals throw). It returns
+   null, and changes nothing, when there is nothing to hand back: no record of this incarnation
+   gives it the permission (never held, superseded, stopped before it released), or a handover
+   is open (the permission is on its way to `to`). A permission that ran out on the holder's
+   clock is still released (a witness may hold it a little longer); one that ran out at the
+   witnesses too is refused there, harmlessly.
+2. The `release` record gives the permission to nobody (`holder` is `NO_HOLDER`, `from` the
+   releaser), and carries the op outcomes reported since the last renew, and `not-sent` for the
+   ops it registered and never began (below).
+3. The process resends it (`release()` again) to the witnesses that have not taken it, and exits
+   once `released()` is `'stood'` (a majority took it) or after a short cap (3 s), whichever
+   comes first. Witnesses that do not answer never hold up a deploy: a release that did not stand
+   leaves the record to run out, as after a crash.
+
+**The witness rule.** A witness takes a release only on the live record of the same machine and
+incarnation, never on a handover (the handover's rule). Holding it, its hold is already over
+(`holdsForHolder` is false, `grantable` true, after a restart too): a grant from anyone is taken
+at once, from the next process of the same machine or another machine, and a renew, handover,
+cancel or second release on it is refused. A list change step is taken on it as on a record that
+ran out.
+
+**Why it is safe.** A grant still needs a majority of the fixed list, and each witness of that
+majority either ran out on its own clock (as before) or holds a release. A witness holds a release
+only if it came from the incarnation whose live record it held, and that incarnation stopped
+acting before it sent it and never acts again. A release cannot free a witness that holds another
+holder's record (it refuses it, and keeps holding for that holder). A release that reached a
+minority frees only that minority: the others still hold the live record until it runs out, so
+no majority forms before then, and the next process waits as after a crash. A release that
+arrives late is refused: after a later record by its number, and in any case unless the witness
+still holds its writer's own live record (a later holder's record, or a hold that ran out,
+leaves nothing of the writer's to hand back). The random schedules also stop processes that do
+not act (one whose lease ran out on its clock but was never cleared, a twin, one just
+superseded): a witness that took a release on any live record lets such a process free the
+next holder's witnesses (negative control below).
+
+Why the releaser stops before it sends: a release stands at a witness the moment that witness has
+it on disk, and a candidate that reads a majority of them can be granted before the releaser hears
+the answers. A releaser that acted until it saw its release stand acts beside that candidate
+(negative control (a) below).
+
+**Op ids.** A release carries the outcomes reported and not yet carried (`sent`, `not-sent`), as a
+renew does, so outcomes reported before the stop are not lost (one reported after `release()`
+rides nothing). It also reports `not-sent` for every op whose registration a majority took from
+this process and whose send it never began (`beginSend`): it never sends again, so those surely
+never left, and the next holder need not list them as unknown. Not an id whose registration
+reached no majority: an earlier holder may have registered it at witnesses this process never
+heard, and `not-sent` would overwrite that entry. A witness refuses a release that carries a
+registration: its writer never sends again. An op whose send was still in flight at the stop
+stays `registered` at the witnesses: the next holder reads it as `unknown`, never sends it again,
+and lists it for the user, as after a crash.
+
+**What must end before the release.** The release ends the margin `assertMayAct` promised (15 s
+or more left when an action passed it): the next holder may act about 2 s after the release. So
+the wiring calls `release()` only once nothing of the process acts: it closes its doors (no new
+`assertMayAct` passes), lets the actions in flight end (the op-id sends, within about a second,
+and reports their outcomes), then releases. The next server of the same home cannot start before
+the old process exited (the instance lock), so what remains is work that outlives the process's
+control: a detached child process, a job on another daemon. Nothing here covers it (no action
+token): stop such work before the release, or do not release and let the record run out.
+
+**The next process.** It needs nothing of its own: it reads, a majority answers `grantable` (so
+`mayAskForTakeover` passes; the release carries the last progress stamp), and it asks for a grant,
+which the witnesses take at once. A standing record of kind `release` means "free". With the
+default parameters a named case has the next process hold about 2.0 s after the release (the
+grant back-off drawn at its longest, 2 s, then a read and a grant on a 5 ms network), against
+62 s after a crash. The back-off is for candidates that see it free at the same instant; it is
+liveness only, so a wiring that wants the machine's own next process first may skip it after its
+own machine's release.
 
 ## Changing the witness list
 
@@ -204,7 +284,7 @@ the send ends in time either. So before a send the holder registers its op id wi
 (`registerOps(ids)`: a renew carrying `ops.register`; ids only, never content) and sends only
 once `assertMaySend(opId)` passes: the permission as `assertMayAct`, and the registration taken
 by a majority. Afterwards it reports the outcome (`reportOutcome(opId, sent)`, carried on the
-next renew); `sent: false` only when the send surely never left. Use `beginSend(opId)` for the
+next renew, or on the release of a planned stop); `sent: false` only when the send surely never left. Use `beginSend(opId)` for the
 send itself: it is `assertMaySend` plus a mark that this process started it, so a second call
 throws. What this process began or reported stays in its memory for its whole life, so it
 never sends one op twice, even after the witnesses dropped the entry.
@@ -279,19 +359,39 @@ holds within a minute in each of 30 runs.
 `tests/core/leader/permit/`: a simulated world (one real timeline; each node its own clock with
 drift, offset, wall jumps and sleeps; a network that delays, drops, duplicates and reorders;
 witnesses that crash and restart from their file). `model-check.test.ts` (slow tier) runs about
-1,300 seeded 15-minute schedules (some with witnesses swapped in and out of the list, some with
+1,750 seeded 15-minute schedules (some with witnesses swapped in and out of the list, some with
 the holder restarting mid-renew or mid-change, some with five witnesses and change steps arriving
-minutes late, some with two processes per machine, some sending outward ops) against two
-invariants: at no real instant do two processes both have `mayAct()` true, and no op id is sent
-by two processes. Negative controls each remove one safety part (the margins, the fsync before
-the answer, the wall clock in the holder's clock, the fixed-list majority, waiting for the
-registration, the ledger on list changes, the incarnation, the holder writing down an outcome it
-read) and must find a violation. Each wake of a sleeping machine is an event of its own, so the
+minutes late, some with two processes per machine, some sending outward ops, some with planned
+stops) against two invariants: at no real instant do two processes both have `mayAct()` true,
+and no op id is sent by two processes. In the planned-stop schedules the process that acts
+releases about every 1 to 2.5 minutes and exits (once its release stood, or after 3 s), and as
+often any other process does (one whose lease ran out but was never cleared, a twin, one just
+superseded), as do half the machines that sleep or are cut off, the instant they wake or the cut
+heals (in half the splits the other machines also lose the witness the cut machine keeps, so the
+next holder never sees the numbers it goes on renewing there); the next process of its machine
+starts, and every other machine asks too; the release reaches every witness,
+only a majority, or only one; they run with fast candidates and no back-off, with two processes
+per machine, with op sends and crashes, and across list changes, and most full releases must be
+taken over within 10 s (not vacuous). Negative controls each remove one safety part (the margins,
+the fsync before the answer, the wall clock in the holder's clock, the fixed-list majority,
+waiting for the registration, the ledger on list changes, the incarnation, the holder writing
+down an outcome it read, the releaser stopping before it sends, a new process waiting for a
+majority after a release, a witness taking a release only on its writer's own live record) and
+must find a violation. The last one goes red rarely in random schedules (1 of 200 split
+schedules): a process whose lease ran out stops proposing, so its numbers stay below the next
+holder's record and the number check refuses its release first, unless the next holder never saw
+the witness it kept. A named case builds that schedule and goes red every time. Each wake of a sleeping machine is an event of its own, so the
 invariant is checked at the instant it wakes.
 `named-cases.test.ts` holds the named schedules of the first brief (the split, the 90 s sleep, a
 witness killed between accepting and answering, clocks 30 s off and 1% fast or slow, the drift
 bound's edge, late renews, a holder restarting mid-renew, the handover and cancel race, one
-witness reachable, the list change). `ops.test.ts`, `change-repair.test.ts`, `instance.test.ts`
+witness reachable, the list change) and the planned stop: the next process holds about 2 s after
+the release, after a crash it waits for the witness hold, and after a release that reached one
+witness of three it waits for the hold too (its negative control: a process that takes it on that
+one witness acts beside the next holder); and a process whose lease ran out but was never cleared
+releasing over the next holder's lower-numbered record (refused; its negative control, witnesses
+that take a release on any live record, lets a third machine act beside the holder).
+`units.test.ts` holds the release's witness rule and the client's side of it. `ops.test.ts`, `change-repair.test.ts`, `instance.test.ts`
 and `system-clock.test.ts` hold the op ids, the final-step evidence and the repair, the back-off,
 the two processes and the instance lock, and the clocks.
 
@@ -309,6 +409,9 @@ the two processes and the instance lock, and the clocks.
   goes to the user's inbox. The core and its simulated sends are built; no send path calls it.
 - **Wiring the instance lock** at the server's boot (its path under the Walnut's local data)
   and its `onLost` to the client's `stop()` and the process's exit.
+- **Wiring the release** into the server's planned stop: close the outward doors, let the sends
+  in flight end and report them, `release()`, resend until `released()` is `'stood'` or 3 s
+  passed, exit (giving up the instance lock); and treat a standing `release` as free at boot.
 - The old holder's handover flag survives only in memory: a restarted process comes back with
   no permission and waits it out, which is safe (its records carry a new incarnation), but the
   manual-switch flow must keep its own "switch in progress" state on disk.

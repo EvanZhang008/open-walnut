@@ -44,6 +44,7 @@ import {
   deleteTask,
   mergeTaskInto,
   findTaskByExtId,
+  markOldCopyMoved,
 } from '../../src/core/task-manager.js';
 import {
   closeDb,
@@ -399,5 +400,63 @@ describe('D. deleting a duplicate never damages the survivor', () => {
     expect(link?.task_id).toBe('t-keep');
     expect(deleteTaskHook).not.toHaveBeenCalled();
     expect((await listTasks()).filter((t) => t.source === SOURCE).map((t) => t.id)).toEqual(['t-keep']);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// E. A remote delete refused at the outward door (leader switch) is not lost
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('E. a remote delete on a machine without the write permission', () => {
+  afterEach(async () => {
+    (await import('../../src/core/leader/switch/doors.js')).setOutwardDoorChecker(null);
+  });
+
+  it('E1: sends nothing, keeps the tombstone unconfirmed, and deletes the remote copy once the doors open', async () => {
+    const doors = await import('../../src/core/leader/switch/doors.js');
+    await addTasksBulk([makeTask('t-held', 'R-HELD')]);
+    recordRemoteLink({ source: SOURCE, remoteId: 'R-HELD', taskId: 't-held', remoteList: 'list-A', state: 'owned' });
+    let open = false;
+    doors.setOutwardDoorChecker(() => {
+      if (!open) throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' });
+    }, () => open);
+
+    await deleteTask('t-held');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(deleteTaskHook).not.toHaveBeenCalled();
+    expect(getRemoteLink(SOURCE, 'R-HELD')).toMatchObject({ state: 'deleted' });
+    expect(getRemoteLink(SOURCE, 'R-HELD')?.remote_delete_confirmed).toBeFalsy();
+
+    open = true;
+    doors.notifyOutwardDoorsOpened();
+    await vi.waitFor(() => expect(deleteTaskHook).toHaveBeenCalledTimes(1));
+    expect((deleteTaskHook.mock.calls[0][0] as Task).id).toBe('t-held');
+    // Once: a second opening sends nothing more.
+    doors.notifyOutwardDoorsOpened();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(deleteTaskHook).toHaveBeenCalledTimes(1);
+  });
+
+  it('E2: a cross-source move refused at the door marks the old copy moved once the doors open', async () => {
+    const doors = await import('../../src/core/leader/switch/doors.js');
+    let open = false;
+    const refuse = () => { if (!open) throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' }); };
+    const calls: string[] = [];
+    const sync = {
+      updateTitle: vi.fn(async (_t: Task, title: string) => { refuse(); calls.push(`title ${title}`); }),
+      updatePhase: vi.fn(async (_t: Task, phase: string) => { refuse(); calls.push(`phase ${phase}`); }),
+    } as unknown as import('../../src/core/integration-types.js').IntegrationSync;
+    doors.setOutwardDoorChecker(refuse, () => open);
+    const snapshot = makeTask('t-moved', 'R-OLD');
+
+    await markOldCopyMoved(sync, snapshot, '[Moved] x');
+    expect(calls).toEqual([]);
+
+    open = true;
+    doors.notifyOutwardDoorsOpened();
+    await vi.waitFor(() => expect(calls).toEqual(['title [Moved] x', 'phase COMPLETE']));
+    doors.notifyOutwardDoorsOpened();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls).toHaveLength(2);
   });
 });

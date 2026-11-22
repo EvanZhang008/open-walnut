@@ -21,7 +21,8 @@
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { notifyOutwardDoorsOpened, setOutwardDoorChecker } from '../../src/core/leader/switch/doors.js'
 import { PluginDatabaseClient } from '../../src/core/plugins/plugin-storage.js'
 import { MailBodyStore } from '../../src/integrations/mail/bodies.js'
 import { MAIL_MIGRATIONS, MailDatabase } from '../../src/integrations/mail/db.js'
@@ -164,6 +165,30 @@ afterEach(async () => {
   rig.engine.dispose()
   await rig.db.dispose().catch(() => undefined)
   await fsp.rm(rig.dir, { recursive: true, force: true })
+})
+
+describe('a server without the write permission (leader switch)', () => {
+  afterEach(() => { setOutwardDoorChecker(null) })
+
+  it('moves nothing and counts no attempt; once the doors open the run is scheduled and the mail moves', async () => {
+    let open = false
+    setOutwardDoorChecker(() => {
+      if (!open) throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' })
+    }, () => open)
+    await rig.service.ingestPage(MARINA, [mail(2, T0 + MINUTE)])
+    await rig.mover.runNow()
+    expect(rig.archived).toEqual([])
+    expect(await ledger('INBOX:1:2')).toMatchObject({ status: 'queued', attempts: 0 })
+    expect(await rowIds()).toEqual(['INBOX:1:2'])
+
+    open = true
+    const schedule = vi.spyOn(rig.mover, 'schedule')
+    notifyOutwardDoorsOpened()
+    expect(schedule).toHaveBeenCalledWith(0)
+    await rig.mover.runNow()
+    expect(rig.archived).toEqual([['INBOX:1:2']])
+    expect(await ledger('INBOX:1:2')).toMatchObject({ status: 'moved', attempts: 0, moves: 1 })
+  })
 })
 
 describe('arrival', () => {

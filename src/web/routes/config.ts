@@ -754,6 +754,14 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       res.status(403).json({ error: 'Only you, at this computer, can change where backups go (Settings, Backup).', code: 'person_at_this_machine' })
       return
     }
+    // The switchable leader's machines name the command that starts a server and its
+    // witnesses decide who may write (core/leader/switch/): only the person at this machine
+    // changes them. A write that carries the section back unchanged is fine.
+    if (body.leader_switch !== undefined && !isPersonAtThisMachine(req)
+      && JSON.stringify(writeConfigSection('leader_switch', storedConfig.leader_switch, body.leader_switch, sections) ?? {}) !== JSON.stringify(storedConfig.leader_switch ?? {})) {
+      res.status(403).json({ error: 'Only you, at this computer, can change the leader switch\'s machines and witnesses (config.yaml leader_switch).', code: 'person_at_this_machine' })
+      return
+    }
     // `companion` names the cloud companion (replication/companion-keep.ts): a host saved
     // under it would take the companion's keep choice. One already there stays.
     if (body.hosts && typeof body.hosts === 'object' && !Array.isArray(body.hosts)) {

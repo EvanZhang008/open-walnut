@@ -247,6 +247,21 @@ describe('what reaches the lead without a message from anyone', () => {
       { emitEvent: true, source: 'status-report' })
     await until('the worker waits on its lead', async () => (await getTask(hose)).user_status?.kind === 'lead')
     _resetTeamNoteClaimsForTesting()
+    // Without the write permission (leader switch) no session is woken and the note stays untold.
+    const doors = await import('../../src/core/leader/switch/doors.js')
+    const asked: string[] = []
+    doors.setOutwardDoorChecker((kind, opId) => {
+      asked.push(`${kind} ${opId}`)
+      throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' })
+    }, () => false)
+    try {
+      expect(await tellLead(leadId)).toBe(false)
+    } finally {
+      doors.setOutwardDoorChecker(null)
+    }
+    expect(asked).toEqual([`session-wake lead-wait:${leadId}`])
+    expect((await getQueue(LEAD_SID)).find((m) => m.message.includes('Waiting on you:'))).toBeUndefined()
+    // With it, the same wake goes, once.
     expect(await tellLead(leadId)).toBe(true)
     const row = (await getQueue(LEAD_SID)).find((m) => m.message.includes('Waiting on you:'))
     expect(row?.message).toContain('"Check the hose"')

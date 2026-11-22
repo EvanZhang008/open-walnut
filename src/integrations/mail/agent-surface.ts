@@ -366,6 +366,21 @@ const DRAFT_REMINDER =
   'Nothing is sent yet. Call mail_request_send with this draftId and revision, and the user gets '
   + 'a letter showing exactly this draft; only their answer sends it.'
 
+/**
+ * What a send with no letter (approvals off) came to, for the agent. A row still `approved` is
+ * QUEUED (approvals.ts runQueued): this server did not hold the write permission, and the server
+ * that does sends it. Drafting it again would reach the recipient twice.
+ */
+function sentWithoutLetter(send: { sendId: string; state: string }): string {
+  if (send.state === 'approved') {
+    return `Approvals are off, and the mail is queued (send ${send.sendId}): this server does not hold the write permission`
+      + ' right now, and it goes out once a server that does sends it. Tell the user it is queued; do not draft or send it again.'
+  }
+  if (send.state === 'sent') return `Approvals are off, so the mail was sent now with no letter to the user (send ${send.sendId}). Tell the user it was sent.`
+  return `Approvals are off, so the mail was attempted now with no letter to the user, and it ended "${send.state}" (send ${send.sendId}).`
+    + ' Tell the user exactly that.'
+}
+
 /** What an edit may change. Anything else on an existing draft is a new draft. */
 const EDITABLE_FIELDS = ['to', 'cc', 'bcc', 'subject', 'bodyMarkdown'] as const
 const FIXED_AT_CREATION = ['account', 'inReplyTo'] as const
@@ -478,7 +493,7 @@ async function patchDraft(
   )
   const again = await deps.approvals.requestSend(draftId, patched.draft.revision)
   if (again.sent) {
-    return `${draftJson(again.draft)}\nThe old letter was withdrawn. Approvals are off, so this revision was sent now (send ${again.sent.sendId}, ${again.sent.state}).`
+    return `${draftJson(again.draft)}\nThe old letter was withdrawn. ${sentWithoutLetter(again.sent)}`
   }
   return `${draftJson(again.draft)}\n`
     + `The user was already looking at a letter for the old text, so that one was withdrawn and a `
@@ -610,7 +625,7 @@ export async function mailRequestSend(deps: MailAgentDeps, input: Record<string,
     const asked = await deps.approvals.requestSend(draftId, revision)
     if (asked.sent) {
       return JSON.stringify({ sendId: asked.sent.sendId, draftId: asked.draft.draftId, revision: asked.draft.revision, state: asked.sent.state })
-        + '\nApprovals are off, so the mail was sent now with no letter to the user. Tell the user it was sent.'
+        + `\n${sentWithoutLetter(asked.sent)}`
     }
     return JSON.stringify({
       letterId: asked.letterId,

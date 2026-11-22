@@ -772,6 +772,230 @@ describe('the console can send without a letter', () => {
   });
 });
 
+describe('a send registers its op id with the witnesses (leader switch)', () => {
+  /**
+   * A permit runtime's door and sender, recording what the send asked. `refuse` makes the begin
+   * refuse like the runtime: an op known already (`opState`, runtime.ts beginSend) or, with
+   * `opState: null`, the permission not held. `onBegin` runs inside a begin that passes.
+   */
+  async function fakePermit(opts: {
+    checker?: boolean;
+    refuse?: { opState: 'sent' | 'not-sent' | 'unknown' | 'sending' | null };
+    onBegin?: (opId: string) => Promise<void>;
+  } = {}) {
+    const doors = await import('../../src/core/leader/switch/doors.js');
+    const seen: string[] = [];
+    const state = { refuse: opts.refuse ?? null };
+    if (opts.checker !== false) doors.setOutwardDoorChecker(() => {}, () => true);
+    else doors.setOutwardDoorChecker(null);
+    doors.setOutwardSender({
+      begin: async (kind, opId) => {
+        seen.push(`begin ${kind} ${opId}`);
+        const refuse = state.refuse;
+        if (refuse?.opState) {
+          throw Object.assign(new Error(`op ${opId} is ${refuse.opState} already: never sent again`), {
+            name: 'PermitNotHeld', opKnown: true, opState: refuse.opState,
+          });
+        }
+        if (refuse) throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' });
+        await opts.onBegin?.(opId);
+      },
+      report: (opId, outcome) => { seen.push(`report ${opId} ${outcome}`); },
+    });
+    return { seen, state, done: () => doors.setOutwardDoorChecker(null) };
+  }
+  const consoleSend = (draftId: string) => api('POST', `/drafts/${draftId}/send`, { revision: 1 });
+  const begins = (seen: string[]) => seen.filter((one) => one.startsWith('begin mail-send mail:'));
+
+  it('a send that goes out begins once with the ledger key and reports sent', async () => {
+    const permit = await fakePermit();
+    try {
+      const draft = await newDraft();
+      await consoleSend(draft.draftId);
+      await expect.poll(async () => (await draftOf(draft.draftId)).state, { timeout: 15_000 }).toBe('sent');
+      const key = `mail:${draft.draftId}:1`;
+      expect(begins(permit.seen)).toEqual([`begin mail-send ${key}`]);
+      expect(permit.seen.filter((one) => one.startsWith(`report ${key}`))).toEqual([`report ${key} sent`]);
+      expect(callsFor(draft.draftId)).toHaveLength(1);
+    } finally {
+      permit.done();
+    }
+  });
+
+  it('a provider failure before any data reports not-sent; an unclear one reports unknown', async () => {
+    const permit = await fakePermit();
+    try {
+      marks().sendMode = 'before-data';
+      const failed = await newDraft();
+      await consoleSend(failed.draftId);
+      await expect.poll(async () => (await draftOf(failed.draftId)).state, { timeout: 15_000 }).toBe('failed');
+      expect(permit.seen).toContain(`report mail:${failed.draftId}:1 not-sent`);
+
+      marks().sendMode = 'after-data';
+      const unclear = await newDraft();
+      await consoleSend(unclear.draftId);
+      await expect.poll(async () => (await draftOf(unclear.draftId)).state, { timeout: 15_000 }).toBe('unknown');
+      expect(permit.seen).toContain(`report mail:${unclear.draftId}:1 unknown`);
+      expect(permit.seen.filter((one) => one.includes(`mail:${unclear.draftId}:1 `) && one.startsWith('report'))).toHaveLength(1);
+    } finally {
+      marks().sendMode = 'ok';
+      permit.done();
+    }
+  });
+
+  it('an op known as sent settles the row sent, one known as not sent settles it failed; neither reaches the provider', async () => {
+    const permit = await fakePermit({ refuse: { opState: 'sent' } });
+    try {
+      const went = await newDraft();
+      await consoleSend(went.draftId);
+      await expect.poll(async () => (await draftOf(went.draftId)).state, { timeout: 15_000 }).toBe('sent');
+      expect(await sendsOf(went.draftId)).toMatchObject([{ revision: 1, state: 'sent' }]);
+
+      permit.state.refuse = { opState: 'not-sent' };
+      const never = await newDraft();
+      await consoleSend(never.draftId);
+      await expect.poll(async () => (await draftOf(never.draftId)).state, { timeout: 15_000 }).toBe('failed');
+      expect((await sendsOf(never.draftId))[0]).toMatchObject({ revision: 1, state: 'failed', error: expect.stringMatching(/did not go out/) });
+      expect([...callsFor(went.draftId), ...callsFor(never.draftId)]).toEqual([]);
+      // Refused begins report nothing: the op's outcome is the witnesses' already.
+      expect(permit.seen.filter((one) => one.startsWith('report'))).toEqual([]);
+    } finally {
+      permit.done();
+    }
+  });
+
+  it('an op an earlier holder left unknown while its row is still approved never went out: failed, and a new Send goes once', async () => {
+    const permit = await fakePermit({ refuse: { opState: 'unknown' } });
+    try {
+      const draft = await newDraft();
+      await consoleSend(draft.draftId);
+      await expect.poll(async () => (await draftOf(draft.draftId)).state, { timeout: 15_000 }).toBe('failed');
+      expect((await sendsOf(draft.draftId))[0]).toMatchObject({
+        revision: 1, state: 'failed', error: expect.stringMatching(/stopped before it started, so it never went out/),
+      });
+      expect(callsFor(draft.draftId)).toEqual([]);
+
+      // The person sends it again: a fresh revision, so a fresh op id, and it goes out once.
+      permit.state.refuse = null;
+      await consoleSend(draft.draftId);
+      await expect.poll(async () => (await draftOf(draft.draftId)).state, { timeout: 15_000 }).toBe('sent');
+      expect(callsFor(draft.draftId).map((one) => one.idempotencyKey)).toEqual([`${draft.draftId}:2`]);
+      expect(begins(permit.seen)).toEqual([`begin mail-send mail:${draft.draftId}:1`, `begin mail-send mail:${draft.draftId}:2`]);
+    } finally {
+      permit.done();
+    }
+  });
+
+  it('an op this process is sending right now leaves the row to that attempt', async () => {
+    const permit = await fakePermit({ refuse: { opState: 'sending' } });
+    try {
+      const draft = await newDraft();
+      await consoleSend(draft.draftId);
+      await expect.poll(async () => (await sendsOf(draft.draftId)).length, { timeout: 15_000 }).toBe(1);
+      expect(await sendsOf(draft.draftId)).toMatchObject([{ revision: 1, state: 'approved' }]);
+      expect(callsFor(draft.draftId)).toEqual([]);
+    } finally {
+      permit.done();
+    }
+  });
+
+  it('a claim that finds the row settled sends nothing and reports the op as the row stands', async () => {
+    let settleAs = 'sent';
+    const permit = await fakePermit({
+      // Another attempt settles the row between the begin and the claim.
+      onBegin: async (opId) => {
+        const draftId = opId.replace(/^mail:/, '').replace(/:\d+$/, '');
+        await runSql("UPDATE sends SET state = ?, attempted_at = ? WHERE draft_id = ?", [settleAs, Date.now(), draftId]);
+      },
+    });
+    try {
+      const went = await newDraft();
+      await consoleSend(went.draftId);
+      await expect.poll(() => permit.seen.filter((one) => one.startsWith(`report mail:${went.draftId}:1`)), { timeout: 15_000 })
+        .toEqual([`report mail:${went.draftId}:1 sent`]);
+      settleAs = 'failed';
+      const never = await newDraft();
+      await consoleSend(never.draftId);
+      await expect.poll(() => permit.seen.filter((one) => one.startsWith(`report mail:${never.draftId}:1`)), { timeout: 15_000 })
+        .toEqual([`report mail:${never.draftId}:1 not-sent`]);
+      expect([...callsFor(went.draftId), ...callsFor(never.draftId)]).toEqual([]);
+    } finally {
+      permit.done();
+    }
+  });
+
+  it('a console Send refused at its last door after the ledger row is answered queued (the row), not "did not act"', async () => {
+    const permit = await fakePermit({ refuse: { opState: null } });
+    try {
+      const draft = await newDraft();
+      const answered = await api<{ send?: SendShape; error?: string }>('POST', `/drafts/${draft.draftId}/send`, { revision: 1 });
+      expect(answered.status).toBe(200);
+      expect(answered.body.send).toMatchObject({ revision: 1, state: 'approved' });
+      expect(callsFor(draft.draftId)).toEqual([]);
+    } finally {
+      permit.done();
+    }
+  });
+
+  it('a request-send with approvals off, refused after its ledger row, answers queued, and the reconcile sends it exactly once', async () => {
+    const before = process.env.WALNUT_APPROVALS_ASK;
+    process.env.WALNUT_APPROVALS_ASK = '0';
+    const { _resetAskMeLatchForTesting } = await import('../../src/core/approvals/ask-me.js');
+    _resetAskMeLatchForTesting();
+    const permit = await fakePermit({ refuse: { opState: null } });
+    try {
+      const draft = await newDraft({ subject: 'Queued while not the leader' });
+      const asked = await requestSend(draft) as { status: number; body: { letterId?: string; sent?: SendShape; error?: string } };
+      expect(asked.status).toBe(200);
+      expect(asked.body.sent).toMatchObject({ revision: 1, state: 'approved' });
+      expect(callsFor(draft.draftId)).toEqual([]);
+
+      // The doors open: the reconcile sends it, once, under the same key.
+      permit.state.refuse = null;
+      await runSql('UPDATE drafts SET updated_at = ? WHERE draft_id = ?', [Date.now() - 3 * 60_000, draft.draftId]);
+      await mailSyncForTesting()!.runTick({});
+      await expect.poll(async () => (await draftOf(draft.draftId)).state, { timeout: 15_000 }).toBe('sent');
+      await mailSyncForTesting()!.runTick({});
+      expect(callsFor(draft.draftId).map((one) => one.idempotencyKey)).toEqual([`${draft.draftId}:1`]);
+      expect(await sendsOf(draft.draftId)).toMatchObject([{ revision: 1, state: 'sent' }]);
+    } finally {
+      permit.done();
+      if (before === undefined) delete process.env.WALNUT_APPROVALS_ASK; else process.env.WALNUT_APPROVALS_ASK = before;
+      _resetAskMeLatchForTesting();
+    }
+  });
+
+  it('a console Send refused before its approval leaves the draft editable at once', async () => {
+    const doors = await import('../../src/core/leader/switch/doors.js');
+    // consoleSend's own door passes, mintAndSend's (before the approval) refuses.
+    let passes = 1;
+    doors.setOutwardDoorChecker((kind) => {
+      if (kind === 'mail-send' && passes-- <= 0) throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' });
+    }, () => false);
+    try {
+      const draft = await newDraft();
+      const refused = await api<{ error?: string }>('POST', `/drafts/${draft.draftId}/send`, { revision: 1 });
+      expect(refused.status).toBe(503);
+      expect((await draftOf(draft.draftId)).state).toBe('composing');
+      expect(await sendsOf(draft.draftId)).toEqual([]);
+    } finally {
+      doors.setOutwardDoorChecker(null);
+    }
+  });
+
+  it('with the experiment off (no checker) the sender is never asked', async () => {
+    const permit = await fakePermit({ checker: false });
+    try {
+      const draft = await newDraft();
+      await consoleSend(draft.draftId);
+      await expect.poll(async () => (await draftOf(draft.draftId)).state, { timeout: 15_000 }).toBe('sent');
+      expect(permit.seen).toEqual([]);
+    } finally {
+      permit.done();
+    }
+  });
+});
+
 describe('a send that failed before the transport took any data', () => {
   it('is `failed`, says so, and a retry asks again for a new revision', async () => {
     marks().sendMode = 'before-data';
@@ -1010,6 +1234,72 @@ describe('recovering a draft nobody could finish', () => {
     ).toBe('withdrawn');
     expect((await threadTexts(letterId)).join(' ')).toContain('Nothing was sent');
     expect(callsFor(draft.draftId)).toEqual([]);
+  });
+
+  it('a Send refused at the last door (the permission lost after the ledger row) goes out once the doors open', async () => {
+    const doors = await import('../../src/core/leader/switch/doors.js');
+    const draft = await newDraft();
+    const asked = await requestSend(draft);
+    // The first door (before the approval) passes; the backstop in sends.execute refuses.
+    let passes = 1;
+    doors.setOutwardDoorChecker((kind) => {
+      if (kind === 'mail-send' && passes-- <= 0) throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' });
+    }, () => passes > 0);
+    try {
+      expect(await answer(asked.body.letterId!, 'send')).toBe(200);
+      await expect.poll(async () => (await sendsOf(draft.draftId)).length, { timeout: 15_000 }).toBe(1);
+      expect(await sendsOf(draft.draftId)).toMatchObject([{ revision: 1, state: 'approved' }]);
+      expect((await draftOf(draft.draftId)).state).toBe('approved');
+      expect(callsFor(draft.draftId)).toEqual([]);
+
+      // Still closed: the reconcile leaves it waiting, sends nothing and unfreezes nothing.
+      await runSql('UPDATE drafts SET updated_at = ? WHERE draft_id = ?', [Date.now() - 3 * 60_000, draft.draftId]);
+      await mailSyncForTesting()!.runTick({});
+      expect((await draftOf(draft.draftId)).state).toBe('approved');
+      expect(callsFor(draft.draftId)).toEqual([]);
+
+      // Open: the reconcile runs the approved row, once.
+      passes = Infinity;
+      await mailSyncForTesting()!.runTick({});
+      await expect.poll(async () => (await draftOf(draft.draftId)).state, { timeout: 15_000 }).toBe('sent');
+      await mailSyncForTesting()!.runTick({});
+      expect(callsFor(draft.draftId).map((one) => one.idempotencyKey)).toEqual([`${draft.draftId}:1`]);
+      expect(await sendsOf(draft.draftId)).toMatchObject([{ revision: 1, state: 'sent' }]);
+    } finally {
+      doors.setOutwardDoorChecker(null);
+    }
+  });
+
+  it('an approved row that never started is left alone with the experiment off, and not sent a day late with it on', async () => {
+    const doors = await import('../../src/core/leader/switch/doors.js');
+    const draft = await newDraft();
+    const asked = await requestSend(draft);
+    let passes = 1;
+    doors.setOutwardDoorChecker((kind) => {
+      if (kind === 'mail-send' && passes-- <= 0) throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' });
+    }, () => passes > 0);
+    try {
+      expect(await answer(asked.body.letterId!, 'send')).toBe(200);
+      await expect.poll(async () => (await sendsOf(draft.draftId)).length, { timeout: 15_000 }).toBe(1);
+      await runSql('UPDATE drafts SET updated_at = ? WHERE draft_id = ?', [Date.now() - 3 * 60_000, draft.draftId]);
+
+      // Experiment off (no permit guards this process): the reconcile leaves the row as it always did.
+      doors.setOutwardDoorChecker(null);
+      await mailSyncForTesting()!.runTick({});
+      expect(await sendsOf(draft.draftId)).toMatchObject([{ revision: 1, state: 'approved' }]);
+      expect((await draftOf(draft.draftId)).state).toBe('approved');
+
+      // On, open, but the approval is over a day old: failed, nothing sent, the letter says so.
+      doors.setOutwardDoorChecker(() => {}, () => true);
+      await runSql('UPDATE sends SET created_at = ? WHERE draft_id = ?', [Date.now() - 25 * 60 * 60_000, draft.draftId]);
+      await mailSyncForTesting()!.runTick({});
+      await expect.poll(async () => (await draftOf(draft.draftId)).state, { timeout: 15_000 }).toBe('failed');
+      expect((await sendsOf(draft.draftId))[0]).toMatchObject({ state: 'failed', error: expect.stringMatching(/more than a day ago/) });
+      await expect.poll(async () => (await threadTexts(asked.body.letterId!)).join(' '), { timeout: 15_000 }).toContain('more than a day ago');
+      expect(callsFor(draft.draftId)).toEqual([]);
+    } finally {
+      doors.setOutwardDoorChecker(null);
+    }
   });
 
   it('resumes a letter that was answered while nothing was listening, and leaves an unanswered one alone', async () => {

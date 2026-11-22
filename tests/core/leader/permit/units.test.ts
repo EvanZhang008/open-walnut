@@ -7,7 +7,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  DEFAULT_PERMIT_PARAMS, PermitClient, PermitNotHeld, PermitWitness, bootstrapWitnessStore, checkTiming,
+  DEFAULT_PERMIT_PARAMS, NO_HOLDER, PermitClient, PermitNotHeld, PermitWitness, bootstrapWitnessStore, checkTiming, grantable,
   DISTRUST_STEP_MS, createFilePermitStore, createHolderClock, encodeStored, judge, mayAskForTakeover, maxSafeDrift,
   genesisConfigId, generationToJoin, prepareJoiningWitness, type PermitRecord, type PermitReply, type PermitRequest, type WitnessState,
 } from '../../../../src/core/leader/permit/index.js'
@@ -137,6 +137,57 @@ describe('judge: what a witness accepts', () => {
   })
 })
 
+describe('judge: a release', () => {
+  const release = (number: number, by: string, extra: Partial<PermitRecord> = {}) => rec(number, 'release', by, { holder: NO_HOLDER, from: by, ...extra })
+  const holding = (h: PermitRecord, acceptedAt = 0): WitnessState => ({ ...empty, held: h, acceptedAt })
+  const after = (j: ReturnType<typeof judge>) => (j as { next: WitnessState }).next
+
+  it('comes only from the holder of the live record, same incarnation, and is a hold already over', () => {
+    const s = holding(rec(1, 'grant', 'A'))
+    expect(judge(s, 'w1', release(2, 'B'), 1, P)).toEqual({ ok: false, reason: 'not-holder' })
+    expect(judge(s, 'w1', release(2, 'A', { nonce: 'n2' }), 1, P)).toEqual({ ok: false, reason: 'not-holder' })
+    // After the hold ran out it is refused like a renew (nothing to hand back).
+    expect(judge(s, 'w1', release(2, 'A'), P.validMs + P.witnessMarginMs, P)).toEqual({ ok: false, reason: 'not-holder' })
+    const r = judge(s, 'w1', release(2, 'A'), 1, P)
+    expect(r.ok).toBe(true)
+    // One millisecond later another machine's grant is taken, not 62 s later.
+    expect(grantable(after(r), 'w1', 2, P)).toBe(true)
+    expect(judge(after(r), 'w1', rec(3, 'grant', 'B'), 2, P).ok).toBe(true)
+    // And the next process of the same machine (a new incarnation) too.
+    expect(judge(after(r), 'w1', rec(3, 'grant', 'A', { nonce: 'n2' }), 2, P).ok).toBe(true)
+  })
+
+  it('a renew, handover, cancel or second release on it is refused, from its writer too', () => {
+    const s = after(judge(holding(rec(1, 'grant', 'A')), 'w1', release(2, 'A'), 1, P))
+    expect(judge(s, 'w1', rec(3, 'renew', 'A'), 2, P)).toEqual({ ok: false, reason: 'not-holder' })
+    expect(judge(s, 'w1', rec(3, 'handover', 'A', { from: 'A', to: 'B', holder: 'B' }), 2, P)).toEqual({ ok: false, reason: 'not-holder' })
+    expect(judge(s, 'w1', rec(3, 'cancel', 'A', { from: 'A' }), 2, P)).toEqual({ ok: false, reason: 'nothing-to-cancel' })
+    expect(judge(s, 'w1', release(3, 'A'), 2, P)).toEqual({ ok: false, reason: 'not-holder' })
+    // A witness that restarts with the release on disk holds nothing for anyone either.
+    expect(grantable({ ...s, acceptedAt: 1_000_000 }, 'w1', 1_000_000, P)).toBe(true)
+  })
+
+  it('is refused on a handover (the permission is on its way to its new holder) and on another holder\'s record', () => {
+    const ho = rec(2, 'handover', 'A', { from: 'A', to: 'B', holder: 'B' })
+    expect(judge(holding(ho), 'w1', release(3, 'A'), 1, P)).toEqual({ ok: false, reason: 'not-holder' })
+    expect(judge(holding(rec(3, 'renew', 'B')), 'w1', release(4, 'A'), 1, P)).toEqual({ ok: false, reason: 'not-holder' })
+    // On the holder's own cancel it is taken (that is its live record again).
+    expect(judge(holding(rec(3, 'cancel', 'A', { from: 'A' })), 'w1', release(4, 'A'), 1, P).ok).toBe(true)
+  })
+
+  it('carries outcomes, never a registration; gives the permission to nobody', () => {
+    const s = holding(rec(1, 'grant', 'A'))
+    expect(judge(s, 'w1', release(2, 'A', { ops: { register: ['op1'] } }), 1, P)).toEqual({ ok: false, reason: 'bad-ops' })
+    const r = judge(s, 'w1', release(2, 'A', { ops: { sent: ['op1'], notSent: ['op2'] } }), 1, P)
+    expect(r.ok && r.next.ops.map((e) => [e.id, e.state])).toEqual([['op1', 'sent'], ['op2', 'not-sent']])
+    expect(judge(s, 'w1', release(2, 'A', { holder: 'A' }), 1, P)).toEqual({ ok: false, reason: 'bad-release' })
+    expect(judge(s, 'w1', release(2, 'A', { from: 'B' }), 1, P)).toEqual({ ok: false, reason: 'bad-release' })
+    expect(judge(s, 'w1', release(2, 'A', { to: 'B' }), 1, P)).toEqual({ ok: false, reason: 'bad-release' })
+    // No machine is named by the empty id: a grant or renew by it is malformed.
+    expect(judge(empty, 'w1', rec(1, 'grant', NO_HOLDER), 0, P)).toEqual({ ok: false, reason: 'bad-holder' })
+  })
+})
+
 describe('timing parameters', () => {
   it('the defaults are safe for their assumed drift, and the safe bound is (W-L)/(W+L)', () => {
     expect(() => checkTiming(P)).not.toThrow()
@@ -247,25 +298,39 @@ describe('mayAskForTakeover', () => {
   })
 })
 
-describe('assertMayAct', () => {
-  function holder() {
-    let t = 0
-    const replies: Array<() => void> = []
-    const witnesses = W.map((id) => {
-      const store = new SimStore()
-      bootstrapWitnessStore(store, W)
-      return new PermitWitness({ id, store, clock: { now: () => t }, params: P })
-    })
+/** A client of machine `id` on three witnesses with one shared clock; replies wait for flush(). */
+function holderSetup(id = 'A') {
+  let t = 0
+  const replies: Array<() => void> = []
+  const witnesses = W.map((wid) => {
+    const store = new SimStore()
+    bootstrapWitnessStore(store, W)
+    return new PermitWitness({ id: wid, store, clock: { now: () => t }, params: P })
+  })
+  /** `reach`: the witnesses a proposal gets to (all by default). */
+  let reach: string[] = W
+  /** A transport whose send throws (a socket that broke under it). */
+  let throwing = false
+  const client = (cid: string): PermitClient => {
     const c: PermitClient = new PermitClient({
-      id: 'A', list: W, params: P, clock: { now: () => t },
-      transport: { send: (w: string, req: PermitRequest) => { const r = witnesses.find((x) => x.id === w)!.handle(req); replies.push(() => c.receive(r)) } },
+      id: cid, list: W, params: P, clock: { now: () => t },
+      transport: { send: (w: string, req: PermitRequest) => {
+        if (req.type === 'propose' && !reach.includes(w)) return
+        if (throwing && req.type === 'propose') throw new Error('EPIPE')
+        const r = witnesses.find((x) => x.id === w)!.handle(req)
+        replies.push(() => c.receive(r))
+      } },
     })
-    const flush = () => { while (replies.length) replies.shift()!() }
-    return { c, flush, at: (ms: number) => { t = ms } }
+    return c
   }
+  const c = client(id)
+  const flush = () => { while (replies.length) replies.shift()!() }
+  return { c, client, witnesses, flush, at: (ms: number) => { t = ms }, reachOnly: (ws: string[]) => { reach = ws }, failSends: (on: boolean) => { throwing = on } }
+}
 
+describe('assertMayAct', () => {
   it('passes with enough left, refuses with under minSendRemainingMs, and refuses during a handover', () => {
-    const h = holder()
+    const h = holderSetup()
     expect(() => h.c.assertMayAct('op-1')).toThrow(PermitNotHeld)
     h.c.requestGrant()
     h.flush()
@@ -278,6 +343,155 @@ describe('assertMayAct', () => {
     h.c.handover('B')
     expect(h.c.mayAct()).toBe(false)
     expect(() => h.c.assertMayAct('op-3')).toThrow(/handover/)
+  })
+})
+
+describe('PermitClient.release', () => {
+  function holding() {
+    const h = holderSetup()
+    h.c.requestGrant()
+    h.flush()
+    expect(h.c.mayAct()).toBe(true)
+    return h
+  }
+
+  it('stops acting before the release leaves, for good; the next process takes a grant at once', () => {
+    const h = holding()
+    h.at(10_000)
+    const r = h.c.release()!
+    expect(r).toMatchObject({ kind: 'release', holder: NO_HOLDER, from: 'A', by: 'A', nonce: h.c.incarnation() })
+    // No answer has come back yet: it does not act already.
+    expect(h.c.mayAct()).toBe(false)
+    expect(() => h.c.assertMayAct('op')).toThrow(/planned stop/)
+    expect(h.c.released()).toBe('open')
+    h.flush()
+    expect(h.c.released()).toBe('stood')
+    expect(h.c.mayAct()).toBe(false)
+    // It proposes nothing else, ever; asking again only returns the same record.
+    expect(h.c.renew()).toBeNull()
+    expect(() => h.c.requestGrant()).toThrow(/released/)
+    expect(() => h.c.handover('B')).toThrow(/released/)
+    expect(h.c.release()).toBe(r)
+    // The next process of A, 1 ms later.
+    h.at(10_001)
+    const next = h.client('A')
+    next.read()
+    h.flush()
+    expect(next.standing()).toMatchObject({ kind: 'release', from: 'A' })
+    next.requestGrant()
+    h.flush()
+    expect(next.mayAct()).toBe(true)
+  })
+
+  it('a send that throws: it stays released (not acting, the record kept), and asking again resends it', () => {
+    const h = holding()
+    h.failSends(true)
+    expect(() => h.c.release()).toThrow(/EPIPE/)
+    expect(h.c.mayAct()).toBe(false)
+    expect(h.c.released()).toBe('open')
+    h.failSends(false)
+    expect(h.c.release()!.kind).toBe('release')
+    h.flush()
+    expect(h.c.released()).toBe('stood')
+  })
+
+  it('returns null and changes nothing when it holds nothing, or while a handover is open', () => {
+    const h = holderSetup()
+    expect(h.c.release()).toBeNull()
+    expect(h.c.released()).toBeNull()
+    h.c.requestGrant()
+    h.flush()
+    h.c.handover('B')
+    expect(h.c.release()).toBeNull()
+    expect(h.c.released()).toBeNull()
+  })
+
+  it('carries the outcomes reported before it, never a registration', () => {
+    const h = holding()
+    h.c.registerOps(['op1'])
+    h.flush()
+    h.c.beginSend('op1')
+    h.c.reportOutcome('op1', true)
+    // op2's registration never reached a majority: it is not sent, and the release does not carry it.
+    h.reachOnly([])
+    h.c.registerOps(['op2'])
+    h.reachOnly(W)
+    const r = h.c.release()!
+    expect(r.ops).toEqual({ sent: ['op1'] })
+    h.flush()
+    for (const w of h.witnesses) expect(w.handle({ type: 'read' }).ops).toEqual([{ id: 'op1', state: 'sent', by: 'A', nonce: h.c.incarnation() }])
+  })
+
+  it('reports not-sent for ops a majority registered that it never began, and nothing for one whose registration reached no majority', () => {
+    const h = holding()
+    h.c.registerOps(['begun', 'idle'])
+    h.flush()
+    h.c.beginSend('begun')
+    // 'pending' reached one witness only: an earlier holder might hold it elsewhere, so it is left alone.
+    h.reachOnly(['w1'])
+    h.c.registerOps(['pending'])
+    h.flush()
+    h.reachOnly(W)
+    const r = h.c.release()!
+    expect(r.ops).toEqual({ notSent: ['idle'] })
+    expect(h.c.opStatus('idle')).toBe('not-sent')
+    expect(h.c.opStatus('begun')).toBe('sending')
+    h.flush()
+    const next = h.client('A')
+    next.read()
+    h.flush()
+    expect(next.opStatus('idle')).toBe('not-sent')
+    // A send that began and was never reported stays unknown for the next holder: never sent again.
+    expect(next.opStatus('begun')).toBe('unknown')
+    expect(next.unresolvedOps().map((e) => e.id).sort()).toEqual(['begun', 'pending'])
+  })
+
+  it('a released or stopped client changes no witness list, not even the one it follows', () => {
+    const h = holding()
+    h.c.release()
+    expect(() => h.c.changeWitnesses(['w1', 'w2', 'w4'], { list: ['w1', 'w2', 'w9'], cfg: 'x', epoch: 3 })).toThrow(/released/)
+    expect(h.c.config()).toMatchObject({ list: W, epoch: 0 })
+    const s = holderSetup()
+    s.c.stop('lock lost')
+    expect(() => s.c.changeWitnesses(['w1', 'w2', 'w4'], { list: ['w1', 'w2', 'w9'], cfg: 'x', epoch: 3 })).toThrow(/stopped/)
+    expect(s.c.config()).toMatchObject({ list: W, epoch: 0 })
+    // A stopped releaser does not resend.
+    let sends = 0
+    const t = holderSetup()
+    t.c.requestGrant()
+    t.flush()
+    t.reachOnly([])
+    t.c.release()
+    t.c.stop('exit')
+    const orig = t.witnesses[0].handle.bind(t.witnesses[0])
+    t.witnesses[0].handle = (req) => { sends++; return orig(req) }
+    t.reachOnly(W)
+    t.c.release()
+    expect(sends).toBe(0)
+  })
+
+  it('a release that reached one witness of three: the next process gets no grant until the old record ran out', () => {
+    const h = holding()
+    h.at(10_000)
+    h.reachOnly(['w1'])
+    h.c.release()
+    h.flush()
+    expect(h.c.released()).toBe('open')
+    expect(h.c.mayAct()).toBe(false)
+    h.reachOnly(W)
+    const next = h.client('A')
+    next.read()
+    h.flush()
+    next.requestGrant()
+    h.flush()
+    expect(next.mayAct()).toBe(false)
+    // The grant (accepted at 0) runs out at w2 and w3 after validMs + witnessMarginMs.
+    h.at(P.validMs + P.witnessMarginMs)
+    next.read()
+    h.flush()
+    next.requestGrant()
+    h.flush()
+    expect(next.mayAct()).toBe(true)
   })
 })
 

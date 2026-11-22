@@ -366,3 +366,32 @@ describe('a refused-create card from an earlier process', () => {
     expect(carded.has('t')).toBe(true)
   })
 })
+
+describe('retryUnsyncedCreates on a machine without the write permission', () => {
+  it('a door refusal is not an attempt: no back-off, no card, and the create lands once the doors open', async () => {
+    const schedule = new SyncRetrySchedule({ baseMs: MIN })
+    let open = false
+    const calls: string[] = []
+    const create = vi.fn(async (t: TestTask) => {
+      if (!open) throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' })
+      calls.push(t.id)
+      return { [PLUGIN]: { id: `remote-${t.id}` } }
+    })
+    const rows = [task('t1'), task('t2'), task('t3')]
+    const log = makeLog()
+    for (let i = 0; i < CREATE_ATTEMPTS_BEFORE_NOTICE + 2; i++) {
+      const r = await tick(schedule, rows, create, log)
+      expect(r).toMatchObject({ attempted: 0, succeeded: 0, failed: 0 })
+    }
+    // One door call per tick (the batch stops at the first refusal), never a back-off or a card.
+    expect(create).toHaveBeenCalledTimes(CREATE_ATTEMPTS_BEFORE_NOTICE + 2)
+    for (const r of rows) expect(schedule.attemptsOf(r.id)).toBe(0)
+    expect(log.error).not.toHaveBeenCalled()
+    expect(log.warn).not.toHaveBeenCalled()
+
+    open = true
+    const after = await tick(schedule, rows, create, log)
+    expect(after).toMatchObject({ attempted: 3, succeeded: 3, failed: 0 })
+    expect(calls).toEqual(['t1', 't2', 't3'])
+  })
+})

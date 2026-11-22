@@ -505,6 +505,34 @@ describe('renameProject — ms-todo remote list', () => {
     expect(await remoteListNameFor('AcmeCorp')).toBe('Sync / Acme');
   });
 
+  it('a rename refused at the outward door waits (no per-task push) and runs once the doors open', async () => {
+    const doors = await import('../../src/core/leader/switch/doors.js');
+    await ensureProject('Acme', 'ms-todo');
+    await setProjectMetadata('Acme', { remote_list: 'Sync / Acme' });
+    await addTask({ title: 'A', project: 'Acme' });
+    const perTask = vi.fn(async () => {});
+    registry.get('ms-todo')!.sync.updateProject = perTask;
+    let open = false;
+    doors.setOutwardDoorChecker(() => {
+      if (!open) throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' });
+    }, () => open);
+    try {
+      await renameProject('Acme', 'AcmeCorp');
+      expect(mockRenameListByName).not.toHaveBeenCalled();
+      expect(perTask).not.toHaveBeenCalled();
+      expect(await remoteListNameFor('AcmeCorp')).toBe('Sync / Acme');
+
+      open = true;
+      doors.notifyOutwardDoorsOpened();
+      await vi.waitFor(async () => expect(await remoteListNameFor('AcmeCorp')).toBe('AcmeCorp'));
+      expect(mockRenameListByName).toHaveBeenCalledTimes(1);
+      expect(mockRenameListByName).toHaveBeenCalledWith('Sync / Acme', 'AcmeCorp');
+      expect(perTask).not.toHaveBeenCalled();
+    } finally {
+      doors.setOutwardDoorChecker(null);
+    }
+  });
+
   it('does NOT rename a remote list on a MERGE (the target list already exists)', async () => {
     await ensureProject('Alpha', 'ms-todo');
     await ensureProject('Beta', 'ms-todo');

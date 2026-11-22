@@ -211,6 +211,19 @@ describe('PUT /api/config', () => {
     expect((await request(app).put('/api/config').send({ backup: { enabled: true, destination: { ...dest, bucket: 'new' } } })).status).toBe(200);
   });
 
+  it('only the person changes the leader switch\'s machines and witnesses', async () => {
+    const app = createApp();
+    const section = { witnesses: [{ id: 'w1', dir: '/srv/w1' }], machines: [{ id: 'm1', home: '/srv/a', standby_dir: '/srv/as', port: 3456 }] };
+    await fs.writeFile(CONFIG_FILE, yaml.dump({ version: 1, leader_switch: section }), 'utf-8');
+    const agent = { 'x-walnut-caller-sid': 'session-under-test' };
+    const r = await request(app).put('/api/config').set(agent).send({ leader_switch: { machines: [{ ...section.machines[0], start_command: ['/bin/sh', '-c', 'x'] }] } });
+    expect(r.status).toBe(403);
+    expect(r.body).toMatchObject({ code: 'person_at_this_machine' });
+    // Sent back unchanged (a whole-config round trip): fine.
+    expect((await request(app).put('/api/config').set(agent).send({ leader_switch: section })).status).toBe(200);
+    expect((await request(app).put('/api/config').send({ leader_switch: { back_window_hours: 24 } })).status).toBe(200);
+  });
+
   it('a session never turns encryption off: not by the switch, not by dropping the saved-key mark', async () => {
     const app = createApp();
     const dest = { type: 'r2', bucket: 'mine', account_id: 'acct', access_key_id: 'k', secret_access_key: 's' };

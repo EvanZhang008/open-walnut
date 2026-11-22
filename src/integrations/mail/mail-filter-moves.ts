@@ -24,6 +24,7 @@
  */
 import type { MailBodyStore } from './bodies.js'
 import { providerIdOf } from './contract.js'
+import { assertOutwardDoor, holdUntilDoorsOpen, isPermitRefusal, leaderPermitActive } from '../../core/leader/switch/doors.js'
 import type { MailProviderRegistry } from './provider-registry.js'
 import type { MailStore } from './store.js'
 import type { MoveRequest, MoveRow, SettleRow } from './store-moves.js'
@@ -119,7 +120,12 @@ export class MailFilterMover {
     // After a rule batch already running, so one account never has two moves in flight from here.
     while (this.running) await this.running
     if (!await stillCurrent()) return { ok: false, reason: 'a later delivery replaced the email' }
-    const outcome = (await this.move(accountId, [{ message_id: messageId } as MoveRow])).get(messageId) ?? { ok: false, reason: 'no answer' }
+    const moved = await this.move(accountId, [{ message_id: messageId } as MoveRow]).catch((error: unknown) => {
+      if (isPermitRefusal(error)) return null
+      throw error
+    })
+    if (!moved) return { ok: false, reason: 'this server does not hold the write permission now' }
+    const outcome = moved.get(messageId) ?? { ok: false, reason: 'no answer' }
     if (!outcome.ok) return { ok: false, reason: (outcome.reason ?? 'the mail server did not move it').slice(0, 200) }
     const pairs = new Map<string, FolderPair>()
     await this.dropCached(accountId, [messageId], pairs)
@@ -158,7 +164,16 @@ export class MailFilterMover {
         const next = await this.deps.store.moves.nextAt()
         if (next !== null && !this.disposed) this.schedule(Math.max(1_000, next - this.now()))
       } catch (error) {
-        this.deps.log?.warn('mail filter moves failed', { error: String(error).slice(0, 200) })
+        if (isPermitRefusal(error)) {
+          // Not a failure: the rows stay due, untouched, and run the moment the permission arrives.
+          holdUntilDoorsOpen(
+            'mail-filter-moves',
+            () => { if (!this.disposed) this.schedule(0) },
+            () => this.deps.log?.info?.('mail filter moves wait for the write permission'),
+          )
+        } else {
+          this.deps.log?.warn('mail filter moves failed', { error: String(error).slice(0, 200) })
+        }
       } finally {
         this.running = null
       }
@@ -268,6 +283,9 @@ export class MailFilterMover {
       for (const row of rows) out.set(row.message_id, { ok: false, reason: folder ? CANNOT_FILE : CANNOT_ARCHIVE, final: true })
       return out
     }
+    // The outward door, before the provider is asked: a refusal throws, so no row is settled (no
+    // attempt counted) and the run waits for the permission (runNow).
+    if (leaderPermitActive()) assertOutwardDoor('mail-write', `move:${accountId}:${rows.length}`)
     let clock: ReturnType<typeof setTimeout> | undefined
     try {
       const answer = await Promise.race([

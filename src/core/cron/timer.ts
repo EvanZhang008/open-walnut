@@ -19,6 +19,7 @@ import {
   appendRun, catchUpNote, HELD_RECHECK_MS, judgesSlots, runEntry, runFailed, runSlots, SLOT_RETRIES,
 } from './run-log.js';
 import { amendAsSent, asSentResult, sentRunOutcome, unrecordedSentRun } from './sent-run.js';
+import { doorsClosed, leaderPermitActive, onceOutwardDoorsOpened, outwardDoorRefusal } from '../leader/switch/doors.js';
 
 const MAX_TIMER_DELAY_MS = 60_000;
 
@@ -159,6 +160,22 @@ export function armTimer(state: CronServiceState): void {
   }
 
   const nextAt = nextWakeAtMs(state);
+  // A machine without the write permission takes no due slot (findDueJobs), so nextWakeAtMs
+  // offers none: it ticks the moment the permission arrives, and polls once a minute meanwhile
+  // (a stopped timer has no poll left, and the opening then arms nothing).
+  if (!nextAt && doorsClosed()) {
+    state.timer = setTimeout(() => {
+      void onTimer(state).catch((err) => state.deps.log.error('timer tick failed', { err: String(err) }));
+    }, MAX_TIMER_DELAY_MS);
+    onceOutwardDoorsOpened(`cron-timer:${state.deps.storePath}`, () => {
+      if (!state.timer) return;
+      clearTimeout(state.timer);
+      state.timer = setTimeout(() => {
+        void onTimer(state).catch((err) => state.deps.log.error('timer tick failed', { err: String(err) }));
+      }, 0);
+    });
+    return;
+  }
   if (!nextAt) {
     const jobCount = state.store?.jobs.length ?? 0;
     const enabledCount = state.store?.jobs.filter((j) => j.enabled).length ?? 0;
@@ -520,6 +537,8 @@ export interface JobExecution {
   retryable?: boolean;
   /** The init processor declined only because an earlier run has not started (its task). */
   heldBy?: string;
+  /** The outward door refused the run before it started (releaseRefusedRun): nothing ran. */
+  notPermitted?: true;
 }
 
 /** A catch-up run: the slot it stands for, or every slot from `fromMs` to `toMs` (run-log.ts). */
@@ -734,6 +753,12 @@ export async function executeJob(
 ): Promise<JobExecution> {
   if (!job.state) {
     job.state = {};
+  }
+  // Backstop of the outward door (findDueJobs and run() check it before a slot is taken): a
+  // permission lost in between releases the running marker and leaves the slot due.
+  if (leaderPermitActive()) {
+    const refused = outwardDoorRefusal('cron-fire', cronFireOpId(job));
+    if (refused) return await releaseRefusedRun(state, job, refused);
   }
   const startedAt = state.deps.nowMs();
   // A run the schedule asked for (a tick, a boot catch-up, a due run) stands for its slots, every
@@ -964,6 +989,24 @@ async function settleSetAside(state: CronServiceState, job: CronJob, nowMs: numb
   return { status: 'skipped', summary };
 }
 
+/** executeJob refused at its door: only the running marker goes, so the slot stays due. */
+/** The op id a routine's fire asks the door under: its job and the slot it would run. */
+export function cronFireOpId(job: CronJob): string {
+  return `${job.id}:${job.state.nextRunAtMs ?? 'now'}`;
+}
+
+async function releaseRefusedRun(state: CronServiceState, job: CronJob, why: string): Promise<JobExecution> {
+  await locked(state, async () => {
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    const target = state.store?.jobs.find((j) => j.id === job.id) ?? job;
+    target.state.runningAtMs = undefined;
+    await persist(state);
+  });
+  job.state.runningAtMs = undefined;
+  state.deps.log.info('routine run not made: this machine does not hold the write permission', { jobId: job.id, why });
+  return { status: 'skipped', summary: 'not-permitted', notPermitted: true };
+}
+
 // ── Timer tick ──
 
 /**
@@ -995,6 +1038,9 @@ export function findDueJobs(state: CronServiceState): CronJob[] {
       state.deps.log.info('replica: skipping non-allowlisted cron job', { jobId: j.id, jobName: j.name });
       return false;
     }
+    // The outward door: a machine without the write permission leaves the slot due (never
+    // advanced), for the server that holds it to run once through its catch-up (runSlots).
+    if (doorsClosed()) return false;
     return true;
   });
 }

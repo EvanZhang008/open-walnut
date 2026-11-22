@@ -33,6 +33,7 @@ import type { MailEvents } from './events.js'
 import { walnutLetterLanguage } from '../../core/human-inbox/walnut-letters/languages.js'
 import { MAIL_APPROVAL_WORDS, type MailApprovalNote } from '../../core/human-inbox/walnut-letters/mail-approval.js'
 import { renderOutgoingHtml } from './render.js'
+import { beginOutwardSend, knownOpState, reportOutwardSend, type KnownOpState } from '../../core/leader/switch/doors.js'
 import type { MailService } from './service.js'
 import type { DraftRow, MailStore, SendRow } from './store.js'
 import type { OutgoingMail } from './types.js'
@@ -46,6 +47,11 @@ import type { OutgoingMail } from './types.js'
  * minutes is not in a hurry.
  */
 const REAP_BATCH = 10
+
+/** The op id a mail send registers with the witnesses (leader switch): one per ledger key. */
+export function mailSendOpId(send: Pick<SendRow, 'idempotency_key'>): string {
+  return `mail:${send.idempotency_key}`
+}
 
 /** The letters surface this file needs. A subset, so a test can hand over a small spy. */
 export interface SendLetters {
@@ -124,47 +130,135 @@ export class MailSends {
    * that is not an error, it is the gate doing its job.
    */
   async execute(send: SendRow): Promise<SendRow> {
-    const claimed = await this.deps.store.write.claimSendAttempt(send.send_id, this.now)
-    if (claimed === 0) {
-      this.deps.log.info('mail send attempt already claimed, doing nothing', {
-        sendId: send.send_id, state: send.state,
-      })
-      return (await this.deps.store.write.getSend(send.send_id)) ?? send
-    }
-    await this.setDraft(send.draft_id, 'sending')
-    this.deps.events.sendSettled(send.send_id, send.draft_id, 'sending')
-
-    const row = await this.deps.drafts.require(send.draft_id)
-    const mail = this.outgoingFor(row)
+    // The outward door with the op id registered before the claim (leader switch: a no-op with the
+    // experiment off). A refusal for want of the permission leaves the row `approved`, for the
+    // reconcile of a server that may send; a refusal because the op is known already settles the
+    // row by how the op stands (settleKnownOp), and it is never sent again under this id.
+    const opId = mailSendOpId(send)
     try {
-      const result = await callProvider(
-        `a send for ${send.draft_id}`,
-        () => this.deps.service.provider(send.account_id).send(
-          send.account_id,
-          mail,
-          { idempotencyKey: send.idempotency_key },
-        ),
-        SEND_DEADLINE_MS,
-      )
-      await this.settle(send, 'sent', {
-        ...(result?.providerMessageId ? { providerMessageId: result.providerMessageId } : {}),
-      })
-      await this.reply(send, (w) => w.sentAt(clockTime(result?.acceptedAt || this.now), recipientCount(mail)))
-      return (await this.deps.store.write.getSend(send.send_id)) ?? send
+      await beginOutwardSend('mail-send', opId)
     } catch (error) {
-      const detail = reasonOf(error).slice(0, 300)
-      const safe = stageOf(error) === 'before-data' && providerErrorCode(error) !== undefined
-      // A DEADLINE is `after-data` by construction: `callProvider` reports a timeout as
-      // `unreachable` with no stage, and a transport we stopped waiting for may well have
-      // delivered the message. Only an error the provider explicitly staged before DATA is safe.
-      const state: SendState = safe ? 'failed' : 'unknown'
-      await this.settle(send, state, { error: detail })
-      await this.reply(send, (w) => (state === 'failed' ? w.failed(detail) : w.unknown(detail)))
-      this.deps.log.warn('mail send did not succeed', {
-        sendId: send.send_id, state, code: providerErrorCode(error) ?? 'unknown', error: detail,
-      })
-      return (await this.deps.store.write.getSend(send.send_id)) ?? send
+      const known = knownOpState(error)
+      if (!known) throw error
+      return this.settleKnownOp(send, known, reasonOf(error))
     }
+    // What the op is reported as when this attempt ends: 'not-sent' until the provider is asked
+    // (a throw before that, the claim or the draft read, sent nothing), then as the ledger row ends.
+    let outcome: 'sent' | 'not-sent' | 'unknown' = 'not-sent'
+    try {
+      const claimed = await this.deps.store.write.claimSendAttempt(send.send_id, this.now)
+      if (claimed === 0) {
+        this.deps.log.info('mail send attempt already claimed, doing nothing', {
+          sendId: send.send_id, state: send.state,
+        })
+        // This attempt sent nothing; the op is reported as the row stands now, so it does not
+        // stay registered with no outcome when the data knows one.
+        const now = (await this.deps.store.write.getSend(send.send_id)) ?? send
+        outcome = now.state === 'sent' ? 'sent' : now.state === 'failed' || now.state === 'approved' ? 'not-sent' : 'unknown'
+        return now
+      }
+      await this.setDraft(send.draft_id, 'sending')
+      this.deps.events.sendSettled(send.send_id, send.draft_id, 'sending')
+
+      const row = await this.deps.drafts.require(send.draft_id)
+      const mail = this.outgoingFor(row)
+      outcome = 'unknown'
+      try {
+        const result = await callProvider(
+          `a send for ${send.draft_id}`,
+          () => this.deps.service.provider(send.account_id).send(
+            send.account_id,
+            mail,
+            { idempotencyKey: send.idempotency_key },
+          ),
+          SEND_DEADLINE_MS,
+        )
+        outcome = 'sent'
+        await this.settle(send, 'sent', {
+          ...(result?.providerMessageId ? { providerMessageId: result.providerMessageId } : {}),
+        })
+        await this.reply(send, (w) => w.sentAt(clockTime(result?.acceptedAt || this.now), recipientCount(mail)))
+        return (await this.deps.store.write.getSend(send.send_id)) ?? send
+      } catch (error) {
+        const detail = reasonOf(error).slice(0, 300)
+        const safe = stageOf(error) === 'before-data' && providerErrorCode(error) !== undefined
+        // A DEADLINE is `after-data` by construction: `callProvider` reports a timeout as
+        // `unreachable` with no stage, and a transport we stopped waiting for may well have
+        // delivered the message. Only an error the provider explicitly staged before DATA is safe.
+        const state: SendState = safe ? 'failed' : 'unknown'
+        outcome = safe ? 'not-sent' : 'unknown'
+        await this.settle(send, state, { error: detail })
+        await this.reply(send, (w) => (state === 'failed' ? w.failed(detail) : w.unknown(detail)))
+        this.deps.log.warn('mail send did not succeed', {
+          sendId: send.send_id, state, code: providerErrorCode(error) ?? 'unknown', error: detail,
+        })
+        return (await this.deps.store.write.getSend(send.send_id)) ?? send
+      }
+    } finally {
+      // A throw after the provider was asked and before it answered leaves the row `sending`
+      // for the reaper's `unknown`: the op says the same.
+      reportOutwardSend(opId, outcome)
+    }
+  }
+
+  /**
+   * The op of this row is known already (the permit refused its begin because of it): the row
+   * settles by how the op stands, and it is never sent again under this id.
+   *
+   * - 'sent': it went out, so the row says sent.
+   * - 'not-sent': it surely never left, so the row is failed; the person may send it again (a
+   *   retry is a fresh revision, so a fresh key and a fresh op id), nothing resends it by itself.
+   * - 'unknown' (an earlier holder registered it and never reported) while the row is still
+   *   `approved` in this home's data: provably never sent, so failed as well. `execute` begins
+   *   the op BEFORE its claim, and the claim is written before the provider is asked, so a holder
+   *   that registered the op and stopped before its claim never asked the provider. That rests on
+   *   this home's data being the earlier holder's last word: true in a manual switch (the data
+   *   moves with the stopped home, after the earlier holder stopped); an automatic takeover from
+   *   a lagging copy would need more (the claim on the witnesses too, or a check of the Sent folder).
+   * - 'unknown' with the row claimed (`sending`): it may have gone out, so the row says unknown and
+   *   the person is told to check the Sent folder.
+   * - 'sending': this process is sending it right now, and that attempt settles the row.
+   */
+  private async settleKnownOp(send: SendRow, op: KnownOpState, why: string): Promise<SendRow> {
+    const row = (await this.deps.store.write.getSend(send.send_id)) ?? send
+    if (op === 'sending') return row
+    if (row.state !== 'approved' && row.state !== 'sending') return row
+    const state: SendState = op === 'sent' ? 'sent'
+      : op === 'not-sent' || row.state === 'approved' ? 'failed'
+        : 'unknown'
+    const detail = op === 'sent' ? undefined
+      : op === 'not-sent' ? 'an earlier Walnut server tried this send and it did not go out.'
+        : row.state === 'approved' ? 'an earlier Walnut server registered this send but stopped before it started, so it never went out.'
+          : 'an earlier Walnut server began this send and never reported whether it went out.'
+    this.deps.log.warn('mail send op known already: settled by its state, never sent again', {
+      sendId: send.send_id, op, state, why: why.slice(0, 200),
+    })
+    return this.settleWithoutSending(send, row, state, detail)
+  }
+
+  /**
+   * An `approved` row that never started and is too old to send without asking again (the
+   * reconcile's resume limit): failed with `detail`, nothing sent, and the person may send it again.
+   */
+  async settleUnsent(send: SendRow, detail: string): Promise<SendRow> {
+    const row = (await this.deps.store.write.getSend(send.send_id)) ?? send
+    if (row.state !== 'approved') return row
+    return this.settleWithoutSending(send, row, 'failed', detail)
+  }
+
+  /** Settle an `approved` or `sending` row that this attempt will not send, and say so in its thread. */
+  private async settleWithoutSending(send: SendRow, row: SendRow, state: SendState, detail?: string): Promise<SendRow> {
+    const reread = async () => (await this.deps.store.write.getSend(send.send_id)) ?? send
+    // `settleSend` moves only a claimed row: an approved one is claimed first.
+    if (row.state === 'approved' && await this.deps.store.write.claimSendAttempt(send.send_id, this.now) === 0) return reread()
+    if (!await this.settle(send, state, detail ? { error: detail } : {})) return reread()
+    if (state === 'sent') {
+      const mail = await this.deps.drafts.require(send.draft_id).then((d) => this.outgoingFor(d)).catch(() => null)
+      if (mail) await this.reply(send, (w) => w.sentAt(clockTime(this.now), recipientCount(mail)))
+    } else if (detail) {
+      await this.reply(send, (w) => (state === 'failed' ? w.failed(detail) : w.unknown(detail)))
+    }
+    return reread()
   }
 
   /**

@@ -249,3 +249,44 @@ describe('the sweep', () => {
     await until(() => trackedBoardReminders().size === 0)
   })
 })
+
+describe('on a machine without the write permission (leader switch doors)', () => {
+  afterEach(async () => {
+    const { setOutwardDoorChecker } = await import('../../../src/core/leader/switch/doors.js')
+    setOutwardDoorChecker(null)
+  })
+
+  it('holds every due reminder quietly (one log line per closed period) and fires each once the doors open', async () => {
+    const doors = await import('../../../src/core/leader/switch/doors.js')
+    const { log } = await import('../../../src/logging/index.js')
+    let open = false
+    doors.setOutwardDoorChecker(() => {
+      if (!open) throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' })
+    }, () => open)
+    const info = vi.spyOn(log.task, 'info')
+    const warn = vi.spyOn(log.task, 'warn')
+    const now = Date.now()
+    await setBoardReminder(T, 'when', { at: new Date(now - MIN).toISOString() }, { by: 'human', nowMs: now - HOUR })
+    await setBoardReminder(T, 'cause-a', { at: new Date(now - MIN).toISOString() }, { by: 'human', nowMs: now - HOUR })
+    startBoardReminders()
+    await loadBoardReminders()
+
+    for (let i = 0; i < 3; i++) expect(await sweepBoardReminders(now + i * BOARD_REMINDER_RETRY_MS)).toEqual([])
+    expect(performSessionSendMock).not.toHaveBeenCalled()
+    expect(trackedBoardReminders().size).toBe(2)
+    expect((await getBoard(T))!.reminders.when).not.toHaveProperty('fired_at')
+    const held = info.mock.calls.filter((c) => /board reminders held/.test(String(c[0])))
+    expect(held).toHaveLength(1)
+    expect(warn.mock.calls.filter((c) => /board reminder failed/.test(String(c[0])))).toEqual([])
+
+    open = true
+    doors.notifyOutwardDoorsOpened()
+    await until(() => sends().length === 2)
+    await until(async () => !!(await getBoard(T))!.reminders.when?.delivered_at && !!(await getBoard(T))!.reminders['cause-a']?.delivered_at)
+    // Delivered once each: a later sweep finds nothing.
+    await sweepBoardReminders(Date.now() + HOUR)
+    expect(sends()).toHaveLength(2)
+    info.mockRestore()
+    warn.mockRestore()
+  })
+})

@@ -6,7 +6,7 @@
  */
 import {
   bootstrapWitnessStore, prepareJoiningWitness, mayAskForTakeover, PermitClient, PermitWitness, createHolderClock, createWitnessClock, decodeStored, encodeStored,
-  type ElapsedClock, type PermitParams, type PermitReply, type PermitRequest, type PermitStore, type StoredWitness,
+  type ElapsedClock, type PermitParams, type PermitRecord, type PermitReply, type PermitRequest, type PermitStore, type StoredWitness,
 } from '../../../../src/core/leader/permit/index.js'
 
 export function rng(seed: number): () => number {
@@ -125,6 +125,14 @@ export class World {
   done = new Set<string>()
   sends = new Map<string, Array<{ by: string; nonce: string; at: number }>>()
   unknownSeen = new Set<string>()
+  /** Planned stops (plannedStop): when each released, when it saw its release stand, when it exited. */
+  releases: Array<{ key: string; at: number; record: PermitRecord | null; reach: string[] | null; stoodAt: number | null; exitAt: number | null }> = []
+  /** A release (by its writer's incarnation) reaches only these witnesses: the rest are unreachable for it. */
+  private releaseReach = new Map<string, Set<string>>()
+  /** Called with every new process (addMachine, restartMachine): a negative control patches its client here. */
+  onNewClient: ((m: MachineNode) => void) | null = null
+  /** Called with every witness start (addWitness, a restart): a negative control patches it here. */
+  onNewWitness: ((n: WitnessNode) => void) | null = null
 
   constructor(public params: PermitParams, public net: NetOptions = CALM, seed = 1) {
     this.rand = rng(seed)
@@ -183,6 +191,7 @@ export class World {
 
   startWitness(n: WitnessNode): void {
     n.w = new PermitWitness({ id: n.id, store: n.store, clock: createWitnessClock({ monotonic: n.clock.monotonic }), params: this.params })
+    this.onNewWitness?.(n)
   }
 
   /** Crash now (losing what is not on disk) and come back after `downMs`. */
@@ -203,6 +212,7 @@ export class World {
     node.c = this.newClient(node, list, opts.nonce, opts.cfg, opts.epoch)
     this.machines.set(key, node)
     this.activeMs.set(key, 0)
+    this.onNewClient?.(node)
     return node
   }
 
@@ -226,6 +236,44 @@ export class World {
     // keepConfig: the process starts from the witness list it last knew (kept on its disk).
     const known = keepConfig ? n.c.config() : null
     n.c = known && !known.joint ? this.newClient(n, known.list, nonce, known.cfg, known.epoch) : this.newClient(n, list, nonce)
+    this.onNewClient?.(n)
+  }
+
+  /**
+   * A planned stop (a deploy) of process `key`, as the wiring does it: release() (it stops acting
+   * at once), resend it every 300 ms to the witnesses that have not taken it, and exit once it
+   * stood or after `capMs` (3 s), whichever comes first; the next process of the machine starts
+   * `downMs` after the exit. `reach`: the only witnesses the release gets to (the others are
+   * unreachable for it), to model a release that reaches a minority.
+   */
+  plannedStop(key: string, list: string[], o: { capMs?: number; downMs?: number; reach?: string[] | null; keepConfig?: boolean } = {}): void {
+    const m = this.machines.get(key)!
+    const c = m.c
+    if (o.reach) this.releaseReach.set(c.incarnation(), new Set(o.reach))
+    const record = c.release()
+    const entry = { key, at: this.now, record, reach: o.reach ?? null, stoodAt: null as number | null, exitAt: null as number | null }
+    this.releases.push(entry)
+    const exit = (): void => {
+      entry.exitAt = this.now
+      this.restartMachine(key, list, o.downMs ?? 500, undefined, o.keepConfig)
+    }
+    if (!record) return exit()
+    const cap = this.now + (o.capMs ?? 3_000)
+    let lastSend = this.now
+    const look = (): void => {
+      if (m.c !== c) return
+      if (c.released() === 'stood') {
+        entry.stoodAt = this.now
+        return exit()
+      }
+      if (this.now >= cap || c.outcome() === 'short') return exit()
+      if (this.now - lastSend >= 300) {
+        c.release()
+        lastSend = this.now
+      }
+      this.after(20, look)
+    }
+    this.after(20, look)
   }
 
   partition(a: string, b: string, on = true): void {
@@ -257,6 +305,7 @@ export class World {
   }
 
   private send(from: string, to: string, req: PermitRequest): void {
+    if (req.type === 'propose' && req.record.kind === 'release' && this.releaseReach.get(req.record.nonce)?.has(to) === false) return
     this.transmit(from, to, req, () => this.deliverToWitness(from, to, req))
   }
 
@@ -378,6 +427,8 @@ export function pilot(world: World, key: string, opts: PilotOptions): void {
     world.after(opts.exactTicks ? tick : tick * (0.8 + 0.4 * world.rand()), step)
     if (m.clock.asleep() || world.now < m.downUntil) return
     const c = m.c
+    // A process in its planned stop does nothing more (World.plannedStop drives its release).
+    if (c.released()) return
     if (c.isFrozen()) {
       if (opts.cancelChance && world.rand() < opts.cancelChance) c.cancelHandover()
       else if (c.outcome() === 'open') c.retransmit()
@@ -507,4 +558,57 @@ export function lastStop(world: World, id: string): number | null {
 /** Look at who may act every `ms` until `until`, so stops between events are seen on time. */
 export function sample(world: World, ms: number, until: number): void {
   for (let t = world.now + ms; t <= until; t += ms) world.at(t, () => {})
+}
+
+/**
+ * Negative control (a): the releaser keeps acting until it sees its release stand, instead of
+ * stopping before it sends it.
+ */
+export function actUntilReleaseStood(c: PermitClient): void {
+  const x = c as unknown as { releasing: boolean; remainingMs: () => number }
+  const orig = x.remainingMs.bind(c)
+  x.remainingMs = () => {
+    const was = x.releasing
+    x.releasing = false
+    try { return orig() } finally { x.releasing = was }
+  }
+}
+
+/**
+ * Negative control: a witness that takes a release on any live record, whoever holds it (the
+ * rule takes it only on the writer's own record, same incarnation). A process whose lease ran
+ * out on its clock but was never cleared then frees the witnesses that hold the next holder's
+ * grant, and a third machine is granted beside it.
+ */
+export function releaseOnAnyLive(w: PermitWitness): void {
+  const x = w as unknown as { state: { held: PermitRecord | null }; handle: (req: PermitRequest) => PermitReply }
+  const handle = x.handle.bind(w)
+  x.handle = (req) => {
+    const real = x.state.held
+    if (req.type !== 'propose' || req.record.kind !== 'release' || !real || real.kind === 'release') return handle(req)
+    // Judge it as if the live record were the writer's own; on a refusal, judge it again as it is.
+    x.state = { ...x.state, held: { ...real, kind: 'renew', holder: req.record.by, by: req.record.by, nonce: req.record.nonce } }
+    const reply = handle(req)
+    if (reply.ok) return reply
+    x.state = { ...x.state, held: real }
+    return handle(req)
+  }
+}
+
+/**
+ * Negative control (b): a new process takes the permission on a release of its machine seen at
+ * a minority. It counts a grant of its own as chosen once every witness that showed it that
+ * release took it ("the others have not heard the release yet"), not only with a majority. Its
+ * renews still need a majority, so the bug is in taking it, not in keeping it.
+ */
+export function takeOnMinorityRelease(c: PermitClient): void {
+  const x = c as unknown as { chosen: (p: { acks: Set<string>; record: PermitRecord }) => boolean; receive: (r: PermitReply) => void }
+  const showed = new Set<string>()
+  const chosen = x.chosen.bind(c)
+  const receive = x.receive.bind(c)
+  x.receive = (r) => {
+    if (r.held?.kind === 'release' && r.held.from === c.id && r.held.nonce !== c.incarnation()) showed.add(r.witness)
+    receive(r)
+  }
+  x.chosen = (p) => chosen(p) || (p.record.kind === 'grant' && showed.size > 0 && [...showed].every((w) => p.acks.has(w)))
 }

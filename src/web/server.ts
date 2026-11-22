@@ -750,6 +750,8 @@ let sessionProjectionHandle: { stop: () => void } | null = null
 let threadAnswersHandle: { stop: () => void } | null = null
 let topicsHandle: { stop: () => void } | null = null
 let standbyHandle: { stop: () => void } | null = null
+/** The write permission of a switchable leader (core/leader/switch/boot.ts); null with the experiment off. */
+let leaderPermitHandle: { stop: () => void } | null = null
 let threadFollowHandle: { stop: () => void } | null = null
 let threadRepliesHandle: { stop: () => void } | null = null
 let letterThreadsHandle: { stop: () => void } | null = null
@@ -1336,7 +1338,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   const port = options.port ?? DEFAULT_PORT
   const dev = options.dev ?? false
-  const isEphemeral = IS_EPHEMERAL
+  // Also true for a leader switch's trial start (set after the permit below): it does as
+  // little as an ephemeral server, on a home that is about to become the leader's.
+  let isEphemeral = IS_EPHEMERAL
+  let leaderTrial = false
   // Own-server URL for agent-facing skills/tools (e.g. the walnut-install-plugin skill curls
   // the REST API). Sandbox/demo servers on other ports inherit the right value.
   // Set again after listen, where port 0 resolves to a real number.
@@ -1407,6 +1412,38 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }
     // Capture for the fatal-signal path (which cannot await an import).
     releaseInstanceLockSync = releaseInstanceLock
+    // A switchable leader (experiment switchable_leader with a leader_switch section) leads
+    // only with the write permission: a home that was handed over, or whose permission
+    // another machine holds, refuses to boot here (core/leader/switch/boot.ts). Off, this
+    // reads the experiment and imports nothing else.
+    {
+      // A previous server of this process (a test's restart) left its doors closed: this boot decides again.
+      ;(await import('../core/leader/switch/doors.js')).setOutwardDoorChecker(null)
+      const { experimentalEnabled } = await import('../core/experimental.js')
+      const bootConfig = await (await import('../core/config-manager.js')).getConfig()
+      const flagOn = experimentalEnabled(bootConfig.experimental, 'switchable_leader')
+      // The experiment alone is not enough (an "every experiment on" switch turns it on for
+      // everyone): only a Walnut that set up witnesses reaches the permit. And whatever the
+      // config says, a home a switch marked (handed over, or a copy still being promoted)
+      // is checked, so turning the experiment off never brings it back as a second leader.
+      const witnessesSet = Array.isArray(bootConfig.leader_switch?.witnesses) && bootConfig.leader_switch.witnesses.length > 0
+      // records.ts markerFile and promotedFile, spelled out: importing records.ts here would load switch code on every boot.
+      const switchMarked = fs.existsSync(path.join(WALNUT_HOME, 'local', 'leader-switch', 'handed-over.json'))
+        || fs.existsSync(path.join(WALNUT_HOME, 'local', 'leader-switch', 'promoted.json'))
+      // A switch's trial or commit start (set only by `walnut leader switch`) is always checked: boot.ts refuses it without the permit.
+      const switchStart = process.env.WALNUT_LEADER_TRIAL === '1' || !!process.env.WALNUT_LEADER_SWITCH_COMMIT
+      if ((flagOn && witnessesSet) || switchMarked || switchStart) {
+        const { leaderPermitAtBoot } = await import('../core/leader/switch/boot.js')
+        leaderPermitHandle = await leaderPermitAtBoot({
+          home: WALNUT_HOME, flagOn, isLeaderRole: role() === 'leader', ephemeral: IS_EPHEMERAL,
+          log: (level, msg, data) => log.web[level](msg, data),
+        })
+      }
+      // The switch's trial start (WALNUT_LEADER_TRIAL=1) only shows the new home reads back: it
+      // picks up, recovers and reconciles no session, wakes no org node, pulls and commits no
+      // git, as an ephemeral server does not (its outward doors are closed besides).
+      if (leaderPermitHandle && process.env.WALNUT_LEADER_TRIAL === '1') { isEphemeral = true; leaderTrial = true }
+    }
     // This process owns the data folder now: read back what earlier servers saw of this
     // machine's sleep and when no server ran, and stamp from now on that this one is alive
     // (lib/sleep-ledger.ts), before any queued row is delivered. Only the server keeps it: a
@@ -2249,15 +2286,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     startWaitUntilWatch()
     // Main's and the leads' promised follow-ups (src/core/sessions/promise-alarm.ts), same clock policy.
     const { startPromiseAlarms } = await import('../core/sessions/promise-alarm.js')
-    startPromiseAlarms({ ephemeral: IS_EPHEMERAL })
+    startPromiseAlarms({ ephemeral: isEphemeral })
     // A "needs you" nobody checks by script is checked again every few hours (src/core/sessions/needs-recheck.ts).
     const { startNeedsRecheck } = await import('../core/sessions/needs-recheck.js')
-    startNeedsRecheck({ ephemeral: IS_EPHEMERAL })
+    startNeedsRecheck({ ephemeral: isEphemeral })
     const { startUserAsks } = await import('../core/sessions/user-asks.js')
-    void startUserAsks({ ephemeral: IS_EPHEMERAL }).catch(() => {})
+    void startUserAsks({ ephemeral: isEphemeral }).catch(() => {})
     // Every open task's stored status against its facts, hourly (src/core/status-consistency.ts).
     const { startStatusCheck } = await import('../core/status-consistency.js')
-    startStatusCheck({ ephemeral: IS_EPHEMERAL })
+    startStatusCheck({ ephemeral: isEphemeral })
   }
 
   // ── Walnut's own health alarms, CloudWatch style (src/core/health-monitor/), off the boot path.
@@ -2333,16 +2370,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // What agents keep, in one artifacts folder, the only place for it (src/core/artifacts/migrate.ts).
     if (role() === 'leader') void import('../core/artifacts/migrate.js').then((m) => m.startArtifacts()).catch(() => {})
     // The org nodes' duties (src/core/org/duties/): each runs for the nodes that turned it on.
-    if (role() === 'leader') void import('../core/org/duties/registry.js').then((m) => m.startOrgDuties({ ephemeral: IS_EPHEMERAL })).catch(() => {})
+    if (role() === 'leader') void import('../core/org/duties/registry.js').then((m) => m.startOrgDuties({ ephemeral: isEphemeral })).catch(() => {})
     // Main and the VPs that have no session yet start by themselves, a minute after boot (src/core/org/org-autostart.ts).
-    if (role() === 'leader') void import('../core/org/org-autostart.js').then((m) => m.startOrgAutostart(60_000, { ephemeral: IS_EPHEMERAL })).catch(() => {})
+    if (role() === 'leader') void import('../core/org/org-autostart.js').then((m) => m.startOrgAutostart(60_000, { ephemeral: isEphemeral })).catch(() => {})
     // Starts queued for a free host slot begin by themselves once a host has room (src/core/sessions/start-queue.ts);
     // a companion never drains, an ephemeral server only what it queued itself.
     // A message lined up for after a running turn goes out when that turn ends (src/core/sessions/queue-after-turn.ts).
     if (role() === 'leader') void import('../core/sessions/queue-after-turn.js').then((m) => m.startQueueAfterTurn()).catch(() => {})
     // Messages held for a cold session's next wake go out by their max hold, a restart's included (src/core/sessions/cold-hold.ts).
     if (role() === 'leader') void import('../core/sessions/cold-hold.js').then((m) => m.startColdHold()).catch(() => {})
-    if (role() === 'leader') void import('../core/sessions/start-queue.js').then((m) => m.startStartQueue({ ephemeral: IS_EPHEMERAL })).catch(() => {})
+    if (role() === 'leader') void import('../core/sessions/start-queue.js').then((m) => m.startStartQueue({ ephemeral: isEphemeral })).catch(() => {})
     // A status answer a turn end missed is asked again while its session is alive (src/core/sessions/status-reconcile.ts).
     if (role() === 'leader') void import('../core/sessions/status-reconcile.js').then((m) => m.startStatusReconcile()).catch(() => {})
     // An idle Claude Code session near where it compacts by itself is compacted shortly before its
@@ -2557,6 +2594,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // The guessed liveness addresses (routes/system.ts), exact paths, ahead of the Apple Health routes.
   app.use('/api', livenessAliasRouter)
   app.use('/api/health', (await import('./routes/health.js')).healthRouter)
+  // A switchable leader's status (core/leader/switch/): mounted only while its permit runs.
+  if (leaderPermitHandle) app.use('/api/leader', (await import('./routes/leader-switch.js')).leaderSwitchRouter)
   app.use('/api/places', (await import('./routes/places.js')).placesRouter)
   app.use('/api/images', imagesRouter)
   app.use('/api/local-image', localImageRouter)
@@ -3397,10 +3436,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // otherwise its hosts are the developer's real ones (src/lib/real-ssh-guard.ts).
       const { realSshReachAllowed } = await import('../lib/real-ssh-guard.js')
       const sshAllowed = realSshReachAllowed()
-      if (!IS_EPHEMERAL && bootPolicy('terminal-sweep') && !sshAllowed) {
+      if (!isEphemeral && bootPolicy('terminal-sweep') && !sshAllowed) {
         log.web.info('terminal sweep skipped: a server under test without ssh isolation never runs ssh')
       }
-      if (!IS_EPHEMERAL && bootPolicy('terminal-sweep') && sshAllowed) {
+      if (!isEphemeral && bootPolicy('terminal-sweep') && sshAllowed) {
         // Sweep leaked walnut-*.dsock dtach sessions whose backing session is gone.
         import('./terminal/dtach-lifecycle.js')
           .then(({ reapOrphanDtach }) => reapOrphanDtach())
@@ -3679,8 +3718,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Each dead session's record as it stood BEFORE the reconciler marked it:
   // its last projected status is restart recovery's fallback fact.
   const beforeReconcile = new Map<string, import('../core/types.js').SessionRecord>()
-  if (!bootPolicy('session-reconcile')) {
-    log.session.info(`${offByPolicy()}: skipping session reconciliation`)
+  if (!bootPolicy('session-reconcile') || leaderTrial) {
+    log.session.info(leaderTrial ? 'leader switch trial: skipping session reconciliation (it would mark the old leader\'s sessions dead in the new home)' : `${offByPolicy()}: skipping session reconciliation`)
   } else try {
     const { reconcileSessions } = await import('../core/session-reconciler.js')
     const { listSessions } = await import('../core/session-tracker.js')
@@ -4258,6 +4297,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           log.git.info('git compaction skipped — operator pause marker active', { reason: pausedBy })
           return
         }
+        // A switchable leader without the write permission rewrites no history at the data
+        // remote: the worker is its own process with no door, so the door is asked here.
+        const { compactionDoorRefusal } = await import('../integrations/git-compaction.js')
+        const refused = compactionDoorRefusal()
+        if (refused) { log.git.info('git compaction skipped: this server may not push now', { why: refused }); return }
         // git maintenance holds the same pause flag while its gc runs (the size
         // sentinel can start one 30s after boot). Taking it too would let
         // whichever finishes first clear it and resume sync under the other.
@@ -6437,7 +6481,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   // -- Load integration plugins --
   try {
-    if (bootPolicy('plugins')) {
+    // A leader switch's trial start (core/leader/switch/) loads no plugin: a plugin's own code may send outward.
+    if (bootPolicy('plugins') && !(leaderPermitHandle && process.env.WALNUT_LEADER_TRIAL === '1')) {
       await loadPlugins(registry)
       log.web.info('integration plugins loaded', { plugins: registry.getAll().map(p => p.id) })
       // Tasks a removed plugin kept to its own view come back to the board (Task.plugin_only):
@@ -6622,7 +6667,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }
     await cronService.start()
     // The routers' wakes follow their tasks once the engine and the router:pending template are up (core/router/wake.ts).
-    if (!IS_EPHEMERAL && role() === 'leader') {
+    if (!isEphemeral && role() === 'leader') {
       const { reconcileRouterWakes, routerWakeRegistered } = await import('../core/router/wake.js')
       void reconcileRouterWakes({ isLive: routerWakeRegistered }).catch((err) => {
         log.cron.warn('router wakes not reconciled', { error: err instanceof Error ? err.message : String(err) })
@@ -7106,12 +7151,13 @@ function startPluginSyncPolling(): void {
             if (result.success) {
               pushRetrySchedule.noteSuccess(task.id)
               log.web.info(`${plugin.id} sync: error retry push succeeded`, { taskId: task.id, phase: task.phase })
-            } else {
+            } else if (!result.deferred) {
+              // A push held for the write permission (leader switch) is no failure: no back-off.
               pushRetrySchedule.noteFailure(task.id)
               log.web.debug(`${plugin.id} sync: error retry push failed`, { taskId: task.id, error: result.error })
             }
           } catch (err) {
-            pushRetrySchedule.noteFailure(task.id)
+            if (!(await import('../core/leader/switch/doors.js')).isPermitRefusal(err)) pushRetrySchedule.noteFailure(task.id)
             log.web.debug(`${plugin.id} sync: error retry push failed`, {
               taskId: task.id,
               error: err instanceof Error ? err.message : String(err),
@@ -7446,6 +7492,11 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   localDaemonLane = null
   // A session that dies from here on died with this computer's shutdown (sessions/shutdown-death.ts).
   markServerStopping()
+  // A stopping leader acts on nothing more: its outward doors close now, and its write
+  // permission goes back to the witnesses (a release, at most 3 s) so the next process of this
+  // machine holds at once (core/leader/switch/runtime.ts). Awaited before the stop ends.
+  const permitReleased = leaderPermitHandle?.stop() ?? Promise.resolve()
+  leaderPermitHandle = null
   // Why, for the work this stop cuts short: 'self-update', else a planned restart's marker
   // ('deploy'), read without taking it (the feature-node stop below takes it). A signal says nothing.
   noteServerStopReason(opts.reason)
@@ -7970,5 +8021,7 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
     await shutdownStep('threads files, last', async () => (await import('../core/org/threads-sync.js')).flushThreadsExports(), { budgetMs: 800, afterClose: true })
   } finally {
     releaseSelfApiRoot()
+    // Started before the HTTP close; the release caps itself at 3 s (RELEASE_CAP_MS).
+    await shutdownStep('leader permit release', () => permitReleased, { budgetMs: 3_500, afterClose: true })
   }
 }

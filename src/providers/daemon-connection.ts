@@ -39,6 +39,7 @@ import crypto from 'node:crypto'
 import net from 'node:net'
 import type { Duplex } from 'node:stream'
 import { log } from '../logging/index.js'
+import { leaderPermitActive, onceOutwardDoorsOpened, outwardDoorRefusal } from '../core/leader/switch/doors.js'
 import { HoldNews, holdLog } from './daemon-hold-news.js'
 import { PTY_STREAM_CAPABILITY, ptyStreamMissingSentence } from '../core/hosts/terminal-link.js'
 import { createStreamEndpoint, listenLoopback, spliceStream, type PtyOpenOptions, type PtyStream, type StreamEndpoint } from '../lib/link-stream.js'
@@ -2169,6 +2170,12 @@ export class DaemonConnection {
   /** One compile and send of the armed set, inside this daemon's push gate. 'stop': no provider or no cron engine. */
   private async pushTriggersOnce(): Promise<'stop' | 'next'> {
     if (!this._connected) return 'stop'
+    // The outward door: a machine without the write permission arms no daemon. Every host is
+    // pushed again when the permission arrives.
+    if (leaderPermitActive() && outwardDoorRefusal('trigger-arm', this.hostKey)) {
+      onceOutwardDoorsOpened('trigger-arm', pushTriggersToAllHosts)
+      return 'stop'
+    }
     const epoch = this._connectionEpoch
     const recheck = this.triggersRecheck
     this.triggersRecheck = false

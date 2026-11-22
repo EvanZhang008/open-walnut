@@ -61,6 +61,8 @@ import { recordRemoteLink, findLiveClaimants, isRemoteIdBlocked } from './task-r
 import { decideBirth } from './private-tasks/birth.js';
 import { syncRulesFor } from './private-tasks/provider-rules.js';
 import { isPrivateTaskBlocked } from './private-tasks/sync-guard.js';
+import { isPermitRefusal, onceOutwardDoorsOpened } from './leader/switch/doors.js';
+import type { IntegrationSync } from './integration-types.js';
 import { privacyJudgeAvailable, startSyncGate } from './private-tasks/sync-gate.js';
 import { MERGE_EVENT_SOURCE } from './task-deleted-id.js';
 import { checkLaunchDefaultsPatch, checkLaunchDefaultsShape } from './sessions/project-launch-defaults.js';
@@ -1749,6 +1751,45 @@ export async function resolveProjectForWrite(
 }
 
 /**
+ * The remote side of a project rename (renameProject), best effort: rename the CONTAINER once
+ * instead of pushing N tasks. A per-task push resolves the new name, doesn't find a list, and
+ * CREATES one, forking the user's list in two, so the per-task push is only the fallback for a
+ * plugin without the renameProjectRemote hook, a failed rename, or a merge (`oldAlias` null:
+ * the target list already exists and the tasks genuinely have to move into it). Core never
+ * imports a specific integration. A rename refused at the outward door (this machine does not
+ * hold the write permission) is neither: it waits, and runs once the permission arrives (held in
+ * memory: a restart while the doors are closed loses it, and the list keeps its old name).
+ */
+async function renameRemoteContainer(source: string, oldAlias: string | null | undefined, canonical: string, tasks: Task[]): Promise<void> {
+  const remoteRename = oldAlias ? registry.get(source)?.sync.renameProjectRemote : undefined;
+  if (oldAlias && remoteRename) {
+    try {
+      await remoteRename({ oldRemoteName: oldAlias, newName: canonical });
+      // Remote container now IS the project name: repoint (not delete) the alias so there is
+      // exactly one source of truth for the list name.
+      await setProjectMetadata(canonical, { remote_list: canonical });
+      log.task.info('project rename: renamed remote container', { project: canonical, from: oldAlias, source });
+      return;
+    } catch (err) {
+      if (isPermitRefusal(err)) {
+        log.task.info('project rename: remote container rename waits for the write permission', { project: canonical, from: oldAlias, source });
+        onceOutwardDoorsOpened(`task-sync:rename:${source}:${oldAlias}`, () => {
+          void renameRemoteContainer(source, oldAlias, canonical, tasks).catch(() => { /* best effort */ });
+        });
+        return;
+      }
+      log.task.warn('project rename: remote container rename failed, falling back to per-task push', {
+        project: canonical, from: oldAlias, source,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  for (const task of tasks) {
+    pushToPlugin(task, 'updateProject', canonical).catch(() => { /* best effort */ });
+  }
+}
+
+/**
  * Rename a project, moving every task with it.
  *
  * Semantics (all of them — the old doc claimed only the last one):
@@ -1930,41 +1971,7 @@ export async function renameProject(
   // Remote rename (best effort, outside the lock). The local rename already
   // committed; a remote failure leaves tasks pushing to the OLD list via the
   // surviving alias, which is exactly what the alias model tolerates.
-  if (renameSource !== 'local') {
-    let remoteRenamed = false;
-    // Rename the CONTAINER once instead of pushing N tasks: a per-task push
-    // resolves the new name, doesn't find a list, and CREATES one — forking the
-    // user's list in two. Only meaningful for a plain rename; on a merge the
-    // target list already exists and the tasks genuinely have to move into it.
-    // Goes through the plugin's optional renameProjectRemote hook — core never
-    // imports a specific integration (a plugin without the hook just takes the
-    // per-task fallback below).
-    if (!merged && oldAlias) {
-      const remoteRename = registry.get(renameSource)?.sync.renameProjectRemote;
-      if (remoteRename) {
-        try {
-          await remoteRename({ oldRemoteName: oldAlias, newName: canonical });
-          remoteRenamed = true;
-          // Remote container now IS the project name — repoint (not delete) the
-          // alias so there is exactly one source of truth for the list name.
-          await setProjectMetadata(canonical, { remote_list: canonical });
-          log.task.info('project rename: renamed remote container', {
-            project: canonical, from: oldAlias, source: renameSource,
-          });
-        } catch (err) {
-          log.task.warn('project rename: remote container rename failed, falling back to per-task push', {
-            project: canonical, from: oldAlias, source: renameSource,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-    }
-    if (!remoteRenamed) {
-      for (const task of renamedTasks) {
-        pushToPlugin(task, 'updateProject', canonical).catch(() => { /* best effort */ });
-      }
-    }
-  }
+  if (renameSource !== 'local') await renameRemoteContainer(renameSource, merged ? null : oldAlias, canonical, renamedTasks);
 
   // The REGISTRY change is its own event, and it fires even when no task moved:
   // an empty project is invisible in the task list, so TASK_UPDATED alone left
@@ -2488,6 +2495,11 @@ export async function setProjectLocal(project: string): Promise<{ name: string; 
 export interface SyncResult {
   success: boolean;
   error?: string;
+  /**
+   * Not sent because this machine does not hold the write permission (deferSyncForPermit): not a
+   * failure, so a retry loop counts no back-off for it.
+   */
+  deferred?: true;
 }
 
 /**
@@ -2553,6 +2565,7 @@ async function pushToPlugin(
     return { success: true };
   } catch (err) {
     if (isPrivateTaskBlocked(err)) return { success: true };
+    if (isPermitRefusal(err)) return deferSyncForPermit(task, method);
     const message = err instanceof Error ? err.message : String(err);
     // ERROR with the plugin named: the ONE card for this failure, wherever the
     // write came from (a v1 route, the console's /api/tasks, an op, a background
@@ -2687,6 +2700,63 @@ export async function autoPushIfConfigured(task: Task): Promise<SyncResult> {
 /** How long a push waits for a boot walk or a plugin reload before it reports the plugin missing. */
 const PLUGIN_CHANGE_WAIT_MS = 30_000;
 
+/**
+ * A cross-source move's old copy, marked moved at its old service: renamed, then completed. Two
+ * steps, each on its own: a title the push check refuses (it matches a private word) must not
+ * leave the old copy open. A step refused at the outward door (this machine does not hold the
+ * write permission) is not a failure: it runs again once the permission arrives (held in memory: a
+ * restart while the doors are closed loses it, and the old copy stays open). Exported for tests.
+ */
+export async function markOldCopyMoved(
+  sync: IntegrationSync, snapshot: Task, movedTitle: string,
+  steps: ReadonlyArray<'title' | 'complete'> = ['title', 'complete'],
+): Promise<void> {
+  const held: Array<'title' | 'complete'> = [];
+  for (const step of steps) {
+    try {
+      if (step === 'title') await sync.updateTitle(snapshot, movedTitle);
+      else await sync.updatePhase(snapshot, 'COMPLETE');
+    } catch (err) {
+      if (isPermitRefusal(err)) { held.push(step); continue; }
+      log.task.warn('cross-source migration: old backend mark-moved failed (non-fatal)', {
+        taskId: snapshot.id, oldSource: snapshot.source, step,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  if (held.length === 0) return;
+  log.task.info('cross-source migration: old backend mark-moved waits for the write permission', {
+    taskId: snapshot.id, oldSource: snapshot.source, steps: held,
+  });
+  onceOutwardDoorsOpened(`task-sync:mark-moved:${snapshot.source}:${snapshot.id}`, () => {
+    void markOldCopyMoved(sync, snapshot, movedTitle, held).catch(() => { /* logged inside */ });
+  });
+}
+
+/**
+ * A push refused at the outward door (this machine does not hold the write permission): nothing
+ * was sent. Like a push deferred by a stopping server, the stamp is the hand-off (the sync loop
+ * retries every task carrying a sync_error), at info and with no failure counted, so no card.
+ */
+async function deferSyncForPermit(task: Task, method: string): Promise<SyncResult> {
+  const message = `This change has not reached "${task.source}" yet: this server may not send it now, and the sync tries again`;
+  if (method === 'deleteTask') {
+    // The row is gone, so there is no task to stamp and the sync loop (which retries live tasks)
+    // never sees it: the remote delete runs again once the permission arrives (held in memory; a
+    // source with confirmRemoteDeleted is also retried by the sync loop from its tombstone). Its
+    // ledger row stays unconfirmed meanwhile, so no pull re-imports the remote copy.
+    log.task.info('remote delete deferred: no write permission on this machine', { task: task.id, source: task.source });
+    onceOutwardDoorsOpened(`task-sync:delete:${task.source}:${task.id}`, () => {
+      void pushToPlugin(task, 'deleteTask').catch(() => { /* logged inside */ });
+    });
+    return { success: false, error: message, deferred: true };
+  }
+  log.task.info('sync deferred: no write permission on this machine', { task: task.id, source: task.source, method });
+  const { changed, task: stamped } = await updateTaskRaw(task.id, { sync_error: message });
+  if (changed && stamped) bus.emit(EventNames.TASK_UPDATED, { task: stamped }, ['web-ui'], { source: 'sync' });
+  return { success: false, error: message, deferred: true };
+}
+
 async function autoPushIfConfiguredImpl(task: Task): Promise<SyncResult> {
   let plugin = registry.get(task.source);
   // The plugins are loading or reloading: wait for that, then push the task as
@@ -2796,6 +2866,7 @@ async function autoPushIfConfiguredImpl(task: Task): Promise<SyncResult> {
     // Kept local by the private-task guard (sync-guard.ts): nothing was sent, which is the
     // outcome, not a failed push. The guard already turned the task local.
     if (isPrivateTaskBlocked(err)) return { success: true };
+    if (isPermitRefusal(err)) return deferSyncForPermit(task, 'pushTask');
     const message = err instanceof Error ? err.message : String(err);
     notePushFailed(task.source);
     log.task.error(TASK_SYNC_PUSH_FAILED_LOG, { pluginId: task.source, taskId: task.id, method: 'pushTask', error: message, recoveryKey: taskSyncPushRecoveryKey(task.source) });
@@ -5067,26 +5138,11 @@ export async function updateTask(
       if (m.oldSource !== 'local' && m.oldExt) {
         const oldPlugin = registry.get(m.oldSource);
         if (oldPlugin) {
-          const movedTitle = `[Moved] ${m.oldTitle} [open-walnut:${m.task.id}]`;
           // The copy as the old service knew it: its source and identity, and no hold (a task
           // moved into another service's project is held for THAT one; the guard would refuse
           // a held snapshot and leave the old copy open).
           const snapshot = { ...m.task, source: m.oldSource, ext: m.oldExt, sync_hold: undefined } as Task;
-          // Two steps, each on its own: a title the push check refuses (it matches a private
-          // word) must not leave the old copy open.
-          for (const [step, run] of [
-            ['title', () => oldPlugin.sync.updateTitle(snapshot, movedTitle)],
-            ['complete', () => oldPlugin.sync.updatePhase(snapshot, 'COMPLETE')],
-          ] as const) {
-            try {
-              await run();
-            } catch (err) {
-              log.task.warn('cross-source migration: old backend mark-moved failed (non-fatal)', {
-                taskId: m.task.id, oldSource: m.oldSource, step,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            }
-          }
+          await markOldCopyMoved(oldPlugin.sync, snapshot, `[Moved] ${m.oldTitle} [open-walnut:${m.task.id}]`);
         }
       }
 

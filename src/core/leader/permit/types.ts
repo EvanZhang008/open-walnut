@@ -5,12 +5,16 @@ import { createHash } from 'node:crypto'
  * numbered record per Walnut, kept by a fixed list of witnesses. Wired to nothing yet.
  */
 
-export type PermitKind = 'grant' | 'renew' | 'handover' | 'cancel' | 'members'
+export type PermitKind = 'grant' | 'renew' | 'handover' | 'cancel' | 'members' | 'release'
+
+/** A release gives the permission to nobody: its `holder` is this (no machine id is empty). */
+export const NO_HOLDER = ''
 
 /**
  * One record. A higher number always wins at a witness; the record a majority of the
  * witness list holds is the permission. `holder` is the machine the record gives the
- * permission to (a handover gives it to `to`, a cancel back to `from`).
+ * permission to (a handover gives it to `to`, a cancel back to `from`, a release to nobody:
+ * NO_HOLDER).
  *
  * There is no wall-clock `validUntil`: every machine measures `validMs` on its own
  * clock from its own event (the holder from when it SENT the record, a witness from
@@ -29,7 +33,7 @@ export interface PermitRecord {
    * is never taken for a yes to one sent after it (review round 1, B-1).
    */
   nonce: string
-  /** handover and cancel: the old holder. */
+  /** handover, cancel and release: the old holder. */
   from?: string
   /** handover: the new holder. */
   to?: string
@@ -63,7 +67,10 @@ export interface PermitRecord {
    * `writtenAt` is the holder's own wall clock, comparable only with other stamps it made.
    */
   progress?: PermitProgress
-  /** renew: op ids registered before an outward send, and outcomes reported after it (ops.ts). */
+  /**
+   * renew: op ids registered before an outward send, and outcomes reported after it (ops.ts).
+   * release: outcomes only (it registers nothing: its writer never sends again).
+   */
   ops?: OpChanges
   /**
    * members: every op entry the writer knows. A witness joining the new list takes them, so an

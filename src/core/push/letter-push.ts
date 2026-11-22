@@ -258,17 +258,20 @@ async function attemptLetterPush(
   // (quiet-hold.ts): it waits in the inbox, and the one push after quiet says it waited. Asked
   // after the device choice, so a letter no device takes is never held. The summary line stays
   // per letter, as this file promises.
-  if (await holdPushForQuiet('letter-push', { key: `letter:${letter.letterId}`, title: letter.subject }, { taskId: letter.senderTaskId })) {
+  const heldWhy = await holdPushForQuiet('letter-push', { key: `letter:${letter.letterId}`, title: letter.subject }, { taskId: letter.senderTaskId })
+  if (heldWhy) {
     return finish({
       attempted: false, sent: 0, failed: 0, suppressed,
-      reason: 'quiet mode is on',
+      reason: heldWhy,
     }, { devices: tokens.length, targeted: chosen.length })
   }
 
   // One letter = one banner: the content's collapse id makes a redelivered
   // event replace the earlier undelivered notification instead of stacking.
   const out = await deliverPush(chosen.map(({ device }) => device.entry), letterPushContent(letter))
-  if (out.reason) {
+  // A refusal at the outward door (the permission went between the hold's look and the send) is
+  // not a configuration gap: the summary line below carries its reason.
+  if (out.reason && !out.notPermitted) {
     // The missing-credential text itself is warned once per process inside
     // apns.ts; this names the letter that just lost its push.
     warnOnce('apns-unconfigured',

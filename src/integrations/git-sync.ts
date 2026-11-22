@@ -20,6 +20,7 @@ import {
 import { SECRET_IGNORE_PATTERNS } from './git-sync-secrets.js';
 import { releasePrivateDataHolds } from './git-sync-private-data.js';
 import { carryLocalCommits, type CarryResult, type GitStatusRunner } from './git-sync-rewrite-carry.js';
+import { leaderPermitActive, outwardDoorRefusal } from '../core/leader/switch/doors.js';
 
 export interface SyncStatus {
   initialized: boolean;
@@ -2454,7 +2455,10 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
     // box must not publish anything until a human or a clean cycle clears it.
     // Also skipped in disk pull-only mode: a push packs objects LOCALLY first,
     // which is exactly the write pressure the disk latch exists to stop).
-    if (!guard.safeMode && !diskPullOnly) {
+    // The outward door: a machine without the write permission still pulls, and publishes nothing.
+    if (!guard.safeMode && !diskPullOnly && leaderPermitActive() && outwardDoorRefusal('git-push', branch)) {
+      log.git.debug('git-sync push skipped: this machine does not hold the write permission');
+    } else if (!guard.safeMode && !diskPullOnly) {
       const pushResult = await gitSafeAsync(`push origin ${branch}`, { timeout: NETWORK_TIMEOUT });
       if (pushResult === null) {
         pushed = 0; // push failed

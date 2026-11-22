@@ -17,6 +17,7 @@ import {
 } from '../../src/core/plugin-jobs/manager.js'
 import type { PluginJobSpec, PluginJobsSpec, PluginJobStatus } from '../../src/providers/plugin-jobs-core.js'
 import { isSecretKey } from '../../src/core/config-secret-shape.js'
+import { notifyOutwardDoorsOpened, setOutwardDoorChecker } from '../../src/core/leader/switch/doors.js'
 
 const HOME = '/home/tester/.open-walnut'
 const WALNUT_ID = 'walnut-test-1'
@@ -499,6 +500,33 @@ describe('plugin jobs manager: a plugin in flux, turned off, or whose code fails
       state: 'pending',
       message: 'the last setup on this computer failed: jobs.configure refused: jobs.configure: the spec names another Walnut',
     })
+  })
+})
+
+describe('plugin jobs manager on a server without the write permission (leader switch)', () => {
+  it('sends nothing, is not an error and arms no back-off; the pass runs once the doors open', async () => {
+    let open = false
+    setOutwardDoorChecker(() => {
+      if (!open) throw Object.assign(new Error('not the leader'), { name: 'PermitNotHeld' })
+    }, () => open)
+    try {
+      const h = harness()
+      const local = fakeDaemon(LOCAL_HOST)
+      const mgr = h.manager()
+      await mgr.connected(local.link)
+      expect(local.cmds()).toEqual([])
+      expect(mgr.views()[0]).toMatchObject({ phase: 'checking', message: expect.stringMatching(/write permission/) })
+      expect(h.timers).toEqual([])
+      expect(h.deps.log).not.toHaveBeenCalledWith('warn', expect.anything(), expect.anything())
+
+      open = true
+      notifyOutwardDoorsOpened()
+      for (let i = 0; i < 20 && mgr.views()[0]?.phase !== 'ready'; i++) await tick()
+      expect(local.cmds()).toEqual(['jobs.status', 'jobs.configure'])
+      expect(mgr.views()[0]).toMatchObject({ phase: 'ready' })
+    } finally {
+      setOutwardDoorChecker(null)
+    }
   })
 })
 

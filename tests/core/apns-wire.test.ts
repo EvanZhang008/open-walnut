@@ -18,6 +18,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('apns-wire'))
 
 import { closeApnsSessions, sendApns } from '../../src/core/push/apns.js'
+import { setOutwardDoorChecker } from '../../src/core/leader/switch/doors.js'
 import { END_EXPIRES_MS, END_GRACE_MS, STALE_AFTER_MS, WorkCardService, type WorkCardDeps } from '../../src/core/push/work-card.js'
 import type { PushTokenEntry, Task } from '../../src/core/types.js'
 
@@ -121,5 +122,29 @@ describe('a card push as Apple receives it', () => {
     expect(end.body.aps).toHaveProperty('dismissal-date')
     for (const loud of ['alert', 'sound', 'badge']) expect(end.body.aps).not.toHaveProperty(loud)
     expect(cleared.at(-1)).toEqual([LIVE])
+  })
+})
+
+describe('a push from a machine without the write permission', () => {
+  it('reaches nothing and says why, never throwing; with no permit registered it goes as always', async () => {
+    const asked: string[] = []
+    setOutwardDoorChecker((kind) => {
+      asked.push(kind)
+      throw Object.assign(new Error('this machine does not hold the write permission'), { name: 'PermitNotHeld' })
+    }, () => false)
+    try {
+      const before = seen.length
+      const out = await sendApns([{ token: LIVE }], { aps: { alert: { title: 'Hello' } } })
+      expect(out).toMatchObject({ attempted: false, sent: 0, failed: 0, deadTokens: [] })
+      expect(out.reason).toContain('write permission')
+      expect(asked).toEqual(['apns'])
+      expect(seen.length).toBe(before)
+    } finally {
+      setOutwardDoorChecker(null)
+    }
+    const before = seen.length
+    const out = await sendApns([{ token: LIVE }], { aps: { alert: { title: 'Hello' } } })
+    expect(out).toMatchObject({ attempted: true, sent: 1 })
+    expect(seen.length).toBe(before + 1)
   })
 })

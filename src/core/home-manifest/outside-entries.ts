@@ -15,6 +15,8 @@ export const OUTSIDE_ENTRIES: readonly OutsideEntry[] = [
   outside('machine', 'xdg-state', 'state.vault.browsers', 'open-walnut/vault/browsers.json', 'file', 'Keys of the browsers paired with this machine\'s vault', { sensitive: true }),
   outside('machine', 'xdg-state', 'state.secrets', 'open-walnut/secrets', 'dir', 'This host\'s copy of the fleet secrets shared with it', { sensitive: true }),
   outside('machine', 'xdg-state', 'state.tasks', 'open-walnut/tasks', 'dir', 'Task working folders of sessions that ran on this machine: on purpose, they belong to the host a session runs on, and a leader switch does not move sessions'),
+  outside('machine', 'xdg-state', 'state.machine-id', 'open-walnut/machine-id', 'file', 'This machine\'s stable id: the holder id of a switchable leader\'s write permission (read only, made by the machine-id task)'),
+  outside('machine', 'xdg-state', 'state.leader-instance', 'open-walnut/leader-instance', 'dir', 'The instance lock of a switchable leader: one leader server per machine id holds the write permission'),
   outside('machine', 'xdg-state', 'state.approvals', 'open-walnut/approvals', 'dir', 'Wait tokens of approval asks made from this machine\'s shell', { sensitive: true }),
   outside('machine', 'xdg-state', 'state.net', 'open-walnut/net', 'dir', 'This machine\'s host network identity (always under ~/.local/state)', { sensitive: true }),
   outside('machine', 'xdg-state', 'state.net-members', 'open-walnut/net-members.json', 'file', 'The companion\'s list of machines allowed on the host network'),

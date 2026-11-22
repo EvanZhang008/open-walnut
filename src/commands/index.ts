@@ -224,6 +224,33 @@ export function registerCommands(program: Command): void {
       await runStandbyReceive(op, dir, options);
     });
 
+  const leader = program
+    .command('leader')
+    .description('A switchable leader (experiment switchable_leader): hand the lead to another machine, back, or see where it stands');
+  leader.command('switch').description('Stop this leader, hand its data and write permission to another machine, start it there')
+    .option('--to <machine>', 'The machine id (leader_switch.machines) that leads next')
+    .option('--back', 'Switch back to the machine this Walnut was switched from')
+    .option('--resume', 'Finish, or roll back, a switch that was cut off')
+    .option('--cancel', 'Cancel a switch that has not committed')
+    .option('--home <dir>', 'The leader\'s home (default: this Walnut\'s)')
+    .action(async (options: Record<string, unknown>) => {
+      const { runLeaderSwitchCommand } = await import('./leader.js');
+      await runLeaderSwitchCommand(options);
+    });
+  leader.command('status').description('The switch under way, the handed-over marker, and what the witnesses hold')
+    .option('--home <dir>', 'The home to read (default: this Walnut\'s)')
+    .action(async (options: Record<string, unknown>) => {
+      const { runLeaderStatus } = await import('./leader.js');
+      await runLeaderStatus(options);
+    });
+  leader.command('witnesses').description('The witnesses of the write permission').command('init')
+    .description('Set up the witness directories leader_switch.witnesses names (each once)')
+    .option('--home <dir>', 'The home whose config names them (default: this Walnut\'s)')
+    .action(async (options: Record<string, unknown>) => {
+      const { runLeaderWitnessesInit } = await import('./leader.js');
+      await runLeaderWitnessesInit(options);
+    });
+
   program
     .command('sync')
     .description('Sync ~/.open-walnut via git and/or Microsoft To-Do')

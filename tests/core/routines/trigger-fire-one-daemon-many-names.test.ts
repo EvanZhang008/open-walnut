@@ -27,11 +27,14 @@ import { CronService } from '../../../src/core/cron/service.js'
 import { fireLaneBusy, handleTriggerEvent } from '../../../src/core/routines/trigger-events.js'
 import { setTriggerDaemonLookupForTest } from '../../../src/core/routines/trigger-daemon.js'
 import type { TriggerFiredEvent } from '../../../src/providers/trigger-check-core.js'
+import { setOutwardDoorChecker } from '../../../src/core/leader/switch/doors.js'
 
 const NAMES = ['newdev', 'clouddev', 'clouddev-net']
 let counter = 0
 let runs: number
 let acks: Array<{ host: string; seq: unknown }>
+let claims: number
+let runsAsked: number
 
 function service(): CronService {
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn(), fatal: vi.fn(), child: vi.fn().mockReturnThis() } as any
@@ -56,6 +59,8 @@ async function until(cond: () => boolean, ms = 10_000): Promise<void> {
 beforeEach(() => {
   runs = 0
   acks = []
+  claims = 0
+  runsAsked = 0
   // A session send takes a while: long enough for every copy to arrive while it runs.
   cron.run = async () => { runs++; await new Promise((r) => setTimeout(r, 400)); return { status: 'ok', summary: 'sent' } }
   setTriggerDaemonLookupForTest((host) => ({
@@ -63,13 +68,18 @@ beforeEach(() => {
     send: async (cmd: string, p: Record<string, unknown> = {}) => {
       if (cmd === 'triggers.ack') acks.push({ host, seq: p.seq })
       // The daemon answers each link of this one server the same: the fire is this server's.
+      if (cmd === 'triggers.claim') claims++
+      if (cmd === 'triggers.run') runsAsked++
       if (cmd === 'triggers.claim') return { ok: true, claimed: p.seqs, unknown: [], host: [], busy: [] }
       return { ok: true }
     },
   }) as never)
 })
 
-afterEach(() => { setTriggerDaemonLookupForTest(null) })
+afterEach(() => {
+  setTriggerDaemonLookupForTest(null)
+  setOutwardDoorChecker(null)
+})
 
 async function watchRoutine(s: CronService): Promise<string> {
   const job = await s.add({
@@ -153,5 +163,72 @@ describe('one fire arriving under several names of one daemon', () => {
     await until(() => acks.length === 2 && !fireLaneBusy(id))
     expect(runs).toBe(2)
     expect(acks.sort((a, b) => a.host.localeCompare(b.host))).toEqual([{ host: 'clouddev', seq: 1 }, { host: 'olddev', seq: 7 }])
+  })
+})
+
+describe('a fire reaching a machine without the write permission', () => {
+  it('is neither claimed, run nor acked; its replay once the permission arrives delivers it once', async () => {
+    const s = service()
+    cron.service = s
+    const id = await watchRoutine(s)
+    let permitted = false
+    const asked: string[] = []
+    setOutwardDoorChecker((kind) => {
+      asked.push(kind)
+      if (!permitted) throw Object.assign(new Error('this machine does not hold the write permission'), { name: 'PermitNotHeld' })
+    }, () => permitted)
+    handleTriggerEvent('newdev', fire(id, 1))
+    await until(() => asked.length === 1)
+    await until(() => !fireLaneBusy(id))
+    expect(asked).toEqual(['trigger-fire'])
+    expect({ claims, runs, acks }).toEqual({ claims: 0, runs: 0, acks: [] })
+
+    // The daemon replays the unacked fire; this machine now holds the permission.
+    permitted = true
+    handleTriggerEvent('newdev', { ...fire(id, 1), replay: true } as TriggerFiredEvent)
+    await until(() => acks.length === 1 && !fireLaneBusy(id))
+    expect({ claims, runs, acks }).toEqual({ claims: 1, runs: 1, acks: [{ host: 'newdev', seq: 1 }] })
+  })
+
+  it('a permission lost after the claim: the delivery door refuses, nothing runs or is acked, and the replay delivers once', async () => {
+    const s = service()
+    cron.service = s
+    const id = await watchRoutine(s)
+    // The claim's door passes; the delivery's door (the second ask) is refused.
+    let passes = 1
+    const asked: string[] = []
+    setOutwardDoorChecker((kind) => {
+      asked.push(kind)
+      if (passes-- <= 0) throw Object.assign(new Error('this machine does not hold the write permission'), { name: 'PermitNotHeld' })
+    }, () => passes > 0)
+    handleTriggerEvent('newdev', fire(id, 1))
+    await until(() => asked.length === 2)
+    await until(() => !fireLaneBusy(id))
+    expect(asked).toEqual(['trigger-fire', 'trigger-fire'])
+    expect({ claims, runs, acks }).toEqual({ claims: 1, runs: 0, acks: [] })
+
+    passes = Infinity
+    handleTriggerEvent('newdev', { ...fire(id, 1), replay: true } as TriggerFiredEvent)
+    await until(() => acks.length === 1 && !fireLaneBusy(id))
+    expect({ runs, acks }).toEqual({ runs: 1, acks: [{ host: 'newdev', seq: 1 }] })
+  })
+
+  it('a Run of the check asks the door before the daemon is told to run it', async () => {
+    const s = service()
+    cron.service = s
+    const id = await watchRoutine(s)
+    let permitted = false
+    const asked: string[] = []
+    setOutwardDoorChecker((kind, opId) => {
+      asked.push(`${kind} ${opId}`)
+      if (!permitted) throw Object.assign(new Error('this machine does not hold the write permission'), { name: 'PermitNotHeld' })
+    }, () => permitted)
+    await expect(s.run(id, 'force')).resolves.toEqual({ ok: true, ran: false, reason: 'not-permitted' })
+    expect(asked).toEqual([`trigger-fire run:${id}`])
+    expect(runsAsked).toBe(0)
+
+    permitted = true
+    await expect(s.run(id, 'force')).resolves.toMatchObject({ status: 'ok', ran: true })
+    expect(runsAsked).toBe(1)
   })
 })
