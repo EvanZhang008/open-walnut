@@ -277,6 +277,7 @@ describe('the WebKit voice specs, the one place a test browser may make an Audio
     'tests/e2e/browser/stt-final-whole-clip.webkit.spec.ts': 'the final transcript of a whole clip, from a synthetic mic',
     'tests/e2e/browser/stt-live-draft-recorder.webkit.spec.ts': 'the live draft while recording, from a synthetic mic',
     'tests/e2e/browser/stt-long-take.webkit.spec.ts': 'a take of any length and its live text, from a synthetic mic',
+    'tests/e2e/browser/voice-conversation.webkit.spec.ts': 'voice conversation turns in WebKit, from a synthetic mic; the answer is a silent clip into the muted sink',
   };
   const DIRS = ['tests', 'web', 'src', 'scripts', 'plugin-store', 'packages'];
   const CODE = /\.(ts|tsx|js|mjs|cjs)$/;
