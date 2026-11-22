@@ -13,7 +13,7 @@ import { reportGauge } from '../health-monitor/gauges.js'
 import { addCall, emptyAgg, type Agg, type OutcomeClass, type UsageKind } from './agg.js'
 import { addEvents, addHours, markAlive, pruneStore, readHours, type UsageEvent } from './store.js'
 import { TemplateMatcher, type PageErrorKind } from './normalize.js'
-import { UNKNOWN_CLIENT_BIG, type ToolClient } from '../../lib/tool-answer-size.js'
+import type { ToolClient } from '../../lib/tool-answer-size.js'
 import { labelValue } from './counters.js'
 
 const HOUR_MS = 3_600_000
@@ -84,7 +84,6 @@ export interface OpCall {
 export function recordOpCall(c: OpCall): void {
   if (!active) return
   const now = c.now ?? Date.now()
-  const big = c.overLimit || (c.client === 'unknown' && c.size > UNKNOWN_CLIENT_BIG)
   const agg = bucket('op', c.op, now)
   addCall(agg, { cls: c.cls, ...(c.code ? { code: c.code } : {}), chars: c.size, ms: c.ms })
   if (c.overLimit) agg.overLimit++
@@ -96,7 +95,7 @@ export function recordOpCall(c: OpCall): void {
   }
   if (c.cls === 'bad_args') count('usage.op.bad_args', 1, labels)
   if (c.overLimit) count('usage.op.over_limit', 1, labels)
-  if (c.cls !== 'ok' || big) {
+  if (c.cls !== 'ok' || c.overLimit) {
     event({ at: now, kind: 'op', name: c.op, problem: c.cls !== 'ok' ? c.cls : 'over_limit', ...(c.code ? { code: c.code } : {}), chars: c.size, ms: c.ms })
   }
 }
@@ -152,7 +151,11 @@ export function recordPageError(k: PageErrorKind, now = Date.now()): void {
   addCall(agg, { cls: 'error', chars: 0, ms: 0 })
   // The same cause rang on its route this hour (server errors): counted here, alarmed there.
   const sameCause = k.route ? now - (routeErrorsAt.get(k.route) ?? 0) < HOUR_MS : false
-  if (!sameCause) count('usage.page.errors', 1, { kind: labelValue(k.kind) })
+  // A request the page's connection queue gave up on was never sent: a restart or a held route
+  // fills the queue, and that cause rings on its own (slow reads, server errors, Walnut Health's
+  // server alarms). Shown in the table, never rung (2026-11-22: a deploy's restart made 19 at once).
+  const unsent = / rejected in the page$/.test(k.kind)
+  if (!sameCause && !unsent) count('usage.page.errors', 1, { kind: labelValue(k.kind) })
   event({ at: now, kind: 'page', name: k.kind, problem: k.request ? 'request_failed' : 'error' })
 }
 

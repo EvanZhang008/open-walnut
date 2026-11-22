@@ -212,6 +212,16 @@ export function watchWhen(w: Pick<UsageWatch, 'state' | 'checkAt' | 'checkedAt'>
   return w.checkedAt ? `checked ${stamp(w.checkedAt, now)}` : '';
 }
 
+/**
+ * Whom a note went to, when its task's title is not at hand (a task gone or archived, a copy of
+ * the data): the name the send itself recorded (`told "Walnut VP"`), else the task's id.
+ */
+export function noteRecipientName(n: Pick<UsageNote, 'recipient' | 'recipientTitle' | 'detail'>): string {
+  if (n.recipientTitle) return n.recipientTitle;
+  const told = /^told "(.+)"$/.exec(n.detail ?? '');
+  return told ? told[1]! : n.recipient;
+}
+
 export function noteStatus(n: Pick<UsageNote, 'state' | 'dueAt' | 'tries' | 'detail'>, now: number): { tone: NoticeTone; text: string } {
   if (n.state === 'sent') return { tone: 'ok', text: 'Sent' };
   if (n.state === 'pending') return { tone: 'live', text: `Next at ${stamp(n.dueAt, now)}` };

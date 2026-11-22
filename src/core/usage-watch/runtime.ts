@@ -59,12 +59,17 @@ const PROBLEM_OF: Record<string, string> = {
   'usage.slow': 'slow', 'usage.server_errors': 'server_error', 'usage.page': 'request_failed',
 }
 
+/** An alarm's unit for its count: one "confirmed cut", "error in 6 h"; a share stays as it is. */
+export function unitFor(unit: string, value: number | null | undefined): string {
+  return value === 1 && !unit.startsWith('%') ? unit.replace(/s(?=$| in )/, '') : unit
+}
+
 /** Walnut Health's `route` action for a real-use alarm (health-monitor/index.ts). */
 export async function routeHealthAlarm(input: RouteAlarmInput): Promise<RouteAlarmResult> {
   const { def, inst } = input
   const target = usageTargetOf(inst.defId, inst.labels)
   if (!target) return { handled: false, fallback: false, detail: 'not a real-use alarm' }
-  const counted = `${inst.value ?? '?'} ${def.unit} in the last ${def.periodMin >= 60 ? `${def.periodMin / 60} h` : `${def.periodMin} min`}`
+  const counted = `${inst.value ?? '?'} ${unitFor(def.unit, inst.value)} in the last ${def.periodMin >= 60 ? `${def.periodMin / 60} h` : `${def.periodMin} min`}`
   const detail = lastEventLine(target.kind, target.name, PROBLEM_OF[inst.defId] ?? '')
   return routeUsageAlarm({
     alarmId: inst.id, since: inst.since, title: def.title, kind: target.kind, name: target.name,

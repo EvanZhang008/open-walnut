@@ -100,6 +100,8 @@ export function pageErrorKind(message: string, args: string | undefined, templat
   const text = String(message ?? '').replace(/\s+/g, ' ').trim()
   const fail = CLIENT_FAIL_RE.exec(text)
   if (fail) {
+    // A request held in the page's queue while the page was in the background never was a problem.
+    if (fail[3] === 'rejected' && /page suspended/.test(fail[4] ?? '')) return null
     const how = fail[3] === 'rejected' ? 'rejected' : /time(?:d)? ?out|timeout/i.test(fail[4] ?? '') ? 'timed out' : 'failed'
     const route = templates.match(fail[1]!, fail[2]!)
     return route

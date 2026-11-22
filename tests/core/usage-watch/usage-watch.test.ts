@@ -95,6 +95,9 @@ describe('what is kept', () => {
     expect(pageErrorKind('[api] GET /api/sessions/search FAILED after 20ms', '', t)?.kind).toBe('GET /api/sessions/search failed in the page')
     // A path no answered template matches is never kept as itself (it may hold a file name).
     expect(pageErrorKind('[api] GET /api/notes/My%20private%20file.md FAILED after 5ms', '', t)?.kind).toBe('GET unknown request failed in the page')
+    // Held in the page's queue while the page was in the background: no problem at all.
+    expect(pageErrorKind('[api] GET /api/sessions/search rejected after 15000ms in the connection queue (page suspended)', '', t)).toBeNull()
+    expect(pageErrorKind('[api] GET /api/sessions/search rejected after 15000ms in the connection queue (pool saturated)', '', t)?.kind).toBe('GET /api/sessions/search rejected in the page')
     const thrown = pageErrorKind('[uncaught] Uncaught TypeError: cannot read secret-word of undefined', 'https://h/assets/ThreadCard-AbC123xy.js:1:2', t)
     expect(thrown).toEqual({ kind: 'TypeError in the ThreadCard chunk', request: false })
     expect(JSON.stringify(thrown)).not.toContain('secret')
@@ -117,7 +120,9 @@ describe('what is kept', () => {
     expect(answerSize({ text: 'a'.repeat(11_000) }, 'cli').overLimit).toBe(true)
     // Past the MCP server's own cap it is saved to a file and never cut by the harness.
     expect(answerSize({ text: 'a'.repeat(70_000) }, 'mcp')).toEqual({ size: 70_011, overLimit: false, spilled: true })
-    expect(answerSize(big, 'unknown').overLimit).toBe(false)
+    // An older client names none: over every client's limit reads over budget.
+    expect(answerSize(big, 'unknown').overLimit).toBe(true)
+    expect(answerSize({ text: 'a'.repeat(20_000) }, 'unknown').overLimit).toBe(false)
   })
 
   it('the probe is filler with no content and a length the drill names', () => {

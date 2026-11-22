@@ -17,9 +17,6 @@ export const ANSWER_LIMITS: Readonly<Record<Exclude<ToolClient, 'unknown'>, { ma
   cli: { max: 10_240, unit: 'bytes' },
 }
 
-/** Answers this long with no client named are counted as big, never judged against a limit. */
-export const UNKNOWN_CLIENT_BIG = 20_000
-
 /** The text `walnut tools call` prints for an op's answer. */
 export function cliAnswerText(result: unknown): string {
   return JSON.stringify(result, null, 2) + '\n'
@@ -44,7 +41,9 @@ export function answerSize(result: unknown, client: ToolClient): { size: number;
     const size = compact.length > PRETTY_MEASURE_MAX ? Buffer.byteLength(compact, 'utf-8') : Buffer.byteLength(cliAnswerText(result), 'utf-8')
     return { size, overLimit: size > ANSWER_LIMITS.cli.max }
   }
-  return { size: compact.length, overLimit: false }
+  // An older client names none: over the larger limit is over every client's (the CLI's pretty text
+  // is longer than the compact one), so a 290 K answer reads over budget whoever asked.
+  return { size: compact.length, overLimit: compact.length > ANSWER_LIMITS.mcp.max }
 }
 
 export function isToolClient(v: unknown): v is Exclude<ToolClient, 'unknown'> {

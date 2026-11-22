@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
-  DEFAULT_WATCH_CHECKS, alarmLine, alarmStatus, checksText, failuresText, matchesFind, msText, noteStatus, pageKindParts, pctText,
+  DEFAULT_WATCH_CHECKS, alarmLine, noteRecipientName, alarmStatus, checksText, failuresText, matchesFind, msText, noteStatus, pageKindParts, pctText,
   recordedText, sizeText, sizesText, slowIsHigh, sortRows, spilledText, stamp, summaryOf, targetResultText, watchStatus, watchWhen,
 } from '../../web/src/components/settings/sections/real-use-model'
 import type { UsageRow } from '../../web/src/api/usage-watch'
@@ -217,3 +217,12 @@ describe('notes', () => {
     expect(noteStatus({ state: 'failed', dueAt: due, tries: 1 }, NOW).text).toBe('Not delivered after 1 try')
   })
 })
+
+describe('whom a note went to', () => {
+  it('its title, else the name the send recorded, else its id', () => {
+    expect(noteRecipientName({ recipient: 't1', recipientTitle: 'Walnut VP', detail: 'told "Old name"' })).toBe('Walnut VP')
+    expect(noteRecipientName({ recipient: 't1', recipientTitle: null, detail: 'told "Walnut VP"' })).toBe('Walnut VP')
+    expect(noteRecipientName({ recipient: 't1', recipientTitle: null, detail: '"X" has no session to tell' })).toBe('t1')
+  })
+})
+

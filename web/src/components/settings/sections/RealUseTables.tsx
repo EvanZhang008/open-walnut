@@ -73,7 +73,7 @@ function toolCols(range: UsageRange): Col[] {
     { head: 'Bad args', title: 'Calls the tool refused for their arguments', cls: 'ru-num ru-w-small ru-wide', cell: (r) => <Num n={r.badArgs} /> },
     { head: 'Cut (confirmed)', cls: 'ru-num ru-w-cut ru-mid', cell: (r) => <Num n={r.cut} bad /> },
     { head: 'Over budget', cls: 'ru-num ru-w-over ru-wide', cell: (r) => <Num n={r.overLimit} /> },
-    { head: 'Answer size p95 (chars)', cls: 'ru-num ru-w-size ru-mid', cell: (r) => sizeText(r.sizeP95) },
+    { head: 'Answer p95 (chars)', title: 'The answer size 95% of calls stay under, in characters', cls: 'ru-num ru-w-size ru-mid', cell: (r) => sizeText(r.sizeP95) },
     { head: 'Largest (chars)', cls: 'ru-num ru-w-largest ru-wide', cell: (r) => sizeText(r.largest) },
     sparkCol(range),
     STATE_COL,
@@ -229,7 +229,8 @@ export function ToolsBlock({ rows, range, now }: BlockProps) {
         <b>Cut (confirmed)</b>: Claude Code said it saved the answer to a file, so the agent read only its start; one rings an alarm.{' '}
         <b>Over budget</b>: answers bigger than the asking client takes (25,000 characters through MCP, 10,240 bytes through the CLI).{' '}
         <b>Refused</b>: designed refusals (a guard said no); they never ring.{' '}
-        <b>{rangeWord(range)}</b>: grey line uses {stepWord(range)}, red line problems {stepWord(range)}.
+        <b>{rangeWord(range)}</b>: grey line uses {stepWord(range)}, red line problems {stepWord(range)}.{' '}
+        <b>State</b>: its Walnut Health alarm. <b>Alarm</b> rang; <b>No alarm</b> checked and under its threshold; <b>No data</b> too little use to judge yet.
       </p>
     </section>
   );

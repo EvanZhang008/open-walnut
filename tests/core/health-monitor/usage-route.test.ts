@@ -14,6 +14,7 @@ import type { RouteAlarmInput, RouteAlarmResult } from '../../../src/core/health
 import { USAGE_ALARMS, usageTargetOf } from '../../../src/core/health-monitor/usage-alarms.js'
 import { USAGE_COUNTERS } from '../../../src/core/usage-watch/counters.js'
 import { count } from '../../../src/core/observability/metrics.js'
+import { _resetUsageRecorderForTesting, recordPageError } from '../../../src/core/usage-watch/record.js'
 
 const START = Date.parse('2026-11-21T10:00:30Z')
 let dir: string
@@ -48,7 +49,7 @@ async function harness(route: (input: RouteAlarmInput) => Promise<RouteAlarmResu
   const minutes = async (n: number, each?: (i: number) => void) => {
     for (let i = 0; i < n; i++) { each?.(i); clock.now += 60_000; await m.tick() }
   }
-  return { m, fixes, minutes }
+  return { m, fixes, minutes, now: () => clock.now }
 }
 
 describe('real-use alarms', () => {
@@ -75,6 +76,31 @@ describe('real-use alarms', () => {
     await h.minutes(5, (i) => { if (i === 0) count('usage.op.cut', 1, { op: 'thread_update' }) })
     expect(calls).toHaveLength(1)
     expect(h.fixes).toHaveLength(0)
+  })
+
+  it('a count of one reads singular in the note', async () => {
+    const { unitFor } = await import('../../../src/core/usage-watch/runtime.js')
+    // Every unit of a real-use alarm reads singular for one (no unit ends in an s once it is one).
+    for (const d of USAGE_ALARMS) if (!d.unit.startsWith('%')) expect(unitFor(d.unit, 1)).not.toMatch(/s(?:$| in )/)
+    expect(unitFor('confirmed cuts', 1)).toBe('confirmed cut')
+    expect(unitFor('errors in 6 h', 1)).toBe('error in 6 h')
+    expect(unitFor('confirmed cuts', 2)).toBe('confirmed cuts')
+    expect(unitFor('% of calls', 1)).toBe('% of calls')
+  })
+
+  it('page requests the connection queue gave up on never ring; failed ones do', async () => {
+    _resetUsageRecorderForTesting(true)
+    try {
+      const h = await harness(async () => ({ handled: true, delivered: true, taskId: 'vp', detail: 'delivered' }))
+      // 2026-11-22: a deploy's restart left 19 requests unsent in an open page at once.
+      await h.minutes(3, (i) => {
+        if (i !== 0) return
+        for (let n = 0; n < 19; n++) recordPageError({ kind: 'GET unknown request rejected in the page', request: true }, h.now())
+        for (let n = 0; n < 5; n++) recordPageError({ kind: 'GET /api/x failed in the page', route: 'GET /api/x', request: true }, h.now())
+      })
+      expect(h.m.alarms['usage.page{kind=GET unknown request rejected in the page}']?.state ?? 'none').not.toBe('ALARM')
+      expect(h.m.alarms['usage.page{kind=GET /api/x failed in the page}']?.state).toBe('ALARM')
+    } finally { _resetUsageRecorderForTesting(false) }
   })
 
   it('with nobody to tell it files a fix task; switched off it only records why', async () => {
