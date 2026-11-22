@@ -69,6 +69,20 @@ function outageText(message: string, meta?: Record<string, unknown>): string {
 }
 
 /**
+ * The text two tellings of one link failure share. Every word with a digit in it differs
+ * between them: a port, a timeout, "42s ago", and the per-call ids (a daemon command's
+ * `[traceId=9a847df7]`, a uuid; an id by name is folded whole, digits or not). Only digits were folded until 2026-11-22, so the hex trace
+ * id made each "reconnect failed, will retry" news: 34 warns an hour for one outage, and the
+ * log-spike alarm rang. The host is in the key already, so a name with a digit loses nothing.
+ */
+export function sameCauseText(linkFailure: string): string {
+  return linkFailure.slice(0, MAX_FIELD_CHARS)
+    // An id by name (`traceId=…`), even one that happens to have no digit (`abcdefab`).
+    .replace(/\b(\w*id)=[^\s\]),;"']+/gi, '$1=#')
+    .replace(/[\w.-]*\d[\w.-]*/g, '#')
+}
+
+/**
  * A failed name lookup and the name it was for: node's resolver (getaddrinfo, also
  * inside a DNSException), curl's (git over https: "Could not resolve host: <name>")
  * and ssh's ("Could not resolve hostname <name>: ...").
@@ -120,8 +134,7 @@ export function outageRepeatOf(
   const linkFailure = meta?.linkFailure;
   if (typeof linkFailure === 'string') {
     const cause = linkCauseKey(hostHint);
-    // Digits differ between two tellings of one cause (a port, a timeout, "42s ago").
-    const sameCause = linkFailure.slice(0, MAX_FIELD_CHARS).replace(/\d+/g, '#');
+    const sameCause = sameCauseText(linkFailure);
     return cause ? toldRepeat(`${cause}\u0000${level}\u0000${subsystem}\u0000${message}\u0000${sameCause}`, cause, now) : null;
   }
   const text = outageText(message, meta);

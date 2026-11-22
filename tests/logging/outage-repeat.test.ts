@@ -306,3 +306,48 @@ describe('every test starts with no outage told', () => {
     expect(missing).toEqual([]);
   });
 });
+
+/**
+ * 2026-11-22: every host's link was down for over an hour and each reconnect logged
+ * "DaemonConnection: reconnect failed, will retry" at warn, because the daemon command's
+ * per-call `[traceId=<hex>]` made each summary new (only digits were folded): 34 an hour,
+ * and the log-spike alarm rang. The lines are the incident's, word for word.
+ */
+describe('a link failure that differs only in a per-call id is one cause', () => {
+  const MSG = 'DaemonConnection: reconnect failed, will retry';
+  const retry = (linkFailure: string) => createSubsystemLogger('session').warn(MSG, { host: 'devbox', error: linkFailure, linkFailure, kind: 'timeout' });
+
+  it('folds the trace id, uuids and ids with no digit in them', () => {
+    for (const id of ['9a847df7', 'ebe56590', '7f930f23', 'abcdefab']) retry(`daemon command timeout: net.forward (30000ms) [traceId=${id}]`);
+    retry('daemon command lost: net.configure: connection closed before devbox answered [traceId=da4b0c3a]');
+    retry('daemon command lost: net.configure: connection closed before devbox answered [traceId=fbe483ad]');
+    retry('session 1aa2c800-cb49-45d0-8820-8303e51c0c89 did not answer');
+    retry('session a1932552-d3fe-438c-8092-6da4eb2d0572 did not answer');
+    expect(tapped.map((t) => t.level)).toEqual(['warn', 'warn', 'warn']);
+  });
+
+  it('still tells a different cause', () => {
+    retry('daemon command timeout: net.forward (30000ms) [traceId=9a847df7]');
+    retry('devbox is not online on the host network: this machine could not reach it');
+    expect(tapped).toHaveLength(2);
+  });
+
+  /**
+   * The class: a per-call value put in brackets into an error's text (`[traceId=${...}]`).
+   * The fold drops a value by its name only when the name ends in "id"; a new bracketed
+   * per-call field in src/ fails here until it is named so (or the fold learns it).
+   */
+  it('every bracketed per-call field in error text is named as an id', () => {
+    const root = path.resolve(__dirname, '../..');
+    const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = path.join(dir, e.name);
+      return e.isDirectory() ? walk(p) : /\.tsx?$/.test(e.name) ? [p] : [];
+    });
+    const fields: string[] = [];
+    for (const file of walk(path.join(root, 'src'))) {
+      for (const m of fs.readFileSync(file, 'utf8').matchAll(/\[(\w+)=\$\{/g)) fields.push(`${path.relative(root, file)}: ${m[1]}`);
+    }
+    expect(fields.some((f) => f.endsWith(': traceId'))).toBe(true);
+    expect(fields.filter((f) => !/id$/i.test(f))).toEqual([]);
+  });
+});
