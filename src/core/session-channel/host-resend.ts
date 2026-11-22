@@ -160,6 +160,22 @@ export async function startHostResendFamily(o: { say?: Say } = {}): Promise<Host
     if (!m.usageLimitWaitEnabled()) return
     return m.startUsageLimitWait({ handBack: cardToLeader, pickUp: true }).stop
   })
+  // The health monitor's stale-process repair, for this host's own rows (the monitor runs on no replica).
+  await step('stale-repair', async () => {
+    const [{ createHostStaleRepair }, { listSessions, updateSessionRecord }, { rowOwnedHere, thisHostKey }, { engineCaps }] = await Promise.all([
+      import('./host-stale-repair.js'), import('../session-tracker.js'), import('../sessions/session-row-owner.js'), import('../agents/engine-registry.js'),
+    ])
+    const runner = sessionRunner as unknown as { getOrAttachLiveSession(sid: string): Promise<unknown> }
+    const repair = createHostStaleRepair({
+      ownRows: async () => (await listSessions()).filter((r) => rowOwnedHere(r, thisHostKey())),
+      alive: async (row) => !!(await runner.getOrAttachLiveSession(row.claudeSessionId)),
+      probes: (row) => engineCaps(row.engine).sidLivenessProbe,
+      write: (sid, patch) => updateSessionRecord(sid, patch),
+      log: say,
+    })
+    repair.start()
+    return repair.stop
+  })
   say('info', 'host sessions: the resend family runs here for this host\'s own sessions', { members: stops.length })
   return {
     stop() {
