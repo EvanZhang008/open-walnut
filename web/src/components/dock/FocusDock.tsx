@@ -123,7 +123,7 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
       {/* The header is the row that expands on hover; the card also holds the chat. */}
       <div className="dock-task-header" data-peek-row="">
         <div className="dock-task-header-top">
-          <span className={`dock-task-title${task.walnut_agent ? ' walnut-task-title' : ''}`}>{task.title}</span>
+          <span className={`dock-task-title wn-title${task.walnut_agent ? ' walnut-task-title' : ''}`}>{task.title}</span>
           <span className={`dock-task-phase-badge${unread ? ' dock-task-phase-unread' : ''}${isStreaming ? ' dock-task-phase-streaming' : ''}`}>
             {/* The task's own status in the user's words (taskStatusLabel). */}
             {taskStatusLabel(task)}

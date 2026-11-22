@@ -17,8 +17,8 @@
     .app-shell-navigation .cal-page .cal-chip-title {
       display: -webkit-box;
       -webkit-box-orient: vertical;
-      -webkit-line-clamp: var(--cal-chip-lines, 2);
-      line-clamp: var(--cal-chip-lines, 2);
+      -webkit-line-clamp: var(--cal-chip-lines, 2); /* meta: a timed chip is as tall as its meeting, a tap opens it in full */
+      line-clamp: var(--cal-chip-lines, 2); /* meta: the same clamp for engines with the unprefixed property */
       min-width: 0;
       white-space: normal;
       overflow-wrap: anywhere;

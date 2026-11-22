@@ -35,8 +35,12 @@
   font-weight: 600;
   color: var(--fg);
   min-width: 0;
+}
+/* The app's name in the pane's one-line bar (the bar never grows a second line); the icon stays. */
+.session-app-pane-title > span:last-child {
+  min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: ellipsis; /* meta: the app's name in the pane's fixed one-line bar; it peeks whole on hover */
 }
 
 /* Many Apps scroll sideways in one row (the shared Tabs do), the bar never grows a second line. */

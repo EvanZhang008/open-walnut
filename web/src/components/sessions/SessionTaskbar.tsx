@@ -406,7 +406,7 @@ function PeekCard({ sessionId, task, title, state, running, anchorRef, processSt
     >
       <div className="session-taskbar-card-head">
         <TaskStateIcon state={state} className="session-taskbar-dot" size={12} decorative />
-        <span className="session-taskbar-card-title">{title}</span>
+        <span className="session-taskbar-card-title wn-title">{title}</span>
         <button type="button" className="session-taskbar-card-open" onClick={onOpen}>Open</button>
       </div>
       {/* The status line and the last reply are the agent's words, source as written: a path, link,

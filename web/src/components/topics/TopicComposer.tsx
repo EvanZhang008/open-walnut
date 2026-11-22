@@ -120,7 +120,7 @@ export function TopicComposer({ topic, actions }: { topic: Topic; actions: Pick<
                 data-testid="topic-mention-row" data-kind={c.kind}
                 onMouseEnter={() => setHi(i)} onClick={() => void pick(c)}>
                 <MemberAvatar who={{ name, ref }} size={20} />
-                <span className="topic-mention-name">{name}</span>
+                <span className="topic-mention-name wn-title">{name}</span>
                 <span className="topic-mention-hint">{c.kind === 'member' ? (c.member.role === 'host' ? 'Host' : 'In the topic') : 'Add to topic'}</span>
               </button>
             );

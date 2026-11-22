@@ -110,7 +110,7 @@ export function RoutineTaskField({ id, value, onChange }: { id: string; value: s
               className="routine-task-hit"
               onClick={() => { picked.current.set(h.id, h); onChange(h.id); setQuery(''); setChoosing(false); }}
             >
-              <span className="routine-task-hit-title">{h.title}</span>
+              <span className="routine-task-hit-title wn-title">{h.title}</span>
               <span className="routine-task-hit-project">{h.project || 'Inbox'}</span>
             </button>
           </li>

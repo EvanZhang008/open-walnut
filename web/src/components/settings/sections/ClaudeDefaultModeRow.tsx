@@ -40,14 +40,18 @@ export function ClaudeDefaultModeRow({ config }: { config: Config }) {
     }
     finally { if (hostRef.current === host) setBusy(false); }
   };
-  return <SettingsRow label="Claude Code default mode" htmlFor="claude-default-mode" error={error}
+  // Stacked, each select named: two selects beside the help squeezed it into a narrow column and
+  // read as one choice (2026-11-22 audit).
+  return <SettingsRow label="Claude Code default mode" htmlFor="claude-default-mode" error={error} className="settings-row-stacked"
     help="New sessions follow Claude Code's own setting on the selected machine. Project settings can override it. With no saved mode, Walnut uses Auto when supported. A session can choose another mode."
-    control={<span style={{ display: 'flex', gap: 8 }}>
-      <select aria-label="Default mode host" className="settings-select" value={host} disabled={busy}
+    control={<span className="settings-captioned-fields">
+      <label className="settings-field-caption" htmlFor="claude-default-mode-host">Machine</label>
+      <select id="claude-default-mode-host" aria-label="Default mode host" className="settings-select" value={host} disabled={busy}
         onChange={e => setHost(e.target.value)}>
         <option value="__local__">This machine</option>
         {Object.keys(config.hosts ?? {}).map(id => <option key={id} value={id}>{id}</option>)}
       </select>
+      <label className="settings-field-caption" htmlFor="claude-default-mode">Mode</label>
       <select id="claude-default-mode" data-testid="claude-default-mode" className="settings-select"
         disabled={busy || !item || !!item.invalid} value={item?.source === 'default' ? '' : String(item?.value ?? '')}
         onChange={e => void save(e.target.value)}>

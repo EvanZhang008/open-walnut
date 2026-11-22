@@ -304,7 +304,7 @@ export function SessionBrowserReplay({ taskId, large, onLarge, onBack, onClose, 
     <section className={`session-browser-card session-browser-replay${large ? ' session-browser-card--large' : ''}`} data-testid="session-browser-replay" aria-label="Browser replay">
       <header className="session-browser-replay-head">
         <div className="session-browser-replay-names">
-          <div className="session-browser-title" data-testid="session-browser-replay-title">{title}</div>
+          <div className="session-browser-title wn-title" data-testid="session-browser-replay-title">{title}</div>
           <div className="session-browser-url" data-testid="session-browser-replay-url">{step?.url ?? ''}</div>
         </div>
         <span className="session-browser-replay-where" data-testid="session-browser-replay-where" title={step ? agoLine(step.at, now) : undefined}>

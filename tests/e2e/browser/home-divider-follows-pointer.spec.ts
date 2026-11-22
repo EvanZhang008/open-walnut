@@ -78,8 +78,10 @@ test('Home: with the task panel open, the session divider and the task panel div
   await expect(page.locator('.main-page-chat')).not.toHaveClass(/collapsed/)
 
   const sessionHandle = page.locator('.session-resize-handle')
-  // Wider (left), then narrower (right): both directions, from a non-default start the second time.
-  for (const dx of [-120, 80]) {
+  // Narrower (right), then wider (left): both directions, from a non-default start the second time.
+  // The fixture's Quick question is empty, so the area starts at its graduated 65%, a few % under the
+  // 70% the drag stops at: narrower first leaves the wider drag its room.
+  for (const dx of [80, -120]) {
     const moved = await dragBy(page, sessionHandle, dx)
     expect(Math.abs(moved.mid - dx), `session divider mid-drag moved ${moved.mid} for ${dx}`).toBeLessThanOrEqual(2)
     expect(Math.abs(moved.released - dx), `session divider released moved ${moved.released} for ${dx}`).toBeLessThanOrEqual(2)
@@ -109,4 +111,42 @@ test("a session's chat splitter follows the pointer in a Home column", async ({ 
     expect(Math.abs(moved.released - dx), `chat splitter released moved ${moved.released} for ${dx}`).toBeLessThanOrEqual(2)
   }
   await page.screenshot({ path: `${SHOT_DIR}/chat-splitter-after-drag.png` })
+})
+
+// 2026-11-22 audit: with nothing open beside it, Home's empty pane kept two thirds of the row while
+// long titles wrapped in the task panel. The panel now takes the room up to a readable line, with a
+// width of its own for that layout: a drag there follows the pointer and leaves the width it has
+// beside a session alone.
+test('Home with nothing open: the task panel takes the room, its divider follows the pointer, the width beside a session is kept', async ({ page, baseURL }) => {
+  await boot(page, baseURL!, false)
+  await expect(page.getByTestId('home-empty-pane')).toBeVisible()
+  const todo = page.locator('.main-page-todo')
+  // 1512 less the 56 px rail, less the empty pane's 400 px, capped at the readable 880 px.
+  await expect.poll(async () => Math.round((await todo.boundingBox())!.width)).toBe(880)
+  const handle = page.locator('.todo-resize-handle')
+  for (const dx of [-120, 60]) {
+    const moved = await dragBy(page, handle, dx)
+    expect(Math.abs(moved.mid - dx), `task panel divider mid-drag moved ${moved.mid} for ${dx}`).toBeLessThanOrEqual(2)
+    expect(Math.abs(moved.released - dx), `task panel divider released moved ${moved.released} for ${dx}`).toBeLessThanOrEqual(2)
+  }
+  await page.screenshot({ path: `${SHOT_DIR}/todo-alone-after-drag.png` })
+  // A session opened: the task panel is back at its own width beside a session (the default 25%).
+  await openSessionColumn(page)
+  await expect.poll(async () => Math.round((await todo.boundingBox())!.width)).toBe(Math.round((1512 - 56) * 0.25))
+})
+
+// 2026-11-22 audit: an empty Quick question took half the row beside a session with a long history.
+test('Home: an empty Quick question keeps the smaller share beside a session', async ({ page, baseURL }) => {
+  await boot(page, baseURL!, true)
+  await openSessionColumn(page)
+  const slot = page.locator('.main-page-chat')
+  const area = page.locator('.main-page-sessions-area')
+  // The fixture has no quick question yet: the slot shows a new question's composer.
+  await expect(slot.locator('[data-testid="ask-walnut-draft"], [data-testid="ask-walnut-main-draft"]').first()).toBeVisible()
+  const row = page.locator('.main-page-content-row')
+  await expect.poll(async () => {
+    const [a, r] = [(await area.boundingBox())!.width, (await row.boundingBox())!.width]
+    return Math.round((a / r) * 100)
+  }).toBeGreaterThanOrEqual(63)
+  await page.screenshot({ path: `${SHOT_DIR}/empty-quick-question.png` })
 })

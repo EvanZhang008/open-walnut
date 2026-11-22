@@ -83,7 +83,12 @@ test.describe('the model answering', () => {
       expect(cut).toBe(false)
       expect(height).toBeLessThanOrEqual(56 + (lines - 1) * 16)
     }
-    for (const group of groups.groups) await expect(groupLine(page, group.id).getByTestId('mail-group-summary')).toHaveText(group.summary)
+    // Open, a line keeps only the model's words: its rows already show the newest subject (2026-11-22).
+    for (const group of groups.groups) {
+      const summary = groupLine(page, group.id).getByTestId('mail-group-summary')
+      if (group.summaryBy === 'ai') await expect(summary).toHaveText(group.summary)
+      else await expect(summary).toHaveCount(0)
+    }
     const first = groupLine(page, ids[0]!)
     await expect(first.getByTestId('mail-group-mark')).toBeHidden()
     await first.hover()

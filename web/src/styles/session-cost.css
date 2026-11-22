@@ -25,11 +25,14 @@
 
 .session-cost-title {
   color: var(--fg);
-  /* One line whatever lands in it (the picker's rows below must not move). */
   min-width: 0;
+}
+/* The picker's toggle head is one line whatever lands in it (the picker's rows below must not
+   move). The opened fold's head says the whole sentence, wrapping. */
+.session-cost-head .session-cost-title {
   overflow: hidden;
   white-space: nowrap;
-  text-overflow: ellipsis;
+  text-overflow: ellipsis; /* meta: the model picker's one-line cost toggle, so its rows never move when a reason lands; it peeks whole on hover */
 }
 
 .session-cost-reason::before {
@@ -69,11 +72,9 @@
   background: var(--bg-secondary);
 }
 
+/* A model's name wraps in full (.wn-title); its counts and price stay level with its first line. */
 .session-cost-model-name {
   color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .session-cost-model-meta,
@@ -262,6 +263,7 @@
 
 .session-cost-fold .session-cost-title {
   color: var(--fg-notice);
+  overflow-wrap: anywhere;
 }
 
 .session-cost-fold .session-cost-title strong {

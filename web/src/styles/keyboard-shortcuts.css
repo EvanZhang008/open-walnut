@@ -54,12 +54,14 @@
   margin: 0;
 }
 
+/* Keys of one combination sit 4px apart; between combinations 8px, the word, 8px, so
+   "Alt Shift [ / Alt Shift ]" reads as two combinations, not one run (2026-11-22 audit). */
 .shortcuts-help-keys {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 6px;
+  gap: 8px;
   margin: 0;
   flex-shrink: 0;
 }
@@ -67,13 +69,13 @@
 .shortcuts-help-chord {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
 }
 
 .shortcuts-help-sep {
   font-size: var(--font-size-sm);
   color: var(--fg-muted);
-  margin-right: 3px;
+  margin-right: 4px;
 }
 
 .shortcuts-help kbd,

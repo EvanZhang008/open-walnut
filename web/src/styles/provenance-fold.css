@@ -105,26 +105,15 @@
   overflow-wrap: anywhere;
 }
 
-/* Folded, the title is one line and the summary two (the user, 2026-11-10). */
-.op-card-main[aria-expanded="false"] .op-card-title {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 1;
-  overflow: hidden;
-}
-
+/* The title and the summary say their words in full here (standard.md "Text that does not
+   fit"). In the session timeline, step-rows.css draws them as the row's one or two lines
+   (2026-11-11, the user: "if 1 line just 1 line, if 2 line just have the title in one and
+   detail or summary in next"), and the opened card holds every word. */
 .op-card-summary {
+  display: block;
   font-size: var(--font-size-md);
   color: var(--fg-secondary);
   overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-}
-
-.op-card-main[aria-expanded="true"] + .op-card-summary {
-  display: block;
 }
 
 .op-card-more {

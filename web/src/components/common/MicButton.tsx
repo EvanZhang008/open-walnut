@@ -603,8 +603,8 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
             const name = MODEL_CATALOG.find(c => c.filename === m.name)?.name ?? m.name;
             return (
               <button key={m.name} className="mic-retry-item" onClick={() => handleRetryModel(name)} type="button">
-                <span className="mic-retry-model-name">{modelDisplayName(m)}</span>
-                <span className="mic-retry-model-size">{(m.sizeBytes / 1e9).toFixed(1)}G</span>
+                <span className="mic-retry-model-name wn-title">{modelDisplayName(m)}</span>
+                <span className="mic-retry-model-size wn-fixed">{(m.sizeBytes / 1e9).toFixed(1)}G</span>
               </button>
             );
           })}

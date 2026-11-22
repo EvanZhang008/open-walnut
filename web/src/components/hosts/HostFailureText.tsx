@@ -4,7 +4,7 @@
  * same everywhere. Text comes from the shared model (@open-walnut/host-problem)
  * and the server's hint verbatim; nothing here rewrites a sentence by kind.
  *
- *   .hft-headline  bold, two lines then clamped, title = full text
+ *   .hft-headline  bold, wrapped in full (.wn-title), never clamped
  *   .hft-hint      the server hint, `code` rendered as <code>
  *   .hft-details   'Show SSH output' (or 'Show details') -> pre.hft-summary
  *   .hft-when      'Walnut tries again in 3m 12s', only for a real schedule
@@ -66,7 +66,7 @@ export function HostFailureText({ headline, hint, summary, kind, retryAt, lastFr
   const hidden = collapsed ? (cleanHint || cleanSummary) : (inline ? '' : cleanSummary);
   return (
     <div className="hft" data-testid={testId} {...(kind ? { 'data-kind': kind } : {})}>
-      {headline && <div className="hft-headline">{headline}</div>}
+      {headline && <div className="hft-headline wn-title">{headline}</div>}
       {afterHeadline}
       {!collapsed && cleanHint && <div className="hft-hint"><InlineCodeText text={cleanHint} /></div>}
       {inline && cleanSummary && <pre className="hft-summary">{cleanSummary}</pre>}

@@ -113,7 +113,8 @@ function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; select
             {badge}
           </span>
         </span>
-        <span className={`org-channel-latest wn-title${row.state === 'alert' ? ' is-alert' : ''}`} data-testid="org-channel-latest" title={row.latestTask ? `${row.latestTask}: ${row.latest}` : row.latest}>
+        {/* What is happening is metadata: one line under the name, cut first (the hover peek shows it whole). */}
+        <span className={`org-channel-latest wn-meta${row.state === 'alert' ? ' is-alert' : ''}`} data-testid="org-channel-latest" title={row.latestTask ? `${row.latestTask}: ${row.latest}` : row.latest}>
           {/* A pinned thread named on the line wears the Threads card's pin. */}
           {row.latestPinned && <ThreadPinIcon size={11} className="org-channel-pin" />}{row.latest}
         </span>
@@ -191,7 +192,7 @@ function MovedSection({ moved, query, onSelect, onMenu }: { moved: readonly Move
           <NodeAvatar taskId={undefined} name={m.project} size={26} className="is-moved" />
           <span className="org-channel-mid">
             <span className="org-channel-name wn-title">{m.project}</span>
-            <span className="org-channel-latest wn-title" data-testid="org-moved-line">
+            <span className="org-channel-latest wn-meta" data-testid="org-moved-line">
               Moved to the {m.vpName} VP{m.from ? (m.from.open ? ' · handing over' : ' · closed') : ''}
             </span>
           </span>

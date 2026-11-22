@@ -112,7 +112,7 @@ export function NoteLinkPanel({ notes, onSelect, onBack }: NoteLinkPanelProps) {
                 onMouseEnter={() => setSelectedIdx(i)}
                 onMouseDown={(e) => { e.preventDefault(); onSelect(note.name); }}
               >
-                <div className="notes-task-search-title">{note.name}</div>
+                <div className="notes-task-search-title wn-title">{note.name}</div>
                 {note.path !== `${note.name}.md` && (
                   <div className="notes-task-search-meta">
                     <span className="notes-task-search-project">{note.path.replace(/\.md$/, '')}</span>
@@ -126,7 +126,7 @@ export function NoteLinkPanel({ notes, onSelect, onBack }: NoteLinkPanelProps) {
                 onMouseEnter={() => setSelectedIdx(results.length)}
                 onMouseDown={(e) => { e.preventDefault(); onSelect(query.trim()); }}
               >
-                <div className="notes-task-search-title">Link new note "{query.trim()}"</div>
+                <div className="notes-task-search-title wn-title">Link new note "{query.trim()}"</div>
               </div>
             )}
           </>

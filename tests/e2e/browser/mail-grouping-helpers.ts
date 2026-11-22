@@ -100,10 +100,14 @@ export async function allGroupMessages(
 
 /**
  * New unread mail (newest of all), `people` of them from a person writing to Robin directly;
- * `kind: 'list'` makes the rest a newsletter whose only way out is a mailto:.
+ * `kind: 'list'` makes the rest a newsletter whose only way out is a mailto:. `subject` and `from`
+ * replace every delivered mail's subject and sender.
  */
-export function deliver(fixture: MailFixture, count = 1, options: { people?: number; account?: 'marina' | 'ferry'; kind?: 'list'; subject?: string } = {}): Promise<{ delivered: Array<{ accountId: string; messageId: string; subject: string }> }> {
-  const query = `count=${count}&people=${options.people ?? 0}&account=${options.account ?? 'marina'}${options.kind ? `&kind=${options.kind}` : ''}${options.subject ? `&subject=${encodeURIComponent(options.subject)}` : ''}`
+export function deliver(fixture: MailFixture, count = 1, options: { people?: number; account?: 'marina' | 'ferry'; kind?: 'list'; subject?: string; from?: { name: string; address: string } } = {}): Promise<{ delivered: Array<{ accountId: string; messageId: string; subject: string }> }> {
+  const query = new URLSearchParams({ count: String(count), people: String(options.people ?? 0), account: options.account ?? 'marina' })
+  if (options.kind) query.set('kind', options.kind)
+  if (options.subject) query.set('subject', options.subject)
+  if (options.from) { query.set('from', options.from.name); query.set('address', options.from.address) }
   return fixtureCall(fixture, `deliver?${query}`, 'POST')
 }
 

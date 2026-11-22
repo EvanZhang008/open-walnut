@@ -37,7 +37,9 @@
   border-bottom: 1px solid var(--border);
 }
 .topic-head-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.topic-head-title { font-weight: 600; font-size: var(--font-size-lg); line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The topic's title, a message's author, a member's or candidate's name wrap in full (.wn-title, standard.md
+   "Text that does not fit"); only a picked chip keeps its one line. */
+.topic-head-title { font-weight: 600; font-size: var(--font-size-lg); line-height: 20px; }
 .topic-head-sub { font-size: var(--font-size-sm); line-height: 16px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .topic-head-count { font-size: var(--font-size-md); font-variant-numeric: tabular-nums; }
 .topic-main { flex: 1; min-height: 0; display: flex; position: relative; }
@@ -67,7 +69,8 @@
 .topic-msg.is-human { justify-content: flex-end; }
 .topic-msg.is-human .topic-msg-body { align-items: flex-end; }
 .topic-msg-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; max-width: 100%; line-height: 20px; padding: 0 4px; }
-.topic-msg-name { flex: 0 1 auto; min-width: 0; font-size: var(--font-size-md); font-weight: 600; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The author keeps its words' width, so the context and the time follow it (not the row's far end). */
+.topic-msg-head .topic-msg-name { flex: 0 1 auto; font-size: var(--font-size-md); font-weight: 600; color: var(--fg); }
 .topic-msg-context { min-width: 24px; font-size: var(--font-size-sm); color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* A message's role or source ("Host", "Email"): the one neutral `.badge`. */
 .topic-msg-tag { flex: none; }
@@ -132,7 +135,7 @@
 
 .topic-mention-menu { min-width: 260px; max-width: 420px; overflow-y: auto; }
 .topic-mention-row { display: flex; align-items: center; gap: 8px; width: 100%; }
-.topic-mention-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.topic-mention-name { text-align: left; }
 .topic-mention-hint { color: var(--fg-muted); font-size: var(--font-size-xs); flex: none; }
 
 /* The side panel */
@@ -146,7 +149,7 @@
 .topic-member:hover { background: var(--bg-hover); }
 .topic-member.is-pending .topic-member-name { color: var(--fg-secondary); }
 .topic-member-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.topic-member-name { font-size: var(--font-size-md); font-weight: 500; line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topic-member-name { font-size: var(--font-size-md); font-weight: 500; line-height: 18px; }
 .topic-member-status { font-size: var(--font-size-sm); line-height: 16px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Remove: shown on the row's hover or focus, never a permanent column of crosses. */
 .topic-member-remove {
@@ -201,7 +204,10 @@
   border: 1px solid var(--border); font-size: var(--font-size-md); max-width: 100%;
 }
 .topic-chip.is-host { border-color: var(--accent); }
-.topic-chip-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
+.topic-chip-name {
+  white-space: nowrap; overflow: hidden; max-width: 200px;
+  text-overflow: ellipsis; /* meta: a picked member's chip in the wrapping chip strip, 200px at most; it peeks whole on hover */
+}
 .topic-chip-host, .topic-chip-x {
   border: none; background: transparent; color: var(--fg-muted); cursor: pointer; padding: 0 3px; font-size: var(--font-size-md); line-height: 1;
 }
@@ -214,7 +220,7 @@
 }
 .topic-candidate:hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 6%, transparent); }
 .topic-candidate:disabled { opacity: 0.55; cursor: default; }
-.topic-candidate-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topic-candidate-name { flex: 1; }
 .topic-candidate-hint { flex: 0 1 auto; max-width: 55%; color: var(--fg-muted); font-size: var(--font-size-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .topic-add-list { margin-top: 12px; }
 .topic-person { display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px dashed var(--border); border-radius: var(--radius-sm); }

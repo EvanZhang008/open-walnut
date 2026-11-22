@@ -287,7 +287,7 @@ export function RoutinesView({ compact = false }: { compact?: boolean }) {
                     <svg className={`routine-row-chevron routine-group-chevron${folded ? '' : ' open'}`} viewBox="0 0 16 16" aria-hidden="true">
                       <path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
-                    <span className="routine-group-name">{group.name}</span>
+                    <span className="routine-group-name wn-title">{group.name}</span>
                     <span className="routine-group-count">{group.routines.length}</span>
                     {group.failing > 0 && <span className="routine-group-failing">{group.failing} failing</span>}
                   </button>

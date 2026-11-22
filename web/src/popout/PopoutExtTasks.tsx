@@ -216,7 +216,7 @@ function TaskRow({ section, row, open, onToggle, replies, setReplies }: { sectio
       <button type="button" className="ext-task-head" onClick={onToggle} aria-expanded={open}>
         <TaskStateIcon state={taskIconState(task)} size={12} className="ext-task-mark" decorative />
         <span className="ext-task-text">
-          <span className="ext-task-title">{taskTitleOf(task)}</span>
+          <span className="ext-task-title wn-title">{taskTitleOf(task)}</span>
           {line && <span className="ext-task-line" data-testid="ext-task-line">{line}</span>}
           {reply?.state === 'sent' && reply.words && <span className="ext-task-replied" data-testid="ext-task-replied">You replied: {reply.words}</span>}
         </span>

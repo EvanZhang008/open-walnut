@@ -6,7 +6,8 @@
  * always asks, whatever this says (routes/approvals-v1.ts), and the row says so.
  *
  * Under the switch, while it is off: the steps that went ahead without asking, newest first (the
- * approved records marked `unasked`), so the person can read afterwards what the switch let through.
+ * approved records marked `unasked`), so the person can read afterwards what the switch let through;
+ * the same step from the same task is one entry with its count (groupSame).
  *
  * Only the person's own window moves it (routes/config.ts refuses an agent), on any device they are
  * signed in on: no extra ask to turn it off.
@@ -84,26 +85,28 @@ function UnaskedList({ off }: { off: boolean }) {
   if (!items) return null;
   // On, with nothing that ever went ahead: nothing to show. Once some did, the record stays.
   if (!off && items.length === 0) return null;
-  const shown = all ? items : items.slice(0, FIRST);
+  const groups = groupSame(items);
+  const shown = all ? groups : groups.slice(0, FIRST);
   return (
     <SettingsRow indent label="Went ahead without asking" help={off ? undefined : 'While approvals were off. Each one asks you now.'} data-testid="settings-approvals-unasked">
       {items.length === 0
         ? <p className="settings-row-help">Nothing yet.</p>
         : (
           <ul className="approvals-unasked-list">
-            {shown.map((a) => (
-              <li key={a.id} data-testid="settings-approvals-unasked-item">
+            {shown.map(({ lead: a, all: same }) => (
+              <li key={a.id} data-testid="settings-approvals-unasked-item" data-count={same.length}>
                 <details>
                   <summary>
                     <span className="approvals-unasked-what">{a.what}</span>
                     <span className="approvals-unasked-meta">
-                      {a.requester.taskTitle ? `${a.requester.taskTitle} · ` : ''}{timeAgo(a.answer?.at ?? a.createdAt, { long: true })}
+                      {a.requester.taskTitle ? `${a.requester.taskTitle} · ` : ''}
+                      {same.length > 1 ? `${same.length} times, last ` : ''}{timeAgo(whenOf(a), { long: true })}
                     </span>
                   </summary>
                   <dl className="approvals-unasked-more-info">
                     {a.requester.command && (<><dt>Command</dt><dd><code>{a.requester.command}</code></dd></>)}
                     <dt>From</dt><dd>{fromText(a, hostLabel)}</dd>
-                    <dt>When</dt><dd>{new Date(a.answer?.at ?? a.createdAt).toLocaleString()}</dd>
+                    <dt>When</dt><dd>{same.map((x) => new Date(whenOf(x)).toLocaleString()).join(', ')}</dd>
                     {a.detail && (<><dt>Detail</dt><dd><pre>{a.detail}</pre></dd></>)}
                   </dl>
                 </details>
@@ -111,13 +114,33 @@ function UnaskedList({ off }: { off: boolean }) {
             ))}
           </ul>
         )}
-      {items.length > FIRST && (
+      {groups.length > FIRST && (
         <button type="button" className="approvals-unasked-more" data-testid="settings-approvals-unasked-more" onClick={() => setAll((v) => !v)}>
-          {all ? 'Show fewer' : `Show all ${items.length}`}
+          {all ? 'Show fewer' : `Show all ${groups.length}`}
         </button>
       )}
     </SettingsRow>
   );
+}
+
+function whenOf(a: Approval): string {
+  return a.answer?.at ?? a.createdAt;
+}
+
+/**
+ * The same step from the same task, several times (an agent retrying a sign-in), is one entry with
+ * its count, at the place of its newest: five near-identical lines read as a wall (2026-11-22 audit).
+ * `items` is newest first, so each group's lead is its newest.
+ */
+export function groupSame(items: Approval[]): Array<{ lead: Approval; all: Approval[] }> {
+  const byKey = new Map<string, { lead: Approval; all: Approval[] }>();
+  for (const a of items) {
+    const key = `${a.requester.taskId ?? a.requester.taskTitle ?? ''}\u0000${a.what}`;
+    const group = byKey.get(key);
+    if (group) group.all.push(a);
+    else byKey.set(key, { lead: a, all: [a] });
+  }
+  return [...byKey.values()];
 }
 
 /** Who asked, in a few words: the task, the process, the machine (by its label). */

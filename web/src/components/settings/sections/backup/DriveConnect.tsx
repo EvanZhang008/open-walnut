@@ -158,11 +158,11 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
     const who = `${status.email ? ` as ${status.email}` : ''}`
     const clientId = dest.client_id?.trim() || status.signedInClientId
     const ownClientNote = (status.signedInWith ?? status.client) === 'custom'
-      ? ` Uses your own Google client${clientId ? ` (${clientId.length > 24 ? `${clientId.slice(0, 12)}...${clientId.slice(-12)}` : clientId})` : ''}: a new computer needs the same ID and secret.`
+      ? `Uses your own Google client${clientId ? ` (${clientId.length > 24 ? `${clientId.slice(0, 12)}...${clientId.slice(-12)}` : clientId})` : ''}: a new computer needs the same ID and secret.`
       : status.signedInWith === 'missing'
-        ? ' The Google client this sign-in used is no longer on this computer, so backups stop: put it back, or disconnect and connect again.'
+        ? 'The Google client this sign-in used is no longer on this computer, so backups stop: put it back, or disconnect and connect again.'
       : status.machineClientFile && status.signedInWith === 'builtin'
-        ? ` Uses the Google client saved on this computer (${status.machineClientFile}): a new computer needs a copy of that file.`
+        ? `Uses the Google client saved on this computer (${status.machineClientFile}): a new computer needs a copy of that file.`
         : ''
     if (confirmingDisconnect) {
       return (
@@ -183,12 +183,14 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
         />
       )
     }
+    // Who and where first; the Google client and what a new computer needs on a line of its own
+    // under it, so the destination is not buried in the path (2026-11-22 audit).
     return (
       <SettingsRow
         label="Google account"
         help={inUse
-          ? `Connected${who}. Backups go to the "${status.folderName ?? 'Walnut Backup'}" folder in your Drive.${ownClientNote}`
-          : `Connected${who}. Backups still go to ${otherInUse ?? 'the service picked before'} until you choose Google Drive.${ownClientNote}`}
+          ? `Connected${who}. Backups go to the "${status.folderName ?? 'Walnut Backup'}" folder in your Drive.`
+          : `Connected${who}. Backups still go to ${otherInUse ?? 'the service picked before'} until you choose Google Drive.`}
         error={error ?? undefined}
         data-testid="backup-gdrive-connected"
         control={
@@ -197,7 +199,9 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
             <SettingsButton onClick={() => setConfirmingDisconnect(true)} data-testid="backup-gdrive-disconnect">Disconnect</SettingsButton>
           </span>
         }
-      />
+      >
+        {ownClientNote && <span className="settings-row-help" data-testid="backup-gdrive-client-note">{ownClientNote}</span>}
+      </SettingsRow>
     )
   }
 

@@ -13,7 +13,6 @@ a.letter-link:hover {
 [data-agent-text] { overflow-wrap: anywhere; white-space: normal; }
 [data-agent-text] > :first-child { margin-top: 0; }
 [data-agent-text] > :last-child { margin-bottom: 0; }
-.triage-session-summary [data-agent-text] { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 
 .open-agent-ref { color: var(--fg); background: var(--bg); overflow-wrap: anywhere; }
 .open-agent-ref button {

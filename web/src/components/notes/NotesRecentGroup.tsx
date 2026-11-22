@@ -56,7 +56,7 @@ export function NotesRecentGroup({ existingPaths, selectedPath, onSelect, expand
           <ChevronIcon />
         </span>
         <ClockGlyph />
-        <span className="notes-tree-name">Recent</span>
+        <span className="notes-tree-name wn-title">Recent</span>
         <span className="notes-bookmarks-count">{recents.length}</span>
       </div>
       {expanded && (
@@ -70,7 +70,7 @@ export function NotesRecentGroup({ existingPaths, selectedPath, onSelect, expand
               onContextMenu={onContextMenu ? (e) => onContextMenu(e, path) : undefined}
             >
               <ClockGlyph />
-              <span className="notes-tree-name">{basenameNoExt(path)}</span>
+              <span className="notes-tree-name wn-title">{basenameNoExt(path)}</span>
             </div>
           ))}
         </div>

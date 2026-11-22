@@ -150,11 +150,14 @@
   font-family: var(--font-mono);
   font-weight: 600;
 }
-.session-server-name {
+/* A chip's name: the strip lays its chips out in one row and cuts every name to the one length
+   that fits (SessionServerList relayout). A row's name wraps in full instead (.wn-title). */
+.session-server-chip .session-server-name {
   max-width: 130px;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: ellipsis; /* meta: a chip in the one-row server strip, cut to the length the strip fits; it peeks whole on hover */
   white-space: nowrap;
+  color: var(--fg-secondary);
 }
 
 /* What answered on the port: green for a web page, grey for anything else. */
@@ -274,7 +277,8 @@
   min-width: 0;
   font-size: var(--font-size-md);
 }
-.session-server-row-main .session-server-name { max-width: none; color: var(--fg); }
+/* The name keeps its words' width (not the row's), so its tags follow it. */
+.session-server-row-main .session-server-name { flex-grow: 0; color: var(--fg); }
 .session-server-row-main .session-server-title,
 .session-server-row-main .session-server-name:not(.session-server-program) { font-weight: 500; }
 .session-server-row-meta { grid-area: meta; min-width: 0; display: flex; align-items: flex-start; gap: 8px; }
@@ -319,16 +323,11 @@
   .session-server-row .session-server-copy { width: 36px; }
 }
 
-/* A row's name: the page's own title when it has one, the program beside it, muted. */
-.session-server-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--fg);
-}
+/* A row's name: the page's own title when it has one (.wn-title, wraps in full), the program
+   beside it, muted (.wn-meta, one line). */
+.session-server-title { color: var(--fg); }
 .session-server-row-main .session-server-program { color: var(--fg-secondary); }
-/* Short of room, the program gives way first; the title keeps a few letters and its ellipsis. */
+/* Short of room, the program gives way first; the title then wraps. */
 .session-server-row-main .session-server-title { flex: 0 1 auto; min-width: 48px; }
 .session-server-row-main .session-server-name.session-server-program { flex-shrink: 4; min-width: 0; }
 .session-server-row-main .session-server-tag { white-space: nowrap; flex-shrink: 0; }
@@ -413,7 +412,7 @@
   .session-servers-list-dense .session-server-row-actions { margin-top: 0; }
 }
 /* A narrow card (the chat column) never lets a row's name or tag run under its buttons: the
-   tag gives way first, then the name, each to an ellipsis (the row's tooltip has them whole). */
+   tag gives way first, to an ellipsis (the row's tooltip has it whole); the name wraps. */
 .session-servers-list-dense .session-server-row-main { overflow: hidden; }
 .session-servers-list-dense .session-server-row-main .session-server-tag {
   flex-shrink: 2;
@@ -425,9 +424,6 @@
 .session-servers-list-dense .session-server-row-main .session-server-name {
   flex-shrink: 1;
   min-width: 24px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 /* A card as narrow as the chat beside the Web view keeps the name: its tags (Terminal, not a
    web page, Showing) go to the row's tooltip; the shown row keeps its accent. */

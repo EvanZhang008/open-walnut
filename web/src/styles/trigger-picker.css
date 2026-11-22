@@ -51,12 +51,8 @@
 .trigger-picker-title {
   margin: 0;
   flex: 1 1 auto;
-  min-width: 0;
   font-size: 14px;
   font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .trigger-picker-back,

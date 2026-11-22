@@ -233,3 +233,24 @@ textarea.settings-input {
 .message-hint-origin-badge { margin-left: 6px; }
 
 /* Task providers' "Try a task title": the title field and its Ask AI button on one line. */
+
+/* Several fields in one stacked row's control line, each with a word before it ("Machine",
+   "Mode"): the word belongs to the field after it, so a wider gap goes before the next word. */
+.settings-captioned-fields {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-field-caption {
+  font-size: var(--font-size-md);
+  line-height: 18px;
+  color: var(--fg-secondary);
+  white-space: nowrap;
+}
+
+.settings-captioned-fields > .settings-field-caption:not(:first-child) {
+  margin-left: 8px;
+}

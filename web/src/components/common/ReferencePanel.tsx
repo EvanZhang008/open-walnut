@@ -105,7 +105,7 @@ export function ReferencePanel({ result, symbol, currentFile, loading, error, on
   return (
     <div className="ref-panel">
       <div className="ref-panel-header">
-        <span className="ref-panel-title">
+        <span className="ref-panel-title wn-title">
           References: <code>{symbol}</code>
           {result && !loading && (
             <span className="ref-panel-count">

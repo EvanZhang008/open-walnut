@@ -87,7 +87,7 @@ export const QuickBarResults = forwardRef<QuickBarResultsHandle, {
         >
           <span className={`qb-result-icon qb-result-icon-${mode}`} aria-hidden="true">{mode === 'tasks' ? <TaskGlyph /> : <NoteGlyph />}</span>
           <span className="qb-result-body">
-            <span className="qb-result-title">{row.title}</span>
+            <span className="qb-result-title wn-title">{row.title}</span>
             {row.sub && <span className="qb-result-sub">{row.sub}</span>}
           </span>
           {i === cursor && <kbd className="qb-key">↵</kbd>}

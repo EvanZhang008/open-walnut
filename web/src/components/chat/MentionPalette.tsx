@@ -448,7 +448,7 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
         >
           <TaskStateIcon state={entity.icon} size={12} decorative />
           <span className="mention-main">
-            <span className="mention-title">
+            <span className="mention-title wn-title">
               {matchField === 'title'
                 ? <Highlighted text={entity.title} positions={positions} />
                 : entity.title}
@@ -475,7 +475,7 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
         >
           <span className="mention-ficon" aria-hidden="true">{entry.type === 'dir' ? ICON_FOLDER : ICON_FILE}</span>
           <span className="mention-main">
-            <span className="mention-title"><Highlighted text={entry.name} positions={positions} /></span>
+            <span className="mention-title wn-title"><Highlighted text={entry.name} positions={positions} /></span>
           </span>
           {entry.type === 'dir' && <span className="mention-into">→</span>}
           {entry.type === 'file' && entry.size != null && (
@@ -507,7 +507,7 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
       >
         <span className="mention-ficon" aria-hidden="true">{KIND_ICON[row.item.kind ?? ''] ?? '•'}</span>
         <span className="mention-main">
-          <span className="mention-title">{row.item.title}</span>
+          <span className="mention-title wn-title">{row.item.title}</span>
           {row.item.subtitle && <span className="mention-meta">{row.item.subtitle}</span>}
         </span>
       </div>

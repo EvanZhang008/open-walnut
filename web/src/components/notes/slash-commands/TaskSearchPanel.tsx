@@ -137,7 +137,7 @@ export function TaskSearchPanel({ tasks, focusedTaskId, onSelect, onBack }: Task
                 onMouseEnter={() => setSelectedIdx(i)}
                 onMouseDown={(e) => { e.preventDefault(); onSelect(task); }}
               >
-                <div className="notes-task-search-title">
+                <div className="notes-task-search-title wn-title">
                   {task.id === focusedTaskId && <span className="notes-task-search-pin" title="Currently selected task">&#x2605;</span>}
                   {orgDisplayTitle(task)}
                 </div>

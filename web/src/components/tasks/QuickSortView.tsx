@@ -331,7 +331,7 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
             const tags = ageTags(item.tier, label(item.tier), item.ages);
             return <article data-peek-row="" key={item.task.id} className={`quick-sort-card${i === at ? ' is-current' : ''}`} data-sort-card={item.task.id} data-sort-card-index={i} onPointerDown={() => setCursor(i)} onFocus={() => setCursor(i)}>
               <div className="quick-sort-card-proj">{item.task.project?.trim() || 'Inbox'}{sub > 0 && ` · ${sub} ${sub === 1 ? 'subtask moves' : 'subtasks move'} with it`}</div>
-              <button type="button" className="quick-sort-card-title" onClick={() => onOpen(item.task)}>{item.task.title}</button>
+              <button type="button" className="quick-sort-card-title wn-title" onClick={() => onOpen(item.task)}>{item.task.title}</button>
               <div className="quick-sort-card-meta"><span className={`home-board-state home-board-state-${state}`}><TaskStateIcon state={taskIconState(item.task)} size={12} decorative />{taskStatusLabel(item.task)}</span><span>{label(item.tier)}</span></div>
               {tags.length > 0 && <div className="quick-sort-tags">{tags.map(t => <span key={t.kind} className={`badge${t.kind === 'idle' && item.ages.idle >= 7 ? ' badge-warning is-old' : ''} quick-sort-tag is-${t.kind}`} data-sort-age={t.kind}><span>{t.text}</span></span>)}</div>}
               {item.line && <div className="quick-sort-card-line">{item.line}</div>}
@@ -350,7 +350,7 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
             const ask = confirming?.key === project.key ? confirming : null;
             return <article key={project.key} className={`quick-sort-card is-project${i === at ? ' is-current' : ''}`} data-sort-project={project.key} data-sort-card-index={i} onPointerDown={() => setCursor(i)} onFocus={() => setCursor(i)}>
               <div className="quick-sort-card-proj">Project · {open} open{project.snoozed ? ` · ${project.snoozed} snoozed` : ''}</div>
-              <div className="quick-sort-card-title is-static">{project.label}</div>
+              <div className="quick-sort-card-title wn-title is-static">{project.label}</div>
               <div className="quick-sort-mix" aria-label={tiers.map(t => `${project.tiers[t.id] ?? 0} ${t.label}`).join(', ')}>
                 {tiers.map(t => (project.tiers[t.id] ?? 0) > 0 && <i key={t.id} className={tierClass(t.id)} style={{ flexGrow: project.tiers[t.id] }} />)}
               </div>

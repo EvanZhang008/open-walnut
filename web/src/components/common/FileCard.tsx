@@ -77,7 +77,7 @@ export function FileCard({ name, mediaType, detail, failed, progress, onOpen, ac
     <>
       <FileGlyph name={name} mediaType={mediaType} />
       <span className="file-card-meta">
-        <span className="file-card-name">{name}</span>
+        <span className="file-card-name wn-title">{name}</span>
         <span className="file-card-detail">{detail}</span>
       </span>
     </>

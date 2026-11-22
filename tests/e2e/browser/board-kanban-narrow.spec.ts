@@ -238,11 +238,12 @@ test('C55: a tapped card replaces the board; Back and Escape return with the scr
   await page.waitForTimeout(200)
   const before = await boardState(pane)
   expect(before.top).toBeGreaterThan(300)
-  // The first card fully inside the scrolled view.
+  // The first card whose title is fully inside the scrolled view (a card shows its whole summary,
+  // so a whole card may be taller than the view).
   const id = await lanes.evaluate((host) => {
     const box = host.getBoundingClientRect()
     const hit = Array.from(host.querySelectorAll<HTMLElement>('[data-testid="kanban-card"]'))
-      .find((c) => { const r = c.getBoundingClientRect(); return r.top > box.top + 30 && r.bottom < box.bottom - 10 })
+      .find((c) => { const t = c.querySelector('[data-testid="kanban-card-title"]')!.getBoundingClientRect(); return t.top > box.top + 30 && t.bottom < box.bottom - 10 })
     return hit?.dataset.taskId ?? ''
   })
   expect(id).not.toBe('')

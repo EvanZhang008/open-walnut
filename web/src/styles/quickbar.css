@@ -113,7 +113,10 @@
 }
 
 .qb-to:hover, .qb-to[aria-expanded="true"] { background: var(--qb-hover); }
-.qb-to-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qb-to-name {
+  overflow: hidden; white-space: nowrap;
+  text-overflow: ellipsis; /* meta: the recipient chip beside the message box, 220px at most; it peeks whole on hover */
+}
 
 .qb-to-caret {
   width: 0;
@@ -229,8 +232,13 @@
 .qb-keys { flex: none; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 /* Shift-Tab's hint names who it switches to; a long task title is cut, never the other keys. */
 .qb-switch-key { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
-.qb-switch-name { max-width: 9em; overflow: hidden; text-overflow: ellipsis; }
+.qb-switch-name {
+  max-width: 9em; overflow: hidden;
+  text-overflow: ellipsis; /* meta: a name inside the one-line key hints of the foot; its tooltip names it whole */
+}
 
+/* A key is outlined, never filled: the word beside it (what the key does) reads first (the audit,
+   2026-11-22: the filled caps outweighed their words in the foot). */
 .qb-key {
   display: inline-block;
   min-width: 18px;
@@ -238,7 +246,7 @@
   margin-left: 6px;
   border-radius: var(--radius-xs);
   border: 1px solid var(--qb-line);
-  background: var(--qb-hover);
+  background: transparent;
   font: 500 var(--font-size-xs)/15px -apple-system, BlinkMacSystemFont, sans-serif;
   color: var(--qb-muted);
   text-align: center;
@@ -297,8 +305,9 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 42px;
-  padding: 0 10px;
+  /* At least one line's height: a name too long for its column wraps and the row grows. */
+  min-height: 42px;
+  padding: 4px 10px;
   border-radius: 10px;
   cursor: pointer;
 }
@@ -309,8 +318,8 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 46px;
-  padding: 0 10px;
+  min-height: 46px;
+  padding: 4px 10px;
   border-radius: 10px;
   cursor: pointer;
 }
@@ -326,11 +335,12 @@
   background: var(--accent-subtle);
 }
 .qb-mode-row-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.qb-mode-row-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A row's name wraps in full (.wn-title); the line under it is metadata (one line, cut). */
+.qb-mode-row-name { font-size: 14px; font-weight: 600; }
 .qb-mode-row-about { font-size: var(--font-size-sm); color: var(--qb-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qb-mode-row-hint { flex: none; font-size: var(--font-size-xs); color: var(--qb-muted); white-space: nowrap; }
 .qb-person-main { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 0 1 auto; max-width: 52%; }
-.qb-person-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qb-person-name { font-size: 14px; font-weight: 600; }
 .qb-person-current .qb-person-name::after { content: ' \2713'; color: var(--accent); font-weight: 700; }
 .qb-person-project { font-size: var(--font-size-xs); color: var(--qb-muted); white-space: nowrap; }
 
@@ -470,7 +480,7 @@ html.qb-panel-doc #root {
 .qb-result-icon-tasks { background: var(--success); }
 .qb-result-icon-notes { background: #e8a800; }
 .qb-result-body { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.qb-result-title { font-size: 14px; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qb-result-title { font-size: 14px; font-weight: 550; }
 .qb-result-sub { font-size: var(--font-size-sm); color: var(--qb-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .qb-ask {

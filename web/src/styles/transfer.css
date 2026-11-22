@@ -41,7 +41,7 @@
 .xfer-opt:disabled { cursor: not-allowed; opacity: 0.55; }
 .xfer-opt:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 1px; }
 .xfer-opt-line { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.xfer-opt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.xfer-opt-name { flex: 1; min-width: 0; font-weight: 500; }
 /* "Now" (accent: the live choice) and a choice's tag are the one `.badge`. */
 .xfer-opt-tag, .xfer-now { flex: none; }
 .xfer-opt-sub { font-size: var(--font-size-sm); color: var(--fg-muted); overflow-wrap: anywhere; }

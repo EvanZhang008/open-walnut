@@ -114,7 +114,8 @@
 .kanban-lane-kind-bar[data-kind="wait"], .kanban-kind-radio-dot[data-kind="wait"] { background: var(--kc-violet); }
 .kanban-lane-kind-bar[data-kind="review"], .kanban-kind-radio-dot[data-kind="review"] { background: var(--kc-amber); }
 .kanban-lane-kind-bar[data-kind="done"], .kanban-kind-radio-dot[data-kind="done"] { background: var(--kc-green); }
-.kanban-lane-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
+/* The lane's name wraps whole (`wn-title`) at its words' width, so its count and badge follow it. */
+.kanban-lane-head .kanban-lane-name { font-weight: 600; flex: 0 1 auto; }
 /* The lane's count and its needs-you count are `.badge badge-count` (styles/badge.css): only placement here. */
 .kanban-lane-count, .kanban-lane-needs { flex: 0 0 auto; }
 .kanban-lane-kebab {

@@ -151,7 +151,7 @@ export function QuickBarPicker({ sections, current, onPick, onClose, modes: mode
                 >
                   <span className="qb-mode-row-icon"><ModeGlyph mode={m.id} size={16} /></span>
                   <span className="qb-mode-row-main">
-                    <span className="qb-mode-row-name">{m.action}</span>
+                    <span className="qb-mode-row-name wn-title">{m.action}</span>
                     <span className="qb-mode-row-about">{m.about}</span>
                   </span>
                   <span className="qb-mode-row-hint">or type <kbd className="qb-key">{m.keywords[0]}</kbd> then <kbd className="qb-key">tab</kbd></span>
@@ -179,7 +179,7 @@ export function QuickBarPicker({ sections, current, onPick, onClose, modes: mode
                 >
                   <PersonAvatar person={p} size={26} />
                   <span className="qb-person-main">
-                    <span className="qb-person-name">{p.title}</span>
+                    <span className="qb-person-name wn-title">{p.title}</span>
                     {p.kind === 'task' && p.project && <span className="qb-person-project">{p.project}</span>}
                   </span>
                   <span className={`qb-person-line${p.needs > 0 || p.state === 'needs' ? ' qb-person-needs' : ''}`}>

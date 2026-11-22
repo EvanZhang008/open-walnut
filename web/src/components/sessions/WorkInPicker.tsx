@@ -124,7 +124,7 @@ function WorkInBody({ draft, ps, rows, folders, onPickFolder, onBrowse, onUpdate
                 <button type="button" className="wip-pick" onClick={() => pickProject(r.name)} title={source ? `From ${source.anchor}` : r.defaultCwd ?? undefined}>
                   <span className={`wip-ico is-${workInKindOf(source)}`}><WorkInKindIcon kind={workInKindOf(source)} /></span>
                   <span className="wip-text">
-                    <span className="wip-name">{projectDisplayName(r.name)}</span>
+                    <span className="wip-name wn-title">{projectDisplayName(r.name)}</span>
                     <span className="wip-line" data-testid="work-in-line">{line}</span>
                   </span>
                   {current && <WorkInCheckIcon />}
@@ -145,7 +145,7 @@ function WorkInBody({ draft, ps, rows, folders, onPickFolder, onBrowse, onUpdate
               <button type="button" className="wip-pick" onClick={() => pickProject('')}>
                 <span className="wip-ico is-folder"><WorkInKindIcon kind="folder" /></span>
                 <span className="wip-text">
-                  <span className="wip-name">Inbox</span>
+                  <span className="wip-name wn-title">Inbox</span>
                   <span className="wip-line">No project · works in a folder you pick</span>
                 </span>
                 {inboxCurrent && <WorkInCheckIcon />}
@@ -165,7 +165,7 @@ function WorkInBody({ draft, ps, rows, folders, onPickFolder, onBrowse, onUpdate
                 <button type="button" className="wip-pick" onClick={() => pickFolder(d)} title={d.cwd}>
                   <span className="wip-ico is-folder"><WorkInKindIcon kind="folder" /></span>
                   <span className="wip-text">
-                    <span className="wip-name">{shownFolderName(d.cwd, d.host)}</span>
+                    <span className="wip-name wn-title">{shownFolderName(d.cwd, d.host)}</span>
                     <span className="wip-line">
                       {tildePath(d.cwd, knownHomeOf(d.host))} · {d.host ? hostLabelOf(d.host, d.hostLabel) : LOCAL_HOST_LABEL}
                     </span>

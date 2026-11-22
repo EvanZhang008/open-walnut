@@ -59,13 +59,11 @@
 }
 .turns-row:hover { background: var(--bg-hover); }
 .turns-item.is-selected > .turns-row { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+/* A turn's label wraps whole (`wn-title`, SessionTurnsView.tsx). */
 .turns-row-title {
   grid-area: title;
   font-size: var(--font-size-md);
   font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .turns-kind-start, .turns-kind-pre-restore, .turns-kind-restored { color: var(--fg-secondary); }
 .turns-row-time { grid-area: time; font-size: var(--font-size-xs); color: var(--fg-muted); white-space: nowrap; }

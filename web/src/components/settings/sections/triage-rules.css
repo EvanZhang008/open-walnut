@@ -25,7 +25,10 @@
 .trr-off { margin: 0; padding: 8px 14px; font-size: var(--font-size-sm); color: var(--fg-muted); }
 .trr-hint { font-size: var(--font-size-xs); color: var(--fg-muted); }
 
-.trr-rule-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+/* Two areas at the row's end: the text keys (Edit, Remove), then the switch, each with room around
+   it; at 4px the keys ran together as "Edit Remove" beside the switch (2026-11-22 audit). */
+.trr-rule-actions { display: flex; align-items: center; gap: 16px; flex: 0 0 auto; }
+.trr-rule-keys { display: inline-flex; align-items: center; gap: 12px; }
 
 .trr-editor {
   display: flex;
@@ -63,7 +66,6 @@
   cursor: pointer;
 }
 .trr-pick:hover, .trr-pick:focus-visible { background: var(--bg-hover); }
-.trr-pick-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .trr-pick-project { flex: 0 0 auto; font-size: var(--font-size-xs); color: var(--fg-muted); }
 .trr-pick-empty { padding: 8px 10px; font-size: var(--font-size-sm); color: var(--fg-muted); }
 .trr-editor-actions { display: flex; gap: 8px; }
@@ -88,7 +90,7 @@ textarea.settings-input.trr-note-input { width: 100%; height: auto; min-height: 
 /* Confirming a removal: the question and its buttons take their own line under the rule, so the
    rule's text does not reflow narrower. */
 .trr-rule-removing { flex-wrap: wrap; }
-.trr-rule-removing .trr-rule-actions { flex: 1 0 100%; justify-content: flex-end; }
+.trr-rule-removing .trr-rule-actions { flex: 1 0 100%; justify-content: flex-end; gap: 8px; }
 .trr-inline-btn { border: none; background: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline; }
 @media (max-width: 600px) {
   .trr-pick { min-height: 44px; }

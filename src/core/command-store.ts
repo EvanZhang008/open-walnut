@@ -67,6 +67,10 @@ function toFilename(name: string): string {
 
 function nameFromFile(filename: string): string | null {
   if (!filename.endsWith('.md')) return null;
+  // A hidden file is never a command: macOS writes `._<name>.md` (AppleDouble metadata, binary)
+  // beside a file copied to some disks, and editors leave `.#<name>.md` locks; listed, one showed
+  // as a command whose prompt was binary noise (2026-11-22, the UI audit).
+  if (filename.startsWith('.')) return null;
   return filename.slice(0, -3);
 }
 

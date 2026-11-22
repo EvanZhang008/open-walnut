@@ -97,7 +97,7 @@ export function AttachmentPreview({ notePath, findQuery }: { notePath: string; f
           <div className="notes-image-missing notes-attachment-failed">
             <span className="notes-image-missing-icon" aria-hidden>{failure === 'missing' ? '!' : '\u2193'}</span>
             <span className="notes-image-missing-label">{failure === 'missing' ? 'Image not found' : "Can't preview here"}</span>
-            <span className="notes-image-missing-name">{name}</span>
+            <span className="notes-image-missing-name wn-title">{name}</span>
             {failure === 'undrawable' && (
               <a className="notes-image-download" href={url} download={name}>Download</a>
             )}

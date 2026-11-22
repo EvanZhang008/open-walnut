@@ -18,9 +18,12 @@
  *
  * Two traps this file exists to hold shut:
  *
- *  1. The heights are hard-coded, so they must match the CSS. They are not measured at
- *     runtime on purpose (measuring 2,923 rows is the cost being avoided), which means a
- *     CSS change to `.tp-row` height silently misaligns every offset. Test reads both.
+ *  1. The estimates must match the CSS. A ghost row is a fixed height; a row and a group
+ *     header wrap their whole title (standard.md, "Text that does not fit"), so the CSS
+ *     gives them a floor (`min-height`) and the window measures only the items it renders
+ *     (useTableWindow.ts; measuring all 2,923 rows is the cost being avoided). An item not
+ *     measured yet counts as its estimate, so a CSS change to that floor misaligns every
+ *     offset below the fold. Test reads both.
  *
  *  2. `visibleRangeFor` must never return a range SHORTER than the viewport. One item
  *     short shows a blank strip at the leading edge during a flick — the exact bug that
@@ -30,22 +33,23 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  ROW_H, GROUP_H, GHOST_H, WINDOW_MIN_ITEMS, OVERSCAN, visibleRangeFor, offsetsFor,
+  ROW_H, GROUP_H, GHOST_H, WINDOW_MIN_ITEMS, OVERSCAN, visibleRangeFor, offsetsFor, itemHeights,
 } from '../../web/src/components/tasks/tasks-table-window';
 
 const WEB = path.resolve(import.meta.dirname, '../../web/src');
 const CSS_SRC = fs.readFileSync(path.join(WEB, 'styles/tasks-page.css'), 'utf8');
 const TABLE_SRC = fs.readFileSync(path.join(WEB, 'components/tasks/TasksPageTable.tsx'), 'utf8');
+const WINDOW_SRC = fs.readFileSync(path.join(WEB, 'components/tasks/useTableWindow.ts'), 'utf8');
 
 /**
- * The `height:` declared for a class in tasks-page.css.
+ * The `height:` (or `min-height:`) declared for a class in tasks-page.css.
  *
  * Scans EVERY rule whose selector list mentions the class, not just the first: these
  * classes also appear in a shared `.tp-thead, .tp-row, .tp-ghost { display: grid; … }`
  * rule that sets no height, and matching that one only would report "no height declared"
  * for a class that plainly has one.
  */
-function cssHeight(cls: string): number {
+function cssHeight(cls: string, prop: 'height' | 'min-height' = 'height'): number {
   const found: number[] = [];
   // Comments first: a `/* … */` immediately above a rule is otherwise glued onto its
   // selector, so the selector no longer compares equal to the class name.
@@ -54,12 +58,12 @@ function cssHeight(cls: string): number {
   for (let m = rule.exec(css); m; m = rule.exec(css)) {
     const selectors = m[1].split(',').map((s) => s.trim());
     if (!selectors.includes(cls)) continue;
-    const h = m[2].match(/(?:^|[;\s])height:\s*(\d+(?:\.\d+)?)px/);
+    const h = m[2].match(new RegExp(`(?:^|[;\\s])${prop}:\\s*(\\d+(?:\\.\\d+)?)px`));
     if (h) found.push(Number(h[1]));
   }
   expect(
     found.length,
-    `${cls} must declare exactly one explicit px height for windowing to work, found ${found.length}`,
+    `${cls} must declare exactly one explicit px ${prop} for windowing to work, found ${found.length}`,
   ).toBe(1);
   return found[0];
 }
@@ -68,18 +72,33 @@ describe('tasks table windowing: heights match the CSS', () => {
   it('a row, a group header and a ghost row are the heights the code assumes', () => {
     // If this fails, the CSS moved and the offsets are now wrong everywhere below the
     // fold. Update the constants in web/src/components/tasks/tasks-table-window.ts.
-    expect(cssHeight('.tp-row')).toBe(ROW_H);
-    expect(cssHeight('.tp-group-header')).toBe(GROUP_H);
+    expect(cssHeight('.tp-row', 'min-height')).toBe(ROW_H);
+    expect(cssHeight('.tp-group-header', 'min-height')).toBe(GROUP_H);
     expect(cssHeight('.tp-ghost')).toBe(GHOST_H);
   });
 
-  it('nothing gives a row a height that varies with its content', () => {
-    // `min-height` instead of `height`, or padding on `.tp-row`, would make rows taller
-    // than ROW_H for long titles and every offset would drift by an unknown amount.
-    const idx = CSS_SRC.indexOf('.tp-row {');
-    const body = CSS_SRC.slice(idx, CSS_SRC.indexOf('}', idx) + 1);
-    expect(body).not.toMatch(/min-height:/);
-    expect(body).not.toMatch(/height:\s*auto/);
+  it('what grows with its content is measured, and nothing else is', () => {
+    // A row and a group header grow with a wrapped title: each carries its item key so the
+    // window measures it. A ghost row is fixed and never measured.
+    expect(TABLE_SRC).toMatch(/className=\{`tp-row\$\{[^`]*`\}[^>]*data-win-key=\{t\.id\}/);
+    expect(TABLE_SRC).toMatch(/className=\{`tp-group-header[^`]*`\}\s*data-win-key=/);
+    for (const cls of ['.tp-row {', '.tp-group-header {']) {
+      const idx = CSS_SRC.indexOf(cls);
+      expect(CSS_SRC.slice(idx, CSS_SRC.indexOf('}', idx) + 1).replace(/\/\*[\s\S]*?\*\//g, '')).not.toMatch(/(^|[;\s])height:/);
+    }
+    const ghost = CSS_SRC.indexOf('.tp-ghost {');
+    expect(CSS_SRC.slice(ghost, CSS_SRC.indexOf('}', ghost) + 1)).not.toMatch(/min-height:|height:\s*auto/);
+  });
+
+  it('a measured height replaces the estimate, and an item not seen yet keeps it', () => {
+    const items = [
+      { kind: 'ghost' as const, key: 'ghost:top', h: GHOST_H },
+      { kind: 'row' as const, key: 'a', h: ROW_H },
+      { kind: 'row' as const, key: 'b', h: ROW_H },
+      { kind: 'group' as const, key: 'grp:x', h: GROUP_H },
+    ];
+    expect(itemHeights(items, new Map([['b', 54], ['grp:x', 50]]))).toEqual([GHOST_H, ROW_H, 54, 50]);
+    expect(offsetsFor(itemHeights(items, new Map())).at(-1)).toBe(GHOST_H + 2 * ROW_H + GROUP_H);
   });
 });
 
@@ -179,9 +198,18 @@ describe('tasks table windowing: the component wiring', () => {
     // A non-passive listener that setStates on every scroll event would hand back the
     // jank this change removed. The listener is passive, coalesced into one rAF, and
     // only setStates when the slice actually changes.
-    expect(TABLE_SRC).toContain("addEventListener('scroll', onScroll, { passive: true })");
-    expect(TABLE_SRC).toContain('requestAnimationFrame(compute)');
-    expect(TABLE_SRC).toMatch(/if \(ps !== start \|\| pe !== stop\) setRange/);
+    expect(WINDOW_SRC).toContain("addEventListener('scroll', onScroll, { passive: true })");
+    expect(WINDOW_SRC).toContain('requestAnimationFrame(compute)');
+    expect(WINDOW_SRC).toMatch(/if \(ps !== start \|\| pe !== stop\) setRange/);
+  });
+
+  it('a measured row above the visible part keeps what the user reads in place', () => {
+    // A row taller than its estimate, rendered above the viewport (the overscan on a scroll
+    // up), would push every visible row down. The window moves the scroll position by the
+    // difference itself, on every engine, so the browser's own anchoring is off.
+    expect(WINDOW_SRC).toMatch(/if \(node\.getBoundingClientRect\(\)\.top < top\) shift \+= h - before/);
+    expect(WINDOW_SRC).toContain('if (shift) el.scrollTop += shift');
+    expect(CSS_SRC).toMatch(/\.tp-table-scroll \{[^}]*overflow-anchor:\s*none/);
   });
 
   it('the sticky project header is kept alive above the window', () => {
@@ -193,6 +221,6 @@ describe('tasks table windowing: the component wiring', () => {
     // height above still checks out.
     expect(CSS_SRC).toMatch(/\.tp-group-header \{[^}]*position:\s*sticky/);
     expect(TABLE_SRC).toMatch(/const pinned = headIdx >= 0 && headIdx < from/);
-    expect(TABLE_SRC).toContain('offsets[from] - (pinned ? pinned.h : 0)');
+    expect(TABLE_SRC).toContain('offsets[from] - (pinned ? offsets[headIdx + 1] - offsets[headIdx] : 0)');
   });
 });

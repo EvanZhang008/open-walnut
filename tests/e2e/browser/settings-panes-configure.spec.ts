@@ -274,7 +274,9 @@ test('C31: hooks are roomy rows with a level chevron; the label discloses Fires 
   const rowHeights = await hooks.locator('.hook-row').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)))
   // N23: an empty "Your hooks" is a real 44px empty row in a group, like every pane's.
   const emptyRows = await hooks.locator('.settings-empty').count()
-  expect(height, `rows ${rowHeights.join(',')}`).toBeLessThanOrEqual(140 + 60 * (n + emptyRows))
+  // A help that wraps (it is never cut: 2026-11-22 audit) adds its second 16px line, and only that.
+  const wrapped = await hooks.locator('.hook-row .settings-row-help').evaluateAll((els) => els.filter((e) => e.getBoundingClientRect().height > 20).length)
+  expect(height, `rows ${rowHeights.join(',')}`).toBeLessThanOrEqual(140 + 60 * (n + emptyRows) + 16 * wrapped)
   const first = hooks.locator('.hook-row').first()
   // Not a wall: every row has air around its two lines, and the chevron sits
   // level with the switch beside it (both centered on the row), not on the
@@ -295,7 +297,8 @@ test('C31: hooks are roomy rows with a level chevron; the label discloses Fires 
   expect(level.chevronVsSwitch, JSON.stringify(level)).toBeLessThanOrEqual(2)
   expect(level.topAir, JSON.stringify(level)).toBeGreaterThanOrEqual(8)
   expect(level.bottomAir, JSON.stringify(level)).toBeGreaterThanOrEqual(8)
-  await expect(first.locator('.settings-row-help')).toHaveCSS('white-space', 'nowrap')
+  // A hook's help wraps in full: a one-line cut lost the trigger of the longer ones (2026-11-22 audit).
+  await expect(first.locator('.settings-row-help')).not.toHaveCSS('white-space', 'nowrap')
   const disclose = first.locator('.hook-row-disclose')
   await expect(disclose).toHaveAttribute('aria-expanded', 'false')
   await disclose.click()

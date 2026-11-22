@@ -55,8 +55,7 @@ describe('truncated rows rely on the in-place peek, not a native title', () => {
  */
 const NOT_A_ROW: Record<string, string> = {
   // Task titles that wrap (`.wn-title`, 2026-11-21) cut nothing and need no entry: the list row's
-  // drag copy, the Adopt and Release headings, the Leader flyout's heading.
-  'components/board/kanban/KanbanCard.tsx kanban-card-title': 'a loading skeleton, or the drag overlay whose row marker is disabled at runtime; real Board cards carry data-peek-row',
+  // drag copy, the Adopt and Release headings, the Leader flyout's heading, a Board card's title.
   'components/calendar/CalendarItemPopover.tsx cal-item-title-static': 'the heading of an open popover, not a row; it peeks when hovered itself',
   'components/sessions/SessionBrowserCard.tsx session-browser-tab-label': 'a web page tab of the agent browser, not a task',
   'components/tasks/TodoPanel.tsx todo-pinned-title': 'the pinned card drag overlay, never hovered (the pinned card itself is marked)',

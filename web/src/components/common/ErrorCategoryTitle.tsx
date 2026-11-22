@@ -22,7 +22,7 @@ export function ErrorCategoryTitle({ causeKey, label }: { causeKey: string; labe
   }, [causeKey, label, host, statuses]);
   return (
     <span className="nfc-cat-title" data-cause-key={causeKey}>
-      <span className="nfc-cat-name">{name}</span>
+      <span className="nfc-cat-name wn-title">{name}</span>
     </span>
   );
 }

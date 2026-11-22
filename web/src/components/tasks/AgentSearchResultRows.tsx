@@ -88,8 +88,8 @@ export function AgentSearchResultRows({ rows, className }: {
                     title sits 18px left of every other row's and the list reads
                     as two lists. */}
                 <span className="task-phase-icon-btn agent-search-row-circle agent-search-row-circle-empty" aria-hidden="true" />
-                <span className="agent-search-row-title">{row.taskId}</span>
-                <span className="agent-search-row-project">no longer exists</span>
+                <span className="agent-search-row-title wn-title">{row.taskId}</span>
+                <span className="agent-search-row-project wn-meta">no longer exists</span>
               </span>
             </li>
           );
@@ -107,8 +107,8 @@ export function AgentSearchResultRows({ rows, className }: {
               <span className="task-phase-icon-btn agent-search-row-circle" aria-hidden="true">
                 <TaskStateIcon state={taskIconState({ phase: (row.phase ?? 'TODO') as TaskPhase, status: isDone ? 'done' : 'todo', user_status: row.user_status })} size={12} decorative />
               </span>
-              <span className="agent-search-row-title">{row.title ?? row.taskId}</span>
-              <span className="agent-search-row-project">{projectDisplayName(row.project)}</span>
+              <span className="agent-search-row-title wn-title">{row.title ?? row.taskId}</span>
+              <span className="agent-search-row-project wn-meta">{projectDisplayName(row.project)}</span>
             </button>
           </li>
         );

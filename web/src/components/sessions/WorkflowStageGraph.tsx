@@ -63,8 +63,8 @@ const PhaseCard = memo(function PhaseCard({ phase, feeder, open, onChoose }: {
     >
       <span className="wf-stage-card-head">
         <StageIcon state={phase.state} />
-        <span className="wf-stage-card-title">{title}</span>
-        <span className="wf-stage-card-count">{phase.total ? `${phase.done + phase.failed}/${phase.total}` : 'next'}</span>
+        <span className="wf-stage-card-title wn-title">{title}</span>
+        <span className="wf-stage-card-count wn-fixed">{phase.total ? `${phase.done + phase.failed}/${phase.total}` : 'next'}</span>
       </span>
       {phase.total > 0 && <StageMeter phase={phase} />}
       <span className={`wf-stage-card-sub${phase.state === 'failed' ? ' wf-stage-card-sub--failed' : ''}`}>{subline(phase, feeder)}</span>

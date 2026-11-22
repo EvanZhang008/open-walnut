@@ -93,7 +93,7 @@
   max-width: 55%;
   overflow: hidden;
   white-space: nowrap;
-  text-overflow: ellipsis;
+  text-overflow: ellipsis; /* meta: a menu row's current value; the property's name beside it is the label */
   color: var(--fg);
   font-size: var(--font-size-sm);
 }

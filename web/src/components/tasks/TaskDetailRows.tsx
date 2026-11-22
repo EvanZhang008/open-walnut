@@ -59,7 +59,7 @@ export function SessionRow({ sessionId, record, processStatus, isPlan, owner, on
       <div className="tdp-row-line">
         <span className="todo-detail-session-dot tdp-dot" style={{ background: processColor(processStatus) }} />
         {isPlan && <span className="badge badge-accent todo-detail-plan-badge">Plan</span>}
-        <span className={`tdp-row-title${record ? '' : ' is-loading'}`}>{title}</span>
+        <span className={`tdp-row-title wn-title${record ? '' : ' is-loading'}`}>{title}</span>
         {ago && <span className="tdp-row-end">{ago}</span>}
       </div>
       {/* One quiet line: what it is doing now, or what it last did. */}
@@ -92,7 +92,7 @@ export function TaskRow({ title, phase, done, status, state, onOpen }: TaskRowPr
     >
       <div className="tdp-row-line">
         <TaskStateIcon state={state ?? (done ? 'done' : phaseIconState(phase))} decorative />
-        <span className="tdp-row-title">{title}</span>
+        <span className="tdp-row-title wn-title">{title}</span>
         <span className="tdp-row-end">{status ?? PHASE_LABELS[phase as TaskPhase] ?? phase}</span>
       </div>
     </div>

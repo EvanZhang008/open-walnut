@@ -9,7 +9,7 @@
  * plugin into this Walnut, the row appears without a refresh — that moment is
  * the payoff, and it's why this is a page instead of a docs link.
  */
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppCatalog } from '@/apps/hooks'
 import { copyTextRobust } from '@/utils/clipboard'
@@ -89,7 +89,12 @@ export function CreatePluginPage() {
             rebuilding as you save.
           </p>
           <div className="create-plugin-command" data-testid="create-plugin-command">
-            <code>{CREATE_COMMAND}</code>
+            {/* Shown whole: it wraps only between its words, never inside a flag or a path. */}
+            <code>
+              {CREATE_COMMAND.split(' ').map((word, i) => (
+                <Fragment key={i}>{i > 0 && ' '}<span className="create-plugin-word">{word}</span></Fragment>
+              ))}
+            </code>
             <button
               type="button"
               className="btn btn-sm"

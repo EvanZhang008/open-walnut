@@ -221,14 +221,14 @@ test('a narrow popup stacks the document before relationships and facts', async 
   // The earlier sessions, folded under the task's one session, hold the long title.
   await modal.getByRole('button', { name: 'Earlier sessions (3)' }).click()
   await expect(modal.locator('.todo-detail-session-item')).toHaveCount(4, { timeout: 20_000 })
-  // The long session title stays on one line, and one too long for it is cut with an ellipsis
-  // (at the narrowest desktop width it still fits, so the rule is read, not a cut seen).
+  // The long session title wraps whole, never cut (2026-11-22, standard.md "Text that does not
+  // fit": it was cut with an ellipsis; a title now wraps onto as many lines as it needs).
   const cut = await modal.locator('.todo-detail-session-item').filter({ hasText: 'Review the day-by-day list' })
     .locator('.tdp-row-title').evaluate((el) => {
       const cs = getComputedStyle(el)
-      return { overflow: cs.textOverflow, wrap: cs.whiteSpace, hidden: cs.overflow, height: el.getBoundingClientRect().height }
+      return { overflow: cs.textOverflow, wrap: cs.whiteSpace, hidden: cs.overflow, whole: el.scrollWidth <= el.clientWidth + 1 && el.scrollHeight <= el.clientHeight + 1 }
     })
-  expect(cut).toMatchObject({ overflow: 'ellipsis', wrap: 'normal', hidden: 'hidden' })
+  expect(cut).toMatchObject({ overflow: 'clip', wrap: 'normal', hidden: 'visible', whole: true })
   const [main, rail] = await Promise.all([modal.locator('.tdp-main').boundingBox(), modal.locator('.tdp-rail').boundingBox()])
   expect(main!.y + main!.height).toBeLessThanOrEqual(rail!.y)
   expect(Math.abs(rail!.width - main!.width)).toBeLessThan(2)

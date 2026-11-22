@@ -41,7 +41,7 @@ export function ProjectStatusFolds({ region, project, tasks, open, onToggle, han
     <div className="project-status-folds" data-testid="project-status-folds" data-project={project}>
       {label && (
         <div className="tier-project-label recent-project-label project-status-folds-project">
-          <span className="tier-project-label-name">{projectDisplayName(project)}</span>
+          <span className="tier-project-label-name wn-title">{projectDisplayName(project)}</span>
         </div>
       )}
       <div className="project-status-fold-row">

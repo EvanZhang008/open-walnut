@@ -70,7 +70,7 @@ export function ExtAskHeader(p: HeaderProps) {
       <AskWalnutMenuButton ref={p.menuRef} open={p.menuOn} onToggle={p.onMenu} label={shown} />
       {p.surface === 'panel' && p.title ? (
         <div className="ext-ask-titles">
-          <span className="ext-ask-title" data-testid="ext-ask-title">{p.title}</span>
+          <span className="ext-ask-title wn-title" data-testid="ext-ask-title">{p.title}</span>
           {agentSwitch}
         </div>
       ) : <div className="ext-ask-titles is-popup">{agentSwitch}</div>}
@@ -154,7 +154,7 @@ export function ExtTaskHeader({ title, state, label, meta, onBack, keyed, vault,
         <span aria-hidden="true">{ICON_BACK}</span>Back
       </button>
       <div className="ext-ask-titles">
-        <span className="ext-ask-title" data-testid="ext-task-title">{title}</span>
+        <span className="ext-ask-title wn-title" data-testid="ext-task-title">{title}</span>
         {(label || meta) && (
           <span className="ext-taskpage-line" data-testid="ext-task-headline">
             {label && <span className={`ext-taskpage-state state-${state}`}>{label}</span>}

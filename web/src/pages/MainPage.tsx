@@ -133,7 +133,7 @@ import { withDetectedOwner } from '@/components/sessions/draft-work-in';
 import { knownHomeOf } from '@/utils/home-folder';
 import { withHomeFolder } from '@/components/sessions/draft-home-default';
 import { reconcileActiveSession } from '@/stores/active-session';
-import { loadColWeights, saveColWeights, resizeAtBoundary, sessionAreaShownPct, todoPanelBasisPx, todoPanelWidth, usersSessionWidth } from './columnSizing';
+import { loadColWeights, saveColWeights, resizeAtBoundary, sessionAreaShownPct, todoPanelAloneWidth, todoPanelBasisPx, todoPanelWidth, usersSessionWidth, type QuickQuestionSlot } from './columnSizing';
 import { HomeEmptyPane } from './HomeEmptyPane';
 import {
   HOME_CHAT_VISIBLE_DEFAULT, LS_HOME_CHAT_VISIBLE_KEY, autoDraftMayTakeFocus, firstDraftDecisionReady, focusHolderOf, homeChatChosenOpen, homeTaskPanelShown, readHomeChatVisible, shouldAutoOpenFirstDraft,
@@ -542,6 +542,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Context inspector, pointed at the selected Ask Walnut session (the legacy
   // agentId/conversationId form stays on the route for other callers).
   const inspector = useContextInspector(undefined, undefined, askSlotSelection.sessionId ?? undefined);
+  // Whether the slot's conversation has anything to read, as the slot last reported it (it says
+  // nothing while it loads): an empty one keeps the smaller share beside the columns.
+  const [askSlotHasContent, setAskSlotHasContent] = useState(true);
 
   // Chat panel visibility: toggle via the Focus Dock "Walnut" cell or the Sidebar
   // "Ask Walnut" toggle. Hidden until the user opens it.
@@ -924,7 +927,27 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Resizable panels
   // A drag's px are a share of the window less the rail, the room todoPanelWidth sizes it in.
   const todoPanel = useResizablePanel('open-walnut-todo-width', 25, 'left', { basis: todoPanelBasis });
-  const todoWidth = todoPanelWidth(todoPanel.pct);
+  // Nothing open beside the task panel (only the empty pane): the panel takes the room first, with
+  // a width of its own for this layout, so a drag here never moves the width beside a session.
+  const homeRowEmpty = !phoneLayout && !chatVisible && sessionColumns.length === 0 && !triagePanelOpen;
+  const todoAloneLayout = homeRowEmpty && !calendarVisible && !scratchpadVisible;
+  const todoAlone = useResizablePanel('open-walnut-todo-width-alone', 50, 'left', {
+    basis: todoPanelBasis,
+    // A drag starts from the width that shows (the grown one), never from the stored default.
+    measure: () => {
+      const el = todoAlone.panelRef.current;
+      return el ? (el.getBoundingClientRect().width / todoPanelBasis()) * 100 : null;
+    },
+  });
+  const todoResize = todoAloneLayout ? todoAlone : todoPanel;
+  const todoWidth = todoAloneLayout
+    ? todoPanelAloneWidth(todoAlone.dragged ? todoAlone.pct : null, todoPanel.pct)
+    : todoPanelWidth(todoPanel.pct);
+  // Both widths' hooks hold the panel (their drags mark it resizing, and the alone one measures it).
+  const todoPanelCombinedRef = useLeanCallback((el: HTMLDivElement | null) => {
+    (todoPanel.panelRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+    (todoAlone.panelRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+  }, [todoPanel.panelRef, todoAlone.panelRef]);
   // The session area's width is derived (sessionAreaShown below); a drag starts from what shows.
   const sessionAreaShownRef = useRef<number | null>(null);
   // Its `${pct}%` is a share of the content row beside the task panel (basis 'parent'), not the window.
@@ -994,7 +1017,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // The session area's width, from the layout as it is now (sessionAreaShownPct): the user's
   // dragged width as he left it, else the graduated width for these columns, capped beside the
   // Quick question slot. Nothing writes it, so every order of opening and a reload agree.
-  const sessionAreaShown = sessionAreaShownPct(usersSessionWidth(sessionPanel), colCount, chatVisible && !phoneLayout);
+  const askSlot: QuickQuestionSlot = !chatVisible || phoneLayout ? 'closed' : askSlotHasContent ? 'shown' : 'empty';
+  const sessionAreaShown = sessionAreaShownPct(usersSessionWidth(sessionPanel), colCount, askSlot);
   sessionAreaShownRef.current = sessionAreaShown;
 
   // Swap in the layout saved for THIS column count. Layouts are stored per count,
@@ -3754,7 +3778,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
       {/* Todo Panel (LEFT — collapsible via Sidebar toggle) */}
       <div
-        ref={todoPanel.panelRef}
+        ref={todoPanelCombinedRef}
         id="home-task-navigation"
         inert={!todoShown}
         className={`main-page-todo${todoShown ? '' : ' collapsed'}`}
@@ -3833,7 +3857,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       {visible && <DraftPanelWarmup />}
 
       {/* Todo Resize Handle — only shown when todo is visible */}
-      {todoShown && <div className="todo-resize-handle" {...todoPanel.handleProps} />}
+      {todoShown && <div className="todo-resize-handle" {...todoResize.handleProps} />}
 
       {/* The day agenda and the scratchpad open right of the task panel, as the
           first of the columns beside it (user, 2026-09-25: not on the far right,
@@ -3906,6 +3930,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onOpenOrg={openOrg}
           // The inspector describes the session actually on screen.
           onSelectionChange={setAskSlotSelection}
+          onContentChange={setAskSlotHasContent}
           onLocateTask={handleLocateTaskById}
           onOpenTaskDetail={handleOpenTaskDetailById}
           onSessionClick={handleSessionClick}
@@ -4098,7 +4123,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
       {/* Nothing open beside the task panel: the room says what it is for and the next step,
           never a blank two thirds of the window. */}
-      {!phoneLayout && !chatVisible && sessionColumns.length === 0 && !triagePanelOpen && (
+      {homeRowEmpty && (
         <HomeEmptyPane onNewTask={handleToolbarOpenLauncher} />
       )}
 

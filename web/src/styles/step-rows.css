@@ -150,7 +150,8 @@
 :root .session-history .provenance-card .op-card-main .op-card-title {
   flex: 1 1 auto; min-width: 0;
   font-size: 14px; font-weight: 400; color: var(--fg-muted);
-  display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: block; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; /* meta: a step row is one line by the user's design (2026-11-11); its words are whole in the opened detail */
 }
 :root .session-history .provenance-card .op-card-main .op-card-title > span { display: inline; }
 /* In a fold the summary is a copy of the open message's words: the row is one line. */
@@ -202,7 +203,7 @@
   line-clamp: unset;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: ellipsis; /* meta: a step row's second line, one line by the user's design (2026-11-11); whole in the opened detail */
   overflow-wrap: normal;
   font-size: var(--font-size-md);
   line-height: 1.4;
@@ -214,7 +215,8 @@
 :root .session-history .chat-tool-block > .chat-tool-block-header { flex-wrap: wrap; row-gap: 0; }
 :root .session-history .chat-tool-block > .chat-tool-block-header > .chat-tool-block-desc,
 :root .session-history .chat-tool-block > .chat-tool-block-header > .chat-tool-block-summary {
-  flex: 1 1 0; min-width: 2em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex: 1 1 0; min-width: 2em; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; /* meta: a call's step row is one line by the user's design (2026-11-11); whole in the opened detail */
 }
 :root .session-history .chat-tool-block > .chat-tool-block-header > .chat-tool-block-decision {
   order: 10;

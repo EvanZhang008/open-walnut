@@ -21,15 +21,12 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* What the drawer asks about, in full (.wn-title); Back and × stay beside it. */
 .ask-object-title {
   flex: 1;
-  min-width: 0;
   margin: 0;
   font-size: var(--font-size-md);
   font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .ask-object-quote {

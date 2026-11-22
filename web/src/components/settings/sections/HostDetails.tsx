@@ -125,7 +125,7 @@ function DetailsBody({ alias, name, card, now, linked, kind, rowProblem, system,
   return (
     <div className="rh-details" data-testid="rh-details" data-host={alias} role="region" aria-label={`Details of ${name}`} onKeyDown={onKeyDown}>
       <div className="rh-details-head">
-        <span className="rh-details-name">{name}</span>
+        <span className="rh-details-name wn-title">{name}</span>
         <SettingsButton variant="text" onClick={onClose} data-testid="rh-details-hide" aria-label={`Hide details of ${name}`}>Hide details</SettingsButton>
       </div>
       <Part id="status" title="Status" defaultOpen>

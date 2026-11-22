@@ -104,7 +104,7 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
           title={isFullscreen ? '' : collapsed ? 'Expand' : 'Collapse'}
         >
           {stateIcon}
-          <span className="wf-card-title" title={workflowDescription}>
+          <span className="wf-card-title wn-title" title={workflowDescription}>
             {workflowName ? <><span className="wf-card-title-kind">Workflow: </span>{workflowName}</> : 'Background'}
           </span>
         </DisclosureButton>

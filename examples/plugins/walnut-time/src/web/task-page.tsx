@@ -108,18 +108,22 @@ function Totals({ totals, label }: { totals: TimeTotals; label: string }) {
   )
 }
 
-/** Each lane has its own scale: agent hours would flatten your minutes to nothing on a shared one. */
+/**
+ * Each lane has its own scale: agent hours would flatten your minutes to nothing on a shared one.
+ * A lane with no time on any day (its `max` is 0) is marked idle and keeps only its value.
+ */
 function Bars({ pair, max }: { pair: TimePair; max: TimePair }) {
   const pct = (v: number, m: number) => (m > 0 ? Math.max(v > 0 ? 2 : 0, Math.round((v / m) * 100)) : 0)
+  const idle = max.humanMs === 0 && max.agentMs > 0 ? 'human' : max.agentMs === 0 && max.humanMs > 0 ? 'agent' : undefined
   return (
-    <span className="wt-task-bars">
+    <span className="wt-task-bars" data-idle={idle}>
       <span className="wt-task-bar is-human" title={`You: ${formatLane(pair.humanMs)}`}>
-        <i style={{ width: `${pct(pair.humanMs, max.humanMs)}%` }} />
         <b>{formatLane(pair.humanMs)}</b>
+        <i style={{ width: `${pct(pair.humanMs, max.humanMs)}%` }} />
       </span>
       <span className="wt-task-bar is-agent" title={`Agent: ${formatLane(pair.agentMs)}`}>
-        <i style={{ width: `${pct(pair.agentMs, max.agentMs)}%` }} />
         <b>{formatLane(pair.agentMs)}</b>
+        <i style={{ width: `${pct(pair.agentMs, max.agentMs)}%` }} />
       </span>
     </span>
   )
@@ -195,7 +199,6 @@ function TaskBody({ data, focus, onFocus }: { data: TaskTime; focus: string | nu
                 onClick={() => onFocus(s.sessionId)}
                 data-testid="time-task-session"
                 data-session-id={s.sessionId}
-                title={names.get(s.sessionId)}
               >
                 <span className="wt-task-session-name">{names.get(s.sessionId)}</span>
                 <span className="wt-task-session-v">

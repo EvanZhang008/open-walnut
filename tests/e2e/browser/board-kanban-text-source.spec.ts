@@ -207,7 +207,7 @@ async function settle(page: Page): Promise<void> {
 
 // ── Tests ──
 
-test('a card summary a remote session wrote opens on that host, never through the task\'s local session; the card stays folded', async ({ page }) => {
+test('a card summary a remote session wrote opens on that host, never through the task\'s local session', async ({ page }) => {
   const pane = await openBoard(page)
   const summary = card(pane, remoteCard).getByTestId('kanban-card-summary')
   await summary.scrollIntoViewIfNeeded()
@@ -216,8 +216,6 @@ test('a card summary a remote session wrote opens on that host, never through th
   await click(page, link)
   await expectRemoteText(page)
   await closeFile(page)
-  // The link took the click: the summary around it did not unfold.
-  await expect(summary).not.toHaveAttribute('data-expanded', 'true')
   expect(sessionReads(REMOTE_SID), 'the writer\'s record was read once, on the click').toBe(1)
   expect(sessionReads(team.sessions[remoteCard]!), 'the task\'s current session was never asked').toBe(0)
   expect(primaryReads(), 'nothing was read on this machine').toEqual([])

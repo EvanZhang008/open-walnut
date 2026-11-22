@@ -306,7 +306,7 @@ export function SessionTurnsView({ sessionId, sessionCwd, sessionHost, onComment
                     aria-current={isSel ? 'true' : undefined}
                     title={new Date(s.at).toLocaleString()}
                   >
-                    <span className={`turns-row-title turns-kind-${s.kind}`}>{snapshotLabel(s, snapshots)}</span>
+                    <span className={`turns-row-title wn-title turns-kind-${s.kind}`}>{snapshotLabel(s, snapshots)}</span>
                     <span className="turns-row-time">{timeOf(s.at)}</span>
                     <span className="turns-row-files">{filesLine(s)}</span>
                     {s.capture === 'tracked-only' && (

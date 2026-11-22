@@ -75,7 +75,7 @@ function KanbanLaneInner(p: KanbanLaneProps) {
   const ghost = p.keyGhost != null ? (
     <div key="key-ghost" className={`kanban-drag-overlay kanban-key-ghost${p.reducedMotion ? '' : ' is-tilted'}`} data-testid="kanban-key-ghost" aria-hidden="true">
       {ghostVm ? <KanbanCard vm={ghostVm} laneName={lane.name} tabStop={false} overlay />
-        : <div className="kanban-card"><div className="kanban-card-title">{p.keyGhost}</div></div>}
+        : <div className="kanban-card"><div className="kanban-card-title wn-title">{p.keyGhost}</div></div>}
     </div>
   ) : null;
   // The line stays the card's direct sibling (the drop is `line + card`); the ghost, when any, follows it.
@@ -122,7 +122,7 @@ function KanbanLaneInner(p: KanbanLaneProps) {
           ) : items}
           {p.pending.map((a) => (
             <div key={a.key} className="kanban-card kanban-card-pending" data-testid="kanban-card-pending" aria-busy="true">
-              <div className="kanban-card-title">{a.title}</div>
+              <div className="kanban-card-title wn-title">{a.title}</div>
               <div className="kanban-card-status kanban-tone-grey"><span className="kanban-card-dot" aria-hidden="true" /><span className="kanban-card-status-text">Adding...</span></div>
             </div>
           ))}

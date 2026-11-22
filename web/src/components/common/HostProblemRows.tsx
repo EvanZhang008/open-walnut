@@ -36,9 +36,7 @@ export interface HostRowProps {
   row: BannerRow;
   /** Row 1 opens expanded; the rest start behind 'Show details'. */
   defaultExpanded: boolean;
-  /** One line: the headline (ellipsis), the row's primary action and the x. */
-  singleLine?: boolean;
-  /** Several rows: until opened, the headline on one line, then the primary action and the details toggle. */
+  /** Several rows: until opened, the headline (wrapped in full), then the primary action and the details toggle. */
   dense?: boolean;
   leaving?: boolean;
   /** The row x. Absent: no x (the System list is a status list). */
@@ -104,7 +102,7 @@ const INSTALL_LABELS = ['Install', 'Installing...', 'Try again'];
 
 /**
  * What a row shows of its actions: its own buttons (`ids`) and Fix with agent
- * (`fix`), which is the last of them. A folded dense row and a one-line row show
+ * (`fix`), which is the last of them. A folded dense row shows
  * one action, the first (BP-R3-N1: every problem reads at a glance); the rest,
  * Fix with agent included, are behind Show details (`folds`, the toggle shows
  * even when the row has no words to open). A row with no action of its own leads
@@ -112,11 +110,11 @@ const INSTALL_LABELS = ['Install', 'Installing...', 'Try again'];
  * folded row took a third line (2026-10-31: BP-R3-N1, BP-C54, C61).
  */
 export function rowActionsFor(all: HostActionId[], canFix: boolean,
-  form: { singleLine?: boolean; dense?: boolean; expanded?: boolean; statusList?: boolean }):
+  form: { dense?: boolean; expanded?: boolean; statusList?: boolean }):
   { ids: HostActionId[]; fix: boolean; folds: boolean } {
   // Every action stays one Show details away: an opened row (or one whose fix failed, which
   // opens by itself) shows them all, and the toggle folds them back.
-  const folding = !!form.singleLine || !!form.dense;
+  const folding = !!form.dense;
   const total = all.length + (canFix ? 1 : 0);
   if (!folding || form.expanded) return { ids: all, fix: canFix, folds: folding && total > 1 };
   const ids = all.slice(0, 1);
@@ -205,9 +203,9 @@ function useSelfTryHeight(host: string, on: boolean): number | undefined {
   return held.current;
 }
 
-function RowFrame({ row, lockRef, minHeight, maxHeight, leaving, body, onDismiss, dot, singleLine, dense, open, receipt, statusList }: {
+function RowFrame({ row, lockRef, minHeight, maxHeight, leaving, body, onDismiss, dot, dense, open, receipt, statusList }: {
   row: BannerRow; lockRef: React.RefObject<HTMLLIElement | null>; minHeight?: number; maxHeight?: number; leaving?: boolean;
-  body: ReactNode; onDismiss?: () => void; dot: ReactNode; singleLine?: boolean; dense?: boolean; open?: boolean; receipt?: boolean;
+  body: ReactNode; onDismiss?: () => void; dot: ReactNode; dense?: boolean; open?: boolean; receipt?: boolean;
   statusList?: boolean;
 }) {
   const label = row.labels.join(', ');
@@ -221,7 +219,7 @@ function RowFrame({ row, lockRef, minHeight, maxHeight, leaving, body, onDismiss
   return (
     <li
       ref={lockRef}
-      className={`hpb-row${leaving ? ' hpb-leaving' : ''}${singleLine ? ' hpb-single' : ''}${dense ? ' hpb-dense' : ''}${open ? ' hpb-open' : ''}${receipt ? ' hpb-has-receipt' : ''}${maxHeight !== undefined ? ' hpb-locked' : ''}`}
+      className={`hpb-row${leaving ? ' hpb-leaving' : ''}${dense ? ' hpb-dense' : ''}${open ? ' hpb-open' : ''}${receipt ? ' hpb-has-receipt' : ''}${maxHeight !== undefined ? ' hpb-locked' : ''}`}
       data-host={row.hosts.join(' ')}
       data-type={row.type}
       {...(row.kind ? { 'data-kind': row.kind } : {})}
@@ -230,7 +228,7 @@ function RowFrame({ row, lockRef, minHeight, maxHeight, leaving, body, onDismiss
     >
       <span className="hpb-dot">{dot}</span>
       {/* Headline first, then the row's buttons, then the details: the host is named before Retry. */}
-      {/* data-label: the host's name alone, drawn by CSS in the one-line fitted and narrow forms (N3-3, N3-10). */}
+      {/* data-label: the host's name alone (N3-3, N3-10). */}
       <div className="hpb-body" data-label={label}>{body}</div>
       {onDismiss && (
         <button type="button" tabIndex={0} className="setup-banner-dismiss hpb-x" aria-label={dismissLabel} title={dismissLabel} onClick={onDismiss}>
@@ -242,13 +240,13 @@ function RowFrame({ row, lockRef, minHeight, maxHeight, leaving, body, onDismiss
 }
 
 /**
- * A connect failure's words. Folded: the headline alone (and the retry time,
- * unless the row is one line); open: the hint inline and the raw output
+ * A connect failure's words. Folded: the headline alone (and the retry time);
+ * open: the hint inline and the raw output
  * behind its own toggle. The fold toggle is the row's, so its state is the
  * session's and a remount keeps it.
  */
-function ConnectBody({ row, expanded, onToggle, singleLine, after, receipt, more }: {
-  row: BannerRow; expanded: boolean; onToggle: () => void; singleLine?: boolean;
+function ConnectBody({ row, expanded, onToggle, after, receipt, more }: {
+  row: BannerRow; expanded: boolean; onToggle: () => void;
   /** The folded row keeps actions back (rowActionsFor): the toggle opens them even with no words to show. */
   more?: boolean;
   /** The row's buttons (and its receipt), right under the headline. */
@@ -270,7 +268,7 @@ function ConnectBody({ row, expanded, onToggle, singleLine, after, receipt, more
       <HostFailureText
         headline={row.headline ?? ''} kind={row.kind} collapsed={!expanded} summaryInline={summaryInline}
         {...(expanded ? { hint: receipt ? undefined : row.hint, summary: row.summary } : {})}
-        {...((singleLine && !expanded) || receipt ? {} : { retryAt: row.retryAt })}
+        {...(receipt ? {} : { retryAt: row.retryAt })}
         afterHeadline={after}
       />
       {(foldable || more) && <DetailsToggle open={expanded} onToggle={onToggle} />}
@@ -285,7 +283,7 @@ export function splitReadinessMessage(message: string): { head: string; rest: st
 }
 
 /** A row for ONE host: connect failure, reconnect with a cause, readiness, or an attempt in flight. */
-export function SingleHostRow({ row, defaultExpanded, singleLine, dense, leaving, onDismiss, statusList, onOpenSettings, onNavigate }: HostRowProps) {
+export function SingleHostRow({ row, defaultExpanded, dense, leaving, onDismiss, statusList, onOpenSettings, onNavigate }: HostRowProps) {
   const alias = row.hosts[0];
   const label = row.labels[0];
   const status = useHostStatus(alias);
@@ -310,7 +308,7 @@ export function SingleHostRow({ row, defaultExpanded, singleLine, dense, leaving
   const fixFailed = problem?.fix?.state === 'failed';
   const fixing = row.type === 'readiness' && !!actions.fixing && !fixFailed;
   const allIds = fixing ? row.actions.filter((a) => a !== 'update' && a !== 'install') : row.actions;
-  const shown = rowActionsFor(allIds, row.type !== 'trying', { singleLine, dense, expanded: expanded || fixFailed, statusList });
+  const shown = rowActionsFor(allIds, row.type !== 'trying', { dense, expanded: expanded || fixFailed, statusList });
   const ids = shown.ids;
   const autofix = problem ? autofixVerbFor(problem, status?.readiness?.claude?.installMethod) : null;
   const actionsNode = trying
@@ -336,11 +334,11 @@ export function SingleHostRow({ row, defaultExpanded, singleLine, dense, leaving
     );
   } else if (row.type === 'connect') {
     body = <ConnectBody row={row} expanded={expanded} onToggle={toggle}
-      singleLine={singleLine} after={after} receipt={hasReceipt} more={more} />;
+      after={after} receipt={hasReceipt} more={more} />;
   } else if (row.type === 'reconnecting') {
     body = (
       <div className="hft">
-        <div className="hft-headline" title={`Reconnecting to ${label}`}>Reconnecting to {label}</div>
+        <div className="hft-headline wn-title" title={`Reconnecting to ${label}`}>Reconnecting to {label}</div>
         {after}
         {!hasReceipt && <div className="hpb-last">Last attempt: {row.headline}</div>}
         {expanded && row.hint && <div className="hft-hint"><InlineCodeText text={row.hint} /></div>}
@@ -354,7 +352,7 @@ export function SingleHostRow({ row, defaultExpanded, singleLine, dense, leaving
     body = (
       <>
         {fixing ? <FixProgress actions={actions} label={label} /> : (
-          <div className="hpb-message hpb-headline" title={head}><InlineCodeText text={head} /></div>
+          <div className="hpb-message hpb-headline wn-title" title={head}><InlineCodeText text={head} /></div>
         )}
         {after}
         {!fixing && open && rest && !hasReceipt && <div className="hpb-rest"><InlineCodeText text={rest} /></div>}
@@ -369,7 +367,7 @@ export function SingleHostRow({ row, defaultExpanded, singleLine, dense, leaving
       body={body} receipt={hasReceipt}
       onDismiss={onDismiss && row.dismissKeys.length ? () => onDismiss(row) : undefined}
       dot={<HostStatusDot host={alias} label={label} decorative />}
-      singleLine={singleLine} dense={dense} open={expanded} statusList={statusList}
+      dense={dense} open={expanded} statusList={statusList}
     />
   );
 }

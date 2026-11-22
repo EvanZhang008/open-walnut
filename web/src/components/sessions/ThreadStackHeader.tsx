@@ -332,7 +332,7 @@ function HalfRow({ half, label, title, question, status, rename, children }: {
       <span className="tree-sr-only">{SIDE_NAME[half.side]}: </span>
       {rename ?? (
         <>
-          <span className="thread-half-name" title={question ?? title ?? name}>{name}</span>
+          <span className="thread-half-name wn-fixed" title={question ?? title ?? name}>{name}</span>
           {shownTitle && <span className="thread-half-title" title={question ?? shownTitle}>{shownTitle}</span>}
         </>
       )}

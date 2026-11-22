@@ -3,9 +3,9 @@
 .hii-snapshot { color: var(--fg-muted); font-size: var(--font-size-xs); margin: 0 0 8px; }
 .hii-item { min-width: 0; padding: 12px; margin: 8px 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--card-bg); overflow-wrap: anywhere; }
 .hii-item h3 { font-size: var(--font-size-md); font-weight: 600; margin: 0 0 6px; }
-.hii-summary { font-size: var(--font-size-sm); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; }
-.hii-summary-expanded { display: block; }
-.hii-item > .hii-summary-toggle { margin-block: 4px; }
+/* In full, never clamped. A column, as the old clamp box was, so the newline between rendered
+   paragraphs is not a blank line of its own under pre-wrap. */
+.hii-summary { font-size: var(--font-size-sm); line-height: 1.45; white-space: pre-wrap; display: flex; flex-direction: column; min-width: 0; }
 .hii-source { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: var(--font-size-xs); color: var(--fg-secondary); }
 .hii-source-details, .hii-receipt-details, .hii-operation-details { font-size: var(--font-size-xs); margin: 6px 0; min-width: 0; }
 .hii-item summary, .hii-selector summary { cursor: pointer; color: var(--fg-secondary); }

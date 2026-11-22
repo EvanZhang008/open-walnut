@@ -355,25 +355,62 @@ export function offlineLine(h: FleetHost, live?: { phaseLabel?: string; connecte
 
 export interface TopoNode { host: string; x: number; y: number; side: 'left' | 'right' | 'centre'; live: boolean }
 
-export const TOPO = { width: 760, nodeW: 150, nodeH: 46, rowGap: 64, pad: 16 } as const;
+export const TOPO = { width: 760, nodeW: 150, nodeH: 46, rowGap: 64, pad: 16, nameLine: 16 } as const;
+
+/**
+ * Characters of a node's name per line: what fits beside the dot in the node's width, and beside
+ * a Cloud or Phone mark when the node carries one.
+ */
+export const NAME_CHARS = { plain: 16, marked: 9 } as const;
+
+/**
+ * A host's name as the lines it takes in a diagram node, never cut (standard.md, "Text that does
+ * not fit"; 2026-11-22 audit: "Garden-Laptop-Pro" ran past its node and a longer name lost its end
+ * to an ellipsis). A line breaks at a space or after a hyphen, a dot or an underscore past its first
+ * third, and inside a word only when no such place is there.
+ */
+export function nameLines(name: string, perLine: number): string[] {
+  const lines: string[] = [];
+  let rest = name.trim();
+  while (rest.length > perLine) {
+    let at = -1;
+    for (let i = perLine; i >= Math.ceil(perLine / 3); i--) {
+      if (rest[i] === ' ') { lines.push(rest.slice(0, i)); rest = rest.slice(i + 1); at = i; break; }
+      if ('-._'.includes(rest[i - 1]!)) { lines.push(rest.slice(0, i)); rest = rest.slice(i); at = i; break; }
+    }
+    if (at < 0) { lines.push(rest.slice(0, perLine)); rest = rest.slice(perLine); }
+  }
+  lines.push(rest);
+  return lines;
+}
+
+/** A node's height for a name of `lines` lines: one line is the 46px node. */
+export function nodeHeight(lines: number): number {
+  return TOPO.nodeH + (Math.max(1, lines) - 1) * TOPO.nameLine;
+}
 
 /** A host the diagram draws: the list's row (online as the row says it) or a reading. */
 export type TopoItem = { host: string; local: boolean; live: boolean } | FleetHost;
 const liveOf = (h: TopoItem) => ('live' in h ? h.live : isLive(h));
 
-/** The primary in the centre; every other host on the left and right, half each, top to bottom in order. */
-export function topologyLayout(hosts: TopoItem[]): { height: number; centre: TopoNode | null; nodes: TopoNode[] } {
+/**
+ * The primary in the centre; every other host on the left and right, half each, top to bottom in
+ * order. `nodeH` is the tallest node (a name of two lines makes every node that tall); the rows
+ * keep the 18px between nodes that one-line nodes have.
+ */
+export function topologyLayout(hosts: TopoItem[], nodeH: number = TOPO.nodeH): { height: number; centre: TopoNode | null; nodes: TopoNode[] } {
+  const rowGap = Math.max(TOPO.rowGap, nodeH + TOPO.rowGap - TOPO.nodeH);
   const primary = hosts.find((h) => h.local) ?? null;
   const others = hosts.filter((h) => h !== primary);
   const left = others.filter((_, i) => i % 2 === 0);
   const right = others.filter((_, i) => i % 2 === 1);
   const rows = Math.max(1, left.length, right.length);
-  const height = Math.max(150, TOPO.pad * 2 + (rows - 1) * TOPO.rowGap + TOPO.nodeH);
+  const height = Math.max(150, TOPO.pad * 2 + (rows - 1) * rowGap + nodeH);
   const column = (list: TopoItem[], side: 'left' | 'right') => {
-    const span = (list.length - 1) * TOPO.rowGap;
+    const span = (list.length - 1) * rowGap;
     const top = height / 2 - span / 2;
     const x = side === 'left' ? TOPO.pad + TOPO.nodeW / 2 : TOPO.width - TOPO.pad - TOPO.nodeW / 2;
-    return list.map((h, i) => ({ host: h.host, x, y: top + i * TOPO.rowGap, side, live: liveOf(h) }));
+    return list.map((h, i) => ({ host: h.host, x, y: top + i * rowGap, side, live: liveOf(h) }));
   };
   return {
     height,

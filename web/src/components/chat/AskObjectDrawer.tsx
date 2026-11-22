@@ -567,7 +567,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
       <div className="ask-object-pending" data-testid="ask-object-pending">
         {!props.plainChat && <div className="ask-object-head">
           {backButton}
-          <h2 className="ask-object-title">{props.title}</h2>
+          <h2 className="ask-object-title wn-title">{props.title}</h2>
           <button
             type="button"
             className="btn btn-icon btn-sm"

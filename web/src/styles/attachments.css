@@ -98,13 +98,11 @@ button.file-card-open { cursor: pointer; }
 .file-card.is-openable:hover { background: var(--bg-hover); }
 button.file-card-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
 .file-card-meta { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+/* The file's name wraps in full (.wn-title); its size and kind under it are metadata. */
 .file-card-name {
   font-size: var(--font-size-md);
   font-weight: 600;
   color: var(--fg);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .file-card-detail {
   font-size: var(--font-size-sm);

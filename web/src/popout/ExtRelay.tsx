@@ -43,7 +43,7 @@ export function RelayRow({ t, here, task, action, onAction }: { t: RelayTab; her
     <div className={`ext-relay-row${t.tab === here ? ' is-here' : ''}`} data-testid="ext-relay-row" data-tab={t.tab}>
       <span className="ext-chip-fav" aria-hidden="true">{letter}</span>
       <span className="ext-relay-row-text">
-        <span className="ext-relay-row-name">{relayTabName(t, here)}</span>
+        <span className="ext-relay-row-name wn-title">{relayTabName(t, here)}</span>
         {what && <span className="ext-relay-row-what">{what}</span>}
       </span>
       <button type="button" className={`btn btn-sm ext-relay-row-btn${action === 'Stop' ? ' btn-danger' : ''}`} data-testid={action === 'Stop' ? 'ext-relay-stop' : 'ext-relay-unshare'} onClick={onAction}>{action}</button>

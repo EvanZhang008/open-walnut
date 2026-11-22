@@ -70,7 +70,7 @@ function AddToTopicDialog({ members, onClose, onAdded }: { members: PickedMember
                       disabled={inAll || busy !== null} title={inAll ? `${who} already in it` : `Add ${who} to “${t.title}”`}
                       onClick={() => void add(t.id)}>
                       <StackedAvatars members={t.members} size={18} />
-                      <span className="topic-candidate-name">{t.title}</span>
+                      <span className="topic-candidate-name wn-title">{t.title}</span>
                       <span className="topic-candidate-hint">{inAll ? 'Already in' : busy === t.id ? 'Adding…' : `${t.members.filter((m) => m.status !== 'left').length} members`}</span>
                     </button>
                   </li>

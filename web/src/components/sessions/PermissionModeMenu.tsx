@@ -116,7 +116,7 @@ export function PermissionModeMenu({ mode, onPick, title, heading = 'Permission 
                 if (!active) onPick(option.id);
               }}
             >
-              <span className="model-picker-row-name permission-mode-name">{option.label}</span>
+              <span className="model-picker-row-name permission-mode-name wn-title">{option.label}</span>
             </button>
           );
         })}

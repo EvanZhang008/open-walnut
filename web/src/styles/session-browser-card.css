@@ -37,15 +37,12 @@
 }
 .session-browser-dot--idle { background: var(--warning); box-shadow: none; }
 .session-browser-dot--off { background: var(--fg-muted); box-shadow: none; }
+/* The page's title wraps in full (.wn-title); the dot and × stay beside it. */
 .session-browser-title {
   flex: 1 1 auto;
-  min-width: 0;
   font-size: var(--font-size-md);
   font-weight: 600;
   color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 /* The address and the window, each one line under the title. */
 .session-browser-names { min-width: 0; margin-bottom: 10px; }

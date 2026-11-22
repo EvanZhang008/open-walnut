@@ -17,9 +17,8 @@ import { TaskKebabMenu } from './TaskKebabMenu';
 import { ProjectKebabMenu, ProjectPlusMenu, type ProjectMenuExtra } from './ProjectHeaderMenus';
 import { openSessionOnHome, openDraftSessionOnHome } from '@/utils/open-session';
 import { sortTasks, groupTasksByProject, type TpSort, type TpSortKey } from './tasks-page-sort';
-import {
-  ROW_H, GROUP_H, GHOST_H, WINDOW_MIN_ITEMS, OVERSCAN, visibleRangeFor, offsetsFor,
-} from './tasks-table-window';
+import { ROW_H, GROUP_H, GHOST_H, WINDOW_MIN_ITEMS } from './tasks-table-window';
+import { useTableWindow } from './useTableWindow';
 import {
   TP_DEFAULT_COLUMNS, visibleColumns, gridTemplate, formatTableTime, formatTableTimeTitle,
   type TpColumnDef, type TpColumnId,
@@ -77,45 +76,6 @@ type TableItem =
   | { kind: 'group'; key: string; h: number; project: string; tasks: Task[]; collapsed: boolean }
   | { kind: 'row'; key: string; h: number; task: Task }
   | { kind: 'ghost'; key: string; h: number; project: string | undefined; keySuffix: string };
-
-/**
- * Which slice of a fixed-height list is on screen.
- *
- * Deliberately NOT a scroll-triggered React render per pixel: the listener is passive
- * and coalesced into one rAF, and it only calls setState when the resulting slice
- * actually changes. Scrolling within the current window costs nothing.
- */
-function useVisibleRange(
-  ref: React.RefObject<HTMLDivElement | null>,
-  offsets: number[],
-  enabled: boolean,
-): [number, number] {
-  const [range, setRange] = useState<[number, number]>(
-    () => visibleRangeFor(offsets, 0, 900, OVERSCAN),
-  );
-  const rangeRef = useRef(range);
-  rangeRef.current = range;
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || !enabled) return;
-    let queued = false;
-    const compute = () => {
-      queued = false;
-      const [start, stop] = visibleRangeFor(offsets, el.scrollTop, el.clientHeight, OVERSCAN);
-      const [ps, pe] = rangeRef.current;
-      if (ps !== start || pe !== stop) setRange([start, stop]);
-    };
-    const onScroll = () => { if (!queued) { queued = true; requestAnimationFrame(compute); } };
-    el.addEventListener('scroll', onScroll, { passive: true });
-    const ro = new ResizeObserver(onScroll);
-    ro.observe(el);
-    compute();
-    return () => { el.removeEventListener('scroll', onScroll); ro.disconnect(); };
-  }, [ref, offsets, enabled]);
-
-  return range;
-}
 
 const PRIORITY_META: Record<string, { dot: string; labelCls: string; label: string }> = {
   immediate: { dot: 'p0', labelCls: ' lp0', label: 'P0 · urgent' },
@@ -519,7 +479,7 @@ export function TasksPageTable({
 
   const row = (t: Task) => {
     return (
-      <div key={t.id} className={`tp-row${t.status === 'done' ? ' done' : ''}`} data-peek-row="" data-task-id={t.id}>
+      <div key={t.id} className={`tp-row${t.status === 'done' ? ' done' : ''}`} data-peek-row="" data-task-id={t.id} data-win-key={t.id}>
         <span className="tp-cell-title">
           {/* The same unread mark as the home list, in the row's left gutter: unread agent output
               (clears when the task is opened). Needs you is the row's status icon. */}
@@ -529,7 +489,7 @@ export function TasksPageTable({
           <RowCircle task={t} onToggleComplete={onToggleComplete} />
           <button
             type="button"
-            className={`tp-row-title${t.walnut_agent ? ' walnut-task-title' : ''}`}
+            className={`tp-row-title wn-title${t.walnut_agent ? ' walnut-task-title' : ''}`}
             onClick={() => openTask(t.id)}
           >
             {orgDisplayTitle(t)}
@@ -645,6 +605,7 @@ export function TasksPageTable({
         <Fragment key={`grp:${project || '·inbox·'}`}>
           <div
             className={`tp-group-header${isCollapsed ? ' closed' : ''}`}
+            data-win-key={`grp:${project || '·inbox·'}`}
             data-testid="tasks-group-header"
             data-project={project}
             data-group-project={project}
@@ -652,7 +613,7 @@ export function TasksPageTable({
           >
             <span className="tp-group-chevron">▾</span>
             <span className="tp-group-icon">{project ? '📁' : '📥'}</span>
-            <span className="tp-group-name">{projectDisplayName(project)}</span>
+            <span className="tp-group-name wn-title">{projectDisplayName(project)}</span>
             {project && <ProjectSourceBadge source={sourceByName.get(project.toLowerCase())} />}
             <span className="tp-group-count">{groupTasks.length}</span>
             {/* One-click "+" → a draft session in this project, the same control (and
@@ -687,7 +648,7 @@ export function TasksPageTable({
   // ── flatten to the scroller's actual child sequence ──
   // Grouped mode already produced a FLAT run of children (header, rows, ghost, next
   // header, …) because each group was a Fragment. Making that list explicit is what
-  // lets a window be a slice: item heights are known, so offsets are arithmetic.
+  // lets a window be a slice: item heights are known (a row's once measured), so offsets are arithmetic.
   const { items, groupAt } = useMemo(() => {
     const out: TableItem[] = [];
     // Which group header each item belongs to. Needed because `.tp-group-header` is
@@ -718,12 +679,10 @@ export function TasksPageTable({
     return { items: out, groupAt: owner };
   }, [groups, collapsed, sorted]);
 
-  // Prefix sums: offsets[i] is item i's top edge, and the last entry is the total.
-  const offsets = useMemo(() => offsetsFor(items.map((it) => it.h)), [items]);
-
   const windowed = items.length > WINDOW_MIN_ITEMS;
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [winStart, winEnd] = useVisibleRange(scrollRef, offsets, windowed);
+  // Prefix sums: offsets[i] is item i's top edge, and the last entry is the total.
+  const { offsets, range: [winStart, winEnd] } = useTableWindow(scrollRef, items, windowed);
 
   const renderItem = (it: TableItem): ReactNode => {
     if (it.kind === 'group') return groupHeader(it.project, it.tasks, it.collapsed);
@@ -763,7 +722,7 @@ export function TasksPageTable({
     body = (
       <>
         {pinned && renderItem(pinned)}
-        <div style={{ height: offsets[from] - (pinned ? pinned.h : 0) }} aria-hidden="true" />
+        <div style={{ height: offsets[from] - (pinned ? offsets[headIdx + 1] - offsets[headIdx] : 0) }} aria-hidden="true" />
         {items.slice(from, to + 1).map(renderItem)}
         <div style={{ height: offsets[items.length] - offsets[to + 1] }} aria-hidden="true" />
       </>

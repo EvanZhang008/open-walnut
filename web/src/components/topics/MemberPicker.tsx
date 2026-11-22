@@ -87,7 +87,7 @@ export function MemberPicker({ picked, onChange, host, onHost, exclude, autoFocu
             <li key={refKey(c.ref)}>
               <button type="button" role="option" aria-selected={false} className="topic-candidate" data-testid="topic-candidate" data-ref={refKey(c.ref)} onClick={() => add(c)}>
                 <MemberAvatar who={{ name: c.name, ref: c.ref }} size={20} />
-                <span className="topic-candidate-name">{c.name}</span>
+                <span className="topic-candidate-name wn-title">{c.name}</span>
                 <span className="topic-candidate-hint">{c.hint}</span>
               </button>
             </li>

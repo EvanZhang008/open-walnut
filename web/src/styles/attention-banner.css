@@ -122,15 +122,8 @@
 .hpb-x { grid-area: x; }
 /* A row with an x is at least 34px tall: with the 10px gap, two x boxes (20px) sit 24px apart. */
 .hpb-row:has(> .hpb-x) { min-height: 34px; }
-/* Readiness: the first sentence is the bold headline (two lines at most), the rest is detail. */
-.hpb-headline {
-  font-weight: 600;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  overflow: hidden;
-}
+/* Readiness: the first sentence is the bold headline (wrapped in full, .wn-title), the rest is detail. */
+.hpb-headline { font-weight: 600; }
 .hpb-rest { color: var(--fg-secondary); line-height: 1.45; }
 /* Words break between words; a command or a host name never splits mid-token
    unless it cannot fit a line on its own. */
@@ -183,44 +176,6 @@
   text-decoration: underline;
 }
 .hpb-more:hover { color: var(--fg); }
-
-/* ── One-line rows (a mount whose cap is at its 132px floor: a phone's task band) ── */
-.hpb-single:not(.hpb-open) .hpb-body,
-.hpb-single:not(.hpb-open) .hft { flex-direction: row; align-items: center; gap: 8px; }
-.hpb-single:not(.hpb-open) .hft { flex: 1 1 auto; min-width: 0; }
-.hpb-single:not(.hpb-open) .hft-headline,
-.hpb-single:not(.hpb-open) .hpb-message { flex: 1 1 auto; min-width: 0; }
-.hpb-single:not(.hpb-open) .hft-headline,
-.hpb-single:not(.hpb-open) .hpb-message {
-  display: block;
-  -webkit-line-clamp: unset;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.hpb-single:not(.hpb-open) .hpb-actions { flex: none; flex-wrap: nowrap; margin: 0; }
-.hpb-single:not(.hpb-open) .hpb-last,
-.hpb-single:not(.hpb-open) .hpb-receipt,
-.hpb-single:not(.hpb-open) .hft-when { display: none; }
-.hpb-single:not(.hpb-open) .hft-details { flex: none; }
-/* A narrow one-line row (a phone's task band) wraps its headline to two lines
-   instead of cutting it: the host's name is never the part that disappears. */
-@container attention (max-width: 420px) {
-  .hpb-single:not(.hpb-open) .hft-headline,
-  .hpb-single:not(.hpb-open) .hpb-message {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    white-space: normal;
-    text-overflow: clip;
-  }
-  /* Narrow (spec 4.1): the actions drop under the headline, which takes the whole line (N3-11). */
-  .hpb-single:not(.hpb-open) .hpb-body,
-  .hpb-single:not(.hpb-open) .hft { flex-wrap: wrap; row-gap: 4px; }
-  .hpb-single:not(.hpb-open) .hft-headline,
-  .hpb-single:not(.hpb-open) .hpb-message { flex: 0 0 100%; }
-}
 
 /* ── The draft's Start refusal (HostGateErrorBar) and the session host bar ── */
 .host-gate-bar { flex-direction: column; align-items: stretch; gap: 8px; margin: 0 0 8px; }

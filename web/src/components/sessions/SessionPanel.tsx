@@ -460,6 +460,8 @@ interface SessionPanelProps {
   onHostBoard?: () => void;
   /** What an empty conversation says instead of "No conversation history found" (a router's page: why it is empty). */
   emptyHistory?: ReactNode;
+  /** Whether the conversation has anything to show, once its history has answered (SessionChatHistory). */
+  onHistoryShown?: (hasContent: boolean) => void;
   /**
    * A plain chat (the browser side panel's Ask, about the page the person is on): the
    * conversation and a composer, nothing of a coding session. No header (the host has its
@@ -508,7 +510,7 @@ const carriedTitles = new Map<string, string>();
 /** How long a chat waits for the rest of a burst of events before it re-reads its record. */
 const RECORD_REREAD_COALESCE_MS = 250;
 
-const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, onRestoredGone, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onMinimize, onTaskCompleted, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced: onSessionReplacedProp, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill, composerBar, emptyHistory }: SessionPanelProps) {
+const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, onClose, onRestoredGone, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onMinimize, onTaskCompleted, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced: onSessionReplacedProp, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard, plainChat, composerPill, composerBar, emptyHistory, onHistoryShown }: SessionPanelProps) {
   countRender('SessionPanelBody');
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) goes through the same
@@ -3613,11 +3615,11 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                     taskId={session?.taskId}
                     title={headerTitle}
                     // Same amber as the task lists — one marker, every surface.
-                    className={`session-panel-title${sessionTask?.walnut_agent ? ' walnut-task-title' : ''}`}
+                    className={`session-panel-title wn-title${sessionTask?.walnut_agent ? ' walnut-task-title' : ''}`}
                   />
                 : carriedTitle
-                  ? <span className="session-panel-title">{carriedTitle}</span>
-                  : <span className="session-panel-title text-muted">{loading ? 'Opening the session…' : 'Untitled session'}</span>
+                  ? <span className="session-panel-title wn-title">{carriedTitle}</span>
+                  : <span className="session-panel-title wn-title text-muted">{loading ? 'Opening the session…' : 'Untitled session'}</span>
               }
             </div>
             {/* The one question control up here: the mode pill (Tree Mode /
@@ -4253,6 +4255,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             key={`${sessionId}:${rewindEpoch}`}
             sessionId={sessionId}
             emptyHistory={emptyHistory}
+            {...(onHistoryShown ? { onHistoryShown } : {})}
             publishTimeline={treeGrid || reader.shown ? timelineShare : undefined}
             engine={session?.engine}
             phase={taskPhase}

@@ -25,9 +25,10 @@
   border-bottom: 1px solid var(--border);
 }
 .health-table th:nth-child(1) { width: 72px; }
-.health-table th:nth-child(3) { width: 96px; }
+/* The Alarm column gets the room first; Now and What Walnut did give theirs up. */
+.health-table th:nth-child(3) { width: 80px; }
 .health-table th:nth-child(4) { width: 136px; }
-.health-table th:nth-child(5) { width: 30%; }
+.health-table th:nth-child(5) { width: 24%; }
 .health-row { cursor: pointer; }
 .health-row td {
   padding: 6px 8px;
@@ -39,15 +40,18 @@
 .health-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* An alarm's state is a dot and a word (NoticeStatus); the width keeps the titles beside it in line. */
 .health-pill { flex: none; min-width: 52px; }
-.health-name { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+/* A table cell stays a cell (a flex td stops short of a taller row, and its border with it):
+   its three lines are blocks. */
+.health-name { min-width: 0; }
+.health-name > span { display: block; }
+.health-name > span + span { margin-top: 1px; }
 .health-title { color: var(--fg); font-weight: 500; }
+/* The log line or host an alarm watches tells same-titled alarms apart: it wraps in full (2026-11-22 audit). */
 .health-label {
   color: var(--fg-muted);
   font-family: var(--font-mono);
   font-size: var(--font-size-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 .health-since { color: var(--fg-muted); font-size: var(--font-size-xs); }
 .health-value { color: var(--fg); }
@@ -82,6 +86,7 @@
   color: var(--fg-secondary);
 }
 
+.health-fix-row > .health-count { font-size: var(--font-size-sm); }
 .health-fix-note {
   font-size: var(--font-size-sm);
   color: var(--fg-muted);

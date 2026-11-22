@@ -11,23 +11,21 @@
 .mail-rules-file-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
 .mail-rules-file-label { font-weight: 600; font-size: var(--font-size-md); }
 .mail-rules-file-path {
+  display: block;
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
   user-select: text;
   overflow-wrap: anywhere;
   min-width: 0;
-  flex: 1 1 240px;
   color: var(--fg);
 }
-.mail-rules-file-actions { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.mail-rules-file-actions { display: inline-flex; gap: 12px; flex-wrap: wrap; margin-left: auto; }
 .mail-rules-file-error { display: flex; flex-direction: column; gap: 6px; }
 .mail-rules-file-error-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 
-.mail-rules-groups,
 .mail-rules-rules,
 .mail-rules-builtins { list-style: none; margin: 0; padding: 0; }
 
-.mail-rules-group,
 .mail-rule-line,
 .mail-rules-builtin {
   display: flex;
@@ -39,10 +37,8 @@
   border-bottom: 1px solid var(--border);
 }
 .mail-rules-builtin { flex-direction: column; align-items: flex-start; gap: 2px; }
-.mail-rules-group:last-child,
 .mail-rule-row:last-child .mail-rule-line,
 .mail-rules-builtin:last-child { border-bottom: none; }
-.mail-rules-group-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .mail-rule-row { transition: background-color 0.3s ease; }
 .mail-rule-row[data-flash='true'] { background: var(--accent-subtle); }
@@ -154,11 +150,11 @@
 @media (prefers-reduced-motion: reduce) {
   .mail-rule-row { transition: none; }
 }
-/* The matching mails under the preview, on request: sender and subject, one line each. */
+/* The matching mails under the preview, on request: sender, then subject, each in full (.wn-title). */
 .mail-rule-samples {
   list-style: none; margin: 0; padding: 4px 8px; display: flex; flex-direction: column; gap: 4px;
   border: 1px solid var(--border); border-radius: 6px; background: var(--bg-secondary); font-size: var(--font-size-sm);
 }
 .mail-rule-sample { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
-.mail-rule-sample-sender { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mail-rule-sample-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-secondary); }
+.mail-rule-sample-sender { font-weight: 600; }
+.mail-rule-sample-subject { color: var(--fg-secondary); }

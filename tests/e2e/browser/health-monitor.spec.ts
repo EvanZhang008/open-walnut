@@ -95,6 +95,9 @@ test.describe('Walnut Health', () => {
     const row = page.getByTestId('health-fix-tasks')
     await expect(row.getByTestId('health-fix-actions-off')).toHaveCount(0)
     await expect(row).toContainText('When an alarm needs a fix')
+    // What Walnut may still do today sits with the control that sets it, not in the counts line.
+    await expect(row.getByTestId('health-fixes-today')).toContainText('Fix tasks today')
+    await expect(page.getByTestId('health-summary')).not.toContainText('Fix tasks today')
     const read = async () => (await (await page.request.get('/api/v1/health-monitor')).json()).fixTasks
     const start = row.getByTestId('health-fix-start')
     const record = row.getByTestId('health-fix-record')

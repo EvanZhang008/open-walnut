@@ -26,7 +26,7 @@ import { USER_STATE_LABELS } from '@open-walnut/user-status';
 import { isBoolean, usePageViewOf } from '@/utils/view-memory';
 import { domId } from './OrgChartVp';
 import { TaskStateIcon } from '@/components/common/TaskStateIcon';
-import { directorsLabel, foldGroups, leaderTotal, leadersMatch, subsMatch, type LeaderGroup, type LeaderNode } from './org-leaders';
+import { directorsLabel, firstLeaders, foldGroups, leaderTotal, leadersMatch, subsMatch, type LeaderGroup, type LeaderNode } from './org-leaders';
 import { directorMenuItems, endNewDirector, useDirectorActions, useNewDirectorAsk, type DirectorProject } from './director-actions';
 import { OrgNewDirector } from './OrgNewDirector';
 import '@/styles/org-leaders.css';
@@ -35,6 +35,9 @@ import { NodeAvatar } from './OrgAvatar';
 /** How far each level of Directors steps in: enough for the tree to read, little enough that a deep
  *  level keeps the width its title wraps in (2026-11-21, the UI audit: names cut at every level). */
 const LEVEL_INDENT_PX = 10;
+/** How many Directors an opened fold of the list shows before "N more": one VP's team never pushes
+ *  the other VPs off the first screen (2026-11-22, the UI audit). The chart's cards show them all. */
+const LIST_FIRST_LEADERS = 3;
 
 type Surface = 'list' | 'chart';
 
@@ -121,9 +124,15 @@ function LeaderRow({ leader: l, depth, surface, query, openTaskIds, onOpen, onMe
         >
           <TaskStateIcon state={l.icon} decorative />
           <NodeAvatar taskId={l.id} name={l.title} size={20} className="org-leader-avatar" />
-          <span className="org-leader-title wn-title">{l.title}</span>
-          {l.watched && <span className="org-leader-eye wn-fixed" data-testid="org-leader-eye" title="Watched" aria-hidden="true">{ICON_EYE}</span>}
-          <span className="org-leader-leads wn-fixed" data-testid="org-leader-leads">leads {l.leads}</span>
+          {/* The eye and "leads N" end the title's last line, at the row's right edge (or under it when that
+              line is full), so they take no column from the words (2026-11-22, the UI audit). */}
+          <span className="org-leader-title wn-title">
+            {l.title}
+            <span className="org-leader-tail wn-fixed">
+              {l.watched && <span className="org-leader-eye" data-testid="org-leader-eye" title="Watched" aria-hidden="true">{ICON_EYE}</span>}
+              <span className="org-leader-leads" data-testid="org-leader-leads">leads {l.leads}</span>
+            </span>
+          </span>
         </button>
       </div>
       {hasSubs && open && (
@@ -155,6 +164,7 @@ interface Props {
 export function OrgLeaders({ groups, surface, vpKey, vpName, projects, showProjects = true, query = '', openTaskIds, onLeave }: Props) {
   const actions = useDirectorActions();
   const [open, setOpen] = useFold(surface, 'leaders', vpKey, leadersMatch(groups, query), query);
+  const [allShown, setAllShown] = usePageViewOf('org', `${surface}.leaders.all`, vpKey, false, isBoolean);
   const menu = useContextMenu<LeaderNode>({ ignorePressSelection: true });
   // A VP's "New Director…": this fold opens on its input (kept open), for a VP with none yet too.
   const asked = useNewDirectorAsk(surface);
@@ -163,6 +173,10 @@ export function OrgLeaders({ groups, surface, vpKey, vpName, projects, showProje
   useEffect(() => { if (mine) { setOpen(true); setAdding(true); } }, [mine?.n]); // eslint-disable-line react-hooks/exhaustive-deps -- one answer per ask
   const onAdding = (on: boolean) => { setAdding(on); if (!on && mine) endNewDirector(mine.n); };
   const total = leaderTotal(groups);
+  const folded = foldGroups(groups, showProjects);
+  // The list's first Directors, then "N more"; a search shows everything it finds.
+  const first = surface === 'list' && !query.trim() ? firstLeaders(folded, LIST_FIRST_LEADERS) : { groups: folded, hidden: 0 };
+  const shownGroups = first.hidden && !allShown ? first.groups : folded;
   const listId = domId(`org-leaders-${surface}`, vpKey);
   const inList = surface === 'list';
   const onOpen = (taskId: string) => { onLeave?.(); actions.openTask(taskId); };
@@ -220,12 +234,23 @@ export function OrgLeaders({ groups, surface, vpKey, vpName, projects, showProje
       </DisclosureButton>
       {open && (
         <div id={listId} className="org-leaders-list" data-testid="org-leaders-list">
-          {foldGroups(groups, showProjects).map((g) => (
+          {shownGroups.map((g) => (
             <div key={g.key} className="org-leaders-group" role={inList ? 'group' : undefined} aria-label={inList ? (g.name || `Directors under ${vpName}`) : undefined} data-testid="org-leaders-group" data-project={g.project}>
               {g.name && <div className="org-leaders-project wn-title" data-testid="org-leaders-project" aria-hidden={inList || undefined}>{g.name}</div>}
               {g.leaders.map((l) => <LeaderRow key={l.id} leader={l} depth={0} surface={surface} query={query} openTaskIds={openTaskIds} onOpen={onOpen} onMenu={onMenu} />)}
             </div>
           ))}
+          {/* Only the list cuts a fold short, so this is always one of its listbox's options. */}
+          {first.hidden > 0 && (
+            <button
+              type="button"
+              role="option"
+              aria-selected={false}
+              className="org-leaders-more"
+              data-testid="org-leaders-more"
+              onClick={() => setAllShown(!allShown)}
+            >{allShown ? 'Show fewer' : `${first.hidden} more`}</button>
+          )}
           {newRow}
         </div>
       )}

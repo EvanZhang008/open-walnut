@@ -120,8 +120,10 @@ export function PasswordsSection({ config, onSave }: Props) {
           help={state}
           control={<SettingsButton onClick={() => navigate('/passwords')}>{status?.setUp ? 'Open Passwords' : 'Set up'}</SettingsButton>}
         />
+        {/* Stacked: six choices beside the help squeezed it into a narrow column (2026-11-22 audit). */}
         <SettingsRow
           label="Keep Passwords unlocked"
+          className="settings-row-stacked"
           help={status?.unlockFor === 'always'
             ? 'Forever: a key stays on this Mac, so agents can use Passwords while you are away. Any program running as you could read the vault.'
             : `${status ? unlockFootText(status) : ''}${status?.unlockFor === 'restart' ? '' : ' Restarting Walnut keeps it.'} A shorter choice also applies to the windows open now; a longer one to the next unlock.`}

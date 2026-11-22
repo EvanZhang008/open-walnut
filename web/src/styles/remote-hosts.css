@@ -284,7 +284,7 @@ html body .wn-context-menu.rh-add-menu {
   background: var(--settings-group-bg, var(--card-bg));
   border-bottom: 1px solid var(--settings-hairline);
 }
-.rh-details-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-size-md); line-height: 18px; font-weight: 600; }
+.rh-details-name { font-size: var(--font-size-md); line-height: 18px; font-weight: 600; }
 .rh-details-head > .btn { flex: none; }
 .rh-details-part { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .rh-details-part + .rh-details-part { border-top: 1px solid var(--settings-hairline); padding-top: 10px; }

@@ -462,12 +462,9 @@
   margin: 4px 8px;
   background: var(--border);
 }
+/* A chat's title wraps in full (.wn-title); its time stays at the right. */
 .ask-walnut-drawer-item-title {
   flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 /* "3d ago" on the right: last touch, in the header's own time-ago voice. */
 .ask-walnut-drawer-item-time {

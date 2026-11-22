@@ -387,11 +387,15 @@ test('R3-15 R3-16 R3-18: one card copy for keyboard and pointer drags, no hover 
   const kh = (await ghost.boundingBox())!.height
   await page.screenshot({ path: `${SHOTS}/${engine}-r315-key-ghost.png` })
   await page.keyboard.press('Escape')
-  // R3-16: under a pointer drag, the card under the pointer shows no action bar.
+  // R3-16: under a pointer drag, the card under the pointer shows no action bar. The keyboard drag
+  // may have scrolled the lane, and a card shows its whole summary: bring the dragged card back first.
+  await card(pane, a).scrollIntoViewIfNeeded()
   const target = card(pane, b)
   const tb = (await target.boundingBox())!
   let overlayH = 0
-  await dragTo(page, card(pane, a), tb.x + tb.width / 2, tb.y + tb.height - 12, async () => {
+  // Its lower part, inside the window: a card shows its whole summary, so it may run past the window's end.
+  const overY = Math.min(tb.y + tb.height - 12, page.viewportSize()!.height - 24)
+  await dragTo(page, card(pane, a), tb.x + tb.width / 2, overY, async () => {
     const vis = await target.getByTestId('kanban-card-actions').evaluate((el) => getComputedStyle(el).visibility)
     expect(vis).toBe('hidden')
     overlayH = (await page.locator('.kanban-drag-overlay .kanban-card').first().boundingBox())?.height ?? 0
@@ -443,7 +447,9 @@ for (const scheme of ['light', 'dark'] as const) {
     const pb = (await pane.boundingBox())!
     const why = `pane ${Math.round(pb.height)}, session ${Math.round(sb.height)}`
     expect(pb.y + pb.height - (sb.y + sb.height), why).toBeLessThan(40)
-    expect(sb.height, why).toBeGreaterThan(280)
+    // At least the chat's floor: the card's title and status show whole above it (the fixture's title
+    // runs five lines at 520px), and its summary takes at most 4 lines there.
+    expect(sb.height, why).toBeGreaterThanOrEqual(280)
     // The nested chat is shown, not hidden by the outer panel's collapsed-chat rule: its history and composer.
     await expect(session.locator('.session-panel-body').first()).toBeVisible()
     await expect(session.getByRole('textbox').first()).toBeInViewport({ ratio: 1 })

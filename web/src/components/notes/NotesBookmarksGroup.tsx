@@ -52,7 +52,7 @@ export function NotesBookmarksGroup({ favoriteNotes, selectedPath, onSelect, onT
           <ChevronIcon />
         </span>
         <BookmarkGlyph />
-        <span className="notes-tree-name">Bookmarks</span>
+        <span className="notes-tree-name wn-title">Bookmarks</span>
         <span className="notes-bookmarks-count">{favoriteNotes.length}</span>
       </div>
       {expanded && (
@@ -66,7 +66,7 @@ export function NotesBookmarksGroup({ favoriteNotes, selectedPath, onSelect, onT
               onContextMenu={onContextMenu ? (e) => onContextMenu(e, path) : undefined}
             >
               <BookmarkGlyph />
-              <span className="notes-tree-name">{basenameNoExt(path)}</span>
+              <span className="notes-tree-name wn-title">{basenameNoExt(path)}</span>
               <button
                 className="notes-bookmark-remove"
                 aria-label={`Remove bookmark ${basenameNoExt(path)}`}

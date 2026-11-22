@@ -56,7 +56,7 @@ function StageDetail({ state }: { state: DetailState }) {
           {d.steps.map((step, i) => (
             <li key={`${i}:${step.name}`} className="change-card-step" data-status={step.status} data-testid="change-stage-step">
               <span className="change-card-step-mark" data-tone={step.status}><StatusIcon status={step.status} label={STAGE_WORDS[step.status]} /></span>
-              <span className="change-card-step-name" title={step.url}>{step.name}</span>
+              <span className="change-card-step-name wn-title" title={step.url}>{step.name}</span>
               {step.note && <span className="change-card-step-note">{step.note}</span>}
             </li>
           ))}
@@ -200,7 +200,7 @@ export function ChangeDeployView({ deploy, taskId, url, stale, focus, now }: {
   return (
     <section className="change-card-deploy" data-stale={stale ? 'true' : undefined} data-testid="change-deploy">
       <div className="change-card-deploy-head">
-        <span className="change-card-deploy-name">{deploy.pipeline}</span>
+        <span className="change-card-deploy-name wn-title">{deploy.pipeline}</span>
         {deploy.commit && <code className="change-card-commit" title={deploy.commit}>{deploy.commit.slice(0, 7)}</code>}
         <span className="change-card-count" data-testid="change-deploy-count">{counts.done} of {counts.total} deployed</span>
       </div>

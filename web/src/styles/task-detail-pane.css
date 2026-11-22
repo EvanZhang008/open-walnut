@@ -112,13 +112,9 @@
   height: 6px;
   border-radius: 50%;
 }
+/* A session's or a subtask's title wraps whole (`wn-title`, TaskDetailRows.tsx). */
 .tdp-row-title {
   flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: normal;
-  overflow-wrap: anywhere;
   color: var(--fg);
 }
 .tdp-row-title.is-loading { color: var(--fg-muted); }
@@ -276,8 +272,8 @@
   border-radius: var(--radius-xs);
 }
 .tdp-dep-row .tdp-row-line { gap: 8px; }
+/* A dependency's title wraps whole (`wn-title`, TaskDetailEdits.tsx). */
 .tdp-dep-title {
-  min-width: 0;
   flex: 1;
   padding: 0;
   font: inherit;
@@ -287,9 +283,6 @@
   background: none;
   border: none;
   cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .tdp-dep-title:hover { text-decoration: underline; }
 .tdp-dep-remove {

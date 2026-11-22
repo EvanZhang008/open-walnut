@@ -89,7 +89,7 @@ function SortableRailItem({ p, active, onSelect, onToggleFavorite, onProjectChan
       {...listeners}
     >
       <span className="tp-ri-icon">📁</span>
-      <span className="tp-ri-name">{projectDisplayName(p.name)}</span>
+      <span className="tp-ri-name wn-title">{projectDisplayName(p.name)}</span>
       <ProjectSourceBadge source={p.source} />
       {p.favorite && <span className="tp-ri-fav">★</span>}
       <span className="tp-ri-count">{p.openCount}</span>
@@ -248,7 +248,7 @@ export function TasksPageRail({
       <div className="tp-rail-scroll">
         <button type="button" className={itemClass(null)} onClick={() => onSelect(null)}>
           <span className="tp-ri-icon">☰</span>
-          <span className="tp-ri-name">All Tasks</span>
+          <span className="tp-ri-name wn-title">All Tasks</span>
           <span className="tp-ri-count">{allOpenCount}</span>
         </button>
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
@@ -272,7 +272,7 @@ export function TasksPageRail({
         {showInbox && (
           <button type="button" className={itemClass('')} onClick={() => onSelect('')}>
             <span className="tp-ri-icon">📥</span>
-            <span className="tp-ri-name">Inbox</span>
+            <span className="tp-ri-name wn-title">Inbox</span>
             <span className="tp-ri-count">{inboxOpenCount}</span>
           </button>
         )}

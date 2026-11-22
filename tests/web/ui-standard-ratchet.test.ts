@@ -42,7 +42,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { countAll, restylesBtn, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, inputParts, restylesInput, cutsTitle, fieldClasses, restylesField, isOwnLabel, paintsLabel, isBoxedLabelName, drawsBox, LABEL_HOME, isCard, offCardFill, type Counts } from './ui-standard-scan';
+import { countAll, restylesBtn, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, inputParts, restylesInput, cutsTitle, fieldClasses, restylesField, isOwnLabel, paintsLabel, isBoxedLabelName, drawsBox, LABEL_HOME, isCard, offCardFill, META_MARK, type Counts } from './ui-standard-scan';
 import { tokenBreaks } from './ui-token-scan';
 import type { Decl } from './css-scan';
 
@@ -151,6 +151,10 @@ describe('UI standard: one look per kind of control', () => {
     expect(offCardFill([{ prop: 'background', value: 'var(--bg-secondary)' }, r])).toBe(false);
     expect(offCardFill([{ prop: 'background', value: 'var(--bg)' }])).toBe(false);
     expect(offCardFill([{ prop: 'background', value: 'var(--bg-elevated)' }, r, { prop: 'position', value: 'fixed' }])).toBe(false);
+    // A cut that is right says why on its own line; a bare or short mark does not count.
+    expect(META_MARK.test('  text-overflow: ellipsis; /* meta: one-line tab strip, the tab peeks */')).toBe(true);
+    expect(META_MARK.test('  text-overflow: ellipsis; /* meta: tab */')).toBe(false);
+    expect(META_MARK.test('  text-overflow: ellipsis;')).toBe(false);
   });
 
   it('finds each value that is not a token', () => {

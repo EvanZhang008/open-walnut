@@ -47,13 +47,7 @@
 .hft-headline {
   font-weight: 600;
   color: var(--fg);
-  /* Wrap first (the kind sits at the END of the headline), clamp at two lines. */
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  overflow: hidden;
-  overflow-wrap: anywhere;
+  /* Wrapped in full (.wn-title): the kind sits at the END of the headline. */
 }
 .hft-hint {
   color: var(--fg-secondary);

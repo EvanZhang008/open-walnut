@@ -260,8 +260,9 @@ const TaskListRow = memo(function TaskListRow({
   row, now, selected, onSelect,
 }: { row: Row; now: number; selected: boolean; onSelect: (key: string) => void }) {
   if (!row.isAgent) {
-    // A command (or other job) is one line: the tab already names its kind, and a
-    // session can run hundreds, so the list must stay scannable.
+    // A command (or other job) is one row: the tab already names its kind, and a
+    // session can run hundreds, so the list must stay scannable. Its name wraps
+    // rather than cut (.wn-title); the time keeps its room (.wn-fixed).
     const elapsed = row.task ? fmtElapsed(rowElapsedMs(row.task, now)) : '';
     return (
       <button data-peek-row=""
@@ -271,8 +272,8 @@ const TaskListRow = memo(function TaskListRow({
         title={row.task?.summary && RUNNING.has(row.status) ? `${row.title}\n${row.task.summary}` : row.title}
       >
         <StatusDot status={row.status} />
-        <span className="bg-task-row-name">{row.title}</span>
-        {elapsed && <span className="bg-task-row-time">{elapsed}</span>}
+        <span className="bg-task-row-name wn-title">{row.title}</span>
+        {elapsed && <span className="bg-task-row-time wn-fixed">{elapsed}</span>}
       </button>
     );
   }
@@ -287,7 +288,7 @@ const TaskListRow = memo(function TaskListRow({
     >
       <div className="bg-task-row-head">
         <StatusDot status={row.status} />
-        <span className="bg-task-row-name">{row.title}</span>
+        <span className="bg-task-row-name wn-title">{row.title}</span>
         {!walnut && <KindPill row={row} />}
       </div>
       {walnut && <div className="bg-task-row-chips"><KindPill row={row} /></div>}
@@ -442,7 +443,7 @@ export function BackgroundTasksPanel({
             {selected && (
               <div className={`bg-tasks-detail-head${selected.task && isWalnutSubagent(selected.task) ? ' bg-tasks-detail-head--walnut' : ''}`}>
                 <StatusDot status={selected.status} />
-                <span className="bg-tasks-detail-title">{selected.title}</span>
+                <span className="bg-tasks-detail-title wn-title">{selected.title}</span>
                 <KindPill row={selected} />
                 {detailLive && <span className="wf-modal-live" title="Agent still running — this is its live output">{'●'}</span>}
                 {/* The pill already names a command's kind; the meta keeps only the timing. */}

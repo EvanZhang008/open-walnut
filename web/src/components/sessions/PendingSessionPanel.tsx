@@ -131,7 +131,7 @@ export function PendingSessionPanel({ cwd, host, hostLabel, label, message, real
         <div className="session-panel-header">
           <div className="session-panel-header-top">
             <div className="session-panel-title-area">
-              <span className="session-panel-title" title={cwd}>{dirName}</span>
+              <span className="session-panel-title wn-title" title={cwd}>{dirName}</span>
               {host && (
                 <span className="badge session-panel-badge">
                   <span>{hostDisplayLabel(host, undefined, hostLabel)}</span>
@@ -190,7 +190,7 @@ export function PendingSessionPanel({ cwd, host, hostLabel, label, message, real
       <div className="session-panel-header">
         <div className="session-panel-header-top">
           <div className="session-panel-title-area">
-            <span className="session-panel-title" title={cwd}>{dirName}</span>
+            <span className="session-panel-title wn-title" title={cwd}>{dirName}</span>
             {host && (
               <span className="badge session-panel-badge">
                 <span>{hostDisplayLabel(host, undefined, hostLabel)}</span>

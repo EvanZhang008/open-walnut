@@ -163,20 +163,6 @@ export function AudioCaptureSection({ config, onSave }: Props) {
             }
           />
         ))}
-        {quickAdd.length > 0 && (
-          <SettingsRow
-            label="Quick add"
-            control={
-              <span className="settings-addons-inline">
-                {quickAdd.map(d => (
-                  <SettingsButton key={d.bundleId} onClick={() => addApp(d.bundleId)}>
-                    {`Add ${d.name}`}
-                  </SettingsButton>
-                ))}
-              </span>
-            }
-          />
-        )}
         {availableApps.length > 0 && (
           <SettingsRow
             label="Running apps"
@@ -203,12 +189,14 @@ export function AudioCaptureSection({ config, onSave }: Props) {
             }
           />
         )}
+        {/* One action group: the field for any app, then the common ones as one-click keys beside
+            it, instead of two neighbouring rows of keys (2026-11-22 audit). */}
         <SettingsRow
           label="Add app"
           htmlFor="audio-add-app"
-          wide
+          className="settings-row-stacked"
           control={
-            <span className="settings-addons-inline">
+            <span className="settings-addons-inline audio-add-apps">
               <input
                 id="audio-add-app"
                 type="text"
@@ -224,6 +212,11 @@ export function AudioCaptureSection({ config, onSave }: Props) {
               <SettingsButton onClick={() => { addApp(newApp); newAppDraft.clear(); }} disabled={!newApp.trim()} title={newApp.trim() ? undefined : 'Type an app name first.'}>
                 Add
               </SettingsButton>
+              {quickAdd.map(d => (
+                <SettingsButton key={d.bundleId} onClick={() => addApp(d.bundleId)}>
+                  {`Add ${d.name}`}
+                </SettingsButton>
+              ))}
             </span>
           }
         />

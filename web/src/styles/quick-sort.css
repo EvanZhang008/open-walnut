@@ -23,7 +23,8 @@
 .quick-sort-card { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card-bg); color: var(--fg); }
 .quick-sort-card.is-current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 6px 18px rgba(0, 122, 255, .14); }
 .quick-sort-card-proj { color: var(--fg-muted); font-size: var(--font-size-sm); overflow-wrap: anywhere; }
-.quick-sort-card-title { padding: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--font-size-lg); font-weight: 600; line-height: 1.4; text-align: left; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+/* The card's task or project name wraps whole (`wn-title`, QuickSortView.tsx). */
+.quick-sort-card-title { padding: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--font-size-lg); font-weight: 600; line-height: 1.4; text-align: left; }
 button.quick-sort-card-title { cursor: pointer; }
 button.quick-sort-card-title:hover { color: var(--accent); }
 .quick-sort-card-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--fg-muted); font-size: var(--font-size-sm); }

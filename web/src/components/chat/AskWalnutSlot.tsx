@@ -145,6 +145,10 @@ export interface AskWalnutSlotProps {
   /** Reported on every selection change, so the owner can point the context
    *  inspector at the session actually on screen. */
   onSelectionChange?: (selection: { taskId: string | null; sessionId: string | null }) => void;
+  /** Whether what the slot shows has anything to read (a conversation with messages, a question
+   *  starting, the setup card) or not (a new question's composer, a session with no history);
+   *  reported once known, never while it loads. Home sizes the slot by it (columnSizing). */
+  onContentChange?: (hasContent: boolean) => void;
   /** The embedded panel's Locate button (see SessionPanel.onLocateTask). */
   onLocateTask?: (taskId: string) => void;
   onOpenTaskDetail?: (taskId: string) => void;
@@ -175,7 +179,7 @@ function initialDraftMeta(): QuickStartTaskMeta {
 
 export function AskWalnutSlot({
   tasks, tasksLoading, setupReady, setup, inspectorPanel,
-  inspectorOpen, onToggleInspector, onFixWalnut, onCloseChat, onOpenOrg, onSelectionChange, phoneOpen,
+  inspectorOpen, onToggleInspector, onFixWalnut, onCloseChat, onOpenOrg, onSelectionChange, onContentChange, phoneOpen,
   onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft,
 }: AskWalnutSlotProps) {
   // The console agents, from the shared agent store (the /agents page writes to
@@ -427,6 +431,23 @@ export function AskWalnutSlot({
   useEffect(() => {
     onSelectionChangeRef.current?.({ taskId: shownTaskId, sessionId });
   }, [shownTaskId, sessionId]);
+
+  // What the slot shows has anything to read: the session panel says so for its own history
+  // (per session, so a switch waits for the new one's answer); the composers have nothing yet.
+  const [history, setHistory] = useState<{ sessionId: string; has: boolean } | null>(null);
+  const onHistoryShown = useCallback((has: boolean) => {
+    if (sessionId) setHistory((h) => (h?.sessionId === sessionId && h.has === has ? h : { sessionId, has }));
+  }, [sessionId]);
+  const hasContent: boolean | null = setup ? true
+    : view === 'loading' ? null
+      : view === 'pending' ? true
+        : view === 'session' && sessionId ? (history?.sessionId === sessionId ? history.has : null)
+          : false;
+  const onContentChangeRef = useRef(onContentChange);
+  onContentChangeRef.current = onContentChange;
+  useEffect(() => {
+    if (hasContent !== null) onContentChangeRef.current?.(hasContent);
+  }, [hasContent]);
 
   // Ask Walnut's own launch memory (the model last picked FOR an Ask Walnut
   // session, at a launch or in a running session's picker) seeds the pill each
@@ -815,6 +836,7 @@ export function AskWalnutSlot({
               {...(onSessionClick ? { onSessionClick } : {})}
               onSessionReplaced={handleSessionReplaced}
               {...(onOpenForkDraft ? { onOpenForkDraft } : {})}
+              onHistoryShown={onHistoryShown}
             />
           </div>
         ) : (

@@ -29,8 +29,6 @@ const SESSION_HINTS = {
 } as const;
 
 type QuickBase = keyof typeof SESSION_HINTS;
-/** How many trailing characters of a branch name always show (the rest is cut with an ellipsis). */
-const REF_TAIL = 14;
 /** The server lists at most this many commits (git-diff-core.ts MAX_COMMITS). */
 const COMMITS_LISTED = 100;
 const QUICK: ReadonlyArray<{ base: QuickBase; label: string }> = [
@@ -353,14 +351,11 @@ export function DiffComparePicker({ sessionId, compare, resolved, onChange }: {
     }
     if (it.kind === 'ref') {
       return (
-        // Named whole (the cut name is two pieces on screen, which would read as two words).
+        // Named with its state, so a screen reader hears "current" and "remote" too.
         <div {...common} aria-label={`${it.name}${it.isCurrent ? ', current' : ''}${it.refKind === 'remote' ? ', remote' : ''}${it.time ? `, ${unixAgo(it.time)}` : ''}`} title={`${it.name}\nEvery file your branch changes since it split from ${it.name}, uncommitted work included`}>
           <span className="sdc-main sdc-main-row">
-            {/* A long name is cut in the middle: its end is what tells similar branches apart. */}
-            <span className="sdc-ref-name">
-              <span className="sdc-ref-head">{it.name.slice(0, -REF_TAIL)}</span>
-              <span className="sdc-ref-tail">{it.name.slice(-REF_TAIL)}</span>
-            </span>
+            {/* A long name wraps whole: its end is what tells similar branches apart. */}
+            <span className="sdc-ref-name wn-title">{it.name}</span>
             {it.isCurrent && <span className="badge sdc-badge">current</span>}
             {it.refKind === 'remote' && <span className="badge sdc-badge sdc-badge-remote">remote</span>}
           </span>
@@ -372,7 +367,7 @@ export function DiffComparePicker({ sessionId, compare, resolved, onChange }: {
       <div {...common} title={`${it.sha}\n${it.subject}\n${it.author}${it.parents > 1 ? '\nMerge commit: shown against its first parent' : ''}`}>
         <span className="sdc-main sdc-main-row">
           <code className="sdc-sha">{shortSha(it.sha)}</code>
-          <span className="sdc-subject">{it.subject || '(no message)'}</span>
+          <span className="sdc-subject wn-title">{it.subject || '(no message)'}</span>
           {it.onBranch && <span className="sdc-onbranch" title="On this branch, not yet on the default branch" aria-label="on this branch" />}
         </span>
         <span className="sdc-time">{unixAgo(it.time)}</span>

@@ -511,32 +511,26 @@
 .notes-cmdk-item:hover { background: var(--bg-hover); }
 .notes-cmdk-item-head {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 8px;
   min-width: 0;
 }
+/* The name wraps in full (.wn-title) at its words' width, so its folder (.wn-meta) follows it. */
+.notes-cmdk-item-head > .notes-cmdk-item-title { flex: 0 1 auto; }
 .notes-cmdk-item-title {
   font-size: 14px;
   font-weight: 500;
   color: var(--fg);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .notes-cmdk-item-path {
   font-size: var(--font-size-xs);
   color: var(--fg-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
-/* The note's own title, under its file name, only when the two differ. */
+/* The note's own title, under its file name, only when the two differ. Both wrap in full
+   (.wn-title); the folder beside the name is metadata and cuts. */
 .notes-cmdk-item-note-title {
   font-size: var(--font-size-sm);
   color: var(--fg-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .notes-cmdk-item-snippet {
   font-size: var(--font-size-sm);
@@ -834,11 +828,6 @@ mark.notes-search-mark {
   gap: 6px;
   padding-left: 28px !important;
 }
-.notes-bookmark-row .notes-tree-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .notes-bookmark-remove {
   margin-left: auto;
   display: inline-flex;
@@ -920,13 +909,7 @@ mark.notes-search-mark {
   flex: none;
   color: var(--fg);
 }
-.notes-editor .tiptap .notes-image-missing-name,
-.notes-attachment-preview .notes-image-missing-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* The missing file's name wraps in full (.wn-title on .notes-image-missing-name). */
 /* A file this browser cannot draw (HEIC, TIFF outside Safari) is still there. */
 .notes-editor .tiptap .notes-image-download,
 .notes-attachment-preview .notes-image-download {

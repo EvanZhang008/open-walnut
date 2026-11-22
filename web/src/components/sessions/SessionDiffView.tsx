@@ -313,7 +313,7 @@ function TreeRow({
         data-viewed={vs}
       >
         <span className={`session-diff-tree-status status-${g.cls}`} title={g.title}>{g.ch}</span>
-        <span className="session-diff-tree-name">{node.name}</span>
+        <span className="session-diff-tree-name wn-title">{node.name}</span>
         {vs === 'viewed' && <span className="session-diff-tree-viewed" aria-label="viewed">{ICON_VIEWED_CHECK}</span>}
         {vs === 'changed' && <span className="session-diff-tree-changed" role="img" aria-label="changed since viewed" title="Changed since you viewed it" />}
         {critical?.has(node.change.filePath) && (
@@ -339,7 +339,7 @@ function TreeRow({
         title={isRepo ? `${node.label} (${node.repoKind})` : node.name}
       >
         <span className="session-diff-tree-caret">{isOpen ? '▾' : '▸'}</span>
-        <span className="session-diff-tree-dir-name">{isRepo ? node.shortLabel : node.name}</span>
+        <span className="session-diff-tree-dir-name wn-title">{isRepo ? node.shortLabel : node.name}</span>
         {/* No pill for a submodule: the deep path in the tooltip already says so,
             and the pill only ate width the name needs in a narrow column. */}
         {isRepo && node.repoKind !== 'submodule' && (
@@ -1424,7 +1424,8 @@ export const FileDiffPane = memo(function FileDiffPane({
       ) : binary ? (
         <div className="session-diff-file-empty session-diff-binary">Binary file: no line diff to show.</div>
       ) : change.status === 'renamed' ? (
-        <div className="session-diff-file-empty">File moved{change.oldRelPath ? ` from ${change.oldRelPath}` : ''} — content unchanged.</div>
+        // The head above names where it moved from (← old path): the body says only what it means.
+        <div className="session-diff-file-empty">Moved, content unchanged.</div>
       ) : ignoreWhitespace && differsOnlyInWhitespace(change.before, change.after) ? (
         <div className="session-diff-file-empty session-diff-ws-only">
           Only whitespace changed in this file.
@@ -1553,8 +1554,8 @@ function CompareStrip({ info, compare }: { info: GitCompareInfo | undefined; com
       {c ? (
         <span className="sdc-strip-commit">
           <code title={c.sha}>{shortSha(c.sha)}</code>
-          <b className="sdc-strip-subject" title={c.subject}>{c.subject || '(no message)'}</b>
-          <span className="sdc-strip-meta">
+          <b className="sdc-strip-subject wn-title">{c.subject || '(no message)'}</b>
+          <span className="sdc-strip-meta wn-fixed">
             {c.author}{c.time ? ` · ${timeAgo(new Date(c.time * 1000).toISOString())}` : ''}
             {' · '}{c.parent ? <>vs parent <code title={c.parent}>{shortSha(c.parent)}</code>{c.parents > 1 ? ' (first of a merge)' : ''}</> : 'first commit'}
           </span>
@@ -3167,7 +3168,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
                 ))}
                 {ghost && (
                   <div className="session-diff-tree-ghost" title={ghost.file}>
-                    <span className="session-diff-tree-ghost-name">{basename(ghost.file)}</span>
+                    <span className="session-diff-tree-ghost-name wn-title">{basename(ghost.file)}</span>
                     <span className="badge session-diff-tree-ghost-tag">context</span>
                     <button
                       className="session-diff-tree-ghost-close"

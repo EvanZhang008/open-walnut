@@ -83,7 +83,7 @@ export function TransferLaunchRows({ options, source, form, onChange, group }: {
             data-testid="xfer-model"
           >
             <span className="xfer-opt-line">
-              <span className="xfer-opt-name">{launchLabel(form, acp, source)}</span>
+              <span className="xfer-opt-name wn-title">{launchLabel(form, acp, source)}</span>
               {isDefault && form.engine === source.engine && <span className="badge badge-accent xfer-now">Now</span>}
               <span className="xfer-model-caret" aria-hidden="true">▾</span>
             </span>

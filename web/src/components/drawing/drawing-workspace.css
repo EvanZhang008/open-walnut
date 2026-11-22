@@ -114,7 +114,8 @@
   text-align: left;
 }
 .drawing-workspace-file-row[aria-current="true"] .drawing-workspace-file-title { color: var(--accent-text); }
-.drawing-workspace-file-title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+/* A drawing's name in the list wraps in full (.wn-title); its time stays under it. */
+.drawing-workspace-file-title { max-width: 100%; }
 .drawing-workspace-file-time { color: var(--fg-muted); font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; }
 /* The pencil shows on the row under the pointer or the keyboard. */
 .drawing-workspace .drawing-workspace-file-rename { opacity: 0; margin-right: 2px; }
@@ -138,7 +139,7 @@
   min-width: 0;
   max-width: 50%;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: ellipsis; /* meta: the open drawing's name in the 44px toolbar; the drawings list shows it whole, and it peeks on hover */
   white-space: nowrap;
   font-size: var(--font-size-md);
   font-weight: 500;
@@ -379,7 +380,7 @@
 }
 .drawing-library-preview img { width: 100%; height: 100%; object-fit: contain; }
 .drawing-library-text { display: flex; flex: 1 1 auto; flex-direction: column; gap: 2px; min-width: 0; }
-.drawing-library-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drawing-library-name { font-weight: 500; }
 .drawing-library-meta { color: var(--fg-muted); font-size: var(--font-size-xs); }
 .drawing-library-desc { color: var(--fg-secondary); font-size: var(--font-size-sm); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .drawing-library-error { color: var(--error); font-size: var(--font-size-xs); }

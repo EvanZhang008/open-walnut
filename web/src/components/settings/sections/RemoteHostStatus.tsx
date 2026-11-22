@@ -40,7 +40,7 @@ export function RemoteHostDetail({ alias, name, hintOnRow = false }: { alias: st
     : problem?.type === 'reconnecting' && problem.headline
       ? (
         <div className="rh-failure" data-host={alias} data-kind={problem.kind} data-type="reconnecting">
-          <div className="hft-headline" title={problem.headline}>{`Last attempt: ${problem.headline}`}</div>
+          <div className="hft-headline wn-title" title={problem.headline}>{`Last attempt: ${problem.headline}`}</div>
           {problem.hint && <div className="hft-hint"><InlineCodeText text={problem.hint} /></div>}
         </div>
       )

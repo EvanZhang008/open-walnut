@@ -63,7 +63,9 @@
 }
 .ceo-composer-attached svg { flex: none; color: var(--fg-muted); }
 .ceo-composer-source { flex: none; font-weight: 600; }
-.ceo-composer-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* What is attached says its title in full (.wn-title) at its words' width, so where it is from
+   (at most 40%, cut) follows it. */
+.ceo-composer-attached > .ceo-composer-title { flex: 0 1 auto; }
 .ceo-composer-from { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); }
 .ceo-composer-error { color: var(--error); font-size: var(--font-size-sm); }
 .ceo-composer-foot {

@@ -401,7 +401,7 @@ export function DashboardPage() {
         {/* In a focus: its name, what waits outside, and Leave (the list shows only the focus). */}
         <FocusBanner />
         <div className="tp-toolbar">
-          <span className="tp-title">{boardTitle}</span>
+          <span className="tp-title wn-title">{boardTitle}</span>
           <span className="tp-stats">{stats.todo} open · {stats.done} complete</span>
           {/* The high-frequency conditions stay one click away as chips; every
               other dimension lives in the shared View panel next to them. Both

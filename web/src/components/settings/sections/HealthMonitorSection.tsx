@@ -175,9 +175,10 @@ export function HealthMonitorSection() {
               <span className="health-count health-count-ALARM">{view.counts.ALARM} in alarm</span>
               <span className="health-count">{view.counts.OK} OK</span>
               <span className="health-count">{view.counts.INSUFFICIENT_DATA} no data</span>
-              <span className="health-count health-dim">Fix tasks today: {view.fixesToday} of {view.fixesPerDay}</span>
             </div>
-            <FixTasksRow mode={view.fixTasks ?? 'record'} actionsOn={view.actions} onChanged={() => void load()} />
+            {/* What Walnut may do sits with the control that sets it, apart from the counts (2026-11-22 audit). */}
+            <FixTasksRow mode={view.fixTasks ?? 'record'} onChanged={() => void load()}
+              fixesToday={view.fixesToday} fixesPerDay={view.fixesPerDay} actionsOn={view.actions} />
             <table className="health-table">
               <thead>
                 <tr><th>State</th><th>Alarm</th><th>Now</th><th>Last 24 h</th><th>What Walnut did</th></tr>
@@ -203,7 +204,9 @@ export function HealthMonitorSection() {
  * one) nothing is filed or started whatever it says, so it reads disabled with the reason beside it
  * (2026-11-21 review: "Start fixing it" looked like a live pick while nothing could act on it).
  */
-function FixTasksRow({ mode, actionsOn, onChanged }: { mode: FixTasksMode; actionsOn: boolean; onChanged: () => void }) {
+function FixTasksRow({ mode, actionsOn, onChanged, fixesToday, fixesPerDay }: {
+  mode: FixTasksMode; actionsOn: boolean; onChanged: () => void; fixesToday: number; fixesPerDay: number;
+}) {
   const [shown, setShown] = useState<FixTasksMode>(mode);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => { setShown(mode); }, [mode]);
@@ -217,6 +220,7 @@ function FixTasksRow({ mode, actionsOn, onChanged }: { mode: FixTasksMode; actio
       <span className="health-fix-label">When an alarm needs a fix</span>
       <SegmentedControl<FixTasksMode> value={shown} options={FIX_OPTIONS} onChange={(v) => void pick(v)}
         aria-label="When an alarm needs a fix" disabled={!actionsOn} />
+      <span className="health-count health-dim" data-testid="health-fixes-today">Fix tasks today: {fixesToday} of {fixesPerDay}</span>
       {!actionsOn && <span className="health-fix-note" data-testid="health-fix-actions-off">Actions are off on this server: alarms only show here, nothing is filed or started.</span>}
       {error && <SettingsNotice kind="error" role="alert">{`Couldn't change it: ${error}`}</SettingsNotice>}
     </div>

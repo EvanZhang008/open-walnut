@@ -76,7 +76,7 @@ export function KanbanCardDetail({ card, laneName, readOnly, onBack, onOpenSessi
         <button ref={backRef} type="button" className="btn btn-link kanban-detail-back" data-testid="kanban-detail-back" onClick={onBack}>Back</button>
         <span className="kanban-detail-lane">{laneName}</span>
       </div>
-      <h3 className="kanban-detail-title">{card.title}</h3>
+      <h3 className="kanban-detail-title wn-title">{card.title}</h3>
       {(card.ticket || card.sev) && (
         <div className="kanban-card-ids">
           {card.ticket && (
@@ -95,7 +95,7 @@ export function KanbanCardDetail({ card, laneName, readOnly, onBack, onOpenSessi
         <div className="kanban-card-editor">
           <KanbanCardEditor field={editor.field} card={card} openedAt={editor.openedAt} api={ctx!.api} onClose={() => { setEditor(null); moreRef.current?.focus(); }} />
         </div>
-      ) : card.summary && <AgentText compact {...card.summary.textSource} className={`kanban-detail-summary${inline ? ' is-clamped' : ''}`} testId="kanban-detail-summary" text={card.summary.text} title={card.summary.tooltip} />}
+      ) : card.summary && <AgentText compact {...card.summary.textSource} className="kanban-detail-summary wn-title" testId="kanban-detail-summary" text={card.summary.text} title={card.summary.tooltip} />}
       {card.waiting?.kind === 'text' && <div className="kanban-card-waiting"><span className="kanban-card-waiting-label">Waiting on</span> <AgentText compact inline {...(card.waiting.textSource ?? { unknownSource: true })} text={card.waiting.text ?? ''} /></div>}
       <div className="kanban-card-foot"><span title={card.foot.activeTooltip}>{sent ? 'Sent' : card.foot.activeText}</span>{card.foot.stale && <span className="kanban-card-stale">{card.foot.stale}</span>}</div>
       <div className="kanban-detail-actions">

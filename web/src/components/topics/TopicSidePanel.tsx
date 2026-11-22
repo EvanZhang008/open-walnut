@@ -97,7 +97,7 @@ export function TopicSidePanel({ topic, actions, sheet }: {
             <li key={m.id} className={`topic-member is-${m.status}`} data-testid="topic-member" data-member-id={m.id} data-status={m.status} data-role={m.role}>
               <MemberAvatar who={{ name: m.name, ref: m.ref }} size={24} />
               <span className="topic-member-mid">
-                <span className="topic-member-name" title={m.name}>{shortName(m.name)}</span>
+                <span className="topic-member-name wn-title" title={m.name}>{shortName(m.name)}</span>
                 <span className="topic-member-status">{memberLine(m)}</span>
               </span>
               {!closed && m.status === 'pending' && (

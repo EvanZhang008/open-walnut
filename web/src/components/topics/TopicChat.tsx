@@ -115,7 +115,7 @@ function Message({ m, topic, cont }: { m: LocalMessage; topic: Topic; cont: bool
         {cont && <span className="topic-sr-only">{human ? name : shortName(name)}</span>}
         {!cont && (
           <span className="topic-msg-head">
-            {human ? <span className="topic-sr-only">{name}</span> : <span className="topic-msg-name" data-testid="topic-message-name" title={name}>{shortName(name)}</span>}
+            {human ? <span className="topic-sr-only">{name}</span> : <span className="topic-msg-name wn-title" data-testid="topic-message-name" title={name}>{shortName(name)}</span>}
             {context && <span className="topic-msg-context">{context}</span>}
             {!human && who.kind === 'member' && who.member?.role === 'host' && <span className="badge topic-msg-tag">Host</span>}
             {m.via === 'mail' && <span className="badge topic-msg-tag" data-testid="topic-message-mail">Email</span>}
@@ -180,7 +180,7 @@ export function TopicChat({ topicId, onBack }: { topicId: string; onBack?: () =>
       <header className="topic-head">
         {onBack && <button type="button" className="btn btn-icon" onClick={onBack} aria-label="Back to the list">{ICON_CHEVRON_LEFT}</button>}
         <span className="topic-head-mid">
-          <span className="topic-head-title" data-testid="topic-title">{topic.title}</span>
+          <span className="topic-head-title wn-title" data-testid="topic-title">{topic.title}</span>
           <span className="topic-head-sub" data-testid="topic-subtitle">{topicSubtitle(topic)}{topic.closed ? ' · closed' : ''}</span>
         </span>
         <button ref={membersRef} type="button" className="btn btn-sm btn-ghost topic-head-members" data-testid="topic-toggle-side" aria-pressed={shown}

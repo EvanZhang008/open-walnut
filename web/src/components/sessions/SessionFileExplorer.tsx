@@ -1788,7 +1788,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                     {isRootLoading ? '…' : isOpen ? ICON_CHEVRON_DOWN : ICON_CHEVRON_RIGHT}
                   </span>
                   <span className="sfe-icon" data-kind="dir">{ICON_FOLDER}</span>
-                  <span className={`sfe-name${section.prefix ? ' sfe-name-ctx' : ''}`}>
+                  <span className={`sfe-name wn-title${section.prefix ? ' sfe-name-ctx' : ''}`}>
                     {section.prefix && <span className="sfe-name-prefix">{section.prefix}/</span>}
                     <span className="sfe-name-base">{section.label}</span>
                   </span>
@@ -1844,7 +1844,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                           {node.type === 'dir' ? (isLoading ? '…' : isExpanded ? ICON_CHEVRON_DOWN : ICON_CHEVRON_RIGHT) : null}
                         </span>
                         <span className="sfe-icon" data-kind={node.type}>{node.type === 'dir' ? ICON_FOLDER : ICON_FILE}</span>
-                        <span className="sfe-name">{node.name}</span>
+                        <span className="sfe-name wn-title">{node.name}</span>
                         {/* Unsaved edits live in the draft store, not in this pane, so a
                             file can hold work while its editor is closed — the dot is the
                             only way to find it again. */}
@@ -1937,7 +1937,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                       <button key={p} type="button" className="sfe-recent-file" title={p} onClick={() => selectFile(p)}>
                         <span className="sfe-icon" data-kind="file">{ICON_FILE}</span>
                         <span className="sfe-recent-text">
-                          <span className="sfe-recent-name">{lastSegment(p)}</span>
+                          <span className="sfe-recent-name wn-title">{lastSegment(p)}</span>
                           {/* Its folder, so two README.md stay two different rows; the
                               time only when the visit was recorded with one. */}
                           <span className="sfe-recent-dir">

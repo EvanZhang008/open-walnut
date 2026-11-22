@@ -3435,7 +3435,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 .team-tab-name {
   max-width: 120px;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: ellipsis; /* meta: a tab in the team's scrolling tab strip; hover shows the whole name */
 }
 .team-tab-dot {
   font-size: var(--font-size-xs);
@@ -3465,9 +3465,10 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   font-size: var(--font-size-md);
 }
 /* The title region is the disclosure (controls/Disclosure.tsx) that collapses the card. */
-.wf-card-collapse { min-width: 0; }
+.wf-card-collapse { min-width: 0; text-align: left; }
 .wf-card-collapse .wn-disclosure-label { display: inline-flex; align-items: center; gap: 8px; }
-.wf-card-title { font-weight: 600; color: var(--fg); white-space: nowrap; }
+/* .wn-title on the element: the workflow's name wraps, never cut (text-fit.css). */
+.wf-card-title { font-weight: 600; color: var(--fg); }
 /* Collapsed: header has no bottom border (it's the whole card). */
 .wf-card-collapsed .wf-card-header { border-bottom: none; }
 .wf-card-count {
@@ -3566,8 +3567,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 .wf-card-header-meta .wf-card-tokens, .wf-card-header-actions .wf-script-toggle { margin: 0; }
 @container (max-width: 620px) {
   .wf-card-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 8px; }
-  .wf-card-collapse { grid-column: 1; min-width: 0; }
-  .wf-card-header .wf-card-title { overflow: hidden; text-overflow: ellipsis; }
+  .wf-card-collapse { grid-column: 1; }
   .wf-card-header-actions { grid-column: 2; grid-row: 1; }
   .wf-card-header-meta { grid-column: 1 / -1; grid-row: 2; }
 }
@@ -3664,33 +3664,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 }
 .wf-phase-title { flex: 1; }
 .wf-phase-count { font-weight: 500; }
-.wf-agent { display: flex; flex-direction: column; border-bottom: 1px solid var(--border); }
-.wf-agent:last-child { border-bottom: none; }
-.wf-agent-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  font-size: var(--font-size-sm);
-  background: none;
-  border: none;
-  cursor: pointer;
-  text-align: left;
-  width: 100%;
-  color: var(--fg);
-}
-.wf-agent-row:hover { background: var(--bg); }
-.wf-agent-caret { font-size: 9px; color: var(--fg-muted); flex: none; width: 10px; }
-.wf-agent-name {
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: none;
-  max-width: 220px;
-}
-.wf-agent-meta { margin-left: auto; font-size: var(--font-size-xs); color: var(--fg-muted); flex: none; }
-.wf-agent-expanded { background: var(--bg); }
 .wf-agent-detail {
   display: flex;
   flex-direction: column;
@@ -3778,7 +3751,8 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 .wf-stage-card--open, .wf-stage-card--open:hover { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent); }
 .wf-stage-card--future { color: var(--fg-muted); background: transparent; border-style: dashed; }
 .wf-stage-card-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.wf-stage-card-title { flex: 1; min-width: 0; font-size: var(--font-size-md); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* .wn-title on the element: a phase's name wraps, never cut; its count stays (.wn-fixed). */
+.wf-stage-card-title { flex: 1; min-width: 0; font-size: var(--font-size-md); font-weight: 600; }
 .wf-stage-card--future .wf-stage-card-title { font-weight: 500; }
 .wf-stage-card-count { flex: none; color: var(--fg-muted); font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; }
 .wf-stage-card-sub { color: var(--fg-muted); font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -4078,12 +4052,12 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   font-size: var(--font-size-md);
   font-weight: 500;
 }
+/* .wn-title on the element: a job's name wraps, never cut (text-fit.css). In a card's head it
+   keeps its words' width, so the kind pill follows it. */
 .bg-task-row-name {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
+.bg-task-row-head > .bg-task-row-name { flex: 0 1 auto; }
 .bg-task-row-meta {
   display: flex;
   flex-wrap: wrap;
@@ -4162,14 +4136,14 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
 }
+/* .wn-title on the element: the open job's name wraps, never cut (text-fit.css); it keeps its
+   words' width, so the pill and the timing follow it. */
 .bg-tasks-detail-title {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: var(--font-size-md);
   font-weight: 600;
 }
+.bg-tasks-detail-head > .bg-tasks-detail-title { flex: 0 1 auto; }
 .bg-tasks-detail-body {
   flex: 1;
   min-height: 0;
@@ -4567,10 +4541,9 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   background: var(--accent-subtle);
 }
 
+/* Names in the memory tree wrap, never cut (.wn-title on the element, text-fit.css). */
 .memory-tree-item-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
 }
 
 /* Project folder nodes */
@@ -4597,9 +4570,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 }
 
 .memory-tree-folder-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   text-transform: capitalize;
 }
 
@@ -4713,187 +4683,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   display: flex;
   flex-direction: column;
   height: calc(100vh - 48px);
-}
-
-/* ── Agent tab bar (Walnut | conv 1 | conv 2 | … | +) ──
-   Replaces the old AgentDropdown trigger. Lives inside .chat-header-meta. */
-
-.agent-tab-bar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  flex: 1;
-}
-
-.agent-tab-combo-wrap {
-  position: relative;
-  flex-shrink: 1;
-  min-width: 0;
-}
-
-.agent-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 26px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-  color: var(--fg-secondary);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
-}
-
-.agent-tab:hover {
-  background: var(--bg-hover);
-  color: var(--fg);
-}
-
-/* Combined trigger — agent chip + conversation title in ONE button */
-.agent-tab-combo {
-  height: 28px;
-  max-width: 340px;
-  padding: 0 10px 0 4px;
-  gap: 7px;
-  border-radius: 999px;
-  font-weight: 600;
-  color: var(--fg);
-}
-
-.agent-tab-combo.open {
-  border-color: var(--accent);
-}
-
-.agent-tab-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex-shrink: 0;
-}
-
-.agent-tab-caret {
-  font-size: 9px;
-  opacity: 0.6;
-}
-
-/* Conversation tabs — scroll horizontally when they overflow.
-   Native scrollbar is hidden so it (a) doesn't steal vertical space — which
-   would misalign the conv tabs against the Walnut tab + the + button — and
-   (b) stays visually calm. Overflow still scrolls via trackpad / shift-wheel. */
-.agent-tab-conv-scroll {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;        /* Firefox */
-  -ms-overflow-style: none;     /* legacy Edge */
-}
-
-.agent-tab-conv-scroll::-webkit-scrollbar {
-  height: 0;                    /* WebKit — zero height = no layout impact */
-}
-
-.agent-tab-conv {
-  max-width: 200px;
-}
-
-.agent-tab-conv.active {
-  background: var(--accent-subtle);
-  border-color: var(--accent);
-  color: var(--fg);
-  font-weight: 600;
-}
-
-.agent-tab-conv-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 160px;
-}
-
-/* × delete — revealed on tab hover (hidden by default to keep the strip calm) */
-.agent-tab-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 15px;
-  height: 15px;
-  border-radius: var(--radius-xs);
-  font-size: var(--font-size-md);
-  line-height: 1;
-  color: var(--fg-muted);
-  cursor: pointer;
-  flex-shrink: 0;
-  opacity: 0;
-  transition: opacity 0.12s, background 0.12s, color 0.12s;
-}
-
-.agent-tab-conv:hover .agent-tab-close,
-.agent-tab-conv.active .agent-tab-close {
-  opacity: 0.7;
-}
-
-.agent-tab-close:hover {
-  opacity: 1;
-  background: var(--bg-tertiary);
-  color: var(--fg);
-}
-
-.agent-tab-rename-input {
-  height: 26px;
-  padding: 0 8px;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
-  font-size: var(--font-size-sm);
-  max-width: 180px;
-  box-sizing: border-box;
-}
-
-/* 📌 on a pinned tab — quiet until hovered, click = unpin */
-.agent-tab-pin {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 15px;
-  height: 15px;
-  border: none;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  font-size: var(--font-size-xs);
-  line-height: 1;
-  padding: 0;
-  cursor: pointer;
-  flex-shrink: 0;
-  opacity: 0.7;
-  transition: opacity 0.12s, background 0.12s;
-}
-
-.agent-tab-pin:hover {
-  opacity: 1;
-  background: var(--bg-tertiary);
-}
-
-/* History dropdown row actions (📌 / ×) — revealed on row hover */
-.agent-dd-row .agent-dd-hover-btn {
-  opacity: 0;
-  transition: opacity 0.12s;
-}
-
-.agent-dd-row:hover .agent-dd-hover-btn {
-  opacity: 0.7;
-}
-
-.agent-dd-row .agent-dd-hover-btn:hover {
-  opacity: 1;
 }
 
 .chat-panel {
@@ -5043,14 +4832,10 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   margin-left: 6px;
 }
 
-/* Collapsed summary text — wraps up to 2 lines, then clamps with ellipsis */
+/* Collapsed summary text: shown whole, wrapping (.wn-title on the element, text-fit.css). */
 .chat-collapsed-summary {
   font-size: 0.8em;
   color: var(--fg-secondary);
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
   flex: 1 1 0;
   min-width: 0;
 }
@@ -5688,7 +5473,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   flex: 1;
   color: var(--fg-muted);
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: ellipsis; /* meta: a closed tool call's one-line input preview; opening the call shows it whole */
   white-space: nowrap;
   font-size: var(--font-size-xs);
 }
@@ -6732,9 +6517,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--fg);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   min-width: 0;
 }
 .chat-input-task-pill .badge {
@@ -7096,9 +6878,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   font-size: var(--font-size-md);
   font-weight: 500;
   color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .mention-title mark {
   background: color-mix(in srgb, var(--warning) 26%, transparent);
@@ -7869,9 +7648,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 
 .mic-retry-model-name {
   flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .mic-retry-model-size {
@@ -8817,7 +8593,10 @@ body.walnut-dragging {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  /* A column too narrow for the title's first words moves the header's tools under it,
+     never squeezes the title to a letter a line (text-fit.css .wn-title). */
+  flex-wrap: wrap;
+  gap: 4px 8px;
 }
 
 .session-meta-row-2 + .session-panel-header-top {
@@ -8828,10 +8607,10 @@ body.walnut-dragging {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-width: 0;
+  min-width: min(12em, 100%);
   /* The title owns every pixel row 1 doesn't need. Its siblings on this row
-     (status badge / kebab) are flex-shrink:0, so the ellipsis lands on the
-     title — which is what hover-for-full-title backstops. */
+     (status badge / kebab) are flex-shrink:0, so a long title wraps onto more
+     lines here instead of pushing them out. */
   flex: 1 1 auto;
 }
 
@@ -8845,21 +8624,18 @@ body.walnut-dragging {
   flex-shrink: 0;
 }
 
+/* .wn-title on the element: the title is shown whole, wrapping (text-fit.css). */
 .session-panel-title {
   /* 13px, not the 14px section-header size: at this weight it reads as the same
-     heading but fits ~8% more characters before the ellipsis, which is the whole
-     point of giving the title its own row. */
+     heading and fits ~8% more characters on each line. */
   font-size: var(--font-size-md);
   font-weight: 600;
   letter-spacing: -0.1px;
   color: var(--fg);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   min-width: 0;
-  /* Shrink-to-fit, never grow, so a short title doesn't strand its siblings. */
-  flex: 0 1 auto;
 }
+/* Shrink-to-fit, never grow, so a short title doesn't strand its siblings. */
+.session-panel-title-area > .session-panel-title { flex: 0 1 auto; min-width: min(8em, 100%); }
 
 .session-panel-title-editable {
   cursor: pointer;
@@ -9178,60 +8954,7 @@ body.walnut-dragging {
   flex-shrink: 0;
 }
 
-.session-panel-task-link {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 4px;
-  padding: 3px 8px;
-  border-radius: 6px;
-  font-size: var(--font-size-sm);
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-  max-width: 100%;
-  overflow: hidden;
-}
-
-.session-panel-task-link:hover {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-}
-
-.session-panel-task-icon {
-  flex-shrink: 0;
-  font-size: var(--font-size-xs);
-}
-
-.session-panel-task-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 500;
-}
-
-.session-panel-task-arrow {
-  flex-shrink: 0;
-  font-size: var(--font-size-xs);
-  opacity: 0.6;
-}
-
 /* ===== Task Quick Actions (session panel header) ===== */
-
-.session-panel-task-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 4px;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.session-panel-task-row .session-panel-task-link {
-  margin-top: 0;
-  flex: 0 1 auto;
-  min-width: 0;
-}
 
 .task-quick-actions {
   display: flex;
@@ -9532,7 +9255,6 @@ body.walnut-dragging {
   background: var(--accent-subtle);
   color: var(--fg); font-weight: 600;
 }
-.vd-rail-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A set count is `.badge.badge-accent.badge-count`; an empty one still holds its place. */
 .vd-rail-badge { margin-left: auto; flex-shrink: 0; min-width: var(--badge-h); height: var(--badge-h); }
 .vd-detail { overflow-y: auto; padding: 10px 12px; }
@@ -9562,7 +9284,10 @@ body.walnut-dragging {
    cursor is invisible exactly on hovered/selected rows (source order decides). */
 .vd-cat.vd-cursor { outline: 2px solid var(--accent); outline-offset: 1px; }
 .vd-cat-check { margin-right: 6px; font-size: var(--font-size-xs); flex-shrink: 0; }
-.vd-cat-name { overflow: hidden; text-overflow: ellipsis; }
+.vd-cat-name {
+  overflow: hidden;
+  text-overflow: ellipsis; /* meta: a choice chip in a two-column grid of fixed width; its title shows the whole label */
+}
 
 /* Controls grid: 2 columns of fields (label above control) — never overflows the panel */
 .vd-grid {
@@ -10197,7 +9922,8 @@ body.walnut-dragging {
   cursor: grabbing;
 }
 
-/* Floating card during a pinned drag. COMPACT (the title, capped) and placed
+/* Floating card during a pinned drag. COMPACT (the title, 260px wide at most, wrapping
+   as .wn-title) and placed
    beside the pointer (ghostBesideCursor), never a full-width copy of the row:
    that copy sat exactly on the row the drop was aimed at and hid its highlight. */
 .todo-pinned-card-dragging {
@@ -10214,11 +9940,6 @@ body.walnut-dragging {
   font-size: var(--font-size-sm);
   opacity: 0.92;
   cursor: grabbing;
-}
-.todo-pinned-card-dragging .todo-pinned-title {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 /* The ghost's invisible frame: exactly the dragged row's box (the overlay sizes
    itself to it). dnd-kit measures this, not the ghost, as the collision rect. */
@@ -12232,9 +11953,6 @@ body.walnut-dragging {
   font-size: var(--font-size-md);
   font-weight: 500;
   color: var(--fg);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .notes-task-search-pin {
@@ -12871,11 +12589,9 @@ body.walnut-dragging {
   height: 12px;
 }
 
-.tier-project-label-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* .wn-title on the element: a project's name wraps, never cut; it keeps its words' width so its
+   kind tag and count follow it. */
+.tier-project-label > .tier-project-label-name { flex: 0 1 auto; }
 
 /* A tier project label whose whole body folds/unfolds on click. Same reasoning as
    .task-group-chip-clickable: the chevron is the discoverable affordance and the
@@ -13823,7 +13539,7 @@ a.task-kebab-info:hover {
 }
 .task-kebab-project-current-name {
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: ellipsis; /* meta: the current value on a one-line picker button, like a select's */
   white-space: nowrap;
 }
 .task-kebab-project-caret {
@@ -13871,11 +13587,7 @@ a.task-kebab-info:hover {
 }
 .task-kebab-project-opt:hover { background: var(--accent-subtle); }
 .task-kebab-project-opt.active { font-weight: 600; color: var(--accent); }
-.task-kebab-project-opt-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* An option's name wraps, never cut (.wn-title on the element, text-fit.css). */
 .task-kebab-project-empty {
   padding: 8px 12px;
   font-size: var(--font-size-sm);
@@ -16752,12 +16464,10 @@ a.task-kebab-info:hover {
   cursor: not-allowed;
 }
 
+/* .wn-title on the element: a model's name wraps, never cut (text-fit.css). */
 .model-picker-row-name {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* Catalog rows the CLI marks disabled (org-restricted): visible, greyed, no Switch. */
@@ -18048,15 +17758,14 @@ td.usage-share-col {
   font-size: var(--font-size-sm);
 }
 
+/* .wn-title on the element: a file's name wraps, never cut (text-fit.css). */
 .sfe-name {
   flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* Repo-context root header: "repo/…/folder". The muted prefix shrinks (and
-   ellipsizes) far before the folder name does — the name is the identity and
-   must survive a narrow tree. */
+   ellipsizes) far before the folder name does: the name is the identity, so it
+   wraps whole in a narrow tree. */
 .sfe-name-ctx {
   display: flex;
   min-width: 0;
@@ -18070,10 +17779,8 @@ td.usage-share-col {
   min-width: 2ch;
 }
 .sfe-name-ctx .sfe-name-base {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   flex: 0 1 auto;
+  min-width: 0;
 }
 
 .sfe-size {
@@ -18760,14 +18467,12 @@ a.tag-chip:hover .tag-chip-value,
   50% { opacity: 0.3; }
 }
 
+/* .wn-title on the element: the task's title wraps, never cut (text-fit.css). */
 .dock-task-title {
   flex: 1;
   font-size: var(--font-size-xs);
   font-weight: 600;
   color: var(--fg);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .dock-task-expand {
@@ -20403,7 +20108,7 @@ a.tag-chip:hover .tag-chip-value,
 .notes-chat-switcher-title {
   max-width: 180px;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: ellipsis; /* meta: the current chat on the pane's one-line switcher button; its menu lists every chat whole */
   white-space: nowrap;
 }
 /* Origin-folder context: muted prefix in the trigger ("Areas/Records / acme"),
@@ -20681,10 +20386,8 @@ a.tag-chip:hover .tag-chip-value,
   opacity: 0.6;
 }
 
+/* .wn-title on the element: a note's or folder's name wraps, never cut (text-fit.css). */
 .notes-tree-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   flex: 1;
   min-width: 0;
 }
@@ -20744,9 +20447,6 @@ a.tag-chip:hover .tag-chip-value,
 .notes-search-note-title {
   font-size: var(--font-size-sm);
   color: var(--fg-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   max-width: 100%;
 }
 
@@ -20784,9 +20484,6 @@ a.tag-chip:hover .tag-chip-value,
 .notes-search-folder .notes-tree-name {
   font-weight: 600;
   font-size: var(--font-size-md);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .notes-search-folder .notes-tree-icon,
 .notes-search-folder > svg {
@@ -21606,13 +21303,11 @@ a.file-link:hover {
   border-bottom: 1px solid var(--border);
   flex: 0 0 auto;
 }
+/* .wn-title on the element: the symbol's heading wraps, never cut (text-fit.css). */
 .ref-panel-title {
   font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .ref-panel-title code {
   font-size: var(--font-size-sm);
@@ -21971,42 +21666,6 @@ a.file-link:hover {
   display: flex;
   flex-direction: column;
   min-height: 0;
-}
-.popout-session-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-.popout-session-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.popout-session-host {
-  background: var(--bg-tertiary);
-  color: var(--fg-muted);
-  padding: 1px 5px;
-  border-radius: var(--radius-xs);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  flex-shrink: 0;
-}
-.popout-session-body {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-.popout-session-body .session-history {
-  flex: 1;
-  overflow-y: auto;
 }
 
 /* Fullscreen preview overlay — covers the viewport, escapes the panel chrome */
@@ -22384,7 +22043,11 @@ a.file-link:hover {
 }
 /* The tab gives way inside its 220 px box, so a long name ends in an ellipsis and the x keeps its place. */
 .session-terminal-tab > .session-terminal-tab-btn { flex: 0 1 auto; min-width: 0; }
-.session-terminal-tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-terminal-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis; /* meta: a tab in the terminal's tab strip; its title names every pane in it */
+  white-space: nowrap;
+}
 .session-terminal-tab-split { display: inline-flex; opacity: 0.75; }
 .session-terminal-tab-split svg { width: 12px; height: 12px; }
 .session-terminal-tab-close {
@@ -22760,12 +22423,6 @@ a.file-link:hover {
   font-size: var(--font-size-sm);
 }
 
-/* AgentDropdown — reveal rename/delete icon buttons only on row hover */
-.agent-dd-hover-btn { opacity: 0; transition: opacity 0.12s; }
-.agent-dd-row:hover .agent-dd-hover-btn { opacity: 1; }
-.agent-dd-row:hover { background: var(--bg-hover); }
-.agent-dd-hover-btn:hover { color: var(--fg); background: var(--bg-tertiary); }
-
 /* ===== Pop-out windows (/popout) ===== */
 /* Standalone window shell — no sidebar/providers. Full-height, theme-aware,
    scrolls internally. Leaf views (file/note/session/task) fill it. */
@@ -22991,7 +22648,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .side-thread-chip { max-width: 220px; }
 .side-thread-chip-title {
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: ellipsis; /* meta: a capped chip in the side threads' chip strip; the open thread shows its question whole */
   white-space: nowrap;
 }
 /* Chip + its archive affordance. A wrapper rather than a nested button (invalid
@@ -23071,7 +22728,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 }
 
 /* The active thread's conversation — a plain SessionChatHistory in a bounded,
-   scrollable frame (same shape as .popout-session-body). Shrinkable: opening the
+   scrollable frame (flex: 1 with its own scroll). Shrinkable: opening the
    legacy section must steal height from HERE, never push the composer off. */
 .side-thread-body {
   /* Content-driven height (a two-message thread must not render as a big empty
@@ -23620,11 +23277,10 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .sdc-title { color: var(--fg); }
 .sdc-hint { color: var(--fg-muted); font-size: var(--font-size-xs); line-height: 15px; }
 .sdc-legend { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-weight: 400; }
-.sdc-ref-name,
-.sdc-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.sdc-ref-name { font-family: var(--font-mono); font-size: var(--font-size-sm); display: inline-flex; }
-.sdc-ref-head { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.sdc-ref-tail { flex: 0 0 auto; white-space: nowrap; }
+/* A branch name and a commit's subject wrap, never cut (.wn-title on the element, text-fit.css);
+   they keep their words' width, so the badges and the on-branch dot follow them. */
+.sdc-ref-name { font-family: var(--font-mono); font-size: var(--font-size-sm); }
+.sdc-main-row > :is(.sdc-ref-name, .sdc-subject) { flex: 0 1 auto; }
 .sdc-sha { flex: 0 0 auto; font-family: var(--font-mono); font-size: var(--font-size-xs); color: var(--fg-muted); }
 .sdc-badge {
   flex: 0 0 auto;
@@ -23675,7 +23331,9 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   line-height: 16px;
 }
 .sdc-strip-commit { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.sdc-strip-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* .wn-title on the element: the compared commit's subject wraps, never cut; the author and time
+   follow it and keep their room (.wn-fixed). */
+.sdc-strip-commit > .sdc-strip-subject { flex: 0 1 auto; }
 .sdc-strip-meta { flex: 0 0 auto; white-space: nowrap; }
 
 .session-diff-ws-only, .session-diff-not-rebuilt { display: flex; flex-direction: column; align-items: center; gap: 10px; }
@@ -24028,11 +23686,14 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .session-diff-tree-file.is-selected .session-diff-tree-name { color: var(--accent); font-weight: 600; }
 
 .session-diff-tree-caret { width: 10px; color: var(--fg-muted); flex: 0 0 auto; }
+/* Names in the changed-files tree wrap, never cut (.wn-title on the element, text-fit.css); each
+   keeps its words' width, so the marks after it (old name, AI mark, context tag) follow it. */
 .session-diff-tree-dir-name {
   font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
+.session-diff-tree-dir > .session-diff-tree-dir-name,
+.session-diff-tree-file > .session-diff-tree-name,
+.session-diff-tree-ghost > .session-diff-tree-ghost-name { flex: 0 1 auto; }
 .session-diff-tree-dir.is-repo .session-diff-tree-dir-name { font-weight: 700; }
 .session-diff-tree-repokind { flex: 0 0 auto; } /* "cwd" (accent) or "other": the one `.badge` */
 .session-diff-tree-count { margin-left: auto; color: var(--fg-muted); font-size: var(--font-size-xs); flex: 0 0 auto; padding-left: 6px; }
@@ -24050,7 +23711,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .session-diff-tree-status.status-modified { color: var(--warning); }
 .session-diff-tree-status.status-renamed { color: var(--accent); }
 .session-diff-tree-status.status-untracked { color: var(--success); font-style: italic; }
-.session-diff-tree-name { overflow: hidden; text-overflow: ellipsis; }
 @container session-diff-tree (max-width: 240px) {
   /* No room for both names: the new one stays, the header shows the whole move. */
   .session-diff-tree-renamed-from { display: none; }
@@ -24832,11 +24492,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   color: var(--fg-muted);
   font-style: italic;
   border-top: 1px dashed var(--border);
-}
-.session-diff-tree-ghost-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .session-diff-tree-ghost-close {
   margin-left: auto;
@@ -27865,12 +27520,9 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .session-search-dot.status-idle { background: var(--warning); }
 .session-search-dot.status-error { background: var(--error); }
 
+/* .wn-title on the element: a session's title wraps, never cut (text-fit.css). */
 .session-search-title {
-  flex-shrink: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-weight: 500;
 }
 
@@ -28112,16 +27764,16 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 .nfc-cause-header .nfc-cat-name { color: var(--fg); }
 
+/* .wn-title on the element: a category's name wraps, never cut (text-fit.css); it keeps its
+   words' width, so its count follows it. */
 .nfc-cat-name {
   font-size: var(--font-size-xs);
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--fg-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
+.nfc-cat-header > .nfc-cat-name { flex: 0 1 auto; }
 
 .nfc-cat-count {
   flex-shrink: 0;
@@ -29109,21 +28761,18 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 .agent-search-row.is-needs-action:hover { background: rgba(255, 59, 48, 0.14); }
 /* The row's status icon (TaskStateIcon, 12px) sits inside the row button. */
 .agent-search-row-circle { pointer-events: none; }
+/* .wn-title on the element: a task's title wraps, never cut; the project is metadata and gives
+   up its room first (.wn-meta, text-fit.css). */
 .agent-search-row-title {
   flex: 1;
   min-width: 0;
   font-size: var(--font-size-sm);
   line-height: 1.3;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .agent-search-row.is-done .agent-search-row-title { text-decoration: line-through; color: var(--fg-muted); }
 .agent-search-row-project {
   font-size: var(--font-size-xs);
   color: var(--fg-muted);
-  flex-shrink: 0;
-  white-space: nowrap;
 }
 .agent-search-error { padding: 6px 0 2px; color: var(--fg-muted); font-size: var(--font-size-sm); }
 .agent-search-retry {
@@ -30221,4 +29870,66 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--fg-muted);
+}
+
+/* ── Pages: column heads, full-bleed Memory, the plugin command (2026-11-22, the UI audit) ──
+   Appended here while other work holds the rules above; each block names the rule it refines. */
+
+/* The Notes page's three column heads (the Scratchpad beside it, the tree, the tab strip) end on one
+   line, the shell's 42px header line (.app-shell-navigation .sidebar-header), instead of at 41, 53
+   and 43px. Refines .notes-tree-header above, .notes-tab-strip (notes-editor.css) and the
+   Scratchpad head (home-navigation.css). */
+.home-companion-scratchpad .global-notes-header,
+.notes-split-view .notes-tree-header,
+.notes-split-view .notes-tab-strip {
+  box-sizing: border-box;
+  height: 42px;
+}
+.notes-split-view .notes-tree-header { padding-top: 0; padding-bottom: 0; }
+
+/* Memory fills the content area as Notes and Tasks do: its divider runs from the top edge to the
+   bottom one and its list starts at the window's edge, instead of floating in a 24px frame with a
+   divider that stops short (refines .memory-split-view above). The phone keeps its own padding
+   and height (phone-layout.css). */
+@media not ((max-width: 768px) or ((pointer: coarse) and (max-height: 500px))) {
+  .app-content-area:has(> .memory-split-view) {
+    padding: 0;
+    overflow: hidden;
+    scrollbar-gutter: auto;
+  }
+  .app-content-area > .memory-split-view {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+  }
+  /* The list's end already clears the notice stack itself (.memory-tree-sections, corner-stack-room.ts). */
+  /* Its two column heads end on the shell's 42px header line, as the Notes page's do. */
+  .memory-split-view .memory-tree-header,
+  .memory-split-view .memory-content-header {
+    box-sizing: border-box;
+    height: 42px;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+  .memory-split-view .memory-tree-header { border-bottom: 1px solid var(--border); }
+  .memory-split-view .memory-tree-filter { padding-top: 8px; }
+}
+
+/* The one command of /plugins/new is shown whole: it wraps between its words beside Copy (each word
+   is a .create-plugin-word that never breaks, so a flag or a path stays in one piece) instead of
+   scrolling under a hidden scrollbar, which cut its last flags off. A soft wrap adds no newline,
+   so a copied selection stays one line; Copy copies the exact string anyway. It still scrolls when
+   one word alone is wider than a phone (refines .create-plugin-command above). */
+.create-plugin-command { align-items: flex-start; }
+.create-plugin-command code { white-space: pre-wrap; }
+.create-plugin-word { white-space: nowrap; }
+
+/* A command card's preview is its prompt as plain sentences (commandSummary, CommandCard.tsx), in
+   the card's reading type; the raw markdown keeps .cmd-card-pre in the opened card. */
+.cmd-card-summary {
+  margin: 8px 0 0;
+  font-size: var(--font-size-md);
+  line-height: 1.5;
+  color: var(--fg-secondary);
+  overflow-wrap: anywhere;
 }

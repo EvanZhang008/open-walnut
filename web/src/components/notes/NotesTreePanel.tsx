@@ -864,7 +864,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                 onClick={e => e.stopPropagation()}
               />
             ) : (
-              <span className="notes-tree-name">{isFiles ? 'Attachments' : node.name}</span>
+              <span className="notes-tree-name wn-title">{isFiles ? 'Attachments' : node.name}</span>
             )}
           </div>
           {isExpanded && node.children && (
@@ -894,7 +894,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           style={{ paddingLeft: `${12 + depth * 16}px` }}
         >
           <AttachmentIcon name={node.name} />
-          <span className="notes-tree-name">{node.name}</span>
+          <span className="notes-tree-name wn-title">{node.name}</span>
         </div>
       );
     }
@@ -928,7 +928,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
             onClick={e => e.stopPropagation()}
           />
         ) : (
-          <span className="notes-tree-name">{node.name.replace(/\.md$/, '')}</span>
+          <span className="notes-tree-name wn-title">{node.name.replace(/\.md$/, '')}</span>
         )}
       </div>
     );
@@ -1046,7 +1046,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                       title={g.folder}
                     >
                       <FolderIcon />
-                      <span className="notes-tree-name">
+                      <span className="notes-tree-name wn-title">
                         <HighlightedTitle text={g.folder} query={searchQuery} tokens={searchTokens} />
                       </span>
                       {g.nameMatched && (
@@ -1080,11 +1080,11 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                         {/* The file name leads, as in the tree and the tabs; the folder is
                             the group header above. Server highlights snippets only — names
                             and titles get a client-side token-wise mark. */}
-                        <span className="notes-tree-name notes-search-file-name" title={r.path}>
+                        <span className="notes-tree-name notes-search-file-name wn-title" title={r.path}>
                           <HighlightedTitle text={label.name} query={searchQuery} tokens={searchTokens} />
                         </span>
                         {label.title && (
-                          <span className="notes-search-note-title">
+                          <span className="notes-search-note-title wn-title">
                             <HighlightedTitle text={label.title} query={searchQuery} tokens={searchTokens} />
                           </span>
                         )}

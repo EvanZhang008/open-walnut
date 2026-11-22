@@ -131,8 +131,7 @@
 .board-kanban .kanban-lane.is-over { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent); }
 /* N8: dragging across the board never paints a text selection over lane heads, counts and cards. */
 .board-kanban .kanban-lanes-host, .board-kanban .kanban-head-fixed { -webkit-user-select: none; user-select: none; }
-.board-kanban :is(input, textarea, [contenteditable="true"]),
-.board-kanban .kanban-card-summary[data-expanded="true"] { -webkit-user-select: text; user-select: text; }
+.board-kanban :is(input, textarea, [contenteditable="true"]) { -webkit-user-select: text; user-select: text; }
 .board-kanban .kanban-lane-head-wrap[data-flash="true"] { box-shadow: inset 0 0 0 2px var(--accent); border-radius: 10px; }
 .board-kanban .kanban-kind-todo { --kb-kind: var(--fg-muted); }
 .board-kanban .kanban-kind-active { --kb-kind: var(--accent); }
@@ -233,10 +232,9 @@
 .kanban-drag-overlay.is-tilted { transform: rotate(1.5deg); }
 .kanban-drag-overlay .kanban-card { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18); cursor: grabbing; }
 
-.kanban-card-title {
-  font-size: 14px; font-weight: 600; line-height: 19px; display: -webkit-box; -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; word-break: normal;
-}
+.kanban-card-title { font-size: 14px; font-weight: 600; line-height: 19px; }
+/* The title and summary wrap whole (`wn-title`); in the card's column they keep their height and never take its free room. */
+:is(.kanban-card, .kanban-card-detail) > .wn-title { flex: none; }
 .kanban-card-ids { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
 .kanban-card-ticket { display: inline-flex; min-width: 0; max-width: 100%; }
 /* The ticket is the card's identity: its whole value, not the 80px inline-chip cap. */
@@ -288,13 +286,8 @@ button.kanban-card-status { padding: 0; border: 0; background: none; font-family
 .kanban-tone-grey .kanban-card-dot { background: var(--fg-muted); }
 .kanban-card-start-row { display: flex; flex-wrap: wrap; gap: 6px; }
 
-/* Summary: 3 lines wide, 2 narrow; a click shows it all. */
-.kanban-card-summary {
-  font-size: var(--font-size-md); line-height: 18px; color: var(--fg-secondary); display: -webkit-box; -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; cursor: text;
-}
-.board-kanban.kanban-mode-narrow .kanban-card-summary { -webkit-line-clamp: 2; line-clamp: 2; }
-.board-kanban .kanban-card-summary[data-expanded="true"] { -webkit-line-clamp: unset; line-clamp: none; display: block; }
+/* Summary: the card's own words, shown whole (standard.md, "Text that does not fit"; `wn-title` in KanbanCard.tsx). */
+.kanban-card-summary { font-size: var(--font-size-md); line-height: 18px; color: var(--fg-secondary); }
 .kanban-card-waiting { font-size: var(--font-size-sm); color: var(--fg); overflow-wrap: anywhere; }
 .kanban-card-waiting-label { color: var(--fg-muted); }
 .kanban-card-waiting-until { color: var(--fg-muted); }
@@ -353,18 +346,20 @@ button.kanban-card-status { padding: 0; border: 0; background: none; font-family
 .kanban-card-detail > * { flex: 0 0 auto; }
 .kanban-card-detail .kanban-detail-bar { display: flex; align-items: center; gap: 10px; }
 .kanban-card-detail .kanban-detail-lane { color: var(--fg-muted); font-size: var(--font-size-sm); }
-.kanban-card-detail .kanban-detail-title { margin: 0; font-size: var(--font-size-lg); font-weight: 600; overflow-wrap: anywhere; }
-.kanban-card-detail .kanban-detail-summary { margin: 0; color: var(--fg-secondary); line-height: 19px; overflow-wrap: anywhere; }
+.kanban-card-detail .kanban-detail-title { margin: 0; font-size: var(--font-size-lg); font-weight: 600; }
+.kanban-card-detail .kanban-detail-summary { margin: 0; color: var(--fg-secondary); line-height: 19px; }
 .kanban-card-detail .kanban-detail-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .kanban-card-detail .kanban-detail-actions .btn { display: inline-flex; align-items: center; gap: 4px; }
 /* R3-05: the task under the card's header. With a session, the chat takes the rest of the pane. */
 .kanban-card-detail.has-session { overflow: hidden; padding-bottom: 0; }
-.kanban-card-detail .kanban-detail-summary.is-clamped { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .kanban-card-detail > .kanban-detail-session {
   flex: 1 1 auto; min-height: 280px; display: flex; flex-direction: column; position: relative;
   margin: 2px -12px 0; border-top: 1px solid var(--border);
 }
 .kanban-detail-session > .session-panel { flex: 1 1 auto; height: auto; min-height: 0; }
+/* Above the chat the summary stays whole but takes at most 4 lines of the pane, in a box that scrolls,
+   so the chat keeps the rest (a summary is never cut: standard.md, "Text that does not fit"). */
+.kanban-card-detail.has-session > .kanban-detail-summary { max-height: calc(4 * 19px); overflow-y: auto; }
 /* The detail sits in the outer panel's split, whose `is-chat-collapsed` / `is-changed-open` descendant rules
    reach the nested panel too (they hid its whole chat): its own split is closed, its chat column is the plain
    wrapper again, as in the board peek (task-board.css). Its header is in flow. */
@@ -372,9 +367,6 @@ button.kanban-card-status { padding: 0; border: 0; background: none; font-family
 .kanban-detail-session .session-panel.session-panel-inset:not(.pending-session-panel) > .session-panel-header { position: relative; }
 .kanban-detail-session .session-panel.session-panel-inset:not(.pending-session-panel) > .session-panel-header + .session-action-panel,
 .kanban-detail-session .session-panel.session-panel-inset:not(.pending-session-panel) > .session-panel-header + .session-error-banner { margin-top: 6px; }
-/* Above the chat the card says only what the chat does not: 2 lines of title, 2 of summary. */
-.kanban-card-detail.has-session .kanban-detail-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.kanban-card-detail.has-session .kanban-detail-summary.is-clamped { -webkit-line-clamp: 2; }
 .kanban-detail-task { display: flex; flex-direction: column; gap: 10px; padding-top: 4px; border-top: 1px solid var(--border); }
 .kanban-detail-section { display: flex; flex-direction: column; gap: 4px; }
 .kanban-detail-heading { margin: 6px 0 0; font-size: var(--font-size-sm); font-weight: 600; color: var(--fg-secondary); }

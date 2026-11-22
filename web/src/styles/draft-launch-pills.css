@@ -36,7 +36,7 @@
 .draft-pill-name,
 .draft-pill-host {
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: ellipsis; /* meta: a launch pill's label in the composer bar, its whole name shown on hover */
   white-space: nowrap;
 }
 

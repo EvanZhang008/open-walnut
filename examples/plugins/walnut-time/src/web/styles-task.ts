@@ -172,7 +172,7 @@ export const TASK_CSS = `
   color: var(--fg);
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 16px;
   cursor: pointer;
 }
 .wt-task-session:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
@@ -180,14 +180,14 @@ export const TASK_CSS = `
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, var(--bg-elevated));
 }
+/* A session's name is what tells the chips apart: it wraps in full, never cut (the Day by day head
+   names it the same way); its time stays one line beside it. */
 .wt-task-session-name {
   min-width: 0;
-  max-width: 34ch;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+  text-align: left;
 }
-.wt-task-session-v { display: inline-flex; gap: 4px; font-variant-numeric: tabular-nums; font-size: 11.5px; }
+.wt-task-session-v { display: inline-flex; flex: none; gap: 4px; white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 11.5px; }
 .wt-task-session-v .is-human, .wt-task-day-sessions .is-human { color: var(--wt-human); }
 .wt-task-session-v .is-agent, .wt-task-day-sessions .is-agent { color: var(--wt-agent); }
 
@@ -216,8 +216,17 @@ export const TASK_CSS = `
 .wt-task-day-date { font-weight: 500; white-space: nowrap; }
 .wt-task-day-caret { color: var(--fg-secondary); font-size: 14px; line-height: 1; text-align: center; }
 
+/* Each lane reads value then bar, so a day's numbers sit right beside its date and its bar starts at
+   the number (2026-11-22, the UI audit: the values sat at the far end of an empty track). A lane with
+   no time on any day keeps only its value: an empty track would push the other lane half a row away. */
 .wt-task-bars { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; min-width: 0; }
-.wt-task-bar { display: grid; grid-template-columns: 1fr 64px; align-items: center; gap: 8px; min-width: 0; }
+.wt-task-bars[data-idle="human"] { grid-template-columns: auto 1fr; }
+.wt-task-bars[data-idle="agent"] { grid-template-columns: 1fr auto; }
+.wt-task-bar { display: grid; grid-template-columns: 56px 1fr; align-items: center; gap: 8px; min-width: 0; }
+.wt-task-bars[data-idle="human"] .wt-task-bar.is-human,
+.wt-task-bars[data-idle="agent"] .wt-task-bar.is-agent { grid-template-columns: 56px; }
+.wt-task-bars[data-idle="human"] .wt-task-bar.is-human i,
+.wt-task-bars[data-idle="agent"] .wt-task-bar.is-agent i { display: none; }
 .wt-task-bar i {
   display: block;
   height: 8px;
@@ -257,9 +266,8 @@ export const TASK_CSS = `
   color: var(--fg);
   background: none;
   border: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  /* A session's title under its day is shown whole too, as on its chip above. */
+  overflow-wrap: anywhere;
   cursor: pointer;
 }
 .wt-task-day-session:hover { color: var(--accent); text-decoration: underline; }

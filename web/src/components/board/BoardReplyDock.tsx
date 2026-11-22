@@ -202,7 +202,7 @@ export function BoardReplyDock({
       onWheel={inline && onWheelScroll ? (e) => { if (!textareaTakesWheel(e)) onWheelScroll(e.deltaY); } : undefined}
     >
       <div className="task-board-dock-head">
-        <span className="task-board-dock-title" data-testid="board-reply-title">
+        <span className="task-board-dock-title wn-title" data-testid="board-reply-title">
           {noting ? <>Your <b>note for the leader</b>{about}</>
             : answering ? <>Answer <b>{name}</b> in your own words{about}</> : <>Reply in <b>{name}</b>{about}</>}
         </span>

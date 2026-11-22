@@ -494,7 +494,7 @@ export const ResolvedImage = Image.extend<ResolvedImageOptions, ResolvedImageSto
         label.className = 'notes-image-missing-label';
         label.textContent = kind === 'missing' ? 'Image not found' : "Can't preview here";
         const file = document.createElement('span');
-        file.className = 'notes-image-missing-name';
+        file.className = 'notes-image-missing-name wn-title';
         file.textContent = name;
         card.append(icon, label, file);
         if (kind === 'undrawable' && url) {

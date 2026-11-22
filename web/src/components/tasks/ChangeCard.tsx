@@ -39,7 +39,7 @@ export function ChangeCard({ snap, taskId, refreshing, refreshError, onRefresh }
   return (
     <>
       <header className="change-card-head">
-        {snap.title && <div className="change-card-title" data-testid="change-card-title">{snap.title}</div>}
+        {snap.title && <div className="change-card-title wn-title" data-testid="change-card-title">{snap.title}</div>}
         <div className="change-card-head-line">
           <a className="change-card-label" href={snap.url} target="_blank" rel="noopener noreferrer" title="Open the review">{snap.label}</a>
           {review && <span className={`${badge(REVIEW_TONES[review.state] === 'blocked' ? 'error' : REVIEW_TONES[review.state] === 'waiting' ? 'warning' : 'neutral')} change-card-state`} data-tone={REVIEW_TONES[review.state]} data-testid="change-card-state"><span>{REVIEW_WORDS[review.state]}</span></span>}

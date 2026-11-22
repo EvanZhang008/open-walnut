@@ -21,7 +21,7 @@ export function ScriptRunCard({ role, run, action, openOutput }: {
     <div className={`script-run-card is-${run.state}`} data-testid={`script-run-${role}`} data-state={run.state} data-untrusted={run.untrusted ? '' : undefined}>
       <div className="script-run-head">
         <span className="script-run-role">{label}</span>
-        <span className="script-run-name" title={`From the ${scriptSourceText(run.source)}`}>{run.name}</span>
+        <span className="script-run-name wn-title" title={`From the ${scriptSourceText(run.source)}`}>{run.name}</span>
         <span className="script-run-status" data-testid={`script-run-${role}-status`}>
           {run.state === 'running' && <span className="workspace-pill-spin" aria-hidden />}
           {scriptRunStatus(run)}

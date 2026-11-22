@@ -31,7 +31,7 @@ export function TransferChoice({ group, checked, disabled, onPick, name, now, ta
       data-testid={testId}
       label={(
         <span className="xfer-opt-line">
-          <span className="xfer-opt-name">{name}</span>
+          <span className="xfer-opt-name wn-title">{name}</span>
           {now && <span className="badge badge-accent xfer-now">Now</span>}
           {tag && <span className="badge xfer-opt-tag"><span>{tag}</span></span>}
         </span>

@@ -385,6 +385,10 @@ One rule for every list row, tree row, card and header (`web/src/styles/text-fit
   `tests/web/ui-standard-ratchet.test.ts` counts those that exist today (they only go down), and
   `tests/e2e/browser/text-fit-scan.spec.ts` measures the main screens at 1512, 1280 and their
   narrowest column and fails when a title is cut.
+- **The one exception is one-line chrome** whose room is fixed by design (a tab in a tab strip, a
+  file path bar, a breadcrumb, a toolbar's current-item label): there a name may cut, the full text
+  shown on hover, and the cut says why on its own line, `text-overflow: ellipsis; /* meta: <why> */`
+  (the ratchet skips only marked cuts). A list row, tree row, card or header is never chrome.
 
 Why (2026-11-21, the UI audit on the user's own data): task titles in the task panel and search
 results lost the part that tells tasks apart while the small icons and time beside them kept their

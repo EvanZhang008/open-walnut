@@ -119,7 +119,7 @@ export function LibraryBrowser({ onClose, onAdded, api = drawingLibraryApi, stor
                       {item.preview && <img src={item.preview} alt="" loading="lazy" decoding="async" />}
                     </div>
                     <div className="drawing-library-text">
-                      <span className="drawing-library-name">{item.name}</span>
+                      <span className="drawing-library-name wn-title">{item.name}</span>
                       <span className="drawing-library-meta">
                         {[item.authors.join(', '), item.itemNames.length ? `${item.itemNames.length} items` : ''].filter(Boolean).join(' · ')}
                       </span>

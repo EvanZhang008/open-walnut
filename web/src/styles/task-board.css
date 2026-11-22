@@ -176,13 +176,7 @@
   color: var(--fg-muted);
 }
 
-.task-board-dock-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
+/* `.task-board-dock-title` names the thread the reply goes to: it wraps whole (`wn-title`). */
 .task-board-dock-title b {
   color: var(--fg);
   font-weight: 600;

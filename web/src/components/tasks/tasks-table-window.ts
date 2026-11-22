@@ -10,10 +10,11 @@
  */
 
 /**
- * Row/header/ghost heights, from web/src/styles/tasks-page.css. Every one is an explicit
- * `height` there, which is what makes a windowed render possible without measuring
- * anything: a fixed height per item kind means item N's scroll offset is arithmetic.
- * The test ratchets these against the CSS — change the CSS and it tells you to come here.
+ * Row/header/ghost heights, from web/src/styles/tasks-page.css. A ghost row is an explicit
+ * `height` there; a row and a group header are a `min-height`, since their title wraps
+ * whole (standard.md, "Text that does not fit"), and ROW_H / GROUP_H is the estimate until the window has
+ * measured it (useTableWindow.ts measures only the rows it renders). The test ratchets
+ * these against the CSS — change the CSS and it tells you to come here.
  */
 export const ROW_H = 36;
 export const GROUP_H = 32;
@@ -60,6 +61,14 @@ export function visibleRangeFor(
   let end = lo;
   while (end < count - 1 && offsets[end + 1] < bottom) end++;
   return [Math.max(0, lo - overscan), Math.min(count - 1, end + overscan)];
+}
+
+/** An item of the table's flat child sequence: its key and its estimated height. */
+export interface WindowItem { kind: 'group' | 'row' | 'ghost'; key: string; h: number }
+
+/** Each item's height: its measured one when the window has seen it, else the estimate. */
+export function itemHeights(items: readonly WindowItem[], measured: ReadonlyMap<string, number>): number[] {
+  return items.map((it) => measured.get(it.key) ?? it.h);
 }
 
 /** Prefix sums for a list of item heights: `[0, h0, h0+h1, …]`, length n+1. */

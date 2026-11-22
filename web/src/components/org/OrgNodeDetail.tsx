@@ -484,7 +484,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
         {onBack && <button type="button" className="org-back" onClick={onBack} aria-label="Back to the org">‹</button>}
         <OrgAvatar row={row} size={40} />
         <div className="org-detail-who">
-          <h2 className="org-detail-title" data-testid="org-detail-title">{title}</h2>
+          <h2 className="org-detail-title wn-title" data-testid="org-detail-title">{title}</h2>
           <div className="org-detail-sub">
             <CountPills tabs={tabs} onOpen={openTab} approvals={approvals.length} keepsThreads={keepsBrief} threads={keepsBrief ? threadsCounted : undefined} onThreads={() => { setRailHidden(false); pickTop('threads'); }} />
             {!!row.led?.length && (

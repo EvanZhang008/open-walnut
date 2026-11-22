@@ -146,11 +146,11 @@ function HookRow({ hook, name, error, showTag, onToggle, onSettingCommit }: {
             data-testid={`hook-disclose-${hook.id}`}
             onClick={() => setOpen((v) => !v)}
           >
-            <span className="settings-row-label hook-row-name" title={hook.name}>{name}</span>
+            <span className="settings-row-label hook-row-name wn-title" title={hook.name}>{name}</span>
             {tag && <SettingsTag>{tag}</SettingsTag>}
             <DisclosureChevron open={open} className="settings-disclosure-chevron" />
           </button>
-          {help && <span className="settings-row-help settings-help-oneline" title={hook.description}><CodeText text={help} /></span>}
+          {help && <span className="settings-row-help" title={hook.description}><CodeText text={help} /></span>}
         </div>
         <div className="settings-row-actions">
           {toggleable ? (

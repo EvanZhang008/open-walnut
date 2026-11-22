@@ -302,7 +302,7 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
     <section className={`session-browser-card${prefs.large ? ' session-browser-card--large' : ''}`} data-testid="session-browser-card" aria-label="Browser view">
       <header className="session-browser-head">
         <span className={`session-browser-dot${live ? '' : ' session-browser-dot--idle'}`} aria-hidden />
-        <div className="session-browser-title" data-testid="session-browser-title" title={title}>{title || 'Untitled page'}</div>
+        <div className="session-browser-title wn-title" data-testid="session-browser-title">{title || 'Untitled page'}</div>
         <button type="button" className="btn btn-icon btn-sm session-browser-btn--icon" aria-label="Close the Browser view" title="Close"
           onClick={onClose} data-testid="session-browser-hide">{CLOSE_GLYPH}</button>
       </header>

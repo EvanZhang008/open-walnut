@@ -218,7 +218,8 @@
 .workspace-preparing-panel .script-run-card { margin: 12px auto 0; max-width: min(460px, 100%); width: 100%; box-sizing: border-box; }
 .script-run-head { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; row-gap: 2px; min-width: 0; }
 .script-run-role { color: var(--fg-muted); font-size: var(--font-size-xs); white-space: nowrap; }
-.script-run-name { font-weight: 600; color: var(--fg); flex: 0 0 auto; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The script's name wraps whole (`wn-title`, ScriptRunCard.tsx); its status follows, or goes under it. */
+.script-run-head .script-run-name { font-weight: 600; color: var(--fg); flex: 0 1 auto; }
 .script-run-status { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; color: var(--fg-muted); white-space: nowrap; max-width: 100%; }
 .script-run-card.is-done .script-run-status { color: var(--success-text); }
 .script-run-card.is-failed .script-run-status,

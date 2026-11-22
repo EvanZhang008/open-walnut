@@ -437,20 +437,20 @@ test.describe('geometry and colour', () => {
       const muted = getComputedStyle(probe).color
       probe.remove()
       const ch = document.createElement('div')
-      ch.style.width = '60ch'
+      ch.style.width = '88ch'
       help.appendChild(ch)
-      const sixtyCh = getComputedStyle(ch).width
+      const capCh = getComputedStyle(ch).width
       ch.remove()
       return {
         label: [getComputedStyle(label).fontSize, getComputedStyle(label).color === fg, getComputedStyle(label).textTransform],
-        help: [getComputedStyle(help).fontSize, getComputedStyle(help).color === muted, Math.abs(parseFloat(getComputedStyle(help).maxWidth) - parseFloat(sixtyCh)) < 1, getComputedStyle(help).maxWidth, sixtyCh],
+        help: [getComputedStyle(help).fontSize, getComputedStyle(help).color === muted, Math.abs(parseFloat(getComputedStyle(help).maxWidth) - parseFloat(capCh)) < 1, getComputedStyle(help).maxWidth, capCh],
         minHeight: root.minHeight,
       }
     })
     expect(type.label).toEqual(['14px', true, 'none'])
     expect(type.help[0]).toBe('12.5px')
     expect(type.help[1]).toBe(true)
-    expect(type.help[2]).toBe(true) // max-width is 60ch at the help's own font
+    expect(type.help[2]).toBe(true) // max-width is 88ch at the help's own font: the copy column's width in the 680px pane (2026-11-22 audit)
     expect(type.minHeight).toBe('44px')
 
     const lines = await H(page).getByTestId('controls-group').evaluate((block) => {

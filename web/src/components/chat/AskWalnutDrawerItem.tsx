@@ -37,21 +37,20 @@ export function DrawerItem({ row, held, selected, onPick, detail }: {
       data-peek-row="" data-task-id={row.id}
       aria-current={selected ? 'true' : undefined}
       onClick={onPick}
-      title={row.title}
       {...(detail ? { 'data-needs': detail.needs ? 'true' : 'false' } : {})}
     >
       {detail ? (
         <>
           <span className={`ask-walnut-drawer-needs${detail.needs ? ' is-on' : ''}`} aria-label={detail.needs ? 'Needs you' : undefined} />
           <span className="ask-walnut-drawer-item-text">
-            <span className="ask-walnut-drawer-item-title">{row.title}</span>
+            <span className="ask-walnut-drawer-item-title wn-title">{row.title}</span>
             {detail.line && <span className="ask-walnut-drawer-item-line">{detail.line}</span>}
           </span>
         </>
       ) : (
         <>
           {row.task ? <TaskDot task={row.task} /> : <span className="ask-walnut-drawer-dot" aria-hidden="true" />}
-          <span className="ask-walnut-drawer-item-title">{row.title}</span>
+          <span className="ask-walnut-drawer-item-title wn-title">{row.title}</span>
         </>
       )}
       {stamp.kind === 'time' && <span className="ask-walnut-drawer-item-time">{timeAgo(stamp.at)}</span>}

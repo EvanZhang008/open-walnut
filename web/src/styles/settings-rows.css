@@ -75,7 +75,7 @@
 .settings-group-description {
   margin: -2px 0 6px;
   padding: 0 calc(var(--settings-row-pad-x) + 1px);
-  max-width: 72ch;
+  max-width: 88ch; /* the rows' help measure, so a group's prose shares one right edge */
   font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--fg-muted);
@@ -85,7 +85,7 @@
 .settings-group-footer {
   margin: 6px 0 0;
   padding: 0 calc(var(--settings-row-pad-x) + 1px);
-  max-width: 72ch;
+  max-width: 88ch; /* the rows' help measure, so a group's prose shares one right edge */
   font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--fg-muted);
@@ -135,7 +135,10 @@
 .settings-row-help {
   display: block;
   margin: 0;
-  max-width: 60ch;
+  /* The copy column's own width in the 680px pane (2026-11-22 audit: at 60ch a help beside a
+     switch stopped halfway and wrapped into a narrow column beside empty room); the cap only
+     bites where a row is far wider (a plugin page). */
+  max-width: 88ch;
   font-size: var(--font-size-md);
   line-height: 17px;
   color: var(--fg-muted);

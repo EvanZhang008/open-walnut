@@ -168,6 +168,14 @@ test.describe('the summary line under each group', () => {
     for (const group of groups) {
       const line = groupLine(page, group.id)
       const summary = line.getByTestId('mail-group-summary')
+      // Open, a line keeps only the model's words (its rows show the newest subject, 2026-11-22):
+      // a subject summary is read on the closed line, and the group opens again after.
+      const closed = group.summaryBy !== 'ai'
+      if (closed) {
+        await expect(summary).toHaveCount(0)
+        await line.getByTestId('mail-group-name').click()
+        await expect(line).toHaveAttribute('aria-expanded', 'false')
+      }
       await expect(summary).toHaveText(group.summary)
       await expect(summary).toHaveAttribute('data-by', group.summaryBy ?? 'subject')
       if (group.unread === 1) expect(group.summaryBy).toBeUndefined()
@@ -180,7 +188,12 @@ test.describe('the summary line under each group', () => {
       expect(cut).toBe(false)
       expect(lines).toBeGreaterThanOrEqual(1)
       expect(height).toBeGreaterThanOrEqual(40)
-      expect(height).toBeLessThanOrEqual(56 + (lines - 1) * 16)
+      // A closed line also shows its senders beside the name, which rounds it half a pixel taller.
+      expect(height).toBeLessThanOrEqual(56 + (closed ? 1 : 0) + (lines - 1) * 16)
+      if (closed) {
+        await line.getByTestId('mail-group-name').click()
+        await expect(line).toHaveAttribute('aria-expanded', 'true')
+      }
     }
     await page.mouse.move(0, 0)
     await shoot(page, shots, 'group-summaries')

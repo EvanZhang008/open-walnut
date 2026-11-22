@@ -172,16 +172,26 @@ export function usersSessionWidth(panel: { pct: number; custom: boolean; dragged
 }
 
 /**
+ * The Quick question slot beside the session columns: closed (or the phone's own layout), open on
+ * a conversation with nothing in it yet (a new question's composer, a session with no history),
+ * or open on one that has something to read.
+ */
+export type QuickQuestionSlot = 'closed' | 'empty' | 'shown';
+
+/**
  * The session area's width as shown, derived from the layout on every render and never written
  * back (2026-11-22 review: two effects writing in turn missed the cap whenever Quick question
  * opened first, or was already open at a load, and a column added wiped a dragged width):
  * the user's own width as he left it; else the graduated width for the columns open, capped
- * beside the Quick question slot so the slot gets at least one column's share.
+ * beside a Quick question slot that shows a conversation so the slot gets at least one column's
+ * share. An empty slot has nothing to read, so it keeps the smaller share the graduated width
+ * leaves it and the columns keep their room (2026-11-22 audit: an empty CEO chat took half the
+ * row and cut the title of the long session beside it).
  */
-export function sessionAreaShownPct(userPct: number | null, count: number, besideChat: boolean): number {
+export function sessionAreaShownPct(userPct: number | null, count: number, slot: QuickQuestionSlot): number {
   if (userPct !== null) return userPct;
   const graduated = sessionWidthForCount(count);
-  return besideChat && count > 0 ? Math.min(graduated, sessionAreaPctBesideChat(count)) : graduated;
+  return slot === 'shown' && count > 0 ? Math.min(graduated, sessionAreaPctBesideChat(count)) : graduated;
 }
 
 /** The collapsed rail's width when `--home-rail-width` cannot be read (globals.css sets 56px). */
@@ -201,6 +211,25 @@ export const TODO_PANEL_MIN_PX = 224;
  */
 export function todoPanelWidth(pct: number): string {
   return `max(${TODO_PANEL_MIN_PX}px, (100vw - var(--home-rail-width, ${HOME_RAIL_DEFAULT_PX}px)) * ${Math.round(pct * 100) / 10000})`;
+}
+
+/** The room Home's empty pane needs for what it says (HomeEmptyPane: a 320px block and its padding). */
+const HOME_EMPTY_PANE_PX = 400;
+/** The widest the task panel grows by itself: a list keeps a readable line (`.page-readable`, 880px). */
+const TASK_LIST_READABLE_PX = 880;
+
+/**
+ * The task panel's CSS width when nothing is open beside it (only Home's empty pane): the list
+ * takes the room first and the empty pane keeps only what its words need (standard.md "Panes":
+ * width goes by content; 2026-11-22 audit: the empty pane kept two thirds while long titles
+ * wrapped in the panel). It grows to the window less the empty pane's room, up to a readable
+ * line, and never below the width the panel has beside a session (`sharedPct`). A width the user
+ * dragged in this layout (`alonePct`) is his; the layout with a session open keeps its own.
+ */
+export function todoPanelAloneWidth(alonePct: number | null, sharedPct: number): string {
+  if (alonePct !== null) return todoPanelWidth(alonePct);
+  const room = `calc(100vw - var(--home-rail-width, ${HOME_RAIL_DEFAULT_PX}px) - ${HOME_EMPTY_PANE_PX}px)`;
+  return `max(${todoPanelWidth(sharedPct)}, min(${room}, ${TASK_LIST_READABLE_PX}px))`;
 }
 
 /**

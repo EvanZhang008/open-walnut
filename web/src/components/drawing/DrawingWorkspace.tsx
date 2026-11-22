@@ -162,7 +162,7 @@ function FileRow({ item, current, onOpen, onRename }: {
         : <>
             <button type="button" className="drawing-workspace-file" aria-current={current ? 'true' : undefined} onClick={onOpen}
               onDoubleClick={() => { setFailure(null); setRenaming(true); }} title={item.path}>
-              <span className="drawing-workspace-file-title">{item.title}</span>
+              <span className="drawing-workspace-file-title wn-title">{item.title}</span>
               {item.updatedAt && <span className="drawing-workspace-file-time">{timeAgo(item.updatedAt)}</span>}
             </button>
             <button type="button" className="btn btn-icon drawing-workspace-file-rename" aria-label={`Rename ${item.title}`} title="Rename"

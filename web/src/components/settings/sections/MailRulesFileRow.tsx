@@ -90,9 +90,10 @@ export function MailRulesFileRow({ rules, busy, onCreate, onReload, onRestore, o
   };
   return (
     <div className="mail-rules-file" data-testid="mail-rules-file">
+      {/* The label and its actions on one line, the path whole on the line under them: a long path
+          never squeezes the actions, and the actions never squeeze the path (2026-11-22 audit). */}
       <div className="mail-rules-file-line">
         <span className="mail-rules-file-label">Rules file</span>
-        <code className="mail-rules-file-path" data-testid="mail-rules-path">{rules.path}</code>
         <span className="mail-rules-file-actions">
           <CopyPathButton text={rules.path} />
           {rules.exists && (
@@ -102,6 +103,7 @@ export function MailRulesFileRow({ rules, busy, onCreate, onReload, onRestore, o
           )}
         </span>
       </div>
+      <code className="mail-rules-file-path" data-testid="mail-rules-path">{rules.path}</code>
       {!rules.exists && !missing && (
         <div className="mail-rules-file-line mail-rules-file-missing">
           <span className="mail-rules-help">{COPY.noFile}</span>

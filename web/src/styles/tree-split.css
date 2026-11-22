@@ -110,7 +110,7 @@
   min-width: 0;
   max-width: 280px;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: ellipsis; /* meta: a breadcrumb segment of the one-line question path; its tooltip names it whole */
   white-space: nowrap;
 }
 .tree-path-bar[data-narrow] .tree-path-seg:not([data-shown]):not([data-first]) .tree-path-title { display: none; }
@@ -229,21 +229,17 @@
 .thread-half-row { gap: 8px; padding-left: 4px; }
 /* The side's letter is a square `.badge.badge-count` (styles/badge.css). */
 .thread-half-badge { flex: none; }
+/* The page's number (6.1) is whole and never shrinks (.wn-fixed). */
 .thread-half-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   color: var(--fg-secondary);
   font: 600 var(--font-size-md)/18px ui-monospace, 'SF Mono', Menlo, monospace;
 }
 .thread-half-status { flex: none; }
-.thread-half-row .thread-half-name { flex: none; }
 .thread-half-title {
   flex: 0 1 auto;
   min-width: 3em;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: ellipsis; /* meta: the page's 36px header row of buttons; the path bar above and its tooltip show the whole question */
   white-space: nowrap;
   color: var(--fg);
   font-size: var(--font-size-md);

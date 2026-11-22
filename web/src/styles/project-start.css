@@ -86,7 +86,8 @@
   background: var(--accent-subtle);
   color: var(--fg);
 }
-.draft-source-value-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.draft-source-value-name { overflow: hidden; white-space: nowrap;
+  text-overflow: ellipsis; /* meta: a source chip's label (a repo or a path), its whole value shown on hover */ }
 .draft-source-star { color: var(--accent); font-size: var(--font-size-xs); }
 .draft-source-remove,
 .draft-source-add {
@@ -207,7 +208,8 @@
   background: var(--bg-secondary);
 }
 .wip-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.wip-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A project's or a folder's name in the picker wraps whole (`wn-title`, WorkInPicker.tsx); its line under it may cut. */
+.wip-name { font-weight: 500; }
 .wip-line { color: var(--fg-muted); font-size: var(--font-size-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .work-in-check { flex: none; color: var(--accent); }
 .wip-row .draft-work-in-project-tag { margin-left: 0; }

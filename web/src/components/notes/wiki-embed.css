@@ -66,12 +66,9 @@
 .notes-wikiembed-pdf-bar + .notes-wikiembed-pdf-frame { border-top-left-radius: 0; border-top-right-radius: 0; }
 /* "PDF": a kind, the one neutral `.badge` (WikiEmbedView.tsx). */
 .notes-wikiembed-pdf-badge { flex: 0 0 auto; }
+/* The file's name wraps in full (.wn-title), Open and Download stay beside it. */
 .notes-wikiembed-pdf-name {
   flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   color: var(--fg);
 }
 .notes-wikiembed-pdf-action {
@@ -109,9 +106,6 @@
 }
 .notes-wikiembed-card-name {
   font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .notes-wikiembed-card-raw {
   font-family: var(--font-mono);

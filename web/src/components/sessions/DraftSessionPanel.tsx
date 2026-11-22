@@ -916,7 +916,7 @@ export function DraftSessionPanel({
         <div className="session-panel-header-top">
           {headerLeading && <div className="session-panel-header-leading">{headerLeading}</div>}
           <div className="session-panel-title-area">
-            <span className="session-panel-title">
+            <span className="session-panel-title wn-title">
               {/* A plain draft makes a task (its "Save as todo" makes nothing else), so
                   it says so; a BOUND draft adds a session to an existing task and
                   creates none, so it keeps "New Session" beside its "for:" line. */}

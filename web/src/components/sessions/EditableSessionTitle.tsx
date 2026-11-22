@@ -80,10 +80,8 @@ export function EditableSessionTitle({ sessionId, taskId, title, className, onSa
     );
   }
 
-  // The tooltip leads with the FULL title: the header truncates with an ellipsis,
-  // so hover is the only way to read a long title. The rename hint follows on a
-  // second line rather than replacing it (it used to be the whole tooltip, which
-  // made a truncated title unreadable).
+  // The tooltip leads with the full title, then the rename hint on a second line
+  // (the header shows the title whole, wrapping: .wn-title).
   const hint = taskId ? 'Click to rename task' : 'Click to rename session';
 
   return (

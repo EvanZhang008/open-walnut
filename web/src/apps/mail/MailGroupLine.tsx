@@ -4,7 +4,8 @@
  *
  * The title line: chevron, name, unread pill, who sent it, the newest mail's time. Under it, one line
  * saying what the mail is ABOUT (the server's `summary`: the model's words, or the newest subject), so
- * a group can be judged without opening it. On hover or keyboard focus the time gives way to two icon
+ * a group can be judged without opening it; an open group keeps only the model's words there, since
+ * its rows already show the newest subject and the senders. On hover or keyboard focus the time gives way to two icon
  * buttons, ✓ (`Mark N read`) and ⋯ (the group's menu); at zero unread there is nothing to mark, so
  * neither ✓ nor the footer's `Mark … read` is drawn. While a bulk read runs, its progress sits in
  * that same place; its RESULT goes to the list's status strip, because a group whose unread all got
@@ -204,6 +205,10 @@ export function MailGroupLine({
 
   const senders = group.topSenders.map((one) => one.label).join(', ');
   const summary = group.summary?.trim() || senders;
+  // Open, a group's rows are right under its line: a summary that is only the newest subject (or
+  // the senders) would say again what its first row says, so the line keeps the model's words
+  // alone (2026-11-22 audit: the same subject twice took a row of room from every group).
+  const summaryShown = !!summary && (!open || (!!group.summary?.trim() && group.summaryBy === 'ai'));
   const rows = page.rows;
   return (
     <div className={`mail-group${open ? ' open' : ''}`} data-testid="mail-group" data-group-id={group.id}>
@@ -217,7 +222,7 @@ export function MailGroupLine({
         data-unread={unread}
         aria-expanded={open}
         aria-label={groupRowAria(group.label, unread, open)}
-        {...(summary ? { 'aria-describedby': summaryId } : {})}
+        {...(summaryShown ? { 'aria-describedby': summaryId } : {})}
         onMouseDown={(event) => { summaryPress.current = !!(event.target as Element).closest('.mail-group-summary'); }}
         onClick={(event) => {
           const fromSummary = summaryPress.current;
@@ -289,7 +294,7 @@ export function MailGroupLine({
             </>
           )}
         </span>
-        {summary && (
+        {summaryShown && (
           <span
             id={summaryId}
             className="mail-group-summary wn-title"

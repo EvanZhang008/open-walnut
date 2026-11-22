@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  capabilityChips, clip, readingWhy, sessionsTitle, sessionsUnknown, spendUnknown, diskFree, fleetSummary, gauges, isLive, linkLabel, offlineLine, problemsOf, roleChips, sparkPaths, sparks, timeline, topologyLayout, TIMELINE_MS, TOPO,
+  capabilityChips, clip, NAME_CHARS, nameLines, nodeHeight, readingWhy, sessionsTitle, sessionsUnknown, spendUnknown, diskFree, fleetSummary, gauges, isLive, linkLabel, offlineLine, problemsOf, roleChips, sparkPaths, sparks, timeline, topologyLayout, TIMELINE_MS, TOPO,
 } from '../../web/src/components/settings/sections/host-fleet-dashboard-model'
 import type { FleetHost } from '../../web/src/api/hosts-fleet'
 
@@ -300,6 +300,22 @@ describe('diagram', () => {
     const { nodes } = topologyLayout(list)
     const left = nodes.filter((n) => n.side === 'left').map((n) => n.y)
     for (let i = 1; i < left.length; i++) expect(left[i] - left[i - 1]).toBeGreaterThanOrEqual(TOPO.nodeH)
+  })
+  // 2026-11-22 audit: "Garden-Laptop-Pro" ran past its node and a longer name ended in an ellipsis.
+  it('wraps a long name over lines, never cuts it, and taller nodes keep their gap', () => {
+    expect(nameLines('This Mac', NAME_CHARS.plain)).toEqual(['This Mac'])
+    expect(nameLines('Garden-Laptop-Pro', NAME_CHARS.plain)).toEqual(['Garden-Laptop-', 'Pro'])
+    expect(nameLines('New big clouddev', NAME_CHARS.plain)).toEqual(['New big clouddev'])
+    expect(nameLines('Spare box with a rather long label', NAME_CHARS.plain)).toEqual(['Spare box with a', 'rather long', 'label'])
+    expect(nameLines('build-box-7f3a91c2.region-west-2.example.invalid', NAME_CHARS.plain).join('')).toBe('build-box-7f3a91c2.region-west-2.example.invalid')
+    for (const line of nameLines('abcdefghijklmnopqrstuvwxyz0123456789', NAME_CHARS.marked)) expect(line.length).toBeLessThanOrEqual(NAME_CHARS.marked)
+    expect(nodeHeight(1)).toBe(TOPO.nodeH)
+    const tall = nodeHeight(3)
+    const list = [host({ host: '__local__', local: true }), ...Array.from({ length: 5 }, (_, i) => host({ host: `h${i}` }))]
+    const { nodes, height } = topologyLayout(list, tall)
+    const left = nodes.filter((n) => n.side === 'left').map((n) => n.y)
+    for (let i = 1; i < left.length; i++) expect(left[i] - left[i - 1] - tall).toBeGreaterThanOrEqual(TOPO.rowGap - TOPO.nodeH)
+    for (const n of nodes) expect(n.y + tall / 2).toBeLessThanOrEqual(height)
   })
   it('labels each link with its kind and latency', () => {
     expect(linkLabel(host())).toBe('SSH tunnel, 38 ms')

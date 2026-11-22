@@ -353,9 +353,8 @@ function TreeItem({ label, selected, onClick, depth = 0 }: TreeItemProps) {
       className={`memory-tree-item${selected ? ' memory-tree-item-selected' : ''}`}
       onClick={onClick}
       style={depth > 0 ? { paddingLeft: `${12 + depth * 16}px` } : undefined}
-      title={label}
     >
-      <span className="memory-tree-item-label">{label}</span>
+      <span className="memory-tree-item-label wn-title">{label}</span>
     </button>
   );
 }
@@ -386,7 +385,7 @@ function ProjectNodeView({ node, depth, selectedPath, onSelect, collapsed, onTog
           style={{ paddingLeft: `${12 + depth * 16}px` }}
         >
           <span className="memory-tree-chevron">{isCollapsed ? '\u25B6\uFE0E' : '\u25BC'}</span>
-          <span className="memory-tree-folder-name">{node.name}</span>
+          <span className="memory-tree-folder-name wn-title">{node.name}</span>
         </button>
         {!isCollapsed && (
           <>

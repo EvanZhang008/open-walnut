@@ -9,8 +9,10 @@ import {
   sessionAreaPctBesideChat,
   sessionAreaShownPct,
   sessionWidthForCount,
+  todoPanelAloneWidth,
   todoPanelWidth,
   usersSessionWidth,
+  type QuickQuestionSlot,
 } from '../../web/src/pages/columnSizing';
 
 /**
@@ -260,6 +262,16 @@ describe("Home's row: the pane just opened gets its share", () => {
   it('the task panel is never narrower than its toolbar needs', () => {
     expect(todoPanelWidth(10)).toMatch(/^max\(224px, /);
   });
+
+  // 2026-11-22 audit: with nothing open beside it, the empty pane kept two thirds of the row while
+  // long titles wrapped in the task panel.
+  it('with nothing open beside it, the task panel takes the room up to a readable line, never below its usual width', () => {
+    expect(todoPanelAloneWidth(null, 33.42)).toBe(
+      'max(calc((100vw - var(--home-rail-width, 56px)) * 0.3342), min(calc(100vw - var(--home-rail-width, 56px) - 400px), 880px))',
+    );
+    // A width the user dragged in this layout is his, as a plain share.
+    expect(todoPanelAloneWidth(45, 33.42)).toBe(todoPanelWidth(45));
+  });
 });
 
 // The session area's width as shown: one derivation from the layout, never two effects writing in
@@ -274,7 +286,8 @@ describe("Home's row: the session area's width is derived from the layout", () =
   const drag = { pct: 65, custom: true, dragged: true };
   // Every way to reach a layout ends in the same (panel, columns, Quick question open) state, so
   // the order of opening and a reload cannot change what shows.
-  const shown = (panel: typeof none, count: number, besideChat: boolean) => sessionAreaShownPct(usersSessionWidth(panel), count, besideChat);
+  const shown = (panel: typeof none, count: number, slot: QuickQuestionSlot | boolean) =>
+    sessionAreaShownPct(usersSessionWidth(panel), count, slot === true ? 'shown' : slot === false ? 'closed' : slot);
 
   it('a width the user dragged is his, in every layout; any other is the program\'s', () => {
     expect(usersSessionWidth(none)).toBeNull();
@@ -283,7 +296,7 @@ describe("Home's row: the session area's width is derived from the layout", () =
     // An older version's drag has no mark and stays his; a marked drag is his whatever its value.
     expect(usersSessionWidth(olderDrag)).toBe(58.4);
     expect(usersSessionWidth(drag)).toBe(65);
-    for (const count of [1, 2, 3]) for (const chat of [false, true]) {
+    for (const count of [1, 2, 3]) for (const chat of ['closed', 'empty', 'shown'] as const) {
       expect(shown(olderDrag, count, chat)).toBe(58.4);
       expect(shown(drag, count, chat)).toBe(65);
     }
@@ -305,5 +318,15 @@ describe("Home's row: the session area's width is derived from the layout", () =
     for (const n of [1, 2, 3, 4]) expect(shown(none, n, true)).toBeLessThanOrEqual(sessionAreaPctBesideChat(n));
     // Closing the slot gives the graduated width back, with nothing to restore.
     expect(shown(none, 1, false)).toBe(65);
+  });
+
+  it('beside an empty Quick question slot the columns keep the graduated width', () => {
+    // 2026-11-22 audit: a CEO chat with no history took half the row and cut the title of the
+    // long session beside it. Nothing to read keeps the smaller share; a conversation gets its column's.
+    expect([1, 2, 3].map((n) => shown(none, n, 'empty'))).toEqual([65, 65, 70]);
+    expect(shown(none, 1, 'shown')).toBe(50);
+    // The user's own width still wins over both.
+    expect(shown(drag, 1, 'empty')).toBe(65);
+    expect(shown(olderDrag, 1, 'empty')).toBe(58.4);
   });
 });

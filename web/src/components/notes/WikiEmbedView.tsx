@@ -120,7 +120,7 @@ export function WikiEmbedView({ node, editor }: ReactNodeViewProps) {
         <span className="notes-image-missing" title={`![[${target}]]`}>
           <span className="notes-image-missing-icon" aria-hidden>{failed.kind === 'missing' ? '!' : '\u2193'}</span>
           <span className="notes-image-missing-label">{failed.kind === 'missing' ? 'Image not found' : "Can't preview here"}</span>
-          <span className="notes-image-missing-name">{fileNameOf(target)}</span>
+          <span className="notes-image-missing-name wn-title">{fileNameOf(target)}</span>
           {retrying && (
             <img src={url} alt="" hidden onLoad={() => setFailure(null)} onError={onImageError} />
           )}
@@ -133,7 +133,7 @@ export function WikiEmbedView({ node, editor }: ReactNodeViewProps) {
           {/* Above the frame, so Open and Download are plain to see, also where the frame stays empty. */}
           <span className="notes-wikiembed-pdf-bar">
             <span className="badge notes-wikiembed-pdf-badge" aria-hidden>PDF</span>
-            <span className="notes-wikiembed-pdf-name">{fileNameOf(target)}</span>
+            <span className="notes-wikiembed-pdf-name wn-title">{fileNameOf(target)}</span>
             <a href={url} target="_blank" rel="noreferrer" className="notes-wikiembed-pdf-action notes-wikiembed-open" aria-label={`Open ${fileNameOf(target)}`}>
               Open
             </a>
@@ -148,7 +148,7 @@ export function WikiEmbedView({ node, editor }: ReactNodeViewProps) {
           <span className="notes-wikiembed-card-icon" aria-hidden>
             {'\u{1F4CE}'}
           </span>
-          <span className="notes-wikiembed-card-name">{fileNameOf(target)}</span>
+          <span className="notes-wikiembed-card-name wn-title">{fileNameOf(target)}</span>
           <span className="notes-wikiembed-card-raw">{`![[${target}]]`}</span>
         </a>
       )}

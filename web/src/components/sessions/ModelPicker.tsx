@@ -848,7 +848,7 @@ export function ModelPicker({
       title={`${engineUi.displayName} picks its configured default model at launch`}
       onClick={() => { if (acpCurrent) onAcpSwitch(''); }}
     >
-      <span className="model-picker-row-name">{acpDefaultLabel}</span>
+      <span className="model-picker-row-name wn-title">{acpDefaultLabel}</span>
     </button>
   );
 
@@ -1068,7 +1068,7 @@ export function ModelPicker({
                   title={group.label || 'Other models'}
                   onClick={() => setAcpGroupSel(group.id)}
                 >
-                  <span className="model-picker-row-name">{group.label || 'Other'}</span>
+                  <span className="model-picker-row-name wn-title">{group.label || 'Other'}</span>
                 </button>
               );
             })}
@@ -1149,7 +1149,7 @@ export function ModelPicker({
                           if (acpMatches) { setAcpQuery(''); setAcpGroupSel(fam.groupId); }
                         }}
                       >
-                        <span className="model-picker-row-name">
+                        <span className="model-picker-row-name wn-title">
                           {fam.label}
                           {showGroup && <span className="model-picker-row-group"> — {fam.groupLabel}</span>}
                         </span>
@@ -1173,7 +1173,7 @@ export function ModelPicker({
                 aria-selected
                 title={`${engineUi.displayName} picks its configured default model at launch`}
               >
-                <span className="model-picker-row-name">{engineUi.displayName} default</span>
+                <span className="model-picker-row-name wn-title">{engineUi.displayName} default</span>
               </button>
               <div className="model-picker-status">
                 Models are discovered when the session starts — open this picker again on the running session to switch.
@@ -1203,7 +1203,7 @@ export function ModelPicker({
                     if (!active && variant && variant.modelId !== acpCurrent) onAcpSwitch(variant.modelId);
                   }}
                 >
-                  <span className="model-picker-row-name">{e.label}</span>
+                  <span className="model-picker-row-name wn-title">{e.label}</span>
                 </button>
               );
             })}
@@ -1224,7 +1224,7 @@ export function ModelPicker({
                   title={effortTitle(option.name, option.description)}
                   onClick={() => { if (!active) onAcpEffortControl?.(option.value); }}
                 >
-                  <span className="model-picker-row-name">{option.name}</span>
+                  <span className="model-picker-row-name wn-title">{option.name}</span>
                 </button>
               );
             })}
@@ -1285,7 +1285,7 @@ export function ModelPicker({
                     ? 'Saved model — not in this session\'s selectable catalog; it applies on the next start'
                     : 'Current model — not in this session\'s selectable catalog'}
                 >
-                  <span className="model-picker-row-name">{shortModelLabel(row.model)}</span>
+                  <span className="model-picker-row-name wn-title">{shortModelLabel(row.model)}</span>
                 </div>
               );
             }
@@ -1301,7 +1301,7 @@ export function ModelPicker({
                   title={row.title ?? 'No --model flag — the CLI/config default decides'}
                   onClick={() => { if (!row.active) onSwitch(''); }}
                 >
-                  <span className="model-picker-row-name">{row.label ?? (row.resolvedLabel ? `Auto (${row.resolvedLabel})` : 'Auto')}</span>
+                  <span className="model-picker-row-name wn-title">{row.label ?? (row.resolvedLabel ? `Auto (${row.resolvedLabel})` : 'Auto')}</span>
                 </button>
               );
             }
@@ -1324,7 +1324,7 @@ export function ModelPicker({
                   : m.description ?? catalogRowLabel(m)}
                 onClick={() => { if (!isActive && !m.disabled) onSwitch(m.value); }}
               >
-                <span className="model-picker-row-name">
+                <span className="model-picker-row-name wn-title">
                   {catalogRowLabel(m)}
                   {isRequestedNotApplied && <span className="model-picker-option-requested"> ⚠</span>}
                 </span>
@@ -1345,7 +1345,7 @@ export function ModelPicker({
                 title={effortDefaultTitle ?? 'No --effort at start: Claude Code\'s own settings decide'}
                 onClick={() => { if (currentEffort !== undefined) onEffortDefault(); }}
               >
-                <span className="model-picker-row-name">
+                <span className="model-picker-row-name wn-title">
                   Default
                   {effortDefaultLevel && <span className="model-picker-row-group" data-testid="effort-default-level"> · {effortDefaultLevel}</span>}
                 </span>
@@ -1378,7 +1378,7 @@ export function ModelPicker({
                   data-effort={e.id}
                   onClick={() => { if (!disabled && !active) onEffortSwitch(e.id); }}
                 >
-                  <span className="model-picker-row-name">{e.label}{requestedNotApplied ? ' ⚠' : ''}</span>
+                  <span className="model-picker-row-name wn-title">{e.label}{requestedNotApplied ? ' ⚠' : ''}</span>
                 </button>
               );
             })}

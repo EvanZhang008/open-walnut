@@ -470,8 +470,8 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
         <ul className="mail-rule-samples" data-testid="mail-rule-sample-list">
           {samples.map((one) => (
             <li key={`${one.accountId}/${one.messageId}`} className="mail-rule-sample" data-testid="mail-rule-sample">
-              <span className="mail-rule-sample-sender">{one.sender}</span>
-              <span className="mail-rule-sample-subject">{one.subject || '(no subject)'}</span>
+              <span className="mail-rule-sample-sender wn-title">{one.sender}</span>
+              <span className="mail-rule-sample-subject wn-title">{one.subject || '(no subject)'}</span>
             </li>
           ))}
         </ul>

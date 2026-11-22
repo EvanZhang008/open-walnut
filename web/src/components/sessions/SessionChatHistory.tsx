@@ -361,6 +361,9 @@ interface SessionChatHistoryProps {
   sessionId: string;
   /** What an empty conversation says instead of "No conversation history found". */
   emptyHistory?: ReactNode;
+  /** Whether the conversation has anything to show, said once its history has answered (content,
+   *  or the empty, unavailable or error state), never while it still loads. */
+  onHistoryShown?: (hasContent: boolean) => void;
   /** Coding agent backing this session. Legacy records without one are Claude Code. */
   engine?: SessionEngine;
   phase?: string;
@@ -743,7 +746,7 @@ function ownRowsOf(queuedSig: string, tree: ThreadTree): { sentKeys: Set<string>
 /** How long the history waits for the rest of a moment's signals before it reads (bumpHistory). */
 const HISTORY_BUMP_COALESCE_MS = 150;
 
-export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, queueSync, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, folderGoneBanner, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, publishTimeline, readTimeline, readerPane, workingText, emptyHistory }: SessionChatHistoryProps) {
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, queueSync, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, folderGoneBanner, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession, publishTimeline, readTimeline, readerPane, workingText, emptyHistory, onHistoryShown }: SessionChatHistoryProps) {
   countRender('SessionChatHistory');
   // Dev-only render counter per session: lets a browser test prove a hot
   // interaction (the pointer over a question mark) never re-renders this tree.
@@ -4489,6 +4492,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // The chat's earlier part is content too: a warm session that never ran a turn
   // has no transcript file, and "History unavailable" over a readable chat is false.
   const historyUnavailable = visibleHistoryUnavailable(error, hasContent || chatEarlier.length > 0);
+  // The one empty state below ("No conversation history found" or the caller's words).
+  const showsEmpty = !error && !hasContent && !loading && !phase2Pending && !loadingFrom && chatEarlier.length === 0 && !earlierSessionsTaskId;
+  const shownContent: boolean | null = hasContent || chatEarlier.length > 0 || !!earlierSessionsTaskId ? true
+    : showsEmpty || !!error ? false
+      : null;
+  const onHistoryShownRef = useRef(onHistoryShown);
+  onHistoryShownRef.current = onHistoryShown;
+  useEffect(() => {
+    if (shownContent !== null) onHistoryShownRef.current?.(shownContent);
+  }, [shownContent]);
 
   // The page's own rows: the SAME parts, filtered by row identity.
   const visibleHistoryParts = stackMode
@@ -6971,7 +6984,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           </div>
         )}
         {/* A session an engine switch started idle shows its task's earlier sessions instead. */}
-        {!error && !hasContent && !loading && !phase2Pending && !loadingFrom && chatEarlier.length === 0 && !earlierSessionsTaskId && (
+        {showsEmpty && (
           <div className="session-history-empty">
             {emptyHistory ?? <p className="text-muted">No conversation history found</p>}
           </div>

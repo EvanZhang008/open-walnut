@@ -207,10 +207,11 @@
 
 .hf-dash .hf-stat[data-tone="warn"] .hf-stat-label::before { background: var(--warning); }
 
-/* The host cards. */
+/* The host cards. auto-fit: the connected hosts share the row, so one host's card takes the room
+   its timeline needs instead of a 264px column beside empty space (2026-11-22 audit). */
 .hf-dash .hf-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(264px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(264px, 1fr));
   gap: 10px;
   margin-top: 10px;
 }
@@ -229,9 +230,10 @@
 
 .hf-dash .hf-card-head .sps-host-dot { width: 8px; height: 8px; flex: none; }
 
-.hf-dash .hf-card-name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.hf-dash .hf-card-name { font-weight: 600; font-size: 14px; }
 
-.hf-dash .hf-card-sys { margin: -6px 0 0; font-size: var(--font-size-sm); color: var(--settings-help-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The system line reads in full (OS, CPU, cores, memory): it wraps under the name. */
+.hf-dash .hf-card-sys { margin: -6px 0 0; font-size: var(--font-size-sm); color: var(--settings-help-fg); overflow-wrap: anywhere; }
 
 .hf-dash .hf-problem {
   display: flex;
@@ -301,7 +303,8 @@
 
 .hf-dash .hf-off-line .sps-host-dot { width: 8px; height: 8px; flex: none; }
 
-.hf-dash .hf-off-name { font-weight: 600; font-size: var(--font-size-md); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; max-width: 45%; }
+/* The name wraps inside its share of the line; the reason beside it is what cuts. */
+.hf-dash .hf-off-name { font-weight: 600; font-size: var(--font-size-md); flex: 0 1 auto; max-width: 45%; }
 
 .hf-dash .hf-off-why { font-size: var(--font-size-sm); color: var(--settings-help-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 0; }
 

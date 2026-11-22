@@ -203,7 +203,7 @@ function ModelRow({ m }: { m: SessionCostModel }) {
   return (
     <div className="session-cost-model" data-testid="session-cost-model" data-model={m.model}>
       <button type="button" className="session-cost-model-row" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-        <span className="session-cost-model-name">{open ? '▾' : '▸'} {costModelLabel(m.model, m.speed)}</span>
+        <span className="session-cost-model-name wn-title">{open ? '▾' : '▸'} {costModelLabel(m.model, m.speed)}</span>
         <span className="session-cost-model-meta">
           {m.responses} req · {fmtTokenCount(m.tokens.input + m.tokens.cacheRead + cacheWriteTokens(m))} in · {fmtTokenCount(m.tokens.output)} out
         </span>

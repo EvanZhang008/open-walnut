@@ -24,7 +24,7 @@ import { usePhoneLayout } from '@/hooks/usePhoneLayout'
 import { SettingsButton } from '@/components/settings/inputs/SettingsButton'
 import { SettingsGroup, SettingsRow } from '@/components/settings/SettingsSection'
 import { PART_KIND_LABEL, builtinEntries, partsStatus, type AppPart, type BuiltinEntry, type HeldPlugin } from './builtin-apps'
-import { SidebarSwitch } from './app-bits'
+import { AppsGrid, SidebarSwitch } from './app-bits'
 import type { RegistryRow } from './plugin-store-model'
 import { categoryOf } from './categories'
 import { setSideBarPane, sideBarPageOf } from '@/components/layout/page-side-bar'
@@ -153,7 +153,7 @@ export function BuiltinAppsGrid({ entries, folded, facts, onOpen, onOpenPlugin }
   const quietRail = useExperimental('quiet_rail')
   if (entries.length === 0) return null
   return (
-    <div className="apps-grid" data-testid="apps-builtin-grid">
+    <AppsGrid data-testid="apps-builtin-grid">
       {entries.map((entry) => {
         const row = folded.get(entry.key)
         const own = facts.get(entry.key)
@@ -189,7 +189,7 @@ export function BuiltinAppsGrid({ entries, folded, facts, onOpen, onOpenPlugin }
           />
         )
       })}
-    </div>
+    </AppsGrid>
   )
 }
 

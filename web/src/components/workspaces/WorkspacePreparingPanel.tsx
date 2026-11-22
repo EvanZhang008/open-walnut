@@ -219,7 +219,7 @@ export function WorkspacePreparingPanel({ taskId, initialTask, message, launchEr
       <div className="session-panel-header">
         <div className="session-panel-header-top">
           <div className="session-panel-title-area">
-            <span className="session-panel-title" title={anchor}>{dirName}</span>
+            <span className="session-panel-title wn-title" title={anchor}>{dirName}</span>
             {ws && ws.host !== '__local__' && (
               <span className="badge session-panel-badge"><span>{hostName(ws.host)}</span></span>
             )}

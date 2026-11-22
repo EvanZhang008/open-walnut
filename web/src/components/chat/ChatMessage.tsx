@@ -1145,7 +1145,7 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden', flex: 1 }}>
         {isCollapsed && collapsedSummary && (
           <span
-            className="chat-collapsed-summary"
+            className="chat-collapsed-summary wn-title"
             onClick={handleContentClick}
             dangerouslySetInnerHTML={stableHtml(renderInlineMarkdown(collapsedSummary))}
           />

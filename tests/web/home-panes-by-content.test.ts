@@ -43,7 +43,8 @@ describe("Home's panes go by content", () => {
   const globals = read('styles/globals.css')
 
   it('an empty Home row shows the empty room, with the toolbar\'s own New task action', () => {
-    expect(main).toMatch(/!chatVisible && sessionColumns\.length === 0 && !triagePanelOpen && \(\s*<HomeEmptyPane onNewTask=\{handleToolbarOpenLauncher\} \/>/)
+    expect(main).toMatch(/const homeRowEmpty = !phoneLayout && !chatVisible && sessionColumns\.length === 0 && !triagePanelOpen;/)
+    expect(main).toMatch(/\{homeRowEmpty && \(\s*<HomeEmptyPane onNewTask=\{handleToolbarOpenLauncher\} \/>/)
     const pane = read('pages/HomeEmptyPane.tsx')
     expect(pane).toContain('No session open')
     // One New task, one look: the toolbar's own button, never a second one beside it.
@@ -63,7 +64,11 @@ describe("Home's panes go by content", () => {
     // Round 2 capped it in an effect on the slot's opening and wrote the graduated width in another on
     // a column added: Quick question first then a column, or a reload with both open, missed the cap
     // (2026-11-22 review). The width shown is now one derivation (columnSizing.sessionAreaShownPct).
-    expect(main).toMatch(/const sessionAreaShown = sessionAreaShownPct\(usersSessionWidth\(sessionPanel\), colCount, chatVisible && !phoneLayout\)/)
+    expect(main).toMatch(/const sessionAreaShown = sessionAreaShownPct\(usersSessionWidth\(sessionPanel\), colCount, askSlot\)/)
+    // The slot counts as shown only while it has something to read (an empty one keeps the smaller share).
+    expect(main).toMatch(/const askSlot: QuickQuestionSlot = !chatVisible \|\| phoneLayout \? 'closed' : askSlotHasContent \? 'shown' : 'empty';/)
+    expect(main).toMatch(/onContentChange=\{setAskSlotHasContent\}/)
+    expect(read('components/chat/AskWalnutSlot.tsx')).toMatch(/onHistoryShown=\{onHistoryShown\}/)
     expect(main).toMatch(/style=\{sessionColumns\.length > 0 \|\| triagePanelOpen \? \{ width: `\$\{sessionAreaShown\}%` \} : undefined\}/)
     // Nothing writes the session area's width but a drag: no effect sizes it in turn.
     expect(main).not.toMatch(/sessionPanel\.setPct\(/)
@@ -72,6 +77,10 @@ describe("Home's panes go by content", () => {
     // ...and measures a drag against the content row its `${pct}%` is a share of (basis 'parent').
     expect(main).toMatch(/useResizablePanel\('walnut-session-panel-width-v2', 35, 'right', \{ measure: \(\) => sessionAreaShownRef\.current, basis: 'parent' \}\)/)
     expect(main).toMatch(/style=\{todoShown \? \{ width: todoWidth \} : undefined\}/)
+    // Nothing open beside it: the task panel takes the room first, with its own width for that layout.
+    expect(main).toMatch(/const todoAloneLayout = homeRowEmpty && !calendarVisible && !scratchpadVisible;/)
+    expect(main).toMatch(/todoPanelAloneWidth\(todoAlone\.dragged \? todoAlone\.pct : null, todoPanel\.pct\)/)
+    expect(main).toMatch(/<div className="todo-resize-handle" \{\.\.\.todoResize\.handleProps\} \/>/)
     expect(main).not.toMatch(/width: todoPanel\.width/)
     expect(rule(globals, '.main-page')).toMatch(/--home-rail-width:\s*56px/)
     expect(rule(globals, '.sidebar.collapsed')).toMatch(/width:\s*56px/)

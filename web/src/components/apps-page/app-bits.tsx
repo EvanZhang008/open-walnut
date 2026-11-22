@@ -1,12 +1,26 @@
 /**
  * Small pieces every Apps page view draws for a registered App: its glyph (a plugin's own
  * icon, inside the plugin's error boundary) and its badge, drawn like the Sidebar's so an
- * App off the Sidebar still shows it here.
+ * App off the Sidebar still shows it here; and the one card grid every section uses.
  */
+import { useRef, type HTMLAttributes } from 'react'
 import { PuzzleIcon } from '@/apps/icons'
 import type { RegisteredApp } from '@/apps/registry'
 import { PluginBoundary } from '@/components/common/PluginBoundary'
 import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch'
+import { useMasonryRows } from '@/hooks/useMasonryRows'
+
+/**
+ * The grid of store cards, the same in every section (built-ins, each source, Get more). Its
+ * cards keep their own height and flow like bricks (useMasonryRows): a card's description is
+ * shown whole, so a long one no longer stretches every card of its row and leaves holes under
+ * the short ones (2026-11-22, the UI audit).
+ */
+export function AppsGrid({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
+  const ref = useRef<HTMLDivElement>(null)
+  useMasonryRows(ref)
+  return <div ref={ref} className={className ? `apps-grid ${className}` : 'apps-grid'} {...rest} />
+}
 
 /**
  * The one "Show <name> on the sidebar" switch every Apps page view draws: a built-in part on

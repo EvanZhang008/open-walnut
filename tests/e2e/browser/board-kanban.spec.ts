@@ -195,32 +195,31 @@ test('C21 C46 C94: title, ticket link, Sev chip, 3 line summary, Markdown as wri
   await expect(pane).toBeVisible()
   await expect(page.locator(`${REAL_PANEL}[data-session-id="${team.sessions[team.perm]}"]`)).toHaveCount(0)
   await expect(perm).not.toHaveClass(/is-placeholder/)
-  // Summary: at most 3 lines wide, the tooltip is the whole text. The card renders the words as
-  // written (Markdown, so its paragraph ends in a line break the text node keeps; trimmed here).
+  // Summary: shown whole (standard.md, "Text that does not fit": a card's summary never cuts),
+  // the tooltip is the whole text. The card renders the words as written (Markdown, so its
+  // paragraph ends in a line break the text node keeps; trimmed here).
   const sum = card(pane, team.idle[1]).getByTestId('kanban-card-summary')
-  const box = await sum.evaluate((el) => ({ h: el.clientHeight, lh: parseFloat(getComputedStyle(el).lineHeight), title: el.getAttribute('title') ?? '', text: (el.textContent ?? '').trim() }))
-  expect(box.h).toBeLessThanOrEqual(3 * box.lh + 2)
+  const box = await sum.evaluate((el) => ({ h: el.clientHeight, sh: el.scrollHeight, title: el.getAttribute('title') ?? '', text: (el.textContent ?? '').trim() }))
+  expect(box.sh).toBeLessThanOrEqual(box.h + 1)
   expect(box.title.startsWith(box.text)).toBe(true)
   expect(box.text).toBe(team.summaries[team.idle[1]])
-  // C46: the long title clamps to 2 lines with its full name in its text, which peeks in place
-  // on hover (utils/truncation-peek.ts); the non Latin one shows whole.
+  // C46: the long title wraps whole onto as many lines as it needs (2026-11-22: it was clamped
+  // to 2 lines; the rule is now that a title never cuts); the non Latin one shows whole too.
   const long = card(pane, team.longTitle).getByTestId('kanban-card-title')
-  const lt = await long.evaluate((el) => ({ h: el.clientHeight, lh: parseFloat(getComputedStyle(el).lineHeight), text: el.textContent }))
-  expect(lt.h).toBeLessThanOrEqual(2 * lt.lh + 2)
+  const lt = await long.evaluate((el) => ({ h: el.clientHeight, sh: el.scrollHeight, w: el.clientWidth, sw: el.scrollWidth, text: el.textContent }))
+  expect(lt.sh).toBeLessThanOrEqual(lt.h + 1)
+  expect(lt.sw).toBeLessThanOrEqual(lt.w + 1)
   expect(lt.text).toBe(team.titles[team.longTitle])
   await expect(card(pane, team.nonLatin).getByTestId('kanban-card-title')).toContainText(NON_LATIN_WORDS)
   // C94: Markdown in a summary renders as written (2026-11-10, agent text links its references):
-  // no `**` or backtick shows, the words read as the sentence; a click expands it, Escape folds it, no peek.
+  // no `**` or backtick shows, the words read as the sentence; it is whole already, so a click on it
+  // opens nothing (2026-11-22: the click used to unfold a clamped summary).
   await call(api, 'PUT', `/api/v1/tasks/${team.leader}/board/cards/${team.idle[2]}`, { summary: 'Root cause is **the retry budget** in `ledger-sync`; rollback is out.' })
   const md = card(pane, team.idle[2]).getByTestId('kanban-card-summary')
   await expect(md).toHaveText('Root cause is the retry budget in ledger-sync; rollback is out.', { timeout: 15_000 })
   expect(await md.locator('strong').allInnerTexts()).toEqual(['the retry budget'])
   expect(await md.locator('code').allInnerTexts()).toEqual(['ledger-sync'])
   await md.click()
-  await expect(md).toHaveAttribute('data-expanded', 'true')
-  await card(pane, team.idle[2]).focus()
-  await page.keyboard.press('Escape')
-  await expect(md).not.toHaveAttribute('data-expanded', 'true')
   await expect(pane).toBeVisible()
   await expect(page.locator(`${REAL_PANEL}[data-session-id="${team.sessions[team.idle[2]]}"]`)).toHaveCount(0)
 })

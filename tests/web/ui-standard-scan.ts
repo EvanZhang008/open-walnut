@@ -146,6 +146,9 @@ export function cutsTitle(selector: string): boolean {
   return classesOf(parts[parts.length - 1] ?? '').some((c) => TITLE_CLASS.test(c));
 }
 
+/** A cut that is right (one-line chrome: a tab, a path bar, a breadcrumb) says why on its own line:
+ *  `text-overflow: ellipsis; /* meta: <why, 10+ characters> *\/`. The ratchet skips only those. */
+export const META_MARK = /\/\*\s*meta:\s*[^*]{10,}\*\//;
 const CUTS = (prop: string, value: string) => (prop === 'text-overflow' && /ellipsis/.test(value)) || (/(^|-)line-clamp$/.test(prop) && !/^(none|unset|initial)$/.test(value.trim()));
 /**
  * `.my-thing-badge { color; border-radius }`: a badge, pill, chip or tag that draws a label of its own
@@ -362,7 +365,9 @@ export function countAll(): Counts {
   for (const file of walk(WEB_SRC, ['.css']).sort()) {
     const rel = path.relative(WEB_SRC, file);
     const rules = new Map<string, Decl[]>();
-    for (const d of scanCss(rel, fs.readFileSync(file, 'utf8'))) {
+    const text = fs.readFileSync(file, 'utf8');
+    const lines = text.split('\n');
+    for (const d of scanCss(rel, text)) {
       const key = d.selectors.join(', ');
       rules.set(key, [...(rules.get(key) ?? []), d]);
       for (const kind of tokenBreaks(d)) bump(out[kind], rel);
@@ -373,7 +378,7 @@ export function countAll(): Counts {
       if (decls.some((d) => LOOK.test(d.prop)) && !fingerSize(decls) && sels.some((x) => restylesBtn(x, companions))) bump(out.restyledBtn, rel);
       else if (sets(/^background(-color)?$/) && sets(/^border-radius$/) && sels.some(isOwnControl)) bump(out.ownControl, rel);
       if (rel !== INPUT_HOME && sels.some((x) => restylesInput(x, decls, parts))) bump(out.restyledInput, rel);
-      if (rel !== 'styles/text-fit.css' && decls.some((d) => CUTS(d.prop, d.value)) && sels.some(cutsTitle)) bump(out.cutTitle, rel);
+      if (rel !== 'styles/text-fit.css' && decls.some((d) => CUTS(d.prop, d.value) && !META_MARK.test(lines[d.line - 1] ?? '')) && sels.some(cutsTitle)) bump(out.cutTitle, rel);
       if (rel !== INPUT_HOME && sels.some((x) => restylesField(x, decls, fields))) bump(out.restyledField, rel);
       if (sels.some(isCard) && offCardFill(decls)) bump(out.cardBg, rel);
       if (rel !== LABEL_HOME && ((decls.some((d) => paintsLabel(d.prop, d.value)) && sels.some(isOwnLabel)) || (sels.some(isBoxedLabelName) && drawsBox(decls)))) bump(out.ownLabel, rel);

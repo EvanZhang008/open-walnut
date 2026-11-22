@@ -178,8 +178,8 @@ function RuleEditor({ rule, tasks, onSaved, onCancel }: {
                     // Focus stays in the search (WebKit focuses no button on click), so its blur
                     // never closes the list under the pointer.
                     onMouseDown={(e) => e.preventDefault()} onClick={() => pick(t)}>
-                    <span className="trr-pick-title">{t.title}</span>
-                    {t.project && <span className="trr-pick-project">{t.project}</span>}
+                    <span className="trr-pick-title wn-title">{t.title}</span>
+                    {t.project && <span className="trr-pick-project wn-meta">{t.project}</span>}
                   </button>
                 ))}
               </div>
@@ -324,12 +324,12 @@ export function TriageRoutingRules({ off = false, onGroupIds }: { off?: boolean;
                 <SettingsButton variant="ghost" onClick={() => setRemoving(null)}>Keep</SettingsButton>
               </>
             ) : (
-              <>
+              <span className="trr-rule-keys">
                 <SettingsButton variant="ghost" aria-label={`Edit rule: ${rule.matchText}`} data-testid="triage-rule-edit"
                   onClick={() => openEditor(rule.id)}>Edit</SettingsButton>
                 <SettingsButton variant="ghost" aria-label={`Remove rule: ${rule.matchText}`} data-testid="triage-rule-delete"
                   onClick={() => setRemoving(rule.id)}>Remove</SettingsButton>
-              </>
+              </span>
             )}
             {/* Hidden while a removal is asked, so the red Remove has no switch beside it. While Inbox
                 triage is off a rule routes nothing: its switch reads disabled and grey (its saved

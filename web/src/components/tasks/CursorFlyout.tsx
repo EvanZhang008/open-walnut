@@ -149,7 +149,7 @@ export function OptionPickerFlyout<V extends string>({ anchorPoint, anchorRef, o
             onClose();
           }}
         >
-          <span className="task-kebab-project-opt-name">{option.label}</span>
+          <span className="task-kebab-project-opt-name wn-title">{option.label}</span>
         </button>
       ))}
       {footer && <div className="task-kebab-flyout-footer">{footer}</div>}

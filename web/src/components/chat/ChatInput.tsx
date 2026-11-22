@@ -2152,7 +2152,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                 &times;
               </button>
               <StatusBadge status={focusedTask.status} phase={focusedTask.phase} task={focusedTask} />
-              <span className="pill-title">{focusedTask.title}</span>
+              <span className="pill-title wn-title">{focusedTask.title}</span>
             </div>
           )}
           {/* Attachments: pictures and files, each with its own upload state */}

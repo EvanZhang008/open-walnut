@@ -81,7 +81,7 @@ export function ConnectExtensionPage() {
 
   return (
     <div className="pw-ext-page" data-testid="connect-extension">
-      <div className="pw-ext-card">
+      <div className="pw-ext-card" data-phase={phase}>
         <div className="pw-ext-icon" aria-hidden="true">{ASK_ICON}</div>
         {phase === 'looking' && (
           <>
@@ -126,8 +126,9 @@ export function ConnectExtensionPage() {
           <>
             <h1>Install the Walnut extension</h1>
             <p>Ask a quick question about any page, let your agents work in this browser, and fill passwords from your own Walnut. Then come back to this page.</p>
+            {/* Someone who has it already reads their next step first, before the install ways (2026-11-22 audit). */}
+            <p className="pw-ext-already" data-testid="connect-extension-already">Already installed? Click the Walnut icon in the toolbar and press Connect there: it opens this page ready to connect.</p>
             <div className="pw-ext-install"><ExtensionInstallSteps browser={browser} /></div>
-            <p className="pw-ext-fine">Already installed? Click the Walnut icon in the toolbar and press Connect there: it opens this page ready to connect.</p>
           </>
         )}
       </div>

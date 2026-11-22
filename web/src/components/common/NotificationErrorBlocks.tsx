@@ -53,10 +53,10 @@ export function NotificationErrorBlocks({ causes, blocks, activeCategory, drilla
               drill into. */}
           <div className="nfc-cat-header">
             {activeCategory || !drillable ? (
-              <span className="nfc-cat-name">{block.category}</span>
+              <span className="nfc-cat-name wn-title">{block.category}</span>
             ) : (
               <button
-                className="nfc-cat-name nfc-cat-drill"
+                className="nfc-cat-name nfc-cat-drill wn-title"
                 title={`Show only ${block.category} errors`}
                 onClick={() => onPickCategory(block.category)}
               >

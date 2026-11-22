@@ -69,11 +69,9 @@
   border-radius: 6px;
 }
 
-.routine-group-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* The group's (project's) name wraps whole (`wn-title`) at its words' width, so its count follows it. */
+.routine-group-header .routine-group-name {
+  flex: 0 1 auto;
 }
 
 .routine-group-count {
@@ -198,12 +196,9 @@
   min-width: 0;
 }
 
+/* The routine's name wraps whole (`wn-title`, RoutineRow.tsx). */
 .routine-row-name.cron-job-name {
   flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: 14px;
   font-weight: 500;
 }
@@ -533,12 +528,8 @@
   cursor: pointer;
 }
 
-.routine-task-hit-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* A task's title in the picker wraps whole (`wn-title`, RoutineTaskField.tsx); its project stays on the right. */
+
 
 .routine-task-hit-project {
   flex: 0 0 auto;

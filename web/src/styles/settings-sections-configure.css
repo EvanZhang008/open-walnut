@@ -4,14 +4,6 @@
  * settings-controls.css; nothing here restyles them globally.
  */
 
-/* One-line help that ellipsizes (Hooks rows); full text rides on title. */
-.settings-help-oneline {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
-}
-
 /* Inline mono value inside a row copy column (Fires on, paths). */
 .settings-mono-value {
   font-family: var(--font-mono);
@@ -168,13 +160,6 @@
 .hook-row-disclose:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-}
-
-.hook-row-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* Still inside the disclosure button (so it clicks and announces with it), but

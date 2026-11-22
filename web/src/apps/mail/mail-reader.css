@@ -332,7 +332,7 @@
 .mail-attachment-name {
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: ellipsis; /* meta: a chip of fixed size, its full name is the chip's own tooltip */
   white-space: nowrap;
 }
 
@@ -393,7 +393,7 @@
   min-width: 0;
   flex: 0 1 auto;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: ellipsis; /* meta: the viewer's one-line toolbar, the dialog is named in full */
   white-space: nowrap;
   font-weight: 600;
 }

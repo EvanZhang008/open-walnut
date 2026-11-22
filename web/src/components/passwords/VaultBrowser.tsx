@@ -275,7 +275,7 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
             <button key={i.id} type="button" role="option" aria-selected={selectedId === i.id} className={`pw-row${selectedId === i.id ? ' on' : ''}`} onClick={() => select(i.id)} data-testid="pw-row">
               <SiteTile item={i} />
               <span className="pw-row-text">
-                <span className="pw-row-title">{i.title}{i.favorite && <span className="pw-row-star"><StarIcon size={11} filled /></span>}</span>
+                <span className="pw-row-title wn-title">{i.title}{i.favorite && <span className="pw-row-star"><StarIcon size={11} filled /></span>}</span>
                 <span className="pw-row-sub">{i.username || (i.urls?.[0] ? displayHost(i.urls[0]) : typeLabel(i.type))}</span>
               </span>
             </button>

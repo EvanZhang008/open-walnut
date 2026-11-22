@@ -1,5 +1,5 @@
 /* Dense host rows (AttentionBanner `dense`, more than one entry): until the
-   user opens a row, it is its headline on one line, then its primary action
+   user opens a row, it is its headline (wrapped in full), then its primary action
    and the details toggle on the next, so every problem reads at a glance
    (N1). A result line ('Tried again just now: same result') takes the toggle's
    place on that same line, so the row keeps its height (N13). */
@@ -18,18 +18,6 @@
 .hpb-dense:not(.hpb-open) .hpb-headline,
 .hpb-dense:not(.hpb-open) .hpb-trying,
 .hpb-dense:not(.hpb-open) .hpb-fixing { flex: 0 0 100%; min-width: 0; }
-/* Two whole-word lines, never a one-line ellipsis: the cause at the end of the
-   headline ('SSH certificate expired', 'not signed in') stays readable (N3-5). */
-.hpb-dense:not(.hpb-open) .hft-headline,
-.hpb-dense:not(.hpb-open) .hpb-headline {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  white-space: normal;
-  overflow: hidden;
-  text-overflow: clip;
-}
 .hpb-dense:not(.hpb-open) .hpb-actions { flex: none; margin: 0; flex-wrap: nowrap; }
 .hpb-dense:not(.hpb-open) .hft-details,
 .hpb-dense:not(.hpb-open) .hpb-receipt,
@@ -48,24 +36,9 @@
 .hpb-dense:not(.hpb-open) .hpb-headline,
 .hpb-dense:not(.hpb-open) .hpb-trying,
 .hpb-dense:not(.hpb-open) .hpb-fixing { flex-basis: calc(100% - 28px); margin-right: 28px; }
-/* A narrow card (a 980px window): the headline takes two lines on whole words,
-   so the host's name, at its end, still shows. */
-@container attention (max-width: 220px) {
-  .hpb-dense:not(.hpb-open) .hft-headline,
-  .hpb-dense:not(.hpb-open) .hpb-headline {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    white-space: normal;
-    text-overflow: clip;
-  }
-}
-/* A task panel dragged to its minimum: the whole headline wraps and the line
-   under it wraps too, never scrolling sideways (N10). */
+/* A task panel dragged to its minimum: the line under the headline wraps too,
+   never scrolling sideways (N10). */
 @container attention (max-width: 170px) {
-  .hpb-dense:not(.hpb-open) .hft-headline,
-  .hpb-dense:not(.hpb-open) .hpb-headline { display: block; -webkit-line-clamp: unset; line-clamp: none; overflow: visible; }
   .hpb-dense:not(.hpb-open) .hpb-receipt,
   .hpb-dense:not(.hpb-open) .host-connect-retry-msg { white-space: normal; }
 }

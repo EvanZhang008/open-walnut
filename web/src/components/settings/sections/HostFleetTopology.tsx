@@ -7,7 +7,7 @@
  * reach is drawn dashed and grey; the cloud companion carries a Cloud mark, and the host whose
  * Walnut holds the phone tunnel a Phone mark. Layout comes from host-fleet-dashboard-model.ts.
  */
-import { clip, topologyLayout, TOPO, type TopoNode } from './host-fleet-dashboard-model';
+import { clip, NAME_CHARS, nameLines, nodeHeight, topologyLayout, TOPO, type TopoNode } from './host-fleet-dashboard-model';
 import { mapLinkLabel, type RowReport } from './host-row-model';
 
 /** A node's colour, as its row's dot says it. */
@@ -18,10 +18,17 @@ export function topoKind(r: RowReport): 'connected' | 'warn' | 'failed' | 'off' 
   return r.needsLook ? 'warn' : 'connected';
 }
 
-function Node({ node, row, onPick }: { node: TopoNode; row: RowReport; onPick: (host: string) => void }) {
-  const { nodeW: w, nodeH: h } = TOPO;
+/** The Cloud or Phone mark a node carries, if any. */
+const markOf = (row: RowReport): 'Cloud' | 'Phone' | null => (row.via === 'bridge' ? 'Cloud' : row.phone ? 'Phone' : null);
+const linesOf = (row: RowReport) => nameLines(row.name, markOf(row) ? NAME_CHARS.marked : NAME_CHARS.plain);
+
+function Node({ node, row, h, onPick }: { node: TopoNode; row: RowReport; h: number; onPick: (host: string) => void }) {
+  const w = TOPO.nodeW;
   const kind = topoKind(row);
-  const mark = row.via === 'bridge' ? 'Cloud' : row.phone ? 'Phone' : null;
+  const mark = markOf(row);
+  const name = linesOf(row);
+  // The name and its sub line sit centred in the node (every node is as tall as the tallest one).
+  const top = (h - nodeHeight(name.length)) / 2;
   const sub = row.local ? 'Runs Walnut' : row.off ? 'Off' : row.sub || (row.online ? (row.unstable ? 'Unstable' : 'Connected') : 'Not connected');
   return (
     <g
@@ -34,8 +41,10 @@ function Node({ node, row, onPick }: { node: TopoNode; row: RowReport; onPick: (
       <title>{`${row.name}\n${sub}`}</title>
       <rect className="hf-topo-box" width={w} height={h} rx={10} />
       <circle className="hf-topo-dot" cx={14} cy={h / 2} r={4.5} />
-      <text className="hf-topo-name" x={26} y={19}>{clip(row.name, mark ? 11 : 17)}</text>
-      <text className="hf-topo-sub" x={26} y={34}>{clip(sub, 19)}</text>
+      <text className="hf-topo-name" x={26} y={top + 19}>
+        {name.map((line, i) => <tspan key={i} x={26} dy={i ? TOPO.nameLine : 0}>{line}</tspan>)}
+      </text>
+      <text className="hf-topo-sub" x={26} y={top + 34 + (name.length - 1) * TOPO.nameLine}>{clip(sub, 19)}</text>
       {mark && (
         <g className="hf-topo-mark" data-mark={mark.toLowerCase()} transform={`translate(${w - 50} 8)`}>
           <rect width={42} height={16} rx={8} />
@@ -48,7 +57,8 @@ function Node({ node, row, onPick }: { node: TopoNode; row: RowReport; onPick: (
 
 export function HostFleetTopology({ rows, onPick }: { rows: RowReport[]; onPick: (host: string) => void }) {
   const shown = rows.filter((r) => r.counted);
-  const { height, centre, nodes } = topologyLayout(shown.map((r) => ({ host: r.host, local: r.local, live: r.local || (!r.off && r.online) })));
+  const nodeH = Math.max(TOPO.nodeH, ...shown.map((r) => nodeHeight(linesOf(r).length)));
+  const { height, centre, nodes } = topologyLayout(shown.map((r) => ({ host: r.host, local: r.local, live: r.local || (!r.off && r.online) })), nodeH);
   const byHost = new Map(shown.map((r) => [r.host, r]));
   const primary = centre ? byHost.get(centre.host) : undefined;
   const half = TOPO.nodeW / 2;
@@ -81,8 +91,8 @@ export function HostFleetTopology({ rows, onPick }: { rows: RowReport[]; onPick:
           >{mapLinkLabel(r)}</text>
         );
       })}
-      {centre && primary && <Node node={centre} row={primary} onPick={onPick} />}
-      {nodes.map((n) => <Node key={n.host} node={n} row={byHost.get(n.host)!} onPick={onPick} />)}
+      {centre && primary && <Node node={centre} row={primary} h={nodeH} onPick={onPick} />}
+      {nodes.map((n) => <Node key={n.host} node={n} row={byHost.get(n.host)!} h={nodeH} onPick={onPick} />)}
     </svg>
   );
 }

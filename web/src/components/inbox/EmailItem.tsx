@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useRef, useState, useSyncExternalStore } from 'react';
 import { getLeaderPresence, subscribeLeaderPresence } from '@/api/leader-presence';
 import { copyTextRobust } from '@/utils/clipboard';
 import type { InboxItemAction, InboxItemReceipt, InboxLetterItem, InboxTaskCandidate } from '@/api/human-inbox-items';
@@ -10,7 +10,6 @@ import { ItemTaskSelector } from './ItemTaskSelector';
 import { clearItemDraft, rememberInboxReturn, useItemDraft } from './item-drafts';
 import { taskPath } from '@/utils/task-path';
 import { AgentText } from '@/components/common/AgentText';
-import { DisclosureButton } from '@/components/controls';
 
 export function EmailItem({ letterId, item, duplicateLabels, canOpenMail = false, onNavigate, sender }: {
   letterId: string; item: InboxLetterItem; duplicateLabels: ReadonlySet<string>; canOpenMail?: boolean; onNavigate: (to: string) => void;
@@ -18,22 +17,11 @@ export function EmailItem({ letterId, item, duplicateLabels, canOpenMail = false
   sender?: { host?: string; sessionId?: string; unknownSource?: boolean };
 }) {
   const { state, prepare, execute, direct, check } = useItemExecution(letterId, item);
-  const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState('');
   const draftKey = JSON.stringify([letterId, item.id]);
   const [selector, setSelector] = useItemDraft<InboxItemAction | undefined>(draftKey, 'selector', undefined);
   const [selectorOpen, setSelectorOpen] = useItemDraft(draftKey, 'selectorOpen', false);
   const navigate = (to: string) => { rememberInboxReturn(letterId); onNavigate(to); };
-  const summary = useRef<HTMLDivElement>(null);
-  const [truncated, setTruncated] = useState(false);
-  useLayoutEffect(() => {
-    const el = summary.current;
-    if (!el || expanded) return;
-    const measure = () => setTruncated(el.scrollHeight > el.clientHeight + 1);
-    measure();
-    const observer = new ResizeObserver(measure); observer.observe(el);
-    return () => observer.disconnect();
-  }, [item.summary, expanded]);
   const [confirmation, setConfirmation] = useItemDraft<{ actionId: string; target?: InboxTaskCandidate; retry?: InboxItemReceipt; again?: boolean } | undefined>(draftKey, 'confirmation', undefined);
   const trigger = useRef<HTMLButtonElement | null>(null);
   const actions = itemActions(item);
@@ -71,9 +59,8 @@ export function EmailItem({ letterId, item, duplicateLabels, canOpenMail = false
   }
   return <article className="hii-item" data-item-id={item.id} aria-label={item.subject}>
     <h3 className="hii-subject">{item.subject}</h3>
-    <div ref={summary} className={`hii-summary${expanded ? ' hii-summary-expanded' : ''}`}><AgentText compact host={sender?.host} sessionId={sender?.sessionId} unknownSource={sender?.unknownSource ?? (!sender?.sessionId && sender?.host === undefined)} text={item.summary || 'Email summary unavailable'} /></div>
-    {(truncated || expanded) && <DisclosureButton expanded={expanded} className="hii-summary-toggle"
-      aria-label={`${expanded ? 'Show less' : 'Show more'} for ${item.subject}`} onClick={() => setExpanded(v => !v)}>{expanded ? 'Show less' : 'Show more'}</DisclosureButton>}
+    {/* The whole summary, never two lines and a Show more (standard.md, "Text that does not fit"). */}
+    <div className="hii-summary"><AgentText compact host={sender?.host} sessionId={sender?.sessionId} unknownSource={sender?.unknownSource ?? (!sender?.sessionId && sender?.host === undefined)} text={item.summary || 'Email summary unavailable'} /></div>
     <div className="hii-source"><span>Mail</span><span>{accountText(item, duplicateLabels)}</span>
       <span>{item.display?.sender?.name || item.display?.sender?.address || 'Sender unavailable'}</span>
       <span>{mailDateText(item.display?.sentAt)}</span>

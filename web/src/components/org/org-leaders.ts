@@ -108,6 +108,25 @@ export function foldGroups(groups: readonly LeaderGroup[], showProjects: boolean
   return [{ key: '*', project: '', name: '', leaders: groups.flatMap((g) => g.leaders) }];
 }
 
+/**
+ * The first `first` Directors of an opened fold, whole groups cut where the count runs out, and how
+ * many it leaves for "N more". Hiding a single one saves nothing (its "1 more" line is as tall as
+ * the row), so up to `first + 1` all show.
+ */
+export function firstLeaders(groups: readonly LeaderGroup[], first: number): { groups: readonly LeaderGroup[]; hidden: number } {
+  const total = leaderTotal(groups);
+  if (total <= first + 1) return { groups, hidden: 0 };
+  const out: LeaderGroup[] = [];
+  let left = first;
+  for (const g of groups) {
+    if (left <= 0) break;
+    const leaders = g.leaders.slice(0, left);
+    left -= leaders.length;
+    out.push(leaders.length === g.leaders.length ? g : { ...g, leaders });
+  }
+  return { groups: out, hidden: total - first };
+}
+
 /** Every Director, a Director's own Directors right after it: the DIRECTORS section's rows (one level). */
 export const flatDirectors = (groups: readonly LeaderGroup[]): LeaderNode[] => groups.flatMap((g) => [...allLeaders(g.leaders)]);
 

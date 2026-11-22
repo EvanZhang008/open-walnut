@@ -27,7 +27,7 @@ import { peekPendingInstall, settlePendingInstall, subscribeOpenLinks } from '@/
 import { useDraft } from '@/hooks/useDraft'
 import { draftKey } from '@/utils/drafts'
 import { PLUGIN_CATEGORY_ORDER, categoryOf, pluginMatches, type AppsFilter, type PluginCategoryId } from './categories'
-import { AppBadge, SidebarSwitch } from './app-bits'
+import { AppBadge, AppsGrid, SidebarSwitch } from './app-bits'
 import { StoreCard, type StoreCardPart } from './StoreCard'
 import { originKind, partParents, type RegistryRow } from './plugin-store-model'
 import { pluginCardFacts } from './plugin-card-facts'
@@ -360,7 +360,7 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen, folde
         <section className="apps-section apps-get-more" data-testid="apps-get-more" aria-labelledby="apps-get-more-title">
           <h2 className="apps-section-title" id="apps-get-more-title">Get more</h2>
           <p className="apps-section-sub">Plugins you can add in one click, or from any git or npm link.</p>
-          <div className="apps-grid" data-testid="plugin-store-available">
+          <AppsGrid data-testid="plugin-store-available">
             {matchingAvailable.map(card)}
             {!searching && (
               <button
@@ -377,7 +377,7 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen, folde
                 <span>Add from a git or npm link</span>
               </button>
             )}
-          </div>
+          </AppsGrid>
 
           {/* The free-form install, for anything the catalog does not list. */}
           {(addOpen || url.trim() !== '') && (
@@ -483,7 +483,7 @@ function SourceSectionView({ section, store, card }: {
       ) : (
         <p className="apps-section-sub">{SECTION_SUB[section.kind as 'builtin' | 'local']}</p>
       )}
-      {section.rows.length > 0 && <div className="apps-grid">{section.rows.map(card)}</div>}
+      {section.rows.length > 0 && <AppsGrid>{section.rows.map(card)}</AppsGrid>}
     </section>
   )
 }

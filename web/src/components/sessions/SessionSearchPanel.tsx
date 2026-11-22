@@ -169,7 +169,7 @@ export function SessionSearchPanel({ open, onClose, onOpenSession }: SessionSear
             onMouseEnter={() => setSelectedIdx(i)}
           >
             <span className={`session-search-dot status-${s.process_status}`} aria-hidden="true" />
-            <span className="session-search-title">
+            <span className="session-search-title wn-title">
               {sessionRecordTitle(s) || s.cwd?.split('/').pop() || s.claudeSessionId.slice(0, 8)}
             </span>
             {/* The folder's own name (the full path is the tooltip), then when: the time never

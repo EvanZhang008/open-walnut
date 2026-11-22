@@ -56,7 +56,7 @@
 .session-taskbar-title {
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: ellipsis; /* meta: a 28px chip in the one-row taskbar, 240px at most; the card it opens names the task whole */
   white-space: nowrap;
 }
 .session-taskbar-peek,
@@ -130,16 +130,13 @@
 .session-taskbar-card > * { flex-shrink: 0; }
 .session-taskbar-card-head {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 7px;
 }
+/* The card names its task in full (.wn-title); Open stays level with its first line. */
 .session-taskbar-card-title {
   flex: 1;
-  min-width: 0;
   font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .session-taskbar-card-open {
   flex: 0 0 auto;

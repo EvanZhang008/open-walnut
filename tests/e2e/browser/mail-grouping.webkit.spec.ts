@@ -56,8 +56,11 @@ test('lines, hover tools, the more (...) menu, an open group and the reader line
   const heights = await page.getByTestId('mail-group-row').evaluateAll((rows) => rows.map((row) => row.getBoundingClientRect().height))
   // A title row and one summary line (the model's line, or the subject for one unread).
   for (const height of heights) expect(height).toBeLessThanOrEqual(56)
+  // Open, a line keeps only the model's words: its rows already show the newest subject (2026-11-22).
   for (const group of groups.groups.slice(0, 5)) {
-    await expect(groupLine(page, group.id).getByTestId('mail-group-summary')).toHaveText(group.summary)
+    const summary = groupLine(page, group.id).getByTestId('mail-group-summary')
+    if (group.summaryBy === 'ai') await expect(summary).toHaveText(group.summary)
+    else await expect(summary).toHaveCount(0)
   }
   await page.mouse.move(2, 2)
   await shoot(page, SHOTS, 'overview')

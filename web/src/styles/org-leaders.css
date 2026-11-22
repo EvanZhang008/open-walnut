@@ -3,8 +3,9 @@
 /* In the list: on the row's guide line, as the kept rows are (org-rail.css .org-watched), and one line with them. */
 .org-leaders.is-list { margin: -2px 0 4px 25px; padding-left: 4px; border-left: 1.5px solid color-mix(in srgb, var(--fg) 12%, transparent); }
 .org-watched + .org-leaders.is-list { margin-top: -4px; }
-/* In a chart card: under the name, above the projects. */
-.org-leaders.is-chart { padding: 0 4px 6px 38px; }
+/* In a chart card: under the name, above the projects, its "▸" in the projects' fold column (org-chart.css .oc-chevron). */
+.org-leaders.is-chart { padding: 0 4px 6px 2px; }
+.org-leaders.is-chart .org-leaders-chevron { color: var(--fg-secondary); }
 .org-leaders.is-chart .org-leaders-list { margin-left: 5px; padding-left: 6px; border-left: 1.5px solid color-mix(in srgb, var(--fg) 12%, transparent); }
 
 /* The fold is the shared DisclosureButton; these only place it. */
@@ -15,9 +16,9 @@
 
 .org-leaders-group { display: flex; flex-direction: column; min-width: 0; }
 .org-leaders-project { padding: 4px 2px 2px; font-size: var(--font-size-xs); font-weight: 600; color: var(--fg-muted); }
-/* A Director's title wraps (.wn-title, OrgLeaders.tsx): the fold, dot, avatar, eye and "leads N" stay level
-   with its first line, and each level steps in only LEVEL_INDENT_PX (2026-11-21, the UI audit). On the
-   2px grid: the first line's middle is 13px down the row; every mark below is placed on it. */
+/* A Director's title wraps (.wn-title, OrgLeaders.tsx): the fold, dot and avatar stay level with its first
+   line, the eye and "leads N" end its last one, and each level steps in only LEVEL_INDENT_PX (2026-11-21, the
+   UI audit). On the 2px grid: the first line's middle is 13px down the row; every mark below is placed on it. */
 .org-leader { display: flex; align-items: flex-start; min-width: 0; border-radius: var(--radius-xs); }
 .org-leader:hover { background: color-mix(in srgb, var(--fg) 5%, transparent); }
 .org-leader[data-open] { background: color-mix(in srgb, var(--accent) 8%, transparent); }
@@ -31,13 +32,24 @@
 /* The status icon (TaskStateIcon, 14px) on the first line's middle: 2px padding + 4px + 7px = 13px. */
 .org-leader-open > .task-state-icon { margin-top: 4px; }
 .org-leader-open > .org-leader-avatar { margin-top: 1px; }
-/* Below about 8em the eye and "leads N" move to the next line, at its end, so the title keeps its words. */
-.org-leader-open > .org-leader-title { flex: 1 1 8em; padding-top: 2px; line-height: 18px; overflow-wrap: break-word; }
-.org-leader-title + :is(.org-leader-eye, .org-leader-leads) { margin-left: auto; }
-.org-leader-eye { flex: none; display: inline-flex; height: 22px; align-items: center; color: var(--fg-muted); opacity: .85; }
+/* A list dragged narrow gives a Director's words the avatar's room: the dot still says its state. */
+@container org-list (max-width: 240px) { .org-leader-open > .org-leader-avatar { display: none; } }
+/* The title takes the whole row (.wn-title wraps it); its tail (the eye, "leads N") floats right on the title's
+   last line, or under it when that line is full: a count column that never narrows the words. */
+.org-leader-open > .org-leader-title { flex: 1 1 0; padding-top: 2px; line-height: 18px; overflow-wrap: break-word; }
+.org-leader-tail { float: right; display: inline-flex; align-items: center; gap: 4px; height: 18px; margin-left: 8px; }
+.org-leader-eye { display: inline-flex; align-items: center; color: var(--fg-muted); opacity: .85; }
 .org-leader-eye svg { width: 12px; height: 12px; }
-.org-leader-leads { flex: none; color: var(--fg-muted); font-size: var(--font-size-xs); line-height: 22px; }
+.org-leader-leads { color: var(--fg-muted); font-size: var(--font-size-xs); line-height: 18px; }
 .org-leader-open:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* "N more" / "Show fewer" after an opened fold's first Directors in the list, level with "+ New Director". */
+.org-leaders-more {
+  display: flex; align-items: center; width: max-content; max-width: 100%; padding: 2px 6px 2px 14px; line-height: 20px;
+  border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--fg-muted); font: inherit; font-size: var(--font-size-sm); text-align: left; cursor: pointer;
+}
+.org-leaders-more:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); color: var(--fg); }
+.org-leaders-more:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* "+ New Director": the last row of an opened fold and of the DIRECTORS section (OrgNewDirector.tsx). */
 .org-new-director {

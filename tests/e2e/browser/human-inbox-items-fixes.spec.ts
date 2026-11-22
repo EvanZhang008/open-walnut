@@ -4,7 +4,8 @@ import { cssColorToRgba } from './css-color';
 const SHOTS = process.env.PW_EVIDENCE_DIR ?? '/tmp/inbox-item-actions/fixer-r1/shots';
 test.describe.configure({ mode: 'serial' });
 
-test('compact initial rows hide empty task status and toggle only truncated summaries', async ({ page, request }, info) => {
+// A summary reads in full, never two lines and a Show more (2026-11-22, standard.md "Text that does not fit").
+test('compact initial rows hide empty task status and show every summary in full', async ({ page, request }, info) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const items = Array.from({ length: 20 }, (_, n) => ({ ...mailItem(`fix-density-${n}`),
     summary: n === 19 ? 'Long summary for reading. '.repeat(50) : 'One short saved summary.',
@@ -20,9 +21,10 @@ test('compact initial rows hide empty task status and toggle only truncated summ
   expect((await first.boundingBox())!.height).toBeLessThan(245);
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-compact-light.png`, scale: 'css' });
   const long = itemRow(view, items[19].id);
-  await long.getByRole('button', { name: /^Show more/ }).click();
-  await expect(long.getByRole('button', { name: /^Show less/ })).toHaveAttribute('aria-expanded', 'true');
-  await long.getByRole('button', { name: /^Show less/ }).click();
+  await expect(long.getByRole('button', { name: /^Show (more|less)/ })).toHaveCount(0);
+  const summary = long.locator('.hii-summary');
+  expect(await summary.evaluate((el) => el.scrollHeight <= el.clientHeight + 1 && getComputedStyle(el).webkitLineClamp === 'none')).toBe(true);
+  await expect(summary).toContainText(items[19].summary.trim());
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
   await first.scrollIntoViewIfNeeded();

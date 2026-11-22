@@ -144,7 +144,7 @@ export function RoutineRow({
           <span className={`routine-dot cron-status-dot ${health}`} data-off={health === 'off' ? offLabel(routine).toLowerCase() : undefined}
             title={label} aria-label={label} role="img" />
           <span className="routine-row-text">
-            <span className="routine-row-name cron-job-name">{routine.name}</span>
+            <span className="routine-row-name cron-job-name wn-title">{routine.name}</span>
             <span className="routine-row-timing cron-job-desc">
               {health === 'error' ? (
                 <>

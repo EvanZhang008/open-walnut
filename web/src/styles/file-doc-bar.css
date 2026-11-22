@@ -256,7 +256,7 @@
   text-align: left;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: ellipsis; /* meta: the folder head above the tree, one line like a path bar; its tooltip names the whole path */
   cursor: text;
 }
 .sfe-tree-head-name:hover { background: var(--bg-hover); }
@@ -349,7 +349,10 @@
 .fv-more-path-dir > span { flex: 0 0 auto; }
 .fv-more-path-cut { flex: 0 0 auto; }
 .fv-more-path-folder { flex: 0 0 auto; }
-.fv-more-path-name { flex: 0 0 auto; max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--fg-secondary); }
+.fv-more-path-name {
+  flex: 0 0 auto; max-width: 100%; overflow: hidden; color: var(--fg-secondary);
+  text-overflow: ellipsis; /* meta: a one-line path whose folders give way first; the name cuts only when it alone is wider */
+}
 
 /* ── Fullscreen: the document alone, centred at a reading width ───────────── */
 /* The panel's own controls in the bar have nothing to act on in the sheet: the tree, the chat,
@@ -438,7 +441,8 @@
 .sfe-recent-file .sfe-icon { display: inline-flex; color: var(--fg-muted); }
 .sfe-recent-file .sfe-icon svg { width: 15px; height: 15px; }
 .sfe-recent-text { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
-.sfe-recent-name { font-size: var(--font-size-md); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A recent file's name wraps in full (.wn-title); its folder and time under it are metadata. */
+.sfe-recent-name { font-size: var(--font-size-md); font-weight: 500; }
 .sfe-recent-dir { font-size: var(--font-size-sm); color: var(--fg-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* The path suggestions float in a portal (SessionFileExplorer PathSuggestions):

@@ -126,7 +126,7 @@ export function KanbanLaneHead({ lane: vm, lanes, index, mode, folded, onToggleF
     </span>
   ) : (
     <span
-      className="kanban-lane-name"
+      className="kanban-lane-name wn-title"
       data-testid="kanban-lane-name"
       title={narrow || readOnly ? lane.name : `${lane.name} (double click to rename)`}
       onDoubleClick={narrow ? undefined : startRename}

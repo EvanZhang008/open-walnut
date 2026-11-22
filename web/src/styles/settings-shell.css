@@ -306,7 +306,7 @@
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: ellipsis; /* meta: the compact bar's one line repeats the pane heading shown in full above */
   white-space: nowrap;
   font-size: var(--font-size-lg);
   line-height: 20px;

@@ -122,7 +122,8 @@
   font-weight: 400;
   line-height: 1.5;
 }
-.oc-project-btn > .oc-now { font-size: var(--font-size-sm); line-height: 1.6; flex: 0 0 auto; margin-left: auto; }
+/* A project's count: one right-aligned column down the card, its digits aligned, read at a glance. */
+.oc-project-btn > .oc-now { font-size: var(--font-size-sm); line-height: 1.6; flex: 0 0 auto; margin-left: auto; color: var(--fg-secondary); font-variant-numeric: tabular-nums; }
 .oc-card-headline > .oc-now { flex: 0 0 auto; line-height: 1.3; }
 /* An opened card: Open chat and its menu, under the name (past the avatar). */
 .oc-detail { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 0 4px 2px 42px; }
@@ -188,7 +189,9 @@
 .oc-project[draggable="true"] { cursor: grab; }
 .oc-project.is-dragging { opacity: 0.45; }
 .oc-project-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.oc-chevron { flex-shrink: 0; width: 10px; color: var(--fg-muted); font-size: var(--font-size-xs); line-height: 1.6; }
+/* The fold marks of a card read alike: a project's and its Directors' "▸" (org-leaders.css) are the same width
+   and colour, darker than the counts, so the tree's levels scan (2026-11-22, the UI audit). */
+.oc-chevron { flex-shrink: 0; width: 12px; color: var(--fg-secondary); font-size: var(--font-size-xs); line-height: 1.6; text-align: center; }
 .oc-project-btn {
   display: flex;
   align-items: flex-start;
@@ -207,7 +210,7 @@
 }
 .oc-project-btn:hover { background: var(--bg-secondary); }
 /* The row is its name, whole: it wraps, never cut off. */
-.oc-project-name { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; font-weight: 450; line-height: 1.35; }
+.oc-project-name { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; font-weight: 500; line-height: 1.35; color: var(--fg); }
 .oc-project.is-open > .oc-project-btn .oc-project-name { font-weight: 600; }
 
 /* A project's tasks, opened: the tree of them, each its status icon and its title, whole. */

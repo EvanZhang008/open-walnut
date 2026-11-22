@@ -20,6 +20,8 @@
 .org-list {
   /* The width the divider after it sets (OrgPage), else the page's own. */
   width: var(--org-list-w, 340px);
+  /* Its rows read their own width (org-leaders.css): the list's width is its own, never its content's. */
+  container: org-list / inline-size;
   flex: none;
   display: flex;
   flex-direction: column;
@@ -84,7 +86,8 @@
    side by side moves the whole tail under the name, at the line's end, before it breaks a word of the
    name (2026-11-21, the UI audit: the badge sat below the first line, beside the avatar's middle). */
 .org-channel-top { display: flex; flex-wrap: wrap; align-items: flex-start; column-gap: 6px; line-height: 20px; }
-.org-channel-top > .org-channel-name { flex: 1 1 8em; overflow-wrap: break-word; }
+/* Sized by its words (auto, not a fixed 8em): a short name keeps the tail on its line in a narrow list. */
+.org-channel-top > .org-channel-name { flex: 1 1 auto; overflow-wrap: break-word; }
 .org-channel-tail { display: flex; align-items: center; gap: 6px; height: 20px; margin-left: auto; }
 .org-channel-led { flex-shrink: 0; }
 .org-detail-led { font-size: var(--font-size-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -205,7 +208,8 @@
 .org-router-settings-head:hover { background: var(--bg-secondary); }
 .org-router-settings-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .org-router-settings-title { flex: none; font-weight: 600; }
-.org-router-settings-summary { flex: 1; min-width: 0; color: var(--fg-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The summary wraps under its own start, never cut; Open keeps its place at the end of the first line. */
+.org-router-settings-summary { flex: 1; min-width: 0; color: var(--fg-secondary); overflow-wrap: anywhere; }
 .org-router-settings-open { flex: none; font-size: var(--font-size-sm); color: var(--accent); }
 .org-detail-split.is-router-split { min-height: 160px; }
 /* Mail's "Open router": the message, its state and the next step, under the router's header. */
@@ -250,9 +254,6 @@
   margin: 0;
   font-size: 16px;
   font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .org-detail-sub { margin-top: 3px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: var(--font-size-sm); }
 .org-pills { display: inline-flex; flex-wrap: wrap; gap: 5px; }

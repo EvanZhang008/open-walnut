@@ -396,16 +396,16 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
                           <span className="notes-cmdk-badge-label">{badge.label}</span>
                         </span>
                       )}
-                      <span className="notes-cmdk-item-title">
+                      <span className="notes-cmdk-item-title wn-title">
                         {/* The file name leads, then its folder; the note's own title follows
                             when it says something else. Server highlights snippets only —
                             names and titles get a client-side token-wise mark. */}
                         <HighlightedTitle text={row.label?.name ?? row.title} query={q} tokens={resultTokens} />
                       </span>
-                      {row.label?.folder && <span className="notes-cmdk-item-path">{row.label.folder}</span>}
+                      {row.label?.folder && <span className="notes-cmdk-item-path wn-meta">{row.label.folder}</span>}
                     </div>
                     {row.label?.title && (
-                      <div className="notes-cmdk-item-note-title">
+                      <div className="notes-cmdk-item-note-title wn-title">
                         <HighlightedTitle text={row.label.title} query={q} tokens={resultTokens} />
                       </div>
                     )}

@@ -283,12 +283,15 @@ describe('the expanded flag is shared by row id (C48, second half)', () => {
   })
 })
 
-describe('one-line rows (the notification panel over pending asks, C62)', () => {
-  it('only the primary action, not opened by position, and Show details still opens it', async () => {
+// The one-line row (C62) left with the attention banner's single-line mount (f208c93632); a folded
+// row is the dense one, whose headline wraps in full (2026-11-22, standard.md "Text that does not fit").
+describe('a folded dense row', () => {
+  it('only the primary action, not opened by position, its headline a whole title, and Show details still opens it', async () => {
     const row = connectRow()
-    await render(createElement(SingleHostRow, { row, defaultExpanded: false, singleLine: true, onDismiss: noop, onOpenSettings: noop }))
+    await render(createElement(SingleHostRow, { row, defaultExpanded: false, dense: true, onDismiss: noop, onOpenSettings: noop }))
     const li = host.querySelector('li.hpb-row')!
-    expect(li.classList.contains('hpb-single')).toBe(true)
+    expect(li.classList.contains('hpb-dense')).toBe(true)
+    expect(li.querySelector('.hft-headline')!.classList.contains('wn-title')).toBe(true)
     expect(Array.from(li.querySelectorAll('.hpb-actions button')).map((b) => b.textContent)).toEqual(['Retry'])
     expect(li.querySelector('.hft-hint')).toBeNull()
     await click(byText('Show details')!)
@@ -341,11 +344,11 @@ describe('Retry reads the attempt at once, and one attempt is shared across moun
 })
 
 describe('what a row shows of its actions (rowActionsFor)', () => {
-  it('a folded dense row and a one-line row show their first action; Fix with agent waits behind Show details', async () => {
+  it('a folded dense row shows its first action; Fix with agent waits behind Show details', async () => {
     const { rowActionsFor } = await import('../../web/src/components/common/HostProblemRows')
     expect(rowActionsFor(['retry', 'openSettings'], true, { dense: true })).toEqual({ ids: ['retry'], fix: false, folds: true })
-    expect(rowActionsFor(['retry'], true, { singleLine: true })).toEqual({ ids: ['retry'], fix: false, folds: true })
-    expect(rowActionsFor(['retry'], true, { singleLine: true, expanded: true })).toEqual({ ids: ['retry'], fix: true, folds: true })
+    expect(rowActionsFor(['retry'], true, { dense: true })).toEqual({ ids: ['retry'], fix: false, folds: true })
+    expect(rowActionsFor(['retry'], true, { dense: true, expanded: true })).toEqual({ ids: ['retry'], fix: true, folds: true })
     // Opened, or a lone row: every action, Fix with agent last.
     expect(rowActionsFor(['retry', 'openSettings'], true, { dense: true, expanded: true })).toEqual({ ids: ['retry', 'openSettings'], fix: true, folds: true })
     expect(rowActionsFor(['retry'], true, {})).toEqual({ ids: ['retry'], fix: true, folds: false })
@@ -357,8 +360,8 @@ describe('what a row shows of its actions (rowActionsFor)', () => {
     expect(rowActionsFor(['retry'], false, { dense: true })).toEqual({ ids: ['retry'], fix: false, folds: false })
   })
 
-  it('every folded action is one Show details away: a one-line row, opened, has Fix with agent', async () => {
-    await render(createElement(SingleHostRow, { row: connectRow(), defaultExpanded: false, singleLine: true, onDismiss: noop, onOpenSettings: noop }))
+  it('every folded action is one Show details away: a folded dense row, opened, has Fix with agent', async () => {
+    await render(createElement(SingleHostRow, { row: connectRow(), defaultExpanded: false, dense: true, onDismiss: noop, onOpenSettings: noop }))
     expect(byText('Fix with agent')).toBeUndefined()
     await click(byText('Show details')!)
     expect(byText('Fix with agent')).toBeDefined()

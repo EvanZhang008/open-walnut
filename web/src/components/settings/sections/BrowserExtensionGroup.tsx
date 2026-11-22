@@ -108,12 +108,17 @@ export function BrowserExtensionGroup({ status }: { status?: ExtensionStatus | n
           ? <>Add it from the Chrome Web Store in one click. After Connect in the extension&apos;s popup, it shows up under Your browsers.</>
           : <>After Connect in the extension&apos;s popup, it shows up under Your browsers.</>}
       >
+        {/* The choice first, on its own row; the steps under it at the copy column's full width,
+            not squeezed beside a control in the middle of the card (2026-11-22 audit). */}
         <SettingsRow
-          label={browser === 'chrome' ? 'Chrome, Edge, Brave or Arc' : 'Firefox'}
-          help={<span className="pw-ext-install" style={{ display: 'block', marginTop: 8 }}><ExtensionInstallSteps browser={browser} /></span>}
+          label="Browser"
           control={<SegmentedControl<ExtBrowser> id="pw-ext-browser" aria-label="Browser" value={browser}
             options={[{ value: 'chrome', label: 'Chrome' }, { value: 'firefox', label: 'Firefox' }]}
             onChange={setBrowser} />}
+        />
+        <SettingsRow
+          label={browser === 'chrome' ? 'Chrome, Edge, Brave or Arc' : 'Firefox'}
+          help={<span className="pw-ext-install" style={{ display: 'block', marginTop: 8 }}><ExtensionInstallSteps browser={browser} /></span>}
         />
       </SettingsGroup>
       <SettingsGroup heading="What it does" data-testid="ext-features">

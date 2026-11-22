@@ -8485,7 +8485,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             {activeDragPinnedTask && (
               <div className="todo-pinned-drag-frame">
                 <div className="todo-pinned-card todo-pinned-card-dragging">
-                  <span className={`todo-pinned-title${activeDragPinnedTask.walnut_agent ? ' walnut-task-title' : ''}`}>{orgDisplayTitle(activeDragPinnedTask)}</span>
+                  <span className={`todo-pinned-title wn-title${activeDragPinnedTask.walnut_agent ? ' walnut-task-title' : ''}`}>{orgDisplayTitle(activeDragPinnedTask)}</span>
                 </div>
               </div>
             )}

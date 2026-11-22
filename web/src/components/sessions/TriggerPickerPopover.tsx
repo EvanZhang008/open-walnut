@@ -126,7 +126,7 @@ export function TriggerPickerPopover(props: TriggerPickerPopoverProps) {
             </svg>
           </button>
         ) : null}
-        <h2 className="trigger-picker-title">{picked ? `${picked.pluginName}: ${picked.title}` : 'Add a trigger'}</h2>
+        <h2 className="trigger-picker-title wn-title">{picked ? `${picked.pluginName}: ${picked.title}` : 'Add a trigger'}</h2>
         <button type="button" className="trigger-picker-close" aria-label="Close" onClick={() => { const a = anchorRef.current; close('close'); a?.focus({ preventScroll: true }); }}>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden>
             <path d="M4 4l8 8M12 4l-8 8" />

@@ -142,7 +142,6 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
   const ro = api.readOnly;
   const project = ctx.projectOf.get(vm.taskId);
   const { compiled: tagDisplay } = useTagDisplay();
-  const [expanded, setExpanded] = useState(false);
   const [promptOpen, setPromptOpen] = useState(false);
   const [composer, setComposer] = useState(false);
   const [editor, setEditor] = useState<{ field: 'summary' | 'waiting_on'; openedAt: string | undefined } | null>(null);
@@ -196,7 +195,6 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
   };
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget) {
-      if (e.key === 'Escape' && expanded) { setExpanded(false); e.stopPropagation(); }
       const tag = (e.target as HTMLElement).tagName;
       if (e.key === 'ArrowLeft' && tag !== 'INPUT' && tag !== 'TEXTAREA') { e.preventDefault(); rootRef.current?.focus(); }
       return;
@@ -210,7 +208,6 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
       return;
     }
     if (e.key === 'Enter') { e.preventDefault(); open(); return; }
-    if (e.key === 'Escape' && expanded) { e.preventDefault(); setExpanded(false); return; }
     if ((e.key === 'm' || e.key === 'M') && !e.metaKey && !e.ctrlKey && !e.altKey) {
       if (vm.hasSession && !ro) { e.preventDefault(); setComposer(true); }
       return;
@@ -261,7 +258,6 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
       data-peek-row={overlay ? undefined : ''}
       data-source={vm.source}
       data-completed-after-move={vm.completedAfterMove ? 'true' : undefined}
-      data-expanded={expanded ? 'true' : undefined}
       data-handled={handled ? 'true' : undefined}
       data-moved={moved ? 'true' : undefined}
       data-flash={flash && !ctx.reducedMotion ? 'true' : undefined}
@@ -272,7 +268,7 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
       onBlur={(e: FocusEvent<HTMLDivElement>) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setInside(false); }}
       onContextMenu={onContextMenu}
     >
-      <div className="kanban-card-title" data-testid="kanban-card-title">{vm.title}</div>
+      <div className="kanban-card-title wn-title" data-testid="kanban-card-title">{vm.title}</div>
       {(vm.ticket || vm.sev || vm.leaderCount || project) && (
         <div className="kanban-card-ids">
           {vm.ticket && (
@@ -339,9 +335,9 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
         </div>
       ) : vm.summary ? (
         <div
-          className="kanban-card-summary" data-testid="kanban-card-summary" data-kanban-zone
-          title={vm.summary.tooltip} data-expanded={expanded ? 'true' : undefined}
-          onClick={(e) => { e.stopPropagation(); if (overlay) return; setExpanded((v) => !v); ctx.markSeen(vm.taskId); }}
+          className="kanban-card-summary wn-title" data-testid="kanban-card-summary" data-kanban-zone
+          title={vm.summary.tooltip}
+          onClick={(e) => { e.stopPropagation(); if (!overlay) ctx.markSeen(vm.taskId); }}
         ><AgentText text={vm.summary.text} compact {...vm.summary.textSource} /></div>
       ) : null}
       {editor?.field === 'waiting_on' ? (
