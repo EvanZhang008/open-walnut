@@ -79,9 +79,16 @@ describe('boot decisions', () => {
   })
 
   it('a release no witness took (or a crash): the restart waits, doors closed, until the earlier record runs out, then leads', async () => {
+    // A record that outlives the stop's release attempt (up to RELEASE_CAP_MS, 3 s) and a loaded
+    // machine's restart: with the 3 s record of the other cases it could run out before the
+    // restart asks, and the restart would lead at once.
+    settings = { ...settings, params: { ...settings.params, validMs: 15_000, renewEveryMs: 2_000 } }
     const first = await start('machine-a')
     for (const w of settings.witnesses) fs.renameSync(w.dir, `${w.dir}.off`)
     await first.stop()
+    // The local transport answers on a later tick: let the stop's last release resend reach the
+    // missing directories (and fail there) before they come back, or it lands and stands.
+    for (let i = 0; i < 3; i++) await new Promise((r) => setImmediate(r))
     for (const w of settings.witnesses) fs.renameSync(`${w.dir}.off`, w.dir)
     forgetLocalWitnesses()
     const again = await start('machine-a')
@@ -92,8 +99,8 @@ describe('boot decisions', () => {
     expect(outwardDoorsOpen()).toBe(false)
     // The client may act a moment before the loop marks the state (acquire returns after the
     // grant stands): wait for both.
-    await until('the restarted server to lead', () => again.mayAct() && again.status().state === 'leading')
-  })
+    await until('the restarted server to lead', () => again.mayAct() && again.status().state === 'leading', 40_000)
+  }, 60_000)
 
   it('another machine is refused while one holds the permission', async () => {
     await start('machine-a')

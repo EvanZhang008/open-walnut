@@ -17,7 +17,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { withFileLockSync } from '../../../utils/file-lock.js'
+import { withFileLock } from '../../../utils/file-lock.js'
 import { createWitnessClock } from '../permit/clock.js'
 import { bootstrapWitnessStore, createFilePermitStore } from '../permit/store.js'
 import { PermitWitness } from '../permit/witness.js'
@@ -45,11 +45,15 @@ function readText(file: string): string {
   try { return fs.readFileSync(file, 'utf8') } catch { return '' }
 }
 
-/** Serve one request at a local witness; null when its directory is missing (no answer). */
-export function serveLocalWitness(place: WitnessPlace, req: PermitRequest, params: PermitParams): PermitReply | null {
-  if (!fs.existsSync(place.dir)) return null
+/**
+ * Serve one request at a local witness; null when its directory is missing (no answer). The lock
+ * is the async one (a server's event loop never waits on it), held a short while: a witness whose
+ * lock is busy that long gives no answer, as a slow one on a network would.
+ */
+export function serveLocalWitness(place: WitnessPlace, req: PermitRequest, params: PermitParams): Promise<PermitReply | null> {
+  if (!fs.existsSync(place.dir)) return Promise.resolve(null)
   const file = witnessRecordFile(place)
-  return withFileLockSync(file, () => {
+  return withFileLock(file, async () => {
     const text = readText(file)
     let c = cache.get(place.dir)
     if (!c || c.text !== text) {
@@ -59,7 +63,7 @@ export function serveLocalWitness(place: WitnessPlace, req: PermitRequest, param
     const reply = c.witness.handle(req)
     c.text = readText(file)
     return reply
-  })
+  }, { timeoutMs: 2_000 })
 }
 
 /** Forget every witness this process loaded (tests: a "restart" of the witnesses). */
@@ -78,13 +82,8 @@ export function localWitnessTransport(places: WitnessPlace[], params: PermitPara
       const place = byId.get(witness)
       if (!place) return
       setImmediate(() => {
-        let reply: PermitReply | null = null
-        try {
-          reply = serveLocalWitness(place, req, params)
-        } catch {
-          reply = null // a lock that could not be taken, a disk error: no answer
-        }
-        if (reply) deliver(reply)
+        // A lock that could not be taken, a disk error: no answer.
+        void serveLocalWitness(place, req, params).catch(() => null).then((reply) => { if (reply) deliver(reply) })
       })
     },
   }
