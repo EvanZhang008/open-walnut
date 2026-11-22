@@ -12,7 +12,8 @@
  *     naming the drill's pid (this process's parent), and a nonce that the env carries
  *     (TRIAL_NONCE_ENV); the ticket is removed as it is read, so it starts one server;
  *   - a home that is a drill's restored copy (`<tmp>/walnut-restore-drill-XXXXXX/home`) and is not
- *     the user's data home.
+ *     the user's data home (~/.open-walnut, or the one the drill names in the ticket);
+ *   - the ephemeral argv flag beside it (IS_EPHEMERAL: no permit, standby or backup of its own).
  * Without the flag nothing here is read: a production server with a stray nonce in its env, or a
  * ticket in its home, boots as it always did. With the flag, any part missing or wrong refuses the
  * start (TrialStartRefused): a drill's server never boots as a normal one on a restored copy.
@@ -25,6 +26,8 @@ import { accountInfo } from '../../lib/account.js';
 import { DRILL_DIR_RE, DRILL_HOME_NAME } from '../backup/restore-drill-dir.js';
 
 export const TRIAL_START_FLAG = '--_trial-start';
+/** The ephemeral identity (src/constants.ts IS_EPHEMERAL) a trial start always carries. */
+const EPHEMERAL_FLAG = '--_ephemeral-child';
 export const TRIAL_TICKET_FILE = path.join('local', 'trial-start.json');
 export const TRIAL_NONCE_ENV = 'WALNUT_TRIAL_NONCE';
 /** A ticket older than this is from a drill that is gone. */
@@ -33,7 +36,13 @@ export const TRIAL_TICKET_MAX_AGE_MS = 10 * 60_000;
 /** What a trial start is for. The leader switch's trial is the other purpose of the trial column. */
 export type TrialStartPurpose = 'restore-drill';
 
-interface Ticket { version: 1; purpose: TrialStartPurpose; parentPid: number; nonce: string; at: string }
+interface Ticket {
+  version: 1; purpose: TrialStartPurpose; parentPid: number; nonce: string; at: string;
+  /** The user's data home as the drill knows it (it may live outside ~/.open-walnut): the trial never boots on it. */
+  liveHomes?: string[];
+}
+
+export interface TicketOptions { parentPid?: number; liveHomes?: readonly string[] }
 
 export class TrialStartRefused extends Error {
   constructor(why: string) {
@@ -43,11 +52,14 @@ export class TrialStartRefused extends Error {
 }
 
 /** Write the ticket for one trial server on `home`; returns the nonce its env must carry. */
-export function writeTrialTicket(home: string, purpose: TrialStartPurpose, parentPid = process.pid): string {
+export function writeTrialTicket(home: string, purpose: TrialStartPurpose, opts: TicketOptions = {}): string {
   const nonce = crypto.randomBytes(24).toString('hex');
   const file = path.join(home, TRIAL_TICKET_FILE);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const ticket: Ticket = { version: 1, purpose, parentPid, nonce, at: new Date().toISOString() };
+  const ticket: Ticket = {
+    version: 1, purpose, parentPid: opts.parentPid ?? process.pid, nonce, at: new Date().toISOString(),
+    ...(opts.liveHomes?.length ? { liveHomes: [...opts.liveHomes] } : {}),
+  };
   fs.writeFileSync(file, JSON.stringify(ticket), { mode: 0o600 });
   return nonce;
 }
@@ -81,6 +93,11 @@ export interface TakeTicketInput {
 export function takeTrialTicket(input: TakeTicketInput): TrialStartPurpose | null {
   const argv = input.argv ?? process.argv;
   if (!argv.includes(TRIAL_START_FLAG)) return null;
+  // What keeps an ephemeral server off the user's witnesses, standby and backups (IS_EPHEMERAL,
+  // src/constants.ts) must hold for the trial too: a trial start without it is refused.
+  if (!argv.includes(EPHEMERAL_FLAG)) {
+    throw new TrialStartRefused(`${TRIAL_START_FLAG} runs only with ${EPHEMERAL_FLAG}`);
+  }
   const env = input.env ?? process.env;
   const nonce = env[TRIAL_NONCE_ENV];
   delete env[TRIAL_NONCE_ENV];
@@ -107,7 +124,8 @@ export function takeTrialTicket(input: TakeTicketInput): TrialStartPurpose | nul
   if (path.basename(home) !== DRILL_HOME_NAME || !DRILL_DIR_RE.test(path.basename(path.dirname(home)))) {
     throw new TrialStartRefused(`${home} is not a restore drill's copy`);
   }
-  if (productionHomes().some((h) => insideOrAt(home, realOr(h)) || insideOrAt(realOr(h), home))) {
+  const live = [...productionHomes(), ...(Array.isArray(ticket.liveHomes) ? ticket.liveHomes.filter((h): h is string => typeof h === 'string') : [])];
+  if (live.some((h) => insideOrAt(home, realOr(h)) || insideOrAt(realOr(h), home))) {
     throw new TrialStartRefused(`${home} is the user's data home`);
   }
   return 'restore-drill';

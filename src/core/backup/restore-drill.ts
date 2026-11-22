@@ -289,7 +289,7 @@ export async function runRestoreDrill(opts: DrillOptions): Promise<DrillResult> 
       ? { id: 'boot', ok: null, detail: 'Not run: this drill was asked not to boot the copy (--no-boot)' }
       : await checkTrialBoot({
         dir, target, dataDir: opts.dataDir, files: tree.map((e) => restorePathOf(e.p)), task: db.task,
-        ...(opts.bootTimeoutMs ? { timeoutMs: opts.bootTimeoutMs } : {}), ...(opts.onServer ? { onServer: opts.onServer } : {}),
+        ...(opts.bootTimeoutMs ? { timeoutMs: opts.bootTimeoutMs } : {}), ...(opts.onServer ? { onServer: opts.onServer } : {}), ...(opts.onSpawn ? { onSpawn: opts.onSpawn } : {}),
       }));
     return finish();
   } finally {

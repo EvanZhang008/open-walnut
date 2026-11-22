@@ -142,11 +142,14 @@ describe('a backup whose copy cannot boot', () => {
 })
 
 describe('a drill killed while its trial server runs', () => {
-  it('leaves no server: the server stops by itself, and the next drill removes the folder', async () => {
-    const dest = path.join(root, 'dest-kill')
+  it.each([
+    ['answering', 'server'],
+    ['still booting', 'spawn'],
+  ] as const)('%s: leaves no server (it stops by itself), and the next drill removes the folder', async (_when, step) => {
+    const dest = path.join(root, `dest-kill-${step}`)
     await runEncryptedBackup(cfg, { dataDir: home, store: new LocalStore(dest) })
-    const ready = path.join(root, 'server-ready')
-    const child = spawn(process.execPath, [path.join(import.meta.dirname, '../core/backup/fixtures/restore-drill-child.ts'), home, dest, tmpRoot, ready, 'server'], {
+    const ready = path.join(root, `server-ready-${step}`)
+    const child = spawn(process.execPath, [path.join(import.meta.dirname, '../core/backup/fixtures/restore-drill-child.ts'), home, dest, tmpRoot, ready, step], {
       env: { ...process.env, OPEN_WALNUT_HOME: home }, stdio: ['ignore', 'ignore', 'pipe'],
     })
     let stderr = ''
@@ -172,15 +175,20 @@ describe('walnut web --_trial-start without a drill\'s ticket', () => {
   it('refuses before it opens anything in the home', async () => {
     const plain = path.join(root, 'plain-home')
     await fsp.mkdir(plain, { recursive: true })
-    const child = spawn(process.execPath, [cli, 'web', '--_trial-start', '--_ephemeral-child'], {
-      env: { ...process.env, OPEN_WALNUT_HOME: plain, WALNUT_TRIAL_NONCE: 'not-a-ticket' }, stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    let out = ''
-    child.stdout!.on('data', (d) => { out += d })
-    child.stderr!.on('data', (d) => { out += d })
-    const code = await new Promise<number | null>((resolve) => child.once('exit', (c) => resolve(c)))
-    expect(code, out).toBe(2)
-    expect(out).toMatch(/does not start this trial server: no ticket/)
+    for (const args of [['--_trial-start'], ['--_trial-start', '--_ephemeral-child']]) {
+      const r = await runCli(['web', ...args], { ...process.env, OPEN_WALNUT_HOME: plain, WALNUT_TRIAL_NONCE: 'not-a-ticket' })
+      expect(r.code, r.out).toBe(2)
+      expect(r.out).toMatch(args.length === 1 ? /runs only with --_ephemeral-child/ : /does not start this trial server: no ticket/)
+    }
     expect(await fsp.readdir(plain)).toEqual([])
   }, 60_000)
 })
+
+async function runCli(args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number | null; out: string }> {
+  const child = spawn(process.execPath, [cli, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  let out = ''
+  child.stdout!.on('data', (d) => { out += d })
+  child.stderr!.on('data', (d) => { out += d })
+  const code = await new Promise<number | null>((resolve) => child.once('exit', (c) => resolve(c)))
+  return { code, out }
+}

@@ -3,7 +3,8 @@
  * it starts a drill of the backups at argv[3] for the home at argv[2] with its folder under
  * argv[4], writes argv[5] once it reaches the step argv[6] names, then hangs there until the
  * test kills it. `folder` (the default): the drill's folder exists, no boot. `server`: its
- * trial server runs; the file holds that server's pid.
+ * trial server answers; `spawn`: its trial server was just started and boots; the file holds
+ * that server's pid.
  */
 import fs from 'node:fs';
 import { LocalStore } from '../../../../src/core/backup/stores/local-store.js';
@@ -17,8 +18,8 @@ await runRestoreDrill({
   store: new LocalStore(dest),
   tmpRoot,
   freeBytes: async () => 1024 ** 4,
-  boot: step === 'server',
-  ...(step === 'server'
-    ? { onServer: async (pid: number) => { fs.writeFileSync(ready, String(pid)); await hang(); } }
-    : { onFolder: async (dir: string) => { fs.writeFileSync(ready, dir); await hang(); } }),
+  boot: step !== 'folder',
+  ...(step === 'server' ? { onServer: async (pid: number) => { fs.writeFileSync(ready, String(pid)); await hang(); } }
+    : step === 'spawn' ? { onSpawn: async (pid: number) => { fs.writeFileSync(ready, String(pid)); await hang(); } }
+      : { onFolder: async (dir: string) => { fs.writeFileSync(ready, dir); await hang(); } }),
 });

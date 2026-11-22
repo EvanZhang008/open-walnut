@@ -53,7 +53,7 @@ describe('with the flag', () => {
     ['no ticket', () => ({ nonce: 'x' }), /no ticket/],
     ['no nonce', () => { writeTrialTicket(home, 'restore-drill'); return { env: {} } }, /do not match/],
     ['another nonce', () => { const n = writeTrialTicket(home, 'restore-drill'); return { nonce: n.replace(/.$/, (c) => (c === '0' ? '1' : '0')) } }, /do not match/],
-    ['another parent', () => ({ nonce: writeTrialTicket(home, 'restore-drill', process.pid + 1) }), /parent/],
+    ['another parent', () => ({ nonce: writeTrialTicket(home, 'restore-drill', { parentPid: process.pid + 1 }) }), /parent/],
     ['a stale ticket', () => ({ nonce: writeTrialTicket(home, 'restore-drill'), now: Date.now() + TRIAL_TICKET_MAX_AGE_MS + 1_000 }), /stale/],
     ['an unknown purpose', () => {
       const n = writeTrialTicket(home, 'restore-drill')
@@ -75,21 +75,20 @@ describe('with the flag', () => {
     }
   })
 
-  it('the user\'s data home is refused even when named like a drill copy (a link to it)', () => {
-    const userHome = path.join(root, 'user')
-    const prod = path.join(userHome, '.open-walnut')
-    fs.mkdirSync(prod, { recursive: true })
-    const linked = path.join(root, 'walnut-restore-drill-Zz99Yy')
-    fs.mkdirSync(linked)
-    fs.symlinkSync(prod, path.join(linked, 'home'))
-    const nonce = writeTrialTicket(prod, 'restore-drill')
-    const was = process.env.HOME
-    process.env.HOME = userHome
-    try {
-      // The link resolves to ~/.open-walnut, which is not named like a drill copy: refused either way.
-      expect(() => takeTrialTicket({ home: path.join(linked, 'home'), argv, env: { [TRIAL_NONCE_ENV]: nonce }, ppid: process.pid })).toThrow(TrialStartRefused)
-    } finally {
-      process.env.HOME = was
-    }
+  it('without the ephemeral flag beside it: refused, so no trial runs without what keeps an ephemeral server off the witnesses', () => {
+    const nonce = writeTrialTicket(home, 'restore-drill')
+    expect(() => takeTrialTicket({ home, argv: ['bun', 'cli.ts', 'web', TRIAL_START_FLAG], env: { [TRIAL_NONCE_ENV]: nonce }, ppid: process.pid }))
+      .toThrow(/runs only with --_ephemeral-child/)
+  })
+
+  it('the user\'s data home the drill names is refused, even where it is named like a drill copy', () => {
+    // A data home outside ~/.open-walnut (OPEN_WALNUT_HOME): the drill writes it into the ticket.
+    const nonce = writeTrialTicket(home, 'restore-drill', { liveHomes: [path.dirname(home)] })
+    expect(() => take({ nonce })).toThrow(/is the user's data home/)
+    const again = writeTrialTicket(home, 'restore-drill', { liveHomes: [home] })
+    expect(() => take({ nonce: again })).toThrow(/is the user's data home/)
+    // Another place named: the copy boots.
+    const ok = writeTrialTicket(home, 'restore-drill', { liveHomes: [path.join(root, 'elsewhere')] })
+    expect(take({ nonce: ok })).toBe('restore-drill')
   })
 })

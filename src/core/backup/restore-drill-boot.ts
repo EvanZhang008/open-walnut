@@ -86,7 +86,11 @@ export async function pointConfigAtCopy(home: string, liveHomes: readonly string
     return v;
   };
   const next = fix(cfg);
-  if (changed) await fsp.writeFile(file, YAML.stringify(next), { mode: 0o600 });
+  if (changed) {
+    // The copy is the drill's own: a config the backup kept read-only is made writable first.
+    await fsp.chmod(file, 0o600);
+    await fsp.writeFile(file, YAML.stringify(next), { mode: 0o600 });
+  }
   return changed;
 }
 
@@ -104,6 +108,8 @@ export interface BootCheckInput {
   env?: NodeJS.ProcessEnv;
   /** Tests: the server's pid, once it answers as the trial it must be (the kill test stops the drill here). */
   onServer?: (pid: number) => void | Promise<void>;
+  /** Tests: the server's pid, right after the spawn, while it boots. */
+  onSpawn?: (pid: number) => void | Promise<void>;
 }
 
 export interface BootTimings {
@@ -121,9 +127,6 @@ export async function checkTrialBoot(input: BootCheckInput): Promise<DrillCheck>
   const timings: BootTimings = { startMs: 0, totalMs: 0 };
   const problems: string[] = [];
   const sandbox = path.join(input.dir, 'boot');
-  for (const d of ['user-home', 'xdg/state', 'xdg/config', 'xdg/cache', 'xdg/data', 'tmp', 'daemon']) {
-    await fsp.mkdir(path.join(sandbox, d), { recursive: true, mode: 0o700 });
-  }
   const logFile = path.join(sandbox, 'server.log');
   const fail = (why: string, extra: string[] = []): DrillCheck => {
     timings.totalMs = Date.now() - t0;
@@ -134,14 +137,29 @@ export async function checkTrialBoot(input: BootCheckInput): Promise<DrillCheck>
     };
   };
 
-  const rewritten = await pointConfigAtCopy(input.target, [input.dataDir, await fsp.realpath(input.dataDir).catch(() => input.dataDir)]);
-  const nonce = writeTrialTicket(input.target, 'restore-drill');
+  // Every step before the start fails the boot check, never the drill (a read-only file, a full disk).
+  const liveHomes = [input.dataDir, await fsp.realpath(input.dataDir).catch(() => input.dataDir)];
+  let rewritten: number;
+  let nonce: string;
+  let out: number;
+  try {
+    for (const d of ['user-home', 'xdg/state', 'xdg/config', 'xdg/cache', 'xdg/data', 'tmp', 'daemon']) {
+      await fsp.mkdir(path.join(sandbox, d), { recursive: true, mode: 0o700 });
+    }
+    rewritten = await pointConfigAtCopy(input.target, liveHomes);
+    nonce = writeTrialTicket(input.target, 'restore-drill', { liveHomes });
+    out = fs.openSync(logFile, 'a', 0o600);
+  } catch (err) {
+    return fail(`The restored copy could not be readied for its boot: ${message(err)}`);
+  }
+  // The ephemeral flag too: what an ephemeral server never does (ask the witnesses for the write
+  // permission, run a standby, back up) holds for the trial; the ticket refuses a start without it.
   const cmd = serverCommand(['web', TRIAL_START_FLAG, '--_ephemeral-child']);
-  const out = fs.openSync(logFile, 'a', 0o600);
   let exited: { code: number | null; signal: string | null } | null = null;
   let child;
   try {
-    child = spawn(cmd[0], cmd.slice(1), { env: trialChildEnv(input.env ?? process.env, input.target, sandbox, nonce), stdio: ['ignore', out, out], cwd: sandbox });
+    // cwd: the parent's, as any `walnut web` (the web assets are found from there in a checkout).
+    child = spawn(cmd[0], cmd.slice(1), { env: trialChildEnv(input.env ?? process.env, input.target, sandbox, nonce), stdio: ['ignore', out, out] });
   } catch (err) {
     fs.closeSync(out);
     return fail(`The trial server did not start: ${message(err)}`);
@@ -161,6 +179,7 @@ export async function checkTrialBoot(input: BootCheckInput): Promise<DrillCheck>
   };
 
   try {
+    await input.onSpawn?.(pid);
     // Up: it wrote where it listens. Down: it exited, or the time ran out.
     const infoFile = path.join(input.target, TRIAL_SERVER_FILE);
     const deadline = t0 + (input.timeoutMs ?? BOOT_TIMEOUT_MS);

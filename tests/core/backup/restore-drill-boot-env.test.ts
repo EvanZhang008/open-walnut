@@ -9,7 +9,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import YAML from 'yaml'
-import { pointConfigAtCopy, trialChildEnv } from '../../../src/core/backup/restore-drill-boot.js'
+import { checkTrialBoot, pointConfigAtCopy, trialChildEnv } from '../../../src/core/backup/restore-drill-boot.js'
 import { TRIAL_NONCE_ENV } from '../../../src/core/trial-start/ticket.js'
 import { assertOutwardDoor, closeOutwardDoorsForTrial, doorsClosed, isPermitRefusal, outwardDoorRefusal, setOutwardDoorChecker } from '../../../src/core/leader/switch/doors.js'
 
@@ -65,5 +65,22 @@ describe('closeOutwardDoorsForTrial', () => {
     try { assertOutwardDoor('mail-send', 'op-1') } catch (e) { err = e }
     expect(isPermitRefusal(err)).toBe(true)
     expect(outwardDoorRefusal('push', 'op-2')).toMatch(/restore-drill trial server never acts outward/)
+  })
+})
+
+describe('checkTrialBoot before its start', () => {
+  let dir: string
+  afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }) })
+
+  it('a copy that cannot be readied fails the boot check with why, never the whole drill; a read-only config is made writable', async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'walnut-restore-drill-'))
+    const target = path.join(dir, 'home')
+    await fs.mkdir(target)
+    // local/ is a file: the ticket cannot be written there. Nothing is spawned.
+    await fs.writeFile(path.join(target, 'local'), 'not a folder')
+    await fs.writeFile(path.join(target, 'config.yaml'), YAML.stringify({ x: `${dir}/live/a` }), { mode: 0o400 })
+    const r = await checkTrialBoot({ dir, target, dataDir: path.join(dir, 'live'), files: [], task: null })
+    expect(r).toMatchObject({ id: 'boot', ok: false, detail: expect.stringMatching(/^The restored copy could not be readied for its boot: /) })
+    expect(YAML.parse(await fs.readFile(path.join(target, 'config.yaml'), 'utf8'))).toEqual({ x: `${target}/a` })
   })
 })
