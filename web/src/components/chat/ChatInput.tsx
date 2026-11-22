@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo, type KeyboardEvent, type DragEvent, type ClipboardEvent, type RefObject, useLayoutEffect } from 'react';
 import { RegionErrorBoundary } from '@/components/common/RegionErrorBoundary';
-import { ICON_READ_SPLIT } from '@/components/common/Icons';
+import { ICON_READ_SPLIT, ICON_SEND } from '@/components/common/Icons';
 import { returnInsertsNewline } from './touch-return';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { searchCommands, getCommand } from '@/commands/index';
@@ -2037,7 +2037,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
   // next to the text. One definition so the two variants can never drift.
   const primaryButton = showStopPrimary ? (
     <button
-      className="chat-send-btn-icon chat-stop-btn-icon"
+      className="chat-send-btn-icon chat-stop-btn-icon wn-input-send"
       onClick={handleStop}
       type="button"
       aria-label="Stop the running turn"
@@ -2049,7 +2049,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
     </button>
   ) : (
     <button
-      className="chat-send-btn-icon"
+      className="chat-send-btn-icon wn-input-send"
       onClick={handleSend}
       disabled={!canSend}
       {...(sendTestId ? { 'data-testid': sendTestId } : {})}
@@ -2058,10 +2058,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
       title={sendTitle}
       {...dictationWaitProps(sendGate)}
     >
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-        <line x1="12" y1="19" x2="12" y2="5" />
-        <polyline points="6 11 12 5 18 11" />
-      </svg>
+      {ICON_SEND}
     </button>
   );
 
@@ -2141,7 +2138,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
           spacer · mic · send. Mic stays next to send. */}
       <ComposerCamera camera={camera} />
       <div className="chat-input-row">
-        <div className="chat-input-box" data-mic-bubble-anchor="" data-light={light ? 'true' : undefined}>
+        <div className={`chat-input-box wn-input${light || compact ? ' is-line' : ''}`} data-mic-bubble-anchor="" data-light={light ? 'true' : undefined}>
           {noteSlot}
           {contextPill}
           {/* Inline task context pill */}

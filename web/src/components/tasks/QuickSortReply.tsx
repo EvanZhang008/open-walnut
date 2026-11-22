@@ -87,7 +87,7 @@ export function QuickSortReply({ task, onSent, onClose }: { task: Task; onSent: 
 
   return <div className="quick-sort-reply" data-testid="quick-sort-reply" data-sending={sending || undefined}
     onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
-    <div className="quick-sort-reply-row">
+    <div className="quick-sort-reply-row wn-input is-line">
       <textarea ref={ref} className="quick-sort-reply-input" rows={2} data-draft-key={draft.key ?? undefined}
         placeholder={sessionId ? 'Type or speak your reply' : 'Type or speak, and the task starts with it'}
         aria-label={`Reply to ${task.title}`} value={text} readOnly={sending}

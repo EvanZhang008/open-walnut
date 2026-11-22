@@ -393,9 +393,10 @@ html body .is-plain-chat-pickers .mode-toggle-pill:hover, html body .is-plain-ch
 .ext-home.is-c > .ext-home-notes { padding: 2px 8px 0; }
 .ext-home.is-c > .ext-home-composer { padding: 6px 8px 10px; border-top: 1px solid var(--border); background: var(--bg); }
 /* Docked: one line, "+", the words, "This page", send. */
-.ext-home-composer.is-docked .chat-input-box { flex-direction: row; align-items: center; flex-wrap: nowrap; gap: 6px; min-height: 0; padding: 4px 4px 4px 6px; border-radius: 22px; }
+/* Its corner, fill and one-line height are the one input box's (styles/input-box.css). */
+.ext-home-composer.is-docked .chat-input-box { flex-direction: row; align-items: center; flex-wrap: nowrap; gap: 6px; padding: 0 var(--input-key-inset) 0 6px; }
 .ext-home-composer.is-docked .chat-input-controls { display: contents; }
-.ext-home-composer.is-docked .chat-input-box > .chat-input-textarea { order: 1; flex: 1; min-width: 0; min-height: 0; height: 30px !important; max-height: 30px; padding: 5px 2px; overflow: hidden; white-space: nowrap; resize: none; }
+.ext-home-composer.is-docked .chat-input-box > .chat-input-textarea { order: 1; flex: 1; min-width: 0; min-height: 0; height: calc(var(--input-line) - 2px) !important; max-height: calc(var(--input-line) - 2px); padding: var(--input-pad) 2px; line-height: 20px; overflow: hidden; white-space: nowrap; resize: none; }
 .ext-home-composer.is-docked .chat-input-textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ext-home-composer.is-docked .chat-plus-group { order: 0; }
 .ext-home-composer.is-docked .ext-home-dock-chip { order: 2; }

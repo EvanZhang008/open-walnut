@@ -17,6 +17,10 @@
  *   - bareButton: a `<button>` in a TSX file whose className has no `btn` (the family in
  *     web/src/styles/buttons.css), choice controls (role tab, radio, switch, checkbox, option)
  *     aside. A new file starts at 0: every button it draws is `.btn` plus a variant.
+ *   - restyledInput: a rule outside web/src/styles/input-box.css that gives an input box (a class
+ *     the TSX writes beside `wn-input`), its send key (beside `wn-input-send`) or the mic and
+ *     attach keys inside it a corner, fill, edge or size of its own (2026-11-21, the user on the
+ *     Threads reply box: "it's oval ... can there be one unified input box?").
  * The counts that exist today are in ui-standard-baseline.json and may only go down. A new file or
  * a higher count fails: use the family the standard names. A lower count fails too until the
  * baseline is lowered with `UI_STANDARD_RECORD=1` on this file, so the ratchet stays tight.
@@ -24,7 +28,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { countAll, restylesBtn, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, type Counts } from './ui-standard-scan';
+import { countAll, restylesBtn, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, inputParts, restylesInput, type Counts } from './ui-standard-scan';
 import { tokenBreaks } from './ui-token-scan';
 import type { Decl } from './css-scan';
 
@@ -66,7 +70,7 @@ describe('UI standard: one look per kind of control', () => {
   const recorded = JSON.parse(fs.readFileSync(BASELINE, 'utf8')) as Partial<Counts>;
   const was = Object.fromEntries(Object.keys(now).map((k) => [k, recorded[k as keyof Counts] ?? {}])) as Counts;
 
-  for (const kind of ['restyledBtn', 'ownControl', 'rawAccent', 'bareButton', ...TOKEN_KINDS] as const) {
+  for (const kind of ['restyledBtn', 'ownControl', 'rawAccent', 'bareButton', 'restyledInput', ...TOKEN_KINDS] as const) {
     it(`${kind}: no new second style`, () => {
       const { grew } = compare(kind, now[kind], was[kind]);
       expect(grew, `A second style of a shared control. Use the family in ${STANDARD} instead:\n${grew.join('\n')}`).toEqual([]);
@@ -124,10 +128,24 @@ describe('UI standard: one look per kind of control', () => {
     expect(tokenBreaks(d('padding', '5px 8px'))).toEqual(['spacingOffGrid']);
     expect(tokenBreaks(d('padding', '1px 6px'))).toEqual([]);
   });
+  it('finds every input box and the second looks given to one', () => {
+    const parts = inputParts();
+    for (const box of ['chat-input-box', 'answer-box', 'thread-card-composer']) expect(parts.boxes.has(box), box).toBe(true);
+    for (const key of ['chat-send-btn-icon', 'answer-box-send', 'thread-card-send']) expect(parts.keys.has(key), key).toBe(true);
+    expect(restylesInput('.my-card .answer-box', [{ prop: 'border-radius' }], parts)).toBe(true);
+    expect(restylesInput('.thread-card-send', [{ prop: 'background' }], parts)).toBe(true);
+    expect(restylesInput('.answer-box-tools .mic-btn', [{ prop: 'height' }], parts)).toBe(true);
+    expect(restylesInput(':is(.answer-box, .thread-card-composer)', [{ prop: 'border-radius' }], parts)).toBe(true);
+    expect(restylesInput('.thread-card-composer', [{ prop: 'border-top' }], parts)).toBe(true);
+    expect(restylesInput('.answer-box-send:disabled', [{ prop: 'opacity' }], parts)).toBe(true);
+    expect(restylesInput('.session-notes-heading-actions .mic-btn', [{ prop: 'height' }], parts)).toBe(false);
+    expect(restylesInput('.answer-box .mic-btn', [{ prop: 'height' }], parts)).toBe(true);
+    expect(restylesInput('.answer-box', [{ prop: 'flex-wrap' }], parts)).toBe(false);
+  });
 
   it('the standard it enforces exists and names this test', () => {
-    const text = fs.readFileSync(path.join(__dirname, '../..', STANDARD), 'utf8');
-    expect(text).toContain('tests/web/ui-standard-ratchet.test.ts');
-    expect(text).toContain(FAMILY_HOME.replace('components/', 'web/src/components/'));
-  });
+  const text = fs.readFileSync(path.join(__dirname, '../..', STANDARD), 'utf8');
+  expect(text).toContain('tests/web/ui-standard-ratchet.test.ts');
+  expect(text).toContain(FAMILY_HOME.replace('components/', 'web/src/components/'));
+});
 });

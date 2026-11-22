@@ -15,6 +15,8 @@ import { AttachPictureButton, PictureStrip, usePictureInput } from '@/components
 import type { ImageAttachment } from '@/api/chat';
 import { useDraft } from '@/hooks/useDraft';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
+import { ICON_SEND } from '@/components/common/Icons';
+import { fitRows } from '@/components/common/fit-rows';
 import '@/styles/thread-card.css';
 
 export interface ThreadReplyBoxProps {
@@ -51,8 +53,7 @@ export const ThreadReplyBox = memo(function ThreadReplyBox(p: ThreadReplyBoxProp
   useEffect(() => {
     const el = boxRef.current;
     if (!el) return;
-    el.style.height = '0px';
-    el.style.height = `${Math.min(el.scrollHeight, 5 * 20 + 12)}px`;
+    fitRows(el, 5);
   }, [text]);
   // A recording still running belongs to the question the box was for.
   useEffect(() => () => { mic.current?.clear(); }, [p.draftKey]);
@@ -112,7 +113,7 @@ export const ThreadReplyBox = memo(function ThreadReplyBox(p: ThreadReplyBoxProp
     <>
       <PictureStrip pictures={pictures} className="thread-card-pictures" testId="thread-card-pictures" />
       <div
-        className={`thread-card-composer${p.asked ? ' has-asked' : ''}${pictureInput.dragOver ? ' is-drag-over' : ''}`}
+        className={`thread-card-composer wn-input is-line${p.asked ? ' has-asked' : ''}${pictureInput.dragOver ? ' is-drag-over' : ''}`}
         data-testid="thread-reply-box"
         {...pictureInput.dropProps}
       >
@@ -143,13 +144,13 @@ export const ThreadReplyBox = memo(function ThreadReplyBox(p: ThreadReplyBoxProp
         <BoxMic className="thread-card-mic" boxRef={boxRef} text={text} setText={setText} handleRef={mic} disabled={!p.canAsk || sending} />
         <button
           type="button"
-          className="thread-card-send"
+          className="thread-card-send wn-input-send"
           aria-label="Send"
           disabled={(!text.trim() && pictures.images.length === 0 && !gate.micBusy && !gate.waiting) || sending || !p.canAsk}
           onClick={gate.send}
           {...dictationWaitProps(gate, 'Send (Enter)')}
         >
-          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" /></svg>
+          {ICON_SEND}
         </button>
       </div>
     </>

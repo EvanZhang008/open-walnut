@@ -1,0 +1,142 @@
+/* One input box (.claude/skills/walnut-ui-requirements/standard.md, "Inputs").
+ *
+ * 2026-11-21, the user on a Threads card's reply box: "this input box is oval ... why does
+ * everything have to be round? Everything should be unified! Can there be one unified input
+ * box?" Each composer had its own corner (8, 10, 12, 14 or 20 px), its own mic (24, 28 or a
+ * 34 x 28 oval) and its own send (an ink circle, a blue circle, a text button).
+ *
+ * Every box a person types a message in carries `wn-input` (ChatInput, AnswerBox, the side
+ * comment card's box), and this file alone gives it its corner, edge, fill, one-line height and
+ * its mic and send keys. `is-line` is a box that is one row: the text with its keys on its right.
+ * A box that floats over scrolling content (the session and Home composers) keeps its glass
+ * fill and shadow from globals.css; everything else here applies to it too.
+ * Guard: tests/web/ui-standard-ratchet.test.ts (inputs).
+ */
+:root {
+  --input-radius: var(--radius-sm);   /* 8 px: the corner of the buttons beside it */
+  --input-line: 34px;                 /* one line, its 1 px edges included: a button's height */
+  --input-key: 28px;                  /* the mic and send inside the box */
+  --input-key-radius: 6px;            /* the box's corner less the key's inset */
+  --input-key-hit-radius: calc(var(--input-key-radius) + 4px); /* a phone key's 4 px clear ring */
+  --input-unread-edge: rgba(255, 59, 48, 0.6);  /* an unread reply: the red edge and its fill */
+  --input-unread-fill: rgba(255, 59, 48, 0.05);
+}
+/* A phone (the app shell's phone layout only: a narrow desktop window or the browser's side panel
+   keeps the desktop sizes): each key is a finger's 44 px, and one line holds a key and the box's
+   two 1 px edges. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation { --input-line: 46px; --input-key: 44px; }
+}
+/* What centres one 20 px line, and a key, in a one-line box: worked out on each box, so a box
+   whose line is set nearer it (the phone above) gets its own. */
+:root, .wn-input {
+  --input-pad: calc((var(--input-line) - 22px) / 2);
+  --input-key-inset: max(0px, calc((var(--input-line) - 2px - var(--input-key)) / 2));
+}
+
+.wn-input {
+  border-radius: var(--input-radius);
+  background: var(--bg-secondary);
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+.wn-input:focus-within { border-color: var(--border-strong); }
+/* A picture dragged over the box: the drop cue, the same on every box. */
+.wn-input.is-drag-over { border-color: var(--accent); outline: 2px dashed var(--accent); outline-offset: -3px; }
+/* A session window whose new reply is not read yet (task.unread): one red edge and a faint red
+   fill, and its placeholder says so in words (SessionPanel); gone on the first click or key in
+   the window (2026-09-29, the user: "the red dot, some red in the input box, gone when I click
+   it"). One edge only: an extra red ring around it read as an error (2026-11-21 UI audit). Only
+   the panel's own composer: Tree Mode's other pages (.tree-split-input) are pages of the same chat. */
+.session-panel.session-panel-unread .session-panel-input:not(.tree-split-input) .wn-input {
+  border-color: var(--input-unread-edge);
+  background-image: linear-gradient(var(--input-unread-fill), var(--input-unread-fill));
+}
+
+/* ── One row: the text, then the keys on its right ── */
+.wn-input.is-line { min-height: var(--input-line); }
+.wn-input.is-line :is(.chat-input-textarea, .answer-box-input, .thread-card-input, .kanban-composer-input, .quick-sort-reply-input) {
+  min-height: calc(var(--input-line) - 2px);
+  padding-top: var(--input-pad);
+  padding-bottom: var(--input-pad);
+  line-height: 20px;
+}
+/* The text starts 10 px in; the keys sit their inset from the box's right and bottom edges. */
+.wn-input.is-line:not(.chat-input-box) {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 0 var(--input-key-inset) 0 10px;
+}
+.wn-input.is-line:not(.chat-input-box) > :is(button, .box-mic, .answer-box-tools, .kanban-spinner) { margin-bottom: var(--input-key-inset); }
+/* A box that shows a line above its text (a Threads review card's "You: ..."): that line keeps clear of the top edge. */
+.wn-input.is-line.has-asked { padding-top: 6px; }
+.wn-input.is-line.chat-input-box > :is(.chat-input-controls, .chat-input-compact-actions) {
+  align-self: flex-end;
+  padding: 0 var(--input-key-inset) var(--input-key-inset) 0;
+}
+
+/* ── The keys ── */
+/* The box's own keys only (its controls row, its tools, a key straight in it): never a mic in
+   a band the box holds, such as a session note's heading (globals.css .session-notes-heading-actions). */
+.wn-input :is(.chat-input-controls, .chat-input-compact-actions, .answer-box-tools) :is(.mic-btn, .picture-attach),
+.wn-input > :is(.mic-btn, .picture-attach),
+.wn-input > .box-mic .mic-btn {
+  width: var(--input-key);
+  min-width: var(--input-key);
+  height: var(--input-key);
+  min-height: var(--input-key);
+  padding: 0;
+  border-radius: var(--input-key-radius);
+}
+.wn-input :is(.chat-input-controls, .chat-input-compact-actions, .answer-box-tools) :is(.mic-btn, .picture-attach):hover:not(:disabled),
+.wn-input > :is(.mic-btn, .picture-attach):hover:not(:disabled),
+.wn-input > .box-mic .mic-btn:hover:not(:disabled) {
+  color: var(--fg);
+  background-color: var(--bg-hover);
+}
+.wn-input-send {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: var(--input-key);
+  min-width: var(--input-key);
+  height: var(--input-key);
+  min-height: var(--input-key);
+  padding: 0;
+  border: none;
+  border-radius: var(--input-key-radius);
+  /* The box's main action: solid blue, the theme's own accent even inside a chat, whose
+     palette greys every other accent (chat-palette.css). */
+  background-color: var(--chat-hue-accent, var(--accent));
+  color: var(--on-accent);
+  cursor: pointer;
+  transition: filter 0.15s, background 0.15s;
+}
+.wn-input-send svg { width: 15px; height: 15px; }
+.wn-input-send:hover:not(:disabled) { filter: brightness(0.94); }
+/* Nothing to send yet: a quiet grey key, never a faded blue one, still plain to see on the
+   box's own grey (its arrow at least 3:1). */
+.wn-input-send:is(:disabled, [aria-disabled='true']),
+.wn-input-send:is(:disabled, [aria-disabled='true']):hover {
+  opacity: 1;
+  filter: none;
+  background-color: color-mix(in srgb, var(--fg) 10%, var(--bg-secondary));
+  color: var(--fg-notice, var(--fg-muted));
+  cursor: default;
+}
+/* A running turn's stop takes the send's place: the same key, in grey. */
+.wn-input-send.chat-stop-btn-icon { background-color: var(--fg-muted); color: var(--bg); }
+
+/* A phone: each key is a finger's 44 px to tap but drawn 36 px, 4 px clear of the box's edge,
+   so a key never fills the box from edge to edge. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .wn-input :is(.chat-input-controls, .chat-input-compact-actions, .answer-box-tools) :is(.mic-btn, .picture-attach),
+  .app-shell-navigation .wn-input > :is(.mic-btn, .picture-attach),
+  .app-shell-navigation .wn-input > .box-mic .mic-btn,
+  .app-shell-navigation .wn-input-send {
+    padding: 4px;
+    background-clip: content-box;
+    border-radius: var(--input-key-hit-radius);
+  }
+}

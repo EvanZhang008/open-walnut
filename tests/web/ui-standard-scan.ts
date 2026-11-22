@@ -80,11 +80,62 @@ function fingerSize(decls: Decl[]): boolean {
   return look.length > 0 && look.every((d) => SIZE.test(d.prop) && d.atRules.some((a) => /pointer:\s*coarse|max-width/.test(a)));
 }
 
+/**
+ * The one input box (web/src/styles/input-box.css): the classes the TSX writes beside `wn-input`
+ * (the boxes: chat-input-box, answer-box, ...) and beside `wn-input-send` (their send keys).
+ * 2026-11-21, the user on a Threads reply box: "it's oval ... everything should be unified".
+ */
+export function inputParts(): { boxes: Set<string>; keys: Set<string> } {
+  const boxes = new Set<string>();
+  const keys = new Set<string>();
+  const STATE = /^(is-|has-)/;
+  for (const file of walk(WEB_SRC, ['.tsx', '.ts'])) {
+    const text = fs.readFileSync(file, 'utf8');
+    // A plain string, or a template literal's fixed words (its `${...}` parts left out).
+    for (const m of text.matchAll(/className=\{?\s*(?:`((?:[^`$]|\$\{[^}]*\})*)`|'([^']*)'|"([^"]*)")/g)) {
+      const fixed = (m[1] ?? m[2] ?? m[3] ?? '').replace(/\$\{[^}]*\}/g, ' ');
+      const words = fixed.split(/\s+/).filter((w) => /^[A-Za-z][A-Za-z0-9_-]*$/.test(w));
+      const into = words.includes('wn-input') ? boxes : words.includes('wn-input-send') ? keys : null;
+      if (!into) continue;
+      for (const w of words) if (!w.startsWith('wn-input') && !STATE.test(w)) into.add(w);
+    }
+  }
+  return { boxes, keys };
+}
+
+/** The file that alone gives the input box its look. */
+export const INPUT_HOME = 'styles/input-box.css';
+const BOX_LOOK = /^(background(-color|-image)?|border(-(top|right|bottom|left))?(-(color|width|style))?|border(-(top|bottom)-(left|right))?-radius|box-shadow|outline(-(color|width|style))?|height|min-height)$/;
+const KEY_LOOK = /^(background(-color|-image)?|border(-(top|right|bottom|left))?(-(color|width|style))?|border(-(top|bottom)-(left|right))?-radius|width|height|min-width|min-height|padding(-(top|right|bottom|left|inline|block))?|color|opacity|box-shadow)$/;
+/** Rows inside a box that hold its keys: a key in one of them is still the box's own key. */
+const KEY_ROWS = new Set(['chat-input-controls', 'chat-input-compact-actions', 'answer-box-tools', 'thread-card-mic']);
+
+/** Compounds of one selector, with what `:is()` / `:where()` name kept (each alternative's last compound). */
+function inputCompounds(selector: string): string[] {
+  const opened = selector.replace(/:(?:is|where)\(((?:[^()]|\([^()]*\))*)\)/g, (_m, inner: string) =>
+    inner.split(',').map((alt) => alt.trim().split(/\s*[>+~]\s*|\s+/).pop() ?? '').join(''));
+  return compounds(opened);
+}
+
+/** A rule that gives an input box, its send key, or a key inside it a look of its own. */
+export function restylesInput(selector: string, decls: { prop: string }[], parts: { boxes: Set<string>; keys: Set<string> }): boolean {
+  const cs = inputCompounds(selector);
+  const last = classesOf(cs[cs.length - 1] ?? '');
+  const before = cs.slice(0, -1).flatMap(classesOf);
+  const sets = (re: RegExp) => decls.some((d) => re.test(d.prop));
+  if (last.some((c) => parts.boxes.has(c) || c === 'wn-input')) return sets(BOX_LOOK);
+  if (last.some((c) => parts.keys.has(c) || c === 'wn-input-send')) return sets(KEY_LOOK);
+  const inBox = before.some((c) => parts.boxes.has(c) || c === 'wn-input' || KEY_ROWS.has(c));
+  if (inBox && last.some((c) => c === 'mic-btn' || c === 'picture-attach')) return sets(KEY_LOOK);
+  return false;
+}
+
 export type Counts = {
   restyledBtn: Record<string, number>;
   ownControl: Record<string, number>;
   rawAccent: Record<string, number>;
   bareButton: Record<string, number>;
+  restyledInput: Record<string, number>;
 } & Record<TokenKind, Record<string, number>>;
 
 /** Roles of a choice control (segmented, tabs, switches, boxes): their own components, not buttons. */
@@ -127,14 +178,17 @@ export function isBareButton(tag: string): boolean {
   if (at < 0) return true;
   const start = at + 'className='.length;
   const value = tag.slice(start, valueEnd(tag, start));
+  // The input box's send key is its own control (styles/input-box.css, standard.md "Inputs").
+  if (/(^|[\s"'`{(])wn-input-send(?=$|[\s"'`}$])/.test(value)) return false;
   return !/(^|[\s"'`{(])btn(?=$|[\s"'`}$])/.test(value);
 }
 
 /** Rules (one per file and selector list) in each file that break each rule of the standard. */
 export function countAll(): Counts {
-  const out =  { restyledBtn: {}, ownControl: {}, rawAccent: {}, ...Object.fromEntries(TOKEN_KINDS.map((k) => [k, {}])), bareButton: {} } as Counts;
+  const out = { restyledBtn: {}, ownControl: {}, rawAccent: {}, ...Object.fromEntries(TOKEN_KINDS.map((k) => [k, {}])), bareButton: {}, restyledInput: {} } as Counts;
   const bump = (m: Record<string, number>, f: string) => { m[f] = (m[f] ?? 0) + 1; };
   const companions = btnCompanions();
+  const parts = inputParts();
   for (const file of walk(WEB_SRC, ['.css']).sort()) {
     const rel = path.relative(WEB_SRC, file);
     const rules = new Map<string, Decl[]>();
@@ -148,6 +202,7 @@ export function countAll(): Counts {
       const sets = (re: RegExp) => decls.some((d) => re.test(d.prop));
       if (decls.some((d) => LOOK.test(d.prop)) && !fingerSize(decls) && sels.some((x) => restylesBtn(x, companions))) bump(out.restyledBtn, rel);
       else if (sets(/^background(-color)?$/) && sets(/^border-radius$/) && sels.some(isOwnControl)) bump(out.ownControl, rel);
+      if (rel !== INPUT_HOME && sels.some((x) => restylesInput(x, decls, parts))) bump(out.restyledInput, rel);
     }
   }
   for (const file of walk(WEB_SRC, ['.css', '.ts', '.tsx']).sort()) {

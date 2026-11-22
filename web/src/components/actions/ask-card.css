@@ -80,21 +80,9 @@
 /* Any other part placed straight in the row (a closed thread's line) keeps the same spacing. */
 .ask-card-answer > :where(:not(.org-answer-inline, .action-needed-approval, .org-answer-options, .org-answer-multi, .org-thread-follow, .org-thread-letter)) { margin-block: 4px; }
 
-/* The box: a soft grey field inside the card, no frame of its own until it has the focus. */
+/* The box is the one input box (styles/input-box.css): one key's height, 34 px, grey, corner 8,
+   its mic and blue send inside. Only its place in the row is set here. */
 .ask-card-answer .org-answer-words .chat-input-container { padding: 0; }
-.ask-card-answer .org-answer-words .chat-input-box {
-  background: var(--bg-secondary); border-color: transparent; border-radius: var(--radius-sm); box-shadow: none;
-}
-/* One key's height, 34 px with its 1 px edge: one line of text, the mic and send inside it. */
-.ask-card-answer .org-answer-words .chat-input-box > .chat-input-textarea { min-height: 32px; padding-top: 6px; padding-bottom: 6px; line-height: 20px; }
-.ask-card-answer .org-answer-words .chat-input-box > .chat-input-controls { padding-bottom: 2px; }
-.ask-card-answer .org-answer-words .chat-input-controls .mic-btn { height: 28px; min-height: 28px; }
-.ask-card-answer .org-answer-words .chat-input-box:focus-within { border-color: var(--border-strong); box-shadow: none; }
-/* Its composer greys the theme's colours as every chat's does (chat-palette.css); an ask that waits
-   on him keeps its blue send, from the theme's own accent. */
-.ask-card-answer .org-answer-words .chat-send-btn-icon { width: 28px; height: 28px; background: var(--chat-hue-accent, var(--accent)); color: var(--on-accent); }
-.ask-card-answer .org-answer-words .chat-send-btn-icon svg { width: 15px; height: 15px; }
-.ask-card-answer .org-answer-words .chat-send-btn-icon:disabled { opacity: 1; background: var(--bg-tertiary); color: var(--fg-muted); cursor: default; }
 
 /* Its keys (2026-11-21, the user, of ten whole-card designs: "2 is good"): one height with the box,
    34 px, corner 8. The card's one main action is solid blue: Acknowledge, or the recommended option
@@ -162,8 +150,6 @@
     min-width: 44px;
   }
   .app-shell-navigation .ask-card :is(.ask-card-status, .org-answer-note, .org-answer-error) { font-size: var(--font-size-sm); }
-  /* Its keys and box share one height there too: a finger's 44 px. */
+  /* Its keys and box share one height there too: a finger's 44 px (the box's from input-box.css). */
   .app-shell-navigation .ask-card .ask-card-answer :is(.btn, .approval-btn, .org-answer-check):not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *) { min-height: 44px; }
-  .app-shell-navigation .ask-card .ask-card-answer .org-answer-words .chat-input-box > .chat-input-textarea { min-height: 42px; padding-top: 11px; padding-bottom: 11px; }
-  .app-shell-navigation .ask-card .ask-card-answer .org-answer-words .chat-input-box > .chat-input-controls { padding-bottom: 0; }
 }

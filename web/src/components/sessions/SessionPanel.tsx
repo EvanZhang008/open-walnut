@@ -4365,9 +4365,10 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             isStreaming={pageStreaming(threads.stack.api.currentKey)}
             // Phone: the Waiting line folds away with the keyboard up (N2-06), so its words ride here.
             placeholder={plainChat ? 'Ask a follow-up…' : threads.composerPlaceholder ?? (phoneLayer || phoneWidth
-              ? (sessionTask?.phase === 'WAITING' ? 'Message: moves it to Working' : 'Message')
+              ? (unread ? 'New reply above, not read yet' : sessionTask?.phase === 'WAITING' ? 'Message: moves it to Working' : 'Message')
               // A desktop says it in the line above the box (composer-prompt-warning), once.
-              : 'Send a message to this session... (/ for commands)')}
+              // The red box of an unread reply says what it means (input-box.css).
+              : unread ? 'New reply above, not read yet. Send a message... (/ for commands)' : 'Send a message to this session... (/ for commands)')}
             onValueChange={handleComposerValue}
             showCommands={false}
             {...(plainChat ? {} : {

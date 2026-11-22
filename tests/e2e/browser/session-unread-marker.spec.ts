@@ -1,7 +1,8 @@
 /**
  * Playwright browser test: a session window whose agent output has not been
  * read yet (task.unread) shows two quiet markers, a red dot before the title and
- * a red composer card, and both go away on the user's first click or keystroke
+ * a red composer card whose placeholder says "New reply above, not read yet", and
+ * both go away on the user's first click or keystroke
  * in that window (2026-09-29: a full red frame did this job but was too loud;
  * the user asked for "the red dot, some red in the input box, gone when I click
  * it: basically the task's read status").
@@ -91,11 +92,14 @@ async function expectMarked(page: Page, panel: Locator, taskId: string): Promise
   await expect(panel).toHaveClass(UNREAD_CLASS, { timeout: 15_000 })
   await expect(solidDot(panel)).toBeVisible()
   await expect(ringDot(panel)).toHaveCount(0)
-  // The card's own 0.2s transition fades the red in; read it once it settles.
+  // The card's own 0.2s transition fades the red in; read it once it settles. One red edge, no
+  // second red ring around it (2026-11-21 UI audit: the double red read as an error), and the
+  // box says in words what the red means.
   await expect.poll(() => composerCard(panel).evaluate((el) => {
     const s = getComputedStyle(el)
-    return { border: s.borderTopColor, halo: s.boxShadow.includes('rgba(255, 59, 48, 0.14)') }
-  }), { timeout: 5_000 }).toEqual({ border: 'rgba(255, 59, 48, 0.6)', halo: true })
+    return { border: s.borderTopColor, halo: s.boxShadow.includes('rgb(255, 59, 48') || s.boxShadow.includes('rgba(255, 59, 48') }
+  }), { timeout: 5_000 }).toEqual({ border: 'rgba(255, 59, 48, 0.6)', halo: false })
+  await expect(composerCard(panel).locator('textarea').first()).toHaveAttribute('placeholder', /New reply above, not read yet/)
 }
 
 async function expectRead(page: Page, panel: Locator, taskId: string): Promise<void> {

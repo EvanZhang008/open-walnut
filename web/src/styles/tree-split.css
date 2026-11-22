@@ -374,14 +374,15 @@
    (a comment tray, images, a quote pill) keeps a line of its own. */
 .chat-input-box[data-light="true"] { flex-direction: row; flex-wrap: wrap; align-items: flex-end; }
 .chat-input-box[data-light="true"] > * { flex: 1 0 100%; min-width: 0; }
+/* Its one-line height and its keys' inset are the one input box's (input-box.css, `is-line`). */
 .chat-input-box[data-light="true"] > .chat-input-textarea {
   flex: 1 1 0%;
-  min-height: 0;
-  padding: 9px 4px 9px 12px;
+  padding-left: 12px;
+  padding-right: 4px;
 }
 /* No query container here: an inline-size container is as wide as its padding
    when its width is its content's (flex: auto), and its buttons spill out. */
-.chat-input-box[data-light="true"] > .chat-input-controls { flex: 0 0 auto; padding: 0 5px 4px 0; container-type: normal; }
+.chat-input-box[data-light="true"] > .chat-input-controls { flex: 0 0 auto; container-type: normal; }
 .chat-input-box[data-light="true"] .chat-input-controls-spacer { display: none; }
 /* Its placeholder ("Reply in <title>…") is one line, cut with an ellipsis: a
    long title wrapped it to a second line the one-row box clipped. Typed text

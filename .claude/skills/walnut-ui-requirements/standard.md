@@ -93,13 +93,38 @@ glass". `tests/web/scroll-jump-button-guard.test.ts` fails on a jump button draw
 
 ## Inputs
 
-- In a card, the answer box is the chat input in the answer row: `--bg-secondary`, corner 8 px,
-  no border until focus (then `--border-strong`), no shadow (`ask-card.css`).
-- Elsewhere a reply or answer box is `AnswerBox` (`components/common/AnswerBox.tsx`): corner `--radius-md`
-  (12 px), `--bg-secondary`, 1 px `--border`, accent border on focus, 13 px text, a round send
-  button. `answer-box-guard.test.ts` already keeps new boxes on it.
-- A plain field takes the global `input, textarea, select` rules in `globals.css`; never its own
-  border, radius or fill.
+Every box a person types a message in is ONE input box (2026-11-21, the user on a Threads reply
+box: "it's oval ... why does everything have to be round? Everything should be unified! Can there
+be one unified input box?"). Its look lives in one file, `web/src/styles/input-box.css`:
+
+| Part | Look |
+|---|---|
+| Box | class `wn-input`; corner `--input-radius` (8 px, the buttons' corner); `--bg-secondary` fill, a transparent 1 px edge that turns `--border-strong` on focus, no shadow, no ring |
+| One line (`is-line`) | 34 px tall with its edges, a button's height; 46 px on a phone (a 44 px key and the two edges); it grows with the text |
+| Mic, attach | 28 px rounded squares (corner 6 px), transparent, `--fg-muted`; `--bg-hover` on hover |
+| Send (`wn-input-send`) | the same 28 px rounded square, solid blue (`--chat-hue-accent`, blue even inside a chat), white arrow (`ICON_SEND`); grey while there is nothing to send |
+| Phone keys | 44 px to tap, drawn 36 px, 4 px clear of the box's edge |
+| Drag a picture over | an accent edge and a 2 px dashed accent outline, the same on every box |
+| Unread | a session whose new reply is not read yet: one red edge, a faint red fill, and the placeholder says "New reply above, not read yet"; never a second red ring |
+
+- The component is `ChatInput` (with `ReplyComposer` for an ask, a thread or a letter) or
+  `AnswerBox` for an answer whose words the owner keeps; both draw the box above. A new composer
+  uses one of them; one that cannot carries `wn-input` and `wn-input-send` on its own box and key.
+- Only a composer that floats over scrolling chat (the session and Home composers) keeps its glass
+  fill and shadow (`globals.css`); its corner, edge and keys are the box's.
+- No other file gives an input box, its keys or the mic inside it a corner, fill, edge, outline,
+  size or opacity: `tests/web/ui-standard-ratchet.test.ts` (`restyledInput`) fails on a new one.
+  It reads CSS only, so never style a box inline (`style={{ borderRadius }}`) either.
+- A key rule names only the box's own keys (its controls row, its tools, a key straight in it),
+  never every `.mic-btn` inside the box: a band the box holds (a session note's heading) keeps its
+  own small mic.
+- Text grows with `fitRows` (`web/src/components/common/fit-rows.ts`), which reads the box's own
+  padding; never a fixed `rows * 20 + 12`.
+- The quick bar (`web/src/components/quickbar/`) is a launcher panel, not a box in a page: its
+  panel keeps the dialog corner and its 34 px row; only its mic takes the key's shape (a rounded
+  square, `--radius-sm`).
+- A plain field (a settings value, a label in a dialog, a search) takes the global
+  `input, textarea, select` rules in `globals.css`; never its own border, radius or fill.
 
 ## Cards
 
@@ -150,6 +175,9 @@ Counted on 2026-11-21 by `tests/web/ui-standard-ratchet.test.ts` (per file, in
   `rawColour`, `radiusNotToken`, `pillRadius` (87: the pill-shaped controls and labels),
   `fontSizeOffScale`, `shadowLiteral`, `zIndexLiteral`, `spacingOffGrid`. Their counts per file are
   in the same baseline; a new file starts at 0.
+- 8 rules in 2 files style an input box outside `input-box.css`: the floating composers' glass
+  fill and shadow, their focus edge and the phone's 44 px send target (all on purpose; a new one
+  fails). The unread composer's red edge is a state of the box, in `input-box.css`.
 
 A change that touches one of these moves it onto the family; the ratchet then asks for its count to
 be lowered (`UI_STANDARD_RECORD=1` on that test).

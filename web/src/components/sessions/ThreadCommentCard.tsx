@@ -26,7 +26,8 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import type { CardGrown } from '@/utils/thread-card';
 import type { ThreadViewStatus } from '@/utils/thread-meta';
-import { ICON_COLLAPSE, ICON_EXPAND } from '@/components/common/Icons';
+import { ICON_COLLAPSE, ICON_EXPAND, ICON_SEND } from '@/components/common/Icons';
+import { fitRows } from '@/components/common/fit-rows';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useImageAttachments, type ImageAttachments } from '@/components/common/image-attachments';
 import { AttachPictureButton, PictureStrip, usePictureInput } from '@/components/common/PictureStrip';
@@ -293,8 +294,7 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
   const grow = useCallback(() => {
     const el = boxRef.current;
     if (!el) return;
-    el.style.height = '0px';
-    el.style.height = `${Math.min(el.scrollHeight, 5 * 20 + 12)}px`;
+    fitRows(el, 5);
   }, []);
   useEffect(() => { grow(); }, [text, grow]);
 
@@ -495,7 +495,7 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
         </div>
       )}
       <PictureStrip pictures={pictures} className="thread-card-pictures" testId="thread-card-pictures" />
-      <div className={`thread-card-composer${pictureInput.dragOver ? ' is-drag-over' : ''}`} {...pictureInput.dropProps}>
+      <div className={`thread-card-composer wn-input is-line${pictureInput.dragOver ? ' is-drag-over' : ''}`} {...pictureInput.dropProps}>
         <textarea
           ref={boxRef}
           className="thread-card-input"
@@ -513,13 +513,13 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
         <BoxMic className="thread-card-mic" boxRef={boxRef} text={text} setText={setText} handleRef={mic} disabled={!p.canAsk || sending} />
         <button
           type="button"
-          className="thread-card-send"
+          className="thread-card-send wn-input-send"
           aria-label="Send"
           disabled={(!text.trim() && pictures.images.length === 0 && !gate.micBusy && !gate.waiting) || sending || !p.canAsk}
           onClick={gate.send}
           {...dictationWaitProps(gate, 'Send (Enter)')}
         >
-          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" /></svg>
+          {ICON_SEND}
         </button>
       </div>
     </div>

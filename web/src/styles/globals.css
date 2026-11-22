@@ -348,7 +348,7 @@ input:focus, textarea:focus, select:focus {
    second ring inside the box's own (measured on the comment box: a blue border
    around a 3px blue glow). Every box with such a ring is listed here;
    tests/web/focus-ring-owner-guard.test.ts fails when one is added without it. */
-:is(.answer-box, .search-bar, .chat-input-box, .pw-search, .routine-instructions-box,
+:is(.wn-input, .search-bar, .chat-input-box, .pw-search, .routine-instructions-box,
   .todo-search-bar, .thread-drawer-search, .apps-search, .tp-rules, .ask-walnut-drawer-search,
   .mail-compose-field)
   :is(input, textarea, select):focus {
@@ -7278,7 +7278,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   gap: 6px;
   padding: 6px 10px 4px 6px;
   border-bottom: 1px solid var(--border);
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  border-radius: calc(var(--input-radius) - 1px) calc(var(--input-radius) - 1px) 0 0;
   flex-shrink: 0;
   max-width: 100%;
   animation: contextBarSlideIn 0.15s ease;
@@ -7321,22 +7321,14 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   flex-shrink: 0;
 }
 
-/* D6 composer card: one quiet border holds text row + controls row.
-   Focus = a slightly firmer hairline + lift, NEVER a blue ring/glow. */
+/* The composer card: text row + controls row. Its corner, edge, fill and focus are the one
+   input box look (styles/input-box.css, `wn-input`), never set here. */
 .chat-input-box {
   flex: 1;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
   transition: border-color 0.2s, box-shadow 0.2s;
   min-width: 0;
-}
-.chat-input-box:focus-within {
-  border-color: var(--border-strong);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.07);
 }
 /* Controls row inside the card: [+] · slot · spacer · mic · send */
 .chat-input-controls {
@@ -7410,29 +7402,20 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 .chat-input-container.is-compact .chat-input-box {
   flex-direction: row;
   align-items: flex-end;
-  border-radius: 10px;
-  padding-right: 3px;
 }
+/* Its one-line height and keys are the one input box's (input-box.css, `is-line`). */
 .chat-input-container.is-compact .chat-input-textarea {
   flex: 1 1 0%;
   min-width: 0;
-  min-height: 28px;
-  max-height: calc(4 * 1.5em + 10px);
-  padding: 4px 4px 4px 10px;
+  max-height: calc(4 * 20px + 12px);
+  padding-left: 10px;
+  padding-right: 4px;
 }
 .chat-input-compact-actions {
   display: flex;
   align-items: center;
   flex-shrink: 0;
   padding-bottom: 3px;
-}
-.chat-input-container.is-compact .chat-send-btn-icon {
-  width: 24px;
-  height: 24px;
-}
-.chat-input-container.is-compact .chat-send-btn-icon svg {
-  width: 14px;
-  height: 14px;
 }
 
 .chat-input-textarea {
@@ -7832,43 +7815,20 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   gap: 2px;
   flex-shrink: 0;
 }
-.chat-send-btn-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  /* The theme's ink, as a quiet chat sends (chat-palette.css): near black on light,
-     near white on dark. */
-  background: var(--fg);
-  border: none;
-  border-radius: 50%;
-  color: var(--bg);
-  cursor: pointer;
-  transition: filter 0.15s, opacity 0.15s, transform 0.1s;
-}
-.chat-send-btn-icon:hover:not(:disabled) { filter: brightness(0.92); }
+/* The send key's look is the one input box's (input-box.css, `wn-input-send`). */
 .chat-send-btn-icon:active:not(:disabled) { transform: scale(0.94); }
-/* Stop primary (streaming + empty composer): same circle, muted danger-ish tone
-   so the square glyph reads as "stop", not "send". */
-.chat-stop-btn-icon {
-  background: var(--fg-muted);
-}
+/* Stop primary (streaming + empty composer): the same key in grey (input-box.css), red on
+   hover so the square glyph reads as "stop", not "send". */
 .chat-stop-btn-icon:hover:not(:disabled) {
-  background: var(--error);
+  background-color: var(--error);
   filter: none;
-}
-.chat-send-btn-icon:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
 }
 .chat-send-caret {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 18px;
-  height: 34px;
+  height: var(--input-key, 34px);
   padding: 0;
   background: transparent;
   border: none;
@@ -7915,7 +7875,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 
 .mic-btn:hover:not(:disabled) {
   color: var(--accent);
-  background: var(--accent-subtle);
+  background-color: var(--accent-subtle);
 }
 
 .mic-btn:disabled {
@@ -28766,11 +28726,10 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 /* ── Session composer card: G4 floating card (radius + shadow always) ── */
 .session-panel-input .chat-input-box {
-  border-radius: 20px;
   box-shadow: var(--glass-g4-shadow);
 }
 .session-panel-input .chat-input-task-pill {
-  border-radius: 19px 19px 0 0;
+  border-radius: calc(var(--input-radius) - 1px) calc(var(--input-radius) - 1px) 0 0;
 }
 
 /* ── Main chat column: composer overlay ── */
@@ -28793,11 +28752,10 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 }
 /* Same floating-card treatment as the session composer (radius + shadow always). */
 .chat-composer-overlay .chat-input-box {
-  border-radius: 20px;
   box-shadow: var(--glass-g4-shadow);
 }
 .chat-composer-overlay .chat-input-task-pill {
-  border-radius: 19px 19px 0 0;
+  border-radius: calc(var(--input-radius) - 1px) calc(var(--input-radius) - 1px) 0 0;
 }
 
 /* ── Chrome-over-content legibility ──

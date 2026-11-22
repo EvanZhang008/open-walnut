@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { sendSessionMessage } from '@/api/session-send';
 import { log } from '@/utils/log';
+import { ICON_SEND } from '@/components/common/Icons';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useImageAttachments } from '@/components/common/image-attachments';
 import { AttachPictureButton, PictureStrip, usePictureInput } from '@/components/common/PictureStrip';
@@ -88,7 +89,7 @@ export function KanbanCardComposer({ card, onSent, onClose }: KanbanCardComposer
     <div className="kanban-card-composer" data-testid="kanban-card-composer" data-sending={sending || undefined}
       onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
       <PictureStrip pictures={pictures} className="kanban-composer-pictures" testId="kanban-card-composer-pictures" readOnly={sending} />
-      <div className={`kanban-composer-row${pictureInput.dragOver ? ' is-drag-over' : ''}`} {...pictureInput.dropProps}>
+      <div className={`kanban-composer-row wn-input is-line${pictureInput.dragOver ? ' is-drag-over' : ''}`} {...pictureInput.dropProps}>
         <textarea
           ref={ref}
           className="kanban-composer-input"
@@ -111,10 +112,10 @@ export function KanbanCardComposer({ card, onSent, onClose }: KanbanCardComposer
         <BoxMic boxRef={ref} text={text} setText={(v) => { setText(v); if (error) setError(''); }} handleRef={mic} disabled={sending} />
         {sending ? <span className="kanban-spinner" data-testid="kanban-card-composer-sending" aria-label="Sending" /> : (
           <button
-            type="button" className="btn btn-link btn-sm kanban-text-btn kanban-composer-send" data-testid="kanban-card-composer-send"
+            type="button" className="kanban-composer-send wn-input-send" data-testid="kanban-card-composer-send" aria-label="Send"
             aria-disabled={(!text.trim() && pictures.images.length === 0 && !gate.micBusy && !gate.waiting) || undefined}
             onClick={gate.send} {...dictationWaitProps(gate, text.trim() || pictures.images.length || gate.micBusy ? 'Send (Enter)' : 'Type a message first')}
-          >Send</button>
+          >{ICON_SEND}</button>
         )}
       </div>
       {error && (

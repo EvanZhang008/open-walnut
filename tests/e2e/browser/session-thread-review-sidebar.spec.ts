@@ -842,7 +842,8 @@ test.describe('the fullscreen review sidebar', () => {
       t.placeholder = was
       return h
     })
-    expect.soft(tall, 'a long placeholder takes one line').toBeLessThanOrEqual(30)
+    // One 20 px line and the input box's padding (styles/input-box.css): 32 px; two lines are 52.
+    expect.soft(tall, 'a long placeholder takes one line').toBeLessThanOrEqual(40)
     await wheelIntoView(page, history, box)
     const hb = (await history.boundingBox())!
     // Wheel until the box's middle is just above the view's foot (its buttons past it).

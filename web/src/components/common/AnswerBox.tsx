@@ -14,6 +14,8 @@
  */
 import { useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
+import { ICON_SEND } from '@/components/common/Icons';
+import { fitRows, maxRowsHeight } from '@/components/common/fit-rows';
 import type { ImageAttachments } from '@/components/common/image-attachments';
 import { AttachPictureButton, PictureStrip, usePictureInput } from '@/components/common/PictureStrip';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
@@ -58,8 +60,6 @@ export interface AnswerBoxProps {
   pictures?: ImageAttachments;
 }
 
-const LINE_PX = 18;
-
 export function AnswerBox({
   value, onChange, placeholder, onSubmit, sendLabel, sending, disabled, autoFocus, minRows = 1, maxRows = 6,
   ariaLabel, testId, sendTestId, draftKey, className, inputClassName, boxRef, micRef, children, onKeyDown, onBlur, id, maxLength, readOnly,
@@ -73,10 +73,7 @@ export function AnswerBox({
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
-    const fit = () => {
-      el.style.height = 'auto';
-      el.style.height = `${Math.min(el.scrollHeight, maxRows * LINE_PX + 8)}px`;
-    };
+    const fit = () => fitRows(el, maxRows);
     fit();
     // Measured while its column was still sliding in (narrow, the placeholder wrapped):
     // the height is read again once the width settles. Only a width change refits, so
@@ -106,7 +103,7 @@ export function AnswerBox({
   const submit = gate.send;
   return (
     <div
-      className={`answer-box${className ? ` ${className}` : ''}${disabled ? ' is-disabled' : ''}${hasPictures ? ' has-pictures' : ''}${pictureInput.dragOver ? ' is-drag-over' : ''}`}
+      className={`answer-box wn-input is-line${className ? ` ${className}` : ''}${disabled ? ' is-disabled' : ''}${hasPictures ? ' has-pictures' : ''}${pictureInput.dragOver ? ' is-drag-over' : ''}`}
       data-testid={testId ? `${testId}-box` : 'answer-box'}
       data-takes-pictures={pictures ? '' : undefined}
       {...pictureInput.dropProps}
@@ -127,7 +124,7 @@ export function AnswerBox({
         aria-label={ariaLabel ?? (id ? undefined : placeholder)}
         autoFocus={autoFocus}
         disabled={disabled}
-        style={{ maxHeight: maxRows * LINE_PX + 8 }}
+        style={{ maxHeight: maxRowsHeight(maxRows) }}
         onChange={(e) => onChange(e.target.value)}
         onPaste={pictureInput.onPaste}
         onBlur={onBlur}
@@ -144,8 +141,9 @@ export function AnswerBox({
         <BoxMic boxRef={box} text={value} setText={onChange} handleRef={mic} target={draftKey} disabled={disabled || sending || readOnly} />
         {children}
         {onSubmit && sendLabel && (
-          <button type="button" className="btn btn-sm btn-primary answer-box-send" data-testid={sendTestId} disabled={disabled || sending || (!value.trim() && !hasPictures && !gate.micBusy && !gate.waiting)} onClick={submit} {...dictationWaitProps(gate)}>
-            {sendLabel}
+          // The one send key of every input box (input-box.css): the arrow, its words as its name.
+          <button type="button" className="answer-box-send wn-input-send" data-testid={sendTestId} aria-label={sendLabel} disabled={disabled || sending || (!value.trim() && !hasPictures && !gate.micBusy && !gate.waiting)} onClick={submit} {...dictationWaitProps(gate, sendLabel)}>
+            {ICON_SEND}
           </button>
         )}
       </span>

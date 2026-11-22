@@ -1,35 +1,22 @@
-/* AnswerBox (components/common/AnswerBox.tsx): the composer's look for every answer in words. */
+/* AnswerBox (components/common/AnswerBox.tsx): the box for an answer in words. Its corner, edge,
+   fill, one-line height and keys are the one input box's (styles/input-box.css, `wn-input
+   is-line`); only its row is set here. */
 .answer-box {
-  display: flex; align-items: flex-end; gap: 4px; min-width: 0;
-  padding: 4px 4px 4px 10px; border: 1px solid var(--border); border-radius: var(--radius-md);
-  background: var(--bg-secondary); transition: border-color 0.12s;
+  min-width: 0; transition: border-color 0.12s;
 }
-.answer-box:focus-within { border-color: var(--accent); }
 .answer-box.is-disabled { opacity: 0.6; }
 .answer-box-input {
-  flex: 1; min-width: 0; align-self: center; margin: 0; padding: 4px 0;
+  flex: 1; min-width: 0; margin: 0; padding-left: 0; padding-right: 0;
   border: none; outline: none; background: transparent; color: var(--fg);
-  font: inherit; font-size: var(--font-size-md); line-height: 18px; resize: none; overflow-y: auto;
+  font: inherit; font-size: var(--font-size-md); resize: none; overflow-y: auto;
   field-sizing: content; box-sizing: border-box;
 }
 /* The box's own border shows focus; the global field ring on the textarea inside drew a second frame. */
 .answer-box-input:focus { border: none; box-shadow: none; }
 .answer-box-input::placeholder { color: var(--fg-muted); }
 .answer-box-tools { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
-.answer-box-tools .mic-btn { min-width: 28px; height: 28px; }
-/* An even 4px inset inside the box: the radius follows the box's (12 - 4). */
-.answer-box-send { border-radius: var(--radius-sm); }
-/* Nothing to send yet: a neutral button with readable grey words, not a faded blue one. */
-.answer-box-send:disabled,
-.answer-box-send:disabled:hover {
-  background: var(--bg-tertiary);
-  border-color: var(--border);
-  color: var(--fg-secondary);
-  cursor: default;
-}
 /* Pictures going with the words: the chat's thumbnails on their own row above the text. */
 .answer-box.has-pictures { flex-wrap: wrap; }
-.answer-box.is-drag-over { border-color: var(--accent); outline: 2px dashed var(--accent); outline-offset: -3px; }
 .answer-box .answer-box-pictures { width: 100%; flex-basis: 100%; padding: 4px 0 2px; gap: 6px; }
 .answer-box .answer-box-pictures .chat-image-preview { width: 52px; height: 52px; }
 .answer-box .answer-box-pictures .chat-image-remove { opacity: 1; }

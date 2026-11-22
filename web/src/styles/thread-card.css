@@ -166,32 +166,26 @@
   :root:not([data-theme]) .thread-card .thread-card-status[data-kind="waiting"] { color: hsl(45 95% 62%); }
 }
 
+/* The card's reply box is the one input box (styles/input-box.css): its corner, fill, height and
+   keys come from there. Only its place in the card is set here. */
 .thread-card-composer {
-  display: flex;
-  align-items: flex-end;
-  gap: 6px;
   flex: none;
-  padding: 6px 6px 6px 10px;
-  border-top: 1px solid var(--border);
+  margin: 6px 8px 8px;
 }
-.thread-card[data-draft="true"] .thread-card-composer { border-top: 0; }
 .thread-card .thread-card-pictures { flex: none; padding: 6px 10px 0; border-top: 1px solid var(--border); }
 .thread-card .thread-card-pictures .chat-image-preview { width: 48px; height: 48px; }
 .thread-card .thread-card-pictures .chat-image-remove { opacity: 1; }
-.thread-card-pictures + .thread-card-composer { border-top: 0; }
-.thread-card-composer.is-drag-over { outline: 2px dashed var(--accent); outline-offset: -3px; }
 .thread-card-input {
   flex: 1 1 auto;
   min-width: 0;
-  min-height: 28px;
   max-height: 112px;
-  padding: 5px 0;
+  padding-left: 0;
+  padding-right: 0;
   border: 0;
   background: transparent;
   color: var(--fg);
   font: inherit;
   font-size: var(--font-size-md);
-  line-height: 20px;
   resize: none;
   outline: none;
 }
@@ -203,23 +197,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.thread-card-send {
-  display: inline-grid;
-  place-items: center;
-  flex: none;
-  width: 26px;
-  height: 26px;
-  margin-bottom: 2px;
-  border: 0;
-  border-radius: 50%;
-  background: var(--accent);
-  color: var(--on-accent);
-  cursor: pointer;
-}
-.thread-card-send:disabled { background: var(--bg-tertiary); color: var(--fg-muted); cursor: default; }
 .thread-card-send:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-/* The composer's mic, sized to the send button beside it. */
-.thread-card-composer .mic-btn { min-width: 28px; height: 28px; margin-bottom: 1px; }
 /* A review card's person's words (ThreadCardConversation `asks="lines"`,
    ThreadReplyBox `asked`): a muted line of at most two, never the blue bubble.
    In the reply box it sits above the text field, inside the composer. */

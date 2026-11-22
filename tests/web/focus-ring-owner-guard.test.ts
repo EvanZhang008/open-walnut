@@ -80,7 +80,7 @@ function owners(): Set<string> {
 describe('a box with its own focus ring owns focus', () => {
   it('finds the boxes it is meant to find (the scan still works)', () => {
     const boxes = ringBoxes();
-    for (const known of ['answer-box', 'search-bar', 'chat-input-box', 'pw-search']) expect(boxes.has(known), known).toBe(true);
+    for (const known of ['wn-input', 'search-bar', 'chat-input-box', 'pw-search']) expect(boxes.has(known), known).toBe(true);
   });
 
   it('every such box is in the focus-ring-owners rule, so its field draws no second ring', () => {

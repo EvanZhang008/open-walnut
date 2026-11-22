@@ -3,5 +3,5 @@
   display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px;
   padding: 0; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--fg-muted); cursor: pointer;
 }
-.picture-attach:hover:not(:disabled) { color: var(--fg); background: var(--bg-hover); }
+.picture-attach:hover:not(:disabled) { color: var(--fg); background-color: var(--bg-hover); }
 .picture-attach:disabled { opacity: 0.4; cursor: default; }

@@ -48,6 +48,6 @@ describe('every Ask here card with a conversation has its reply box', () => {
     expect(src).toMatch(/<BoxMic\b/)
     expect(src).toMatch(/<AttachPictureButton\b/)
     expect(src).toMatch(/data-draft-key=\{draft\.key/)
-    expect(src).toMatch(/className="thread-card-send"/)
+    expect(src).toMatch(/className="thread-card-send( wn-input-send)?"/)
   })
 })

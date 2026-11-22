@@ -9,8 +9,8 @@
 .quick-sort-tag { padding: 1px 7px; border-radius: 6px; background: var(--bg-secondary); color: var(--fg-muted); font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; }
 .quick-sort-tag.is-old { background: color-mix(in srgb, var(--tier-wait) 14%, var(--bg)); color: color-mix(in srgb, var(--tier-wait) 70%, var(--fg)); }
 .quick-sort-reply { display: flex; flex-direction: column; gap: 6px; margin-top: auto; }
-.quick-sort-reply-row { display: flex; align-items: flex-start; gap: 6px; padding: 6px 8px; border: 1px solid var(--accent); border-radius: var(--radius-sm); background: var(--bg); }
-.quick-sort-reply-input { flex: 1; min-width: 0; min-height: 40px; max-height: 140px; padding: 0; border: 0; outline: none; resize: vertical; background: transparent; color: var(--fg); font: inherit; font-size: var(--font-size-md); line-height: 1.45; }
+/* The reply box is the one input box (input-box.css); only its row is set here. */
+.quick-sort-reply-input { flex: 1; min-width: 0; max-height: 140px; padding-left: 0; padding-right: 0; border: 0; outline: none; resize: vertical; background: transparent; color: var(--fg); font: inherit; font-size: var(--font-size-md); }
 .quick-sort-reply-input, .quick-sort-reply-input:focus, .quick-sort-reply-input:focus-visible { box-shadow: none; outline: none; border: 0; background: transparent; }
 .quick-sort-reply-error { color: var(--error); font-size: var(--font-size-sm); }
 .quick-sort-reply-actions { display: grid; grid-template-columns: 1fr 2fr; gap: 6px; }

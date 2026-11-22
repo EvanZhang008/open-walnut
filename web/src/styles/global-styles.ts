@@ -10,3 +10,5 @@ import './chat-palette.css';
 import './home-navigation.css';
 import './overlay-glass.css';
 import './fullscreen-tab.css';
+// Last: the one input box look (input-box.css) wins over every rule above it of the same weight.
+import './input-box.css';
