@@ -169,7 +169,7 @@ function SummaryView({ summary, onClose }: { summary: FocusSummary; onClose(): v
           <div className="ask-card-answer focus-options">
             <div className="org-answer-options" role="list">
               {summary.needs.slice(0, 6).map((t) => (
-                <button key={t.id} type="button" role="listitem" className="btn btn-sm" onClick={() => { onClose(); openTask(t.id) }}>{t.title}</button>
+                <button key={t.id} type="button" role="listitem" className="btn btn-sm" data-peek-row="" onClick={() => { onClose(); openTask(t.id) }}>{t.title}</button>
               ))}
             </div>
           </div>

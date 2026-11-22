@@ -25,8 +25,9 @@ export function createPluginUseDraft(pluginId: string): PluginUseDraft {
   return function useDraftOfPlugin(name: string, options?: { id?: string }) {
     if (!NAME.test(name)) throw new Error('walnut.ui.useDraft name must be 1-64 letters, digits, "_" or "-"')
     const id = options?.id
-    const own = `${useFocusKeyPrefix(pluginId)}${name}`
-    const key = id === undefined ? draftKey('plugin', pluginId, own) : draftKey('plugin', pluginId, own, id)
+    // In a focus space where this app starts fresh, the name carries the space (`ws.<id>.`).
+    const nameInSpace = `${useFocusKeyPrefix(pluginId)}${name}`
+    const key = id === undefined ? draftKey('plugin', pluginId, nameInSpace) : draftKey('plugin', pluginId, nameInSpace, id)
     const draft = useDraft(key, { followElsewhere: false })
     return [draft.text, draft.setText, () => draft.clear()]
   }
