@@ -22,7 +22,7 @@ import { cssColorToRgba, withCssColor } from './css-color'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
-const SHOTS = '/tmp/kanban/shots/r4'
+const SHOTS = process.env.PW_SCREENSHOT_DIR ?? '/tmp/kanban/shots/r4'
 const litter: string[] = []
 let api: KanbanApi
 let team: KanbanTeam
@@ -447,12 +447,31 @@ for (const scheme of ['light', 'dark'] as const) {
     const pb = (await pane.boundingBox())!
     const why = `pane ${Math.round(pb.height)}, session ${Math.round(sb.height)}`
     expect(pb.y + pb.height - (sb.y + sb.height), why).toBeLessThan(40)
-    // At least the chat's floor: the card's title and status show whole above it (the fixture's title
-    // runs five lines at 520px), and its summary takes at most 4 lines there.
+    // At least the chat's floor: the card's title and status stay whole above it (the fixture's title
+    // runs five lines at 520px) in the card's own box, which scrolls.
     expect(sb.height, why).toBeGreaterThanOrEqual(280)
     // The nested chat is shown, not hidden by the outer panel's collapsed-chat rule: its history and composer.
     await expect(session.locator('.session-panel-body').first()).toBeVisible()
     await expect(session.getByRole('textbox').first()).toBeInViewport({ ratio: 1 })
+    // The chat keeps real room for its history (2026-11-22: the whole card above it left about 45px):
+    // the card is a box of its own that scrolls, at most 40% of the pane, Back and the actions in view.
+    const room = await session.evaluate((el) => {
+      const r = (s: string) => el.querySelector(s)?.getBoundingClientRect() ?? null
+      const hist = r('.session-history'), header = r('.session-panel-header'), input = r('.session-panel-input')
+      if (!hist || !header || !input) return { history: 0 }
+      return { history: Math.round(Math.min(hist.bottom, input.top) - Math.max(hist.top, header.bottom)) }
+    })
+    expect(room.history, `${why}, chat history ${room.history}`).toBeGreaterThanOrEqual(160)
+    const head = detail.getByTestId('kanban-detail-head')
+    const hb = (await head.boundingBox())!
+    expect(hb.height, `${why}, card ${Math.round(hb.height)}`).toBeLessThanOrEqual(pb.height * 0.4 + 2)
+    // The card's title is whole (it scrolls, never cuts), and Back and the actions stay in view.
+    const title = detail.locator('.kanban-detail-title')
+    expect(await title.evaluate((el) => el.scrollHeight <= el.clientHeight + 1 && getComputedStyle(el).textOverflow !== 'ellipsis')).toBe(true)
+    await expect(pane.getByTestId('kanban-detail-back')).toBeInViewport({ ratio: 1 })
+    await expect(detail.getByTestId('kanban-detail-complete')).toBeInViewport({ ratio: 1 })
+    const actions = (await detail.locator('.kanban-detail-actions').boundingBox())!
+    expect(actions.y + actions.height, 'the actions sit at the bottom of the card box').toBeLessThanOrEqual(hb.y + hb.height + 1)
     await page.screenshot({ path: `${SHOTS}/${engine}-r305-detail-session-${scheme}.png` })
     await pane.getByTestId('kanban-detail-back').click()
     await expect(detail).toHaveCount(0)

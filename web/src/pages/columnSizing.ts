@@ -240,3 +240,38 @@ export function todoPanelAloneWidth(alonePct: number | null, sharedPct: number):
 export function todoPanelBasisPx(viewportPx: number, railPx: number): number {
   return viewportPx - (Number.isFinite(railPx) ? railPx : HOME_RAIL_DEFAULT_PX);
 }
+
+// ── Floors: every column on Home's row keeps a readable width ──
+
+/**
+ * The narrowest a Home column (the Quick question slot, a session column) is drawn while the row
+ * has room: the chat floor its header and composer need (2026-11-22: at 1280 with the task panel,
+ * the Scratchpad, an empty Quick question and one session, Quick question got 145px, its header's
+ * tools clipped and its name broke onto two lines).
+ */
+export const HOME_COLUMN_MIN_PX = 280;
+
+/** The room Home's columns need at their floors: one per session column, one for an open Quick question. */
+export function homeColumnFloorPx(columns: number, chatShown: boolean): number {
+  return HOME_COLUMN_MIN_PX * (Math.max(0, columns) + (chatShown ? 1 : 0));
+}
+
+/**
+ * The custom properties `.main-page-right` carries for the floors (globals.css, "Floors"), or none on a
+ * phone, which shows one pane at a time. Who gives way when the row is short, in order: the session
+ * area's share (Quick question keeps its floor), then the side bars (down to
+ * globals.css --home-side-bar-floor); the task panel keeps the width the user gave it. A row that still
+ * cannot hold every column at its floor (a hand-set count of many columns) splits what is left
+ * evenly among the session columns, never cutting one off the window's edge.
+ */
+export function homeRowFloorVars(o: { columns: number; chatShown: boolean; sideBars: number; todoWidth: string | null; phone: boolean }): Record<string, string> | undefined {
+  if (o.phone) return undefined;
+  return {
+    '--home-column-min': `${HOME_COLUMN_MIN_PX}px`,
+    '--home-chat-min': o.chatShown ? `${HOME_COLUMN_MIN_PX}px` : '0px',
+    '--home-columns': String(Math.max(1, o.columns)),
+    '--home-row-floor': `${homeColumnFloorPx(o.columns, o.chatShown)}px`,
+    '--home-side-bars': String(Math.max(0, o.sideBars)),
+    '--home-todo-w': o.todoWidth ?? '0px',
+  };
+}

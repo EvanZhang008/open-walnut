@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   evenWeights,
+  HOME_COLUMN_MIN_PX,
+  homeColumnFloorPx,
+  homeRowFloorVars,
   normalizeWeights,
   resizeAtBoundary,
   loadColWeights,
@@ -328,5 +331,34 @@ describe("Home's row: the session area's width is derived from the layout", () =
     // The user's own width still wins over both.
     expect(shown(drag, 1, 'empty')).toBe(65);
     expect(shown(olderDrag, 1, 'empty')).toBe(58.4);
+  });
+});
+
+describe('Home column floors', () => {
+  // 2026-11-22: at 1280 with the task panel, the Scratchpad, an empty Quick question and one
+  // session, Quick question got 145px; its header's tools clipped and its name broke in two.
+  it('every open column, Quick question included, asks for its floor', () => {
+    expect(HOME_COLUMN_MIN_PX).toBe(280);
+    expect(homeColumnFloorPx(1, true)).toBe(560);
+    expect(homeColumnFloorPx(1, false)).toBe(280);
+    expect(homeColumnFloorPx(0, true)).toBe(280);
+    expect(homeColumnFloorPx(3, true)).toBe(1120);
+    expect(homeColumnFloorPx(-1, false)).toBe(0);
+  });
+
+  it('the row carries the numbers its CSS reads, and a phone none', () => {
+    const vars = homeRowFloorVars({ columns: 1, chatShown: true, sideBars: 1, todoWidth: 'calc(100vw * 0.3)', phone: false })!;
+    expect(vars).toEqual({
+      '--home-column-min': '280px', '--home-chat-min': '280px', '--home-columns': '1',
+      '--home-row-floor': '560px', '--home-side-bars': '1', '--home-todo-w': 'calc(100vw * 0.3)',
+    });
+    // Quick question closed: it asks for nothing; no task panel: it takes no room.
+    const closed = homeRowFloorVars({ columns: 2, chatShown: false, sideBars: 0, todoWidth: null, phone: false })!;
+    expect(closed['--home-chat-min']).toBe('0px');
+    expect(closed['--home-row-floor']).toBe('560px');
+    expect(closed['--home-todo-w']).toBe('0px');
+    // No column (Quick question alone): the per-column share never divides by zero.
+    expect(homeRowFloorVars({ columns: 0, chatShown: true, sideBars: 0, todoWidth: null, phone: false })!['--home-columns']).toBe('1');
+    expect(homeRowFloorVars({ columns: 1, chatShown: true, sideBars: 2, todoWidth: null, phone: true })).toBeUndefined();
   });
 });

@@ -343,23 +343,36 @@ button.kanban-card-status { padding: 0; border: 0; background: none; font-family
 /* ── The narrow card detail (it replaces the board) ── */
 .kanban-card-detail { flex: 1 1 auto; overflow-y: auto; margin: 8px 12px; cursor: default; gap: 8px; padding: 10px 12px; justify-content: flex-start; }
 /* N6: the card's status line grows in a row; in this column it would take every spare pixel. */
-.kanban-card-detail > * { flex: 0 0 auto; }
+.kanban-card-detail > *, .kanban-detail-head > * { flex: 0 0 auto; }
+/* The card itself (Back to the actions), in the detail's own column rhythm. */
+.kanban-detail-head { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .kanban-card-detail .kanban-detail-bar { display: flex; align-items: center; gap: 10px; }
 .kanban-card-detail .kanban-detail-lane { color: var(--fg-muted); font-size: var(--font-size-sm); }
 .kanban-card-detail .kanban-detail-title { margin: 0; font-size: var(--font-size-lg); font-weight: 600; }
 .kanban-card-detail .kanban-detail-summary { margin: 0; color: var(--fg-secondary); line-height: 19px; }
 .kanban-card-detail .kanban-detail-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .kanban-card-detail .kanban-detail-actions .btn { display: inline-flex; align-items: center; gap: 4px; }
-/* R3-05: the task under the card's header. With a session, the chat takes the rest of the pane. */
-.kanban-card-detail.has-session { overflow: hidden; padding-bottom: 0; }
+/* R3-05: the task under the card's header. With a session, the chat takes the rest of the pane, and
+   the card above it is a box of its own: at most 40% of the pane, scrolling, with Back at its top and
+   the actions at its bottom held in view, so a five-line title and a long summary stay whole (a scroll
+   box is not a cut: standard.md, "Text that does not fit") and the chat keeps its history (2026-11-22:
+   the whole card above the session left the chat about 45px at 520x800). The box spans the card's
+   edges, so its scroll bar sits at the card's edge and no focus ring is clipped. */
+.kanban-card-detail.has-session { overflow: hidden; padding: 0; gap: 0; }
+.kanban-card-detail.has-session > .kanban-detail-head {
+  max-height: 40%; overflow-y: auto; overscroll-behavior: contain; padding: 10px 12px;
+}
+.kanban-card-detail.has-session > .kanban-detail-head > :is(.kanban-detail-bar, .kanban-detail-actions) {
+  position: sticky; z-index: 1; background: var(--bg-elevated);
+}
+/* A sticky box stops at the scroll box's padding: the offsets reach into it, so no scrolled line shows past Back or the actions. */
+.kanban-card-detail.has-session > .kanban-detail-head > .kanban-detail-bar { top: -10px; padding-top: 10px; margin-top: -10px; }
+.kanban-card-detail.has-session > .kanban-detail-head > .kanban-detail-actions { bottom: -10px; padding-bottom: 10px; margin-bottom: -10px; }
 .kanban-card-detail > .kanban-detail-session {
   flex: 1 1 auto; min-height: 280px; display: flex; flex-direction: column; position: relative;
-  margin: 2px -12px 0; border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border);
 }
 .kanban-detail-session > .session-panel { flex: 1 1 auto; height: auto; min-height: 0; }
-/* Above the chat the summary stays whole but takes at most 4 lines of the pane, in a box that scrolls,
-   so the chat keeps the rest (a summary is never cut: standard.md, "Text that does not fit"). */
-.kanban-card-detail.has-session > .kanban-detail-summary { max-height: calc(4 * 19px); overflow-y: auto; }
 /* The detail sits in the outer panel's split, whose `is-chat-collapsed` / `is-changed-open` descendant rules
    reach the nested panel too (they hid its whole chat): its own split is closed, its chat column is the plain
    wrapper again, as in the board peek (task-board.css). Its header is in flow. */

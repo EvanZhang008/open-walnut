@@ -133,7 +133,7 @@ import { withDetectedOwner } from '@/components/sessions/draft-work-in';
 import { knownHomeOf } from '@/utils/home-folder';
 import { withHomeFolder } from '@/components/sessions/draft-home-default';
 import { reconcileActiveSession } from '@/stores/active-session';
-import { loadColWeights, saveColWeights, resizeAtBoundary, sessionAreaShownPct, todoPanelAloneWidth, todoPanelBasisPx, todoPanelWidth, usersSessionWidth, type QuickQuestionSlot } from './columnSizing';
+import { homeRowFloorVars, loadColWeights, saveColWeights, resizeAtBoundary, sessionAreaShownPct, todoPanelAloneWidth, todoPanelBasisPx, todoPanelWidth, usersSessionWidth, type QuickQuestionSlot } from './columnSizing';
 import { HomeEmptyPane } from './HomeEmptyPane';
 import {
   HOME_CHAT_VISIBLE_DEFAULT, LS_HOME_CHAT_VISIBLE_KEY, autoDraftMayTakeFocus, firstDraftDecisionReady, focusHolderOf, homeChatChosenOpen, homeTaskPanelShown, readHomeChatVisible, shouldAutoOpenFirstDraft,
@@ -1020,6 +1020,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const askSlot: QuickQuestionSlot = !chatVisible || phoneLayout ? 'closed' : askSlotHasContent ? 'shown' : 'empty';
   const sessionAreaShown = sessionAreaShownPct(usersSessionWidth(sessionPanel), colCount, askSlot);
   sessionAreaShownRef.current = sessionAreaShown;
+  // Every column keeps a floor; a short row takes the room from the session area's share, then
+  // from the side bars (columnSizing.ts homeRowFloorVars).
+  const homeRowFloor = homeRowFloorVars({
+    columns: colCount, chatShown: askSlot !== 'closed', phone: phoneLayout,
+    sideBars: (calendarVisible ? 1 : 0) + (scratchpadVisible ? 1 : 0), todoWidth: todoShown ? todoWidth : null,
+  }) as React.CSSProperties | undefined;
 
   // Swap in the layout saved for THIS column count. Layouts are stored per count,
   // so opening a 3rd panel doesn't destroy the 2-column split the user tuned —
@@ -3897,7 +3903,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       )}
 
       {/* Right column: Chat + Sessions + FocusDock */}
-      <div className="main-page-right">
+      <div className="main-page-right" style={homeRowFloor}>
       <div className="main-page-content-row" ref={contentRowRef}>
 
       {/* THE CHAT SPOT IS AN ASK WALNUT SESSION VIEW (P1 of "remove the main
@@ -3982,7 +3988,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           <div
             className="main-page-session-column"
             key="__triage__"
-            style={colCount >= 2 ? { flex: `0 0 ${renderWeights[0] ?? 0}%` } : undefined}
+            style={colCount >= 2 ? { flex: `0 1 ${renderWeights[0] ?? 0}%` } : undefined}
           >
             <TriagePanel
               onClose={handleCloseTriage}
@@ -4008,10 +4014,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           const pendingMeta = (qsMeta?.id === sid ? qsMeta : null) ?? (forkMeta?.id === sid ? forkMeta : null);
           const isForkPending = forkMeta?.id === sid;
           // Column widths: one weight per column (summing to 100). A single column
-          // stays on the CSS default (flex:1) so it fills the strip.
+          // stays on the CSS default (flex:1) so it fills the strip. A weight may shrink:
+          // a column dragged under its floor (globals.css) takes the room from the others.
           const colIdx = idx + (triagePanelOpen ? 1 : 0);
           const colStyle: React.CSSProperties = colCount >= 2
-            ? { flex: `0 0 ${renderWeights[colIdx] ?? 0}%` }
+            ? { flex: `0 1 ${renderWeights[colIdx] ?? 0}%` }
             : {};
           // Phone: only the open column is on screen, so only it mounts (and fetches).
           if (phoneLayout && idx !== mobileActiveIdx) {

@@ -72,51 +72,55 @@ export function KanbanCardDetail({ card, laneName, readOnly, onBack, onOpenSessi
 
   return (
     <div className={`kanban-card-detail${inline ? ' has-session' : ''}`} data-testid="kanban-card-detail" data-task-id={card.taskId} role="region" aria-label={card.title}>
-      <div className="kanban-detail-bar">
-        <button ref={backRef} type="button" className="btn btn-link kanban-detail-back" data-testid="kanban-detail-back" onClick={onBack}>Back</button>
-        <span className="kanban-detail-lane">{laneName}</span>
-      </div>
-      <h3 className="kanban-detail-title wn-title">{card.title}</h3>
-      {(card.ticket || card.sev) && (
-        <div className="kanban-card-ids">
-          {card.ticket && (
-            <span className="kanban-card-ticket" data-testid="kanban-detail-ticket">
-              <TagChip tag={card.ticket.tag} inline whole valueOnly href={tagDisplay.linkFor(card.ticket.tag)} />
-            </span>
-          )}
-          {card.sev && <span className={`kanban-card-sev kanban-sev-${card.sev === '1' ? '1' : card.sev === '2' ? '2' : 'other'}`}>Sev {card.sev}</span>}
+      {/* The card itself. Above an open session it is a box of its own that scrolls, Back and the
+          actions held at its edges, so the chat keeps most of the pane (board-kanban.css). */}
+      <div className="kanban-detail-head" data-testid="kanban-detail-head">
+        <div className="kanban-detail-bar">
+          <button ref={backRef} type="button" className="btn btn-link kanban-detail-back" data-testid="kanban-detail-back" onClick={onBack}>Back</button>
+          <span className="kanban-detail-lane">{laneName}</span>
         </div>
-      )}
-      <div className={`kanban-card-status kanban-tone-${card.status.tone} kanban-detail-status`} data-tone={card.status.tone} title={card.status.tooltip}>
-        <span className="kanban-card-dot" aria-hidden="true" /><AgentText compact inline {...(card.status.textSource ?? { unknownSource: true })} className="kanban-card-status-text" text={card.status.text} />
-      </div>
-      {card.status.prompt && <div className="kanban-card-prompt"><OneCardFrame testId="kanban-card-ask"><KanbanCardPrompt request={card.status.prompt} onAnswered={() => onSeen(card.taskId)} /></OneCardFrame></div>}
-      {editor ? (
-        <div className="kanban-card-editor">
-          <KanbanCardEditor field={editor.field} card={card} openedAt={editor.openedAt} api={ctx!.api} onClose={() => { setEditor(null); moreRef.current?.focus(); }} />
+        <h3 className="kanban-detail-title wn-title">{card.title}</h3>
+        {(card.ticket || card.sev) && (
+          <div className="kanban-card-ids">
+            {card.ticket && (
+              <span className="kanban-card-ticket" data-testid="kanban-detail-ticket">
+                <TagChip tag={card.ticket.tag} inline whole valueOnly href={tagDisplay.linkFor(card.ticket.tag)} />
+              </span>
+            )}
+            {card.sev && <span className={`kanban-card-sev kanban-sev-${card.sev === '1' ? '1' : card.sev === '2' ? '2' : 'other'}`}>Sev {card.sev}</span>}
+          </div>
+        )}
+        <div className={`kanban-card-status kanban-tone-${card.status.tone} kanban-detail-status`} data-tone={card.status.tone} title={card.status.tooltip}>
+          <span className="kanban-card-dot" aria-hidden="true" /><AgentText compact inline {...(card.status.textSource ?? { unknownSource: true })} className="kanban-card-status-text" text={card.status.text} />
         </div>
-      ) : card.summary && <AgentText compact {...card.summary.textSource} className="kanban-detail-summary wn-title" testId="kanban-detail-summary" text={card.summary.text} title={card.summary.tooltip} />}
-      {card.waiting?.kind === 'text' && <div className="kanban-card-waiting"><span className="kanban-card-waiting-label">Waiting on</span> <AgentText compact inline {...(card.waiting.textSource ?? { unknownSource: true })} text={card.waiting.text ?? ''} /></div>}
-      <div className="kanban-card-foot"><span title={card.foot.activeTooltip}>{sent ? 'Sent' : card.foot.activeText}</span>{card.foot.stale && <span className="kanban-card-stale">{card.foot.stale}</span>}</div>
-      <div className="kanban-detail-actions">
-        <button type="button" className="btn btn-sm" data-testid="kanban-detail-open" onClick={() => onOpenSession(card.taskId, card.sessionId)}>
-          <span aria-hidden="true">{ICON_NEW_TAB}</span> {card.hasSession ? 'Open session' : 'Open the task'}
-        </button>
-        {!inline && <button type="button" className="btn btn-sm" data-testid="kanban-detail-message" aria-disabled={readOnly || !card.hasSession || undefined}
-          title={readOnly ? READ_ONLY_TITLE : card.hasSession ? 'Message the worker' : 'No session yet. Use Start worker.'}
-          onClick={() => { if (!readOnly && card.hasSession) setComposer(true); }}>
-          <span aria-hidden="true">{ICON_CHAT}</span> Message
-        </button>}
-        {!card.isComplete && (
-          <button type="button" className="btn btn-sm" data-testid="kanban-detail-complete" aria-disabled={readOnly || undefined}
-            title={readOnly ? READ_ONLY_TITLE : 'Complete this task'} onClick={() => { if (!readOnly) void ctx?.api.completeTask(card.taskId); }}>
-            <span aria-hidden="true">{ICON_CHECK}</span> Complete
+        {card.status.prompt && <div className="kanban-card-prompt"><OneCardFrame testId="kanban-card-ask"><KanbanCardPrompt request={card.status.prompt} onAnswered={() => onSeen(card.taskId)} /></OneCardFrame></div>}
+        {editor ? (
+          <div className="kanban-card-editor">
+            <KanbanCardEditor field={editor.field} card={card} openedAt={editor.openedAt} api={ctx!.api} onClose={() => { setEditor(null); moreRef.current?.focus(); }} />
+          </div>
+        ) : card.summary && <AgentText compact {...card.summary.textSource} className="kanban-detail-summary wn-title" testId="kanban-detail-summary" text={card.summary.text} title={card.summary.tooltip} />}
+        {card.waiting?.kind === 'text' && <div className="kanban-card-waiting"><span className="kanban-card-waiting-label">Waiting on</span> <AgentText compact inline {...(card.waiting.textSource ?? { unknownSource: true })} text={card.waiting.text ?? ''} /></div>}
+        <div className="kanban-card-foot"><span title={card.foot.activeTooltip}>{sent ? 'Sent' : card.foot.activeText}</span>{card.foot.stale && <span className="kanban-card-stale">{card.foot.stale}</span>}</div>
+        <div className="kanban-detail-actions">
+          <button type="button" className="btn btn-sm" data-testid="kanban-detail-open" onClick={() => onOpenSession(card.taskId, card.sessionId)}>
+            <span aria-hidden="true">{ICON_NEW_TAB}</span> {card.hasSession ? 'Open session' : 'Open the task'}
           </button>
-        )}
-        {ctx && (
-          <button ref={moreRef} type="button" className="btn btn-sm" data-testid="kanban-detail-more" aria-haspopup="menu" aria-expanded={menu}
-            title="Move to lane, edit summary, more" onClick={() => setMenu((v) => !v)}>More</button>
-        )}
+          {!inline && <button type="button" className="btn btn-sm" data-testid="kanban-detail-message" aria-disabled={readOnly || !card.hasSession || undefined}
+            title={readOnly ? READ_ONLY_TITLE : card.hasSession ? 'Message the worker' : 'No session yet. Use Start worker.'}
+            onClick={() => { if (!readOnly && card.hasSession) setComposer(true); }}>
+            <span aria-hidden="true">{ICON_CHAT}</span> Message
+          </button>}
+          {!card.isComplete && (
+            <button type="button" className="btn btn-sm" data-testid="kanban-detail-complete" aria-disabled={readOnly || undefined}
+              title={readOnly ? READ_ONLY_TITLE : 'Complete this task'} onClick={() => { if (!readOnly) void ctx?.api.completeTask(card.taskId); }}>
+              <span aria-hidden="true">{ICON_CHECK}</span> Complete
+            </button>
+          )}
+          {ctx && (
+            <button ref={moreRef} type="button" className="btn btn-sm" data-testid="kanban-detail-more" aria-haspopup="menu" aria-expanded={menu}
+              title="Move to lane, edit summary, more" onClick={() => setMenu((v) => !v)}>More</button>
+          )}
+        </div>
       </div>
       {menu && ctx && (
         <KanbanCardMenu

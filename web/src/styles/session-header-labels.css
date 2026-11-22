@@ -75,3 +75,27 @@
   order: 2;
 }
 .session-panel-header-top[data-header-fit="tight"] .session-panel-title-meta .task-waiting-chip { max-width: 100%; }
+
+/* A title that wraps (data-title-band, set by useTitleRowTight.ts only then): everything beside it
+   lines up with its FIRST line, never the middle of the block (2026-11-22: once titles wrapped, the
+   labels and the ⋮ floated between two lines). --title-band is the height the row has with a
+   one-line title, so the first line stays where a one-line title sits; a one-line title gets none
+   of this and is laid out as before. */
+.session-panel-header-top[data-title-band] { align-items: flex-start; }
+.session-panel-header-top[data-title-band] > :is(.session-panel-title-meta, .session-panel-header-leading),
+.session-panel-header-top[data-title-band][data-header-fit="tight"] > .session-panel-title-meta > .task-quick-actions {
+  min-height: var(--title-band);
+}
+.session-panel-header-top[data-title-band] > .thread-mode-pill-slot { align-self: flex-start; height: var(--title-band); }
+.session-panel-header-top[data-title-band] > .session-panel-title-area {
+  align-items: flex-start;
+  padding-top: calc((var(--title-band) - var(--title-line)) / 2);
+}
+.session-panel-header-top[data-title-band] > .session-panel-title-area > .task-quick-actions { min-height: var(--title-line); }
+/* The unread dot in the header's gutter (walnut-agent.css) centres on the first line too; after the
+   Ask Walnut menu button it is a flex item, moved to the line's middle and back by half its own size. */
+.session-panel-header-top[data-title-band] > .session-panel-title-area > .session-panel-unread-dot { top: calc(var(--title-band) / 2); }
+.session-panel-header-top[data-title-band] > .session-panel-header-leading + .session-panel-title-area > .session-panel-unread-dot {
+  margin-top: calc(var(--title-line) / 2);
+  translate: 0 -50%;
+}

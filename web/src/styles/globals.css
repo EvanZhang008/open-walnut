@@ -8467,6 +8467,33 @@ body.walnut-dragging {
   overflow: hidden;
 }
 
+/* Floors: every column on Home's row keeps a readable width (columnSizing.ts homeRowFloorVars sets
+   the numbers on .main-page-right, none on a phone). A short row takes the room from the session
+   area's share first (Quick question keeps its floor), then from the side bars right of the task
+   panel, which shrink down to --home-side-bar-floor; the right side asks for no more than the row
+   leaves after the task panel and those floors. Past that the session columns split what is left
+   evenly, never one cut off at the window's edge (2026-11-22: an empty Quick question got 145px at
+   1280 beside the Scratchpad and a session). */
+.main-page { --home-side-bar-floor: 200px; }
+.main-page-right {
+  min-width: min(var(--home-row-floor, 0px), calc(100% - var(--home-todo-w, 0px) - var(--home-side-bars, 0) * var(--home-side-bar-floor)));
+}
+.main-page-chat:not(.collapsed) { min-width: min(var(--home-chat-min, 0px), 100%); }
+.main-page-content-row > .main-page-sessions-area:not(.collapsed) {
+  flex-shrink: 1;
+  min-width: min(calc(var(--home-columns, 1) * var(--home-column-min, 0px)), calc(100% - var(--home-chat-min, 0px)));
+}
+.main-page-sessions-area > .main-page-session-column { min-width: min(var(--home-column-min, 0px), 100% / var(--home-columns, 1)); }
+@media (min-width: 1101px) {
+  /* Scoped under .main-page so it outranks home-navigation.css's `flex: 0 0 auto`, which loads later. */
+  .main-page .home-companion { flex-shrink: 1; min-width: 0; }
+  .main-page .home-companion .side-bar-pane { flex-shrink: 1; min-width: var(--home-side-bar-floor); }
+}
+@media (max-width: 1100px) {
+  /* The side bars overlay the row there (home-navigation.css): they take no room from it. */
+  .main-page { --home-side-bar-floor: 0px; }
+}
+
 /* Nothing open beside the task panel (pages/HomeEmptyPane.tsx): the room's title and its
    one next step, centred and quiet, never a blank two thirds of the window. */
 .home-empty-pane {

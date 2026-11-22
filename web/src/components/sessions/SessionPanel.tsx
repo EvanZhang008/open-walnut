@@ -202,7 +202,7 @@ import type { PlusMenuAction } from '@/components/chat/plus-menu-actions';
 import { useMainQuickPlusActions } from '@/components/org/useMainQuickPlusActions';
 import { SessionHeaderMoreMenu, SessionHeaderToolRow } from './SessionHeaderMore';
 import { SessionHeaderLabels } from './SessionHeaderLabels';
-import { useTitleRowTight } from './useTitleRowTight';
+import { titleRowBandProps, useTitleRowTight } from './useTitleRowTight';
 import { NoticeToken, PanelNotice } from './PanelNotice';
 import '@/styles/session-header-fit.css';
 import '@/styles/session-plain-chat.css';
@@ -681,8 +681,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // them. The title row has nothing to fold: its labels are one control already.
   const toolRowRef = useRef<HTMLDivElement>(null);
   // A narrow title row puts its labels on a line under the title (useTitleRowTight.ts), and
-  // its Watch pill draws the eye alone.
-  const [titleRowRef, titleRowTight] = useTitleRowTight();
+  // its Watch pill draws the eye alone. A wrapped title gives the row its first line band, so
+  // the labels and the kebab line up with the title's first line.
+  const [titleRowRef, titleRowTight, titleRowBand] = useTitleRowTight();
   // Fork and Board (and the kebab's Locate) need the session's task. Whether they exist is decided
   // on the first frame from what this page already knows (the status store, which
   // every list naming the session seeds); a session known to have no task gets
@@ -3584,7 +3585,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           {/* ROW 2 — the title gets the whole line; only the folded labels and the
               kebab sit beside it (plus the host's one leading control, when
               embedded). Every window/tool icon button lives on row 1. */}
-          <div className="session-panel-header-top" ref={titleRowRef} data-header-fit={titleRowTight ? 'tight' : undefined}>
+          <div className="session-panel-header-top" ref={titleRowRef} data-header-fit={titleRowTight ? 'tight' : undefined} {...titleRowBandProps(titleRowBand)}>
             {headerLeading && !shownFullscreen && (
               <div className="session-panel-header-leading">{headerLeading}</div>
             )}

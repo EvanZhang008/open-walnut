@@ -237,6 +237,73 @@ test('a session column header: the unread dot, the status icon, Trigger, Worker,
   expect(errors).toEqual([])
 })
 
+/** The vertical centre of a title's first line (its first line box), and how many lines it has. */
+async function titleFirstLine(row: Locator): Promise<{ cy: number; lines: number }> {
+  return row.locator('.session-panel-title').first().evaluate((el) => {
+    const rects = [...(() => { const r = document.createRange(); r.selectNodeContents(el); return r.getClientRects() })()]
+    const first = rects[0]
+    return { cy: first.y + first.height / 2, lines: new Set(rects.map((x) => Math.round(x.y))).size }
+  })
+}
+
+const boxCy = (row: Locator, sel: string) => row.locator(sel).first().evaluate((el) => { const b = el.getBoundingClientRect(); return b.y + b.height / 2 })
+
+test('a title that wraps: the status icon and the kebab line up with its first line, a one-line title is left as it was', async ({ page }) => {
+  // 2026-11-22: once titles wrapped (.wn-title), the kebab and the status icon beside a two-line title
+  // sat between its lines, centred on the whole block.
+  test.setTimeout(180_000)
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(e.message))
+  await openHome(page)
+  await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
+  const { taskId, sessionId } = await quickStart(page, draftComposer(page), 'snapshot-clean-turn:Wrapped title turn finished')
+  const panel = page.locator(`${REAL_PANEL}[data-session-id="${sessionId}"]`)
+  await expect(panel.getByText('Wrapped title turn finished', { exact: true }).first()).toBeVisible({ timeout: 30_000 })
+  await dressAsBusyTask(taskId)
+  const row = panel.locator('.session-panel-header-top')
+  for (const pill of ['Trigger', 'Worker', 'Leader']) await expectHeaderLabel(panel, pill)
+  // One line: the row is laid out as before (no band), its height noted to compare.
+  await expect(row).not.toHaveAttribute('data-title-band', /./)
+  const oneLineH = (await row.boundingBox())!.height
+  const header = panel.locator('.session-panel-header')
+  const oneLineHeaderH = (await header.boundingBox())!.height
+
+  const long = 'Garden watering planner skips the evening run for beds that are still being replanted, so the soil check never runs and the bed waits for a manual watering'
+  await api('PATCH', `/api/tasks/${taskId}`, { title: long })
+  await expect(row.locator('.session-panel-title').first()).toHaveText(long, { timeout: 20_000 })
+  // A narrow column (the labels go under the title, the kebab stays beside it) and a wide one.
+  for (const width of [400, 700]) {
+    await panel.evaluate((el, w) => { (el as HTMLElement).style.width = `${w}px`; (el as HTMLElement).style.flex = 'none' }, width)
+    await expect(row).toHaveAttribute('data-title-band', 'wrapped')
+    await page.waitForTimeout(300)
+    const first = await titleFirstLine(row)
+    expect(first.lines, `${width}px: the title wraps`).toBeGreaterThanOrEqual(2)
+    const circle = await boxCy(row, '.task-quick-phase-btn')
+    expect(Math.abs(circle - first.cy), `${width}px: the status icon ${(circle - first.cy).toFixed(1)}px off the first line`).toBeLessThanOrEqual(1)
+    const kebab = (await row.locator('.task-kebab-btn').last().boundingBox())!
+    const titleBox = (await row.locator('.session-panel-title-area').boundingBox())!
+    if (kebab.y < titleBox.y + titleBox.height - 1) {
+      // Beside the title: centred on its first line, not on the block.
+      const off = kebab.y + kebab.height / 2 - first.cy
+      expect(Math.abs(off), `${width}px: the kebab ${off.toFixed(1)}px off the first line`).toBeLessThanOrEqual(4)
+      expect(Math.abs(off), `${width}px: the kebab on the first line's centre`).toBeLessThanOrEqual(1)
+      // Nothing beside the first line sticks out above the row (into the tool row).
+      expect(kebab.y, `${width}px: the kebab stays inside the row`).toBeGreaterThanOrEqual((await row.boundingBox())!.y - 0.5)
+    } else {
+      expect(width, 'only a wide row moves the kebab under a long title').toBeGreaterThan(440)
+    }
+    await panel.locator('.session-panel-header').screenshot({ path: `${SCREENSHOT_DIR}/${test.info().project.name}-wrapped-${width}.png`, animations: 'disabled' })
+  }
+  // Back to one line: the band goes and the header is as tall as before.
+  await panel.evaluate((el) => { (el as HTMLElement).style.width = ''; (el as HTMLElement).style.flex = '' })
+  await api('PATCH', `/api/tasks/${taskId}`, { title: 'Focus big instance alignment' })
+  await expect(row).not.toHaveAttribute('data-title-band', /./, { timeout: 20_000 })
+  expect(Math.abs((await row.boundingBox())!.height - oneLineH), 'the one-line row keeps its height').toBeLessThanOrEqual(0.5)
+  expect(Math.abs((await header.boundingBox())!.height - oneLineHeaderH), 'the header keeps its height').toBeLessThanOrEqual(0.5)
+  await expectRowAligned(page, panel, 'column-after-wrap', (({ marker: _m, ...rest }) => rest)(HEADER_ITEMS))
+  expect(errors).toEqual([])
+})
+
 test('the Ask Walnut slot header: the dot after the menu button keeps the same line and spacing', async ({ page }) => {
   test.setTimeout(150_000)
   const errors: string[] = []
