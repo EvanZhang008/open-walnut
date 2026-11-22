@@ -124,10 +124,12 @@ test('N05 N06: a plugin\'s parts are plain rows on its page that say their state
   await openSettings(page)
   await openApps(page)
   await installedCardIds(page)
-  // A parent's card names its parts.
-  const parents = await page.locator('[data-testid="plugin-store-installed"] .apps-card:has(.apps-card-note)').evaluateAll((cards) => cards
+  // A parent's card names its parts. A parent is a plugin card, or a built-in app's card that
+  // holds its plugin (Mail): that card names the plugin in data-plugin.
+  const parents = await page.locator('[data-testid="apps-page"] .apps-card:has(.apps-card-note)').evaluateAll((cards) => cards
     .filter((c) => /^Includes /.test(c.querySelector('.apps-card-note')?.textContent ?? ''))
-    .map((c) => (c.getAttribute('data-testid') ?? '').replace(/^plugin-card-/, '')))
+    .map((c) => c.getAttribute('data-plugin') || (c.getAttribute('data-testid') ?? '').replace(/^plugin-card-/, ''))
+    .filter((id) => id && !id.startsWith('apps-builtin-')))
   expect(parents.length, 'fixture has a plugin with parts').toBeGreaterThan(0)
   let seen = 0
   for (const id of parents) {
