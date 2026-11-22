@@ -1,18 +1,5 @@
-/* Watch (WatchToggle.tsx): the eye in a task's header, lit while the task is watched. */
-.task-watch-btn {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px;
-  background: transparent; color: var(--fg-muted); cursor: pointer; opacity: .7;
-  transition: opacity .15s, background .15s, color .15s;
-}
-.task-watch-btn:hover { opacity: 1; background: var(--bg-hover); }
-.task-watch-btn.is-watched {
-  color: var(--accent); opacity: 1;
-  /* On, like Lock when locked (.session-panel-lock.is-locked): a tint behind the filled eye, so
-     the state shows even where the accent is grey (2026-11-20, the user: "选了之后是高亮的"). */
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-}
-.task-watch-btn.is-watched:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
+/* Watch (WatchToggle.tsx): the eye in a task's header, a `btn btn-icon btn-sm` key whose watched
+   state is the family's on state (aria-pressed), with the filled eye. */
 /* In the detail header it sits at the right, just before the close button. */
 .tdp-head-top .tdp-watch { margin-left: auto; }
 .tdp-head-top .tdp-watch + .todo-detail-close { margin-left: 0; }
@@ -20,6 +7,3 @@
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   html .app-shell-navigation .task-watch-btn { width: 44px; height: 44px; }
 }
-
-/* Among a session header's window buttons (SessionPanel, .btn-icon.btn-sm): at full strength. */
-.task-watch-btn.task-action-btn { opacity: 1; }

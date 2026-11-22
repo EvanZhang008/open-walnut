@@ -1235,7 +1235,7 @@ export function DraftSessionPanel({
           // Walnut/Focus task with no session to answer it.
           sendSlot={!isBound && !isFork && !isWalnut ? (
             <button
-              className="draft-later-btn"
+              className="btn draft-later-btn"
               disabled={!text.trim() || saveBusy}
               aria-busy={saveBusy || undefined}
               onClick={() => { void onSaveAsTask(draft.id, text); }}

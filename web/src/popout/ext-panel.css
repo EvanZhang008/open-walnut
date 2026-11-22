@@ -405,12 +405,10 @@ html body .is-plain-chat-pickers .composer-model-pill:hover { color: var(--walnu
 .ext-home-dock-chip .ext-chip-fav svg { width: 13px; height: 13px; }
 /* Grown: the full composer; its controls get room in a 400 px popup (review round 5, Sol #4). */
 .ext-home-composer.is-grown .chat-input-controls { gap: 4px; padding-right: 2px; }
-/* Beside the side bar (the row about 330 px) "Save as todo" is its glyph alone, a round button like
-   the mic's, its words in the tooltip: Act in this tab keeps its words and the send arrow its room. */
+/* Beside the side bar (the row about 330 px) "Save as todo" is its glyph alone, its words in the
+   tooltip: Act in this tab keeps its words and the send arrow its room. */
 @container (max-width: 345px) {
   .ext-home-composer .draft-later-words, .ext-home-composer .draft-later-short { display: none; }
-  .ext-home-composer .draft-later-glyph { margin-right: 0; }
-  .ext-home-composer .draft-later-btn { width: 32px; padding: 0; border-radius: 50%; font-size: 14px; }
 }
 .ext-home-composer.is-grown .chat-send-group { margin-left: 2px; }
 /* Narrower still, the switch's words give way (cut with an ellipsis), never the send arrow. */

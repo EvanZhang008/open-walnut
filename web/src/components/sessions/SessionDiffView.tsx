@@ -47,7 +47,7 @@ import {
   DomSearchController, collectTextMatches,
   wordAtPoint, claimSearchOwner, onSearchOwnerLost, SYMBOL_RE,
 } from '@/utils/dom-text-search';
-import { ICON_REFRESH, ICON_WARNING, ICON_PANEL_LEFT, ICON_PANEL_LEFT_FILLED } from '@/components/common/Icons';
+import { ICON_REFRESH, ICON_WARNING, ICON_PANEL_LEFT, ICON_PANEL_LEFT_FILLED, ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import { log } from '@/utils/log';
 import { pointerOwnedElsewhere } from '@/utils/find-scope';
 import { SessionCommitButton } from '@/components/sessions/SessionCommitDialog';
@@ -2913,7 +2913,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         <button
           type="button"
           data-choice-exempt="layout tool button with a panel glyph that shows or hides a pane, not a disclosure row"
-          className="sfe-btn sfe-tree-toggle"
+          className="btn btn-icon sfe-btn sfe-tree-toggle"
           onClick={() => setTreeCollapsed((c) => !c)}
           title={treeCollapsed ? 'Show file tree' : 'Hide file tree'}
           aria-label={treeCollapsed ? 'Show file tree' : 'Hide file tree'}
@@ -2924,20 +2924,20 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         <div className="sfe-nav-group">
           <button
             type="button"
-            className="sfe-btn sfe-nav-btn"
+            className="btn btn-icon sfe-btn sfe-nav-btn"
             onClick={() => navigateJump(-1)}
             disabled={!canJumpBack}
             title={canJumpBack ? 'Back (⌘[)' : 'Back (no earlier jump)'}
             aria-label="Back to the previous jump target"
-          >‹</button>
+          >{ICON_CHEVRON_LEFT}</button>
           <button
             type="button"
-            className="sfe-btn sfe-nav-btn"
+            className="btn btn-icon sfe-btn sfe-nav-btn"
             onClick={() => navigateJump(1)}
             disabled={!canJumpForward}
             title={canJumpForward ? 'Forward (⌘])' : 'Forward (no later jump)'}
             aria-label="Forward to the next jump target"
-          >›</button>
+          >{ICON_CHEVRON_RIGHT}</button>
         </div>
         <span className="session-diff-toolbar-title">
           {data && !switching

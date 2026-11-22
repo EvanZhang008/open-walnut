@@ -1597,7 +1597,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
       <button
         type="button"
         data-choice-exempt="layout tool button with a panel glyph that shows or hides a pane, not a disclosure row"
-        className="sfe-btn sfe-tree-toggle"
+        className="btn btn-icon sfe-btn sfe-tree-toggle"
         onClick={toggleTreeCollapsed}
         title={treeCollapsed ? 'Show file tree' : 'Hide file tree'}
         aria-label={treeCollapsed ? 'Show file tree' : 'Hide file tree'}
@@ -1610,20 +1610,20 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
       {(canGoBack || canGoForward) && <div className="sfe-nav-group">
         <button
           type="button"
-          className="sfe-btn sfe-nav-btn"
+          className="btn btn-icon sfe-btn sfe-nav-btn"
           onClick={() => navigateHistory(-1)}
           disabled={!canGoBack}
           title={canGoBack ? `Back to ${lastSegment(history.entries[history.index - 1]!.path)} (⌘[)` : 'Back (no earlier file)'}
           aria-label="Back to the previously viewed file"
-        >‹</button>
+        >{ICON_CHEVRON_LEFT}</button>
         <button
           type="button"
-          className="sfe-btn sfe-nav-btn"
+          className="btn btn-icon sfe-btn sfe-nav-btn"
           onClick={() => navigateHistory(1)}
           disabled={!canGoForward}
           title={canGoForward ? `Forward to ${lastSegment(history.entries[history.index + 1]!.path)} (⌘])` : 'Forward (no later file)'}
           aria-label="Forward to the next viewed file"
-        >›</button>
+        >{ICON_CHEVRON_RIGHT}</button>
       </div>}
       {/* On a phone the tree and the file take turns: with no file open the
           tree's head holds the path instead (one editor on screen, never two). */}
@@ -1656,12 +1656,12 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         </button>
       )}
       <span className="sfe-tree-head-tools">
-        <button type="button" className="sfe-btn sfe-up-btn" onClick={goUp} title="Go to parent directory" aria-label="Go to parent directory">
+        <button type="button" className="btn btn-icon sfe-btn" onClick={goUp} title="Go to parent directory" aria-label="Go to parent directory">
           {ICON_ARROW_UP}
         </button>
         <button
           type="button"
-          className={`sfe-btn sfe-refresh-btn${refreshing ? ' is-refreshing' : ''}`}
+          className={`btn btn-icon sfe-btn sfe-refresh-btn${refreshing ? ' is-refreshing' : ''}`}
           onClick={handleRefresh}
           title="Refresh: re-list folders and reload the open file"
           aria-label="Refresh file panel"
@@ -1670,7 +1670,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         </button>
         <button
           type="button"
-          className={`sfe-btn sfe-hidden-toggle${showHidden ? ' active' : ''}`}
+          className="btn btn-icon sfe-btn"
           onClick={() => setShowHidden((v) => !v)}
           aria-pressed={showHidden}
           aria-label="Show hidden files"

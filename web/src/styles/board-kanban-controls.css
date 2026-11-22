@@ -255,7 +255,6 @@
   cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .kanban-leader-row .kanban-prompt { color: var(--fg); }
-.kanban-show-chat { font-size: var(--font-size-sm); padding: 0 8px; width: auto; white-space: nowrap; }
 
 /* R3-06: the Cards view before the first payload: four skeleton lanes, sections when narrow. */
 .board-kanban.kanban-skeleton-board { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }

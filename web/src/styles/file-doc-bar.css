@@ -196,23 +196,6 @@
   align-items: center;
   gap: 2px;
 }
-.sfe-nav-lead .sfe-btn,
-.sfe-tree-head .sfe-btn,
-.fv-doc-bar > .sfe-btn {
-  border: none;
-  background: none;
-  color: var(--fg-muted);
-  border-radius: var(--radius-sm);
-  min-width: 28px;
-  height: 28px;
-  justify-content: center;
-  padding: 0 4px;
-}
-.sfe-nav-lead .sfe-btn:hover:not(:disabled),
-.sfe-tree-head .sfe-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
-.sfe-nav-lead .sfe-btn:disabled:hover { background: none; }
-.sfe-nav-lead .sfe-nav-group .sfe-nav-btn { font-size: var(--font-size-xl); line-height: 1; padding: 0 4px; border-radius: var(--radius-sm); }
-.sfe-nav-lead .sfe-nav-group .sfe-nav-btn:last-child { border-left-width: 0; }
 
 /* The path of what is open, as breadcrumbs; click to type a path instead. */
 .sfe-crumbs {
@@ -279,9 +262,6 @@
 .sfe-tree-head-name:hover { background: var(--bg-hover); }
 .sfe-tree-head-in { margin-right: 4px; font-weight: 400; opacity: 0.7; }
 .sfe-tree-head-tools { flex: none; display: inline-flex; gap: 1px; }
-.sfe-tree-head .sfe-btn svg { width: 14px; height: 14px; display: block; }
-.sfe-tree-head .sfe-hidden-toggle.active,
-.sfe-tree-head .sfe-hidden-toggle.active:hover { color: var(--accent-text); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .sfe-tree-head .sfe-path-edit { flex: 1 1 auto; }
 /* The multi-root section headers stick below the head, not under it. */
 .session-file-explorer-tree:has(> .sfe-tree-head) .sfe-root-header { top: var(--split-bar-h); }
@@ -487,7 +467,7 @@ html body .sfe-path-suggest.sfe-path-suggest-floating {
 /* The Terminal dock toggle is its icon, as Preview and Source are: its word took the room the
    file's name needs (2026-11-09: a 1280 window with the chat open cut the name on Linux fonts). */
 .fv-doc-bar:not([data-fit='full']) .session-terminal-dock-toggle .sfe-btn-label { display: none; }
-.fv-doc-bar[data-fit='compact'] .sfe-nav-group .sfe-nav-btn { min-width: 22px; padding: 0 2px; }
+.fv-doc-bar[data-fit='compact'] .sfe-nav-group .sfe-nav-btn { width: 24px; min-width: 24px; }
 .fv-doc-bar[data-fit='compact'] .sfe-crumbs { margin-left: 2px; }
 .fv-doc-bar[data-fit='compact'] .fv-mode-toggle { margin: 0 2px; }
 

@@ -2874,7 +2874,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // label row's Watching pill: "watching ... 也应该去放到上面"). The kebab drops its row.
   const watchButton = taskSlot === 'absent' ? null : taskSlot === 'live' && sessionTask
     ? <WatchButton task={sessionTask} className="task-action-btn session-panel-watch" headerId="watch" testId="session-watch-btn" />
-    : <button type="button" className="task-watch-btn task-action-btn session-panel-watch" data-header-id="watch" {...TASK_SLOT_SPACER}>{ICON_EYE}</button>;
+    : <button type="button" className="btn btn-icon btn-sm task-watch-btn task-action-btn session-panel-watch" data-header-id="watch" {...TASK_SLOT_SPACER}>{ICON_EYE}</button>;
   const headerPills = (
     <>
       <WaitingChip task={sessionTask} />
@@ -3867,7 +3867,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             const chatBarSlot = chatCollapsed && activeView === 'board' ? (
               <button
                 type="button"
-                className="sfe-btn session-chat-collapse-btn kanban-show-chat"
+                className="btn btn-sm sfe-btn session-chat-collapse-btn kanban-show-chat"
                 data-testid="kanban-show-chat"
                 onClick={revealChatForBoard}
                 title="Show the chat beside the board"
@@ -3876,7 +3876,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             ) : chatCollapsed && activeView === 'changed' && autoCollapsed.current && !phoneBar.phone ? (
               <button
                 type="button"
-                className="sfe-btn session-chat-collapse-btn session-diff-show-chat"
+                className="btn btn-sm sfe-btn session-chat-collapse-btn session-diff-show-chat"
                 onClick={() => { changedChatRevealed.current = true; collapseChat(false); }}
                 title="Show the chat beside the changes"
                 aria-expanded={false}
@@ -3885,7 +3885,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               <button
                 type="button"
                 data-choice-exempt="layout tool button with a panel glyph that shows or hides a pane, not a disclosure row"
-                className="sfe-btn sfe-tree-toggle session-chat-collapse-btn"
+                className="btn btn-icon sfe-btn session-chat-collapse-btn"
                 onClick={() => collapseChat(false)}
                 title="Show chat"
                 aria-label="Show chat"
@@ -3897,7 +3897,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             const dockToggle = !terminalBlockedWhy && terminalDockAllowed && activeView && TERMINAL_DOCK_VIEWS.includes(activeView) ? (
               <button
                 type="button"
-                className={`sfe-btn session-terminal-dock-toggle${terminalDocked ? ' is-on' : ''}`}
+                className="btn btn-sm btn-ghost sfe-btn session-terminal-dock-toggle"
                 onClick={terminalDocked ? undockTerminal : () => setTerminalDock((d) => ({ ...d, on: true }))}
                 aria-pressed={terminalDocked}
                 // Its name stays when a narrow file bar draws it as the icon alone (file-doc-bar.css).
@@ -4092,7 +4092,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 <button
                   type="button"
                   data-choice-exempt="layout tool button with a panel glyph that shows or hides a pane, not a disclosure row"
-                  className="sfe-btn sfe-tree-toggle session-chat-collapse-btn"
+                  className="btn btn-icon sfe-btn session-chat-collapse-btn"
                   onClick={() => collapseChat(true)}
                   title="Hide chat"
                   aria-label="Hide chat"

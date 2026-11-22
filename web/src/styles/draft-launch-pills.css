@@ -8,14 +8,14 @@
    a quick second click would land on a different folder. Wide columns keep one
    row (every part ellipsizes instead of wrapping); narrow ones always use two,
    folder on the first, project + More on the second, even when there is no
-   project yet. Every item in the row has the same fixed box height. */
+   project yet. Every pill in the row has the same fixed box height; More is the
+   family's small key. */
 
 .draft-launch-bar {
   container: draft-launch / inline-size;
 }
 
-.draft-composer-bar > .session-action-chip,
-.draft-composer-bar > .draft-more-btn {
+.draft-composer-bar > .session-action-chip {
   box-sizing: border-box;
   height: 24px;
   display: inline-flex;

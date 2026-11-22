@@ -182,7 +182,7 @@ export function WatchButton({ task, className = '', headerId, testId = 'task-wat
   return (
     <button
       type="button"
-      className={`task-watch-btn${watched ? ' is-watched' : ''} ${className}`.trim()}
+      className={`btn btn-icon btn-sm task-watch-btn${watched ? ' is-watched' : ''} ${className}`.trim()}
       data-testid={testId}
       data-header-id={headerId}
       aria-pressed={watched}

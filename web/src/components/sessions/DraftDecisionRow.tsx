@@ -235,14 +235,15 @@ export function DraftDecisionChips({ chips, menu }: { chips: readonly DraftDecis
         const cls = ['draft-decision-chip'];
         if (c.ai) cls.push('draft-decision-chip-ai');
         if (active) cls.push('draft-decision-chip-active');
-        if (c.overdue) cls.push('draft-decision-chip-overdue');
+        // Overdue reads as the family's red label.
+        if (c.overdue) cls.push('draft-decision-chip-overdue', 'btn-danger');
         if (c.removedTier) cls.push('draft-decision-chip-removed');
         const labelCls = `draft-decision-label${c.customTier ? ' draft-decision-label-custom' : ''}`;
         return (
           <button
             key={c.field}
             type="button"
-            className={cls.join(' ')}
+            className={`btn btn-sm ${cls.join(' ')}`}
             data-field={c.field}
             {...{ [OWNER_ATTR]: menu.ownerId }}
             style={{ '--i': stagger.get(c.field) ?? 0 } as CSSProperties}
@@ -278,7 +279,7 @@ export function draftMoreTitle(priorityVisible: boolean | 'unknown', shortcut = 
 }
 
 /**
- * The bar's "other settings" entry: a ghost button, rendered directly as the
+ * The bar's "other settings" entry: a quiet key, rendered directly as the
  * last child of its row (no wrapper, the specs assert the button itself). It
  * never lights up for "has edits": the edits already show as chips.
  */
@@ -295,7 +296,7 @@ export function DraftMoreButton({ menu, moreRef, priorityVisible, withProject = 
     <button
       ref={moreRef}
       type="button"
-      className={`draft-more-btn${active ? ' draft-more-btn-active' : ''}`}
+      className={`btn btn-sm btn-ghost draft-more-btn${active ? ' draft-more-btn-active' : ''}`}
       {...{ [OWNER_ATTR]: menu.ownerId }}
       aria-label="Task settings"
       aria-haspopup="dialog"

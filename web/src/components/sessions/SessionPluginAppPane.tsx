@@ -162,7 +162,7 @@ export function SessionPluginAppPane({
           {barRightSlot}
           <button
             type="button"
-            className="sfe-btn session-app-pane-close"
+            className="btn btn-icon btn-sm sfe-btn session-app-pane-close"
             onClick={onClose}
             aria-label={`Close ${app?.title ?? 'App'}`}
             title="Close (the chat stays)"

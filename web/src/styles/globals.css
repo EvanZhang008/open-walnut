@@ -19473,90 +19473,23 @@ td.usage-share-col {
   flex-shrink: 0;
 }
 
-.sfe-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  /* A visible border: on the near-white toolbar, --bg-tertiary alone made these
-     read as blank space — users couldn't find the Refresh button at all. */
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg);
-  border-radius: var(--radius-sm);
-  padding: 3px 8px;
-  cursor: pointer;
-  font-size: var(--font-size-md);
-  line-height: 1.4;
-}
+/* The Files and Changed bars' keys are the button family (`btn btn-icon`); `.sfe-btn` stays on
+   them only as the hook for a phone's finger size (phone-session.css, phone-fixes-r4.css). */
 
-.sfe-btn:hover {
-  background: var(--bg-hover);
-  color: var(--fg);
-}
+/* The tree's show/hide toggle (a VS Code-style window glyph, its side filled while the pane is
+   visible) keeps its fixed, findable home at the start of the bar. Shared by Files and Changed. */
+.sfe-tree-toggle { flex-shrink: 0; }
 
-.sfe-btn:active { transform: scale(0.96); }
-
-/* Nothing to go back/forward to — dim, but keep the buttons in place so the
-   toolbar never reflows as history grows (jumping controls are worse than dim ones). */
-.sfe-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-.sfe-btn:disabled:hover { background: var(--bg); }
-.sfe-btn:disabled:active { transform: none; }
-
-/* Tree show/hide — a VS Code-style layout toggle in the toolbar (window
-   glyph, side compartment filled while the pane is visible). Final design
-   after chevrons, rails, and labels all failed discoverability: users know
-   this icon from editors, and a toolbar button has a fixed, findable home.
-   Shared by the Files tab and the Changed tab. */
-.sfe-tree-toggle {
-  flex-shrink: 0;
-  padding: 3px 6px;
-  color: var(--fg-muted);
-}
-.sfe-tree-toggle:hover { color: var(--fg); }
-.sfe-tree-toggle svg { display: block; }
-
-/* Back / Forward pair: one segmented control, like a browser's. */
+/* Back / Forward: a pair, like a browser's. */
 .sfe-nav-group {
   display: inline-flex;
   flex-shrink: 0;
-}
-.sfe-nav-group .sfe-nav-btn {
-  padding: 1px 7px;
-  font-size: var(--font-size-lg);
-  line-height: 1.2;
-}
-.sfe-nav-group .sfe-nav-btn:first-child {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-}
-.sfe-nav-group .sfe-nav-btn:last-child {
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-  border-left-width: 0;
-}
-
-.sfe-btn-label {
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  letter-spacing: 0.01em;
 }
 
 /* Spin the glyph while the refetch is in flight so the click has feedback even
    when the listing comes back instantly. */
 .sfe-refresh-btn.is-refreshing svg {
   animation: spin 0.7s linear infinite;
-}
-
-.sfe-hidden-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-  color: var(--fg-muted);
-  user-select: none;
 }
 
 .session-file-explorer-body {
@@ -21449,39 +21382,15 @@ a.tag-chip:focus-visible,
   min-width: 0;
 }
 .draft-decision-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
   max-width: 100%;
   min-width: 0;
   overflow: hidden;
-  white-space: nowrap;
-  padding: 3px 10px;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: var(--bg-secondary);
-  color: var(--fg);
-  font-family: inherit;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  line-height: normal;   /* same box height as the pills beside it */
-  cursor: pointer;
   animation: draft-decision-in 120ms ease-out both;
   animation-delay: calc(var(--i, 0) * 60ms);
 }
-.draft-decision-chip:hover { border-color: var(--border); }
-.draft-decision-chip-ai,
-.draft-decision-chip-ai:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
-.draft-decision-chip-active,
-.draft-decision-chip-active:hover {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-}
-.draft-decision-chip-overdue { color: var(--error); }
 .draft-decision-chip .draft-ai-badge { margin-left: 0; }
 /* "Pinned:" / "Priority:", the same muted key as the project pill's "Project:". */
 .draft-decision-key { flex-shrink: 0; color: var(--fg-muted); font-weight: 400; }
-.draft-decision-chip-active .draft-decision-key { color: inherit; }
 .draft-decision-glyph {
   display: inline-flex;
   align-items: center;
@@ -21496,30 +21405,9 @@ a.tag-chip:focus-visible,
 }
 .draft-decision-label-custom { max-width: 18ch; }
 .draft-decision-chip-removed .draft-decision-label { text-decoration: line-through; }
-.draft-decision-chip-removed { border-color: color-mix(in srgb, var(--error) 45%, transparent); }
-/* More: a ghost button at the end of the pills row. It never lights for
-   "has edits" (those already show as chips), only while its menu is open. */
-.draft-more-btn {
-  flex-shrink: 0;
-  padding: 3px 8px;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--fg-muted);
-  font-family: inherit;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  line-height: normal;   /* same box height as the pills beside it */
-  cursor: pointer;
-}
-.draft-more-btn:hover { color: var(--fg); background: var(--bg-secondary); }
-.draft-more-btn-active,
-.draft-more-btn-active:hover { color: var(--fg); background: var(--bg-secondary); border-color: var(--border); }
-.draft-decision-chip:focus-visible,
-.draft-more-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
+/* More: a quiet key (`btn btn-sm btn-ghost`) at the end of the pills row. It never lights for
+   "has edits" (those already show as chips). */
+.draft-more-btn { flex-shrink: 0; }
 /* The legend copies .draft-quick-key so the two captions read as one kind. */
 .draft-decisions-key {
   display: block;
@@ -21583,37 +21471,18 @@ a.tag-chip:focus-visible,
 
 /* "Save as todo": the draft's one exit besides the send arrow, so it sits
    right before the arrow (ChatInput `sendSlot`), not among the launch settings
-   on the left (user, 2026-10-03). Accent-tinted fill (not solid): a real exit,
-   not an afterthought, so it reads as a button at rest, but stays visually
-   behind the solid send arrow. A capsule as tall as the arrow, one line, never
-   shrinking: the right cluster keeps its size and the model select on the left
-   is the control that gives way on a ~270px column. */
+   on the left (user, 2026-10-03). A plain key (`btn`), as tall as the arrow and
+   behind the solid send arrow; one line, never shrinking: the right cluster keeps
+   its size and the model select on the left is the control that gives way on a
+   ~270px column. */
 .draft-later-btn {
   flex: 0 0 auto;
-  height: 34px;
   margin: 0 2px;
-  padding: 0 12px;
-  border: none;
-  border-radius: var(--radius-lg);
-  background: var(--accent-subtle);
-  color: var(--accent);
-  font-family: inherit;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, opacity 0.15s;
 }
-.draft-later-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-}
-.draft-later-glyph { margin-right: 5px; }
 .draft-later-short { display: none; }
 /* The row narrows (a ~280px row: the third of three columns on a 1280px window):
    "Todo" stands in for the words. Narrower still (~220px, the third of three on
-   1100px): the glyph alone, a round button the size of the mic and the arrow
-   beside it, the words in its tooltip. Widths measured by
+   1100px): the glyph alone, the words in its tooltip. Widths measured by
    tests/e2e/browser/draft-save-as-todo. */
 @container (max-width: 380px) {
   .draft-later-words { display: none; }
@@ -21621,19 +21490,6 @@ a.tag-chip:focus-visible,
 }
 @container (max-width: 250px) {
   .draft-later-short { display: none; }
-  .draft-later-glyph { margin-right: 0; }
-  .draft-later-btn { width: 34px; padding: 0; border-radius: 50%; font-size: 14px; }
-}
-.draft-later-btn:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-/* Keyboard parity: a primary action, so it must be visibly reachable by Tab
-   (the family's ring, styles/buttons.css). */
-.draft-later-btn:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
-  outline-offset: 2px;
 }
 
 /* Inline retry button in session error banner */
@@ -24497,7 +24353,6 @@ a.file-link:hover {
 }
 .session-terminal-dock.is-resizing { user-select: none; }
 .session-terminal-panel.is-docked .session-terminal-header { min-height: 36px; padding: 4px 10px; }
-.session-terminal-dock-toggle.is-on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
 
 /* ── Session Code view (embedded VS Code / code-server iframe) ─────────── */
 /* Keep-alive: once opened, the Code column stays mounted and is HIDDEN with
@@ -25751,8 +25606,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .session-diff-tree-file.is-ws-only .session-diff-tree-status { opacity: 0.5; }
 /* The comparison just left, still on screen while the new one loads. */
 .session-diff-body.is-switching .session-diff-tree { opacity: 0.5; pointer-events: none; transition: opacity 0.12s ease 0.08s; }
-/* The Changed view opened without the chat (too narrow for both): a worded way back. */
-.session-chat-collapse-btn.session-diff-show-chat { font-size: var(--font-size-sm); padding: 0 8px; width: auto; white-space: nowrap; }
 
 .session-diff-notice {
   display: flex;
