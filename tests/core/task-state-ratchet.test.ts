@@ -139,7 +139,8 @@ const PHASE_READERS: Record<string, number> = {
   // + two: a parked task's own work reads Working while its wait clock brings it back (ownWork).
   // + one: the deriver itself, its open ask read before the phase branches (openAskOf): on
   // NEED_ACTION any wait its report names is the user's, elsewhere only one that names them.
-  'src/core/user-status.ts': 7,
+  // + one: a needs report with no question on a task parked on its own wait reads its park (WAITING).
+  'src/core/user-status.ts': 8,
   // the deriver's own fact: a subtask in progress or parked on its own wait is one its parent waits on (workersAtWork)
   'src/core/user-status-sync.ts': 1,
   'src/ops/tasks.ts': 2,
