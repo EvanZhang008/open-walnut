@@ -104,5 +104,14 @@ export async function openApp(page: Page, barOn = true): Promise<void> {
 }
 
 export const bar = (page: Page) => page.locator('.qb-center .qb-bar')
+
+/** Opens the bar with its key, pressing again while the app has not yet taken it: on a busy host
+ *  the first press can land before the bar listens, and the box then never shows (2026-11-22). */
+export async function openBar(page: Page): Promise<void> {
+  await expect(async () => {
+    if (!(await bar(page).isVisible())) await page.keyboard.press(KEY)
+    await expect(box(page)).toBeVisible({ timeout: 3_000 })
+  }).toPass({ timeout: 45_000 })
+}
 export const box = (page: Page) => page.getByRole('textbox', { name: 'Message' })
 export const chip = (page: Page) => page.locator('.qb-to-name')

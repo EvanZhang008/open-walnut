@@ -16,7 +16,7 @@
 import { expect, test } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { useSyntheticMic } from './stt-failure-helpers'
-import { bar, box, chip, DRAFT, KEY, openApp, pinFlag, shot, stubAll, voiceOff } from './quick-bar-helpers'
+import { bar, box, chip, DRAFT, KEY, openApp, openBar, pinFlag, shot, stubAll, voiceOff } from './quick-bar-helpers'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -270,7 +270,7 @@ test('a send that never went out says so and puts the words back', async ({ page
   sends.fail = true
   await voiceOff(page)
   await openApp(page)
-  await page.keyboard.press(KEY)
+  await openBar(page)
   await box(page).fill('Move the review to Friday')
   // Esc closes and keeps the words; the key opens the bar on them again.
   await box(page).press('Escape')

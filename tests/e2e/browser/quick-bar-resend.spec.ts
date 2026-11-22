@@ -16,7 +16,7 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { useSyntheticMic } from './stt-failure-helpers'
-import { box, KEY, openApp, pinFlag, shot, stubAll, voiceOff } from './quick-bar-helpers'
+import { box, openApp, openBar, pinFlag, shot, stubAll, voiceOff } from './quick-bar-helpers'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -47,7 +47,7 @@ async function stubResend(page: Page, abortSends: number): Promise<Wire> {
 }
 
 async function sendFromBar(page: Page, text: string): Promise<void> {
-  await page.keyboard.press(KEY)
+  await openBar(page)
   await box(page).fill(text)
   await box(page).press('Enter')
 }
@@ -87,7 +87,7 @@ test('its × only hides the card: the message still goes out once Walnut is back
   await sendFromBar(page, 'there can be one that needs to show a long time')
   const receipt = page.locator('.qb-receipt').first()
   await expect(receipt.locator('.qb-receipt-status')).toHaveText('Waiting for Walnut · sends when it is back')
-  await receipt.locator('.wn-notice-x').click()
+  await receipt.locator('.wn-notice-close').click()
   await expect(page.locator('.qb-receipt')).toHaveCount(0)
   // Still down: nothing is tried while Walnut does not answer.
   await page.waitForTimeout(3_000)
@@ -111,7 +111,7 @@ test('hidden, a send that never gets through brings its card back with Send agai
   await sendFromBar(page, 'keep these words')
   const receipt = page.locator('.qb-receipt').first()
   await expect(receipt.locator('.qb-receipt-status')).toHaveText('Waiting for Walnut · sends when it is back')
-  await receipt.locator('.wn-notice-x').click()
+  await receipt.locator('.wn-notice-close').click()
   await expect(page.locator('.qb-receipt')).toHaveCount(0)
   await expect(receipt.locator('.qb-receipt-status')).toHaveText('Not sent · Walnut could not be reached. Nothing was sent.', { timeout: 45_000 })
   expect(wire.bodies).toHaveLength(4)
