@@ -154,11 +154,14 @@ export async function rowState(panel: Locator): Promise<{ visible: string[]; hid
   return barOf(panel).evaluate((bar) => {
     const items = [...bar.querySelectorAll<HTMLElement>('[data-control-id]')];
     const visible = items.filter((el) => el.dataset.hidden !== 'true');
-    const tops = new Set(visible.map((el) => Math.round(el.getBoundingClientRect().top)));
+    // A line is the row's centre line: its items are centred, and a 28 px key beside a 23 px
+    // pill starts lower but sits on the same line. Centres within 4 px are one line.
+    const centres = visible.map((el) => { const b = el.getBoundingClientRect(); return (b.top + b.bottom) / 2; }).sort((a, b) => a - b);
+    const lines = centres.filter((c, i) => i === 0 || c - centres[i - 1] > 4).length;
     return {
       visible: visible.map((el) => el.dataset.controlId!),
       hidden: items.filter((el) => el.dataset.hidden === 'true').map((el) => el.dataset.controlId!),
-      lines: tops.size,
+      lines,
       height: Math.round(bar.getBoundingClientRect().height),
     };
   });
