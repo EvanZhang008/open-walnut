@@ -117,6 +117,14 @@ describe('compaction', () => {
     expect(out[2].data).toEqual({ patch: { process_status: 'running', messageCount: 3 } })
   })
 
+  it('only the newest live state of each session stays', () => {
+    const out = compactRecords([
+      rec(1, 's1', 'live', { state: { turnGen: 1 } }), rec(2, 's2', 'live', { state: { turnGen: 1 } }),
+      rec(3, 's1', 'live', { state: { turnGen: 2 } }), rec(4, 's1', 'session:tool-use', {}),
+    ])
+    expect(out.map((r) => [r.seq, r.sid, r.name])).toEqual([[2, 's2', 'live'], [3, 's1', 'live'], [4, 's1', 'session:tool-use']])
+  })
+
   it('acked records go at compaction, and a reader below the floor learns it', async () => {
     const log = await open()
     for (let i = 0; i < 10; i++) log.append('s1', i % 2 ? 'session:result' : 'session:user-line', { i })

@@ -67,10 +67,12 @@ export const SESSION_EVENT_CLASS: Readonly<Record<string, ChannelClass>> = {
 /**
  * Channel records that are not bus events: a change to a row the host owns (its patch, the
  * whole row at birth), a session id the CLI replaced (resume, fork), a row the host dropped
- * because the leader deleted it, and the summary that stands for a finished turn's tool facts
- * in a log the leader has not read for a while (fact-log.ts compaction).
+ * because the leader deleted it, the summary that stands for a finished turn's tool facts in a
+ * log the leader has not read for a while (fact-log.ts compaction), and `live`: the state the
+ * leader reads of a running session at once (its turn, its prompt, its mode ...; the newest one
+ * stands for every earlier one).
  */
-export const CHANNEL_RECORD_KINDS = ['row', 'rename', 'drop', 'turn-summary'] as const
+export const CHANNEL_RECORD_KINDS = ['row', 'rename', 'drop', 'turn-summary', 'live'] as const
 export type ChannelRecordKind = typeof CHANNEL_RECORD_KINDS[number]
 
 /** The class of one event name; a name the table does not know is never sent. */

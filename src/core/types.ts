@@ -1888,6 +1888,10 @@ export interface Config {
     auto_complete_after_days?: number;
   };
   session?: {
+    /** A session on a host whose own service can run it is assembled, run and judged there
+     *  (session-channel/switch.ts). Set only explicitly: not one of the experiments
+     *  `every_experiment` turns on, until the whole path is proven on real hosts. */
+    host_runs_sessions?: boolean;
     /** Cron scheduling policy for Walnut-managed CLI sessions.
      *  - 'unrestricted' (default): sessions may create any cron the CLI allows,
      *    including durable ones (persisted to {cwd}/.claude/scheduled_tasks.json).

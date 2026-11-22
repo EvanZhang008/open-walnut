@@ -362,6 +362,10 @@ export function compactRecords(records: readonly FactRecord[]): FactRecord[] {
       turn = []
     }
   }
+  // A session's newest `live` record stands for every earlier one.
+  const newestLive = new Map<string, number>()
+  for (const r of records) if (r.name === 'live') newestLive.set(r.sid, r.seq)
+  for (const r of records) if (r.name === 'live' && newestLive.get(r.sid) !== r.seq) replace.set(r.seq, null)
   const out: FactRecord[] = []
   for (const r of records) {
     if (!replace.has(r.seq)) { out.push(r); continue }
