@@ -113,12 +113,15 @@ test('a paused trigger stays on its task through a reload, stops checking, and R
     await expect(trow.getByRole('button', { name: 'Run check now' })).toHaveCount(0)
     await expect(trow.getByRole('button', { name: 'Delete' })).toBeVisible()
     await expect(trow.locator('.trigger-jobs-tally')).not.toContainText(/next run/i)
-    // The pill's colour is not the armed accent: it reads as off at a glance.
-    const [pausedColor, pausedBorder] = await pill.evaluate((el) => {
+    // It reads as off at a glance: the label system's paused badge, a dashed outline with no fill
+    // (badge.css), where an armed trigger is the filled kind badge. Its words keep the kind's grey,
+    // so the fill and the outline carry the difference, not the colour.
+    const [pausedFill, pausedBorder] = await pill.evaluate((el) => {
       const cs = getComputedStyle(el)
-      return [cs.color, cs.borderTopStyle]
+      return [cs.backgroundColor, cs.borderTopStyle]
     })
     expect(pausedBorder).toBe('dashed')
+    expect(pausedFill).toBe('rgba(0, 0, 0, 0)')
     await shot(flyout, 'paused-flyout')
     await shot(row, 'paused-row')
     // The UI answers before the server does: wait for the PATCH to land.
@@ -153,8 +156,12 @@ test('a paused trigger stays on its task through a reload, stops checking, and R
     await expect(trow2).toHaveAttribute('data-state', 'armed')
     await expect(pill2).toHaveText('Trigger')
     await expect(pill2).not.toHaveAttribute('data-paused', 'true')
-    const armedColor = await pill2.evaluate((el) => getComputedStyle(el).color)
-    expect(armedColor).not.toBe(pausedColor)
+    const [armedFill, armedBorder] = await pill2.evaluate((el) => {
+      const cs = getComputedStyle(el)
+      return [cs.backgroundColor, cs.borderTopStyle]
+    })
+    expect(armedBorder).not.toBe('dashed')
+    expect(armedFill).not.toBe(pausedFill)
     await expect.poll(async () => (await getRoutine(created.id))?.state?.lastCheck?.atMs ?? 0, { timeout: 30_000 })
       .toBeGreaterThan(mark)
     const resumed = await getRoutine(created.id)
