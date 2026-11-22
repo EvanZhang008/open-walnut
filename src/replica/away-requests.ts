@@ -19,6 +19,7 @@ import type { SessionRequest } from '../core/session-requests.js'
 import type { OfflineRequestRow } from '../providers/offline-host-core.js'
 import { requestOfRow } from '../core/offline-merge/request-row.js'
 import { forwardRequest } from '../core/replication/kinds/requests.js'
+import { answersLate } from '../core/session-request-status.js'
 import type { Overlay } from './overlay.js'
 
 /** A journal record as the overlay holds it (overlay.ts OverlayEntry), as far as this reads it. */
@@ -51,7 +52,7 @@ export function foldAwayRequests(copy: readonly SessionRequest[], entries: reado
     const own = rows.get(c.id)
     let r = own ? forwardRequest(c, requestOfRow(own.row)) : c
     const s = settles.get(c.id)
-    if (s && r.status === 'pending') r = { ...r, status: s.status as SessionRequest['status'], settledAt: new Date(s.at).toISOString() }
+    if (s && (r.status === 'pending' || (s.status === 'replied' && answersLate(r.status)))) r = { ...r, status: s.status as SessionRequest['status'], settledAt: new Date(s.at).toISOString() }
     out.push(r)
   }
   for (const [id, { row }] of rows) if (!seen.has(id)) out.push(requestOfRow(row))

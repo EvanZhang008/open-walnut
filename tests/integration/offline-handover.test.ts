@@ -48,7 +48,7 @@ import { closeDb } from '../../src/core/task-db.js'
 import { buildHostSlice } from '../../src/core/host-slice.js'
 import { runOfflineHandover, runningHandover, waitForOfflineHandovers, _setHandoverBackoffForTesting } from '../../src/core/offline-handover.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
-import { createSessionRequest, getSessionRequest } from '../../src/core/session-requests.js'
+import { createSessionRequest, getSessionRequest, settleNotified } from '../../src/core/session-requests.js'
 import { updateTaskRaw } from '../../src/core/task-manager.js'
 import type { OfflineRecord } from '../../src/providers/offline-host-core.js'
 import { WALNUT_HOME } from '../../src/constants.js'
@@ -448,6 +448,27 @@ describe('runOfflineHandover', () => {
     })
     expect(r.imported).toBe(0)
     expect(await getSessionRequest(row.id)).toMatchObject({ status: 'notified' })
+  })
+
+  it('a host\'s late answer reaches a row the server settled without one: its row and its copy settle read replied', async () => {
+    // 2026-11-22: the turn end's notice settled it notified first; the host's answer came after.
+    const own = await createSessionRequest({ fromSessionId: A, toSessionId: B, toTaskId: child, text: 'host owns this' })
+    const copy = await createSessionRequest({ fromSessionId: A, toSessionId: B, toTaskId: child, text: 'host holds a copy' })
+    await settleNotified(own.id, 'completed')
+    await settleNotified(copy.id, 'timeout')
+    const at = new Date().toISOString()
+    const records = [
+      { seq: 1, at: Date.now(), kind: 'row', row: { ...own, status: 'replied', settledAt: at } },
+      { seq: 2, at: Date.now(), kind: 'settle', requestId: copy.id, status: 'replied' },
+    ] as unknown as OfflineRecord[]
+    let n = 0
+    const r = await runOfflineHandover({
+      hostKey: 'devbox',
+      send: async (cmd) => cmd === 'offline.drain' && n++ === 0 ? { ok: true, records } : { ok: true, records: [] },
+    })
+    expect(r).toMatchObject({ imported: 1, settled: 1 })
+    expect(await getSessionRequest(own.id)).toMatchObject({ status: 'replied', lateFrom: 'notified' })
+    expect(await getSessionRequest(copy.id)).toMatchObject({ status: 'replied', lateFrom: 'expired' })
   })
 
   it('a review score journalled with an offline reply lands on the replier\'s task, once, and never over a newer one', async () => {

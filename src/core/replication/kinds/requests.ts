@@ -6,7 +6,9 @@
  *
  * A request's status only moves forward on apply (section 7): once the copy
  * holds a final status (replied, notified, expired), a leader row that says
- * otherwise does not take it back, and the leader's hash is still recorded so
+ * otherwise does not take it back (nor does a leader's notified or expired
+ * take back a reply the copy holds: a late answer turns those replied on the
+ * Mac too), and the leader's hash is still recorded so
  * the round ends (a settle the copy made itself reaches the Mac through the
  * journal, WP10). `withdrawn` is not final: the Mac restores a withdrawn ask
  * to pending when its task reopens (session-requests.ts restoreRequest).
@@ -25,6 +27,7 @@ import { WALNUT_HOME } from '../../../constants.js'
 import { log } from '../../../logging/index.js'
 import type { SessionRequest, SessionRequestStatus } from '../../session-requests.js'
 import { prunedByLeader, requestsWindowOf, windowOf } from '../../session-request-retention.js'
+import { answersLate } from '../../session-request-status.js'
 import { sha12 } from '../kind.js'
 import { createRowSetFollower, serialChain, writeCopyFile, type RowSetFollower, type RowSetState } from '../kind-follower.js'
 import type { CopyKind } from './copy-kind.js'
@@ -38,12 +41,14 @@ const FINAL: ReadonlySet<SessionRequestStatus> = new Set(['replied', 'notified',
 /**
  * The row the copy keeps when the leader sends `incoming` for a row it holds
  * as `local`: the leader's, unless the copy settled it here (a final status)
- * and the leader has not yet (pending or withdrawn). Two final statuses: the
- * leader's, since a final status never changes on the Mac and its hash is the
- * one this side records (keeping the local one would never be asked again).
+ * and the leader has not yet (pending or withdrawn), or the copy holds the
+ * answer to a row the leader settled without one (answersLate: the Mac turns
+ * it replied when the journal reaches it). Otherwise two final statuses: the
+ * leader's, and its hash is the one this side records.
  */
 export function forwardRequest(local: SessionRequest | undefined, incoming: SessionRequest): SessionRequest {
   if (local && FINAL.has(local.status) && !FINAL.has(incoming.status)) return local
+  if (local?.status === 'replied' && answersLate(incoming.status)) return local
   return incoming
 }
 

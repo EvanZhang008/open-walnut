@@ -1508,7 +1508,10 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const given = offlineScoreOf(rawScore)
     const score: OfflineReplyScore | undefined = given && replierTaskId ? { ...given, at: new Date(deps.now()).toISOString(), taskId: replierTaskId } : undefined
     if (own) {
-      if (own.status === 'pending') {
+      // Open, or settled here without an answer (the turn end's notice, overdue, withdrawn: the
+      // server's answersLate): the answer settles it, so the Mac's drain reads it replied too.
+      // Inlined, not imported: this factory body references nothing at module scope.
+      if (own.status === 'pending' || own.status === 'notified' || own.status === 'expired' || own.status === 'withdrawn') {
         own.status = 'replied'
         own.settledAt = new Date(deps.now()).toISOString()
         append(home, { kind: 'row', row: { ...own }, ...(score ? { score } : {}) }, online)

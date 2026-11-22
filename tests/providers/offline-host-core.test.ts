@@ -604,6 +604,13 @@ describe('offline host: messages between sessions on this host', () => {
     // Settled once: a second turn end says nothing more.
     await h.host.onResult(B, JSON.stringify({ type: 'result', result: 'again' }))
     expect(h.delivered).toHaveLength(2)
+    // B answers in a later turn: delivered, and the row the Mac drains reads replied (2026-11-22:
+    // it stayed notified, so the Mac showed the answered request as ended without a reply).
+    const late = await call(h, B, 'task_send', { in_reply_to: requestId, text: 'Late, but here it is: the page is built.' })
+    expect(late.ok).toBe(true)
+    expect(h.delivered.at(-1)!.sid).toBe(A)
+    const rows = h.host.drain(HOME).records.filter((r): r is Extract<OfflineRecord, { kind: 'row' }> => r.kind === 'row' && r.row.id === requestId)
+    expect(rows.map((r) => r.row.status)).toEqual(['pending', 'notified', 'replied'])
   })
 
   it('an error result settles as error', async () => {

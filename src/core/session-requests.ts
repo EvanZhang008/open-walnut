@@ -25,6 +25,9 @@ import { buildWalnutMessage, sessionHandle } from './peers/walnut-message-tag.js
 import { createEnvelopeKit, type EnvelopeHandedOn } from './peers/envelope-kit.js';
 import { isHeldElsewhereReason } from './sessions/undelivered-requests.js';
 import { log } from '../logging/index.js';
+// What a reply does to a request in each status (a leaf module, so copies read it without this store).
+import { answersLate, type LateAnswerFrom } from './session-request-status.js';
+export { REPLY_TO_STATUS, answersLate, type LateAnswerFrom } from './session-request-status.js';
 // The cap and the retention prune keeps live beside how a copy reads them.
 import { MAX_REQUESTS, SETTLED_RETENTION_MS } from './session-request-retention.js';
 import { DEFAULT_REPLY_TIMEOUT_SECS, IMPLICIT_REPLY_TIMEOUT_SECS, MIN_REPLY_TIMEOUT_SECS, MAX_REPLY_TIMEOUT_SECS, REPLY_TIMEOUT_BY_KIND, clampReplyTimeoutSecs, type ReplyKind } from './sessions/send-rules.js';
@@ -57,6 +60,7 @@ export type SessionRequestStatus =
   | 'expired'
   /** Nobody waits on it: the asker's task completed (withdrawRequest). Reopening restores it. */
   | 'withdrawn';
+
 
 /** Why a 'notified' settle fired — rides into the notification wording. */
 export type SessionRequestOutcome = 'completed' | 'error' | 'awaiting_human' | 'timeout';
@@ -104,7 +108,8 @@ export interface SessionRequest {
    * reminder its asker got at twice the deadline.
    */
   remindedAt?: string;
-  lateFrom?: 'expired';
+  /** The no-answer status a late reply settled it from (settleLateReply). 'notified' and 'withdrawn' since 2026-11-22. */
+  lateFrom?: LateAnswerFrom;
   /** When this server's deadline sweep made it overdue (ISO). Only such a row is reminded:
    *  rows an older Walnut expired never are, so an upgrade does not send a burst of them. */
   overdueAt?: string;
@@ -596,17 +601,20 @@ export async function noteReplyOutboxTry(id: string, messageId: string): Promise
 }
 
 /**
- * A reply to an OVERDUE request (status 'expired'): it is answered now, so it leaves every
- * "overdue, still open" list. Exactly once, like settle: null when it was not overdue.
+ * A reply to a request settled without an answer (answersLate: notified by a turn end, overdue,
+ * withdrawn): it is answered now, so it reads replied and leaves every "overdue, still open" or
+ * "ended without a reply" list, and a reopened asker does not restore it. Exactly once, like
+ * settle: null when it was not in one of those statuses.
  */
 export async function settleLateReply(id: string, reply?: SessionRequest['reply'] | null, forwardedTo?: string, answer?: AnswerStamp): Promise<SessionRequest | null> {
   let settled: SessionRequest | null = null;
   await updateRequests((store) => {
     const requests = [...(store.requests ?? [])];
     const idx = requests.findIndex((r) => r.id === id);
-    if (idx === -1 || requests[idx].status !== 'expired') return undefined;
+    const from = requests[idx]?.status;
+    if (idx === -1 || !answersLate(from)) return undefined;
     settled = {
-      ...requests[idx], status: 'replied', settledAt: new Date().toISOString(), lateFrom: 'expired',
+      ...requests[idx], status: 'replied', settledAt: new Date().toISOString(), lateFrom: from,
       ...(reply ? { reply } : {}), ...(forwardedTo ? { forwardedTo } : {}), ...stampAnswer(requests, id, answer),
     };
     requests[idx] = settled;
@@ -887,7 +895,8 @@ export async function listPendingRequests(): Promise<SessionRequest[]> {
 /**
  * Take in a row a host daemon created while this server was away
  * (offline-handover.ts). The daemon owned it until now, so ITS state wins over
- * a copy already here; a row this server settled itself is never reopened.
+ * a copy already here; a row this server settled itself is never reopened, except
+ * by the host's late answer to a row settled without one (answersLate).
  * Returns whether anything changed.
  */
 export async function importOfflineRequest(row: SessionRequest): Promise<boolean> {
@@ -914,7 +923,16 @@ export async function importOfflineRequest(row: SessionRequest): Promise<boolean
         ...(here.reachedAt && !row.reachedAt ? { reachedAt: here.reachedAt } : {}),
         ...(here.messageId && !row.messageId ? { messageId: here.messageId } : {}),
       };
-      if (requests[idx].status !== 'pending' || JSON.stringify(requests[idx]) === JSON.stringify(next)) return undefined;
+      // A row this server settled is never reopened, but one settled without an answer takes the
+      // host's answer (a late reply after the turn end's notice, answersLate): it reads replied.
+      // The row stays this server's then, with only the answer added.
+      const late = row.status === 'replied' && answersLate(here.status) ? here.status : undefined;
+      if (late) {
+        requests[idx] = { ...here, status: 'replied', settledAt: row.settledAt ?? new Date().toISOString(), lateFrom: late };
+        changed = true;
+        return { requests: prune(requests) };
+      }
+      if (here.status !== 'pending' || JSON.stringify(here) === JSON.stringify(next)) return undefined;
       requests[idx] = next;
       // The host settled it: what it carried has its work back.
       if (next.status !== 'pending' && next.carries?.length) pullInBack(requests, next.id);

@@ -40,6 +40,7 @@ import {
   settleReplied,
   clearReplyOutbox,
   settleLateReply,
+  answersLate,
   withdrawRequest,
   listAllSessionRequests,
   answerDigest,
@@ -924,7 +925,7 @@ async function settleAnswerNotDelivered(
   const { readStructuredReply } = await import('../peers/structured-reply.js');
   const fields = input.reply ? readStructuredReply(input.reply) : null;
   if (request.status === 'pending') await settleReplied(request.id, fields).catch(() => null);
-  else if (request.status === 'expired') await settleLateReply(request.id, fields).catch(() => null);
+  else if (answersLate(request.status)) await settleLateReply(request.id, fields).catch(() => null);
 }
 
 async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendResult | HeldSendResult> {
@@ -1375,10 +1376,10 @@ async function performReply(
       // Late but honest: the asker was already notified (turn end / timeout), yet
       // a real answer beats a status notice — deliver it anyway, marked late.
       log.session.info('session reply after settle — delivering late', { requestId: id, status });
-      // An overdue request was still open: this answer closes it.
-      if (status === 'expired') sameAs = (await settleLateReply(id, fields, undefined, stamp).catch(() => null))?.sameAnswerAs;
-      // Answered already, and these are the words it got then (or another request got).
-      else sameAs = sameAnswerOf(await listAllSessionRequests().catch(() => []), stamp)?.id;
+      // Settled without an answer (a turn end's notice, overdue, withdrawn): this answer settles
+      // it as replied (answersLate). Lost that race, or answered already: these may be the words it got then.
+      const late = answersLate(status) ? await settleLateReply(id, fields, undefined, stamp).catch(() => null) : null;
+      sameAs = late ? late.sameAnswerAs : sameAnswerOf(await listAllSessionRequests().catch(() => []), stamp)?.id;
       // Its answer is still owed (the server died before delivering it, and the replier sends again):
       // this answer goes out as that same queue row, and the outbox owes nothing more.
       if (fresh.outbox && !sameAs) { deliveryId = fresh.outbox.messageId; owed = true; }

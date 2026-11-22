@@ -6,7 +6,8 @@
  *    replier's task keeps its latest result (Task.result_report, via 'reply'), and the asker
  *    reads them as plain sections of the delivered text (composeReplyText). The fields without
  *    `in_reply_to` are refused; a plain reply leaves no result_report.
- *  - A late reply to an EXPIRED request settles it (settleLateReply, `lateFrom: 'expired'`).
+ *  - A late reply to a request settled WITHOUT an answer (notified by a turn end, expired,
+ *    withdrawn: REPLY_TO_STATUS `late`) settles it as replied (settleLateReply, `lateFrom`).
  *  - `POST /api/v1/tasks/:id/complete` with `result` / `not_done` keeps a result_report via
  *    'complete'; `POST /api/v1/tasks/:id/not-done` settles it; nothing to settle is 409.
  *  - A SESSION completing ANOTHER task that is still in use or unfinished (a Partial nobody
@@ -34,7 +35,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
-import { createSessionRequest, getSessionRequest, settleNotified } from '../../src/core/session-requests.js'
+import { REPLY_TO_STATUS, createSessionRequest, getSessionRequest, settleNotified, withdrawRequest, type SessionRequestStatus } from '../../src/core/session-requests.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -309,6 +310,36 @@ describe('a late reply to an overdue request', () => {
     expect(Date.parse(row!.settledAt!)).toBeGreaterThanOrEqual(Date.parse(expired!.settledAt!))
     await until('late reply delivered', async () => sentTexts().filter((s) => s.includes('the rollout is done')), (a) => a.length > 0)
     await until('asker idle', () => sessionStatus(asker.sid), (s) => s !== 'running', 30_000)
+  }, 60_000)
+
+  // 2026-11-22: after the turn end's "finished without replying" notice (notified), the late
+  // answer was delivered but the request stayed notified. Every late status, through the real route.
+  const into: Record<string, (id: string) => Promise<unknown>> = {
+    notified: (id) => settleNotified(id, 'completed'),
+    expired: (id) => settleNotified(id, 'timeout'),
+    withdrawn: (id) => withdrawRequest(id),
+  }
+  const late = (Object.keys(REPLY_TO_STATUS) as SessionRequestStatus[]).filter((s) => REPLY_TO_STATUS[s] === 'late')
+  it.each(late)('a reply after the request was settled %s turns it replied and is delivered once', async (status) => {
+    const rq = await ask(asker, lead, `asked before it was ${status}`)
+    expect(into[status], `no way to reach ${status} here`).toBeTypeOf('function')
+    await into[status](rq.id)
+    expect((await getSessionRequest(rq.id))?.status).toBe(status)
+    daemon.clearCommandHistory()
+    const words = `late answer after ${status}`
+    const r = await req('POST', '/api/v1/messages', { in_reply_to: rq.id, text: words, result: 'checked' }, asSession(lead.sid))
+    expect(r.status, JSON.stringify(r.json)).toBe(202)
+    expect(await getSessionRequest(rq.id)).toMatchObject({ status: 'replied', lateFrom: status, reply: { result: 'checked' } })
+    await until('late reply delivered', async () => sentTexts().filter((s) => s.includes(words)), (a) => a.length > 0)
+    // The same words again: a repeat, not delivered twice, and the row stays as the first answer left it.
+    const settled = await getSessionRequest(rq.id)
+    expect((await req('POST', '/api/v1/messages', { in_reply_to: rq.id, text: words, result: 'checked' }, asSession(lead.sid))).status).toBe(202)
+    expect((await getSessionRequest(rq.id))?.status).toBe('replied')
+    expect((await getSessionRequest(rq.id))?.lateFrom).toBe(settled?.lateFrom)
+    await until('asker idle', () => sessionStatus(asker.sid), (s) => s !== 'running', 30_000)
+    // One queue row carried it (the daemon may be asked to write one row more than once: same id).
+    const rows = new Set(daemon.getCommandHistoryFor('send').filter((c) => String(c.payload.message ?? '').includes(words)).map((c) => (c.payload.markers as { messageId?: string }[] | undefined)?.[0]?.messageId))
+    expect(rows.size).toBe(1)
   }, 60_000)
 
   it('a second reply to a request already replied leaves the row as it was', async () => {
