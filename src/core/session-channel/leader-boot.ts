@@ -33,7 +33,7 @@ export function _setActiveLeaderSideForTesting(side: LeaderSide | null): void {
  * subscriber that records a time counts the fact where it happened (EmitOptions.timestamp).
  */
 export function sayHostFact(name: string, data: unknown, opts: { late: boolean; to?: string[]; at?: number }): void {
-  bus.emit(name, data, reemitDestinations(opts.to), {
+  bus.emit(name, data, reemitDestinations(opts.to, bus.subscriberNames()), {
     source: 'host-channel',
     ...(opts.late ? { late: true as const } : {}),
     ...(typeof opts.at === 'number' && Number.isFinite(opts.at) ? { timestamp: opts.at } : {}),

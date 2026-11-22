@@ -41,7 +41,7 @@ const COMPUTED_DESTINATIONS: Record<string, string> = {
   // ACP sessions emit their normalized events, results and errors included, to acpEventDestinations(name).
   'src/providers/acp-session.ts destinations': 'acpEventDestinations',
   // A host's session facts, said again on the leader to the destinations the host's own emit named.
-  'src/core/session-channel/leader-boot.ts reemitDestinations(opts.to)': 'reemitDestinations',
+  'src/core/session-channel/leader-boot.ts reemitDestinations(opts.to, bus.subscriberNames())': 'reemitDestinations',
 }
 
 interface Emit { file: string; line: number; name: string | null; nameText: string; dest: string[] | null; destText: string }

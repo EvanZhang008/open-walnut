@@ -516,6 +516,11 @@ export class EventBus {
     }
   }
 
+  /** The names of the subscribers registered now (a host's `'*'` is expanded against them: session-channel/event-classes.ts). */
+  subscriberNames(): string[] {
+    return [...this.subscribers.keys()];
+  }
+
   /**
    * Check if a subscriber is registered.
    */

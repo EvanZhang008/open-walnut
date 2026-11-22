@@ -111,10 +111,15 @@ const UNNAMED_DESTINATIONS: readonly string[] = ['main-ai']
  * side of a host's give-up (leader-retry-over.ts, sessions/held-error.ts RETRY_OVER_SUBSCRIBER).
  * Never a command subscriber (the session runner, the subagent runner, the task outbox ...) and never
  * the phone's push subscriber (a host session buzzes the phone no more than one here does). A host
- * cannot choose any other. Every named subscriber of the codebase is in this list or in
- * REEMIT_REFUSED: tests/core/session-channel/reemit-destinations-ratchet.test.ts.
+ * cannot choose any other. Every named subscriber of the codebase is in this list, in
+ * REEMIT_ALLOWED_PREFIXES or in REEMIT_REFUSED: tests/core/session-channel/reemit-destinations-ratchet.test.ts.
  */
-export const REEMIT_ALLOWED: readonly string[] = ['*', 'main-ai', 'web-ui', 'session-sse', 'mobile-events-feed', 'host-retry-over']
+export const REEMIT_ALLOWED: readonly string[] = ['main-ai', 'web-ui', 'session-sse', 'mobile-events-feed', 'host-retry-over']
+/**
+ * Readers named once per request (a lane turn's relay, web/routes/lane-turn-sse.ts: `api-v1-lane-relay-<turn>`,
+ * `cloud-fallback-relay-<turn>`): a host's `'*'` reaches the ones registered now.
+ */
+export const REEMIT_ALLOWED_PREFIXES: readonly string[] = ['api-v1-lane-relay-', 'cloud-fallback-relay-']
 /** The named subscribers a host's record never names on the leader (see REEMIT_ALLOWED). */
 export const REEMIT_REFUSED: readonly string[] = [
   'session-runner', 'subagent-runner', 'task-outbox', 'setup-health', 'plugin-config-reload', 'push-notifications',
@@ -124,9 +129,17 @@ export const REEMIT_REFUSED: readonly string[] = [
 /**
  * Who the leader says a host's fact or flow event to (leader-boot.ts): the destinations the host's
  * own emit named (the record's `to`) that REEMIT_ALLOWED holds, so the leader's readers hear it as
- * they hear one of its own sessions. Ratchet: tests/core/push-producer-ratchet.test.ts.
+ * they hear one of its own sessions. A `'*'` is never passed on (the bus would hand it to every
+ * subscriber, the refused ones included): it stands for every allowed reader, and for the
+ * per-request readers among `registered` (the bus's subscriber names now). Ratchet:
+ * tests/core/push-producer-ratchet.test.ts.
  */
-export function reemitDestinations(to: readonly string[] | undefined): string[] {
-  const named = Array.isArray(to) ? to.filter((d) => typeof d === 'string' && REEMIT_ALLOWED.includes(d)) : []
-  return named.length > 0 ? [...new Set(named)] : [...UNNAMED_DESTINATIONS]
+export function reemitDestinations(to: readonly string[] | undefined, registered: readonly string[] = []): string[] {
+  const list = Array.isArray(to) ? to.filter((d) => typeof d === 'string') : []
+  const out = new Set(list.filter((d) => REEMIT_ALLOWED.includes(d)))
+  if (list.includes('*')) {
+    for (const d of REEMIT_ALLOWED) out.add(d)
+    for (const d of registered) if (REEMIT_ALLOWED_PREFIXES.some((p) => d.startsWith(p))) out.add(d)
+  }
+  return out.size > 0 ? [...out] : [...UNNAMED_DESTINATIONS]
 }

@@ -7,7 +7,8 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { REEMIT_ALLOWED, REEMIT_REFUSED, reemitDestinations } from '../../../src/core/session-channel/event-classes.js'
+import { REEMIT_ALLOWED, REEMIT_ALLOWED_PREFIXES, REEMIT_REFUSED, reemitDestinations } from '../../../src/core/session-channel/event-classes.js'
+import { EventBus } from '../../../src/core/event-bus.js'
 import { RETRY_OVER_SUBSCRIBER } from '../../../src/core/sessions/held-error.js'
 
 const SRC = path.resolve(__dirname, '../../../src')
@@ -67,7 +68,23 @@ describe('the leader subscribers a host record may reach', () => {
   it('a host naming a refused or unknown destination reaches only the allowed ones', () => {
     expect(reemitDestinations(['session-runner'])).toEqual(['main-ai'])
     expect(reemitDestinations(['session-runner', 'web-ui', 'anything-else'])).toEqual(['web-ui'])
-    expect(reemitDestinations(['*', 'main-ai'])).toEqual(['*', 'main-ai'])
     expect(reemitDestinations(undefined)).toEqual(['main-ai'])
+  })
+
+  it('a host\'s \'*\' is never passed on: it stands for the allowed readers and the per-request readers registered now (R2-M2)', () => {
+    expect(REEMIT_ALLOWED).not.toContain('*')
+    const dest = reemitDestinations(['*', 'main-ai'], ['push-notifications', 'approvals', 'api-v1-lane-relay-t1', 'cloud-fallback-relay-t2', 'task-outbox'])
+    expect(dest).not.toContain('*')
+    expect(dest.sort()).toEqual([...REEMIT_ALLOWED, 'api-v1-lane-relay-t1', 'cloud-fallback-relay-t2'].sort())
+    for (const p of REEMIT_ALLOWED_PREFIXES) expect(REEMIT_REFUSED.some((r) => r.startsWith(p))).toBe(false)
+  })
+
+  it('on a real bus, a host fact naming \'*\' reaches no refused subscriber (R2-M2)', () => {
+    const bus = new EventBus()
+    const heard: string[] = []
+    for (const name of [...REEMIT_REFUSED, ...REEMIT_ALLOWED, 'api-v1-lane-relay-turn-1']) bus.subscribe(name, () => { heard.push(name) })
+    bus.emit('session:result', { sessionId: 'sess-acme-1' }, reemitDestinations(['*'], bus.subscriberNames()), { source: 'host-channel' })
+    for (const refused of REEMIT_REFUSED) expect(heard, refused).not.toContain(refused)
+    expect(heard.sort()).toEqual([...REEMIT_ALLOWED, 'api-v1-lane-relay-turn-1'].sort())
   })
 })
