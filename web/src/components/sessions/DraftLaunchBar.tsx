@@ -97,6 +97,7 @@ import { DraftWorkInPill, DraftWorkInSuggest, useDraftProjectStart, useWorkIn, t
 import { DraftProjectSourceRow } from './DraftProjectSourceRow';
 import { projectStartEligible } from './draft-project-start';
 import { Chip, ChipGroup } from '@/components/controls';
+import { ICON_CLOSE } from '@/components/common/Icons';
 
 /** `host::cwd`: one directory's identity (same as draft-column's dirKey). */
 function chipKey(d: { cwd: string; host: string | null }): string {
@@ -361,12 +362,12 @@ export function DraftLaunchBar({
           {emptyFolder && onClearFolder && draft.cwd && !isFork && (
             <button
               type="button"
-              className="session-action-chip draft-folder-clear"
+              className="btn btn-icon btn-sm session-action-chip draft-folder-clear"
               data-testid="draft-folder-clear"
               aria-label={`Use ${emptyFolder} folder instead`}
               title={`The task works in a folder of its own instead of ${draft.cwd}`}
               onClick={() => { onClearFolder(draft.id); onAfterQuickPick?.(); }}
-            >&times;</button>
+            >{ICON_CLOSE}</button>
           )}
           {!isFork && workspaces && draft.cwd && !workIn && <DraftWorkspaceAutoChip draftId={draft.id} />}
           <DraftPillsBreak />

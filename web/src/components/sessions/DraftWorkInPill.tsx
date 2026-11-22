@@ -108,7 +108,7 @@ export function DraftWorkInPill({ draft, ps, work, pillRef, folders, onPickFolde
       <button
         ref={pillRef}
         type="button"
-        className={`session-action-chip draft-work-in-pill${open ? ' session-action-chip-active' : ''}${face.kind === 'empty' ? ' is-empty' : ''}`}
+        className={`btn btn-sm session-action-chip draft-work-in-pill${open ? ' session-action-chip-active' : ''}${face.kind === 'empty' ? ' is-empty' : ''}`}
         data-choice-exempt="opens the Work in picker; active only while the picker is open"
         data-testid="draft-work-in-pill"
         data-kind={face.kind}
@@ -124,11 +124,11 @@ export function DraftWorkInPill({ draft, ps, work, pillRef, folders, onPickFolde
         <span className="draft-pill-key">Work in:</span>{' '}
         {face.kind === 'source' && (
           <>
-            <span className="draft-pill-name">{projectDisplayName(face.project)}</span>{' '}
+            <span className="draft-pill-name btn-value">{projectDisplayName(face.project)}</span>{' '}
             <span className="draft-work-in-detail">· fresh {face.makes}</span>
           </>
         )}
-        {face.kind === 'folder' && <span className="draft-pill-name">{face.folder}</span>}
+        {face.kind === 'folder' && <span className="draft-pill-name btn-value">{face.folder}</span>}
         {face.kind !== 'source' && face.tag && (
           // A project Start will create (named after the folder) is drawn as new, as the project chip did.
           <span className={`draft-work-in-project-tag${tagIsNew ? ' is-new' : ''}`} data-testid="draft-work-in-project-tag"

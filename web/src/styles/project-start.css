@@ -4,7 +4,6 @@
    project settings' "Code source" section (ProjectCodeSource). */
 
 .draft-composer-bar > .draft-work-in-pill { gap: 0; max-width: 100%; }
-.draft-composer-bar > .draft-work-in-pill.is-empty { color: var(--fg-muted); }
 .draft-work-in-pill .work-in-icon { flex: none; margin-right: 5px; }
 .work-in-icon.is-git { color: var(--success); }
 .work-in-icon.is-box { color: var(--warning); }

@@ -48,7 +48,7 @@ export function DraftFolderPill({ draft, pillRef, pickerOpen, ai, onOpenPicker, 
     : null;
   const dot = hostDot?.kind ?? 'unknown';
   const saysSomething = !!hostDot && ['warn', 'failed', 'off', 'connecting', 'checking'].includes(dot);
-  const cls = `session-action-chip draft-folder-pill${pickerOpen ? ' session-action-chip-active' : ''}${ai ? ' session-action-chip-ai' : ''}`;
+  const cls = `btn btn-sm session-action-chip draft-folder-pill${pickerOpen ? ' session-action-chip-active' : ''}${ai ? ' session-action-chip-ai' : ''}`;
   let title: string;
   if (isFork) title = `A fork continues the source session, so it runs in its folder: ${draft.cwd}`;
   else if (!draft.cwd) title = emptyFolder
@@ -79,14 +79,14 @@ export function DraftFolderPill({ draft, pillRef, pickerOpen, ai, onOpenPicker, 
         <>
           {/* The spaces are text for copy and specs; flex drops them visually. */}
           <span className="draft-pill-key">Folder/Host:</span>{' '}
-          <span className="draft-pill-name">{shownFolderName(draft.cwd, draft.host)}</span>{' '}
+          <span className="draft-pill-name btn-value">{shownFolderName(draft.cwd, draft.host)}</span>{' '}
           <span className="draft-pill-host">· {hostName}</span>
           {saysSomething && <HostStatusDot dot={hostDot!} host={draft.host ?? undefined} className="draft-pill-dot" />}
         </>
       ) : emptyFolder ? (
         <>
           <span className="draft-pill-key">Folder:</span>{' '}
-          <span className="draft-pill-name">{emptyFolder}</span>
+          <span className="draft-pill-name btn-value">{emptyFolder}</span>
         </>
       ) : 'Choose folder and host…'}
       <AiBadge on={ai} />
@@ -134,7 +134,7 @@ export function DraftProjectChip({ chip, menu, project, onPick }: {
   const viaMenu = chip.action === 'menu' && !!menu;
   const menuActive = viaMenu && menu.anchor !== null && menu.anchor === ref.current;
   const active = menuActive || flyoutOpen;
-  const cls = ['session-action-chip', 'draft-project-chip'];
+  const cls = ['btn', 'btn-sm', 'session-action-chip', 'draft-project-chip'];
   if (chip.isNew) cls.push('draft-project-chip-new');
   if (chip.ai) cls.push('session-action-chip-ai');
   if (active) cls.push('session-action-chip-active');
@@ -156,7 +156,7 @@ export function DraftProjectChip({ chip, menu, project, onPick }: {
           : { onClick: () => setFlyoutOpen((o) => !o) })}
       >
         <span className="draft-pill-key">{chip.key}</span>{' '}
-        <span className="draft-pill-name">{chip.name}</span>
+        <span className="draft-pill-name btn-value">{chip.name}</span>
         <AiBadge on={chip.ai} />
       </button>
       {flyoutOpen && (

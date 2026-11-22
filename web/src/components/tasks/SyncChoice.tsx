@@ -39,7 +39,7 @@ export function SyncChoiceChip({ project, local, onChange, disabled }: {
   return (
     <button
       type="button"
-      className={`session-action-chip draft-sync-chip${local ? ' draft-sync-chip-local' : ''}`}
+      className={`btn btn-sm session-action-chip draft-sync-chip${local ? ' draft-sync-chip-local' : ''}`}
       data-testid="draft-sync-chip"
       data-choice-exempt="a pill of the draft launch row: its words name where the task goes (Sync: Local or the service), drawn like the Project and Work in pills beside it"
       data-sync={local ? 'local' : 'project'}
@@ -54,7 +54,7 @@ export function SyncChoiceChip({ project, local, onChange, disabled }: {
     >
       {local && <span className="draft-sync-lock">{LOCK}</span>}
       <span className="draft-pill-key">Sync:</span>
-      <span>{local ? 'Local' : service.name}</span>
+      <span className="btn-value">{local ? 'Local' : service.name}</span>
     </button>
   );
 }

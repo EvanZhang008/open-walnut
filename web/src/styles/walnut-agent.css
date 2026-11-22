@@ -129,37 +129,18 @@
   pointer-events: none;
 }
 
-/* Composer seeds in the walnut tab's empty body. Bare .session-action-chip is
-   borderless (built for a composer row where neighbours make it read as a
-   control); floating alone in the body it looked like grey captions, so these
-   get the SAME outline upgrade the draft launch pills got (globals.css
-   ".draft-launch-pills .session-action-chip") — and an amber hover, since blue
-   would clash inside the amber-accented mode. */
+/* Composer seeds in the walnut tab's empty body: plain `.btn btn-sm` keys (buttons.css),
+   which read as keys even floating alone in the body. */
 .draft-walnut-suggests {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   justify-content: center;
 }
-.draft-walnut-suggests .session-action-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  font-size: var(--font-size-xs);
-  color: var(--fg);
-}
-/* The chip's line icon: muted until hover, when it takes the chip's accent. */
+/* The key's line icon: muted until hover, when it takes the label's colour. */
 .draft-walnut-suggests .session-action-chip-ic { display: inline-flex; color: var(--fg-muted); }
 .draft-walnut-suggests .session-action-chip-ic svg { width: 12px; height: 12px; }
 .draft-walnut-suggests .session-action-chip:hover .session-action-chip-ic { color: inherit; }
-.draft-walnut-suggests .session-action-chip:hover {
-  border-color: var(--walnut-accent);
-  color: var(--walnut-accent);
-  background: color-mix(in srgb, var(--walnut-accent) 8%, transparent);
-}
 /* Another agent's composer: the Walnut seeds (tasks, schedule) would be wrong
    asks for Mentor, so its own description takes their place. */
 .draft-agent-desc {

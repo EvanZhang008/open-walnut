@@ -1,6 +1,6 @@
 /* Draft launch bar, last row: [Folder/Host: x · host] [Project: y] More
-   (DraftLaunchPills). The base pill look is `.draft-launch-pills
-   .session-action-chip` in globals.css; these rules add the labelled parts.
+   (DraftLaunchPills). Each pill is a `.btn btn-sm` (buttons.css), its value in
+   `.btn-value`; these rules only lay out the labelled parts.
 
    The row's HEIGHT depends only on the column's width, never on its content: the
    bar is anchored to the composer, so a row that grew when the project chip
@@ -15,20 +15,15 @@
   container: draft-launch / inline-size;
 }
 
+/* A pill with a long folder or project name ellipsizes inside the row. */
 .draft-composer-bar > .session-action-chip {
-  box-sizing: border-box;
-  height: 24px;
-  display: inline-flex;
-  align-items: center;
   min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* The folder pill's × back to no folder (a host that starts tasks in their own folder). */
 .draft-composer-bar > .draft-folder-clear {
-  width: 24px;
-  justify-content: center;
-  padding: 0;
-  font-size: var(--font-size-lg);
-  line-height: 1;
   flex: none;
 }
 
@@ -58,35 +53,10 @@
   color: var(--fg-muted);
 }
 
-.draft-launch-pills .session-action-chip:hover .draft-pill-key,
-.draft-launch-pills .session-action-chip:hover .draft-pill-host,
-.draft-launch-pills .session-action-chip-active .draft-pill-key,
-.draft-launch-pills .session-action-chip-active .draft-pill-host {
-  color: inherit;
-}
-
-/* Start will CREATE this project: a write, so it is said in words and drawn
-   differently from a project that already exists. Selectors carry the base
-   class so they outrank the plain pill rule in globals.css, whatever the
-   order the two sheets load in. */
-.draft-launch-pills .session-action-chip.draft-project-chip-new,
-.draft-launch-pills .session-action-chip.draft-project-chip-new .draft-pill-key {
-  color: var(--accent);
-}
-
-.draft-launch-pills .session-action-chip.draft-project-chip-new {
-  border-style: dashed;
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-}
-
-.draft-launch-pills .session-action-chip.draft-project-chip-new:hover {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-
-.draft-launch-pills .draft-project-chip:disabled {
-  cursor: default;
-  opacity: 0.75;
+/* Start will CREATE this project: a write, so it is said in words ("New project:"),
+   and that word takes the accent. */
+.draft-project-chip-new .draft-pill-key {
+  color: var(--accent-text);
 }
 
 /* The forced line break of the narrow layout. */
@@ -187,13 +157,10 @@
   margin-right: auto;
 }
 
-/* The draft's source choice (SyncChoiceChip): only in a project that syncs to an outside service. */
-.draft-launch-pills .session-action-chip.draft-sync-chip {
+/* The draft's source choice (SyncChoiceChip): only in a project that syncs to an outside
+   service. An on/off key: aria-pressed (synced) draws its on state. */
+.draft-launch-pills .draft-sync-chip {
   flex: 0 0 auto;
-  gap: 4px;
-}
-.draft-launch-pills .session-action-chip.draft-sync-chip-local {
-  color: var(--fg);
 }
 .draft-sync-lock {
   display: inline-flex;

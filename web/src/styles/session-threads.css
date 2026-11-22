@@ -57,14 +57,3 @@
   padding: 4px 4px 12px;
 }
 
-/* The header's Threads chip: how many threads have something for him. */
-.session-action-chip-count {
-  margin-left: 5px;
-  padding: 0 5px;
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  line-height: 15px;
-  background: var(--accent);
-  color: var(--on-accent);
-}

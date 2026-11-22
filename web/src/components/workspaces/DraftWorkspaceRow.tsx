@@ -349,7 +349,7 @@ export function DraftWorkspaceAutoChip({ draftId }: { draftId: string }) {
   const picked = selectedCandidate(choice);
   if (!picked) return null;
   return (
-    <span className="session-action-chip draft-workspace-auto" data-testid="draft-workspace-auto"
+    <span className="draft-workspace-auto" data-testid="draft-workspace-auto"
       title={`Isolated workspace by default: the task gets its own working copy (${picked.displayName}${picked.root ? ` of ${picked.root}` : ''}), so it never edits the folder other tasks use. × works in the folder itself.`}>
       <span aria-hidden>⑂</span> {picked.displayName}
       <button

@@ -180,9 +180,6 @@
   }
   .app-shell-navigation :is(.session-panel, .draft-session-panel, .ask-walnut-slot) .session-action-chip {
     min-height: 44px;
-    padding: 0 14px;
-    font-size: 14px;
-    border-radius: 22px;
   }
   /* The header's keys are finger sized too (the family's own look otherwise). */
   .app-shell-navigation :is(.session-panel, .draft-session-panel, .ask-walnut-slot) .btn.session-header-tool {

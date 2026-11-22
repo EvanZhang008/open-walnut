@@ -19289,15 +19289,18 @@ td.usage-share-col {
   color: var(--accent);
 }
 
+/* A count inside a key (Threads 2, Web 1) or a menu row (Inbox 3): one badge everywhere. */
 .session-action-chip-count {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  font-size: 9px;
+  box-sizing: border-box;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  font-size: var(--font-size-xs);
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
   color: var(--on-accent);
   background: var(--accent);
   border-radius: var(--radius-sm);
@@ -21240,26 +21243,6 @@ a.tag-chip:focus-visible,
   flex-wrap: wrap;
   row-gap: 2px;
 }
-/* .session-action-chip is borderless by design INSIDE a session's composer row,
-   where its neighbours make it read as a control. On its own row it just looked
-   like two muted labels, so the folder/project pills get an outline here — same
-   affordance as the quick-folder chips above them. Bigger type too: these two are
-   the most-clicked controls in the panel and were rendering at 10px. */
-.draft-launch-pills .session-action-chip {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding: 3px 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  font-size: var(--font-size-xs);
-  color: var(--fg);
-}
-.draft-launch-pills .session-action-chip:hover,
-.draft-launch-pills .session-action-chip-active {
-  border-color: var(--accent);
-  color: var(--accent);
-}
 /* No task-meta row lives inside the stack (the tier · More row was removed
    2026-09-15, see DraftLaunchBar); the folder picker below picks a folder and a
    host only (2026-10-29). */
@@ -21362,11 +21345,6 @@ a.tag-chip:focus-visible,
   font-size: 9px;
   line-height: 1;
   flex-shrink: 0;
-}
-/* An AI-filled pill gets the accent outline a hover would give it, so the row
-   reads as "look at these" without shouting. */
-.draft-launch-pills .session-action-chip-ai {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
 }
 /* ── Draft decision chips + More (DraftDecisionRow) ──
    The chips sit on their OWN row above the folder/project pills: filled, not

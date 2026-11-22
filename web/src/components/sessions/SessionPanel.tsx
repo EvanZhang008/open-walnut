@@ -3394,10 +3394,12 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   aria-pressed={planPopoverOpen}
                   onClick={() => setPlanPopoverOpen(o => !o)}
                   title="Plan & Execute"
+                  aria-haspopup="dialog"
+                  aria-expanded={planPopoverOpen}
                   data-header-id="plan"
                   data-hidden={hid('plan')}
                 >
-                  Plan {planPopoverOpen ? '\u25B4' : '\u25BE'}
+                  Plan <span className="btn-caret" aria-hidden="true">{'\u25BE'}</span>
                 </button>
                 {planPopoverOpen && (
                   <div className="plan-popup-overlay" onClick={() => setPlanPopoverOpen(false)}>

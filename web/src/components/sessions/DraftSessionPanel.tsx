@@ -1028,7 +1028,7 @@ export function DraftSessionPanel({
                   <button
                     key={s.label}
                     type="button"
-                    className="session-action-chip"
+                    className="btn btn-sm session-action-chip"
                     data-icon={s.iconName}
                     onClick={() => setPrefill((p) => ({ text: s.text, nonce: p.nonce + 1 }))}
                   >
@@ -1042,7 +1042,7 @@ export function DraftSessionPanel({
               <div className="draft-walnut-suggests" role="group" aria-label="Quick actions">
                 <button
                   type="button"
-                  className="session-action-chip"
+                  className="btn btn-sm session-action-chip"
                   data-testid="draft-customize-walnut"
                   title="Open a session in Walnut's own source code to change or fix Walnut"
                   onClick={() => { onCustomizeWalnut(draft.id); focusComposer(); }}
