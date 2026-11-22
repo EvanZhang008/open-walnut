@@ -1140,6 +1140,11 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   margin-top: 4px;
 }
 
+/* A page header on the header rule (header-fit.css; Agents, Commands): the title and the line
+   under it take the room left, the title cutting last; the button keeps its words whole. */
+.page-header[data-fit-header] > .page-header-text { flex: 1 1 auto; min-width: 0; }
+.page-header[data-fit-header] > .btn { flex: none; white-space: nowrap; }
+
 /* A page that is one list of cards (Agents, Commands): a readable width, so a card's
    menu sits beside its short text and a long description wraps, instead of the card
    stretching across a wide window. */
@@ -3300,7 +3305,8 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 .wf-card-header-actions .wf-script-toggle { white-space: nowrap; }
 .wf-card-header-meta .wf-card-tokens, .wf-card-header-actions .wf-script-toggle { margin: 0; }
 @container (max-width: 620px) {
-  .wf-card-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 8px; }
+  /* A grid on purpose (the tallies take a second row); outranks the header rule's flex row. */
+  .wf-card-header[data-fit-header] { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 8px; }
   .wf-card-collapse { grid-column: 1; }
   .wf-card-header-actions { grid-column: 2; grid-row: 1; }
   .wf-card-header-meta { grid-column: 1 / -1; grid-row: 2; }
@@ -6082,16 +6088,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 .session-panel .plan-preview-section {
   margin: 0;
 }
-
-/* Refresh button — inherits pill base from .task-action-btn */
-.plan-preview-refresh { margin-left: auto; }
-.plan-preview-refresh:disabled { opacity: 0.5; cursor: not-allowed; }
-
-@keyframes plan-refresh-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-.plan-preview-refresh-spin { animation: plan-refresh-spin 0.8s linear infinite; }
 
 .chat-input-container {
   display: flex;
@@ -11673,7 +11669,8 @@ body.walnut-dragging {
   font-size: var(--font-size-md);
 }
 
-/* A name too long for the row wraps (`.wn-title`) instead of overflowing into the star. */
+/* The row is on the header rule (header-fit.css): a name too long for the row cuts with an
+   ellipsis, last, and the peek shows it whole; it never runs into the star. */
 .todo-group-project-header .todo-group-project-name {
   min-width: 0;
 }
@@ -13062,8 +13059,12 @@ a.task-kebab-info:hover {
   font-size: var(--font-size-md);
   font-weight: 700;
   color: var(--fg);
-  flex: 1;
+  flex: 0 1 auto;
 }
+
+/* The two badges beside the title: they shrink and cut before the title does. */
+.context-inspector-meta { display: flex; align-items: center; gap: 12px; }
+.context-inspector-meta .context-token-badge { flex-shrink: 1; min-width: 0; }
 
 .context-inspector-body {
   padding: 4px 0;
@@ -15843,6 +15844,7 @@ a.task-kebab-info:hover {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 .cmd-card-name {
   font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Menlo', monospace;
@@ -15853,8 +15855,10 @@ a.task-kebab-info:hover {
 .cmd-card-desc {
   line-height: 1.4;
 }
+/* At the top of a two-line header, whatever the header rule's own alignment. */
 .cmd-card-actions {
   flex-shrink: 0;
+  align-self: flex-start;
 }
 
 /* Source badge */
@@ -16658,24 +16662,10 @@ td.usage-share-col {
   align-items: center;
   gap: 8px;
 }
-
-.plan-popup-header-actions .plan-preview-refresh {
-  padding: 4px 8px;
-  font-size: var(--font-size-xs);
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border-radius: var(--radius-full);
-  background: var(--bg-tertiary);
-  color: var(--fg-muted);
-  border: 1px solid var(--border);
-  cursor: pointer;
-}
-
-.plan-popup-header-actions .plan-preview-refresh:hover {
-  background: var(--bg-hover);
-  color: var(--fg);
-}
+/* The session's Plan window: the title takes its own width (not a share of the row), so the
+   "from" line beside it gives way first (the header rule); the tools sit at the end. */
+.plan-popup-header--tools > .plan-popup-title { flex: 0 1 auto; }
+.plan-popup-header--tools > .plan-popup-header-actions { margin-left: auto; }
 
 .plan-popup-header-actions .execute-plan-btn-desc {
   display: none;
@@ -17188,6 +17178,9 @@ a.tag-chip:hover .tag-chip-value,
   gap: 8px;
   min-width: 0;
 }
+/* The header rule (header-fit.css): the count and the close keep their size; the title cuts last. */
+.triage-panel-header > .btn,
+.triage-panel-count { flex: none; }
 
 .triage-panel-title {
   font-size: 14px;
@@ -17493,27 +17486,10 @@ a.tag-chip:hover .tag-chip-value,
 
 .dock-task-header {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px 8px 4px;
-  flex-shrink: 0;
-}
-
-.dock-task-header-top {
-  display: flex;
   align-items: center;
   gap: 6px;
-}
-
-.dock-task-status-labels {
-  display: flex;
-  gap: 6px;
-}
-
-.dock-task-session-label {
-  font-size: 9px;
-  font-weight: 500;
-  color: var(--accent);
+  padding: 6px 8px 4px;
+  flex-shrink: 0;
 }
 
 .dock-task-phase-badge {
@@ -17541,6 +17517,7 @@ a.tag-chip:hover .tag-chip-value,
 /* .wn-title on the element: the task's title wraps, never cut (text-fit.css). */
 .dock-task-title {
   flex: 1;
+  min-width: 0;
   font-size: var(--font-size-xs);
   font-weight: 600;
   color: var(--fg);
@@ -18156,6 +18133,9 @@ a.tag-chip:hover .tag-chip-value,
   flex-direction: column;
   height: 100%;
 }
+/* Its header is on the header rule (header-fit.css), which makes the header a flex row: its one
+   row (title, state, close) still takes the whole width. */
+.pending-session-panel > .session-panel-header > .session-panel-header-top { flex: 1 1 auto; min-width: 0; }
 
 .pending-session-body {
   flex: 1;
@@ -19064,9 +19044,6 @@ a.tag-chip:hover .tag-chip-value,
   font-size: var(--font-size-md);
   font-weight: 600;
   color: var(--fg);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
 }
 .notes-chat-clear {
   font-size: var(--font-size-sm);
@@ -19935,7 +19912,9 @@ a.file-link:hover {
   flex-shrink: 0;
 }
 
+/* The title's text: it shrinks and cuts inside its flex title (the header rule). */
 .file-viewer-path {
+  min-width: 0;
   font-family: var(--font-mono);
   font-size: var(--font-size-md);
   font-weight: 600;
@@ -20234,12 +20213,13 @@ a.file-link:hover {
   border-radius: var(--radius-xs);
 }
 .ref-panel-count {
-  margin-left: 8px;
   font-weight: 400;
   font-size: var(--font-size-xs);
   color: var(--fg-muted);
 }
 .ref-panel-close {
+  flex: none;
+  margin-left: auto;
   border: none;
   background: transparent;
   color: var(--fg-muted);
@@ -20908,12 +20888,10 @@ a.file-link:hover {
 
 /* ── Several terminals: tabs, split panes, the dock under Changed / Files / Web ── */
 .session-terminal-pill-slot { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
-/* A narrow terminal bar (a split column, a small window) keeps its controls: the words go first. */
+/* A narrow terminal bar (a split column, a small window) keeps its controls: the header rule folds
+   the words first (components/common/HeaderFit.tsx), by the bar's own width. */
 .session-terminal-panel-embedded { container: terminal-panel / inline-size; }
-@container terminal-panel (max-width: 640px) {
-  .session-terminal-dock-btn span { display: none; }
-}
-.session-terminal-dock-btn svg { display: block; width: 14px; height: 14px; }
+.session-terminal-header .header-fit-icon svg { display: block; width: 14px; height: 14px; }
 
 /* The strip is the shared Tabs (controls/Tabs.tsx); here only its place. */
 .session-terminal-tabs { padding: 0 8px; flex-shrink: 0; }
@@ -22085,9 +22063,14 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .session-diff-ws-count { margin-left: 6px; font-weight: 500; font-size: var(--font-size-sm); color: var(--fg-muted); }
 .session-diff-changed-count { margin-left: 6px; font-weight: 600; font-size: var(--font-size-sm); color: var(--warning); }
 @container session-diff-toolbar (max-width: 640px) { .session-diff-changed-count { display: none; } }
-/* The title keeps one width while a comparison loads, so the controls after it do not move. */
-.session-diff-toolbar-title { min-width: 15em; }
-@container session-diff-toolbar (max-width: 640px) { .session-diff-toolbar-title { min-width: 10em; } }
+/* The title keeps one width while a comparison loads, so the controls after it do not move, but
+   never more than the bar: past that it cuts its text (the header rule, styles/header-fit.css). */
+.session-diff-toolbar-title,
+.session-diff-toolbar:not(.turns-toolbar) > .session-diff-toolbar-title[data-fit-title] { min-width: min(15em, 100%); }
+@container session-diff-toolbar (max-width: 640px) {
+  .session-diff-toolbar-title,
+  .session-diff-toolbar:not(.turns-toolbar) > .session-diff-toolbar-title[data-fit-title] { min-width: min(10em, 100%); }
+}
 .session-diff-viewed-group {
   display: inline-flex;
   align-items: center;
@@ -23410,6 +23393,8 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   font-weight: 600;
   font-size: 14px;
 }
+/* The header rule (header-fit.css): the close keeps its size; the title cuts last. */
+.routines-panel-header > .btn { flex: none; }
 
 .routines-panel-body {
   flex: 1;
@@ -24408,18 +24393,22 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .app-content-area:has(> .cal-page) { padding-bottom: 24px; }
 
 /* --- toolbar -------------------------------------------------------------- */
+/* The header rule (components/common/HeaderFit.tsx): when the date and the right-hand controls
+   do not fit on one line, the controls move under it, so they never cut the date. */
 .cal-toolbar {
   position: relative;
   z-index: 5;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px 12px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
 }
 
 .cal-toolbar-left {
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -25325,8 +25314,10 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   border-bottom: 1px solid var(--border);
 }
 
+/* Its own width as its basis: the header wraps (grid-controls.css), so the buttons move under
+   the date rather than cut it (the header rule, components/common/HeaderFit.tsx). */
 .cal-side-title {
-  flex: 1;
+  flex: 1 1 auto;
   font-size: var(--font-size-md);
   font-weight: 700;
   white-space: nowrap;
@@ -25693,6 +25684,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  margin-left: auto;
 }
 
 .cal-cals-btn {

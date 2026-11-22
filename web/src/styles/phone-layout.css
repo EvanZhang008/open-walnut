@@ -20,7 +20,9 @@
   --wn-keyboard-inset: 0px;
 }
 
-.phone-topbar {
+/* The doubled form outranks the header rule's `[data-fit-header] { display: flex }`. */
+.phone-topbar,
+.phone-topbar[data-fit-header] {
   display: none;
 }
 
@@ -77,14 +79,13 @@
     display: inline-flex;
   }
 
-  /* The title is centered on the whole bar, not between its buttons: it is laid
-     over the bar between two 52px gutters (44px button + its padding). */
+  /* The title takes the room between the buttons (the header rule, PhoneTopBar.tsx), centred in
+     it: centred on the bar while both sides hold one 44px button, and never under a pill however
+     many the page puts in the slot (it used to lie over the bar between fixed gutters, which
+     every pill had to widen by its own rule). */
   .app-shell-navigation .phone-topbar-title {
-    position: absolute;
-    top: var(--wn-safe-top);
-    bottom: 0;
-    left: calc(52px + var(--wn-safe-left));
-    right: calc(52px + var(--wn-safe-right));
+    flex: 1 1 auto;
+    align-self: stretch;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -346,7 +347,6 @@
     justify-content: flex-end;
     min-width: 44px;
     height: 44px;
-    margin-left: auto;
   }
 
   .app-shell-navigation .phone-topbar-slot {

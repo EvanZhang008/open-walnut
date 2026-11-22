@@ -3,6 +3,7 @@ import { AgentText } from '@/components/common/AgentText';
 import type { ContextInspectorResponse } from '@/api/context';
 import { ContextSection } from './ContextSection';
 import { parseSkillsIndex } from './skills-index-parse';
+import '@/styles/header-fit.css';
 
 interface ContextInspectorPanelProps {
   data: ContextInspectorResponse | null;
@@ -59,8 +60,8 @@ export function ContextInspectorPanel({ data, loading, error, onRefresh }: Conte
   if (error) {
     return (
       <div className="context-inspector">
-        <div className="context-inspector-header">
-          <span className="context-inspector-title">Agent Context Inspector</span>
+        <div className="context-inspector-header" data-fit-header="">
+          <span className="context-inspector-title" data-fit-title="">Agent Context Inspector</span>
           <button className="btn btn-sm" onClick={onRefresh}>Retry</button>
         </div>
         <div className="text-sm" style={{ color: 'var(--error)', padding: '12px 16px' }}>
@@ -90,16 +91,19 @@ export function ContextInspectorPanel({ data, loading, error, onRefresh }: Conte
 
   return (
     <div className="context-inspector">
-      <div className="context-inspector-header">
-        <span className="context-inspector-title">Agent Context Inspector</span>
-        <span
-          className="badge context-token-badge"
-          title="A chat turn runs in a coding-agent session; this shows that session's launch config."
-        >
-          <span>{isClaudeCode ? 'Claude Code engine' : `${data.engine ?? 'unknown'} engine`}</span>
-        </span>
-        <span className="badge badge-accent context-token-badge context-token-badge-total">
-          <span>System prompt: ~{totalTokens.toLocaleString()} tokens</span>
+      <div className="context-inspector-header" data-fit-header="">
+        <span className="context-inspector-title" data-fit-title="">Agent Context Inspector</span>
+        {/* The engine and the size: they give way before the title (the header rule). */}
+        <span className="context-inspector-meta" data-fit-sub="">
+          <span
+            className="badge context-token-badge"
+            title="A chat turn runs in a coding-agent session; this shows that session's launch config."
+          >
+            <span>{isClaudeCode ? 'Claude Code engine' : `${data.engine ?? 'unknown'} engine`}</span>
+          </span>
+          <span className="badge badge-accent context-token-badge context-token-badge-total">
+            <span>System prompt: ~{totalTokens.toLocaleString()} tokens</span>
+          </span>
         </span>
         <button
           className="btn btn-sm"

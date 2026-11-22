@@ -281,6 +281,7 @@
   background: color-mix(in srgb, var(--walnut-accent) 10%, transparent);
 }
 .ask-walnut-agent-caret {
+  flex: none;
   display: inline-flex;
   opacity: 0.85;
   transition: transform 0.15s;

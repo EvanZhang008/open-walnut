@@ -5,11 +5,11 @@
 .mail-router-settings .mail-router-lead { margin: 0; font-size: var(--font-size-md); line-height: 1.45; color: var(--fg-secondary); }
 .mail-router-settings .mail-router-block { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
 .mail-router-settings .mail-router-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.mail-router-settings .mail-router-name { font-weight: 600; color: var(--fg); }
+.mail-router-settings .mail-router-name { flex: 0 1 auto; font-weight: 600; color: var(--fg); }
 .mail-router-settings .mail-router-state { font-size: var(--font-size-sm); color: var(--fg-secondary); }
 .mail-router-settings .mail-router-state.is-paused, .mail-router-settings .mail-router-state.is-closed { color: var(--warning); }
 .mail-router-settings .mail-router-actions[hidden] { display: none; }
-.mail-router-settings .mail-router-open { margin-left: auto; flex: none; font-size: var(--font-size-sm); color: var(--accent); text-decoration: none; }
+.mail-router-settings .mail-router-open { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: var(--font-size-sm); color: var(--accent); text-decoration: none; }
 .mail-router-settings .mail-router-open:hover { text-decoration: underline; }
 .mail-router-settings .mail-router-accounts { margin: 0 0 4px; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 2px 14px; color: var(--fg-secondary); }
 .mail-router-settings .mail-router-hint { margin: 0; font-size: var(--font-size-sm); color: var(--fg-secondary); }

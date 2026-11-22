@@ -11,6 +11,7 @@ import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { SessionMessage } from '@/components/sessions/SessionMessage';
 import { AgentText } from '@/components/common/AgentText';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
+import '@/styles/header-fit.css';
 
 interface TriagePanelProps {
   onClose: () => void;
@@ -200,9 +201,9 @@ export function TriagePanel({ onClose, taskId, onSessionClick }: TriagePanelProp
     // data-task-id: the single time-tracking listener attributes interaction
     // inside this panel to the task being triaged (web/src/utils/time-attribution.ts).
     <div className="triage-panel" data-task-id={taskId || undefined}>
-      <div className="triage-panel-header">
+      <div className="triage-panel-header" data-fit-header="">
         <div className="triage-panel-title-area">
-          <span className="triage-panel-title">{headerTitle}</span>
+          <span className="triage-panel-title" data-fit-title="">{headerTitle}</span>
           <span className="badge badge-count triage-panel-count">{total}</span>
         </div>
         <button

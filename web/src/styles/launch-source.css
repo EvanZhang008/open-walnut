@@ -73,6 +73,9 @@
   color: var(--fg);
 }
 .project-launch-defaults-clear {
+  /* The header rule (header-fit.css): the button keeps its words on one line; the title cuts, last. */
+  flex: none;
+  white-space: nowrap;
   font-size: var(--font-size-xs);
   padding: 2px 8px;
   border-radius: var(--radius-full);

@@ -82,7 +82,8 @@ import { TerminalDock } from './TerminalDock';
 import { TerminalUnavailableView } from './HostFeatureUnavailable';
 import type { TerminalPathLink } from './terminal-links';
 import type { SessionSplitView } from './sessionSplitView';
-import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_MINIMIZE, ICON_LOCATE, ICON_EYE, ICON_LOCK, ICON_UNLOCK, ICON_PANEL_RIGHT, ICON_PANEL_RIGHT_FILLED, ICON_TERMINAL } from '../common/Icons';
+import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_MINIMIZE, ICON_LOCATE, ICON_EYE, ICON_LOCK, ICON_UNLOCK, ICON_PANEL_RIGHT, ICON_PANEL_RIGHT_FILLED, ICON_TERMINAL, ICON_REFRESH, ICON_SKIP_FORWARD } from '../common/Icons';
+import { FitButton, HeaderFitMore, useHeaderFit } from '@/components/common/HeaderFit';
 import { openPopout } from '@/popout/openPopout';
 import { locateTaskOnHome, navigateToTarget } from '@/utils/open-session';
 import { UserMessagesSummary } from './UserMessagesSummary';
@@ -1193,6 +1194,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
 
   // Action chip toggle state
   const [planPopoverOpen, setPlanPopoverOpen] = useState(false);
+  const planHeadRef = useHeaderFit();
   const [notesOpen, setNotesOpen] = useState(false);
   // Shared note state feeding both the pill (empty) and the bar (has note)
   const noteState = useSessionNote(sessionId, session?.human_note);
@@ -3430,46 +3432,34 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   <div className="plan-popup-overlay wn-scrim" onClick={() => setPlanPopoverOpen(false)}>
                     <PlanModalEscape onClose={() => setPlanPopoverOpen(false)} />
                     <div className="plan-popup-container wn-dialog" onClick={e => e.stopPropagation()}>
-                      <div className="plan-popup-header wn-dialog-head">
-                        <span className="plan-popup-title">
-                          {plan?.planFile?.split('/').pop() ?? 'Plan'}
-                          {isFromPlan && plan?.sourceSessionId && (
-                            <span style={{ marginLeft: '8px', fontSize: '11px', fontWeight: 400, color: 'var(--fg-muted)' }}>
-                              from{' '}
-                              <a
-                                href={`/sessions?id=${plan.sourceSessionId}`}
-                                style={{ color: 'var(--accent)' }}
-                                onClick={(e) => { e.preventDefault(); navigate(`/sessions?id=${plan.sourceSessionId}`); setPlanPopoverOpen(false); }}
-                              >
-                                {plan.sourceSessionId.slice(0, 12)}...
-                              </a>
-                            </span>
-                          )}
-                        </span>
-                        <div className="plan-popup-header-actions">
+                      {/* On the header rule (HeaderFit.tsx): "from" gives way, then the tools fold; Execute stays. */}
+                      <div className="plan-popup-header wn-dialog-head plan-popup-header--tools" ref={planHeadRef} data-fit-header="">
+                        <span className="plan-popup-title" data-fit-title="">{plan?.planFile?.split('/').pop() ?? 'Plan'}</span>
+                        {isFromPlan && plan?.sourceSessionId && (
+                          <span data-fit-sub="" style={{ fontSize: '11px', fontWeight: 400, color: 'var(--fg-muted)' }}>
+                            from{' '}
+                            <a
+                              href={`/sessions?id=${plan.sourceSessionId}`}
+                              style={{ color: 'var(--accent)' }}
+                              onClick={(e) => { e.preventDefault(); navigate(`/sessions?id=${plan.sourceSessionId}`); setPlanPopoverOpen(false); }}
+                            >
+                              {plan.sourceSessionId.slice(0, 12)}...
+                            </a>
+                          </span>
+                        )}
+                        <div className="plan-popup-header-actions" data-fit-actions="">
                           {showExecuteButtons && (
                             <>
                               <button className="btn btn-sm btn-primary execute-plan-btn" onClick={handleExecuteContinue} disabled={executing}>
                                 {executing ? 'Starting\u2026' : <><PlayGlyphIcon size={10} /> Execute</>}
                               </button>
-                              <button className="btn btn-sm" onClick={handleClearContextExecute} disabled={executing}>
-                                Clear Context & Execute
-                              </button>
+                              <FitButton icon={ICON_SKIP_FORWARD} label="Clear Context & Execute" onClick={handleClearContextExecute} disabled={executing} />
                             </>
                           )}
                           {executeStarted && <span style={{ fontSize: '11px', color: 'var(--success)' }}>Started</span>}
                           {executeError && <span style={{ fontSize: '11px', color: 'var(--error)' }}>{executeError}</span>}
-                          <button
-                            className="plan-preview-refresh"
-                            onClick={async (e) => { e.stopPropagation(); await planRefresh(); }}
-                            title="Refresh plan content"
-                          >
-                            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                              <path d="M1.5 8a6.5 6.5 0 0111.3-4.4"/><polyline points="13 1 13 4.5 9.5 4.5"/>
-                              <path d="M14.5 8a6.5 6.5 0 01-11.3 4.4"/><polyline points="3 15 3 11.5 6.5 11.5"/>
-                            </svg>
-                            {' '}Refresh
-                          </button>
+                          <FitButton icon={ICON_REFRESH} label="Refresh" title="Refresh plan content" onClick={(e) => { e.stopPropagation(); void planRefresh(); }} />
+                          <HeaderFitMore testId="plan-popup-more" />
                         </div>
                         <button className="btn btn-icon plan-popup-close wn-dialog-close" onClick={() => setPlanPopoverOpen(false)} aria-label="Close">{ICON_CLOSE}</button>
                       </div>

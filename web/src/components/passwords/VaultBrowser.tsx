@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { vaultApi, VaultApiError, isLockedError, type SecurityReport, type VaultItem, type VaultItemSummary, type VaultStatus } from '@/api/vault'
 import { usePageView } from '@/utils/view-memory'
+import '@/styles/header-fit.css'
 import { log } from '@/utils/log'
 import { EmptyState, LoadingState } from '@/components/common/EmptyState'
 import type { VaultItemType } from '../../../../src/core/vault/types'
@@ -235,9 +236,9 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
       </aside>
 
       <section className="pw-list" aria-label={sectionTitle}>
-        <div className="pw-list-head">
-          <div>
-            <h1>{sectionTitle}</h1>
+        <div className="pw-list-head" data-fit-header="">
+          <div className="pw-list-titles">
+            <h1 data-fit-title="">{sectionTitle}</h1>
             <span className="pw-list-count">{items ? `${shownItems.length} item${shownItems.length === 1 ? '' : 's'}` : ''}</span>
           </div>
           {section !== 'trash' && <NewItemButton onPick={(t) => { setEditing({ kind: 'new', type: t }); setSelectedId('') }} />}

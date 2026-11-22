@@ -17,6 +17,8 @@ import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { folderList } from '@/components/org/RouterFolderPicker';
 import { RouterSettingsDialog } from '@/components/org/RouterSettingsDialog';
 import { areaIdWords } from '@/components/org/org-channels-model';
+import { FitButton, HeaderFitMore, useHeaderFit } from '@/components/common/HeaderFit';
+import { ICON_GEAR, ICON_OPEN_APP } from '@/components/common/Icons';
 import {
   accountAreaKey, refreshRouterAreas, routerAccountAreas, routerAreaFolders, routerAreaRouters, useRouterAreaNames, useRouterAreasReadState,
 } from '@/components/org/router-area-names';
@@ -113,8 +115,10 @@ export function MailRouterSettings() {
 function OrgLink({ routerId }: { routerId: string }) {
   const routed = useInRouterContext();
   const to = `/org?node=${encodeURIComponent(`router:${routerId}`)}`;
-  const props = { className: 'mail-router-open', 'data-testid': 'mail-router-open-org' };
-  return routed ? <Link to={to} {...props}>Open in Org</Link> : <a href={to} {...props}>Open in Org</a>;
+  // Folds with the header's buttons (HeaderFit): its words go first, then it goes into More.
+  const props = { className: 'mail-router-open', 'data-testid': 'mail-router-open-org', 'data-fit-button': '2', 'aria-label': 'Open in Org' };
+  const body = <><span className="header-fit-icon" aria-hidden="true">{ICON_OPEN_APP}</span><span data-fit-label="">Open in Org</span></>;
+  return routed ? <Link to={to} {...props}>{body}</Link> : <a href={to} {...props}>{body}</a>;
 }
 
 /** The saved folders in words: a role by its name, a folder by the last part of its id. */
@@ -126,14 +130,16 @@ export function foldersInWords(entries: readonly string[]): string {
 
 function MailRouterBlockView({ block, router, tasks, tasksLoading }: { block: MailRouterBlock; router: Task | undefined; tasks: readonly Task[]; tasksLoading: boolean }) {
   const [open, setOpen] = useState(false);
+  const headRef = useHeaderFit();
   return (
     <div className="mail-router-block" data-testid="mail-router-block" data-router-id={block.routerId}>
-      <div className="mail-router-head">
-        <span className="mail-router-name wn-title">{block.name}</span>
-        {block.state && <span className={`mail-router-state is-${block.state.toLowerCase()}`} data-testid="mail-router-state">{block.state}</span>}
-        <span className="mail-router-actions">
+      <div className="mail-router-head" ref={headRef} data-fit-header="">
+        <span className="mail-router-name wn-title" data-fit-title="">{block.name}</span>
+        {block.state && <span className={`mail-router-state is-${block.state.toLowerCase()}`} data-testid="mail-router-state" data-fit-sub="">{block.state}</span>}
+        <span className="mail-router-actions" data-fit-actions="">
           <OrgLink routerId={block.routerId} />
-          <button type="button" className="btn btn-sm" data-testid="mail-router-open-settings" aria-haspopup="dialog" aria-expanded={open} disabled={!router} onClick={() => setOpen(true)}>Settings</button>
+          <FitButton icon={ICON_GEAR} label="Settings" data-testid="mail-router-open-settings" aria-haspopup="dialog" aria-expanded={open} disabled={!router} onClick={() => setOpen(true)} />
+          <HeaderFitMore testId="mail-router-more" />
         </span>
       </div>
       <ul className="mail-router-accounts" data-testid="mail-router-accounts">

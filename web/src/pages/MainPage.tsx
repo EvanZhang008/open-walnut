@@ -123,6 +123,7 @@ import { phaseSnapshot, useTaskUndo } from '@/undo/TaskUndoContext';
 import { nextAfterCompleteNow, useNextAfterComplete } from '@/hooks/useNextAfterComplete';
 import { needsYouQueue, nextNeedsYou } from '@/components/tasks/next-needs-you';
 import '@/styles/keyboard-shortcuts.css';
+import '@/styles/header-fit.css';
 import { isDraftColumnId, isPendingColumnId, isPlaceholderColumnId, DRAFT_COL_PREFIX } from '@/utils/column-ids';
 import { createStripWriter, readColumns, readLayoutField, readString, writeLayoutField, type LayoutField } from '@/utils/layout-record';
 import { recordTaskOpened, recentOpenRecorder } from '@/utils/recent-opened';
@@ -3912,8 +3913,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       {/* Routines Panel (slide-out, toggled via Sidebar) */}
       {routinesVisible && !phoneLayout && (
         <div className="main-page-routines">
-          <div className="routines-panel-header">
-            <span className="routines-panel-title">&#9889; Routines</span>
+          <div className="routines-panel-header" data-fit-header="">
+            <span className="routines-panel-title" data-fit-title="">&#9889; Routines</span>
             <button
               className="btn btn-sm"
               onClick={() => setRoutinesVisible(false)}

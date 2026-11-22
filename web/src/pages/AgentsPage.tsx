@@ -7,6 +7,7 @@ import { EmptyState, LoadingState, UnavailableState } from '@/components/common/
 import { ICON_ROBOT } from '@/components/common/Icons';
 import { Chip, ChipGroup } from '@/components/controls';
 import type { AgentDefinition, CreateAgentInput, UpdateAgentInput } from '@/api/agents';
+import '@/styles/header-fit.css';
 
 type FilterTab = 'all' | 'builtin' | 'config';
 
@@ -87,9 +88,9 @@ export function AgentsPage() {
 
   return (
     <div className="page-readable">
-      <div className="page-header flex justify-between items-center">
-        <div>
-          <h1 className="page-title">Agents</h1>
+      <div className="page-header flex justify-between items-center" data-fit-header="">
+        <div className="page-header-text">
+          <h1 className="page-title" data-fit-title="">Agents</h1>
           <p className="page-subtitle">Agents you chat with on Home and agents that run in the background: edit their prompts or make your own.</p>
         </div>
         {!showForm && (

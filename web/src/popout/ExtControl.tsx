@@ -24,6 +24,7 @@ import { taskHead } from './ext-tasks-model';
 import { toParent } from './ext-frame';
 import type { VaultState } from './ext-panel-model';
 import { EmptyState } from '@/components/common/EmptyState';
+import '@/styles/header-fit.css';
 
 type SitesMode = 'ask' | 'any';
 
@@ -61,8 +62,8 @@ export function ExtControl({ relay, here, tasks, owner, agents, keyed, vault, ke
   const stop = (tab: number) => toParent({ type: 'relay-release', tab });
   return (
     <div className="ext-control" data-testid="ext-control">
-      <header className="ext-ask-head ext-control-head" data-testid="ext-control-head">
-        <span className="ext-control-title">Browser control</span>
+      <header className="ext-ask-head ext-control-head" data-fit-header="" data-testid="ext-control-head">
+        <span className="ext-control-title" data-fit-title="">Browser control</span>
         {keyed && <KeyButton vault={vault} pressed={keyPressed} />}
       </header>
       <div className="ext-control-body">

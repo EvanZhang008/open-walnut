@@ -58,6 +58,29 @@ test('every header on Home, Org and Settings fits at 1512, 1280, 1024 and phone 
   }
 })
 
+// Every page the sidebar links to (read from the page, so a page added later is swept too), each
+// at every width: the header rows of Apps, Calendar, Notes, Tasks, Agents and the rest.
+test('every page in the sidebar: its headers fit at 1512, 1280, 1024 and phone width', async ({ page }) => {
+  await isolateUiPrefs(page)
+  await page.setViewportSize({ width: 1512, height: 900 })
+  await loadHome(page)
+  const hrefs = [...new Set(await page.locator('a.sidebar-link[href^="/"]').evaluateAll(
+    (els) => els.map((a) => a.getAttribute('href') ?? '').filter((h) => h && h !== '/')))]
+  expect(hrefs.length, 'the sidebar links its pages').toBeGreaterThan(3)
+  const found: Record<string, unknown> = {}
+  for (const href of hrefs) {
+    await page.setViewportSize({ width: 1512, height: 900 })
+    await sidebarTo(page, href)
+    for (const width of [1512, 1280, 1024, 390]) {
+      await page.setViewportSize({ width, height: width < 500 ? 844 : 900 })
+      await page.waitForTimeout(150)
+      const at = await problems(page)
+      if (at.length) found[`${width} ${href}`] = at
+    }
+  }
+  expect(found).toEqual({})
+})
+
 test('the Org list header: the Org chart icon and the gear; the title always reads', async ({ page }) => {
   await isolateUiPrefs(page)
   await page.setViewportSize({ width: 1512, height: 900 })

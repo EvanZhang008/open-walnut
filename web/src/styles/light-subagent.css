@@ -43,8 +43,6 @@
   :root:not([data-theme]) .bg-task-kind.bg-task-kind--walnut { color: #E8A557; }
 }
 .bg-task-row-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding-left: 17px; }
-.bg-tasks-detail-head--walnut .bg-tasks-detail-title { flex-shrink: 0; max-width: 40%; }
-.bg-tasks-detail-head--walnut > .wf-modal-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* A Walnut subagent's own session in the reader (WalnutSubagentChat): the normal chat
    view fills the column, the chat scrolls inside it and the composer stays at its foot,

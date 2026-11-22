@@ -14,6 +14,7 @@ import { useSessionTextRender } from '@/hooks/useAgentFileOpener';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { localImageSrc } from '@/utils/agent-text-source';
 import { ICON_CLOSE } from '../common/Icons';
+import '@/styles/header-fit.css';
 
 // ── Bash tool call — terminal-style rendering ──
 // Bash commands/output are shell text, not JSON: the command renders with real
@@ -45,8 +46,8 @@ function BashPopup({ command, description, output, onClose }: {
   return createPortal(
     <div className="plan-popup-overlay wn-scrim" role="dialog" aria-modal="true" aria-label="Bash command detail" onClick={onClose}>
       <div className="plan-popup-container wn-dialog" onClick={(e) => e.stopPropagation()}>
-        <div className="plan-popup-header wn-dialog-head">
-          <span className="plan-popup-title">
+        <div className="plan-popup-header wn-dialog-head" data-fit-header="">
+          <span className="plan-popup-title" data-fit-title="">
             Bash{description ? ` · ${description}` : ''}
           </span>
           <button className="btn btn-icon plan-popup-close wn-dialog-close" onClick={onClose} aria-label="Close bash popup">{ICON_CLOSE}</button>

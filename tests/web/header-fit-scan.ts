@@ -79,9 +79,12 @@ export function allHeaderRows(): HeaderRow[] {
   return out;
 }
 
-/** Header rows not on the shared rule, per file. */
-export function offRuleCounts(rows = allHeaderRows()): Record<string, number> {
+/** A row's key in an exemption list: its file and the class the scan names it by. */
+export const rowKey = (r: Pick<HeaderRow, 'file' | 'className'>): string => `${r.file} ${r.className}`;
+
+/** Header rows not on the shared rule and not exempt (keys of `exempt`), per file. */
+export function offRuleCounts(rows = allHeaderRows(), exempt: Record<string, string> = {}): Record<string, number> {
   const out: Record<string, number> = {};
-  for (const r of rows) if (!r.onRule) out[r.file] = (out[r.file] ?? 0) + 1;
+  for (const r of rows) if (!r.onRule && !(rowKey(r) in exempt)) out[r.file] = (out[r.file] ?? 0) + 1;
   return out;
 }

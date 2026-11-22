@@ -18,6 +18,7 @@ import { OutsidePress } from './drawing-overlay';
 import { drawingErrorMessage } from './drawing-api';
 import { ICON_CLOSE } from '../common/Icons';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
+import '@/styles/header-fit.css';
 
 export interface LibraryBrowserProps {
   onClose(): void;
@@ -82,8 +83,8 @@ export function LibraryBrowser({ onClose, onAdded, api = drawingLibraryApi, stor
       // Keys stay in the dialog (Escape never gets here: the overlay layer takes it first).
       onKeyDown={(e) => { e.stopPropagation(); }}>
       <div ref={panel} className="drawing-library-dialog wn-dialog" role="dialog" aria-modal="true" aria-label="Browse libraries">
-        <header className="drawing-library-head">
-          <h2>Libraries</h2>
+        <header className="drawing-library-head" data-fit-header="">
+          <h2 data-fit-title="">Libraries</h2>
           <SearchField small ref={search} fieldClassName="drawing-library-search-field" type="search" data-no-draft="search" className="drawing-library-search" placeholder="Search"
             aria-label="Search libraries" value={query} setText={setQuery} onClear={() => setQuery('')} />
           <button type="button" className="btn btn-icon wn-dialog-close" aria-label="Close libraries" title="Close" onClick={onClose}>

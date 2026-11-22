@@ -28,6 +28,7 @@ import { avatarFileValue } from './avatar-upload';
 import { Tabs } from '@/components/controls';
 import '@/styles/org-avatar-dialog.css';
 import { ICON_CLOSE } from '../common/Icons';
+import '@/styles/header-fit.css';
 
 type Tab = 'presets' | 'ai' | 'upload';
 const TABS: ReadonlyArray<[Tab, string]> = [['presets', 'Presets'], ['ai', 'Ask AI to draw'], ['upload', 'Upload']];
@@ -139,8 +140,8 @@ export function OrgAvatarDialog({ target, onRename, onClose }: Props) {
       <div className="app-modal-overlay org-avatar-overlay wn-scrim" onMouseDown={onClose}>
         <div className="app-modal org-avatar-dialog wn-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} data-testid="org-avatar-dialog"
           ref={box} tabIndex={-1} onMouseDown={(e) => e.stopPropagation()}>
-          <header className="org-avatar-head wn-dialog-head">
-            <h2 id={titleId}>Edit {target.name}</h2>
+          <header className="org-avatar-head wn-dialog-head" data-fit-header="">
+            <h2 id={titleId} data-fit-title="">Edit {target.name}</h2>
             <button type="button" className="btn btn-icon wn-dialog-close" aria-label="Close" onClick={onClose}>{ICON_CLOSE}</button>
           </header>
           <div className="org-avatar-who">

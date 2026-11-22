@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import type { AgentDefinition } from '@/api/agents';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
+import '@/styles/header-fit.css';
 
 interface AgentCardProps {
   agent: AgentDefinition;
@@ -45,14 +46,14 @@ export function AgentCard({ agent, onEdit, onClone, onDelete, onReset }: AgentCa
 
   return (
     <div className="agent-card card" data-agent-id={agent.id}>
-      <div className="agent-card-header">
+      <div className="agent-card-header" data-fit-header="">
         <div className="agent-card-title-row">
           {badges.map((b) => <span key={b.label} className={b.className}>{b.label}</span>)}
           {/* The id is for an agent (its config key), never visible text; the hover keeps it findable. */}
-          <span className="agent-card-name" title={`Agent id: ${agent.id}`}>{agent.name}</span>
+          <span className="agent-card-name" data-fit-title="" title={`Agent id: ${agent.id}`}>{agent.name}</span>
           {isBuiltin && <span className="agent-card-lock" title="Built-in: editing saves your own version, and Reset to Default brings the original back">&#128274;</span>}
         </div>
-        <div className="agent-card-actions">
+        <div className="agent-card-actions" data-fit-actions="">
           <div className="agent-menu-wrapper" ref={wrapRef}>
             <button
               ref={btnRef}

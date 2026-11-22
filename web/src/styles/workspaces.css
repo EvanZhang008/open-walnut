@@ -291,6 +291,8 @@
   margin: -20px -22px 0; padding: 20px 22px 8px;
   background: inherit; border-radius: var(--radius-md) var(--radius-md) 0 0;
 }
+/* The header rule (header-fit.css): the close keeps its size; the title cuts last. */
+.project-scripts-head > .session-panel-close { flex: none; }
 .project-scripts-lede { margin-top: 6px; font-size: var(--font-size-md); color: var(--fg-secondary); line-height: 1.5; }
 .project-scripts-list { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
 .project-scripts-row {

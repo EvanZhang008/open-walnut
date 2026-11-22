@@ -159,7 +159,9 @@
  */
 .hf-dash { margin: 0 0 22px; min-width: 0; }
 
-.hf-dash-head {
+/* On the header rule (header-fit.css): the title's Disclosure cuts its label last; the row keeps
+   its baseline alignment, which the rule's align-items: center would otherwise take on load order. */
+.hf-dash-head[data-fit-header] {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -173,6 +175,7 @@
 .hf-dash-updated { font-size: var(--font-size-sm); color: var(--settings-help-fg); font-variant-numeric: tabular-nums; }
 
 .hf-dash-read { display: inline-flex; align-items: baseline; gap: 10px; min-width: 0; white-space: nowrap; }
+.hf-dash-head .hf-dash-read[data-fit-actions] { align-items: baseline; }
 
 .hf-dash .hf-refreshing { font-size: var(--font-size-sm); color: var(--accent-text); }
 

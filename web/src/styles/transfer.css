@@ -10,7 +10,7 @@
 .xfer-head { display: flex; align-items: center; gap: 8px; }
 .xfer-head .app-modal-title { flex: 1; min-width: 0; }
 .xfer-close {
-  border: none; background: none; color: var(--fg-muted); font-size: var(--font-size-xl); line-height: 1;
+  flex: none; border: none; background: none; color: var(--fg-muted); font-size: var(--font-size-xl); line-height: 1;
   cursor: pointer; padding: 2px 6px; border-radius: 6px;
 }
 .xfer-close:hover { background: var(--bg-hover); color: var(--fg); }

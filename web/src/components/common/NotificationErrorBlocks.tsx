@@ -9,6 +9,7 @@ import type { ErrorCauseGroup } from '@/contexts/notifications';
 import { ErrorCategoryTitle } from './ErrorCategoryTitle';
 import { FeedGroups, type FeedGroupsProps } from './NotificationFeedCards';
 import type { ErrorBlock } from './useNotificationFeedView';
+import '@/styles/header-fit.css';
 
 /** What every block's cards share: the panel's group state and actions. */
 type CardProps = Omit<FeedGroupsProps, 'groups' | 'showCategoryChip' | 'onOpenLetter'>;
@@ -51,12 +52,13 @@ export function NotificationErrorBlocks({ causes, blocks, activeCategory, drilla
               two-family gate as the rail sub-entries: with one family
               the all view IS the category view, so there is nothing to
               drill into. */}
-          <div className="nfc-cat-header">
+          <div className="nfc-cat-header" data-fit-header="">
             {activeCategory || !drillable ? (
-              <span className="nfc-cat-name wn-title">{block.category}</span>
+              <span className="nfc-cat-name wn-title" data-fit-title="">{block.category}</span>
             ) : (
               <button
                 className="nfc-cat-name nfc-cat-drill wn-title"
+                data-fit-title=""
                 title={`Show only ${block.category} errors`}
                 onClick={() => onPickCategory(block.category)}
               >

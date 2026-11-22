@@ -6,6 +6,7 @@ import type { RawFlushIO } from './MarkdownEditorPanel';
 import type { Editor } from '@tiptap/core';
 import type { Task } from '@open-walnut/core';
 import { ICON_COLLAPSE } from '@/components/common/Icons';
+import '@/styles/header-fit.css';
 import { fetchGlobalNotes, saveGlobalNotes } from '@/api/notes';
 
 // Raw-flush cold-start IO — same shape as PopoutGlobalNotes: the raw view's
@@ -37,9 +38,9 @@ export function GlobalNotesPopup({ content, onDirty, saving, onClose, tasks, foc
   return createPortal(
     <div className="notes-popup-overlay wn-scrim" role="dialog" aria-modal="true" aria-label="Global Notes" onClick={onClose}>
       <div className="notes-popup-container wn-dialog" onClick={e => e.stopPropagation()}>
-        <div className="notes-popup-header wn-dialog-head">
-          <span className="notes-popup-title">Global Notes</span>
-          <div className="notes-popup-actions">
+        <div className="notes-popup-header wn-dialog-head" data-fit-header="">
+          <span className="notes-popup-title" data-fit-title="">Global Notes</span>
+          <div className="notes-popup-actions" data-fit-actions="">
             {saving && <span className="notes-popup-saving">Saving...</span>}
             <button className="btn btn-icon notes-popup-close wn-dialog-close" onClick={onClose} aria-label="Collapse notes" title="Collapse notes">{ICON_COLLAPSE}</button>
           </div>

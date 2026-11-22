@@ -198,6 +198,7 @@ import { useTaskCircle } from '@/hooks/useSessionStatus';
 import { openTaskHere } from '@/utils/open-session';
 import { projectDisplayName, projectGroupKey, projectIdentity, taskProjectLabel } from '@/utils/project-display';
 import { badge, priorityTone } from '@/components/common/badge';
+import '@/styles/header-fit.css';
 
 type Task = CoreTask & {
   has_description?: boolean;
@@ -1541,6 +1542,7 @@ function ProjectHeaderRow({
           <div
             ref={setHeaderRef}
             className={`todo-group-project-header${isHeaderOver ? ' header-drop-active' : ''}`}
+            data-fit-header=""
             {...dragHandleProps}
             title={`Project: click to ${collapsed ? 'expand' : 'collapse'}`}
             // dnd-kit swallows the click once its 5px activation fired, so a real
@@ -1567,7 +1569,7 @@ function ProjectHeaderRow({
               >
                 {/* SOLID icon + kind-tag = project (folders inside use the hollow icon + indent). */}
                 <span className="todo-group-project-icon">{ICONS.ICON_FOLDER_SOLID}</span>
-                <span className="todo-group-project-name wn-title">{projectDisplayName(project)}</span>
+                <span className="todo-group-project-name wn-title" data-fit-title="">{projectDisplayName(project)}</span>
               </button>
               {/* Tag / badge / count sit on the ROW, not inside the name button, and
                   that placement is the feature: the button is the "open the project
@@ -1602,7 +1604,7 @@ function ProjectHeaderRow({
                 padding, the 8px divider band) would land on the row's fold —
                 stopPropagation here, where the menu is a child. The tier's project
                 label guards the same way. */}
-            <span className="todo-group-header-actions" onClick={(e) => e.stopPropagation()}>
+            <span className="todo-group-header-actions" data-fit-actions="" onClick={(e) => e.stopPropagation()}>
               <button
                 type="button"
                 className="navigation-more"

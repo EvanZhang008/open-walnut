@@ -137,7 +137,6 @@
 .drawing-workspace-title {
   margin: 0;
   min-width: 0;
-  max-width: 50%;
   overflow: hidden;
   text-overflow: ellipsis; /* meta: the open drawing's name in the 44px toolbar; the drawings list shows it whole, and it peeks on hover */
   white-space: nowrap;
@@ -159,7 +158,7 @@
 .drawing-workspace-status[data-state="offline"],
 .drawing-workspace-status[data-state="missing"],
 .drawing-workspace-status[data-state="error"] { color: var(--error); }
-.drawing-workspace-bar-gap { flex: 1; }
+.drawing-workspace-actions { margin-left: auto; gap: 4px; }
 .drawing-workspace-attach { margin-right: 4px; }
 
 /* Notices under the header. */
@@ -383,7 +382,6 @@
 
 @media (max-width: 640px) {
   .drawing-workspace-files { flex-basis: 176px; }
-  .drawing-workspace-title { max-width: 36%; }
   .drawing-library-overlay { padding: 0; }
   .drawing-library-dialog { height: 100dvh; }
   html body .drawing-library-dialog { border-radius: 0; }

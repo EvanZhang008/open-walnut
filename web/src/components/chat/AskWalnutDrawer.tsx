@@ -37,6 +37,7 @@ import { DrawerItem, heldRowView, TaskDot } from './AskWalnutDrawerItem';
 import { MicInput } from '@/components/common/BoxMic';
 import { hasActiveModalOverlay } from '@/hooks/useModalOverlay';
 import { EmptyState, LoadingState } from '@/components/common/EmptyState';
+import '@/styles/header-fit.css';
 
 /** A row in the drawer's list. The just-launched task is not in the store yet,
  *  so a row is `{ id, title }` plus the Task when the store has it. */
@@ -257,23 +258,25 @@ export function AskWalnutDrawer({
         aria-label={`${shown} list`}
         tabIndex={-1}
       >
-        <div className="ask-walnut-drawer-head">
+        <div className="ask-walnut-drawer-head" data-fit-header="">
           {canSwitch ? (
             <button
               type="button"
               className={`ask-walnut-drawer-title ask-walnut-agent-picker${agentsOpen ? ' is-open' : ''}`}
               data-testid="ask-walnut-agent-switch"
+              data-fit-title=""
               aria-haspopup="true"
               aria-expanded={agentsOpen}
               title="Switch agent"
               onClick={() => setAgentsOpen((v) => !v)}
             >
-              {shown}
+              {/* The words cut inside the picker (the header rule); the caret stays whole. */}
+              <span data-fit-cut="">{shown}</span>
               {/* A menu opener: a down caret that turns over while the list is open, not a disclosure's chevron. */}
               <span className={`ask-walnut-agent-caret${agentsOpen ? ' is-open' : ''}`} aria-hidden="true">{ICON_CHEVRON_DOWN}</span>
             </button>
           ) : (
-            <span className="ask-walnut-drawer-title">{shown}</span>
+            <span className="ask-walnut-drawer-title" data-fit-title="">{shown}</span>
           )}
           {panel ? (
             <button

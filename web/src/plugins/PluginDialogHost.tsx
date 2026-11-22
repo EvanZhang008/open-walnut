@@ -13,6 +13,7 @@ import { closePluginDialog, getPluginDialog, getPluginDialogOpener, invalidatePl
 import type { PluginDialogSlotProps } from './types'
 import '@/styles/plugin-dialog.css'
 import { ICON_CLOSE } from '../components/common/Icons'
+import '@/styles/header-fit.css'
 
 export function PluginDialogHost() {
   const request = useSyncExternalStore(subscribePluginDialog, getPluginDialog, getPluginDialog)
@@ -110,8 +111,8 @@ function PluginDialog({ request }: { request: PluginDialogRequest }) {
       stops[next].scrollIntoView?.({ block: 'nearest' })
     }}>
       <div ref={ref} className="plugin-dialog wn-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} data-testid="plugin-dialog">
-        <header className="plugin-dialog-header wn-dialog-head">
-          <h2 id={titleId}>{title}</h2>
+        <header className="plugin-dialog-header wn-dialog-head" data-fit-header="">
+          <h2 id={titleId} data-fit-title="">{title}</h2>
           <button type="button" className="btn btn-icon plugin-dialog-close wn-dialog-close" aria-label="Close dialog" onClick={close}>
             {ICON_CLOSE}
           </button>

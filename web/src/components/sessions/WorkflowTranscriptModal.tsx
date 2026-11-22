@@ -37,6 +37,7 @@ import { ICON_CLOSE } from '../common/Icons';
 import type { SessionHistoryMessage } from '@/types/session';
 import { log } from '@/utils/log';
 import { AgentText } from '../common/AgentText';
+import '@/styles/header-fit.css';
 
 /** How often a still-running agent's transcript is re-read while the modal is
  *  open. Each poll is a full read + parse of the agent's JSONL on the server
@@ -91,12 +92,12 @@ export function TranscriptOverlay({
   return createPortal(
     <div className="wf-modal-overlay wn-scrim" onClick={onClose}>
       <div className="wf-modal wn-dialog" onClick={(e) => e.stopPropagation()}>
-        <div className="wf-modal-header wn-dialog-head">
+        <div className="wf-modal-header wn-dialog-head" data-fit-header="">
           {/* Title, live dot and meta read as one title (the head's first child takes the room). */}
           <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-            <span className="wf-modal-title">{title}</span>
+            <span className="wf-modal-title" data-fit-title="">{title}</span>
             {live && <span className="wf-modal-live" title="Agent still running — refreshing while open">{'●'}</span>}
-            {meta && <span className="wf-modal-meta">{meta}</span>}
+            {meta && <span className="wf-modal-meta" data-fit-sub="">{meta}</span>}
           </span>
           <button className="btn btn-icon wf-modal-close wn-dialog-close" onClick={onClose} aria-label="Close transcript" title="Close (Esc)">
             {ICON_CLOSE}

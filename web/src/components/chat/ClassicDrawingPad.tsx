@@ -7,6 +7,7 @@ import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterD
 import { DRAWING_WIDTH, DRAWING_HEIGHT, DRAWING_TEXT_SIZE, drawingPoint, drawingTextLayout, hasDrawing, paintDrawing, paintDrawingItem, type DrawingItem, type DrawingPoint, type DrawingTool } from './drawing-model';
 import './drawing-pad.css';
 import { ICON_CLOSE } from '../common/Icons';
+import '@/styles/header-fit.css';
 
 /** What a press asked of the open label, run once its dictated words are in. */
 type LabelAction = { kind: 'close' } | { kind: 'tool'; tool: DrawingTool } | { kind: 'undo' } | { kind: 'clear' } | { kind: 'canvas'; at: DrawingPoint };
@@ -254,8 +255,8 @@ function DrawingDialog({ items, onChange, onClose, onAttach, canAttach }: Dialog
   return createPortal(
     <div className="drawing-pad-overlay wn-scrim" onPointerDown={(e) => { e.stopPropagation(); if (e.target === e.currentTarget) { e.preventDefault(); dialog.current?.focus(); } }} onKeyDownCapture={onKeyDown}>
       <div ref={dialog} className="drawing-pad wn-dialog" role="dialog" aria-modal="true" aria-label="Drawing" tabIndex={-1}>
-        <header className="drawing-pad-header wn-dialog-head">
-          <h2>Drawing</h2>
+        <header className="drawing-pad-header wn-dialog-head" data-fit-header="">
+          <h2 data-fit-title="">Drawing</h2>
           <button type="button" className="btn btn-icon wn-dialog-close" onClick={() => afterLabel({ kind: 'close' })} disabled={busy} aria-label="Close drawing">{ICON_CLOSE}</button>
         </header>
         <div className="drawing-pad-tools" role="toolbar" aria-label="Drawing tools">

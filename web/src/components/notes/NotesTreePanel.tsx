@@ -12,6 +12,7 @@ import { useConfirm, useAlert } from '@/hooks/useConfirm';
 import { copyTextDeferred } from '@/utils/clipboard';
 import { MicInput } from '@/components/common/BoxMic';
 import { SearchField } from '@/components/common/SearchField';
+import '@/styles/header-fit.css';
 import { folderNoteOf, visibleFolderChildren, folderOfFolderNote, folderRowClickAction, isAttachmentFolder } from './folder-note';
 import { EmptyState } from '@/components/common/EmptyState';
 
@@ -958,9 +959,9 @@ export const NotesTreePanel = memo(function NotesTreePanel({
 
   return (
     <div className="notes-tree-panel">
-      <div className="notes-tree-header">
-        <h3>Notes</h3>
-        <div className="notes-tree-actions">
+      <div className="notes-tree-header" data-fit-header="">
+        <h3 data-fit-title="">Notes</h3>
+        <div className="notes-tree-actions" data-fit-actions="">
           <button
             className="btn btn-icon btn-sm btn-ghost notes-tree-action-btn"
             onClick={() => handleNewItem(null, 'file')}

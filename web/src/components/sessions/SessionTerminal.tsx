@@ -32,7 +32,8 @@ import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { remoteHostTag } from '@/utils/host-display-label';
 import { log } from '@/utils/log';
-import { ICON_CLOSE, ICON_EXPAND, ICON_PANEL_BOTTOM, ICON_PLUS, ICON_SPLIT_DOWN, ICON_SPLIT_RIGHT } from '../common/Icons';
+import { ICON_CLOSE, ICON_EXPAND, ICON_PANEL_BOTTOM, ICON_PLUS, ICON_SPLIT_DOWN, ICON_SPLIT_RIGHT, ICON_STOP } from '../common/Icons';
+import { FitButton, HeaderFitMore, useHeaderFit } from '@/components/common/HeaderFit';
 import { TerminalStatusPill } from './TerminalModeNotices';
 import { SessionTerminalPane, type TerminalPaneHandle, type TerminalPaneState } from './SessionTerminalPane';
 import type { TerminalPathLink } from './terminal-links';
@@ -416,9 +417,10 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
     tabsRef.current?.querySelectorAll<HTMLButtonElement>('.session-terminal-tab-btn')[next]?.focus();
   }, [viewTabs, viewActive, activateViewTab]);
 
+  const headerRef = useHeaderFit();
   const header = (
-    <div className={`session-terminal-header${embedded ? '' : ' wn-dialog-head'}`}>
-      <div className="session-terminal-title">
+    <div className={`session-terminal-header${embedded ? '' : ' wn-dialog-head'}`} ref={headerRef} data-fit-header="">
+      <div className="session-terminal-title" data-fit-title="">
         <span className="session-terminal-icon">&#x2328;</span>
         <span className={`session-terminal-label${folderGone ? ' is-gone' : ''}`} title={fullTitle ?? undefined}>{title ?? 'Terminal'}</span>
         {remote && <span className="session-terminal-host">{remoteHostTag(remote, hostName)}</span>}
@@ -426,7 +428,7 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
           {!listed && <TerminalStatusPill status="connecting" />}
         </span>
       </div>
-      <div className="session-terminal-actions">
+      <div className="session-terminal-actions" data-fit-actions="">
         <button type="button" className="btn btn-icon" onClick={() => { void newTab(); }} disabled={!canNew} title={canNew ? 'New terminal' : 'Every terminal slot is in use (8)'} aria-label="New terminal" data-testid="terminal-new">
           {ICON_PLUS}
         </button>
@@ -441,9 +443,8 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
           </>
         )}
         {dock && !dock.docked && dock.onDock && (
-          <button type="button" className="btn btn-sm btn-ghost session-terminal-dock-btn" onClick={dock.onDock} title={`Show with ${dock.viewLabel}: ${dock.viewLabel} above, the terminal below`} aria-label={`Show with ${dock.viewLabel}`} data-testid="terminal-dock">
-            {ICON_PANEL_BOTTOM}<span>{`With ${dock.viewLabel}`}</span>
-          </button>
+          <FitButton icon={ICON_PANEL_BOTTOM} label={`With ${dock.viewLabel}`} className="session-terminal-dock-btn" onClick={dock.onDock}
+            title={`Show with ${dock.viewLabel}: ${dock.viewLabel} above, the terminal below`} aria-label={`Show with ${dock.viewLabel}`} data-testid="terminal-dock" />
         )}
         {dock?.docked && dock.onMaximize && (
           <button type="button" className="btn btn-icon" onClick={dock.onMaximize} title="Terminal only" aria-label="Terminal only" data-testid="terminal-maximize">
@@ -451,21 +452,23 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
           </button>
         )}
         {focused !== null && !focusedState.exited && (
-          <button
-            className="btn btn-sm btn-danger session-terminal-btn-kill"
+          <FitButton
+            icon={ICON_STOP}
+            label={ending ? 'Ending…' : endLabel}
+            step={2}
+            className="btn-danger session-terminal-btn-kill"
             onClick={() => { void endTerminals([focused]); }}
             disabled={ending}
             title={`End ${terminalName(focused)}: stops its shell and anything running in it`}
             aria-label={ending ? `Ending ${terminalName(focused)}` : `End ${terminalName(focused)}`}
-          >
-            {ending ? 'Ending…' : endLabel}
-          </button>
+          />
         )}
         {dock?.docked && dock.onUndock && (
           <button type="button" className="btn btn-icon" onClick={dock.onUndock} title="Hide the terminal (it keeps running)" aria-label="Hide terminal" data-testid="terminal-undock">
             {ICON_CLOSE}
           </button>
         )}
+        <HeaderFitMore testId="terminal-header-more" />
         {/* In embedded mode the split's header owns closing (Changed/Files/Terminal toggle). */}
         {!embedded && (
           <button className="btn btn-icon session-terminal-close wn-dialog-close" onClick={onClose} aria-label="Close" title={focusedState.plain ? 'Close (Esc). Not persistent: the shell ends about 2 minutes after closing' : 'Close (Esc). The terminals keep running'}>

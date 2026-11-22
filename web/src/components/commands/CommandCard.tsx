@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import type { CommandDef } from '@/api/commands';
 import { stripMarkdown } from '../../../../src/core/boards/board-summary-text';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
+import '@/styles/header-fit.css';
 
 interface CommandCardProps {
   command: CommandDef;
@@ -52,10 +53,10 @@ export function CommandCard({ command, onEdit, onDelete }: CommandCardProps) {
 
   return (
     <div className="cmd-card card">
-      <div className="cmd-card-header">
+      <div className="cmd-card-header" data-fit-header="">
         <div className="cmd-card-info">
           <div className="cmd-card-name-row">
-            <code className="cmd-card-name">/{command.name}</code>
+            <code className="cmd-card-name" data-fit-title="">/{command.name}</code>
             <span className={`cmd-source-badge ${isReadOnly ? 'badge builtin' : 'badge badge-accent user'}`}>
               <span>{COMMAND_SOURCE_LABEL[command.source] ?? command.source}</span>
             </span>
@@ -65,7 +66,7 @@ export function CommandCard({ command, onEdit, onDelete }: CommandCardProps) {
           )}
         </div>
         {!isReadOnly && (
-          <div className="cmd-card-actions">
+          <div className="cmd-card-actions" data-fit-actions="">
             <div className="cmd-menu-wrapper" ref={wrapRef}>
               <button
                 ref={btnRef}

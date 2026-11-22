@@ -11,6 +11,7 @@ import { usePhoneOverlayTop } from '@/hooks/usePhoneOverlayHistory';
 import { useResyncState } from '@/hooks/usePhoneResync';
 import { ChevronLeftIcon, MenuLinesIcon } from '../common/PhoneIcons';
 import { PhoneStatusRow } from './PhoneStatusRow';
+import '@/styles/header-fit.css';
 
 // The page's right slot, for portals from other components.
 let slotEl: HTMLElement | null = null;
@@ -71,7 +72,7 @@ export function PhoneTopBar({ pageTitle, menuRef, menuExpanded, onMenu }: PhoneT
   };
 
   return (
-    <div className={`phone-topbar${bar ? ' has-layer' : ''}`} data-layer={top?.kind}>
+    <div className={`phone-topbar${bar ? ' has-layer' : ''}`} data-layer={top?.kind} data-fit-header="">
       {bar && top ? (
         <button
           type="button"
@@ -98,12 +99,13 @@ export function PhoneTopBar({ pageTitle, menuRef, menuExpanded, onMenu }: PhoneT
       <button
         type="button"
         className={`phone-topbar-title${bar?.subtitle ? ' has-subtitle' : ''}`}
+        data-fit-title=""
         onClick={onTitleTap}
       >
         <span className="phone-topbar-title-text">{bar ? bar.title : pageTitle}</span>
         {bar?.subtitle ? <span className="phone-topbar-subtitle">{bar.subtitle}</span> : null}
       </button>
-      <div className="phone-topbar-right">
+      <div className="phone-topbar-right" data-fit-actions="">
         {bar ? (bar.action ?? null) : <div ref={pageSlotRef} className="phone-topbar-slot" />}
       </div>
       <div

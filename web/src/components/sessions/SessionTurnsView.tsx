@@ -11,6 +11,7 @@ import { buildReviewMessage, buildCommentMessage } from './diffPrefill';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { ICON_REFRESH, ICON_WARNING } from '@/components/common/Icons';
 import { log } from '@/utils/log';
+import '@/styles/header-fit.css';
 
 /**
  * The Changed tab's Turns view: one row per snapshot the session's daemon
@@ -210,13 +211,13 @@ export function SessionTurnsView({ sessionId, sessionCwd, sessionHost, onComment
   }, [load, sessionId, snapshots]);
 
   const toolbar = (
-    <div className="session-diff-toolbar turns-toolbar">
+    <div className="session-diff-toolbar turns-toolbar" data-fit-header="">
       {toolbarLeadingSlot}
-      <span className="session-diff-toolbar-title">
+      <span className="session-diff-toolbar-title" data-fit-title="">
         {data?.supported && data.repoRoot ? `${snapshots.length} ${snapshots.length === 1 ? 'snapshot' : 'snapshots'}` : 'Turns'}
         {loading && data && <span className="session-diff-refreshing" title="Refreshing">↻</span>}
       </span>
-      <div className="session-diff-toolbar-actions">
+      <div className="session-diff-toolbar-actions" data-fit-actions="">
         <button type="button" className="session-diff-refresh" onClick={() => load()} title="Refresh the turn list" aria-label="Refresh the turn list">
           {ICON_REFRESH}
         </button>
@@ -324,9 +325,9 @@ export function SessionTurnsView({ sessionId, sessionCwd, sessionHost, onComment
           </div>
           <div className="session-diff-main turns-main">
             {snap && (
-              <div className="turns-main-head">
-                <span className="turns-main-title">{snapshotLabel(snap, snapshots)}</span>
-                <span className="turns-main-time">{timeOf(snap.at)}</span>
+              <div className="turns-main-head" data-fit-header="">
+                <span className="turns-main-title" data-fit-title="">{snapshotLabel(snap, snapshots)}</span>
+                <span className="turns-main-time" data-fit-sub="">{timeOf(snap.at)}</span>
                 <button
                   type="button"
                   className="btn btn-sm turns-restore-btn"

@@ -28,6 +28,7 @@ import { Breakable } from '@/components/common/Breakable';
 import { ProjectScriptsDialog } from './ProjectScriptsDialog';
 import { NoticeStatus } from '@/components/common/NoticeCard';
 import '@/styles/workspaces.css';
+import '@/styles/header-fit.css';
 
 const POLL_MS = 3_000;
 /** While its session starts: the column turns into it soon after its record is there. */
@@ -216,10 +217,10 @@ export function WorkspacePreparingPanel({ taskId, initialTask, message, launchEr
 
   return (
     <div className="session-panel pending-session-panel workspace-preparing-panel" data-testid="workspace-preparing-panel" data-task-id={taskId} data-state={ws?.state ?? 'unknown'}>
-      <div className="session-panel-header">
+      <div className="session-panel-header" data-fit-header="">
         <div className="session-panel-header-top">
           <div className="session-panel-title-area">
-            <span className="session-panel-title wn-title" title={anchor}>{dirName}</span>
+            <span className="session-panel-title wn-title" data-fit-title="" title={anchor}>{dirName}</span>
             {ws && ws.host !== '__local__' && (
               <span className="badge session-panel-badge"><span>{hostName(ws.host)}</span></span>
             )}
@@ -227,7 +228,7 @@ export function WorkspacePreparingPanel({ taskId, initialTask, message, launchEr
               {failed ? 'Failed' : asksOk ? 'Waiting for you' : 'Preparing…'}
             </NoticeStatus>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
+          <div data-fit-actions="" style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
             <button className="session-panel-close" onClick={onClose} title="Close panel">&times;</button>
           </div>
         </div>

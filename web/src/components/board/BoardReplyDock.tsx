@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type WheelEvent } from 'react';
 import { ChatInput } from '@/components/chat/ChatInput';
 import type { ImageAttachment } from '@/api/chat';
+import '@/styles/header-fit.css';
 
 export interface BoardReplyTarget {
   /** The thread the reply goes to; '' when the box answers a choice. */
@@ -201,8 +202,8 @@ export function BoardReplyDock({
       onKeyDown={onKeyDown}
       onWheel={inline && onWheelScroll ? (e) => { if (!textareaTakesWheel(e)) onWheelScroll(e.deltaY); } : undefined}
     >
-      <div className="task-board-dock-head">
-        <span className="task-board-dock-title wn-title" data-testid="board-reply-title">
+      <div className="task-board-dock-head" data-fit-header="">
+        <span className="task-board-dock-title wn-title" data-testid="board-reply-title" data-fit-title="">
           {noting ? <>Your <b>note for the leader</b>{about}</>
             : answering ? <>Answer <b>{name}</b> in your own words{about}</> : <>Reply in <b>{name}</b>{about}</>}
         </span>

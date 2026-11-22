@@ -2,6 +2,7 @@ import { memo } from 'react';
 import { addDays, formatDateOnly, weekRange } from '@/utils/calendar-date';
 import { CalendarGridControls } from './CalendarGridControls';
 import { SegmentedControl, type SegmentedOption } from '@/components/controls';
+import '@/styles/header-fit.css';
 
 export type CalendarViewKind = 'day' | 'week' | 'month';
 
@@ -56,7 +57,7 @@ export const CalendarToolbar = memo(function CalendarToolbar({
   };
 
   return (
-    <div className="cal-toolbar">
+    <div className="cal-toolbar" data-fit-header="">
       <div className="cal-toolbar-left">
         <button
           className={`cal-rail-toggle${railOpen ? ' active' : ''}`}
@@ -82,7 +83,7 @@ export const CalendarToolbar = memo(function CalendarToolbar({
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
           </button>
         </div>
-        <h2 className="cal-title">{title(view, anchor)}</h2>
+        <h2 className="cal-title" data-fit-title="">{title(view, anchor)}</h2>
       </div>
       <div className="cal-toolbar-right">
         {view !== 'month' && <CalendarGridControls />}

@@ -33,6 +33,8 @@ import { BoxMic, MicInput, type BoxMicHandle } from '@/components/common/BoxMic'
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { ContextMenu } from '@/components/common/ContextMenu';
+import { FitButton, HeaderFitMore, useHeaderFit } from '@/components/common/HeaderFit';
+import { ICON_FILE, ICON_INFO } from '@/components/common/Icons';
 import { providerIdOf, type MailDraftDto, type MailboxDto } from '@/api/mail';
 import { BackIcon, ClipIcon, SentIcon, TrashIcon } from '../mail-icons';
 import { selectMailbox, selectSmartMailbox } from '../mail-actions';
@@ -105,6 +107,7 @@ function needsDiscardConfirm(composer: MailComposer): boolean {
 export function ComposerPanel({ composer, mailboxes, drafts, narrow, canSend, cannotSendTitle }: Props) {
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [identityPoint, setIdentityPoint] = useState<{ x: number; y: number } | null>(null);
+  const headRef = useHeaderFit();
   // Read from the store rather than taken as props: the identity below and the drafts chip's
   // destination are questions about EVERY account, and the pane above only ever hands this one its
   // own account's rows. A subscription, not the console hook: this pane starts nothing.
@@ -171,8 +174,8 @@ export function ComposerPanel({ composer, mailboxes, drafts, narrow, canSend, ca
 
       <div className="mail-compose-shell">
         <div className="mail-compose-card">
-          <div className="mail-compose-card-head">
-            <span className="mail-compose-title">{titleOf(composer)}</span>
+          <div className="mail-compose-card-head" ref={headRef} data-fit-header="">
+            <span className="mail-compose-title" data-fit-title="">{titleOf(composer)}</span>
             {account && (switchable ? (
               <button
                 type="button"
@@ -222,26 +225,19 @@ export function ComposerPanel({ composer, mailboxes, drafts, narrow, canSend, ca
               />
             )}
             {others > 0 && (
-              <button
-                type="button"
-                className="btn btn-sm mail-compose-drafts-chip"
+              <FitButton
+                icon={ICON_FILE}
+                label={others === 1 ? '1 draft' : `${others} drafts`}
+                className="mail-compose-drafts-chip"
                 data-testid="mail-compose-drafts-chip"
                 title={merged ? "Open every account's drafts" : 'Open the drafts waiting on this account'}
                 onClick={openDrafts}
-              >
-                {others === 1 ? '1 draft' : `${others} drafts`}
-              </button>
+              />
             )}
             {showing === 'edit' && composer.draftId && (
-              <button
-                type="button"
-                className="btn btn-sm mail-text-btn"
-                data-testid="mail-composer-show-status"
-                onClick={showMailComposerStatus}
-              >
-                Status
-              </button>
+              <FitButton icon={ICON_INFO} label="Status" className="mail-text-btn" data-testid="mail-composer-show-status" onClick={showMailComposerStatus} />
             )}
+            <HeaderFitMore testId="mail-compose-more" />
             {showing === 'edit' && (
               <button
                 type="button"

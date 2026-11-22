@@ -44,6 +44,7 @@ import type { ChannelRow } from './org-channels-model';
 import '@/styles/org-chart.css';
 import { ICON_CLOSE } from '../common/Icons';
 import { EmptyState } from '@/components/common/EmptyState';
+import '@/styles/header-fit.css';
 
 /** A question the sheet opens on: put `project` (a project row key) under `to`'s VP (a card key; null = its own). */
 export interface ChartStart {
@@ -304,9 +305,9 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
       }}
     >
       <div ref={setPanel} className="org-sheet wn-dialog" role="dialog" aria-modal="true" aria-label="Org chart" tabIndex={-1}>
-        <header className="org-sheet-head wn-dialog-head">
-          <div>
-            <h2 className="org-sheet-title">Org chart</h2>
+        <header className="org-sheet-head wn-dialog-head" data-fit-header="">
+          <div className="org-sheet-intro">
+            <h2 className="org-sheet-title" data-fit-title="">Org chart</h2>
             <p className="org-sheet-hint">Drag a project onto another VP to put it under that VP. Nothing changes until you confirm.</p>
           </div>
           <button type="button" className="btn btn-icon wn-dialog-close" onClick={onClose} aria-label="Close the org chart" title="Close">{ICON_CLOSE}</button>

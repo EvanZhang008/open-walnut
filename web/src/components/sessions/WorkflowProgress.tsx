@@ -16,6 +16,7 @@ import { useFullscreen } from '@/hooks/useFullscreen';
 import { ICON_EXPAND, ICON_COLLAPSE } from '../common/Icons';
 import { useShedToFit } from './shed-to-fit';
 import { DisclosureButton } from '@/components/controls';
+import '@/styles/header-fit.css';
 
 export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { sessionId: string }) {
   const { workflowName, workflowDescription, scriptSource, inFlight, foregroundActive, tasks, phases, agents } = useBackgroundTasks(sessionId);
@@ -96,9 +97,10 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
     <>
     {FullscreenBackdrop}
     <div className={`wf-card ${collapsed ? 'wf-card-collapsed' : ''}${fullscreenClass}`}>
-      <div className="wf-card-header">
+      <div className="wf-card-header" data-fit-header="">
         <DisclosureButton
           className="wf-card-collapse"
+          data-fit-title=""
           onClick={() => !isFullscreen && setCollapseOverride(!collapsed)}
           expanded={!collapsed}
           title={isFullscreen ? '' : collapsed ? 'Expand' : 'Collapse'}
@@ -113,7 +115,7 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
           {meter}
           {totalTokens > 0 && <span className="wf-card-tokens">{fmtTokens(totalTokens)} tok</span>}
         </div>
-        <div className="wf-card-header-actions">
+        <div className="wf-card-header-actions" data-fit-actions="">
           {scriptSource && (
             <button className="wf-script-toggle" onClick={() => setShowScript(s => !s)} title="View the generated workflow script" aria-pressed={showScript}>
               <span className="wf-script-label">{showScript ? 'Hide script' : 'View script'}</span>

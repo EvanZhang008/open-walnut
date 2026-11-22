@@ -20,6 +20,7 @@ import { allowScriptsFile, fetchScripts, saveProjectScripts, type ProjectScript,
 import { log } from '@/utils/log';
 import '@/styles/workspaces.css';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
+import '@/styles/header-fit.css';
 import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { ICON_CLOSE } from '../common/Icons';
@@ -275,8 +276,8 @@ export function ProjectScriptsDialog({ project, cwd, host, onClose, onSaved }: {
   return createPortal(
     <div className="app-modal-overlay project-scripts-overlay wn-scrim" role="dialog" aria-modal="true" aria-label={`Scripts of ${project}`} onMouseDown={() => { if (!draftRef.current) onClose(); }}>
       <div className="app-modal project-scripts-dialog wn-dialog" data-testid="project-scripts-dialog" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="project-scripts-head wn-dialog-head">
-          <div className="app-modal-title">Scripts · {project}</div>
+        <div className="project-scripts-head wn-dialog-head" data-fit-header="">
+          <div className="app-modal-title" data-fit-title="">Scripts · {project}</div>
           <button className="btn btn-icon wn-dialog-close" onClick={onClose} title="Close (Esc)" aria-label="Close">{ICON_CLOSE}</button>
         </div>
         <div className="project-scripts-lede">

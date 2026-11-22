@@ -19,6 +19,7 @@ import { TreeHalfContext } from './tree-half-context';
 import { SessionReaderContext, ICON_READ_SIDE, ICON_READ_SPLIT } from './reader-split';
 import '@/styles/tree-split.css';
 import '@/styles/reader-split.css';
+import '@/styles/header-fit.css';
 
 type HistoryProps = Omit<ComponentProps<typeof SessionChatHistory>,
   'onMessagesDelivered' | 'onBatchCompleted' | 'onBatchFailed' | 'onDeliveryWaiting' | 'onAgentQueued'
@@ -62,9 +63,9 @@ export const SessionReaderPane = memo(function SessionReaderPane(p: SessionReade
   const other = p.orient === 'stack' ? 'side' : 'stack';
   return (
     <div className={`session-reader-pane is-${p.orient}`} data-testid="session-reader-pane">
-      <div className="session-reader-bar">
-        <span className="session-reader-title">Reading</span>
-        <span className="session-reader-hint">{p.orient === 'side' ? 'stays here while you ask on the right' : 'stays here while you ask below'}</span>
+      <div className="session-reader-bar" data-fit-header="">
+        <span className="session-reader-title" data-fit-title="">Reading</span>
+        <span className="session-reader-hint" data-fit-sub="">{p.orient === 'side' ? 'stays here while you ask on the right' : 'stays here while you ask below'}</span>
         {p.canSide && (
           <button
             type="button"

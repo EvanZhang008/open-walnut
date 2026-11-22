@@ -15,6 +15,7 @@ import { fetchTask } from '@/api/tasks';
 import { ApiError } from '@/api/api-error';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { ICON_LOCK, ICON_UNLOCK } from '@/components/common/Icons';
+import '@/styles/header-fit.css';
 import { locateTaskOnHome, openSessionOnHome } from '@/utils/open-session';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { projectDisplayName } from '@/utils/project-display';
@@ -115,8 +116,8 @@ export function OrgSidePanel({ target, tasks, onClose, onOpenSession, onStartCha
 
   return (
     <aside className={`org-side org-side-card${locked ? ' is-locked' : ''}`} data-testid="org-side" data-target={sideTargetParam(target)} aria-label="Opened task">
-      <header className="org-side-card-head">
-        <h3 className="org-side-card-title" data-testid="org-side-title">
+      <header className="org-side-card-head" data-fit-header="">
+        <h3 className="org-side-card-title" data-fit-title="" data-testid="org-side-title">
           {loading ? 'Loading…' : task ? task.title : 'That task is gone.'}{/* empty-state-ok: the card's heading while its task loads */}
         </h3>
         {onToggleLock && (

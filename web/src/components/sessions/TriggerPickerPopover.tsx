@@ -24,6 +24,7 @@ import { log } from '@/utils/log';
 import {
   EVERY_CHOICES, TRIGGER_IDEAS, describeText, ideaText, missingRequired, templateHandoffText, type TriggerIdea,
 } from './trigger-picker-model';
+import '@/styles/header-fit.css';
 import '@/styles/trigger-picker.css';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import { SegmentedControl } from '@/components/controls';
@@ -118,7 +119,7 @@ export function TriggerPickerPopover(props: TriggerPickerPopoverProps) {
         ['--menu-max-height' as string]: placement ? `${placement.maxHeight}px` : undefined,
       } as CSSProperties}
     >
-      <header className="trigger-picker-header">
+      <header className="trigger-picker-header" data-fit-header="">
         {picked ? (
           <button type="button" className="trigger-picker-back" aria-label="Back to all triggers" onClick={() => setPicked(null)}>
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -126,7 +127,7 @@ export function TriggerPickerPopover(props: TriggerPickerPopoverProps) {
             </svg>
           </button>
         ) : null}
-        <h2 className="trigger-picker-title wn-title">{picked ? `${picked.pluginName}: ${picked.title}` : 'Add a trigger'}</h2>
+        <h2 className="trigger-picker-title wn-title" data-fit-title="">{picked ? `${picked.pluginName}: ${picked.title}` : 'Add a trigger'}</h2>
         <button type="button" className="trigger-picker-close" aria-label="Close" onClick={() => { const a = anchorRef.current; close('close'); a?.focus({ preventScroll: true }); }}>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden>
             <path d="M4 4l8 8M12 4l-8 8" />

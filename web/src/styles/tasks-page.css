@@ -200,6 +200,8 @@
   margin-right: 2px;
   max-width: 260px;
 }
+.tp-toolbar .tp-chip[data-fit-button] .wn-chip-label { display: contents; }
+.tp-toolbar > :is(.vd, .btn) { flex: none; }
 .tp-stats {
   display: flex;
   align-items: center;
@@ -563,7 +565,7 @@
 .tp-group-icon { flex: none; font-size: var(--font-size-sm); }
 /* The project's name wraps whole (`wn-title`) at its words' width, so the count follows it. */
 .tp-group-header .tp-group-name { flex: 0 1 auto; }
-.tp-group-count { color: var(--fg-muted); font-weight: 400; font-size: var(--font-size-sm); }
+.tp-group-count { flex: none; color: var(--fg-muted); font-weight: 400; font-size: var(--font-size-sm); }
 
 /* ghost "＋ New task…" row at the very top of the body */
 .tp-ghost {

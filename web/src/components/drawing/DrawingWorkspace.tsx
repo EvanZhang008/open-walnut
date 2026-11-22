@@ -43,6 +43,7 @@ const DrawingAssistant = lazy(() => import('./DrawingAssistant'));
 import { usePageTheme } from './usePageTheme';
 import { useOverlayRoom } from './canvas-overlay';
 import { useFullscreenArea } from '@/components/layout/fullscreen-area';
+import { FitButton, HeaderFitMore, useHeaderFit } from '@/components/common/HeaderFit';
 import './drawing-workspace.css';
 
 export interface DrawingWorkspaceState {
@@ -117,6 +118,7 @@ const ICON = {
   exit: 'M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5',
   close: 'M6 6l12 12M18 6 6 18',
   plus: 'M12 5v14M5 12h14',
+  attach: 'M21 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9',
   pencil: 'M4 20h4L19 9l-4-4L4 16zM13 7l4 4',
   assistant: 'M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM18 15l.9 2.1L21 18l-2.1.9L18 21l-.9-2.1L15 18l2.1-.9z',
 };
@@ -254,6 +256,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const [others, setOthers] = useState<DrawingListItem[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [busy, setBusy] = useState<null | 'new' | 'attach' | 'png' | 'svg' | 'copy'>(null);
+  const fitBar = useHeaderFit();
   const [notice, setNotice] = useState<string | null>(null);
   const [libraryDialogOpen, setLibraryDialogOpen] = useState(false);
   const [textDialogOpen, setTextDialogOpen] = useState(false);
@@ -719,30 +722,35 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         </aside>
       )}
       <section className="drawing-workspace-main" aria-label={title}>
-        <header className="drawing-workspace-bar">
+        <header ref={fitBar} className="drawing-workspace-bar" data-fit-header="">
           <button type="button" className="btn btn-icon drawing-workspace-files-toggle" data-choice-exempt="toolbar icon button that shows the drawings list beside the canvas" aria-expanded={filesShown} aria-label={filesShown ? 'Hide drawings list' : 'Show drawings list'} title={filesShown ? 'Hide drawings list' : 'Show drawings list'} onClick={() => setFilesShown((v) => !v)}><Icon d={ICON.list} /></button>
           {titleEditing && currentPath
             ? <NameField value={title} label="Drawing name" className="drawing-workspace-title" onCommit={(name) => renameDrawing(currentPath, name)}
                 onDone={(failure) => { setTitleEditing(false); setNotice(failure); }} />
-            : <h2 className="drawing-workspace-title" title={currentPath ?? undefined}>
+            : <h2 className="drawing-workspace-title" data-fit-title="" title={currentPath ?? undefined}>
                 {canRename
                   ? <button type="button" className="btn btn-ghost btn-sm drawing-name-button" aria-label={`Rename drawing: ${title}`} title="Click to rename" onClick={() => setTitleEditing(true)}><span>{title}</span></button>
                   : title}
               </h2>}
-          {state && <span className="drawing-workspace-status" data-state={state} role="status" aria-live="polite">{STATUS_TEXT[state]}</span>}
-          <span className="drawing-workspace-bar-gap" />
+          {state && <span className="drawing-workspace-status" data-fit-sub="" data-state={state} role="status" aria-live="polite">{STATUS_TEXT[state]}</span>}
+          {/* The buttons are pushed right by an auto margin, which the header rule counts as free room. */}
+          <div className="drawing-workspace-actions" data-fit-actions="">
           {typeof barExtra === 'function' ? barExtra({ saveNow: () => saveNow(sync.current) }) : barExtra}
-          {onAttach && <button type="button" className="drawing-primary-button drawing-workspace-attach" onClick={() => void attach()} disabled={!!busy || !hasScene || !canAttach || !Canvas} title={canAttach ? 'Add this drawing to your message as a picture' : 'Attachment limit reached'}>{busy === 'attach' ? 'Attaching…' : 'Attach PNG'}</button>}
+          {/* The one primary action keeps its own look; it folds to its icon after Assistant (the header rule). */}
+          {onAttach && <button type="button" className="drawing-primary-button drawing-workspace-attach" data-fit-button={2} aria-label="Attach PNG" onClick={() => void attach()} disabled={!!busy || !hasScene || !canAttach || !Canvas} title={canAttach ? 'Add this drawing to your message as a picture' : 'Attachment limit reached'}>
+            <span className="header-fit-icon" aria-hidden="true"><Icon d={ICON.attach} /></span><span data-fit-label>{busy === 'attach' ? 'Attaching…' : 'Attach PNG'}</span></button>}
           {canAssist && (
-            <button type="button" className="drawing-quiet-button drawing-workspace-assistant-toggle" aria-pressed={assistantShown}
+            <FitButton icon={<Icon d={ICON.assistant} />} label="Assistant" step={1} className="drawing-workspace-assistant-toggle" aria-pressed={assistantShown}
               title={assistantShown ? 'Hide the assistant' : 'Ask the assistant to change this drawing'}
-              onClick={() => setAssistantShown(!assistantShown)}><Icon d={ICON.assistant} /><span>Assistant</span></button>
+              onClick={() => setAssistantShown(!assistantShown)} />
           )}
+          <HeaderFitMore testId="drawing-workspace-more" />
           <button type="button" className="btn btn-icon drawing-workspace-fullscreen" aria-pressed={fullScreen}
             aria-label={fullScreen ? 'Exit full screen' : 'Full screen'} title={`${fullScreen ? 'Exit full screen' : 'Full screen'} (${/Mac/.test(globalThis.navigator?.platform ?? '') ? '\u2318\u21e7F' : 'Ctrl+Shift+F'})`}
             // The keys go back to the editor (its tool shortcuts), not to this button.
             onClick={() => { setFullScreen((v) => !v); requestAnimationFrame(() => canvas.current?.focus()); }}><Icon d={fullScreen ? ICON.exit : ICON.enter} /></button>
           {onClose && <button type="button" className="btn btn-icon drawing-workspace-close" onClick={close} aria-label="Close drawing" title="Close"><Icon d={ICON.close} /></button>}
+          </div>
         </header>
         {conflict && (
           <div className="drawing-workspace-conflict" role="alert">

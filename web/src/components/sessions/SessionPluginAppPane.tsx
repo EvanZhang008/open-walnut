@@ -29,6 +29,7 @@ import { appNavigateTarget, sessionPaneApps, type RegisteredApp, type SessionApp
 import { log } from '@/utils/log';
 import type { PanelAppRecord } from './panel-view';
 import { Tab, TabList } from '@/components/controls';
+import '@/styles/header-fit.css';
 import '@/styles/session-app-pane.css';
 
 export interface SessionPluginAppPaneProps {
@@ -137,7 +138,7 @@ export function SessionPluginAppPane({
 
   return (
     <div className="session-app-pane" data-testid="session-app-pane" data-app-key={key ?? undefined}>
-      <div className="session-app-pane-bar">
+      <div className="session-app-pane-bar" data-fit-header="">
         {tabs.length > 1 ? (
           <TabList className="session-app-pane-tabs" aria-label="Apps" flush>
             {tabs.map((tab) => (
@@ -154,12 +155,12 @@ export function SessionPluginAppPane({
             ))}
           </TabList>
         ) : (
-          <span className="session-app-pane-title">
+          <span className="session-app-pane-title" data-fit-title="">
             {app && <PaneAppIcon app={app} size={13} />}
-            <span>{app?.title ?? 'App'}</span>
+            <span data-fit-cut="">{app?.title ?? 'App'}</span>
           </span>
         )}
-        <div className="session-app-pane-bar-right">
+        <div className="session-app-pane-bar-right" data-fit-actions="">
           {barRightSlot}
           <button
             type="button"

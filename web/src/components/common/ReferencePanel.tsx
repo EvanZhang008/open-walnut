@@ -8,6 +8,7 @@
 import { useMemo } from 'react';
 import type { ReferencesResponse, ReferenceMatch } from '@/api/files';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
+import '@/styles/header-fit.css';
 
 interface ReferencePanelProps {
   /** null = loading (the header still names the symbol). */
@@ -105,15 +106,16 @@ export function ReferencePanel({ result, symbol, currentFile, loading, error, on
 
   return (
     <div className="ref-panel">
-      <div className="ref-panel-header">
-        <span className="ref-panel-title wn-title">
+      <div className="ref-panel-header" data-fit-header="">
+        <span className="ref-panel-title wn-title" data-fit-title="">
           References: <code>{symbol}</code>
-          {result && !loading && (
-            <span className="ref-panel-count">
-              {result.matches.length}{result.truncated ? '+' : ''} in {new Set(result.matches.map((m) => m.file)).size} files
-            </span>
-          )}
         </span>
+        {/* Beside the title, not in it: the count gives way first (the header rule). */}
+        {result && !loading && (
+          <span className="ref-panel-count" data-fit-sub="">
+            {result.matches.length}{result.truncated ? '+' : ''} in {new Set(result.matches.map((m) => m.file)).size} files
+          </span>
+        )}
         <button type="button" className="ref-panel-close" onClick={onClose} title="Close (Esc)" aria-label="Close references">✕</button>
       </div>
       <div className="ref-panel-body">

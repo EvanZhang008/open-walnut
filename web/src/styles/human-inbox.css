@@ -180,7 +180,13 @@
   font-size: var(--font-size-lg);
   font-weight: 650;
   overflow-wrap: anywhere;
+  /* The subject wraps, never cuts: the header rule's no-wrap on the title is for one-line titles. */
+  white-space: normal;
 }
+
+/* The subject and its tools: one row on the header rule (LetterView.tsx), the tools at the
+   top of a subject that wraps. */
+.hib-reader-head .hib-reader-line { flex: 1 0 100%; align-items: flex-start; gap: 10px; }
 
 .hib-reader-tools {
   display: flex;

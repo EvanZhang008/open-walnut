@@ -19,6 +19,7 @@ import { EmptyState } from '@/components/common/EmptyState';
 import { readHomeChatVisible, showHomeChatToggle } from '@/pages/home-panel-flags';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { useDragGesture } from '@/hooks/useDragGesture';
+import '@/styles/header-fit.css';
 
 // ── Custom events for Dock ↔ MainPage communication ──
 
@@ -122,48 +123,46 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
       onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); handleClick(); } }}
     >
       {/* The header is the row that expands on hover; the card also holds the chat. */}
-      <div className="dock-task-header" data-peek-row="">
-        <div className="dock-task-header-top">
-          <span className={`dock-task-title wn-title${task.walnut_agent ? ' walnut-task-title' : ''}`}>{task.title}</span>
-          <span className={`dock-task-phase-badge${unread ? ' dock-task-phase-unread' : ''}${isStreaming ? ' dock-task-phase-streaming' : ''}`}>
-            {/* The task's own status in the user's words (taskStatusLabel). */}
-            {taskStatusLabel(task)}
-          </span>
-          {sessionId && (
-            <button
-              className="dock-task-expand"
-              onClick={(e) => { e.stopPropagation(); isFullscreen ? exitFullscreen() : enterFullscreen(); }}
-              title={isFullscreen ? 'Collapse back' : 'Expand session'}
-              aria-label={isFullscreen ? 'Collapse session' : 'Expand session to full screen'}
-            >
-              {isFullscreen ? (
-                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="4 14 4 10 0 10" />
-                  <polyline points="12 2 12 6 16 6" />
-                  <line x1="0" y1="10" x2="5" y2="5" />
-                  <line x1="16" y1="6" x2="11" y2="11" />
-                </svg>
-              ) : (
-                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="10 2 14 2 14 6" />
-                  <polyline points="6 14 2 14 2 10" />
-                  <line x1="14" y1="2" x2="9" y2="7" />
-                  <line x1="2" y1="14" x2="7" y2="9" />
-                </svg>
-              )}
-            </button>
-          )}
-          {/* Fullscreen turns the card into an overlay: its X dismisses the overlay,
-              it does not unpin the task underneath (same rule as SessionPanel). */}
+      <div className="dock-task-header" data-peek-row="" data-fit-header="">
+        <span className={`dock-task-title wn-title${task.walnut_agent ? ' walnut-task-title' : ''}`} data-fit-title="">{task.title}</span>
+        <span className={`dock-task-phase-badge${unread ? ' dock-task-phase-unread' : ''}${isStreaming ? ' dock-task-phase-streaming' : ''}`}>
+          {/* The task's own status in the user's words (taskStatusLabel). */}
+          {taskStatusLabel(task)}
+        </span>
+        {sessionId && (
           <button
-            className="dock-task-unpin"
-            onClick={isFullscreen ? (e) => { e.stopPropagation(); exitFullscreen(); } : handleUnpin}
-            title={isFullscreen ? 'Exit full screen' : 'Unpin from Focus Dock'}
-            aria-label={isFullscreen ? 'Exit full screen' : 'Unpin task'}
+            className="dock-task-expand"
+            onClick={(e) => { e.stopPropagation(); isFullscreen ? exitFullscreen() : enterFullscreen(); }}
+            title={isFullscreen ? 'Collapse back' : 'Expand session'}
+            aria-label={isFullscreen ? 'Collapse session' : 'Expand session to full screen'}
           >
-            &times;
+            {isFullscreen ? (
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="4 14 4 10 0 10" />
+                <polyline points="12 2 12 6 16 6" />
+                <line x1="0" y1="10" x2="5" y2="5" />
+                <line x1="16" y1="6" x2="11" y2="11" />
+              </svg>
+            ) : (
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="10 2 14 2 14 6" />
+                <polyline points="6 14 2 14 2 10" />
+                <line x1="14" y1="2" x2="9" y2="7" />
+                <line x1="2" y1="14" x2="7" y2="9" />
+              </svg>
+            )}
           </button>
-        </div>
+        )}
+        {/* Fullscreen turns the card into an overlay: its X dismisses the overlay,
+            it does not unpin the task underneath (same rule as SessionPanel). */}
+        <button
+          className="dock-task-unpin"
+          onClick={isFullscreen ? (e) => { e.stopPropagation(); exitFullscreen(); } : handleUnpin}
+          title={isFullscreen ? 'Exit full screen' : 'Unpin from Focus Dock'}
+          aria-label={isFullscreen ? 'Exit full screen' : 'Unpin task'}
+        >
+          &times;
+        </button>
       </div>
       <div className="dock-task-body">
         {sessionId ? (

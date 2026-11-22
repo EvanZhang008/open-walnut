@@ -28,6 +28,9 @@
   justify-content: space-between;
   gap: 12px;
 }
+/* The close key stays at the top of a hint that wraps (outranks the header rule's centring). */
+.org-sheet-head[data-fit-header] { align-items: flex-start; }
+.org-sheet-intro { flex: 1; min-width: 0; }
 .org-sheet-title { margin: 0; font-size: var(--font-size-xl); font-weight: 650; }
 .org-sheet-hint { margin: 2px 0 0; font-size: var(--font-size-md); color: var(--fg-muted); }
 

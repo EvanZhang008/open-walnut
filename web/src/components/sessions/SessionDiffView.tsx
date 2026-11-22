@@ -56,6 +56,7 @@ import { Checkbox, SegmentedControl, type SegmentedOption } from '@/components/c
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { badge } from '@/components/common/badge';
+import '@/styles/header-fit.css';
 
 export type DiffViewType = 'split' | 'unified';
 /** The toolbar layout mode: 'auto' picks per file — split only when some line
@@ -2922,7 +2923,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   // would be unreachable and — with base/scope persisted per session — every
   // re-entry would replay the same doomed fetch with no way out.
   const toolbar = (
-      <div className="session-diff-toolbar">
+      <div className="session-diff-toolbar" data-fit-header="">
         {toolbarLeadingSlot}
         {/* VS Code-style layout toggle — same control as the Files tab. */}
         <button
@@ -2954,7 +2955,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
             aria-label="Forward to the next jump target"
           >{ICON_CHEVRON_RIGHT}</button>
         </div>
-        <span className="session-diff-toolbar-title">
+        <span className="session-diff-toolbar-title" data-fit-title="">
           {data && !switching
             ? (empty ? 'No file changes' /* empty-state-ok: toolbar title */ : <>{shownCount} file{shownCount === 1 ? '' : 's'}<span className="session-diff-title-long"> changed</span></>)
             : error ? "Couldn't load changes" : (loading || switching ? 'Loading…' : 'Changes') /* empty-state-ok: toolbar title */}

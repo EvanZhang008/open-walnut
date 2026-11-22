@@ -32,6 +32,7 @@ import { NodeDuties } from './NodeDuties';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import '@/styles/agent-memory.css';
 import { ICON_CLOSE } from '../common/Icons';
+import '@/styles/header-fit.css';
 
 /** Org agents have instructions and a memory of their own; other tasks have neither. */
 export function hasMemoryAndInstructions(task: Pick<Task, 'org_role'> | null | undefined): boolean {
@@ -214,8 +215,8 @@ export function AgentMemoryPanel({ task, onClose }: { task: Task; onClose: () =>
         data-testid="agent-memory-panel"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="am-head wn-dialog-head">
-          <div className="app-modal-title">Memory &amp; instructions</div>
+        <div className="am-head wn-dialog-head" data-fit-header="">
+          <div className="app-modal-title" data-fit-title="">Memory &amp; instructions</div>
           <button type="button" className="btn btn-icon wn-dialog-close" onClick={onClose} disabled={busy} aria-label="Close">{ICON_CLOSE}</button>
         </div>
         <div className="am-sub">{name}</div>

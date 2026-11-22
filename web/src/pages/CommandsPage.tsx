@@ -8,6 +8,7 @@ import { ICON_TERMINAL } from '@/components/common/Icons';
 import { Chip, ChipGroup } from '@/components/controls';
 import { useAlert } from '@/hooks/useConfirm';
 import type { CommandDef } from '@/api/commands';
+import '@/styles/header-fit.css';
 
 type FilterTab = 'all' | 'builtin' | 'user';
 
@@ -64,9 +65,9 @@ export function CommandsPage() {
 
   return (
     <div className="page-readable">
-      <div className="page-header flex justify-between items-center">
-        <div>
-          <h1 className="page-title">Commands</h1>
+      <div className="page-header flex justify-between items-center" data-fit-header="">
+        <div className="page-header-text">
+          <h1 className="page-title" data-fit-title="">Commands</h1>
           <p className="page-subtitle">Manage slash commands for quick prompts</p>
         </div>
         {!showForm && (

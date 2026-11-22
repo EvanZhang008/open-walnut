@@ -27,6 +27,7 @@ import { Checkbox } from '@/components/controls';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import '@/styles/transfer.css';
 import { ICON_CLOSE } from '../common/Icons';
+import '@/styles/header-fit.css';
 
 interface Props {
   options: TransferOptions | null;
@@ -208,8 +209,8 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
         data-testid="transfer-dialog"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="xfer-head wn-dialog-head">
-          <div className="app-modal-title">Transfer to another harness or host</div>
+        <div className="xfer-head wn-dialog-head" data-fit-header="">
+          <div className="app-modal-title" data-fit-title="">Transfer to another harness or host</div>
           <button type="button" className="btn btn-icon wn-dialog-close" onClick={onClose} aria-label="Close">{ICON_CLOSE}</button>
         </div>
         <div className="xfer-intro">

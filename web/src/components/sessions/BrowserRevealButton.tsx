@@ -9,8 +9,10 @@ import { useEffect, useState } from 'react';
 import { apiPost } from '@/api/client';
 import { ApiError } from '@/api/api-error';
 import { log } from '@/utils/log';
+import { FitButton } from '@/components/common/HeaderFit';
+import { ICON_OPEN_APP } from '@/components/common/Icons';
 
-export function BrowserRevealButton({ taskId, tab, device, step, testId = 'session-browser-reveal' }: {
+export function BrowserRevealButton({ taskId, tab, device, step, testId = 'session-browser-reveal', fit }: {
   taskId: string;
   /** The task's tab now: brought to the front. */
   tab?: number;
@@ -18,6 +20,8 @@ export function BrowserRevealButton({ taskId, tab, device, step, testId = 'sessi
   /** With no tab: the replay step whose page opens again (default the last with an address). */
   step?: string;
   testId?: string;
+  /** In a header on the header rule (components/common/HeaderFit.tsx): the fold step its words go at. */
+  fit?: 1 | 2 | 3;
 }) {
   const [phase, setPhase] = useState<'idle' | 'opening' | 'done'>('idle');
   const [trouble, setTrouble] = useState<string | null>(null);
@@ -47,11 +51,13 @@ export function BrowserRevealButton({ taskId, tab, device, step, testId = 'sessi
       setPhase('idle');
     }
   };
+  const label = phase === 'opening' ? 'Opening…' : phase === 'done' ? 'Opened in Chrome' : 'Open in Chrome';
+  const why = tab !== undefined ? 'Bring this tab to the front in Chrome' : 'Open this page again in Chrome and bring it to the front';
   return (
     <>
-      <button type="button" className="btn btn-sm" onClick={() => { void reveal(); }} disabled={phase === 'opening'}
-        title={tab !== undefined ? 'Bring this tab to the front in Chrome' : 'Open this page again in Chrome and bring it to the front'}
-        data-testid={testId}>{phase === 'opening' ? 'Opening…' : phase === 'done' ? 'Opened in Chrome' : 'Open in Chrome'}</button>
+      {fit
+        ? <FitButton icon={ICON_OPEN_APP} label={label} step={fit} onClick={() => { void reveal(); }} disabled={phase === 'opening'} title={why} data-testid={testId} />
+        : <button type="button" className="btn btn-sm" onClick={() => { void reveal(); }} disabled={phase === 'opening'} title={why} data-testid={testId}>{label}</button>}
       {choices.length > 0 && (
         <span className="session-browser-reveal-choices" data-testid={`${testId}-choices`}>
           Which browser?

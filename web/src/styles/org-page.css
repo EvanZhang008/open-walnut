@@ -398,6 +398,10 @@
   border-bottom: 1px solid var(--border);
 }
 .org-side-card-title { flex: 1; min-width: 0; margin: 0; font-size: var(--font-size-lg); font-weight: 600; overflow-wrap: anywhere; }
+/* The task's title is read whole: it wraps beside its two keys, which stay at its top (these
+   outrank the header rule's one-line title and centring). */
+.org-side-card-head[data-fit-header] { align-items: flex-start; }
+.org-side-card-head[data-fit-header] .org-side-card-title { white-space: normal; }
 .org-side-close {
   border: none;
   background: transparent;

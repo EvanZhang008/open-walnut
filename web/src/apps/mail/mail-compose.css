@@ -56,7 +56,8 @@
 }
 
 .mail-compose-title {
-  flex: 1;
+  /* Its own width first: the account beside it gives way before it (the header rule, HeaderFit). */
+  flex: 1 1 auto;
   min-width: 0;
   font-size: var(--font-size-lg);
   font-weight: 600;
@@ -67,7 +68,7 @@
    control) and clipped to one line: the head also holds Status, Discard and Close, so a long display
    name has to give way rather than wrap the row and move those three buttons down a line. */
 .mail-compose-account {
-  flex: 0 1 auto;
+  flex: 0 1000 auto;
   min-width: 0;
   padding: 2px 8px;
   border-radius: var(--radius-full);

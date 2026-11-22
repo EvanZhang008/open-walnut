@@ -26,6 +26,7 @@ import { timeAgo } from '@/utils/time';
 import { log } from '@/utils/log';
 import { badge, type BadgeTone } from '@/components/common/badge';
 import '@/styles/file-history.css';
+import '@/styles/header-fit.css';
 
 export interface FileHistoryPanelProps {
   path: string;
@@ -203,9 +204,9 @@ export function FileHistoryPanel({
 
   return (
     <div className="fh-panel">
-      <div className="fh-header">
-        <span className="fh-title">History</span>
-        <span className="fh-file" title={path}>{fileName}</span>
+      <div className="fh-header" data-fit-header="">
+        <span className="fh-title" data-fit-title="">History</span>
+        <span className="fh-file" title={path} data-fit-sub="">{fileName}</span>
         <button type="button" className="fh-close" onClick={onClose} title="Close history" aria-label="Close history">✕</button>
       </div>
 

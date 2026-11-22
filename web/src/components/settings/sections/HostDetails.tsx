@@ -28,6 +28,7 @@ import { RemoteHostDetail } from './RemoteHostStatus';
 import { HostProfileDisclosure, profileSystemLine, useHostProfile } from './HostProfileDisclosure';
 import { HostThisPart } from './HostThisPart';
 import { SettingsButton } from '../inputs/SettingsButton';
+import '@/styles/header-fit.css';
 import { keepPress } from '../inputs/press-keeps-target';
 import { DisclosureChevron } from '@/components/controls';
 import { readDisclosureOpen, sessionStore, writeDisclosureOpen } from '../SettingsSection';
@@ -125,8 +126,8 @@ function DetailsBody({ alias, name, card, now, linked, kind, rowProblem, system,
   const omit = live || !saidAbove ? [] : ['connection', 'online', ...(card?.daemon && !card.daemon.vitals ? [] : ['now'])];
   return (
     <div className="rh-details" data-testid="rh-details" data-host={alias} role="region" aria-label={`Details of ${name}`} onKeyDown={onKeyDown}>
-      <div className="rh-details-head">
-        <span className="rh-details-name wn-title">{name}</span>
+      <div className="rh-details-head" data-fit-header="">
+        <span className="rh-details-name wn-title" data-fit-title="">{name}</span>
         <SettingsButton onClick={onClose} data-testid="rh-details-hide" aria-label={`Hide details of ${name}`}>Hide details</SettingsButton>
       </div>
       <Part id="status" title="Status" defaultOpen>

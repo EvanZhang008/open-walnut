@@ -75,10 +75,6 @@
     width: 16px;
     height: 16px;
   }
-  .app-shell-navigation .phone-topbar:has(.phone-bar-slot .task-waiting-chip) .phone-topbar-title {
-    left: calc(96px + var(--wn-safe-left));
-    right: calc(96px + var(--wn-safe-right));
-  }
 
   .phone-topbar .phone-bar-slot .task-kebab-btn {
     width: 44px;
@@ -665,12 +661,4 @@
   .phone-topbar .phone-bar-slot .session-web-chip.is-compact .session-web-chip-count { color: var(--success); }
   .phone-topbar .phone-bar-slot .session-web-chip.is-compact .session-web-chip-dot { display: none; }
   .phone-topbar .phone-bar-slot .session-web-chip.is-compact .session-web-chip-icon svg { width: 16px; height: 16px; }
-  .app-shell-navigation .phone-topbar:has(.phone-bar-slot .session-web-chip) .phone-topbar-title {
-    left: calc(96px + var(--wn-safe-left));
-    right: calc(96px + var(--wn-safe-right));
-  }
-  .app-shell-navigation .phone-topbar:has(.phone-bar-slot .session-web-chip):has(.phone-bar-slot .task-waiting-chip) .phone-topbar-title {
-    left: calc(140px + var(--wn-safe-left));
-    right: calc(140px + var(--wn-safe-right));
-  }
 }

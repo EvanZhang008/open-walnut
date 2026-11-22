@@ -35,6 +35,7 @@ import { StatusDot } from './WorkflowGraph';
 import { BackgroundTaskStopButton } from './BackgroundTaskStopButton';
 import { useDetailsDisclosure } from './row-disclosure';
 import '@/styles/light-subagent.css';
+import '@/styles/header-fit.css';
 import { agentModelLabel } from './SessionMessage';
 import { TranscriptBody } from './WorkflowTranscriptModal';
 import { ICON_CLOSE } from '../common/Icons';
@@ -396,9 +397,9 @@ export function BackgroundTasksPanel({
   return createPortal(
     <div className="wf-modal-overlay wn-scrim" onClick={onClose}>
       <div className="wf-modal wf-modal--tasks wn-dialog" onClick={(e) => e.stopPropagation()}>
-        <div className="wf-modal-header wn-dialog-head">
-          <span className="wf-modal-title">Background tasks</span>
-          <span className="wf-modal-meta">
+        <div className="wf-modal-header wn-dialog-head" data-fit-header="">
+          <span className="wf-modal-title" data-fit-title="">Background tasks</span>
+          <span className="wf-modal-meta" data-fit-sub="">
             {[...present.map(k => plural(groups[k].length, KIND_NOUN[k])), allRunning > 0 && `${allRunning} running`].filter(Boolean).join(' · ')}
           </span>
           <button className="btn btn-icon wn-dialog-close" onClick={onClose} aria-label="Close background tasks" title="Close (Esc)">
@@ -444,13 +445,13 @@ export function BackgroundTasksPanel({
           </div>
           <div className="bg-tasks-detail">
             {selected && (
-              <div className={`bg-tasks-detail-head${selected.task && isWalnutSubagent(selected.task) ? ' bg-tasks-detail-head--walnut' : ''}`}>
+              <div className={`bg-tasks-detail-head${selected.task && isWalnutSubagent(selected.task) ? ' bg-tasks-detail-head--walnut' : ''}`} data-fit-header="">
                 <StatusDot status={selected.status} />
-                <span className="bg-tasks-detail-title wn-title">{selected.title}</span>
+                <span className="bg-tasks-detail-title wn-title" data-fit-title="">{selected.title}</span>
                 <KindPill row={selected} />
                 {detailLive && <span className="wf-modal-live" title="Agent still running — this is its live output">{'●'}</span>}
                 {/* The pill already names a command's kind; the meta keeps only the timing. */}
-                <span className="wf-modal-meta">{rowMeta(selected, now).slice(selected.isAgent ? 0 : 1).join(' · ')}</span>
+                <span className="wf-modal-meta" data-fit-sub="">{rowMeta(selected, now).slice(selected.isAgent ? 0 : 1).join(' · ')}</span>
                 {selected.task && RUNNING.has(selected.status) && (
                   <BackgroundTaskStopButton key={selected.task.taskId} sessionId={sessionId} taskId={selected.task.taskId}
                     noun={selected.isAgent ? 'agent' : selected.isCommand ? 'command' : selected.task.taskType === 'local_workflow' ? 'workflow' : 'task'} />

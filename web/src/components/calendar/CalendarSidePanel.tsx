@@ -27,6 +27,7 @@ import { gridLocalIso, gridSnappedMinuteAt } from './calendar-grid-settings';
 import { CalendarAlert, calendarAlertOf, canCreateEventOf } from './CalendarAlert';
 import { emptyDayLine, isDayEmpty } from './phone-empty-day';
 import { EmptyState, LoadingState, UnavailableState } from '../common/EmptyState';
+import '@/styles/header-fit.css';
 
 interface Props {
   onClose: () => void;
@@ -149,8 +150,8 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
       ref={panelRef}
       style={width ? { width } : undefined}
     >
-      <div className="cal-side-header">
-        <span className="cal-side-title">
+      <div className="cal-side-header" data-fit-header="">
+        <span className="cal-side-title" data-fit-title="">
           {isToday ? 'Today' : anchor.toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric' })}
         </span>
         {/* Three groups of the same quiet buttons: the day, the time scale, the panel. */}

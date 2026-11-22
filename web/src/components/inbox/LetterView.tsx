@@ -55,6 +55,9 @@ import { ScrollToBottomButton } from '@/components/common/ScrollToBottomButton';
 import { taskPath } from '@/utils/task-path';
 import { openAgentRef, type AgentRef } from '@/utils/agent-ref-open';
 import { letterTypeBadge } from '@/components/common/badge';
+import { FitButton, HeaderFitMore, useHeaderFit } from '@/components/common/HeaderFit';
+import { ICON_PIN, ICON_PIN_FILLED } from '@/components/common/Icons';
+import { ThreadArchiveIcon, ThreadReopenIcon } from '@/components/sessions/ThreadIcons';
 
 /** Where a file reference in a letter body should open. */
 export interface LetterFileTarget {
@@ -310,13 +313,14 @@ export function LetterView({
     () => (senderSid ? sessionInboxLetterHref(senderSid, letterId) : null),
     [senderSid, letterId],
   );
+  const fitLine = useHeaderFit();
 
   return (
     <div
       ref={thread.viewRef}
       className={`hib-view${embedded ? ' hib-view-embedded' : ''}${turns > 0 ? ' hib-view-split' : ''}`}
     >
-      <div className="hib-reader-head">
+      <div className="hib-reader-head" data-fit-header="">
         {/* A host's back button stays first; then who it is from, on its own full-width line,
             so on a phone Pin and Archive never squeeze the sender's name. */}
         {headLeading}
@@ -325,32 +329,35 @@ export function LetterView({
             <LetterOriginBadge letter={shown} variant="reader" linkTask />
           </div>
         )}
-        <div className="hib-reader-title">
-          <span className="hib-reader-subject">{shown?.subject || 'Letter'}</span>
-          {shown && (settledNote ? (
-            <span className="badge hib-type hib-type--info">Settled</span>
-          ) : (
-            <span className={`${letterTypeBadge(shown.type)} hib-type hib-type--${shown.type}`}>
-              {LETTER_TYPE_LABEL[shown.type] ?? shown.type}
-            </span>
-          ))}
-        </div>
-        <div className="hib-reader-tools">
-          {shown && (
-            <>
-              <button className="btn btn-sm hib-row-btn" onClick={() => onTogglePin(shown)}>
-                {shown.pinned ? 'Unpin' : 'Pin'}
+        {/* The subject and its tools: the tools fold to icons, then into More, before the
+            subject (which wraps, never cuts) gets narrower than it reads (the header rule). */}
+        <div ref={fitLine} className="hib-reader-line" data-fit-header="">
+          <div className="hib-reader-title" data-fit-title="">
+            <span className="hib-reader-subject">{shown?.subject || 'Letter'}</span>
+            {shown && (settledNote ? (
+              <span className="badge hib-type hib-type--info">Settled</span>
+            ) : (
+              <span className={`${letterTypeBadge(shown.type)} hib-type hib-type--${shown.type}`}>
+                {LETTER_TYPE_LABEL[shown.type] ?? shown.type}
+              </span>
+            ))}
+          </div>
+          <div className="hib-reader-tools" data-fit-actions="">
+            {shown && (
+              <>
+                <FitButton className="hib-row-btn" icon={shown.pinned ? ICON_PIN_FILLED : ICON_PIN}
+                  label={shown.pinned ? 'Unpin' : 'Pin'} step={1} onClick={() => onTogglePin(shown)} />
+                <FitButton className="hib-row-btn" icon={shown.archived ? <ThreadReopenIcon /> : <ThreadArchiveIcon />}
+                  label={shown.archived ? 'Unarchive' : 'Archive'} step={1} onClick={() => onToggleArchive(shown)} />
+                <HeaderFitMore testId="letter-reader-more" />
+              </>
+            )}
+            {onClose && (
+              <button className="hib-reader-close" onClick={onClose} aria-label="Close letter">
+                &times;
               </button>
-              <button className="btn btn-sm hib-row-btn" onClick={() => onToggleArchive(shown)}>
-                {shown.archived ? 'Unarchive' : 'Archive'}
-              </button>
-            </>
-          )}
-          {onClose && (
-            <button className="hib-reader-close" onClick={onClose} aria-label="Close letter">
-              &times;
-            </button>
-          )}
+            )}
+          </div>
         </div>
       </div>
 

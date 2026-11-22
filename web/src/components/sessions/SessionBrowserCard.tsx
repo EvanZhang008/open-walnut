@@ -39,6 +39,7 @@ import {
   type BrowserFrame,
 } from './browser-view-model';
 import { Tab, TabList } from '@/components/controls';
+import '@/styles/header-fit.css';
 import '@/styles/session-browser-card.css';
 
 /** The × of the popover's title row, the servers popover's own (SessionServerList.tsx). */
@@ -301,9 +302,9 @@ export function SessionBrowserCard({ taskId, view, onClose }: {
 
   return (
     <section className={`session-browser-card${prefs.large ? ' session-browser-card--large' : ''}`} data-testid="session-browser-card" aria-label="Browser view">
-      <header className="session-browser-head">
+      <header className="session-browser-head" data-fit-header="">
         <span className={`session-browser-dot${live ? '' : ' session-browser-dot--idle'}`} aria-hidden />
-        <div className="session-browser-title wn-title" data-testid="session-browser-title">{title || 'Untitled page'}</div>
+        <div className="session-browser-title wn-title" data-fit-title="" data-testid="session-browser-title">{title || 'Untitled page'}</div>
         <button type="button" className="btn btn-icon btn-sm session-browser-btn--icon" aria-label="Close the Browser view" title="Close"
           onClick={onClose} data-testid="session-browser-hide">{CLOSE_GLYPH}</button>
       </header>

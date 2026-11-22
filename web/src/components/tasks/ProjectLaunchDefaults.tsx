@@ -28,6 +28,7 @@ import { engineEntry } from '@/utils/engines';
 import { LaunchSourceTag } from '@/components/sessions/LaunchSourceNote';
 import { useClaudeLaunchMode } from '@/hooks/useClaudeLaunchMode';
 import { useExperimental } from '@/hooks/useExperimental';
+import '@/styles/header-fit.css';
 
 type Field = 'default_engine' | 'default_model' | 'default_effort' | 'default_mode' | 'isolated_workspace';
 
@@ -90,8 +91,8 @@ export function ProjectLaunchDefaults({ project, row }: { project: string; row: 
 
   return (
     <div className="project-launch-defaults" data-testid="project-launch-defaults">
-      <div className="project-launch-defaults-head">
-        <span className="project-launch-defaults-title">New tasks start on</span>
+      <div className="project-launch-defaults-head" data-fit-header="">
+        <span className="project-launch-defaults-title" data-fit-title="">New tasks start on</span>
         <button
           type="button"
           className="project-launch-defaults-clear"

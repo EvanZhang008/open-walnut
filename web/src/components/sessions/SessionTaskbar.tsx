@@ -21,6 +21,7 @@
  *
  * The rules of what is a chip live in pages/sessionTaskbar.ts; this file only draws.
  */
+import '@/styles/header-fit.css';
 import '@/styles/session-taskbar.css';
 import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import { useCallback, useEffect, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
@@ -393,9 +394,9 @@ function PeekCard({ sessionId, task, title, state, running, anchorRef, processSt
       onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
     >
-      <div className="session-taskbar-card-head">
+      <div className="session-taskbar-card-head" data-fit-header="">
         <span className="session-taskbar-dot" aria-hidden="true" />
-        <span className="session-taskbar-card-title wn-title">{title}</span>
+        <span className="session-taskbar-card-title wn-title" data-fit-title="">{title}</span>
         <button type="button" className="session-taskbar-card-open" onClick={onOpen}>Open</button>
       </div>
       {/* The status line and the last reply are the agent's words, source as written: a path, link,

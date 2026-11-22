@@ -40,6 +40,7 @@ import { useOrgThreads } from './useOrgThreads';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { timeAgo } from '@/utils/time';
 import { ORG_TASK_MODES, OrgTaskRail, TAB_DOT, type OrgAnswers, type OrgTaskMode } from './OrgTaskRail';
+import '@/styles/header-fit.css';
 import { askWords } from './org-ask-form';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { recentMainStart } from './ask-main';
@@ -482,14 +483,16 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
 
   return (
     <div ref={detailRef} className="org-detail" data-testid="org-detail" data-key={row.key}>
-      <header className="org-detail-head">
+      {/* On the header rule; its tools take a line of their own under the name before they would
+          cut it (org-page.css), so they keep their own wrap instead of the rule's actions group. */}
+      <header className="org-detail-head" data-fit-header="">
         {onBack && <button type="button" className="org-back" onClick={onBack} aria-label="Back to the org">‹</button>}
         {/* No state mark on the avatar, and the projects it leads and its last move only on hover
             (2026-11-22/23, the user: "no fucking the ! mark", "why we need Leads Walnut, Walnut-Idea
             · moved just now???"). */}
         <OrgAvatar row={row} size={40} plain />
         <div className="org-detail-who">
-          <h2 className="org-detail-title wn-title" data-testid="org-detail-title" title={headTitle}>{title}</h2>
+          <h2 className="org-detail-title wn-title" data-fit-title="" data-testid="org-detail-title" title={headTitle}>{title}</h2>
           <div className="org-detail-sub">
             <CountPills tabs={tabs} onOpen={openTab} approvals={approvals.length} keepsThreads={keepsBrief} threads={keepsBrief ? threadsCounted : undefined} onThreads={() => { setRailHidden(false); pickTop('threads'); }} />
             {isRouter && <span className="org-muted" data-testid="org-detail-router-role">Router</span>}

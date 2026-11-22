@@ -281,14 +281,6 @@
 }
 .phone-topbar .phone-bar-slot .pr-pill.is-compact .pr-pill-mark::before { content: attr(data-t); }
 .phone-topbar .phone-bar-slot .pr-pill.is-compact:focus-visible .pr-pill-icon { box-shadow: 0 0 0 2px color-mix(in srgb, var(--pr-tone) 45%, transparent); }
-.app-shell-navigation .phone-topbar:has(.phone-bar-slot .pr-pill) .phone-topbar-title {
-  left: calc(96px + var(--wn-safe-left));
-  right: calc(96px + var(--wn-safe-right));
-}
-.app-shell-navigation .phone-topbar:has(.phone-bar-slot .pr-pill):has(.phone-bar-slot .task-waiting-chip) .phone-topbar-title {
-  left: calc(140px + var(--wn-safe-left));
-  right: calc(140px + var(--wn-safe-right));
-}
 
 /* A narrow session header (data-header-fit="tight", session-header-labels.css): the other state
    pills read as one letter, so this one is its glyph in its tone; the words stay in its hover

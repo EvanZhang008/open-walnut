@@ -25,6 +25,7 @@ import { ApiError } from '@/api/client';
 import { log } from '@/utils/log';
 import { useHostDisplayLabel, useHostRoute } from '@/hooks/useHostDisplayLabel';
 import { remoteHostTag } from '@/utils/host-display-label';
+import '@/styles/header-fit.css';
 
 /** iframe must emit onload within this after the URL is set. */
 const LOAD_TIMEOUT_MS = 20_000;
@@ -103,13 +104,13 @@ export function SessionCodeView({ sessionId, host, barRightSlot }: SessionCodeVi
 
   return (
     <div className="session-code-panel">
-      <div className="session-code-header">
-        <div className="session-code-title">
+      <div className="session-code-header" data-fit-header="">
+        <div className="session-code-title" data-fit-title="">
           <span className="session-code-label">VS Code</span>
           {openLabel && <span className="session-code-target" title={info?.open.path}>{openLabel}</span>}
           {remote && <span className="session-code-host">{remoteHostTag(remote, hostName, hostVia)}</span>}
         </div>
-        <div className="session-code-actions">
+        <div className="session-code-actions" data-fit-actions="">
           {info && phase === 'ready' && (
             <a className="btn btn-sm" href={info.url} target="_blank" rel="noreferrer" title="Open this editor in its own browser tab">
               Open in tab

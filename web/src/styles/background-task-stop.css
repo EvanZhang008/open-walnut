@@ -55,12 +55,3 @@
   font-size: var(--font-size-sm);
   color: var(--error);
 }
-/* With the control in the row, the timing line gives way on ONE line (ellipsis,
-   full text in the row it came from) instead of wrapping the header taller. */
-.bg-tasks-detail-head:has(.bg-task-stop-wrap) .wf-modal-meta {
-  min-width: 0;
-  flex: 0 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}

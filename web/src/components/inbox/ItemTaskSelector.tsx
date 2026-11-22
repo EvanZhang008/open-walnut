@@ -10,6 +10,7 @@ import { itemDraftKey, useItemDraft } from './item-drafts';
 import { MicInput } from '@/components/common/BoxMic';
 import { ICON_CLOSE } from '../common/Icons';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
+import '@/styles/header-fit.css';
 
 export function ItemTaskSelector({ open, letterId, itemId, onClose, onChoose, onNavigate }: {
   open: boolean; letterId: string; itemId: string; onClose: () => void; onChoose: (task: InboxTaskCandidate) => void;
@@ -75,7 +76,7 @@ export function ItemTaskSelector({ open, letterId, itemId, onClose, onChoose, on
   if (!open) return null;
   return createPortal(<div className="hii-selector-overlay wn-scrim" onPointerDown={e => e.stopPropagation()}>
     <div className="hii-selector wn-dialog" role="dialog" aria-modal="true" aria-label="Choose a task" ref={root}>
-      <header className="wn-dialog-head"><h2>Choose a task</h2><button type="button" className="btn btn-icon wn-dialog-close" onClick={onClose} aria-label="Close task selector">{ICON_CLOSE}</button></header>
+      <header className="wn-dialog-head" data-fit-header=""><h2 data-fit-title="">Choose a task</h2><button type="button" className="btn btn-icon wn-dialog-close" onClick={onClose} aria-label="Close task selector">{ICON_CLOSE}</button></header>
       <label htmlFor={searchId} className={preview ? 'hii-hidden' : ''}>Search tasks
         <MicInput id={searchId} aria-label="Search tasks" ref={input} data-draft-key={itemDraftKey(draftKey, 'query')} value={query} placeholder="Search by title, project, or full task ID" setText={setQuery} />
       </label>

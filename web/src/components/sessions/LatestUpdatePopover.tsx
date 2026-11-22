@@ -15,6 +15,7 @@ import { useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { timeAgo } from '@/utils/time';
 import { AgentText } from '@/components/common/AgentText';
+import '@/styles/header-fit.css';
 import '@/styles/session-recap.css';
 
 export type LatestUpdateCloseReason = 'escape' | 'close' | 'outside' | 'anchor-lost';
@@ -76,9 +77,9 @@ export function LatestUpdatePopover(props: {
         ['--menu-max-height' as string]: placement ? `${placement.maxHeight}px` : undefined,
       } as CSSProperties}
     >
-      <header className="latest-update-header">
-        <h2 className="latest-update-title">Latest update</h2>
-        {ago && <span className="latest-update-ago" title={at}>{ago}</span>}
+      <header className="latest-update-header" data-fit-header="">
+        <h2 className="latest-update-title" data-fit-title="">Latest update</h2>
+        {ago && <span className="latest-update-ago" data-fit-sub="" title={at}>{ago}</span>}
         <button
           type="button"
           className="latest-update-close"

@@ -40,6 +40,7 @@ import {
   withAsked, writeAskSession, type AskSessionLaunch, type AskSessionRecord, type AskSessionScope,
 } from './ask-object-session';
 import '@/styles/ask-object-drawer.css';
+import '@/styles/header-fit.css';
 import '@/styles/walnut-agent.css';
 
 export interface AskObjectQuote {
@@ -565,9 +566,9 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
     const failed = view.kind === 'starting' || view.kind === 'linking' ? view.error : undefined;
     body = (
       <div className="ask-object-pending" data-testid="ask-object-pending">
-        {!props.plainChat && <div className="ask-object-head">
+        {!props.plainChat && <div className="ask-object-head" data-fit-header="">
           {backButton}
-          <h2 className="ask-object-title wn-title">{props.title}</h2>
+          <h2 className="ask-object-title wn-title" data-fit-title="">{props.title}</h2>
           <button
             type="button"
             className="btn btn-icon btn-sm"

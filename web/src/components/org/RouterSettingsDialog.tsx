@@ -15,6 +15,7 @@ import { draftKey } from '@/utils/drafts';
 import { refreshRouterAreas, routerAreaSources } from './router-area-names';
 import { folderList, sameFolders } from './RouterFolderPicker';
 import '@/styles/router-settings.css';
+import '@/styles/header-fit.css';
 import { routerStateWord } from './org-channels-model';
 import { ICON_CLOSE } from '../common/Icons';
 import {
@@ -121,9 +122,9 @@ export function RouterSettingsDialog({ router, tasks, tasksLoading = false, onCl
           tabIndex={-1}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <header className="router-settings-dialog-head wn-dialog-head">
+          <header className="router-settings-dialog-head wn-dialog-head" data-fit-header="">
             <div className="router-settings-dialog-titles">
-              <h2 className="router-settings-dialog-title wn-title" id={titleId}>{value.name.trim() || fresh.org_name || fresh.title}</h2>
+              <h2 className="router-settings-dialog-title wn-title" data-fit-title="" id={titleId}>{value.name.trim() || fresh.org_name || fresh.title}</h2>
               <span className="router-settings-dialog-sub">Router · {areaLabel || 'Area not configured'} · {routerStateWord(baseline.paused)}</span>
             </div>
             <button type="button" className="btn btn-icon wn-dialog-close" aria-label="Close" data-testid="router-settings-close" onClick={onClose}>{ICON_CLOSE}</button>

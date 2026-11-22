@@ -34,6 +34,7 @@ import { TopicComposer } from './TopicComposer';
 import { TopicSidePanel } from './TopicSidePanel';
 import { useTopicsOn } from './topics-flag';
 import { useTopic, type LocalMessage } from './useTopics';
+import '@/styles/header-fit.css';
 
 /** A time line between messages more than this apart. */
 const GAP_MS = 30 * 60_000;
@@ -180,10 +181,10 @@ export function TopicChat({ topicId, onBack }: { topicId: string; onBack?: () =>
   const liveCount = topic.members.filter((mb) => mb.status !== 'left').length;
   return (
     <div className={`topic-chat${shown ? ' shows-side' : ''}`} data-testid="topic-chat" data-topic-id={topic.id} data-closed={topic.closed ? 'true' : undefined}>
-      <header className="topic-head">
+      <header className="topic-head" data-fit-header="">
         {onBack && <button type="button" className="btn btn-icon" onClick={onBack} aria-label="Back to the list">{ICON_CHEVRON_LEFT}</button>}
         <span className="topic-head-mid">
-          <span className="topic-head-title wn-title" data-testid="topic-title">{topic.title}</span>
+          <span className="topic-head-title wn-title" data-fit-title="" data-testid="topic-title">{topic.title}</span>
           <span className="topic-head-sub" data-testid="topic-subtitle">{topicSubtitle(topic)}{topic.closed ? ' · closed' : ''}</span>
         </span>
         <button ref={membersRef} type="button" className="btn btn-sm btn-ghost topic-head-members" data-testid="topic-toggle-side" aria-pressed={shown}

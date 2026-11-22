@@ -39,6 +39,7 @@ import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterD
 import { ThreadStatusWord } from './ThreadStatusWord';
 import { ThreadCloseIcon } from './ThreadIcons';
 import { afterOwnTransitions } from '@/utils/after-transitions';
+import '@/styles/header-fit.css';
 import '@/styles/thread-card.css';
 
 /** The grow animation (`.thread-card.is-sizing` in thread-card.css). */
@@ -427,7 +428,7 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
       style={place}
       onKeyDown={onCardKeyDown}
     >
-      <div className="thread-card-head">
+      <div className="thread-card-head" data-fit-header="">
         {p.draft ? (
           <span className="thread-map-num thread-map-num--new" aria-hidden="true">
             <svg viewBox="0 0 10 10" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M5 1.5v7M1.5 5h7" /></svg>
@@ -435,10 +436,10 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
         ) : (
           p.number !== undefined && <span className="thread-map-num" aria-hidden="true">{p.number}</span>
         )}
-        <span className="thread-card-title" title={p.title}>{p.draft ? 'New question' : p.title}</span>
-        {p.naming && <span className="thread-naming">Naming…</span>}
+        <span className="thread-card-title" data-fit-title="" title={p.title}>{p.draft ? 'New question' : p.title}</span>
+        {p.naming && <span className="thread-naming" data-fit-sub="">Naming…</span>}
         {!p.draft && <ThreadStatusWord status={p.status} unread={p.unread} className="thread-card-status" />}
-        <span className="thread-card-head-actions">
+        <span className="thread-card-head-actions" data-fit-actions="">
           {p.onQuote && (
             <button
               type="button"

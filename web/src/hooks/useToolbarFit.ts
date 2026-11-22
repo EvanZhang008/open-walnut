@@ -111,6 +111,8 @@ export function attachFold(row: HTMLElement, { keepSelector, measure }: {
   keepSelector: string;
   measure: (kept: HTMLElement) => FoldReading;
 }): () => void {
+  // No layout to measure (a DOM without ResizeObserver or rects, as in a unit test's renderer): the row stays as written.
+  if (typeof ResizeObserver === 'undefined' || typeof row.getClientRects !== 'function') return () => {};
   let step = 0;
   // The buttons' width at each step the row has shown, so unfolding knows what it costs.
   const widthAt: number[] = [];

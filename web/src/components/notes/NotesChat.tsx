@@ -5,6 +5,7 @@ import { ChatMessage } from '@/components/chat/ChatMessage';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import type { ImageAttachment } from '@/api/chat';
+import '@/styles/header-fit.css';
 
 export const NOTE_AGENT_ID = 'note-agent';
 
@@ -40,8 +41,8 @@ export function NotesChat({ activeNotePath, headerLeft, conversationId }: {
 
   return (
     <div className="notes-chat">
-      <div className="notes-chat-header">
-        {headerLeft ?? <span className="notes-chat-title">Note Agent</span>}
+      <div className="notes-chat-header" data-fit-header="">
+        {headerLeft ?? <span className="notes-chat-title" data-fit-title="">Note Agent</span>}
         {chat.messages.length > 0 && (
           <button
             className="notes-chat-clear"

@@ -12,6 +12,7 @@ import { ImportIcon } from './pw-icons'
 import { Chip, ChipGroup } from '@/components/controls'
 import { ICON_CLOSE } from '../common/Icons'
 import { LoadingState } from '@/components/common/EmptyState'
+import '@/styles/header-fit.css'
 
 const MAX_FILE_BYTES = 12 * 1024 * 1024
 
@@ -64,8 +65,8 @@ export function ImportDialog({ onClose, onImported }: { onClose: () => void; onI
   return createPortal(
     <div className="app-modal-overlay pw-modal-overlay wn-scrim" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
       <div className="pw-modal wn-dialog" role="dialog" aria-modal="true" aria-label="Import passwords" data-testid="pw-import">
-        <div className="pw-modal-head wn-dialog-head">
-          <h2>Import passwords</h2>
+        <div className="pw-modal-head wn-dialog-head" data-fit-header="">
+          <h2 data-fit-title="">Import passwords</h2>
           <button type="button" className="btn btn-icon wn-dialog-close" aria-label="Close" onClick={onClose}>{ICON_CLOSE}</button>
         </div>
         {added !== null ? (

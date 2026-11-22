@@ -7,18 +7,21 @@
  * holding a title and a button) is either on the shared rule (`data-fit-header`, set with
  * useHeaderFit) or counted in header-fit-baseline.json, per file. A new row off the rule fails;
  * a fix lowers the count with `HEADER_FIT_RECORD=1` on this file. The page itself is swept at
- * every width by tests/e2e/browser/header-fit-sweep.spec.ts.
+ * every width by tests/e2e/browser/header-fit-sweep.spec.ts. A row that can never crush its title
+ * (a fixed-width box, a row whose text is not a title) is listed with its reason in
+ * header-fit-exempt.ts instead.
  */
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { allHeaderRows, headerRowsIn, offRuleCounts } from './header-fit-scan';
+import { allHeaderRows, headerRowsIn, offRuleCounts, rowKey } from './header-fit-scan';
+import { HEADER_FIT_EXEMPT } from './header-fit-exempt';
 
 const BASELINE = path.join(__dirname, 'header-fit-baseline.json');
 
 describe('header rows: title and buttons never overlap', () => {
   const rows = allHeaderRows();
-  const now = offRuleCounts(rows);
+  const now = offRuleCounts(rows, HEADER_FIT_EXEMPT);
   if (process.env.HEADER_FIT_RECORD === '1') fs.writeFileSync(BASELINE, `${JSON.stringify(now, null, 2)}\n`);
   const was = JSON.parse(fs.readFileSync(BASELINE, 'utf8')) as Record<string, number>;
 
@@ -33,6 +36,14 @@ describe('header rows: title and buttons never overlap', () => {
   it('the baseline follows every fix', () => {
     const fell = Object.entries(was).filter(([f, n]) => (now[f] ?? 0) < n).map(([f, n]) => `web/src/${f}: ${now[f] ?? 0} (baseline ${n})`);
     expect(fell, `Fewer than recorded: good. Lower the baseline with\nHEADER_FIT_RECORD=1 bun --bun vitest run tests/web/header-fit-ratchet.test.ts\n${fell.join('\n')}`).toEqual([]);
+  });
+
+  it('every exemption names a row still off the rule, with its reason', () => {
+    const off = new Set(rows.filter((r) => !r.onRule).map(rowKey));
+    const stale = Object.keys(HEADER_FIT_EXEMPT).filter((k) => !off.has(k));
+    expect(stale, 'These exempt rows are gone or on the rule now: drop them from header-fit-exempt.ts').toEqual([]);
+    const thin = Object.entries(HEADER_FIT_EXEMPT).filter(([, why]) => why.trim().length < 40).map(([k]) => k);
+    expect(thin, 'Say why the row can never crush its title').toEqual([]);
   });
 
   it('the headers the user named are on the rule', () => {

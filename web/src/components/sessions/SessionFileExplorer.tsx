@@ -63,6 +63,7 @@ import { useRevealFile } from '@/hooks/useRevealFile';
 import { openPopout } from '@/popout/openPopout';
 import { log } from '@/utils/log';
 import { folderNameIn, homeFolderWords, HOME_FOLDER_LABEL, knownHomeOf, pathCrumbs, rememberHostHome, tildePath, untildePath } from '@/utils/home-folder';
+import '@/styles/header-fit.css';
 
 interface SessionFileExplorerProps {
   cwd?: string;
@@ -1660,11 +1661,12 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   );
   const headIsHome = folderNameIn(focusedDir ?? root, hostHome) === '~';
   const treeHead = (
-    <div className="sfe-tree-head">
+    <div className="sfe-tree-head" data-fit-header="">
       {phone && !selectedFile && editingPath ? pathEditor : (
         <button
           type="button"
           className="sfe-tree-head-name"
+          data-fit-title=""
           onClick={() => setEditingPath(true)}
           title={`In ${parentPath(focusedDir ?? root)}: click to type a path`}
         >
@@ -1674,7 +1676,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
           {headIsHome ? HOME_FOLDER_LABEL : <><span className="sfe-tree-head-in">in</span>{homeFolderWords(folderNameIn(parentPath(focusedDir ?? root), hostHome))}</>}
         </button>
       )}
-      <span className="sfe-tree-head-tools">
+      <span className="sfe-tree-head-tools" data-fit-actions="">
         <button type="button" className="btn btn-icon btn-ghost sfe-btn" onClick={goUp} title="Go to parent directory" aria-label="Go to parent directory">
           {ICON_ARROW_UP}
         </button>

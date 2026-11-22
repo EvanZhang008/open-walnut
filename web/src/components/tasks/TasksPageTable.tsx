@@ -34,6 +34,7 @@ import { useTaskCircle } from '@/hooks/useSessionStatus';
 import { visibleInterval } from '@/utils/page-visibility';
 import * as ICONS from '../common/Icons';
 import '@/styles/walnut-agent.css';
+import '@/styles/header-fit.css';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import { projectDisplayName, projectGroupKey } from '@/utils/project-display';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
@@ -588,7 +589,7 @@ export function TasksPageTable({
         <Fragment key={`grp:${project || '·inbox·'}`}>
           <div
             className={`tp-group-header${isCollapsed ? ' closed' : ''}`}
-            data-win-key={`grp:${project || '·inbox·'}`}
+            data-win-key={`grp:${project || '·inbox·'}`} data-fit-header=""
             data-testid="tasks-group-header"
             data-project={project}
             data-group-project={project}
@@ -596,7 +597,7 @@ export function TasksPageTable({
           >
             <span className="tp-group-chevron">▾</span>
             <span className="tp-group-icon">{project ? '📁' : '📥'}</span>
-            <span className="tp-group-name wn-title">{projectDisplayName(project)}</span>
+            <span className="tp-group-name wn-title" data-fit-title="">{projectDisplayName(project)}</span>
             {project && <ProjectSourceBadge source={sourceByName.get(project.toLowerCase())} />}
             <span className="tp-group-count">{groupTasks.length}</span>
             {/* One-click "+" → a draft session in this project, the same control (and

@@ -34,6 +34,7 @@ import { MapArchiveButton, useMapArchive, type MapArchiveApi } from '@/component
 import { mapOverlayWidth, mapStep, onPathIds, railMarks, type ThreadMapShape } from '@/utils/thread-map';
 import { openChipCount, pluralQuestions, toggleLabel, type ThreadCounts } from '@/utils/thread-meta-counts';
 import type { TreeRow } from '@/utils/thread-tree-rows';
+import '@/styles/header-fit.css';
 import '@/styles/thread-map.css';
 
 export interface ThreadMapProps {
@@ -427,11 +428,11 @@ function MapList(p: ListProps) {
 
   return (
     <div className="thread-map-list" onKeyDown={onKeyDown}>
-      <div className="thread-map-head">
-        <span className="thread-map-title">Questions</span>
-        <span className="thread-map-count" title={fullCount !== count ? fullCount : undefined}
+      <div className="thread-map-head" data-fit-header="">
+        <span className="thread-map-title" data-fit-title="">Questions</span>
+        <span className="thread-map-count" data-fit-sub="" title={fullCount !== count ? fullCount : undefined}
           data-all-done={openChipCount(p.counts) === 0 ? 'true' : undefined}>{count}</span>
-        <span className="thread-map-head-actions">
+        <span className="thread-map-head-actions" data-fit-actions="">
           <button type="button" className="thread-map-icon" title="Open the question list" aria-label="Open the question list"
             data-map-stop={STOP_LIST} {...entryOf(STOP_LIST)} tabIndex={tabIndexOf(STOP_LIST)} onFocus={() => setCursor(STOP_LIST)}
             onClick={(e) => { p.onDone?.(byKeyboard(e)); p.onOpenList(); }}>

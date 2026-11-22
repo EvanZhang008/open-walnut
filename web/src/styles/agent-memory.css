@@ -8,7 +8,7 @@
 .am-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .am-close {
   border: none; background: none; color: var(--fg-muted); font-size: var(--font-size-xl); line-height: 1;
-  width: 28px; height: 28px; border-radius: 6px; cursor: pointer;
+  width: 28px; height: 28px; border-radius: 6px; cursor: pointer; flex: none;
 }
 .am-close:hover { background: var(--bg-hover); color: var(--fg); }
 .am-sub { margin-top: 2px; font-size: var(--font-size-sm); color: var(--fg-muted); }

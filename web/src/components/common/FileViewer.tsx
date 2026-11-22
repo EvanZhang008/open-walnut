@@ -20,6 +20,7 @@ import { useHostDisplayLabel, useHostRoute } from '@/hooks/useHostDisplayLabel';
 import { remoteHostTag } from '@/utils/host-display-label';
 import { locateClickedPath, missingPathLine, type ClickedPathTarget } from '@/hooks/useClickedPathOpener';
 import { ICON_CLOSE } from './Icons';
+import '@/styles/header-fit.css';
 
 const LOCAL = '__local__';
 const LOCAL_ALIASES = new Set(['', 'local', LOCAL]);
@@ -78,13 +79,13 @@ export function FileViewer({ path: filePath, line, endLine, host: askedHost, sou
   const overlay = (
     <div className="file-viewer-overlay wn-scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="file-viewer-panel file-viewer-panel-explorer wn-dialog">
-        <div className="file-viewer-header wn-dialog-head">
-          <div className="file-viewer-title">
+        <div className="file-viewer-header wn-dialog-head" data-fit-header="">
+          <div className="file-viewer-title" data-fit-title="">
             <span className="file-viewer-icon">&#x1F4C2;</span>
             <span className="file-viewer-path" title={filePath}>{filename}</span>
             {line && <span className="file-viewer-line">:{line}</span>}
           </div>
-          <div className="file-viewer-actions">
+          <div className="file-viewer-actions" data-fit-actions="">
             <button
               className="btn btn-sm"
               onClick={handleCopyPath}

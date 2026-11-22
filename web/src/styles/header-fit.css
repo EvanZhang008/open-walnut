@@ -1,11 +1,13 @@
 /*
  * The header rule (components/common/HeaderFit.tsx): a title and its buttons in one row never
  * cover each other. useHeaderFit sets data-toolbar-fold (the buttons' words fold to icons,
- * toolbar-fit.css) and then data-fit-overflow (the buttons go into the More menu). The title
- * cuts its text with an ellipsis only after both.
+ * toolbar-fit.css) and then data-fit-overflow (the buttons go into the More menu). Only after
+ * both does the title give way: a title marked `.wn-title` (text-fit.css: the words that tell one
+ * item from another are never cut) wraps onto more lines, any other cuts with an ellipsis.
  */
 [data-fit-header] { display: flex; align-items: center; min-width: 0; }
-[data-fit-header] [data-fit-title] {
+[data-fit-header] [data-fit-title].wn-title { min-width: 0; flex-shrink: 1; }
+[data-fit-header] [data-fit-title]:not(.wn-title) {
   min-width: 0;
   flex-shrink: 1;
   overflow: hidden;
@@ -14,7 +16,7 @@
 }
 /* A title whose text is one control (a rename button) cuts inside that control. A flex title
    lets it shrink; a percent max-width would feed back into the title's own size and cut it early. */
-[data-fit-header] [data-fit-title] > :only-child {
+[data-fit-header] [data-fit-title]:not(.wn-title) > :only-child:not(.wn-title) {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -25,6 +27,14 @@
 [data-fit-header] [data-fit-sub] {
   min-width: 0;
   flex: 1 1 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A title (or a name in the header) that is a flex box, an icon or a caret beside its words, cuts inside its words, marked
+   `data-fit-cut`; the icon stays whole. */
+[data-fit-header] [data-fit-cut] {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -15,6 +15,7 @@ import { useShortcutOverrides } from './shortcut-overrides';
 import { ShortcutKeys } from './ShortcutKeys';
 import '@/styles/keyboard-shortcuts.css';
 import { ICON_CLOSE } from '../components/common/Icons';
+import '@/styles/header-fit.css';
 
 
 export function ShortcutsHelpHost() {
@@ -59,8 +60,8 @@ function ShortcutsHelpDialog({ onClose }: { onClose: () => void }) {
         tabIndex={-1}
         onPointerDown={(e) => e.stopPropagation()}
       >
-        <header className="shortcuts-help-head wn-dialog-head">
-          <h2 id={labelId} className="app-modal-title">Keyboard shortcuts</h2>
+        <header className="shortcuts-help-head wn-dialog-head" data-fit-header="">
+          <h2 id={labelId} className="app-modal-title" data-fit-title="">Keyboard shortcuts</h2>
           <button type="button" className="btn btn-icon shortcuts-help-close wn-dialog-close" aria-label="Close keyboard shortcuts" onClick={onClose}>{ICON_CLOSE}</button>
         </header>
         <div className="shortcuts-help-groups">

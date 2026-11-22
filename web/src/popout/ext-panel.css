@@ -149,6 +149,10 @@
 .ext-ask-agent:hover { color: var(--fg); }
 .ext-ask-agent.is-plain { cursor: default; }
 .ext-ask-titles.is-popup .ext-ask-agent { font-size: var(--font-size-lg); color: var(--fg); font-weight: 650; }
+/* The header rule (header-fit.css): the agent's name cuts with an ellipsis, last, and its caret stays. */
+.ext-ask-agent { max-width: 100%; min-width: 0; }
+/* The popup's title is the agent button alone: the button cuts inside itself, so its focus ring is not clipped. */
+.ext-ask-titles.is-popup[data-fit-title] { overflow: visible; }
 .ext-ask-icon { flex: none; position: relative; width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: var(--radius-full); background: none; color: var(--fg-secondary); cursor: pointer; }
 .ext-ask-icon:hover { background: var(--hover-bg); color: var(--walnut-accent); }
 .ext-ask-icon:focus-visible { outline: 2px solid var(--walnut-accent); outline-offset: 1px; }

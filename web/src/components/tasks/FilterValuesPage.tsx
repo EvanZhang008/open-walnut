@@ -11,6 +11,7 @@ import { dimLabel, isDimDefault, pickValue, resetDim } from './filter-bar-model'
 import type { FilterBarController, FilterDim, FilterPickMode, FilterValueOption } from './filter-bar-types';
 import { COUNT_DIMS, FilterValueList, MULTI_DIMS, type FilterWriter } from './FilterValueList';
 import { CustomTime, TimeBasis } from './FilterTimeControls';
+import '@/styles/header-fit.css';
 
 export interface FilterValuesPageProps {
   controller: FilterBarController;
@@ -36,11 +37,11 @@ export function FilterValuesPage({ controller: c, writer: w, dim, options, query
   };
   return (
     <div className="fb-page" data-filter-dim={dim}>
-      <div className="fb-page-head">
+      <div className="fb-page-head" data-fit-header="">
         <button type="button" className="fb-back" aria-label="Back to all filters" title="Back" onClick={onBack}>
           {ICON_CHEVRON_LEFT}
         </button>
-        <span className="fb-page-title">{dimLabel(dim)}</span>
+        <span className="fb-page-title" data-fit-title="">{dimLabel(dim)}</span>
         {isSet && (
           <button type="button" className="fb-text-btn fb-page-reset" onClick={() => w.write((s) => resetDim(s, dim), 'menu')}>
             Reset

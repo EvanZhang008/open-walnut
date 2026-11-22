@@ -27,6 +27,8 @@ import { EmptyState, LoadingState, UnavailableState } from '@/components/common/
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { apiGet } from '@/api/client';
 import { BrowserRevealButton } from './BrowserRevealButton';
+import { FitButton, HeaderFitMore, useHeaderFit } from '@/components/common/HeaderFit';
+import { ICON_COLLAPSE, ICON_EXPAND, ICON_EYE } from '@/components/common/Icons';
 import { log } from '@/utils/log';
 import {
   NO_REPLAY, NO_STEP_PICTURE, REPLAY_REREAD_MS, REPLAY_SPEEDS, agoLine, pictureIndex, replayRuler, replayStepWords, replayTimeLine, spanLine, stepTimeLine,
@@ -127,6 +129,7 @@ export function SessionBrowserReplay({ taskId, large, onLarge, onBack, onClose, 
   onBack?: () => void;
   onClose: () => void;
 }) {
+  const headRef = useHeaderFit();
   const [steps, setSteps] = useState<ReplayStep[] | null>(null);
   const [days, setDays] = useState<number | null>(null);
   const [i, setI] = useState(-1);
@@ -303,21 +306,22 @@ export function SessionBrowserReplay({ taskId, large, onLarge, onBack, onClose, 
 
   return (
     <section className={`session-browser-card session-browser-replay${large ? ' session-browser-card--large' : ''}`} data-testid="session-browser-replay" aria-label="Browser replay">
-      <header className="session-browser-replay-head">
+      <header className="session-browser-replay-head" ref={headRef} data-fit-header="">
         <div className="session-browser-replay-names">
-          <div className="session-browser-title wn-title" data-testid="session-browser-replay-title">{title}</div>
+          <div className="session-browser-title wn-title" data-fit-title="" data-testid="session-browser-replay-title">{title}</div>
           <div className="session-browser-url" data-testid="session-browser-replay-url">{step?.url ?? ''}</div>
         </div>
-        <span className="session-browser-replay-where" data-testid="session-browser-replay-where" title={step ? agoLine(step.at, now) : undefined}>
+        <span className="session-browser-replay-where" data-fit-sub="" data-testid="session-browser-replay-where" title={step ? agoLine(step.at, now) : undefined}>
           {count ? `Replay · step ${i + 1} of ${count} · ${spanLine(ruler.seconds)}` : 'Replay'}
         </span>
         {onBack
-          ? <button type="button" className="btn btn-sm" onClick={onBack} data-testid="session-browser-replay-back" title="The live picture of the agent's tab">Live</button>
+          ? <FitButton icon={ICON_EYE} label="Live" step={2} onClick={onBack} data-testid="session-browser-replay-back" title="The live picture of the agent's tab" />
           : null}
         {(liveTab || anyPage) && (
-          <BrowserRevealButton taskId={taskId} tab={liveTab?.tab} device={liveTab?.device} step={liveTab ? undefined : pageStep?.id} testId="session-browser-replay-reveal" />
+          <BrowserRevealButton taskId={taskId} tab={liveTab?.tab} device={liveTab?.device} step={liveTab ? undefined : pageStep?.id} testId="session-browser-replay-reveal" fit={1} />
         )}
-        <button type="button" className="btn btn-sm" onClick={onLarge} aria-pressed={large} data-testid="session-browser-replay-size">{large ? 'Smaller' : 'Larger'}</button>
+        <FitButton icon={large ? ICON_COLLAPSE : ICON_EXPAND} label={large ? 'Smaller' : 'Larger'} onClick={onLarge} aria-pressed={large} data-testid="session-browser-replay-size" />
+        <HeaderFitMore testId="session-browser-replay-more" />
         <button type="button" className="btn btn-icon btn-sm session-browser-btn--icon" aria-label="Close the Browser view" title="Close"
           onClick={onClose} data-testid="session-browser-replay-hide">{CLOSE_GLYPH}</button>
       </header>

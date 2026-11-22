@@ -7,6 +7,7 @@ import { testRoutineCheck } from '@/api/routines';
 import { CUSTOM_SCHEDULE, describeSchedule, describeWake } from '@/utils/routine-format';
 import '@/styles/routine-description.css';
 import '@/styles/routine-mic.css';
+import '@/styles/header-fit.css';
 import { BoxMic, MicField, type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps, useDictationGroup } from '@/hooks/useSendAfterDictation';
 import { useDraftValue } from '@/hooks/useDraft';
@@ -573,8 +574,8 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
   return (
     <div className="modal-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !saving) requestClose(); }}>
       <div className="modal card routine-modal">
-        <div className="routine-modal-header">
-          <h3>{routine ? 'Edit routine' : 'New routine'}</h3>
+        <div className="routine-modal-header" data-fit-header="">
+          <h3 data-fit-title="">{routine ? 'Edit routine' : 'New routine'}</h3>
           <button type="button" className="routine-modal-close" onClick={requestClose} disabled={saving} aria-label="Close">✕</button>
         </div>
         <form onSubmit={handleSubmit} ref={formRef}>

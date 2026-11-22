@@ -11,6 +11,7 @@ import { ago, siteTile, typeLabel } from './passwords-model'
 import { PasskeyList } from './PasskeyList'
 import { NoticeStatus, type NoticeTone } from '@/components/common/NoticeCard'
 import { CopyIcon, EyeIcon, EyeOffIcon, LinkIcon, StarIcon, EditIcon, TrashIcon, RestoreIcon, CheckIcon, RobotIcon } from './pw-icons'
+import '@/styles/header-fit.css'
 
 export const AGENT_ACCESS_TEXT = {
   never: 'Never: agents cannot use it',
@@ -128,13 +129,13 @@ export function ItemView({ item, onEdit, onChanged }: { item: VaultItem; onEdit:
 
   return (
     <div className="pw-detail" data-testid="pw-detail">
-      <div className="pw-detail-head">
+      <div className="pw-detail-head" data-fit-header="">
         <SiteTile item={item} size={52} />
         <div className="pw-detail-title">
-          <h2>{item.title}</h2>
+          <h2 data-fit-title="">{item.title}</h2>
           <span className="pw-detail-type">{typeLabel(item.type)}{item.sensitive ? ' · Sensitive' : ''}</span>
         </div>
-        <div className="pw-detail-actions">
+        <div className="pw-detail-actions" data-fit-actions="">
           {!trashed && (
             <>
               <button type="button" className={`btn btn-icon${item.favorite ? ' pw-fav-on' : ''}`} aria-label={item.favorite ? 'Remove from favorites' : 'Add to favorites'} title="Favorite" disabled={busy}

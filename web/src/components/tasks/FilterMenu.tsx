@@ -33,6 +33,7 @@ import { DisplaySections, DisplayViewsPage, useMenuViews } from './DisplaySectio
 import { viewLabel } from './tab-bar-model';
 import '@/styles/filter-toolbar-base.css';
 import '@/styles/filter-bar.css';
+import '@/styles/header-fit.css';
 import { SearchField } from '@/components/common/SearchField';
 
 export const PANEL_MENU_MAX_HEIGHT = 520;
@@ -238,11 +239,11 @@ export function PanelMenu({ filters: c, display: d, flashOption }: PanelMenuProp
   const style = { ...menuPlacementStyle(clamped), width, maxHeight: Math.min(clamped?.maxHeight ?? PANEL_MENU_MAX_HEIGHT, PANEL_MENU_MAX_HEIGHT) };
   const pageKey = page?.kind === 'dim' ? page.dim : page?.kind === 'view' ? 'view' : null;
   const viewsHead = (
-    <div className="fb-page-head">
+    <div className="fb-page-head" data-fit-header="">
       <button type="button" className="fb-back" aria-label="Back to all filters" title="Back" onClick={goBack}>
         {ICON_CHEVRON_LEFT}
       </button>
-      <span className="fb-page-title">View</span>
+      <span className="fb-page-title" data-fit-title="">View</span>
     </div>
   );
 

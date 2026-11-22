@@ -128,6 +128,8 @@ html :is(.fb-group-title, .fb-layout-title).wn-menu-heading { padding: 4px 8px 2
 .fb-back svg { width: 12px; height: 12px; }
 .fb-page-title { flex: 1; min-width: 0; font-weight: 600; font-size: var(--font-size-sm); color: var(--fg-secondary); }
 .fb-page-reset { font-size: var(--font-size-sm); }
+/* The header rule (header-fit.css): Back and Reset keep their size; only the title cuts, last. */
+.fb-page-head > button { flex: none; }
 .fb-page-sub { display: flex; padding: 2px 8px 6px; }
 .fb-page-sub .tp-seg { flex: 1; }
 .fb-page-sub .tp-seg-btn { flex: 1; }

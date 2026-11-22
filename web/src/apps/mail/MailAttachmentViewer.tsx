@@ -15,6 +15,8 @@
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { mailAttachmentUrl, type MailAttachmentMeta } from '@/api/mail';
+import { FitButton, HeaderFitMore, useHeaderFit } from '@/components/common/HeaderFit';
+import { ICON_CLOSE, ICON_DOWNLOAD } from '@/components/common/Icons';
 import { PdfPreview } from '@/components/common/PdfPreview';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
@@ -40,6 +42,7 @@ export function MailAttachmentViewer({ open, onClose }: { open: OpenAttachment; 
   useDialogFocus(root, name);
   const saver = useAttachmentSave(accountId, messageId);
   const status = saveStatusLine(saver.state);
+  const barRef = useHeaderFit();
 
   return createPortal(
     <div
@@ -56,9 +59,9 @@ export function MailAttachmentViewer({ open, onClose }: { open: OpenAttachment; 
       // A portal still bubbles React events to the reader behind it; nothing there may see these.
       onPointerDown={(event) => event.stopPropagation()}
     >
-      <div className="mail-attachment-viewer-bar" onClick={(event) => event.stopPropagation()}>
-        <span className="mail-attachment-viewer-name">{name}</span>
-        {attachment.bytes ? <span className="mail-attachment-viewer-size">{formatSize(attachment.bytes)}</span> : null}
+      <div className="mail-attachment-viewer-bar" ref={barRef} data-fit-header="" onClick={(event) => event.stopPropagation()}>
+        <span className="mail-attachment-viewer-name" data-fit-title="">{name}</span>
+        {attachment.bytes ? <span className="mail-attachment-viewer-size" data-fit-sub="">{formatSize(attachment.bytes)}</span> : null}
         {status && (
           <span
             className={`mail-attachment-viewer-status${saver.state.kind === 'failed' ? ' is-failed' : ''}`}
@@ -69,34 +72,30 @@ export function MailAttachmentViewer({ open, onClose }: { open: OpenAttachment; 
           </span>
         )}
         {savesThroughServer() ? (
-          <button
-            type="button"
-            className="btn mail-attachment-viewer-btn"
+          <FitButton
+            icon={ICON_DOWNLOAD}
+            label="Download"
+            className="mail-attachment-viewer-btn"
             data-testid="mail-attachment-download"
             disabled={saver.state.kind === 'saving'}
             onClick={() => { void saver.save(attachment); }}
-          >
-            Download
-          </button>
+          />
         ) : (
+          // A link, so the browser saves it; it folds like a FitButton (its icon, then the More menu).
           <a
-            className="btn mail-attachment-viewer-btn"
+            className="btn btn-sm btn-ghost mail-attachment-viewer-btn"
             data-testid="mail-attachment-download"
+            data-fit-button="1"
+            aria-label="Download"
             href={mailAttachmentUrl(accountId, messageId, attachment.id, { download: true })}
             download={attachmentFileName(attachment)}
           >
-            Download
+            <span className="header-fit-icon" aria-hidden="true">{ICON_DOWNLOAD}</span>
+            <span data-fit-label="">Download</span>
           </a>
         )}
-        <button
-          type="button"
-          className="btn mail-attachment-viewer-btn"
-          data-testid="mail-attachment-close"
-          aria-label="Close"
-          onClick={onClose}
-        >
-          Close
-        </button>
+        <HeaderFitMore testId="mail-attachment-more" />
+        <FitButton icon={ICON_CLOSE} label="Close" keep className="mail-attachment-viewer-btn" data-testid="mail-attachment-close" onClick={onClose} />
       </div>
       <div className="mail-attachment-viewer-body" onClick={(event) => { if (kind === 'pdf') event.stopPropagation(); }}>
         {kind === 'pdf' ? (

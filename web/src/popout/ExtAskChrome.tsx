@@ -19,6 +19,7 @@ import { toParent } from './ext-frame';
 import { hostOf, type VaultState } from './ext-panel-model';
 import { askRowDetail } from './ext-tasks-model';
 import { mainLineOf, type ExtAsks } from './useExtAsks';
+import '@/styles/header-fit.css';
 
 const S = { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true };
 const ICON_KEY = <svg {...S}><circle cx="8" cy="15" r="4" /><path d="M10.85 12.15 19 4" /><path d="m18 5 2 2" /><path d="m15 8 2 2" /></svg>;
@@ -62,18 +63,18 @@ export function ExtAskHeader(p: HeaderProps) {
   const shown = askProjectDisplay(p.agent.project);
   const agentSwitch = p.canSwitch ? (
     <button type="button" className="ext-ask-agent" data-testid="ext-ask-agent" onClick={p.onAgents} title="Switch agent">
-      {shown}<span aria-hidden="true">{ICON_CARET}</span>
+      <span data-fit-cut="">{shown}</span><span aria-hidden="true">{ICON_CARET}</span>
     </button>
   ) : <span className="ext-ask-agent is-plain">{shown}</span>;
   return (
-    <header className={`ext-ask-head is-${p.surface}`} data-testid="ext-ask-head">
+    <header className={`ext-ask-head is-${p.surface}`} data-fit-header="" data-testid="ext-ask-head">
       <AskWalnutMenuButton ref={p.menuRef} open={p.menuOn} onToggle={p.onMenu} label={shown} />
       {p.surface === 'panel' && p.title ? (
         <div className="ext-ask-titles">
-          <span className="ext-ask-title wn-title" data-testid="ext-ask-title">{p.title}</span>
+          <span className="ext-ask-title wn-title" data-fit-title="" data-testid="ext-ask-title">{p.title}</span>
           {agentSwitch}
         </div>
-      ) : <div className="ext-ask-titles is-popup">{agentSwitch}</div>}
+      ) : <div className="ext-ask-titles is-popup" data-fit-title="">{agentSwitch}</div>}
       {p.keyed && <KeyButton vault={p.vault} pressed={p.keyPressed} />}
       {p.surface === 'panel' ? (
         <button type="button" className="ext-ask-icon" data-testid="ext-panel-new" aria-label="New quick question" title="New quick question about this page" onClick={p.onNew}>{ICON_COMPOSE}</button>
@@ -126,11 +127,11 @@ interface HomeHeaderProps {
 /** The first page's header: ≡, Walnut, the relay pill, the key, (the side panel,) Settings. */
 export function ExtHomeHeader(p: HomeHeaderProps) {
   return (
-    <header className={`ext-ask-head ext-home-head is-${p.surface}`} data-testid="ext-home-head">
+    <header className={`ext-ask-head ext-home-head is-${p.surface}`} data-fit-header="" data-testid="ext-home-head">
       <AskWalnutMenuButton ref={p.menuRef} open={p.menuOn} onToggle={p.onMenu} label="Walnut" />
       <div className="ext-home-brand">
         <img src="/walnut-icon.png" alt="" className="ext-home-mark" aria-hidden="true" />
-        <span className="ext-home-name">Walnut</span>
+        <span className="ext-home-name" data-fit-title="">Walnut</span>
         {p.relay}
       </div>
       {p.keyed && <KeyButton vault={p.vault} pressed={p.keyPressed} />}
@@ -149,12 +150,12 @@ export function ExtTaskHeader({ title, state, label, meta, onBack, keyed, vault,
   title: string; state: string; label: string; meta: string; onBack: () => void; keyed: boolean; vault: VaultState | null; keyPressed: boolean;
 }) {
   return (
-    <header className="ext-ask-head ext-taskpage-head" data-testid="ext-task-head">
+    <header className="ext-ask-head ext-taskpage-head" data-fit-header="" data-testid="ext-task-head">
       <button type="button" className="ext-taskpage-back" data-testid="ext-task-back" onClick={onBack} aria-label="Back to the tasks" title="Back to the tasks">
         <span aria-hidden="true">{ICON_BACK}</span>Back
       </button>
       <div className="ext-ask-titles">
-        <span className="ext-ask-title wn-title" data-testid="ext-task-title">{title}</span>
+        <span className="ext-ask-title wn-title" data-fit-title="" data-testid="ext-task-title">{title}</span>
         {(label || meta) && (
           <span className="ext-taskpage-line" data-testid="ext-task-headline">
             {label && <span className={`ext-taskpage-state state-${state}`}>{label}</span>}

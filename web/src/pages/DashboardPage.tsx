@@ -31,6 +31,7 @@ import { TaskFilterChips } from '@/components/tasks/TaskFilterChips';
 import { useAskMainAbout } from '@/components/org/main-quick-menus';
 import { foldQueryStatus } from '@/components/tasks/filter-bar-model';
 import { ICON_COLLAPSE, ICON_EXPAND, ICON_PHASE_COMPLETE, ICON_PHASE_TODO } from '@/components/common/Icons';
+import { FitButton, HeaderFitMore, useHeaderFit } from '@/components/common/HeaderFit';
 import {
   buildTaskQueryContext,
   deriveSourceOptions,
@@ -108,6 +109,8 @@ export function DashboardPage() {
   const [activeProject, setActiveProject] = useState<string | null>(readActiveProject);
   const [search, setSearch] = useState(readSearch);
   const [showForm, setShowForm] = useState(false);
+  // The toolbar is on the header rule: its words fold to icons, then into More, before the title cuts.
+  const toolbarRef = useHeaderFit();
 
   // The SAME canonical query state the home panel uses. The persisted default is
   // seeded with completion: ['todo','in_progress'] to preserve this page's shipped
@@ -400,9 +403,9 @@ export function DashboardPage() {
       <main className="tp-board">
         {/* In a focus: its name, what waits outside, and Leave (the list shows only the focus). */}
         <FocusBanner />
-        <div className="tp-toolbar">
-          <span className="tp-title wn-title">{boardTitle}</span>
-          <span className="tp-stats">{stats.todo} open · {stats.done} complete</span>
+        <div className="tp-toolbar" ref={toolbarRef} data-fit-header="">
+          <span className="tp-title wn-title" data-fit-title="">{boardTitle}</span>
+          <span className="tp-stats" data-fit-sub="">{stats.todo} open · {stats.done} complete</span>
           {/* The high-frequency conditions stay one click away as chips; every
               other dimension lives in the shared View panel next to them. Both
               write the SAME query state, so a chip and a panel chip can never
@@ -410,24 +413,30 @@ export function DashboardPage() {
           <Chip
             className="tp-chip"
             pressed={showTodoChip}
+            data-fit-button="1"
+            title="Open tasks"
             leading={<span className="tp-chip-icon" aria-hidden="true">{ICON_PHASE_TODO}</span>}
             onClick={() => toggleCompletionChip('todo')}
           >
-            Open
+            <span data-fit-label="">Open</span>
           </Chip>
           <Chip
             className="tp-chip"
             pressed={showDoneChip}
+            data-fit-button="1"
+            title="Complete tasks"
             leading={<span className="tp-chip-icon" aria-hidden="true">{ICON_PHASE_COMPLETE}</span>}
             onClick={() => toggleCompletionChip('done')}
           >
-            Complete
+            <span data-fit-label="">Complete</span>
           </Chip>
           {showPriority && (
             <>
               <Chip
                 className="tp-chip"
                 pressed={query.priorities.includes('immediate')}
+                data-fit-button="3"
+                title="P0 tasks"
                 leading={<span className="tp-p-dot p0" />}
                 onClick={() => togglePriorityChip('immediate')}
               >
@@ -436,6 +445,8 @@ export function DashboardPage() {
               <Chip
                 className="tp-chip"
                 pressed={query.priorities.includes('important')}
+                data-fit-button="3"
+                title="P1 tasks"
                 leading={<span className="tp-p-dot p1" />}
                 onClick={() => togglePriorityChip('important')}
               >
@@ -457,24 +468,26 @@ export function DashboardPage() {
               <Chip
                 className="tp-chip"
                 pressed={grouped}
+                data-fit-button="1"
+                aria-label="Group"
                 title={grouped ? 'Grouped by project: click for a flat list' : 'Flat list: click to group by project'}
+                leading={<span className="tp-chip-icon" aria-hidden="true">⊟</span>}
                 onClick={handleGroupedToggle}
               >
-                ⊟ Group
+                <span data-fit-label="">Group</span>
               </Chip>
               {grouped && (
-                <button
-                  type="button"
-                  className="tp-btn"
+                <FitButton
+                  icon={allGroupsCollapsed ? ICON_EXPAND : ICON_COLLAPSE}
+                  label={allGroupsCollapsed ? 'Expand all' : 'Collapse all'}
+                  step={1}
                   title={allGroupsCollapsed ? 'Expand all projects' : 'Collapse all projects'}
                   onClick={handleCollapseExpandAll}
-                >
-                  <span className="tp-chip-icon" aria-hidden="true">{allGroupsCollapsed ? ICON_EXPAND : ICON_COLLAPSE}</span>
-                  {allGroupsCollapsed ? 'Expand all' : 'Collapse all'}
-                </button>
+                />
               )}
             </>
           )}
+          <HeaderFitMore testId="tp-toolbar-more" />
           <SearchField small fieldClassName="tp-search-field" data-no-draft="search"
             className="tp-search"
             type="search"
@@ -484,7 +497,9 @@ export function DashboardPage() {
             setText={setSearch}
             onClear={() => setSearch('')}
           />
-          <button type="button" className="btn btn-sm btn-primary tp-newtask-btn" onClick={() => setShowForm(true)}>＋ Task</button>
+          <button type="button" className="btn btn-sm btn-primary tp-newtask-btn" data-fit-button="2" data-fit-keep="" aria-label="New task" title="New task" onClick={() => setShowForm(true)}>
+            <span className="header-fit-icon" aria-hidden="true">＋</span><span data-fit-label="">Task</span>
+          </button>
         </div>
 
         {/* Same chips component as the home panel: one removable chip per value. */}

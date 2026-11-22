@@ -11,12 +11,13 @@
  */
 
 import { shownFolderName } from '@/utils/home-folder';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
 import { useEvent } from '../../hooks/useWebSocket';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
 import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
 import { hostDisplayLabel } from '@/utils/host-display-label';
 import { NoticeStatus } from '@/components/common/NoticeCard';
+import '@/styles/header-fit.css';
 
 /** Timeout thresholds (ms) */
 const SLOW_THRESHOLD_MS = 20_000;    // 20s → "Taking longer than expected..."
@@ -53,9 +54,31 @@ function PendingPrompt({ message }: { message?: string }) {
   );
 }
 
+/** The header of both states (spinner and failed): the folder, its host, the state, and close.
+ *  On the header rule (header-fit.css): the title cuts last, the close never covers it. */
+function PendingHeader({ cwd, dirName, hostTag, status, onClose }: {
+  cwd: string; dirName: string; hostTag?: string; status: ReactNode; onClose: () => void;
+}) {
+  return (
+    <div className="session-panel-header" data-fit-header="">
+      <div className="session-panel-header-top">
+        <div className="session-panel-title-area">
+          <span className="session-panel-title wn-title" data-fit-title="" title={cwd}>{dirName}</span>
+          {hostTag && <span className="badge session-panel-badge"><span>{hostTag}</span></span>}
+          {status}
+        </div>
+        <div data-fit-actions="">
+          <button className="session-panel-close" onClick={onClose} title="Close panel">&times;</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function PendingSessionPanel({ cwd, host, hostLabel, label, message, realTaskId, initialError, onRetry, onClose }: PendingSessionPanelProps) {
   // The host's home reads `~`, never its id or user name (utils/home-folder.ts).
   const dirName = shownFolderName(cwd, host);
+  const hostTag = host ? hostDisplayLabel(host, undefined, hostLabel) : undefined;
   const [error, setError] = useState<string | null>(initialError ?? null);
   const [phase, setPhase] = useState<'starting' | 'slow' | 'timeout'>(initialError ? 'timeout' : 'starting');
   const [retrying, setRetrying] = useState(false);
@@ -128,22 +151,8 @@ export function PendingSessionPanel({ cwd, host, hostLabel, label, message, real
   if (hasError) {
     return (
       <div className="session-panel pending-session-panel">
-        <div className="session-panel-header">
-          <div className="session-panel-header-top">
-            <div className="session-panel-title-area">
-              <span className="session-panel-title wn-title" title={cwd}>{dirName}</span>
-              {host && (
-                <span className="badge session-panel-badge">
-                  <span>{hostDisplayLabel(host, undefined, hostLabel)}</span>
-                </span>
-              )}
-              <NoticeStatus tone="error" className="session-panel-badge">Failed</NoticeStatus>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
-              <button className="session-panel-close" onClick={onClose} title="Close panel">&times;</button>
-            </div>
-          </div>
-        </div>
+        <PendingHeader cwd={cwd} dirName={dirName} hostTag={hostTag} onClose={onClose}
+          status={<NoticeStatus tone="error" className="session-panel-badge">Failed</NoticeStatus>} />
 
         <PendingPrompt message={message} />
         <div className="pending-session-body">
@@ -186,23 +195,9 @@ export function PendingSessionPanel({ cwd, host, hostLabel, label, message, real
 
   return (
     <div className="session-panel pending-session-panel">
-      {/* Header — matches SessionPanel header-top structure */}
-      <div className="session-panel-header">
-        <div className="session-panel-header-top">
-          <div className="session-panel-title-area">
-            <span className="session-panel-title wn-title" title={cwd}>{dirName}</span>
-            {host && (
-              <span className="badge session-panel-badge">
-                <span>{hostDisplayLabel(host, undefined, hostLabel)}</span>
-              </span>
-            )}
-            <NoticeStatus tone={phase === 'slow' ? 'warn' : 'live'} className="session-panel-badge">{headerStatus}</NoticeStatus>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
-            <button className="session-panel-close" onClick={onClose} title="Close panel">&times;</button>
-          </div>
-        </div>
-      </div>
+      {/* Header: matches SessionPanel's header-top structure */}
+      <PendingHeader cwd={cwd} dirName={dirName} hostTag={hostTag} onClose={onClose}
+        status={<NoticeStatus tone={phase === 'slow' ? 'warn' : 'live'} className="session-panel-badge">{headerStatus}</NoticeStatus>} />
 
       <PendingPrompt message={message} />
       {/* Body — spinner + path */}
