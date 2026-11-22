@@ -22,6 +22,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer, type WebSocket } from '#ws'
 import { hostCallAllowed } from './host-calls.js'
+import { checkPermissionAnswer } from './host-permission.js'
 import { isChannelFrame, type HostChannel } from './channel.js'
 import { HOST_CHANNEL_PATH, HOST_SESSIONS_OFF, HOST_SESSIONS_PATH, type CallBody, type QueuedLine, type StartBody } from './host-api.js'
 import type { StartBundles } from './host-port.js'
@@ -187,6 +188,9 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
     else if (body.target === 'acp') target = (runner.findAcpSession(body.sid) ?? await runner.findOrAttachAcpSession?.(body.sid) ?? null) as Record<string, unknown> | null
     else target = (runner.findSessionByClaudeId(body.sid) ?? await runner.getOrAttachLiveSession?.(body.sid) ?? null) as Record<string, unknown> | null
     if (!target) return { status: 200, body: { ok: false, error: 'no_live_session' } }
+    // An answer to a prompt names a request this very session holds now (host-permission.ts).
+    const permission = checkPermissionAnswer(body.sid, body.member, args, target, o.log)
+    if (!permission.ok) return { status: permission.status, body: { ok: false, error: permission.error } }
     if (body.member === 'bashCallMatchingOp') {
       const a = (args[0] ?? {}) as { op?: unknown; file?: unknown; taken?: unknown }
       const runsOp = o.commandRunsOp ?? (await import('../../lib/walnut-op-command.js')).commandRunsOp

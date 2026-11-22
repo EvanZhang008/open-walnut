@@ -18,6 +18,7 @@ import { bus, EventNames } from '../core/event-bus.js'
 import { lightSubagentRows } from '../core/subagents/registry.js'
 import type { HostCallTarget } from '../core/session-channel/host-calls.js'
 import type { LiveState } from '../core/session-channel/host-api.js'
+import { isNotPendingRefusal } from '../core/session-channel/host-permission.js'
 
 export interface HostCallBody { sid: string; target: HostCallTarget; member: string; args: unknown[] }
 export type CallHost = (host: string, body: HostCallBody) => Promise<unknown>
@@ -147,7 +148,16 @@ export class RemoteJudgedSession {
   retryCancelledLines(...a: unknown[]) { return this.call('retryCancelledLines', a, 'session') }
   stopBackgroundTask(...a: unknown[]) { return this.call('stopBackgroundTask', a, 'session') }
   gracefulStop(...a: unknown[]) { return this.call('gracefulStop', a) }
-  resolvePermissionRequest(...a: unknown[]) { return this.call('resolvePermissionRequest', a) }
+  /**
+   * The host answers a request this session no longer (or never) held with a refusal: callers get
+   * what a session here answers for it, false (core/session-channel/host-permission.ts).
+   */
+  resolvePermissionRequest(...a: unknown[]): Promise<unknown> {
+    return this.call('resolvePermissionRequest', a).catch((err: unknown) => {
+      if (isNotPendingRefusal(err)) return false
+      throw err
+    })
+  }
   /** The Bash call that ran `op` (and `@file`), asked of the host: bashCallMatching's crossing form. */
   bashCallMatchingOp(op: string, file: string | undefined, taken: string[] = []) { return this.call('bashCallMatchingOp', [{ op, file, taken }], 'session') as Promise<string | undefined> }
   // ACP
