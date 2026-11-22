@@ -263,7 +263,9 @@ export async function persist(state: CronServiceState): Promise<void> {
   });
 
   const jobsText = jsonFileText({ ...state.store, jobs: jobsWithoutState });
-  const stateText = jsonFileText({ version: 1, states } satisfies CronStateFile);
+  // Compact: the sidecar is machine-local (never synced, never read by a person) and written on
+  // every trigger check, about once a second on the Mac; indenting made it 40% larger.
+  const stateText = JSON.stringify({ version: 1, states } satisfies CronStateFile) + '\n';
   // A file whose text is what this process last wrote, and that nobody wrote since, is left as
   // it is: most writes change only the runtime state, and the jobs file rides git-sync.
   const prior = state.disk && await diskStampOf(state) === state.disk.stamp ? state.disk : undefined;

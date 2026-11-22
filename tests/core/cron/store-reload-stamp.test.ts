@@ -163,6 +163,15 @@ describe('cron store: a forced reload keeps what still matches the disk', () => 
     expect(await fs.readFile(state.deps.storePath, 'utf-8')).toBe(ours);
   });
 
+  it('the runtime sidecar is written compact (written on every check), the synced jobs file stays indented', async () => {
+    const state = await makeState();
+    await ops.update(state, 'job-a', { name: 'Morning digest' });
+    const sidecar = await fs.readFile(cronStatePath(state.deps.storePath), 'utf-8');
+    expect(sidecar.trimEnd().split('\n')).toHaveLength(1);
+    expect(JSON.parse(sidecar).states['job-a']).toBeTruthy();
+    expect((await fs.readFile(state.deps.storePath, 'utf-8')).split('\n').length).toBeGreaterThan(5);
+  });
+
   it('a file deleted under it is read as missing, not kept', async () => {
     const state = await makeState();
     await ops.list(state, { includeDisabled: true });
