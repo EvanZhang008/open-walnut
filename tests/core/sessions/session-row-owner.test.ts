@@ -31,11 +31,21 @@ describe('every field of SessionRecord has an owner', () => {
     expect(Object.keys(SESSION_FIELD_OWNER).sort()).toEqual([...fields].sort())
   })
 
-  it('the leader fields are the ones a person, the leader\'s hooks or its send path write', () => {
+  it('the leader fields are the ones a person, the leader\'s hooks, its send path or its engine switch write', () => {
     expect([...LEADER_SESSION_FIELDS].sort()).toEqual([
-      'archive_reason', 'archived', 'hintState', 'human_note', 'output_mode', 'output_mode_injected', 'overview', 'overviewAt', 'passageComments', 'pinnedMessages',
-      'recap', 'recapAt', 'summary', 'summaryGeneratedAt', 'threadAnchors', 'threadMeta', 'title',
+      'archive_reason', 'archived', 'engineSwitch', 'hintState', 'human_note', 'leftContext', 'output_mode', 'output_mode_injected', 'overview', 'overviewAt', 'passageComments', 'pinnedMessages',
+      'recap', 'recapAt', 'resumedBySwitch', 'summary', 'summaryGeneratedAt', 'supersededBy', 'threadAnchors', 'threadMeta', 'title',
     ])
+  })
+
+  it('R2-M7: every field an engine switch writes is a leader field (it runs on the leader; a host only reads them)', () => {
+    const fields = new Set<string>()
+    for (const f of ['src/core/sessions/engine-switch.ts', 'src/core/sessions/engine-switch-resume.ts', 'src/core/sessions/engine-switch-watch.ts']) {
+      const src = fs.readFileSync(path.join(ROOT, f), 'utf8')
+      for (const m of src.matchAll(/updateSessionRecord\([^,]+,\s*\{([^}]*)/g)) for (const k of ['supersededBy', 'leftContext', 'engineSwitch', 'resumedBySwitch']) if (m[1].includes(k)) fields.add(k)
+    }
+    expect([...fields].sort()).toEqual(['engineSwitch', 'leftContext', 'resumedBySwitch', 'supersededBy'])
+    for (const k of fields) expect(SESSION_FIELD_OWNER[k as keyof SessionRecord], k).toBe('leader')
   })
 
   it('every field the session-meta journal kind takes is a leader field', () => {
