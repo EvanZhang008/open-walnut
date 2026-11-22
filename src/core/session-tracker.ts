@@ -15,7 +15,7 @@ import type {
   StatusTransition,
   SessionStatusSnapshot,
 } from './types.js';
-import { dbGeneration, getDb, rowToSession, sessionToRow, SESSION_COLUMNS, transactionWhenFree, writeChannelCursor } from './session-db.js';
+import { dbGeneration, getDb, rowToSession, sessionToRow, sessionWriteHandle, ownRowHostKey, SESSION_COLUMNS, transactionWhenFree, writeChannelCursor } from './session-db.js';
 import { runSessionMigrationIfNeeded } from './session-db-migration.js';
 import { isHostReplica } from './server-role.js';
 import { refuseProcessAction } from './sessions/replica-process-guard.js';
@@ -599,13 +599,14 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
     .then(() => {
       touched = new Set<string>();
       touchedSessionIds = touched;
-      const db = getDb();
+      // The connection the section writes through (a host's own-row writer, else the shared one).
+      const db = sessionWriteHandle();
       changesBefore = db ? totalChanges(db) : 0;
       return fn();
     })
     .then(
       (value) => {
-        const db = getDb();
+        const db = sessionWriteHandle();
         const changed = db ? totalChanges(db) - changesBefore : 0;
         if (touched === null || changed > touched.size) invalidateSessionStoreCache();
         else patchSessionCacheRows(touched);
@@ -1735,6 +1736,8 @@ export async function createSessionRecord(
     acpRuntimeId?: string;
     acpJournalPath?: string;
     acpCapabilities?: AcpSessionCapabilities;
+    /** Run and judged by its host's own service (sessions/session-row-owner.ts). */
+    judge?: 'host';
   },
 ): Promise<SessionRecord> {
   await ensureSessionInit();
@@ -1864,6 +1867,9 @@ export async function createSessionRecord(
         ...(extra?.planFile ? { planFile: extra.planFile } : {}),
         ...(extra?.planCompleted != null ? { planCompleted: extra.planCompleted } : {}),
         ...(extra?.host ? { host: extra.host } : {}),
+        // A row a host that runs its sessions makes on itself is its own from birth (session-db.ts
+        // own-row writer): it is never written as a plain row first.
+        ...(extra?.judge === 'host' || (extra?.host && extra.host === ownRowHostKey()) ? { judge: 'host' as const } : {}),
         ...(extra?.provider ? { provider: extra.provider } : {}),
         type: extra?.type ?? 'interactive',
         ...(extra?.fromPlanSessionId ? { fromPlanSessionId: extra.fromPlanSessionId } : {}),

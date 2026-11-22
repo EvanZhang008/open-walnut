@@ -241,6 +241,7 @@ function openShared(): DatabaseType {
 
 /** Close a shared handle a test's wipe replaced, with the apply connection on its file. */
 function closeShared(old: DatabaseType): void {
+  closeOwnRowWriter();
   if (applyHandle) {
     try { applyHandle.close(); } catch { /* replaced anyway */ }
     applyHandle = null;
@@ -510,6 +511,7 @@ export function closeCompanionSessionCopy(): void {
  */
 export function closeDb(): void {
   closeCompanionSessionCopy();
+  closeOwnRowWriter();
   if (applyHandle) {
     try { applyHandle.close(); } catch (err) { log.session.warn('session-db apply connection close error', { err: String(err) }); }
     applyHandle = null;
@@ -578,13 +580,79 @@ function tryBeginImmediate(handle: DatabaseType): boolean {
  */
 export function transactionWhenFree<T>(fn: (db: DatabaseType) => T): T | Promise<T> {
   const handle = openForWrite();
+  // A host replica's copy is query_only (BEGIN IMMEDIATE is refused there): its sections only
+  // read, except a host that runs its sessions, whose sections write its own rows through the
+  // own-row writer (below), which refuses any other row.
+  if (isHostReplica()) {
+    const own = ownRowWriter();
+    if (own) return own.inTransaction ? own.transaction(fn)(own) : own.transaction(fn).immediate(own);
+    return handle.transaction(fn)(handle);
+  }
   // Inside a caller's transaction the lock is held already: a savepoint, as transaction() does.
-  // A host replica's copy is query_only (BEGIN IMMEDIATE is refused there): its sections only read.
-  if (handle.inTransaction || isHostReplica()) return handle.transaction(fn)(handle);
+  if (handle.inTransaction) return handle.transaction(fn)(handle);
   // Free now (the usual case): it runs and commits before this returns, with no extra turn of
   // the loop, so a caller's order of events is what it was with transaction().
   if (tryBeginImmediate(handle)) return runLocked(handle, fn);
   return waitForLockThenRun(fn);
+}
+
+// ── A host's own rows (sessions/session-row-owner.ts rowOwnedHere) ──
+//
+// A host replica's sessions.sqlite is the leader's copy, read only (copy-guard.ts). A host that
+// runs and judges its sessions writes its own rows there: through a connection of its own whose
+// TEMP triggers refuse every write of a row that is not this host's (host = its key, judge
+// 'host'), before and after the write, so the copy's other rows stay the leader's. The follower
+// apply connection (applySessionCopy) stays the one writer of those.
+
+/** What a write of another row is refused with. */
+export const NOT_OWN_ROW = 'session-db: this host writes only its own session rows';
+
+let ownRows: { hostKey: string; handle: DatabaseType | null } | null = null;
+
+/** Turn the own-row writer on for `hostKey` (a host whose service runs its sessions), or off (null). */
+export function allowOwnRowWrites(hostKey: string | null): void {
+  const key = (hostKey ?? '').trim();
+  if (ownRows?.handle && ownRows.hostKey !== key) {
+    try { ownRows.handle.close(); } catch { /* replaced anyway */ }
+    ownRows.handle = null;
+  }
+  ownRows = key ? { hostKey: key, handle: ownRows?.hostKey === key ? ownRows.handle : null } : null;
+}
+
+function closeOwnRowWriter(): void {
+  if (!ownRows?.handle) return;
+  try { ownRows.handle.close(); } catch { /* closing anyway */ }
+  ownRows.handle = null;
+}
+
+function ownRowWriter(): DatabaseType | null {
+  if (!ownRows || !isHostReplica()) return null;
+  if (ownRows.handle) return ownRows.handle;
+  getDb();
+  const h = openApplyConnection(SESSION_DB_PATH, 'sessions (own rows)');
+  // A REPLACE deletes the row it replaces: the delete trigger must see that too.
+  h.pragma('recursive_triggers = ON');
+  h.exec('CREATE TEMP TABLE IF NOT EXISTS own_host (k TEXT NOT NULL); DELETE FROM temp.own_host;');
+  h.prepare('INSERT INTO temp.own_host (k) VALUES (?)').run(ownRows.hostKey);
+  const own = (r: string) => `(${r}.host = (SELECT k FROM temp.own_host) AND ${r}.payload IS NOT NULL AND json_valid(${r}.payload) AND json_extract(${r}.payload, '$.judge') = 'host')`;
+  const refuse = `SELECT RAISE(ABORT, '${NOT_OWN_ROW}');`;
+  h.exec(`
+    CREATE TEMP TRIGGER IF NOT EXISTS own_rows_insert BEFORE INSERT ON main.sessions WHEN NOT ${own('NEW')} BEGIN ${refuse} END;
+    CREATE TEMP TRIGGER IF NOT EXISTS own_rows_update BEFORE UPDATE ON main.sessions WHEN NOT (${own('OLD')} AND ${own('NEW')}) BEGIN ${refuse} END;
+    CREATE TEMP TRIGGER IF NOT EXISTS own_rows_delete BEFORE DELETE ON main.sessions WHEN NOT ${own('OLD')} BEGIN ${refuse} END;
+  `);
+  ownRows.handle = h;
+  return h;
+}
+
+/** The host key whose rows the own-row writer writes, or null (off, or not a host replica). */
+export function ownRowHostKey(): string | null {
+  return ownRows && isHostReplica() ? ownRows.hostKey : null;
+}
+
+/** The handle this process's session writes go through now (the own-row writer on a host that runs its sessions). */
+export function sessionWriteHandle(): DatabaseType | null {
+  return (isHostReplica() ? ownRowWriter() : null) ?? getDb();
 }
 
 function openForWrite(): DatabaseType {

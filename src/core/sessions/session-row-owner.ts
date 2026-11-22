@@ -116,6 +116,15 @@ export function hostFieldsIn(patch: Readonly<Record<string, unknown>>): string[]
   return Object.keys(patch).filter((k) => sessionFieldOwner(k) === 'host')
 }
 
+/**
+ * The host a session's CLI runs on, as this server reaches it: undefined for this machine. A row
+ * this host replica owns names its own host key, which is this machine here (never an ssh target).
+ */
+export function execHostOf(row: Pick<SessionRecord, 'judge' | 'host'>): string | undefined {
+  if (!row.host || row.host === '__local__') return undefined
+  return rowOwnedHere(row, thisHostKey()) ? undefined : row.host
+}
+
 /** This server's own host key: a host replica's WALNUT_HOST_KEY, '' on the leader (and anywhere else). */
 export function thisHostKey(): string {
   return isHostReplica() ? (process.env.WALNUT_HOST_KEY ?? '').trim() : ''
