@@ -121,7 +121,9 @@ test('the default model and effort are set in Settings, shown on a new task and 
   // The caption sits above the composer here, so the model pill's "· High" stays in sight.
   await page.evaluate(() => { const c = document.getElementById('proof-caption'); if (c) c.style.bottom = '180px' })
   await video.caption('The session runs at High, the same effort the settings page shows')
-  await live.locator('.session-panel-input .session-detail-effort-badge').first().hover()
+  // The pointer leaves the pill so its "· High" is not under the dot.
+  const pill = await live.locator('.session-panel-input .session-detail-effort-badge').first().boundingBox()
+  if (pill) await page.mouse.move(pill.x + pill.width / 2, pill.y - 60, { steps: 8 })
   await pause()
   await live.locator('.session-panel-input').screenshot({ path: `${SHOTS}/4-live-session-high.png` })
 
