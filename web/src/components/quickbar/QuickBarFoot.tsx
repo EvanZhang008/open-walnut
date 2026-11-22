@@ -5,6 +5,7 @@
  * draws: a key, the microphone and the live level.
  */
 import { MODES, type ModeMatch, type QuickMode } from './quickbar-modes';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { personLine, type QuickPerson } from './quickbar-people';
 
 export function QuickBarFoot({
@@ -26,6 +27,7 @@ export function QuickBarFoot({
   /** Who Shift-Tab switches to (null: the CEO when the list did not load); undefined: nobody, no key shown. */
   switchTo?: QuickPerson | null;
 }) {
+  const phone = usePhoneLayout();
   const who = to?.title ?? 'CEO';
   const live = recording ? (micLive ? 'Listening' : 'Opening the microphone') : transcribing ? 'Finishing the last words' : null;
 
@@ -69,7 +71,8 @@ export function QuickBarFoot({
   return (
     <div className="qb-foot">
       {left}
-      <span className="qb-keys">{keys}</span>
+      {/* A phone has no keyboard: the key hints only crowded its modes off the bar's edge. */}
+      {!phone && <span className="qb-keys">{keys}</span>}
     </div>
   );
 }
