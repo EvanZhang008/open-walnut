@@ -49,8 +49,11 @@ export interface HostRoutesOptions {
   channel(): HostChannel | null
   /** A bus event for this host's runner (SESSION_SEND, SESSION_INTERRUPT). */
   emit(name: string, data: unknown, source: string): void
-  /** Queue a send's lines on this host (session-message-queue.ts), before its SESSION_SEND: the runner drains the queue. */
-  enqueue(sid: string, lines: QueuedLine[]): Promise<void>
+  /**
+   * Queue a send's lines on this host (session-message-queue.ts), before its SESSION_SEND: the
+   * runner drains the queue. `source`: the send's bus source (who a line with no sender is from).
+   */
+  enqueue(sid: string, lines: QueuedLine[], source: string): Promise<void>
   /** Where a start's large prompt is spilled (0700, files 0600). */
   spillDir: string
   /** The op test of a Bash call (lib/walnut-op-command.ts commandRunsOp); tests pass their own. */
@@ -130,7 +133,7 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
 
   async function start(body: StartBody): Promise<{ status: number; body: unknown }> {
     if (!body || typeof body.taskId !== 'string' || typeof body.message !== 'string') return { status: 400, body: { ok: false, error: 'taskId and message are required', why: 'bad_request' } }
-    const { largePrompt, startBundle, source, ...rest } = body
+    const { largePrompt, startBundle, busSource, ...rest } = body
     const data: Record<string, unknown> & { taskId: string; message: string } = { ...rest }
     if (typeof largePrompt === 'string' && largePrompt.length > 0) {
       await fsp.mkdir(o.spillDir, { recursive: true, mode: 0o700 })
@@ -143,7 +146,7 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
     if (startBundle) o.bundles.put(body.taskId, startBundle, body.preassignedSessionId)
     try {
       const runner = await o.runner()
-      const r = await runner.startSession(data, source)
+      const r = await runner.startSession(data, busSource)
       return { status: 200, body: { ok: true, sessionId: r.claudeSessionId, title: r.title } }
     } catch (err) {
       const why = typeof (err as { why?: unknown })?.why === 'string' ? (err as { why: string }).why : 'start_failed'
@@ -210,18 +213,19 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
         return sendJson(res, r.status, r.body)
       }
       if (op === 'send' || op === 'interrupt') {
-        const b = body as { sessionId?: unknown; source?: unknown }
+        const b = body as { sessionId?: unknown; busSource?: unknown }
         if (typeof b?.sessionId !== 'string' || !b.sessionId) return sendJson(res, 400, { ok: false, error: 'sessionId is required' })
-        const { source, queued, ...payload } = b as Record<string, unknown>
+        const { busSource, queued, ...payload } = b as Record<string, unknown>
+        const source = typeof busSource === 'string' && busSource ? busSource : 'host-api'
         // A send's lines are queued here first, as the leader's send route queues them for its own
         // runner: the SESSION_SEND only tells the runner to drain.
         if (op === 'send') {
           const lines = Array.isArray(queued)
             ? (queued as QueuedLine[]).filter((l) => l && typeof l.message === 'string')
             : typeof payload.message === 'string' && payload.message ? [{ message: payload.message }] : []
-          if (lines.length > 0) await o.enqueue(b.sessionId, lines)
+          if (lines.length > 0) await o.enqueue(b.sessionId, lines, source)
         }
-        o.emit(op === 'send' ? 'session:send' : 'session:interrupt', payload, typeof source === 'string' && source ? source : 'host-api')
+        o.emit(op === 'send' ? 'session:send' : 'session:interrupt', payload, source)
         return sendJson(res, 200, { ok: true })
       }
       if (op === 'call') {

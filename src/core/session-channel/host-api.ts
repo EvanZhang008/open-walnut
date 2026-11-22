@@ -42,13 +42,13 @@ export interface StartBundle {
 
 /**
  * The start body: the SESSION_START payload with its leader-only file replaced by its text, the
- * bundle, and the bus source the leader's start carried (it decides how the first message is
- * framed, sessions/send-frame.ts).
+ * bundle, and the bus source the leader's start carried (`busSource`: it decides how the first
+ * message is framed, sessions/send-frame.ts; not a task's sync source, which its bundle's task keeps).
  */
 export type StartBody = Omit<SessionStartEvent, 'largePromptFile'> & {
   largePrompt?: string
   startBundle?: StartBundle
-  source?: string
+  busSource?: string
 }
 
 export type StartAnswer = { ok: true; sessionId: string; title: string } | { ok: false; error: string; why?: string }
@@ -62,8 +62,8 @@ export interface QueuedLine { id?: string; message: string; userUuid?: string; l
  * `queued`: the lines the leader had queued for this session, which go to the host's queue. A send
  * without it (one made on the host itself) queues its `message`.
  */
-export type SendBody = SessionSendEvent & { source?: string; queued?: QueuedLine[] }
-export type InterruptBody = SessionInterruptEvent & { source?: string }
+export type SendBody = SessionSendEvent & { busSource?: string; queued?: QueuedLine[] }
+export type InterruptBody = SessionInterruptEvent & { busSource?: string }
 
 export interface CallBody {
   sid: string

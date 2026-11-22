@@ -62,7 +62,7 @@ async function startDoor(withRoutes: boolean): Promise<void> {
   routes = withRoutes ? createHostSessionRoutes({
     enabled: async () => enabled, runner: async () => runner, bundles, channel: () => channel,
     emit: (name, data, source) => emitted.push({ name, data, source }),
-    enqueue: async (sid, lines) => { emitted.push({ name: 'enqueue', data: { sid, lines }, source: '' }) },
+    enqueue: async (sid, lines, source) => { emitted.push({ name: 'enqueue', data: { sid, lines }, source }) },
     spillDir: path.join(dir, 'prompts'),
     commandRunsOp: (c, op) => c.includes(op),
   }) : null
@@ -173,7 +173,7 @@ describe('start, send, interrupt', () => {
   it('a start answers from its bundle, spills its large prompt here and never names a host to dial', async () => {
     const r = await post('/host-api/sessions/start', {
       taskId: 'task-1', message: 'hi', host: 'marina-box', largePrompt: 'L'.repeat(5000), preassignedSessionId: 'sid-pre-1',
-      startBundle: { sessionContext: { systemPrompt: 'leader prompt' }, hintsApplied: true }, source: 'chat',
+      startBundle: { sessionContext: { systemPrompt: 'leader prompt' }, hintsApplied: true }, busSource: 'chat',
     })
     expect(r.body).toEqual({ ok: true, sessionId: 'sid-started-1', title: 'Started' })
     expect(seenAtStart!.bundle).toEqual({ sessionContext: { systemPrompt: 'leader prompt' }, hintsApplied: true })
@@ -191,18 +191,18 @@ describe('start, send, interrupt', () => {
   })
 
   it('send and interrupt are this host\'s bus events, with the leader\'s source; a send\'s lines are queued here first', async () => {
-    expect((await post('/host-api/sessions/send', { sessionId: 'sid-1', message: 'go', source: 'chat' })).body).toEqual({ ok: true })
+    expect((await post('/host-api/sessions/send', { sessionId: 'sid-1', message: 'go', busSource: 'chat' })).body).toEqual({ ok: true })
     expect((await post('/host-api/sessions/interrupt', { sessionId: 'sid-1' })).body).toEqual({ ok: true })
     // The leader's queued lines go to this host's queue under their ids; a kick with none queues nothing.
     const lines = [{ id: 'qm-1', message: 'go [hinted]', sentBy: 'person' }]
-    expect((await post('/host-api/sessions/send', { sessionId: 'sid-1', message: 'go', queued: lines, source: 'chat' })).body).toEqual({ ok: true })
+    expect((await post('/host-api/sessions/send', { sessionId: 'sid-1', message: 'go', queued: lines, busSource: 'chat' })).body).toEqual({ ok: true })
     expect((await post('/host-api/sessions/send', { sessionId: 'sid-1', message: '', queued: [] })).body).toEqual({ ok: true })
     expect(emitted).toEqual([
       // Made on this host (no lines from a leader): its own message is the line.
-      { name: 'enqueue', data: { sid: 'sid-1', lines: [{ message: 'go' }] }, source: '' },
+      { name: 'enqueue', data: { sid: 'sid-1', lines: [{ message: 'go' }] }, source: 'chat' },
       { name: 'session:send', data: { sessionId: 'sid-1', message: 'go' }, source: 'chat' },
       { name: 'session:interrupt', data: { sessionId: 'sid-1' }, source: 'host-api' },
-      { name: 'enqueue', data: { sid: 'sid-1', lines }, source: '' },
+      { name: 'enqueue', data: { sid: 'sid-1', lines }, source: 'chat' },
       { name: 'session:send', data: { sessionId: 'sid-1', message: 'go' }, source: 'chat' },
       { name: 'session:send', data: { sessionId: 'sid-1', message: '' }, source: 'host-api' },
     ])

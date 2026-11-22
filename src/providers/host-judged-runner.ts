@@ -90,7 +90,7 @@ export function routeHostJudgedEvent(event: BusEvent): Promise<void> | null {
       const host = judgingHostOf(sid)
       if (!host) return null
       // The provenance rides the envelope (phase.ts reads it): it goes with the command.
-      const body = { ...(event.data as Record<string, unknown>), source: event.source }
+      const body = { ...(event.data as Record<string, unknown>), busSource: event.source }
       if (event.name === EventNames.SESSION_INTERRUPT) {
         return inOrder(sid, async () => {
           const a = await (await leaderSide()).interruptOnHost(host, body)
@@ -221,7 +221,7 @@ export async function startOnJudgingHost<T extends StartData>(data: T, commit: (
   // The spilled message's file is this server's: its text goes instead (the host spills it again).
   if (largePromptFile) payload.largePrompt = await fsp.readFile(largePromptFile.localPath, 'utf8')
   payload.startBundle = await startBundle(data)
-  if (source) payload.source = source
+  if (source) payload.busSource = source
   const side = await leaderSide()
   // A row seeded for this start (task-start.ts makes one under the id it answers with) is the
   // host's before the host speaks: its facts can beat the start's answer.

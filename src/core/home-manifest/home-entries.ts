@@ -98,6 +98,7 @@ export const TOP_LEVEL_ENTRIES: readonly HomeEntry[] = [
   lead('mention-dirs', 'mention-directories.json', 'file', 'Folders browsed in the @ file picker'),
   mach('host-servers', 'host-servers.json', 'file', 'Host servers this server started, with their ports'),
   mach('host-expose', 'host-expose.json', 'file', 'A host server\'s own public port state'),
+  mach('session-channel', 'session-channel', 'dir', 'A host that runs its own sessions: the fact log per Walnut it serves (facts-<id>.ndjson, its .state.json) and spilled start prompts; its sequence numbers and acks belong to this host'),
   rebuild('distributed-skills', 'distributed-skills', 'dir', 'Skills the leader sends to this host\'s daemon, sent again on connect'),
   mach('cloud-setup-job', 'cloud-setup-job.json', 'file', 'An in-flight cloud setup run, with its pairing code', { sensitive: true }),
   mach('code-server', 'code-server', 'dir', 'The in-app editor: its data and the instance running here'),

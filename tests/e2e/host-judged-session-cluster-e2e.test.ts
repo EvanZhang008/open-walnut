@@ -164,8 +164,9 @@ describe.skipIf(!RUN)('a host runs and judges its sessions, every piece a real p
     h.c.sleepMac()
     try {
       await h.c.waitAway(token)
-      // The host's own route, as a session or a person on the host would reach it while the Mac is away.
-      const sent = await h.door('POST', '/host-api/sessions/send', { sessionId: sid, taskId, message: 'ROUND away', source: 'host-test' })
+      // The host's own route, as a person on the host would reach it while the Mac is away (a person's
+      // source: the line goes in as typed; any other source's line is framed as Walnut's there).
+      const sent = await h.door('POST', '/host-api/sessions/send', { sessionId: sid, taskId, message: 'ROUND away', busSource: 'ui' })
       expect(sent.json, JSON.stringify(sent.json)).toEqual({ ok: true })
       await waitFor(async () => resultOn((await h.host(`/events?sid=${sid}`)) as ProbeEvent[], 'echo: ROUND away'), 60_000, 'the away turn to complete on the host')
       const away = factsOf((await hostFacts(before)).recs, sid)

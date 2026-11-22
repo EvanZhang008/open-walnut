@@ -27,6 +27,7 @@ import { liveStateOf, type LiveRunnerLike } from './host-live.js'
 import { installSessionPort } from '../sessions/session-port.js'
 import { rowOwnedHere } from '../sessions/session-row-owner.js'
 import { hasLocalDaemon, isHostReplica } from '../server-role.js'
+import { WALNUT_HOME } from '../../constants.js'
 import type { SessionRecord } from '../types.js'
 
 export interface HostSessions {
@@ -53,13 +54,16 @@ export function hostSessionsRunning(): HostSessions | null {
   return current
 }
 
-/** Can this host replica run sessions itself (see the header)? */
-/** Has this host run sessions of its own for this Walnut (its fact log exists)? */
-export function hostRanSessions(stateDir: string, walnutId: string): boolean {
+/**
+ * Has this host run sessions of its own for this Walnut (its fact log exists)? The log lives under
+ * this host's own home, `session-channel/` (home manifest: session-channel, a machine's place).
+ */
+export function hostRanSessions(walnutId: string, stateDir: string = WALNUT_HOME): boolean {
   if (!walnutId) return false
   return fs.existsSync(path.join(stateDir, 'session-channel', `facts-${walnutId}.ndjson`))
 }
 
+/** Can this host replica run sessions itself (see the header)? */
 export function hostCanRunSessions(env: NodeJS.ProcessEnv = process.env): boolean {
   return isHostReplica() && (hasLocalDaemon() || env.WALNUT_IN_PROCESS_DAEMON === '1')
 }
@@ -67,8 +71,8 @@ export function hostCanRunSessions(env: NodeJS.ProcessEnv = process.env): boolea
 export interface StartHostSessionsOptions {
   walnutId: string
   hostKey: string
-  /** This host's own state dir (the fact log and spilled prompts go under it). */
-  stateDir: string
+  /** This host's own state dir (the fact log and spilled prompts go under it); its home by default. */
+  stateDir?: string
   log?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 }
 
@@ -85,7 +89,8 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     say('warn', 'host sessions: not started, this host does not know its Walnut id or its host key yet', { walnutId: !!o.walnutId, hostKey: !!o.hostKey })
     return null
   }
-  const dir = path.join(o.stateDir, 'session-channel')
+  const { stateDir = WALNUT_HOME } = o
+  const dir = path.join(stateDir, 'session-channel')
   const log = await FactLog.open({ dir, walnutId: o.walnutId, log: say })
   // The copy's store is read only here: rows of this host's own sessions go through the own-row writer.
   const { allowOwnRowWrites } = await import('../session-db.js')
@@ -116,10 +121,14 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     bundles,
     channel: () => current?.channel ?? null,
     emit: (name, data, source) => bus.emit(name, data, ['session-runner'], { source }),
-    enqueue: async (sid, lines) => {
-      const { enqueueMessage } = await import('../session-message-queue.js')
+    enqueue: async (sid, lines, source) => {
+      const [{ enqueueMessage }, { frameAsWalnut, frameForSource }] = await Promise.all([import('../session-message-queue.js'), import('../sessions/send-frame.js')])
       for (const l of lines) {
-        await enqueueMessage(sid, l.message, {
+        // The leader's queue rows, as its send stored them: a person's line as he typed it, an agent's
+        // already framed there (framed here when it still reads as a person's, never passed as his);
+        // a line with no sender (a send made on this host) is framed for the send's own source.
+        const text = l.sentBy === 'person' ? l.message : l.sentBy === 'agent' ? frameAsWalnut(l.message, source) : frameForSource(l.message, source)
+        await enqueueMessage(sid, text, {
           ...(l.id ? { id: l.id } : {}), ...(l.userUuid ? { userUuid: l.userUuid } : {}), ...(l.lineUuid ? { lineUuid: l.lineUuid } : {}),
           ...(l.closesPrompt ? { closesPrompt: true } : {}), ...(l.sentBy ? { sentBy: l.sentBy } : {}),
         })

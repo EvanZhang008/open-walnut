@@ -94,7 +94,7 @@ describe('a host-judged session', () => {
     bus.emit(EventNames.SESSION_INTERRUPT, { sessionId: HOST_SID }, ['*'], { source: 'mobile' })
     await settle(50)
     expect(sent.map((s) => `${s.op}:${s.host}`)).toEqual(['send:devbox', 'interrupt:devbox'])
-    expect(sent[0].body).toMatchObject({ sessionId: HOST_SID, message: 'hello', source: 'mobile' })
+    expect(sent[0].body).toMatchObject({ sessionId: HOST_SID, message: 'hello', busSource: 'mobile' })
     expect(h.writes).toEqual([])
   })
 
@@ -220,7 +220,7 @@ describe('a host-judged session', () => {
     expect(sent[0].body.largePrompt).toBe('the whole long prompt')
     expect(sent[0].body.largePromptFile).toBeUndefined()
     expect(sent[0].body.startBundle).toMatchObject({ hintsApplied: true, task: { id: 'gate-task-b' } })
-    expect(sent[0].body.source).toBe('test')
+    expect(sent[0].body.busSource).toBe('test')
     // The new session is the host's at once, before its row arrives.
     expect(isRemoteJudgedSession(h.runner.findSessionByClaudeId('started-on-host'))).toBe(true)
     // Its task is the leader's: linked and In Progress here (leader-tasks.ts).

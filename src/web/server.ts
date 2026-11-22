@@ -4737,13 +4737,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // On with the switch, and on again after a restart while this host has a fact log, so the
     // sessions it ran keep reporting and taking sends after the switch went off.
     const switchOn = sw.hostRunsSessions(await (await import('../core/config-manager.js')).getConfig().catch(() => null))
-    if ((switchOn || boot.hostRanSessions(WALNUT_HOME, (process.env.WALNUT_WALNUT_ID ?? '').trim())) && boot.hostCanRunSessions()) {
+    if ((switchOn || boot.hostRanSessions((process.env.WALNUT_WALNUT_ID ?? '').trim())) && boot.hostCanRunSessions()) {
       hostSessionsRoutes = boot.hostSessionRoutes
       hostSessionsCaps = boot.hostSessionCapabilities
       await boot.startHostSessions({
         walnutId: (process.env.WALNUT_WALNUT_ID ?? '').trim(),
         hostKey: (process.env.WALNUT_HOST_KEY ?? '').trim(),
-        stateDir: WALNUT_HOME,
         log: (level, msg, data) => log.session[level](msg, data),
       }).catch((err: unknown) => {
         log.session.warn('host sessions: not started; the leader runs this host\'s sessions as before', { error: err instanceof Error ? err.message : String(err) })
