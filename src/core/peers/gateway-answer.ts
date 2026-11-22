@@ -18,12 +18,15 @@ import { gzip } from 'node:zlib';
 import { log } from '../../logging/index.js';
 import { DAEMON_FRAME_MAX_BYTES } from '../../providers/daemon-frame-cap.js';
 import { gatewayErrorReplyFields, vouchedGatewayPayload } from '../../providers/gateway-core.js';
-import { createRefusalLog, isOpAnswerStatus } from '../../providers/gateway-refusal-log.js';
+import { createRefusalLog, isOpAnswer } from '../../providers/gateway-refusal-log.js';
 import type { GatewayRelayMeta } from './capability-router.js';
+import { selfApiStarting, whenSelfApiListening } from '../../lib/self-api-root.js';
 
 const gzipAsync = promisify(gzip);
 /** A relay answer's result this big or bigger goes gzipped. */
 export const RELAY_RESULT_GZ_BYTES = 16 * 1024;
+/** A relay waiting for this server's listen keeps this much of its deadline for the call itself. */
+export const RELAY_LISTEN_MARGIN_MS = 5_000;
 
 /**
  * A big answer's result gzipped where the daemon reads it (gateway-result-gz-v1): answers to a
@@ -193,6 +196,16 @@ export async function serveRelayedCall(call: RelayedCall, deps: RelayedCallDeps)
 /** Run one relayed call (after `before`) and build its gateway-result. Never throws. */
 export async function answerRelayedCall(call: RelayedCall, deps: RelayedCallDeps): Promise<Reply> {
   const { relayId, capability, callerSid } = call;
+  // A relay that came while this server still boots (the local daemon connects before listen and
+  // hands over what its sessions sent meanwhile) waits for the listen: its call to this server's
+  // own API met the port hold and read as lost, `hub_timeout` at every deploy (self-api-root.ts).
+  if (selfApiStarting()) {
+    const listening = await whenSelfApiListening(deps.receivedAt + deps.deadlineMs - RELAY_LISTEN_MARGIN_MS - Date.now());
+    if (!listening) {
+      log.session.info(`${deps.label}: gateway relay came while this server was still starting`, { host: deps.hostKey, relayId, capability, callerSid });
+      return { relayId, error: 'The Walnut server is still starting; nothing ran. Run it again in a few seconds.', errorCode: 'hub_unreachable' };
+    }
+  }
   if (deps.before) await deps.before();
   try {
     const { handleGatewayCapability } = await import('./capability-router.js');
@@ -215,13 +228,14 @@ export async function answerRelayedCall(call: RelayedCall, deps: RelayedCallDeps
     const lifted = outcome.error.api?.code && deps.liftCodes?.includes(outcome.error.api.code)
       ? { ...outcome.error, code: outcome.error.api.code as typeof outcome.error.code } : outcome.error;
     // One line per caller and reason every few minutes, with the count left out (gateway-refusal-log.ts).
-    const answered = isOpAnswerStatus(outcome.opStatus);
-    const seen = refusalLog.admit(deps.hostKey, callerSid, answered ? `status:${outcome.opStatus}` : lifted.code);
+    const apiCode = outcome.error.api?.code;
+    const answered = isOpAnswer(outcome.opStatus, apiCode);
+    const seen = refusalLog.admit(deps.hostKey, callerSid, answered ? `status:${outcome.opStatus}${apiCode ? `:${apiCode}` : ''}` : lifted.code);
     sweepRefusalsLater(deps.label);
     // The relay worked and the API answered (a 404 for a missing id): the op's answer, not a refusal (2026-11-15).
     if (seen.write && answered) {
       log.session.info(`${deps.label}: gateway relay handled, the op answered an error`, {
-        host: deps.hostKey, relayId, capability, callerSid, status: outcome.opStatus, ...op,
+        host: deps.hostKey, relayId, capability, callerSid, status: outcome.opStatus, ...(apiCode ? { apiCode } : {}), ...op,
         ...(seen.suppressed > 0 ? { suppressed: seen.suppressed } : {}),
       });
     } else if (seen.write) {

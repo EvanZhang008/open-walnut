@@ -446,7 +446,9 @@ callerSid, callerHost: host, origin: hostOrigin(host), ...(proofToken ? { caller
       ...(r.result === undefined ? {} : { detail: r.result }), ...(api ? { api } : {}),
       ...(r.retryAfterMs ? { retryAfterMs: r.retryAfterMs } : {}),
     });
-    return typeof r.status === 'number' && !out.ok ? { ...out, opStatus: r.status } : out;
+    // Arguments the op's own check refused (no request went out) are the answer a 400 is: the op's.
+    const opStatus = typeof r.status === 'number' ? r.status : r.invalidArgs ? 400 : undefined;
+    return opStatus !== undefined && !out.ok ? { ...out, opStatus } : out;
   }
   // GatewayResponse.result must be an object — wrap non-object op results.
   const result = (typeof r.result === 'object' && r.result !== null && !Array.isArray(r.result))

@@ -27,6 +27,54 @@ let selfCallAuth = false
 export function setSelfApiRoot(root: string | null, opts: { credential?: boolean } = {}): void {
   selfApiRoot = root
   selfCallAuth = root !== null && opts.credential === true
+  endSelfApiStarting()
+}
+
+/**
+ * The server in this process holds its port and will listen on it soon (server.ts, from the
+ * port hold to listen). In between, a call to its own API meets the hold, which cuts every
+ * connection (port-hold.ts): the call reads as lost. The local daemon connects about a second
+ * before listen and hands over the relays its sessions sent while the server restarted, so each
+ * deploy answered them `hub_timeout` (2026-11-22: 3 or so per restart, the top of the
+ * "gateway relay refused" log spike). Work that arrives from outside in that window waits for
+ * the listen first (whenSelfApiListening).
+ */
+let starting: { done: Promise<void>; end: () => void } | null = null
+
+/** server.ts: the port is held and listen comes next. */
+export function markSelfApiStarting(): void {
+  if (starting) return
+  let end!: () => void
+  const done = new Promise<void>((resolve) => { end = resolve })
+  starting = { done, end }
+}
+
+/** The listen happened (setSelfApiRoot) or the server stopped before it (stopServer). */
+export function endSelfApiStarting(): void {
+  const s = starting
+  starting = null
+  s?.end()
+}
+
+/** Whether a server in this process holds its port and has not listened yet. */
+export function selfApiStarting(): boolean {
+  return starting !== null
+}
+
+/**
+ * Wait until the server in this process listens, at most `maxWaitMs`. At once when no server
+ * here is starting (it listens already, or this is the CLI). True: nothing is starting now.
+ */
+export async function whenSelfApiListening(maxWaitMs: number): Promise<boolean> {
+  const s = starting
+  if (!s) return true
+  if (!(maxWaitMs > 0)) return false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  await Promise.race([
+    s.done,
+    new Promise<void>((resolve) => { timer = setTimeout(resolve, maxWaitMs); timer.unref?.() }),
+  ]).finally(() => clearTimeout(timer))
+  return starting === null
 }
 
 /** Null outside a listening server (the CLI, the MCP child, unit tests). */

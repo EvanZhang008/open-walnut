@@ -72,3 +72,16 @@ const OP_ANSWER_STATUSES = new Set([400, 404, 409, 410, 412, 422])
 export function isOpAnswerStatus(status: unknown): status is number {
   return typeof status === 'number' && OP_ANSWER_STATUSES.has(status)
 }
+
+/**
+ * The codes an op answers when the machine it was asked to act on cannot be reached (host_exec,
+ * host_copy on a host that is offline): the op's answer about that host, whose link has its own
+ * health checks, not this relay refusing the caller (2026-11-22: about a third of the
+ * "gateway relay refused" lines were host_offline).
+ */
+const TARGET_DOWN_CODES = new Set(['host_offline', 'bridge_offline'])
+
+/** An op's own answer (by its status, or a code naming the host it acted on as down), not a refusal. */
+export function isOpAnswer(status: unknown, apiCode?: unknown): boolean {
+  return isOpAnswerStatus(status) || (typeof status === 'number' && typeof apiCode === 'string' && TARGET_DOWN_CODES.has(apiCode))
+}

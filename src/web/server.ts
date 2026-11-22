@@ -120,7 +120,7 @@ import { appsRouter, pluginAppStaticRouter } from './routes/apps.js'
 import { createPluginBodyParser, createPluginRouteDispatcher } from './plugin-route-dispatcher.js'
 import { pluginJobRoutes } from '../core/plugin-jobs/serve.js'
 import { setPluginApiBase } from '../core/plugins/server-api.js'
-import { setSelfApiRoot } from '../lib/self-api-root.js'
+import { endSelfApiStarting, markSelfApiStarting, setSelfApiRoot } from '../lib/self-api-root.js'
 import { guardProcessStdio } from '../lib/stdio-epipe-guard.js'
 import { livenessAliasRouter, systemRouter } from './routes/system.js'
 import { hostsRouter } from './routes/hosts.js'
@@ -1794,6 +1794,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if ((err as NodeJS.ErrnoException)?.code !== 'EADDRINUSE') throw err
     throw await portInUseError(port)
   }
+
+  // From here to listen, work arriving from outside (the relays the local daemon hands over as it
+  // connects) waits for the listen before calling this server's own API (self-api-root.ts).
+  markSelfApiStarting()
 
   // A host's one Walnut service holds the host's daemon runtime (src/binary/service-entry.ts): it
   // starts it here as the Mac starts its in-process one, and its door serves the leaders.
@@ -7598,6 +7602,7 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   // A boot stopped before it listened leaves its port held.
   void serverPortHold?.release()
   serverPortHold = null
+  endSelfApiStarting()
   // Tell the companion this is a restart, not the Mac going away, so a deploy
   // never hands it the lead. Bounded: never holds the shutdown up.
   leaderLoopHandle?.stop()

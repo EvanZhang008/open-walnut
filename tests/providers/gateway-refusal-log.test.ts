@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { createRefusalLog, isOpAnswerStatus, REFUSAL_LOG_WINDOW_MS } from '../../src/providers/gateway-refusal-log.js'
+import { createRefusalLog, isOpAnswer, isOpAnswerStatus, REFUSAL_LOG_WINDOW_MS } from '../../src/providers/gateway-refusal-log.js'
 
 describe('gateway refusal log', () => {
   it('writes the first refusal of a caller for a reason, counts the rest, and names the count on the next line', () => {
@@ -62,6 +62,16 @@ describe('gateway refusal log', () => {
     // 401/403 (session_only, 2026-11-14) stay refusals, as do timeouts, too-many and server faults.
     for (const s of [undefined, 200, 401, 403, 408, 429, 500, 503, 507]) expect(isOpAnswerStatus(s), String(s)).toBe(false)
   })
+
+  it('an op that says the host it acts on is down answered; a 503 of its own does not (2026-11-22)', () => {
+    expect(isOpAnswer(503, 'host_offline')).toBe(true)
+    expect(isOpAnswer(503, 'bridge_offline')).toBe(true)
+    expect(isOpAnswer(404, undefined)).toBe(true)
+    // A busy or restarting server, a policy refusal, or a code with no status the API gave stay refusals.
+    for (const [s, c] of [[503, 'server_restarting'], [503, undefined], [403, 'session_only'], [undefined, 'host_offline'], [429, undefined]] as const) {
+      expect(isOpAnswer(s, c), `${s} ${c}`).toBe(false)
+    }
+  })
 })
 
 describe('ratchet: every gateway refusal line of the relay goes through the refusal log', () => {
@@ -85,7 +95,7 @@ describe('ratchet: every gateway refusal line of the relay goes through the refu
     expect(lines[answered - 1]).toMatch(/if \(seen\.write\b/)
     expect(src).toMatch(/const seen = refusalLog\.admit\(deps\.hostKey, callerSid, answered \?/)
     expect(src).toMatch(/const seen = refusalLog\.admit\(deps\.hostKey, callerSid, `before:/)
-    expect(src).toMatch(/isOpAnswerStatus\(outcome\.opStatus\)/)
+    expect(src).toMatch(/isOpAnswer\(outcome\.opStatus, apiCode\)/)
     expect(src).toMatch(/refusalLog\.sweep\(\)/)
   })
 
