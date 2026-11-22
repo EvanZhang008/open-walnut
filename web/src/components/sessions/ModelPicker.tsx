@@ -27,6 +27,7 @@ import type { AcpModelFamily } from './acp-model-id';
 import { SessionCostBlock, BudgetPausedMark, costToggleLabel, type CompareModel } from './SessionCostBlock';
 import { useSessionCost } from '@/hooks/useSessionCost';
 import { PickerFoldBar, type PickerFold } from './PickerFoldBar';
+import { Tab, TabList } from '@/components/controls';
 import { oneRowPerModel, rowNamedLike } from './model-row-dedupe';
 
 const EFFORTS = SESSION_EFFORTS;
@@ -217,7 +218,7 @@ export function ProviderRail({ active, onSwitch, lockReason, onClose }: {
     // The rail is laid over the slot, so the slot keeps the height the rail's rows need
     // (40px rows, 6px apart, 12px padding), "More engines" included.
     <div className="model-picker-rail-slot" style={{ minHeight: 24 + (rows.length + 1) * 46 - 6 }}>
-    <div className="model-picker-rail" role="tablist" aria-label="Engine" data-testid="provider-rail">
+    <TabList className="model-picker-rail" aria-orientation="vertical" flush aria-label="Engine" data-testid="provider-rail">
       {rows.map(({ id, label, unavailable }) => {
         const isActive = id === active;
         const reason = isActive ? null
@@ -230,14 +231,12 @@ export function ProviderRail({ active, onSwitch, lockReason, onClose }: {
         const activeUnavailable = isActive ? lockReason?.(id) ?? null : null;
         const Icon = PROVIDER_ICONS[id] ?? GenericEngineMark;
         return (
-          <button
+          <Tab
             key={id}
-            type="button"
-            role="tab"
-            aria-selected={isActive}
+            selected={isActive}
             aria-disabled={locked || undefined}
             aria-label={label}
-            className={`provider-rail-item${isActive ? ' provider-rail-item-active' : ''}${locked ? ' provider-rail-item-locked' : ''}${activeUnavailable ? ' provider-rail-item-unavailable' : ''}`}
+            className={`provider-rail-item${locked ? ' provider-rail-item-locked' : ''}${activeUnavailable ? ' provider-rail-item-unavailable' : ''}`}
             // The engine's name, and why it cannot be picked when it cannot.
             title={locked ? `${label}: ${reason}` : activeUnavailable ? `${label}: ${activeUnavailable}` : label}
             data-provider={id}
@@ -255,11 +254,11 @@ export function ProviderRail({ active, onSwitch, lockReason, onClose }: {
               )}
             </span>
             <span className="provider-rail-label" aria-hidden>{label}</span>
-          </button>
+          </Tab>
         );
       })}
       <RailMoreEngines onClose={onClose} />
-    </div>
+    </TabList>
     </div>
   );
 }

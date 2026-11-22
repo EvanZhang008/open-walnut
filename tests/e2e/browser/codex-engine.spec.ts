@@ -300,7 +300,7 @@ test('Codex model picker switches models on Homepage', async ({ page }) => {
   // page-scoped: the picker PORTALS to <body> when anchored (popout, 020a265b).
   const homeMenu = page.locator('.model-picker')
   await expect(homeMenu).toBeVisible()
-  await expect(homeMenu.locator('.provider-rail-item[data-provider="codex"]')).toHaveClass(/provider-rail-item-active/)
+  await expect(homeMenu.locator('.provider-rail-item[data-provider="codex"]')).toHaveAttribute('aria-selected', 'true')
   await expect(homeMenu.locator('.provider-rail-item[data-provider="claude"]')).not.toHaveClass(/provider-rail-item-locked/)
   const homeSwitchResponse = page.waitForResponse((candidate) =>
     candidate.request().method() === 'POST'

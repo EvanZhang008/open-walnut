@@ -16455,22 +16455,17 @@ a.task-kebab-info:hover {
   box-shadow: 8px 0 24px rgba(0, 0, 0, 0.18);
 }
 
-.provider-rail-item {
-  position: relative;
+/* Each engine is a shared Tab (TabList aria-orientation="vertical", choice-controls.css draws the
+   hover, the picked fill and the focus ring); the rail sets only its size and the icon beside its
+   name. Scoped to the rail so it wins over .wn-tab's own size. */
+.model-picker-rail .provider-rail-item {
   width: 100%;
   height: 40px;
   flex: none;
   display: flex;
-  align-items: center;
   gap: 10px;
   padding: 0;
-  border: none;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--fg);
-  font: inherit;
   text-align: left;
-  cursor: pointer;
 }
 
 .provider-rail-icon {
@@ -16481,13 +16476,13 @@ a.task-kebab-info:hover {
   display: flex;
   align-items: center;
   justify-content: center;
+  /* The engine's own mark keeps its colour on the picked tab; only the name takes the accent. */
+  color: var(--fg);
 }
 
 .provider-rail-label {
   flex: 1;
   min-width: 0;
-  font-size: var(--font-size-md);
-  font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -16499,30 +16494,6 @@ a.task-kebab-info:hover {
 }
 .model-picker-rail:has(:focus-visible) .provider-rail-label { opacity: 1; }
 
-.provider-rail-item:hover {
-  background: var(--bg-hover);
-}
-
-.provider-rail-item:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
-.provider-rail-item-active {
-  background: var(--accent-subtle);
-}
-
-.provider-rail-item-active .provider-rail-label {
-  color: var(--accent);
-  font-weight: 600;
-}
-
-
-.provider-rail-item-locked,
-.provider-rail-item-locked:hover {
-  cursor: not-allowed;
-  background: transparent;
-}
 /* The engine's own mark fades; its lock badge does not, so the lock reads at a glance. */
 .provider-rail-item-locked > .provider-rail-icon > svg:first-child,
 .provider-rail-item-locked > .provider-rail-label {
@@ -16554,11 +16525,19 @@ a.task-kebab-info:hover {
   color: var(--fg-muted);
 }
 
-/* "More engines": the rail's last row, set apart, in the muted colour. */
+/* "More engines": the rail's last row, set apart, in the muted colour. A link out, not a tab, so it
+   draws the tabs' hover itself. */
 .provider-rail-more {
   margin-top: auto;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
   color: var(--fg-muted);
+  font: inherit;
+  cursor: pointer;
 }
+.provider-rail-more:hover { background: var(--bg-hover); }
+.provider-rail-more:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 @media (prefers-reduced-motion: reduce) {
   .model-picker-rail,

@@ -140,6 +140,40 @@
   border-radius: var(--choice-radius-box) var(--choice-radius-box) 0 0;
 }
 
+/* A vertical list (TabList aria-orientation="vertical": the model picker's engine rail). No line
+   under it and none under a tab: the picked tab is filled in the accent's tint instead, and Up and
+   Down move between tabs. */
+.wn-tabs[aria-orientation='vertical'] {
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
+  box-shadow: none;
+}
+
+.wn-tabs[aria-orientation='vertical'] > .wn-tab {
+  border-bottom: 0;
+  border-radius: var(--radius-md);
+  color: var(--fg);
+}
+
+.wn-tabs[aria-orientation='vertical'] > .wn-tab:hover:not(:disabled):not([aria-disabled='true']) {
+  background: var(--bg-hover);
+}
+
+.wn-tabs[aria-orientation='vertical'] > .wn-tab[aria-selected='true'] {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.wn-tabs[aria-orientation='vertical'] > .wn-tab[aria-disabled='true'] {
+  cursor: not-allowed;
+}
+
+.wn-tabs[aria-orientation='vertical'] > .wn-tab:focus-visible {
+  border-radius: var(--radius-md);
+}
+
 .wn-tab-count {
   font-size: var(--font-size-xs);
   font-weight: 500;
