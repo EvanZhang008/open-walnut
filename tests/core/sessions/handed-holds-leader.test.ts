@@ -28,6 +28,7 @@ import type { SendBody } from '../../../src/core/session-channel/host-api.js'
 const HOST_SID = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'
 const sent: Array<{ host: string; body: SendBody }> = []
 let refuse = false
+let refusals = 0
 
 async function hostRow(): Promise<void> {
   await applyHostChannelBatch({
@@ -51,9 +52,10 @@ beforeEach(async () => {
   resetCache()
   sent.length = 0
   refuse = false
+  refusals = 0
   _setActiveLeaderSideForTesting({
     sendToHost: async (host: string, body: unknown) => {
-      if (refuse) throw new Error('the host is not connected')
+      if (refuse) { refusals++; throw new Error('the host is not connected') }
       sent.push({ host, body: body as SendBody })
       return { ok: true }
     },
@@ -90,7 +92,8 @@ describe('a hold of a host-judged session goes to its host', () => {
     vi.spyOn(sessionRunner, 'isTurnRunning').mockReturnValue(true)
     refuse = true
     const msg = await sendMessageToSession(HOST_SID, 'held while the host is away', { source: 'mobile', afterTurn: true })
-    await new Promise((r) => setTimeout(r, 200))
+    await until(() => refusals === 1)
+    await until(async () => (await getQueue(HOST_SID)).some((m) => m.id === msg.id))
     expect((await getQueue(HOST_SID)).map((m) => [m.id, m.status, m.parkedReason])).toEqual([[msg.id, 'parked', AFTER_TURN_REASON]])
     refuse = false
     const taken = await takeLinesForHost(HOST_SID)

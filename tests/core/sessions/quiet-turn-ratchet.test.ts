@@ -26,6 +26,8 @@ const SEES_QUIET_TURNS: Record<string, string> = {
   'src/core/event-types.ts': 'defines the payload',
   'src/core/phase.ts': 'applySessionPhase itself refuses a quiet turn\'s session edges, and handBackTaskOnSessionEnd its clean end',
   'src/core/session-hooks/dispatcher.ts': 'hands the event to derive/session.ts, which skips a quiet turn',
+  'src/core/session-channel/host-resend.ts': 'stamps the turn end it keeps with the retrier that took it; each retrier decides about quiet turns itself',
+  'src/core/session-channel/leader-retry-over.ts': 'names the phase trigger of a host\'s give-up; applySessionPhase gates it',
   'src/core/session-health-monitor.ts': 'only names the phase trigger; applySessionPhase gates it',
   'src/providers/claude-code-session.ts': 'the runner: drains the queue and settles the turn, quiet or not',
   'src/providers/acp-session.ts': 'an ACP engine: never compacted while idle',

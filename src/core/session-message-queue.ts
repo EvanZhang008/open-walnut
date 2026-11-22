@@ -452,12 +452,6 @@ export async function sendMessageToSession(
     coldHold.noteColdHold(sessionId);
     log.session.info('cold hold: message held for the session\'s next wake', { sessionId, messageId: msg.id, source });
   }
-  // A session its host runs and judges keeps its holds there: the held row goes to the host now,
-  // whose own queue-after-turn and cold hold release it (sessions/handed-holds.ts).
-  if (holdsRow || holdsCold) {
-    const { handHeldRowsToHost } = await import('./sessions/handed-holds.js');
-    handHeldRowsToHost(sessionId);
-  }
 
   // Tell session-runner to process the queued message (a row held for a move, for the turn's end or
   // for a cold session's next wake waits for it). Held rows that went back in line in front of it and
@@ -470,6 +464,13 @@ export async function sendMessageToSession(
   interrupt: opts?.interrupt || undefined,
   ...(opts?.endsWait || released?.endsWait ? { endsWait: true } : {}),
 }, ['session-runner'], { source });
+  // A session its host runs and judges keeps its holds there: the held row goes to the host now,
+  // whose own queue-after-turn and cold hold release it (sessions/handed-holds.ts). After the emit:
+  // a held row starts no send here, and nothing of this reaches a host before a send that goes.
+  if (holdsRow || holdsCold) {
+    const { handHeldRowsToHost } = await import('./sessions/handed-holds.js');
+    handHeldRowsToHost(sessionId);
+  }
 
   // Tell UI so the message appears immediately in the session panel. A quiet turn's row is Walnut's
   // own upkeep, not a message: the panel shows its note instead, and its history row says what it was.
