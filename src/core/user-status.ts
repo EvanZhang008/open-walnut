@@ -1330,7 +1330,10 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   // their own wait on the user's next message below. A turn that answered a person in their chat
   // and then parked on its own trigger keeps the park: they read the answer as it came (the
   // answered_person rule below; tests/core/own-park-survives-turn-end.test.ts).
-  if (report?.state === 'needs' && none(report.ask) && !report.kindless_ask && !report.answered_person && !input.isMain && !input.isLead) {
+  // Not a task parked on its own wait, though (2026-11-20 and 11-22, the user, of a check its wait
+  // clock woke that found nothing new: "it is basically a waiting status right", "this seems like
+  // should be wait but why it is need me"): its park says what it waits on, read below.
+  if (report?.state === 'needs' && none(report.ask) && !report.kindless_ask && !report.answered_person && !input.isMain && !input.isLead && input.phase !== 'WAITING') {
     return toRead('answer', ANSWER_TO_READ, w);
   }
   const own = ownWork(input, report, w, nowMs);

@@ -115,9 +115,9 @@ describe('an open ask of the user is Needs you, whatever else wakes the task', (
   })
 
   // The same day, its next trigger turn reported "needs you" with no question: something to read.
-  it('a current report that needs the user but asks nothing is theirs to read in every open phase, never a wait', () => {
+  it('a current report that needs the user but asks nothing is theirs to read in every open phase but its own park, never a wait', () => {
     const wrong: string[] = []
-    for (const phase of open) {
+    for (const phase of open.filter((p) => p !== 'WAITING')) {
       for (const [waitName, wait] of Object.entries({ none: {}, ...WAIT_SOURCES })) {
         if (waitName === 'reportPending') continue
         const s = deriveUserStatus({ phase, hasSession: true, processStatus: 'idle', ...wait, report: rep({ state: 'needs' }) }, NOW)
@@ -125,6 +125,17 @@ describe('an open ask of the user is Needs you, whatever else wakes the task', (
       }
     }
     expect(wrong).toEqual([])
+  })
+
+  // 2026-11-22, the user, of a ticket task its wait clock woke for a check that found nothing new,
+  // which reported needs-you with no question and read "something to read" with a Take a look chip:
+  // "this seems like should be wait but why it is need me". Its own park speaks.
+  it('a task parked on its own wait whose check reports needs-you with no question waits; a real ask is still Needs you', () => {
+    const base = { phase: 'WAITING' as const, hasSession: true, processStatus: 'idle' as const, waitUntil: new Date(NOW + 86_400_000).toISOString() }
+    const s = deriveUserStatus({ ...base, report: rep({ state: 'needs' }) }, NOW)
+    expect(s.state).toBe('waiting')
+    expect(s.until).toBe(base.waitUntil)
+    expect(deriveUserStatus({ ...base, report: rep({ state: 'needs', ask: 'Approve the paid plan for the orchard team?' }) }, NOW).state).toBe('needs')
   })
 
   it('the case that showed it: a watch, a trigger wake that ran no turn, and the ask from before it', () => {
