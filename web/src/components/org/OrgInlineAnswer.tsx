@@ -278,7 +278,7 @@ function ChoiceAnswer({ alert, failure, onSend, onWords, known }: FormProps & { 
     }), onSend(body.text ?? found.options.find((o) => o.value === body.option)?.label));
   };
   const words = (
-    <WordsField placeholder={found.options.length ? 'Reply…' : 'Your answer'} draftKey={`draft:choice-reply:${found.owner}:${found.id}`} onSend={(t, images) => answer({ text: t }, images)} taskId={alert.taskId} />
+    <WordsField placeholder="Reply…" draftKey={`draft:choice-reply:${found.owner}:${found.id}`} onSend={(t, images) => answer({ text: t }, images)} taskId={alert.taskId} />
   );
   return (
     <>
@@ -325,7 +325,7 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape, thre
   const recommended = options.find((o) => o.recommended)?.id;
   const words = (
     <WordsField
-      placeholder={failed ? 'Or tell it what to do' : shape === 'text' ? 'Your answer' : 'Reply…'}
+      placeholder={failed ? 'Or tell it what to do' : 'Reply…'}
       draftKey={`draft:ask-reply:${sessionId}:${alert.itemId ?? alert.taskId}`}
       sessionId={sessionId}
       taskId={alert.taskId}

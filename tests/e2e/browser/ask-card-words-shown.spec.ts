@@ -202,3 +202,55 @@ test('the buttons first, the box under them, Snooze on the box\'s line; the same
   expect((await snooze().boundingBox())!.y, 'Snooze on the box\'s line or under it').toBeGreaterThanOrEqual(b.y - 1)
   await page.screenshot({ path: `test-results/ask-card-narrow-${test.info().project.name}.png`, clip: (await item.boundingBox())! })
 })
+
+test('a long why opens with More, a bare path reads short, and a narrow card gives its box a line', async ({ page, request }) => {
+  test.setTimeout(240_000)
+  // 2026-11-21, UI audit: a Yes / No card's why cut to two lines with no way to read it, a path written
+  // out whole over several lines, and a narrow card's box, mic, send and Snooze crowded on one line.
+  const id = await createTask(request, `long ${STAMP}`)
+  const sid = await startSession(request, id, `Long ready ${STAMP}`)
+  await expect.poll(async () => ((await (await request.get(`/api/v1/sessions/${sid}/history?tail=80`)).json()) as { messages?: Array<{ text?: string }> }).messages?.map((m) => m.text ?? '').join('\n') ?? '', { timeout: 90_000 }).toContain(`Long ready ${STAMP}`)
+  expect((await request.patch(`/api/tasks/${id}`, { data: { phase: 'NEED_ACTION' } })).ok()).toBe(true)
+  const path = `${cwd}/design/long-folder-name-for-the-pages/index.html`
+  const more = `The designs are at ${path}. ` + 'Each page shows the same card at three widths, with the old one beside it, so the change can be judged without opening anything else. '.repeat(3)
+  const asked = await request.put(`/api/v1/tasks/${id}/report`, { data: { state: 'needs', ask: `Ship the long card ${STAMP}?`, ask_kind: 'yes_no', ask_more: more } })
+  expect(asked.ok(), await asked.text()).toBe(true)
+  await expect.poll(() => kindsOf(request, id), { timeout: 90_000 }).toContain('ask')
+  await openNeeds(page)
+  const item = itemOf(await showSectionCard(page, 'needs', id), 'ask')
+  const detail = item.getByTestId('action-detail')
+  await expect(detail).toBeVisible({ timeout: 30_000 })
+  // The path reads as its folder and file, and still says where it goes.
+  const link = detail.locator('a.file-link').first()
+  await expect(link).toHaveText(/^…\/long-fold.*pages\/index\.html$/)
+  await expect(link).toHaveAttribute('title', path)
+  // Cut to its lines: More opens it whole in the card, Less cuts it again.
+  const clamp = item.locator('.ask-card-detail')
+  const cut = await clamp.evaluate((el) => el.clientHeight)
+  const toggle = item.getByTestId('ask-card-more')
+  await expect(toggle).toHaveText('More')
+  // The hover peek opens the text where it is; More stays put under the pointer meanwhile.
+  await clamp.hover()
+  await expect(item.locator('[data-peek-down]').first(), 'the hover peek opened the text').toBeAttached({ timeout: 5_000 })
+  await page.waitForTimeout(500)
+  await expect(toggle).toHaveText('More')
+  await page.mouse.move(5, 5)
+  await toggle.click()
+  await expect(toggle).toHaveText('Less')
+  await expect.poll(() => clamp.evaluate((el) => el.clientHeight)).toBeGreaterThan(cut)
+  await expect(item.getByTestId('org-answer-option').first(), 'the answer stays in the card').toBeVisible()
+  await page.screenshot({ path: `test-results/ask-card-more-${test.info().project.name}.png`, clip: (await item.boundingBox())! })
+  await toggle.click()
+  await expect(toggle).toHaveText('More')
+  // Under the pointer the hover peek holds it open again; away from the card it is cut as before.
+  await page.mouse.move(5, 5)
+  await expect.poll(() => clamp.evaluate((el) => el.clientHeight)).toBe(cut)
+  // Narrow: a card under 460 px (a narrowed list column; a window under 769 px is the phone's layout)
+  // gives the box its own line and Snooze the line under it.
+  const card = item
+  await card.evaluate((el) => { (el as HTMLElement).style.width = '420px' })
+  const look = await expectFamily(item, 'narrow ask card')
+  expect(look.narrow, 'the card is narrow').toBe(true)
+  expect(look.toolsUnderBox, 'Snooze under the box').toBe(true)
+  await page.screenshot({ path: `test-results/ask-card-narrow-box-${test.info().project.name}.png`, clip: (await card.boundingBox())! })
+})

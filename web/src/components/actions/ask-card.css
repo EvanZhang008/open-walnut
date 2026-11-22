@@ -2,10 +2,11 @@
    and Snooze last. A wide card keeps the buttons beside the box; a narrow one puts them below.
 
    Its frame (2026-11-20, the user, of ten designs: "I mean 1 is good let's do it"): the frosted
-   card of the notices and the quick bar (overlay-glass.css's hairline and white top edge), 18px
+   card of the notices and the quick bar (overlay-glass.css's hairline and white top edge), 16px
    corners outside. Its answer (2026-11-21, of ten whole-card designs: "2 is good"): the options
    as a list of rows, the one main action solid blue, the box under them at the same 34 px height
-   and 8 px corner, Snooze and pin as quiet text on the box's line (under it where narrow). */
+   and 8 px corner, Snooze and pin as quiet text on the box's line (under it where narrow, under
+   460 px). */
 .ask-card { display: flex; flex-direction: column; gap: 4px; min-width: 0; container-type: inline-size; }
 
 /* Its frame where it stands on its own: a task's ask (ActionNeeded) and a node's Needs you list
@@ -15,11 +16,11 @@
    frame and show nothing. */
 .action-needed .ask-card,
 .ask-card.org-ask {
-  padding: 12px 12px 8px;
-  border-radius: 18px;
+  padding: var(--ask-card-pad);
+  border-radius: var(--ask-card-radius);
   background: var(--glass-legible-bg, var(--bg-elevated));
   border: 1px solid var(--glass-frost-border, var(--border));
-  box-shadow: inset 0 1px 0 var(--glass-frost-highlight, transparent), var(--card-shadow-hover);
+  box-shadow: inset 0 1px 0 var(--glass-frost-highlight, transparent), var(--card-shadow);
 }
 .ask-card.org-ask { margin: 6px 8px; }
 
@@ -53,6 +54,15 @@
 .ask-card :is(.ask-card-question, .ask-card-detail) a:not(.btn) { color: var(--accent-text); }
 .ask-card-status { color: var(--fg-muted); font-size: var(--font-size-sm); }
 
+/* More / Less under a question or why cut to its lines (AskCard.tsx useWholeText), the shared
+   DisclosureButton: placed under the text it opens. Whole, the text stays in the card's column and
+   scrolls past 40% of the window, so its answer stays in reach. */
+.ask-card-more { align-self: flex-start; }
+.ask-card :is(.ask-card-question, .ask-card-detail) + .ask-card-more { margin-left: 12px; }
+.ask-card:has(.org-ask-mark) .ask-card-more { margin-left: -4px; }
+.ask-card.is-whole :is(.ask-card-question, .ask-card-detail) { display: block; -webkit-line-clamp: unset; }
+.ask-card.is-whole :is(.ask-card-question, .ask-card-detail) { max-height: 40vh; overflow-y: auto; }
+
 /* The answer row. Its lines are 8 px apart, kept by each part's own 4 px above and below rather than
    the row's gap, so the zero-height line break below adds no second gap. */
 .ask-card-answer { display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; row-gap: 0; min-width: 0; margin-block: -4px; }
@@ -85,7 +95,8 @@
 .ask-card-answer .org-answer-words .chat-input-container { padding: 0; }
 
 /* Its keys (2026-11-21, the user, of ten whole-card designs: "2 is good"): one height with the box,
-   34 px, corner 8. The card's one main action is solid blue: Acknowledge, or the recommended option
+   34 px, corner 8. The card's one main action is solid blue, the button family's primary fill
+   (styles/buttons.css --btn-primary-fill, darker than the accent so white text reads at 4.5:1): Acknowledge, or the recommended option
    ("Ack button shoudl be blue, or recommended optiion shoudl be blue also"); the rest are quiet. */
 .ask-card-answer .btn:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *) {
   min-height: 34px; padding: 4px 12px; border: none; border-radius: var(--radius-sm);
@@ -93,16 +104,17 @@
 }
 .ask-card-answer .btn:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *):hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 8%, var(--bg-secondary)); }
 .ask-card-answer .btn:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *):disabled { opacity: 0.5; }
-.ask-card-answer .btn.btn-primary:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *) { background: var(--accent); color: var(--on-accent); }
-.ask-card-answer .btn.btn-primary:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *):hover:not(:disabled) { background: var(--accent-hover); }
+.ask-card-answer .btn.btn-primary:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *) { background: var(--btn-primary-fill); color: var(--on-accent); }
+.ask-card-answer .btn.btn-primary:not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *):hover:not(:disabled) { background: var(--btn-primary-fill-hover); }
 
 /* An approval's Deny and Approve are the same keys; Approve is the card's one blue. */
 .ask-card .ask-card-answer .approval-actions .approval-btn {
   min-height: 34px; padding: 4px 12px; border: none; border-radius: var(--radius-sm);
   background: var(--bg-secondary); color: var(--fg); font-size: var(--font-size-md); font-weight: 500;
 }
-.ask-card .ask-card-answer .approval-actions .approval-btn-approve { background: var(--accent); color: var(--on-accent); }
-.ask-card .ask-card-answer .approval-actions .approval-btn-approve:hover:not(:disabled) { background: var(--accent-hover); }
+/* Approve is no .btn, so the family's fill (set on .btn) falls back to the accent there. */
+.ask-card .ask-card-answer .approval-actions .approval-btn-approve { background: var(--btn-primary-fill, var(--accent)); color: var(--on-accent); }
+.ask-card .ask-card-answer .approval-actions .approval-btn-approve:hover:not(:disabled) { background: var(--btn-primary-fill-hover, var(--accent-hover)); }
 
 /* Its options: a list, one row each, its line of why beside it in small grey (cut to the row), the
    recommended row blue with its word at the right. The why is the button's data-detail, drawn
@@ -145,6 +157,12 @@
 .ask-card-answered { flex: 1 1 100%; min-width: 0; font-size: var(--font-size-md); line-height: 19px; color: var(--fg-muted); overflow-wrap: break-word; }
 .ask-card-answered-mark { margin-right: 6px; font-weight: 600; }
 .ask-card-answered-said { color: var(--fg); }
+
+/* A narrow card (2026-11-21, UI audit: box, mic, send and Snooze crowded on one line): the box
+   takes its own line and Snooze goes under it at the right, as the picked design draws it narrow. */
+@container (max-width: 460px) {
+  .ask-card-answer .org-answer-words { flex-basis: 100%; }
+}
 
 /* A phone: every control is a finger's size and every word 12 px at least (phone-pages.css). */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {

@@ -6,18 +6,21 @@ import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { useAgentFileOpener } from '@/hooks/useAgentFileOpener';
 import { renderMarkdownWithRefs, type RenderMarkdownOptions } from '@/utils/markdown';
 import { claimAgentLinkClick } from '@/utils/open-anywhere';
+import { shortLinkLabelsHtml } from '@/utils/short-link-labels';
 
 /**
  * `task` / `host` / `sessionId` / `cwd` name where the words came from, so a path in them opens
  * on that machine (hooks/useAgentFileOpener.ts); `unknownSource`: Walnut did not record the writer,
  * so a path reads nothing until a machine is chosen and no picture loads. No named writer is
  * unknown by default. A caller's own
- * `onClick` replaces the click handler whole: it must carry the same source itself.
+ * `onClick` replaces the click handler whole: it must carry the same source itself. `shortLinks`: a
+ * bare URL or path reads as a short label in a card's few lines (utils/short-link-labels.ts).
  */
-export function AgentText({ text, className, testId, compact = false, inline = false, onClick, title, task, host, sessionId, cwd, unknownSource, taskIds }: {
+export function AgentText({ text, className, testId, compact = false, inline = false, onClick, title, task, host, sessionId, cwd, unknownSource, taskIds, shortLinks = false }: {
   text: string;
   /** How a bare task id renders (renderMarkdownWithRefs `taskIds`); absent = pills, as before. */
   taskIds?: RenderMarkdownOptions['taskIds'];
+  shortLinks?: boolean;
   task?: Task | null;
   host?: string;
   sessionId?: string;
@@ -34,8 +37,11 @@ export function AgentText({ text, className, testId, compact = false, inline = f
   const file = useAgentFileOpener({ task, host, sessionId, cwd, unknownSource: unknownSource ?? (!task && host === undefined && !sessionId) });
   const { cwd: renderCwd, host: renderHost, images } = file.render;
   const html = useMemo(
-    () => renderMarkdownWithRefs(text, renderCwd, renderHost, { inlineImages: !compact && images, inline, ...(taskIds ? { taskIds } : {}) }),
-    [text, compact, inline, labels, renderCwd, renderHost, images, taskIds],
+    () => {
+      const out = renderMarkdownWithRefs(text, renderCwd, renderHost, { inlineImages: !compact && images, inline, ...(taskIds ? { taskIds } : {}) });
+      return shortLinks ? shortLinkLabelsHtml(out) : out;
+    },
+    [text, compact, inline, labels, renderCwd, renderHost, images, taskIds, shortLinks],
   );
   const inner = useStableHtml(html);
   const onEntityClick = useEntityClickHandler(undefined, file.onFileOpen, file.fileHost, file.fileSessionId, file.refusesAll);

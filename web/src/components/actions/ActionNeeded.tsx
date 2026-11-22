@@ -193,8 +193,8 @@ export const AskCard = memo(function AskCard({ task, item, onAnswer = () => sett
       testId="action-item"
       className={`action-needed-item${answered ? ' is-answered' : until ? ' is-snoozed' : ''}`}
       data={{ 'data-kind': item.kind, 'data-item-id': item.id, 'data-answered': answered ? 'true' : undefined }}
-      question={says ? <AgentText compact inline {...source} text={item.summary} testId="action-summary" /> : undefined}
-      detail={says && item.detail ? <AgentText compact inline {...source} text={item.detail} testId="action-detail" /> : undefined}
+      question={says ? <AgentText compact inline {...source} text={item.summary} shortLinks testId="action-summary" /> : undefined}
+      detail={says && item.detail ? <AgentText compact inline {...source} text={item.detail} shortLinks testId="action-detail" /> : undefined}
       status={<>
         {until ? (
           <div className="ask-card-status" data-testid="action-snoozed-until">

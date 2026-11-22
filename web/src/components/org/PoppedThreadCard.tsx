@@ -81,8 +81,8 @@ export function PoppedThreadCard({ node, t, state, now, snoozed, listed }: {
           <ThreadState badge={badge} />{' \u00b7 '}
           <button type="button" className="org-thread-link" data-testid="org-thread-owner" onClick={() => openTask(owner.task_id)}>{owner.title}</button>
         </>)}
-        question={<AgentText compact inline {...threadSummarySource(t)} text={t.heldAsk?.ask || t.ask?.trim() || t.title} testId="org-thread-popped-ask" />}
-        detail={detail?.trim() ? <AgentText compact {...threadSummarySource(t)} text={detail} testId="org-thread-popped-summary" /> : undefined}
+        question={<AgentText compact inline {...threadSummarySource(t)} text={t.heldAsk?.ask || t.ask?.trim() || t.title} shortLinks testId="org-thread-popped-ask" />}
+        detail={detail?.trim() ? <AgentText compact {...threadSummarySource(t)} text={detail} shortLinks testId="org-thread-popped-summary" /> : undefined}
         status={(<>
           {until && <SnoozedUntil until={until} now={now} />}
           {t.can_answer_now === false && <p className="org-thread-stand-in-note" data-testid="org-thread-not-now">{owner.title} is not running now: your reply is kept and goes to it when it is back.</p>}

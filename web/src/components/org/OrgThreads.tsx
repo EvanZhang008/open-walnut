@@ -384,15 +384,15 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
           {/* Its status a step behind (no item yet): the question in the agent's own rendering until it comes. */}
           {heldItem && owner
             ? <AskCard task={owner} item={heldItem} threadId={t.id} />
-            : <AgentText text={held.ask} compact className="org-thread-summary" testId="org-thread-held-question" {...threadSummarySource(t)} />}
-          {held.reply && <AgentText text={held.reply} compact className="org-thread-summary" testId="org-thread-reply" {...threadSummarySource(t)} />}
+            : <AgentText text={held.ask} compact shortLinks className="org-thread-summary" testId="org-thread-held-question" {...threadSummarySource(t)} />}
+          {held.reply && <AgentText text={held.reply} compact shortLinks className="org-thread-summary" testId="org-thread-reply" {...threadSummarySource(t)} />}
         </div>
       )}
       {known && !deciding && <KnownBlock t={t} tasks={tasks} name={name} />}
       {!asked && !held && !known && (card.summary.by === 'node'
         ? (<>
           {/* The summary opens on the machine of the session that last wrote it, never the node's current one. */}
-          <AgentText text={card.summary.text} compact className="org-thread-summary" testId="org-thread-reply" {...threadSummarySource(t)} />
+          <AgentText text={card.summary.text} compact shortLinks className="org-thread-summary" testId="org-thread-reply" {...threadSummarySource(t)} />
           {/* His message came after it: it says so until the node rewrites it (core/org/thread-view.ts summaryBehindHim). */}
           {card.summary.stale && <span className="org-thread-stand-in-note" data-testid="org-thread-summary-stale">Written before your latest message; {name} has not updated it yet</span>}
         </>)
@@ -401,7 +401,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
           <div className="org-thread-summary is-stand-in" data-testid="org-thread-reply" data-by="walnut">
             {card.summary.from === 'none'
               ? <p>{name} has not answered yet</p>
-              : <AgentText text={card.summary.text} compact {...threadStandInSource(t, card.summary)} />}
+              : <AgentText text={card.summary.text} compact shortLinks {...threadStandInSource(t, card.summary)} />}
             {card.summary.from !== 'none' && <span className="org-thread-stand-in-note" data-testid="org-thread-stand-in">{STAND_IN_NOTE[card.summary.from ?? 'answer'](name)}</span>}
           </div>
         ))}

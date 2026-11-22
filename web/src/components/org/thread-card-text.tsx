@@ -2,7 +2,8 @@
  * The words on a thread card (OrgThreads.tsx): the node's answer as its chat shows it and his own
  * words, each folded to a few lines with the rest one click away. Moved out of OrgThreads.tsx whole.
  */
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCutOff } from '@/hooks/useCutOff';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
 import { DisclosureButton } from '@/components/controls';
 import { AgentText } from '@/components/common/AgentText';
@@ -28,17 +29,8 @@ function clock(at: string, now: number): string {
  */
 function Fold({ children, className, testId }: { children: React.ReactNode; className: string; testId: string }) {
   const box = useRef<HTMLDivElement>(null);
-  const [long, setLong] = useState(false);
   const [whole, setWhole] = useState(false);
-  useLayoutEffect(() => {
-    const el = box.current;
-    if (!el || whole) return;
-    const measure = () => setLong(el.scrollHeight > el.clientHeight + 4);
-    measure();
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
-    ro?.observe(el);
-    return () => ro?.disconnect();
-  }, [whole]);
+  const long = useCutOff(box, { whole, slack: 4 });
   const folded = long && !whole;
   return (
     <>
