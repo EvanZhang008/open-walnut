@@ -64,6 +64,20 @@ describe('appending', () => {
     await log.close()
   })
 
+  it('a record kept twice (a batch written again after its sync failed) is read once', async () => {
+    let log = await open()
+    log.append('s1', 'session:user-line', { text: 'one' })
+    log.append('s1', 'session:result', {})
+    await log.close()
+    const file = path.join(dir, 'facts-w1.ndjson')
+    const lines = fs.readFileSync(file, 'utf8').trim().split('\n')
+    await fsp.appendFile(file, lines.map((l) => l + '\n').join(''))
+    log = await open()
+    expect((await log.read(0)).map((r) => r.seq)).toEqual([1, 2])
+    expect(log.head).toBe(2)
+    await log.close()
+  })
+
   it('a rename continues the old id\'s sseq', async () => {
     const log = await open()
     log.append('old-id', 'session:user-line', {})

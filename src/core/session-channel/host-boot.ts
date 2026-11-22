@@ -151,6 +151,12 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
       return sids.length
     },
     spillDir: path.join(dir, 'prompts'),
+    // A session this host runs: the emitter knows it, or its row says so (a start whose row is just written).
+    owns: async (sid) => {
+      if (emitter.owns(sid)) return true
+      const { getSessionByClaudeId } = await import('../session-tracker.js')
+      return rowOwnedHere(await getSessionByClaudeId(sid).catch(() => null), o.hostKey)
+    },
     log: say,
   })
   current = { log, channel, emitter, routes, bundles, resend }

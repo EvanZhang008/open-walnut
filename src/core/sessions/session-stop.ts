@@ -331,8 +331,12 @@ export class SessionStopCoordinator {
  */
 export async function stopConnectionOf(host: string, sid?: string): Promise<SessionStopConnection | null> {
   const dc = await import('../../providers/daemon-connection.js')
-  const { thisHostKey } = await import('./session-row-owner.js')
+  const { rowOwnedHere, thisHostKey } = await import('./session-row-owner.js')
   if (!sid || !host || host !== thisHostKey()) return dc.getConnectedDaemonConnection(host)
+  // Only a row this host owns: a copied row naming this host is a session its leader runs here,
+  // whose process this host never stops.
+  const row = await (await import('../session-tracker.js')).getSessionByClaudeId(sid).catch(() => null)
+  if (!rowOwnedHere(row, host)) return null
   const mgr = (await import('../../providers/session-manager.js')).getRegisteredSessionManager(sid) as { liveConnection?: SessionStopConnection | null } | undefined
   return mgr?.liveConnection ?? (await import('../../replica/self-host.js')).selfHostConnection(host) ?? dc.getConnectedDaemonConnection(host)
 }

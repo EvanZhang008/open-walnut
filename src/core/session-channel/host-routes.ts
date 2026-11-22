@@ -77,6 +77,12 @@ export interface HostRoutesOptions {
   drop?(sids: string[]): Promise<number>
   /** Where a start's large prompt is spilled (0700, files 0600). */
   spillDir: string
+  /**
+   * Is `sid` one of this host's own sessions (its row rowOwnedHere)? A call or an interrupt of any
+   * other is refused: a copied row of a session the leader runs here never reaches its process
+   * through these routes. Absent (tests): every sid passes.
+   */
+  owns?(sid: string): Promise<boolean>
   /** The session controls of host-calls.ts `lifecycle` (sessions/session-lifecycle.ts); tests pass their own. */
   lifecycle?: Record<string, (sid: string, ...args: unknown[]) => Promise<unknown>>
   /** The op test of a Bash call (lib/walnut-op-command.ts commandRunsOp); tests pass their own. */
@@ -141,6 +147,10 @@ function jsonValue(v: unknown): unknown {
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
+/** A session id the leader may name for a start (event-types.ts checks it at the leader's edge; a file is named by it here). */
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+export const NOT_OWN_SESSION = 'not_own_session'
+
 export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes {
   const now = o.now ?? Date.now
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 })
@@ -156,6 +166,8 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
 
   async function start(body: StartBody): Promise<{ status: number; body: unknown }> {
     if (!body || typeof body.taskId !== 'string' || typeof body.message !== 'string') return { status: 400, body: { ok: false, error: 'taskId and message are required', why: 'bad_request' } }
+    const pre = (body as { preassignedSessionId?: unknown }).preassignedSessionId
+    if (pre !== undefined && (typeof pre !== 'string' || !UUID_V4.test(pre))) return { status: 400, body: { ok: false, error: 'preassignedSessionId must be a v4 UUID', why: 'bad_request' } }
     const { largePrompt, largePromptPath, startBundle, busSource, ...rest } = body
     const data: Record<string, unknown> & { taskId: string; message: string } = { ...rest }
     if (typeof largePrompt === 'string' && largePrompt.length > 0) {
@@ -188,6 +200,7 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
       return { status: 400, body: { ok: false, error: 'sid, target and member are required' } }
     }
     if (!hostCallAllowed(body.target, body.member)) return { status: 403, body: { ok: false, error: 'not_allowed' } }
+    if (o.owns && !(await o.owns(body.sid))) return { status: 403, body: { ok: false, error: NOT_OWN_SESSION } }
     const args = Array.isArray(body.args) ? body.args : []
     if (body.member === 'undoExpectedTeardown') {
       const u = undos.get(String(args[0] ?? ''))
@@ -252,6 +265,8 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
       if (op === 'send' || op === 'interrupt') {
         const b = body as { sessionId?: unknown; busSource?: unknown }
         if (typeof b?.sessionId !== 'string' || !b.sessionId) return sendJson(res, 400, { ok: false, error: 'sessionId is required' })
+        // An interrupt reaches a process: only of a session this host owns. (A send only queues, by row id.)
+        if (op === 'interrupt' && o.owns && !(await o.owns(b.sessionId))) return sendJson(res, 403, { ok: false, error: NOT_OWN_SESSION })
         const { busSource, queued, holdOnly, ...payload } = b as Record<string, unknown>
         const source = typeof busSource === 'string' && busSource ? busSource : 'host-api'
         // A send's lines are queued here first, as the leader's send route queues them for its own

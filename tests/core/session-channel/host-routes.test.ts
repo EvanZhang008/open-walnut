@@ -69,6 +69,7 @@ async function startDoor(withRoutes: boolean): Promise<void> {
     commandRunsOp: (c, op) => c.includes(op),
     drop: async (sids) => { dropped.push(sids); return sids.length },
     lifecycle: { terminateSession: async (sid, opts) => { terminated.push({ sid, opts }); return { status: 'terminated', sessionId: sid } } },
+    owns: async (sid) => sid !== 'sid-leaders',
   }) : null
   door = createLeaderDoor({ devices: {} as never, sessions: () => routes })
   server = net.createServer((sock) => door.accept(sock))
@@ -158,6 +159,14 @@ describe('/call', () => {
     expect(runnerCalls).toEqual(['acp:opus', 'sync:sid-1:task-1'])
   })
 
+  it('a call or an interrupt of a session this host does not own is refused before it reaches a process', async () => {
+    expect(await post('/host-api/sessions/call', { sid: 'sid-leaders', target: 'session', member: 'getUsage', args: [1] })).toEqual({ status: 403, body: { ok: false, error: 'not_own_session' } })
+    expect(await post('/host-api/sessions/call', { sid: 'sid-leaders', target: 'lifecycle', member: 'terminateSession', args: [{}] })).toEqual({ status: 403, body: { ok: false, error: 'not_own_session' } })
+    expect((await post('/host-api/sessions/interrupt', { sessionId: 'sid-leaders' })).status).toBe(403)
+    expect(terminated).toEqual([])
+    expect(emitted.filter((e) => e.name === 'session:interrupt')).toEqual([])
+  })
+
   it('an expected teardown gives back an undo the leader calls once', async () => {
     const r = await post('/host-api/sessions/call', { sid: 'sid-1', target: 'session', member: 'markExpectedTeardown', args: ['respawn'] })
     const undoId = (r.body.value as { undoId: string }).undoId
@@ -197,7 +206,7 @@ describe('start, send, interrupt', () => {
 
   it('a start answers from its bundle, spills its large prompt here and never names a host to dial', async () => {
     const r = await post('/host-api/sessions/start', {
-      taskId: 'task-1', message: 'hi', host: 'marina-box', largePrompt: 'L'.repeat(5000), preassignedSessionId: 'sid-pre-1',
+      taskId: 'task-1', message: 'hi', host: 'marina-box', largePrompt: 'L'.repeat(5000), preassignedSessionId: '50000000-0000-4000-8000-0000000000a1',
       startBundle: { sessionContext: { systemPrompt: 'leader prompt' }, hintsApplied: true }, busSource: 'chat',
     })
     expect(r.body).toEqual({ ok: true, sessionId: 'sid-started-1', title: 'Started' })
@@ -229,6 +238,11 @@ describe('start, send, interrupt', () => {
     expect(seenAtStart!.data.largePromptPath).toBeUndefined()
     expect(fs.existsSync(stale)).toBe(false)
     expect(fs.existsSync(fresh)).toBe(true)
+  })
+
+  it('a preassigned session id that is not a v4 UUID is refused (it names a file here)', async () => {
+    expect((await post('/host-api/sessions/start', { taskId: 'task-1', message: 'hi', preassignedSessionId: '../../etc/x' })).body).toMatchObject({ ok: false, why: 'bad_request' })
+    expect(seenAtStart).toBeNull()
   })
 
   it('a failed start answers why', async () => {

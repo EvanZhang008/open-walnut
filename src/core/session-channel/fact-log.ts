@@ -228,11 +228,16 @@ export class FactLog {
     this.buffered = []
     const text = batch.map((b) => b.line).join('')
     const fh = await fsp.open(this.file, 'a', 0o600)
+    let before = -1
     try {
-      await fh.write(text)
+      before = (await fh.stat()).size
+      const { bytesWritten } = await fh.write(text)
+      if (bytesWritten !== Buffer.byteLength(text)) throw new Error(`a short write (${bytesWritten} of ${Buffer.byteLength(text)} bytes)`)
       if (this.o.durable) await fh.datasync()
     } catch (err) {
-      // Not written: put the batch back in front, so order holds and the next flush tries again.
+      // Not written whole: what part of it landed goes again (no torn line hides the records after
+      // it, no record is kept twice), and the batch goes back in front, so order holds.
+      if (before >= 0) await fh.truncate(before).catch(() => {})
       this.buffered = [...batch, ...this.buffered]
       throw err
     } finally {
@@ -272,7 +277,14 @@ export class FactLog {
 
   private async saveState(): Promise<void> {
     const tmp = `${this.stateFile}.tmp`
-    await fsp.writeFile(tmp, JSON.stringify(this.state), { mode: 0o600 })
+    const fh = await fsp.open(tmp, 'w', 0o600)
+    try {
+      await fh.writeFile(JSON.stringify(this.state))
+      // Durable before the rename: a power loss never leaves an empty state (a new log id, every fact said again).
+      if (this.o.durable) await fh.sync()
+    } finally {
+      await fh.close()
+    }
     await fsp.rename(tmp, this.stateFile)
   }
 }
@@ -288,7 +300,8 @@ async function readRecords(file: string): Promise<{ records: FactRecord[]; valid
     if (nl < 0) break // a torn last line
     try {
       const r = JSON.parse(buf.subarray(start, nl).toString('utf8')) as FactRecord
-      if (r && r.kind === 'session-fact' && Number.isSafeInteger(r.seq)) records.push(r)
+      // In seq order, once each: a record kept twice (a write retried after its sync failed) is read once.
+      if (r && r.kind === 'session-fact' && Number.isSafeInteger(r.seq) && r.seq > (records[records.length - 1]?.seq ?? 0)) records.push(r)
     } catch { break }
     start = nl + 1
     valid = start

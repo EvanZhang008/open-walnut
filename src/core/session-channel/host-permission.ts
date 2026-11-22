@@ -62,6 +62,18 @@ export function checkPermissionAnswer(
   if (!ANSWER_MEMBERS.has(member)) return { ok: true }
   const requestId = args[0]
   if (typeof requestId !== 'string' || !requestId) return { ok: false, status: 400, error: 'requestId is required' }
+  // The answer's input patch is the shape the leader's prompt answer sends (session-lifecycle.ts:
+  // `{answers}`, a question's answers) and nothing else: no caller rewrites a pending tool's input
+  // (a Bash command) through it.
+  const patch = args[3]
+  if (patch !== undefined && patch !== null) {
+    const keys = typeof patch === 'object' && !Array.isArray(patch) ? Object.keys(patch) : null
+    const answers = keys ? (patch as { answers?: unknown }).answers : undefined
+    if (!keys || keys.some((k) => k !== 'answers') || (answers !== undefined && (typeof answers !== 'object' || answers === null || Array.isArray(answers)))) {
+      log?.('warn', 'host sessions: a permission answer whose input patch is not an answers map was refused', { sessionId: sid, requestId, keys })
+      return { ok: false, status: 400, error: 'input_patch_not_allowed' }
+    }
+  }
   const pending = pendingIdsOf(target)
   if (pending?.has(requestId)) return { ok: true }
   log?.('warn', 'host sessions: a permission answer for a request this session does not hold was refused', {
