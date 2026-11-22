@@ -152,13 +152,20 @@ export function refreshOnResume(
  * The prompt a cold resume of this session should run on: the current one when
  * refreshOnResume says so, else null (replay the stored one). Only a prompt Walnut
  * built is rebuilt: Walnut's alone, or a caller's own prompt followed by Walnut's.
+ *
+ * `decided`: the caller already judged that the session moves onto its current prompt (the
+ * post-compaction respawn, whose verdict adds `restatementTooLarge` to the cost rule), so only
+ * the build is left; null then means the rebuild would change nothing. Judged a second time here,
+ * the cost rule alone said no and the respawn answered 'not-due' (2026-11-21, the Walnut VP: 8 KB
+ * and more behind, its respawn decided twice and not done twice, then restated 14 KB at 22:29).
  */
 export async function freshResumePrompt(
   record: RefreshRecord & Partial<Pick<SessionRecord, 'cwd' | 'host'>>, now = Date.now(), facts = record.promptCache,
+  opts: { decided?: boolean } = {},
 ): Promise<string | null> {
   const stored = record.appliedAppendSystemPrompt;
   // The cheap facts first: this runs before each resume spawn.
-  if (!stored || !facts || !record.taskId || !promptRefreshable(record)) return null;
+  if (!stored || (!facts && !opts.decided) || !record.taskId || !promptRefreshable(record)) return null;
   const join = stored.indexOf(TASK_CONTEXT_JOIN);
   const callerPrompt = join >= 0 ? stored.slice(0, join) : null;
   if (callerPrompt === null && !stored.startsWith(WALNUT_PROMPT_MARK)) return null;
@@ -168,7 +175,7 @@ export async function freshResumePrompt(
   // The default instructions read the user's profile and Reply language from their copies: read them now.
   const [{ refreshUserProfile }, { refreshReplyLanguage }] = await Promise.all([import('./user-profile-context.js'), import('./reply-language-context.js')]);
   await Promise.all([refreshUserProfile(), refreshReplyLanguage()]);
-  if (!refreshOnResume(record, task, now, facts)) return null;
+  if (!opts.decided && !refreshOnResume(record, task, now, facts)) return null;
   const { buildSessionContext } = await import('./session-context.js');
   const ctx = await buildSessionContext(record.taskId, record.cwd ?? undefined, record.host ?? undefined);
   if (!ctx.systemPrompt) return null;

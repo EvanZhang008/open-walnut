@@ -16058,8 +16058,8 @@ export class SessionRunner {
 
   /**
    * Move an idle session onto its current prompt with a respawn that runs no turn (the Restart
-   * path, `reinitialize`), when the stored prompt is behind and rebuilding it pays
-   * (sessions/prompt-refresh.ts). Walnut's own step: sessions/prompt-refresh-respawn.ts decides
+   * path, `reinitialize`), when the stored prompt is behind; the caller decided that it pays
+   * (sessions/prompt-refresh-respawn.ts, its verdict), so it is not judged again here. Walnut's own step: sessions/prompt-refresh-respawn.ts decides
    * when, after a compaction; the caller has checked that nothing runs in the CLI. 'not-due' when
    * the rebuild would change nothing, so the CLI is never stopped for a replay.
    */
@@ -16071,7 +16071,8 @@ export class SessionRunner {
     if (!record || isAcpEngine(record.engine)) return 'not-due'
     const { freshResumePrompt } = await import('../core/sessions/prompt-refresh.js')
     const facts = this.findSessionByClaudeId(sessionId)?.promptCache ?? record.promptCache
-    const fresh = await freshResumePrompt(record, Date.now(), facts)
+    // Decided by the caller (its verdict holds the rules a resume's cost rule lacks): only built here.
+    const fresh = await freshResumePrompt(record, Date.now(), facts, { decided: true })
     // `folder`: a VP or lead outside its own folder, which the spawn moves (org-own-folder.ts): due
     // with its prompt current too, then respawned on the stored prompt.
     if (!fresh && !opts.folder) return 'not-due'

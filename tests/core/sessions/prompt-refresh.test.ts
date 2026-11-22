@@ -124,6 +124,20 @@ describe('freshResumePrompt', () => {
     await updateSessionRecord(sid, { promptCache: { ...warmBig, expiresAt: new Date(Date.now() + 3_000_000).toISOString() } })
     expect(await freshResumePrompt((await getSessionByClaudeId(sid))!)).toBeNull()
   })
+
+  it('decided by its caller (the post-compaction respawn), it builds the current prompt whatever the cost rule says (2026-11-21, the Walnut VP)', async () => {
+    // Judged again with the cost rule alone, the respawn's decision came back 'not-due' and the VP
+    // stayed on its old prompt: restated 14 KB after its next compaction.
+    const { sid, current } = await seed()
+    const rec = { ...(await getSessionByClaudeId(sid))!, promptCache: { ...warmBig, expiresAt: new Date(Date.now() + 3_000_000).toISOString() } }
+    expect(await freshResumePrompt(rec)).toBeNull()
+    expect(await freshResumePrompt(rec, Date.now(), rec.promptCache, { decided: true })).toBe(current)
+    // With no cache facts known either.
+    expect(await freshResumePrompt({ ...rec, promptCache: undefined }, Date.now(), undefined, { decided: true })).toBe(current)
+    // Still nothing when the rebuild would change nothing, or the prompt is not Walnut's.
+    expect(await freshResumePrompt({ ...rec, appliedAppendSystemPrompt: current }, Date.now(), rec.promptCache, { decided: true })).toBeNull()
+    expect(await freshResumePrompt({ ...rec, appliedAppendSystemPrompt: 'Some other prompt.' }, Date.now(), rec.promptCache, { decided: true })).toBeNull()
+  })
 })
 
 describe('the instruction notice', () => {

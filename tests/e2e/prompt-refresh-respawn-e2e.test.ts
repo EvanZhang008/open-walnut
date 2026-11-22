@@ -152,6 +152,34 @@ describe('a session whose stored prompt is far behind', () => {
     } finally { daemon.notQuiet = false }
   }, 120_000)
 
+  it('a lead the cost rule alone would leave behind is respawned on its current prompt too (2026-11-21, the Walnut VP)', async () => {
+    // The VP's compaction came mid-turn and its turn went on: the conversation was read again, so
+    // the cost rule said a respawn does not pay. The respawner's verdict says it does
+    // (restatementTooLarge); the runner judged it again by the cost rule alone, answered 'not-due',
+    // and the VP was restated 14 KB after its next compaction.
+    const { addTask } = await import('../../src/core/task-manager.js')
+    const id = (await addTask({ title: 'Lead', project: 'Acme', source: 'local', org_role: 'lead' } as never)).task.id
+    const started = await req('POST', `/api/v1/tasks/${id}/start`, { message: 'big-context-turn:60000:1h' })
+    expect(started.status, JSON.stringify(started.json)).toBeLessThan(300)
+    const sid = (await until('session', async () => (await task(id)).session_id, (s) => !!s)) as string
+    const first = await until('first turn ended', () => getSessionByClaudeId(sid), (r) => r?.process_status === 'idle' && !!r.appliedAppendSystemPrompt && !!r.promptCache?.expiresAt)
+    const current = first!.appliedAppendSystemPrompt!
+    const old = aged(current)
+    expect(Buffer.byteLength(current) - Buffer.byteLength(old)).toBeGreaterThan(8_192)
+    await updateSessionRecord(sid, { appliedAppendSystemPrompt: old })
+    await sendMessageToSession(sid, '/compact', { source: 'ui', taskId: id })
+    await until('compacted', () => getSessionByClaudeId(sid), (r) => !!r?.lastCompactUuid)
+    // The turn after it reads a large conversation again: the cost rule alone no longer pays.
+    const startsBefore = starts(sid).length
+    await sendMessageToSession(sid, 'big-context-turn:400000:1h', { source: 'ui', taskId: id })
+    const rec = await until('decided', () => getSessionByClaudeId(sid), (r) => !!r?.promptRefresh, 40_000)
+    expect(rec!.promptRefresh, JSON.stringify(rec!.promptRefresh)).toMatchObject({ outcome: 'respawned' })
+    expect(rec!.promptRefresh!.rewriteTokens).toBeGreaterThan(100_000)
+    await until('respawn start sent', async () => starts(sid).length, (n) => n > startsBefore)
+    expect(Buffer.byteLength((await getSessionByClaudeId(sid))!.appliedAppendSystemPrompt!)).toBeGreaterThan(Buffer.byteLength(old) + 8_192)
+    expect(promptOf(starts(sid).at(-1)!)).toBe((await getSessionByClaudeId(sid))!.appliedAppendSystemPrompt)
+  }, 120_000)
+
   it('a session already on its current prompt is left alone after its compaction', async () => {
     const w = await startSession()
     const startsBefore = starts(w.sid).length
