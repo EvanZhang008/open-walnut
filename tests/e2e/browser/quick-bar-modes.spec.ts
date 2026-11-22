@@ -363,5 +363,5 @@ test('the people list not loading and nobody sent to lately: the chip says CEO a
   await box(page).fill('What is on today')
   await box(page).press('Enter')
   await expect.poll(() => sends.bodies.length).toBe(1)
-  expect(sends.bodies[0]).toEqual({ text: 'What is on today', follow: true })
+  expect(sends.bodies[0]).toEqual({ text: 'What is on today', follow: true, userUuid: expect.any(String) })
 })

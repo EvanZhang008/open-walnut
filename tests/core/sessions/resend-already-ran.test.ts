@@ -87,7 +87,9 @@ describe('every resend of a settled line asks whether it already ran', () => {
       .filter((f) => !QUEUE_ITSELF.has(f))
       .filter((f) => /\bsettledLineUuid\s*\(/.test(fs.readFileSync(path.join(ROOT, f), 'utf8')))
     expect(readers.length, 'the known resend routes are found').toBeGreaterThanOrEqual(2)
-    const missing = readers.filter((f) => !/\bresendAlreadyRan\s*\(/.test(fs.readFileSync(path.join(ROOT, f), 'utf8')))
+    // sameSendSettled (core/sessions/send-once.ts, the same send's one check) asks it for them.
+    const missing = readers.filter((f) => !/\b(?:resendAlreadyRan|sameSendSettled)\s*\(/.test(fs.readFileSync(path.join(ROOT, f), 'utf8')))
     expect(missing, 'a resend of a line that ran must not enqueue it again (core/sessions/resend-already-ran.ts)').toEqual([])
+    expect(fs.readFileSync(path.join(ROOT, 'src/core/sessions/send-once.ts'), 'utf8')).toMatch(/\bresendAlreadyRan\(\{/)
   })
 })

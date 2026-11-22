@@ -10,11 +10,17 @@
  * (every `new Error('...')` and `rejectPending('...')` of api/ws.ts, and the deadline
  * of api/session-send.ts), so a new way to lose the connection fails here until it is
  * sorted as a connection failure or listed as a refusal.
+ *
+ * 2026-11-22: the quick bar follows the same rule (its HTTP send's `network` failure), and a
+ * send older than AUTO_RETRY_MAX_AGE_MS no longer goes out by itself.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { AUTO_RETRY_MAX, dueForAutoRetry, isConnectionFailure, sameWaitingSend, waitsForConnectionAfter } from '../../web/src/hooks/send-auto-retry';
+import {
+  AUTO_RETRY_MAX, AUTO_RETRY_MAX_AGE_MS, dueForAutoRetry, expiredAutoRetry, isConnectionFailure, nextAutoRetryExpiry, pastAutoRetryAge,
+  sameWaitingSend, waitsForConnectionAfter,
+} from '../../web/src/hooks/send-auto-retry';
 import { acceptedBubble, composerSendError } from '../../web/src/components/sessions/send-acceptance';
 import { markBubblesFailed } from '../../web/src/components/sessions/parked-bubbles';
 
@@ -163,5 +169,85 @@ describe('only a surface that draws the waiting bubble resends by itself', () =>
     // A surface added here must pass onRetryFailed and onDismissFailed to SessionChatHistory.
     expect(files.sort()).toEqual(['web/src/components/notes/NotesSessionChat.tsx', 'web/src/components/sessions/SessionPanel.tsx']);
     for (const f of files) expect(read(f), f).toMatch(/onRetryFailed=/);
+  });
+});
+
+describe('a send that waited too long goes out by itself no more (AUTO_RETRY_MAX_AGE_MS)', () => {
+  const T0 = Date.parse('2026-11-22T10:00:00.000Z');
+  const at = (ms: number) => new Date(T0 + ms).toISOString();
+  const b = (over: Record<string, unknown>) => ({ queueId: 'q1', status: 'failed', userUuid: 'u1', waitsForConnection: true, timestamp: at(0), ...over });
+  it('ten minutes from the first try, one rule for both surfaces', () => {
+    expect(AUTO_RETRY_MAX_AGE_MS).toBe(10 * 60_000);
+    expect(pastAutoRetryAge(at(0), T0 + AUTO_RETRY_MAX_AGE_MS - 1)).toBe(false);
+    expect(pastAutoRetryAge(at(0), T0 + AUTO_RETRY_MAX_AGE_MS)).toBe(true);
+    // Epoch ms (a quick bar receipt) counts the same as an ISO time (a bubble).
+    expect(pastAutoRetryAge(T0, T0 + AUTO_RETRY_MAX_AGE_MS)).toBe(true);
+    // No known time: never too old (an older bubble kept in a draft).
+    expect(pastAutoRetryAge(undefined, T0 + 99 * AUTO_RETRY_MAX_AGE_MS)).toBe(false);
+    expect(pastAutoRetryAge('not a time', T0)).toBe(false);
+  });
+  it('an old send never waits, never goes out by itself, and turns into an ordinary failure, shown', () => {
+    const late = T0 + AUTO_RETRY_MAX_AGE_MS + 1;
+    expect(waitsForConnectionAfter('WebSocket not connected (timeout)', { userUuid: 'u1', timestamp: at(0) }, 0, late)).toBe(false);
+    expect(waitsForConnectionAfter('WebSocket not connected (timeout)', { userUuid: 'u1', timestamp: at(0) }, 0, T0 + 1000)).toBe(true);
+    expect(dueForAutoRetry([b({})], true, new Set(), late)).toHaveLength(0);
+    expect(dueForAutoRetry([b({})], true, new Set(), T0 + 1000)).toHaveLength(1);
+    // Never silently: the hook turns each of these into a red line with its Retry.
+    expect(expiredAutoRetry([b({})], late).map((m) => m.queueId)).toEqual(['q1']);
+    expect(expiredAutoRetry([b({})], T0 + 1000)).toHaveLength(0);
+    expect(expiredAutoRetry([b({ waitsForConnection: undefined })], late)).toHaveLength(0);
+    expect(expiredAutoRetry([b({ status: 'pending' })], late)).toHaveLength(0);
+  });
+  it('one timer: the earliest moment a waiting bubble grows too old', () => {
+    expect(nextAutoRetryExpiry([b({ queueId: 'a', timestamp: at(5_000) }), b({ queueId: 'b', timestamp: at(1_000) })])).toBe(T0 + 1_000 + AUTO_RETRY_MAX_AGE_MS);
+    expect(nextAutoRetryExpiry([b({ waitsForConnection: undefined })])).toBeUndefined();
+    expect(nextAutoRetryExpiry([])).toBeUndefined();
+  });
+  it('Enter on the words of an old waiting send is a new send', () => {
+    const w = b({ text: 'jsut go', draftOrigin: { key: 'draft:session:s1' } });
+    expect(sameWaitingSend([w], 'jsut go', 'draft:session:s1', T0 + 1000)?.queueId).toBe('q1');
+    expect(sameWaitingSend([w], 'jsut go', 'draft:session:s1', T0 + AUTO_RETRY_MAX_AGE_MS)).toBeUndefined();
+  });
+});
+
+describe("the quick bar's HTTP send: a fetch that never reached Walnut is a connection failure", () => {
+  it('by its code (api/quick.ts postNdjson), never by a refusal the server answered', () => {
+    const src = read('web/src/api/quick.ts');
+    // The one code postNdjson gives a fetch that threw.
+    expect(src).toMatch(/fail\('network', opts\.unreachable\)/);
+    expect(isConnectionFailure({ code: 'network', message: 'Walnut could not be reached. Nothing was sent.' })).toBe(true);
+    for (const code of ['http_400', 'http_404', 'http_409', 'http_500', 'send_failed', 'follow_lost']) {
+      expect(isConnectionFailure({ code, message: 'Not sent (500).' }), code).toBe(false);
+    }
+    expect(waitsForConnectionAfter({ code: 'network', message: 'x' }, { userUuid: 'u1', timestamp: Date.now() })).toBe(true);
+    expect(waitsForConnectionAfter({ code: 'network', message: 'x' }, {})).toBe(false);
+  });
+});
+
+describe('every surface that resends by itself follows this one rule', () => {
+  it('the chat hook and the quick bar, and nothing else imports it', () => {
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of fs.readdirSync(path.join(ROOT, dir))) {
+        const rel = path.join(dir, name);
+        if (fs.statSync(path.join(ROOT, rel)).isDirectory()) walk(rel);
+        else if (/\.tsx?$/.test(name) && /from '(?:\.\/|@\/hooks\/)send-auto-retry'/.test(read(rel))) files.push(rel);
+      }
+    };
+    walk('web/src');
+    expect(files.sort()).toEqual(['web/src/components/quickbar/useQuickReceipts.ts', 'web/src/hooks/useSessionSend.ts']);
+  });
+  it("the quick bar's one send carries its own user line, so its resend is the same send on the server", () => {
+    const callers: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of fs.readdirSync(path.join(ROOT, dir))) {
+        const rel = path.join(dir, name);
+        if (fs.statSync(path.join(ROOT, rel)).isDirectory()) walk(rel);
+        else if (/\.tsx?$/.test(name) && /\bquickSendFollow\(/.test(read(rel))) callers.push(rel);
+      }
+    };
+    walk('web/src');
+    expect(callers.filter((f) => f !== 'web/src/api/quick.ts')).toEqual(['web/src/components/quickbar/useQuickReceipts.ts']);
+    expect(read('web/src/components/quickbar/useQuickReceipts.ts')).toMatch(/userUuid: r\.userUuid/);
   });
 });

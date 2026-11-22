@@ -20,7 +20,7 @@ import { newUserUuid } from '@/utils/thread-tree';
 import type { RowWithSendUuids } from '@/utils/send-uuids';
 import { onKept, sendSessionMessage, type SendAck } from '@/api/session-send';
 import { applyLateKept, composerSendError, shownSendError, type SendErrorState } from '@/components/sessions/send-acceptance';
-import { dueForAutoRetry, sameWaitingSend, waitsForConnectionAfter } from './send-auto-retry';
+import { dueForAutoRetry, expiredAutoRetry, nextAutoRetryExpiry, sameWaitingSend, waitsForConnectionAfter } from './send-auto-retry';
 
 /** How long after the connection is back a waiting send goes out (the stores refetch first). */
 const AUTO_RETRY_DELAY_MS = 1_000;
@@ -678,6 +678,19 @@ export function useSessionSend(activeSessionId: string | null, options?: {
     const sid = activeSessionId;
     if (!sid || !autoResend) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // A bubble that waited past AUTO_RETRY_MAX_AGE_MS goes out by itself no more: it becomes an
+    // ordinary failed send, its red line and Retry (send-auto-retry.ts), never dropped quietly.
+    const expire = () => {
+      const old = expiredAutoRetry(msgsRef.current);
+      if (old.length === 0) return;
+      const ids = new Set(old.map((m) => m.queueId));
+      log.info('send', 'waited too long for the connection: no longer sent by itself', { sessionId: sid, count: old.length });
+      setSendError(old[0].failedError ?? 'Not sent', old[0].userUuid, true);
+      setOptimisticMsgs((prev) => prev.map((m) => (ids.has(m.queueId) ? { ...m, waitsForConnection: undefined } : m)));
+    };
+    expire();
+    const expiresAt = nextAutoRetryExpiry(msgsRef.current);
+    const expiry = expiresAt === undefined ? undefined : setTimeout(expire, Math.max(0, expiresAt - Date.now()) + 50);
     const fire = () => {
       for (const m of dueForAutoRetry(msgsRef.current, wsClient.state === 'connected', autoInFlight.current)) {
         autoInFlight.current.add(m.queueId);
@@ -690,8 +703,12 @@ export function useSessionSend(activeSessionId: string | null, options?: {
     const onState = (state: string) => { if (state === 'connected') soon(); };
     wsClient.onEvent('_ws:reconnected', soon);
     wsClient.onConnectionChange(onState);
-    return () => { wsClient.offEvent('_ws:reconnected', soon); wsClient.offConnectionChange(onState); if (timer) clearTimeout(timer); };
-  }, [waitingKey, activeSessionId, autoResend]);
+    return () => {
+      wsClient.offEvent('_ws:reconnected', soon); wsClient.offConnectionChange(onState);
+      if (timer) clearTimeout(timer);
+      if (expiry) clearTimeout(expiry);
+    };
+  }, [waitingKey, activeSessionId, autoResend, setSendError]);
 
   /** Remove a failed message from the optimistic list. */
   const dismissFailed = useCallback((queueId: string) => {

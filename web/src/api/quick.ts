@@ -51,6 +51,13 @@ export type QuickFollowLine =
 export interface QuickImage { data: string; mediaType: string }
 
 /**
+ * A send's own user line: the same `userUuid` again is that send on the server, never a second
+ * copy (src/core/sessions/send-once.ts). `resend`: sent again by the bar itself (`auto`) or by
+ * the person's Send again (`person`).
+ */
+export interface QuickSendLine { userUuid: string; resend?: 'auto' | 'person' }
+
+/**
  * Send `text` to `to` (a task id; the CEO when null) and call `onLine` with each line of the
  * answer: first `sent` or `held`, then the reply as it is written. Resolves when the answer ends.
  * A failure before any line (the network, a refusal) comes back as one `error` line, so the
@@ -58,14 +65,32 @@ export interface QuickImage { data: string; mediaType: string }
  */
 export async function quickSendFollow(
   to: string | null, text: string, images: QuickImage[], onLine: (line: QuickFollowLine) => void, signal?: AbortSignal,
+  line?: QuickSendLine,
 ): Promise<void> {
-  const body = { ...(to ? { to } : {}), text, ...(images.length ? { images } : {}), follow: true };
+  const body = {
+    ...(to ? { to } : {}), text, ...(images.length ? { images } : {}), follow: true,
+    ...(line ? { userUuid: line.userUuid, ...(line.resend ? { resend: line.resend } : {}) } : {}),
+  };
   return postNdjson<QuickFollowLine>('/api/v1/quick/send', body, onLine, {
     signal,
     unreachable: 'Walnut could not be reached. Nothing was sent.',
     refused: (status) => `Not sent (${status}).`,
     lost: 'Lost the reply on the way. It is in the chat.',
   });
+}
+
+/** Walnut answers again (a liveness read that never waits long): a waiting send may go out now. */
+export async function walnutAnswers(timeoutMs = 3_000): Promise<boolean> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const res = await fetch('/api/system/health', { cache: 'no-store', signal: ctl.signal });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export type QuickAskLine =

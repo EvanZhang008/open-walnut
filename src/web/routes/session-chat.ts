@@ -13,7 +13,7 @@ import type { SessionEffort, SessionEngine, SessionMode } from '../../core/types
 import { normalizeEngine } from '../../core/agents/engine-registry.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tracker.js'
 import { getSessionPendingPermissions } from '../../core/sessions/session-lifecycle.js'
-import { sendMessageToSession, editMessage, deleteMessage, getQueue, queuedRowOfUserLine, settledLineUuid } from '../../core/session-message-queue.js'
+import { sendMessageToSession, editMessage, deleteMessage, getQueue, settledLineUuid } from '../../core/session-message-queue.js'
 import { heldRows, PROMPT_HOLD_REASON } from '../../providers/line-consumption.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
 import { prepareHintedSend } from '../../core/hints/hint-send.js'
@@ -34,6 +34,7 @@ import { broadcastEvent } from '../ws/handler.js'
 import { hasAiOnly, redactAiOnly } from '../../lib/ai-only-envelope.js'
 import { attachmentHeaderBlock } from '../../lib/attachment-headers.js'
 import { attributedUnlessAutomated } from '../../core/sessions/send-frame.js'
+import { oneSendAtATime, sameSendSettled } from '../../core/sessions/send-once.js'
 
 const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 const MAX_SESSION_IMAGES = 5
@@ -66,25 +67,10 @@ function inSendTestRun<T>(handler: (payload: unknown) => Promise<T>): (payload: 
   }
 }
 
-/**
- * The same send twice at once is one send: a client that lost the socket with its send in flight
- * resends it (web/src/hooks/send-auto-retry.ts) as soon as the socket is back, which can be while
- * the first is still on its way to the queue. Keyed by the send's user line uuid, so two different
- * sends never wait on each other; a send without one runs as always.
- */
-const sendsInFlight = new Map<string, Promise<unknown>>()
-function oneSendAtATime(payload: unknown, run: (payload: unknown) => Promise<unknown>): Promise<unknown> {
+/** The key of one send: its session and user line (core/sessions/send-once.ts); none without a uuid. */
+function sendKeyOf(payload: unknown): string | undefined {
   const p = payload as { sessionId?: unknown; userUuid?: unknown } | null
-  const key = p && typeof p.sessionId === 'string' && typeof p.userUuid === 'string' ? `${p.sessionId}\n${p.userUuid}` : undefined
-  if (!key) return run(payload)
-  const earlier = sendsInFlight.get(key)
-  // The later one runs after the earlier settles, so it finds the row the earlier queued (the retry
-  // path's same-line check) instead of racing it to the queue.
-  const next = (earlier ? earlier.catch(() => undefined) : Promise.resolve()).then(() => run(payload))
-  sendsInFlight.set(key, next)
-  const clear = () => { if (sendsInFlight.get(key) === next) sendsInFlight.delete(key) }
-  next.then(clear, clear)
-  return next
+  return p && typeof p.sessionId === 'string' && typeof p.userUuid === 'string' ? `${p.sessionId}\n${p.userUuid}` : undefined
 }
 
 export function registerSessionChatRpc(): void {
@@ -128,7 +114,7 @@ export function registerSessionChatRpc(): void {
     }, ['session-runner'], { source: 'web-ui' })
   })
 
-  registerMethod('session:send', inSendTestRun((payload: unknown) => oneSendAtATime(payload, sendRpc)))
+  registerMethod('session:send', inSendTestRun((payload: unknown) => oneSendAtATime(sendKeyOf(payload), () => sendRpc(payload))))
   async function sendRpc(payload: unknown): Promise<unknown> {
     if (typeof payload !== 'object' || payload === null) {
       throw new Error('session:send requires an object payload')
@@ -330,29 +316,15 @@ export function registerSessionChatRpc(): void {
         return { messageId: data.retryOf }
       }
       // The first send reached the queue but its answer was lost (the socket dropped after the
-      // server took it): the bubble still knows it by its own client id, the row by its user line.
-      // The same send again is that row, never a second copy (the client resends by itself once the
-      // connection is back, hooks/send-auto-retry.ts).
-      const twin = userUuid ? await queuedRowOfUserLine(data.sessionId, userUuid) : undefined
-      if (twin) {
-        log.web.info('session:send retry: the send is already queued under its user line', {
-          sessionId: data.sessionId, retryOf: data.retryOf, messageId: twin.id,
-        })
-        // A Retry still means "send it": a parked row is un-parked and the drain asked for, as above.
-        await sendQueuedNow({
-          sessionId: data.sessionId, messageId: twin.id, taskId: record?.taskId,
-          message: data.message as string, source: 'web-ui-retry', unpark: data.autoResend !== true,
-        })
-        return { messageId: twin.id, ...(twin.enqueuedAt ? { enqueuedAt: twin.enqueuedAt } : {}) }
-      }
+      // server took it), or its line already ran: the same send again is that send, never a second
+      // copy (core/sessions/send-once.ts; the client resends by itself, hooks/send-auto-retry.ts).
       retryLine = await settledLineUuid(data.retryOf)
-      // The first send's acknowledgement was lost, not the send: its line may have run.
-      // Then a fresh enqueue would only spawn a CLI for a turn that never comes
-      // (core/sessions/resend-already-ran.ts); the bubble learns it was delivered.
-      const { resendAlreadyRan } = await import('../../core/sessions/resend-already-ran.js')
-      if (await resendAlreadyRan({ sessionId: data.sessionId, host: record?.host, lineUuid: retryLine ?? userUuid })) {
-        return { messageId: data.retryOf, alreadyDelivered: true }
-      }
+      const same = await sameSendSettled({
+        sessionId: data.sessionId, host: record?.host, taskId: record?.taskId, userUuid, lineUuid: retryLine,
+        message: data.message as string, source: 'web-ui-retry', autoResend: data.autoResend === true,
+      })
+      if (same.state === 'queued') return { messageId: same.messageId, ...(same.enqueuedAt ? { enqueuedAt: same.enqueuedAt } : {}) }
+      if (same.state === 'ran') return { messageId: data.retryOf, alreadyDelivered: true }
       log.web.info('session:send retry — original row no longer queued, enqueueing fresh', {
         sessionId: data.sessionId, messageId: data.retryOf, lineUuid: retryLine,
       })

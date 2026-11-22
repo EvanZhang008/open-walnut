@@ -382,3 +382,63 @@ describe('the quick bar: GET /api/v1/quick/people and POST /api/v1/quick/send', 
     expect(String(last.text).split('<system-reminder>')[0]).toContain('PEAR-3')
   })
 })
+
+describe('the same quick send again (userUuid) is that send, never a second copy', () => {
+  // 2026-11-22: the quick bar sends a message that never reached Walnut again by itself once
+  // Walnut answers, under the same user line (core/sessions/send-once.ts).
+  it('starts a task once, queues a message once, and after a restart finds the row it queued', async () => {
+    const { resetSendOnce } = await import('../../src/core/sessions/send-once.js')
+    const made = (await (await post('/tasks', { title: 'Book the ferry', project: 'Life' })).json()) as { task: { id: string } }
+    const taskId = made.task.id
+    starts.length = 0
+
+    // No session yet: two tries of one send at once start the task once, and both hear the same.
+    const START = '3e1f0a9b-4c5d-4e6f-8a0b-1c2d3e4f5a6b'
+    const [a, b] = await Promise.all([
+      post('/quick/send', { to: taskId, text: 'Take the 9am one', userUuid: START }),
+      post('/quick/send', { to: taskId, text: 'Take the 9am one', userUuid: START, resend: 'auto' }),
+    ])
+    const [ja, jb] = [await a.json(), await b.json()]
+    expect(ja).toMatchObject({ taskId, started: true })
+    expect(jb).toEqual(ja)
+    expect(starts).toHaveLength(1)
+
+    // A live session: the row carries the send's own user line; the same send again is that row.
+    const sid = '44444444-5555-4666-8777-888888888888'
+    await createSessionRecord(sid, taskId, 'Life', WALNUT_HOME)
+    await updateTaskRaw(taskId, { session_id: sid } as never)
+    await updateSessionRecord(sid, { process_status: 'idle' } as never)
+    starts.length = 0
+    const LINE = '4f2a1b0c-5d6e-4f7a-9b1c-2d3e4f5a6b7c'
+    const first = await (await post('/quick/send', { to: taskId, text: 'And a cabin', userUuid: LINE })).json() as Record<string, unknown>
+    expect(first).toMatchObject({ taskId, sessionId: sid, started: false })
+    const rows = () => getQueue(sid).then((q) => q.filter((m) => m.message.startsWith('And a cabin')))
+    expect((await rows()).map((m) => [m.id, m.userUuid])).toEqual([[first.messageId, LINE]])
+    const again = await (await post('/quick/send', { to: taskId, text: 'And a cabin', userUuid: LINE, resend: 'auto' })).json()
+    expect(again).toEqual(first)
+    expect(await rows()).toHaveLength(1)
+
+    // The server restarted between the tries (its memory is gone): the queued row is that send.
+    resetSendOnce()
+    const afterRestart = await (await post('/quick/send', { to: taskId, text: 'And a cabin', userUuid: LINE, resend: 'auto', follow: true })).text()
+    expect(lines(afterRestart)[0]).toMatchObject({ type: 'sent', taskId, sessionId: sid, messageId: first.messageId })
+    expect(await rows()).toHaveLength(1)
+    expect(starts).toHaveLength(0)
+  })
+
+  it('without a uuid every send is its own, as before; a malformed uuid is refused before anything is sent', async () => {
+    const made = (await (await post('/tasks', { title: 'Water the ferns', project: 'Life' })).json()) as { task: { id: string } }
+    const sid = '55555555-6666-4777-8888-999999999999'
+    await createSessionRecord(sid, made.task.id, 'Life', WALNUT_HOME)
+    await updateTaskRaw(made.task.id, { session_id: sid } as never)
+    await updateSessionRecord(sid, { process_status: 'idle' } as never)
+    await post('/quick/send', { to: made.task.id, text: 'Twice please' })
+    await post('/quick/send', { to: made.task.id, text: 'Twice please' })
+    expect((await getQueue(sid)).filter((m) => m.message.startsWith('Twice please'))).toHaveLength(2)
+    for (const userUuid of ['not-a-uuid', 42, '4f2a1b0c-5d6e-1f7a-9b1c-2d3e4f5a6b7c', `${'a'.repeat(40)}`]) {
+      const res = await post('/quick/send', { to: made.task.id, text: 'Never', userUuid })
+      expect(res.status, String(userUuid)).toBe(400)
+    }
+    expect((await getQueue(sid)).some((m) => m.message.startsWith('Never'))).toBe(false)
+  })
+})

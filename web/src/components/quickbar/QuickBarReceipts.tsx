@@ -1,7 +1,8 @@
 /**
  * The receipts after a send (useQuickReceipts.ts): a notice card (NoticeCard) per message, newest at the bottom,
  * that says where it stands in words and, once it came, the reply's first line. Click opens the
- * whole reply with "Open chat"; a message that never went out offers "Put it back". Each has its ×.
+ * whole reply with "Open chat"; a message that never went out offers "Put it back". Each has its ×;
+ * on a message still on its way (waiting for Walnut) the × only hides the card: it goes out all the same.
  */
 import { CORNER_ORDER, CornerSlot } from '@/components/common/corner-stack';
 import { NoticeCard, type NoticeTone } from '@/components/common/NoticeCard';
@@ -14,7 +15,7 @@ interface ReceiptsProps {
   floating?: boolean;
   onOpenChat: (r: Receipt) => void;
   onPutBack: (r: Receipt) => void;
-  /** Send the words again as they were (a failed or held send). */
+  /** Send the words again as they were (a failed or held send), or a waiting one now. */
   onResend: (id: string) => void;
   onToggle: (id: string) => void;
   onDismiss: (id: string) => void;
@@ -25,6 +26,7 @@ interface ReceiptsProps {
 export function receiptStatus(r: Receipt): string {
   switch (r.state) {
     case 'sending': return 'Sending…';
+    case 'waiting': return 'Waiting for Walnut · sends when it is back';
     case 'sent': return r.started ? 'Sent · starting its session' : 'Sent · in its queue';
     case 'delivered': return 'Delivered';
     case 'thinking': return r.reply ? 'Replying…' : r.activity ? `Working · ${r.activity}` : 'Thinking…';
@@ -42,7 +44,7 @@ function firstLine(text: string): string {
 /** The tone of a receipt's dot: on its way (live), replied (ok), never sent (warn), muted otherwise. */
 export function receiptTone(r: Pick<Receipt, 'state'>): NoticeTone {
   switch (r.state) {
-    case 'sending': case 'sent': case 'delivered': case 'thinking': return 'live';
+    case 'sending': case 'waiting': case 'sent': case 'delivered': case 'thinking': return 'live';
     case 'replied': return 'ok';
     case 'held': case 'failed': return 'warn';
     case 'lost': return 'muted';

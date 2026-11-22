@@ -14,18 +14,47 @@
  *  - only a send with its own user line uuid: that uuid is how the server knows the
  *    same send again (session-chat.ts: a queued row with it is that row; a line the CLI
  *    already ran with it is delivered), so a resend can never add a second copy.
- *  - at most AUTO_RETRY_MAX tries by itself; then it is an ordinary failed send with a
- *    Retry the person presses.
+ *  - at most AUTO_RETRY_MAX tries by itself, and only within AUTO_RETRY_MAX_AGE_MS of the
+ *    first; then it is an ordinary failed send with a Retry the person presses (2026-11-22:
+ *    words a person wrote ten minutes ago may no longer be what he wants sent).
+ *
+ * The chat's bubbles (hooks/useSessionSend.ts) and the quick bar's receipts
+ * (components/quickbar/useQuickReceipts.ts) follow this one rule; the server side is
+ * src/core/sessions/send-once.ts.
  */
 
 /** How many times a send is sent again by itself before the person's Retry takes over. */
 export const AUTO_RETRY_MAX = 3;
 
+/** A send older than this (from its first try) is never sent again by itself. */
+export const AUTO_RETRY_MAX_AGE_MS = 10 * 60_000;
+
 /** Error words of a send that never got through (api/ws.ts, api/session-send.ts withDeadline). */
 const CONNECTION_FAILURE = /^(?:WebSocket not connected|WebSocket disconnected|no answer in \d+s$)/;
 
-export function isConnectionFailure(error: string | undefined): boolean {
-  return !!error && CONNECTION_FAILURE.test(error);
+/** Codes of an HTTP send that never reached Walnut: the quick bar's fetch threw (api/quick.ts postNdjson). */
+const CONNECTION_CODES: ReadonlySet<string> = new Set(['network']);
+
+/** A failure by its words (a socket send) or by its code (an HTTP send's `{code, message}` line). */
+export type SendFailure = string | { message: string; code?: string } | undefined;
+
+export function isConnectionFailure(failure: SendFailure): boolean {
+  if (!failure) return false;
+  if (typeof failure === 'string') return CONNECTION_FAILURE.test(failure);
+  return (!!failure.code && CONNECTION_CODES.has(failure.code)) || CONNECTION_FAILURE.test(failure.message);
+}
+
+/** When a send was first tried: an ISO time (a bubble's `timestamp`) or epoch ms. */
+function firstTriedAt(at: string | number | undefined): number | undefined {
+  if (at === undefined) return undefined;
+  const ms = typeof at === 'number' ? at : Date.parse(at);
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+/** Too old to go out by itself any more. A send with no known time is never too old. */
+export function pastAutoRetryAge(at: string | number | undefined, now = Date.now()): boolean {
+  const first = firstTriedAt(at);
+  return first !== undefined && now - first >= AUTO_RETRY_MAX_AGE_MS;
 }
 
 export interface AutoRetryBubble {
@@ -33,6 +62,8 @@ export interface AutoRetryBubble {
   status: string;
   text?: string;
   userUuid?: string;
+  /** When it was first sent (ISO): past AUTO_RETRY_MAX_AGE_MS it no longer goes out by itself. */
+  timestamp?: string;
   draftOrigin?: { key: string };
   /** Failed for the connection only: sent again by itself once it is back. */
   waitsForConnection?: boolean;
@@ -40,16 +71,45 @@ export interface AutoRetryBubble {
   autoTries?: number;
 }
 
-/** Whether a send that just failed with `error` waits for the connection (after `tries` resends by itself). */
-export function waitsForConnectionAfter(error: string, bubble: Pick<AutoRetryBubble, 'userUuid'>, tries = 0): boolean {
-  return isConnectionFailure(error) && !!bubble.userUuid && tries < AUTO_RETRY_MAX;
+/**
+ * Whether a send that just failed with `failure` waits for the connection (after `tries` resends
+ * by itself). `at`: when it was first tried (a bubble's `timestamp`, a receipt's epoch ms).
+ */
+export function waitsForConnectionAfter(
+  failure: SendFailure, send: { userUuid?: string; timestamp?: string | number }, tries = 0, now = Date.now(),
+): boolean {
+  return isConnectionFailure(failure) && !!send.userUuid && tries < AUTO_RETRY_MAX && !pastAutoRetryAge(send.timestamp, now);
+}
+
+/** Waiting for the connection, with tries left and young enough to go out by itself. */
+function stillWaits(m: AutoRetryBubble, now: number): boolean {
+  return m.status === 'failed' && !!m.waitsForConnection && !!m.userUuid
+    && (m.autoTries ?? 0) < AUTO_RETRY_MAX && !pastAutoRetryAge(m.timestamp, now);
 }
 
 /** The bubbles to send again now: waiting for the connection, which is up, and not on their way already. */
-export function dueForAutoRetry<T extends AutoRetryBubble>(bubbles: readonly T[], connected: boolean, inFlight: ReadonlySet<string>): T[] {
+export function dueForAutoRetry<T extends AutoRetryBubble>(bubbles: readonly T[], connected: boolean, inFlight: ReadonlySet<string>, now = Date.now()): T[] {
   if (!connected) return [];
-  return bubbles.filter((m) => m.status === 'failed' && m.waitsForConnection && !!m.userUuid
-    && (m.autoTries ?? 0) < AUTO_RETRY_MAX && !inFlight.has(m.queueId));
+  return bubbles.filter((m) => stillWaits(m, now) && !inFlight.has(m.queueId));
+}
+
+/**
+ * The bubbles that waited too long: no longer sent by themselves, so each becomes an ordinary
+ * failed send (its red line and Retry), never dropped quietly.
+ */
+export function expiredAutoRetry<T extends AutoRetryBubble>(bubbles: readonly T[], now = Date.now()): T[] {
+  return bubbles.filter((m) => m.status === 'failed' && m.waitsForConnection && pastAutoRetryAge(m.timestamp, now));
+}
+
+/** When the next waiting bubble grows too old (epoch ms), for one timer; undefined when none waits. */
+export function nextAutoRetryExpiry(bubbles: readonly AutoRetryBubble[]): number | undefined {
+  let next: number | undefined;
+  for (const m of bubbles) {
+    if (m.status !== 'failed' || !m.waitsForConnection) continue;
+    const first = firstTriedAt(m.timestamp);
+    if (first !== undefined && (next === undefined || first + AUTO_RETRY_MAX_AGE_MS < next)) next = first + AUTO_RETRY_MAX_AGE_MS;
+  }
+  return next;
 }
 
 /**
@@ -57,8 +117,9 @@ export function dueForAutoRetry<T extends AutoRetryBubble>(bubbles: readonly T[]
  * itself now. A failed send's words come back to its box; pressing Enter on them again is that
  * send, never a second one under a new user line (which the server could not tell from a new message).
  */
-export function sameWaitingSend<T extends AutoRetryBubble>(bubbles: readonly T[], text: string, boxKey: string | undefined): T | undefined {
+export function sameWaitingSend<T extends AutoRetryBubble>(bubbles: readonly T[], text: string, boxKey: string | undefined, now = Date.now()): T | undefined {
   if (!boxKey) return undefined;
-  return bubbles.find((m) => m.draftOrigin?.key === boxKey && m.text === text && !!m.userUuid
+  // Too old to go out by itself: Enter on its words is a new send (the old one shows its Retry).
+  return bubbles.find((m) => m.draftOrigin?.key === boxKey && m.text === text && !!m.userUuid && !pastAutoRetryAge(m.timestamp, now)
     && ((m.status === 'failed' && m.waitsForConnection) || (m.status === 'pending' && (m.autoTries ?? 0) > 0)));
 }

@@ -30,7 +30,7 @@ function QuickBarOverlay() {
   const [open, setOpen] = useState(false);
   const barRef = useRef<QuickBarHandle | null>(null);
   const navigate = useNavigate();
-  const { receipts, send, resend, dismiss, toggleOpen, pin } = useQuickReceipts();
+  const { receipts, send, resend, dismiss, withdraw, toggleOpen, pin } = useQuickReceipts();
 
   const show = useLeanCallback((opts?: OpenOptions) => {
     // Shown and focused before the next key: words typed right after the key go into the bar,
@@ -75,10 +75,11 @@ function QuickBarOverlay() {
   }, [send]);
 
   const putBack = useLeanCallback((r: Receipt) => {
-    dismiss(r.id);
+    // The words go back into the bar: their send (a waiting one too) goes out no more.
+    withdraw(r.id);
     setOpen(true);
     requestAnimationFrame(() => barRef.current?.restore(r.person as QuickPerson, r.text, r.images));
-  }, [dismiss]);
+  }, [withdraw]);
 
   const openChat = useLeanCallback((r: Receipt) => {
     if (!r.taskId) return;

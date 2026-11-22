@@ -85,7 +85,7 @@ test('speak, the name said first picks the VP, and two seconds later it sends an
 
   // Two seconds later: sent to the VP, the bar closes, the receipt follows the reply.
   await expect.poll(() => sends.bodies.length, { timeout: 5_000 }).toBe(1)
-  expect(sends.bodies[0]).toEqual({ to: 'pw-vp-walnut', text: 'ship the quick bar first', follow: true })
+  expect(sends.bodies[0]).toEqual({ to: 'pw-vp-walnut', text: 'ship the quick bar first', follow: true, userUuid: expect.any(String) })
   await expect(bar(page)).toBeHidden()
   const receipt = page.locator('.qb-receipt').first()
   await expect(receipt.locator('.qb-receipt-who')).toHaveText('Walnut VP')
@@ -98,7 +98,7 @@ test('speak, the name said first picks the VP, and two seconds later it sends an
   // The reply shows once: the line above it now says what was sent.
   await expect(receipt.locator('.qb-receipt-line')).toHaveText('You: ship the quick bar first')
   await expect(receipt.getByRole('button', { name: 'Open chat' })).toBeVisible()
-  await receipt.getByRole('button', { name: 'Dismiss' }).click()
+  await receipt.locator('.qb-receipt-actions').getByRole('button', { name: 'Dismiss' }).click()
   await expect(page.locator('.qb-receipt')).toHaveCount(0)
 
   // It opens again on the person just sent to. Esc during the count stops it; Enter sends.
@@ -142,7 +142,7 @@ test('Enter during the take closes the bar at once; the last words are written o
   expect(took).toBeLessThan(100)
   expect(sends.bodies).toHaveLength(0)
   await expect.poll(() => sends.bodies.length, { timeout: 10_000 }).toBe(1)
-  expect(sends.bodies[0]).toEqual({ text: 'to Walnut VP, ship it', follow: true })
+  expect(sends.bodies[0]).toEqual({ text: 'to Walnut VP, ship it', follow: true, userUuid: expect.any(String) })
   await expect(bar(page)).toBeHidden()
   // The words left with the send: nothing waits in the draft store to go again on the next open.
   await expect.poll(() => page.evaluate(() => localStorage.getItem('draft:quickbar'))).toBeNull()
@@ -261,7 +261,7 @@ test('Tab lists who to talk to: Cmd-number and typed words pick', async ({ page 
   await expect(chip(page)).toHaveText('Pick the tile color')
   await box(page).fill('Sand, please')
   await box(page).press('Enter')
-  await expect.poll(() => sends.bodies.at(-1)).toEqual({ to: 'pw-task-tile', text: 'Sand, please', follow: true })
+  await expect.poll(() => sends.bodies.at(-1)).toEqual({ to: 'pw-task-tile', text: 'Sand, please', follow: true, userUuid: expect.any(String) })
 })
 
 test('a send that never went out says so and puts the words back', async ({ page }) => {

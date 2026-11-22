@@ -25,9 +25,13 @@
  *        clipboard; saved here and named by path in the message, the phone's way
  *        (session-send-v1.ts). With an image the text may be empty.
  *        Both are the one send below.
- *   POST /quick/send { to?, text, images?, follow? } → as /quick/main
+ *   POST /quick/send { to?, text, images?, follow?, userUuid?, resend? } → as /quick/main
  *        The quick bar's send (web/src/components/quickbar/): `to` is the task id the people list
  *        named (a VP, any task), Main when absent or `ceo`; `follow` streams that task's reply.
+ *        `userUuid` (a v4 uuid the client made for this send) is the send's own user line: the
+ *        same uuid again is that send, never a second copy (core/sessions/send-once.ts), answered
+ *        as the first was, or as `delivered` when its line already ran. `resend`: `auto` (the bar
+ *        sends it again by itself once Walnut answers) or `person` (its Send again).
  *        In a focus space (experiment focus_workspace) a line to anyone outside it is dropped out
  *        and left: after `sent` the stream ends with `{ type: 'kept', reason: 'outside_focus' }`,
  *        and the reply waits in that chat, never streaming back into the focus.
@@ -253,11 +257,16 @@ async function quickSend(req: Request, res: Response, taskId: string | null, bad
     res.status(400).json({ error: badRequest, code: 'bad_request' })
     return
   }
+  const line = quickLineOf(req.body)
+  if (line === null) {
+    res.status(400).json({ error: 'userUuid must be a v4 UUID string', code: 'bad_request' })
+    return
+  }
   let send: () => Promise<QuickMainResult>
   if (taskId === null) {
     // A marked test run talks to its own stand-in CEO, never the user's (content-v1.ts).
     const standIn = opts.testRunGuard ? await (await import('./content-v1.js')).testRunCeo() : null
-    send = standIn ? () => sendToTaskFromRequest(req, standIn, text, images) : () => sendToMain(text, images, quickSource(req))
+    send = standIn ? () => sendToTaskFromRequest(req, standIn, text, images, line) : () => sendToMain(text, images, quickSource(req), line)
   } else {
     const task = await exactTask(taskId, res)
     if (!task) return
@@ -265,14 +274,20 @@ async function quickSend(req: Request, res: Response, taskId: string | null, bad
       res.status(409).json({ error: 'A test run never writes into a VP or router chat', code: 'test_run_unmarked' })
       return
     }
-    send = () => sendToTaskFromRequest(req, task, text, images)
+    send = () => sendToTaskFromRequest(req, task, text, images, line)
+  }
+  if (line) {
+    // The same send again (the bar resends by itself once Walnut answers) is that send, run once.
+    const first = send
+    const { sendOnce } = await import('../../core/sessions/send-once.js')
+    send = () => sendOnce(`quick\n${line.userUuid}`, first, { again: wentInSince })
   }
   if (req.body?.follow === true) {
     await sendAndFollow(send, res, { kept: opts.kept })
     return
   }
-  const answer = await send()
-  delete answer.midTurn
+  // A copy: the kept answer of a send (send-once.ts) is answered again as it was.
+  const { midTurn: _midTurn, ...answer } = await send()
   res.json(answer)
 }
 
@@ -302,7 +317,9 @@ async function sendAndFollow(send: () => Promise<QuickMainResult>, res: Response
     type: sent.held ? 'held' : 'sent', taskId: sent.taskId, sessionId: sent.sessionId, started: sent.started,
     ...(sent.messageId ? { messageId: sent.messageId } : {}),
   })
-  if (sent.held || !sent.sessionId) {
+  // A resend of a line that already ran: delivered, and its reply (if any) is in its chat.
+  if (sent.alreadyDelivered) line({ type: 'delivered' })
+  if (sent.held || !sent.sessionId || sent.alreadyDelivered) {
     follower.stop()
     return
   }
@@ -364,6 +381,32 @@ export interface QuickMainResult {
   messageId?: string
   /** Main was in a turn when the message went in (quick-main-follow.ts reads the reply after it). */
   midTurn?: boolean
+  /** A resend whose line already ran (send-once.ts): nothing was sent again. */
+  alreadyDelivered?: boolean
+}
+
+/**
+ * The first answer of a send asked again: its queued row may have gone in since, and then the
+ * reply to follow is over or under way; the client hears it was delivered (the reply is in its chat).
+ */
+async function wentInSince(answer: QuickMainResult): Promise<QuickMainResult> {
+  if (!answer.messageId || answer.held || answer.alreadyDelivered) return answer
+  const { findQueuedMessage } = await import('../../core/session-message-queue.js')
+  return (await findQueuedMessage(answer.messageId)) ? answer : { ...answer, alreadyDelivered: true }
+}
+
+/** A quick send's own user line (`userUuid`) and whether this is it sent again. */
+interface QuickLine { userUuid: string; resend?: 'auto' | 'person' }
+
+/** v4 only: the uuid becomes the CLI's own user line, as session:send's (session-chat.ts). */
+const V4_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+/** The body's line: undefined without one (older clients), null for a malformed one. */
+function quickLineOf(body: unknown): QuickLine | undefined | null {
+  const b = (body ?? {}) as { userUuid?: unknown; resend?: unknown }
+  if (b.userUuid === undefined) return undefined
+  if (typeof b.userUuid !== 'string' || b.userUuid.length > 36 || !V4_UUID_RE.test(b.userUuid)) return null
+  return { userUuid: b.userUuid, ...(b.resend === 'auto' || b.resend === 'person' ? { resend: b.resend } : {}) }
 }
 
 /**
@@ -372,10 +415,10 @@ export interface QuickMainResult {
  * (web/src/components/org/ask-main.ts): Main's live session gets it as a person's chat message,
  * with the same message hints a composer send carries; a Main with none is started with it.
  */
-export async function sendToMain(text: string, images: SessionImage[] = [], source: string = 'ui'): Promise<QuickMainResult> {
+export async function sendToMain(text: string, images: SessionImage[] = [], source: string = 'ui', line?: QuickLine): Promise<QuickMainResult> {
   const { ensureMainTask } = await import('../../core/org/org-store.js')
   const main: Task = await ensureMainTask()
-  return sendToTaskSession(main, await taskSessionRecord(main), text, await withSavedImages(text, images), false, source)
+  return sendToTaskSession(main, await taskSessionRecord(main), text, await withSavedImages(text, images), false, source, source, undefined, line)
 }
 
 /**
@@ -420,8 +463,8 @@ async function exactTask(taskId: string, res: Response): Promise<Task | null> {
 }
 
 /** The words into one task's chat as this request's: its source, its start's source and caller. */
-async function sendToTaskFromRequest(req: Request, task: Task, text: string, images: SessionImage[]): Promise<QuickMainResult> {
-  return sendToTaskSession(task, await taskSessionRecord(task), text, await withSavedImages(text, images), false, quickSource(req), startRouteSource('api-v1', req.headers), startingSid(req))
+async function sendToTaskFromRequest(req: Request, task: Task, text: string, images: SessionImage[], line?: QuickLine): Promise<QuickMainResult> {
+  return sendToTaskSession(task, await taskSessionRecord(task), text, await withSavedImages(text, images), false, quickSource(req), startRouteSource('api-v1', req.headers), startingSid(req), line)
 }
 
 /** The session making this request: a task it starts here runs at most as loose as it (delegated-mode.ts). */
@@ -429,9 +472,18 @@ function startingSid(req: Request): string | undefined {
   return req.get('x-walnut-caller-sid')?.trim() || undefined
 }
 
-async function sendToTaskSession(task: Task, record: SessionRecord | null, text: string, cliText: string, startedOnce = false, source: string = 'ui', firstSource = source, callerSid?: string): Promise<QuickMainResult> {
+async function sendToTaskSession(task: Task, record: SessionRecord | null, text: string, cliText: string, startedOnce = false, source: string = 'ui', firstSource = source, callerSid?: string, line?: QuickLine): Promise<QuickMainResult> {
   if (record) {
     const sessionId = record.claudeSessionId
+    if (line?.resend) {
+      // Sent again after a lost answer (this process may have restarted): its row or its line is it.
+      const { sameSendSettled } = await import('../../core/sessions/send-once.js')
+      const same = await sameSendSettled({
+        sessionId, host: record.host, taskId: task.id, userUuid: line.userUuid, message: text, source, autoResend: line.resend === 'auto',
+      })
+      if (same.state === 'queued') return { taskId: task.id, sessionId, started: false, messageId: same.messageId, midTurn: record.process_status === 'running' }
+      if (same.state === 'ran') return { taskId: task.id, sessionId, started: false, alreadyDelivered: true }
+    }
     if (record.pendingPermission && (record.process_status === 'running' || record.process_status === 'idle')) {
       return { taskId: task.id, sessionId, started: false, held: true }
     }
@@ -445,6 +497,8 @@ async function sendToTaskSession(task: Task, record: SessionRecord | null, text:
       taskId: task.id,
       ...(hinted.enqueueText !== text ? { enqueueMessage: hinted.enqueueText } : {}),
       hinted: true,
+      // The queue row carries the send's own user line; the drain hands it to the CLI.
+      ...(line ? { userUuid: line.userUuid } : {}),
     })
     await hinted.commit()
     log.web.info('quick input sent to task', { taskId: task.id, sessionId, messageId: msg.id })
@@ -459,7 +513,7 @@ async function sendToTaskSession(task: Task, record: SessionRecord | null, text:
     if (err instanceof SessionExistsError && err.existingSessionId && !startedOnce) {
       const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
       const existing = await getSessionByClaudeId(err.existingSessionId)
-      if (existing) return sendToTaskSession(task, existing, text, cliText, true, source, firstSource, callerSid)
+      if (existing) return sendToTaskSession(task, existing, text, cliText, true, source, firstSource, callerSid, line)
     }
     throw err
   }

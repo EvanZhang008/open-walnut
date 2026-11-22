@@ -1798,7 +1798,7 @@ while the experiment is off; writes answer `501 not_supported_cloud` on the clou
 - `DELETE /focus-spaces/active?only_by=` → `{ ended }`
 - The events feed's `focus-changed` frame says to read `GET /focus-spaces` again.
 
-### Quick input (additive, 2026-10-31): `/quick/ask`, `/quick/warm`, `/quick/main`, `/quick/task-message`, `/quick/tasks`
+### Quick input (additive, 2026-10-31): `/quick/ask`, `/quick/warm`, `/quick/main`, `/quick/task-message`, `/quick/send`, `/quick/tasks`
 
 What a launcher on the Mac calls (the Alfred workflow and Raycast extension in
 `desktop/launchers/`, the app's Spotlight actions in `desktop/WalnutIntents.swift`).
@@ -1836,6 +1836,17 @@ Every route answers `501 not_supported_cloud` on a cloud companion.
   `/quick/tasks`: the text (and `images`) go into that task's chat as the user's message, or start
   its session when it has none. `taskId` is the exact id (`404 task_not_found` for anything else,
   a prefix included). Answers `{taskId, sessionId, started, held?, messageId?}`.
+- `POST /quick/send {to?, text, images?, follow?}`: the quick bar's send, the same send to the task
+  `to` names (Main when absent, `ceo` or `main`), answered as `/quick/main`.
+- `userUuid`, `resend` (additive, 2026-11-22, on `/quick/main`, `/quick/task-message` and
+  `/quick/send`): `userUuid` is a v4 uuid the client made for this send (anything else answers
+  `400 bad_request`); the message's line in its session carries it. The same `userUuid` again is
+  that send, never a second copy: it gets the first send's answer, or, when the server lost it (a
+  restart), `sent` with the queued row's `messageId`, or `delivered` when its line already ran
+  (the JSON answer then carries `alreadyDelivered: true`). `resend` is `auto` (the client sends it
+  again by itself after a send that never reached the server) or `person` (its Send again); a
+  `resend: "auto"` never puts back a message that was set aside (parked). Without `userUuid`
+  everything works as before.
 - `GET /quick/tasks?q=&limit=6&recent=`: `{tasks: [{id, title, project, state, stateLabel}]}`, open
   tasks first; `state` is the user status (`needs`, `working`, `waiting`, `done`). With no `q`,
   nothing, unless `recent=1`: then the open board tasks, the ones needing the user first. Open one with the

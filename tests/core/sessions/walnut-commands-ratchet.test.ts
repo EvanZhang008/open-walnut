@@ -90,9 +90,10 @@ describe('the raw passes of the send framing', () => {
       }
     };
     walk('src/web');
-    files.push('src/core/sessions/session-extras.ts');
+    // The same send's twin lookup (session:send and the quick bar's send share it).
+    files.push('src/core/sessions/session-extras.ts', 'src/core/sessions/send-once.ts');
     const readers = files.filter((f) => /\bgetQueue\(/.test(fs.readFileSync(path.join(ROOT, f), 'utf8')));
-    expect(readers.sort()).toEqual(['src/core/sessions/session-extras.ts', 'src/web/routes/session-chat.ts']);
+    expect(readers.sort()).toEqual(['src/core/sessions/send-once.ts', 'src/core/sessions/session-extras.ts', 'src/web/routes/session-chat.ts']);
     for (const f of readers) {
       for (const line of fs.readFileSync(path.join(ROOT, f), 'utf8').split('\n').filter((l) => /\bgetQueue\(/.test(l))) {
         expect(line, f).toMatch(/withoutWalnutRows\(await getQueue\(/);
