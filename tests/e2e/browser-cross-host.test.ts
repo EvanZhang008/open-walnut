@@ -136,7 +136,7 @@ describe('a trusted upload of a file on the browser\'s machine', () => {
   const REC = '/Users/evan/Desktop/Screen Recording 2026-11-13 at 12.32.01\u202fPM.mov'
   const KEY = '/Users/evan/.ssh/id_ed25519'
   const uploads = () => ext.seen.filter((c) => c.action === 'upload')
-  // The person's answer, as the store takes it once the route checked their proof (guard person).
+  // The person's answer, as the store takes it once the route found a person (a tap on any device they are signed in on).
   const answer = async (id: string, decision: 'approve' | 'deny') => {
     const { answerApproval } = await import('../../src/core/approvals/store.js')
     await answerApproval(id, { decision, device: { name: 'Test iPhone', kind: 'iphone' } } as never, async () => undefined)
@@ -151,7 +151,9 @@ describe('a trusted upload of a file on the browser\'s machine', () => {
     expect(body).toMatchObject({ status: 'needs_ok', code: 'upload_needs_ok' })
     expect(uploads()).toHaveLength(0)
     const ask = (await http('GET', `/approvals/${body.request}`)).body.approval
-    expect(ask).toMatchObject({ status: 'pending', mode: 'tap', guard: 'person' })
+    expect(ask).toMatchObject({ status: 'pending', mode: 'tap' })
+    // No unlock or device proof rides on it (2026-11-21): the person's tap answers it.
+    expect(ask.guard).toBeUndefined()
     // The approvals store folds every space to a plain one in its title; the detail keeps the path as it is.
     expect(ask.what).toBe('Upload ~/Desktop/Screen Recording 2026-11-13 at 12.32.01 PM.mov from this computer into example.test')
     expect(ask.detail).toContain('Task "Upload the demo video" asks')
@@ -199,13 +201,22 @@ describe('a trusted upload of a file on the browser\'s machine', () => {
     }
   }, 60_000)
 
-  it('a plain tap from this machine is not the person\'s proof', async () => {
+  it('the asking session cannot answer its own ask; the person\'s tap on this computer is their yes', async () => {
     const tab = (await viewTabs())[0]
     const r = await relayed('devbox', { action: 'upload', tab, selector: '#file', trusted: true, paths: ['/Users/evan/Desktop/other.mov'] })
     const id = (r as { result: Record<string, any> }).result.request
-    const tap = await http('POST', `/approvals/${id}/answer`, { decision: 'approve' })
-    expect(tap.status).not.toBe(200)
+    const { digest } = (await http('GET', `/approvals/${id}`)).body.approval
+    // The session that asked, from its host or by its session id: refused, and the ask still waits.
+    for (const headers of [{ 'x-walnut-origin': hostOrigin('devbox') }, { 'x-walnut-caller-sid': sid }]) {
+      const self = await http('POST', `/approvals/${id}/answer`, { decision: 'approve', digest }, headers)
+      expect(self.status, JSON.stringify(headers)).toBe(403)
+      expect(self.body.code).toBe('human_only')
+    }
     expect((await http('GET', `/approvals/${id}`)).body.approval.status).toBe('pending')
+    // The person's tap in the web console on this computer.
+    const tap = await http('POST', `/approvals/${id}/answer`, { decision: 'approve', digest, device: { name: 'Web console', kind: 'web' } })
+    expect(tap.status, JSON.stringify(tap.body)).toBe(200)
+    expect((await http('GET', `/approvals/${id}`)).body.approval.status).toBe('approved')
   }, 60_000)
 
   it('another task\'s yes is not this one\'s: a session that is no task\'s is refused', async () => {
