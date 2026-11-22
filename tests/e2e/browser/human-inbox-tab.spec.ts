@@ -29,6 +29,7 @@ import fs from 'node:fs/promises'
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { openKebabGroup } from './kebab-group-helpers'
+import { sessionComposer } from './session-composer'
 
 const SCREENSHOT_DIR = '/tmp/human-inbox-tab'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -237,7 +238,7 @@ test('a letter opens in the session Inbox tab beside the live chat, and answerin
 
   // ── A chat message sent WHILE the letter is open reaches the CLI ──
   const chatText = `PW TAB chat while reading ${NONCE}`
-  const chatInput = panel.getByRole('textbox', { name: 'Send a message to this session' })
+  const chatInput = sessionComposer(panel)
   await expect(chatInput).toBeVisible()
   await chatInput.fill(chatText)
   await panel.locator('.session-panel-input .chat-send-btn-icon').click()

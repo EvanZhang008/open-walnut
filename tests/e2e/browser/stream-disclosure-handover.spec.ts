@@ -21,6 +21,7 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { disableTransitions } from './render-parity-helpers';
+import { sessionComposer } from './session-composer';
 
 const SESSION_ID = 'pw-normal-session';
 
@@ -171,7 +172,7 @@ test('an opened run, an opened card and a folded diff stay as the reader left th
 
   // A message sent mid-turn; the CLI takes it and the transcript writes the
   // three calls and the message: one history read saves them all.
-  const input = page.getByRole('textbox', { name: 'Send a message to this session' });
+  const input = sessionComposer(page);
   await input.fill(midText);
   await page.locator('.session-panel-input .chat-send-btn-icon').click();
   await expect(input).toHaveValue('');

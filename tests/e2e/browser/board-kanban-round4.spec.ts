@@ -118,9 +118,7 @@ test('R3-01 R3-06: the Board opens as skeleton lanes, then every card once at it
     await r.fallback()
   })
   const watch = plainIdle()[0]
-  await startSampler(page, watch)
-  await panel.getByTestId('session-board-chip').click()
-  const pane = page.getByTestId('task-board-pane')
+  const pane = await openSessionBoard(page, panel, { beforeClick: () => startSampler(page, watch) })
   await expect(pane.getByTestId('board-kanban-loading')).toBeVisible({ timeout: 10_000 })
   await expect.poll(() => pane.getByTestId('kanban-skeleton').count(), { timeout: 5_000 }).toBeGreaterThanOrEqual(8)
   await page.waitForTimeout(400) // the sheet's open animation ends, the read is still held

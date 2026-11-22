@@ -19,6 +19,7 @@
  *   - Assert the user message is still visible after turn boundary
  */
 import { test, expect, type Page } from '@playwright/test';
+import { sessionComposer } from './session-composer';
 
 const SESSION_ID = 'pw-normal-session';
 
@@ -270,7 +271,7 @@ test.describe('Mid-stream user message persistence', () => {
     await expect(liveRows.first()).toBeVisible({ timeout: 3000 });
 
     // ── Step 2: User sends a message mid-stream ──
-    const chatInput = page.getByRole('textbox', { name: 'Send a message to this session' });
+    const chatInput = sessionComposer(page);
     await chatInput.fill(midStreamText);
     const sendBtn = page.locator('.session-panel-input .chat-send-btn-icon');
     await sendBtn.click();
@@ -381,7 +382,7 @@ test.describe('Mid-stream user message persistence', () => {
     await page.waitForTimeout(100);
 
     // Send first message mid-stream
-    const chatInput = page.getByRole('textbox', { name: 'Send a message to this session' });
+    const chatInput = sessionComposer(page);
     await chatInput.fill('First mid-stream message');
     await page.locator('.session-panel-input .chat-send-btn-icon').click();
     await page.waitForTimeout(200);
@@ -493,7 +494,7 @@ test.describe('Mid-stream user message persistence', () => {
     await page.waitForTimeout(50);
 
     // ── Step 2: User sends mid-stream message ──
-    const chatInput = page.getByRole('textbox', { name: 'Send a message to this session' });
+    const chatInput = sessionComposer(page);
     await chatInput.fill('check test files too');
     await page.locator('.session-panel-input .chat-send-btn-icon').click();
     await page.waitForTimeout(200);

@@ -29,6 +29,7 @@
  * only under a timing race that cannot be forced from a test.
  */
 import { test, expect, type Page } from '@playwright/test';
+import { sessionComposer } from './session-composer';
 
 const SESSION_ID = 'pw-merged-batch-session';
 const TASK_ID = 'pw-merged-task';
@@ -66,7 +67,7 @@ async function sentIds(page: Page): Promise<string[]> {
 
 /** Type into the REAL session composer and press Enter (no API shortcuts). */
 async function sendViaUi(page: Page, text: string) {
-  const input = page.locator('textarea[aria-label="Send a message to this session"]').first();
+  const input = sessionComposer(page).first();
   await input.click();
   await input.fill(text);
   await input.press('Enter');

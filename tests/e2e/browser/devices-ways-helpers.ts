@@ -54,12 +54,23 @@ export async function openDevicesTab(page: Page): Promise<Locator> {
  * Cloud sync, updates, "While this Mac is away" and what it keeps, in "Manage cloud
  * companion", closed by default. Open it (no-op when open) and return it.
  */
-export async function openCloudManage(page: Page): Promise<Locator> {
+export async function openCloudManage(page: Page, timeout = 30_000): Promise<Locator> {
   const toggle = page.getByTestId('cloud-manage-toggle')
-  await expect(toggle).toBeVisible({ timeout: 30_000 })
+  await expect(toggle).toBeVisible({ timeout })
   if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
   return page.getByTestId('cloud-manage')
+}
+
+/**
+ * This Mac's cloud sync row on the Cloud companion tab: its tag says whether the companion takes
+ * this Mac ("Connected", "Not accepted"). The row sits in "Manage cloud companion", closed by
+ * default, so a spec reading the state goes through here (tests/web/cloud-sync-state-reads.test.ts).
+ * Opens the fold (no-op when open); the Cloud companion tab must be showing.
+ */
+export async function cloudSyncRow(page: Page, timeout = 30_000): Promise<Locator> {
+  const manage = await openCloudManage(page, timeout)
+  return manage.locator('.settings-row', { has: page.locator('.settings-row-label', { hasText: /^Cloud sync$/ }) })
 }
 
 /** The pairing QR dialog (cloud/PairQrDialog.tsx). */

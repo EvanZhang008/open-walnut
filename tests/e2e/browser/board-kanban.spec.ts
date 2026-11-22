@@ -7,6 +7,7 @@
  * C21 C22 C30 C46 C47 C57 C66 C77 C84 C94). Chromium and WebKit, real clicks.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
+import { openSessionBoard } from './board-view-helpers'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, leaveFullscreen } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
@@ -79,9 +80,7 @@ async function openLeaderPanel(page: Page, leader: string, sid: string, project:
 /** The leader's session column, then its Board tab, on Cards. */
 async function openBoard(page: Page, leader = team.leader, sid = team.leaderSid, project = team.project, beforeBoard?: () => Promise<void>): Promise<Locator> {
   const panel = await openLeaderPanel(page, leader, sid, project)
-  if (beforeBoard) await beforeBoard()
-  await panel.getByTestId('session-board-chip').click()
-  const pane = page.getByTestId('task-board-pane')
+  const pane = await openSessionBoard(page, panel, { beforeClick: beforeBoard })
   // The Board opens on Status (the default since 2026-10-25): the kanban is one click away.
   await pane.getByTestId('board-view-cards').click()
   await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 30_000 })

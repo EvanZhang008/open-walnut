@@ -7,6 +7,7 @@ import { expect, type APIRequestContext, type Locator, type Page } from '@playwr
 import { REAL_PANEL } from './draft-helpers'
 import { withFixtureLease } from './fixture-lease'
 import { seededThreadState } from './threads-fixture'
+import { sessionComposer } from './session-composer'
 
 /** Every spec that resets a threads fixture runs its tests with this `test` (fixture-lease.ts). */
 export { test } from './fixture-lease'
@@ -40,7 +41,7 @@ export async function expectStackDepth(scope: Locator, depth: number, timeout = 
 
 /** The panel's own composer (never the split's left half). */
 export function mainComposer(panel: Locator): Locator {
-  return panel.locator('.session-panel-input:not(.tree-split-input) .chat-input-textarea')
+  return sessionComposer(panel)
 }
 
 /** Pin a session's home column to `width` px. Under 900px Tree Mode never splits,

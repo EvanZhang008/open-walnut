@@ -18,6 +18,7 @@
  * The fixture is shared, so this file makes its own tasks and removes them.
  */
 import { expect, test, type APIRequestContext, type Locator, type Page, type Route } from '@playwright/test'
+import { openSessionBoard } from './board-view-helpers'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, loadHome, seedColumns } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
@@ -89,8 +90,7 @@ async function openBoard(page: Page, workerSid: string): Promise<Locator> {
   const lead = page.locator(`${REAL_PANEL}[data-session-id="${ids.leaderSid}"]`)
   await expect(lead).toBeVisible({ timeout: 30_000 })
   await expect(page.locator(`${REAL_PANEL}[data-session-id="${workerSid}"]`)).toBeVisible({ timeout: 30_000 })
-  await lead.getByTestId('session-board-chip').click()
-  const pane = page.getByTestId('task-board-pane')
+  const pane = await openSessionBoard(page, lead)
   if (!(await pane.getByTestId('board-kanban').isVisible().catch(() => false))) await pane.getByTestId('board-view-cards').click()
   await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 30_000 })
   return pane

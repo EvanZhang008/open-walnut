@@ -7,7 +7,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { TINY_SILENT_MP4_BASE64 } from './fixtures/tiny-video'
 import { dragAcrossWords, press as click } from './real-press'
 import { DRAFT_PANEL, closeModelPicker, serverHome, shownHomePath } from './draft-helpers'
-import { PHONE_QUERY } from './board-view-helpers'
+import { openSessionBoard as openBoardBy, showCustomBoard as showPageBy } from './board-view-helpers'
 
 export const AGENT_TEXT_BASE = process.env.AGENT_TEXT_URL ?? 'http://localhost:3457'
 /** A neutral picture of the repo's own (192px) when the run names no real screenshot. */
@@ -73,55 +73,11 @@ export async function openDraftOnCwd(page: Page, cwd: string, opts: { engine?: '
   return panel
 }
 
-/**
- * The Board of the session in `panel`, opened by native input the way its layout offers it
- * (the route of `openSessionBoard` in board-view-helpers.ts): the header chip when it is live
- * on the row, else the phone top bar's More actions, else the header's "..." menu.
- */
-export async function openSessionBoard(page: Page, panel: Locator): Promise<Locator> {
-  const chip = panel.getByTestId('session-board-chip')
-  await expect(chip).toHaveCount(1, { timeout: 30_000 })
-  const phone = await page.evaluate((q) => window.matchMedia(q).matches, PHONE_QUERY)
-  // A chip that turns live on the row is the click. A phone whose header folds the chip away goes
-  // to the top bar at once: waiting out the poll for a chip it keeps hidden alone outlasted a test.
-  const place = async (): Promise<'row' | 'folded' | 'wait'> => {
-    const hidden = (await chip.getAttribute('data-hidden')) === 'true'
-    if (!hidden && await chip.isEnabled() && await chip.isVisible()) return 'row'
-    return phone && hidden ? 'folded' : 'wait'
-  }
-  let where = await place()
-  for (const deadline = Date.now() + 30_000; where === 'wait' && Date.now() < deadline;) {
-    await page.waitForTimeout(250)
-    where = await place()
-  }
-  if (where === 'row') {
-    await click(page, chip)
-  } else if (phone) {
-    await click(page, page.locator('.phone-topbar').getByRole('button', { name: 'More actions' }))
-    const row = page.getByTestId('phone-row-board')
-    await expect(row).toBeEnabled({ timeout: 30_000 })
-    await click(page, row)
-  } else if ((await chip.getAttribute('data-hidden')) === 'true') {
-    await click(page, panel.getByTestId('session-header-more-btn'))
-    const row = page.getByTestId('session-header-more-item-board')
-    await expect(row).toBeEnabled({ timeout: 30_000 })
-    await click(page, row)
-  } else {
-    await click(page, chip)
-  }
-  const pane = page.getByTestId('task-board-pane')
-  await expect(pane).toBeVisible({ timeout: 30_000 })
-  return pane
-}
+/** The Board of the session in `panel`, opened by native input (board-view-helpers.ts has the route). */
+export const openSessionBoard = (page: Page, panel: Locator): Promise<Locator> => openBoardBy(page, panel, { press: click })
 
-/** The leader's page in the Board `pane`: its Page segment, pressed when it is not the view yet. */
-export async function showCustomBoard(pane: Locator): Promise<void> {
-  const custom = pane.getByTestId('board-view-custom')
-  await expect(custom).toBeVisible({ timeout: 15_000 })
-  await expect(custom).not.toHaveAttribute('aria-disabled', 'true', { timeout: 15_000 })
-  if ((await custom.getAttribute('aria-checked')) !== 'true') await click(pane.page(), custom)
-  await expect(custom).toHaveAttribute('aria-checked', 'true')
-}
+/** The leader's page in the Board `pane`, its Page segment pressed by native input. */
+export const showCustomBoard = (pane: Locator): Promise<void> => showPageBy(pane, click)
 
 /** Keyboard focus by real input: a press on a harmless start, then Tab (Option-Tab in WebKit) until the target holds it. */
 export async function tabTo(page: Page, start: Locator, target: Locator, max = 300): Promise<void> {

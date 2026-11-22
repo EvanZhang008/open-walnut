@@ -316,8 +316,7 @@ test('C75: Start worker runs the card in the leader folder; Tell the leader reac
   await row.locator('.todo-item-title').click()
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${kidSid}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
-  await panel.getByTestId('session-board-chip').click()
-  const other = panel.getByTestId('task-board-pane')
+  const other = await openSessionBoard(page, panel)
   // This team's board opens on Status; the cards are one click away.
   await other.getByTestId('board-view-cards').click()
   const tell = card(other, kids[1]).getByTestId('kanban-card-tell-leader')

@@ -19,6 +19,7 @@
 import { test, expect, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
+import { sessionComposer } from './session-composer'
 
 const SESSION_ID = 'pw-queued-follows-session'
 const TASK_ID = 'pw-queued-follows-task'
@@ -37,7 +38,7 @@ async function injectEvent(page: Page, name: string, data: unknown) {
 }
 
 async function sendViaUi(page: Page, text: string) {
-  const input = page.locator('textarea[aria-label="Send a message to this session"]').first()
+  const input = sessionComposer(page).first()
   await input.click()
   await input.fill(text)
   await input.press('Enter')

@@ -23,7 +23,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect, type Page } from '@playwright/test'
 import { openListProject } from './todo-panel-helpers'
-import { leadForPage } from './board-view-helpers'
+import { leadForPage, openSessionBoard, showCustomBoard } from './board-view-helpers'
 
 test.setTimeout(300_000)
 
@@ -242,17 +242,8 @@ test('the console writes while the Mac sleeps: each write is kept on the host wi
     await row(page, 'Release plan').locator('.todo-item-title').click()
     const panel = page.locator(`.session-panel[data-session-id="${ids.macSid}"]`).first()
     await expect(panel).toBeVisible({ timeout: 30_000 })
-    if (isPhone()) {
-      await page.locator('.phone-topbar').getByRole('button', { name: 'More actions' }).click()
-      await page.getByTestId('phone-row-board').click()
-    } else {
-      await panel.getByTestId('session-board-chip').click()
-    }
-    const pane = page.getByTestId('task-board-pane')
-    await expect(pane).toBeVisible({ timeout: 30_000 })
-    const custom = pane.getByTestId('board-view-custom')
-    await expect(custom).toBeVisible({ timeout: 15_000 })
-    if ((await custom.getAttribute('aria-checked')) !== 'true') await custom.click()
+    const pane = await openSessionBoard(page, panel)
+    await showCustomBoard(pane)
     const frame = page.frameLocator('.task-board-frame')
     const thread = frame.locator('walnut-thread[id="drill"]')
     await expect(thread.locator('.wn-thread-title')).toHaveText('Drill', { timeout: 30_000 })

@@ -19,6 +19,7 @@ import { openAskWalnutDrawer, openChatOnLoad } from './draft-helpers'
 import { presetPanelView } from './todo-panel-helpers'
 import { expectBareTitleRow } from './session-header-labels-helpers'
 import { sessionLocateButton } from './session-kebab-helpers'
+import { sessionComposer } from './session-composer'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -88,7 +89,7 @@ for (const width of [1280, 820]) {
     await openHome(page)
     const panel = await openHomepageSession(page)
     const time = panel.locator('.session-panel-time')
-    const draft = panel.getByRole('textbox', { name: 'Send a message to this session' })
+    const draft = sessionComposer(panel)
     await draft.fill('Keep this draft while checking the activity time')
     await expect(time).toHaveCount(0)
     await panel.locator('.session-panel-header').screenshot({

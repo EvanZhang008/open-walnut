@@ -20,7 +20,7 @@ import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, leaveFullscreen } from './draft-helpers'
-import { PHONE_QUERY, openSessionBoard } from './board-view-helpers'
+import { PHONE_QUERY, closeSessionBoard, openSessionBoard } from './board-view-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import {
   call, kanbanApi, pollUntil, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
@@ -75,8 +75,7 @@ async function openBoard(page: Page): Promise<Locator> {
   await row.locator('.todo-item-title').click()
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${team.leaderSid}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
-  await panel.getByTestId('session-board-chip').click()
-  const pane = page.getByTestId('task-board-pane')
+  const pane = await openSessionBoard(page, panel)
   // The Board opens on Status (the default since 2026-10-25): the kanban is one click away.
   await pane.getByTestId('board-view-cards').click()
   await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 30_000 })
@@ -280,19 +279,6 @@ async function openBoard2(page: Page): Promise<Locator> {
   return openSessionBoard(page, panel)
 }
 
-/** Close the open Board where this layout offers it: on a phone the Board is its own view,
- *  left by the top bar's Back; on a desktop the Board control toggles it (the chip, or its
- *  row in the header's "..." menu when the chip is folded). */
-async function closeBoard(page: Page, panel: Locator): Promise<void> {
-  if (await page.evaluate((q) => window.matchMedia(q).matches, PHONE_QUERY)) {
-    return page.locator('.phone-topbar').getByRole('button', { name: 'Back' }).click()
-  }
-  const chip = panel.getByTestId('session-board-chip')
-  if ((await chip.getAttribute('data-hidden')) !== 'true') return chip.click()
-  await panel.getByTestId('session-header-more-btn').click()
-  await page.getByTestId('session-header-more-item-board').click()
-}
-
 // A desktop window narrow enough that the chat would leave the board under the kanban's
 // 480px floor. Not 520px: since 2026-10-15 a window 768px wide or less is the phone layout,
 // which shows the Board OR the chat on every open by design (SessionPanel applyOpenCollapse).
@@ -328,7 +314,7 @@ test.describe('layout C, a narrow desktop window (780px)', () => {
     await expect(page.getByTestId('kanban-show-chat')).toHaveCount(0)
     // Close the Board and open it again: the user's pick wins, no second collapse.
     const panel = page.locator(`${REAL_PANEL}[data-session-id="${team.leaderSid}"]`)
-    await closeBoard(page, panel)
+    await closeSessionBoard(page, panel)
     await expect(pane).toHaveCount(0)
     await openSessionBoard(page, panel)
     await page.waitForTimeout(500)

@@ -15,6 +15,7 @@
  * the previous message"; a reloaded panel reads the hold back from the queue.
  */
 import { test, expect, type Page } from '@playwright/test'
+import { sessionComposer } from './session-composer'
 
 const SESSION_ID = 'pw-late-delivered-session'
 const TASK_ID = 'pw-late-delivered-task'
@@ -35,7 +36,7 @@ async function injectEvent(page: Page, name: string, data: unknown) {
 }
 
 async function sendViaUi(page: Page, text: string) {
-  const input = page.locator('textarea[aria-label="Send a message to this session"]').first()
+  const input = sessionComposer(page).first()
   await input.click()
   await input.fill(text)
   await input.press('Enter')

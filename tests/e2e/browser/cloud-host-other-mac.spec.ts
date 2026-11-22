@@ -31,7 +31,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import { openBell } from './host-problems-fixture-helpers'
 import { closePanel, pickRail, problemHosts, problemRow } from './host-attention-helpers'
 import { draftCwdPill, loadHome, openDraft } from './draft-helpers'
-import { backToDevices, openWay } from './devices-ways-helpers'
+import { backToDevices, cloudSyncRow, openWay } from './devices-ways-helpers'
 
 const SHOTS = process.env.CLOUD_HOST_SHOTS ?? path.join(os.tmpdir(), 'walnut-cloud-host-shots')
 const CLOUD = '__cloudbox__'
@@ -232,10 +232,10 @@ test('a second Mac hears another Mac is connected, and takes the companion over 
   // 5. Unpair this Mac, confirmed: the companion drops it and the credential it
   // minted. All devices says so plainly (no red, no "may have been"), the Cloud
   // companion tab no longer pairs a phone, and it no longer says Connected.
-  // The Cloud companion tab says Connected first.
+  // The Cloud companion tab says Connected first (its Cloud sync row, under Manage cloud companion).
   section = await openDevices(page)
   const cloudCard = await openWay(page, 'cloud')
-  await expect(cloudCard.getByText('Connected', { exact: true })).toBeVisible({ timeout: 30_000 })
+  await expect((await cloudSyncRow(page)).getByText('Connected', { exact: true })).toBeVisible({ timeout: 30_000 })
   const advancedAgain = await openOthers(page)
   const me = advancedAgain.locator('.devices-row[data-device-role="self"]')
   await me.getByTestId('devices-unpair-self').click()

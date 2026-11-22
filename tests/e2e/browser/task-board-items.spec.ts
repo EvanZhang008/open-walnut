@@ -50,7 +50,7 @@ import { expect, test, type FrameLocator, type Locator, type Page } from '@playw
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
-import { showCustomBoard } from './board-view-helpers'
+import { openSessionBoard, showCustomBoard } from './board-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -136,8 +136,7 @@ async function openBoardTab(page: Page, taskId: string, sid: string, custom = tr
   await row.locator('.todo-item-title').click()
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${sid}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
-  await panel.getByTestId('session-board-chip').click()
-  const pane = page.getByTestId('task-board-pane')
+  const pane = await openSessionBoard(page, panel)
   if (custom) await showCustomBoard(pane)
   return { panel, pane, frame: page.frameLocator('.task-board-frame') }
 }
@@ -449,8 +448,7 @@ test('projects, checks, choices, reminders and the updated dot', async ({ page }
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${sid}"]`)
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   await expect(pane).toHaveCount(0)
-  await panel.getByTestId('session-board-chip').click()
-  ;({ pane, frame } = { pane: page.getByTestId('task-board-pane'), frame: page.frameLocator('.task-board-frame') })
+  ;({ pane, frame } = { pane: await openSessionBoard(page, panel), frame: page.frameLocator('.task-board-frame') })
   const point2 = frame.locator('walnut-check[id="cause-timeout"]')
   await expect(point2).toHaveAttribute('data-read', '', { timeout: 15_000 })
   await expect(point2.locator('.wn-check-box')).toHaveCount(1)
@@ -589,8 +587,7 @@ test('projects, checks, choices, reminders and the updated dot', async ({ page }
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   await expect(pane).toHaveCount(0)
   await expect.poll(async () => (await getBoard(leader)).marks.probe?.note, { timeout: 10_000 }).toBe(lastWords)
-  await panel.getByTestId('session-board-chip').click()
-  ;({ pane, frame } = { pane: page.getByTestId('task-board-pane'), frame: page.frameLocator('.task-board-frame') })
+  ;({ pane, frame } = { pane: await openSessionBoard(page, panel), frame: page.frameLocator('.task-board-frame') })
   await expect(frame.locator('walnut-mark[id="probe"] .wn-mark-note')).toHaveValue(lastWords, { timeout: 15_000 })
   await page.unroute('**/board/marks/**')
   await frame.locator('body').evaluate(() => window.scrollTo(0, 0))
@@ -825,7 +822,7 @@ test('a note docks Walnut\'s composer (voice included) through Dictate…', asyn
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   await expect(pane).toHaveCount(0)
   await expect.poll(savedNote, { timeout: 10_000 }).toBe(lastWords)
-  await panel.getByTestId('session-board-chip').click()
+  await openSessionBoard(page, panel)
   const frame2 = page.frameLocator('.task-board-frame')
   await expect(frame2.locator('walnut-mark[id="probe"] .wn-mark-note')).toHaveValue(lastWords, { timeout: 15_000 })
   await frame2.locator('walnut-mark[id="probe"]').screenshot({ path: `/tmp/voice-mic-everywhere/board-mark-${engine}-saved.png` })
@@ -902,13 +899,11 @@ test('a worker has no Board tab; its board posts land on its leader\'s board, wh
   await leaderRow.locator('.todo-item-title').click()
   const leaderPanel = page.locator(`${REAL_PANEL}[data-session-id="${leaderSid}"]`)
   await expect(leaderPanel).toBeVisible({ timeout: 30_000 })
-  const leaderChip = leaderPanel.getByTestId('session-board-chip')
-  await expect(leaderChip).toBeEnabled({ timeout: 30_000 })
+  await expect(leaderPanel.getByTestId('session-board-chip')).toBeEnabled({ timeout: 30_000 })
   await expect(workerPanel.getByTestId('session-board-chip')).toHaveCount(0)
 
   // ── The team board there: the leader's page, with the worker's post in its thread ──
-  await leaderChip.click()
-  const pane = page.getByTestId('task-board-pane')
+  const pane = await openSessionBoard(page, leaderPanel)
   await showCustomBoard(pane)
   const frame = page.frameLocator('.task-board-frame')
   await expect(frame.locator('h1.team-h1')).toHaveText(`${engine} team board ${stamp}`, { timeout: 15_000 })

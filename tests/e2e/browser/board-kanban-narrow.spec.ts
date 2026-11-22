@@ -10,7 +10,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, leaveFullscreen } from './draft-helpers'
-import { openSessionBoard } from './board-view-helpers'
+import { closeSessionBoard, openSessionBoard } from './board-view-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { call, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
 import { keepCornerToBoard } from './board-kanban-corner'
@@ -412,10 +412,9 @@ test.describe('248px lanes (a 1440 window, the chat open)', () => {
     expect(kept.length).toBe(1)
     // Close the Board and open it again in this tab: still open.
     const panel = page.locator(`${REAL_PANEL}[data-session-id="${team.leaderSid}"]`)
-    await panel.getByTestId('session-board-chip').click()
+    await closeSessionBoard(page, panel)
     await expect(pane).toHaveCount(0)
-    await panel.getByTestId('session-board-chip').click()
-    await expect(lane(page.getByTestId('task-board-pane'), 'resolved')).toBeVisible({ timeout: 30_000 })
+    await expect(lane(await openSessionBoard(page, panel), 'resolved')).toBeVisible({ timeout: 30_000 })
     // Fold it back to the rail and drop a card on it: the card goes into Resolved.
     await page.getByTestId('task-board-pane').getByTestId('kanban-done-fold').click()
     const pane2 = page.getByTestId('task-board-pane')

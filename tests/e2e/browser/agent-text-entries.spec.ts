@@ -243,7 +243,10 @@ test('Needs you row: its ask opens the file by pointer and Enter, and the row ne
   await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
   await rowUntouched(page, card, sids.needs)
   await page.setViewportSize({ width: 1024, height: 720 })
-  expect(await line.textContent()).toContain(files.picture)
+  // A bare path in an ask card reads as a short label (utils/short-link-labels.ts, 4824a55c5d): the
+  // link keeps its target, and the whole address is its tooltip.
+  await expect(link).toBeVisible()
+  await expect(link).toHaveAttribute('title', files.picture)
   await expect(page.locator('.file-viewer-overlay')).toHaveCount(0)
   await rowUntouched(page, card, sids.needs)
   await page.setViewportSize({ width: 1280, height: 900 })

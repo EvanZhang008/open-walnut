@@ -6,6 +6,7 @@
  * (C7 C13 C43 C44 C64 C73 C76).
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
+import { openSessionBoard } from './board-view-helpers'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
@@ -53,8 +54,7 @@ async function openBoard(page: Page, leader = team.leader, sid = team.leaderSid,
   await row.locator('.todo-item-title').click()
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${sid}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
-  await panel.getByTestId('session-board-chip').click()
-  const pane = page.getByTestId('task-board-pane')
+  const pane = await openSessionBoard(page, panel)
   // The Board opens on Status (the default since 2026-10-25): the kanban is one click away.
   await pane.getByTestId('board-view-cards').click()
   await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 30_000 })

@@ -22,6 +22,7 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test, type FrameLocator, type Locator, type Page } from '@playwright/test'
+import { openSessionBoard } from './board-view-helpers'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
@@ -101,8 +102,7 @@ async function openBoard(page: Page, taskId: string, sid: string): Promise<{ pan
   await row.locator('.todo-item-title').click()
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${sid}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
-  await panel.getByTestId('session-board-chip').click()
-  const pane = page.getByTestId('task-board-pane')
+  const pane = await openSessionBoard(page, panel)
   await showPage(pane)
   return { panel, pane, frame: page.frameLocator('.task-board-frame') }
 }
@@ -228,8 +228,7 @@ test('the reader keeps their place across the leader\'s writes, and every thread
   // Files and back: a new pane, the same place.
   await panel.getByRole('button', { name: 'Files', exact: true }).click()
   await expect(pane).toHaveCount(0)
-  await panel.getByTestId('session-board-chip').click()
-  pane = page.getByTestId('task-board-pane')
+  pane = await openSessionBoard(page, panel)
   await showPage(pane)
   frame = page.frameLocator('.task-board-frame')
   await expect(frame.locator('#sec-new')).toBeAttached({ timeout: 15_000 })

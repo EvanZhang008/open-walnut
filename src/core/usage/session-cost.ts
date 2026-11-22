@@ -31,22 +31,28 @@ export type SessionScanRead =
   | { ok: true; scan: SessionCostScan; thresholds: number[]; overrides?: Record<string, UserPriceRates> }
   | { ok: false; payload: SessionCostPayload };
 
-/** Read one session's usage on its host, within the deadline (degraded, never hanging). */
+/**
+ * Read one session's usage on its host, within the deadline (degraded, never hanging). The read
+ * goes through the request-path bound (remote-read-bound.ts) like every other read a panel makes
+ * of a remote host: a link that went silent answers "Reconnecting to Cloud" within seconds instead
+ * of holding the request for the whole deadline (each panel warms its cost when it mounts and
+ * after a turn, so this route is hot).
+ */
 export async function readSessionScan(sessionId: string): Promise<SessionScanRead> {
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw Object.assign(new Error('session not found'), { statusCode: 404 });
   const engine = record.engine ?? 'claude';
   const host = record.host ?? '__local__';
-  const [{ getConfig }, { DaemonFileReader }] = await Promise.all([
-    import('../config-manager.js'), import('../daemon-file-reader.js'), ensurePriceBook(),
+  const [{ getConfig }, { DaemonFileReader }, { boundHostRead, HostReconnectingError }] = await Promise.all([
+    import('../config-manager.js'), import('../daemon-file-reader.js'), import('../hosts/remote-read-bound.js'), ensurePriceBook(),
   ]);
   const overrides = (await getConfig()).usage?.prices;
   const thresholds = priceThresholds(overrides);
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<'timeout'>((resolve) => { timer = setTimeout(() => resolve('timeout'), DEADLINE_MS); });
   try {
-    const read = new DaemonFileReader(host).readSessionCost({ sessionId, engine, cwd: record.cwd, thresholds }, DEADLINE_MS);
+    const read = boundHostRead(host, () => new DaemonFileReader(host).readSessionCost({ sessionId, engine, cwd: record.cwd, thresholds }, DEADLINE_MS));
     // A read that loses the race may still fail later; that failure has no listener left.
     read.catch(() => {});
     const scan = await Promise.race([read, deadline]);
@@ -54,6 +60,8 @@ export async function readSessionScan(sessionId: string): Promise<SessionScanRea
     if (scan === null) return { ok: false, payload: unavailable(sessionId, engine, 'The session\'s host runs an older Walnut daemon; it updates on its next connect.') };
     return { ok: true, scan: scan as SessionCostScan, thresholds, ...(overrides ? { overrides } : {}) };
   } catch (err) {
+    // The bound's answer is already a plain sentence in the host's name ("Reconnecting to Cloud").
+    if (err instanceof HostReconnectingError) return { ok: false, payload: unavailable(sessionId, engine, err.message) };
     return { ok: false, payload: unavailable(sessionId, engine, `Usage could not be read: ${(err as Error).message}`) };
   } finally {
     clearTimeout(timer);

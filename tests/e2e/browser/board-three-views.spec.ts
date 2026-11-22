@@ -13,6 +13,7 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Browser, type Locator, type Page } from '@playwright/test'
+import { openSessionBoard } from './board-view-helpers'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, leaveFullscreen } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
@@ -76,13 +77,7 @@ async function openBoard(page: Page): Promise<Locator> {
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${team.leaderSid}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
   // A 520px window is the phone layout: the Board is a row of its More actions menu there.
-  if ((page.viewportSize()?.width ?? 1280) <= 600) {
-    await page.locator('.phone-topbar').getByRole('button', { name: 'More actions' }).click()
-    await page.getByTestId('phone-row-board').click()
-  } else {
-    await panel.getByTestId('session-board-chip').click()
-  }
-  const pane = page.getByTestId('task-board-pane')
+  const pane = await openSessionBoard(page, panel)
   await expect(pane.getByTestId('board-view-toggle')).toBeVisible({ timeout: 30_000 })
   return pane
 }

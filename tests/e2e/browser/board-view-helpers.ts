@@ -6,52 +6,98 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 
+/**
+ * How a helper presses a control: a plain Playwright click by default; a spec that drives the
+ * page by native input passes its own (`press` in real-press.ts).
+ */
+export type Press = (page: Page, target: Locator) => Promise<void>
+const plainClick: Press = (_page, target) => target.click()
+
 /** Show the leader's page in `pane` (the `task-board-pane`): waits for one to exist, then picks Page. */
-export async function showCustomBoard(pane: Locator): Promise<void> {
+export async function showCustomBoard(pane: Locator, press: Press = plainClick): Promise<void> {
   const custom = pane.getByTestId('board-view-custom')
   await expect(custom).toBeVisible({ timeout: 15_000 })
   await expect(custom).not.toHaveAttribute('aria-disabled', 'true', { timeout: 15_000 })
-  if ((await custom.getAttribute('aria-checked')) !== 'true') await custom.click()
+  if ((await custom.getAttribute('aria-checked')) !== 'true') await press(pane.page(), custom)
   await expect(custom).toHaveAttribute('aria-checked', 'true')
 }
 
 /** The phone layout's query (web/src/hooks/usePhoneLayout.ts PHONE_LAYOUT_QUERY). */
 export const PHONE_QUERY = '(max-width: 768px), (pointer: coarse) and (max-height: 500px)'
 
+export interface OpenBoardOptions {
+  /** Runs right before the click that opens the Board (a spec that measures the open). */
+  beforeClick?: () => Promise<void>
+  press?: Press
+}
+
 /**
  * Opens the Board of the session in `panel` the way its layout offers it, and returns the
- * `task-board-pane`. A window 768px wide or less is the phone layout (since 2026-10-15), where
- * the Board is a row of the top bar's More actions; a desktop header too narrow for the chip
- * folds it into its "..." menu (2026-10-31: the 520px kanban specs waited up to 240 s on the
- * desktop chip, which a phone keeps hidden).
+ * `task-board-pane`; a Board already open in it is left as it is. The ONLY way a spec opens a
+ * Board from a session header (tests/scripts/board-chip-click-ratchet.test.ts): the header folds
+ * the Board chip into its "..." menu when the row is too narrow (useSessionHeaderFit.ts, Board
+ * leaves just before Terminal), and a direct chip click waits forever on a folded chip
+ * (2026-11-22: the button family's wider keys folded it in a 460px Home column, and the replica
+ * specs timed out). A window 768px wide or less is the phone layout (since 2026-10-15), where the
+ * Board is a row of the top bar's More actions.
  */
-export async function openSessionBoard(page: Page, panel: Locator, beforeClick?: () => Promise<void>): Promise<Locator> {
+export async function openSessionBoard(page: Page, panel: Locator, opts: OpenBoardOptions = {}): Promise<Locator> {
+  const press = opts.press ?? plainClick
   const chip = panel.getByTestId('session-board-chip')
+  const pane = page.getByTestId('task-board-pane')
   await expect(chip).toHaveCount(1, { timeout: 30_000 })
-  // A chip on the row that turns live (the record loaded) is the one click, whatever the
-  // width, as a plain click waits for it: the specs measure the Board as it opens from
-  // there. Only a chip that stays folded or hidden takes the layout's other way.
-  const onRow = await expect.poll(async () => await chip.isEnabled() && (await chip.getAttribute('data-hidden')) !== 'true' && await chip.isVisible(),
-    { timeout: 30_000 }).toBe(true).then(() => true, () => false)
-  if (beforeClick) await beforeClick()
-  if (onRow) {
-    await chip.click()
-  } else if (await page.evaluate((q) => window.matchMedia(q).matches, PHONE_QUERY)) {
-    await page.locator('.phone-topbar').getByRole('button', { name: 'More actions' }).click()
+  if ((await chip.getAttribute('aria-pressed')) === 'true' && await pane.isVisible()) return pane
+  const phone = await page.evaluate((q) => window.matchMedia(q).matches, PHONE_QUERY)
+  // A chip on the row that turns live (the record loaded) is the one click: the specs measure
+  // the Board as it opens from there. A chip the header folded (live on a desktop, any on a
+  // phone, which keeps it hidden) takes the layout's other way, once it stays folded a beat.
+  const place = async (): Promise<'row' | 'folded' | 'wait'> => {
+    const hidden = (await chip.getAttribute('data-hidden')) === 'true'
+    const enabled = await chip.isEnabled()
+    if (!hidden && enabled && await chip.isVisible()) return 'row'
+    return hidden && (phone || enabled) ? 'folded' : 'wait'
+  }
+  let where = await place()
+  for (let folds = 0, deadline = Date.now() + 30_000; Date.now() < deadline;) {
+    if (where === 'row') break
+    if (where === 'folded' && ++folds >= 3) break
+    if (where === 'wait') folds = 0
+    await page.waitForTimeout(250)
+    where = await place()
+  }
+  if (opts.beforeClick) await opts.beforeClick()
+  if (where === 'row') {
+    await press(page, chip)
+  } else if (phone) {
+    await press(page, page.locator('.phone-topbar').getByRole('button', { name: 'More actions' }))
     const row = page.getByTestId('phone-row-board')
     await expect(row).toBeEnabled({ timeout: 30_000 })
-    await row.click()
+    await press(page, row)
   } else if ((await chip.getAttribute('data-hidden')) === 'true') {
-    await panel.getByTestId('session-header-more-btn').click()
+    await press(page, panel.getByTestId('session-header-more-btn'))
     const row = page.getByTestId('session-header-more-item-board')
     await expect(row).toBeEnabled({ timeout: 30_000 })
-    await row.click()
+    await press(page, row)
   } else {
-    await chip.click()
+    await press(page, chip)
   }
-  const pane = page.getByTestId('task-board-pane')
   await expect(pane).toBeVisible({ timeout: 30_000 })
   return pane
+}
+
+/**
+ * Leaves the Board of the session in `panel` for its chat: on a phone the top bar's Back; on a
+ * desktop the Board control toggles it (the chip, or its row in the header's "..." menu when
+ * the chip is folded).
+ */
+export async function closeSessionBoard(page: Page, panel: Locator, press: Press = plainClick): Promise<void> {
+  if (await page.evaluate((q) => window.matchMedia(q).matches, PHONE_QUERY)) {
+    return press(page, page.locator('.phone-topbar').getByRole('button', { name: 'Back' }))
+  }
+  const chip = panel.getByTestId('session-board-chip')
+  if ((await chip.getAttribute('data-hidden')) !== 'true') return press(page, chip)
+  await press(page, panel.getByTestId('session-header-more-btn'))
+  await press(page, page.getByTestId('session-header-more-item-board'))
 }
 
 /**

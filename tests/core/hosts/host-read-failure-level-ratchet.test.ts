@@ -32,6 +32,9 @@ const PLAIN_WARNS: Record<string, number> = {
   'src/core/sessions/session-controls.ts': 8,
   'src/core/sessions/session-extras.ts': 5,
   'src/core/sessions/task-dir-place.ts': 0,
+  // The cost cache's refresh warn: readSessionScan turns a host-away read into an unavailable
+  // payload, so only an unknown session or a pricing fault reaches it.
+  'src/core/usage/session-cost.ts': 1,
   'src/web/routes/file-content-validator.ts': 0,
   'src/web/routes/file-content.ts': 5,
   'src/web/routes/files.ts': 0,

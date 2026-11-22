@@ -20,7 +20,7 @@ import { test, expect, type Page } from '@playwright/test'
 import { startReplicaCluster, WINDOWS, type ReplicaCluster } from '../../helpers/replica-cluster.js'
 import { startFakeTunnel, type FakeTunnel } from './replica-tunnel.js'
 import { openListProject } from './todo-panel-helpers'
-import { leadForPage } from './board-view-helpers'
+import { leadForPage, openSessionBoard, showCustomBoard } from './board-view-helpers'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -91,12 +91,8 @@ test('a host replica: sign in through it, read away, an away complete kept on th
   const panel = page.locator(`.session-panel[data-session-id="${c.ids.macSid}"]`).first()
   await expect(panel).toBeVisible({ timeout: 30_000 })
   const boardRead = page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname.startsWith(`/api/v1/tasks/${c.ids.board}/board`), { timeout: 30_000 })
-  await panel.getByTestId('session-board-chip').click()
-  const pane = page.getByTestId('task-board-pane')
-  await expect(pane).toBeVisible({ timeout: 30_000 })
-  const custom = pane.getByTestId('board-view-custom')
-  await expect(custom).toBeVisible({ timeout: 15_000 })
-  if ((await custom.getAttribute('aria-checked')) !== 'true') await custom.click()
+  const pane = await openSessionBoard(page, panel)
+  await showCustomBoard(pane)
   await expect(page.frameLocator('.task-board-frame').locator('#build')).toHaveText('Build: green', { timeout: 30_000 })
   const read = await boardRead
   expect(read.status()).toBe(200)

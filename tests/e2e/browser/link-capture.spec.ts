@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, test, type BrowserContext, type Locator, type Page } from '@playwright/test'
 import { bunRuntime } from '../../helpers/bun-runtime.js'
-import { leadForPage, showCustomBoard } from './board-view-helpers'
+import { leadForPage, openSessionBoard, showCustomBoard } from './board-view-helpers'
 import { leaveFullscreen } from './draft-helpers'
 import { goToSessionFolder } from './todo-panel-helpers'
 
@@ -358,10 +358,7 @@ test('the Board frame forwards its link clicks and right-clicks to the same hand
 
   const openBoard = async () => {
     const col = await openColumn(page)
-    const chip = col.getByTestId('session-board-chip')
-    await expect(chip).toBeVisible({ timeout: 15_000 })
-    if (!(await chip.getAttribute('aria-pressed')) === 'true') await chip.click()
-    const pane = page.getByTestId('task-board-pane')
+    const pane = await openSessionBoard(page, col)
     await showCustomBoard(pane)
     const frame = page.frameLocator('.task-board-frame')
     await expect(frame.locator('a.perm')).toBeVisible({ timeout: 15_000 })

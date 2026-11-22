@@ -16,7 +16,7 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { leadForPage } from './board-view-helpers'
+import { leadForPage, openSessionBoard } from './board-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -77,10 +77,7 @@ async function openBoard(page: Page, host: { task: string; session: string; sear
   await pointer(page, row.locator('.todo-item-title'))
   const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${host.session}"]`)
   await expect(panel).toBeVisible({ timeout: 20_000 })
-  const chip = panel.getByTestId('session-board-chip')
-  await expect(chip).toBeVisible({ timeout: 20_000 })
-  await pointer(page, chip)
-  const pane = page.getByTestId('task-board-pane')
+  const pane = await openSessionBoard(page, panel, { press: pointer })
   await pointer(page, pane.getByTestId('board-view-custom'))
   return page.frameLocator('.task-board-frame')
 }

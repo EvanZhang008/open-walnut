@@ -69,7 +69,7 @@ async function openBoard(page: Page, beforeBoard?: () => Promise<void>): Promise
   await expect(panel).toBeVisible({ timeout: 30_000 })
   // The chip, or the layout's other way when a narrow window folds or hides it; a timed
   // spec starts its clock right before the click.
-  const pane = await openSessionBoard(page, panel, beforeBoard)
+  const pane = await openSessionBoard(page, panel, { beforeClick: beforeBoard })
   // The Board opens on Status (the default since 2026-10-25): the kanban is one click away.
   await pane.getByTestId('board-view-cards').click()
   await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 30_000 })

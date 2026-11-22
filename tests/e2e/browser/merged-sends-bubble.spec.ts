@@ -19,6 +19,7 @@
  * build's parse) and without (a host daemon still on the older parser).
  */
 import { test, expect, type Page } from '@playwright/test';
+import { sessionComposer } from './session-composer';
 
 const SESSION_ID = 'pw-merged-sends-session';
 const TASK_ID = 'pw-merged-sends-task';
@@ -59,7 +60,7 @@ async function sends(page: Page): Promise<Array<{ messageId: string; userUuid?: 
 }
 
 async function sendViaUi(page: Page, text: string) {
-  const input = page.locator('textarea[aria-label="Send a message to this session"]').first();
+  const input = sessionComposer(page).first();
   await input.click();
   await input.pressSequentially(text, { delay: 8 });
   await input.press('Enter');

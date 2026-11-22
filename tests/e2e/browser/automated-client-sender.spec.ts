@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import net from 'node:net'
 import path from 'node:path'
 import { expect, test, type Browser, type Page } from '@playwright/test'
+import { sessionComposer } from './session-composer'
 
 /**
  * A browser under automation types into the composer: the words are an agent's, never the
@@ -95,7 +96,7 @@ async function typeAndSend(page: Page, sid: string, words: string) {
   })
   await page.goto(`${base()}/sessions?id=${sid}`)
   const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${sid}"]`).last()
-  const input = panel.locator('textarea[aria-label="Send a message to this session"]').first()
+  const input = sessionComposer(panel).first()
   await expect(input).toBeVisible({ timeout: 90_000 })
   await input.click()
   await input.pressSequentially(words, { delay: 15 })

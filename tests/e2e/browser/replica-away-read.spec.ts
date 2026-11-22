@@ -39,7 +39,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect, type Page, type Response } from '@playwright/test'
 import { openListProject } from './todo-panel-helpers'
-import { leadForPage } from './board-view-helpers'
+import { leadForPage, openSessionBoard, showCustomBoard } from './board-view-helpers'
 
 test.setTimeout(300_000)
 
@@ -357,17 +357,8 @@ test('the console reads its copies while the Mac sleeps, and comes back with no 
     await shot(page, '4-away-mac-session')
     // The Board: a view this page never loaded, read from the copy.
     const boardRead = nextGet(page, `/api/v1/tasks/${ids.board}/board`)
-    if (isPhone()) {
-      await page.locator('.phone-topbar').getByRole('button', { name: 'More actions' }).click()
-      await page.getByTestId('phone-row-board').click()
-    } else {
-      await panel.getByTestId('session-board-chip').click()
-    }
-    const pane = page.getByTestId('task-board-pane')
-    await expect(pane).toBeVisible({ timeout: 30_000 })
-    const custom = pane.getByTestId('board-view-custom')
-    await expect(custom).toBeVisible({ timeout: 15_000 })
-    if ((await custom.getAttribute('aria-checked')) !== 'true') await custom.click()
+    const pane = await openSessionBoard(page, panel)
+    await showCustomBoard(pane)
     await expect(page.frameLocator('.task-board-frame').locator('#build')).toHaveText('Build: green', { timeout: 30_000 })
     const read = await boardRead
     expect(read.status()).toBe(200)

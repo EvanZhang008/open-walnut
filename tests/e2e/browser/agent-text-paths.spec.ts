@@ -5,6 +5,7 @@ import { TINY_SILENT_MP4_BASE64 } from './fixtures/tiny-video';
 import { press as click } from './real-press';
 import { closeLinkedLetter, dragSelect, openSessionBoard, showPointer, tabTo } from './agent-text-entry-helpers';
 import { leadForPage } from './board-view-helpers';
+import { sessionComposer } from './session-composer';
 
 const stamp = Date.now().toString(36);
 const project = `Agent links ${stamp}`;
@@ -215,7 +216,7 @@ test('task, letter and external URL links activate through pointer and keyboard 
   await click(page, summary.locator('a.task-link'));
   await besideOrg();
   await threads(page);
-  const composer = page.getByRole('textbox', { name: /^Send a message to this session/ }).first();
+  const composer = sessionComposer(page).first();
   await tabTo(page, composer, summary.locator('a.letter-link'));
   await page.keyboard.press('Enter');
   await expect(page.locator('.hib-reader')).toContainText(project);
@@ -235,7 +236,7 @@ test('task, letter and external URL links activate through pointer and keyboard 
   await click(page, link);
   await closeFile(page);
   // The node's own chat composer: the Threads side bar follows it in Tab order.
-  await tabTo(page, page.getByRole('textbox', { name: /^Send a message to this session/ }).first(), link);
+  await tabTo(page, sessionComposer(page).first(), link);
   await page.keyboard.press('Enter');
   await expect(page.locator('.file-viewer-overlay .cm-content')).toContainText('Line two', { timeout: 30_000 });
   await page.keyboard.press('Escape');

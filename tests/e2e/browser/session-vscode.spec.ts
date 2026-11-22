@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import { openKebabGroup } from './kebab-group-helpers'
 import { selectSection } from './todo-panel-helpers'
+import { sessionComposer } from './session-composer'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -108,7 +109,7 @@ for (const width of [1280, 820]) {
     }))
     await openHome(page)
     const panel = await openHomepageSession(page)
-    const draft = panel.getByRole('textbox', { name: 'Send a message to this session' })
+    const draft = sessionComposer(panel)
     await draft.fill('Keep this unsent message')
     const menu = page.locator('.task-kebab-menu:visible')
     const openMenu = async () => {

@@ -11,6 +11,7 @@
  * send RPC answered in the page, server events injected on the socket.
  */
 import { test, expect, type Page } from '@playwright/test'
+import { sessionComposer } from './session-composer'
 
 const SESSION_ID = 'pw-slow-host-session'
 const TASK_ID = 'pw-slow-host-task'
@@ -32,7 +33,7 @@ async function injectEvent(page: Page, name: string, data: unknown) {
 }
 
 async function sendViaUi(page: Page, text: string) {
-  const input = page.locator('textarea[aria-label="Send a message to this session"]').first()
+  const input = sessionComposer(page).first()
   await input.click()
   await input.fill(text)
   await input.press('Enter')

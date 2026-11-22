@@ -19,6 +19,7 @@
  * deterministic (the production shape needs a redeploy mid-turn).
  */
 import { test, expect, type Page } from '@playwright/test';
+import { sessionComposer } from './session-composer';
 
 const SESSION_ID = 'pw-window-swap-session';
 const TASK_ID = 'pw-window-swap-task';
@@ -66,7 +67,7 @@ async function sentIds(page: Page): Promise<string[]> {
 
 /** Type into the REAL session composer and press Enter. */
 async function sendViaUi(page: Page, text: string) {
-  const input = page.locator('textarea[aria-label="Send a message to this session"]').first();
+  const input = sessionComposer(page).first();
   await input.click();
   await input.fill(text);
   await input.press('Enter');

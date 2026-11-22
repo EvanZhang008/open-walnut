@@ -11,10 +11,12 @@
  *   note / copy   the picker note's buttons and the Copy button are tabbable
  *                 (WebKit) and reserve their widest label, so a flip to
  *                 'Retrying...' or 'Copy failed' never moves the row
+ *   restore       a refused Start's images go back through the composer's picker,
+ *                 never the camera's capture input that sits before it (one photo)
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseHTML } from 'linkedom'
-import { createElement, act } from '../../web/node_modules/react/index.js'
+import { createElement, act, useRef } from '../../web/node_modules/react/index.js'
 import { createRoot } from '../../web/node_modules/react-dom/client.js'
 import type { HostStatus } from '../../web/src/api/hosts'
 
@@ -30,7 +32,7 @@ vi.mock('@/api/hosts', () => ({ connectHost: async () => state.current, checkHos
 vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {} } }))
 
 const { MemoryRouter } = await import('../../web/node_modules/react-router-dom')
-const { gateProblem, HostGateErrorBar } = await import('../../web/src/components/sessions/HostGateErrorBar')
+const { gateProblem, HostGateErrorBar, useRestoreImages } = await import('../../web/src/components/sessions/HostGateErrorBar')
 const { SessionHostErrorText, useSessionHostHasProblem } = await import('../../web/src/components/sessions/SessionHostErrorBar')
 const { hostProblemOf, REMOTE_OFF_NOTE } = await import('../../src/core/hosts/host-problem')
 const { HostNote } = await import('../../web/src/components/sessions/path-selector/HostNote')
@@ -166,5 +168,29 @@ describe('buttons that flip their label keep their width', () => {
     const copy = Array.from(el.querySelectorAll('button')).find((b) => (b.getAttribute('aria-label') ?? '').startsWith('Copy'))!
     expect(copy.querySelector('.btn-reserve')?.getAttribute('data-r1')).toBe('Copy failed')
     expect(copy.querySelector('.btn-reserve')?.getAttribute('data-r2')).toBe('Copied')
+  })
+})
+
+describe("a refused Start's images go back into the composer", () => {
+  it("every image goes through the picker, not the camera's capture input before it", async () => {
+    const g = globalThis as unknown as Record<string, unknown>
+    const had = g.DataTransfer
+    g.DataTransfer = class { files: File[] = []; items = { add: (f: File) => { this.files.push(f) } } }
+    const images = [1, 2].map((n) => ({ name: `shot-${n}.png`, mediaType: 'image/png', data: btoa(`png-${n}`) }))
+    function Box() {
+      const ref = useRef<HTMLDivElement | null>(null)
+      useRestoreImages(ref, images as never)
+      return createElement('div', { ref },
+        createElement('input', { type: 'file', capture: 'environment', 'data-testid': 'camera-capture-input' }),
+        createElement('input', { type: 'file', multiple: true, 'data-testid': 'composer-file-input' }))
+    }
+    try {
+      await render(createElement(Box))
+      const [capture, picker] = Array.from(el.querySelectorAll('input')) as unknown as Array<{ files?: File[] }>
+      expect(picker!.files?.map((f) => f.name)).toEqual(['shot-1.png', 'shot-2.png'])
+      expect(capture!.files).toBeUndefined()
+    } finally {
+      g.DataTransfer = had
+    }
   })
 })

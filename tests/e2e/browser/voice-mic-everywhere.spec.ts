@@ -22,6 +22,7 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
+import { openSessionBoard } from './board-view-helpers'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
@@ -382,8 +383,7 @@ test.describe('Board', () => {
     await row.locator('.todo-item-title').click()
     const panel = page.locator(`${REAL_PANEL}[data-session-id="${seed.leaderSid}"]`)
     await expect(panel).toBeVisible({ timeout: 30_000 })
-    await panel.getByTestId('session-board-chip').click()
-    const pane = page.getByTestId('task-board-pane')
+    const pane = await openSessionBoard(page, panel)
     await expect(pane.getByTestId('board-view-toggle')).toBeVisible({ timeout: 30_000 })
     return { pane, panel }
   }

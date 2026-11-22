@@ -34,7 +34,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test, expect, type Page, type Locator } from '@playwright/test'
 import { draftComposer, draftCwdPill, draftPanel, draftSend, loadHome, openDraft, REAL_PANEL, seedColumns } from './draft-helpers'
-import { backToDevices, openWay } from './devices-ways-helpers'
+import { backToDevices, cloudSyncRow, openWay } from './devices-ways-helpers'
 import { goToSessionFolder } from './todo-panel-helpers'
 import { noise } from '../../helpers/incompressible'
 
@@ -476,7 +476,8 @@ test('the operator removes this Mac on the companion: the Cloud card stops sayin
   await loadHome(page)
   let section = await openDevices(page)
   const cloudCard = await openWay(page, 'cloud')
-  await expect(cloudCard.getByText('Connected', { exact: true })).toBeVisible({ timeout: 60_000 })
+  // The state is the Cloud sync row's tag, under Manage cloud companion.
+  await expect((await cloudSyncRow(page, 60_000)).getByText('Connected', { exact: true })).toBeVisible({ timeout: 60_000 })
   // On the box, as its operator runs it (its own data dir, a local caller).
   const out = execFileSync(bunRuntime(), [path.join(REPO, 'src', 'cli.ts'), 'device', 'revoke', 'mac-primary'], {
     cwd: REPO, encoding: 'utf-8', timeout: 120_000,
@@ -492,7 +493,7 @@ test('the operator removes this Mac on the companion: the Cloud card stops sayin
   await expect(page.locator('.main-page')).toBeVisible({ timeout: 30_000 })
   section = await openDevices(page)
   await openWay(page, 'cloud')
-  await expect(cloudCard.getByText('Not accepted', { exact: true })).toBeVisible({ timeout: 60_000 })
+  await expect((await cloudSyncRow(page)).getByText('Not accepted', { exact: true })).toBeVisible({ timeout: 60_000 })
   await expect(cloudCard.getByText('Connected', { exact: true })).toHaveCount(0)
   await expect(cloudCard).toContainText("The cloud companion no longer accepts this Mac's token")
   await cloudCard.scrollIntoViewIfNeeded()

@@ -33,7 +33,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
-import { leadForPage, showCustomBoard } from './board-view-helpers'
+import { leadForPage, openSessionBoard, showCustomBoard } from './board-view-helpers'
 import { USER_STATE_LABELS } from '../../../src/core/user-status'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -498,9 +498,7 @@ test('a board that cannot load says so with Retry, and Retry recovers', async ({
   await parentRow.locator('.todo-item-title').click()
   const panel = page.locator(`${REAL_PANEL}[data-session-id="pw-model-switch-session"]`)
   await expect(panel).toBeVisible({ timeout: 15_000 })
-  await panel.getByTestId('session-board-chip').click()
-
-  const pane = page.getByTestId('task-board-pane')
+  const pane = await openSessionBoard(page, panel)
   const error = pane.getByTestId('board-error')
   await expect(error).toContainText("Couldn't load the board: Task not found: pw-task-model-switch")
   await expect(pane.getByTestId('board-empty')).toHaveCount(0)

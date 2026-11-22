@@ -8,6 +8,7 @@ import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { openThreadsSession, test } from './threads-helpers'
 import { SPLIT_READY, SPLIT_SESSION, SPLIT_TASK } from './threads-fixture'
+import { sessionComposer } from './session-composer'
 
 export type SentFrame = { message: string; hints?: Record<string, { arg?: string }> }
 
@@ -78,7 +79,7 @@ export const middlePage = (panel: Locator) => panel.locator('.tree-split-left[da
 export const rightBody = (panel: Locator) => panel.locator('.session-panel-body')
 export const leftHeader = (panel: Locator) => leftHalf(panel).locator('.thread-stack-header[data-half="L"]')
 export const rightHeader = (panel: Locator) => rightBody(panel).locator('.thread-stack-header[data-half="R"]')
-export const rightComposer = (panel: Locator) => panel.locator('.session-panel-input:not(.tree-split-input) textarea.chat-input-textarea')
+export const rightComposer = (panel: Locator) => sessionComposer(panel)
 export const leftComposer = (panel: Locator) => leftHalf(panel).locator('textarea.chat-input-textarea')
 
 /** The pages on screen, left to right, as `<badge> <name>` (`L Main conversation`, `M 1`, `R 1.1`). */
