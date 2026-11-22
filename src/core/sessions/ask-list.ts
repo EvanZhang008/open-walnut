@@ -202,7 +202,8 @@ export function askSessionId(task: AskTaskLike): string | null {
  * The row's state (see STATE above). `live` is a fresher process status than
  * the task's own enrichment snapshot (the web's session-status store); the
  * server passes nothing and reads the snapshot its list was enriched with.
- * Same answer as the board's `taskCircleClass` for the same inputs.
+ * The web drawer draws the task's status icon beside it (taskIconState), and the two agree on a
+ * live turn and a finished task (tests/core/sessions/ask-list.test.ts).
  */
 export function askState(
   task: AskTaskLike,

@@ -142,16 +142,16 @@ test('the "@" palette lists tasks only, a task carries its session, and the pick
   expect(groupNames).toContain('Tasks')
   await expect(palette.locator('.mention-row-session, .mention-row-project, [data-group="session"], [data-group="project"]')).toHaveCount(0)
 
-  // The task parked on a permission: a waiting dot and "waiting on you" in its
-  // meta. The task that never ran: the same row shape, an idle dot. The
-  // column's own task is never offered.
+  // The task parked on a permission: the Needs you icon and "waiting on you" in
+  // its meta. The task that never ran: the same row shape, the Not started
+  // icon. The column's own task is never offered.
   const waitingRow = palette.locator('.mention-row-task').filter({ hasText: `${tag} waiting` })
   await expect(waitingRow).toHaveAttribute('data-state', 'waiting')
-  await expect(waitingRow.locator('.mention-dot.waiting')).toBeVisible()
+  await expect(waitingRow.locator('.task-state-icon[data-state="needs"]')).toBeVisible()
   await expect(waitingRow.locator('.mention-meta')).toContainText('waiting on you')
   const plainRow = palette.locator('.mention-row-task').filter({ hasText: `${tag} plain` })
   await expect(plainRow).toHaveAttribute('data-state', 'idle')
-  await expect(plainRow.locator('.mention-dot.idle')).toBeVisible()
+  await expect(plainRow.locator('.task-state-icon[data-state="todo"]')).toBeVisible()
   await expect(plainRow.locator('.mention-meta')).toHaveText('TODO · Walnut')
   await expect(palette.locator('.mention-row-task').filter({ hasText: `${tag} self` })).toHaveCount(0)
   // The live-first ordering: the waiting task sits above the idle one.

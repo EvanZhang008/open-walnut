@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Reminders-style task cell: leading status circle (read-only), title, and a
-/// secondary line of project · priority flag · due date. Done tasks strike
-/// through and dim. The circle is NOT a toggle in v1.
+/// Reminders-style task cell: leading status icon (read-only, `TaskStateIcon`), title,
+/// and a secondary line of project · priority flag · due date. Done tasks strike
+/// through and dim. The icon is NOT a toggle in v1.
 struct TaskRow: View {
     let task: WalnutTask
     /// Focus tier label for pinned tasks ("Focus"/"Satellite"/…) — shown as a
@@ -13,10 +13,11 @@ struct TaskRow: View {
     /// Where a search found the query, when it says more than the title (a
     /// description or transcript hit). nil everywhere but the search results.
     var matchSnippet: String? = nil
+    @ScaledMetric(relativeTo: .body) private var iconSize: CGFloat = 17
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            StatusCircle(status: task.statusKind)
+            TaskStateIcon(state: TeamStatusModel.iconState(of: task), size: iconSize)
                 .padding(.top, 2)
 
             VStack(alignment: .leading, spacing: 3) {
@@ -91,12 +92,10 @@ struct TaskRow: View {
     }
 }
 
-/// Read-only status indicator — open circle (todo), tinted half circle
-/// (in progress), filled checkmark (done). VoiceOver reads the status, not the
-/// symbol's name ("circle.lefthalf.filled", gate r4, F10).
-struct StatusCircle: View {
-    let status: TaskStatus
-
+/// The words of a task's done toggle (a task page's header, a session's task row): one tap
+/// flips to do and done, whose glyph is the task's status icon (`TaskStateIcon`). VoiceOver
+/// reads the status, never a symbol's name (gate r4, F10).
+enum StatusCircle {
     /// What VoiceOver says for a status.
     static func spoken(_ status: TaskStatus) -> String {
         switch status {
@@ -110,24 +109,5 @@ struct StatusCircle: View {
     /// to do and done.
     static func toggleAccessibility(_ status: TaskStatus) -> (label: String, value: String, hint: String) {
         ("Status", spoken(status), status == .done ? "Marks the task as to do." : "Marks the task as done.")
-    }
-
-    var body: some View {
-        symbol.accessibilityLabel(Self.spoken(status))
-    }
-
-    @ViewBuilder
-    private var symbol: some View {
-        switch status {
-        case .done:
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(Theme.success)
-        case .inProgress:
-            Image(systemName: "circle.lefthalf.filled")
-                .foregroundStyle(Theme.tint)
-        case .todo, .unknown:
-            Image(systemName: "circle")
-                .foregroundStyle(.secondary)
-        }
     }
 }

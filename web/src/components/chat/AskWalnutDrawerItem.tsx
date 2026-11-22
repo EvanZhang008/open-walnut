@@ -4,9 +4,12 @@
  * under its title, with a red dot only when it needs the person.
  */
 import type { Task } from '@open-walnut/core';
-import { askActivityAt, askState, printedStamp, type AskState, type HeldList } from '@open-walnut/ask-list';
+import { askActivityAt, askState, printedStamp, type HeldList } from '@open-walnut/ask-list';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { resolveTaskSessionId } from '@/utils/session-status';
+import { taskIconState } from '@/utils/task-icon-state';
+import { useIdleCompactingSession } from '@/stores/idle-compacting-store';
+import { TaskStateIcon } from '@/components/common/TaskStateIcon';
 import { timeAgo } from '@/utils/time';
 import type { DrawerRow } from './AskWalnutDrawer';
 
@@ -47,7 +50,7 @@ export function DrawerItem({ row, held, selected, onPick, detail }: {
         </>
       ) : (
         <>
-          {row.task ? <TaskDot task={row.task} /> : <span className="ask-walnut-drawer-dot task-circle-session" aria-hidden="true" />}
+          {row.task ? <TaskDot task={row.task} /> : <span className="ask-walnut-drawer-dot" aria-hidden="true" />}
           <span className="ask-walnut-drawer-item-title">{row.title}</span>
         </>
       )}
@@ -59,21 +62,16 @@ export function DrawerItem({ row, held, selected, onPick, detail }: {
   );
 }
 
-/** The shared ask state as the board's circle classes (same colours): blue =
- *  a conversation that is not running, pulsing blue = running a turn, green =
- *  done, grey = no session yet. */
-const STATE_CLASS: Record<AskState, string> = {
-  idle: 'task-circle-session',
-  running: 'task-circle-running',
-  done: 'task-circle-done',
-  todo: 'task-circle-todo',
-};
-
-/** The row's state as a dot: the shared `askState` fed the live session status
- *  (the phone gets the same rule from GET /api/v1/asks). Its own component
- *  because the live status is a store subscription. */
+/** The row's state as the task's status icon (TaskStateIcon), fed the live session status. The
+ *  shared `askState` (the phone gets the same rule from GET /api/v1/asks) rides along as
+ *  `data-ask-state`. Its own component because the live status is a store subscription. */
 export function TaskDot({ task }: { task: Task }) {
-  const live = useSessionStatus(resolveTaskSessionId(task));
-  const state = askState(task, live);
-  return <span className={`ask-walnut-drawer-dot ${STATE_CLASS[state]}`} data-ask-state={state} aria-hidden="true" />;
+  const sessionId = resolveTaskSessionId(task);
+  const live = useSessionStatus(sessionId);
+  useIdleCompactingSession(sessionId);
+  return (
+    <span className="ask-walnut-drawer-dot" data-ask-state={askState(task, live)} aria-hidden="true">
+      <TaskStateIcon state={taskIconState(task, live, false, sessionId)} decorative />
+    </span>
+  );
 }

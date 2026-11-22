@@ -25,7 +25,7 @@ import { DisclosureButton } from '@/components/controls';
 import { USER_STATE_LABELS } from '@open-walnut/user-status';
 import { isBoolean, usePageViewOf } from '@/utils/view-memory';
 import { domId } from './OrgChartVp';
-import { TAB_DOT } from './org-task-tabs';
+import { TaskStateIcon } from '@/components/common/TaskStateIcon';
 import { directorsLabel, foldGroups, leaderTotal, leadersMatch, subsMatch, type LeaderGroup, type LeaderNode } from './org-leaders';
 import { directorMenuItems, endNewDirector, useDirectorActions, useNewDirectorAsk, type DirectorProject } from './director-actions';
 import { OrgNewDirector } from './OrgNewDirector';
@@ -119,7 +119,7 @@ function LeaderRow({ leader: l, depth, surface, query, openTaskIds, onOpen, onMe
           onClick={() => onOpen(l.id)}
           onKeyDown={hasSubs ? foldKeys(open, setOpen) : undefined}
         >
-          <i style={{ background: TAB_DOT[l.state] }} aria-hidden="true" />
+          <TaskStateIcon state={l.icon} decorative />
           <NodeAvatar taskId={l.id} name={l.title} size={20} className="org-leader-avatar" />
           <span className="org-leader-title wn-title">{l.title}</span>
           {l.watched && <span className="org-leader-eye wn-fixed" data-testid="org-leader-eye" title="Watched" aria-hidden="true">{ICON_EYE}</span>}

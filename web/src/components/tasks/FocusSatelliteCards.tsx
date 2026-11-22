@@ -3,7 +3,8 @@
  * Each tier gets a SortableTierCard with a kebab menu (same as regular task items).
  */
 import { Fragment, useCallback, memo, type CSSProperties, type ReactNode } from 'react';
-import { useTaskCircle } from '@/hooks/useSessionStatus';
+import { useTaskIconState } from '@/hooks/useSessionStatus';
+import { TaskStateIcon } from '../common/TaskStateIcon';
 import { resolveTaskSessionId, taskNeedsAction, taskUserState } from '@/utils/session-status';
 import type { Task } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
@@ -240,14 +241,6 @@ export function GroupChip({ groupId, tier, label, path, leafId, project, showPro
   );
 }
 
-const PHASE_ICON: Record<string, ReactNode> = {
-  TODO: ICONS.ICON_PHASE_TODO,
-  WAITING: ICONS.ICON_PHASE_WAITING,
-  IN_PROGRESS: ICONS.ICON_PHASE_IN_PROGRESS,
-  NEED_ACTION: ICONS.ICON_PHASE_NEED_ACTION,
-  COMPLETE: ICONS.ICON_PHASE_COMPLETE,
-};
-
 // ── SortableTierCard — unified draggable card for any tier ──
 // Wrapped in React.memo (invariant #4) to prevent re-render cascades during drag.
 // Without memo, every RAF tick from bumpDragTick would re-render all cards in all tiers,
@@ -323,8 +316,8 @@ interface SortableTierCardProps {
 }
 
 export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onSetStartDate, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject, onMoveUp, onMoveDown, groupInfo, folderCollapsed, projectCollapsed, selectMode, isSelected, onSelectToggle, onStartSelect, isGroupTarget, filterOverrideReason, landingDepth }: SortableTierCardProps) {
-  // Live circle: error red / waiting red-pulse / running green-pulse.
-  const circleClass = useTaskCircle(task);
+  // The live status icon (TaskStateIcon): a running turn and a waiting prompt show at once.
+  const iconState = useTaskIconState(task);
   const {
     attributes,
     listeners,
@@ -418,15 +411,13 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       ) : null}
       {/* Unread dot — same affordance as the main list row, so the Focus and
           Satellite strips read the same way as the list. */}
-      {unread ? (
+      {unread && (
         <span className="task-unread-dot" role="img" aria-label="Unread: agent output you haven't seen" title="Unread: click to open and mark read" />
-      ) : needsAction && !isDone && (
-        <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
       )}
       {!isDone && <PhoneRowExtras task={task} needsAction={needsAction} />}
       {/* Phase icon — one click toggles open ↔ Completed */}
       <button
-        className={`task-phase-icon-btn pinned-phase-picker ${circleClass}`}
+        className="task-phase-icon-btn pinned-phase-picker"
         onClick={(e) => {
           e.stopPropagation();
           onSetPhase?.(task.id, isDone ? 'TODO' : 'COMPLETE');
@@ -434,7 +425,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
         aria-label={isDone ? 'Reopen' : 'Mark complete'}
         title={isDone ? 'Done: click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
       >
-        {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}
+        <TaskStateIcon state={iconState} decorative />
       </button>
       {/* A usage limit holds it: its tag and reset ahead of the title, so a long title never hides
           them (limit-row.tsx; the list row draws the same words). */}

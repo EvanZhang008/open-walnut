@@ -169,7 +169,7 @@ test('Main is the CEO and each project a VP card: its avatar, name and count; a 
     await expect(own.getByTestId('org-chart-tasks')).not.toContainText(/Waiting|snoozed|Needs you/)
     for (const t of await tasks.all()) {
       await expect(t).toHaveAttribute('data-state', 'waiting')
-      await expect(t.getByTestId('org-chart-task-icon')).toHaveAttribute('aria-label', 'Waiting')
+      await expect(t.getByTestId('org-chart-task-icon')).toHaveAttribute('aria-label', 'Not started')
       await expect(t.locator('svg')).toHaveCount(1)
     }
     await expect(own.locator('[data-testid="org-chart-project-line"], [data-testid="org-chart-project-menu"]')).toHaveCount(0)
@@ -249,7 +249,7 @@ test('a drag onto another VP says what it does, asks first, and puts the project
   await expect(tasks).toHaveCount(2)
   await expect(seeds.getByTestId('org-chart-tasks')).toContainText(`Collect seeds ${STAMP}`)
   await expect(seeds.getByTestId('org-chart-tasks')).toContainText(`Label jars ${STAMP}`)
-  await expect(tasks.first().getByTestId('org-chart-task-icon')).toHaveAttribute('aria-label', 'Waiting')
+  await expect(tasks.first().getByTestId('org-chart-task-icon')).toHaveAttribute('aria-label', 'Not started')
   await expect(card.locator(`[data-testid="org-chart-project"][data-project="${A}"]`).getByTestId('org-chart-tasks')).toHaveCount(0)
 
   // A press on a task that moves a little drags no project: the press is the task's.

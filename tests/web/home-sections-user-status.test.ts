@@ -15,7 +15,7 @@ import path from 'node:path'
 import type { Task } from '@open-walnut/core'
 import { USER_STATES, shownState, type WaitKind } from '../../src/core/user-status'
 import { needsLine, stateSectionNoNeeds, stateSectionOf, statusSectionOf, waitingReason, STATUS_SECTION_ORDER } from '@/components/tasks/status-sections'
-import { ICON_PHASE_TODO, ICON_PHASE_WAITING, ICON_SNOOZE, ICON_TO_READ, sectionRowIcon } from '@/components/common/Icons'
+import { sectionIconState } from '@/utils/task-icon-state'
 
 const ROOT = path.resolve(__dirname, '../..')
 const PHASES = ['TODO', 'IN_PROGRESS', 'AGENT_COMPLETE', 'NEED_ACTION', 'WAITING'] as const
@@ -155,22 +155,22 @@ describe('Home sections equal the user status', () => {
 
   it('a row wears its section\'s mark, never the phase\'s: no ring under Waiting / snoozed', () => {
     const wrong: string[] = []
-    for (const phase of PHASES) {
+    for (const own of ['needs', 'read', 'working', 'waiting', 'snoozed', 'todo'] as const) {
       for (const snoozed of [false, true]) {
-        const w = sectionRowIcon('waiting', false, phase, snoozed, 'waiting')
-        if (w !== (snoozed ? ICON_SNOOZE : ICON_PHASE_WAITING)) wrong.push(`waiting ${phase}${snoozed ? ' snoozed' : ''}`)
-        // Under Needs you a row with only something to read wears the page; an ask, the open ring.
-        if (sectionRowIcon('needs', false, phase, snoozed, 'read') !== ICON_TO_READ) wrong.push(`read ${phase}`)
-        if (sectionRowIcon('needs', false, phase, snoozed, 'needs') !== ICON_PHASE_TODO) wrong.push(`needs ${phase}`)
-        // Working: the open ring even while parked on its own build.
-        if (sectionRowIcon('working', false, phase, false, 'working') !== ICON_PHASE_TODO) wrong.push(`working ${phase}`)
+        const w = sectionIconState('waiting', own, snoozed)
+        // A snooze and a task nobody started keep their own (iOS BoardStatusSectionModel.iconState).
+        if (w !== (snoozed || own === 'snoozed' ? 'snoozed' : own === 'todo' ? 'todo' : 'waiting')) wrong.push(`waiting ${own}${snoozed ? ' snoozed' : ''}`)
       }
+      // Under Needs you a row with only something to read wears the page; an ask, Needs you.
+      if (sectionIconState('needs', own) !== (own === 'read' ? 'read' : 'needs')) wrong.push(`needs ${own}`)
+      // Working, even while parked on its own build.
+      if (sectionIconState('working', own) !== 'working') wrong.push(`working ${own}`)
+      if (sectionIconState('notstarted', own) !== 'todo') wrong.push(`notstarted ${own}`)
     }
     expect(wrong).toEqual([])
-    // Every section card draws its mark through sectionRowIcon (a new row kind fails here).
+    // Every section card draws its mark through sectionIconState (a new row kind fails here).
     const card = fs.readFileSync(path.join(ROOT, 'web/src/components/tasks/StatusSections.tsx'), 'utf8')
-    expect(card).toContain('sectionRowIcon(sectionKey')
-    expect(card).not.toMatch(/binaryPhaseIcon\(/)
+    expect(card).toContain('sectionIconState(sectionKey')
   })
 
   it('the panel picks a section only through stateSectionOf (a ratchet of the places that name one)', () => {

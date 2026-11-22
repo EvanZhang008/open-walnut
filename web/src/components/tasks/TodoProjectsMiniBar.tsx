@@ -5,6 +5,7 @@
  */
 import { memo } from 'react';
 import * as ICONS from '../common/Icons';
+import { TaskStateIcon } from '../common/TaskStateIcon';
 
 export interface TodoProjectsMiniBarProps {
   runningCount: number;
@@ -38,7 +39,8 @@ export const TodoProjectsMiniBar = memo(function TodoProjectsMiniBar({
             title="Jump to the next task with a running session"
             onClick={onJumpRunning}
           >
-            <span className="todo-minibar-running-dot" />
+            {/* It counts the tasks whose session runs: Working, in its own icon. */}
+            <TaskStateIcon state="working" size={12} decorative />
             Running ({runningCount})
           </button>
         </>

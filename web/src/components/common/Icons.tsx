@@ -4,17 +4,12 @@
  */
 import type { ReactNode } from 'react';
 
-// ── Phase icons (task lifecycle) ──
+// ── Phase glyphs for actions and filters (Open, Reopen, Show Waiting, Complete) ──
+// A task's own status is drawn by TaskStateIcon (components/common/TaskStateIcon.tsx).
 /** hollow circle: To Do */
 export const ICON_PHASE_TODO = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="6"/></svg>;
 /** Hourglass: Waiting (set aside until something happens, or until its wait_until). */
 export const ICON_PHASE_WAITING = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 2h8M4 14h8"/><path d="M5 2c0 3 3 4 3 6s-3 3-3 6M11 2c0 3-3 4-3 6s3 3 3 6"/></svg>;
-/** Not started: the open ring drawn dashed, a task nobody has begun (never the wait hourglass). */
-export const ICON_NOT_STARTED = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeDasharray="2.4 2.3"><circle cx="8" cy="8" r="6"/></svg>;
-/** half-filled: In Progress */
-export const ICON_PHASE_IN_PROGRESS = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="6"/><path d="M8 2a6 6 0 010 12z" fill="currentColor"/></svg>;
-/** single check: Need Action */
-export const ICON_PHASE_NEED_ACTION = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 8.5l3.5 3.5 6.5-8"/></svg>;
 /** double check: Complete */
 export const ICON_PHASE_COMPLETE = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M1 8l3 3.5L10.5 4"/><path d="M5.5 8l3 3.5L15 4"/></svg>;
 
@@ -144,58 +139,7 @@ export const ICON_GEAR = <svg width="14" height="14" viewBox="0 0 16 16" fill="n
 // Sliders / filter-options icon: three horizontal tracks each with a knob.
 export const ICON_SLIDERS = <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><line x1="2" y1="4" x2="14" y2="4"/><line x1="2" y1="8" x2="14" y2="8"/><line x1="2" y1="12" x2="14" y2="12"/><circle cx="11" cy="4" r="1.7" fill="var(--bg-elevated,#1c1e24)"/><circle cx="5" cy="8" r="1.7" fill="var(--bg-elevated,#1c1e24)"/><circle cx="10" cy="12" r="1.7" fill="var(--bg-elevated,#1c1e24)"/></svg>;
 
-/**
- * Binary task-state icon, the glyph the interactive task toggle uses: hollow
- * circle = open, single check = done, and an hourglass for an open task that is
- * Waiting (pass `phase`). The rest of the lifecycle still exists in the data model
- * (and keeps its per-phase COLOR via .task-phase-*), but the shape stays simple so
- * a task row reads like a plain todo item.
- */
-/** A snoozed row's mark: it sleeps until its date (the row's ▶︎ pill says when). */
-export const ICON_SNOOZE = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M13.5 9.6A5.75 5.75 0 1 1 6.4 2.5a4.6 4.6 0 0 0 7.1 7.1z"/></svg>;
-/** A To read row's mark: there is a result or an answer to read, nothing asked. */
-export const ICON_TO_READ = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3.25" y="1.75" width="9.5" height="12.5" rx="1.5"/><path d="M5.75 5.25h4.5M5.75 8h4.5M5.75 10.75h2.5"/></svg>;
-
-/**
- * The mark a status section's row wears (2026-11-02, the user: under Waiting / snoozed the rows wore
- * the needs ring and "looks kike they are waiting for my input"): its section's, never its phase's.
- * Waiting: the snooze mark when snoozed, else the hourglass; To read: the page; elsewhere the phase's.
- */
-export function sectionRowIcon(section: string, isDone: boolean, phase: string | undefined, snoozed: boolean, state: string | undefined): ReactNode {
-  if (isDone) return binaryPhaseIcon(true, phase, state);
-  if (section === 'waiting') return snoozed ? ICON_SNOOZE : ICON_PHASE_WAITING;
-  if (section === 'notstarted') return ICON_NOT_STARTED;
-  // Under Needs you a row with only something to read wears the page; an ask, the open ring.
-  if (section === 'needs' && state === 'read') return ICON_TO_READ;
-  // Working (its own build may run while it is parked) and Needs you wear the open ring.
-  if (section === 'working' || section === 'needs') return ICON_PHASE_TODO;
-  return binaryPhaseIcon(false, phase, state);
-}
-
-/**
- * A task's toggle icon. The one open phase with its own shape: a Waiting row says it is set
- * aside, and the toggle still completes it. `state` is the task's one user status
- * (taskUserState): a parked task whose own work runs (a build, a test run of its change) reads
- * Working, and one with only a result to read reads To read, so neither wears the hourglass
- * (2026-11-02, the user, on a task parked on its own build: "if it is runnig it shoud be i
- * progress right?"). Required, so a new caller cannot draw a wait from the phase alone.
- */
-export function binaryPhaseIcon(isDone: boolean, phase: string | undefined, state: string | undefined): ReactNode {
-  if (isDone) return ICON_PHASE_NEED_ACTION;
-  return phase === 'WAITING' && state !== 'working' && state !== 'read' ? ICON_PHASE_WAITING : ICON_PHASE_TODO;
-}
-
-// ── Phase icon map (for TodoPanel, StatusBadge, ChatMessage) ──
-export function phaseIcon(phase: string): ReactNode {
-  switch (phase) {
-    case 'TODO': return ICON_PHASE_TODO;
-    case 'WAITING': return ICON_PHASE_WAITING;
-    case 'IN_PROGRESS': return ICON_PHASE_IN_PROGRESS;
-    case 'NEED_ACTION': return ICON_PHASE_NEED_ACTION;
-    case 'COMPLETE': return ICON_PHASE_COMPLETE;
-    default: return ICON_PHASE_TODO;
-  }
-}
+// A task's status icon is TaskStateIcon (components/common/TaskStateIcon.tsx), never a glyph here.
 
 // ── Focus-tier icons (crosshair / planet+satellite / inbox tray / parking sign / bookmark) ──
 // Stroke-style on purpose: task PHASE icons are filled-circle shapes, so the

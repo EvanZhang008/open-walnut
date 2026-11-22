@@ -173,30 +173,26 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
     return range.getClientRects()[0].left;
   });
   expect(Math.round(textLeft - panelX)).toBe(46);
-  // Status dots sit on that text column, left of the circle: filled while the output is
-  // unread, hollow once it is read but the task still needs you. The circle keeps its
-  // session colour either way, and the dot never moves it.
+  // The unread dot sits on that text column, left of the status icon, filled while the output is
+  // unread; once it is read the task's status icon alone says it needs you (one mark per row,
+  // TaskStateIcon), and the dot never moves it.
   const dotBox = (dot: ReturnType<Page['locator']>) => dot.evaluate(el => {
     const box = el.getBoundingClientRect();
     const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
     return { left: box.left, right: box.right, painted: hit === el };
   });
-  const unreadDot = row.locator('.task-unread-dot:not(.task-attention-dot)');
+  const unreadDot = row.locator('.task-unread-dot');
   if (await unreadDot.count()) {
     const dot = await dotBox(unreadDot);
     expect(Math.round(dot.left - textColumn)).toBe(0);
     expect(dot.right).toBeLessThanOrEqual(circleX - 3);
+    expect(dot.painted).toBe(true);
     expect((await page.request.patch(`/api/tasks/${taskId}`, { data: { unread: false } })).ok()).toBe(true);
   }
-  await expect(row.locator('.task-attention-dot')).toBeVisible();
   await expect(unreadDot).toHaveCount(0);
-  const ring = await dotBox(row.locator('.task-attention-dot'));
-  expect(Math.round(ring.left - textColumn)).toBe(0);
-  expect(ring.right).toBeLessThanOrEqual(circleX - 3);
-  expect(ring.painted).toBe(true);
   expect(Math.round(await leftOf(row.locator('.task-phase-icon-btn')) - panelX)).toBe(22);
-  await expect(row.locator('.task-phase-icon-btn')).toHaveClass(/task-circle-todo/);
-  expect(await row.locator('.task-phase-icon-btn').evaluate(el => getComputedStyle(el).color)).not.toBe('rgb(255, 59, 48)');
+  await expect(row.locator('.task-phase-icon-btn .task-state-icon')).toHaveAttribute('data-state', 'needs');
+  await expect(row.locator('.task-phase-icon-btn .task-state-icon')).toHaveCSS('color', 'rgb(255, 59, 48)');
   await project.locator('.collapse-chevron').click();
   await expect(row).toBeHidden();
   await project.locator('.todo-group-name-btn').click();
@@ -626,9 +622,13 @@ test('a single tier, Recent and the Projects list draw on the same grid as All',
   await expect(navigation(page).locator(card)).toBeVisible();
   expect(await grid(row)).toEqual({ circle: 22, dot: 12 });
 
+  // Opening the member read it; its dot is the unread one alone now (Needs you is its status
+  // icon, TaskStateIcon), so it is unread again for the list's grid.
+  expect((await page.request.patch(`/api/tasks/${members[0]}`, { data: { unread: true } })).ok()).toBe(true);
   await chooseViewOption(page, 'tasks');
   await openListProject(page, `Grid 1 ${tag}`);
   await expect(navigation(page).locator(card)).toBeVisible();
+  await expect(navigation(page).locator(`${member} .task-unread-dot`)).toHaveCount(1);
   expect(await grid({ project: ['.todo-group-project-header .todo-group-project-name', 'text'], ...row, ...memberRow }))
     .toEqual({ project: 12, circle: 22, dot: 12, memberCircle: 38, memberDot: 28 });
   // In the list the selected row fills the same blue.

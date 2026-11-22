@@ -232,6 +232,8 @@ targets:
       - path: WalnutWidgets
       # Only the work card's model: Shared/Vault is the AutoFill extension's.
       - path: Shared/WorkCard.swift
+      # The task status icon the card's lists wear, the same view the app draws.
+      - path: Shared/TaskStateIcon.swift
       # Talk to Walnut's activity and its Send / Cancel intents, compiled into
       # both targets; iOS runs the intents in the app, and WIDGET_EXTENSION
       # leaves their bodies empty here.

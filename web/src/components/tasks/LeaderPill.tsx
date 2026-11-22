@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task } from '@open-walnut/core';
-import { binaryPhaseIcon } from '@/components/common/Icons';
+import { TaskStateIcon } from '@/components/common/TaskStateIcon';
+import { taskIconState } from '@/utils/task-icon-state';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useKeyboardOpenFocus } from '@/hooks/useKeyboardOpenFocus';
 import { useOpenTask } from '@/hooks/useOpenTask';
-import { resolveTaskSessionId, taskCircleClass, taskStatusLabel, taskUserState } from '@/utils/session-status';
+import { resolveTaskSessionId, taskStatusLabel } from '@/utils/session-status';
 import { log } from '@/utils/log';
 import { AdoptWorkerFlyout } from './AdoptWorkerFlyout';
 import { doneSubtaskCount, leaderPillTitle, openSubtasksOf, subtaskPlaceLabel } from './subtask-index';
@@ -178,9 +179,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
                         title={`Go to "${orgDisplayTitle(sub)}"`}
                         onClick={() => goTo(sub)}
                       >
-                        <span className={`task-phase-icon-btn leader-sub-phase ${taskCircleClass(sub, null)}`} aria-hidden="true">
-                          {binaryPhaseIcon(false, sub.phase, taskUserState(sub))}
-                        </span>
+                        <TaskStateIcon state={taskIconState(sub)} className="leader-sub-phase" decorative />
                         <span className="leader-sub-title wn-title">{orgDisplayTitle(sub)}</span>
                         {place && <span className="leader-sub-place" title={`In project ${place}`}>{place}</span>}
                         <span className="leader-sub-phase-label">{taskStatusLabel(sub)}</span>

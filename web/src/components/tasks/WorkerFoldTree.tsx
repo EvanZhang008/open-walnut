@@ -11,7 +11,8 @@ import { useEffect } from 'react';
 import type { Task } from '@open-walnut/core';
 import * as ICONS from '../common/Icons';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
-import { taskUserState } from '@/utils/session-status';
+import { sectionIconState, taskIconState } from '@/utils/task-icon-state';
+import { TaskStateIcon } from '../common/TaskStateIcon';
 import { foldMixLine, stateSectionKey, type FoldEntry, foldStateWords } from './worker-fold';
 import { installFoldTip } from './fold-tip';
 import { DisclosureButton } from '@/components/controls';
@@ -100,7 +101,7 @@ export function FoldTree({ host, entries, ctl, focusedTaskId, onOpen, twoLine }:
           >
             <button type="button" className="worker-fold-open" title={orgDisplayTitle(task)} onClick={(e) => { e.stopPropagation(); onOpen(task); }}>
               <span className={`worker-fold-icon worker-fold-icon-${key}`} aria-hidden="true">
-                {ICONS.sectionRowIcon(key, key === 'done', task.phase, false, taskUserState(task))}
+                <TaskStateIcon state={sectionIconState(key, taskIconState(task))} decorative />
               </span>
               <span className="worker-fold-title wn-title">{orgDisplayTitle(task)}</span>
               {back ? null : <span className="worker-fold-state wn-meta">{out ? `${foldStateWords(key)} · in the list` : foldStateWords(key)}</span>}

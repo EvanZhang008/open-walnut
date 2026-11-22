@@ -33,7 +33,7 @@
 .org-thread-state {
   display: inline-flex; align-items: center; gap: 4px; font-size: var(--font-size-xs); color: var(--fg-secondary); white-space: nowrap;
 }
-.org-thread-state i, .org-thread-task i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.org-thread-state i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .org-thread-title { grid-column: 1 / -1; grid-row: 2; min-width: 0; font-weight: 600; font-size: var(--font-size-md); line-height: 1.4; overflow-wrap: break-word; }
 /* The row beside the state fills its column and lays its pieces out right-aligned; only the node's
    name gives way (ellipsis, the full name on hover), the state and the time stay whole. An

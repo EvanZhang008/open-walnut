@@ -166,9 +166,9 @@ const HEADER_ITEMS = {
 const TEXT_PILLS = ['trigger', 'worker', 'leader']
 
 /** Every item's ink on the row's center line (a text pill's box); the title's line box too. */
-async function expectRowAligned(page: Page, panel: Locator, label: string): Promise<Record<string, Ink>> {
+async function expectRowAligned(page: Page, panel: Locator, label: string, items: Record<string, string> = HEADER_ITEMS): Promise<Record<string, Ink>> {
   const row = panel.locator('.session-panel-header-top')
-  const { rowCy, ink } = await inkOf(page, row, HEADER_ITEMS)
+  const { rowCy, ink } = await inkOf(page, row, items)
   const offsets = Object.fromEntries(Object.entries(ink).map(([k, v]) => [k, +(v.cy - rowCy).toFixed(2)]))
   await fs.writeFile(`${SCREENSHOT_DIR}/${test.info().project.name}-${label}.json`, JSON.stringify({ rowCy, offsets, ink }, null, 2))
   for (const [name, off] of Object.entries(offsets)) {
@@ -203,7 +203,7 @@ async function listGap(page: Page, taskId: string): Promise<number> {
   return ink.circle.left - ink.dot.right
 }
 
-test('a session column header: dot or ring, circle, Trigger, Worker, Leader and kebab share one center line', async ({ page }) => {
+test('a session column header: the unread dot, the status icon, Trigger, Worker, Leader and kebab share one center line', async ({ page }) => {
   test.setTimeout(180_000)
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
@@ -216,22 +216,23 @@ test('a session column header: dot or ring, circle, Trigger, Worker, Leader and 
   const header = panel.locator('.session-panel-header-top')
   for (const pill of ['Trigger', 'Worker', 'Leader']) await expectHeaderLabel(panel, pill)
   await expectBareTitleRow(panel)
-  await expect(header.locator('.session-panel-unread-dot:not(.session-panel-attention-dot)')).toBeVisible({ timeout: 20_000 })
+  await expect(header.locator('.session-panel-unread-dot')).toBeVisible({ timeout: 20_000 })
 
   const gap = await listGap(page, taskId)
   const unread = await expectRowAligned(page, panel, 'column-unread')
   expect(Math.abs((unread.circle.left - unread.marker.right) - gap), 'dot-to-circle gap matches the task list').toBeLessThanOrEqual(1)
   await rowShot(page, header, 'column-unread')
 
-  // Read: the hollow ring takes the dot's place, on the same line and spacing. The ring
-  // marks a task that needs the user, and a clean turn end asks nothing (only a real ask
-  // reaches Needs you). The task is a worker here (dressAsBusyTask gave it a parent), and a
+  // Read, and it needs the user: no second mark takes the dot's place; the status icon alone
+  // says Needs you (TaskStateIcon), on the same line. A clean turn end asks nothing (only a real
+  // ask reaches Needs you). The task is a worker here (dressAsBusyTask gave it a parent), and a
   // worker's bare NEED_ACTION reads Waiting on its lead, so its own line names an ask.
   await api('PUT', `/api/v1/tasks/${taskId}/report`, { state: 'needs', ask: 'Pick the alignment fixture' })
   await panel.getByText('Alignment turn finished', { exact: true }).first().click()
-  await expect(header.locator('.session-panel-attention-dot')).toBeVisible({ timeout: 20_000 })
-  const read = await expectRowAligned(page, panel, 'column-read')
-  expect(Math.abs((read.circle.left - read.marker.right) - gap), 'ring-to-circle gap matches the task list').toBeLessThanOrEqual(1)
+  await expect(header.locator('.task-quick-phase-btn .task-state-icon')).toHaveAttribute('data-state', 'needs', { timeout: 20_000 })
+  await expect(header.locator('.session-panel-unread-dot')).toHaveCount(0)
+  const { marker: _marker, ...noMarker } = HEADER_ITEMS
+  await expectRowAligned(page, panel, 'column-read', noMarker)
   await rowShot(page, header, 'column-read')
   expect(errors).toEqual([])
 })

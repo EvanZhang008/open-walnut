@@ -4,24 +4,19 @@
  */
 import { useMemo } from 'react';
 import type { Task } from '@open-walnut/core';
-import { userStateOf } from '@open-walnut/org-tree';
-import { shownState } from '@open-walnut/user-status';
+import { TaskStateIcon } from '@/components/common/TaskStateIcon';
+import { taskIconState } from '@/utils/task-icon-state';
 import { useOpenTask } from '@/hooks/useOpenTask';
-
-/** A task's live status dot, the colours of the Task view's tabs (OrgTaskRail TAB_DOT). */
-const TASK_DOT: Record<string, string> = {
-  needs: 'var(--error, #FF3B30)', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)', done: 'var(--accent, #0A84FF)',
-};
 
 /** One task: its dot (when the task is loaded) and its title, or the `fallback` title, else its id. */
 export function TaskChip({ id, task, fallback }: { id: string; task: Task | undefined; fallback?: string }) {
   const openTask = useOpenTask();
-  // A task with only something to read wears Needs you, where it is drawn (shownState).
-  const state = task ? shownState(userStateOf(task)) : null;
+  // Its live status (TaskStateIcon's dot), when the task is loaded.
+  const state = task ? taskIconState(task) : null;
   const title = task?.title ?? fallback ?? id;
   return (
     <button type="button" className="org-thread-task" data-testid="org-thread-task" data-task-id={id} onClick={() => openTask(id)} title={title}>
-      {state && <i style={{ background: TASK_DOT[state] }} />}
+      {state && <TaskStateIcon state={state} size={12} decorative />}
       <span>{title}</span>
     </button>
   );

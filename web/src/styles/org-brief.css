@@ -40,25 +40,8 @@
 .org-brief-body > :last-child { margin-bottom: 0; }
 .org-brief-body p, .org-brief-body ul, .org-brief-body ol { margin: 0 0 4px; }
 .org-brief-body ul, .org-brief-body ol { padding-left: 18px; }
-/* Each task the letter names wears its live status, and so does each section heading. */
-.org-brief-body a.task-link[data-user-state]::before,
-.org-brief-body [data-brief-section]::before {
-  content: '';
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  margin-right: 4px;
-  border-radius: 50%;
-  vertical-align: 1px;
-  background: var(--fg-muted);
-}
-/* To read is drawn under Needs you (shownState, 2026-11-03): its pill wears the Needs you dot. */
-.org-brief-body a.task-link[data-user-state='needs']::before,
-.org-brief-body a.task-link[data-user-state='read']::before,
-.org-brief-body [data-brief-section='needs']::before { background: var(--error); }
-.org-brief-body a.task-link[data-user-state='working']::before,
-.org-brief-body [data-brief-section='working']::before { background: var(--success); }
-.org-brief-body a.task-link[data-user-state='done']::before { background: var(--accent); }
+/* Each task the letter names wears its live status, and so does each section heading: the
+   status icon's shapes drawn by styles/task-state.css. */
 /* The three section headings (Needs you, Working, Waiting / snoozed): small, not a document's. */
 .org-brief-body h1, .org-brief-body h2, .org-brief-body h3, .org-brief-body h4 {
   margin: 8px 0 2px;
@@ -85,20 +68,7 @@
   color: var(--fg);
   font-size: var(--font-size-sm);
 }
-.org-brief-body .org-brief-now::before {
-  content: '';
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 4px;
-  border-radius: 50%;
-  vertical-align: 1px;
-  background: var(--fg-muted);
-}
-.org-brief-body .org-brief-now[data-user-state='needs']::before,
-.org-brief-body .org-brief-now[data-user-state='read']::before { background: var(--error); }
-.org-brief-body .org-brief-now[data-user-state='working']::before { background: var(--success); }
-.org-brief-body .org-brief-now[data-user-state='done']::before { background: var(--accent); }
+/* Its live status mark: styles/task-state.css. */
 .org-top-updating { font-size: var(--font-size-sm); color: var(--accent); }
 /* A line Walnut added for an ask the letter missed: the ask in the task's words, then the note. */
 .org-brief-body li[data-brief-added] .org-brief-now { color: var(--fg-muted); }

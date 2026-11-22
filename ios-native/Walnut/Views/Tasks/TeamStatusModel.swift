@@ -17,15 +17,27 @@ enum UserState: String, CaseIterable {
     /// The group a state is drawn in: To read is Needs you.
     var shown: UserState { self == .read ? .needs : self }
 
-    /// The four names a person reads on every surface (src/core/user-status.ts USER_STATE_LABELS).
+    /// The four names a person reads on every surface (src/core/user-status.ts USER_STATE_LABELS),
+    /// the status icon's words (`TaskIconState.label`) but for Waiting / snoozed, the group of
+    /// three icons (waiting, snoozed, not started).
     var label: String {
         switch self {
-        case .needs: return "Needs you"
         // To read is drawn and named as Needs you (`shown`).
-        case .read: return "Needs you"
-        case .working: return "Working"
+        case .needs, .read: return TaskIconState.needs.label
+        case .working: return TaskIconState.working.label
         case .waiting: return "Waiting / snoozed"
-        case .done: return "Completed"
+        case .done: return TaskIconState.done.label
+        }
+    }
+
+    /// The icon of the group itself, where only the group is known (an Org node's state, a chip).
+    var icon: TaskIconState {
+        switch self {
+        case .needs: return .needs
+        case .read: return .read
+        case .working: return .working
+        case .waiting: return .waiting
+        case .done: return .done
         }
     }
 }
@@ -206,10 +218,52 @@ enum TeamStatusModel {
     /// Not started: a task nobody started (never run, marked in progress with no session, a start
     /// that failed) and not snoozed, the web's `isNotStartedStatus` (2026-11-09, the owner: it is
     /// "completeli differnet" from wait and snooze). A snoozed one sleeps under Waiting / snoozed.
-    static let notStartedLabel = "Not started"
+    static let notStartedLabel = TaskIconState.todo.label
     static func isNotStarted(_ s: WalnutUserStatus?) -> Bool {
         guard let s else { return false }
         return s.state == UserState.waiting.rawValue && s.kind == "not-started" && s.snoozed == nil
+    }
+
+    /// A task's status icon (`TaskStateIcon`): its one user status, told apart further than the
+    /// four groups are (To read out of Needs you; snoozed and not started out of Waiting), else
+    /// its phase. The same seven states the web draws.
+    static func iconState(of task: WalnutTask) -> TaskIconState {
+        iconState(state(of: task), status: task.userStatus, phase: task.phase)
+    }
+
+    /// A row's icon: the row's group decides (a work card list puts its rows in its own), its
+    /// status only tells the group's icons apart.
+    static func iconState(_ row: TeamStatusRow) -> TaskIconState {
+        iconState(row.state, status: row.status, phase: row.task.phase)
+    }
+
+    /// The icon inside a group: To read in Needs you, a snooze or a task nobody started in
+    /// Waiting. With no status this build reads, the phase says which, as the web's `waitFacts`
+    /// does: only a TODO was never started, any other phase in Waiting waits. The web also asks
+    /// that a TODO has no session; a phone row carries no session id, and only a server from
+    /// before `user_status` sends a row without one, so a TODO here reads Not started.
+    static func iconState(_ group: UserState, status: WalnutUserStatus?, phase: String?) -> TaskIconState {
+        switch group {
+        case .done: return .done
+        case .needs, .read: return isToRead(status) ? .read : .needs
+        case .working: return .working
+        case .waiting:
+            guard let s = status, userState(s) != nil else { return phase == nil || phase == "TODO" ? .todo : .waiting }
+            if s.snoozed != nil { return .snoozed }
+            return isNotStarted(s) ? .todo : .waiting
+        }
+    }
+
+    /// The icon of a task this phone has only a snapshot of (a relative in a task's detail): its
+    /// phase, as an older Walnut meant it, and Not started for a TODO.
+    static func iconState(phase: String?, status: String?) -> TaskIconState {
+        if phase == "COMPLETE" || status == "done" { return .done }
+        switch phase {
+        case "IN_PROGRESS": return .working
+        case "NEED_ACTION": return .needs
+        case "WAITING": return .waiting
+        default: return .todo
+        }
     }
 
     /// An agent's sentence (or a title) as a clause inside other words: no closing period,

@@ -2,9 +2,9 @@
  * MentionPalette — the unified "@" popup: ONE panel, Tasks + Files.
  *
  *   Tasks — ONE level. A task and its session are one thing here (the session
- *           is the task's runtime), so a row is a task with its run state: a
- *           dot (running / waiting on you / idle) and the state's word in the
- *           meta line. Picking a row INSERTS an inline `@[title]` reference
+ *           is the task's runtime), so a row is a task with its status icon
+ *           (TaskStateIcon) and its run state's word (running / waiting on
+ *           you) in the meta line. Picking a row INSERTS an inline `@[title]` reference
  *           where the "@" was (a `<task-ref/>` tag in the sent message, see
  *           composer-refs.ts); the message still goes to the CURRENT session,
  *           whose agent gets a compact reference card appended server-side
@@ -48,6 +48,7 @@ import {
 } from 'react';
 import { Tab, TabList } from '@/components/controls';
 import { ICON_FILE, ICON_FOLDER, ICON_MAIL, ICON_NOTE, ICON_PERSON } from '@/components/common/Icons';
+import { TaskStateIcon } from '@/components/common/TaskStateIcon';
 import { fetchDirList, type DirEntry } from '@/api/files';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
@@ -445,7 +446,7 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
           onMouseDown={(e) => { e.preventDefault(); pick(row); }}
           title={`${entity.title} — ${entity.meta}`}
         >
-          <span className={`mention-dot ${entity.state}`} />
+          <TaskStateIcon state={entity.icon} size={12} decorative />
           <span className="mention-main">
             <span className="mention-title">
               {matchField === 'title'

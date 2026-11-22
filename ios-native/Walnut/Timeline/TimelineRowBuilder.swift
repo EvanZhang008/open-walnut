@@ -371,7 +371,7 @@ final class TimelineRowBuilder {
     /// A pill's dot: its task's user state, grey while the phone does not know it.
     static func aboutDotColor(_ state: UserState?) -> UIColor {
         guard let state else { return .systemGray3 }
-        return state == .waiting ? .systemGray : UIColor(UserStatePill.color(state))
+        return state.icon.uiColor
     }
 
     /// Caption under a reply the cloud companion answered on its own.

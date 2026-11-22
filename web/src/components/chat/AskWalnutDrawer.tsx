@@ -366,7 +366,7 @@ export function AskWalnutDrawer({
                 </>
               ) : (
                 <>
-                  {main.task ? <TaskDot task={main.task} /> : <span className="ask-walnut-drawer-dot task-circle-todo" aria-hidden="true" />}
+                  {main.task ? <TaskDot task={main.task} /> : <span className="ask-walnut-drawer-dot" aria-hidden="true" />}
                   <span className="ask-walnut-drawer-item-title">CEO</span>
                   <span className="ask-walnut-drawer-item-time">all your work</span>
                 </>

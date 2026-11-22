@@ -39,15 +39,13 @@ import { requestWaitUntil, WAIT_UNTIL_MENU_LABEL, WAIT_UNTIL_TITLE } from '@/uti
 import { formatDraftDate } from '@/components/sessions/draft-decisions';
 import { log } from '@/utils/log';
 import { PHASE_LABELS, taskStatusLabel } from '@/utils/session-status';
+import { phaseIconState, taskIconState } from '@/utils/task-icon-state';
+import { TaskStateIcon } from '../common/TaskStateIcon';
 import '@/styles/task-status.css';
 
-export const STATUS_OPTIONS: { value: TaskPhase; label: string; icon: ReactNode }[] = [
-  { value: 'TODO', label: PHASE_LABELS.TODO, icon: ICONS.ICON_PHASE_TODO },
-  { value: 'WAITING', label: PHASE_LABELS.WAITING, icon: ICONS.ICON_PHASE_WAITING },
-  { value: 'IN_PROGRESS', label: PHASE_LABELS.IN_PROGRESS, icon: ICONS.ICON_PHASE_IN_PROGRESS },
-  { value: 'NEED_ACTION', label: PHASE_LABELS.NEED_ACTION, icon: ICONS.ICON_PHASE_NEED_ACTION },
-  { value: 'COMPLETE', label: PHASE_LABELS.COMPLETE, icon: ICONS.ICON_PHASE_COMPLETE },
-];
+/** The phase choices, each with the status icon (TaskStateIcon) of the state it sets. */
+export const STATUS_OPTIONS: { value: TaskPhase; label: string; icon: ReactNode }[] = (['TODO', 'WAITING', 'IN_PROGRESS', 'NEED_ACTION', 'COMPLETE'] as const)
+  .map((value) => ({ value, label: PHASE_LABELS[value], icon: <TaskStateIcon state={phaseIconState(value)} decorative /> }));
 
 /** Hourglass, 16px stroke=currentColor (the "+" menu's action-icon contract). */
 export const WAIT_UNTIL_ICON = (
@@ -255,7 +253,6 @@ export function TaskStatusMenuSection({ task, onSetPhase, onSetWaitUntil, afterA
   const setPhase = useSetPhase(onSetPhase);
   const setWaitUntil = useSetWaitUntil(onSetWaitUntil);
   const [open, setOpen] = useState(false);
-  const option = STATUS_OPTIONS.find((o) => o.value === task.phase);
   const until = task.phase === 'WAITING' ? formatWaitUntil(task.wait_until) : '';
   return (
     <>
@@ -270,7 +267,7 @@ export function TaskStatusMenuSection({ task, onSetPhase, onSetWaitUntil, afterA
           data-testid="task-status-toggle"
           onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
         >
-          <span className="task-kebab-icon">{option?.icon ?? ICONS.ICON_PHASE_TODO}</span>
+          <span className="task-kebab-icon"><TaskStateIcon state={taskIconState(task)} decorative /></span>
           <span className="task-kebab-status-value">
             Status: <b>{taskStatusLabel(task)}</b>
             {until ? <span className="task-kebab-status-until"> · until {until}</span> : null}
@@ -326,7 +323,6 @@ export function TaskStatusBadge({ task, onSetPhase, onSetWaitUntil, quiet = fals
     };
   }, [open, close]);
 
-  const option = STATUS_OPTIONS.find((o) => o.value === task.phase);
   return (
     <>
       <button
@@ -339,7 +335,7 @@ export function TaskStatusBadge({ task, onSetPhase, onSetWaitUntil, quiet = fals
         data-testid="task-status-badge"
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
       >
-        {!quiet && (option?.icon ?? '○')} {taskStatusLabel(task)} <span className="task-status-caret" aria-hidden="true">▾</span>
+        {!quiet && <TaskStateIcon state={taskIconState(task)} decorative />} {taskStatusLabel(task)} <span className="task-status-caret" aria-hidden="true">▾</span>
       </button>
       {open && createPortal(
         <div

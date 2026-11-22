@@ -8,7 +8,7 @@
 import { memo, useMemo, type ReactNode } from 'react';
 import { Chip } from '@/components/controls';
 import type { Task, TaskPhase } from '@open-walnut/core';
-import * as ICONS from '../common/Icons';
+import { TaskStateIcon } from '../common/TaskStateIcon';
 import type { FilterDim, FilterState } from './filter-bar-types';
 import { orderStatus } from './filter-bar-model';
 import { passesChips, type FilterEvalContext } from './filter-predicate';
@@ -73,7 +73,7 @@ export function footerItems(state: FilterState, counts: FooterCounts): FooterIte
   const waitingOn = state.status.includes('WAITING');
   if (counts.waiting > 0) {
     items.push({
-      key: 'waiting', on: waitingOn, icon: ICONS.ICON_PHASE_WAITING,
+      key: 'waiting', on: waitingOn, icon: <TaskStateIcon state="waiting" decorative />,
       text: `${counts.waiting} Waiting ${waitingOn ? 'shown' : 'hidden'}`,
       title: waitingOn ? 'Hide the Waiting tasks again' : 'Show the Waiting tasks (on hold until a date or an event)',
       next: toggleStatusPhase(state, 'WAITING'),
@@ -82,7 +82,7 @@ export function footerItems(state: FilterState, counts: FooterCounts): FooterIte
   const completeOn = state.status.includes('COMPLETE');
   if (counts.complete > 0) {
     items.push({
-      key: 'completed', on: completeOn, icon: ICONS.ICON_PHASE_COMPLETE,
+      key: 'completed', on: completeOn, icon: <TaskStateIcon state="done" decorative />,
       text: `${counts.complete} Complete ${completeOn ? 'shown' : 'hidden'}`,
       title: completeOn ? 'Hide the Complete tasks again' : 'Show the Complete tasks',
       next: toggleStatusPhase(state, 'COMPLETE'),

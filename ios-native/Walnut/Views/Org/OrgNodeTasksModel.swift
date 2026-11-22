@@ -25,11 +25,11 @@ enum OrgNodeTasksModel {
         var label: String {
             switch self {
             case .watching: return "Watching"
-            case .needs: return "Needs you"
-            case .working: return "Working"
-            case .waiting: return "Waiting / snoozed"
+            case .needs: return UserState.needs.label
+            case .working: return UserState.working.label
+            case .waiting: return UserState.waiting.label
             case .notStarted: return TeamStatusModel.notStartedLabel
-            case .done: return "Completed"
+            case .done: return UserState.done.label
             }
         }
         /// Open on a page's first look: what is in front of him now (the home rule).

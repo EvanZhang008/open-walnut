@@ -51,14 +51,15 @@ struct WorkCardLiveActivity: Widget {
     }
 }
 
-/// The card's colours: the app's state colours (UserStatePill), readable on the lock screen in
+/// The card's colours: the app's state colours (its status icon's, `TaskIconState.color`:
+/// Working green, Needs you red, Completed grey) as words, readable on the lock screen in
 /// both appearances; the Dynamic Island is always black, so it takes the dark ones.
 enum WorkCardStyle {
     static func color(_ list: WorkCardList, dark: Bool) -> Color {
         switch list {
-        case .working: return dark ? Color(red: 0.50, green: 0.66, blue: 1.00) : Color(red: 0.11, green: 0.31, blue: 0.77)
-        case .needs: return dark ? Color(red: 1.00, green: 0.60, blue: 0.36) : Color(red: 0.70, green: 0.23, blue: 0.02)
-        case .completed: return dark ? Color(red: 0.30, green: 0.85, blue: 0.39) : Color(red: 0.09, green: 0.42, blue: 0.17)
+        case .working: return dark ? Color(red: 0.30, green: 0.85, blue: 0.39) : Color(red: 0.09, green: 0.42, blue: 0.17)
+        case .needs: return dark ? Color(red: 1.00, green: 0.42, blue: 0.40) : Color(red: 0.77, green: 0.09, blue: 0.11)
+        case .completed: return dark ? Color(red: 0.62, green: 0.62, blue: 0.65) : Color(red: 0.40, green: 0.40, blue: 0.43)
         }
     }
 
@@ -105,7 +106,7 @@ struct WorkCardLockScreen: View {
                     .foregroundStyle(.secondary)
             }
             WorkCardTiles(state: state, dark: dark, dimmed: isStale, spacing: 8)
-            WorkCardNeedsLine(state: state, dark: dark)
+            WorkCardNeedsLine(state: state)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
@@ -206,15 +207,14 @@ struct WorkCardTile: View {
 /// The newest task that needs the user, and how many more do ("+2").
 struct WorkCardNeedsLine: View {
     let state: WorkCardAttributes.ContentState
-    let dark: Bool
 
     var body: some View {
         if let title = state.needsTitle, state.needs > 0 {
             // The title is one task: it opens that task, over the Needs you list.
             Link(destination: WorkCardLink.url(.needs, task: state.needsTaskId)) {
                 HStack(spacing: 5) {
-                    Image(systemName: WorkCardList.needs.systemImage)
-                        .foregroundStyle(WorkCardStyle.color(.needs, dark: dark))
+                    // A Live Activity draws one frame: nothing moves on the lock screen.
+                    TaskStateIcon(state: WorkCardList.needs.iconState, size: 13, animates: false)
                     Text(title)
                         .lineLimit(1)
                         .foregroundStyle(.primary)
@@ -239,7 +239,7 @@ struct WorkCardCompact: View {
 
     var body: some View {
         HStack(spacing: 3) {
-            Image(systemName: list.systemImage)
+            TaskStateIcon(state: list.iconState, size: 13, animates: false)
             Text(WorkCardStyle.number(count)).monospacedDigit()
         }
         .font(.caption.weight(.semibold))
@@ -257,7 +257,7 @@ struct WorkCardIslandBottom: View {
         VStack(alignment: .leading, spacing: 8) {
             WorkCardTiles(state: state, dark: true, dimmed: isStale, spacing: 6)
             // In from the island's rounded corner, which clipped its mark at the tiles' inset.
-            WorkCardNeedsLine(state: state, dark: true)
+            WorkCardNeedsLine(state: state)
                 .padding(.horizontal, 10)
         }
         .padding(.horizontal, 4)

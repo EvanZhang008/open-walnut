@@ -28,6 +28,8 @@ import {
 import { pageShortcutBlocked } from '@/utils/page-shortcut';
 import '@/styles/quick-sort.css';
 import { SegmentedControl } from '@/components/controls';
+import { TaskStateIcon } from '@/components/common/TaskStateIcon';
+import { taskIconState } from '@/utils/task-icon-state';
 
 const SHOWN = 3;
 /** A project pick moving this many tasks asks once more first (the group menus' rule). */
@@ -330,7 +332,7 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
             return <article data-peek-row="" key={item.task.id} className={`quick-sort-card${i === at ? ' is-current' : ''}`} data-sort-card={item.task.id} data-sort-card-index={i} onPointerDown={() => setCursor(i)} onFocus={() => setCursor(i)}>
               <div className="quick-sort-card-proj">{item.task.project?.trim() || 'Inbox'}{sub > 0 && ` · ${sub} ${sub === 1 ? 'subtask moves' : 'subtasks move'} with it`}</div>
               <button type="button" className="quick-sort-card-title" onClick={() => onOpen(item.task)}>{item.task.title}</button>
-              <div className="quick-sort-card-meta"><span className={`home-board-state home-board-state-${state}`}><i />{taskStatusLabel(item.task)}</span><span>{label(item.tier)}</span></div>
+              <div className="quick-sort-card-meta"><span className={`home-board-state home-board-state-${state}`}><TaskStateIcon state={taskIconState(item.task)} size={12} decorative />{taskStatusLabel(item.task)}</span><span>{label(item.tier)}</span></div>
               {tags.length > 0 && <div className="quick-sort-tags">{tags.map(t => <span key={t.kind} className={`quick-sort-tag is-${t.kind}${t.kind === 'idle' && item.ages.idle >= 7 ? ' is-old' : ''}`} data-sort-age={t.kind}>{t.text}</span>)}</div>}
               {item.line && <div className="quick-sort-card-line">{item.line}</div>}
               {replying === item.task.id ? <QuickSortReply task={item.task} onSent={() => taskReplied(item)} onClose={() => setReplying(null)} /> : <div className="quick-sort-actions"><div className="quick-sort-tiers">

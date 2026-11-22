@@ -3588,15 +3588,14 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               <div className="session-panel-header-leading">{headerLeading}</div>
             )}
             <div className="session-panel-title-area">
-              {/* Same two states as the task list: a solid dot while the output is
-                  unread, a hollow ring once it is read but the task still needs
-                  the user (cleared by a reply or by completing the task). */}
-              {(unread || needsAction) && (
+              {/* The same unread dot as the task list, while the output is unread. Needs you is
+                  the task's status icon beside the title (TaskQuickActions), not a second mark. */}
+              {unread && (
                 <span
-                  className={`task-unread-dot session-panel-unread-dot${unread ? '' : ' session-panel-attention-dot'}`}
+                  className="task-unread-dot session-panel-unread-dot"
                   role="img"
-                  aria-label={unread ? "Unread: agent output you haven't seen" : 'Needs your action'}
-                  title={unread ? 'Unread: click this window to mark it read' : 'Needs your action'}
+                  aria-label="Unread: agent output you haven't seen"
+                  title="Unread: click this window to mark it read"
                 />
               )}
               {!loading && session?.taskId && (

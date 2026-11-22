@@ -28,7 +28,8 @@
   flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 6px; padding: 2px 2px 2px 1px;
   border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--font-size-sm); text-align: left; cursor: pointer;
 }
-.org-leader-open > i { flex: none; width: 6px; height: 6px; margin-top: 8px; border-radius: 50%; }
+/* The status icon (TaskStateIcon, 14px) on the first line's middle: 2px padding + 4px + 7px = 13px. */
+.org-leader-open > .task-state-icon { margin-top: 4px; }
 .org-leader-open > .org-leader-avatar { margin-top: 1px; }
 /* Below about 8em the eye and "leads N" move to the next line, at its end, so the title keeps its words. */
 .org-leader-open > .org-leader-title { flex: 1 1 8em; padding-top: 2px; line-height: 18px; overflow-wrap: break-word; }
@@ -62,7 +63,7 @@
 /* The DIRECTORS section (OrgDirectorSection.tsx, the "sections" layout): a row the size of a VP's. */
 .org-avatar.is-director { width: 26px; height: 26px; margin: 4px; border-radius: 50%; font-size: var(--font-size-xs); }
 .org-channel.is-director.is-open { background: color-mix(in srgb, var(--accent) 8%, transparent); }
-.org-director-dot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; vertical-align: 1px; }
+.org-director-mark { margin-right: 4px; }
 .org-directors-new { padding: 2px 0 4px; }
 .org-directors-new .org-new-director { padding-left: 8px; }
 .org-directors-new .org-new-director-form { padding-left: 6px; }

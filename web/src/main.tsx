@@ -49,12 +49,15 @@ import { UnpairedNotice } from './components/common/UnpairedNotice';
 import { installOpenLinks } from './utils/open-link';
 import { installOpIdFetch } from './api/op-id';
 import { installLeaderPresence } from './hooks/useLeaderPresence';
+import { installTaskStateMasks } from './components/common/task-state-shapes';
 
 
 // A browser under automation (every Playwright run) makes no sound on the machine,
 // whatever this page shows (automation-silence.ts).
 silenceAutomatedAudio();
 installVideoControls();
+// The status icon's shapes as CSS masks, for the marks CSS draws (task pills, the Brief: task-state.css).
+installTaskStateMasks();
 // Every same-origin fetch write carries an op id (api/op-id.ts), the raw ones too,
 // before anything below sends one.
 installOpIdFetch();

@@ -17,7 +17,9 @@ import { CSS } from '@dnd-kit/utilities';
 import type { Task } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import { isBuiltinTier } from '@/api/focus';
-import { useTaskCircle } from '@/hooks/useSessionStatus';
+import { useTaskIconState } from '@/hooks/useSessionStatus';
+import { sectionIconState } from '@/utils/task-icon-state';
+import { TaskStateIcon } from '../common/TaskStateIcon';
 import { taskNeedsAction, taskUserState } from '@/utils/session-status';
 import { timeAgo } from '@/utils/time';
 import * as ICONS from '../common/Icons';
@@ -69,12 +71,13 @@ import { projectGroupKey } from '@/utils/project-display';
 
 export const SECTION_ICONS: Record<StatusSectionKey, ReactNode> = {
   watching: ICONS.ICON_EYE,
-  needs: ICONS.ICON_ATTENTION,
-  working: ICONS.ICON_PHASE_IN_PROGRESS,
-  waiting: ICONS.ICON_PHASE_WAITING,
-  notstarted: ICONS.ICON_NOT_STARTED,
+  // The state sections wear their rows' status icon (TaskStateIcon), so a heading and its rows agree.
+  needs: <TaskStateIcon state="needs" decorative />,
+  working: <TaskStateIcon state="working" decorative />,
+  waiting: <TaskStateIcon state="waiting" decorative />,
+  notstarted: <TaskStateIcon state="todo" decorative />,
   background: ICONS.ICON_BACKGROUND,
-  done: ICONS.ICON_PHASE_COMPLETE,
+  done: <TaskStateIcon state="done" decorative />,
 };
 
 export function StatusSectionHeading({ sectionKey, count, open, onToggle, more, limited = 0, asks = 0 }: {
@@ -184,7 +187,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
   const quiet = !!fold?.quiet.has(task.id);
   const movedFrom = fold?.movedFrom.get(task.id) as StatusSectionKey | undefined;
   const sectionKey: StatusSectionKey = movedFrom ?? (quiet ? stateSectionKey(task) : drawnIn);
-  const circleClass = useTaskCircle(task);
+  const ownIcon = useTaskIconState(task);
   const [showStatusLines] = useTaskStatusLines();
   // On a phone a title tap opens the row, as on a list row (phone-row-behavior.ts).
   const edit = useInlineTitleEdit(task, handlers.onUpdateTitle, { doubleClick: !isPhoneLayout() });
@@ -204,6 +207,8 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
     : task.phase !== 'WAITING' ? task.start_date ?? '' : '';
   // A timed snooze says its hour ("Sun 3:30 PM"), a date-only one its day words.
   const snoozedUntil = snoozeDate ? (snoozeWhenWords(snoozeDate) ?? formatStartDateDisplay(snoozeDate)) : '';
+  // The row's status icon: its section's (sectionIconState), the task's own outside the state sections.
+  const rowIcon = sectionIconState(sectionKey, ownIcon, !!snoozeDate);
   // Under Waiting / snoozed: why it waits (not started, stopped, a watch, ...). Under Needs you:
   // what to do with it, then what it asks or has to read (2026-11-03, the user: "thridline cna
   // show what need u", "in one line").
@@ -334,15 +339,14 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
           {ICONS.tierIcon(tier)}
         </span>
       )}
-      {unread ? (
+      {unread && (
         // Under Waiting / snoozed and Not started the unread dot is quiet: nothing there asks the user to act.
+        // Needs you has no dot of its own: the row's status icon says it (TaskStateIcon).
         <span className={`task-unread-dot${sectionKey === 'waiting' || sectionKey === 'notstarted' ? ' task-unread-dot-quiet' : ''}`} role="img" aria-label="Unread: agent output you haven't seen" title="Unread: click to open and mark read" />
-      ) : needsAction && !isDone && (
-        <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
       )}
       {!isDone && <PhoneRowExtras task={task} needsAction={needsAction} />}
       <button
-        className={`task-phase-icon-btn pinned-phase-picker ${circleClass}`}
+        className="task-phase-icon-btn pinned-phase-picker"
         {...phonePhaseAttrs()}
         onClick={(e) => {
           e.stopPropagation();
@@ -354,7 +358,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
           : sectionKey === 'notstarted' ? 'Not started: click to complete' : 'Click to complete'}
         data-row-mark={isDone ? 'done' : sectionKey === 'waiting' ? (snoozeDate ? 'snoozed' : 'waiting') : sectionKey === 'notstarted' ? 'not-started' : need ? (taskUserState(task) === 'read' ? 'needs-read' : `needs-${need.category}`) : 'open'}
       >
-        {ICONS.sectionRowIcon(sectionKey, isDone, task.phase, !!snoozeDate, taskUserState(task))}
+        <TaskStateIcon state={rowIcon} decorative />
       </button>
       {twoLine ? (
         // Flat: a small line with the project, its tags and the time, then the title alone,

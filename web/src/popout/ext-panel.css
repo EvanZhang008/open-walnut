@@ -126,9 +126,8 @@
 .ext-task { border-radius: var(--radius-sm); margin: 0 6px; }
 .ext-task.is-open { background: var(--bg-secondary); }
 .ext-task-head { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 7px 8px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: var(--radius-sm); }
-.ext-task-dot { flex: 0 0 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--fg-muted); }
-.ext-task-dot.state-needs { background: var(--error); }
-.ext-task-dot.state-working { background: var(--accent); }
+/* The row's status mark is TaskStateIcon (styles/task-state.css), on the title's first line. */
+.ext-task-mark { margin-top: 3px; }
 .ext-task-text { display: flex; flex-direction: column; min-width: 0; }
 .ext-task-title { font-size: var(--font-size-md); line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .ext-task-line { font-size: var(--font-size-sm); color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

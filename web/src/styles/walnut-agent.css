@@ -211,12 +211,6 @@
   top: 50%;
   transform: translateY(-50%);
 }
-/* Read but still waiting on the user: the list's hollow ring (its own class is
-   display:none outside the lists, so this one is separate). */
-.session-panel-unread-dot.session-panel-attention-dot {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--error);
-}
 .session-panel-header-leading + .session-panel-title-area > .session-panel-unread-dot {
   position: static;
   transform: none;
@@ -488,22 +482,12 @@
   color: var(--accent-text);
   font-weight: 500;
 }
-/* Status dot: the board's task-circle colours (globals), as a 7px disc. */
+/* The row's status icon slot (TaskStateIcon), kept for a row with no task so titles line up. */
 .ask-walnut-drawer-dot {
   flex-shrink: 0;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-  color: var(--fg-muted);
-}
-.ask-walnut-drawer-dot.task-circle-session { color: var(--accent); }
-.ask-walnut-drawer-dot.task-circle-running { color: var(--accent); animation: ask-walnut-pulse 1.4s ease-in-out infinite; }
-.ask-walnut-drawer-dot.task-circle-done { color: var(--success); }
-.ask-walnut-drawer-dot.task-circle-todo { color: var(--fg-muted); }
-@keyframes ask-walnut-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
 }
 /* "New chat": the pinned pill at the bottom, like the Claude sidebar's, with the
    two surface links (Context / Fix Walnut) as small text under it. */

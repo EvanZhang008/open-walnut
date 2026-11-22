@@ -5,16 +5,17 @@ import SwiftUI
 
 // MARK: - List / agenda rows
 
-/// One task item in a day list: status circle, kind chip (Due/Starts/Ends),
+/// One task item in a day list: status icon, kind chip (Due/Starts/Ends),
 /// title, and the clock time when the date carries one.
 struct CalendarTaskRow: View {
     let item: CalendarLogic.TaskItem
     let onTap: () -> Void
+    @ScaledMetric(relativeTo: .subheadline) private var iconSize: CGFloat = 16
 
     var body: some View {
         Button(action: onTap) {
             HStack(alignment: .center, spacing: 10) {
-                StatusCircle(status: item.task.statusKind)
+                TaskStateIcon(state: TeamStatusModel.iconState(of: item.task), size: iconSize)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(AskProjectName.displayTitle(item.task.title, project: item.task.project, orgRole: item.task.orgRole))
                         .font(.subheadline)

@@ -35,28 +35,34 @@ enum BoardStatusSection: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    /// The heading's words, the web's verbatim.
+    /// The heading's words, the web's verbatim: a state section's are its state's.
     var label: String {
         switch self {
         case .watching: return "Watching"
-        case .needs: return "Needs you"
-        case .working: return "Working"
-        case .waiting: return "Waiting / snoozed"
+        case .needs: return UserState.needs.label
+        case .working: return UserState.working.label
+        case .waiting: return UserState.waiting.label
         case .background: return "Background"
-        case .done: return "Completed"
+        case .done: return UserState.done.label
         }
     }
 
-    /// The heading's SF Symbol.
-    var systemImage: String {
+    /// A state section's heading wears its state's status icon, the one its rows wear
+    /// (`TaskStateIcon`); nil for the two that are no state.
+    var iconState: TaskIconState? {
         switch self {
-        case .watching: return "eye"
-        case .needs: return "exclamationmark.circle"
-        case .working: return "circle.lefthalf.filled"
-        case .waiting: return "clock"
-        case .background: return "square.2.layers.3d"
-        case .done: return "checkmark.circle"
+        case .needs: return .needs
+        case .working: return .working
+        case .waiting: return .waiting
+        case .done: return .done
+        case .watching, .background: return nil
         }
+    }
+
+    /// The heading's SF Symbol, for the sections that are no state (a state section wears
+    /// `iconState`).
+    var systemImage: String {
+        self == .watching ? "eye" : BoardBackgroundItem.systemImage
     }
 
     /// Open on a first visit: Watching, Needs you and Working; Waiting, Background and Completed fold.
@@ -159,6 +165,20 @@ enum BoardStatusSectionModel {
         guard let task, !(task.isDone || task.phase == "COMPLETE") else { return false }
         if task.userStatus != nil, let state = TeamStatusModel.userState(task.userStatus) { return state == .needs }
         return task.phase == "NEED_ACTION"
+    }
+
+    /// The status icon of a row drawn under a status section, the web's `sectionIconState`: its
+    /// section's, never what its phase alone would say (2026-11-02: rows under Waiting / snoozed
+    /// must not look like they ask the user), but a To read under Needs you, and a snooze or a
+    /// task nobody started under Waiting, keep their own. In a band, under Watching or under
+    /// Background (any state) the task's own.
+    static func iconState(_ own: TaskIconState, in section: BoardStatusSection?) -> TaskIconState {
+        switch section {
+        case .some(.needs): return own == .read ? .read : .needs
+        case .some(.waiting): return own == .snoozed || own == .todo ? own : .waiting
+        case .some(.done): return .done
+        case .some(.working), .some(.watching), .some(.background), .none: return own
+        }
     }
 
     /// Background's heading dot, the web's `backgroundNeedsCount`: its rows that ask the user.

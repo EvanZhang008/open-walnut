@@ -16,7 +16,7 @@ struct TaskStatusCard: View {
             // Stacked at the largest sizes, so "Updated" is never broken into syllables.
             let header = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4)) : AnyLayout(HStackLayout(spacing: 8))
             header {
-                UserStatePill(state: state, stuck: s?.kind == "stuck")
+                UserStatePill(state: TeamStatusModel.iconState(of: task), stuck: s?.kind == "stuck")
                 if let at = s?.at, !at.isEmpty, !checked {
                     TimelineView(.periodic(from: .now, by: 30)) { ctx in
                         Text("Updated \(WalnutTask.parseISO(at).map { RelativeTime.short(date: $0, relativeTo: ctx.date.addingTimeInterval(AppClock.demoOffset)) } ?? "")")
@@ -99,39 +99,42 @@ struct CheckedCaption: View {
     }
 }
 
+/// A task's state as a word in a capsule, led by its status icon (`TaskStateIcon`), so the
+/// pill and every row's icon read the same.
 struct UserStatePill: View {
-    let state: UserState
+    let state: TaskIconState
     var stuck = false
+    /// False where the row already leads with the same icon (a relative in a task's detail).
+    var showsIcon = true
 
+    /// A group's colour (counts, washes, the timeline's About dots): its status icon's.
     /// Nonisolated: the timeline's layout actor colors a pill's dot with it.
-    nonisolated static func color(_ s: UserState) -> Color {
-        switch s {
-        // To read is drawn as Needs you, never in a colour of its own.
-        case .needs, .read: return Color(red: 0.88, green: 0.38, blue: 0.10)
-        case .working: return Color(red: 0.18, green: 0.44, blue: 0.94)
-        case .waiting: return .secondary
-        case .done: return Theme.success
-        }
-    }
+    nonisolated static func color(_ s: UserState) -> Color { s.icon.color }
 
-    /// The same states as words, readable on both backgrounds (the tints above are for dots).
-    static func textColor(_ s: UserState) -> Color {
+    /// The same states as words, readable on both backgrounds (the icon colours are for marks):
+    /// Needs you red, To read amber, Working green.
+    static func textColor(_ s: TaskIconState) -> Color {
         switch s {
-        case .needs, .read: return Theme.needsText
-        case .working: return Theme.workingText
+        case .needs: return Theme.decideText
+        case .read: return Theme.reviewText
+        case .working: return Theme.doneText
         case .waiting: return .primary
-        case .done: return Theme.doneText
+        case .snoozed, .todo, .done: return .secondary
         }
     }
 
     static let stuckText = Theme.stuckText
 
-    @ScaledMetric(relativeTo: .caption) private var dot: CGFloat = 7
+    @ScaledMetric(relativeTo: .caption) private var iconSize: CGFloat = 12
 
     var body: some View {
-        let tint = stuck ? Theme.warning : Self.color(state)
+        let tint = stuck ? Theme.warning : state.color
         HStack(spacing: 4) {
-            if !stuck { Circle().fill(tint).frame(width: dot, height: dot) }
+            // The word beside it says the state: VoiceOver reads it once.
+            if showsIcon {
+                TaskStateIcon(state: state, size: iconSize)
+                    .accessibilityHidden(true)
+            }
             // Stuck keeps the state's own name, in the warning colour (its words say why).
             Text(state.label)
                 .lineLimit(1)
@@ -163,6 +166,7 @@ struct TeamStatusSection: View {
         nonmutating set { filterRaw = newValue?.rawValue ?? "" }
     }
     @State private var teamBusy = false
+    @ScaledMetric(relativeTo: .caption) private var chipIcon: CGFloat = 11
     @State private var teamError: String?
     @State private var confirmStop = false
 
@@ -281,7 +285,7 @@ struct TeamStatusSection: View {
             if b.needs.isEmpty {
                 Text("Nothing needs you.")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(UserStatePill.textColor(.done))
+                    .foregroundStyle(Theme.doneText)
             } else {
                 (Text("\(b.needs.count) \(b.needs.count == 1 ? "needs" : "need") you: ").bold()
                     .foregroundColor(UserStatePill.textColor(.needs))
@@ -316,15 +320,15 @@ struct TeamStatusSection: View {
         OrgChipFlow(spacing: 0) {
             chip("All open \(b.open.count)", on: filter == nil) { filter = nil }
             ForEach(TeamStatusChip.allCases, id: \.self) { c in
-                chip("\(c.count(b)) \(c.label)", on: filter == c, dot: c.dot) { filter = c }
+                chip("\(c.count(b)) \(c.label)", on: filter == c, icon: c.icon) { filter = c }
             }
         }
     }
 
-    private func chip(_ text: String, on: Bool, dot: Color? = nil, action: @escaping () -> Void) -> some View {
+    private func chip(_ text: String, on: Bool, icon: TaskIconState? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 4) {
-                if let dot { Circle().fill(dot).frame(width: 7, height: 7) }
+                if let icon { TaskStateIcon(state: icon, size: chipIcon).accessibilityHidden(true) }
                 Text(text)
             }
             .font(.caption.weight(.medium))
@@ -357,6 +361,8 @@ struct TeamStatusRowView: View {
     /// nil opens nothing.
     var detailField: LinkSource.TaskTextField? = nil
     @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .subheadline) private var rowIcon: CGFloat = 14
+    @ScaledMetric(relativeTo: .subheadline) private var rowLine: CGFloat = 20
 
     var body: some View {
         // With no pill to read it against, the time says what it is the time of.
@@ -367,12 +373,12 @@ struct TeamStatusRowView: View {
                     // No room for three things on one line at these sizes: the title gets its own.
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: 8) {
-                            if showsPill { UserStatePill(state: row.state, stuck: row.isStuck) }
+                            if showsPill { UserStatePill(state: TeamStatusModel.iconState(row), stuck: row.isStuck) }
                             Spacer(minLength: 4)
                             time
                         }
                         VStack(alignment: .leading, spacing: 2) {
-                            if showsPill { UserStatePill(state: row.state, stuck: row.isStuck) }
+                            if showsPill { UserStatePill(state: TeamStatusModel.iconState(row), stuck: row.isStuck) }
                             time
                         }
                     }
@@ -382,15 +388,13 @@ struct TeamStatusRowView: View {
                     details
                 }
             } else {
-                // A dot, not the pill: the title gets the row's width (2026-11-04 review: a
-                // "Waiting / snoozed" pill took a third of it). The label still reads its state.
-                // The lines under the title start where the title does, right of the dot.
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Image(systemName: "circle.fill")
-                        .font(.subheadline)
-                        .imageScale(.small)
-                        .foregroundStyle(row.isStuck ? UserStatePill.stuckText : UserStatePill.color(row.state))
-                        .accessibilityLabel(row.state.label)
+                // The status icon, not the pill: the title gets the row's width (2026-11-04
+                // review: a "Waiting / snoozed" pill took a third of it). Its label still reads
+                // the state. The lines under the title start where the title does, right of it.
+                HStack(alignment: .top, spacing: 8) {
+                    TaskStateIcon(state: TeamStatusModel.iconState(row), size: rowIcon)
+                        // On the title's first line: the subheadline's line box is about 20pt.
+                        .padding(.top, (rowLine - rowIcon) / 2)
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             Text(AskProjectName.displayTitle(row.task.title, project: row.task.project, orgRole: row.task.orgRole))
@@ -543,14 +547,14 @@ enum TeamStatusChip: String, CaseIterable {
 
     func count(_ b: TeamStatusBoard) -> Int { rows(b).count }
 
-    /// Not started wears no state colour of its own: a plain grey dot.
-    var dot: Color {
+    /// The chip's status icon: Not started its own dashed ring, never Waiting's clock.
+    var icon: TaskIconState {
         switch self {
-        case .needs: return UserStatePill.color(.needs)
-        case .working: return UserStatePill.color(.working)
-        case .waiting: return UserStatePill.color(.waiting)
-        case .notStarted: return Color(.tertiaryLabel)
-        case .done: return UserStatePill.color(.done)
+        case .needs: return .needs
+        case .working: return .working
+        case .waiting: return .waiting
+        case .notStarted: return .todo
+        case .done: return .done
         }
     }
 }

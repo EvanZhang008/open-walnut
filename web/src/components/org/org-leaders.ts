@@ -16,6 +16,7 @@ import { directorsOf, orgDisplayTitle, projectKey, type OrgDirector, type OrgTas
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { stateWord, type UserState } from '@open-walnut/user-status';
 import { stateTab, type OrgStateTab } from './org-task-tabs';
+import { taskIconState, type TaskIconState } from '@/utils/task-icon-state';
 import type { VpCard, VpProject } from './org-chart-model';
 import { shownName, type ChannelRow } from './org-channels-model';
 
@@ -25,6 +26,8 @@ export interface LeaderNode {
   state: OrgStateTab;
   /** Its state in one word for a row that names it ("Not started", "Waiting", "Working"...). */
   stateText: string;
+  /** Its status icon (TaskStateIcon). */
+  icon: TaskIconState;
   /** How many open tasks report to it directly. */
   leads: number;
   /** On the user's Watching list (Task.watched_at): it wears the eye, wherever else it shows. */
@@ -66,6 +69,7 @@ function leaderOf(d: OrgDirector, byId: ReadonlyMap<string, Task>): LeaderNode {
     // The tree is built from these same tasks; one missing reads as waiting.
     state: task ? stateTab(task) : 'waiting',
     stateText: stateTextOf(task),
+    icon: task ? taskIconState(task) : 'waiting',
     leads: d.leads,
     watched: !!task?.watched_at,
     ...(task && resolveTaskSessionId(task) ? { sessionId: resolveTaskSessionId(task)! } : {}),

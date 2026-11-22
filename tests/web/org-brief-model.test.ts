@@ -46,7 +46,7 @@ describe('applyBriefDecorations', () => {
     expect(t2.writes).toBe(before)
   })
 
-  it('a To read pill keeps its state (its dot is the Needs you one, org-brief.css); "To read" is no section heading', () => {
+  it('a To read pill keeps its state (its mark is the To read icon, task-state.css); "To read" is no section heading', () => {
     const t1 = pill('t1')
     const head = { ...pill(''), textContent: 'To read' }
     const letter = { querySelectorAll: (sel: string) => (sel === 'a[data-task-id]' ? [t1] : [head]) }
@@ -54,11 +54,12 @@ describe('applyBriefDecorations', () => {
     expect(t1.getAttribute('data-user-state')).toBe('read')
     expect(head.getAttribute('data-brief-section')).toBeNull()
     expect(BRIEF_SECTIONS.map((s) => s.heading)).toEqual(['Needs you', 'Working', 'Waiting / snoozed'])
-    // The stylesheets draw a read pill in the Needs you colour, the same rule as needs.
+    // The shared status stylesheet draws a read pill as the To read icon in its colour, and the
+    // Brief's own stylesheet colours no pill (TaskStateIcon's shapes, 2026-11-21 and 2026-11-22).
     const css = fs.readFileSync(path.resolve(import.meta.dirname, '../../web/src/styles/org-brief.css'), 'utf8')
-    const globals = fs.readFileSync(path.resolve(import.meta.dirname, '../../web/src/styles/globals.css'), 'utf8')
-    expect(css).toMatch(/a\.task-link\[data-user-state='needs'\]::before,\s*\.org-brief-body a\.task-link\[data-user-state='read'\]::before/)
-    expect(globals).toContain("a.task-link[data-user-state='read']::before { background: var(--error); }")
+    const shared = fs.readFileSync(path.resolve(import.meta.dirname, '../../web/src/styles/task-state.css'), 'utf8')
+    expect(css).not.toContain('data-user-state')
+    expect(shared).toMatch(/a\.task-link\[data-user-state='read'\]::before,[^{]*\{\s*background: var\(--task-state-read\);\s*-webkit-mask-image: var\(--tsi-mask-read\);\s*mask-image: var\(--tsi-mask-read\);\s*\}/)
     expect(css).not.toContain('#6d5bd0')
   })
 

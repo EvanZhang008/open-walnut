@@ -49,9 +49,11 @@ import { isBoolean, usePageView } from '@/utils/view-memory';
 import { writeBriefFolded, type OrgTopView } from './org-brief-model';
 import type { BriefFreshness } from '@open-walnut/brief-fresh';
 import { WithdrawAnswerButton } from '@/components/tasks/AnsweredForLine';
-import { ORG_RAIL_TAB_LABELS, TAB_DOT, allTasksSections, sectionCount, sectionOpen, stateTab, taskTabNote, taskTabNoteField, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
+import { ORG_RAIL_TAB_LABELS, allTasksSections, sectionCount, sectionOpen, stateTab, taskTabNote, taskTabNoteField, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
 import { useWatchToggle } from '@/components/tasks/WatchToggle';
 import * as ICONS from '@/components/common/Icons';
+import { TaskStateIcon } from '@/components/common/TaskStateIcon';
+import { sectionHeadState, sectionIconState, taskIconState } from '@/utils/task-icon-state';
 import { snoozeTakesOff } from '@open-walnut/user-status';
 import { askSummary, lineSetBy, readStatusLine } from './org-ask-form';
 import { isAsk, type ChannelRow, type OrgAlertView } from './org-channels-model';
@@ -76,7 +78,6 @@ export interface OrgAnswers {
   seen: (taskId: string) => void;
 }
 
-export { TAB_DOT };
 
 /** How the Tasks view draws the node's work: every task in one list, or as its lead's Board. A
  *  'status' or 'team' an older build kept is no mode now, so that node opens on All tasks (and an
@@ -109,13 +110,12 @@ const ICON_COLLAPSE = (
   </svg>
 );
 
-/** A section's heading: its dot, name and count; a click folds it or opens it. */
+/** A section's heading: its status icon, name and count; a click folds it or opens it. */
 function SectionHead({ tab, count, open, onFlip }: { tab: OrgRailTab; count: number; open: boolean; onFlip: () => void }) {
   return (
     <button type="button" className="org-task-section-head" data-testid="org-task-section-head" data-tab={tab} aria-expanded={open} onClick={onFlip}>
       {tab === 'watching' ? <span className="org-task-section-icon" aria-hidden="true">{ICONS.ICON_EYE}</span>
-        : tab === 'notstarted' ? <span className="org-task-section-icon" aria-hidden="true">{ICONS.ICON_NOT_STARTED}</span>
-        : <i style={{ background: TAB_DOT[tab] }} />}
+        : <TaskStateIcon state={sectionHeadState(tab) ?? 'waiting'} size={12} decorative />}
       {ORG_RAIL_TAB_LABELS[tab]}<span className="org-task-section-count">{count}</span>
     </button>
   );
@@ -139,7 +139,7 @@ export function OrgWatchToggle({ task, className = '' }: { task: Task; className
 }
 
 /** A section other than Needs you: one row per task, its own line, when it last moved, its eye. On
- *  Watching each row wears the dot and the line of its own state. */
+ *  Watching each row wears the status icon and the line of its own state. */
 function TaskTabList({ tasks, tab, now }: { tasks: readonly Task[]; tab: Exclude<OrgRailTab, 'needs'>; now: number }) {
   // A row is a task reference: it opens where the rail is (useOpenTask: beside the page on Org).
   const onOpen = useOpenTask();
@@ -154,9 +154,7 @@ function TaskTabList({ tasks, tab, now }: { tasks: readonly Task[]; tab: Exclude
         return (
           <li key={t.id} className="org-task-item">
             <div role="button" tabIndex={0} className="org-task-row" data-testid="org-task-row" data-peek-row="" data-task-id={t.id} data-state={own} onClick={() => onOpen(t.id)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(t.id); } }} title={note ? `${t.title}\n${note}` : t.title}>
-              {own === 'notstarted'
-                ? <span className="org-task-ring" aria-hidden="true">{ICONS.ICON_NOT_STARTED}</span>
-                : <i style={{ background: TAB_DOT[own] }} aria-hidden="true" />}
+              <TaskStateIcon state={sectionIconState(own, taskIconState(t))} decorative />
               <NodeAvatar taskId={t.id} name={t.title} size={20} className="org-task-avatar" />
               <span className="org-task-text">
                 <span className="org-task-title wn-title">{orgDisplayTitle(t)}</span>

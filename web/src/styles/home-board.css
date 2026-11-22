@@ -30,9 +30,6 @@
 .home-board-drag:hover, .home-board-drag:focus-visible { border-color: var(--accent); }
 .home-board-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 7px; font-size: var(--font-size-xs); color: var(--fg-muted); }
 .home-board-state { display: inline-flex; align-items: center; gap: 5px; }
-.home-board-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-muted); }
-.home-board-state-needs i { background: var(--error); }
-.home-board-state-working i { background: var(--success); }
 .home-board-actions { display: inline-flex; gap: 10px; margin-left: auto; }
 .home-board-actions > button { padding: 0 2px; border: 0; background: transparent; color: var(--fg-muted); font: inherit; font-size: var(--font-size-xs); }
 .home-board-actions > button:hover { color: var(--accent); }

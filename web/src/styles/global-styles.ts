@@ -6,6 +6,8 @@
  */
 import './buttons.css';
 import './globals.css';
+// The task status icon and dots (components/common/TaskStateIcon.tsx), after the globals they read.
+import './task-state.css';
 import './chat-palette.css';
 import './home-navigation.css';
 import './overlay-glass.css';

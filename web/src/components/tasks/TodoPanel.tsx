@@ -191,7 +191,8 @@ import { BUILTIN_TIERS, isBuiltinTier, isRetiredTier, type FocusTier, type Custo
 import { useInlineTitleEdit } from './useInlineTitleEdit';
 // Every fold chevron is the shared icon-only DisclosureButton (`.collapse-chevron` places it).
 import { DisclosureButton } from '@/components/controls';
-import { useTaskCircle } from '@/hooks/useSessionStatus';
+import { useTaskIconState } from '@/hooks/useSessionStatus';
+import { TaskStateIcon } from '../common/TaskStateIcon';
 import { openTaskHere } from '@/utils/open-session';
 import { projectDisplayName, projectGroupKey, projectIdentity, taskProjectLabel } from '@/utils/project-display';
 
@@ -1101,8 +1102,8 @@ interface TaskRowBodyProps extends SortableTaskItemProps {
 }
 
 const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, isRecentlyDone, isVanishing, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onStartSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveToProject, isPinned, pinnedTier, searchContext, searchTierLabel, foldAsks, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup, folderCollapsed, onToggleFolder, folderProject, onMoveFolderToProject, sortableRef, sortableTransform, sortableTransition, isDragging, dragAttributes: attributes, dragListeners: listeners }: TaskRowBodyProps) {
-  // Live circle: error red / waiting red-pulse / running green-pulse.
-  const circleClass = useTaskCircle(task);
+  // The live status icon (TaskStateIcon): a running turn and a waiting prompt show at once.
+  const iconState = useTaskIconState(task);
   const setNodeRef = sortableRef;
 
   const style: CSSProperties = {
@@ -1279,15 +1280,13 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
         <div className="todo-item-title-row">
           {/* Unread dot — leftmost, keeps everything on one line. Clears when the
               user opens the task (MainPage.handleFocusTask marks it read). */}
-          {!isDone && (task.unread ? (
+          {!isDone && task.unread && (
             <span className="task-unread-dot" role="img" aria-label="Unread: agent output you haven't seen" title="Unread: click to open and mark read" />
-          ) : needsAction && (
-            <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
-          ))}
+          )}
           <PhoneRowExtras task={task} needsAction={needsAction} childCount={childCount} isExpanded={isExpanded} onToggleExpand={onToggleExpand} />
-          {/* Phase icon — one click toggles open ↔ Completed (an hourglass while Waiting) */}
+          {/* The status icon (TaskStateIcon): one click toggles open ↔ Completed */}
           <button
-            className={`task-phase-icon-btn ${circleClass}`}
+            className="task-phase-icon-btn"
             {...phonePhaseAttrs()}
             onClick={(e) => {
               e.stopPropagation();
@@ -1296,7 +1295,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
             aria-label={isDone ? 'Reopen' : 'Mark complete'}
             title={isDone ? 'Done: click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
           >
-            {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}
+            <TaskStateIcon state={iconState} decorative />
           </button>
           <span
             {...titleProps}
@@ -2219,8 +2218,8 @@ function openedTitle(at: string | undefined): string {
 // ── SortableRecentCard — a draggable row of the Recent list, with its kebab menu ──
 
 function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isOpenInWindow, isDetailOpen, onClick, onPinTask, onUnpinTask, isPinned, pinnedTier, pinnedTierLabel, onSetPriority, onSetDate, onSetStartDate, onSetTier, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject, openedAt }: RecentCardProps) {
-  // Live circle: error red / waiting red-pulse / running green-pulse.
-  const circleClass = useTaskCircle(task);
+  // The live status icon (TaskStateIcon): a running turn and a waiting prompt show at once.
+  const iconState = useTaskIconState(task);
   // Static cards: done (tiers filter them out — a drag would silently vanish) and
   // pinned (already placed in a tier; that tier card is the draggable one). Static
   // cards register under a NAMESPACED sortable id — the raw task.id is already
@@ -2287,15 +2286,13 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isOpe
       )}
       {/* Unread dot — the tinted background alone was too subtle on a dense
           pinned strip, and the user asked for the dot on these cards too. */}
-      {unread ? (
+      {unread && (
         <span className="task-unread-dot" role="img" aria-label="Unread: agent output you haven't seen" title="Unread: click to open and mark read" />
-      ) : needsAction && !isDone && (
-        <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
       )}
       {!isDone && <PhoneRowExtras task={task} needsAction={needsAction} />}
       {/* Phase icon — one click toggles open ↔ Completed */}
       <button
-        className={`task-phase-icon-btn pinned-phase-picker ${circleClass}`}
+        className="task-phase-icon-btn pinned-phase-picker"
         {...phonePhaseAttrs()}
         onClick={(e) => {
           e.stopPropagation();
@@ -2304,7 +2301,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isOpe
         aria-label={isDone ? 'Reopen' : 'Mark complete'}
         title={isDone ? 'Done: click to reopen' : task.phase === 'WAITING' ? 'Waiting: click to complete' : 'Click to complete'}
       >
-        {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}
+        <TaskStateIcon state={iconState} decorative />
       </button>
       {/* Editable title */}
       <span

@@ -8,8 +8,8 @@ import type { Task } from '../../src/core/types.js'
 import { buildOrgTree, type OrgTaskLike } from '../../src/core/org/org-tree.js'
 import { buildChannels } from '../../web/src/components/org/org-channels-model.js'
 import { ceoLine, dropPlan, nowLine, vpCards, vpLine } from '../../web/src/components/org/org-chart-model.js'
-import { projectTasks, stateIcon } from '../../web/src/components/org/OrgChartProject.js'
-import * as ICONS from '../../web/src/components/common/Icons.js'
+import { projectTasks } from '../../web/src/components/org/OrgChartProject.js'
+import { iconStateOf } from '../../web/src/utils/task-icon-state.js'
 
 let n = 0
 const t = (project: string, over: Partial<OrgTaskLike> = {}): OrgTaskLike => {
@@ -63,12 +63,9 @@ describe('org chart cards', () => {
     expect([lines[at('Team')]!.depth, lines[at('Worker')]!.depth, lines[at('Sub worker')]!.depth, lines[at('Sub sub worker')]!.depth]).toEqual([0, 1, 2, 3])
     // A worker sits right under its team.
     expect([at('Worker'), at('Sub worker'), at('Sub sub worker')]).toEqual([at('Team') + 1, at('Team') + 2, at('Team') + 3])
-    expect(stateIcon({ state: 'working', snoozed: false })).toBe(ICONS.ICON_PHASE_IN_PROGRESS)
-    expect(stateIcon({ state: 'needs', snoozed: false })).toBe(ICONS.ICON_ATTENTION)
-    // To read wears the task list's page icon, as its row there does (sectionRowIcon).
-    expect(stateIcon({ state: 'read', snoozed: false })).toBe(ICONS.ICON_TO_READ)
-    expect(stateIcon({ state: 'waiting', snoozed: false })).toBe(ICONS.ICON_PHASE_WAITING)
-    expect(stateIcon({ state: 'waiting', snoozed: true })).toBe(ICONS.ICON_SNOOZE)
+    // Each row wears its own status icon state (TaskStateIcon): its state, a snooze and a task
+    // nobody started told apart.
+    for (const l of lines) expect(l.icon).toBe(iconStateOf(l.state, { snoozed: l.snoozed, notStarted: byId.get(l.id)?.user_status?.kind === 'not-started' }))
   })
 
   it('one card per project, named after it, the Inbox last and a VP like any other', () => {

@@ -179,6 +179,16 @@
   background: transparent;
   border: 1.5px solid var(--fg-muted);
 }
+/* Paused: two upright bars (the pause sign), no ring. */
+.routine-dot.off[data-off="paused"] {
+  border: 0;
+  border-radius: 0;
+  background:
+    linear-gradient(var(--fg-muted), var(--fg-muted)) 1px 0 / 2px 100% no-repeat,
+    linear-gradient(var(--fg-muted), var(--fg-muted)) 5px 0 / 2px 100% no-repeat;
+}
+/* Off: a dashed ring, quieter than a pause. */
+.routine-dot.off[data-off="off"] { border: 1px dashed var(--fg-muted); }
 
 .routine-row-text {
   display: flex;

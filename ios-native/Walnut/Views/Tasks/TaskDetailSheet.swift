@@ -11,6 +11,9 @@ struct TaskDetailSheet: View {
     let task: WalnutTask
     @Environment(\.dismiss) private var dismiss
     @Environment(TasksStore.self) private var tasks
+    /// The header's status icon, as big as the title2 glyph it replaced, capped with the
+    /// header's controls (`TaskHeaderControl.typeCap`).
+    @ScaledMetric(relativeTo: .title2) private var statusIconSize: CGFloat = 24
     @Environment(\.composerCovered) private var coveredByHost
 
     /// Explicit path so a freshly created session can push programmatically.
@@ -302,7 +305,7 @@ struct TaskDetailSheet: View {
         }
     }
 
-    /// Status circle = one-tap todo↔done. The three-state choice used to hide in
+    /// Status icon = one-tap todo↔done. The three-state choice used to hide in
     /// a long-press menu here; it is a visible segmented control in the
     /// properties list now, so this stays a plain button (one setting, one home).
     private var header: some View {
@@ -310,8 +313,7 @@ struct TaskDetailSheet: View {
             Button {
                 apply(.init(status: current.statusKind == .done ? "todo" : "done"))
             } label: {
-                StatusCircle(status: current.statusKind)
-                    .font(.title2)
+                TaskStateIcon(state: TeamStatusModel.iconState(of: current), size: min(statusIconSize, 44))
                     .headerControl()
             }
             .buttonStyle(.plain)

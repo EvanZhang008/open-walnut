@@ -1,5 +1,6 @@
 /**
- * The taskbar's dots wear the task's one user status in the colors every task pill wears
+ * The taskbar's dots wear the task's status icon state (TaskStateIcon's dot), the same as every
+ * row and pill of that task
  * (2026-11-09, the user: "we neve ruse the grey acutally if itis read it is read, we use red means
  * it is ready, green is working ... grey might means it is wait liek wait staus, or snoozed").
  * A finished turn of a task that still works, or a To read, was grey before.
@@ -7,7 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { chipStateOf, type ChipState } from '../../web/src/pages/sessionTaskbar';
+import { chipStateOf } from '../../web/src/pages/sessionTaskbar';
 
 const ROOT = path.resolve(__dirname, '../..');
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
@@ -20,12 +21,12 @@ const running = { process_status: 'running' };
 describe('chipStateOf', () => {
   it('reads the task user status, never whether the user saw it', () => {
     expect(chipStateOf(task({ state: 'needs' }), idle).state).toBe('needs');
-    expect(chipStateOf(task({ state: 'read' }), idle).state).toBe('needs');
+    expect(chipStateOf(task({ state: 'read' }), idle).state).toBe('read');
     // An older server's To read: Waiting with toRead.
-    expect(chipStateOf(task({ state: 'waiting', toRead: 'turn' }), idle).state).toBe('needs');
+    expect(chipStateOf(task({ state: 'waiting', toRead: 'turn' }), idle).state).toBe('read');
     expect(chipStateOf(task({ state: 'working' }), idle)).toEqual({ state: 'working', running: false });
     expect(chipStateOf(task({ state: 'waiting' }), idle).state).toBe('waiting');
-    expect(chipStateOf(task({ state: 'waiting', snoozed: { until: 'x' } }), idle).state).toBe('waiting');
+    expect(chipStateOf(task({ state: 'waiting', snoozed: { until: 'x' } }), idle).state).toBe('snoozed');
     expect(chipStateOf(task({ state: 'done' }, 'COMPLETE'), idle).state).toBe('done');
   });
 
@@ -46,27 +47,19 @@ describe('chipStateOf', () => {
   });
 });
 
-describe('the dot colors are the task pills\' colors', () => {
-  const pill = read('web/src/styles/globals.css');
+describe('the dot is the shared status dot', () => {
   const bar = read('web/src/styles/session-taskbar.css');
-  const colorOf = (css: string, re: RegExp) => css.match(re)?.[1]?.replace(/\s+/g, '');
-  // Every state but Waiting has its own color; Waiting is the plain dot's grey.
-  const states: ChipState[] = ['needs', 'working', 'done'];
+  const src = read('web/src/components/sessions/SessionTaskbar.tsx');
 
-  it.each(states)('%s', (s) => {
-    const want = colorOf(pill, new RegExp(`a\\.task-link\\[data-user-state='${s}'\\]::before\\s*\\{\\s*background:\\s*([^;]+);`));
-    const got = colorOf(bar, new RegExp(`\\.session-taskbar-card\\[data-state='${s}'\\] \\.session-taskbar-dot\\s*\\{\\s*background:\\s*([^;]+);`));
-    expect(want, `the pill color for ${s}`).toBeTruthy();
-    expect(got).toBe(want);
-  });
-
-  it('every state the bar stamps has a rule, and no other state is styled', () => {
-    const styled = [...bar.matchAll(/\[data-state='([a-z-]+)'\]/g)].map((m) => m[1]);
-    expect([...new Set(styled)].sort()).toEqual([...states].sort());
+  it('draws every dot through TaskStateIcon and colours none of its own', () => {
+    expect(src).not.toMatch(/<span className="session-taskbar-dot"/);
+    expect((src.match(/<TaskStateIcon state=\{state\} className="session-taskbar-dot" size=\{12\} decorative \/>/g) ?? []).length).toBe(4);
+    expect(bar).not.toMatch(/session-taskbar-dot[^{]*\{[^}]*background/);
+    // The chip's border and the card's line may follow the state (label styling); the dot may not.
+    expect(bar).not.toMatch(/\[data-state='[a-z-]+'\][^{,]*session-taskbar-dot/);
   });
 
   it('the bar decides a dot only through chipStateOf', () => {
-    const src = read('web/src/components/sessions/SessionTaskbar.tsx');
     expect(src).toContain('chipStateOf(');
     expect(src).not.toMatch(/process_status\s*===|taskNeedsAction\(|phase\s*===\s*'COMPLETE'/);
   });

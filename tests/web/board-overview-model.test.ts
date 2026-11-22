@@ -185,7 +185,7 @@ describe('describeTask', () => {
 
 function row(id: string, extra: Partial<OverviewRow> = {}): OverviewRow {
   return {
-    id, task: task(id), depth: 1, parentId: 'lead', signals: [], openSubtasks: 0, place: '', circle: 'task-circle-todo',
+    id, task: task(id), depth: 1, parentId: 'lead', signals: [], openSubtasks: 0, place: '',
     group: 'open', reason: null, badge: { label: 'Not started', tone: 'grey' }, now: '', at: '', running: false,
     ...extra,
   };

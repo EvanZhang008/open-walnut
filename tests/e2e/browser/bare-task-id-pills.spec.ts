@@ -126,7 +126,8 @@ test('task ids in a reply render as task pills and open the task', async ({ page
     return { content: st.content, w: st.width, bg: st.backgroundColor }
   })
   expect(dot.content).not.toBe('none')
-  expect(dot.w).toBe('7px')
+  // The shared 8px status dot (styles/task-state.css).
+  expect(dot.w).toBe('8px')
   expect(pageErrors).toEqual([])
 
   await reply.scrollIntoViewIfNeeded()

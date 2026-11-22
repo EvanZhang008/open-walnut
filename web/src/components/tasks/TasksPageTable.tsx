@@ -29,7 +29,8 @@ import { TagChip } from './TagChip';
 import { useShownTags } from './TaskTagPills';
 import { useTagDisplay } from '@/stores/tag-display-store';
 import { taskNeedsAction, taskStatusLabel, taskUserState } from '@/utils/session-status';
-import { useTaskCircle } from '@/hooks/useSessionStatus';
+import { useTaskIconState } from '@/hooks/useSessionStatus';
+import { TaskStateIcon } from '../common/TaskStateIcon';
 import { visibleInterval } from '@/utils/page-visibility';
 import * as ICONS from '../common/Icons';
 import '@/styles/walnut-agent.css';
@@ -298,12 +299,6 @@ function ProjectCell({ task, sourceByName, projectNames, onUpdate }: {
   );
 }
 
-/**
- * The row's open ↔ Completed toggle — the SAME circle the home list draws
- * (useTaskCircle: grey = no session, blue = session attached, pulsing = running,
- * green check = done), so a task reads the same on both surfaces. A component,
- * not a branch of `row()`, because the colour subscribes to live session status.
- */
 /** The tags the display rules show (hidden ones stay in the tag editor only). */
 function TagsCell({ colId, task }: { colId: string; task: Task }) {
   const shown = useShownTags(task.tags, task);
@@ -317,18 +312,23 @@ function TagsCell({ colId, task }: { colId: string; task: Task }) {
   );
 }
 
+/**
+ * The row's open ↔ Completed toggle: the task's status icon (TaskStateIcon), the SAME one the home
+ * list draws, so a task reads the same on both surfaces. A component, not a branch of `row()`,
+ * because the icon subscribes to live session status.
+ */
 function RowCircle({ task, onToggleComplete }: { task: Task; onToggleComplete: (id: string) => void }) {
-  const circleClass = useTaskCircle(task);
+  const iconState = useTaskIconState(task);
   const isDone = task.status === 'done';
   return (
     <button
       type="button"
-      className={`tp-status-circle task-phase-icon-btn ${circleClass}`}
+      className="tp-status-circle task-phase-icon-btn"
       title={isDone ? 'Done — click to reopen' : 'Click to complete'}
       aria-label={isDone ? 'Reopen' : 'Mark complete'}
       onClick={(e) => { e.stopPropagation(); onToggleComplete(task.id); }}
     >
-      {ICONS.binaryPhaseIcon(isDone, task.phase, taskUserState(task))}
+      <TaskStateIcon state={iconState} decorative />
     </button>
   );
 }
@@ -521,14 +521,11 @@ export function TasksPageTable({
     return (
       <div key={t.id} className={`tp-row${t.status === 'done' ? ' done' : ''}`} data-peek-row="" data-task-id={t.id}>
         <span className="tp-cell-title">
-          {/* Same two red marks as the home list, in the row's left gutter: a solid
-              dot = unread agent output (clears when the task is opened), a hollow
-              ring = the task is at NEED_ACTION and waits on the human. */}
-          {t.status !== 'done' && (t.unread ? (
+          {/* The same unread mark as the home list, in the row's left gutter: unread agent output
+              (clears when the task is opened). Needs you is the row's status icon. */}
+          {t.status !== 'done' && t.unread && (
             <span className="task-unread-dot" role="img" aria-label="Unread — agent output you haven't seen" title="Unread — click to open and mark read" />
-          ) : taskNeedsAction(t) && (
-            <span className="task-unread-dot task-attention-dot" role="img" aria-label="Needs your action" title="Needs your action" />
-          ))}
+          )}
           <RowCircle task={t} onToggleComplete={onToggleComplete} />
           <button
             type="button"

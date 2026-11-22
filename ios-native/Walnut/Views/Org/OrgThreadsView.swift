@@ -921,7 +921,7 @@ struct OrgThreadCard: View {
                     let twin = titles.filter { $0 == title }.count > 1
                     Button { onOpenTask(TaskOpenTarget(id: id, title: title)) } label: {
                         HStack(spacing: 5) {
-                            if let task { Circle().fill(UserStatePill.color(TeamStatusModel.state(of: task))).frame(width: 7, height: 7) }
+                            if let task { TaskStateIcon(state: TeamStatusModel.iconState(of: task), size: 11) }
                             Text(title).lineLimit(1)
                             if twin, let task {
                                 Text("· \(TeamStatusModel.state(of: task).label)").foregroundStyle(.secondary).fixedSize()

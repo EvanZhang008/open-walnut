@@ -22,6 +22,7 @@ import { PluginSlotFact, PluginSlots } from '@/plugins/PluginSlots';
 import { resolveSessionRecordStatus, sessionStatusStore } from '@/stores/session-status-store';
 import { timeAgo } from '@/utils/time';
 import { taskStatusLabel } from '@/utils/session-status';
+import { taskIconState } from '@/utils/task-icon-state';
 import { CopyableId } from '../common/CopyableId';
 import { DatePicker } from '../common/DatePicker';
 import { PluginFieldPills } from './PluginFieldPicker';
@@ -272,14 +273,14 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenTriageForTask, o
 
           {parentTask && (
             <Section label="Parent">
-              <TaskRow title={orgDisplayTitle(parentTask)} phase={parentTask.phase} done={parentTask.status === 'done'} status={taskStatusLabel(parentTask)} onOpen={() => leaveTo(parentTask.id)} />
+              <TaskRow title={orgDisplayTitle(parentTask)} phase={parentTask.phase} done={parentTask.status === 'done'} status={taskStatusLabel(parentTask)} state={taskIconState(parentTask)} onOpen={() => leaveTo(parentTask.id)} />
             </Section>
           )}
 
           {childTasks.length > 0 && (
             <Section label="Subtasks" count={childTasks.length}>
               {childTasks.map((child) => (
-                <TaskRow key={child.id} title={orgDisplayTitle(child)} phase={child.phase} done={child.status === 'done'} status={taskStatusLabel(child)} onOpen={() => leaveTo(child.id)} />
+                <TaskRow key={child.id} title={orgDisplayTitle(child)} phase={child.phase} done={child.status === 'done'} status={taskStatusLabel(child)} state={taskIconState(child)} onOpen={() => leaveTo(child.id)} />
               ))}
             </Section>
           )}

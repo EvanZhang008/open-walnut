@@ -230,30 +230,35 @@ test('rows carry the home list\'s circle colour and red marks', async ({ page, b
   try {
     await gotoTasks(page)
 
-    // Grey circle: a plain task with no session. The table windows its rows
-    // (tasks-table-helpers.ts), so each row is scrolled to before it is read.
+    // The row's status icon (TaskStateIcon), the same as the home list's. A plain task with
+    // no session: a grey state. The table windows its rows (tasks-table-helpers.ts), so each row
+    // is scrolled to before it is read.
+    const icon = (id: string) => row(page, id).locator('.tp-status-circle .task-state-icon')
     await revealInTasksTable(page, row(page, OPEN_RECENT))
-    await expect(row(page, OPEN_RECENT).locator('.tp-status-circle')).toHaveClass(/task-circle-todo/)
+    await expect(icon(OPEN_RECENT)).toHaveAttribute('data-state', /^(todo|waiting|snoozed)$/)
     await expect(row(page, OPEN_RECENT).locator('.task-unread-dot')).toHaveCount(0)
 
-    // Blue circle: a task with a session attached (pw-task-001 owns pw-mode-test-session).
+    // A task with a session attached (pw-task-001 owns pw-mode-test-session) wears its own state.
     await revealInTasksTable(page, row(page, 'pw-task-001'))
-    await expect(row(page, 'pw-task-001').locator('.tp-status-circle')).toHaveClass(/task-circle-(session|running)/)
+    await expect(icon('pw-task-001')).toHaveAttribute('data-state', /^(needs|read|working|waiting|snoozed|todo)$/)
 
-    // Red mark: NEED_ACTION shows the ring (or the solid dot if the phase change
-    // also flagged it unread) in the row's left gutter, and it is actually drawn.
+    // NEED_ACTION: the red Needs you icon, and no second red mark beside it; an unread dot (if
+    // the phase change also flagged it unread) sits in the row's left gutter, actually drawn.
     await revealInTasksTable(page, row(page, needsActionId))
+    await expect(icon(needsActionId)).toHaveAttribute('data-state', 'needs')
+    await expect(icon(needsActionId)).toBeVisible()
     const mark = row(page, needsActionId).locator('.task-unread-dot')
-    await expect(mark).toHaveCount(1)
-    await expect(mark).toBeVisible()
-    const box = (await mark.boundingBox())!
-    const rowBox = (await row(page, needsActionId).boundingBox())!
-    expect(box.x, 'mark sits in the left gutter, before the circle').toBeLessThan(rowBox.x + 20)
+    if (await mark.count()) {
+      await expect(mark).toBeVisible()
+      const box = (await mark.boundingBox())!
+      const rowBox = (await row(page, needsActionId).boundingBox())!
+      expect(box.x, 'mark sits in the left gutter, before the icon').toBeLessThan(rowBox.x + 20)
+    }
 
-    // Green check: a done row (turn the Complete chip on to see one).
+    // Completed: a done row (turn the Complete chip on to see one).
     await chip(page, 'Complete').click()
     await revealInTasksTable(page, row(page, 'pw-tq-pinned-done-recent'))
-    await expect(row(page, 'pw-tq-pinned-done-recent').locator('.tp-status-circle')).toHaveClass(/task-circle-done/)
+    await expect(icon('pw-tq-pinned-done-recent')).toHaveAttribute('data-state', 'done')
     await expect(row(page, 'pw-tq-pinned-done-recent').locator('.task-unread-dot')).toHaveCount(0)
     await page.screenshot({ path: `${SHOTS}/06-circles-and-marks.png`, clip: { x: 0, y: 0, width: 1280, height: 520 } })
   } finally {

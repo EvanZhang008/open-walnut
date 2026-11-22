@@ -171,23 +171,16 @@
 .org-avatar.is-picture { background: none; }
 .org-avatar.is-picture > img { display: block; width: 100%; height: 100%; -webkit-user-drag: none; user-select: none; }
 .org-leader-avatar, .org-task-avatar { flex: none; margin-right: 2px; }
+/* The node's status icon (TaskStateIcon) on the avatar's corner, on a disc of the list's colour. */
 .org-state-dot {
   position: absolute;
-  right: -2px;
-  bottom: -2px;
-  width: 11px;
-  height: 11px;
+  right: -3px;
+  bottom: -3px;
   border-radius: 50%;
-  border: 2px solid var(--bg-secondary);
-  background: var(--fg-muted);
+  background: var(--bg-secondary);
+  box-shadow: 0 0 0 2px var(--bg-secondary);
 }
-.org-detail-head .org-state-dot { border-color: var(--bg); }
-.org-state-dot.org-state-alert { background: var(--error); }
-.org-state-dot.org-state-working { background: var(--success); animation: org-pulse 1.6s ease-in-out infinite; }
-.org-state-dot.org-state-quiet { background: #AEAEB2; }
-.org-state-dot.org-state-parked { background: #AF52DE; }
-@keyframes org-pulse { 50% { opacity: 0.45; } }
-@media (prefers-reduced-motion: reduce) { .org-state-dot.org-state-working { animation: none; } }
+.org-detail-head .org-state-dot { background: var(--bg); box-shadow: 0 0 0 2px var(--bg); }
 
 /* The reorg reminder (OrgReorgReminder.tsx): one quiet line under the search, from 6 VPs. */
 .org-reorg-note {
@@ -284,8 +277,8 @@
 .org-pills { display: inline-flex; flex-wrap: wrap; gap: 5px; }
 /* "Tasks" before the task pills: they count tasks, the threads pill before them threads for him. */
 .org-pills-label { align-self: center; margin-left: 4px; color: var(--fg-muted); font-size: var(--font-size-xs); }
-/* Each count is a small family key that opens its tab in the Task view; its dot is the tab's colour. */
-.org-pills i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+/* Each count is a small family key that opens its tab in the Task view; its mark is the tab's
+   status icon (TaskStateIcon), the threads pill's the threads' own (.top-thread-dot). */
 
 .org-muted { color: var(--fg-muted); }
 
@@ -338,7 +331,6 @@
 .org-team { display: flex; gap: 10px; align-items: flex-start; }
 .org-team-col { flex: 1 1 0; min-width: 190px; overflow: hidden; background: var(--bg-secondary); border-radius: 10px; padding: 9px 10px; }
 .org-team-head { margin: 0 0 6px; display: flex; align-items: center; gap: 6px; font-size: var(--font-size-sm); font-weight: 600; }
-.org-team-head i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .org-team-count { color: var(--fg-muted); font-weight: 500; }
 .org-team-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
 .org-team-item {
@@ -357,7 +349,8 @@
   cursor: pointer;
 }
 .org-team-item:hover { box-shadow: 0 0 0 1px var(--border); }
-.org-team-ring { flex: none; width: 11px; height: 11px; margin-top: 4px; border-radius: 50%; border: 2px solid; }
+/* The status icon (TaskStateIcon, 14px) level with the title's first line, where the old 11px ring sat. */
+.org-team-ring { margin-top: 2px; }
 .org-team-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 /* The title wraps (.wn-title); the note is metadata and stays one line (.wn-meta). */
 /* Where the task stands, in its status's words. */

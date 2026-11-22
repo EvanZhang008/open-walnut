@@ -42,7 +42,9 @@ import { OrgSettingsMenu } from './OrgSettingsMenu';
 import { useOrgSettings } from './useOrgSettings';
 import { USER_STATE_LABELS, stateCountLabel } from '@open-walnut/user-status';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
-import { TAB_DOT, stateTab, type KeptTask } from './org-task-tabs';
+import { stateTab, type KeptTask } from './org-task-tabs';
+import { TaskStateIcon } from '@/components/common/TaskStateIcon';
+import { taskIconState } from '@/utils/task-icon-state';
 import { KeptWhy } from './OrgKeptWhy';
 import { MicInput } from '@/components/common/BoxMic';
 import { OrgLeaders } from './OrgLeaders';
@@ -147,7 +149,7 @@ function KeptChildren({ row, kept, open, onUnwatch, onToggleLock }: { row: Chann
               onClick={() => openTask(t.id)}
               onKeyDown={(e) => { if (watched && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); onUnwatch(t.id); } }}
             >
-              <i style={{ background: TAB_DOT[st] }} aria-hidden="true" />
+              <TaskStateIcon state={taskIconState(t)} size={12} decorative />
               <span className="org-watched-title wn-title">{title}</span>
             </button>
             {watched && <button type="button" className="org-watched-stop" data-testid="org-watched-stop" aria-hidden="true" tabIndex={-1} title="Stop watching" onClick={() => onUnwatch(t.id)}>×</button>}

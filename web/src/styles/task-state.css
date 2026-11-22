@@ -1,0 +1,121 @@
+/* THE status colours and marks of a task (components/common/TaskStateIcon.tsx), and every
+   status mark drawn by CSS from a task's state: task pills (a.task-link[data-user-state], stamped
+   by utils/task-pill-status.ts), the Brief's section heads and moved lines. No other stylesheet
+   colours a task's status mark (tests/web/task-state-icon-guard.test.ts).
+
+   Tokens only: Needs you --error, To read --warning, Working --success, every other state
+   --fg-muted. In the light theme green and amber are darkened to reach 3:1 on the page (as drawn
+   they are about 2.2:1 on white); the dark theme draws the tokens as they are. */
+:root {
+  --task-state-needs: var(--error);
+  --task-state-read: color-mix(in srgb, var(--warning) 80%, black);
+  --task-state-working: color-mix(in srgb, var(--success) 80%, black);
+  --task-state-quiet: var(--fg-muted);
+}
+:root[data-theme="dark"] {
+  --task-state-read: var(--warning);
+  --task-state-working: var(--success);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --task-state-read: var(--warning);
+    --task-state-working: var(--success);
+  }
+}
+
+/* The icon: its size is its SVG's (14px beside 13px text), on the text's middle. The wrapper has
+   no line of its own, so its baseline is its bottom edge, where the SVG's was. */
+.task-state-icon {
+  flex: none;
+  display: inline-block;
+  position: relative;
+  vertical-align: -0.15em;
+  line-height: 0;
+  color: var(--task-state-quiet);
+}
+.task-state-icon > svg { display: block; }
+.task-state-icon[data-state='needs'] { color: var(--task-state-needs); }
+.task-state-icon[data-state='read'] { color: var(--task-state-read); }
+.task-state-icon[data-state='working'] { color: var(--task-state-working); }
+.task-state-icon .tsi-mark { fill: var(--on-accent); }
+/* Working's centre: the SVG's r=3.6 disc on the 16-unit grid (left/top 4.4, width 7.2), an element
+   of its own over the ring so its breathing composites (opacity only) and never repaints the SVG. */
+.task-state-icon .tsi-pulse {
+  position: absolute;
+  left: 27.5%;
+  top: 27.5%;
+  width: 45%;
+  height: 45%;
+  border-radius: 50%;
+  background: currentColor;
+  pointer-events: none;
+}
+
+/* The marks CSS draws before text it does not render (a task pill, stamped by
+   utils/task-pill-status.ts; the Brief's section heads and moved lines): the icon's own shapes,
+   as masks (components/common/task-state-shapes.ts installs --tsi-mask-<state>), at the size of
+   the icon beside small text. Never a dot or a ring of their own. */
+a.task-link[data-user-state]::before,
+.org-brief-body [data-brief-section]::before,
+.org-brief-body .org-brief-now[data-user-state]::before {
+  content: '';
+  flex: none;
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 4px;
+  vertical-align: -0.15em;
+  background: var(--task-state-quiet);
+  -webkit-mask: var(--tsi-mask-todo) center / contain no-repeat;
+  mask: var(--tsi-mask-todo) center / contain no-repeat;
+}
+a.task-link[data-user-state='needs']::before,
+.org-brief-body [data-brief-section='needs']::before,
+.org-brief-body .org-brief-now[data-user-state='needs']::before {
+  background: var(--task-state-needs);
+  -webkit-mask-image: var(--tsi-mask-needs);
+  mask-image: var(--tsi-mask-needs);
+}
+a.task-link[data-user-state='read']::before,
+.org-brief-body .org-brief-now[data-user-state='read']::before {
+  background: var(--task-state-read);
+  -webkit-mask-image: var(--tsi-mask-read);
+  mask-image: var(--tsi-mask-read);
+}
+a.task-link[data-user-state='working']::before,
+.org-brief-body [data-brief-section='working']::before,
+.org-brief-body .org-brief-now[data-user-state='working']::before {
+  background: var(--task-state-working);
+  -webkit-mask-image: var(--tsi-mask-working);
+  mask-image: var(--tsi-mask-working);
+}
+a.task-link[data-user-state='waiting']::before,
+.org-brief-body [data-brief-section='waiting']::before,
+.org-brief-body .org-brief-now[data-user-state='waiting']::before {
+  -webkit-mask-image: var(--tsi-mask-waiting);
+  mask-image: var(--tsi-mask-waiting);
+}
+a.task-link[data-user-state='done']::before,
+.org-brief-body .org-brief-now[data-user-state='done']::before {
+  -webkit-mask-image: var(--tsi-mask-done);
+  mask-image: var(--tsi-mask-done);
+}
+
+/* Working breathes: its centre fades to .7 and back every 2s (at .55 the pale phase read as a
+   hollow ring at 12px); a mask-drawn mark has one layer, so all of it breathes. Still under
+   reduced motion. */
+.task-state-icon .tsi-pulse,
+a.task-link[data-user-state='working']::before,
+.org-brief-body .org-brief-now[data-user-state='working']::before {
+  animation: task-state-breathe 2s ease-in-out infinite;
+  will-change: opacity;
+}
+@keyframes task-state-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .task-state-icon .tsi-pulse,
+  a.task-link[data-user-state='working']::before,
+  .org-brief-body .org-brief-now[data-user-state='working']::before { animation: none; will-change: auto; }
+}

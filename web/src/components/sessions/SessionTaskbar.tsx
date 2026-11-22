@@ -40,6 +40,8 @@ import { taskTextSource } from '@/utils/agent-text-source';
 import { useImageAttachments, type ImageAttachments } from '@/components/common/image-attachments';
 import { log } from '@/utils/log';
 import { OPEN_CENTER_EVENT, OPEN_FILE_EVENT } from '@/utils/open-anywhere';
+import { TaskStateIcon } from '@/components/common/TaskStateIcon';
+import { useIdleCompactingSession } from '@/stores/idle-compacting-store';
 
 export interface SessionTaskbarProps {
   chips: readonly string[];
@@ -114,7 +116,9 @@ interface ChipProps {
 /** The dot's state: chipStateOf (pages/sessionTaskbar.ts), the task's one user status. */
 function useChipState(sessionId: string, task: Task | undefined) {
   const status = useSessionStatus(sessionId);
-  const { state, running } = chipStateOf(task, status);
+  // Re-read when Walnut's idle compaction starts or ends (taskIconState reads it).
+  useIdleCompactingSession(sessionId);
+  const { state, running } = chipStateOf(task, status, sessionId);
   return { status, state, running };
 }
 
@@ -125,7 +129,7 @@ function RecentPill({ sessionId, task, onRestore, onClose }: { sessionId: string
   return (
     <div className="session-taskbar-recent-pill" data-session-id={sessionId} data-state={state} data-running={running || undefined}>
       <button type="button" className="session-taskbar-open" title={title} onClick={() => onRestore(sessionId)} aria-label={`Open ${title} (recent)`}>
-        <span className="session-taskbar-dot" aria-hidden="true" />
+        <TaskStateIcon state={state} className="session-taskbar-dot" size={12} decorative />
         <span className="session-taskbar-title">{title}</span>
       </button>
       <button type="button" className="session-taskbar-close" onClick={() => onClose(sessionId)} aria-label={`Remove ${title} from Recent`}>
@@ -228,7 +232,7 @@ function RecentMoreRow({ sessionId, task, onRestore, onClose }: { sessionId: str
   return (
     <div className="session-taskbar-more-row" role="none" data-session-id={sessionId} data-state={state} data-running={running || undefined}>
       <button type="button" role="menuitem" className="session-taskbar-open" title={title} onClick={() => onRestore(sessionId)} aria-label={`Open ${title} (recent)`}>
-        <span className="session-taskbar-dot" aria-hidden="true" />
+        <TaskStateIcon state={state} className="session-taskbar-dot" size={12} decorative />
         <span className="session-taskbar-title">{title}</span>
       </button>
       <button type="button" role="menuitem" className="session-taskbar-close" onClick={() => onClose(sessionId)} aria-label={`Remove ${title} from Recent`}>
@@ -287,7 +291,7 @@ function TaskbarChip({ sessionId, task, dragging, onRestore, onClose, onDragStar
         onClick={() => { clearTimer(); setPeek('none'); onRestore(sessionId); }}
         aria-label={`Open ${title} (${task ? taskStatusLabel(task) : state})`}
       >
-        <span className="session-taskbar-dot" aria-hidden="true" />
+        <TaskStateIcon state={state} className="session-taskbar-dot" size={12} decorative />
         <span className="session-taskbar-title">{title}</span>
       </button>
       <button
@@ -401,7 +405,7 @@ function PeekCard({ sessionId, task, title, state, running, anchorRef, processSt
       onPointerLeave={onPointerLeave}
     >
       <div className="session-taskbar-card-head">
-        <span className="session-taskbar-dot" aria-hidden="true" />
+        <TaskStateIcon state={state} className="session-taskbar-dot" size={12} decorative />
         <span className="session-taskbar-card-title">{title}</span>
         <button type="button" className="session-taskbar-card-open" onClick={onOpen}>Open</button>
       </div>

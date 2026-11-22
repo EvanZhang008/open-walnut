@@ -25,13 +25,20 @@ struct BoardStatusHeading: View {
     var asks: Int = 0
     @Environment(\.leadingDrawer) private var drawer
     @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .subheadline) private var iconSize: CGFloat = 14
 
     var body: some View {
         HStack(spacing: 7) {
-            Image(systemName: section.systemImage)
-                .font(.system(BoardHeadingType.label, weight: .semibold))
-                .foregroundStyle(Self.tint(section))
-                .accessibilityHidden(true)
+            Group {
+                if let state = section.iconState {
+                    TaskStateIcon(state: state, size: iconSize)
+                } else {
+                    Image(systemName: section.systemImage)
+                        .font(.system(BoardHeadingType.label, weight: .semibold))
+                        .foregroundStyle(Self.tint(section))
+                }
+            }
+            .accessibilityHidden(true)
             Text(section.label)
                 .font(.system(BoardHeadingType.label, weight: .bold))
                 .foregroundStyle(.primary)
@@ -78,16 +85,9 @@ struct BoardStatusHeading: View {
         .accessibilityIdentifier("board.section.\(section.rawValue)")
     }
 
-    /// The icon's colour: the same meaning the row dots and the web's headings carry.
+    /// A symbol heading's colour (a state section's icon carries its own).
     static func tint(_ section: BoardStatusSection) -> Color {
-        switch section {
-        case .watching: return Theme.tint
-        case .needs: return Theme.danger
-        case .working: return BoardHeadingType.ink
-        case .waiting: return Theme.warning
-        case .background: return BoardHeadingType.ink
-        case .done: return Theme.success
-        }
+        section == .watching ? Theme.tint : BoardHeadingType.ink
     }
 }
 
@@ -249,5 +249,5 @@ enum BoardBackgroundItem {
     static func label(inBackground: Bool) -> String {
         inBackground ? "Take out of Background" : "Move to Background"
     }
-    static let systemImage = BoardStatusSection.background.systemImage
+    static let systemImage = "square.2.layers.3d"
 }

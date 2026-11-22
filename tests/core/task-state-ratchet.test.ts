@@ -150,12 +150,10 @@ const PHASE_READERS: Record<string, number> = {
   'src/web/routes/tasks.ts': 2,
   'web/src/components/board/board-overview-model.ts': 3,
   'web/src/components/board/kanban/kanban-card-model.ts': 5,
-  'web/src/components/common/Icons.tsx': 1,
   'web/src/components/org/org-answered.ts': 1,
   'web/src/components/org/org-channels-model.ts': 1,
   'web/src/components/sessions/SessionPanel.tsx': 1,
   'web/src/components/sessions/TaskQuickActions.tsx': 2,
-  'web/src/components/tasks/AgentSearchResultRows.tsx': 1,
   'web/src/components/tasks/FocusSatelliteCards.tsx': 1,
   'web/src/components/tasks/footer-scope.ts': 1,
   'web/src/components/tasks/status-sections.ts': 2,
@@ -243,10 +241,19 @@ describe('one set of state names', () => {
   it('the copies that cannot import the names equal them', () => {
     const frame = fs.readFileSync(path.join(ROOT, 'web/src/components/board/board-elements.frame.js'), 'utf8')
     const ios = fs.readFileSync(path.join(ROOT, 'ios-native/Walnut/Views/Tasks/TeamStatusModel.swift'), 'utf8')
+    const iconWords = fs.readFileSync(path.join(ROOT, 'ios-native/Shared/TaskStateIcon.swift'), 'utf8')
+    // The phone's UserState.label: a word of its own, or the status icon's (TaskIconState.label).
+    const iosLabel = (state: string): string | undefined => {
+      const labelSwitch = ios.slice(ios.indexOf('var label: String {'))
+      const line = labelSwitch.match(new RegExp(`case [.\\w, ]*\\.${state}\\b[.\\w, ]*: return ([^\\n]+)`))?.[1]?.trim()
+      const icon = line?.match(/^TaskIconState\.(\w+)\.label$/)?.[1]
+      if (!icon) return line?.match(/^"([^"]*)"$/)?.[1]
+      return iconWords.match(new RegExp(`case \\.${icon}: return "([^"]*)"`))?.[1]
+    }
     for (const [state, label] of Object.entries(USER_STATE_LABELS)) {
       expect(frame, `frame USER.${state}`).toContain(`${state}: '${label}'`)
       // The phone draws a state by its shown name (To read under Needs you), as the web does.
-      expect(ios, `iOS .${state}`).toContain(`case .${state}: return "${USER_STATE_LABELS[shownState(state as UserState)]}"`)
+      expect(iosLabel(state), `iOS .${state}`).toBe(USER_STATE_LABELS[shownState(state as UserState)])
     }
   })
 

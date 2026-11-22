@@ -14,10 +14,15 @@ const CHIPS_KEY = 'open-walnut-layout:home-minimized'
 /** A beat a person can follow, only while recording (PW_VIDEO, walnut-dev webkit --video). */
 const beat = (page: Page) => (process.env.PW_VIDEO ? page.waitForTimeout(1200) : Promise.resolve())
 
-async function sessionIds(page: Page): Promise<string[]> {
+/** Ten sessions of the shared fixture. `quiet`: only sessions with no turn running and no prompt
+ *  waiting, whose chip reads its task's user status alone (a live prompt is Needs you, a running
+ *  turn Working, whatever the status says: the fixture seeds a few such sessions, and where they fall
+ *  in the task list depends on what earlier specs touched). */
+async function sessionIds(page: Page, quiet = false): Promise<string[]> {
   const res = await page.request.get('/api/tasks')
-  const { tasks } = await res.json() as { tasks: Array<{ session_id?: string; phase?: string }> }
-  const ids = [...new Set(tasks.map((t) => t.session_id).filter((s): s is string => !!s))]
+  const { tasks } = await res.json() as { tasks: Array<{ session_id?: string; phase?: string; session_status?: { process_status?: string; pendingPermissionTool?: string | null } }> }
+  const live = (t: (typeof tasks)[number]) => t.session_status?.process_status === 'running' || !!t.session_status?.pendingPermissionTool
+  const ids = [...new Set(tasks.filter((t) => !quiet || !live(t)).map((t) => t.session_id).filter((s): s is string => !!s))]
   expect(ids.length, 'the fixture holds ten sessions').toBeGreaterThanOrEqual(10)
   return ids.slice(0, 10)
 }
@@ -139,19 +144,20 @@ test('in a short window the "N more" menu is cut to fit, and the row the keyboar
   await page.evaluate(({ r }) => localStorage.setItem(r, JSON.stringify({ v: 1, value: null })), { r: RECENT_KEY })
 })
 
-test('every dot on the bar wears its task status in the task pills\' colors: red, green, blue, grey only for a wait', async ({ page }) => {
+test('every chip on the bar wears its task status icon: red Needs you, amber To read, green Working, a grey moon for a snooze, grey Done', async ({ page }) => {
   await isolateUiPrefs(page)
   await page.setViewportSize({ width: 1280, height: 800 })
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-  const ids = await sessionIds(page)
+  const ids = await sessionIds(page, true)
   // Five sessions, one per status: Needs you, To read, Working (its turn over), snoozed, Done.
-  const want: Array<{ sid: string; us: Record<string, unknown>; phase?: string; state: string; color: string }> = [
-    { sid: ids[0]!, us: { state: 'needs', since: new Date().toISOString() }, state: 'needs', color: 'rgb(255, 59, 48)' },
-    { sid: ids[1]!, us: { state: 'read', toRead: 'turn', since: new Date().toISOString() }, state: 'needs', color: 'rgb(255, 59, 48)' },
-    { sid: ids[2]!, us: { state: 'working', since: new Date().toISOString() }, state: 'working', color: 'rgb(52, 199, 89)' },
-    { sid: ids[3]!, us: { state: 'waiting', snoozed: { until: '2099-01-01' }, since: new Date().toISOString() }, state: 'waiting', color: '' },
-    { sid: ids[4]!, us: { state: 'done', since: new Date().toISOString() }, phase: 'COMPLETE', state: 'done', color: '' },
+  // Each icon's colour is its state's token (styles/task-state.css); its shape is its state's.
+  const want: Array<{ sid: string; us: Record<string, unknown>; phase?: string; state: string; token: string }> = [
+    { sid: ids[0]!, us: { state: 'needs', since: new Date().toISOString() }, state: 'needs', token: '--task-state-needs' },
+    { sid: ids[1]!, us: { state: 'read', toRead: 'turn', since: new Date().toISOString() }, state: 'read', token: '--task-state-read' },
+    { sid: ids[2]!, us: { state: 'working', since: new Date().toISOString() }, state: 'working', token: '--task-state-working' },
+    { sid: ids[3]!, us: { state: 'waiting', snoozed: { until: '2099-01-01' }, since: new Date().toISOString() }, state: 'snoozed', token: '--task-state-quiet' },
+    { sid: ids[4]!, us: { state: 'done', since: new Date().toISOString() }, phase: 'COMPLETE', state: 'done', token: '--task-state-quiet' },
   ]
   const bySid = new Map(want.map((w) => [w.sid, w]))
   await page.route((url) => url.pathname.endsWith('/api/tasks'), async (route) => {
@@ -159,7 +165,13 @@ test('every dot on the bar wears its task status in the task pills\' colors: red
     const body = await res.json() as { tasks: Array<Record<string, unknown>> }
     for (const t of body.tasks) {
       const w = bySid.get(t.session_id as string)
-      if (w) { t.user_status = w.us; if (w.phase) t.phase = w.phase }
+      if (w) {
+        t.user_status = w.us
+        if (w.phase) t.phase = w.phase
+        // The task's own session snapshot seeds the status store too: idle, no prompt, as below.
+        const ss = t.session_status as Record<string, unknown> | undefined
+        if (ss) { ss.process_status = 'idle'; ss.pendingPermissionTool = null; delete ss.pendingPermission }
+      }
     }
     await route.fulfill({ response: res, json: body })
   })
@@ -177,21 +189,21 @@ test('every dot on the bar wears its task status in the task pills\' colors: red
   }, { chips: want.slice(0, 3).map((w) => w.sid), recent: want.slice(3).map((w) => w.sid), r: RECENT_KEY, c: CHIPS_KEY })
   await page.reload()
   await page.waitForLoadState('networkidle')
-  const css = await page.evaluate(() => {
-    const s = getComputedStyle(document.documentElement)
-    return { muted: s.getPropertyValue('--fg-muted').trim(), accent: s.getPropertyValue('--accent').trim() }
-  })
+  // A token's colour as this page computes it: a probe drawn with it.
+  const colorOf = (token: string) => page.evaluate((v) => { const p = document.createElement('i'); p.style.background = `var(${v})`; document.body.append(p); const c = getComputedStyle(p).backgroundColor; p.remove(); return c }, token)
+  // Red is the --error token itself.
+  expect(await colorOf('--task-state-needs')).toBe('rgb(255, 59, 48)')
   for (const w of want) {
     const el = page.locator(`.session-taskbar [data-session-id="${w.sid}"]`).first()
     await expect(el).toHaveAttribute('data-state', w.state)
     await expect(el).not.toHaveAttribute('data-running', /.*/)
-    const bg = await el.locator('.session-taskbar-dot').evaluate((d) => getComputedStyle(d).backgroundColor)
-    if (w.color) expect(bg, `${w.state} dot`).toBe(w.color)
-    // Done is the accent blue, a wait the muted grey: compare through a probe in the same page.
-    else {
-      const ref = await page.evaluate((v) => { const p = document.createElement('i'); p.style.background = v; document.body.append(p); const c = getComputedStyle(p).backgroundColor; p.remove(); return c }, w.state === 'done' ? css.accent : css.muted)
-      expect(bg, `${w.state} dot`).toBe(ref)
-    }
+    const dot = el.locator('.session-taskbar-dot')
+    await expect(dot).toHaveAttribute('data-state', w.state)
+    // The status icon itself at 12px (no dot form of its own), in its state's colour.
+    await expect(dot).toHaveClass(/\btask-state-icon\b/)
+    const drawn = await dot.evaluate((d) => ({ color: getComputedStyle(d).color, width: d.querySelector('svg')!.getAttribute('width') }))
+    expect(drawn.width, `${w.state} icon`).toBe('12')
+    expect(drawn.color, `${w.state} icon`).toBe(await colorOf(w.token))
   }
   await beat(page)
   await beat(page)
