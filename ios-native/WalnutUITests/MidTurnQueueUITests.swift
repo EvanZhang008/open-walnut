@@ -26,8 +26,18 @@ import XCTest
 /// `tests/ui/mid-turn-stub-server.mjs` accepts the POST, streams a couple of
 /// frames, and then holds the stream open until this test says
 /// `POST /__stub/finish-turn`. That gives a mid-turn window of any length and a
-/// wire log that can prove the two facts a screen cannot: nothing was posted
-/// while the turn was held, and exactly one thing was posted after it settled.
+/// wire log that can prove the two facts a screen cannot: no new turn was posted
+/// while the turn was held, and exactly one was posted after it settled.
+///
+/// A SEND INTO THE RUNNING TURN IS EXPECTED ON THE WIRE (since 2026-11-09, the
+/// owner's call: send it straight out as the web does, see `ChatLaneJoinRules`).
+/// A mid-turn tap first POSTs the words with `join: true`, and the server either
+/// takes them into the turn or answers 409 `turn_active` (the turn cannot take
+/// them now, or the server is older than `join`). The stub always answers 409, so this file drives the path
+/// where the words wait on the phone; `ChatLaneJoinTests` covers a join the turn
+/// takes. So the wire log is read as two lists (`StubPosts`): `newTurns`, which
+/// must stay at one while the turn is held, and `joins`, which must be exactly
+/// the one attempt, never a retry loop against a refusing server.
 ///
 /// RUN IT WITH `ios-native/tests/ui/run-ui-tests.sh` and the stub running, not
 /// with a bare `xcodebuild`. Exporting `WALNUT_UITEST_SERVER` in your shell does
@@ -92,8 +102,9 @@ final class MidTurnQueueUITests: XCTestCase {
 
     // MARK: - Scenario 1 to 3: the reported bug, banked, delivered once
 
-    /// Mid-turn: SEND is offered, the tap is banked and NOT posted, and it goes out
-    /// exactly once after the turn settles.
+    /// Mid-turn: SEND is offered, the tap is offered to the running turn once, the
+    /// turn's refusal banks it (no new turn is posted while the turn is held), and it
+    /// goes out as a turn of its own exactly once after the turn settles.
     ///
     /// The three scenarios are one test on purpose. They are three readings of ONE
     /// message's life, and splitting them would mean staging the same turn three
@@ -112,8 +123,8 @@ final class MidTurnQueueUITests: XCTestCase {
         type(Self.opener, into: composer, of: app)
         tapSend(app)
         try await stub.waitForHeldTurn()
-        let postsBefore = try await stub.messagePosts()
-        XCTAssertEqual(postsBefore.count, 1, "the opener should be the only POST so far")
+        let postsBefore = try await stub.posts()
+        XCTAssertEqual(postsBefore.all.count, 1, "the opener should be the only POST so far")
 
         // ── Scenario 1: the reported bug ───────────────────────────────────────
         type(Self.dictatedParagraph, into: composer, of: app)
@@ -164,11 +175,18 @@ final class MidTurnQueueUITests: XCTestCase {
         // A real chance to have gone out early. Without the wait an assertion that
         // nothing was posted would pass simply by running before the POST did.
         try await Task.sleep(for: .seconds(4))
-        let heldPosts = try await stub.messagePosts()
+        let heldPosts = try await stub.posts()
         XCTAssertEqual(
-            heldPosts.count, 1,
-            "a banked message went on the wire while the turn was still held "
-                + "(posts: \(heldPosts.map(\.text)))"
+            heldPosts.newTurns.count, 1,
+            "a banked message went on the wire as a new turn while the turn was still "
+                + "held (new turns: \(heldPosts.newTurns.map(\.text)))"
+        )
+        // The tap went to the running turn first, once: the server's 409 is what
+        // banked it, and a refusal is not a reason to ask again before the settle.
+        XCTAssertEqual(
+            heldPosts.joins.map(\.text), [Self.dictatedParagraph],
+            "the mid-turn send should be offered to the running turn exactly once "
+                + "(joins: \(heldPosts.joins.map { String(($0.text ?? "").prefix(12)) }))"
         )
         let stillHeld = try await stub.state().turnHeld
         XCTAssertNotNil(stillHeld, "the stub stopped holding the turn on its own")
@@ -184,14 +202,14 @@ final class MidTurnQueueUITests: XCTestCase {
                 + "banked message that has been delivered is an ordinary message, and "
                 + "anything still pinned to it says the words are waiting when they are not"
         )
-        let delivered = try await stub.waitForMessagePosts(count: 2)
+        let delivered = try await stub.waitForNewTurns(count: 2).newTurns
         XCTAssertEqual(
             delivered.count, 2,
             "the banked message was posted \(delivered.count - 1) times after the turn "
                 + "settled, not once (texts: \(delivered.map { String(($0.text ?? "").prefix(12)) }))"
         )
         XCTAssertEqual(
-            delivered[1].text, Self.dictatedParagraph,
+            delivered.last?.text, Self.dictatedParagraph,
             "the delivered POST does not carry the paragraph that was typed"
         )
         try await stub.screenshot(app, "03-delivered")
@@ -199,11 +217,15 @@ final class MidTurnQueueUITests: XCTestCase {
         // claim, and it cannot be read off a single sample taken the instant the
         // first POST lands.
         try await Task.sleep(for: .seconds(5))
-        let settled = try await stub.messagePosts()
+        let settled = try await stub.posts()
         XCTAssertEqual(
-            settled.count, 2,
+            settled.newTurns.count, 2,
             "a second POST followed the drain — the banked message was delivered more "
-                + "than once (texts: \(settled.map { String(($0.text ?? "").prefix(12)) }))"
+                + "than once (texts: \(settled.newTurns.map { String(($0.text ?? "").prefix(12)) }))"
+        )
+        XCTAssertEqual(
+            settled.joins.count, 1,
+            "the drained message was offered to a turn again after it had been delivered"
         )
     }
 
@@ -253,14 +275,20 @@ final class MidTurnQueueUITests: XCTestCase {
         // starts.
         _ = try await stub.finishTurn()
         try await Task.sleep(for: .seconds(6))
-        let posts = try await stub.messagePosts()
+        let posts = try await stub.posts()
         XCTAssertEqual(
-            posts.count, 1,
-            "a withdrawn message was posted anyway (texts: \(posts.map(\.text)))"
+            posts.newTurns.count, 1,
+            "a withdrawn message was posted anyway (texts: \(posts.newTurns.map(\.text)))"
         )
         XCTAssertFalse(
-            posts.contains { $0.text == Self.withdrawn },
-            "the withdrawn text reached the server"
+            posts.newTurns.contains { $0.text == Self.withdrawn },
+            "the withdrawn text reached the server as a turn of its own"
+        )
+        // Its one offer to the running turn was refused (that refusal is what
+        // banked it); withdrawing it must not lead to another.
+        XCTAssertLessThanOrEqual(
+            posts.joins.count, 1,
+            "the withdrawn message was offered to a turn again (joins: \(posts.joins.count))"
         )
     }
 
@@ -525,6 +553,18 @@ final class MidTurnQueueUITests: XCTestCase {
         let seq: Int
         let path: String
         let text: String?
+        /// A send into the running turn (`join: true`), not a turn of its own.
+        let join: Bool?
+    }
+
+    /// The message POSTs, split by what each asked the server for. There is no
+    /// plain count on purpose: a send into the running turn and a new turn are
+    /// different facts, and a count of both is what made this file read a mid-turn
+    /// join as "posted early" (2026-11-22).
+    struct StubPosts {
+        let all: [MessagePost]
+        var newTurns: [MessagePost] { all.filter { $0.join != true } }
+        var joins: [MessagePost] { all.filter { $0.join == true } }
     }
 
     struct StubState: Decodable {
@@ -584,8 +624,8 @@ final class MidTurnQueueUITests: XCTestCase {
             return try await state().turnHeld
         }
 
-        func messagePosts() async throws -> [MessagePost] {
-            try await state().messagePosts
+        func posts() async throws -> StubPosts {
+            StubPosts(all: try await state().messagePosts)
         }
 
         /// Wait until the stub is holding a turn open. Until it is, "mid-turn" is a
@@ -601,12 +641,12 @@ final class MidTurnQueueUITests: XCTestCase {
             XCTFail("the stub never received a message POST to hold — the opener never went out")
         }
 
-        func waitForMessagePosts(count: Int, timeout: TimeInterval = 45) async throws -> [MessagePost] {
+        func waitForNewTurns(count: Int, timeout: TimeInterval = 45) async throws -> StubPosts {
             let deadline = Date().addingTimeInterval(timeout)
-            var latest: [MessagePost] = []
+            var latest = StubPosts(all: [])
             while Date() < deadline {
-                latest = try await messagePosts()
-                if latest.count >= count { return latest }
+                latest = try await posts()
+                if latest.newTurns.count >= count { return latest }
                 try await Task.sleep(for: .milliseconds(400))
             }
             return latest

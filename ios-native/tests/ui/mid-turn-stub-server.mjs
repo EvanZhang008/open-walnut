@@ -78,7 +78,8 @@
 //                               because its conversation is no longer listed.
 //   POST /__stub/finish-turn  → the held turn emits `message-end` and settles.
 //   GET  /__stub/state        → generation, whether a turn is held, the message
-//                               POSTs seen this generation, the history.
+//                               POSTs seen this generation (`join: true` for a
+//                               send into the running turn), the history.
 //   GET  /__stub/requests     → every recorded request this generation, in order.
 //   POST /__stub/screenshot?name=X  → body is PNG bytes; written to
 //                               <shots>/X<suffix>.png. The XCUITest runner is a
@@ -1941,6 +1942,9 @@ function summarize(raw) {
     if (typeof body.title === 'string') out.title = body.title
     if (typeof body.model === 'string') out.model = body.model
     if (typeof body.effort === 'string') out.effort = body.effort
+    // A send written during a turn goes into that turn (`join: true`, api-v1.md).
+    // Recorded so a test can tell it from a POST that starts a new turn.
+    if (body.join === true) out.join = true
     return out
   } catch {
     return { bodyBytes: Buffer.byteLength(raw) }
@@ -1976,7 +1980,7 @@ const server = http.createServer(async (req, res) => {
         conversations,
         messagePosts: records
           .filter((r) => r.method === 'POST' && /\/messages$/.test(r.path))
-          .map((r) => ({ seq: r.seq, at: r.at, path: r.path, text: r.text })),
+          .map((r) => ({ seq: r.seq, at: r.at, path: r.path, text: r.text, join: r.join === true })),
         history,
         requestCount: records.length,
       })
@@ -2161,10 +2165,13 @@ const server = http.createServer(async (req, res) => {
     let body = {}
     try { body = JSON.parse(raw) } catch { /* recorded as bodyBytes above */ }
     if (heldTurn) {
-      // Exactly what the real route answers while a turn owns the conversation.
-      // It should be UNREACHABLE for a queued send (the point of the queue is
-      // that nothing is posted until the turn settles), so answering honestly
-      // here is what makes a regression visible instead of silently accepted.
+      // Exactly what the real route answers while a turn owns the conversation
+      // and cannot take the message now: to a plain POST always, and to a
+      // `join: true` POST when the turn has not handed its own message to the CLI
+      // yet, is ending, or the server is older than `join` (api-v1.md). So the
+      // phone's join goes out mid-turn and is refused here, which is the path
+      // where the words wait on the phone for the turn to end; a plain POST
+      // while the turn is held is the regression this answer makes visible.
       return json(res, 409, {
         error: { code: 'turn_active', message: 'A turn is already running' },
       })
