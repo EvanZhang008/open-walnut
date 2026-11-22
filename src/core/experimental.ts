@@ -209,6 +209,13 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'host_runs_sessions',
+    name: 'Each computer runs its own sessions',
+    description: 'A new session on another computer is run and watched by Walnut\'s service on that computer, which sends this Walnut what happened in it, so the session keeps going and keeps being watched while this Walnut is away. Only computers whose Walnut is new enough take it; others run their sessions as before. Sessions started before you turn this off keep reporting. "Every experiment on" does not turn this on: it changes which machine runs your sessions, so it keeps its own switch.',
+    default: false,
+    ownSwitchOnly: true,
+  },
+  {
     id: 'restore_drill',
     name: 'Weekly restore drill',
     description: 'Once a week Walnut restores your newest backup into a temporary folder, checks every file and database in it, compares it with the list of what a backup must hold, then deletes the folder. Your data and your backups are only read. A drill that fails shows in Walnut Health. "Every experiment on" does not turn this on: it copies or downloads all of your data, so it keeps its own switch.',

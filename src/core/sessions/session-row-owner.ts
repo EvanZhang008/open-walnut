@@ -35,7 +35,7 @@ export const SESSION_FIELD_OWNER = {
   fromPlanSessionId: H, forkedFromSessionId: H, engineSwitch: H, 'supersededBy': H /* quoted, so the replaced-session guard does not read this key as a write of the mark */, leftContext: H,
   resumedBySwitch: H, startedIdle: H, rewoundAtMessageUuid: H, inPlaceRewinds: H, pendingResumeSessionAt: H,
   appliedAppendSystemPrompt: H, placeNoted: H, taskRoutingNoted: H, lastCompactUuid: H, lastCompactAt: H,
-  asksSent: H, commitShas: H, mcpMountStatus: H, output_mode_injected: H, hintState: H, outputModeHookAt: H,
+  asksSent: H, commitShas: H, mcpMountStatus: H, outputModeHookAt: H,
   model: H, cliModel: H, effort: H, effectiveEffort: H, modelMaxWindow: H, modelMaxWindowSource: H,
   modelMaxWindowModel: H, autoCompactAt: H, contextTokens: H, promptCache: H, idleCompaction: H,
   contextRecovery: H, safeguardSwitch: H, modelTemporary: H, contextStopsAt: H, idleCompactionLog: H,
@@ -47,6 +47,8 @@ export const SESSION_FIELD_OWNER = {
   statusUpdatedAt: H, pendingPermission: H, promptAnswerLines: H, consumedOffset: H, streamEpoch: H,
   costWatermark: H, costWatermarkPid: H, lineLifecyclePid: H, lineQueuedPid: H, profile: H, lane: H, judge: H,
   // The leader's: set by a person (any screen) or by the leader's own hooks.
+  // The hints a send carries are planned where the send is made, on the leader (hints/hint-send.ts).
+  output_mode_injected: L, hintState: L,
   title: L, archived: L, archive_reason: L, human_note: L, output_mode: L, threadAnchors: L, threadMeta: L,
   pinnedMessages: L, passageComments: L, summary: L, summaryGeneratedAt: L, recap: L, recapAt: L, overview: L,
   overviewAt: L, stopRequest: L,

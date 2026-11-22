@@ -2480,11 +2480,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // A message lined up for after a running turn goes out when that turn ends (src/core/sessions/queue-after-turn.ts).
     if (role() === 'leader') void import('../core/sessions/queue-after-turn.js').then((m) => m.startQueueAfterTurn()).catch(() => {})
     // ── Leader side of hosts that run and judge their sessions (land 3b; src/core/session-channel/leader-boot.ts) ──
-    // Only with the switch on (session-channel/switch.ts): a session channel per host that names
-    // session-judge-v1, and the starts and commands of its sessions go there. Off: nothing starts.
+    // A session channel per host that names session-judge-v1 (a host names it only while it runs
+    // sessions itself), whatever the switch says now: a session a host already runs keeps reporting
+    // after the switch went off. The switch decides only where a new start goes (switch.ts).
     if (role() === 'leader') {
-      void import('../core/session-channel/switch.js').then(async (m) => {
-        if (await m.hostRunsSessionsNow()) await (await import('../core/session-channel/leader-boot.js')).startLeaderSessionChannels()
+      void import('../core/session-channel/leader-boot.js').then(async (m) => {
+        await m.startLeaderSessionChannels()
       }).catch((err) => log.session.warn('session channels: the leader side did not start', { error: err instanceof Error ? err.message : String(err) }))
     }
     // ── end of the land 3b leader block ──
@@ -4733,7 +4734,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // fact log, channel and routes, before the runner starts anything (core/session-channel/host-boot.ts).
   if (isHostReplica()) {
     const [sw, boot] = await Promise.all([import('../core/session-channel/switch.js'), import('../core/session-channel/host-boot.js')])
-    if (sw.hostRunsSessions(await (await import('../core/config-manager.js')).getConfig().catch(() => null)) && boot.hostCanRunSessions()) {
+    // On with the switch, and on again after a restart while this host has a fact log, so the
+    // sessions it ran keep reporting and taking sends after the switch went off.
+    const switchOn = sw.hostRunsSessions(await (await import('../core/config-manager.js')).getConfig().catch(() => null))
+    if ((switchOn || boot.hostRanSessions(WALNUT_HOME, (process.env.WALNUT_WALNUT_ID ?? '').trim())) && boot.hostCanRunSessions()) {
       hostSessionsRoutes = boot.hostSessionRoutes
       hostSessionsCaps = boot.hostSessionCapabilities
       await boot.startHostSessions({

@@ -15,6 +15,7 @@
  * was started with the runtime in process (WALNUT_IN_PROCESS_DAEMON=1): the seam a test harness
  * uses until then, giving the runner its daemon itself.
  */
+import fs from 'node:fs'
 import path from 'node:path'
 import { FactLog } from './fact-log.js'
 import { HostChannel } from './channel.js'
@@ -53,6 +54,12 @@ export function hostSessionsRunning(): HostSessions | null {
 }
 
 /** Can this host replica run sessions itself (see the header)? */
+/** Has this host run sessions of its own for this Walnut (its fact log exists)? */
+export function hostRanSessions(stateDir: string, walnutId: string): boolean {
+  if (!walnutId) return false
+  return fs.existsSync(path.join(stateDir, 'session-channel', `facts-${walnutId}.ndjson`))
+}
+
 export function hostCanRunSessions(env: NodeJS.ProcessEnv = process.env): boolean {
   return isHostReplica() && (hasLocalDaemon() || env.WALNUT_IN_PROCESS_DAEMON === '1')
 }

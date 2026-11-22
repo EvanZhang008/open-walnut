@@ -11,7 +11,8 @@
  *              bashCallMatching with the op and file the leader's predicate would test
  *   channel    a WebSocket whose frames are the channel's (channel.ts HostChannel.attach)
  *
- * The switch is asked on every request: off, every route answers `host_runs_sessions_off`.
+ * The switch is asked on every start: off, a start answers `host_runs_sessions_off`; the sessions
+ * this host already runs keep their other routes and the channel.
  */
 import crypto from 'node:crypto'
 import fsp from 'node:fs/promises'
@@ -199,9 +200,11 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
   async function serve(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
     try {
       if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method_not_allowed' })
-      if (!(await o.enabled())) { req.resume(); return answerHostSessionsOff(res) }
-      const body = await readJson(req)
       const op = pathname.slice(HOST_SESSIONS_PATH.length + 1)
+      // The switch decides only where a NEW session runs: a session this host already runs keeps
+      // taking its sends, interrupts and calls, and keeps reporting, after the switch went off.
+      if (op === 'start' && !(await o.enabled())) { req.resume(); return answerHostSessionsOff(res) }
+      const body = await readJson(req)
       if (op === 'start') {
         const r = await start(body as StartBody)
         return sendJson(res, r.status, r.body)
@@ -257,8 +260,8 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
     upgrade(req, socket, head) {
       const pathname = new URL(req.url ?? '/', 'http://host').pathname
       if (pathname !== HOST_CHANNEL_PATH) return false
-      void o.enabled().then((on) => {
-        const channel = on ? o.channel() : null
+      void Promise.resolve().then(() => {
+        const channel = o.channel()
         if (!channel) return refuseChannelUpgrade(socket)
         wss.handleUpgrade(req, socket, head, (ws) => attach(ws, channel))
       }, () => refuseChannelUpgrade(socket))

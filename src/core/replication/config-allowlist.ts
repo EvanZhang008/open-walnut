@@ -173,7 +173,6 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
   },
   // Read only by the leader's send path. Named in the copy, an older replica would refuse the whole session row.
   session: {
-    host_runs_sessions: 'the leader\'s choice: it decides which host runs a session, and a host runs what it is handed (session-channel/switch.ts)',
     // A session the companion starts while it leads lacks the line until the Mac is back and its
     // instruction notice adds it (as the hint did before, 2026-11-06); the companion never tells a
     // session the line is gone (sessions/instruction-notice.ts).

@@ -78,9 +78,10 @@ function connect(host: HostChannel, leader: Leader, opts: { cutAfterSeq?: number
 }
 
 async function hostOf(over: Partial<Parameters<typeof FactLog.open>[0]> = {}) {
-  const log = await FactLog.open({ dir, walnutId: 'w1', flushMs: 1, durable: false, ...over })
+  // The host's clock moves with the leader's (both machines' time passes), unless a test says otherwise.
+  const log = await FactLog.open({ dir, walnutId: 'w1', flushMs: 1, durable: false, now: () => Date.now() + clockOffset, ...over })
   const own: SessionRecord[] = [{ claudeSessionId: 's1', taskId: 't', project: 'P', process_status: 'running', mode: 'default', host: 'devbox', judge: 'host' } as SessionRecord]
-  const host = new HostChannel({ log, walnutId: 'w1', hostId: 'devbox', ownRows: async () => own })
+  const host = new HostChannel({ log, walnutId: 'w1', hostId: 'devbox', ownRows: async () => own, now: () => Date.now() + clockOffset })
   return { log, host }
 }
 
@@ -228,5 +229,62 @@ describe('latency', () => {
     expect(max).toBeLessThan(1000)
     l.cut()
     await log.close()
+  })
+})
+
+describe('late facts, on the leader\'s clock', () => {
+  const T = 1_800_000_000_000
+  function leaderAt(clock: { now: number }) {
+    const applied: AppliedFact[] = []
+    const sent: ChannelFrame[] = []
+    const side = attachLeaderChannel({ send: (f) => { sent.push(f) }, close: () => {} }, {
+      walnutId: 'w1', hostId: 'devbox', permitNumber: () => 1, ackEveryMs: 1_000_000, now: () => clock.now,
+      loadCursor: async () => null,
+      apply: async (_h, recs) => { applied.push(...recs) },
+      applyRows: async () => {},
+    })
+    return { side, applied, sent }
+  }
+  const rec = (seq: number, at: number) => ({ v: 2, seq, opId: `o${seq}`, rev: 1, at, kind: 'session-fact', sid: 's1', sseq: seq, name: 'session:tool-use', data: {} }) as const
+
+  it('live frames that waited in the link while the leader was stopped are late; fresh ones are not', async () => {
+    const clock = { now: T }
+    const { side, applied } = leaderAt(clock)
+    side.onFrame({ ch: 'sf', op: 'hello', walnutId: 'w1', hostId: 'devbox', logId: 'L', floor: 1, head: 0, now: T })
+    await side.idle()
+    side.onFrame({ ch: 'sf', op: 'facts', recs: [rec(1, T + 10)], sentAt: T + 10 })
+    await side.idle()
+    clock.now = T + 120_000 // stopped two minutes with a frame waiting in the socket
+    side.onFrame({ ch: 'sf', op: 'facts', recs: [rec(2, T + 20)], sentAt: T + 20 })
+    await side.idle()
+    expect(applied.map((r) => [r.seq, r.late])).toEqual([[1, false], [2, true]])
+  })
+
+  it('a host clock ten minutes ahead reads neither late nor fresh by mistake', async () => {
+    const skew = 600_000
+    const clock = { now: T }
+    const { side, applied } = leaderAt(clock)
+    side.onFrame({ ch: 'sf', op: 'hello', walnutId: 'w1', hostId: 'devbox', logId: 'L', floor: 1, head: 0, now: T + skew })
+    await side.idle()
+    clock.now = T + 30
+    side.onFrame({ ch: 'sf', op: 'facts', recs: [rec(1, T + skew + 20)], sentAt: T + skew + 25 })
+    await side.idle()
+    clock.now = T + 200_000
+    // Read back after a cut: it happened 3 minutes ago on the host's own clock.
+    side.onFrame({ ch: 'sf', op: 'facts', recs: [rec(2, T + skew + 20_000)], replay: true, sentAt: T + skew + 199_990 })
+    await side.idle()
+    expect(applied.map((r) => [r.seq, r.late])).toEqual([[1, false], [2, true]])
+  })
+
+  it('a host clock behind does not make a fresh record late', async () => {
+    const skew = -600_000
+    const clock = { now: T }
+    const { side, applied } = leaderAt(clock)
+    side.onFrame({ ch: 'sf', op: 'hello', walnutId: 'w1', hostId: 'devbox', logId: 'L', floor: 1, head: 0, now: T + skew })
+    await side.idle()
+    clock.now = T + 40
+    side.onFrame({ ch: 'sf', op: 'facts', recs: [rec(1, T + skew + 30)], sentAt: T + skew + 35 })
+    await side.idle()
+    expect(applied.map((r) => r.late)).toEqual([false])
   })
 })

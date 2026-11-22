@@ -3,7 +3,7 @@
  * (src/core/session-channel/switch.ts), so a session on the host is run and judged by the host's
  * own service (docs/plan/one-service-every-host.md, phase 2):
  *
- *   the Mac      config `session.host_runs_sessions: true` (a config value, not the variable, so a
+ *   the Mac      config `experimental.host_runs_sessions: true` (a config value, not the variable, so a
  *                test can turn it off while the Mac runs), and a probe in its process
  *   the replica  its app's dist/cli.js boots it as `web --replica` with WALNUT_HOST_RUNS_SESSIONS=1
  *                and WALNUT_IN_PROCESS_DAEMON=1, then hands its runner the in-process runtime
@@ -176,7 +176,7 @@ export async function startHostJudgeCluster(o: { twin: Twin }): Promise<HostJudg
     twin: o.twin,
     appCli: hostJudgeAppCli(),
     macBootExtra: MAC_PROBE,
-    macConfigExtra: ['session:', '  host_runs_sessions: true'],
+    macConfigExtra: ['experimental:', '  host_runs_sessions: true'],
   })
   const macProbeFile = path.join(path.dirname(c.macData), 'mac-probe.json')
   const hostProbeFile = () => path.join(c.replicaData, 'cluster-probe.json')

@@ -1,7 +1,8 @@
 /**
  * The leader's boot wiring of the hosts that run and judge their sessions (leader-side.ts): real
  * data, the host-server manager's views and links, this server's bus. Started by the web server on
- * the leader when the switch is on; with it off nothing here runs and every judge is 'legacy'.
+ * every leader: it links only to hosts that name session-judge-v1, and with the switch off every
+ * new start is 'legacy' (judge-of.ts), while the sessions a host already runs keep reporting.
  */
 import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../event-bus.js'
@@ -12,7 +13,7 @@ import { noteHostJudged, setHostJudgeProbe } from '../sessions/judge-of.js'
 let active: LeaderSide | null = null
 const CONFIG_SUBSCRIBER = 'host-session-switch'
 
-/** The running leader side, or null (switch off, a follower, not started yet). */
+/** The running leader side, or null (a follower, not started yet). */
 export function activeLeaderSide(): LeaderSide | null {
   return active
 }

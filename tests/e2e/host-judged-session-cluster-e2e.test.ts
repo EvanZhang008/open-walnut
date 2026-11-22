@@ -92,7 +92,10 @@ describe.skipIf(!RUN)('a host runs and judges its sessions, every piece a real p
     taskId = t.json.task.id as string
   }, 900_000)
 
-  afterEach(({ task }) => { if (task.result?.state === 'fail' && h) process.stdout.write(`host-judged: logs at ${writeClusterLogs(h.c, 'host-judged')}\n`) })
+  // A failed step keeps the cluster's logs; HOST_JUDGED_KEEP_LOGS=1 keeps them for every step (to read the host's warnings).
+  afterEach(({ task }) => {
+    if (h && (task.result?.state === 'fail' || process.env.HOST_JUDGED_KEEP_LOGS === '1')) process.stdout.write(`host-judged: logs at ${writeClusterLogs(h.c, 'host-judged')}\n`)
+  })
   afterAll(async () => { await h?.stop() }, 120_000)
 
   it('S1: a start on the Mac for devbox runs on the host; the Mac keeps the row, hears its facts, links the task and parses no line', async () => {
@@ -202,7 +205,7 @@ describe.skipIf(!RUN)('a host runs and judges its sessions, every piece a real p
   }, 600_000)
 
   it('S6: the switch off on the Mac: a new start on the same host takes the legacy path; the session the host already runs still reports', async () => {
-    const off = await h.c.mac('PUT', '/api/config', { session: { host_runs_sessions: false } })
+    const off = await h.c.mac('PUT', '/api/config', { experimental: { host_runs_sessions: false } })
     expect(off.status, JSON.stringify(off.json)).toBe(200)
     await waitFor(async () => !(await h.mac(`/side?host=${HOST_KEY}`)).judges, 30_000, 'the Mac to stop handing starts to the host')
     expect((await h.mac(`/side?host=${HOST_KEY}`)).linked).toBe(true)

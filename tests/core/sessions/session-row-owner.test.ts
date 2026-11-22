@@ -31,9 +31,9 @@ describe('every field of SessionRecord has an owner', () => {
     expect(Object.keys(SESSION_FIELD_OWNER).sort()).toEqual([...fields].sort())
   })
 
-  it('the leader fields are the ones a person or the leader\'s hooks write', () => {
+  it('the leader fields are the ones a person, the leader\'s hooks or its send path write', () => {
     expect([...LEADER_SESSION_FIELDS].sort()).toEqual([
-      'archive_reason', 'archived', 'human_note', 'output_mode', 'overview', 'overviewAt', 'passageComments', 'pinnedMessages',
+      'archive_reason', 'archived', 'hintState', 'human_note', 'output_mode', 'output_mode_injected', 'overview', 'overviewAt', 'passageComments', 'pinnedMessages',
       'recap', 'recapAt', 'stopRequest', 'summary', 'summaryGeneratedAt', 'threadAnchors', 'threadMeta', 'title',
     ])
   })

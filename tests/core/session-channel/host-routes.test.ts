@@ -1,7 +1,7 @@
 /**
  * The host's session routes (src/core/session-channel/host-routes.ts) on the leader door
  * (src/replica/leader-door.ts), reached the way the Mac's streams reach it (sockets handed to
- * door.accept): the switch off answers every route `host_runs_sessions_off`; `/call` runs only
+ * door.accept): the switch off refuses a new start (every route, with no routes at boot); `/call` runs only
  * members of HOST_CALL_ALLOWLIST; a start carries its bundle and its large prompt; the channel's
  * WebSocket carries the channel's frames.
  */
@@ -92,26 +92,40 @@ afterEach(async () => {
 })
 
 describe('the switch off', () => {
-  for (const withRoutes of [true, false]) {
-    it(`answers every route host_runs_sessions_off (${withRoutes ? 'routes installed, switch off now' : 'no routes at boot'})`, async () => {
-      enabled = false
-      await startDoor(withRoutes)
-      for (const op of ['start', 'send', 'interrupt', 'call']) {
-        const r = await post(`/host-api/sessions/${op}`, { taskId: 't', message: 'm', sessionId: 's', sid: 's', target: 'session', member: 'getUsage' })
-        expect(r).toEqual({ status: 503, body: { ok: false, error: 'host_runs_sessions_off' } })
-      }
-      expect(emitted).toEqual([])
-      expect(seenAtStart).toBeNull()
-      const ws = new WebSocket(`ws://127.0.0.1:${port}/host-api/session-channel`)
-      const status = await new Promise<number>((resolve) => {
-        ws.on('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0))
-        ws.on('open', () => resolve(101))
-        ws.on('error', () => {})
-      })
-      expect(status).toBe(503)
-      ws.terminate()
+  const offAnswer = { status: 503, body: { ok: false, error: 'host_runs_sessions_off' } }
+  const channelStatus = async (): Promise<number> => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/host-api/session-channel`)
+    const status = await new Promise<number>((resolve) => {
+      ws.on('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0))
+      ws.on('open', () => resolve(101))
+      ws.on('error', () => {})
     })
+    ws.terminate()
+    return status
   }
+
+  it('with no routes at boot answers every route host_runs_sessions_off', async () => {
+    enabled = false
+    await startDoor(false)
+    for (const op of ['start', 'send', 'interrupt', 'call']) {
+      const r = await post(`/host-api/sessions/${op}`, { taskId: 't', message: 'm', sessionId: 's', sid: 's', target: 'session', member: 'getUsage' })
+      expect(r).toEqual(offAnswer)
+    }
+    expect(emitted).toEqual([])
+    expect(seenAtStart).toBeNull()
+    expect(await channelStatus()).toBe(503)
+  })
+
+  it('switched off while the host runs sessions: refuses a new start, the sessions it runs keep their routes and the channel', async () => {
+    enabled = false
+    await startDoor(true)
+    expect(await post('/host-api/sessions/start', { taskId: 't', message: 'm' })).toEqual(offAnswer)
+    expect(seenAtStart).toBeNull()
+    expect(await post('/host-api/sessions/send', { sessionId: 's', message: 'm' })).toEqual({ status: 200, body: { ok: true } })
+    expect(await post('/host-api/sessions/interrupt', { sessionId: 's' })).toEqual({ status: 200, body: { ok: true } })
+    expect(emitted.map((e) => e.name).filter((n) => n.startsWith('session:'))).toEqual(['session:send', 'session:interrupt'])
+    expect(await channelStatus()).toBe(101)
+  })
 
   it('the door\'s other routes answer as before', async () => {
     enabled = false

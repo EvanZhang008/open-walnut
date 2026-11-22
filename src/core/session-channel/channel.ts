@@ -5,7 +5,7 @@
  * into the leader's door), so a host that moves to another leader resumes there from that
  * leader's own confirmed position.
  *
- *   host -> any   hello  {walnutId, hostId, logId, floor, head}
+ *   host -> any   hello  {walnutId, hostId, logId, floor, head, now}
  *   leader -> host resume {walnutId, hostId, permitNumber, logId, after}
  *                         after: the last seq of this log the leader applied (0: none, or a log
  *                         it does not know); a log that still holds every record after `after`
@@ -19,24 +19,32 @@
  *                         the last record the log no longer has, and the records after it still come
  *                         as facts (their row patches up to `rowsAt` are already in the rows, so the
  *                         leader skips those); for a listener both are the head
- *   host -> reader  facts {recs, replay?}     records in seq order; `replay`: read back from the
- *                         log, not live
+ *   host -> reader  facts {recs, replay?, sentAt} records in seq order; `replay`: read back from the
+ *                         log, not live; `now`/`sentAt`: the host's clock, so the leader can tell
+ *                         how old a record is on its own clock (late facts, below)
  *   host -> reader  flow  {sid, name, data}   a text delta: only to a reader that is caught up
  *   leader -> host  ack   {logId, upTo}       the leader applied everything up to `upTo`
  *   host -> reader  refuse {why}              and the host closes the link
  *
  * Only the leader confirms, and only it decides what the host may trim. A listener holds no
  * position anywhere.
+ *
+ * Late: a record is late when it happened more than `lateMs` before the leader applies it, as the
+ * leader's clock reads it: read back after a reconnect, or live frames that waited in a link
+ * while the leader was stopped. The host's clock is mapped onto the leader's by the smallest
+ * (leader now - host send time) the link has seen (the transit plus the clocks' difference; a
+ * frame that waited only makes it larger, so the smallest is the best), so a host whose clock is
+ * off reads neither late nor fresh by mistake.
  */
 import type { FactLog, FactRecord } from './fact-log.js'
 import type { SessionRecord } from '../types.js'
 
 export type ChannelFrame =
-  | { ch: 'sf'; op: 'hello'; walnutId: string; hostId: string; logId: string; floor: number; head: number }
+  | { ch: 'sf'; op: 'hello'; walnutId: string; hostId: string; logId: string; floor: number; head: number; now?: number }
   | { ch: 'sf'; op: 'resume'; walnutId: string; hostId: string; permitNumber: number; logId: string; after: number }
   | { ch: 'sf'; op: 'listen'; walnutId: string }
   | { ch: 'sf'; op: 'rows'; rows: SessionRecord[]; upTo: number; rowsAt: number; logId: string }
-  | { ch: 'sf'; op: 'facts'; recs: FactRecord[]; replay?: true }
+  | { ch: 'sf'; op: 'facts'; recs: FactRecord[]; replay?: true; sentAt?: number }
   | { ch: 'sf'; op: 'flow'; sid: string; name: string; data: unknown }
   | { ch: 'sf'; op: 'ack'; logId: string; upTo: number }
   | { ch: 'sf'; op: 'refuse'; why: string }
@@ -62,6 +70,7 @@ export interface HostChannelOptions {
   hostId: string
   /** This host's own rows as they are now (rowOwnedHere), for a `rows` frame. */
   ownRows(): Promise<SessionRecord[]>
+  now?: () => number
   onLog?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 }
 
@@ -78,7 +87,7 @@ export class HostChannel {
   attach(link: ChannelLink): { onFrame(frame: ChannelFrame): void; onClose(): void } {
     const reader: Reader = { link, leader: false, caughtUp: false, sentUpTo: 0, alive: true }
     const log = this.o.log
-    link.send({ ch: 'sf', op: 'hello', walnutId: this.o.walnutId, hostId: this.o.hostId, logId: log.logId, floor: log.floor, head: log.head })
+    link.send({ ch: 'sf', op: 'hello', walnutId: this.o.walnutId, hostId: this.o.hostId, logId: log.logId, floor: log.floor, head: log.head, now: this.now() })
     const refuse = (why: string): void => {
       reader.alive = false
       try { link.send({ ch: 'sf', op: 'refuse', why }) } catch { /* closing anyway */ }
@@ -109,6 +118,8 @@ export class HostChannel {
   flow(sid: string, name: string, data: unknown): void {
     for (const r of this.readers) if (r.caughtUp && r.alive) r.link.send({ ch: 'sf', op: 'flow', sid, name, data })
   }
+
+  private now(): number { return (this.o.now ?? Date.now)() }
 
   /** Is a leader connected and caught up now? */
   leaderLive(): boolean { return !!this.leaderReader?.caughtUp }
@@ -163,7 +174,7 @@ export class HostChannel {
       const recs = await log.read(reader.sentUpTo, REPLAY_BATCH)
       if (!reader.alive) return
       if (recs.length === 0) break
-      reader.link.send({ ch: 'sf', op: 'facts', recs, replay: true })
+      reader.link.send({ ch: 'sf', op: 'facts', recs, replay: true, sentAt: this.now() })
       reader.sentUpTo = recs[recs.length - 1].seq
     }
     // Same tick as the head check: any batch made durable from here on reaches live().
@@ -175,7 +186,7 @@ export class HostChannel {
       if (!r.alive || !r.caughtUp) continue
       const fresh = recs.filter((x) => x.seq > r.sentUpTo)
       if (fresh.length === 0) continue
-      r.link.send({ ch: 'sf', op: 'facts', recs: fresh })
+      r.link.send({ ch: 'sf', op: 'facts', recs: fresh, sentAt: this.now() })
       r.sentUpTo = fresh[fresh.length - 1].seq
     }
   }
@@ -205,7 +216,7 @@ export interface LeaderChannelOptions {
   /** The host's own rows, standing for every record up to `next.seq`: apply them and keep `next`. */
   applyRows(hostId: string, rows: SessionRecord[], next: ChannelCursor): Promise<void>
   onFlow?(hostId: string, sid: string, name: string, data: unknown): void
-  /** How old a record read back by a resume must be to read as late (default 60 s). */
+  /** How old a record must be, on this leader's clock, when it is applied to read as late (default 60 s). */
   lateMs?: number
   ackEveryMs?: number
   now?: () => number
@@ -220,6 +231,13 @@ export function attachLeaderChannel(link: ChannelLink, o: LeaderChannelOptions):
   let cursor: ChannelCursor | null = null
   /** The record the last rows frame was taken at: row patches up to it are already applied. */
   let rowsAt = 0
+  /** Leader clock minus host clock, the smallest seen on this link (null: no host clock yet). */
+  let offset: number | null = null
+  const noteHostClock = (hostNow: unknown): void => {
+    if (typeof hostNow !== 'number' || !Number.isFinite(hostNow)) return
+    const d = now() - hostNow
+    offset = offset === null ? d : Math.min(offset, d)
+  }
   let chain: Promise<void> = Promise.resolve()
   let ackTimer: ReturnType<typeof setTimeout> | null = null
   let open = true
@@ -243,6 +261,7 @@ export function attachLeaderChannel(link: ChannelLink, o: LeaderChannelOptions):
       if (frame.op === 'hello') {
         if (frame.walnutId !== o.walnutId || (o.hostId && frame.hostId !== o.hostId)) { open = false; link.close('mismatch'); return }
         hostId = frame.hostId
+        noteHostClock(frame.now)
         const logId = frame.logId
         serial(async () => {
           const c = await o.loadCursor(hostId)
@@ -259,17 +278,18 @@ export function attachLeaderChannel(link: ChannelLink, o: LeaderChannelOptions):
           scheduleAck()
         })
       } else if (frame.op === 'facts') {
+        noteHostClock(frame.sentAt)
         serial(async () => {
           if (!cursor) return
           const c = cursor
           const fresh = frame.recs.filter((r) => r.seq > c.seq)
           if (fresh.length === 0) return
           const at = now()
-          // Late: read back by a resume and older than lateMs (a leader that was away). A short blip's
-          // records are not late, and a live record never is, whatever the two clocks say.
+          // Late: older than lateMs on this leader's clock (a leader that was away or stopped).
+          const off = offset ?? 0
           const recs = fresh
             .filter((r) => !(r.name === 'row' && r.seq <= rowsAt))
-            .map((r) => ({ ...r, late: frame.replay === true && at - r.at > lateMs }))
+            .map((r) => ({ ...r, late: at - (r.at + off) > lateMs }))
           const next = { logId: c.logId, seq: fresh[fresh.length - 1].seq }
           await o.apply(hostId, recs, next)
           cursor = next
