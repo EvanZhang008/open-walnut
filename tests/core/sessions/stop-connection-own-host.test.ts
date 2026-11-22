@@ -10,11 +10,13 @@ const m = vi.hoisted(() => ({
   pool: new Map<string, unknown>(),
   managers: new Map<string, unknown>(),
   self: null as unknown,
+  rows: new Map<string, unknown>(),
 }))
 
 vi.mock('../../../src/core/sessions/session-row-owner.js', async (orig) => ({ ...(await orig<object>()), thisHostKey: () => m.here }))
 vi.mock('../../../src/providers/daemon-connection.js', () => ({ getConnectedDaemonConnection: (h: string) => m.pool.get(h) ?? null }))
 vi.mock('../../../src/providers/session-manager.js', () => ({ getRegisteredSessionManager: (sid: string) => m.managers.get(sid) }))
+vi.mock('../../../src/core/session-tracker.js', () => ({ getSessionByClaudeId: async (sid: string) => m.rows.get(sid) ?? null }))
 vi.mock('../../../src/replica/self-host.js', () => ({ selfHostConnection: (h: string) => (h === m.here ? m.self : null) }))
 
 import { stopConnectionOf } from '../../../src/core/sessions/session-stop.js'
@@ -27,6 +29,9 @@ describe('stopConnectionOf', () => {
     m.pool.clear()
     m.managers.clear()
     m.self = null
+    m.rows.clear()
+    // This host's own rows (judge 'host', its key).
+    for (const sid of ['s1', 's2']) m.rows.set(sid, { claudeSessionId: sid, host: 'devbox', judge: 'host' })
   })
 
   it('reads the pool for another host and on the leader', async () => {
@@ -44,6 +49,16 @@ describe('stopConnectionOf', () => {
     m.managers.set('s1', { liveConnection: link })
     m.self = conn('follower link')
     expect(await stopConnectionOf('devbox', 's1')).toBe(link)
+  })
+
+  it('finds no link on this host for a copied row naming it (a session the leader runs here)', async () => {
+    m.here = 'devbox'
+    m.rows.set('copied', { claudeSessionId: 'copied', host: 'devbox' })
+    m.managers.set('copied', { liveConnection: conn('session link') })
+    m.self = conn('follower link')
+    m.pool.set('devbox', conn('pool devbox'))
+    expect(await stopConnectionOf('devbox', 'copied')).toBeNull()
+    expect(await stopConnectionOf('devbox', 'no-row')).toBeNull()
   })
 
   it('falls back to the follower link, then the pool, when the session has no live link', async () => {
