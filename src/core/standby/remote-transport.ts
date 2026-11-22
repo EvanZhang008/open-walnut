@@ -27,6 +27,7 @@ import path from 'node:path'
 import zlib from 'node:zlib'
 import { promisify } from 'node:util'
 import { linkFailureKind, markLinkFailure } from '../../providers/link-failure.js'
+import { MAX_UPLOAD_FRAME_BYTES } from '../../providers/ssh-upload-budget.js'
 import { SCRIPT_MAX_TIMEOUT_MS } from '../../providers/host-script-core.js'
 import { runScriptOnHost } from '../hosts/host-script.js'
 import { HOST_EXEC_DETACH_CAPABILITY, workSurvives } from '../hosts/work-survives.js'
@@ -84,7 +85,8 @@ export class RemoteRefusal extends Error {
 }
 
 /** One part of an upload (the daemon's upload budget, ssh-upload-budget.ts). */
-const PART_BYTES = 1024 * 1024
+/** One fs.writePart part: a daemon frame's cap (ssh-upload-budget.ts), so no part outlasts a keepalive at the bulk pace. */
+const PART_BYTES = MAX_UPLOAD_FRAME_BYTES
 const READ_BYTES = 4 * 1024 * 1024
 const COMMAND_TIMEOUT_MS = 60_000
 const SHORT_RUN_MS = 2 * 60_000

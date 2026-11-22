@@ -173,6 +173,7 @@ describe('no upload frame outlasts a daemon keepalive at the bulk pace', () => {
       'providers/outbound-uploads.ts': 'PART_BYTES = min(phone chunk, MAX_UPLOAD_FRAME_BYTES)',
       'web/routes/session-upload-v1.ts': "a phone's chunk to the companion over its bridge, not an SSH link",
       'providers/daemon-net-update-io.ts': 'the update over the host network, not an SSH link',
+      'core/standby/remote-transport.ts': 'PART_BYTES = MAX_UPLOAD_FRAME_BYTES',
     }
     const senders: string[] = []
     const walk = (dir: string) => {

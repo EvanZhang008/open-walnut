@@ -12,6 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { WebSocket } from 'ws'
 import { markLinkFailure } from '../../../src/providers/link-failure.js'
+import { guardedPath } from '../../setup/exec-guard.js'
 import type { DaemonLink } from '../../../src/core/standby/remote-transport.js'
 
 const STANDALONE = path.resolve(__dirname, '../../../src/providers/daemon-standalone.ts')
@@ -35,7 +36,7 @@ export async function bootStandbyTwin(dir: string, bun: string): Promise<Standby
   fs.mkdirSync(home, { recursive: true })
   fs.mkdirSync(walnutHome, { recursive: true })
   const env: Record<string, string | undefined> = {
-    ...process.env, SHELL: '/bin/sh', PATH: '/usr/bin:/bin', HOME: home, WALNUT_HOME_OVERRIDE: walnutHome,
+    ...process.env, SHELL: '/bin/sh', PATH: guardedPath([], '/usr/bin:/bin'), HOME: home, WALNUT_HOME_OVERRIDE: walnutHome,
     WALNUT_DAEMON_DIR: path.join(dir, 'daemon'), WALNUT_STREAMS_DIR: path.join(dir, 'streams'),
     WALNUT_LEGACY_STREAMS_DIR: path.join(dir, 'no-legacy'), WALNUT_SPAWN_JOURNAL: path.join(dir, 'spawn-journal.jsonl'),
     WALNUT_TASK_DIR_ROOT: path.join(dir, 'state', 'tasks'),

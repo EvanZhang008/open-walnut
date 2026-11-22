@@ -80,6 +80,7 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   'src/core/session-changes.ts': { calls: 2, kind: 'wake-recheck', why: 'change reads; the routes bound them (boundHostRead)' },
   'src/core/sessions/org-own-folder.ts': { calls: 5, kind: 'wake-recheck', why: 'before an Org node\'s own-folder move: a capability flag of the linked daemon, and cli.holder reads that ask whether a CLI still holds the transcript; a lost read answers unknown and nothing moves' },
   'src/core/session-commit.ts': { calls: 2, kind: 'wake-recheck', why: 'a commit job a person starts; a lost start fails the job where they see it' },
+  'src/core/standby/runner.ts': { calls: 1, kind: 'wake-recheck', why: 'the standby copy\'s link to its host (remote-transport.ts): every command has its own deadline, a lost one is sent again on a new link for two minutes (only commands that do the same twice; a lost apply start is refused job_exists), and a batch that still fails is void and the next tick tries again' },
   'src/core/session-git-diff.ts': { calls: 1, kind: 'wake-recheck', why: 'a diff read; its routes bound it (boundHostRead)' },
   'src/core/session-git-status.ts': { calls: 2, kind: 'wake-recheck', why: 'a status read under 15 s; a lost one only errors the status pill' },
   'src/core/session-health-monitor.ts': { calls: 2, kind: 'wake-recheck', why: 'snapshot pulls with a timeout; the next tick pulls again' },

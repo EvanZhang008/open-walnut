@@ -7,7 +7,7 @@
  * disk or a target that moved leaves the batch before whole. Kills of the receiving process and
  * a real daemon are in remote-twin-e2e.test.ts.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -409,8 +409,8 @@ describe('sending chunks', () => {
     g.open()
     // The refusal fails the flush, and every later put says the same until the next read.
     await expect(t.flush()).rejects.toThrow(/ENOSPC/)
-    await new Promise((r) => setTimeout(r, 50))
     // The three queued behind it were dropped, never sent, and their files are gone.
+    await vi.waitFor(() => expect(spoolFiles()).toEqual([]))
     expect(g.started).toBe(1)
     expect(ids.some((x) => onTarget(x.id))).toBe(false)
     expect(spoolFiles()).toEqual([])
@@ -429,7 +429,8 @@ describe('sending chunks', () => {
     await t.current()
     await t.putChunk(chunk(60).id, chunk(60).d)
     g.open()
-    await new Promise((r) => setTimeout(r, 50))
+    // Its file goes once its failure is recorded.
+    await vi.waitFor(() => expect(spoolFiles()).toEqual([]))
     await expect(t.putChunk(chunk(61).id, chunk(61).d)).rejects.toThrow(/ENOSPC/)
   })
 
@@ -463,8 +464,8 @@ describe('sending chunks', () => {
     expect(g.started).toBe(2)
     t.close()
     g.open()
-    await new Promise((r) => setTimeout(r, 100))
-    // Only the two already on the wire finished there.
+    // The folder goes once the two already on the wire finished there; only they did.
+    await vi.waitFor(() => expect(fs.existsSync(path.join(sb.root, 'spool')) ? fs.readdirSync(path.join(sb.root, 'spool')) : []).toEqual([]))
     expect(g.started).toBe(2)
     expect(ids.filter((x) => onTarget(x.id)).length).toBe(2)
     expect(spoolFiles()).toEqual([])
