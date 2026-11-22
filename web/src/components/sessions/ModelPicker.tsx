@@ -263,6 +263,12 @@ export function ProviderRail({ active, onSwitch, lockReason, onClose }: {
   );
 }
 
+/** A ref that reads the session column around the pill when asked (the menu's bounds). Built here,
+ *  outside the render, so the memo holding it keeps no render alive (lean-callback-ratchet). */
+function sessionColumnOf(anchorRef: React.RefObject<HTMLElement | null> | undefined): React.RefObject<HTMLElement | null> {
+  return { get current() { return anchorRef?.current?.closest<HTMLElement>('.session-panel') ?? null; } };
+}
+
 /** The rail's last row: the other engines are turned on in Settings, Sessions. Drawn only
  *  inside the app's router (the browser extension's popout has no Settings page). */
 function RailMoreEngines({ onClose }: { onClose?: () => void }) {
@@ -686,9 +692,7 @@ export function ModelPicker({
   // Inside the pill's own session column when it fits there, never over the task list beside it
   // (2026-11-21 audit at 1280 px: the picker reached 49 px past the column's left edge); the hook
   // falls back to the window when the column is too narrow for it.
-  const columnRef = React.useMemo<React.RefObject<HTMLElement | null>>(() => ({
-    get current() { return anchorRef?.current?.closest<HTMLElement>('.session-panel') ?? null; },
-  }), [anchorRef]);
+  const columnRef = React.useMemo(() => sessionColumnOf(anchorRef), [anchorRef]);
   const placement = useMenuPlacement(popped, anchorRef ?? popRef, popRef, {
     // Centered ON the clicked pill (user call 2026-08-15), flipped up from
     // the bottom mode bar, clamped to the column, else the viewport, by the hook.
