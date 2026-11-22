@@ -185,6 +185,26 @@ test('an answer with nothing to say aloud goes back to listening; tap with nothi
   await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'listening')
 })
 
+test('an answer marked interrupted is still read; the turn stopped from the bar is not', async ({ page }) => {
+  // 2026-11-22, the Mac app: a voice message sent into a busy session came back marked
+  // interrupted after a Stop and a retry, and its answer was never read.
+  const captured = await setup(page, { serverVoice: true })
+  const column = await openVoice(page)
+  await talkAndPause(page)
+  await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'waiting', { timeout: 20_000 })
+  // Stop from the bar: back to listening, and that turn's interrupted result says nothing.
+  await column.getByTestId('voice-stop-run').click()
+  await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'listening')
+  await injectEvent(page, 'session:result', { sessionId: MOCK_SESSION_ID, result: 'Half an answer.', interrupted: true })
+  await page.waitForTimeout(800)
+  expect(captured.speaks).toEqual([])
+  // The answer after the retry, still marked interrupted: read.
+  await injectEvent(page, 'session:result', { sessionId: MOCK_SESSION_ID, result: 'Here is the real answer.', interrupted: true })
+  await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'speaking', { timeout: 20_000 })
+  await expect.poll(() => captured.speaks.length, { timeout: 20_000 }).toBeGreaterThanOrEqual(1)
+  expect(captured.speaks[0]).toBe('Here is the real answer.')
+})
+
 test('a refused microphone says why and keeps the composer', async ({ page }) => {
   await setup(page, { serverVoice: true })
   await page.addInitScript(() => {

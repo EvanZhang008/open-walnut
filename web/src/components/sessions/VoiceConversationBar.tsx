@@ -84,12 +84,12 @@ export function VoiceConversationBar({ voice, onStopRun, running }: { voice: Voi
       </button>
       <div className="voice-bar-title" data-testid="voice-status">
         {state ? status.title : 'Opening the microphone'}
-        <span className="voice-bar-hint">{state ? status.hint : ''}</span>
+        <span className="voice-bar-hint" data-testid="voice-hint">{state ? (phase === 'listening' && state.heard ? 'Hearing you, pause to send' : status.hint) : ''}</span>
       </div>
       <div className="voice-bar-tools">
         {engineLabel && <span className="voice-bar-engine" data-testid="voice-engine">{engineLabel}</span>}
         {(running || phase === 'waiting') && onStopRun && (
-          <button type="button" className="btn btn-sm" onClick={onStopRun} data-testid="voice-stop-run" title="Stop the agent's turn">
+          <button type="button" className="btn btn-sm" onClick={() => { voice.stoppedRun(); onStopRun(); }} data-testid="voice-stop-run" title="Stop the agent's turn">
             Stop
           </button>
         )}

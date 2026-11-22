@@ -13,7 +13,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useLeanCallback } from './useLeanCallback';
-import { transcribeAudio } from '../api/stt';
+import { transcribeAudio, warmupStt } from '../api/stt';
 import { spokenReply, voiceStatus, type SpokenReply, type TtsEngineId } from '../api/voice';
 import { openVoice, reduceVoice, type VoiceEffect, type VoiceEvent, type VoiceState } from '../voice/conversation-machine';
 import { BARGE_IN_OPTIONS, LISTEN_OPTIONS, VoiceActivity } from '../voice/voice-activity';
@@ -46,6 +46,8 @@ export interface VoiceConversation {
   tap: () => void;
   /** Read the last answer again. */
   replay: () => void;
+  /** The person stopped the session's turn from the bar: its answer is not read. */
+  stoppedRun: () => void;
 }
 
 interface SessionResultLike {
@@ -81,6 +83,10 @@ export function useVoiceConversation(
   const genRef = useRef(0);
   /** The mic is off while paused, so the browser's recording mark goes out too; a tap opens it again. */
   const micOpeningRef = useRef<Promise<VoiceMic | null> | null>(null);
+  /** The bar's Stop ended the turn: the next interrupted result is that turn's, never read. */
+  const stoppedRef = useRef(false);
+  /** The last answer read, so a result announced twice is read once. */
+  const lastResultRef = useRef<{ text: string; at: number } | null>(null);
 
   // One place every event goes through: reduce, keep, run the effects.
   const dispatch = useLeanCallback((event: VoiceEvent) => {
@@ -126,6 +132,8 @@ export function useVoiceConversation(
     const gen = genRef.current;
     switch (effect.type) {
       case 'start-take':
+        // The engine loads while they talk, not after (a cold local engine takes seconds).
+        warmupStt();
         activityRef.current.reset(LISTEN_OPTIONS);
         listenSinceRef.current = performance.now();
         if (mic) mic.startTake();
@@ -158,6 +166,7 @@ export function useVoiceConversation(
         return;
       }
       case 'send':
+        stoppedRef.current = false;
         void sendRef.current(effect.text).then((ok) => {
           if (!ok && genRef.current === gen) dispatch({ type: 'send-failed', error: 'The message did not go out. Tap and say it again.' });
         }, (err) => { if (genRef.current === gen) dispatch({ type: 'send-failed', error: err instanceof Error ? err.message : String(err) }); });
@@ -204,6 +213,7 @@ export function useVoiceConversation(
     // Made inside the click, so the browser lets it play the answers.
     const ctx = new AudioContext();
     ctxRef.current = ctx;
+    warmupStt();
     // Each await may outlive this open (Keyboard, then Talk again while the browser
     // asks for the mic): nothing is kept, and nothing is closed, unless it is still this one.
     const current = () => genRef.current === gen && ctxRef.current === ctx;
@@ -243,6 +253,11 @@ export function useVoiceConversation(
 
   const tap = useLeanCallback(() => dispatch({ type: 'tap' }), [dispatch]);
 
+  const stoppedRun = useLeanCallback(() => {
+    stoppedRef.current = true;
+    dispatch({ type: 'reply', spoken: null });
+  }, [dispatch]);
+
   const replay = useLeanCallback(() => {
     if (lastReplyRef.current) dispatch({ type: 'replay', spoken: lastReplyRef.current.text });
   }, [dispatch]);
@@ -276,9 +291,21 @@ export function useVoiceConversation(
   useEvent('session:result', (data) => {
     const ev = data as SessionResultLike;
     if (!stateRef.current || ev.sessionId !== sessionRef.current) return;
-    // A stopped turn has nothing to say: back to listening (a later turn's answer is still read).
-    if (ev.interrupted) { dispatch({ type: 'reply', spoken: null }); return; }
+    // A turn the person stopped from the bar is not read, nor a stopped turn with no words.
+    // Any other answer is, even marked interrupted: a message sent into a busy or restarting
+    // session, or sent again after a stop, comes back so (2026-11-22, the Mac app: the answer
+    // to a voice message was skipped that way and nothing was said).
+    const words = (ev.result ?? '').trim();
+    if (ev.interrupted && (stoppedRef.current || !words)) {
+      stoppedRef.current = false;
+      dispatch({ type: 'reply', spoken: null });
+      return;
+    }
     const text = ev.isError ? 'Something went wrong. The details are on screen.' : (ev.result ?? '');
+    const now = Date.now();
+    const last = lastResultRef.current;
+    if (last && last.text === text && now - last.at < 60_000) return;
+    lastResultRef.current = { text, at: now };
     const gen = genRef.current;
     void spokenReply(text).then((reply) => {
       if (genRef.current !== gen) return;
@@ -297,5 +324,5 @@ export function useVoiceConversation(
     return () => stop();
   }, [sessionId, stop]);
 
-  return { open: state !== null || opening, state, level, engine, engineNote, micError, micWarning, start, stop, tap, replay };
+  return { open: state !== null || opening, state, level, engine, engineNote, micError, micWarning, start, stop, tap, replay, stoppedRun };
 }
