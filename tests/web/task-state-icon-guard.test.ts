@@ -402,3 +402,16 @@ describe('the Routines dot tells Paused from Off', () => {
     expect(paused).not.toEqual(off);
   });
 });
+
+describe('a caller\'s own class places the icon', () => {
+  // 2026-11-22, UI audit: `.task-state-icon { position: relative }` loaded after org-page.css and beat
+  // `.org-state-dot { position: absolute }`, so the avatar's corner icon sat between the picture and
+  // the name. The icon's box rules weigh nothing (:where), so any class a caller passes wins.
+  const BOX = /(?:^|;)\s*(?:position|display|flex|vertical-align|margin|inset|top|left|right|bottom)\s*:/;
+  it('no rule of the bare icon sets its box at class weight', () => {
+    const css = readFileSync(join(WEB_SRC, SHARED_CSS), 'utf8');
+    const heavy = rules(css).filter((r) => r.sel.split(',').some((s) => s.trim() === '.task-state-icon') && BOX.test(r.body)).map((r) => r.sel);
+    expect(heavy, 'wrap the icon\'s own box rules in :where(.task-state-icon)').toEqual([]);
+    expect(css).toMatch(/:where\(\.task-state-icon\)\s*\{[^}]*position:\s*relative/);
+  });
+});

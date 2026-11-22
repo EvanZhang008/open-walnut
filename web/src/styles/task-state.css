@@ -24,8 +24,11 @@
 }
 
 /* The icon: its size is its SVG's (14px beside 13px text), on the text's middle. The wrapper has
-   no line of its own, so its baseline is its bottom edge, where the SVG's was. */
-.task-state-icon {
+   no line of its own, so its baseline is its bottom edge, where the SVG's was. Its box rules weigh
+   nothing (:where), so a caller's own class places it whatever order the stylesheets load in
+   (2026-11-22, UI audit: the avatar's corner icon, .org-state-dot, lost its position: absolute to
+   this rule and sat between the picture and the name). */
+:where(.task-state-icon) {
   flex: none;
   display: inline-block;
   position: relative;
