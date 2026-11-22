@@ -1,49 +1,10 @@
 /* ── How the session chat reads (2026-11-21, the UI audit of the user's own chats) ──────────
-   The agent's words ran the whole column: lines near 750 px (about 120 characters) at a
-   1280 px window, headings, paragraphs and lists in one dense block. Now the timeline is one
-   reading column, --chat-column wide (about 75 characters of English at 14 px), centred in a
-   wide panel with the composer under it (the way T3 Code, the user's pick for the rows,
-   lays it out): the prose, every step and message row and the person's bubbles share its
-   edges; a code block or a table scrolls inside it. A narrower panel is the column.
-   The turn line and the cut-row cue live with the rows (step-rows.css).
+   The timeline and the composer use the panel's width with its plain gutter. There is no
+   centred reading column: the user, 2026-11-22, on a 496 px column with the composer under
+   it, by voice: "why did you make the margins around it so big"; it was never agreed with him. This file keeps the type scale, the reply's line and the scroll stops;
+   the turn line and the cut-row cue live with the rows (step-rows.css).
    tests/e2e/browser/chat-reading.spec.ts measures it. */
 
-/* ── One column for the timeline, centred, and the composer under it at the same width ──
-   The history's side padding grows past its gutter until the content is --chat-column wide,
-   so the prose, every step and message row, code, tables and the person's bubbles share one
-   column; a narrower panel (a Home column, a split, a phone) keeps its plain gutter. A history
-   that needs more room on its left (the question map, a thread page's sliver: thread-map.css,
-   thread-stack-page.css) names it in --history-left, and the column never comes closer. The
-   review sidebar sets its own right padding, so its history, its composer and its notices
-   keep their gutters. Padding in % reads the parent's width, the same parent the composer has
-   (a tree split's half has its own composer and history outside this body: left alone). */
-:root .session-panel-body .session-history:not([data-review-sidebar]) {
-  padding-left: max(var(--history-left, clamp(8px, 4%, 40px)), calc((100% - var(--chat-column)) / 2));
-  padding-right: max(clamp(8px, 4%, 40px), calc((100% - var(--chat-column)) / 2));
-}
-:root .session-panel-input:not(.tree-split-input) {
-  padding-left: max(8px, calc((100% - var(--chat-column)) / 2 - 8px));
-  padding-right: max(8px, calc((100% - var(--chat-column)) / 2 - 8px));
-}
-/* The panel's notices above the timeline (a banner, the threads strip) share the composer's
-   edges, so the chat has one left edge and one right edge (not in a split, where a banner
-   spans both panes). */
-:root .session-panel:not(.is-changed-open) > :is(.session-error-banner, .session-action-panel),
-:root .session-panel-body > .session-top {
-  margin-left: max(8px, calc((100% - var(--chat-column)) / 2 - 8px));
-  margin-right: max(8px, calc((100% - var(--chat-column)) / 2 - 8px));
-}
-/* With the review sidebar open (a full-screen sheet only) everything keeps its gutter. */
-:root .open-walnut-fullscreen:has(.session-history[data-review-sidebar]) .session-panel-input {
-  padding-left: 8px;
-  padding-right: 8px;
-}
-:root .open-walnut-fullscreen:has(.session-history[data-review-sidebar]) > .session-error-banner,
-:root .open-walnut-fullscreen:has(.session-history[data-review-sidebar]) > .session-action-panel,
-:root .open-walnut-fullscreen:has(.session-history[data-review-sidebar]) .session-panel-body > .session-top {
-  margin-left: 8px;
-  margin-right: 8px;
-}
 /* A send that did not go out says so in a quiet caption (--font-size-sm, the standard's secondary size). */
 :root .session-history .session-msg-failed-badge { font-size: var(--font-size-sm); font-weight: 500; color: var(--error); }
 

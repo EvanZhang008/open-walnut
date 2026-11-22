@@ -273,15 +273,15 @@ view draws a toast of its own (the Sort view's inverted pill was removed). Ratch
 
 ## The chat transcript
 
-- **One reading column.** A session's timeline is `--chat-column` (496 px, about 75 characters of
-  English at 14 px) wide, centred in a wide panel, with the composer under it at the same width; a
-  narrower panel keeps its gutter. Prose, every step and message row, code, tables and the person's
-  bubbles stay inside it; a long code line scrolls in its block (`styles/chat-reading.css`).
+- **The chat uses the panel's width.** The timeline and the composer keep the panel's plain
+  gutter; no centred column, no wide margins around the composer (the user, 2026-11-22, by voice: "why did you make the margins around it so big",
+  after a 496 px centred column shipped without his yes). A change to how wide the chat reads is
+  his to pick first. A long code line scrolls in its block.
 - **Chat text keeps the chat's own size (14 px today, the one size the scale has yet to name)**;
   h1 and h2 are `--font-size-lg` (h1 700, h2 600), a smaller heading is the chat text in bold;
   paragraphs and lists 8 px apart, list items 4 px. The reply's time and a failed-send line are
   `--font-size-sm`.
-- **A row is one line or two** (the user, 2026-11-11); a message card or a thought row whose
+- **A row is one line or two** (the user, 2026-11-11); a message card, a thought row or a tool call whose
   words are cut shows its chevron at rest (`components/sessions/cut-cue.ts`), a row that shows all of them only on hover. The
   turn's "Worked for" line is `--font-size-md` secondary grey with a 16 px chevron in `--fg` and a hover fill,
   no box and no rule.
@@ -290,11 +290,11 @@ view draws a toast of its own (the Sort view's inverted pill was removed). Ratch
 - **Nothing starts under a header.** The history's scroll stops clear the glass header; where its
   top is a hard edge (a notice, a split's Chat bar, a strip in flow), a jump stops 12 px below it.
   A history that needs room on its left (the question map, a thread page's sliver) names it in
-  `--history-left`; the centred column never comes closer.
+  `--history-left`.
 
 Source: the UI audit of the user's own chats, 2026-11-21 (lines of 120 characters, a turn line
 that "reads like a grey footnote", notices cut with no way in, the VP chat's folder-gone notice
-twice). `tests/e2e/browser/chat-reading.spec.ts` measures the column, the scale, the turn line, the
+twice). `tests/e2e/browser/chat-reading.spec.ts` measures that the chat fills the panel, the scale, the turn line, the
 one notice and the split's first row; `step-row-lines.spec.ts` checks the cut-row cue on every row
 kind.
 

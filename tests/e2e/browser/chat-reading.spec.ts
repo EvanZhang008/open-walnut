@@ -1,14 +1,13 @@
 /**
  * The session chat reads cleanly (2026-11-21, the UI audit of the user's own chats:
- * the agent's lines ran near 750 px at a 1280 px window, headings, paragraphs and
- * lists in one dense block; the turn's "Worked for" line read like a grey footnote;
+ * headings, paragraphs and lists in one dense block; the turn's "Worked for" line read like a grey footnote;
  * a VP chat drew the folder-gone notice at its top and the same failure with the same
  * button again above the composer). web/src/styles/chat-reading.css holds the layout.
  *
  * Measured here, on a long reply with every block kind:
- *   - the timeline is one reading column (about 75 characters of prose), centred in a wide
- *     panel with the composer under it; every row, code block, table and the person's bubble
- *     stays inside it (a long code line scrolls in its block);
+ *   - the timeline and the composer fill the panel with its plain gutter: no centred column and
+ *     no wide margins around the composer (the user, 2026-11-22); every row, code block, table and
+ *     the person's bubble stays inside the history (a long code line scrolls in its block);
  *   - headings follow one scale (15 px titles, 14 px bold), weight 600;
  *   - the turn's line is secondary grey (not muted), its chevron shows, and it fills on hover;
  *   - one condition is one notice: a folder-gone session with a message the server parked
@@ -77,13 +76,14 @@ async function proseReport(hist: Locator) {
     const pre = body.querySelector('pre') as HTMLElement | null;
     const box = h.getBoundingClientRect();
     const col = body.getBoundingClientRect();
+    const panelBox = h.closest('.session-panel')!.getBoundingClientRect();
     const composer = h.closest('.session-panel')!.querySelector('.session-panel-input .chat-input-container') as HTMLElement | null;
     return {
       panel: box.width,
       column: col.width,
       leftGap: col.left - box.left,
       rightGap: box.right - col.right,
-      colLeft: col.left, colRight: col.right,
+      colLeft: col.left, colRight: col.right, panelLeft: panelBox.left, panelRight: panelBox.right,
       composer: composer ? { left: composer.getBoundingClientRect().left, right: composer.getBoundingClientRect().right } : null,
       widest,
       charsPerLine: Math.round(widest / perChar),
@@ -112,23 +112,19 @@ async function mount(page: Page, width: number, record: Record<string, unknown> 
 }
 
 for (const width of [1280, 1512]) {
-  test(`prose keeps the measure, headings one scale, the turn's line reads as a control (${width}px)`, async ({ page }) => {
+  test(`the chat fills the panel, headings one scale, the turn's line reads as a control (${width}px)`, async ({ page }) => {
     const { hist } = await mount(page, width);
     const r = await proseReport(hist);
     console.log(`[chat-reading] ${width}px ${JSON.stringify(r)}`);
-    // One reading column, centred in the wide panel, the composer under it at its width.
-    expect(r.panel, 'the panel is wider than the column, or this test measures nothing').toBeGreaterThan(r.column + 200);
-    expect(r.column).toBeLessThanOrEqual(497);
-    expect(Math.abs(r.leftGap - r.rightGap), `the column is centred (${r.leftGap} | ${r.rightGap})`).toBeLessThanOrEqual(12);
-    expect(r.widest, 'a prose line runs past the column').toBeLessThanOrEqual(r.column + 1);
-    expect(r.charsPerLine, 'characters on the longest prose line').toBeLessThanOrEqual(84);
-    expect(r.charsPerLine, 'characters on the longest prose line').toBeGreaterThanOrEqual(64);
-    expect(r.pre!.width, 'a code block stays in the column').toBeLessThanOrEqual(r.column + 1);
+    // The chat fills the panel with its plain gutter: no centred column, no wide margins around
+    // the composer (the user, 2026-11-22, by voice: "why did you make the margins around it so big").
+    expect(r.leftGap, `the prose starts at the panel's gutter (${r.leftGap} px in)`).toBeLessThanOrEqual(64);
+    expect(r.rightGap, `the prose ends at the panel's gutter (${r.rightGap} px in)`).toBeLessThanOrEqual(64);
+    expect(r.pre!.width, 'a code block stays in the panel').toBeLessThanOrEqual(r.column + 1);
     expect(r.pre!.scrolls, 'a long code line scrolls inside its block').toBe(true);
-    expect(r.table, 'a table stays in the column').toBeLessThanOrEqual(r.column + 1);
     expect(r.composer, 'the composer is on screen').not.toBeNull();
-    expect(Math.abs(r.composer!.left - r.colLeft), 'the composer starts at the column').toBeLessThanOrEqual(16);
-    expect(Math.abs(r.composer!.right - r.colRight), 'the composer ends at the column').toBeLessThanOrEqual(16);
+    expect(r.composer!.left - r.panelLeft, 'the composer starts at the panel gutter, not inside a wide margin').toBeLessThanOrEqual(24);
+    expect(r.panelRight - r.composer!.right, 'the composer ends at the panel gutter, not inside a wide margin').toBeLessThanOrEqual(24);
     // The standard's sizes: a title is 15 px, the chat text 14 px; a smaller heading is bold text.
     expect(r.h2!.size).toBe(15);
     expect(r.h3!.size).toBeGreaterThanOrEqual(r.p!.size);
