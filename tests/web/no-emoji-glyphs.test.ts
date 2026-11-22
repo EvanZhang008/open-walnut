@@ -109,7 +109,7 @@ const BASELINE: Record<string, number> = {
   'components/tasks/ProjectHeaderMenus.tsx': 1,
   'components/tasks/TasksPageRail.tsx': 2,
   'components/tasks/TasksPageTable.tsx': 6,
-  'pages/CalendarPage.tsx': 1,
+  'components/calendar/CalendarAlert.tsx': 1, // moved from pages/CalendarPage.tsx with the calendar alert
 }
 
 /** The files the spec names: none of the iOS list may remain in them. */

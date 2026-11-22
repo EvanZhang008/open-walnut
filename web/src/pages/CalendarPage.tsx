@@ -24,7 +24,6 @@ import { useTasksContext } from '@/contexts/TasksContext';
 import { useUndoableTaskActions } from '@/undo/TaskUndoContext';
 import { parseDateLocal } from '@/components/common/DatePicker';
 import {
-  SLOT_MINUTES,
   formatDateOnly,
   addDays,
   viewRange,
@@ -43,7 +42,8 @@ import { CalendarsPopover } from '@/components/calendar/CalendarsPopover';
 import { CalendarContextMenu, type CalendarContextTarget } from '@/components/calendar/CalendarContextMenu';
 import { CalendarItemPopover } from '@/components/calendar/CalendarItemPopover';
 import { useCalendarItemActions } from '@/components/calendar/calendar-item-actions';
-import { gridLocalIso, gridSnapMinute } from '@/components/calendar/calendar-grid-settings';
+import { gridLocalIso, gridSnappedMinuteAt } from '@/components/calendar/calendar-grid-settings';
+import { CalendarAlert, calendarAlertOf, canCreateEventOf } from '@/components/calendar/CalendarAlert';
 import { emptyDayLine, isDayEmpty } from '@/components/calendar/phone-empty-day';
 
 const VALID_VIEWS = new Set<CalendarViewKind>(['day', 'week', 'month']);
@@ -192,15 +192,13 @@ export function CalendarPage() {
       if (typeof overId !== 'string') return null;
       const target = parseDroppableId(overId);
       if (!target) return null;
-      if (target.zone !== 'col') return { day: target.day, slot: null, zone: target.zone };
+      if (target.zone !== 'col') return { day: target.day, minute: null, zone: target.zone };
       const metrics = gridMetricsRef.current;
       const rect = metrics?.colTops.get(target.day);
-      if (!rect || !metrics) return { day: target.day, slot: null, zone: 'col' };
+      if (!rect || !metrics) return { day: target.day, minute: null, zone: 'col' };
       const pointerY = dragPointerY.current ?? (e.activatorEvent as PointerEvent)?.clientY ?? 0;
       const y = pointerY - rect.top;
-      const mins = Math.max(metrics.startMinute, Math.min(metrics.endMinute - SLOT_MINUTES,
-        gridSnapMinute(metrics.startMinute + (y / metrics.slotPx) * SLOT_MINUTES, SLOT_MINUTES, metrics.endMinute)));
-      return { day: target.day, slot: Math.floor(mins / SLOT_MINUTES), zone: 'col' };
+      return { day: target.day, minute: gridSnappedMinuteAt(y, metrics.startMinute, metrics.endMinute, metrics.slotPx), zone: 'col' };
     },
     []
   );
@@ -223,8 +221,12 @@ export function CalendarPage() {
       if (!task || !e.over) return;
       const target = parseDroppableId(String(e.over.id));
       if (!target) return;
-      const slot = preview?.slot ?? 0;
-      actions.scheduleTask(task.id, target.zone === 'col' ? gridLocalIso(target.day, slot * SLOT_MINUTES) : target.day);
+      if (target.zone === 'col') {
+        // No measured column (it scrolled away mid-drag): no time to give it, rather than midnight.
+        if (preview?.minute != null) actions.scheduleTask(task.id, gridLocalIso(target.day, preview.minute));
+        return;
+      }
+      actions.scheduleTask(task.id, target.day);
     },
     [computeColPreview, scheduleDropPreview, actions]
   );
@@ -237,28 +239,8 @@ export function CalendarPage() {
 
   const openCreate = useCallback((seed: CreateSeed) => setCreateSeed(seed), []);
 
-  // While the FIRST events fetch is in flight (sources never resolved yet),
-  // assume event-creation IS available: gating on the resolved sources made a
-  // quick-create opened during a slow load render with no Task|Event tab bar
-  // at all (the "can't select Event" race). Once sources have resolved once we
-  // trust them — `sources` persists across range-change refetches, so this
-  // never flashes the Event tab at users with no writable calendar. If the
-  // optimism was wrong, QuickCreatePopover falls back to the Task tab.
-  const canCreateEvent = calendar.sources.length === 0
-    ? calendar.loading
-    : calendar.sources.some((s) => s.available && s.enabled);
-
-  // A calendar problem MUST be said out loud: an empty grid looks exactly like a
-  // free day, so a lost macOS grant used to read as "nothing scheduled". Two
-  // states are worth a banner — access gone (no events at all) and access gone but
-  // served from an older helper (events are real, the grant still needs fixing).
-  const calendarAlert = ((): string | null => {
-    const denied = calendar.sources.find((s) => s.enabled && s.reason === 'permission-denied');
-    if (denied) {
-      return 'Calendar access lost. Re-grant Walnut under System Settings → Privacy & Security → Calendars, then click here to retry.';
-    }
-    return calendar.sources.find((s) => s.degraded)?.degraded ?? null;
-  })();
+  const canCreateEvent = canCreateEventOf(calendar);
+  const calendarAlert = calendarAlertOf(calendar);
 
   const openContextMenu = useCallback(
     (point: { x: number; y: number }, target: { item?: CalendarItem; seed?: CreateSeed }) =>
@@ -317,13 +299,7 @@ export function CalendarPage() {
         {dayEmpty && (
           <p className="cal-empty-day" role="status" data-testid="cal-empty-day">{emptyDayLine(from, formatDateOnly(new Date()))}</p>
         )}
-        {calendarAlert && (
-          <button type="button" className="cal-alert" onClick={calendar.refetch} title={calendarAlert}>
-            <span aria-hidden="true">⚠</span>
-            <span>{calendarAlert}</span>
-            <span className="cal-alert-hint">Retry</span>
-          </button>
-        )}
+        <CalendarAlert calendar={calendar} onRetry={calendar.refetch} />
         <div className="cal-body">
           {railShown && <CalendarTaskList tasks={tasks} />}
           <div className="cal-view">

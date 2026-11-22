@@ -98,6 +98,10 @@ export class CalendarService {
   /** In-flight fetch per window: N concurrent readers of an expired window spawn ONE helper run. */
   private inFlight = new Map<string, Promise<CalendarEvent[]>>();
   private lastRefresh: string | undefined;
+  /** Moves when a write starts and when its write-through starts. A list that began before a move
+   *  may predate the write, so it never goes into the cache (2026-11-21: a load in flight across
+   *  a create cached the list without it, and the new event vanished from the grid for a minute). */
+  private writeGen = 0;
   /** The `mail_calendars` experiment as the last reload read it. */
   private mailOn = false;
 
@@ -351,7 +355,15 @@ export class CalendarService {
     const window = windowRange(from, to);
     const task = (async () => {
       const before = this.cache.get(key);
-      const events = await this.readWindow(window.from, window.to);
+      // A write during the list: list again (its write-through has run or will refresh what is cached).
+      let events: CalendarEvent[] = [];
+      let settled = false;
+      for (let attempt = 0; attempt < 3 && !settled; attempt++) {
+        const gen = this.writeGen;
+        events = await this.readWindow(window.from, window.to);
+        settled = gen === this.writeGen;
+      }
+      if (!settled) return events; // writes keep coming: answer, but cache nothing that may be old
       const hash = eventsHash(events);
       const changed = before?.hash !== hash;
       this.cache.set(key, { events, fetchedAt: Date.now(), hash });
@@ -388,7 +400,10 @@ export class CalendarService {
     if (!this.enabled || this.sources.usable().length === 0) return;
     let anyChanged = false;
     const keys = [...this.cache.keys()];
+    const gen = this.writeGen;
     const read = await this.sources.readWindows(keys.map(lateKey), (m, k) => m.source.listEvents(...windowOf(k), { refresh: true }));
+    // A write landed meanwhile: its own write-through holds the newer lists.
+    if (gen !== this.writeGen) return;
     keys.forEach((key, i) => {
       const result = read[i];
       if ('error' in result) return log.calendar.warn('window refresh failed', { key, error: String(result.error).slice(0, 200) });
@@ -424,6 +439,7 @@ export class CalendarService {
     this.assertUsable(member);
     if (leaderPermitActive()) assertOutwardDoor('calendar-write', `update:${id}`);
     await this.guardWrite(member, id, opts);
+    this.writeGen++;
     // Only the fields an update may carry: nothing a caller adds can move it to another calendar.
     const event = await member.source.updateEvent(id, {
       start: patch.start,
@@ -441,6 +457,7 @@ export class CalendarService {
     const calendarId = await this.createTarget(input.calendarId);
     const member = this.sources.memberFor(calendarId);
     this.assertUsable(member);
+    this.writeGen++;
     const event = await member.source.createEvent({ ...input, calendarId });
     await this.writeThrough();
     return event;
@@ -463,6 +480,7 @@ export class CalendarService {
     this.assertUsable(member);
     if (leaderPermitActive()) assertOutwardDoor('calendar-write', `delete:${id}`);
     await this.guardWrite(member, id, opts);
+    this.writeGen++;
     await member.source.deleteEvent(id, opts);
     await this.writeThrough();
   }
@@ -470,9 +488,13 @@ export class CalendarService {
   /** After a write: refresh cached windows (all at once, recording no source failure, as before) so reads see it, then notify UIs. */
   private async writeThrough(): Promise<void> {
     this.sources.forgetLate(); // a late answer read before this write is older than it
+    const gen = ++this.writeGen;
     const keys = [...this.cache.keys()];
     const read = await this.sources.readWindows(keys.map(lateKey), (m, k) => m.source.listEvents(...windowOf(k)), { record: false, keyed: false });
     keys.forEach((key, i) => {
+      // A later write began (it may wait minutes for the Mac, or be refused): drop these lists
+      // rather than keep them from before it. A miss reads fresh.
+      if (gen !== this.writeGen) { this.cache.delete(key); return; }
       const result = read[i];
       // Stale after a write: better a miss than a lie (a source that failed is read again next time).
       if ('error' in result || result.failed.length) this.cache.delete(key);

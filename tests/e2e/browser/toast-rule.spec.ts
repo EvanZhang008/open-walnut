@@ -49,7 +49,7 @@ test('creating and moving a calendar event shows no toast, and mod+z still takes
     await page.goto('/')
     await page.waitForLoadState('networkidle')
     await page.click('a[href="/calendar"]')
-    await page.getByRole('tab', { name: 'Day', exact: true }).click()
+    await page.getByRole('radio', { name: 'Day', exact: true }).click()
     await expect(page.locator('.cal-grid')).toBeVisible()
 
     // Create from the popover: the block lands on the grid, nothing pops up in the corner.

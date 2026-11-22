@@ -14,7 +14,7 @@ import { useUndoableTaskActions } from '@/undo/TaskUndoContext';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
 import { useDragBusTarget } from '@/hooks/useDragBusTarget';
 import { parseDateLocal } from '@/components/common/DatePicker';
-import { SLOT_MINUTES, addDays, formatDateOnly } from '@/utils/calendar-date';
+import { addDays, formatDateOnly } from '@/utils/calendar-date';
 import { eventsToCalendarItems, tasksToCalendarItems, useFrozenWhile, type CalendarItem } from './calendar-items';
 import { TimeGrid, type DropPreview, type GridMetrics } from './TimeGrid';
 import { QuickCreatePopover, type CreateSeed } from './QuickCreatePopover';
@@ -23,7 +23,8 @@ import { CalendarItemPopover } from './CalendarItemPopover';
 import { CalendarsPopover } from './CalendarsPopover';
 import { CalendarGridControls } from './CalendarGridControls';
 import { useCalendarItemActions } from './calendar-item-actions';
-import { gridLocalIso, gridSnapMinute } from './calendar-grid-settings';
+import { gridLocalIso, gridSnappedMinuteAt } from './calendar-grid-settings';
+import { CalendarAlert, calendarAlertOf, canCreateEventOf } from './CalendarAlert';
 
 interface Props {
   onClose: () => void;
@@ -67,27 +68,25 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
   actionsRef.current = actions;
   const dayRef = useRef(day);
   dayRef.current = day;
-  const slotFromPoint = useCallback((y: number): number | null => {
+  const minuteFromPoint = useCallback((y: number): number | null => {
     const m = metricsRef.current;
     const rect = m?.colTops.get(dayRef.current);
     if (!m || !rect) return null;
     if (y < m.gridTop) return null; // above the scrollable grid = all-day
-    const mins = Math.max(m.startMinute, Math.min(m.endMinute - SLOT_MINUTES,
-      gridSnapMinute(m.startMinute + ((y - rect.top) / m.slotPx) * SLOT_MINUTES, SLOT_MINUTES, m.endMinute)));
-    return Math.floor(mins / SLOT_MINUTES);
+    return gridSnappedMinuteAt(y - rect.top, m.startMinute, m.endMinute, m.slotPx);
   }, []);
   useDragBusTarget({
     element: () => panelRef.current,
     onDragOver: (p) => {
-      const slot = slotFromPoint(p.y);
-      setBusPreview({ day: dayRef.current, slot, zone: slot === null ? 'allday' : 'col' });
+      const minute = minuteFromPoint(p.y);
+      setBusPreview({ day: dayRef.current, minute, zone: minute === null ? 'allday' : 'col' });
     },
     onDragLeave: () => setBusPreview(null),
     onDrop: (p, payload) => {
       setBusPreview(null);
       if (payload.kind !== 'task') return false;
-      const slot = slotFromPoint(p.y);
-      actionsRef.current.scheduleTask(payload.task.id, slot === null ? dayRef.current : gridLocalIso(dayRef.current, slot * SLOT_MINUTES));
+      const minute = minuteFromPoint(p.y);
+      actionsRef.current.scheduleTask(payload.task.id, minute === null ? dayRef.current : gridLocalIso(dayRef.current, minute));
       return true;
     },
   });
@@ -107,18 +106,19 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
   const step = (dir: 1 | -1) => setDay(formatDateOnly(addDays(anchor, dir)));
   const isToday = day === formatDateOnly(new Date());
 
-  // What an empty grid means, said beside the title (an agenda with items says nothing).
+  // What an empty grid means, said beside the title (an agenda with items says nothing). A load
+  // that failed, or access lost, is the alert's to say, never "Nothing scheduled".
+  const alerted = calendarAlertOf(calendar) !== null
   const unread = calendar.sources.length > 0 && !calendar.sources.some((s) => s.available && s.enabled)
   const status: { text: string; tone: 'quiet' | 'warn'; why?: string } | null = calendar.loading && items.length === 0
     ? { text: 'Loading...', tone: 'quiet' }
-    : unread
-      ? { text: 'Calendars not read.', tone: 'warn', why: calendar.sources.find((s) => s.message)?.message ?? 'Mac calendars are off or not allowed. Calendar Accounts on the Apps page turns them on.' }
-      : items.length === 0 ? { text: 'Nothing scheduled.', tone: 'quiet' } : null
+    : alerted
+      ? null
+      : unread
+        ? { text: 'Calendars not read.', tone: 'warn', why: calendar.sources.find((s) => s.message)?.message ?? 'Mac calendars are off or not allowed. Calendar Accounts on the Apps page turns them on.' }
+        : items.length === 0 ? { text: 'Nothing scheduled.', tone: 'quiet' } : null
 
-  // Same optimistic-while-unresolved gate as CalendarPage (see its comment).
-  const canCreateEvent = calendar.sources.length === 0
-    ? calendar.loading
-    : calendar.sources.some((s) => s.available && s.enabled);
+  const canCreateEvent = canCreateEventOf(calendar);
 
   return (
     <div
@@ -175,6 +175,7 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
           </button>
         </div>
       </div>
+      <CalendarAlert calendar={calendar} onRetry={calendar.refetch} />
       {/* An empty grid says why, on its own line so it never truncates: nothing on the day, still
           reading, or the calendars were not read (and why). */}
       {status && (

@@ -26192,18 +26192,11 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   color: var(--fg);
   font-size: var(--font-size-sm);
   line-height: 1.4;
-  text-align: left;
-  cursor: pointer;
 }
 
-.cal-alert:hover {
-  border-color: rgba(214, 149, 33, 0.7);
-}
-
-.cal-alert-hint {
+.cal-alert-retry {
   margin-left: auto;
   flex-shrink: 0;
-  opacity: 0.7;
 }
 
 /* --- layout ---------------------------------------------------------------- */

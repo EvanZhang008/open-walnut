@@ -31,6 +31,7 @@ import {
 import { log } from '@/utils/log';
 import { calendarSourceOf } from '../../../src/integrations/calendar/event-rules';
 import { createEventVisibility } from './calendar-event-visibility';
+import { createLoadRetry } from './calendar-load-retry';
 
 /** A newly mounted surface reuses a range list this fresh instead of re-fetching. */
 const STALE_MS = 15_000;
@@ -42,6 +43,8 @@ const MAX_CACHED_RANGES = 12;
 export interface CalendarRangeEntry {
   events: CalendarEvent[];
   loading: boolean;
+  /** The last load failed (the events shown are older or none); it is tried again by itself. */
+  error?: string;
 }
 
 export interface CalendarSourcesEntry {
@@ -74,6 +77,12 @@ let writesInFlight = 0;
 let pendingRefetch = false;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let provisionalSeq = 0;
+/** Moves when a write starts or settles: a fetch answered across a move may predate the write. */
+let writeEpoch = 0;
+/** Events this page created: kept on screen while a first load's answer is set aside. */
+const createdHere = new Set<string>();
+const loadRetry = createLoadRetry({ watched: (key) => rangeSubs.has(key), retry: (key) => { void loadCalendarRange(key, true); } });
+
 
 export function calendarRangeKey(from: string, to: string): string {
   return `${from}..${to}`;
@@ -102,7 +111,7 @@ export function subscribeCalendarRange(key: string, fn: () => void): () => void 
     const live = rangeSubs.get(key);
     if (!live) return;
     live.delete(fn);
-    if (live.size === 0) { rangeSubs.delete(key); evictCold(); }
+    if (live.size === 0) { rangeSubs.delete(key); loadRetry.clear(key); evictCold(); }
   };
 }
 
@@ -157,7 +166,8 @@ export function loadCalendarRange(key: string, force = false): Promise<void> {
     if (force) wantsRefetch.add(key);
     return running;
   }
-  if (!force && loadedAt.has(key) && Date.now() - (loadedAt.get(key) ?? 0) < STALE_MS) {
+  // A range whose last load failed is never fresh: its alert says it is being asked again.
+  if (!force && loadedAt.has(key) && !entries.get(key)?.error && Date.now() - (loadedAt.get(key) ?? 0) < STALE_MS) {
     return Promise.resolve();
   }
   const { from, to } = splitKey(key);
@@ -166,19 +176,40 @@ export function loadCalendarRange(key: string, force = false): Promise<void> {
       do {
         wantsRefetch.delete(key);
         const t = visibility.fetchStarted();
+        const epoch = writeEpoch;
         try {
           const res = await listCalendarEvents(from, to, { includeHidden: true });
-          loadedAt.set(key, Date.now());
-          setEntry(key, { events: visibility.overlay(res.events, t), loading: false });
           setSources(res.sources);
+          // Asked before a write landed (or while one is on its way): this answer may not hold it,
+          // and applying it would take a new or moved event off the grid until the next push
+          // (2026-11-21: created events that did not show). Ask again once writes settle.
+          if (writesInFlight > 0 || epoch !== writeEpoch) {
+            if (writesInFlight > 0) pendingRefetch = true;
+            else wantsRefetch.add(key);
+            if (!loadedAt.has(key)) {
+              const answered = new Set(res.events.map((e) => e.id));
+              const pending = (entries.get(key)?.events ?? [])
+                .filter((e) => (e.id.startsWith('pending-') || createdHere.has(e.id)) && !answered.has(e.id));
+              setEntry(key, { events: [...visibility.overlay(res.events, t), ...pending], loading: false });
+            }
+            continue;
+          }
+          loadedAt.set(key, Date.now());
+          loadRetry.clear(key);
+          setEntry(key, { events: visibility.overlay(res.events, t), loading: false });
         } finally {
           visibility.fetchEnded(t);
         }
       } while (wantsRefetch.has(key));
     } catch (err) {
       wantsRefetch.delete(key);
-      setEntry(key, { events: entries.get(key)?.events ?? [], loading: false });
-      log.warn('calendar', 'events fetch failed', { range: key, error: String(err).slice(0, 200) });
+      const error = String((err as Error)?.message ?? err).slice(0, 200);
+      const attempt = loadRetry.failed(key);
+      // Events already on screen stay; one lost refresh (a deploy's restart answers 503 for a
+      // second or two) is retried quietly, and only a second failure in a row is said aloud.
+      const quiet = attempt === 1 && loadedAt.has(key);
+      setEntry(key, { events: entries.get(key)?.events ?? [], loading: false, ...(quiet ? {} : { error }) });
+      log.warn('calendar', 'events fetch failed', { range: key, error, attempt });
     } finally {
       inflight.delete(key);
     }
@@ -200,7 +231,19 @@ export function refetchLiveCalendarRanges(): Promise<void> {
   return Promise.all(keys.map((key) => loadCalendarRange(key, true))).then(() => undefined);
 }
 
+function startWrite(): void {
+  writesInFlight += 1;
+  writeEpoch += 1;
+}
+
+/** A write with no optimistic change (one the Mac confirms, up to minutes) holds no answers back
+ *  while it waits; once it lands, an answer asked before it is set aside and asked again. */
+function markLanded(): void {
+  writeEpoch += 1;
+}
+
 function settleWrite(): void {
+  writeEpoch += 1;
   writesInFlight -= 1;
   if (writesInFlight <= 0) {
     writesInFlight = 0;
@@ -313,17 +356,17 @@ function insertEvent(event: CalendarEvent): void {
  *  Resolves true once the source took it, false when it was refused (and rolled back). */
 export function moveCalendarEvent(id: string, patch: { start: string; end: string; title?: string; human_confirm?: boolean }): Promise<boolean> {
   const before = captureEvent(id);
-  if (!patch.human_confirm) patchEvent(id, { start: patch.start, end: patch.end, ...(patch.title ? { title: patch.title } : {}) });
-  writesInFlight += 1;
+  const optimistic = !patch.human_confirm;
+  if (optimistic) { patchEvent(id, { start: patch.start, end: patch.end, ...(patch.title ? { title: patch.title } : {}) }); startWrite(); }
   return updateCalendarEvent(id, patch)
-    .then((res) => { replaceEvent(id, res.event); return true; })
+    .then((res) => { if (!optimistic) markLanded(); replaceEvent(id, res.event); return true; })
     .catch((err) => {
       log.warn('calendar', 'event move failed, rolling back', { id, error: String(err).slice(0, 200) });
-      if (!patch.human_confirm) restoreEvent(before);
+      if (optimistic) restoreEvent(before);
       reportWriteFailure(id, 'update', err);
       return false;
     })
-    .finally(settleWrite);
+    .finally(() => { if (optimistic) settleWrite(); });
 }
 
 /** A chip the user can see while the POST is still in flight. */
@@ -352,9 +395,10 @@ export async function createCalendarEventOptimistic(
 ): Promise<CalendarEvent> {
   const pending = provisionalEvent(input);
   insertEvent(pending);
-  writesInFlight += 1;
+  startWrite();
   try {
     const res = await createCalendarEvent(input);
+    createdHere.add(res.event.id);
     replaceEvent(pending.id, res.event);
     return res.event;
   } catch (err) {
@@ -367,17 +411,16 @@ export async function createCalendarEventOptimistic(
 
 export function removeCalendarEvent(id: string, humanConfirm = false): Promise<boolean> {
   const before = captureEvent(id);
-  if (!humanConfirm) dropEvent(id);
-  writesInFlight += 1;
+  if (!humanConfirm) { dropEvent(id); startWrite(); }
   return deleteCalendarEvent(id, humanConfirm)
-    .then(() => { if (humanConfirm) dropEvent(id); return true; })
+    .then(() => { if (humanConfirm) { markLanded(); dropEvent(id); } return true; })
     .catch((err) => {
       log.warn('calendar', 'event delete failed, rolling back', { id, error: String(err).slice(0, 200) });
       if (!humanConfirm) restoreEvent(before);
       reportWriteFailure(id, 'delete', err);
       return false;
     })
-    .finally(settleWrite);
+    .finally(() => { if (!humanConfirm) settleWrite(); });
 }
 
 export interface CalendarWriteFailure { id: string; action: 'update' | 'delete'; message: string }
@@ -419,7 +462,7 @@ const visibility = createEventVisibility({
     };
     for (const fn of [...visibilityFailureSubs]) fn(failure);
   },
-  begin: () => { writesInFlight += 1; },
+  begin: startWrite,
   end: settleWrite,
 });
 
@@ -463,7 +506,7 @@ export async function setCalendarHidden(calendarId: string, hidden: boolean): Pr
     setCalendars(beforeCalendars.map((c) => (c.id === calendarId ? { ...c, hidden } : c)));
   }
 
-  writesInFlight += 1;
+  startWrite();
   try {
     // The authoritative hidden set needs the whole list; a context-menu hide can
     // be the first thing that ever asks for it.
@@ -525,6 +568,9 @@ export function __resetCalendarEventsStore(): void {
   writesInFlight = 0;
   pendingRefetch = false;
   provisionalSeq = 0;
+  writeEpoch = 0;
+  createdHere.clear();
+  loadRetry.reset();
   visibility.reset();
   visibilityFailureSubs.clear();
   if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }

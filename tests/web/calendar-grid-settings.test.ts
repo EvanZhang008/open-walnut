@@ -16,8 +16,10 @@ describe('calendar grid coordinates', () => {
       expect(fittedSlotPx(height, 1) * 36).toBeCloseTo(height - 12);
       expect(fittedSlotPx(height, 2)).toBeCloseTo(fittedSlotPx(height, 1) * 2);
     }
-    expect(gridSnapMinute(1480, 15, 1860)).toBe(1485);
-    expect(gridSnapMinute(2000, 30, 1860)).toBe(1830);
+    expect(gridSnapMinute(1480, 1860)).toBe(1485);
+    expect(gridSnapMinute(2000, 1860)).toBe(1845);
+    // Every pointer time lands on a quarter hour: :15 and :45 too, never only :00 and :30.
+    expect([607, 622, 638, 653].map((m) => gridSnapMinute(m, 1440))).toEqual([600, 615, 645, 660]);
   });
   it('formats midnight as the next local day, including month and year boundaries', () => {
     expect(gridLocalIso('2026-10-08', 1380)).toBe('2026-10-08T23:00:00');

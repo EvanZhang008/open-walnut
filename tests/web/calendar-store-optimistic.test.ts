@@ -374,6 +374,8 @@ describe('single-event visibility', () => {
     pendingGet.resolve({ events: [event()], sources: [] })
     await dayLoad
     expect(hiddenIn(DAY_KEY)).toBe(true)
+    // What the server says once the hide is written (a GET that left across it is asked again).
+    mocks.listCalendarEvents.mockResolvedValue({ events: [event({ hidden: true })], sources: [] })
 
     write.resolve({ id: 'ev-1', hidden: true })
     await done

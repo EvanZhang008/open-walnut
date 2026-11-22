@@ -52,15 +52,14 @@ export const SLOT_PX = 24;
 const CLICK_TOLERANCE_PX = 4;
 const MIN_EVENT_PX = 20;
 /** Resize can't shrink an event below this. */
-const SNAP_MINUTES_MIN = 15;
 const ALL_DAY_HEIGHT_STORAGE_KEY = 'open-walnut-home-calendar-all-day-height';
 const ALL_DAY_MIN_HEIGHT = 26;
 const ALL_DAY_MAX_HEIGHT = 212; // Ten 19px rows, nine 2px gaps, and 4px cell padding.
 
 export interface DropPreview {
   day: string;
-  /** null for month/all-day zones (no time component). */
-  slot: number | null;
+  /** Minute of the day the drop lands on (snapped); null for month/all-day zones. */
+  minute: number | null;
   zone: 'day' | 'allday' | 'col';
 }
 
@@ -418,7 +417,7 @@ export const TimeGrid = memo(function TimeGrid({
     (day: string, y: number): number => {
       const rect = metricsRef.current?.colTops.get(day);
       if (!rect) return 0;
-      return gridSnapMinute(gridMinute(y - rect.top, startMinute, slotPx), SNAP_MINUTES, endMinute);
+      return gridSnapMinute(gridMinute(y - rect.top, startMinute, slotPx), endMinute);
     },
     [metricsRef, startMinute, endMinute, slotPx]
   );
@@ -522,8 +521,10 @@ export const TimeGrid = memo(function TimeGrid({
       if (!rs) return;
       const rect = metricsRef.current?.colTops.get(rs.item.day);
       if (!rect) return;
-      const raw = Math.round((rs.item.endMin + (m.dy + rs.colTop - rect.top) / slotPx * SLOT_MINUTES) / SNAP_MINUTES) * SNAP_MINUTES;
-      rs.endMin = Math.min(Math.max(endMinute, rs.item.endMin), Math.max(rs.item.startMin + SNAP_MINUTES_MIN, raw));
+      // An end may sit on the grid's last minute itself, one snap past where a start may.
+      const lastEnd = endMinute + SNAP_MINUTES;
+      const raw = gridSnapMinute(rs.item.endMin + (m.dy + rs.colTop - rect.top) / slotPx * SLOT_MINUTES, lastEnd);
+      rs.endMin = Math.min(Math.max(endMinute, rs.item.endMin), Math.max(rs.item.startMin + SNAP_MINUTES, raw));
       setResizeGhost({ itemId: rs.item.id, day: rs.item.day, startMin: rs.item.startMin, endMin: rs.endMin, tint: chipTint(rs.item) });
     },
     onEnd: ({ canceled }) => {
@@ -578,7 +579,7 @@ export const TimeGrid = memo(function TimeGrid({
       sel.moved = true;
       const mins = minAtY(sel.day, m.y);
       sel.startMin = Math.min(sel.anchorMin, mins);
-      sel.endMin = Math.max(sel.anchorMin + SLOT_MINUTES, mins);
+      sel.endMin = Math.max(sel.anchorMin + SNAP_MINUTES, mins);
       setCreateSel({ ...sel });
     },
     onEnd: ({ canceled }) => {
@@ -610,7 +611,7 @@ export const TimeGrid = memo(function TimeGrid({
   const handleEmptyPointerDown = useCallback(
     (e: ReactPointerEvent, day: string) => {
       publishMetrics();
-      const mins = Math.min(endMinute - SLOT_MINUTES, gridSnapMinute(minAtY(day, e.clientY), SLOT_MINUTES, endMinute));
+      const mins = Math.min(endMinute - SLOT_MINUTES, minAtY(day, e.clientY));
       createRef.current = {
         day,
         anchorMin: mins,
@@ -641,7 +642,7 @@ export const TimeGrid = memo(function TimeGrid({
       if (!onContextMenu) return;
       e.preventDefault();
       publishMetrics();
-      const mins = Math.min(endMinute - SLOT_MINUTES, gridSnapMinute(minAtY(day, e.clientY), SLOT_MINUTES, endMinute));
+      const mins = Math.min(endMinute - SLOT_MINUTES, minAtY(day, e.clientY));
       onContextMenu(
         { x: e.clientX, y: e.clientY },
         { seed: { start: gridLocalIso(day, mins), anchorPoint: { x: e.clientX, y: e.clientY }, placeholder: timedPlaceholder(day) } }
@@ -762,10 +763,10 @@ export const TimeGrid = memo(function TimeGrid({
           ))}
 
           {/* drop preview line for rail-task drags (page-computed) */}
-          {dropPreview?.zone === 'col' && dropPreview.slot !== null && (
+          {dropPreview?.zone === 'col' && dropPreview.minute !== null && (
             <GridOverlay day={dropPreview.day} dayList={dayList}>
-              <div className="cal-drop-line" style={{ top: gridY(dropPreview.slot * SLOT_MINUTES, startMinute, slotPx) }}>
-                <span className="cal-drop-time">{minsToLabel(dropPreview.slot * SLOT_MINUTES)}</span>
+              <div className="cal-drop-line" style={{ top: gridY(dropPreview.minute, startMinute, slotPx) }}>
+                <span className="cal-drop-time">{minsToLabel(dropPreview.minute)}</span>
               </div>
             </GridOverlay>
           )}

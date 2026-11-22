@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { SLOT_MINUTES, formatDateOnly } from '@/utils/calendar-date';
+import { SLOT_MINUTES, SNAP_MINUTES, formatDateOnly } from '@/utils/calendar-date';
 
 export const GRID_SETTINGS_KEY = 'open-walnut-calendar-grid-settings';
 export const GRID_ZOOM_LEVELS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
@@ -66,8 +66,20 @@ export function fittedSlotPx(viewportHeight: number, zoom: number): number {
   return Math.max(1, (viewportHeight - 12) / ((GRID_FOCUS_END - GRID_FOCUS_START) / SLOT_MINUTES)) * zoom;
 }
 
-export function gridSnapMinute(minute: number, quantum: number, endMinute: number): number {
-  return Math.max(0, Math.min(endMinute - quantum, Math.round(minute / quantum) * quantum));
+/**
+ * The one snap of the time grid: every place a time is picked by pointer (a chip moved, copied
+ * or resized, a new block clicked or dragged out, a right-click, a task dropped from a list)
+ * lands on SNAP_MINUTES (15), as desktop calendars do. The grid's rows stay SLOT_MINUTES (30)
+ * tall; they are drawn, never snapped to (2026-11-21: a new event could only start on :00 or
+ * :30). Guard: tests/web/calendar-snap-guard.test.ts.
+ */
+export function gridSnapMinute(minute: number, endMinute: number): number {
+  return Math.max(0, Math.min(endMinute - SNAP_MINUTES, Math.round(minute / SNAP_MINUTES) * SNAP_MINUTES));
+}
+
+/** The snapped minute at a pointer `y` px below a day column's top. */
+export function gridSnappedMinuteAt(y: number, startMinute: number, endMinute: number, slotPx: number): number {
+  return Math.max(startMinute, gridSnapMinute(gridMinute(y, startMinute, slotPx), endMinute));
 }
 
 export function gridY(minute: number, startMinute: number, slotPx: number): number {

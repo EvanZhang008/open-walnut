@@ -76,6 +76,21 @@ redo, so a Redo never writes over that change.
 
 On the homepage's day agenda and the Calendar page, a move, a resize, a copy, a new event, a task
 dropped on the grid and a time edited in the popover are each one Undo, and each can be redone.
+None of them raises a notice (the UI standard's toast rule): the block on the grid already shows
+what happened, so mod+Z and mod+Shift+Z are their Undo and Redo.
+
+Every time picked by pointer on the grid lands on a quarter hour: a click or drag that makes an
+event, a move, a resize, an Alt copy, the right-click menu and a task dropped from a list. One
+function snaps them (`gridSnapMinute` in `web/src/components/calendar/calendar-grid-settings.ts`);
+the grid's rows stay half an hour tall (`tests/web/calendar-snap-guard.test.ts`).
+
+A load that fails (the server answers 503 for a few seconds while it restarts) says so above the
+grid, on the day agenda too, with a Retry button, and is tried again by itself (2 s, 5 s, 10 s,
+30 s, then every minute) while the view is open. A refresh of events already on screen that fails
+once is retried quietly; only a second failure in a row is said. A fetch that left before a write
+landed never takes the new or moved event off the grid, in the browser or in the server's cache
+(`src/integrations/calendar/service.ts`, `writeGen`): it is asked again once the writes settle. A
+write the Mac must confirm first holds no answers back while it waits.
 Hold Alt (Option on a Mac) while dragging an event to copy it: the block in your hand gets a "+"
 and the original stays. Letting go of Alt before the drop makes it a move again. A copy takes only
 the calendar, title and times, never the people invited, so it invites and notifies nobody. A task

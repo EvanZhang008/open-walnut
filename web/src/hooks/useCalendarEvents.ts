@@ -40,6 +40,8 @@ export interface UseCalendarEvents {
   hiddenEvents: CalendarEvent[];
   sources: CalendarSourceStatus[];
   loading: boolean;
+  /** The last load of this range failed; the store tries it again by itself. */
+  loadError: string | null;
   /** Optimistic move/resize; rolls back and refetches on failure. */
   moveEvent: (id: string, patch: { start: string; end: string; title?: string; human_confirm?: boolean }) => Promise<boolean>;
   createEvent: (input: { calendarId: string; title: string; start: string; end: string; allDay?: boolean }) => Promise<CalendarEvent>;
@@ -117,6 +119,7 @@ export function useCalendarEvents(from: string, to: string): UseCalendarEvents {
     hiddenEvents,
     sources: shared.sources,
     loading: range.loading,
+    loadError: range.error ?? null,
     moveEvent: moveCalendarEvent,
     createEvent: createCalendarEventOptimistic,
     removeEvent: removeCalendarEvent,
