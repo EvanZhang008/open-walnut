@@ -52,6 +52,7 @@ const LEADER_DATA_ONLY: Record<string, string> = {
   'src/core/sessions/thread-takeaway.ts': "thread takeaways: the leader's",
   'src/core/sessions/thread-title.ts': "thread titles: the leader's",
   'src/core/stt/learn-from-sends.ts': "the correction list: learns from the user's sends on the leader",
+  'src/core/session-channel/leader-boot.ts': "the leader's channel: it re-emits a host's facts (the Background panel's with the leader's subagent rows) and subscribes only to the leader's own deletes",
 }
 
 function filesUnder(dir: string): string[] {
