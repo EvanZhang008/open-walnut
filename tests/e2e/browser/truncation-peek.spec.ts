@@ -17,6 +17,9 @@ import { expectPeeksInPlace, expectRestored, expectStill, expectWidensInPlace, f
 const SHOTS = '/tmp/truncation-peek'
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
 test.setTimeout(120_000)
+// One at a time: these tests pin, rename and delete rows of the same Home list, and a title now
+// wraps, so another test's rename moves the rows a running test measures (2026-11-22, two workers).
+test.describe.configure({ mode: 'default' })
 
 const WORD = 'Zephyrpeek'
 const LONG_A = `${WORD} alpha: Plan the garden shed rebuild, with the lumber list, the paint colours and every weekend step written out in full`
@@ -73,10 +76,10 @@ test('a cut-off Home row widens in place: as tall as it was, nothing below moves
     // The title shows whole (it wraps); the row's tag is cut off: the page shows less than the text.
     expect(await titleOf(page, LONG_A).evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
     expect(await cutOf(page, LONG_A).evaluate((el) => el.scrollWidth > el.clientWidth + 1)).toBe(true)
-    const before = await box(row(page, LONG_A))
-    const beforeB = await box(row(page, LONG_B))
+    let before = await box(row(page, LONG_A))
+    let beforeB = await box(row(page, LONG_B))
     const neighbours = [row(page, LONG_B), row(page, SHORT)]
-    const tops = await topsOf(neighbours)
+    let tops = await topsOf(neighbours)
 
     const a = await centerOf(page, titleOf(page, LONG_A))
     await page.mouse.move(a.x, a.y)
@@ -122,6 +125,18 @@ test('a cut-off Home row widens in place: as tall as it was, nothing below moves
     expect(painted.minW, 'the open row never painted closed while it re-rendered').toBeGreaterThan(before.width + 8)
     expect(painted.dh, 'nor any taller or shorter').toBeLessThanOrEqual(0.5)
     await expect.poll(() => openInRow(cutOf(page, LONG_A))).toBe(true)
+
+    // The longer title can wrap onto one more line once the row closes (titles wrap whole,
+    // `.wn-title`), so the rows below it rightly move then: measure the closed rows again.
+    await page.mouse.move(1200, 780)
+    await expect(row(page, LONG_A)).not.toHaveAttribute('data-peek-expanded')
+    await expect(page.locator('[data-peek-placeholder]')).toHaveCount(0)
+    before = await box(row(page, LONG_A))
+    beforeB = await box(row(page, LONG_B))
+    tops = await topsOf(neighbours)
+    await page.mouse.move(a.x, a.y, { steps: 4 })
+    await expectWidensInPlace(row(page, LONG_A), before, { label: 'renamed Home row' })
+    await expectStill(neighbours, tops, 'Home row below, renamed')
 
     // On to the next cut-off row: it opens and the first is back as it was.
     await page.mouse.move(beforeB.x + 120, beforeB.y + beforeB.height / 2, { steps: 6 })
@@ -352,84 +367,90 @@ test('a cut name inside a sentence opens the block that holds the sentence, neve
   }
 })
 
-test('a task row widens as a whole: the pointer anywhere on a status row opens it; on its ⋮ it stays open, and the ⋮ still opens its menu', async ({ page, baseURL }) => {
+test('a task row widens as a whole: the pointer anywhere on a status row opens it; on its ⋮ it stays open, and the ⋮ still opens its menu', async ({ page, baseURL, request }) => {
   const { presetPanelDesign, setStatusSectionOpen } = await import('./status-section-helpers')
-  await isolateUiPrefs(page)
-  await presetPanelDesign(page, 'status')
-  await openHome(page, baseURL!)
-  await showAllSections(page)
-  const panel = page.locator('.todo-panel').first()
-  await setStatusSectionOpen(panel, 'needs', true)
-  await page.mouse.move(1200, 780)
-  // A status row of the fixture whose metadata the row cuts off, on screen (its title wraps whole,
-  // `.wn-title`; the cut text is marked so the steps below can name it).
-  const findCut = () => page.evaluate(() => {
-    for (const c of document.querySelectorAll<HTMLElement>('.status-section-card[data-peek-row]')) {
-      const r = c.getBoundingClientRect()
-      if (r.top <= 60 || r.bottom >= innerHeight - 20) continue
+  // A task title is never cut any more (`.wn-title` wraps), so the fixture's rows may have nothing
+  // cut: this row's project name is long enough that its metadata line cuts it.
+  const res = await request.post('/api/tasks', { data: { title: `${WORD} theta: Check the status row`, source: 'local', project: `Peek Spec ${WORD} with a project name long enough that the row's metadata line cuts it off` } })
+  expect(res.status()).toBe(201)
+  const cutId = ((await res.json()) as { task: { id: string } }).task.id
+  try {
+    expect((await request.patch(`/api/tasks/${cutId}`, { data: { phase: 'NEED_ACTION' } })).ok()).toBe(true)
+    await isolateUiPrefs(page)
+    await presetPanelDesign(page, 'status')
+    await openHome(page, baseURL!)
+    await showAllSections(page)
+    const panel = page.locator('.todo-panel').first()
+    await setStatusSectionOpen(panel, 'needs', true)
+    await page.mouse.move(1200, 780)
+    const card = panel.locator(`.status-section-card[data-peek-row][data-task-id="${cutId}"]`).first()
+    await expect(card).toBeVisible({ timeout: 20_000 })
+    await card.evaluate((el) => el.scrollIntoView({ block: 'center' }))
+    await page.mouse.move(1200, 780)
+    // The text the row cuts off, marked so the steps below can name it.
+    const findCut = () => card.evaluate((c) => {
       const cut = [...c.querySelectorAll<HTMLElement>('.status-card-body *, .status-section-card > *')].find((e) => e.scrollWidth > e.clientWidth + 1 && getComputedStyle(e).overflow !== 'visible')
-      if (!cut) continue
-      document.querySelectorAll('[data-spec-cut]').forEach((e) => e.removeAttribute('data-spec-cut'))
+      if (!cut) return false
+      c.querySelectorAll('[data-spec-cut]').forEach((e) => e.removeAttribute('data-spec-cut'))
       cut.setAttribute('data-spec-cut', '')
-      return c.dataset.taskId ?? ''
+      return true
+    })
+    await expect.poll(findCut, { timeout: 20_000 }).toBe(true)
+    const full = (await card.locator('[data-spec-cut]').textContent()) ?? ''
+
+    // On the row, right of its title (the time and project side), not on the title's own text
+    // nor on the row's own ⋮.
+    const kebab = card.getByRole('button', { name: 'More actions' })
+    const at = await card.evaluate((el) => {
+      const r = el.getBoundingClientRect()
+      const t = el.querySelector('.todo-pinned-title')!.getBoundingClientRect()
+      const k = el.querySelector('[aria-label="More actions"]')?.getBoundingClientRect()
+      const x = Math.max(t.right + 4 - r.left, (k ? k.left : r.right) - r.left - 40)
+      return { x, y: t.top + t.height / 2 - r.top }
+    })
+    const title = card.locator('[data-spec-cut]')
+    const cardBefore = await box(card)
+    const following = await followingOf(card, 'status-row')
+    const tops = following ? await topsOf([following]) : []
+    await card.hover({ position: at })
+    expect(await page.evaluate(() => !!document.querySelector('.todo-pinned-title:hover'))).toBe(false)
+    // The row itself opens wider, at its own top and height; no pill.
+    await expectWidensInPlace(card, cardBefore, { label: 'status row' })
+    await expect.poll(() => openInRow(title)).toBe(true)
+    await expect(title).toHaveText(full)
+    if (following) await expectStill([following], tops, 'the status row below')
+    await page.screenshot({ path: `${SHOTS}/4-status-row.png`, clip: { x: 0, y: Math.max(0, cardBefore.y - 120), width: 1280, height: 300 } })
+    // No native title from the pointer up to the page while it shows, so no dark tooltip opens.
+    expect(await titlesAt(page, cardBefore.x + at.x, cardBefore.y + at.y)).toEqual([])
+
+    // The project name filters on click, yet reads as the row's text: the row stays open on it.
+    const project = card.getByTestId('row-project-link')
+    if (await project.count()) {
+      await project.hover()
+      expect(await isOpen(title)).toBe(true)
     }
-    return ''
-  })
-  await expect.poll(findCut, { timeout: 20_000 }).not.toBe('')
-  const cutId = await findCut()
-  const card = panel.locator(`.status-section-card[data-task-id="${cutId}"]`).first()
-  const full = (await card.locator('[data-spec-cut]').textContent()) ?? ''
 
-  // On the row, right of its title (the time and project side), not on the title's own text
-  // nor on the row's own ⋮.
-  const kebab = card.getByRole('button', { name: 'More actions' })
-  const at = await card.evaluate((el) => {
-    const r = el.getBoundingClientRect()
-    const t = el.querySelector('.todo-pinned-title')!.getBoundingClientRect()
-    const k = el.querySelector('[aria-label="More actions"]')?.getBoundingClientRect()
-    const x = Math.max(t.right + 4 - r.left, (k ? k.left : r.right) - r.left - 40)
-    return { x, y: t.top + t.height / 2 - r.top }
-  })
-  const title = card.locator('[data-spec-cut]')
-  const cardBefore = await box(card)
-  const following = await followingOf(card, 'status-row')
-  const tops = following ? await topsOf([following]) : []
-  await card.hover({ position: at })
-  expect(await page.evaluate(() => !!document.querySelector('.todo-pinned-title:hover'))).toBe(false)
-  // The row itself opens wider, at its own top and height; no pill.
-  await expectWidensInPlace(card, cardBefore, { label: 'status row' })
-  await expect.poll(() => openInRow(title)).toBe(true)
-  await expect(title).toHaveText(full)
-  if (following) await expectStill([following], tops, 'the status row below')
-  await page.screenshot({ path: `${SHOTS}/4-status-row.png`, clip: { x: 0, y: Math.max(0, cardBefore.y - 120), width: 1280, height: 300 } })
-  // No native title from the pointer up to the page while it shows, so no dark tooltip opens.
-  expect(await titlesAt(page, cardBefore.x + at.x, cardBefore.y + at.y)).toEqual([])
-
-  // The project name filters on click, yet reads as the row's text: the row stays open on it.
-  const project = card.getByTestId('row-project-link')
-  if (await project.count()) {
-    await project.hover()
-    expect(await isOpen(title)).toBe(true)
+    // On the open row's own ⋮ it stays open (closing would move the button from under the
+    // pointer), the button keeps its own label, and a click on it opens the row's real menu.
+    if (await kebab.count()) {
+      await kebab.hover()
+      await page.waitForTimeout(250)
+      expect(await isOpen(title)).toBe(true)
+      await expect(kebab).toHaveAttribute('title', 'More actions')
+      await kebab.click()
+      await expect(page.locator('.task-kebab-menu:visible')).toBeVisible()
+      await expect(card).toBeVisible()
+      const clicked = await box(card)
+      expect(Math.abs(clicked.y - cardBefore.y), 'the row is still drawn at its own top').toBeLessThanOrEqual(0.5)
+      expect(Math.abs(clicked.height - cardBefore.height), 'and its own height').toBeLessThanOrEqual(0.5)
+      await page.keyboard.press('Escape')
+      await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
+    }
+    await page.mouse.move(1200, 780)
+    await expectRestored(card, cardBefore, 'status row')
+    if (following) await expectStill([following], tops, 'the status row below, after')
+    await expect(pill(page)).toHaveCount(0)
+  } finally {
+    await request.delete(`/api/tasks/${cutId}?force=true`).catch(() => undefined)
   }
-
-  // On the open row's own ⋮ it stays open (closing would move the button from under the
-  // pointer), the button keeps its own label, and a click on it opens the row's real menu.
-  if (await kebab.count()) {
-    await kebab.hover()
-    await page.waitForTimeout(250)
-    expect(await isOpen(title)).toBe(true)
-    await expect(kebab).toHaveAttribute('title', 'More actions')
-    await kebab.click()
-    await expect(page.locator('.task-kebab-menu:visible')).toBeVisible()
-    await expect(card).toBeVisible()
-    const clicked = await box(card)
-    expect(Math.abs(clicked.y - cardBefore.y), 'the row is still drawn at its own top').toBeLessThanOrEqual(0.5)
-    expect(Math.abs(clicked.height - cardBefore.height), 'and its own height').toBeLessThanOrEqual(0.5)
-    await page.keyboard.press('Escape')
-    await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
-  }
-  await page.mouse.move(1200, 780)
-  await expectRestored(card, cardBefore, 'status row')
-  if (following) await expectStill([following], tops, 'the status row below, after')
-  await expect(pill(page)).toHaveCount(0)
 })

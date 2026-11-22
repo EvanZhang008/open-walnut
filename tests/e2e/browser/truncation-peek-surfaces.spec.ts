@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { home } from './inbox-items-helpers'
-import { openAllSections, openTasksBy, taskRow } from './org-view-helpers'
+import { openSection, openTasksBy, taskRow } from './org-view-helpers'
 import { expectRestored, expectStill, expectWidensInPlace, followingOf, openInRow, topsOf } from './truncation-peek-helpers'
 
 // Real list/card components with long team names, at both panel widths and themes: each widens
@@ -27,6 +27,12 @@ test('Org rows and Board cards widen whole at their own height, at narrow and wi
       expect(response.status()).toBe(201)
       made.push((await response.json()).task.id)
     }
+    // A task title never cuts (standard.md, "Text that does not fit": it wraps whole), so the row
+    // that peeks carries metadata that is still cut: a long note of what it waits on (outside
+    // Walnut, so the row stays a Waiting row and is not turned into an ask to the user).
+    const NOTE = 'Waiting on the garden supplier to confirm the lumber delivery, the paint colours and the weekend each step of the rebuild is booked for'
+    expect((await request.put(`/api/v1/tasks/${made[2]}/report`, { data: { state: 'waiting', waiting_on: NOTE, waiting_kind: 'outside' } })).ok()).toBe(true)
+    await expect.poll(async () => ((await (await request.get(`/api/tasks/${made[2]}`)).json()).task.user_status?.state), { timeout: 30_000 }).toBe('waiting')
     const boardRes = await request.get(`/api/v1/tasks/${leader}/board?team=1`)
     expect(boardRes.ok()).toBe(true)
     const board = await boardRes.json()
@@ -35,7 +41,8 @@ test('Org rows and Board cards widen whole at their own height, at narrow and wi
     await page.getByTestId('sidebar-org').click()
     await page.locator(`[data-testid="org-channel"][data-key="project:${project.toLowerCase()}"]`).click()
     await openTasksBy(page, 'all')
-    await openAllSections(page)
+    // Only its own section: the others come and go while the fixture's tasks settle.
+    await openSection(page, 'waiting')
     const row = taskRow(page, made[2])
     await expect(row).toBeVisible()
     for (const theme of ['light', 'dark'] as const) {
@@ -47,11 +54,15 @@ test('Org rows and Board cards widen whole at their own height, at narrow and wi
         const before = (await row.boundingBox())!
         const next = await followingOf(row, `org-${theme}-${width}`)
         const tops = next ? await topsOf([next]) : []
-        // A task title never cuts (standard.md, "Text that does not fit"): it wraps in full, so
-        // there is nothing to peek, and hovering leaves the row and the one below where they are.
+        // The title wraps whole; the note is what the row cuts, and it opens whole on its line.
         const title = row.locator('.org-task-title')
         expect(await title.evaluate((el) => el.scrollWidth <= el.clientWidth + 1 && getComputedStyle(el).textOverflow !== 'ellipsis'), `org ${theme} ${width}: the title is whole`).toBe(true)
+        const note = row.getByTestId('org-task-note')
+        await expect(note).toContainText('garden supplier')
+        expect(await note.evaluate((el) => el.scrollWidth > el.clientWidth + 1), `org ${theme} ${width}: the note is cut`).toBe(true)
         await row.hover({ position: { x: 16, y: 5 } })
+        await expectWidensInPlace(row, before, { label: `org ${theme} ${width}`, theme })
+        await expect.poll(() => openInRow(note)).toBe(true)
         if (next) await expectStill([next], tops, `org ${theme} ${width}: the row below`)
         await page.screenshot({ path: info.outputPath(`org-${theme}-${width}.png`) })
         await page.mouse.move(1, 1)

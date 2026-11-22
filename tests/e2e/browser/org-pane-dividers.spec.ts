@@ -90,7 +90,9 @@ test('the line before an opened task drags its width, kept across a reload; doub
 
   // Kept across a reload (the opened task comes back with the page).
   await page.reload()
-  await expect(page.getByTestId('org-side')).toBeVisible()
+  // A reload is a whole app load, given the first load's 30 s: on a busy host the dev server was
+  // still sending modules 15 s after it (2026-11-22, two runs at load 60 to 75).
+  await expect(page.getByTestId('org-side')).toBeVisible({ timeout: 30_000 })
   await expect.poll(() => widthOf(page, '.org-side-strip')).toBeGreaterThan(wider - 3)
   expect(await widthOf(page, '.org-side-strip')).toBeLessThan(wider + 3)
 

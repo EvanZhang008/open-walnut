@@ -14,7 +14,7 @@ test('6481 tasks remain browsable without duplicate pins or expanded project wal
   await page.addInitScript(() => sessionStorage.setItem('open-walnut-home-session-columns', JSON.stringify([{ id: 'pw-store-sync-session', locked: false }])));
   const now = new Date().toISOString();
   const tasks = Array.from({ length: 6481 }, (_, i) => ({
-    id: i === 6400 ? 'pw-task-store-sync' : `density-${i}`, title: `Review item ${i}: ${'a deliberately long task title '.repeat(i % 6 === 0 ? 4 : 1)}`,
+    id: i === 6400 ? 'pw-task-store-sync' : `density-${i}`, title: `Review item ${i}${i % 6 === 0 ? `: ${'a deliberately long task title '.repeat(4)}` : ''}`,
     status: i < 3551 ? 'done' : i < 3752 ? 'in_progress' : 'todo',
     phase: i < 3551 ? 'COMPLETE' : i < 3752 ? 'IN_PROGRESS' : 'TODO',
     priority: 'none', project: i % 61 === 60 ? '' : `Project ${i % 61}`,
@@ -38,7 +38,9 @@ test('6481 tasks remain browsable without duplicate pins or expanded project wal
   for (let round = 0; round < 5; round++) {
     const start = Date.now();
     if (round === 0) await openHome(page, baseURL!); else await page.reload();
-    await expect(page.locator('.todo-group-project-header')).toHaveCount(61, { timeout: 45_000 });
+    // The fixture's 61 projects: a task another spec makes meanwhile reaches this page through the
+    // server's live updates and adds its own project (2026-11-22: "Peek Spec" made it 62).
+    await expect(page.locator('.todo-group-project-header').filter({ has: page.locator('.todo-group-project-name', { hasText: /^(Project \d+|Inbox)$/ }) })).toHaveCount(61, { timeout: 45_000 });
     await expect(page.locator('[data-task-id="density-3552"]')).toHaveCount(1);
     loads.push(Date.now() - start);
     expect(await page.locator('.todo-panel-item').count()).toBeLessThan(150);
@@ -69,11 +71,14 @@ test('6481 tasks remain browsable without duplicate pins or expanded project wal
   await expect(page.locator('.todo-group-project').filter({ has: page.locator('.todo-group-project-name', { hasText: /^Project 1$/ }) }).locator('.todo-panel-item').first()).toBeVisible({ timeout: 30_000 });
   await page.waitForLoadState('networkidle');
   // Rows off screen are not rendered yet (content-visibility) and stand at their size
-  // estimate. It must equal a rendered row, or the list shifts under the pointer as rows
-  // scroll in (WebKit measured 34px unrendered against 28px rendered).
+  // estimate. It must equal a rendered one-line row, or the list shifts under the pointer as rows
+  // scroll in (WebKit measured 34px unrendered against 28px rendered). A title wraps whole since
+  // 2026-11-21 (`.wn-title`), so only the one-line rows share one height: drawn or not, 28px.
   const rowHeights = await page.locator('#home-task-navigation .todo-group-project .todo-panel-item')
-    .evaluateAll(rows => [...new Set(rows.map(row => Math.round(row.getBoundingClientRect().height)))]);
-  expect(rowHeights).toEqual([28]);
+    .evaluateAll(rows => rows.map(row => ({ h: Math.round(row.getBoundingClientRect().height), long: /deliberately/.test(row.textContent ?? '') })));
+  expect([...new Set(rowHeights.filter(r => !r.long).map(r => r.h))]).toEqual([28]);
+  // A long title is drawn whole on several lines, never cut to the row's one line.
+  expect(rowHeights.some(r => r.long && r.h > 28)).toBe(true);
   const scroller = page.locator('#home-task-navigation .home-navigation-scroll');
   const rect = (await scroller.boundingBox())!;
   await page.mouse.move(rect.x + 30, rect.y + 40);
