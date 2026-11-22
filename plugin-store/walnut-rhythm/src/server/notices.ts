@@ -13,11 +13,34 @@
  */
 import type { PluginNoticeAction, PluginNotifyInput } from '@open-walnut/plugin-api/server'
 import { clockTime } from './clock'
-import type { BreakKind, CompletedBlock, FocusState } from './focus'
+import type { BreakKind, CompletedBlock, FocusPhase, FocusState } from './focus'
 
 export const KEY_STAND_UP = 'stand-up'
 export const KEY_FOCUS_DONE = 'focus-done'
 export const KEY_BREAK_OVER = 'break-over'
+
+/**
+ * When each notice Rhythm ever raised still holds, by the phase it asks about. Every key is
+ * listed (a test reads them from this file), so a new notice cannot be left out.
+ */
+const NOTICE_HOLDS: Record<string, (phase: FocusPhase) => boolean> = {
+  [KEY_STAND_UP]: () => false,
+  // End break and Another block answer the break that is running.
+  [KEY_FOCUS_DONE]: (phase) => phase === 'break',
+  // "Start the next block?" asks while Rhythm is off.
+  [KEY_BREAK_OVER]: (phase) => phase === 'idle',
+}
+
+export const NOTICE_KEYS: readonly string[] = Object.keys(NOTICE_HOLDS)
+
+/**
+ * The notices that no longer hold in this phase. PURE. The runtime dismisses them when it loads:
+ * a notice raised before a restart (or by an older version, whose buttons carry no expiry) whose
+ * moment passed while nothing dismissed it is gone, never offering End break a day later.
+ */
+export function staleNoticeKeys(phase: FocusPhase): string[] {
+  return NOTICE_KEYS.filter((key) => !NOTICE_HOLDS[key]!(phase))
+}
 
 /** The next block as this one was started: same task, same length, same break. */
 export function nextBlockArgs(focus: { taskId?: string; goal?: string; minutes: number; breakMinutes: number; spotifyUri?: string }): Record<string, unknown> {

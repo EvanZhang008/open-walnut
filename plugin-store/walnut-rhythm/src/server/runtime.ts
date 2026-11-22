@@ -23,7 +23,7 @@ import type { MacosBridge } from './macos-bridge'
 import { DndController } from './macos-dnd'
 import { SpotifyControl } from './spotify'
 import { parseStarred } from './starred'
-import { breakOverNotice, focusDoneNotice, KEY_BREAK_OVER, KEY_FOCUS_DONE, KEY_STAND_UP } from './notices'
+import { breakOverNotice, focusDoneNotice, KEY_BREAK_OVER, KEY_FOCUS_DONE, staleNoticeKeys } from './notices'
 
 const STATE_FILE = 'state.json'
 /** A finished block or break announced this late is history, not a prompt. */
@@ -118,10 +118,12 @@ export class RhythmRuntime {
       this.dirty = true
       // Its notices had buttons for ops that are gone (Start break, Snooze), and its
       // "Break over" after a stand-up break talked about a sitting count.
-      await this.dismiss(KEY_STAND_UP)
       await this.dismiss(KEY_FOCUS_DONE)
       if (this.focus.phase === 'idle') await this.dismiss(KEY_BREAK_OVER)
     }
+    // A notice whose moment passed while nothing dismissed it (the break ended before a restart,
+    // a dismiss that failed, an older version's buttons with no expiry) goes now.
+    for (const key of staleNoticeKeys(this.focus.phase)) await this.dismiss(key)
     // A hold left by an earlier activation is ours to reconcile, not to leave behind.
     const quiet = await this.readQuiet()
     const ours = quiet.holds.find((hold) => hold.source === `plugin:${this.walnut.pluginId}`)
