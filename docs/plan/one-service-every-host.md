@@ -430,6 +430,32 @@ permission prompts still name Walnut.
 - Between machines on different versions the API is the contract: changes are additive, and a route a host
   does not have yet answers "not supported" so the caller can fall back.
 
+### A session a host runs (phase 2, step C): hand-off, rollback, delete
+
+- **No hand-off of a running session yet.** The switch (`host_runs_sessions`) decides only where a new start
+  goes. A session started before the switch went on stays the leader's for its whole life, resumes included,
+  and one a host started stays that host's after the switch goes off (tests: L1 in
+  `tests/e2e/host-judged-session-lifecycle-e2e.test.ts`, S6 in `host-judged-session-cluster-e2e.test.ts`).
+  So no session changes its judge while it runs. A hand-off is needed only when old sessions must move,
+  which is phase 4 (the legacy path is deleted), not now.
+- **Rolling back.** Turn the switch off first: new starts take today's path at once, and the sessions hosts
+  already run keep reporting through the channel until they end (S6). Install an older release only after
+  those have ended or been stopped. An older leader put in ahead of that order loses no session: it reads a
+  host-run row as an ordinary row of that host and reaches the CLI through the host's daemon as today, and
+  the daemon keeps one CLI per session (cli-owner), so its send or resume goes on with the same
+  conversation. It does not hear the host's facts, so until those CLIs end both sides judge their turns and
+  the host's judgement goes unheard. Not tested against a real older release.
+- **Delete and archive.** Archive is the leader's field and reaches the host in the sessions copy. A delete
+  starts on the leader and goes to the session's host as a command (`POST /host-api/sessions/drop`), never in
+  the copy: a host keeps its own rows when the copy stops naming them, and the copy reaches every replica,
+  where an older one would store a marker as a session. The leader keeps a mark
+  (`session_leader_drops`) until the host's `drop` record answers, and sends the marks again each time the
+  host links, so a host that was away does it then. A host's own `drop` with no mark changes nothing on the
+  leader. Open: marks of a host that never comes back are not pruned.
+- **Stop and mode.** `stopRequest` is a host field: the host's stop coordinator keeps it and fences with it.
+  A stop or a mode change of a host-run session goes whole to its host (`lifecycle` host calls); the
+  leader moves only the task's plan and exec slots.
+
 ## Phases
 
 Each phase lands alone and leaves production working. Nothing in a phase is dropped without the owner's own
