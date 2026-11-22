@@ -665,7 +665,7 @@
 
 /* Cancel and the confirm are family keys sharing the row, each a finger's 44 px tall. */
 .phone-confirm-sheet-btn { flex: 1 1 0; }
-@media (max-width: 768px), (pointer: coarse) {
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .phone-confirm-sheet-btn { min-height: 44px; }
 }
 
