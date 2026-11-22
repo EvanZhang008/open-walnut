@@ -151,6 +151,16 @@ export function cronLineState(crontab: string, script: string, o: { everyMinute?
   return exact.some((n) => n > 0) || related.length ? 'stale' : 'none'
 }
 
+/**
+ * Exactly our lines in one of the two forms (the plain script's single @reboot line, or the
+ * launcher's pair), whichever script is on disk. 2026-11-22: a rollback that put the plain script
+ * back beside the launcher's pair left a host whose every update was refused as stale; a host in
+ * that state still has its boot start, and the next update writes the form that matches.
+ */
+export function cronLinesOursInEitherForm(crontab: string, script: string): boolean {
+  return cronLineState(crontab, script) === 'ours' || cronLineState(crontab, script, { everyMinute: true }) === 'ours'
+}
+
 function ourLine(line: string, script: string): boolean {
   return line === daemonCronLine(script) || line === daemonCronMinuteLine(script)
     || (line.includes(script) && (line.endsWith(DAEMON_CRON_TAG) || /^\s*@reboot\s/.test(line)))
