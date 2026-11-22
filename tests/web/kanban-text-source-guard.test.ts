@@ -86,9 +86,12 @@ function scan(abs: string): { uses: Use[]; plain: Plain[] } {
   const uses: Use[] = [];
   const plain: Plain[] = [];
   const isAgentText = (tag: ts.JsxTagNameExpression) => ts.isIdentifier(tag) && graph.resolveBinding(fileKey, tag.text) === AGENT_TEXT;
+  // A <button>, or a shared control that renders one (web/src/components/controls: a disclosure,
+  // a chip, a tab): a system control either way.
+  const SYSTEM_CONTROLS = new Set(['button', 'DisclosureButton', 'Chip', 'Tab']);
   const inButton = (n: ts.Node) => {
     for (let p: ts.Node | undefined = n.parent; p; p = p.parent) {
-      if (ts.isJsxElement(p) && p.openingElement.tagName.getText(sf) === 'button') return true;
+      if (ts.isJsxElement(p) && SYSTEM_CONTROLS.has(p.openingElement.tagName.getText(sf))) return true;
     }
     return false;
   };
