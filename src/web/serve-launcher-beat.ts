@@ -8,12 +8,20 @@
  *     and one real request on that port answered right (200 with a JSON object): GET /api/config,
  *     or on a host replica, which trusts no loopback caller, the public GET /api/v1/instance;
  *   - leaving: just before a planned stop (stopServer), so the launcher counts it as no crash.
- * The variable is the launcher's own: it is taken out of this process's env, so no daemon or
- * session started below the server writes the launcher's marks.
+ * The variables are the launcher's own: they are taken out of this process's env at its start
+ * (launcher-env.ts), so no daemon or session started below the server writes the launcher's marks.
+ *
+ * WALNUT_LAUNCHER_SERVICE_PID: the pid the launcher started, when that is not this process. On the
+ * Mac the launcher runs a version's run script (scripts/lib/devprod-launcher.sh), which puts the
+ * server under Walnut.app's session host, so the server is two processes below the launcher's
+ * child; its marks name the child, as the launcher matches them by pid.
+ * On the leader (not a host's one service) a put-back the launcher made is raised in Walnut Health
+ * here, as the leader raises a host's from its hello.
  * Nothing here throws into the server.
  */
 import { startLauncherBeat, type LauncherBeat } from '../providers/service-launcher-beat.js'
 import { log } from '../logging/index.js'
+import { takeLauncherEnv } from './launcher-env.js'
 import type { ServesAs } from '../providers/one-service-mode.js'
 
 let beat: LauncherBeat | null = null
@@ -48,9 +56,8 @@ export async function serveReadyCheck(deps: {
 /** Starts the beat when a launcher runs this server; a no-op otherwise. Call once the port listens. */
 export function startServeLauncherBeat(port: number): void {
   if (beat) return
-  const dir = process.env.WALNUT_LAUNCHER_DIR
-  delete process.env.WALNUT_LAUNCHER_DIR
-  beat = startLauncherBeat({ dir, warn: (message) => log.web.warn(message) })
+  const { dir, servicePid } = takeLauncherEnv()
+  beat = startLauncherBeat({ dir, ...(servicePid ? { pid: servicePid } : {}), warn: (message) => log.web.warn(message) })
   if (!beat) return
   beat.busy(ADOPTION_BUSY_SECONDS)
   const own = beat
@@ -62,7 +69,13 @@ export function startServeLauncherBeat(port: number): void {
       inProcess: { wanted: inProcess.inProcessDaemonWanted, check: inProcess.inProcessDaemonServesCheck },
     }))
     own.idle()
-    log.web.info('launcher: ready mark written', { port })
+    log.web.info('launcher: ready mark written', { port, ...(servicePid ? { servicePid } : {}) })
+    if (!isHostReplica() && dir) {
+      const [{ readLauncherFacts }, { noteLauncherRollback }] = await Promise.all([
+        import('../providers/service-launcher-beat.js'), import('../core/hosts/host-launcher.js'),
+      ])
+      await noteLauncherRollback('__local__', await readLauncherFacts(dir))
+    }
   })().catch((err: unknown) => log.web.warn('launcher: ready check stopped', { error: err instanceof Error ? err.message : String(err) }))
 }
 

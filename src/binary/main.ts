@@ -12,6 +12,8 @@
  *   walnut __plugin-check ...        loads installed plugins without activating them (src/core/plugins/plugin-load-check.ts)
  *   walnut __session-host-approve -- <argv...>
  *                                    approves argv under Walnut.app and prints the host executable (the deploy's server launch)
+ *   walnut __service-launcher-script --state <dir> --seed <run> --self <file>
+ *                                    prints the launcher that keeps this machine's own server (scripts/lib/devprod-launcher.sh)
  *   walnut walnut <args> | wn <args> the on-host `walnut` the daemon's PATH shim runs
  *   walnut <runtime root>/<script>   a program a Node build starts as a file (src/binary/bundled-modules.ts)
  *
@@ -57,6 +59,9 @@ if (first === '__selftest') {
 } else if (first === '__session-host-approve') {
   const { runSessionHostApprove } = await import('../providers/session-host-approve.js')
   process.exit(await runSessionHostApprove(userArgs.slice(1)))
+} else if (first === '__service-launcher-script') {
+  const { runServeLauncherScript } = await import('../providers/serve-launcher-script-cli.js')
+  process.exit(runServeLauncherScript(userArgs.slice(1)))
 } else if (first === '--wait-matcher') {
   // The daemon this file runs as starts it again as wait_for's matcher (host-exec-matcher.ts):
   // `<file> --wait-matcher`, the way a daemon binary is started for it.

@@ -193,6 +193,32 @@ describe.each(SHELLS)('the service launcher under %s', (_label, bin) => {
     expect(read(path.join(L, 'launcher.log'))).toMatch(/did not stop in 10 s: KILL/)
   }, 30_000)
 
+  it('a stalled service that leads its own process group and ignores SIGTERM is KILLed with everything in that group', async () => {
+    // The Mac's run script shape: it makes itself a group leader, and the real server runs below it.
+    const exe = path.join(dir, 'grouped')
+    fs.writeFileSync(exe, [
+      '#!/bin/sh',
+      `d='${dir}'`,
+      '[ "$G" = 1 ] || { G=1; export G; exec perl -e \'setpgrp(0,0); exec @ARGV or exit 127\' /bin/sh "$0" "$@"; }',
+      'trap "" TERM',
+      '( trap "" TERM; while [ -d "$d" ]; do /bin/sleep 0.2; done ) &',
+      'echo "grouped $$ $!" >> "$d/runs"',
+      'printf "pid=%s\\n" $$ > "$WALNUT_LAUNCHER_DIR/ready"',
+      // One beat, then none: a stall.
+      'echo "$(date +%s) 0 $$" > "$WALNUT_LAUNCHER_DIR/hb.$$" && mv -f "$WALNUT_LAUNCHER_DIR/hb.$$" "$WALNUT_LAUNCHER_DIR/heartbeat"',
+      'while [ -d "$d" ]; do /bin/sleep 0.2; done',
+      '',
+    ].join('\n'), { mode: 0o700 })
+    launch(writeLauncher(exe))
+    await until(() => read(path.join(dir, 'runs')).includes('grouped '), 5_000, 'grouped start')
+    const [, pid, below] = read(path.join(dir, 'runs')).trim().split('\n')[0]!.split(' ').map(Number)
+    expect(spawnSync('ps', ['-o', 'pgid=', '-p', String(pid)], { encoding: 'utf8' }).stdout.trim()).toBe(String(pid))
+    await until(() => !alive(pid!) && !alive(below!), 25_000, 'the whole group ended')
+    expect(read(path.join(L, 'launcher.log'))).toMatch(/did not stop in 10 s: KILL \(its process group\)/)
+    // The launcher itself (another group) lives on and starts it again.
+    await until(() => read(path.join(dir, 'runs')).trim().split('\n').length >= 2, 8_000, 'restart')
+  }, 40_000)
+
   it('switches to a new version as a trial, commits it once ready, and makes it the good one after probation', async () => {
     const v1 = stub('v1'); const v2 = stub('v2')
     launch(writeLauncher(v1))

@@ -13,6 +13,13 @@
  * server to take the lock; the lock then refuses it, and the app attaches to the deploy's
  * server (desktop/main.swift handleServerStartupFailure). Bounded: a switch whose deploy is
  * gone, an old one, or one that outlasts MAX_WAIT_MS lets it start as before.
+ *
+ *   WALNUT_HOME/local/service-launcher.json   { state }   (the Mac's service launcher, installed by dev-prod.sh)
+ *
+ * The same holds while the service launcher keeps this Walnut's server (it restarts it within
+ * seconds of any exit, and at login): an app-started server whose launcher is alive (its pid in
+ * `<state>/daemon-boot.pid`) waits for any other live server to hold the lock, so the app attaches
+ * to the launcher's server instead of racing it. A launcher that is not running lets it start.
  */
 
 import fsp from 'node:fs/promises'
@@ -23,6 +30,22 @@ export const DEPLOY_SWITCH_MAX_WAIT_MS = 120_000
 
 export function deploySwitchFile(home: string): string {
   return path.join(home, 'local', 'deploy-switch.json')
+}
+
+/** Where dev-prod.sh says which service launcher keeps this Walnut's server (absent: none). */
+export function serviceLauncherFile(home: string): string {
+  return path.join(home, 'local', 'service-launcher.json')
+}
+
+/** The pid of the live launcher that keeps this Walnut's server, or null. */
+export async function liveServiceLauncher(home: string): Promise<number | null> {
+  const raw = await readText(serviceLauncherFile(home))
+  if (raw === null) return null
+  let state: unknown
+  try { state = (JSON.parse(raw) as { state?: unknown }).state } catch { return null }
+  if (typeof state !== 'string' || !path.isAbsolute(state)) return null
+  const pid = Number((await readText(path.join(state, 'daemon-boot.pid')))?.trim())
+  return Number.isInteger(pid) && pid > 1 && alive(pid) ? pid : null
 }
 
 /**
@@ -83,8 +106,12 @@ export async function waitOutDeploySwitch(o: DeploySwitchWait): Promise<'none' |
   const file = deploySwitchFile(o.home)
   const first = await readText(file)
   const sw = first === null ? null : parseDeploySwitch(first, now())
-  if (!sw || !alive(sw.pid)) return 'none'
-  const pid = sw.pid
+  // A deploy's switch is waited out first; with none, a live service launcher (its server may
+  // have started long ago, so any live holder counts).
+  const launcher = sw && alive(sw.pid) ? null : await liveServiceLauncher(o.home)
+  if (!(sw && alive(sw.pid)) && !launcher) return 'none'
+  const pid = launcher ?? sw!.pid
+  const since = launcher ? Number.NEGATIVE_INFINITY : sw!.at - 1000
   o.onWait?.(pid)
   const until = now() + (o.maxWaitMs ?? DEPLOY_SWITCH_MAX_WAIT_MS)
   for (;;) {
@@ -96,12 +123,16 @@ export async function waitOutDeploySwitch(o: DeploySwitchWait): Promise<'none' |
         const l = JSON.parse(lock) as { pid?: unknown; startedAt?: unknown }
         const started = typeof l.startedAt === 'string' ? Date.parse(l.startedAt) : NaN
         if (typeof l.pid === 'number' && l.pid !== process.pid && Number.isFinite(started)
-          && started >= sw.at - 1000 && alive(l.pid)) return 'lock-taken'
+          && started >= since && alive(l.pid)) return 'lock-taken'
       } catch { /* corrupt: the lock code treats it as absent */ }
     }
-    const raw = await readText(file)
-    const still = raw === null ? null : parseDeploySwitch(raw, now())
-    if (still?.pid !== pid || !alive(pid)) return 'ended'
+    if (launcher) {
+      if (!alive(launcher)) return 'ended'
+    } else {
+      const raw = await readText(file)
+      const still = raw === null ? null : parseDeploySwitch(raw, now())
+      if (still?.pid !== pid || !alive(pid)) return 'ended'
+    }
     if (now() >= until) return 'timeout'
     await sleep(o.pollMs ?? 250)
   }

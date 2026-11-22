@@ -12,7 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import {
-  DEPLOY_SWITCH_TTL_MS, deploySwitchFile, isAppStartedServer, parseDeploySwitch, waitOutDeploySwitch,
+  DEPLOY_SWITCH_TTL_MS, deploySwitchFile, isAppStartedServer, liveServiceLauncher, parseDeploySwitch, serviceLauncherFile, waitOutDeploySwitch,
 } from '../../src/core/deploy-switch.js'
 
 const APP_ENV = { WALNUT_LAUNCHER: 'mac-app' } as NodeJS.ProcessEnv
@@ -110,6 +110,68 @@ describe('waitOutDeploySwitch', () => {
     expect(await waitOutDeploySwitch({ home: h, lockFile, env: APP_ENV, now: c.now, sleep: c.sleep })).toBe('none')
     writeSwitch(h, livePid())
     expect(await waitOutDeploySwitch({ home: h, lockFile, env: { WALNUT_LAUNCHD_LABEL: 'x' }, now: c.now, sleep: c.sleep })).toBe('none')
+  })
+})
+
+describe('the service launcher keeps the server (the Mac\'s one service)', () => {
+  /** A launcher state dir with a live launcher pid, named by the home's service-launcher.json. */
+  function installLauncher(h: string, pid: number): string {
+    const state = path.join(h, 'service')
+    fs.mkdirSync(state, { recursive: true })
+    fs.writeFileSync(path.join(state, 'daemon-boot.pid'), `${pid}\n`)
+    fs.writeFileSync(serviceLauncherFile(h), JSON.stringify({ state }))
+    return state
+  }
+
+  it('an app-started server waits for the launcher\'s server, even one that started before it, and then attaches', async () => {
+    const { home: h, lockFile } = home()
+    installLauncher(h, livePid())
+    expect(await liveServiceLauncher(h)).toBeGreaterThan(1)
+    const c = clock()
+    let polls = 0
+    const outcome = await waitOutDeploySwitch({
+      home: h, lockFile, env: APP_ENV, now: c.now,
+      sleep: async (ms) => {
+        await c.sleep(ms)
+        // The launcher's server (started long ago, after a login) holds the lock.
+        if (++polls === 2) fs.writeFileSync(lockFile, JSON.stringify({ pid: livePid(), port: 3456, startedAt: '2026-11-01T00:00:00.000Z' }))
+      },
+    })
+    expect(outcome).toBe('lock-taken')
+    expect(polls).toBe(2)
+  })
+
+  it('a launcher that is not running, or no launcher, lets the app\'s server start as before', async () => {
+    const { home: h, lockFile } = home()
+    const c = clock()
+    const gone = spawn('true'); await new Promise((r) => gone.on('exit', r))
+    installLauncher(h, gone.pid!)
+    expect(await liveServiceLauncher(h)).toBeNull()
+    expect(await waitOutDeploySwitch({ home: h, lockFile, env: APP_ENV, now: c.now, sleep: c.sleep })).toBe('none')
+    fs.writeFileSync(serviceLauncherFile(h), 'not json')
+    expect(await liveServiceLauncher(h)).toBeNull()
+    fs.writeFileSync(serviceLauncherFile(h), JSON.stringify({ state: 'relative/dir' }))
+    expect(await liveServiceLauncher(h)).toBeNull()
+  })
+
+  it('bounded: a launcher whose server never takes the lock lets it start after the wait, and one that dies ends the wait', async () => {
+    const { home: h, lockFile } = home()
+    const launcher = spawn('sleep', ['30'], { stdio: 'ignore' })
+    kids.push(launcher)
+    installLauncher(h, launcher.pid!)
+    const c = clock()
+    expect(await waitOutDeploySwitch({ home: h, lockFile, env: APP_ENV, now: c.now, sleep: c.sleep, maxWaitMs: 2_000 })).toBe('timeout')
+    let polls = 0
+    expect(await waitOutDeploySwitch({
+      home: h, lockFile, env: APP_ENV, now: c.now,
+      sleep: async (ms) => {
+        await c.sleep(ms)
+        if (++polls === 1) { launcher.kill('SIGKILL'); await new Promise((r) => launcher.on('exit', r)) }
+      },
+    })).toBe('ended')
+    // Never for a server the app did not start (the launcher's own, a deploy's).
+    installLauncher(h, livePid())
+    expect(await waitOutDeploySwitch({ home: h, lockFile, env: {}, now: c.now, sleep: c.sleep })).toBe('none')
   })
 })
 

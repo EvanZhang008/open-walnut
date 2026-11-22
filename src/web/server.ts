@@ -215,6 +215,7 @@ import { registerAuthRpc } from './routes/auth-rpc.js'
 import { initPushNotifications } from '../core/push-notification.js'
 import { initLetterPush } from '../core/push/letter-push.js'
 import { takeQosClampRequest } from '../lib/background-qos.js'
+import { takeLauncherEnv } from './launcher-env.js'
 import { enqueueMainAgentTurn, getQueueStatus, recordLastTurnTokens, recordLaneWindow } from './agent-turn-queue.js'
 import { activeRelayedTurnCount } from './routes/chat-turn-relay.js'
 import { setPrivacyModelReady } from '../core/private-tasks/privacy-judge.js'
@@ -1299,6 +1300,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // read it once and take it out of process.env before anything copies that
   // env into a child (the in-app terminal, model turns, plugins).
   const raisedByDeploy = takeQosClampRequest()
+  // The same for the service launcher's variables: only this server writes its marks.
+  takeLauncherEnv()
 
   // FIRST, before any await: install exit diagnostics + always-fatal SIGTERM/
   // SIGHUP handlers. A `kill -15` during the multi-second boot below must kill
@@ -1470,7 +1473,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const { waitOutDeploySwitch } = await import('../core/deploy-switch.js')
     const switchWait = await waitOutDeploySwitch({
       home: WALNUT_HOME, lockFile: instanceLockFile(),
-      onWait: (deployPid) => log.web.info('a deploy is switching the server: waiting for its server to take the lock', { deployPid }),
+      onWait: (pid) => log.web.info('a deploy or the service launcher is starting the server: waiting for its server to take the lock', { pid }),
     })
     if (switchWait !== 'none') log.web.info('deploy switch wait over', { outcome: switchWait })
     try {

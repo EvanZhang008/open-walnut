@@ -75,7 +75,7 @@ export interface LauncherScriptOptions {
   backend: 'systemd' | 'launchd' | 'cron'
   /** Where the script itself is. */
   self: string
-  /** Tests only: shorter clocks. */
+  /** Shorter clocks (tests), or a longer trial (the Mac's own server boots slower on a loaded machine: serve-launcher-script-cli.ts). */
   clocks?: Partial<{ stall: number; trial: number; probation: number; tick: number; stopWait: number }>
 }
 
@@ -201,13 +201,20 @@ l_reap() {
   if [ "$c_own" = 1 ]; then wait "$c_pid" 2>/dev/null; c_code=$?; else c_code=unknown; fi
   c_last=$c_pid; c_pid=; rm -f "$L/service.pid"
 }
-# Stop the service: TERM, then KILL after $1 s.
+# Stop the service: TERM, then KILL after $1 s. A service that leads its own process group (the Mac's
+# run script makes one: Walnut.app's session host and the server run below it) is KILLed as that whole
+# group, or the server would run on with no parent; its sessions run in sessions of their own.
 l_stop() {
   [ -n "$c_pid" ] || return 0
   if l_alive "$c_pid"; then
     kill -TERM "$c_pid" 2>/dev/null
     ls_n=0; while l_alive "$c_pid" && [ "$ls_n" -lt $(($1 * 10)) ]; do sleep 0.1 9>&-; ls_n=$((ls_n + 1)); done
-    if l_alive "$c_pid"; then l_log "pid $c_pid did not stop in $1 s: KILL"; kill -KILL "$c_pid" 2>/dev/null; sleep 0.2; fi
+    if l_alive "$c_pid"; then
+      ls_g=$(ps -o pgid= -p "$c_pid" 2>/dev/null | tr -d ' ')
+      if [ "$ls_g" = "$c_pid" ] && [ "$c_pid" -gt 1 ]; then l_log "pid $c_pid did not stop in $1 s: KILL (its process group)"; kill -KILL -"$c_pid" 2>/dev/null
+      else l_log "pid $c_pid did not stop in $1 s: KILL"; kill -KILL "$c_pid" 2>/dev/null; fi
+      sleep 0.2
+    fi
   fi
   l_reap
 }

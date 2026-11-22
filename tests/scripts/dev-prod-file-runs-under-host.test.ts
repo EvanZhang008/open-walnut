@@ -22,27 +22,31 @@ import path from 'node:path'
 
 const REPO = path.join(import.meta.dirname, '..', '..')
 const script = fs.readFileSync(path.join(REPO, 'scripts', 'dev-prod.sh'), 'utf8')
-const lines = script.split('\n')
+/** dev-prod.sh and the libs it sources (their functions run inside it, with its host_prefix_for). */
+const SOURCED = [...script.matchAll(/^source "\$REPO_ROOT\/(scripts\/lib\/[a-z0-9-]+\.sh)"$/gm)].map((m) => m[1]!)
+const FILES = ['scripts/dev-prod.sh', ...SOURCED].map((rel) => ({ rel, lines: fs.readFileSync(path.join(REPO, rel), 'utf8').split('\n') }))
 
 /** A quoted shell word that runs a Walnut program: a variable, then a Walnut subcommand. */
 const RUN = /"\$\{?[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?(:[0-9:]+)?\}?" (web|mcp|tools|__[a-z][a-z-]*)\b/
 
-interface Run { line: number; text: string }
+interface Run { rel: string; lines: string[]; line: number; text: string }
 
 function runsOfAFile(): Run[] {
   const out: Run[] = []
-  lines.forEach((text, i) => {
-    const code = text.replace(/^\s*#.*$/, '')
-    if (!RUN.test(code)) return
-    // Handing the argv to the approval helper is not a run of the file.
-    if (/^\s*host_prefix_for /.test(code)) return
-    out.push({ line: i + 1, text: text.trim() })
-  })
+  for (const { rel, lines } of FILES) {
+    lines.forEach((text, i) => {
+      const code = text.replace(/^\s*#.*$/, '')
+      if (!RUN.test(code)) return
+      // Handing the argv to the approval helper is not a run of the file.
+      if (/^\s*host_prefix_for /.test(code)) return
+      out.push({ rel, lines, line: i + 1, text: text.trim() })
+    })
+  }
   return out
 }
 
 /** The command a line belongs to (back over `\\` continuations and an array literal still open), and the two lines above it. */
-function commandOf(lineNo: number): { above: string[]; cmd: string[] } {
+function commandOf(lines: string[], lineNo: number): { above: string[]; cmd: string[] } {
   let start = lineNo - 1
   while (start > 0 && /\\\s*$/.test(lines[start - 1]!)) start--
   for (let back = start - 1; back >= Math.max(0, start - 16); back--) {
@@ -63,21 +67,27 @@ describe('every run of a compiled file in the deploy goes through Walnut.app', (
     }
   })
 
+  it('scans the libs dev-prod.sh sources too', () => {
+    expect(SOURCED).toContain('scripts/lib/devprod-launcher.sh')
+  })
+
   for (const run of runsOfAFile()) {
-    it(`dev-prod.sh:${run.line} ${run.text.slice(0, 70)}`, () => {
-      const { above, cmd } = commandOf(run.line)
+    it(`${run.rel}:${run.line} ${run.text.slice(0, 70)}`, () => {
+      const { lines } = run
+      const { above, cmd } = commandOf(lines, run.line)
       const own = lines[run.line - 1]!
       const before = cmd.slice(0, -1).join('\n') + '\n' + own.slice(0, own.search(RUN))
       // The host's prefix must be part of this command, in front of the file, never an argument after it.
       const viaHost = before.includes('${host_prefix[@]+"${host_prefix[@]}"}')
       const plain = [...above, ...cmd].map((l) => /^\s*#\s*runs-plain:\s*(.+)$/.exec(l)?.[1]).find(Boolean)
       expect(viaHost || (plain !== undefined && plain.length >= 20),
-        `dev-prod.sh:${run.line} runs a compiled file as its own program: put \${host_prefix[@]+"\${host_prefix[@]}"} (from host_prefix_for) between its env and the file, or say why on a "# runs-plain:" line above it`).toBe(true)
+        `${run.rel}:${run.line} runs a compiled file as its own program: put \${host_prefix[@]+"\${host_prefix[@]}"} (from host_prefix_for) between its env and the file, or say why on a "# runs-plain:" line above it`).toBe(true)
     })
   }
 
   it('the other deploy scripts run no compiled file themselves', () => {
     const others = ['scripts/deploy-committed.sh', ...fs.readdirSync(path.join(REPO, 'scripts', 'lib')).filter((f) => f.endsWith('.sh')).map((f) => `scripts/lib/${f}`)]
+      .filter((rel) => !SOURCED.includes(rel))
     for (const rel of others) {
       const hits = fs.readFileSync(path.join(REPO, rel), 'utf8').split('\n').filter((l) => !/^\s*#/.test(l) && RUN.test(l))
       expect(hits, `${rel} runs a compiled file: route it through dev-prod.sh's host_prefix_for`).toEqual([])

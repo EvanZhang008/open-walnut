@@ -820,6 +820,15 @@ fi
 # runtime tree is unpacked there too (<stage>/runtime), not into the data home.
 STAGE_ROOT="${TMPDIR:-/tmp}"
 STAGE_DIR="$STAGE_ROOT/open-walnut-stage.$(date +%s).$$"
+# The service launcher, when it keeps the server (WALNUT_DEVPROD_LAUNCHER, scripts/lib/devprod-launcher.sh).
+# shellcheck source=scripts/lib/devprod-launcher.sh
+source "$REPO_ROOT/scripts/lib/devprod-launcher.sh"
+svc_init
+case "$SVC_MODE" in
+  launcher) echo "The service launcher keeps the server ($SVC_PLIST): this deploy asks it to switch." ;;
+  install) echo "Installing the service launcher with this deploy ($SVC_PLIST)." ;;
+  remove) echo "Taking the service launcher away with this deploy (WALNUT_DEVPROD_LAUNCHER=0)." ;;
+esac
 STAGE_IN_USE=0
 
 # Copy one file or tree: clonefile on macOS (APFS: metadata only), plain cp elsewhere.
@@ -1023,11 +1032,12 @@ fi
 # in the runtime/ dir beside its dist-bin/ (WALNUT_RUNTIME_DIR names that
 # parent, src/binary/runtime-tree.ts). Sets the global array server_argv;
 # `web --port N` follows it, after `env` and its -u options. A rehearsal adds its
-# private data and daemon dirs.
+# private data and daemon dirs, and keeps its sessions over a server's exit as production's
+# daemon dir does (a named dir reaps them otherwise), so its restarts show what production's do.
 set_server_argv() {
   server_argv=(WALNUT_RUNTIME_DIR="$(dirname "$(dirname "$1")")/runtime" "$1")
   if [[ "$REHEARSAL" == "1" ]]; then
-    server_argv=(OPEN_WALNUT_HOME="$REHEARSAL_HOME" WALNUT_DAEMON_DIR="$REHEARSAL_DAEMON_DIR" "${server_argv[@]}")
+    server_argv=(OPEN_WALNUT_HOME="$REHEARSAL_HOME" WALNUT_DAEMON_DIR="$REHEARSAL_DAEMON_DIR" WALNUT_DAEMON_KEEP_SESSIONS=1 "${server_argv[@]}")
   fi
   if [[ "$REHEARSAL" == "1" && "${WALNUT_DEVPROD_REHEARSAL_FAIL_LAUNCH:-0}" == "1" && "${rehearsal_fail_armed:-0}" == "1" ]]; then
     # The new server (the real build) answers /api/config but cannot serve the
@@ -1698,6 +1708,10 @@ sweep_old_stages() {
     if [[ ! -d "$old_stage" || "$old_stage" == "$STAGE_DIR" || "${old_stage%/}" == "${LKG_DIR%/}" ]]; then
       continue
     fi
+    # A version the service launcher names (current, good, asked for) stays whole, running or not.
+    if svc_keeps_stage "$old_stage"; then
+      continue
+    fi
     live_pid="$(stage_has_live_process "$old_stage" || true)"
     if [[ "$live_pid" == "unknown" ]]; then
       echo "Keeping stage $old_stage: the process table could not be read, so nothing here is provably dead." >&2
@@ -1835,6 +1849,11 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   preapproved_file="$SERVER_FILE"
   preapproved_prefix=(${host_prefix[@]+"${host_prefix[@]}"})
   preapproved_why="$host_why"
+fi
+
+# With the service launcher, the launcher stops the old server and starts this build as a trial (exits).
+if [[ "$SVC_MODE" == "launcher" ]]; then
+  svc_deploy
 fi
 
 # From here the old server is stopped (the bootout below is itself a stop): an exit leaves the dist to the rollback.
@@ -2287,6 +2306,17 @@ snapshot_lkg() {
 # a process that never started (launchctl submit registering nothing, instant
 # module-init death) — judged in seconds below, not after the whole window.
 server_log_baseline="$(wc -c < "$SERVER_LOG" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+
+# The old server is stopped by now. Installing the launcher: its job starts this build (exits, unless
+# it could not be written or loaded: then the old way below). Taking it away: its job went with the
+# stop above, its plist and mark go now, and the old way follows.
+if [[ "$SVC_MODE" == "install" ]]; then
+  svc_first_start || SVC_MODE=plain
+elif [[ "$SVC_MODE" == "remove" ]]; then
+  rm -f "$SVC_PLIST" 2>/dev/null || true
+  svc_unmark
+  echo "Service launcher removed: the server runs as launchd job '$LAUNCH_LABEL' again."
+fi
 
 STAGE_IN_USE=1
 rehearsal_fail_armed=1

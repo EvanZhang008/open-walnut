@@ -9,6 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { serveReadyCheck, serveLauncherLeaving, startServeLauncherBeat } from '../../src/web/serve-launcher-beat.js'
+import { _resetLauncherEnvForTesting, launcherServicePid, takeLauncherEnv } from '../../src/web/launcher-env.js'
 
 const okConfig = async () => new Response(JSON.stringify({ x: 1 }), { status: 200, headers: { 'content-type': 'application/json' } })
 const noInProcess = { wanted: async () => false, check: async () => 'never asked' }
@@ -51,6 +52,8 @@ describe('startServeLauncherBeat', () => {
     server = null
     for (const r of roots.splice(0)) fs.rmSync(r, { recursive: true, force: true })
     if (before === undefined) delete process.env.WALNUT_LAUNCHER_DIR; else process.env.WALNUT_LAUNCHER_DIR = before
+    delete process.env.WALNUT_LAUNCHER_SERVICE_PID
+    _resetLauncherEnvForTesting()
     if (beforeInProcess === undefined) delete process.env.WALNUT_IN_PROCESS_DAEMON; else process.env.WALNUT_IN_PROCESS_DAEMON = beforeInProcess
   })
 
@@ -86,5 +89,37 @@ describe('startServeLauncherBeat', () => {
 
     serveLauncherLeaving('planned stop')
     expect(fs.existsSync(path.join(dir, 'leaving'))).toBe(true)
+  })
+
+  it('under the Mac\'s run script, every mark names the launcher\'s child, not this process (the session host is between them)', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'serve-launcher-'))
+    roots.push(root)
+    const dir = path.join(root, 'launcher')
+    fs.mkdirSync(dir)
+    process.env.WALNUT_IN_PROCESS_DAEMON = '0'
+    server = http.createServer((req, res) => {
+      if (req.url === '/api/config') { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}') } else { res.writeHead(404); res.end() }
+    })
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', () => resolve()))
+    const port = (server.address() as { port: number }).port
+    const child = process.pid + 7
+    process.env.WALNUT_LAUNCHER_DIR = dir
+    process.env.WALNUT_LAUNCHER_SERVICE_PID = String(child)
+    // Taken at the server's start, before anything copies the env into a child.
+    expect(takeLauncherEnv()).toEqual({ dir, servicePid: child })
+    expect(process.env.WALNUT_LAUNCHER_DIR).toBeUndefined()
+    expect(process.env.WALNUT_LAUNCHER_SERVICE_PID).toBeUndefined()
+    startServeLauncherBeat(port)
+    const deadline = Date.now() + 10_000
+    while (!fs.existsSync(path.join(dir, 'ready')) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
+    expect(fs.readFileSync(path.join(dir, 'ready'), 'utf8')).toContain(`pid=${child}\n`)
+    expect(Number(fs.readFileSync(path.join(dir, 'heartbeat'), 'utf8').trim().split(' ')[2])).toBe(child)
+    serveLauncherLeaving('planned stop')
+    expect(fs.readFileSync(path.join(dir, 'leaving'), 'utf8')).toContain(`pid=${child}\n`)
+  })
+
+  it('takes only a whole pid above 1 from the run script', () => {
+    expect(launcherServicePid('4242')).toBe(4242)
+    for (const bad of [undefined, '', '1', '0', '-5', '12a', ' 42', '99999999999']) expect(launcherServicePid(bad)).toBeNull()
   })
 })
