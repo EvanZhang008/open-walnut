@@ -99,8 +99,8 @@ describe('chipView renders the spec 4.1 table', () => {
     expect(view(FIXTURES.diverged)).toMatchObject({ label: '3 behind · 2 ahead', icon: 'arrows-up-down', modifiers: ['--diverged'] })
     expect(view(FIXTURES.diverged).title).toBe(`Both you and the remote have new commits. Rebase or merge in the checkout, then check again.${CLICK_TO_CHECK_SUFFIX}`)
     const missing = view(FIXTURES.missing)
-    expect(missing).toMatchObject({ label: 'Files not on this Mac', icon: 'slash-circle', modifiers: ['--missing'], clickable: false })
-    expect(missing.title).toBe('The files for this plugin are not on this machine. Restore will clone them again.')
+    expect(missing).toMatchObject({ label: 'Files not on this computer', icon: 'slash-circle', modifiers: ['--missing'], clickable: false })
+    expect(missing.title).toBe('The files for this plugin are not on this computer, so it cannot update. Restore will clone them again.')
   })
 })
 

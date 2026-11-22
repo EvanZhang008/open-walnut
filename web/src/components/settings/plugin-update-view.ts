@@ -324,8 +324,8 @@ function chipViewFor(state: UpdateState, opts: ChipViewOptions): ChipView {
       return v
     }
     case 'missing': {
-      const v = base('missing', 'Files not on this Mac', 'slash-circle', ['--missing'])
-      v.title = 'Its files are not on this Mac, so it cannot update. Restore downloads them again.'
+      const v = base('missing', 'Files not on this computer', 'slash-circle', ['--missing'])
+      v.title = 'The files for this plugin are not on this computer, so it cannot update. Restore will clone them again.'
       v.clickable = false
       return v
     }

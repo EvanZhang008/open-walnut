@@ -102,7 +102,7 @@ export const ROUTER_NO_FILTER_LINE = 'Tick at least one kind of message for each
 
 /** What a router is for, said once for the New router form. */
 export const ROUTER_PURPOSE = 'A router reads an area\'s incoming mail and messages and hands each one to the task that owns it.';
-export const ROUTER_LINK_NOTE = 'Linking a VP only shows the router beside it on the Org page.';
+export const ROUTER_LINK_NOTE = 'Linking a VP only shows the router beside it on the Org page: it never steers where an item goes and gives no access.';
 
 /** The router's saved settings, as the form's baseline. */
 export function routerBaseline(task: Pick<Task, 'org_name' | 'title' | 'router_links' | 'router_paused'>, folders: readonly string[] = [],
