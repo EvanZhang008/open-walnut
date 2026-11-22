@@ -1,9 +1,9 @@
 /**
  * The host's session port (src/core/session-channel/host-port.ts): a row this host makes is its
- * own; leader reads answer from the start bundle first, then this host's copies; task writes go
- * to this service's own API as the session's own call, so the route table decides (the leader's
- * refusal or the away write port's answer comes back as it is); writes with no route are refused
- * with the existing needs_leader shape.
+ * own; leader reads answer from the start bundle first, then this host's copies; the task side of
+ * its sessions (links, phase, activity) is the leader's and answers unchanged, never tried; any
+ * other task field goes to this service's own API as the session's own call, so the route table
+ * decides (the leader's refusal or the away write port's answer comes back as it is).
  */
 import { describe, expect, it } from 'vitest'
 import { createHostSessionPort, StartBundles, type OwnApi } from '../../../src/core/session-channel/host-port.js'
@@ -127,15 +127,25 @@ describe('tasks', () => {
     const { api, seen } = fakeApi(() => ({ status: 503, body: { error: { code: 'needs_leader', why: 'leader_answers', message: 'the Mac answers' } } }))
     const { p } = port({ api })
     const tm = await p.tasks.loadTaskManager()
-    expect(await refusedWhy(tm.updateTask('task-copy-1', { phase: 'IN_PROGRESS' }))).toBe('leader_answers')
-    expect(seen).toEqual([{ method: 'PATCH', path: '/api/tasks/task-copy-1', body: { phase: 'IN_PROGRESS' }, sid: 'sid-run-1' }])
+    expect(await refusedWhy(tm.updateTask('task-copy-1', { title: 'Named here' }))).toBe('leader_answers')
+    expect(seen).toEqual([{ method: 'PATCH', path: '/api/tasks/task-copy-1', body: { title: 'Named here' }, sid: 'sid-run-1' }])
+  })
+
+  it('the phase a start moves is the leader\'s: not sent, the task answers as it is; the rest of the write still goes', async () => {
+    const { api, seen } = fakeApi(() => ({ status: 200, body: { task: { id: 'task-copy-1', title: 'Named here' } } }))
+    const { p, f } = port({ api })
+    const tm = await p.tasks.loadTaskManager()
+    expect((await tm.updateTask('task-copy-1', { phase: 'IN_PROGRESS' })).task).toBe(f.copyTask)
+    expect(seen).toEqual([])
+    await tm.updateTask('task-copy-1', { phase: 'IN_PROGRESS', title: 'Named here' })
+    expect(seen).toEqual([{ method: 'PATCH', path: '/api/tasks/task-copy-1', body: { title: 'Named here' }, sid: 'sid-run-1' }])
   })
 
   it('an away write the write port took answers as the route answered', async () => {
-    const { api } = fakeApi(() => ({ status: 200, body: { task: { id: 'task-copy-1', title: 'From the copy', phase: 'IN_PROGRESS' } } }))
+    const { api } = fakeApi(() => ({ status: 200, body: { task: { id: 'task-copy-1', title: 'Named away' } } }))
     const { p } = port({ api })
     const tm = await p.tasks.loadTaskManager()
-    expect((await tm.updateTask('task-copy-1', { phase: 'IN_PROGRESS' })).task).toMatchObject({ phase: 'IN_PROGRESS' })
+    expect((await tm.updateTask('task-copy-1', { title: 'Named away' })).task).toMatchObject({ title: 'Named away' })
   })
 
   it('no session of this host runs the task, or no own API yet: refused, nothing sent', async () => {
@@ -152,16 +162,19 @@ describe('tasks', () => {
     const bundles = new StartBundles()
     bundles.put('task-copy-1', {}, 'sid-preassigned-1')
     const { p } = port({ api, bundles, sessionOfTask: () => null })
-    await (await p.tasks.loadTaskManager()).updateTask('task-copy-1', { phase: 'IN_PROGRESS' })
+    await (await p.tasks.loadTaskManager()).updateTask('task-copy-1', { title: 'Named at the start' })
     expect(seen[0]!.sid).toBe('sid-preassigned-1')
   })
 
-  it('the session links are the leader\'s; the phase a turn moves answers unchanged; the activity touch does nothing', async () => {
-    const { p } = port()
+  it('the session links are the leader\'s: answered with the task as it is, never tried; the phase a turn moves answers unchanged; the activity touch does nothing', async () => {
+    const { api, seen } = fakeApi(() => ({ status: 500, body: {} }))
+    const { p, f } = port({ api })
     const tm = await p.tasks.loadTaskManager()
-    expect(await refusedWhy(tm.linkSession('task-copy-1', 'sid-1'))).toBe('session_links_on_leader')
-    expect(await refusedWhy(tm.linkSessionSlot('task-copy-1', 'sid-1', 'exec'))).toBe('session_links_on_leader')
-    expect(await refusedWhy(tm.replaceSessionIdLinks('task-copy-1', 'a', 'b'))).toBe('session_links_on_leader')
+    for (const write of [
+      tm.linkSession('task-copy-1', 'sid-1'), tm.linkSessionSlot('task-copy-1', 'sid-1', 'exec'), tm.clearSession('task-copy-1', 'sid-1'),
+      tm.clearSessionSlot('task-copy-1', 'sid-1'), tm.addSessionToHistory('task-copy-1', 'sid-1'), tm.replaceSessionIdLinks('task-copy-1', 'a', 'b'),
+    ]) expect((await write).task).toBe(f.copyTask)
+    expect(seen).toEqual([])
     await expect(tm.touchLastSessionUpdate('task-copy-1')).resolves.toBeUndefined()
     const ph = await p.tasks.loadPhase()
     expect(await ph.applySessionPhase('task-copy-1', 'session:result' as never, 'test')).toEqual({ changed: false })

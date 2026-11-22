@@ -24,6 +24,8 @@ const known = new Map<string, string>()
 /** Rows seen in the store that are not a host's; bounded, cleared when full. */
 const legacy = new Set<string>()
 const LEGACY_MEMO_MAX = 20_000
+/** Sessions this host replica runs for its leader (taskSideOnLeader said so); bounded, cleared when full. */
+const ownHere = new Set<string>()
 /** Did this store ever apply a host's channel? null: not asked yet. */
 let anyCursor: boolean | null = null
 
@@ -77,6 +79,32 @@ export function judgeOf(sid: string): Judge {
   return judgingHostOf(sid) !== null ? 'host' : 'legacy'
 }
 
+/**
+ * On a host replica that runs its sessions: is `sid` one of them (its row this host's own,
+ * session-row-owner.ts rowOwnedHere)? Its task side (the task's phase, its session links) is the
+ * leader's, done from the facts this host sends (session-channel/leader-tasks.ts, and the leader's
+ * own turn-end handlers on the facts it re-emits), so a write of it here is skipped, never tried:
+ * the task store here is a read-only copy. Outside the session classes (their port answers it,
+ * session-channel/host-port.ts) each such write passes one of three gates that ask this:
+ * applySessionPhase (phase.ts), the session-link writer (task-manager.ts), and the session hooks'
+ * dispatcher (the leader runs them on the facts it re-emits). Always false on the leader (no host
+ * key), at no cost.
+ */
+export function taskSideOnLeader(sid: string | null | undefined): boolean {
+  const here = thisHostKey()
+  if (!sid || !here) return false
+  if (ownHere.has(sid)) return true
+  let row: ReturnType<typeof sessionJudgeInStore>
+  try { row = sessionJudgeInStore(sid) } catch { return false }
+  const own = rowOwnedHere(row ? { judge: row.judgedByHost ? 'host' : undefined, host: row.host ?? undefined } : null, here)
+  // A row this host made stays its own; asked on every event of its session (the hooks, a stream's phase).
+  if (own) {
+    if (ownHere.size >= LEGACY_MEMO_MAX) ownHere.clear()
+    ownHere.add(sid)
+  }
+  return own
+}
+
 /** Who judges the session of a record the caller holds (a boot scan): the same rule, no lookup. */
 export function judgeOfRecord(rec: Pick<SessionRecord, 'judge' | 'host'> | null | undefined): Judge {
   return judgedByHost(rec) && !rowOwnedHere(rec, thisHostKey()) ? 'host' : 'legacy'
@@ -115,6 +143,7 @@ export function judgeOfStart(host: string | undefined): Judge {
 export function _resetJudgeOfForTesting(): void {
   known.clear()
   legacy.clear()
+  ownHere.clear()
   anyCursor = null
   startProbe = null
 }

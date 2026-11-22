@@ -5,6 +5,7 @@ import { migrateInboxProject } from './inbox-migration.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import os from 'node:os';
 import { getDb as getSessionDb } from './session-db.js';
+import { taskSideOnLeader } from './sessions/judge-of.js';
 import { TASK_SESSION_ROW_SQL, TaskSessionTakenError } from './sessions/one-session-per-task.js';
 import { CLOUD_MODE, TASKS_FILE } from '../constants.js';
 import { withFileLock } from '../utils/file-lock.js';
@@ -7463,6 +7464,27 @@ export async function listGroups(): Promise<FolderListing[]> {
 }
 
 /**
+ * The one writer of a task's session links (the six below): the task `idPrefix` names, `change`
+ * applied to it, the store written. A session this host runs for its leader (judge-of.ts
+ * taskSideOnLeader) is linked on the leader from the facts it applies: nothing is written here
+ * (the store is a read-only copy), and the task answers as it is.
+ */
+async function writeSessionLink(idPrefix: string, sessionIds: ReadonlyArray<string | undefined>, change: (task: Task) => void): Promise<{ task: Task }> {
+  if (sessionIds.some((sid) => taskSideOnLeader(sid))) return { task: await getTask(idPrefix) };
+  return withWriteLock(async () => {
+    const store = await readStore();
+    const matches = matchIdRef(store.tasks, idPrefix);
+    if (matches.length === 0) throw new Error(missingIdMessage(idPrefix));
+    if (matches.length > 1) throw new Error(ambiguousIdMessage(idPrefix, matches));
+    const task = matches[0];
+    change(task);
+    task.updated_at = new Date().toISOString();
+    await writeStore(store);
+    return { task };
+  });
+}
+
+/**
  * Link a session to a task's typed slot (plan or exec).
  * Also pushes to session_ids history. Replaces old linkActiveSession().
  */
@@ -7471,27 +7493,10 @@ export async function linkSessionSlot(
   sessionId: string,
   slot: 'plan' | 'exec',
 ): Promise<{ task: Task }> {
-  return withWriteLock(async () => {
-  const store = await readStore();
-  const matches = matchIdRef(store.tasks, idPrefix);
-
-  if (matches.length === 0) {
-    throw new Error(missingIdMessage(idPrefix));
-  }
-  if (matches.length > 1) {
-    throw new Error(
-      ambiguousIdMessage(idPrefix, matches),
-    );
-  }
-
-  const task = matches[0];
-  assertSessionBelongsToTask(task.id, sessionId);
-  // The one link rule (sessions/task-session-link.ts), which a host's reader fold shows too.
-  pointTaskAtSession(task, sessionId, slot);
-  task.updated_at = new Date().toISOString();
-
-  await writeStore(store);
-  return { task };
+  return writeSessionLink(idPrefix, [sessionId], (task) => {
+    assertSessionBelongsToTask(task.id, sessionId);
+    // The one link rule (sessions/task-session-link.ts), which a host's reader fold shows too.
+    pointTaskAtSession(task, sessionId, slot);
   });
 }
 
@@ -7537,49 +7542,31 @@ export async function clearSessionSlot(
   sessionId?: string,
   slot?: 'plan' | 'exec',
 ): Promise<{ task: Task }> {
-  return withWriteLock(async () => {
-  const store = await readStore();
-  const matches = matchIdRef(store.tasks, idPrefix);
-
-  if (matches.length === 0) {
-    throw new Error(missingIdMessage(idPrefix));
-  }
-  if (matches.length > 1) {
-    throw new Error(
-      ambiguousIdMessage(idPrefix, matches),
-    );
-  }
-
-  const task = matches[0];
-
-  if (sessionId) {
-    // Clear the specific session from whichever plan/exec slot it occupies.
-    // The primary slot (session_id) is deliberately left alone: it is the
-    // task's durable link to its conversation, and the terminal-status callers
-    // (runner result handler, reconciler, health monitor) call this for every
-    // stopped/error session. Clearing it here unlinked every task whose session
-    // had ever died. A caller that must drop the primary link as well (archive,
-    // retry, force-delete) pairs this call with clearSession().
-    if (task.plan_session_id === sessionId && (!slot || slot === 'plan')) {
+  return writeSessionLink(idPrefix, [sessionId], (task) => {
+    if (sessionId) {
+      // Clear the specific session from whichever plan/exec slot it occupies.
+      // The primary slot (session_id) is deliberately left alone: it is the
+      // task's durable link to its conversation, and the terminal-status callers
+      // (runner result handler, reconciler, health monitor) call this for every
+      // stopped/error session. Clearing it here unlinked every task whose session
+      // had ever died. A caller that must drop the primary link as well (archive,
+      // retry, force-delete) pairs this call with clearSession().
+      if (task.plan_session_id === sessionId && (!slot || slot === 'plan')) {
+        task.plan_session_id = undefined;
+      }
+      if (task.exec_session_id === sessionId && (!slot || slot === 'exec')) {
+        task.exec_session_id = undefined;
+      }
+    } else if (slot) {
+      // Clear a specific slot
+      if (slot === 'plan') task.plan_session_id = undefined;
+      else task.exec_session_id = undefined;
+    } else {
+      // Clear all slots (primary included)
+      task.session_id = undefined;
       task.plan_session_id = undefined;
-    }
-    if (task.exec_session_id === sessionId && (!slot || slot === 'exec')) {
       task.exec_session_id = undefined;
     }
-  } else if (slot) {
-    // Clear a specific slot
-    if (slot === 'plan') task.plan_session_id = undefined;
-    else task.exec_session_id = undefined;
-  } else {
-    // Clear all slots (primary included)
-    task.session_id = undefined;
-    task.plan_session_id = undefined;
-    task.exec_session_id = undefined;
-  }
-  task.updated_at = new Date().toISOString();
-
-  await writeStore(store);
-  return { task };
   });
 }
 
@@ -7592,26 +7579,9 @@ export async function addSessionToHistory(
   idPrefix: string,
   sessionId: string,
 ): Promise<{ task: Task }> {
-  return withWriteLock(async () => {
-    const store = await readStore();
-    const matches = matchIdRef(store.tasks, idPrefix);
-
-    if (matches.length === 0) {
-      throw new Error(missingIdMessage(idPrefix));
-    }
-    if (matches.length > 1) {
-      throw new Error(
-        ambiguousIdMessage(idPrefix, matches),
-      );
-    }
-
-    const task = matches[0];
+  return writeSessionLink(idPrefix, [sessionId], (task) => {
     assertSessionBelongsToTask(task.id, sessionId);
     if (task.session_ids?.length !== 1 || task.session_ids[0] !== sessionId) task.session_ids = [sessionId];
-    task.updated_at = new Date().toISOString();
-
-    await writeStore(store);
-    return { task };
   });
 }
 
@@ -7624,19 +7594,7 @@ export async function replaceSessionIdLinks(
   oldSessionId: string,
   newSessionId: string,
 ): Promise<{ task: Task }> {
-  return withWriteLock(async () => {
-    const store = await readStore();
-    const matches = matchIdRef(store.tasks, idPrefix);
-    if (matches.length === 0) {
-      throw new Error(missingIdMessage(idPrefix));
-    }
-    if (matches.length > 1) {
-      throw new Error(
-        ambiguousIdMessage(idPrefix, matches),
-      );
-    }
-
-    const task = matches[0];
+  return writeSessionLink(idPrefix, [oldSessionId, newSessionId], (task) => {
     const linked = task.session_id === oldSessionId
       || task.plan_session_id === oldSessionId
       || task.exec_session_id === oldSessionId
@@ -7650,9 +7608,6 @@ export async function replaceSessionIdLinks(
     if (linked && !task.session_ids.includes(newSessionId)) {
       task.session_ids.push(newSessionId);
     }
-    task.updated_at = new Date().toISOString();
-    await writeStore(store);
-    return { task };
   });
 }
 
@@ -7664,30 +7619,13 @@ export async function linkSession(
   idPrefix: string,
   sessionId: string,
 ): Promise<{ task: Task }> {
-  return withWriteLock(async () => {
-    const store = await readStore();
-    const matches = matchIdRef(store.tasks, idPrefix);
-
-    if (matches.length === 0) {
-      throw new Error(missingIdMessage(idPrefix));
-    }
-    if (matches.length > 1) {
-      throw new Error(
-        ambiguousIdMessage(idPrefix, matches),
-      );
-    }
-
-    const task = matches[0];
+  return writeSessionLink(idPrefix, [sessionId], (task) => {
     assertSessionBelongsToTask(task.id, sessionId);
     pointTaskAtSession(task, sessionId);
     // Separate from updated_at: updated_at is bumped by any field change (plugin sync,
     // notes, phase changes) which would pollute "Recent" sort. last_session_update only
     // tracks actual user session interactions.
     task.last_session_update = new Date().toISOString();
-    task.updated_at = new Date().toISOString();
-
-    await writeStore(store);
-    return { task };
   });
 }
 
@@ -7717,31 +7655,8 @@ export async function clearSession(
   idPrefix: string,
   sessionId?: string,
 ): Promise<{ task: Task }> {
-  return withWriteLock(async () => {
-    const store = await readStore();
-    const matches = matchIdRef(store.tasks, idPrefix);
-
-    if (matches.length === 0) {
-      throw new Error(missingIdMessage(idPrefix));
-    }
-    if (matches.length > 1) {
-      throw new Error(
-        ambiguousIdMessage(idPrefix, matches),
-      );
-    }
-
-    const task = matches[0];
-    if (sessionId) {
-      if (task.session_id === sessionId) {
-        task.session_id = undefined;
-      }
-    } else {
-      task.session_id = undefined;
-    }
-    task.updated_at = new Date().toISOString();
-
-    await writeStore(store);
-    return { task };
+  return writeSessionLink(idPrefix, [sessionId], (task) => {
+    if (!sessionId || task.session_id === sessionId) task.session_id = undefined;
   });
 }
 

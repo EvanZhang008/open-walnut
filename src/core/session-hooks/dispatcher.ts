@@ -37,6 +37,7 @@ import {
 import { deriveTaskHookPoints, buildTaskContext } from './derive/task.js';
 import { log } from '../../logging/index.js';
 import { isSideThreadLane } from '../sessions/side-thread-fork.js';
+import { sessionOfEvent, taskSideOnLeader } from '../sessions/judge-of.js';
 
 const DEFAULT_HANDLER_TIMEOUT_MS = 30_000;
 const DEFAULT_AGENT_TIMEOUT_MS = 120_000;
@@ -244,6 +245,11 @@ export class HookDispatcher {
       await this.handleTaskEvent(event);
       return;
     }
+
+    // A session this host runs for its leader: its hooks are the leader's, run there on the facts
+    // it re-emits (they write the leader's data, the task's note, summary and title, and ask the
+    // session once, there). judge-of.ts taskSideOnLeader; always false on the leader.
+    if (taskSideOnLeader(sessionOfEvent(event))) return;
 
     const hookPoints = deriveSessionHookPoints(
       event,

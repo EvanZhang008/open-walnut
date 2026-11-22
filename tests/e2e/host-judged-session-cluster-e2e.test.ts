@@ -18,6 +18,8 @@
  *   S5 restart   the host's service restarted in the middle of a turn: the Mac resumes from its
  *                cursor, nothing lost, nothing twice
  *   S6 off       the switch off on the Mac: a new start on the same host takes the legacy path
+ *   S7 tasks     through all of the above the host tried no task write of a session it runs (the
+ *                Mac does their task side from the facts): no refused or failed write in its log
  *
  * Facts are compared by identity: each record of the host's log (seq order, its name and a hash
  * of its data) against the Mac's bus events of the channel (order of emit, the same two).
@@ -227,4 +229,12 @@ describe.skipIf(!RUN)('a host runs and judges its sessions, every piece a real p
     expect(again.status, JSON.stringify(again.json)).toBeLessThan(300)
     await waitFor(async () => resultOn(await channelEvents(sid), 'echo: ROUND after off'), 120_000, 'the host session to answer after the switch went off')
   }, 300_000)
+
+  it('S7: the host tried no task write of a session it runs: no refused or failed one in its whole log', () => {
+    const tried = h.c.logs({ whole: true }).replica.split('\n').filter((l) => TASK_WRITE_TRIED.test(l)).map((l) => l.slice(0, 300))
+    expect(tried).toEqual([])
+  })
 })
+
+/** A task write the host made or tried for one of its sessions, as its log says it (the store is a read-only copy there). */
+const TASK_WRITE_TRIED = /readonly database|phase update (failed|FAILED)|failed to (link session|update task phase|clear session|apply session)|session_links_on_leader|task_writes_need_mac|no_caller_session|linking it to its task failed/

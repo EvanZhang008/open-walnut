@@ -7,15 +7,17 @@
  *             `host: WALNUT_HOST_KEY`), and a rename or a removal of one is told to the fact
  *             emitter (host-emitter.ts). A row that is a copy of the leader's stays as it was.
  *   tasks     reads: the start bundle of the start in flight (host-api.ts StartBundle), else this
- *             host's copies. Writes: this service's own API as the session's own call (the
- *             in-process credential naming the session, replica/write-actor.ts), so the follower's
- *             route table decides, exactly as for a session's `walnut` call: away, the write port
- *             journals it for the leader; a write the table keeps for the leader answers
- *             `needs_leader`, raised as NeedsLeaderError (the existing shape; every call site of
- *             the session classes catches and logs it). A task write with no route (the session
- *             slot links, the phase a turn moves) is the leader's to make from the facts it
- *             applies: refused here with `needs_leader` (the links) or answered as unchanged (the
- *             phase, which a turn asks for on every edge).
+ *             host's copies. The task side of a session this host runs (its session links, the
+ *             phase its start and its turns move, its last activity) is the leader's, made from
+ *             the facts it applies (leader-tasks.ts, and its turn-end handlers on the facts it
+ *             re-emits): answered here as unchanged, never tried. The code outside the session
+ *             classes reaches the same writes through applySessionPhase and the task-manager's
+ *             session-link writer, which skip them by judge-of.ts taskSideOnLeader. Any other
+ *             field of an updateTask goes to this service's own API as the session's own call
+ *             (the in-process credential naming the session, replica/write-actor.ts), so the
+ *             follower's route table decides, exactly as for a session's `walnut` call: away, the
+ *             write port journals it for the leader; a write the table keeps for the leader
+ *             answers `needs_leader`, raised as NeedsLeaderError (the existing shape).
  *   config    this host's config copy (the leader's settings without its secrets).
  *   launch    the bundle first (the session context, the hints already applied), else this host's
  *             own modules on its copies; the leader's list of frequent folders is not written here.
@@ -178,29 +180,31 @@ export function createHostSessionPort(o: HostSessionPortOptions): SessionPort {
     throw refusal(r.status, r.body, 'task_writes_need_mac')
   }
 
-  const linkRefusal = (what: string) => async (): Promise<never> => {
-    throw new NeedsLeaderError('session_links_on_leader', `the leader ${what} from the facts this host sends`)
-  }
-
   const taskManager = async (): Promise<TaskManagerPort> => {
     const local = await base.tasks.loadTaskManager()
+    const getTask = async (id: string): Promise<Task> => o.bundles.task(id) ?? local.getTask(id)
+    /** A session link: the leader's, from the facts (leader-tasks.ts). The task answers as it is. */
+    const leaderLinks = async (id: string): Promise<{ task: Task }> => ({ task: await getTask(id) })
     return {
-      getTask: async (id) => o.bundles.task(id) ?? local.getTask(id),
+      getTask,
       getProjectMetadata: (async (project) => {
         const fromBundle = o.bundles.projectMetadata(project)
         return fromBundle !== undefined ? fromBundle : local.getProjectMetadata(project)
       }) as TaskManagerPort['getProjectMetadata'],
       updateTask: (async (id, updates) => {
-        const body = await taskWrite(id, 'PATCH', `/api/tasks/${encodeURIComponent(id)}`, updates)
+        // The phase a start moves is the leader's: it moves it when the session's row is born there.
+        const { phase: _leaderMovesIt, ...rest } = (updates ?? {}) as Record<string, unknown>
+        if (Object.keys(rest).length === 0) return { task: await getTask(id) }
+        const body = await taskWrite(id, 'PATCH', `/api/tasks/${encodeURIComponent(id)}`, rest)
         const task = (body as { task?: Task } | null)?.task
         return { task: task ?? await local.getTask(id) }
       }) as TaskManagerPort['updateTask'],
-      linkSession: linkRefusal('links a session to its task') as TaskManagerPort['linkSession'],
-      linkSessionSlot: linkRefusal('links a session to its task') as TaskManagerPort['linkSessionSlot'],
-      clearSession: linkRefusal('clears a task\'s session') as TaskManagerPort['clearSession'],
-      clearSessionSlot: linkRefusal('clears a task\'s session') as TaskManagerPort['clearSessionSlot'],
-      addSessionToHistory: linkRefusal('keeps a task\'s session history') as TaskManagerPort['addSessionToHistory'],
-      replaceSessionIdLinks: linkRefusal('moves a task\'s links to a new session id') as TaskManagerPort['replaceSessionIdLinks'],
+      linkSession: leaderLinks as TaskManagerPort['linkSession'],
+      linkSessionSlot: leaderLinks as TaskManagerPort['linkSessionSlot'],
+      clearSession: leaderLinks as TaskManagerPort['clearSession'],
+      clearSessionSlot: leaderLinks as TaskManagerPort['clearSessionSlot'],
+      addSessionToHistory: leaderLinks as TaskManagerPort['addSessionToHistory'],
+      replaceSessionIdLinks: leaderLinks as TaskManagerPort['replaceSessionIdLinks'],
       // Every activity of a session asks this: the leader reads it off the facts instead.
       touchLastSessionUpdate: async () => {},
     }

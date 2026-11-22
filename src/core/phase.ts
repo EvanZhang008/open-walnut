@@ -99,6 +99,7 @@
 import { log } from '../logging/index.js'
 import { isExternalImportTask, isPluginRunTask, isProgramRunTask, type TaskPhase, type TaskStatus, type Task, type TurnRetryReason } from './types.js';
 import { isQuietTurn } from './sessions/quiet-turn.js'
+import { taskSideOnLeader } from './sessions/judge-of.js'
 import { queueSentBy } from './sessions/send-sent-by.js'
 import { isMainAgentTask } from './org/main-stays-active.js'
 import {
@@ -674,6 +675,12 @@ async function movePhase(
     log.session.debug('applySessionPhase: skip (quiet turn)', { taskId, trigger, source, sessionId: opts?.sessionId })
     return { changed: false }
   }
+  // A session this host runs for its leader: the leader moves its task from the facts it applies
+  // (judge-of.ts taskSideOnLeader). Every edge of it, from any caller, stops here.
+  if (taskSideOnLeader(opts?.sessionId)) {
+    log.session.debug('applySessionPhase: skip (the leader moves this session\'s task)', { taskId, trigger, source, sessionId: opts?.sessionId })
+    return { changed: false }
+  }
   // Dynamic imports to avoid circular dependencies (phase.ts ← task-manager.ts)
   const { getTask, updateTaskRaw } = await import('./task-manager.js')
   let task: Task
@@ -1002,6 +1009,8 @@ export async function handBackTaskOnSessionEnd(
   // the task's (2026-11-13: a daemon snapshot of a compaction's end moved a task to Needs you, and the
   // restart after it asked that "turn" for a status).
   if (opts?.turnEnd && isQuietTurn(sessionId)) return false
+  // A session this host runs for its leader: the leader hands its task back (applySessionPhase's gate).
+  if (taskSideOnLeader(sessionId)) return false
   try {
     const { getTask } = await import('./task-manager.js')
     const task = await getTask(taskId)

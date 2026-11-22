@@ -221,8 +221,8 @@ export interface ReplicaCluster {
   deviceCopy(): any
   /** Read-only summary of the copy stores on the replica and the rows on the Mac. */
   stores(): Record<string, unknown>
-  /** The tail of each process's log (failures). */
-  logs(): Record<string, string>
+  /** The tail of each process's log (failures); `whole`: the replica's whole server log. */
+  logs(o?: { whole?: boolean }): Record<string, string>
   stop(): Promise<void>
 }
 
@@ -789,7 +789,9 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
   }
   const copyState = (name: string): any => { try { return JSON.parse(fs.readFileSync(path.join(walnutDir(), 'data', 'cache', name), 'utf8')) } catch { return null } }
   const deviceCopyText = (): string => { try { return fs.readFileSync(path.join(walnutDir(), 'data', 'replica', 'devices.json'), 'utf8') } catch { return '' } }
-  const replicaLog = (): string => { try { return fs.readFileSync(path.join(walnutDir(), 'logs', 'server.log'), 'utf8').slice(-20_000) } catch { return '' } }
+  const replicaLog = (whole = false): string => {
+    try { const text = fs.readFileSync(path.join(walnutDir(), 'logs', 'server.log'), 'utf8'); return whole ? text : text.slice(-20_000) } catch { return '' }
+  }
 
   try {
     // The manager picked the replica's port on the host and keeps it in the Mac's data dir.
@@ -925,7 +927,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
         routines: (() => { try { return JSON.parse(fs.readFileSync(path.join(replicaDataNow(), 'cron-jobs.json'), 'utf8')) } catch { return null } })(),
       }
     },
-    logs: () => ({ mac: macLog.text.slice(-20_000), replica: replicaLog() }),
+    logs: (o) => ({ mac: macLog.text.slice(-20_000), replica: replicaLog(o?.whole === true) }),
     async stop() {
       if (stopped) return
       stopped = true
