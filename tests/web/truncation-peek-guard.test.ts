@@ -55,10 +55,10 @@ describe('truncated rows rely on the in-place peek, not a native title', () => {
  */
 const NOT_A_ROW: Record<string, string> = {
   // Task titles that wrap (`.wn-title`, 2026-11-21) cut nothing and need no entry: the list row's
-  // drag copy, the Adopt and Release headings, the Leader flyout's heading, a Board card's title.
+  // drag copy, the pinned card's drag copy, a Board card's title, the Adopt and Release headings,
+  // the Leader flyout's heading.
   'components/calendar/CalendarItemPopover.tsx cal-item-title-static': 'the heading of an open popover, not a row; it peeks when hovered itself',
   'components/sessions/SessionBrowserCard.tsx session-browser-tab-label': 'a web page tab of the agent browser, not a task',
-  'components/tasks/TodoPanel.tsx todo-pinned-title': 'the pinned card drag overlay, never hovered (the pinned card itself is marked)',
   // The Worker pill's leader name is metadata (`.wn-meta`, text-fit.css), cut only when the row has no room.
   'components/tasks/SubtaskPill.tsx wn-meta': 'a pill drawn inside a task row, which is marked where the row is built',
 };
@@ -72,12 +72,12 @@ describe('a task row whose text is cut off expands as a whole', () => {
     const listed = new Set(sites.filter((s) => !s.inRow).map(keyOf));
     // TodoPanel holds marked rows too: an entry is stale only when no unmarked site of it is left.
     expect(Object.keys(NOT_A_ROW).filter((k) => !listed.has(k)), 'stale NOT_A_ROW entries').toEqual([]);
-    // The rows of the report are found, so the scan is reading what it should.
+    // Marked rows that still cut a title are found, so the scan is reading what it should.
     const rows = new Set(sites.filter((s) => s.inRow).map((s) => s.file));
-    for (const f of ['components/tasks/StatusSections.tsx', 'components/tasks/TodoPanel.tsx', 'components/tasks/FocusSatelliteCards.tsx']) expect(rows.has(f), f).toBe(true);
-    // These rows' titles wrap now (`.wn-title`, 9b60109d6c: titles never cut, only metadata), so the scan
-    // finds no cut title in them; their rows stay marked, since their metadata can still be cut.
-    for (const f of ['components/tasks/WorkerFoldTree.tsx', 'components/org/OrgChannelList.tsx', 'components/org/OrgTaskRail.tsx']) {
+    for (const f of ['components/org/OrgThreads.tsx', 'components/tasks/HomeBoardSheet.tsx']) expect(rows.has(f), f).toBe(true);
+    // The rows of the first report wrap their titles now (`.wn-title`: titles never cut, only
+    // metadata), so the scan finds no cut title in them; they stay marked, since their metadata can cut.
+    for (const f of ['components/tasks/StatusSections.tsx', 'components/tasks/TodoPanel.tsx', 'components/tasks/FocusSatelliteCards.tsx', 'components/tasks/WorkerFoldTree.tsx', 'components/org/OrgChannelList.tsx', 'components/org/OrgTaskRail.tsx']) {
       expect(fs.readFileSync(path.join(WEB_SRC, f), 'utf8'), f).toContain('data-peek-row=""');
     }
   });
