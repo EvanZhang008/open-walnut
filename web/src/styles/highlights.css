@@ -36,18 +36,19 @@
 ::highlight(thread-mark-done-214) { background-color: hsl(214 12% 55% / 0.14); text-decoration: underline dotted 1.5px hsl(214 45% 50% / 0.75); text-underline-offset: 3px; }
 /* Conversation Mode and file marks paint every asked passage by its question's
    state (no hue tells the questions apart; the number does; thread-mark-state.ts):
-   waiting amber with a dashed line (and the pulse below), answering green with
+   waiting amber with its own sweeping line (thread-live-lines.ts; an Ask not sent
+   yet has the amber fill and no line), answering green with
    the scanning line, unread red with a thick line (click to read), failed a pale
    red with a dotted line, read a quiet green with a thin line. An archived
    question keeps its line in grey (the map folds it away, the passage still
    says it was asked). Every state's wash differs too, for WebKit, which may not
    draw a highlight's underline. The comment card opens on a click. */
-::highlight(thread-mark-waiting-neutral) { background-color: hsl(45 95% 55% / 0.32); text-decoration: underline dashed 2px hsl(36 90% 42% / 0.95); text-underline-offset: 3px; }
+::highlight(thread-mark-waiting-neutral) { background-color: hsl(45 95% 55% / 0.32); }
 ::highlight(thread-mark-unread-neutral) { background-color: hsl(0 90% 60% / 0.22); text-decoration: underline 3px hsl(0 78% 46%); text-underline-offset: 3px; }
 ::highlight(thread-mark-failed-neutral) { background-color: hsl(345 70% 60% / 0.12); text-decoration: underline dotted 2px hsl(345 70% 44%); text-underline-offset: 3px; }
 ::highlight(thread-mark-neutral) { background-color: hsl(140 50% 48% / 0.15); text-decoration: underline 1px hsl(145 55% 34% / 0.85); text-underline-offset: 3px; }
 ::highlight(thread-mark-done-neutral) { background-color: hsl(0 0% 50% / 0.12); text-decoration: underline 1.5px hsl(0 0% 52% / 0.6); text-underline-offset: 3px; }
-[data-theme="dark"] ::highlight(thread-mark-waiting-neutral) { background-color: hsl(45 85% 55% / 0.28); text-decoration-color: hsl(42 92% 62%); }
+[data-theme="dark"] ::highlight(thread-mark-waiting-neutral) { background-color: hsl(45 85% 55% / 0.28); }
 [data-theme="dark"] ::highlight(thread-mark-unread-neutral) { background-color: hsl(0 80% 62% / 0.30); text-decoration-color: hsl(0 90% 70%); }
 [data-theme="dark"] ::highlight(thread-mark-failed-neutral) { background-color: hsl(345 60% 62% / 0.16); text-decoration-color: hsl(345 80% 72%); }
 [data-theme="dark"] ::highlight(thread-mark-neutral) { background-color: hsl(140 45% 52% / 0.20); text-decoration-color: hsl(145 55% 62% / 0.85); }
@@ -65,7 +66,7 @@
 [data-theme="dark"] ::highlight(thread-mark-214) { background-color: hsl(214 70% 62% / 0.34); text-decoration-color: hsl(214 85% 70%); }
 [data-theme="dark"] ::highlight(thread-mark-done-214) { background-color: hsl(214 10% 68% / 0.2); text-decoration-color: hsl(214 40% 68% / 0.8); }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) ::highlight(thread-mark-waiting-neutral) { background-color: hsl(45 85% 55% / 0.28); text-decoration-color: hsl(42 92% 62%); }
+  :root:not([data-theme]) ::highlight(thread-mark-waiting-neutral) { background-color: hsl(45 85% 55% / 0.28); }
   :root:not([data-theme]) ::highlight(thread-mark-unread-neutral) { background-color: hsl(0 80% 62% / 0.30); text-decoration-color: hsl(0 90% 70%); }
   :root:not([data-theme]) ::highlight(thread-mark-failed-neutral) { background-color: hsl(345 60% 62% / 0.16); text-decoration-color: hsl(345 80% 72%); }
   :root:not([data-theme]) ::highlight(thread-mark-neutral) { background-color: hsl(140 45% 52% / 0.20); text-decoration-color: hsl(145 55% 62% / 0.85); }

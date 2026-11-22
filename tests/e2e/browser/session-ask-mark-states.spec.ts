@@ -6,8 +6,10 @@
  * color meaning need to click and check, once check become green again, if a
  * new question is asked, become yellow again").
  *
- * One walk in Conversation Mode: Ask on a passage, send; the mark is amber and
- * pulses (its own bars in the live layer) while no answer text has come, with a
+ * One walk in Conversation Mode: Ask on a passage, send; the mark is amber with a
+ * solid line whose band sweeps left to right (its own bars in the live layer;
+ * 2026-11-22, the user: "some kind of hard line but smoothly highlight from left
+ * to right like what we have for claude code is working") while no answer text has come, with a
  * tooltip that says so; the first words turn it green with the scanning line;
  * the answer lands with the card closed, so it is red; opening the card makes
  * it green and still; a second question on the same passage starts over at
@@ -56,11 +58,21 @@ const expectState = (page: Page, name: StateName, timeout = 30_000) =>
 
 const priorityOf = (page: Page, name: string) => page.evaluate((n) => (CSS.highlights?.get(n) as { priority?: number } | undefined)?.priority ?? null, name)
 
-/** A bar in the live layer that breathes: its opacity changes over time. */
-async function expectPulsing(line: Locator): Promise<void> {
-  expect(await line.evaluate((el) => getComputedStyle(el).animationName)).toBe('thread-wait-pulse')
-  const first = await line.evaluate((el) => getComputedStyle(el).opacity)
-  await expect.poll(() => line.evaluate((el) => getComputedStyle(el).opacity), { timeout: 4_000 }).not.toBe(first)
+/** A waiting bar in the live layer: a solid line, never dashed, whose bright band moves
+ *  left to right (the scan's sweep), full opacity the whole time (no breathing). */
+async function expectSweeping(line: Locator): Promise<void> {
+  const look = () => line.evaluate((el) => {
+    const cs = getComputedStyle(el)
+    const band = getComputedStyle(el, '::after')
+    return { name: band.animationName, line: cs.backgroundImage, base: cs.backgroundColor, band: band.backgroundImage, at: band.transform, opacity: cs.opacity }
+  })
+  const first = await look()
+  expect(first.name).toBe('thread-wait-scan')
+  expect(first.line, 'a solid line, not dashes').toBe('none')
+  expect(first.base).not.toBe('rgba(0, 0, 0, 0)')
+  expect(first.band).toContain('linear-gradient')
+  await expect.poll(async () => (await look()).at, { timeout: 4_000, message: 'the band moves' }).not.toBe(first.at)
+  expect((await look()).opacity).toBe('1')
 }
 
 async function hoverPassage(page: Page, panel: Locator): Promise<void> {
@@ -107,7 +119,7 @@ test.describe('the mark of an asked passage follows its question', () => {
     await expect(card().locator('.thread-card-waiting')).toHaveText(/^(Waiting for the first words…|Queued: waits for the answer running now)$/)
     await expect(waitLines().first()).toBeVisible({ timeout: 10_000 })
     await expect(scanLines()).toHaveCount(0)
-    await expectPulsing(waitLines().first())
+    await expectSweeping(waitLines().first())
     expect(await priorityOf(page, 'thread-mark-waiting-neutral'), 'waiting paints above every other state').toBe(7)
     await shot(page, '1-waiting', panel)
     // Reduced motion: the bar holds still, the color stays.
@@ -125,7 +137,7 @@ test.describe('the mark of an asked passage follows its question', () => {
     await expectState(page, 'thread-mark-live-neutral', 30_000)
     await expect(scanLines().first()).toBeVisible()
     await expect(waitLines()).toHaveCount(0)
-    expect(await scanLines().first().evaluate((el) => getComputedStyle(el).animationName)).toBe('thread-live-scan')
+    expect(await scanLines().first().evaluate((el) => getComputedStyle(el, '::after').animationName)).toBe('thread-live-scan')
     const band = await scanLines().first().evaluate((el) => getComputedStyle(el).getPropertyValue('--live-band').trim())
     expect(band, 'the neutral scan is green').toMatch(/^hsl\(14[05]/)
     await shot(page, '2-answering', panel)
@@ -203,7 +215,7 @@ test.describe('the mark of an asked passage follows its question', () => {
     await shot(page, '7-read-after-reload', panel)
   })
 
-  test('a question queued behind a running main turn pulses amber the whole time it waits', async ({ page }) => {
+  test('a question queued behind a running main turn sweeps amber the whole time it waits', async ({ page }) => {
     await page.goto('/')
     await page.waitForLoadState('networkidle')
     await page.setViewportSize({ width: 1280, height: 820 })
@@ -225,10 +237,10 @@ test.describe('the mark of an asked passage follows its question', () => {
     await expect(card.locator('.thread-card-waiting')).toHaveText(/^(Queued: |Waiting for the first words)/, { timeout: 15_000 })
     await card.locator('.thread-card-close').click()
     await expect(card).toHaveCount(0)
-    // Amber with its pulse at once, and still after well over 6 s in the queue.
+    // Amber with its sweep at once, and still after well over 6 s in the queue.
     await expectState(page, 'thread-mark-waiting-neutral', 15_000)
     await expect(waitLines.first()).toBeVisible({ timeout: 10_000 })
-    await expectPulsing(waitLines.first())
+    await expectSweeping(waitLines.first())
     await page.waitForTimeout(7_000)
     expect(await statesOfPassage(page)).toEqual(['thread-mark-waiting-neutral'])
     await expect(waitLines.first()).toBeVisible()
@@ -265,7 +277,8 @@ test.describe('the mark of an asked passage follows its question', () => {
       expect(new Set(washes).size, `${theme}: no two states share a wash`).toBe(STATE_NAMES.length)
     }
     // The line tells them apart for color-blind readers too.
-    expect(paints['light:thread-mark-waiting-neutral'].deco).toContain('dashed')
+    // Waiting draws its line as a sweeping bar (in the live layer), so its highlight has none.
+    expect(paints['light:thread-mark-waiting-neutral'].deco.trim()).toBe('')
     expect(paints['light:thread-mark-failed-neutral'].deco).toContain('dotted')
     expect(paints['light:thread-mark-unread-neutral'].deco).toContain('3px')
     expect(paints['light:thread-mark-neutral'].deco).toContain('1px')

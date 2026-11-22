@@ -95,7 +95,7 @@ describe('a state on the page', () => {
     expect(markHighlightName(214, false, false, true, 'waiting')).toBe('thread-mark-live-214');
   });
 
-  it('waiting pulses, answering scans, nothing else moves; a draft never pulses', () => {
+  it('waiting and answering sweep, nothing else moves; a draft never sweeps', () => {
     const none = new Set<string>();
     expect(markFlagsOf({ key: 'k', neutral: true, state: 'waiting' }, none)).toEqual({ live: false, wait: true });
     expect(markFlagsOf({ key: 'k', neutral: true, state: 'waiting', draft: true }, none)).toEqual({ live: false, wait: false });

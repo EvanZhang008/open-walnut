@@ -23,9 +23,9 @@
  * every scroll when the layer does not scroll with the text.
  *
  * Neutral marks (Conversation Mode, files) paint their question's state instead
- * (`spec.state`, thread-mark-state.ts): waiting is amber with a slow pulse drawn
- * in the same layer, answering green with the scan, unread red, failed dotted
- * red, read green, resolved grey. Each state has its own highlight priority, so
+ * (`spec.state`, thread-mark-state.ts): waiting is amber with the scan's sweep
+ * in amber drawn in the same layer (a draft: the fill alone), answering green
+ * with the scan, unread red, failed dotted red, read green, resolved grey. Each state has its own highlight priority, so
  * where marks overlap the most urgent paints on top. Tree Mode keeps its branch
  * hues and the live scan by `live.keys`, unchanged.
  */
@@ -51,7 +51,7 @@ export interface ThreadMarkSpec {
   neutral?: boolean;
   /** Neutral marks: the question's state; absent paints as before (open / done / live). */
   state?: ThreadMarkState;
-  /** An Ask not sent yet: the waiting paint, no pulse (nothing is waited on). */
+  /** An Ask not sent yet: the waiting fill, no sweeping line (nothing is waited on). */
   draft?: boolean;
 }
 
@@ -75,7 +75,7 @@ const NEUTRAL_STATE_NAME: Record<ThreadMarkState, string> = {
 /** Highlight name per hue and state (neutral: one name per question state);
  *  the paint rules for every name live in highlights.css (utils/highlight-rules.ts). A live mark (its answer
  *  coming in) is the open mark's fill with no underline: the scanning line draws
- *  that. */
+ *  that. So is a waiting one (an Ask not sent yet draws no line at all). */
 export function markHighlightName(hue: number, resolved: boolean, neutral = false, live = false, state?: ThreadMarkState): string {
   if (neutral && state) return NEUTRAL_STATE_NAME[state];
   const s = live ? '-live' : resolved ? '-done' : '';

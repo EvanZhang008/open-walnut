@@ -683,8 +683,10 @@ show inline after the open ones, other completed hits that show the query fold i
   **A neutral mark paints its question's state** (2026-10-26, the user: yellow while queued,
   green while the answer streams, red when done and not read, green again once opened;
   `utils/thread-mark-state.ts`, published as `threadsApi.markStates`): waiting (sent or queued,
-  no answer text yet: amber, dashed, a slow pulse `.thread-wait-line` drawn in the same live
-  layer), answering (the live turn has words for it, `derived.spoke`: green with the scan),
+  no answer text yet: amber, its highlight with no underline and `.thread-wait-line` drawn in the
+  same live layer, the scan's solid line and sweep in amber; 2026-11-22, the user: "some kind of
+  hard line but smoothly highlight from left to right"; an Ask not sent yet has the fill
+  and no line), answering (the live turn has words for it, `derived.spoke`: green with the scan),
   unread (answered after its last view, card closed: red, thick line), failed (pale red,
   dotted), read (green, thin), resolved (grey). Highlight priority rises with urgency, so where
   marks overlap waiting > answering > unread > failed > read > resolved paints on top (find

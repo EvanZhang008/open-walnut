@@ -13,7 +13,7 @@
  * Files tab's overlay), always measured against the layer's own box.
  *
  * A question sent and not answered yet (Conversation Mode, files) gets the same
- * bars as a slow pulse instead (`WAIT_LINE_CLASS`), for the same reason.
+ * bars and sweep in its waiting amber (`WAIT_LINE_CLASS`), for the same reason.
  */
 
 import { clippingAncestors } from './clip-ancestors';
@@ -39,9 +39,8 @@ const LIVE_BAR_RISE = 1;
 /** One sweep, the same pace as the working indicator. */
 export const LIVE_SCAN_MS = 1600;
 export const LIVE_LINE_CLASS = 'thread-live-line';
-/** The waiting pulse: its own class and keyframes, one breath every WAIT_PULSE_MS. */
+/** The waiting line: the scan's sweep in the waiting amber (its own class, the same keyframes). */
 export const WAIT_LINE_CLASS = 'thread-wait-line';
-export const WAIT_PULSE_MS = 2000;
 /** Fragments of one line closer than this are one bar (word runs split across
  *  inline elements); farther apart (two table cells) each gets its own. */
 const JOIN_GAP = 6;
@@ -141,14 +140,14 @@ export function overflowClipOf(range: Range, within: Element | null): BoxLike | 
   return clip;
 }
 
-/** A bar to draw: the scan (default) or the waiting pulse. */
+/** A bar to draw: the scan (default) or the waiting line. */
 export type PaintedBar = LiveBar & { hue?: number; kind?: 'scan' | 'wait' };
 
 /**
  * Draw `bars` into `layer` (which holds nothing else), reusing the bar elements
  * already there so a bar that only moved keeps its place in the sweep. A new bar
  * (or one that changes kind) starts in phase with the document's clock, so every
- * line sweeps or pulses together.
+ * line sweeps together.
  */
 export function paintLiveBars(layer: HTMLElement, bars: ReadonlyArray<PaintedBar>): void {
   const doc = layer.ownerDocument;
@@ -165,7 +164,8 @@ export function paintLiveBars(layer: HTMLElement, bars: ReadonlyArray<PaintedBar
     if (el.className !== cls) {
       el.className = cls;
       const now = doc.defaultView?.performance.now() ?? 0;
-      el.style.animationDelay = `${-Math.round(now % (b.kind === 'wait' ? WAIT_PULSE_MS : LIVE_SCAN_MS))}ms`;
+      // The band is the bar's ::after (thread-stack-page.css), which reads its delay here.
+      el.style.setProperty('--scan-delay', `${-Math.round(now % LIVE_SCAN_MS)}ms`);
     }
     setPx(el, 'top', b.top);
     setPx(el, 'left', b.left);

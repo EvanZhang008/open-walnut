@@ -71,10 +71,11 @@ function expectUnder(bars: Box[], rects: TextRect[]): void {
 }
 
 /** A running sweep: the band's position changes over time. */
+/** The line's band (its ::after) sweeps: named `name`, moved by transform. */
 async function expectScanning(line: Locator, name: RegExp): Promise<void> {
-  expect(await line.evaluate((el) => getComputedStyle(el).animationName)).toMatch(name)
-  const first = await line.evaluate((el) => getComputedStyle(el).backgroundPosition)
-  await expect.poll(() => line.evaluate((el) => getComputedStyle(el).backgroundPosition), { timeout: 3_000 }).not.toBe(first)
+  expect(await line.evaluate((el) => getComputedStyle(el, '::after').animationName)).toMatch(name)
+  const first = await line.evaluate((el) => getComputedStyle(el, '::after').transform)
+  await expect.poll(() => line.evaluate((el) => getComputedStyle(el, '::after').transform), { timeout: 3_000 }).not.toBe(first)
 }
 
 const hasHighlight = (page: Page, name: string) => page.evaluate((n) => CSS.highlights?.has(n) ?? false, name)

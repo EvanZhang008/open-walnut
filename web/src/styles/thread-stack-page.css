@@ -177,50 +177,76 @@
   z-index: 2;
   pointer-events: none;
 }
-.thread-live-line {
-  --live-base: hsl(140 45% 58% / 0.55);
-  --live-band: hsl(145 75% 30%);
+/* The line is the bar (its base color); the band is its ::after, moved by transform so the
+   compositor runs the sweep without repainting the line every frame
+   (tests/web/infinite-animation-composited.test.ts). The band starts and ends wholly
+   outside the line, so a new sweep never jumps into view. */
+.thread-live-line,
+.thread-wait-line {
   position: absolute;
   height: 2px;
   border-radius: 1px;
   pointer-events: none;
-  background:
-    linear-gradient(90deg, transparent, var(--live-band), transparent) no-repeat,
-    var(--live-base);
-  background-size: 40% 100%, 100% 100%;
+  overflow: hidden;
+  background: var(--live-base);
+}
+.thread-live-line::after,
+.thread-wait-line::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, var(--live-band), transparent);
+  transform: translateX(-100%);
   animation: thread-live-scan 1.6s ease-in-out infinite;
+  /* In phase with the document's clock (paintLiveBars), so every line sweeps together. */
+  animation-delay: var(--scan-delay, 0ms);
+}
+.thread-live-line {
+  --live-base: hsl(140 45% 58% / 0.55);
+  --live-band: hsl(145 75% 30%);
 }
 /* Every answering scan is the state's green, in Tree Mode too (no branch hue). */
 [data-theme="dark"] .thread-live-line { --live-base: hsl(140 35% 50% / 0.5); --live-band: hsl(140 70% 72%); }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) .thread-live-line { --live-base: hsl(140 35% 50% / 0.5); --live-band: hsl(140 70% 72%); }
 }
+/* From wholly left of the line to wholly right of it: a translate is a share of the band's
+   own width (40% of the line: 1 / 0.4 = 250%). */
 @keyframes thread-live-scan {
-  0% { background-position: -40% 0, 0 0; }
-  100% { background-position: 140% 0, 0 0; }
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
 }
-/* Sent, no answer text yet (neutral marks): the dashed line breathes slowly
-   until the first words arrive. Same layer and placement as the scan. */
+/* Sent, no answer text yet (neutral marks): the same solid line and sweep as the scan, in
+   the waiting amber, until the first words arrive (2026-11-22, the user: "some kind of hard
+   line but smoothly highlight from left to right like what we have for claude code is
+   working"; it was a dashed line that breathed). On a light page a dark amber line with a
+   light band: a pale line with a dark band read too faint there. */
 .thread-wait-line {
-  --wait-color: hsl(38 92% 46%);
-  position: absolute;
-  height: 2px;
-  border-radius: 1px;
-  pointer-events: none;
-  background: repeating-linear-gradient(90deg, var(--wait-color) 0 6px, transparent 6px 10px);
-  animation: thread-wait-pulse 2s ease-in-out infinite;
+  --live-base: hsl(38 90% 34% / 0.85);
+  /* The glint is the line's own amber, lit: no colour of its own to keep in step. */
+  --live-band: color-mix(in oklab, var(--on-accent) 60%, var(--live-base));
 }
-[data-theme="dark"] .thread-wait-line { --wait-color: hsl(42 92% 62%); }
+.thread-wait-line::after {
+  width: 55%;
+  animation-name: thread-wait-scan;
+}
+[data-theme="dark"] .thread-wait-line { --live-base: hsl(42 70% 55% / 0.5); }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .thread-wait-line { --wait-color: hsl(42 92% 62%); }
+  :root:not([data-theme]) .thread-wait-line { --live-base: hsl(42 70% 55% / 0.5); }
 }
-@keyframes thread-wait-pulse {
-  0%, 100% { opacity: 0.25; }
-  50% { opacity: 1; }
+/* The wider band: 1 / 0.55 = 182%. */
+@keyframes thread-wait-scan {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(182%); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .thread-live-line { animation: none; background: var(--live-band); opacity: 0.7; }
-  .thread-wait-line { animation: none; opacity: 0.8; }
+  .thread-live-line { background: var(--live-band); opacity: 0.7; }
+  /* The waiting band is the light glint: still, the line is its own solid base. */
+  .thread-wait-line { opacity: 1; }
+  .thread-live-line::after, .thread-wait-line::after { animation: none; display: none; }
 }
 
 /* ── The outline rail: pins on other question pages ── */

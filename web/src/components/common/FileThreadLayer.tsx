@@ -182,7 +182,7 @@ function stickyBarOf(root: HTMLElement, surface: FileThreadSurface): HTMLElement
 /** The page's copy of the mark paint (thread-stack-page.css, light theme: the
  *  page in the frame brings its own colors). */
 const FRAME_STYLE = `
-::highlight(thread-mark-waiting-neutral) { background-color: hsl(45 95% 55% / 0.32); text-decoration: underline dashed 2px hsl(36 90% 42% / 0.95); text-underline-offset: 3px; }
+::highlight(thread-mark-waiting-neutral) { background-color: hsl(45 95% 55% / 0.32); }
 ::highlight(thread-mark-live-neutral) { background-color: hsl(140 60% 48% / 0.22); }
 ::highlight(thread-mark-unread-neutral) { background-color: hsl(0 90% 60% / 0.22); text-decoration: underline 3px hsl(0 78% 46%); text-underline-offset: 3px; }
 ::highlight(thread-mark-failed-neutral) { background-color: hsl(345 70% 60% / 0.12); text-decoration: underline dotted 2px hsl(345 70% 44%); text-underline-offset: 3px; }
@@ -226,10 +226,10 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
   // ── Marks on this file's asked passages (top document) ──
   const pending = threads.stack.pending;
   const draftPages = threads.stack.draftPages;
-  // The Ask being written, then the drafts left with words (each a dashed mark).
+  // The Ask being written, then the drafts left with words (each the amber fill, no line).
   const unsent = useMemo(() => (pending ? [pending, ...draftPages] : draftPages), [pending, draftPages]);
   // Each painted by its question's state; an Ask not sent yet in the waiting
-  // color, without the pulse.
+  // fill, without the sweeping line.
   const markStates = threads.markStates;
   const specs = useMemo(() => fileQuestionMarks(threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, unsent)
     .map((m) => {
