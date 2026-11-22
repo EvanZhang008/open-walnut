@@ -42,7 +42,7 @@ beforeEach(async () => {
   await createSessionRecord('legacy-r1', 'task-2', 'p')
   _resetJudgeOfForTesting()
   setRetryOverCard(async (rec, words) => { cards.push({ sid: rec.claudeSessionId, taskId: rec.taskId, words }) })
-  stop = startLeaderRetryOver()
+  stop = startLeaderRetryOver({ lateQuietMs: 20 })
 })
 
 afterEach(() => { stop(); setRetryOverCard(null); closeDb(); _resetSessionTrackerForTesting(); _resetJudgeOfForTesting() })
@@ -56,6 +56,25 @@ describe('the leader raises what a host\'s retrier held', () => {
     await settle()
     expect(cards).toEqual([{ sid: HOST_SID, taskId: 'task-1', words: 'The model refused twice; no other model to switch to.' }])
     expect(phases).toEqual([['task-1', 'session:error', 'safeguard-switch:gave-up', { sessionId: HOST_SID, retryOver: true }]])
+  })
+
+  it('a late give-up a later turn of the same backlog outran raises no card and no phase', async () => {
+    const t0 = Date.now() - 10 * 60_000
+    bus.emit(EventNames.SESSION_RETRY_OVER, { sessionId: HOST_SID, taskId: 'task-1', card: { words: 'gave up' }, phase: { trigger: 'session:error', why: 'safeguard-switch:gave-up' } }, [RETRY_OVER_SUBSCRIBER], { source: 'host-channel', late: true, timestamp: t0 })
+    // The next send ran a good turn: its result comes later in the same backlog.
+    bus.emit(EventNames.SESSION_RESULT, { sessionId: HOST_SID, result: 'fine' }, ['main-ai'], { source: 'host-channel', late: true, timestamp: t0 + 60_000 })
+    await settle()
+    expect(cards).toEqual([])
+    expect(phases).toEqual([])
+  })
+
+  it('a fresh give-up is acted on, unless a turn of that session ended after it', async () => {
+    const t0 = Date.now()
+    bus.emit(EventNames.SESSION_RESULT, { sessionId: HOST_SID, result: 'later turn' }, ['main-ai'], { source: 'host-channel', timestamp: t0 })
+    bus.emit(EventNames.SESSION_RETRY_OVER, { sessionId: HOST_SID, card: { words: 'old' } }, [RETRY_OVER_SUBSCRIBER], { source: 'host-channel', timestamp: t0 - 1_000 })
+    bus.emit(EventNames.SESSION_RETRY_OVER, { sessionId: HOST_SID, card: { words: 'new' } }, [RETRY_OVER_SUBSCRIBER], { source: 'host-channel', timestamp: t0 + 1_000 })
+    await settle()
+    expect(cards.map((c) => c.words)).toEqual(['new'])
   })
 
   it('ignores one naming the leader\'s own session', async () => {
