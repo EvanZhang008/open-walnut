@@ -14,17 +14,20 @@
  *     the record: only `vouched` (the standalone daemon saw the call's process inside the run) proves it;
  *   - the daemon gateway's anonymous caller, the literal sid `external` with no sender label: a job's
  *     call from a daemon older than that, or one the leader did not keep the job of.
+ * A session working a program's run writes for that program too (worksProgramRun): nobody asked for
+ * its task either, so its message into another program run is the program's work going on.
  * Not the program: an unknown sid or a session an engine switch replaced (they resolve to an outside
  * caller, under a sid of their own), a script on the Mac that names itself (messages-v1.ts callerLabel),
- * a session, a person.
+ * a session of a regular task (one a person or a task wrote to included), a person.
  *
  *   task_create with the tag in `tags`   the task is born with the marker; from anyone else the
  *     (or walnut.tasks.create)           create is refused (POST /tasks; task-manager.ts addTask)
  *   task_send / task_start from the      the program's own message (phase.ts PROGRAM_RUN_SEND_SOURCE,
- *     program into a program run         programSendSource): never adopts; into an imported program run
- *                                        it takes the run over (external-session-import.ts adoptImportedTask)
- *   anyone else's message                adopts it (phase.ts inputAdoptsPluginRun): the marker comes off
- *                                        (adoptPluginRun) and it is a regular task from then on
+ *     program, or from a session         programSendSource): never adopts; into an imported program run
+ *     working a program's run, into      it takes the run over (external-session-import.ts adoptImportedTask)
+ *     a program run
+ *   anyone else's message (a person's,   adopts it (phase.ts inputAdoptsPluginRun): the marker comes off
+ *     a regular task's session's)        (adoptPluginRun) and it is a regular task from then on
  *
  * No tag write can put the marker on or take it off (types.ts keepPluginRunMarker).
  *
@@ -32,7 +35,9 @@
  * host's terminal and a trigger's check still reach it as the same anonymous `external`, and their
  * message into a program run is the program's too (it never adopts, and into an imported program run
  * it takes it over); any plugin's own call counts, so one plugin's message into another plugin's run
- * does not adopt it either; and a host's replayed delivery with no sender into a plugin's run counts as
+ * does not adopt it either, and neither does a session's that works another plugin's run; a session
+ * that calls a person's own route (POST /sessions/:id/messages, the chat routes: 'api-agent',
+ * send-sent-by.ts routeSource) adopts whatever its own task is; and a host's replayed delivery with no sender into a plugin's run counts as
  * the program's (programRunDelivery), so a person's message from the phone while the Mac was away does
  * not adopt it.
  */
@@ -62,6 +67,22 @@ export function isProgramCall(caller: CallerIdentity, from: CallOrigin): boolean
   return from.sid?.trim() === EXTERNAL_CALLER_SID && !from.label?.trim()
 }
 
+/**
+ * A session working a program's run (its own task is one, isProgramRunTask): what it writes to another
+ * program run is that program's, as its job's own message is. 2026-11-22: two ticket runs of one plugin
+ * shared a finding, the receiving run became a regular task, and its result went to the user's To read.
+ * Once someone else wrote to the sender's own run it is a regular task, and its messages adopt as any
+ * task's do. Only for a message (a send, a start, an answer to a request: session-send-core.ts): a
+ * session never creates a run (programRunRefusal). Any program's run counts, another plugin's too, as
+ * any plugin's own call does (the known edges above).
+ */
+async function worksProgramRun(caller: CallerIdentity): Promise<boolean> {
+  if (caller.kind !== 'session' || !caller.record.taskId) return false
+  const { getTask } = await import('../task-manager.js')
+  const own = await getTask(caller.record.taskId).catch(() => null)
+  return !!own && isProgramRunTask(own)
+}
+
 /** PROGRAM_RUN_SESSION_REFUSAL unless the call is a program's own (isProgramCall), else null. */
 export async function programRunRefusal(from: CallOrigin): Promise<string | null> {
   const { resolveCaller } = await import('./session-send-core.js')
@@ -71,15 +92,20 @@ export async function programRunRefusal(from: CallOrigin): Promise<string | null
 
 /**
  * The source an op-level send or start goes with when it is the program's own (PROGRAM_RUN_SEND_SOURCE):
- * a program's call (isProgramCall) that names no source of its own, into a task that is a program run.
+ * a program's call (isProgramCall), or a session working a program's run (worksProgramRun), that names
+ * no source of its own, into a task that is a program run.
  * Else null, and the send keeps the source it has today ('peer', which adopts). `named`: the source the
  * caller gave (the router's 'api-agent'); a start's route source is not one (programStartSource).
  */
 export async function programSendSource(caller: CallerIdentity, from: CallOrigin, named: string | undefined, taskId: string | undefined): Promise<string | null> {
   // A start the route already found to be the program's own (programStartSource) keeps that source as it
-  // continues the run's conversation, where the caller's plugin no longer rides; never for a session or a person.
-  if (named === PROGRAM_RUN_SEND_SOURCE) return caller.kind === 'external' ? PROGRAM_RUN_SEND_SOURCE : null
-  if (!isProgramCall(caller, from) || named || !taskId) return null
+  // continues the run's conversation, where the caller's plugin no longer rides; never for a person or a
+  // regular task's session.
+  if (named === PROGRAM_RUN_SEND_SOURCE && caller.kind === 'external') return PROGRAM_RUN_SEND_SOURCE
+  if ((named && named !== PROGRAM_RUN_SEND_SOURCE) || !taskId) return null
+  // A session that names the program's source is held to the same two facts as one that names none.
+  const programs = (!named && isProgramCall(caller, from)) || await worksProgramRun(caller)
+  if (!programs) return null
   const { getTask } = await import('../task-manager.js')
   const task = await getTask(taskId).catch(() => null)
   return task && isProgramRunTask(task) ? PROGRAM_RUN_SEND_SOURCE : null
@@ -101,7 +127,8 @@ export async function programStartSource(from: CallOrigin, taskId: string | unde
  *     the record cannot tell them apart): the program's only in a plugin's run (PLUGIN_RUN_TAG), where
  *     nearly everything written while the Mac was away is that job's follow-up; in an imported program
  *     run it is someone else's and adopts, as on main;
- *   - a session's sid or an unknown one: someone else's.
+ *   - the sid of a session working a program's run (worksProgramRun): the program's, into any program run;
+ *   - any other session's sid or an unknown one: someone else's.
  */
 export async function programRunDelivery(fromSessionId: string | undefined, task: Task): Promise<boolean> {
   const sid = fromSessionId?.trim() ?? ''
@@ -109,11 +136,11 @@ export async function programRunDelivery(fromSessionId: string | undefined, task
   if (!isProgramRunTask(task)) return false
   const { resolveCaller } = await import('./session-send-core.js')
   const caller = await resolveCaller(sid).catch(() => null)
-  return !!caller && isProgramCall(caller, { sid })
+  return !!caller && (isProgramCall(caller, { sid }) || await worksProgramRun(caller))
 }
 
 /**
- * A person or another task wrote to the program's run: it is theirs, a regular task from now on.
+ * A person or a regular task wrote to the program's run: it is theirs, a regular task from now on.
  * Idempotent; a no-op for a task without the marker. Called from applySessionPhase's session:input
  * only (phase.ts), beside the importer's adoption.
  */

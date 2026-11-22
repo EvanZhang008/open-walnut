@@ -501,6 +501,88 @@ describe("a program's run a plugin's job runs in Walnut (PLUGIN_RUN_TAG)", () =>
     expect(await programSendSource(session, { sid: 'caller-session-2' }, PROGRAM_RUN_SEND_SOURCE, run.id)).toBeNull();
   });
 
+  it("a session working a program's run writes for that program, until someone writes to its own run", async () => {
+    // 2026-11-22: two ticket runs of one plugin shared a finding; the receiving run became a regular
+    // task and its result went to the user's To read. Nobody asked for the sender's task either.
+    const run = await pluginRun();
+    const sibling = await pluginRun({ sid: 'plugin-run-sibling-1' });
+    const plain = await pluginRun({ programRun: false, sid: 'plugin-run-plain-6' });
+    const imported = { tags: [EXTERNAL_SESSION_IMPORT_TAG, PROGRAM_RUN_TAG] } as Task;
+    const from = { sid: 'plugin-run-sibling-1' };
+    const worker = await resolveCaller(from.sid);
+    expect(worker.kind).toBe('session');
+    // Its send and its start into another program run are the program's, live and replayed.
+    expect(await programSendSource(worker, from, undefined, run.id)).toBe(PROGRAM_RUN_SEND_SOURCE);
+    expect(await programStartSource(from, run.id)).toBe(PROGRAM_RUN_SEND_SOURCE);
+    expect(await programSendSource(worker, from, PROGRAM_RUN_SEND_SOURCE, run.id)).toBe(PROGRAM_RUN_SEND_SOURCE);
+    expect(await programRunDelivery(from.sid, run)).toBe(true);
+    expect(await programRunDelivery(from.sid, imported)).toBe(true);
+    // Into a regular task it is another task's message (the program's source named or not), and a
+    // source it names itself stays its own.
+    expect(await programSendSource(worker, from, undefined, plain.id)).toBeNull();
+    expect(await programSendSource(worker, from, PROGRAM_RUN_SEND_SOURCE, plain.id)).toBeNull();
+    expect(await programSendSource(worker, from, PROGRAM_RUN_SEND_SOURCE, undefined)).toBeNull();
+    expect(await programSendSource(worker, from, 'api-agent', run.id)).toBeNull();
+    expect(await programRunDelivery(from.sid, plain)).toBe(false);
+    // It still creates no run: only a program's own call does.
+    expect(await programRunRefusal(from)).toBe(PROGRAM_RUN_SESSION_REFUSAL);
+    // The whole path: its message leaves the marker on, and the run's turn end still waits on the program.
+    await adoptOnInput(run.id, (await programSendSource(worker, from, undefined, run.id)) ?? 'peer', 'session_send');
+    expect((await getTask(run.id)).tags).toContain(PLUGIN_RUN_TAG);
+    // Someone wrote to the sender's own run: a regular task, whose messages adopt as any task's.
+    await adoptOnInput(sibling.id, 'peer', 'session_send');
+    expect((await getTask(sibling.id)).tags ?? []).not.toContain(PLUGIN_RUN_TAG);
+    const adopted = await resolveCaller(from.sid);
+    expect(await programSendSource(adopted, from, undefined, run.id)).toBeNull();
+    expect(await programSendSource(adopted, from, PROGRAM_RUN_SEND_SOURCE, run.id)).toBeNull();
+    expect(await programStartSource(from, run.id)).toBeNull();
+    expect(await programRunDelivery(from.sid, run)).toBe(false);
+    await adoptOnInput(run.id, (await programSendSource(adopted, from, undefined, run.id)) ?? 'peer', 'session_send');
+    expect((await getTask(run.id)).tags ?? []).not.toContain(PLUGIN_RUN_TAG);
+  });
+
+  it('every kind of caller is judged (ratchet): a new kind fails until its message into a run is pinned here', async () => {
+    const run = await pluginRun();
+    await pluginRun({ sid: 'plugin-run-sibling-2' });
+    const { task: regular } = await addTask({ title: 'Peer', project: PROJECT, source: 'local', _skipPluginOps: true });
+    await createSessionRecord('caller-session-4', regular.id, PROJECT, WALNUT_HOME);
+    const into = (sid: string | undefined, from: { sid?: string; pluginId?: string; label?: string } = { sid }) =>
+      resolveCaller(sid).then((caller) => programSendSource(caller, from, undefined, run.id).then((source) => [caller.kind, source] as const));
+    // Each kind of caller (session-send-core.ts CallerIdentity), with every way it is or is not the program.
+    const JUDGED: Record<string, Array<readonly [Promise<readonly [string, string | null]>, string | null]>> = {
+      external: [
+        [into('external'), PROGRAM_RUN_SEND_SOURCE],
+        [into('plugin:acme'), PROGRAM_RUN_SEND_SOURCE],
+        [into('external', { sid: 'external', label: 'nightly-report' }), null],
+        [into('caller-not-tracked'), null],
+      ],
+      session: [
+        [into('plugin-run-sibling-2'), PROGRAM_RUN_SEND_SOURCE],
+        [into('caller-session-4'), null],
+      ],
+      human: [[into(undefined, { pluginId: 'acme' }), null]],
+    };
+    const src = await fsp.readFile(path.join(process.cwd(), 'src/core/sessions/session-send-core.ts'), 'utf8');
+    const union = /export type CallerIdentity =\n((?:.+\n)+)/.exec(src)?.[1] ?? '';
+    const kinds = [...new Set([...union.matchAll(/kind: '([^']+)'/g)].map((m) => m[1]!))];
+    expect(kinds.length).toBeGreaterThan(2);
+    expect(Object.keys(JUDGED).sort()).toEqual(kinds.sort());
+    for (const [kind, cases] of Object.entries(JUDGED)) {
+      for (const [judged, source] of cases) expect(await judged, kind).toEqual([kind, source]);
+    }
+  });
+
+  it("every message a caller sends picks its source in one place (ratchet): no send or answer names 'peer' by itself", async () => {
+    // 2026-11-22 review: a plain send asked programSendSource, an answer to a request went out as 'peer'
+    // by itself, so one run's answer made the asking run a regular task.
+    const src = (await fsp.readFile(path.join(process.cwd(), 'src/core/sessions/session-send-core.ts'), 'utf8'))
+      .split('\n').filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line)).join(' ').replace(/\s+/g, ' ');
+    const named = [...src.matchAll(/'peer'/g)].map((m) => src.slice(Math.max(0, m.index! - 260), m.index!));
+    expect(named.length).toBeGreaterThan(1);
+    for (const before of named) expect(before).toMatch(/programSendSource\(/);
+    expect(src).not.toMatch(/source: 'peer'/);
+  });
+
   it("a host's recorded delivery is the program's by the sender the host recorded", async () => {
     const run = await pluginRun();
     const plain = await pluginRun({ programRun: false, sid: 'plugin-run-plain-5' });
@@ -514,7 +596,7 @@ describe("a program's run a plugin's job runs in Walnut (PLUGIN_RUN_TAG)", () =>
     // No sender (follower.send: the phone or a job, the record cannot tell): the program's in a plugin's run only.
     expect(await programRunDelivery('', run)).toBe(true);
     expect(await programRunDelivery('', imported)).toBe(false);
-    // A session's sid or an unknown one, and anything into a regular task: someone else's.
+    // A regular task's session's sid or an unknown one, and anything into a regular task: someone else's.
     expect(await programRunDelivery('caller-session-3', run)).toBe(false);
     expect(await programRunDelivery('caller-not-tracked', run)).toBe(false);
     expect(await programRunDelivery('external', plain)).toBe(false);

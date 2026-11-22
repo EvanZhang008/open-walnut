@@ -317,7 +317,8 @@ describe('runOfflineHandover', () => {
 
   it("a host's replayed delivery is the program's by the sender it recorded, complete or not", async () => {
     // core/sessions/plugin-run.ts programRunDelivery: `external` (a job online) is the program's in any
-    // program run; no sender ('', follower.send) is the program's in a plugin's run only; a session's is not.
+    // program run; no sender ('', follower.send) is the program's in a plugin's run only; a session's is
+    // the program's only when its own task is a program run.
     const res = await fetch(`${root()}/api/v1/tasks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-walnut-caller-sid': 'external' },
@@ -352,7 +353,19 @@ describe('runOfflineHandover', () => {
     // No sender into an imported program run: someone else's, adopted as on main.
     await runOfflineHandover({ hostKey: 'devbox', send: drainOnce('qm-offline-follower-2', '', I, imported) as never })
     expect(await tags(imported)).toEqual([])
-    // A session's message into the plugin's run: someone else's, adopted; the phase stays.
+    // The session of another run of the program: the program's too (two runs sharing a finding).
+    const res2 = await fetch(`${root()}/api/v1/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-walnut-caller-sid': 'external' },
+      body: JSON.stringify({ title: 'Ticket 9', project: 'Acme', tags: ['walnut:plugin-run'] }),
+    })
+    expect(res2.status).toBe(201)
+    const sibling = ((await res2.json()) as { task: { id: string } }).task.id
+    const R2 = '0ff1ce00-0009-4009-8009-000000000009'
+    await createSessionRecord(R2, sibling, 'Acme', '/work', { host: 'devbox', title: 'Ticket 9' })
+    await runOfflineHandover({ hostKey: 'devbox', send: drainOnce('qm-offline-sibling', R2, R, run) as never })
+    expect(await tags(run)).toEqual(['walnut:plugin-run'])
+    // A regular task's session's message into the plugin's run: someone else's, adopted; the phase stays.
     await runOfflineHandover({ hostKey: 'devbox', send: drainOnce('qm-offline-peer', A, R, run) as never })
     expect((await task(run)).phase).toBe('IN_PROGRESS')
     expect(await tags(run)).not.toContain('walnut:plugin-run')

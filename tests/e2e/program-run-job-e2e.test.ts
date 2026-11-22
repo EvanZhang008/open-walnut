@@ -157,7 +157,7 @@ describe("a plugin runs its program in Walnut", () => {
     const fourth0 = await nextProgramTurnEnd('the replica call\'s turn end', third)
     const fromServer = await callPluginOp(PLUGIN, 'task_send', { to: taskId, text: 'Escalated by the plugin', expect_reply: false }, LOCAL_ORIGIN)
     expect(fromServer.ok, JSON.stringify(fromServer)).toBe(true)
-    const fourth = await nextProgramTurnEnd('the server half\'s turn end', fourth0)
+    await nextProgramTurnEnd('the server half\'s turn end', fourth0)
 
     // 5. walnut.tasks.create with the tag files a run, and so does the job's create on its host's replica.
     const filed = await until('the plugin\'s op', () => req('POST', `/api/plugin-runtime/${PLUGIN}/ops/${PLUGIN}_file`, { title: 'Ticket 44', tags: [PLUGIN_RUN_TAG] }), (r) => r.json?.ok === true)
@@ -177,18 +177,37 @@ describe("a plugin runs its program in Walnut", () => {
     expect(scripted.status, JSON.stringify(scripted.json)).toBeLessThan(300)
     await until('the script\'s adoption', () => getTask(fifth.id), (t) => !(t.tags ?? []).includes(PLUGIN_RUN_TAG))
 
-    // 7. Another task's message (a session's task_send) adopts a third run.
+    // 7. The session of another run of the program writes for the program: the run it writes to stays
+    // the program's (2026-11-22: two ticket runs shared a finding and one landed in the user's To read).
     const third2 = await jobRun('Ticket 45')
-    const peer = await executeOp('task_send', { to: third2.id, text: 'Ticket 45 duplicates 42: close it', expect_reply: false }, { origin: LOCAL_ORIGIN, apiBase: base, callerSid: sid })
-    expect(peer.ok, JSON.stringify(peer)).toBe(true)
-    await until('the peer\'s adoption', () => getTask(third2.id), (t) => !(t.tags ?? []).includes(PLUGIN_RUN_TAG))
+    expect((await getTask(taskId)).tags).toContain(PLUGIN_RUN_TAG)
+    const sibling = await executeOp('task_send', { to: third2.id, text: 'Ticket 45 duplicates 42: same cause', expect_reply: false }, { origin: LOCAL_ORIGIN, apiBase: base, callerSid: sid })
+    expect(sibling.ok, JSON.stringify(sibling)).toBe(true)
+    await nextProgramTurnEnd('the sibling run\'s message\'s turn end', third2)
+    // Its question and that run's answer are the program's too: an answer is a message into the asking run.
+    const asked = await executeOp('task_send', { to: third2.id, text: 'Is ticket 45 the same alarm as 42?' }, { origin: LOCAL_ORIGIN, apiBase: base, callerSid: sid })
+    expect(asked.ok, JSON.stringify(asked)).toBe(true)
+    const rq = String((asked as { result: Record<string, any> }).result.requestId ?? '')
+    expect(rq).toMatch(/^rq-/)
+    const third2Sid = String(third2.session_id ?? third2.session_ids?.at(-1))
+    const beforeAnswer = await getTask(taskId)
+    const answered = await executeOp('task_send', { in_reply_to: rq, text: 'Yes: the same alarm.' }, { origin: LOCAL_ORIGIN, apiBase: base, callerSid: third2Sid })
+    expect(answered.ok, JSON.stringify(answered)).toBe(true)
+    const afterAnswer = await nextProgramTurnEnd('the answer\'s turn end in the asking run', beforeAnswer)
+    expect((await getTask(third2.id)).tags).toContain(PLUGIN_RUN_TAG)
 
     // 8. A person's message: a regular task, whose next turn end is the user's to read.
     const person = await req('POST', `/api/v1/sessions/${sid}/messages`, { text: 'I will take this one from here' })
     expect(person.status, JSON.stringify(person.json)).toBeLessThan(300)
     const adopted = await until('the person\'s turn end', () => getTask(taskId),
-      (t) => !(t.tags ?? []).includes(PLUGIN_RUN_TAG) && (t.phase_changed_at ?? '') > (fourth.phase_changed_at ?? '')
+      (t) => !(t.tags ?? []).includes(PLUGIN_RUN_TAG) && (t.phase_changed_at ?? '') > (afterAnswer.phase_changed_at ?? '')
         && t.phase === 'NEED_ACTION' && t.unread === true && t.user_status?.state === 'read')
     expect(adopted.user_status).toMatchObject({ state: 'read', toRead: 'turn' })
-  }, 240_000)
+
+    // 9. That task is a regular one now: its session's message adopts a run, as any task's does.
+    const sixth = await jobRun('Ticket 48')
+    const peer = await executeOp('task_send', { to: sixth.id, text: 'Ticket 48 duplicates 42: close it', expect_reply: false }, { origin: LOCAL_ORIGIN, apiBase: base, callerSid: sid })
+    expect(peer.ok, JSON.stringify(peer)).toBe(true)
+    await until('the peer\'s adoption', () => getTask(sixth.id), (t) => !(t.tags ?? []).includes(PLUGIN_RUN_TAG))
+  }, 300_000)
 })

@@ -1325,6 +1325,10 @@ async function performReply(
     digest: answerDigest(replyBody), deliveredTo: origin.claudeSessionId,
     by: { sessionId: caller.record.claudeSessionId, ...(caller.record.taskId ? { taskId: caller.record.taskId } : {}) },
   };
+  // A session working a program's run answers for that program: its answer into another program run
+  // never makes that run a regular task, as its plain send does not (sessions/plugin-run.ts).
+  const { programSendSource } = await import('./plugin-run.js');
+  const answerSource = (await programSendSource(caller, { sid: caller.record.claudeSessionId }, undefined, origin.taskId)) ?? 'peer';
   let sameAs: string | undefined;
   // One answer at a time per asker and words: a second task_send with the same text waits until
   // the first is delivered (or failed), then reads it as a repeat (or as the answer, if it failed).
@@ -1384,7 +1388,7 @@ async function performReply(
       // repeat (the asker has it) or an answer only for a live session (ask-answer.ts).
       const owe = many.quietRepeat || input.liveOnly ? undefined : (row: SessionRequest): ReplyOutbox | undefined => row.sameAnswerAs ? undefined : {
         to: origin.claudeSessionId, from: caller.record.claudeSessionId, ...(origin.taskId ? { taskId: origin.taskId } : {}), messageId: deliveryId,
-        busText: replyBody, enqueueText: answerText(), source: 'peer', ...(fromLeader ? { fromLeader } : {}),
+        busText: replyBody, enqueueText: answerText(), source: answerSource, ...(fromLeader ? { fromLeader } : {}),
         ...(resultHead ? { report: { taskId: caller.record.taskId!, head: resultHead, fields } } : {}),
         at: new Date().toISOString(),
       };
@@ -1426,7 +1430,7 @@ async function performReply(
     } else {
       try {
         ({ delivery, messageId } = await deliverToSession(origin, {
-          busText: replyBody, enqueueText: answerText(), source: 'peer', endsWait: true,
+          busText: replyBody, enqueueText: answerText(), source: answerSource, endsWait: true,
           taskId: origin.taskId, messageId: deliveryId, fromLeader,
           ...(input.liveOnly ? { liveOnly: input.liveOnly } : {}),
         }));
