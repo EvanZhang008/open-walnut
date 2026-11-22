@@ -264,6 +264,37 @@ async function inject(page: Page, name: string, data: unknown): Promise<void> {
   }, { n: name, d: data })
 }
 
+test('the round jump button counts what arrives below as a badge, and a tap takes the reader home (C35)', async ({ page }) => {
+  const history = longTurnHistory(6)
+  await stubSession(page, { history })
+  await captureWs(page)
+  await openByDeepLink(page)
+  const scroller = timeline(page)
+  await expect(scroller.locator('[data-message-id="a-last"]')).toBeAttached({ timeout: 15_000 })
+  const jump = overlay(page).locator('.scroll-to-bottom-btn')
+  await expect(jump).toHaveClass(/visible/)
+  const box = (await jump.boundingBox())!
+  expect(box.height).toBeGreaterThanOrEqual(44)
+  expect(Math.abs(box.width - box.height)).toBeLessThanOrEqual(1)
+  await expect(jump.locator('.scroll-to-bottom-badge')).toHaveCount(0)
+  await scroller.evaluate((el) => { el.dispatchEvent(new WheelEvent('wheel', { deltaY: -40 })); el.scrollTop = Math.max(0, el.scrollTop - 200) })
+  await page.waitForTimeout(300)
+  for (let i = 1; i <= 3; i++) {
+    history.push({ role: 'assistant', text: `New note ${i}`, timestamp: new Date().toISOString(), msgId: `new-${i}` })
+  }
+  await inject(page, 'session:batch-completed', { sessionId: SID })
+  await expect(scroller.locator('[data-message-id="new-3"]')).toBeAttached({ timeout: 15_000 })
+  // The count is the rows the timeline draws below (consecutive notes may share one row): the
+  // badge shows the same number the accessible name says.
+  await expect(jump).toHaveAttribute('aria-label', /^Scroll to bottom, \d+ new$/)
+  const n = (await jump.getAttribute('aria-label'))!.match(/(\d+) new/)![1]
+  await expect(jump.locator('.scroll-to-bottom-badge')).toHaveText(n)
+  await jump.click()
+  await expect.poll(() => scroller.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThanOrEqual(80)
+  await expect(jump).not.toHaveClass(/visible/)
+  await expect(jump).toHaveAttribute('aria-hidden', 'true')
+})
+
 test('a long last turn opens at its start; 20 calls are one row; the jump pill counts what arrives (C69, C35)', async ({ page }) => {
   const history = longTurnHistory(6)
   await stubSession(page, { history })
