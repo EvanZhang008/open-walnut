@@ -38,6 +38,7 @@ import { log } from '../../logging/index.js'
 import { MAX_UPLOAD_FRAME_BYTES } from '../../providers/ssh-upload-budget.js'
 import { HostExecError, budgetLeft, callerOf, grantFor, hostName, type Caller } from './host-exec.js'
 import { checkPath, macPlace, macSide, planTarget, probe, refuseMacPlace, refuseProtected, sourceSize, trimSlashes, type MacSide } from './host-copy-paths.js'
+import { noteFinalAnswer } from './repeat-answers.js'
 
 export const MAX_COPY_BYTES = 2 * 1024 ** 3
 export const MAX_COPIES_PER_TASK = 2
@@ -500,7 +501,9 @@ export async function copyResult(params: { copy_id?: unknown; wait_ms?: unknown 
   const id = typeof params.copy_id === 'string' ? params.copy_id : ''
   const job = jobs.get(id)
   if (!job || job.taskId !== caller.taskId) {
-    throw new HostExecError(`No copy ${id || '(no copy_id)'} for this task: it never reached Walnut, or it ended over ${KEEP_ENDED_MS / 60_000} minutes ago, or Walnut restarted since. Look at the target, or copy again.`, 404, 'unknown_copy')
+    // Final: no later read finds it, so a repeat is counted and logs at info (repeat-answers.ts).
+    const repeats = noteFinalAnswer(`copy\u0000${caller.taskId}\u0000${id}`)
+    throw new HostExecError(`No copy ${id || '(no copy_id)'} for this task: it never reached Walnut, or it ended over ${KEEP_ENDED_MS / 60_000} minutes ago, or Walnut restarted since. No later read finds it: stop reading it. Look at the target, or copy again.`, 404, 'unknown_copy', { final: true, ...(repeats ? { repeats } : {}) })
   }
   const wanted = typeof params.wait_ms === 'number' && Number.isFinite(params.wait_ms) && params.wait_ms >= 0 ? params.wait_ms : HOLD_MAX_MS
   await waitFor(job, Math.min(wanted, holdFor(caller, t0)))

@@ -39,7 +39,7 @@ import { log } from '../../logging/index.js'
 import { observe } from '../../core/observability/metrics.js'
 import { routeLogMessage, routeRecoveryKey } from '../../core/notifications/route-condition.js'
 import { createRecoveryTransitionTracker } from '../../core/notifications/recovery-transition.js'
-import { isHandledFailure } from './handled-failure.js'
+import { isHandledFailure, isRepeatAnswer } from './handled-failure.js'
 import { registerBurstContext } from '../../core/observability/memory-ledger.js'
 import { isLongPoll } from '../../core/usage-watch/normalize.js'
 import { recordRequestUse } from '../../core/usage-watch/request-record.js'
@@ -374,7 +374,8 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
       // 4xx, the designed 501 and the dependency statuses all land on warn:
       // visible when reading the log, invisible to the notification sink (which
       // only receives error level).
-      if (status >= 400) log.web.warn(line, meta)
+      // A 4xx the route marked as the same answer again (a poll of a gone job) is info: one warn per cause.
+      if (status >= 400 && !(status < 500 && isRepeatAnswer(res))) log.web.warn(line, meta)
       else if (isQuietPath(req.path)) log.web.debug(line, meta)
       else log.web.info(line, meta)
       // Recovery edge: this endpoint answered. A 4xx (or a designed 501, or a

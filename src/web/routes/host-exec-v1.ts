@@ -25,6 +25,7 @@
  * stamps it).
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
+import { markRepeatAnswerIf } from '../middleware/handled-failure.js'
 import { isFollower } from '../../core/server-role.js'
 import { isPersonAtThisMachine } from './expose.js'
 
@@ -69,6 +70,8 @@ async function answer(req: Request, res: Response, next: NextFunction, work: () 
   } catch (err) {
     if (err instanceof HostExecError) {
       const said = await note(true)
+      // The same final answer again (a poll of a job the host does not hold): logged at info (handled-failure.ts).
+      markRepeatAnswerIf(res, err.data)
       res.status(err.status).json({ error: err.message, code: err.code, ...err.data, ...(said ? { note: said } : {}) })
       return
     }

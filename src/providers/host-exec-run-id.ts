@@ -105,7 +105,9 @@ export function lostRunLines(name: string, args: Record<string, unknown>, runId:
   return [
     `walnut: ${name} may have started on ${String(args.host)} as job ${runId}: do not run it again. Read it first:`,
     `  walnut tools call ${op.read} ${shellWord(read)}`,
-    `walnut: (if that read says unknown_job, the run never reached ${String(args.host)}: host_exec_list ${shellWord(JSON.stringify({ host: args.host }))} lists this task's jobs there)`,
+    // unknown_job is final (2026-11-22: a loop read a job that never reached the Mac 80 times): the
+    // step that converges is the same call with its id, which answers the run or runs it once.
+    `walnut: (if that read says unknown_job, the run never reached ${String(args.host)} and no later read finds it: stop reading, and send this ${name} call again with "${op.field}":"${runId}", which runs it at most once; host_exec_list ${shellWord(JSON.stringify({ host: args.host }))} lists this task's jobs there)`,
   ]
 }
 

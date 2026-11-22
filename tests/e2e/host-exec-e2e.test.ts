@@ -1036,6 +1036,37 @@ describe('host_exec', () => {
     expect(execRuns().filter((m) => m.params.jobId === live)).toHaveLength(1)
   }, 30_000)
 
+  it('a read of a job that never reached the host says it is final and how to run it; a repeat of it logs at info (2026-11-22)', async () => {
+    const jobId = 'hx-e2e-never-started-0001'
+    const readIt = () => fetch(`http://127.0.0.1:${port}/api/v1/hosts/macbox/exec/${jobId}?wait_ms=15000`, {
+      headers: { 'x-walnut-caller-sid': OWN_SID, 'x-walnut-answer-by': String(Date.now() + 20_000) },
+    })
+    const first = await readIt()
+    const body = await first.json() as Record<string, unknown>
+    expect(first.status).toBe(404)
+    expect(body).toMatchObject({ code: 'unknown_job', final: true, jobId })
+    expect(body).not.toHaveProperty('repeats')
+    expect(String(body.error)).toContain('No later read finds it: stop asking for it.')
+    expect(String(body.error)).toContain(`send that same call again with "job_id":"${jobId}", which runs it at most once`)
+    expect(first.headers.get('x-walnut-repeat-answer')).toBeNull()
+    const second = await readIt()
+    expect(second.status).toBe(404)
+    expect(await second.json()).toMatchObject({ code: 'unknown_job', final: true, repeats: 1 })
+    expect(second.headers.get('x-walnut-repeat-answer')).toBe('1')
+    // The step it names converges: the same call with that id runs it, once.
+    const run = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo at-last', job_id: jobId }, OWN_SID)
+    expect(run).toMatchObject({ status: 200, body: { jobId, output: 'at-last\n' } })
+    expect(execRuns().filter((m) => m.params.jobId === jobId)).toHaveLength(1)
+    // A run Walnut started that the host no longer holds (an older host here, which reads none): the
+    // same id again would answer job_gone, so the answer says to leave job_id out.
+    const goneId = 'hx-e2e-started-then-gone-0001'
+    expect(await api('POST', '/api/v1/hosts/oldmac/exec', { command: 'echo first', job_id: goneId }, OWN_SID)).toMatchObject({ status: 200 })
+    const gone = await api('GET', `/api/v1/hosts/oldmac/exec/${goneId}`, undefined, OWN_SID)
+    expect(gone).toMatchObject({ status: 404, body: { code: 'unknown_job', final: true } })
+    expect(String(gone.body.error)).toContain('Walnut started it at')
+    expect(String(gone.body.error)).toContain('To run the command anew, leave job_id out.')
+  }, 30_000)
+
   it('a relayed call answers inside its caller\'s deadline, and starts nothing it could not answer for', async () => {
     // A relay that reached this server just now; its host's gateway gives up 14 s from here.
     const t0 = Date.now()

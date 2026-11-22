@@ -25,3 +25,26 @@ export function markHandledFailure(res: Response): Response {
 export function isHandledFailure(res: Pick<Response, 'getHeader'>): boolean {
   return res.getHeader(HANDLED_FAILURE_HEADER) === '1'
 }
+
+/**
+ * A 4xx that repeats an answer the same caller already got for the same thing (a poll loop reading a
+ * job the host does not hold: host-exec-jobs.ts unknownJob) logs at info, not warn: the first one is
+ * the signal, and one stale id should be one warn line, not one per poll (2026-11-22: a session's
+ * loop of 404 reads rang the log-spike alarm). The response itself is unchanged.
+ */
+export const REPEAT_ANSWER_HEADER = 'x-walnut-repeat-answer'
+
+export function markRepeatAnswer(res: Response): Response {
+  res.setHeader(REPEAT_ANSWER_HEADER, '1')
+  return res
+}
+
+/** True when the route said this answer repeats one the caller already had (see markRepeatAnswer). */
+export function isRepeatAnswer(res: Pick<Response, 'getHeader'>): boolean {
+  return res.getHeader(REPEAT_ANSWER_HEADER) === '1'
+}
+
+/** Mark the response as a repeat when the answer's data counts earlier ones (core/hosts/repeat-answers.ts). */
+export function markRepeatAnswerIf(res: Response, data: Record<string, unknown>): void {
+  if (typeof data.repeats === 'number' && data.repeats > 0) markRepeatAnswer(res)
+}

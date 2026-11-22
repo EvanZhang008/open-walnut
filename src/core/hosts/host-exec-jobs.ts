@@ -12,9 +12,11 @@
  * longer holds (it restarted, or an hour went by) is listed as `gone`.
  */
 import {
-  HOST_WAIT_MAX_MS, LIST_MS, REPLY_MARGIN_MS, ask, budgetLeft, callerOf, daemonError, dial, grantFor, HostExecError, jobAnswer, readJob, redact, targetHost,
+  HOST_WAIT_MAX_MS, LIST_MS, REPLY_MARGIN_MS, ask, budgetLeft, callerOf, daemonError, dial, grantFor, HostExecError, hostName, jobAnswer, readJob, redact, targetHost,
+  type Caller,
 } from './host-exec.js'
 import { mayTendRuns } from './host-exec-grant.js'
+import { noteFinalAnswer } from './repeat-answers.js'
 
 /** What this server knows of a run it started (the host may know more). */
 interface StartedRun { jobId: string; taskId: string; host: string; command: string; startedAt: number }
@@ -66,6 +68,38 @@ export function startedRun(jobId: string): StartedRun | undefined {
 }
 
 /**
+ * A job the host does not hold (`unknown_job`) is a final answer: no later read finds it. 2026-11-22:
+ * the Mac's disk filled, a host_exec call's answer was lost before it reached the Mac, and a
+ * session's shell loop read that job id every 10 s for 40 minutes, each read a 404 warn line, until
+ * the log-spike alarm rang. The answer now says what it means and the step that converges (the same
+ * host_exec call with its job_id, which answers the run if it started and runs it once if not), and
+ * counts the reads of it (repeat-answers.ts), so a repeat logs at info, not warn.
+ */
+/** The final answer for a read or stop of `jobId` the host does not hold (see the note above). */
+async function unknownJob(err: HostExecError, caller: { taskId: string }, host: string, jobId: string, verb: 'read' | 'stop' = 'read'): Promise<HostExecError> {
+  const repeats = noteFinalAnswer(`job\u0000${caller.taskId}\u0000${host}\u0000${jobId}`)
+  const name = await hostName(host)
+  const run = startedRun(jobId)
+  // The step depends on what Walnut knows: a run it started is gone (the same id again answers
+  // job_gone and runs nothing), an id it never saw start may be a lost call's (the same id runs it once).
+  const tail = run && run.taskId === caller.taskId
+    ? `Walnut started it at ${new Date(run.startedAt).toISOString()} and ${name} no longer holds it (it keeps a finished job for an hour and its log stays in your task's directory there, host-exec/${jobId}.log; a restart of its daemon also ends what it held). To run the command anew, leave job_id out.`
+    : `Walnut has no record of starting it there. If its host_exec call's answer was lost before the call reached ${name}, it never ran: send that same call again with "job_id":"${jobId}", which runs it at most once. If you know it ran (over an hour ago, or as another task's), leave job_id out instead.`
+  return new HostExecError(`No job ${jobId} on ${name}. No later ${verb} finds it: stop asking for it. ${tail} host_exec_list lists this task's jobs there.`,
+    err.status, 'unknown_job', { ...err.data, jobId, final: true, ...(repeats ? { repeats } : {}) })
+}
+
+/** The same call, with a host's `unknown_job` turned into its final answer (unknownJob). */
+async function finalIfUnknown<T>(caller: { taskId: string }, host: string, jobId: string, work: () => Promise<T>): Promise<T> {
+  try {
+    return await work()
+  } catch (err) {
+    if (err instanceof HostExecError && err.code === 'unknown_job') throw await unknownJob(err, caller, host, jobId)
+    throw err
+  }
+}
+
+/**
  * Read a job's output (from `offset`, or its tail), waiting up to `wait_ms` for it to end; with
  * `wait_for`, also until its output matches, a port listens or a file exists (host-exec-wait.ts),
  * by default as long as a read may hold.
@@ -77,6 +111,12 @@ export async function readHostJob(params: { host: string; job_id: string; offset
   const caller = await callerOf(callerSid)
   const host = await targetHost(String(params.host ?? ''), caller)
   await grantFor(caller, host, null)
+  return finalIfUnknown(caller, host, String(params.job_id), () => readOn(params, caller, callerSid, host, waitFor, t0))
+}
+
+async function readOn(params: { job_id: string; offset?: number; wait_ms?: number }, caller: Caller, callerSid: string | undefined, host: string,
+  waitFor: import('./host-exec-wait.js').WaitFor | null, t0: number): Promise<Record<string, unknown>> {
+  const waits = await import('./host-exec-wait.js')
   const conn = await dial(host, budgetLeft(caller, t0) - 2_000)
   // The host's answer needs a moment to get back: the wait leaves it 2 s. With wait_for the wait
   // is relayed in reads of at most HOST_WAIT_MAX_MS, so it may be as long as host_exec's.
@@ -145,7 +185,10 @@ export async function stopHostJob(params: { host: string; job_id: string }, call
   const { revoked } = await mayTendRuns(caller, host)
   const conn = await dial(host, budgetLeft(caller, t0) - 2_000)
   const reply = await ask(conn, host, 'exec.kill', { jobId: params.job_id, taskId: caller.taskId }, Math.min(REPLY_MARGIN_MS, Math.max(2_000, budgetLeft(caller, t0))))
-  if (!reply.ok) throw daemonError(reply, 'the host could not stop the job')
+  if (!reply.ok) {
+    const err = daemonError(reply, 'the host could not stop the job')
+    throw err.code === 'unknown_job' ? await unknownJob(err, caller, host, String(params.job_id), 'stop') : err
+  }
   const running = reply.running === true
   // A job that had already ended says how, so its stop is not read as one in flight.
   const ended = running ? {} : {

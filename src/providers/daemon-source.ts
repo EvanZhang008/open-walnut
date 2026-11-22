@@ -1265,7 +1265,7 @@ function runWnMinimal(argv, stdinText) {
     return [
       'walnut: ' + wnRunId.op + ' may have started on ' + wnRunId.host + ' as job ' + wnRunId.id + ': do not run it again. Read it first:',
       '  walnut tools call host_exec_read ' + wnShellWord(readArgs),
-      'walnut: (if that read says unknown_job, the run never reached ' + wnRunId.host + ': host_exec_list ' + wnShellWord(JSON.stringify({ host: wnRunId.host })) + " lists this task's jobs there)",
+      'walnut: (if that read says unknown_job, the run never reached ' + wnRunId.host + ' and no later read finds it: stop reading, and send this ' + wnRunId.op + ' call again with "job_id":"' + wnRunId.id + '", which runs it at most once; host_exec_list ' + wnShellWord(JSON.stringify({ host: wnRunId.host })) + " lists this task's jobs there)",
     ];
   };
   // Mirror of src/lib/op-call-id.ts: every call's id, sent beside its name, so a resend runs it
