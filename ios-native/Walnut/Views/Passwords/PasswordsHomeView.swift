@@ -47,7 +47,6 @@ struct PasswordsHomeView: View {
     let store: PasswordsStore
     @State private var query = ""
     @State private var confirmRemove = false
-    @State private var toast: String?
     /// The tile opened. Tiles are buttons, not links: two links in one List row add a chevron
     /// beside each tile and share one tap.
     @State private var openFilter: PasswordsFilter?
@@ -133,7 +132,6 @@ struct PasswordsHomeView: View {
         } message: {
             Text("The passwords stay in Walnut on your Mac. To use them here again, you enter your master password once more.")
         }
-        .vaultToast($toast)
         .vaultPrivacyCover()
         .vaultGate()
     }

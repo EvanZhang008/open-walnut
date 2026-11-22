@@ -69,8 +69,6 @@ struct ChatView: View {
     /// The launch restore gave way to an open still on its way: a failed open puts the last place
     /// back, a successful one is the place.
     @State private var restoreWaitsForOpen = false
-    /// The tab is out of sight, as the notice's clock reads it (a task cannot read the environment).
-    @State private var noticeOutOfSight = false
     /// His own moves outside this view's stack (Back from a node's page, its bar), which end an open.
     @State private var userMoves = OrgUserNavigation.shared
     /// The Chat tab's node pages on screen, by chat (`presentOnRequest` waits for one to leave).
@@ -84,8 +82,8 @@ struct ChatView: View {
     @State private var curtainFor: String?
     /// A read of a node's threads answered (`OrgReadNews`): the offline notice goes.
     @State private var readNews = OrgReadNews.shared
-    /// An Org node open that did not happen, shown over whichever page of this tab is in front
-    /// (`OrgOpenNotice`); the chat's own error bar sits under a pushed session.
+    /// An Org node open that did not happen, shown as a passing notice over whatever is in front
+    /// (`OrgOpenNotice`, `NoticeCenter`); the chat's own error bar sits under a pushed session.
     @State private var orgOpenNotice: OrgOpenNotice?
     /// Talk to CEO's "Open chat" on an email (`ContentActionButtons`).
     @State private var contentLink = ContentActionLink.shared
@@ -134,12 +132,9 @@ struct ChatView: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            // A strip above the NavigationStack, so above a pushed chat or Org page too, and the
-            // whole stack moves down for it: it covers no title, no bar and no card on any page of
-            // this tab (2026-11-08 review, round 3: as a safe-area inset outside the stack it sat
-            // over the VP page's title and its Threads, Tasks and Brief switch).
+            // An open's notices ("Opening Growth VP…", one that did not happen) are passing
+            // notices at the top of the screen (`NoticeCenter`), not part of this layout.
             VStack(spacing: 0) {
-                orgOverlay
                 chatStack
             }
                 // Hand the tab bar's room back to the chat as PADDING. An outer
@@ -183,7 +178,6 @@ struct ChatView: View {
             setDrawer(open: ChatDrawerGeometry.settlesOpen(progress: drawer, velocityX: 0))
         }
         .onChange(of: tabHidden, initial: true) { _, hidden in
-            noticeOutOfSight = hidden
             // He went to another tab: an open still on its way gives way to that.
             if hidden { userNavigated() }
         }
@@ -193,6 +187,8 @@ struct ChatView: View {
             if online { clearOfflineNotice() }
         }
         .onChange(of: readNews.answeredAt) { _, _ in clearOfflineNotice() }
+        .onChange(of: orgOpenNotice) { _, notice in showOrgOpenNotice(notice) }
+        .onChange(of: orgOpening) { _, opening in showOrgOpening(opening) }
         // The page of the chat being replaced has left: the next chat goes up. Its page is up:
         // the swap is done.
         .onChange(of: pages.sessions) { _, _ in
@@ -950,34 +946,10 @@ struct ChatView: View {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
-    /// Say an Org node open did not happen, over whatever page of this tab is in front.
+    /// Say an Org node open did not happen (the notice center reads it aloud).
     private func orgOpenFailed(_ text: String) {
-        withAnimation(reduceMotion ? nil : .snappy) { orgOpenNotice = OrgOpenNotice(text: text) }
-        AccessibilityNotification.Announcement(text).post()
+        orgOpenNotice = OrgOpenNotice(text: text)
     }
-
-    /// What an Org node open says over whatever page of this tab is in front, under its
-    /// navigation bar: that it did not happen (or happened offline), else that it is on its way
-    /// while it waits on the server.
-    @ViewBuilder
-    private var orgOverlay: some View {
-        Group {
-            if let notice = orgOpenNotice {
-                orgOpenNoticeView(notice)
-            } else if let opening = orgOpening, opening.shows {
-                openingPill(opening)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, orgOverlayShown ? 6 : 0)
-        .frame(maxWidth: .infinity)
-        // The strip's own ground, up under the status bar, while it shows something.
-        .background {
-            if orgOverlayShown { Color(uiColor: .systemGroupedBackground).ignoresSafeArea(edges: .top) }
-        }
-    }
-
-    private var orgOverlayShown: Bool { orgOpenNotice != nil || orgOpening?.shows == true }
 
     /// The node a request names, as he knows it: its task's title, else the title a chat of it
     /// carries, else the thread the notification named.
@@ -992,75 +964,43 @@ struct ChatView: View {
         return "the chat"
     }
 
-    /// The node is being read before its chat can open: says so over the page in front.
-    private func openingPill(_ opening: OrgOpening) -> some View {
-        HStack(spacing: 8) {
-            ProgressView()
-            Text(verbatim: "Opening \(opening.name)\u{2026}")
-                .font(.footnote.weight(.medium))
-                .lineLimit(1)
+    static let orgOpenNoticeId = "chat.orgOpenNotice"
+    static let orgOpeningId = "chat.orgOpening"
+
+    /// The failed (or offline) open's notice: closed by its X or a swipe, by a later open, or after
+    /// it was in sight a while (`NoticeCenter`: an error at least 8 s, counted only while seen).
+    /// It goes from the center the moment this view clears it, and clears it when it goes there.
+    private func showOrgOpenNotice(_ notice: OrgOpenNotice?) {
+        let center = NoticeCenter.shared
+        guard let notice else {
+            center.dismiss(Self.orgOpenNoticeId)
+            showOrgOpening(orgOpening)
+            return
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: Capsule())
-        .overlay(Capsule().strokeBorder(Color(uiColor: .separator), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
-        .transition(.move(edge: .top).combined(with: .opacity))
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("chat.orgOpening")
+        center.dismiss(Self.orgOpeningId)
+        let offline = notice.kind == .offline
+        let id = notice.id
+        center.post(NoticeItem(
+            id: Self.orgOpenNoticeId, title: "Chat", status: offline ? "Offline" : "Couldn't open",
+            tone: offline ? .warn : .error, preview: notice.text,
+            avatar: .symbol(offline ? "wifi.slash" : "exclamationmark.triangle.fill"),
+            life: .seconds(NoticeCenter.errorMinimum),
+            onDismiss: { if orgOpenNotice?.id == id { orgOpenNotice = nil } }))
     }
 
-    /// The failed (or offline) open's notice: closed by its X, by a later open, or after it was in
-    /// view a few seconds (`OrgOpenNoticeClock`, which counts no time under a sheet or with the
-    /// tab out of sight).
-    private func orgOpenNoticeView(_ notice: OrgOpenNotice) -> some View {
-        let offline = notice.kind == .offline
-        return HStack(alignment: .top, spacing: 10) {
-            Image(systemName: offline ? "wifi.slash" : "exclamationmark.triangle.fill")
-                .font(.footnote)
-                .foregroundStyle(offline ? Color.secondary : Theme.danger)
-                .padding(.top, 13)
-                .accessibilityHidden(true)
-            Text(notice.text)
-                .font(.footnote)
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            // The full 44 pt square takes the tap (the gate measured 32 pt).
-            Button { withAnimation(reduceMotion ? nil : .snappy) { orgOpenNotice = nil } } label: {
-                Image(systemName: "xmark")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: OrgOpenNotice.closeSide, height: OrgOpenNotice.closeSide)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Dismiss")
-            .accessibilityIdentifier("chat.orgOpenNotice.close")
+    /// "Opening <name>…" while the node is read before its chat can open; a notice of a failed
+    /// open takes its place.
+    private func showOrgOpening(_ opening: OrgOpening?) {
+        let center = NoticeCenter.shared
+        guard let opening, opening.shows, orgOpenNotice == nil else {
+            center.dismiss(Self.orgOpeningId)
+            return
         }
-        .padding(.leading, 14)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .strokeBorder((offline ? Color(uiColor: .separator) : Theme.danger.opacity(0.35)), lineWidth: 1))
-        .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
-        .transition(.move(edge: .top).combined(with: .opacity))
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("chat.orgOpenNotice")
-        .task(id: notice.id) {
-            var clock = OrgOpenNoticeClock()
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(500))
-                let visible = UIApplication.shared.applicationState == .active
-                    && !noticeOutOfSight
-                    && ApprovalCenter.shared.presented == nil
-                    && !PresentationLowering.somethingPresented
-                if clock.tick(0.5, visible: visible) { break }
-            }
-            if !Task.isCancelled, orgOpenNotice?.id == notice.id {
-                withAnimation(reduceMotion ? nil : .snappy) { orgOpenNotice = nil }
-            }
-        }
+        guard center.item(Self.orgOpeningId)?.title != opening.name else { return }
+        center.post(NoticeItem(
+            id: Self.orgOpeningId, title: opening.name, status: "Opening\u{2026}", tone: .live,
+            avatar: NoticeAvatar.initials(of: opening.name), life: .untilDismissed,
+            announces: false))
     }
 
     /// Open an ask that has no chat here as its session: the one the tasks store

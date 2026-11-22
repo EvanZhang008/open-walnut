@@ -11,8 +11,8 @@ import XCTest
 ///     sits in, and says so when a fresh read no longer has it.
 ///  3. The card header stacks at accessibility sizes, and a short conversation has one toggle
 ///     (`OrgThreadCardLayout`).
-///  4. A failed open says what happened in words that fit (`OrgOpenNotice`), and its notice
-///     counts only the time it can be seen (`OrgOpenNoticeClock`).
+///  4. A failed open says what happened in words that fit (`OrgOpenNotice`); how long its notice
+///     stays is the notice center's rule (`NoticeCenterTests`).
 final class OrgThreadFocusTests: XCTestCase {
     private static let now = WalnutTask.parseISO("2026-11-04T12:00:00Z")!
     private let t0 = Date(timeIntervalSince1970: 1_800_000_000)
@@ -353,15 +353,5 @@ final class OrgThreadFocusTests: XCTestCase {
         XCTAssertEqual(OrgOpenNotice.failure("Design", companion), "Design can be started only while your Mac is online.")
         let offline = APIError.network(underlying: URLError(.notConnectedToInternet))
         XCTAssertTrue(OrgOpenNotice.failure("Design", offline).hasPrefix("Couldn't reach Design: "))
-    }
-
-    /// The notice stays until it was in view for `visibleFor`: time under a sheet (an approval)
-    /// or in the background does not count.
-    func testTheNoticeCountsOnlyTimeInView() {
-        var clock = OrgOpenNoticeClock()
-        for _ in 0..<60 { XCTAssertFalse(clock.tick(0.5, visible: false), "under a sheet it waits") }
-        for _ in 0..<15 { XCTAssertFalse(clock.tick(0.5, visible: true)) }
-        XCTAssertTrue(clock.tick(0.5, visible: true), "8 s in view, then it goes")
-        XCTAssertEqual(OrgOpenNoticeClock.visibleFor, 8)
     }
 }

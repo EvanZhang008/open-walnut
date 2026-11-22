@@ -203,8 +203,6 @@ struct OrgThreadsView: View {
                         .allowsHitTesting(bar == .shown)
                 }
             }
-            // At the bottom, above the tab bar: where the eye is after the card's buttons, and off the cards' text.
-            .overlay(alignment: .bottom) { noticeView }
             .refreshable { await store.refresh() }
             .onScrollPhaseChange { _, phase in
                 guard phase == .interacting else { return }
@@ -233,28 +231,6 @@ struct OrgThreadsView: View {
         // A container, so the list's identifier does not replace those inside it (the jump bar's).
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("org.threads")
-    }
-
-    /// Where the last action moved its thread, for a moment at the top of the page.
-    @ViewBuilder
-    private var noticeView: some View {
-        if let notice = store.notice {
-            Label(notice.text, systemImage: "checkmark.circle.fill")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(Color(uiColor: .secondarySystemGroupedBackground), in: Capsule())
-                .overlay(Capsule().stroke(Color(uiColor: .separator), lineWidth: 0.5))
-                .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
-                .padding(.bottom, 12)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .accessibilityIdentifier("org.threads.notice")
-                .task(id: notice.id) {
-                    try? await Task.sleep(for: .seconds(3))
-                    if store.notice?.id == notice.id { withAnimation(.snappy) { store.notice = nil } }
-                }
-        }
     }
 
     private func card(_ t: OrgThread, shared: Set<String>, now: Date, snoozed: Bool, compact: Bool = false) -> some View {

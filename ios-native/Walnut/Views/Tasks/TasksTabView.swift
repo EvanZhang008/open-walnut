@@ -38,7 +38,6 @@ struct TasksTabView: View {
         @Bindable var router = router
         NavigationStack(path: $path) {
             page
-                .modifier(TasksPageToast(drawer: drawer))
                 .navigationDestination(for: TasksTabRoute.self) { route in
                     switch route {
                     case .calendar:
@@ -46,10 +45,8 @@ struct TasksTabView: View {
                             // The calendar's items have no row to spin, so the page does
                             // while a tap asks the server where its session is.
                             .overlay { TasksRouterSpinner(router: router) }
-                            .modifier(TasksPageToast(drawer: drawer))
                     case .session(let session):
                         SessionConversationView(session: session)
-                            .modifier(TasksPageToast(drawer: drawer))
                     }
                 }
         }
@@ -309,19 +306,6 @@ struct TasksCalendarPage: View {
         .navigationTitle("Calendar")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.visible, for: .navigationBar)
-    }
-}
-
-/// The store's toast while the drawer is shut: at the top of the page, under its
-/// navigation bar and clear of a session's composer.
-private struct TasksPageToast: ViewModifier {
-    let drawer: LeadingDrawerModel
-
-    func body(content: Content) -> some View {
-        content.overlay(alignment: .top) {
-            TasksToastLayer(drawer: drawer, whileDrawerOpen: false)
-                .padding(.top, 6)
-        }
     }
 }
 

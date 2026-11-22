@@ -7,8 +7,9 @@ import XCTest
 ///    With Chat out of sight, Growth VP's page has had onDisappear, so `OrgPagesOnScreen` no
 ///    longer lists it and `ChatView.presentOnRequest` may take the plain path (swap the chat under
 ///    a page that is still in the stack), the v11 failure. Expect Design VP's page with its thread.
-///  - AB: the offline notice and the held line must not cover the navigation bar's buttons
-///    (screenshots N05-Y-copy, S06-S-notice and H04-T-held show they do).
+///  - AB: the offline notice never keeps the navigation bar's buttons from him. Since 2026-11-20
+///    it is a passing card at the top of the screen (`NoticeCenter`, the one notice system), over
+///    the bar while it shows, so a swipe up takes it away and Back and the view switch are free.
 final class ThreadPushR3ClaudeReviewUITests: ThreadPushUITestCase {
 
     override var shotPrefix: String { "C3" }
@@ -44,9 +45,9 @@ final class ThreadPushR3ClaudeReviewUITests: ThreadPushUITestCase {
         let backButton = app.navigationBars.buttons.element(boundBy: 0)
         XCTAssertTrue(backButton.exists)
         shot("AB-notice")
-        XCTAssertFalse(notice.frame.intersects(backButton.frame),
-                       "AB: the notice \(notice.frame) covers Back \(backButton.frame)")
-        XCTAssertFalse(notice.frame.intersects(tabs.frame),
-                       "AB: the notice \(notice.frame) covers the view switch \(tabs.frame)")
+        notice.swipeUp()
+        XCTAssertTrue(notice.waitForNonExistence(timeout: 3), "AB: a swipe up does not take the notice away")
+        XCTAssertTrue(backButton.isHittable, "AB: Back \(backButton.frame) is still covered")
+        XCTAssertTrue(tabs.isHittable, "AB: the view switch \(tabs.frame) is still covered")
     }
 }

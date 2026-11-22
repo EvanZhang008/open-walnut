@@ -21,9 +21,17 @@ final class OrgThreadsStore {
     private(set) var loading = false
     /// When a Follow up of his went out, per thread: the card says so at once, whatever the reload shows.
     private(set) var followUpSentAt: [String: Date] = [:]
-    /// Where the last action moved its thread ("Moved to Working"), shown for a moment.
+    /// Where the last action moved its thread ("Moved to Working"), shown for a moment as a
+    /// passing notice (`NoticeCenter`).
     struct Notice: Equatable { let text: String; let id = UUID() }
-    var notice: Notice?
+    var notice: Notice? {
+        didSet {
+            guard let notice else { return }
+            NoticeCenter.shared.post(NoticeItem(
+                id: "org.threads.notice", title: "Threads", status: "Moved", tone: .ok, preview: notice.text,
+                avatar: .symbol("bubble.left.and.text.bubble.right")))
+        }
+    }
     /// The last read that finished (its start, and whether it failed): a thread asked for after
     /// that start may not be in it yet (`OrgThreadRevealModel`).
     private(set) var lastRead: OrgThreadRevealModel.Read?

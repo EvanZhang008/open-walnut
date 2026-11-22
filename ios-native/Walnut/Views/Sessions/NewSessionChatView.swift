@@ -1085,7 +1085,8 @@ struct NewSessionChatView: View {
             AppLog.info("session", "saved a draft as a todo", [
                 "taskId": created.id, "project": project.isEmpty ? "-" : project,
             ])
-            tasks.transientNotice = "Saved to \(tasks.tierLabel(for: Self.todoTier))"
+            // No notice: the saved todo shows where the person is (the toast rule: what the person
+            // just did and sees in front of them pops nothing).
             onSavedAsTodo?()
             return true
         } catch let APIError.server(_, _, msg, _, _) {

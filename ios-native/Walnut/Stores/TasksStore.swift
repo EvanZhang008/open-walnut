@@ -332,11 +332,25 @@ final class TasksStore {
     var projectSources: [String: WalnutProjectSource] = [:]
     /// Debounce handle for scheduleTierRefresh (extension file).
     @ObservationIgnored var tierRefreshTask: Task<Void, Never>?
-    /// Transient failure line for fire-and-forget mutations — TasksView shows
-    /// it as a small auto-dismissing toast (never a modal).
-    var transientError: String?
-    /// Transient info line ("Pinned · Satellite") — same toast surface.
-    var transientNotice: String?
+    /// Transient failure line for fire-and-forget mutations: set, it shows as a passing
+    /// notice (`NoticeCenter`, never a modal). Kept as the last one said, for tests.
+    var transientError: String? {
+        didSet { if let transientError { Self.announce(transientError, isError: true) } }
+    }
+    /// Transient info line ("Pinned · Satellite"): the same notice.
+    var transientNotice: String? {
+        didSet { if let transientNotice { Self.announce(transientNotice, isError: false) } }
+    }
+
+    /// One notice for the store's lines: a newer line replaces the one up.
+    static let noticeId = "tasks.toast"
+
+    private static func announce(_ text: String, isError: Bool) {
+        NoticeCenter.shared.post(NoticeItem(
+            id: noticeId, title: "Tasks", status: isError ? "Not done" : "Done",
+            tone: isError ? .error : .ok, preview: text,
+            avatar: .symbol(isError ? "exclamationmark.triangle.fill" : "checklist")))
+    }
     /// Task ids whose delete came back 409 (active sessions) — the next
     /// delete confirm for these offers "Stop Sessions & Delete".
     var deleteNeedsForceIds: Set<String> = []

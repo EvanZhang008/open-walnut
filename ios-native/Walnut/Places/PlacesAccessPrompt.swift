@@ -115,14 +115,17 @@ final class PlacesAccessPrompt {
 
     private func announce() {
         if PlacesRecorder.shared.access == .always {
-            HealthToast.show("Places is on. Walnut records the places you visit from now on, and sends them to your Walnut server.")
+            NoticeCenter.shared.post(NoticeItem(
+                id: "places.toast", title: "Places", status: "On", tone: .ok,
+                preview: "Places is on. Walnut records the places you visit from now on, and sends them to your Walnut server.",
+                avatar: .symbol("mappin.and.ellipse"), life: .seconds(6)))
         }
     }
 
     private enum Note { case turnOn, accessNote }
 
     private func confirm(_ note: Note) async -> Bool {
-        guard let top = HealthToast.topViewController() else { return false }
+        guard let top = PresentationLowering.top() else { return false }
         return await withCheckedContinuation { done in
             let alert: UIAlertController
             let yes: UIAlertAction

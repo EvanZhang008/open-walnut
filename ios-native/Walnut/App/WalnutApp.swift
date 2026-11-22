@@ -168,7 +168,14 @@ struct RootView: View {
         }
         // First-frame budget proof (see LaunchTrace): must report
         // syncDiskLoads=0, i.e. nothing on this path waited on disk.
-        .onAppear { LaunchTrace.markFirstFrame() }
+        .onAppear {
+            LaunchTrace.markFirstFrame()
+            // Every passing notice of the app shows in one place (`NoticeCenter`).
+            NoticeWindow.shared.install()
+            #if DEBUG
+            NoticeDebugSamples.postIfAsked()
+            #endif
+        }
         // The lock-screen work card's links (`walnut://work?list=…`): MainTabView shows the list.
         .onOpenURL { url in
             #if DEBUG

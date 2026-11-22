@@ -458,8 +458,9 @@ struct LiveMarkdownBody: View {
 }
 
 /// System-generated notification (session error, cron result, …) rendered as a
-/// distinct card — colored left bar + badge header + markdown body — mirroring
-/// the web console's notification styling instead of dumping raw text.
+/// distinct card: one hairline all round (never a coloured bar down one side), a
+/// coloured badge header, a markdown body. Mirrors the web console's notification
+/// styling instead of dumping raw text.
 struct NotificationCard: View {
     let message: ChatMessage
     @State private var expanded = false
@@ -468,22 +469,16 @@ struct NotificationCard: View {
     private static let collapseThreshold = 280
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(accent)
-                .frame(width: 3)
-            VStack(alignment: .leading, spacing: 6) {
-                header
-                bodyText
-            }
-            .padding(.leading, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 6) {
+            header
+            bodyText
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(accent.opacity(0.25), lineWidth: 0.5)
+                .strokeBorder(Color(uiColor: .separator), lineWidth: 0.5)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 3)

@@ -169,22 +169,6 @@ enum VaultClipboard {
     }
 }
 
-/// A short line that floats at the bottom and leaves by itself ("Password copied").
-struct VaultToast: View {
-    let text: String
-
-    var body: some View {
-        Label(text, systemImage: "checkmark.circle.fill")
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 16).padding(.vertical, 11)
-            .background(Capsule().fill(Color.black.opacity(0.82)))
-            .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
-            .accessibilityAddTraits(.isStaticText)
-            .accessibilityIdentifier("passwords.toast")
-    }
-}
-
 /// A system prompt Passwords itself put up (Face ID, iOS's "Allow AutoFill?"): the scene goes
 /// inactive under it, but the person is still looking at this screen, so it stays uncovered.
 @MainActor
@@ -287,25 +271,6 @@ private struct VaultPrivacyCover: ViewModifier {
 
 extension View {
     func vaultPrivacyCover() -> some View { modifier(VaultPrivacyCover()) }
-
-    /// Shows `text` as a toast for two seconds whenever it is set.
-    func vaultToast(_ text: Binding<String?>) -> some View {
-        overlay(alignment: .bottom) {
-            if let t = text.wrappedValue {
-                VaultToast(text: t)
-                    .padding(.horizontal, 24)
-                    // Above the app's floating tab bar, so it covers neither the bar nor the
-                    // last lines of the list.
-                    .padding(.bottom, 92)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .task(id: t) {
-                        try? await Task.sleep(for: .seconds(2))
-                        withAnimation { text.wrappedValue = nil }
-                    }
-            }
-        }
-        .animation(.spring(duration: 0.3), value: text.wrappedValue)
-    }
 }
 
 /// "Updated 2 minutes ago" for the last fetch from the Mac.

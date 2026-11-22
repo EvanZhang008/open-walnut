@@ -195,17 +195,11 @@ struct SessionConversationView: View {
                 }
             )
             messageList
-                // The short-absence chip floats over the timeline instead of
-                // pushing it down: a transient state must not move the rows.
-                .overlay(alignment: .top) {
-                    if store.connectionNotice == .reconnecting {
-                        SessionReconnectingChip()
-                            .padding(.top, 6)
-                            .padding(.horizontal, 16)
-                            .transition(.opacity)
-                    }
+                // A short absence is a passing notice at the top (`NoticeCenter`), not a
+                // strip in the page: a transient state must not move the rows.
+                .onChange(of: store.connectionNotice, initial: true) { _, notice in
+                    SessionReconnectingNotice.show(notice == .reconnecting, sessionId: session.id)
                 }
-                .animation(.easeInOut(duration: 0.2), value: store.connectionNotice)
         }
     }
 
@@ -485,6 +479,7 @@ struct SessionConversationView: View {
         }
         .onDisappear {
             pageOperations.disappear()
+            SessionReconnectingNotice.show(false, sessionId: session.id)
             // And leaving it does too: output that landed while the page was on screen
             // was seen, so it must not greet the user as unread on the board.
             if let taskId = session.taskId { tasksStore?.markRead(taskId: taskId) }
@@ -1097,28 +1092,22 @@ final class SessionPageOperations {
     }
 }
 
-/// "Reconnecting…": the session page's link to its host has been gone for a few
-/// seconds (see SessionConnectionNotice). Small on purpose: most of these clear
-/// on their own, and the composer keeps working throughout.
-private struct SessionReconnectingChip: View {
-    var body: some View {
-        HStack(spacing: 6) {
-            ProgressView()
-                .controlSize(.mini)
-            Text("Reconnecting…")
-                .font(.footnote.weight(.medium))
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .foregroundStyle(.primary)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color(uiColor: .separator), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.12), radius: 4, y: 1)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Reconnecting")
-        .accessibilityIdentifier("session.reconnectingChip")
+/// "Reconnecting…": the session page's link to its host has been gone for a few seconds (see
+/// SessionConnectionNotice), as a passing notice that stays until the link is back or the page
+/// goes. Small on purpose: most of these clear on their own, and the composer keeps working
+/// throughout.
+@MainActor
+enum SessionReconnectingNotice {
+    static func id(_ sessionId: String) -> String { "session.reconnecting.\(sessionId)" }
+
+    static func show(_ shown: Bool, sessionId: String) {
+        let center = NoticeCenter.shared
+        guard shown else { center.dismiss(id(sessionId)); return }
+        guard center.item(id(sessionId)) == nil else { return }
+        center.post(NoticeItem(
+            id: id(sessionId), title: "Session", status: "Reconnecting\u{2026}", tone: .live,
+            avatar: .symbol("antenna.radiowaves.left.and.right"), life: .untilDismissed,
+            accessibilityId: "session.reconnectingChip", announces: false))
     }
 }
 

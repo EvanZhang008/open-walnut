@@ -1769,11 +1769,10 @@ private struct TimelineNotificationView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            // Claude Code's error reply is a grey row (the web console's error line): no
-            // coloured bar, tint or border, only its "!" in the warning colour. The bar's
-            // width stays, so the builder's reserved height and text width still hold.
-            RoundedRectangle(cornerRadius: 2)
-                .fill(quiet ? Color.clear : accent)
+            // No coloured bar down one side (2026-11-20: the user found it ugly and unneeded): the card has one
+            // hairline all round and its colour is the header's. The bar's 3 pt stays as empty
+            // room, so the builder's reserved height and text width still hold.
+            Color.clear
                 .frame(width: 3)
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
@@ -1834,9 +1833,11 @@ private struct TimelineNotificationView: View {
         .background(quiet ? Color(.tertiarySystemFill) : accent.opacity(0.07),
                     in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay {
+            // Claude Code's error reply is a grey row (the web console's error line): no tint
+            // or border, only its "!" in the warning colour.
             if !quiet {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(accent.opacity(0.25), lineWidth: 0.5)
+                    .strokeBorder(Color(uiColor: .separator), lineWidth: 0.5)
             }
         }
         .padding(.horizontal, TimelineMetrics.hMargin)

@@ -57,6 +57,13 @@ enum PresentationLowering {
 
     static func root() -> UIViewController? { appWindow()?.rootViewController }
 
+    /// The screen in front on the app's window: what an alert of the app presents on.
+    static func top() -> UIViewController? {
+        var top = root()
+        while let presented = top?.presentedViewController { top = presented }
+        return top
+    }
+
     /// What is presented over `root`, bottom first, skipping what is already on its way out.
     static func chain(from root: UIViewController?) -> [Bool] {
         var out: [Bool] = []

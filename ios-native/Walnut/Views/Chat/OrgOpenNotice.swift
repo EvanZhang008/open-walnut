@@ -3,9 +3,10 @@ import Observation
 import CoreGraphics
 
 /// An open of an Org node that did not happen (a thread push, a drawer row, Talk to CEO's Open
-/// chat). It shows over whichever page of the Chat tab is in front: the chat's own error bar sits
-/// under a pushed session, out of sight, and was still there, stale, after he went back (2026-11-06
-/// gate). One notice at a time; a later open replaces it, a successful one clears it.
+/// chat). It shows as a passing notice over whatever is in front (`NoticeCenter`): the chat's own
+/// error bar sits under a pushed session, out of sight, and was still there, stale, after he went
+/// back (2026-11-06 gate). One notice at a time; a later open replaces it, a successful one clears
+/// it. How long it stays is the center's rule (an error at least 8 s, counted only while seen).
 struct OrgOpenNotice: Equatable, Identifiable {
     enum Kind: Equatable {
         /// The open did not happen.
@@ -65,18 +66,4 @@ final class OrgReadNews {
 
     /// A read has answered since `since`.
     func answered(since: Date) -> Bool { (answeredAt ?? .distantPast) >= since }
-}
-
-/// How long a notice stays: counted only while it can be seen (the app in front and no sheet
-/// over the tab), so one that came under an approval sheet is still there when the sheet goes.
-/// Pure; pinned in `OrgOpenNoticeTests`.
-struct OrgOpenNoticeClock: Equatable {
-    static let visibleFor: TimeInterval = 8
-    private(set) var seen: TimeInterval = 0
-
-    /// Count `dt` seconds; true once the notice has been in view long enough to go.
-    mutating func tick(_ dt: TimeInterval, visible: Bool) -> Bool {
-        if visible { seen += max(0, dt) }
-        return seen >= Self.visibleFor
-    }
 }

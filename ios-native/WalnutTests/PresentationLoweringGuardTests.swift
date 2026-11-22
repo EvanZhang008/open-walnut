@@ -191,6 +191,7 @@ final class PresentationLoweringGuardTests: XCTestCase {
     /// Windows other than the app's: their own presentations are not the app's chain.
     private static let otherWindows: [String: String] = [
         "Walnut/Talk/TalkPanel.swift": "the Talk panel sits above the app on purpose and is no navigation's to close",
+        "Walnut/Views/Shared/Notices/NoticeWindow.swift": "the passing notices sit above the app's sheets on purpose, and present nothing",
         // `PresentationLowering` names a window kind; it makes none.
     ]
 

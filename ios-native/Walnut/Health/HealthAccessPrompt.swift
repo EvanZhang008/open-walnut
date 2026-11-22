@@ -169,22 +169,30 @@ final class HealthAccessPrompt {
             try? await Task.sleep(for: .seconds(4))
             await store.refresh()
             if store.macHasSamples {
-                HealthToast.show(askAgain
+                Self.tell(askAgain
                     ? "Apple Health is on. Your Mac has your recent health data now, so ask again."
                     : "Apple Health is on. Your Mac has your recent health data now.")
                 return
             }
             if store.progress.lastOutcome == .macUnreachable {
-                HealthToast.show("Apple Health is on. Walnut syncs as soon as your Walnut server can be reached.")
+                Self.tell("Apple Health is on. Walnut syncs as soon as your Walnut server can be reached.")
                 return
             }
         }
     }
 
+    /// What became of turning Apple Health on, as a passing notice.
+    private static func tell(_ text: String) {
+        AppLog.info("health", "notice shown", ["text": text])
+        NoticeCenter.shared.post(NoticeItem(
+            id: "health.toast", title: "Apple Health", status: "On", tone: .ok, preview: text,
+            avatar: .symbol("heart.fill"), life: .seconds(6)))
+    }
+
     private enum Note { case turnOn, accessOff }
 
     private func confirm(_ note: Note) async -> Bool {
-        guard let top = HealthToast.topViewController() else { return false }
+        guard let top = PresentationLowering.top() else { return false }
         return await withCheckedContinuation { done in
             let alert: UIAlertController
             let yes: UIAlertAction
@@ -210,67 +218,6 @@ final class HealthAccessPrompt {
             alert.addAction(yes)
             alert.preferredAction = yes
             top.present(alert, animated: true)
-        }
-    }
-}
-
-/// A short note pinned under the status bar, gone after a few seconds.
-@MainActor
-enum HealthToast {
-    static func keyWindow() -> UIWindow? {
-        UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap(\.windows)
-            .first { $0.isKeyWindow }
-    }
-
-    static func topViewController() -> UIViewController? {
-        guard var top = keyWindow()?.rootViewController else { return nil }
-        while let presented = top.presentedViewController { top = presented }
-        return top
-    }
-
-    static func show(_ text: String) {
-        guard let window = keyWindow() else { return }
-        AppLog.info("health", "toast shown", ["text": text])
-        let toast = UIView()
-        toast.translatesAutoresizingMaskIntoConstraints = false
-        toast.isUserInteractionEnabled = false
-        // Opaque: it sits over the screen's own header for a few seconds.
-        toast.backgroundColor = .secondarySystemGroupedBackground
-        toast.layer.cornerRadius = 18
-        toast.layer.cornerCurve = .continuous
-        toast.layer.borderWidth = 0.5
-        toast.layer.borderColor = UIColor.separator.withAlphaComponent(0.35).cgColor
-        toast.layer.shadowColor = UIColor.black.cgColor
-        toast.layer.shadowOpacity = 0.12
-        toast.layer.shadowRadius = 12
-        toast.layer.shadowOffset = CGSize(width: 0, height: 4)
-        let label = UILabel()
-        label.text = text
-        label.numberOfLines = 3
-        label.textAlignment = .center
-        label.font = .systemFont(ofSize: 14, weight: .semibold)
-        label.textColor = .label
-        label.translatesAutoresizingMaskIntoConstraints = false
-        toast.addSubview(label)
-        toast.accessibilityIdentifier = "health.toast"
-        toast.isAccessibilityElement = true
-        toast.accessibilityLabel = text
-        window.addSubview(toast)
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: toast.leadingAnchor, constant: 16),
-            label.trailingAnchor.constraint(equalTo: toast.trailingAnchor, constant: -16),
-            label.topAnchor.constraint(equalTo: toast.topAnchor, constant: 10),
-            label.bottomAnchor.constraint(equalTo: toast.bottomAnchor, constant: -10),
-            toast.centerXAnchor.constraint(equalTo: window.centerXAnchor),
-            toast.topAnchor.constraint(equalTo: window.safeAreaLayoutGuide.topAnchor, constant: 8),
-            toast.widthAnchor.constraint(lessThanOrEqualTo: window.widthAnchor, constant: -32),
-        ])
-        UIAccessibility.post(notification: .announcement, argument: text)
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(6))
-            UIView.animate(withDuration: 0.25, animations: { toast.alpha = 0 }) { _ in toast.removeFromSuperview() }
         }
     }
 }

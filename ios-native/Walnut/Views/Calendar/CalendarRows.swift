@@ -115,10 +115,9 @@ struct CalendarTimelineBlock: View {
     }
 
     private var content: some View {
+        // Its colour is the block's fill and one hairline all round, never a bar down one side
+        // (2026-11-20: the user found it ugly and unneeded).
         HStack(alignment: .top, spacing: 0) {
-            Rectangle()
-                .fill(accent)
-                .frame(width: 3)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
                     .font(.caption2.weight(.semibold))
@@ -132,22 +131,27 @@ struct CalendarTimelineBlock: View {
                         .lineLimit(1)
                 }
             }
-            .padding(.leading, 4)
+            .padding(.leading, 6)
             .padding(.trailing, 3)
             .padding(.vertical, 2)
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(accent.opacity(0.16))
-        .clipShape(
-            .rect(
-                topLeadingRadius: block.continuesBefore ? 0 : 5,
-                bottomLeadingRadius: block.continuesAfter ? 0 : 5,
-                bottomTrailingRadius: block.continuesAfter ? 0 : 5,
-                topTrailingRadius: block.continuesBefore ? 0 : 5
-            )
-        )
+        .clipShape(shape)
+        .overlay(shape.stroke(accent.opacity(0.45), lineWidth: 0.5))
         .contentShape(Rectangle())
+    }
+
+    /// Flat corners on an edge where the span continues into the neighbouring day.
+    private var shape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: block.continuesBefore ? 0 : 5,
+            bottomLeadingRadius: block.continuesAfter ? 0 : 5,
+            bottomTrailingRadius: block.continuesAfter ? 0 : 5,
+            topTrailingRadius: block.continuesBefore ? 0 : 5,
+            style: .continuous
+        )
     }
 
     private var accent: Color {

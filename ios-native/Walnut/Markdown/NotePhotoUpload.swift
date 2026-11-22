@@ -18,8 +18,9 @@ enum NotePhotoSource {
 ///   next. Peak memory is one raster + one JPEG regardless of selection size.
 /// - Per-photo failure isolation: an upload error offers Retry / Skip for THAT
 ///   photo only; photos before and after insert normally.
-/// - Progress toast ("Uploading n of N…") for multi-photo batches — non-modal,
-///   so the retry alert never fights a presented progress controller.
+/// - Progress notice ("Uploading n of N…") for multi-photo batches — a passing
+///   notice (`NoticeCenter`), non-modal, so the retry alert never fights a
+///   presented progress controller.
 extension WysiwygEditor.Coordinator {
 
     func uploadAndInsertBatch(_ sources: [NotePhotoSource], into textView: UITextView) {
@@ -28,15 +29,14 @@ extension WysiwygEditor.Coordinator {
         Task { @MainActor [weak self, weak textView] in
             guard let self, let textView else { return }
             let total = sources.count
-            let toast: NoteUploadProgressToast? = total > 1
-                ? NoteUploadProgressToast.show(over: textView) : nil
-            defer { toast?.dismissToast() }
+            let progress = NoteUploadProgress(total: total)
+            defer { progress.end() }
             var failures = 0
             for (index, source) in sources.enumerated() {
                 // The editor screen may have been popped mid-batch — stop
                 // uploading into a dead text view.
                 guard textView.window != nil else { break }
-                toast?.update(current: index + 1, total: total)
+                progress.show(current: index + 1)
                 let ok = await self.uploadOne(
                     source, position: index + 1, total: total,
                     notePath: notePath, textView: textView
@@ -196,63 +196,29 @@ func topMostViewController(from view: UIView) -> UIViewController? {
     return top
 }
 
-/// Small non-modal "Uploading n of N…" capsule pinned near the top of the
-/// screen. Non-interactive by design — the user can keep editing, and retry
-/// alerts present freely because nothing modal is up.
+/// "Uploading n of N…" while a batch of photos goes up: one notice, kept up and updated for each
+/// photo, gone when the batch ends. Nothing for a single photo. Non-interactive by design: the
+/// user keeps editing, and retry alerts present freely because nothing modal is up.
 @MainActor
-final class NoteUploadProgressToast: UIView {
-    private let label = UILabel()
+struct NoteUploadProgress {
+    static let noticeId = "note.uploadProgress"
+    let total: Int
 
-    static func show(over view: UIView) -> NoteUploadProgressToast? {
-        guard let window = view.window else { return nil }
-        let toast = NoteUploadProgressToast()
-        toast.translatesAutoresizingMaskIntoConstraints = false
-        toast.isUserInteractionEnabled = false
-        toast.accessibilityIdentifier = "note.uploadProgress"
-        window.addSubview(toast)
-        NSLayoutConstraint.activate([
-            toast.centerXAnchor.constraint(equalTo: window.centerXAnchor),
-            toast.topAnchor.constraint(equalTo: window.safeAreaLayoutGuide.topAnchor, constant: 8),
-            toast.heightAnchor.constraint(equalToConstant: 36),
-        ])
-        return toast
-    }
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        layer.cornerRadius = 18
-        layer.cornerCurve = .continuous
-        layer.borderWidth = 0.5
-        layer.borderColor = UIColor.separator.withAlphaComponent(0.35).cgColor
-        clipsToBounds = true
-
-        let glass = AccessoryBar.glassView()
-        glass.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(glass)
-        label.font = .systemFont(ofSize: 13, weight: .semibold)
-        label.textColor = .label
-        label.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(label)
-        NSLayoutConstraint.activate([
-            glass.leadingAnchor.constraint(equalTo: leadingAnchor),
-            glass.trailingAnchor.constraint(equalTo: trailingAnchor),
-            glass.topAnchor.constraint(equalTo: topAnchor),
-            glass.bottomAnchor.constraint(equalTo: bottomAnchor),
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
-    }
-
-    required init?(coder: NSCoder) { nil }
-
-    func update(current: Int, total: Int) {
-        label.text = "Uploading \(current) of \(total)…"
-    }
-
-    func dismissToast() {
-        UIView.animate(withDuration: 0.2, animations: { self.alpha = 0 }) { _ in
-            self.removeFromSuperview()
+    func show(current: Int) {
+        guard total > 1 else { return }
+        // "Photos · Uploading · 2 of 5": the status word says what, the preview how far.
+        let words = "\(current) of \(total)"
+        if current == 1 {
+            NoticeCenter.shared.post(NoticeItem(
+                id: Self.noticeId, title: "Photos", status: "Uploading", tone: .live, preview: words,
+                avatar: .symbol("photo.on.rectangle"), life: .untilDismissed, announces: false))
+        } else {
+            NoticeCenter.shared.update(Self.noticeId) { $0.preview = words }
         }
+    }
+
+    func end() {
+        guard total > 1 else { return }
+        NoticeCenter.shared.dismiss(Self.noticeId)
     }
 }

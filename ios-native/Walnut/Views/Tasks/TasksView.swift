@@ -609,13 +609,6 @@ struct TasksView: View {
             // `pull` is the one origin exempt from the funnel's rate floor: the spinner is
             // the user's own request and it has to end in a real fetch.
             .refreshable { await tasks.refreshBoard(origin: .pullToRefresh) }
-            // Store-level toast surface (fire-and-forget mutations): a small
-            // auto-dismissing line at the bottom, never a modal. Here only while the
-            // drawer is out; shut, the page under it shows the line (`TasksTabView`).
-            .overlay(alignment: .bottom) {
-                TasksToastLayer(drawer: drawer, whileDrawerOpen: true)
-                    .padding(.bottom, 12)
-            }
             // Locate a just-created task (a todo saved from the `+` page): flash its row
             // and scroll to it, in place. The board's rows carry a `task-<id>` anchor
             // (`TaskBoardList.rowAnchorId`); a task with no board row makes the scroll a
@@ -1182,55 +1175,3 @@ enum TasksDrawerRoute: Hashable {
     case recents
 }
 
-// MARK: - Transient toast (fire-and-forget mutation feedback)
-
-/// Small bottom toast for optimistic mutations: info ("Pinned · Focus") or a
-/// subtle failure line after a revert. Auto-dismisses; tap to dismiss early.
-/// Deliberately NOT a modal/alert — instant-first mutations never block.
-/// The store's toast, on whichever of the Tasks tab's two surfaces is in front: the
-/// board while the drawer is out, the page while it is shut. One surface alone hid it:
-/// the board is invisible while shut, and the toast's timer ran out unseen (a failed
-/// delete from a session's task page said nothing). Its own view, so the drawer's
-/// fraction re-renders this line and not the board.
-struct TasksToastLayer: View {
-    @Environment(TasksStore.self) private var tasks
-    let drawer: LeadingDrawerModel?
-    let whileDrawerOpen: Bool
-
-    var body: some View {
-        if (drawer?.isOpen ?? true) == whileDrawerOpen,
-           let notice = tasks.transientNotice ?? tasks.transientError {
-            TransientToast(text: notice, isError: tasks.transientError != nil) {
-                tasks.transientNotice = nil
-                tasks.transientError = nil
-            }
-        }
-    }
-}
-
-struct TransientToast: View {
-    let text: String
-    let isError: Bool
-    let dismiss: () -> Void
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                .font(.caption)
-            Text(text)
-                .font(.caption.weight(.medium))
-                .lineLimit(2)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .background(.regularMaterial, in: Capsule())
-        .foregroundStyle(isError ? Theme.danger : Theme.tint)
-        .onTapGesture(perform: dismiss)
-        .task {
-            try? await Task.sleep(for: .seconds(isError ? 5 : 2.5))
-            dismiss()
-        }
-        .transition(.move(edge: .bottom).combined(with: .opacity))
-        .accessibilityIdentifier("tasks.toast")
-    }
-}

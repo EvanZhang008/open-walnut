@@ -5,7 +5,6 @@ import SwiftUI
 struct PasswordDetailView: View {
     let item: VaultItem
     @State private var revealed: Set<String> = []
-    @State private var toast: String?
     /// The big header shows the title; the bar shows it only once that has scrolled away.
     @State private var headerGone = false
 
@@ -96,7 +95,6 @@ struct PasswordDetailView: View {
         }
         .navigationTitle(headerGone ? item.title : "")
         .navigationBarTitleDisplayMode(.inline)
-        .vaultToast($toast)
         .vaultPrivacyCover()
         .vaultGate()
     }
@@ -135,7 +133,9 @@ struct PasswordDetailView: View {
     private func copy(_ value: String, _ what: String) {
         VaultClipboard.copy(value)
         UINotificationFeedbackGenerator().notificationOccurred(.success)
-        toast = what
+        NoticeCenter.shared.post(NoticeItem(
+            id: "passwords.toast", title: "Passwords", status: "Copied", tone: .ok, preview: what,
+            avatar: .symbol("key.fill")))
     }
 
     /// The row's own copy control: tapping the row copies too, but that is not visible.
