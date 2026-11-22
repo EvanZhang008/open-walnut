@@ -33,6 +33,7 @@ const PUSH_SITES: Record<string, { lines: number; why: string }> = {
   'scripts/push-gate-sweep.sh': { lines: 1, why: 'deletes gate refs, publishes nothing' },
   'scripts/push-gate.sh': { lines: 6, why: 'a gate ref, pushed only after the pre-push leak scan (the push being gated) or the private scanner passed on it; the other lines are messages' },
   'scripts/release.mjs': { lines: 3, why: 'git push with its hooks (pre-push runs the leak scan); the other lines are messages' },
+  'src/core/usage-watch/ships.ts': { lines: 1, why: 'runs no git: the label it gives a shell command it saw a session run, `git push` to main, so a watch follows that shipped change' },
   'src/providers/git-commit-core.ts': { lines: 2, why: "the app's Push button: a plain git push, so the repository's own pre-push hook runs" },
 }
 
