@@ -72,7 +72,7 @@ async function hostDoor(channel: HostChannel, calls: Array<{ route: string; body
 
 /** The leader's data, as the batch apply keeps it. */
 function leaderStore() {
-  const store = { batches: [] as HostChannelBatch[], cursor: null as ChannelCursor | null, emitted: [] as Array<{ name: string; late: boolean; i?: number; data?: unknown }>, live: [] as Array<{ sid: string; turnGen?: number }>, renames: [] as string[], judged: [] as string[] }
+  const store = { batches: [] as HostChannelBatch[], cursor: null as ChannelCursor | null, emitted: [] as Array<{ name: string; late: boolean; at?: number; i?: number; data?: unknown }>, live: [] as Array<{ sid: string; turnGen?: number }>, renames: [] as string[], judged: [] as string[] }
   return store
 }
 
@@ -94,7 +94,7 @@ function makeSide(port: number, store: ReturnType<typeof leaderStore>, opts: { o
     },
     ...(opts.drops ? { leaderDrops: async () => [...opts.drops!] } : {}),
     loadCursor: async () => store.cursor,
-    emit: (name, data, o) => { store.emitted.push({ name, late: o.late, i: (data as { i?: number })?.i, data }) },
+    emit: (name, data, o) => { store.emitted.push({ name, late: o.late, at: o.at, i: (data as { i?: number })?.i, data }) },
     noteLive: (sid, state) => { store.live.push({ sid, turnGen: state.turnGen }) },
     noteRename: (from, to) => { store.renames.push(`${from}->${to}`) },
     noteHostJudged: (sid) => { store.judged.push(sid) },
@@ -185,7 +185,8 @@ describe('the leader side of a host that runs its sessions', () => {
   it('a record read back long after it happened is late; a live one never is', async () => {
     const { log, channel } = await hostOf()
     const port = await hostDoor(channel, [])
-    log.append('s1', 'session:tool-use', { sessionId: 's1', i: 1 }, { at: Date.now() - 10 * 60_000 })
+    const happened = Date.now() - 10 * 60_000
+    log.append('s1', 'session:tool-use', { sessionId: 's1', i: 1 }, { at: happened })
     await log.flush()
     const store = leaderStore()
     side = makeSide(port, store)
@@ -195,6 +196,10 @@ describe('the leader side of a host that runs its sessions', () => {
     await log.flush()
     await until(() => factIs(store).length === 2)
     expect(store.emitted.filter((e) => e.name === 'session:tool-use').map((e) => e.late)).toEqual([true, false])
+    // Each is said with the time it happened (the same clock here): the late one ten minutes ago.
+    const [lateOne, liveOne] = store.emitted.filter((e) => e.name === 'session:tool-use')
+    expect(Math.abs((lateOne.at ?? 0) - happened)).toBeLessThan(1_000)
+    expect(Date.now() - (liveOne.at ?? 0)).toBeLessThan(30_000)
   })
 
   it('sends the commands as requests on a stream of their own', async () => {

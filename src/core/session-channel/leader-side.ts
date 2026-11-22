@@ -51,8 +51,11 @@ export interface LeaderSideDeps {
   /** The deletes of `hostId`'s sessions it has not answered yet (leader-drops.ts leaderDropsOf). */
   leaderDrops?(hostId: string): Promise<string[]>
   loadCursor(hostId: string): Promise<ChannelCursor | null>
-  /** Re-emit one host fact or flow event on this server's bus; `to`: the destinations the host's emit named. */
-  emit(name: string, data: unknown, opts: { late: boolean; to?: string[] }): void
+  /**
+   * Re-emit one host fact or flow event on this server's bus; `to`: the destinations the host's emit
+   * named; `at`: when a fact happened, on this leader's clock (channel.ts AppliedFact.happenedAt).
+   */
+  emit(name: string, data: unknown, opts: { late: boolean; to?: string[]; at?: number }): void
   noteLive(sid: string, state: LiveState): void
   noteRename(from: string, to: string): void
   noteHostJudged(sid: string, host: string): void
@@ -130,7 +133,7 @@ export function createLeaderSide(deps: LeaderSideDeps) {
         // (leader-tasks.ts claimHostStarted). A rows frame (applyRows) is a resync, never a start.
         // It names no destinations: it goes where a start this leader hands on says it (reemitDestinations).
         const d = (r.data ?? {}) as { born?: unknown; patch?: Record<string, unknown> }
-        if (d.born === true && wrote.has(r.sid)) emitFact(hostId, r.sid, EventNames.SESSION_STARTED, startedOf(hostId, r.sid, d.patch ?? {}), r.late, undefined)
+        if (d.born === true && wrote.has(r.sid)) emitFact(hostId, r, EventNames.SESSION_STARTED, startedOf(hostId, r.sid, d.patch ?? {}), undefined)
         continue
       }
       if (r.name === 'drop' || r.name === 'turn-summary') continue
@@ -144,13 +147,13 @@ export function createLeaderSide(deps: LeaderSideDeps) {
         continue
       }
       if (channelClassOf(r.name) !== 'fact') continue
-      emitFact(hostId, r.sid, r.name, r.data, r.late, r.to)
+      emitFact(hostId, r, r.name, r.data, r.to)
     }
   }
 
-  function emitFact(hostId: string, sid: string, name: string, data: unknown, late: boolean, to: string[] | undefined): void {
-    try { deps.emit(name, data, { late, ...(to ? { to } : {}) }) } catch (err) {
-      deps.log('warn', 'session channel: a re-emitted fact failed', { hostId, name, sessionId: sid, error: err instanceof Error ? err.message : String(err) })
+  function emitFact(hostId: string, r: AppliedFact, name: string, data: unknown, to: string[] | undefined): void {
+    try { deps.emit(name, data, { late: r.late, at: r.happenedAt, ...(to ? { to } : {}) }) } catch (err) {
+      deps.log('warn', 'session channel: a re-emitted fact failed', { hostId, name, sessionId: r.sid, error: err instanceof Error ? err.message : String(err) })
     }
   }
 

@@ -238,6 +238,7 @@ export interface BusEvent {
   data: unknown;
   destinations: string[];
   urgency: 'normal' | 'urgent';
+  /** When it happened (EmitOptions.timestamp: a host fact's original time), else when emitted. */
   timestamp: number;
   source: string;
   traceId: string;
@@ -259,6 +260,10 @@ export interface EmitOptions {
   reemit?: true;
   /** See BusEvent.late. */
   late?: true;
+  /** When the event happened, on this server's clock (BusEvent.timestamp); default now. A host's
+   *  fact the leader applies carries its original time (session-channel/leader-boot.ts), so a
+   *  subscriber that records a time (agent time, a journal line, a card's output) counts it there. */
+  timestamp?: number;
 }
 
 export type SubscriberHandler = (event: BusEvent) => void | Promise<void>;
@@ -423,7 +428,7 @@ export class EventBus {
       data,
       destinations,
       urgency: options?.urgency ?? 'normal',
-      timestamp: Date.now(),
+      timestamp: options?.timestamp ?? Date.now(),
       source: options?.source ?? 'unknown',
       traceId: randomBytes(4).toString('hex'),
       ...(options?.reemit ? { reemit: true } : {}),

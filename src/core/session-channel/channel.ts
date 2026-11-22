@@ -202,8 +202,11 @@ export class HostChannel {
 
 export interface ChannelCursor { logId: string; seq: number }
 
-/** One applied record, as the leader's handler gets it. */
-export interface AppliedFact extends FactRecord { late: boolean }
+/**
+ * One applied record, as the leader's handler gets it. `happenedAt`: when it happened, on this
+ * leader's clock (the host's `at` moved by the link's offset), the time a late fact is counted by.
+ */
+export interface AppliedFact extends FactRecord { late: boolean; happenedAt: number }
 
 export interface LeaderChannelOptions {
   walnutId: string
@@ -289,7 +292,11 @@ export function attachLeaderChannel(link: ChannelLink, o: LeaderChannelOptions):
           const off = offset ?? 0
           const recs = fresh
             .filter((r) => !(r.name === 'row' && r.seq <= rowsAt))
-            .map((r) => ({ ...r, late: at - (r.at + off) > lateMs }))
+            .map((r) => {
+              // Never after now: a host clock read on a fast link may round past it.
+              const happenedAt = Math.min(at, r.at + off)
+              return { ...r, late: at - happenedAt > lateMs, happenedAt }
+            })
           const next = { logId: c.logId, seq: fresh[fresh.length - 1].seq }
           await o.apply(hostId, recs, next)
           cursor = next

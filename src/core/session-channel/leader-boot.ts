@@ -26,6 +26,20 @@ export function _setActiveLeaderSideForTesting(side: LeaderSide | null): void {
   active = side
 }
 
+/**
+ * Say one host fact (or flow event) on this leader's bus, as the channel applies it: to the
+ * destinations the host's emit named (never the phone's push), `source: 'host-channel'`, `late` for
+ * one read back long after it happened, and its original time as the event's timestamp, so a
+ * subscriber that records a time counts the fact where it happened (EmitOptions.timestamp).
+ */
+export function sayHostFact(name: string, data: unknown, opts: { late: boolean; to?: string[]; at?: number }): void {
+  bus.emit(name, data, reemitDestinations(opts.to), {
+    source: 'host-channel',
+    ...(opts.late ? { late: true as const } : {}),
+    ...(typeof opts.at === 'number' && Number.isFinite(opts.at) ? { timestamp: opts.at } : {}),
+  })
+}
+
 export async function startLeaderSessionChannels(): Promise<() => void> {
   if (active) return () => {}
   const [{ applyHostChannelBatch, loadChannelCursor }, hostServer, { hostLeaderStates }, { getInstanceId }, remote, { saidHereAlready }] = await Promise.all([
@@ -54,7 +68,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
       const sid = (data as { sessionId?: unknown } | null)?.sessionId
       const said = name === EventNames.SESSION_BACKGROUND_TASKS && typeof sid === 'string' && data && typeof data === 'object'
         ? remote.withLeaderSubagentRows(data as Record<string, unknown>, sid) : data
-      bus.emit(name, said, reemitDestinations(opts.to), { source: 'host-channel', ...(opts.late ? { late: true as const } : {}) })
+      sayHostFact(name, said, opts)
     },
     noteLive: remote.noteLiveState,
     noteRename: (from, to) => {

@@ -274,6 +274,19 @@ describe('late facts, on the leader\'s clock', () => {
     side.onFrame({ ch: 'sf', op: 'facts', recs: [rec(2, T + skew + 20_000)], replay: true, sentAt: T + skew + 199_990 })
     await side.idle()
     expect(applied.map((r) => [r.seq, r.late])).toEqual([[1, false], [2, true]])
+    // When each happened, on the leader's clock: the host's time moved by the smallest offset seen (the hello's).
+    expect(applied.map((r) => r.happenedAt)).toEqual([T + 20, T + 20_000])
+  })
+
+  it('a record never happened after the leader applies it', async () => {
+    const clock = { now: T }
+    const { side, applied } = leaderAt(clock)
+    side.onFrame({ ch: 'sf', op: 'hello', walnutId: 'w1', hostId: 'devbox', logId: 'L', floor: 1, head: 0, now: T })
+    await side.idle()
+    // A host time a little past the leader's now (rounding on a fast link): it happened now.
+    side.onFrame({ ch: 'sf', op: 'facts', recs: [rec(1, T + 50)], sentAt: T })
+    await side.idle()
+    expect(applied.map((r) => r.happenedAt)).toEqual([T])
   })
 
   it('a host clock behind does not make a fresh record late', async () => {
