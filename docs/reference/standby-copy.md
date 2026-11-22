@@ -177,9 +177,10 @@ the daemon and the server are one program, every host has it.
 | Step | How it goes | Why that way |
 |---|---|---|
 | Read the target | `walnut standby receive init` (run by the daemon's `exec.script`) makes the target owner-only, finishes an apply a kill cut off, and writes into `.incoming/` the chunk ids it holds and its current files, only those the leader does not hold already; the leader reads that file with `fs.readRange` | One run and one read per batch; an unchanged batch reads about 100 bytes back |
-| Send chunks | `fs.writePart`, one 1 MiB chunk a part, eight in flight and up to 256 MiB held to send: the daemon stages it, checks its sha256 (the chunk's name), and renames it into `chunks/` | A chunk is there whole or not at all, so a batch cut off part way leaves every chunk it sent for the next batch; the batch reads its files right after its moment while a slow link sends (reading at the link's pace voided 4 of 5 batches under a steady writer at 20 Mbit/s). A batch that changed more than the 256 MiB reads at the link's pace again once the buffer is full, so a large incremental batch over a slow link can still be void; the leader then holds the largest database being copied plus those 256 MiB |
+| Stage chunks | each chunk to send is written to the leader's disk first, in the home's `tmp/standby-spool/` (rebuildable), and removed once the host has it (`remote-spool.ts`) | The batch reads its files and its databases at the disk's pace, whatever the link's: its files are read right after its moment (reading at a slow link's pace voided 4 of 5 batches under a steady writer at 20 Mbit/s), however much the batch changed, and its database pins end once the databases are read, so the leader's WAL is checkpointed again while the link still sends. Before each chunk the disk's free space is read: one that would leave less than the reserve (2 GiB or 1% of the disk, the larger) free is refused, the batch is void and says so, and the chunks staged already still go. A folder of a leader killed mid-batch is removed by the next batch |
+| Send chunks | `fs.writePart` from the spool, one 1 MiB chunk a part, eight in flight: the daemon stages it, checks its sha256 (the chunk's name), and renames it into `chunks/` | A chunk is there whole or not at all, so a batch cut off part way leaves every chunk it sent for the next batch |
 | Send the batch | an upload (`BatchUpload`: the files that differ from the target's batch, and the paths gone), gzipped, written the same way | An incremental batch sends its few changed entries, not a manifest of every file |
-| Make it current | `walnut standby receive apply` rebuilds the whole manifest from its own current batch and the upload, takes it only when its sha256 is the leader's, then runs `StandbyTarget.commit` and a verify pass | The same rules as a local target, word for word: every chunk and file checked, one switch, a kill or a full disk leaves the batch before whole |
+| Make it current | `walnut standby receive apply`, started as a background job with the daemon's `exec.run` (`remote-apply.ts`), rebuilds the whole manifest from its own current batch and the upload, takes it only when its sha256 is the leader's, then runs `StandbyTarget.commit` and a verify pass; it keeps its state in a status file in `.incoming/` (running with a heartbeat every 10 s, then done with its answer, or failed), which the leader reads every 2 to 5 s, and the leader asks the daemon whether the job still runs | The same rules as a local target, word for word: every chunk and file checked, one switch, a kill or a full disk leaves the batch before whole. No command stays open for the apply, so an apply is not stopped at a command's limit (a script's 10 minutes) |
 
 A dropped link is dialled again and the command sent again for up to two minutes; only commands
 that do the same thing twice are sent twice. A host Walnut does not know fails at once. When the
@@ -190,21 +191,29 @@ target is refused, with symlinks resolved; "its own Walnut home" is the one the 
 sees (`OPEN_WALNUT_HOME` in the environment the daemon gives its scripts, else `~/.open-walnut`),
 so a host whose Walnut runs on another home must give its daemon that variable. Turning the
 standby off, or changing its host or folder, drops the chunks still waiting to go there: only
-the parts already on the wire finish. An apply whose answer was lost (the link went
-while it ran) is never sent again: the leader asks the target which batch it holds and takes
-the answer from there. A target another leader moved meanwhile refuses the upload (it is
+the parts already on the wire finish. One batch is one job id (from the target, the batch, its
+moment and its manifest's hash): a start sent again after its answer was lost is refused
+`job_exists` by the daemon, which knows the ids of the runs it and the daemon before it ran,
+so an apply never runs twice. A job that ends without writing its answer (killed there) fails
+the batch, and the target's journal leaves the batch before whole for the next one. While an
+apply runs there, `init`, `verify` and `reported` say the target is busy at once (its process
+lives and its heartbeat is fresh) instead of waiting on the target's lock: a leader that
+restarted meanwhile has void batches until the apply ends, then goes on from the batch it made.
+An apply whose status could not be read (the link went for longer than the leader waits) is
+judged by the batch the target holds afterwards. A target another leader moved meanwhile refuses the upload (it is
 against another batch), and the next batch reads it again. A chunk the leader believed the
 target held, gone there, fails one batch; the next reads the target's list again and sends it.
 
 Limits:
 
-- An apply runs within the daemon's script limit (10 minutes). The first batch of the 20 GB
-  synthetic home applied in 339 to 390 s on a busy dev box (below); a home whose apply takes longer there is
-  stopped each time, keeps the batch before (none, for a first batch) and never gets further.
-  The way past it is an apply that is not a script, once the standby host runs Walnut itself.
-- While a database's changed chunks wait to go, its pin stays open: on the first batch over a
-  slow link (a 1.5 GB database at 20 Mbit/s, about ten minutes) the leader's WAL cannot be
-  checkpointed meanwhile and grows. Incremental batches send a database's few changed chunks.
+- An apply runs within the daemon's limit for a background job (2 hours, `BACKGROUND_MAX_MS`).
+  The first batch of the 20 GB synthetic home applied in 339 to 390 s on a busy dev box (below),
+  so the limit is about 20 times that; a home whose apply takes longer is stopped each time and
+  keeps the batch before. A daemon update there waits for the job (it is not resumable), unless
+  the job runs detached (the `work_survives_restart` experiment and `host-exec-detach-v1`).
+- The spool takes up to the batch's new chunks not sent yet on the leader's disk (about 4 GB
+  for the first batch of the 20 GB home at 20 Mbit/s; an incremental batch its few MB), written
+  once more than before; see Measured.
 - After any failure the leader reads the target's whole chunk list again (about 33 bytes a
   chunk, gzipped, one read).
 - A host out of reach is reported behind once, about five minutes after its last batch plus the
@@ -278,29 +287,38 @@ not measured yet.
 
 ### A target on another host
 
-`--remote [--mbit 20] [--down-mbit 100] [--rtt-ms 50] [--fast-first]` sends the batches to a
-real session daemon (the standalone twin, run from its source) on the same machine, and the
-real walnut CLI there takes them. The link is slowed in the transport, not in the system's
-network: each frame waits for its bytes at the given rate, and half the round trip each way.
-`--fast-first` sends the first batch unslowed, to measure the apply of a whole home, and then
-slows the link. The same 21.8 GB home on clouddev (2026-11-22, host load about 100 on 48 cores):
+`--remote [--mbit 20] [--down-mbit 100] [--rtt-ms 50] [--fast-first] [--big-mb N]` sends the
+batches to a real session daemon (the standalone twin, run from its source) on the same
+machine, and the real walnut CLI there takes them. The link is slowed in the transport, not in
+the system's network: each frame waits for its bytes at the given rate, and half the round trip
+each way. `--fast-first` sends the first batch unslowed; `--big-mb N` adds one batch after a new
+file of N MiB, with the writers on. The same 21.8 GB home on clouddev (2026-11-22, host load 40
+to 100 on 48 cores), the chunks staged in the spool and the apply a background job:
 
-| What | Measured |
-|---|---|
-| One 1 MiB chunk, one at a time / eight in flight, unslowed | 38 ms / 23.5 ms |
-| The same at 20 Mbit/s up, 50 ms round trip | 653 ms / 562 ms: the wire (1.4 MB of base64 takes 559 ms) |
-| First batch, unslowed | 884 s: 104,191 commands, 6.71 GB up (5.01 GB of chunks), 12.4 MB down; its apply there 390 s (339 s and 360 s in two earlier runs) |
-| First batch at 20 Mbit/s (estimated) | 6.71 GB / 20 Mbit/s at the 93% link use a 1.7 GB home measured = about 3,100 s, plus the 390 s apply: about 58 minutes |
-| Incremental batch at 20 Mbit/s, 50 ms, notes and two databases written all the time | 0 of 5 void; p50 44 s, max 47 s; 7 to 8 MB up, 60 commands; its apply there p50 18 s; hold p50 167 ms |
-| The same plus an ungated append every 20 ms | 0 of 5 void (7,592 appends); p50 41 s, max 42 s |
-| Verify / deep verify there | 2.0 s / 107 s, no drift |
+| What | At 20 Mbit/s up, 50 ms round trip | Unslowed (loopback) |
+|---|---|---|
+| One 1 MiB chunk, one at a time / eight in flight | 655 ms / 562 ms: the wire (1.4 MB of base64 takes 559 ms) | 34 to 94 ms / 14 to 37 ms |
+| First batch | 3,505 s (58 min): 104,299 commands, 6.71 GB up for 5.0 GB of chunks | 838 s |
+| Its database pins (from the pins to the last one's end) | 45 s | 53 s |
+| Its apply there (a background job) | 256 s | 251 s |
+| Its spool: most held at once / time its writes took | 3.97 GB / 160 s | 0.14 GB / 231 s |
+| Incremental batch, notes and two databases written all the time | 1 of 3 void (a note changed after the moment and not read in the hold: the general rule, not the link); 31 s, pins 11 s, apply 13 s | 0 of 3 void; p50 31 s, pins p50 13 s |
+| The same plus an ungated append every 20 ms | 0 of 3 void; p50 30 s, pins 11 s | 0 of 3 void; p50 31 s, pins 13 s |
+| A batch after a new 400 MiB file, writers on | not void: 251 s, 541 MB up, pins 11 s | not void: 39 s, pins 12 s |
+| Verify / deep verify there | 1.2 s / 73 s, no drift | 1.7 s / 85 s, no drift |
 
-Before the send queue (`bufferBytes`), the batch read its files only as fast as the window
-of eight chunks went out, and at 20 Mbit/s 4 of 5 incremental batches were void ("late") in
-both runs above. Of an incremental batch's 44 s, the apply there (the changed databases'
-files in the copy cloned and patched: on ext4 a whole copy of each) is about 18 s, the wire
-about 3 s, and the rest the scan, the hold, the leader's database snapshots and about 60
-round trips.
+The pins end once the databases are copied (each one's with its copy, the databases first),
+so they last as long as the local copy, whatever the link: 45 s at 20 Mbit/s and 53 s unslowed
+for the first batch (the second number is the busier run). Before the spool the first batch's
+pins lasted 458 s at 20 Mbit/s with the files read under them, and before that until the last
+chunk went (about an hour). Before the send queue, the batch read its files only as fast as
+the window of eight chunks went out, and at 20 Mbit/s 4 of 5 incremental batches were void
+("late"); a batch larger than the queue's 256 MiB would have been read at the link's pace
+again, and the spool has no such size. An apply ran 1,261 s as a background job on the real
+daemon (the test `an apply that runs longer than a command may`, run once by hand with
+`STANDBY_LONG_APPLY_MS=1260000`), past a script's 10-minute limit. The spool costs one more
+local write of each new chunk (5 GB for the first batch here), and holds what the link has not
+sent yet: up to about 4 GB at 20 Mbit/s, a few MB for an incremental batch.
 
 **Writes the gate does not hold** void a batch when they land on a file between the moment
 and its read, unless the file is marked append-only (above). Before the marks, one append
