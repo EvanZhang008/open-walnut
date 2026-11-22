@@ -98,6 +98,7 @@ const AUDITED_READERS: readonly string[] = [
   'src/core/sessions/prompt-refresh-respawn.ts',
   'src/core/sessions/prompt-refresh.ts',
   'src/core/sessions/side-thread-fork.ts',
+  'src/core/sessions/session-row-owner.ts', // names the field in its owner table; reads no record
   'src/core/sessions/spawn-prefix.ts',
   'src/core/types.ts',
   'src/providers/claude-code-session.ts',
