@@ -2,7 +2,7 @@
  * An Org node's Threads (GET /api/v1/tasks/:id/threads), kept current by `org-threads:changed`
  * and re-read on reconnect. Writes made here show at once and are undone when the server refuses.
  */
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { fetchOrgThreads, patchOrgThread, splitOrgThread, type OrgThread, type OrgThreadPatch } from '@/api/org-threads';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
@@ -94,6 +94,17 @@ interface NodeThreads {
   catchUp: number;
   /** A read the surfaces hearing the same event (or mounting together) share, until this task ends. */
   joinable?: { why: string; p: Promise<boolean | 'stale'> };
+  /** The one read of this node on its way: a node is never read twice at once. */
+  inFlight?: Promise<boolean | 'stale'>;
+  /** The read asked for while one was on its way: one more after it, for every ask since. */
+  trailing?: { whys: Set<string>; p: Promise<boolean | 'stale'>; resolve: (v: boolean | 'stale') => void };
+  /** The node-wide timer of a read for a listed task that changed, and when the last one started. */
+  ownerTimer?: ReturnType<typeof setTimeout>;
+  ownerReadAt: number;
+  /** The last read that counted failed: every surface says so until one succeeds, whatever started it. */
+  failed: boolean;
+  /** Surfaces showing the node now: a node nobody shows is not read for a listed task's change. */
+  surfaces: number;
 }
 /** How long after a write's answer the server's derived status for an EARLIER write may still land. */
 const SETTLE_MS = 3_000;
@@ -102,7 +113,7 @@ const listeners = new Set<() => void>();
 const subscribe = (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn); }; };
 function nodeOf(taskId: string): NodeThreads {
   let n = nodes.get(taskId);
-  if (!n) { n = { read: null, pending: new Map(), drawn: null, seq: 0, settledAt: 0, counted: false, catchUp: 0 }; nodes.set(taskId, n); }
+  if (!n) { n = { read: null, pending: new Map(), drawn: null, seq: 0, settledAt: 0, counted: false, catchUp: 0, ownerReadAt: 0, failed: false, surfaces: 0 }; nodes.set(taskId, n); }
   return n;
 }
 /** Recompute what a node's surfaces draw, and tell them. */
@@ -116,33 +127,78 @@ function redraw(taskId: string): OrgThread[] | null {
 }
 
 /** The reasons every surface of one node hears at the same moment: one read answers them all. */
-const SHARED_READS: ReadonlySet<string> = new Set(['open', 'changed', 'reconnect']);
+const SHARED_READS: ReadonlySet<string> = new Set(['open', 'changed', 'reconnect', 'snooze-ended']);
 /** The reads that bring a surface up to date after it was away: what they change was never drawn as a move. */
 const CATCH_UP_READS: ReadonlySet<string> = new Set(['open', 'reconnect']);
+
+/**
+ * Reads whose answer must start after them: a write of this page (an answer already on its way
+ * predates it) and a catch-up (a surface's first frame must be a catch-up read, so a change across
+ * it is never drawn as a move). The answer on its way is dropped and one read follows it.
+ */
+const DROPS_IN_FLIGHT: ReadonlySet<string> = new Set(['write', 'failed', 'split', 'open', 'reconnect']);
+/**
+ * A task a thread lists changed (its status, its ask): the node is read again at most this often.
+ * Those events come several a second from a busy team, and each used to start a read per surface
+ * of the node, in parallel (2026-11-21: one Mac app window read a VP's Threads 2 to 4 at a time
+ * about every 1.5 s, 1604 reads in an hour, and the page's connection pool filled up so every
+ * other request waited 20 to 60 s and was rejected).
+ */
+export const OWNER_READ_GAP_MS = 5_000;
+/** The first read after a listed task changed waits this long, so a burst of changes is one read. */
+const OWNER_READ_DELAY_MS = 150;
 
 /**
  * Read a node's threads. True when the list is drawn, false when the read failed, 'stale' when a
  * later read of the node won. Several surfaces show one node (the Org page, its chat's top thread,
  * a Threads pane): an event they all hear, or a mount they share, starts one read, not one each.
- * Only within the same task of the event loop: a change announced later always reads again.
+ * At most one read of a node is on its way at a time: asks made meanwhile, for any reason and
+ * from any surface, become ONE read after it (it starts after their change, so it sees it).
  */
 function readNode(taskId: string, why: string): Promise<boolean | 'stale'> {
   const node = nodeOf(taskId);
   if (SHARED_READS.has(why) && node.joinable?.why === why) return node.joinable.p;
+  if (DROPS_IN_FLIGHT.has(why)) node.seq++;
+  if (node.inFlight) {
+    if (!node.trailing) {
+      let resolve: (v: boolean | 'stale') => void = () => undefined;
+      const p = new Promise<boolean | 'stale'>((r) => { resolve = r; });
+      node.trailing = { whys: new Set(), p, resolve };
+    }
+    node.trailing.whys.add(why);
+    return node.trailing.p;
+  }
+  return startRead(taskId, node, new Set([why]));
+}
+
+function startRead(taskId: string, node: NodeThreads, whys: ReadonlySet<string>): Promise<boolean | 'stale'> {
   const mine = ++node.seq;
+  const catchUp = [...whys].some((w) => CATCH_UP_READS.has(w));
   const p: Promise<boolean | 'stale'> = fetchOrgThreads(taskId).then((next) => {
     // A later read of this node wins: an answer that comes back late is dropped.
     if (mine !== node.seq) return 'stale';
     node.read = next;
-    if (CATCH_UP_READS.has(why)) node.catchUp++;
+    node.failed = false;
+    if (catchUp) node.catchUp++;
     redraw(taskId);
     return true;
   }, (err: unknown) => {
     if (mine !== node.seq) return 'stale';
-    log.warn('org-threads', 'threads read failed', { taskId, why, error: err instanceof Error ? err.message : String(err) });
+    log.warn('org-threads', 'threads read failed', { taskId, why: [...whys].join(','), error: err instanceof Error ? err.message : String(err) });
+    node.failed = true;
+    redraw(taskId);
     return false;
+  }).finally(() => {
+    if (node.inFlight !== p) return;
+    node.inFlight = undefined;
+    const next = node.trailing;
+    node.trailing = undefined;
+    if (next && nodes.get(taskId) === node) void startRead(taskId, node, next.whys).then(next.resolve);
+    else next?.resolve('stale');
   });
-  if (SHARED_READS.has(why)) {
+  node.inFlight = p;
+  for (const why of whys) {
+    if (!SHARED_READS.has(why)) continue;
     const joinable = { why, p };
     node.joinable = joinable;
     queueMicrotask(() => { if (node.joinable === joinable) node.joinable = undefined; });
@@ -150,8 +206,24 @@ function readNode(taskId: string, why: string): Promise<boolean | 'stale'> {
   return p;
 }
 
+/** A task the node's threads list changed: one read for the whole node (every surface), at most every OWNER_READ_GAP_MS. */
+function ownerReadSoon(taskId: string): void {
+  const node = nodeOf(taskId);
+  if (node.ownerTimer) return;
+  const wait = Math.max(OWNER_READ_DELAY_MS, node.ownerReadAt + OWNER_READ_GAP_MS - Date.now());
+  node.ownerTimer = setTimeout(() => {
+    node.ownerTimer = undefined;
+    if (nodes.get(taskId) !== node || node.surfaces === 0) return;
+    node.ownerReadAt = Date.now();
+    void readNode(taskId, 'owner-changed');
+  }, wait);
+}
+
 /** Test seam: forget every node (a module store outlives a test's page). */
-export function resetOrgThreadsForTest(): void { nodes.clear(); listeners.clear(); }
+export function resetOrgThreadsForTest(): void {
+  for (const n of nodes.values()) if (n.ownerTimer) clearTimeout(n.ownerTimer);
+  nodes.clear(); listeners.clear();
+}
 
 /**
  * How many reads caught this node's surfaces up (a mount, a reconnect). A Threads pane compares its
@@ -170,27 +242,24 @@ export function useOrgThreads(taskId: string | undefined, enabled: boolean): Org
   // context changes on every task write (TaskStoreActions).
   const tasks = useTaskStoreActions();
   const threads = useSyncExternalStore(subscribe, () => (!enabled ? null : taskId ? nodes.get(taskId)?.drawn ?? null : NO_THREADS));
-  const [error, setError] = useState<string | null>(null);
+  const failed = useSyncExternalStore(subscribe, () => !!(enabled && taskId && nodes.get(taskId)?.failed));
+  const error = failed ? 'Threads could not be read. They come back when the server answers.' : null;
   /** A write the server refused: kept until the next write saves (a re-read does not clear it). */
   const [writeError, setWriteError] = useState<string | null>(null);
-  const ownerReadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => {
-    if (ownerReadTimer.current) clearTimeout(ownerReadTimer.current);
-    ownerReadTimer.current = null;
-  }, [taskId, enabled]);
   /** Read the threads; false when the read failed (a later read that wins counts as done). */
   const load = useCallback(async (why: string): Promise<boolean> => {
     if (!taskId) return true;
     const got = await readNode(taskId, why);
     // A later read that wins counts as done.
-    if (got === 'stale') return true;
-    setError(got ? null : 'Threads could not be read. They come back when the server answers.');
-    return got;
+    return got === 'stale' ? true : got;
   }, [taskId]);
   useEffect(() => {
-    setError(null);
     setWriteError(null);
-    if (enabled) void load('open');
+    if (!enabled || !taskId) return;
+    const node = nodeOf(taskId);
+    node.surfaces++;
+    void load('open');
+    return () => { node.surfaces--; };
   }, [taskId, enabled, load]);
   useEvent('org-threads:changed', (data) => {
     if (!enabled || (data as { taskId?: string } | null)?.taskId !== taskId) return;
@@ -201,9 +270,7 @@ export function useOrgThreads(taskId: string | undefined, enabled: boolean): Org
     const d = data as { task?: { id?: string }; taskId?: string } | null;
     const id = d?.task?.id ?? d?.taskId;
     // The node's own status too, when a thread holds its ask (core/org/thread-report-ask.ts): it reads needs only while the task asks it.
-    if (id && !ownerReadTimer.current && threads?.some((t) => t.askOwner?.task === id || t.tasks?.includes(id) || (id === taskId && !!(t.reportAsk || t.heldAsk)))) {
-      ownerReadTimer.current = setTimeout(() => { ownerReadTimer.current = null; void load('owner-changed'); }, 150);
-    }
+    if (taskId && id && threads?.some((t) => t.askOwner?.task === id || t.tasks?.includes(id) || (id === taskId && !!(t.reportAsk || t.heldAsk)))) ownerReadSoon(taskId);
   };
   useEvent('task:updated', ownerChanged);
   useEvent('task:completed', ownerChanged);

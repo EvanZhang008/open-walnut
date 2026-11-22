@@ -41,6 +41,12 @@ export function isLongPoll(url: string): boolean {
  */
 export class TemplateMatcher {
   private readonly seen = new Map<string, RegExp>()
+  private resolver: ((method: string, url: string) => string | null) | null = null
+
+  /** The server's own router, asked when no answered template matches (a request that never reached it). */
+  resolveWith(fn: ((method: string, url: string) => string | null) | null): void {
+    this.resolver = fn
+  }
 
   add(method: string, template: string): void {
     if (template === 'unmatched' || this.seen.size >= 2_000) return
@@ -50,7 +56,7 @@ export class TemplateMatcher {
     this.seen.set(key, new RegExp(`^${pattern}/?$`))
   }
 
-  /** `GET /api/tasks/:id` for `GET /api/tasks/abc?x=1`, or null when no answered template matches. */
+  /** `GET /api/tasks/:id` for `GET /api/tasks/abc?x=1`, or null when neither an answered template nor the router matches. */
   match(method: string, url: string): string | null {
     const path = url.split('?')[0] ?? ''
     let best: string | null = null
@@ -59,7 +65,8 @@ export class TemplateMatcher {
       // The most literal template wins (`/api/tasks/search` over `/api/tasks/:id`).
       if (!best || literalCount(key) > literalCount(best)) best = key
     }
-    return best
+    if (best || !this.resolver) return best
+    try { return this.resolver(method, url) } catch { return null }
   }
 }
 

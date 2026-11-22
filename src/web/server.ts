@@ -2904,6 +2904,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', (await import('./routes/health-monitor-v1.js')).healthMonitorV1Router)
   // Real use of tools, requests and pages, and the watches of shipped changes (src/core/usage-watch/).
   app.use('/api/v1', (await import('./routes/usage-watch-v1.js')).usageWatchV1Router)
+  // A request a page says failed before it reached the server is named by the route it would take.
+  {
+    const { answeredTemplates } = await import('../core/usage-watch/record.js')
+    const { routeTemplateOf } = await import('./route-template-of.js')
+    answeredTemplates.resolveWith((method, url) => routeTemplateOf(app.router, method, url))
+  }
   // Every plugin's settings for an AI: the plugin_settings ops.
   app.use('/api/v1', (await import('./routes/plugin-settings-v1.js')).pluginSettingsV1Router)
   // Personal AI conversation management (additive, Wave 1): rename/delete/stop/

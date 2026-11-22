@@ -319,7 +319,11 @@ describe('fetch admission control', () => {
       const line = errorSpy.mock.calls.find((c) => String(c[0]).includes('/api/tasks/groups'));
       expect(line, 'a queue rejection must be logged with the request it killed').toBeDefined();
       expect(String(line![0])).toContain('GET /api/tasks/groups rejected after 20000ms in the connection queue (pool saturated)');
-      expect(line![1]).toEqual({ queued: 0, queuedLow: 0, inFlight: SHARED_FETCH_SLOTS, priority: 'normal' });
+      // It names what held the connections, longest first, so a saturation says its cause.
+      expect(line![1]).toEqual({
+        queued: 0, queuedLow: 0, inFlight: SHARED_FETCH_SLOTS, priority: 'normal',
+        holding: Array.from({ length: SHARED_FETCH_SLOTS }, (_, i) => `GET /api/pinned${i} 20000ms`),
+      });
 
       for (const p of pending.splice(0)) p.resolve(jsonResponse({}));
       await vi.advanceTimersByTimeAsync(0);

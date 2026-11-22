@@ -88,7 +88,9 @@ let inFlightLowFetches = 0;
 let inFlightInteractiveFetches = 0;
 
 /** A granted connection, handed back as it was counted (a lane raised after dispatch counts nothing). */
-interface FetchSlot { low: boolean; interactive: boolean }
+interface FetchSlot { low: boolean; interactive: boolean; label: string; since: number }
+/** The connections in use now: a request rejected for want of one names what held them. */
+const inFlightSlots = new Set<FetchSlot>();
 
 /** Shared slots in use: every fetch in flight but those in the kept slot. */
 function sharedInUse(): number {
@@ -99,11 +101,19 @@ function keptSlotFree(): boolean {
   return inFlightInteractiveFetches < INTERACTIVE_RESERVED && inFlightFetches < MAX_CONCURRENT_FETCHES;
 }
 
-function takeSlot(low: boolean, interactive: boolean): FetchSlot {
+function takeSlot(low: boolean, interactive: boolean, label: string): FetchSlot {
   inFlightFetches++;
   if (low) inFlightLowFetches++;
   if (interactive) inFlightInteractiveFetches++;
-  return { low, interactive };
+  const slot = { low, interactive, label, since: Date.now() };
+  inFlightSlots.add(slot);
+  return slot;
+}
+
+/** What holds the connections, longest first: `GET /api/x 12000ms`, at most 8. */
+function holdingSlots(): string[] {
+  const now = Date.now();
+  return [...inFlightSlots].sort((a, b) => a.since - b.since).slice(0, 8).map((s) => `${s.label} ${now - s.since}ms`);
 }
 const fetchQueue: QueuedFetch[] = [];
 const lowFetchQueue: QueuedFetch[] = [];
@@ -117,7 +127,7 @@ function startQueued(next: QueuedFetch, low: boolean): void {
   if (next.callerSignal && next.onCallerAbort) {
     next.callerSignal.removeEventListener('abort', next.onCallerAbort);
   }
-  next.dispatch(takeSlot(low, !low && next.lane.interactive));
+  next.dispatch(takeSlot(low, !low && next.lane.interactive, next.label));
 }
 
 function eligibleIndex(queue: QueuedFetch[], interactiveOnly = false): number {
@@ -172,7 +182,7 @@ function acquireFetchSlot(priority: FetchPriority, label: string, callerSignal?:
     || (interactive && keptSlotFree() && eligibleIndex(fetchQueue, true) < 0);
   if (!(read && readsSuspended()) && Date.now() < admission.deadline && free
     && (!low || (eligibleIndex(lowFetchQueue) < 0 && inFlightLowFetches < MAX_LOW_PRIORITY_IN_FLIGHT))) {
-    return Promise.resolve(takeSlot(low, interactive));
+    return Promise.resolve(takeSlot(low, interactive, label));
   }
   const queue = low ? lowFetchQueue : fetchQueue;
   const { waitMs } = admission;
@@ -184,7 +194,7 @@ function acquireFetchSlot(priority: FetchPriority, label: string, callerSignal?:
       if (callerSignal && entry.onCallerAbort) callerSignal.removeEventListener('abort', entry.onCallerAbort);
       const cause = admission.suspended ? 'page suspended' : 'pool saturated';
       console.error(`[api] ${label} rejected after ${waitMs}ms in the connection queue (${cause})`, {
-        queued: fetchQueue.length, queuedLow: lowFetchQueue.length, inFlight: inFlightFetches, priority,
+        queued: fetchQueue.length, queuedLow: lowFetchQueue.length, inFlight: inFlightFetches, priority, holding: holdingSlots(),
       });
       reject(new DOMException(admission.suspended
         ? `Request queued ${waitMs}ms while the page was suspended`
@@ -238,6 +248,7 @@ function sendQueuedWritesNow(): void {
 }
 
 function releaseFetchSlot(slot: FetchSlot): void {
+  inFlightSlots.delete(slot);
   inFlightFetches--;
   if (slot.low) inFlightLowFetches--;
   if (slot.interactive) inFlightInteractiveFetches--;
