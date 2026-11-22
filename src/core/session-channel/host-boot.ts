@@ -80,6 +80,9 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   }
   const dir = path.join(o.stateDir, 'session-channel')
   const log = await FactLog.open({ dir, walnutId: o.walnutId, log: say })
+  // The copy's store is read only here: rows of this host's own sessions go through the own-row writer.
+  const { allowOwnRowWrites } = await import('../session-db.js')
+  allowOwnRowWrites(o.hostKey)
   const channel = new HostChannel({ log, walnutId: o.walnutId, hostId: o.hostKey, ownRows: () => ownRows(o.hostKey), onLog: say })
   const { sessionRunner } = await import('../../providers/claude-code-session.js')
   const runner = sessionRunner as unknown as LiveRunnerLike & { findSessionByClaudeId(sid: string): { consumedOffset?: number } | undefined }
@@ -121,5 +124,7 @@ export async function stopHostSessions(): Promise<void> {
   c.emitter.stop()
   c.routes.close()
   installSessionPort(null)
+  const { allowOwnRowWrites } = await import('../session-db.js')
+  allowOwnRowWrites(null)
   await c.log.close()
 }

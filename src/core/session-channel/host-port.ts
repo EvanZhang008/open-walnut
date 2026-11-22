@@ -152,9 +152,8 @@ export function createHostSessionPort(o: HostSessionPortOptions): SessionPort {
       const existing = await t().getSessionByClaudeId(sid)
       // A copy of a leader's row (a session this host does not judge) is written as before.
       if (existing && !rowOwnedHere(existing, hostKey)) return t().createSessionRecord(sid, taskId, project, cwd, extra)
-      const rec = await t().createSessionRecord(sid, taskId, project, cwd, { ...extra, host: hostKey })
-      if (rowOwnedHere(rec, hostKey)) return rec
-      return t().updateSessionRecord(sid, { judge: 'host', host: hostKey })
+      // A row made with this host's own key is judge 'host' at birth (session-db.ts, the own-row writer).
+      return t().createSessionRecord(sid, taskId, project, cwd, { ...extra, host: hostKey })
     }) as SessionTrackerPort['createSessionRecord'],
     renameSessionId: (async (from, to, updates) => {
       const r = await t().renameSessionId(from, to, updates)
