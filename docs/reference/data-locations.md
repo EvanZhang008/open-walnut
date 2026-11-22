@@ -209,6 +209,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/local/machine-id` | machine | no | This machine's id for daemon updates |
 | `~/.open-walnut/local/leader-switch/` | machine | no | The leader switch of this home: its steps and lock, the handed-over marker, the promotion record, permission log |
 | `~/.open-walnut/local/restore-drill.json` | machine | no | The last restore drill of this machine's backups: when, which backup, each check |
+| `~/.open-walnut/local/usage-watch.sqlite` | machine | no | The real-use monitor of this machine's server: hourly counts per tool, route and page error, recent problems, the watches tasks registered |
 | `~/.open-walnut/local/health-monitor/` | machine | no | Walnut Health records of this machine |
 | `~/.open-walnut/local/feature-nodes/` | machine | no | Connection journal of feature nodes |
 | `~/.open-walnut/local/runtime/` | machine | no | The runtime tree of this install |
