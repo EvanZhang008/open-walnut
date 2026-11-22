@@ -10,6 +10,7 @@
  */
 import { expect, test, type Page } from '@playwright/test'
 import { loadHome } from './draft-helpers'
+import { openTaskSession } from './agent-text-entry-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { findHeaderProblems, HEADER_TITLE_MIN_PX } from './header-fit-check'
 
@@ -73,12 +74,46 @@ test('every page in the sidebar: its headers fit at 1512, 1280, 1024 and phone w
     await sidebarTo(page, href)
     for (const width of [1512, 1280, 1024, 390]) {
       await page.setViewportSize({ width, height: width < 500 ? 844 : 900 })
+      // The phone layout is its own shell: load it at phone width, as a phone does.
+      if (width < 500) { await page.reload(); await page.locator('.phone-topbar').first().waitFor(); await page.waitForTimeout(800) }
       await page.waitForTimeout(150)
       const at = await problems(page)
       if (at.length) found[`${width} ${href}`] = at
     }
   }
   expect(found).toEqual({})
+})
+
+// The whole page narrowed, not only one divider (2026-11-22, the text-fit audit): the Scratchpad takes
+// its own column at every width, so at 1024 the Org page is about 568 px beside it; and Home holds
+// three columns (Scratchpad, Quick question, a session).
+test('the page narrowed by the Scratchpad: the Org list and Home in three columns', async ({ page }) => {
+  await isolateUiPrefs(page)
+  const scratch = page.getByTestId('sidebar-toggle-scratchpad')
+  for (const width of [1024, 1280]) {
+    await page.setViewportSize({ width, height: 800 })
+    await loadHome(page)
+    await scratch.click()
+    await openOrg(page)
+    for (const px of [0, 212, 200]) {
+      if (px) await page.locator('.org-list').evaluate((el, w) => { (el as HTMLElement).style.width = `${w}px` }, px)
+      expect(await problems(page), `${width} Org beside the Scratchpad, list ${px || 'default'}`).toEqual([])
+      await expect(page.locator('.org-list-head .org-name-edit')).toHaveText(/\S/)
+    }
+    await scratch.click()
+  }
+  await page.setViewportSize({ width: 1512, height: 900 })
+  await loadHome(page)
+  // A session column (the fixture task test-server.ts gives a stopped session).
+  await openTaskSession(page, 'Outline fixture task', 'pw-task-pins', 'pw-pins-session')
+  await page.getByRole('button', { name: 'Quick question' }).first().click()
+  await scratch.click()
+  for (const width of [1512, 1280, 1024]) {
+    await page.setViewportSize({ width, height: 900 })
+    await frames(page)
+    expect(await problems(page), `${width} Home with the Scratchpad, Quick question and a session`).toEqual([])
+  }
+  await scratch.click()
 })
 
 test('the Org list header: the Org chart icon and the gear; the title always reads', async ({ page }) => {

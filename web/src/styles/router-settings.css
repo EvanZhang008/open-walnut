@@ -77,10 +77,9 @@
 .router-settings-dialog-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .router-settings-dialog-title { margin: 0; font-size: var(--font-size-lg); font-weight: 600; color: var(--fg); }
 .router-settings-dialog-sub { font-size: var(--font-size-sm); color: var(--fg-secondary); }
-/* The name wraps whole (.wn-title) beside the close key, which stays at its top: these outrank the
-   header rule's one-line title and centring. */
+/* The name wraps whole (.wn-title) beside the close key, which stays at its top: this outranks the
+   header rule's centring. */
 .router-settings-dialog-head[data-fit-header] { align-items: flex-start; }
-.router-settings-dialog-head[data-fit-header] .router-settings-dialog-title { white-space: normal; overflow: visible; }
 .router-settings-dialog-close {
   flex: none; width: 28px; height: 28px; border: none; border-radius: 6px; background: none;
   color: var(--fg-secondary); font-size: var(--font-size-xl); line-height: 1; cursor: pointer;

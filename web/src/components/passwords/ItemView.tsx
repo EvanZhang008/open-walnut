@@ -132,7 +132,7 @@ export function ItemView({ item, onEdit, onChanged }: { item: VaultItem; onEdit:
       <div className="pw-detail-head" data-fit-header="">
         <SiteTile item={item} size={52} />
         <div className="pw-detail-title">
-          <h2 data-fit-title="">{item.title}</h2>
+          <h2 className="wn-title" data-fit-title="">{item.title}</h2>
           <span className="pw-detail-type">{typeLabel(item.type)}{item.sensitive ? ' · Sensitive' : ''}</span>
         </div>
         <div className="pw-detail-actions" data-fit-actions="">

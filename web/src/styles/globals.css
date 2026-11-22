@@ -18509,7 +18509,11 @@ a.tag-chip:hover .tag-chip-value,
    .draft-actions-bar purely as a DOM hook. Deliberately no `margin-left: auto` on
    the action button: inside a WRAPPING flex row an auto margin pushes everything
    after it onto its own line, which once stranded the (since removed) "Start ↵"
-   alone under the pills (measured on a 300px column). */
+   alone under the pills (measured on a 300px column).
+   Never narrower than its widest pill: in an empty Quick question slot beside a session and the
+   Scratchpad (about 180 px at 1280) the bar was squeezed to 53 px and the 61 px mode pill ran out
+   of it (header-fit-sweep.spec.ts). */
+.draft-actions-bar { min-width: min-content; }
 
 /* Permission-mode pill, FIRST in the row: the same .mode-toggle-pill a running
    session draws, so the two composers read alike (mode, then model). Sized to

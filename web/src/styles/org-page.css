@@ -148,9 +148,9 @@
 /* A readable column (2026-11-21, the UI audit: two short radio labels in a box across the whole pane).
    The form itself still fills the pane, so it scrolls at the pane's edge. A box is as wide as what it
    holds (two radios: about 240px), never the column's whole width, and the actions sit right under it. */
-.org-router-setup > * { max-width: 640px; box-sizing: border-box; }
+.org-router-setup > * { max-width: 560px; box-sizing: border-box; }
 .org-router-setup > label { display: flex; flex-direction: column; gap: 6px; max-width: 480px; }
-.org-router-setup fieldset { width: fit-content; min-width: min(240px, 100%); max-width: min(640px, 100%); margin: 16px 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.org-router-setup fieldset { width: fit-content; min-width: min(240px, 100%); max-width: min(560px, 100%); margin: 16px 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .org-router-setup fieldset label { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
 .org-router-setup p { font-size: var(--font-size-md); color: var(--fg-secondary); }
 .org-router-setup .btn { margin-right: 8px; }
@@ -186,7 +186,7 @@
 .org-router-overview-checked-line { display: block; }
 .org-router-overview-next { margin-top: 8px !important; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .org-chat-start-actions { display: flex; gap: 8px; }
-.org-router-setup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.org-router-setup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .org-router-setup-actions .btn { margin-right: 0; }
 .org-page.is-phone .org-router-settings-head { padding: 8px 12px; }
 .org-detail { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -398,10 +398,9 @@
   border-bottom: 1px solid var(--border);
 }
 .org-side-card-title { flex: 1; min-width: 0; margin: 0; font-size: var(--font-size-lg); font-weight: 600; overflow-wrap: anywhere; }
-/* The task's title is read whole: it wraps beside its two keys, which stay at its top (these
-   outrank the header rule's one-line title and centring). */
+/* The task's title is read whole: it wraps beside its two keys (.wn-title), which stay at its top
+   (outranks the header rule's centring). */
 .org-side-card-head[data-fit-header] { align-items: flex-start; }
-.org-side-card-head[data-fit-header] .org-side-card-title { white-space: normal; }
 .org-side-close {
   border: none;
   background: transparent;
