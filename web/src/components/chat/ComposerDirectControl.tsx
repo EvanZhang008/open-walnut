@@ -38,7 +38,7 @@ export function ComposerDirectControl({ id, handleRef, disabled }: {
     return () => observer.disconnect();
   }, [id, handleRef]);
   return <button ref={selfRef} type="button"
-    className={`side-question-pill composer-direct-control${state.open ? ' is-open' : ''}`}
+    className={`btn btn-sm btn-ghost side-question-pill composer-direct-control${state.open ? ' is-open' : ''}`}
     // Hidden until the control it mirrors is mounted (the session record may load
     // later), and while a tight row folds it into the "+" menu.
     style={state.present && !state.folded ? undefined : { display: 'none' }}

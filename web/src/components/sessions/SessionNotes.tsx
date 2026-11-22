@@ -121,7 +121,8 @@ export function SessionNotesPill({ noteState, expanded, onToggleExpanded }: Sess
   if (noteState.hasNote) return null;
   return (
     <button
-      className={`side-question-pill session-notes-pill${expanded ? ' is-open' : ''}`}
+      className={`btn btn-sm btn-ghost side-question-pill session-notes-pill${expanded ? ' is-open' : ''}`}
+      aria-expanded={expanded}
       onClick={onToggleExpanded}
       title="Add a session note"
     >

@@ -37,6 +37,7 @@ import {
 import { SpinnerGlyph } from './settings-glyphs'
 import { DisclosureChevron } from '@/components/controls'
 import { CopyButton } from './inputs/CopyButton'
+import { SettingsButtonSize } from './inputs/SettingsButton'
 import '@/styles/settings-shell.css'
 import '@/styles/settings-controls.css'
 
@@ -82,9 +83,9 @@ function PaneHeader({ title, description, actions }: { title: string; descriptio
         <SettingsSavedIndicator placement="header" />
         {hasContent(actions) &&
           (compact && stickyActionsHost ? (
-            createPortal(actions, stickyActionsHost)
+            createPortal(<SettingsButtonSize.Provider value="default">{actions}</SettingsButtonSize.Provider>, stickyActionsHost)
           ) : (
-            <div className="settings-card-actions">{actions}</div>
+            <div className="settings-card-actions"><SettingsButtonSize.Provider value="default">{actions}</SettingsButtonSize.Provider></div>
           ))}
       </div>
     </header>

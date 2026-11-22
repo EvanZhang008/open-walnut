@@ -124,7 +124,7 @@ export function OutputModePill({
   return (
     <button
       type="button"
-      className="mode-toggle-pill"
+      className="btn btn-sm btn-ghost mode-toggle-pill"
       data-compact-label={current === 'rich' ? 'R' : 'M'}
       aria-label={`Output mode: ${current === 'rich' ? 'Rich' : 'MD'}`}
       onClick={toggle}

@@ -354,14 +354,13 @@
    "we need to be able to choose which folder"); docked, the composer stays one line. */
 .ext-home-composer.is-docked .draft-launch-bar { display: none; }
 .ext-home-composer .draft-launch-bar { margin: 0 2px 6px; }
-/* In the panel they read as the chips beside them do (a capsule at the chips' size), so they are
-   seen as the controls they are: "Bypass" and "Auto" as bare grey words were missed. */
-html body .is-plain-chat-pickers .mode-toggle-pill, html body .is-plain-chat-pickers .composer-model-pill {
+/* In the panel the model trigger reads as the chips beside it do, so it is seen as the control it is
+   ("Auto" as a bare grey word was missed). The mode trigger ("Bypass") is the family's quiet key. */
+html body .is-plain-chat-pickers .composer-model-pill {
   height: 24px; display: inline-flex; align-items: center; padding: 0 9px; border: 1px solid var(--border); border-radius: 999px;
   background: var(--bg-secondary); color: var(--fg-secondary); font-size: var(--font-size-sm); font-weight: 600; line-height: 1;
 }
-.is-plain-chat-pickers .mode-toggle-pill .mode-toggle-pill-label { font-family: inherit; font-size: var(--font-size-sm); font-weight: 600; }
-html body .is-plain-chat-pickers .mode-toggle-pill:hover, html body .is-plain-chat-pickers .composer-model-pill:hover { color: var(--walnut-accent); background: var(--hover-bg); }
+html body .is-plain-chat-pickers .composer-model-pill:hover { color: var(--walnut-accent); background: var(--hover-bg); }
 /* Where the bar has no room for them beside its own controls (the first page's grown composer, with
    Act in this tab and Save as todo; any bar under 420 px), they take a line of their own over it. */
 .ext-home-composer.is-grown .chat-input-controls { flex-wrap: wrap; row-gap: 2px; }

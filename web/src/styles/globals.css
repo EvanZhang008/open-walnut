@@ -21559,10 +21559,6 @@ a.tag-chip:focus-visible,
    row reads as two different control kinds. */
 .draft-actions-bar .draft-mode-pill {
   flex: 0 0 auto;
-  padding: 3px 6px;
-}
-.draft-actions-bar .draft-mode-pill .mode-toggle-pill-label {
-  font-size: var(--font-size-xs);
 }
 
 /* Model select, right after the mode pill — the composer's equivalent of a real
@@ -21777,42 +21773,9 @@ a.tag-chip:focus-visible,
 
 /* ── Mode Toggle Pill (Execution / Plan) ── */
 
-/* Text-button style (no capsule): plain muted text, soft tint on hover only.
-   Plan mode reads through TEXT COLOR (amber), not a filled chip. */
-.mode-toggle-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
-  cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease;
-  line-height: 1.4;
-  user-select: none;
-}
-
-.mode-toggle-pill:hover {
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-
-.mode-toggle-pill.plan-active {
-  color: var(--warning);
-}
-
-.mode-toggle-pill.plan-active:hover {
-  background: color-mix(in srgb, var(--warning) 12%, transparent);
-}
-
-.mode-toggle-pill-label {
-  font-family: 'SF Mono', Menlo, monospace;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-}
+/* The mode and option triggers are the family's quiet small keys (.btn.btn-sm.btn-ghost). Plan mode
+   reads through its label's colour (amber), not a filled chip. */
+.mode-toggle-pill.plan-active .mode-toggle-pill-label { color: var(--priority-important-text); }
 
 /* Context-window usage % — pushed to the right edge of the quick-access row.
    Moved here from the chat header so it sits next to /session + Execution. */
@@ -24804,31 +24767,8 @@ a.file-link:hover {
   display: inline-flex;      /* the pill sits inline next to the mode pill */
 }
 
-/* Pill trigger — matches the native .mode-toggle-pill exactly (same bg, border,
-   padding, radius, transition) so it sits as a peer next to Bypass, not a stranger. */
-/* Text-button style (no capsule) — matches .mode-toggle-pill. */
-.side-question-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  color: var(--fg-muted);
-  cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease;
-  line-height: 1.4;
-  user-select: none;
-}
-.side-question-pill:hover:not(:disabled),
-.side-question-pill.is-open {
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-.side-question-pill:disabled { opacity: 0.5; cursor: default; }
+/* The btw trigger is the family's quiet small key, as the mode trigger beside it; open, it keeps
+   its hover fill (.btn-ghost[aria-expanded]). */
 .side-question-count {
   font-size: var(--font-size-xs);
   font-weight: 600;
@@ -28079,12 +28019,10 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
    step up to --fg-secondary (and the Quick Start path/label to full --fg).
    Applies in both the glass and the opaque-fallback case: darker chrome text is
    correct either way. */
-.chat-composer-overlay .quick-access-pill,
-.chat-composer-overlay .mode-toggle-pill {
+.chat-composer-overlay .quick-access-pill {
   color: var(--fg-secondary);
 }
-.chat-composer-overlay .quick-access-pill-label,
-.chat-composer-overlay .mode-toggle-pill-label {
+.chat-composer-overlay .quick-access-pill-label {
   font-weight: 500;
 }
 /* ── Todo panel: toolbar overlay (stable height → fixed padding) ── */

@@ -128,6 +128,8 @@
   color: var(--fg);
 }
 .btn-ghost:active:not(:disabled):not([aria-disabled='true']) { background: var(--btn-fill-hover); }
+/* A quiet trigger whose menu or drawer is open keeps its hover fill. */
+.btn-ghost[aria-expanded='true'] { background: var(--btn-fill); color: var(--fg); }
 .btn-ghost.btn-danger { color: var(--btn-danger-text); }
 .btn-ghost.btn-danger:hover:not(:disabled):not([aria-disabled='true']) {
   background: color-mix(in srgb, var(--error) 10%, transparent);

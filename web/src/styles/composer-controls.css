@@ -43,10 +43,9 @@
 .composer-control[data-add-menu='true'] > .mode-toggle-pill,
 .composer-control[data-add-menu='true'] > .session-notes-pill,
 .composer-control[data-add-menu='true'] > .side-question-root > .side-question-pill {
+  /* Hidden, still in the tree (the + menu lists them): out of the flow and clipped to nothing. */
   position: absolute;
   width: 1px;
-  height: 1px;
-  padding: 0;
   overflow: hidden;
   clip-path: inset(50%);
   visibility: hidden;

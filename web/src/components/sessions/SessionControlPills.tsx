@@ -126,7 +126,7 @@ function ThoughtControlPill({ control, setControl }: Pick<SessionControlPillsPro
   const current = control.options.find((option) => option.value === control.currentValue);
   if (!control.options.length) return null;
   return <>
-    <button ref={trigger} type="button" className="mode-toggle-pill" title={control.name} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(!open)}>
+    <button ref={trigger} type="button" className="btn btn-sm btn-ghost mode-toggle-pill" title={control.name} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(!open)}>
       <span className="mode-toggle-pill-label">{current?.name ?? control.currentValue}</span>
     </button>
     {open && createPortal(<div ref={menu} className="session-control-menu" role="listbox" aria-label={control.name}
@@ -188,7 +188,7 @@ function ApprovalControlPills({
       <span className="session-control-picker" ref={rootRef}>
         <button
           type="button"
-          className="mode-toggle-pill"
+          className="btn btn-sm btn-ghost mode-toggle-pill"
           aria-haspopup="listbox"
           aria-expanded={open}
           title={`${mode.name}: ${CHATGPT_MODE_WORDING[mode.currentValue]?.name ?? current?.name ?? mode.currentValue}`}
@@ -263,7 +263,7 @@ function ApprovalControlPills({
       {planOn && collab && (
         <button
           type="button"
-          className="mode-toggle-pill plan-active"
+          className="btn btn-sm btn-ghost mode-toggle-pill plan-active"
           title="Plan mode on. Click to turn off"
           disabled={busy}
           onClick={() => apply(collab.id, 'default')}

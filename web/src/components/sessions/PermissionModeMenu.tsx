@@ -75,7 +75,7 @@ export function PermissionModeMenu({ mode, onPick, title, heading = 'Permission 
     <button
       ref={triggerRef}
       type="button"
-      className={`mode-toggle-pill${mode === 'plan' ? ' plan-active' : ''}${className ? ` ${className}` : ''}`}
+      className={`btn btn-sm btn-ghost mode-toggle-pill${mode === 'plan' ? ' plan-active' : ''}${className ? ` ${className}` : ''}`}
       aria-haspopup="listbox"
       aria-expanded={open}
       title={title}
