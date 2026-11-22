@@ -25,6 +25,8 @@ describe('choice controls: one markup per kind', () => {
     expect((out.match(/tabindex="-1"/g) ?? []).length).toBe(2)
     expect(out).toContain('data-testid="t-b"')
     expect(out).toContain('<span class="wn-tab-count">12</span>')
+    // The count is its own word in the tab's text and name, never glued to the label.
+    expect(out).toContain('Changes <span class="wn-tab-count">12</span>')
   })
 
   it('Tabs: with nothing picked the first tab takes the Tab key', () => {
@@ -44,6 +46,9 @@ describe('choice controls: one markup per kind', () => {
     expect(on).toContain('aria-pressed="true"')
     expect(on).toContain('class="wn-chip is-on"')
     expect(on).toContain('<span class="wn-chip-count">3</span>')
+    // Its own word in the chip's text and name: "Needs you 3", never "Needs you3" (2026-11-22: a
+    // board chip read "Sev 12" for Sev 1 with 2 cards).
+    expect(on).toContain('</span> <span class="wn-chip-count">3</span>')
     const radio = html(h(Chip, { pressed: false, role: 'radio' }, 'Week'))
     expect(radio).toContain('role="radio" aria-checked="false"')
     expect(radio).not.toContain('aria-pressed')

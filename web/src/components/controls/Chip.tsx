@@ -29,7 +29,9 @@ export function Chip({ pressed, count, leading, trailing, className, children, r
     <button type="button" role={role} {...state} {...rest} className={`wn-chip${pressed ? ' is-on' : ''}${className ? ` ${className}` : ''}`}>
       {leading}
       <span className="wn-chip-label">{children}</span>
-      {count !== undefined && count !== null && count !== false && <span className="wn-chip-count">{count}</span>}
+      {/* The space keeps the count its own word in the chip's text and accessible name ("Sev 1 2",
+          never "Sev 12"); a flex row draws no space-only text, so nothing moves on screen. */}
+      {count !== undefined && count !== null && count !== false && <>{' '}<span className="wn-chip-count">{count}</span></>}
       {trailing}
     </button>
   )

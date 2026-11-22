@@ -79,7 +79,9 @@ export interface TabProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 
 }
 
 export function Tab({ selected, count, trailing, detail, className, children, ...rest }: TabProps) {
-  const countEl = count !== undefined && count !== null && count !== false && <span className="wn-tab-count">{count}</span>
+  // A space before the count keeps it its own word in the tab's text ("Changes 12"); the
+  // inline-flex row draws none of it.
+  const countEl = count !== undefined && count !== null && count !== false && <>{' '}<span className="wn-tab-count">{count}</span></>
   const tall = detail !== undefined && detail !== null && detail !== false
   return (
     <button

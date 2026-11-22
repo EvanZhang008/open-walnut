@@ -284,7 +284,7 @@ test('Tasks as All tasks or Board, kept per node; sections fold by default; an o
   await openNode(page, LED)
   const detail = page.getByTestId('org-detail')
   await detail.getByTestId('org-top-task').click()
-  await expect(detail.getByTestId('org-top-task')).toHaveText('Tasks2')
+  await expect(detail.getByTestId('org-top-task')).toHaveText('Tasks 2')
   // Two ways only (2026-11-12, the user: "under tasks, just show all taks, and then board").
   await expect.poll(() => detail.getByTestId('org-task-modes').getByRole('radio').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid'))), { timeout: 30_000 })
     .toEqual(['org-task-mode-all', 'org-task-mode-board'])
