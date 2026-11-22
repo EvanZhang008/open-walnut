@@ -10,7 +10,8 @@
  * the account does not point gets no password until the person picks it here ("Use <host>").
  * A Gmail or Outlook account signs in with its provider instead (CalendarSignInRow.tsx).
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useLeanCallback } from '@/hooks/useLeanCallback'
 import { listMailAccounts, type MailAccountDto } from '@/api/mail'
 import { addMailCalendar, getSignInProviders, removeMailCalendar, type CalendarInfo, type CalendarSourceStatus, type SignInProviderName } from '@/api/calendar'
 import { calendarSourceOf } from '../../../../../src/integrations/calendar/event-rules'
@@ -62,7 +63,7 @@ export function CalendarMailAccounts({ calendars, sources = [], onChanged }: Pro
   const [found, setFound] = useState<Record<string, string>>({})
   // Bumped when a sign-in client was kept: every sign-in row reads where it stands again.
   const [signInVersion, setSignInVersion] = useState(0)
-  const changed = useCallback(() => {
+  const changed = useLeanCallback(() => {
     void ensureCalendarsLoaded(true)
     onChanged?.()
   }, [onChanged])

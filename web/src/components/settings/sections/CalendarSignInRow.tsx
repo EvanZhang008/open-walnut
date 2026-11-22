@@ -11,7 +11,8 @@
  * as another account than the row's is held (kept nowhere) until the person uses that account's
  * calendar or discards it.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useLeanCallback } from '@/hooks/useLeanCallback'
 import {
   addMailCalendar, cancelCalendarSignIn, completeCalendarSignIn, decideCalendarSignIn, getCalendarSignIn, startCalendarSignIn,
   type CalendarSignInStatus, type CalendarSourceStatus, type SignInProviderName,
@@ -67,7 +68,7 @@ export function CalendarSignInRow({ account, label, provider, tag, own, calendar
     return () => { live.current = false }
   }, [])
 
-  const refresh = useCallback(async () => {
+  const refresh = useLeanCallback(async () => {
     const s = await getCalendarSignIn(id, account.address).catch(() => null)
     if (!live.current || !s) return s
     setStatus(s)
