@@ -1139,6 +1139,10 @@ export async function syncUserStatuses(
    *  the lane this pass ran in, so a hand's change stays fast for every hop. */
   follow: (id: string) => void = mark,
 ): Promise<number> {
+  // The one writer of a task's user status, where the boot policy says statuses are written (the
+  // leader): a replica stores none of its own (a host's copy reads only; the companion's would be a
+  // second copy that disagrees), it derives for its readers instead (deriveUserStatuses).
+  if (!bootPolicy('user-status')) return 0;
   const pass = ++passSeq;
   const leftTo = new Set<number>();
   let ended!: () => void;
@@ -1154,12 +1158,15 @@ export async function syncUserStatuses(
   }
 }
 
-async function derivePass(
-  pass: number, ids: ReadonlySet<string> | null, nowMs: number, follow: (id: string) => void,
-  /** The later passes this one left a task to. */
-  leftTo: Set<number>,
-): Promise<number> {
-  const { listTasks, updateTaskRaw } = await import('./task-manager.js');
+/** What one pass derives from: every task, the ones it derives, and their facts read once. */
+interface PassInputs {
+  everything: Task[]; targets: Task[]; facts: StatusFacts; childrenOf: Map<string, Task[]>;
+  ms: { t0: number; t1: number; t2: number; t2b: number; t3: number };
+}
+
+/** Read what a pass derives `ids` (null: every open task) from; null when none is open. */
+async function readPass(ids: ReadonlySet<string> | null): Promise<PassInputs | null> {
+  const { listTasks } = await import('./task-manager.js');
   const t0 = Date.now();
   const everything = await listTasks();
   const { getConfig } = await import('./config-manager.js');
@@ -1168,7 +1175,7 @@ async function derivePass(
   // children first (childrenFirst below), so a nested change reaches the top in one pass.
   const wanted = ids && followWorkers ? withAncestors(ids, everything) : ids;
   const targets = everything.filter((t) => (wanted ? wanted.has(t.id) : true) && openLeader(t));
-  if (!targets.length) return 0;
+  if (!targets.length) return null;
   const t1 = Date.now();
   const facts = await readStatusFacts(targets, everything.map((t) => t.id), followWorkers);
   const t2 = Date.now();
@@ -1176,9 +1183,37 @@ async function derivePass(
   const t2b = Date.now();
   await readFoldEvidence(facts, targets);
   const t3 = Date.now();
+  return { everything, targets, facts, childrenOf: childrenByParent(everything), ms: { t0, t1, t2, t2b, t3 } };
+}
+
+/**
+ * The status each of these open tasks has now, derived exactly as a pass derives it and written
+ * nowhere: what a replica shows its readers for the tasks whose facts it holds newer than the
+ * leader's stored copy (replica/away-status.ts; the plan's one source of the user status). A
+ * finished task is not in the answer (it reads Done).
+ */
+export async function deriveUserStatuses(ids: ReadonlySet<string>, nowMs = Date.now()): Promise<Map<string, UserStatus>> {
+  const out = new Map<string, UserStatus>();
+  if (!ids.size) return out;
+  const inputs = await readPass(ids);
+  if (!inputs) return out;
+  for (const task of inputs.targets) {
+    if (ids.has(task.id)) out.set(task.id, statusOf(task, inputs.facts, inputs.childrenOf, nowMs).status);
+  }
+  return out;
+}
+
+async function derivePass(
+  pass: number, ids: ReadonlySet<string> | null, nowMs: number, follow: (id: string) => void,
+  /** The later passes this one left a task to. */
+  leftTo: Set<number>,
+): Promise<number> {
+  const { updateTaskRaw } = await import('./task-manager.js');
+  const inputs = await readPass(ids);
+  if (!inputs) return 0;
+  const { everything, targets, facts, childrenOf, ms: { t0, t1, t2, t2b, t3 } } = inputs;
   let changed = 0;
   const toClose: { task: Task; status: UserStatus }[] = [];
-  const childrenOf = childrenByParent(everything);
   const ordered = facts.followWorkers ? childrenFirst(targets, childrenOf) : targets;
   for (const task of ordered) {
     const { input, status: next, own } = statusOf(task, facts, childrenOf, nowMs);
