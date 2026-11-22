@@ -20,12 +20,15 @@
 /* While dragging nothing under the pointer selects or takes the pointer (an iframe in a Board). */
 .org-detail-split.resizing { user-select: none; }
 .org-detail-split.resizing iframe { pointer-events: none; }
-/* Above the chat: at most about half the node, the rest of it the chat's. */
-.org-rail.is-top { flex: none; max-height: 45%; border-bottom: 1px solid var(--border); }
+/* Above the chat: about half the node, the rest of it the chat's. A fixed share, never its content's
+   height: as its cards load, fold or change, the chat under it stays where it is (2026-11-22, the
+   user: on opening, "it goes up, down, up, down"; the pane grew from its loading line to its cards
+   and pushed the chat down by about 390px). */
+.org-rail.is-top { flex: none; height: 45%; border-bottom: 1px solid var(--border); }
 /* Full screen: the same pop-up sheet as a session panel's (globals.css, fullscreen-tab.css), so the
    rail's own width, height cap and border give way to the sheet's box. */
 html .org-rail.open-walnut-fullscreen { width: auto; max-height: none; border: 0; background: var(--bg); }
-html .org-rail.is-top.open-walnut-fullscreen:has(.org-rail-board) { height: auto; }
+html .org-rail.is-top.open-walnut-fullscreen { height: auto; }
 html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overflow: visible; }
 .org-rail > .org-top { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 34px; padding: 4px 10px; border-bottom: 1px solid var(--border); }
 /* A node with no Brief: the bar holds only its close, at the right. */
@@ -50,8 +53,6 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 /* The Board fills the side bar below the switch. */
 .org-rail-board { flex: 1; min-height: 0; display: flex; flex-direction: column; margin-top: 6px; border-top: 1px solid var(--border); }
 .org-rail-board > * { flex: 1; min-height: 0; }
-/* Above the chat (a narrow window, a phone) the Board gets the side bar's whole room, not its content's. */
-.org-rail.is-top:has(.org-rail-board) { height: 45%; }
 .org-rail > .org-top.has-switch { padding: 0 6px 0 12px; min-height: 36px; }
 .org-rail-body { flex: 1; min-height: 0; overflow-y: auto; }
 .org-rail .org-brief { padding: 8px 12px; border-bottom: 0; }
