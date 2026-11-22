@@ -273,12 +273,10 @@ view draws a toast of its own (the Sort view's inverted pill was removed). Ratch
 
 ## The chat transcript
 
-- **The chat's side margins are the user's pick.** Each side of a wide panel keeps a quarter of
-  what the panel has past 496 px, the composer and the panel's notices at the same edges; a
-  narrower panel keeps its gutter (`styles/chat-reading.css`, `--chat-side`). A 496 px centred
-  column shipped first without his yes; the user, 2026-11-22, by voice: "why did you make the
-  margins around it so big", then "make the margin half". A change to how wide the chat reads is
-  his to pick first. A long code line scrolls in its block.
+- **The chat uses the panel's width.** The timeline and the composer keep the panel's plain
+  gutter; no centred column, no wide margins around the composer (the user, 2026-11-22, by voice: "why did you make the margins around it so big",
+  after a 496 px centred column shipped without his yes; a half margin after it was still too much:
+  "change the margin right now"). A change to how wide the chat reads is his to pick first. A long code line scrolls in its block.
 - **Chat text keeps the chat's own size (14 px today, the one size the scale has yet to name)**;
   h1 and h2 are `--font-size-lg` (h1 700, h2 600), a smaller heading is the chat text in bold;
   paragraphs and lists 8 px apart, list items 4 px. The reply's time and a failed-send line are
@@ -296,7 +294,7 @@ view draws a toast of its own (the Sort view's inverted pill was removed). Ratch
 
 Source: the UI audit of the user's own chats, 2026-11-21 (lines of 120 characters, a turn line
 that "reads like a grey footnote", notices cut with no way in, the VP chat's folder-gone notice
-twice). `tests/e2e/browser/chat-reading.spec.ts` measures the side margins, the scale, the turn line, the
+twice). `tests/e2e/browser/chat-reading.spec.ts` measures that the chat fills the panel, the scale, the turn line, the
 one notice and the split's first row; `step-row-lines.spec.ts` checks the cut-row cue on every row
 kind.
 
