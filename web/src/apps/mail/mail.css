@@ -377,12 +377,12 @@
 .mail-sync-line[data-state='auth-required'],
 .mail-sync-line[data-state='degraded'] { color: var(--warning); }
 
-/* `+ Add account` is a quiet family key under the line (its label lines up with the line's words); the
+/* `+ Add account` is a small grey family key under the line, its left edge on the line's words; the
    rule under it, which parts the pane's head from its folders, belongs to the scroller below. */
 .mail-add-account {
   flex: 0 0 auto;
   align-self: flex-start;
-  margin: 0 2px 6px;
+  margin: 4px 12px 8px;
 }
 
 .mail-add-account ~ .mail-accounts-scroll { border-top: 1px solid var(--border); }

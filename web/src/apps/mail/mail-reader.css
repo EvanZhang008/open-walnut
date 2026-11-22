@@ -232,9 +232,7 @@
   white-space: nowrap;
 }
 
-/* Details is a quiet family key; its caret turns while open (.btn-caret). The negative margin lines its
-   label up with the date's end above it. */
-.mail-reader-details-btn { margin-right: -10px; }
+/* Details is a small grey family key; its caret turns while open (.btn-caret). */
 
 /* Fourteen recipients is a real message, so the block is bounded and scrolls itself rather than
    taking the paper's height with it.
