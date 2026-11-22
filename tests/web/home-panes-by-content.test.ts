@@ -47,7 +47,9 @@ describe("Home's panes go by content", () => {
     const pane = read('pages/HomeEmptyPane.tsx')
     expect(pane).toContain('No session open')
     // One New task, one look: the toolbar's own button, never a second one beside it.
-    expect(pane).toContain('<NewLauncherButton onOpen={onNewTask} />')
+    expect(pane).toMatch(/className="btn btn-sm home-empty-pane-start" onClick=\{onNewTask\}/)
+    // One control named New task on Home: the empty pane's button has its own name.
+    expect(pane).not.toContain('NewLauncherButton')
     expect(rule(globals, '.home-empty-pane')).toMatch(/flex:\s*1/)
   })
 
@@ -67,7 +69,8 @@ describe("Home's panes go by content", () => {
     expect(main).not.toMatch(/sessionPanel\.setPct\(/)
     expect(main).not.toMatch(/sessionPanel\.width\b/)
     // A drag starts from the width that shows (a capped one too), never from the stored one.
-    expect(main).toMatch(/useResizablePanel\('walnut-session-panel-width-v2', 35, 'right', \{ measure: \(\) => sessionAreaShownRef\.current \}\)/)
+    // ...and measures a drag against the content row its `${pct}%` is a share of (basis 'parent').
+    expect(main).toMatch(/useResizablePanel\('walnut-session-panel-width-v2', 35, 'right', \{ measure: \(\) => sessionAreaShownRef\.current, basis: 'parent' \}\)/)
     expect(main).toMatch(/style=\{todoShown \? \{ width: todoWidth \} : undefined\}/)
     expect(main).not.toMatch(/width: todoPanel\.width/)
     expect(rule(globals, '.main-page')).toMatch(/--home-rail-width:\s*56px/)

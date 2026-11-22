@@ -192,39 +192,15 @@
 .status-section-card:hover .worker-fold-row-back,
 .status-section-card:focus-within .worker-fold-row-back { display: inline-flex; }
 
-/* With a pointer that hovers, a line's take-out arrow and a row's put-back arrow take no width
-   (2026-11-22 review: the title wrapped short of the edge for an arrow that shows only on hover): they
-   are always laid out, hidden until the hover, over the end of the line on the line's own fill
-   (--row-fill over --bg), so showing them never reflows the title. A worker that is out keeps its
-   arrow, always shown, in the flow. The row's arrow is placed and filled with the row's other
-   actions (home-navigation.css). */
+/* With a pointer that hovers, a row's put-back arrow is always laid out, hidden until the hover, in
+   the card's right rail with its other actions (home-navigation.css), so showing it never reflows the
+   title. A line's take-out arrow keeps its own 20 px at the line's end, hidden until the hover: a
+   control never sits over the title or the state (2026-11-22 review). */
 @media (hover: hover) and (min-width: 769px) and (min-height: 501px), (hover: hover) and (min-width: 769px) and (pointer: fine) {
   .status-section-card .worker-fold-row-back { display: inline-flex; visibility: hidden; }
   .status-section-card:hover .worker-fold-row-back,
   .status-section-card:focus-within .worker-fold-row-back { visibility: visible; }
 }
-@media (hover: hover) {
-  .worker-fold-item { --row-fill: var(--bg-hover); }
-  .worker-fold-item.is-focused { --row-fill: var(--worker-fold-bg); }
-  .worker-fold-item:not(.is-out) > .worker-fold-action {
-    margin-left: -24px;
-    background: linear-gradient(var(--row-fill), var(--row-fill)), var(--bg);
-  }
-  .worker-fold-item:not(.is-out) > .worker-fold-action:is(:hover, :focus-visible) {
-    background: linear-gradient(var(--worker-fold-bg-strong), var(--worker-fold-bg-strong)), linear-gradient(var(--row-fill), var(--row-fill)), var(--bg);
-  }
-  .worker-fold-item:not(.is-out) > .worker-fold-action::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    right: 100%;
-    width: 6px;
-    background: linear-gradient(to right, transparent, var(--row-fill)), linear-gradient(to right, transparent, var(--bg));
-    pointer-events: none;
-  }
-}
-
 /* A touch screen has no hover: the arrows always show, after the hover rules above so they win.
    The phone row puts every extra child of a card in a strip that takes no taps
    (phone-fixes-r4.css); the put-back arrow is a control, so it takes them again. */

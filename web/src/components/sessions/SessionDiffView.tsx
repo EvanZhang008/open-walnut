@@ -1831,8 +1831,9 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   const [treeCollapsed, setTreeCollapsed] = usePageView('diff', 'treeCollapsed', false, isBoolean);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Resizable tree rail (left of the diff). Stored as % of viewport.
-  const tree = useResizablePanel('open-walnut-diff-tree-w', 22, 'left');
+  // Resizable tree rail (left of the diff). Stored as % of the diff body, the box its
+  // `${pct}%` width is a share of, so a drag measures against it too.
+  const tree = useResizablePanel('open-walnut-diff-tree-w', 22, 'left', { basis: 'parent' });
 
   // Floating "Ask about this" affordance, positioned at the current text selection.
   // `ask`: the selection as a passage of the current file (the pill's Ask here),

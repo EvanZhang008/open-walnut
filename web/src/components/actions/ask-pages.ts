@@ -69,11 +69,12 @@ export function anyOpen(pages: readonly ActionItem[], answered: Readonly<Record<
 }
 
 /** The open page a folded place leads with: the one shown when it still waits on the user, else the
- *  next open one after it (from the first again past the last); -1 with none open. */
-export function openPageFrom(pages: readonly ActionItem[], answered: Readonly<Record<string, AnsweredAsk>>, index: number): number {
+ *  next open one after it (from the first again past the last); -1 with none open. `waits`: the
+ *  unanswered pages that count at all (a folded line leaves out the snoozed ones). */
+export function openPageFrom(pages: readonly ActionItem[], answered: Readonly<Record<string, AnsweredAsk>>, index: number, waits: (item: ActionItem) => boolean = ALL): number {
   for (let k = 0; k < pages.length; k++) {
     const j = (index + k) % pages.length;
-    if (!answered[pages[j]!.id]) return j;
+    if (!answered[pages[j]!.id] && waits(pages[j]!)) return j;
   }
   return -1;
 }

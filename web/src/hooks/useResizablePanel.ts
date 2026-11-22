@@ -1,8 +1,8 @@
 import { useState, useCallback, useRef } from 'react';
 import { useDragGesture } from './useDragGesture';
 
-const PANEL_PCT_MIN = 10;  // minimum 10% of viewport
-const PANEL_PCT_MAX = 70;  // maximum 70% of viewport (supports multi-column sessions)
+const PANEL_PCT_MIN = 10;  // minimum 10% of the basis
+const PANEL_PCT_MAX = 70;  // maximum 70% of the basis (supports multi-column sessions)
 const PANEL_PCT_DEFAULT = 20;
 
 function clampPct(pct: number): number {
@@ -50,7 +50,7 @@ interface UseResizablePanelReturn {
 }
 
 /**
- * Reusable hook for a resizable panel with width as % of viewport.
+ * Reusable hook for a resizable panel with width as % of its basis (the viewport by default).
  * @param direction 'right' (default) = panel is right of handle (drag left = increase).
  *                  'left' = panel is left of handle (drag right = increase).
  *
@@ -59,12 +59,36 @@ interface UseResizablePanelReturn {
  * getting stuck on the Files panel's HTML-preview iframe.
  */
 export interface ResizablePanelOptions {
-  /** The panel's room now, as % of the viewport (both sides readable): a drag stops at it, in
+  /** The panel's room now, as % of the basis (both sides readable): a drag stops at it, in
    *  place of the hook's own 10 to 70% clamp. */
   bounds?: () => { min: number; max: number };
-  /** The width that shows now, as % of the viewport, when it can differ from `pct` (a CSS default):
+  /** The width that shows now, as % of the basis, when it can differ from `pct` (a CSS default):
    *  a drag starts from it, so the panel never jumps under the pointer. */
   measure?: () => number | null;
+  /** What 100% is, in px: the box the caller's `${pct}%` width is a share of. A drag turns the
+   *  pointer's px into % of it, so the divider follows the pointer. Default: the viewport.
+   *  `'parent'` = the panel's containing box (a plain `width: N%`); a getter for anything else.
+   *  Dividing by the viewport for a panel sized in its parent moved the divider by
+   *  parent/viewport of the pointer (2026-11-22: Home's session area beside the task panel). */
+  basis?: 'parent' | (() => number | null);
+}
+
+/** The content width a child's `width: N%` resolves against: its parent's, past any
+ *  `display: contents` wrapper, less padding. Null when there is none to measure. */
+export function containingWidth(el: HTMLElement | null): number | null {
+  let box = el?.parentElement ?? null;
+  while (box && getComputedStyle(box).display === 'contents') box = box.parentElement;
+  if (!box) return null;
+  const cs = getComputedStyle(box);
+  const w = box.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+  return w > 0 ? w : null;
+}
+
+/** The width a drag of `dx` px gives, from `startPct`, for a panel whose 100% is `basisPx`.
+ *  'right' = the panel is right of the handle (drag left = wider); 'left' the reverse. */
+export function dragPct(startPct: number, dx: number, direction: 'left' | 'right', basisPx: number): number {
+  const pxDelta = direction === 'right' ? -dx : dx;
+  return startPct + (pxDelta / basisPx) * 100;
 }
 
 function hasStored(key: string): boolean {
@@ -88,6 +112,10 @@ export function useResizablePanel(storageKey: string, defaultPct = PANEL_PCT_DEF
   boundsRef.current = opts.bounds;
   const measureRef = useRef(opts.measure);
   measureRef.current = opts.measure;
+  const basisOptRef = useRef(opts.basis);
+  basisOptRef.current = opts.basis;
+  /** 100% in px, read once at grab time (a drag never rescales mid-way); null = the viewport. */
+  const basisPxRef = useRef<number | null>(null);
   const defaultRef = useRef(defaultPct);
   defaultRef.current = defaultPct;
   const movedRef = useRef(false);
@@ -106,15 +134,14 @@ export function useResizablePanel(storageKey: string, defaultPct = PANEL_PCT_DEF
     onStart: () => {
       // From what shows: a stored width past the room now starts the drag at the edge, not past it.
       startPctRef.current = fit(measureRef.current?.() ?? pctRef.current);
+      const basis = basisOptRef.current;
+      const px = basis === 'parent' ? containingWidth(panelRef.current) : basis?.();
+      basisPxRef.current = px && px > 0 ? px : null;
       movedRef.current = false;
       panelRef.current?.classList.add('resizing');
     },
     onMove: ({ dx }) => {
-      const pxDelta = direction === 'right'
-        ? -dx   // drag left = increase (panel right of handle)
-        : dx;   // drag right = increase (panel left of handle)
-      const pctDelta = (pxDelta / window.innerWidth) * 100;
-      const next = fit(startPctRef.current + pctDelta);
+      const next = fit(dragPct(startPctRef.current, dx, direction, basisPxRef.current ?? window.innerWidth));
       // onEnd persists this ref and can run before React renders the last move (WebKit does):
       // set it here, not only from the render, or the drag saves the width it started from.
       pctRef.current = next;

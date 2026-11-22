@@ -241,8 +241,9 @@
   .app-shell-navigation :is(.ask-walnut-drawer-title, .ask-walnut-agent-item) { min-height: 44px; }
 }
 
-/* N9: a center card's title gets its own line (two at most); the chips, count
-   and time wrap under it, and the dismiss x keeps the top right corner. */
+/* N9: a center card's title gets its own line and wraps in full (a title is never
+   cut, standard.md "Text that does not fit"); the tail (chips, count, time) wraps
+   under it, and the dismiss x keeps the top right corner. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   html body .notification-panel.nfc-panel-wide .notification-feed-item-head {
     position: relative;
@@ -254,14 +255,13 @@
     flex: 1 1 calc(100% - 24px);
     min-width: 0;
     white-space: normal;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
     overflow-wrap: anywhere;
   }
-  html body .notification-panel.nfc-panel-wide .notification-feed-item-head > .notification-feed-item-dismiss {
+  html body .notification-panel.nfc-panel-wide .notification-feed-item-head > .notification-feed-item-tail {
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+  html body .notification-panel.nfc-panel-wide .notification-feed-item-head .notification-feed-item-dismiss {
     position: absolute;
     top: -12px;
     right: -10px;

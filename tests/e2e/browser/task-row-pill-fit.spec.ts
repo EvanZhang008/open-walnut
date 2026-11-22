@@ -11,7 +11,7 @@
  *     a lone one included;
  *   - a roomy column keeps every word (and the Leader count);
  *   - a pill that arrives after the row drew (the triggers load late) is a letter at once;
- *   - folding gives the title real room;
+ *   - folding gives the title real room, and a card's pills never squeeze its title: they go under it;
  *   - widening or narrowing the column flips the rows live, no reload;
  *   - the Worker pill names its leader after the word or letter (2026-11-11: "W · leader"),
  *     in both column widths.
@@ -23,7 +23,8 @@ import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { openHome } from './home-navigation-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
-const SHOT_DIR = '/tmp/task-row-pill-fit'
+// PILL_FIT_SHOTS keeps the pictures past the run (a container's /tmp ends with it).
+const SHOT_DIR = process.env.PILL_FIT_SHOTS ?? '/tmp/task-row-pill-fit'
 const TAGS = ['ticket:V2393257840', 'sev:2']
 const litter: { tasks: string[]; routines: string[] } = { tasks: [], routines: [] }
 
@@ -195,10 +196,33 @@ async function runSurface(page: Page, pick: (p: Page, id: string) => Locator, f:
     expect(foldedTitle, 'wrapped metadata leaves the whole content width for the title').toBeGreaterThanOrEqual(available - 2)
     expect(Math.abs(foldedTitle - wordyTitle), 'metadata labels never squeeze the title').toBeLessThan(2)
   } else {
-    // The Worker pill also names its leader, so at 306px it sits at its own minimum width in
-    // both fits; the room comes from the pills beside it (TRIGGER to T alone gives ~25px).
-    expect(foldedTitle - wordyTitle, 'folding the pills gives the title room').toBeGreaterThan(12)
-    expect(foldedTitle, 'the folded card keeps the start of its title').toBeGreaterThan(40)
+    // A card follows the list row's rule (2026-11-22: its pills kept their room beside the title and
+    // squeezed it to a 70 px column of five lines): the title takes its own width up to the whole
+    // line, and the pills that do not fit beside it go under it, on the right edge where a one-line
+    // card shows them.
+    const fit = await row(f.tagWorkerTrigger).evaluate((card) => {
+      const title = card.querySelector('.todo-pinned-title') as HTMLElement
+      const cs = getComputedStyle(card)
+      const available = card.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+      const contentRight = card.getBoundingClientRect().left + card.clientLeft + card.clientWidth - parseFloat(cs.paddingRight)
+      const t = title.getBoundingClientRect()
+      const range = document.createRange()
+      range.selectNodeContents(title)
+      const lines = new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top))).size
+      const pills = [...card.querySelectorAll(':scope > .task-row-pill, :scope > .task-tag-pills')].map((e) => e.getBoundingClientRect())
+      const under = pills.filter((p) => p.top >= t.bottom - 2)
+      return {
+        available, width: t.width, lines,
+        besideOverTitle: pills.filter((p) => p.top < t.bottom - 2 && p.left < t.right - 1).length,
+        under: under.length,
+        underRight: under.length ? Math.max(...under.map((p) => p.right)) - contentRight : 0,
+      }
+    })
+    expect(fit.lines === 1 || fit.width >= fit.available - 2, `the title keeps its own width or the whole line (${JSON.stringify(fit)})`).toBe(true)
+    expect(fit.besideOverTitle, 'no pill sits inside the title\'s line box').toBe(0)
+    expect(fit.under, 'at 306px the pills go under the title').toBeGreaterThan(0)
+    expect(Math.abs(fit.underRight), 'the pills under the title keep to the right edge').toBeLessThan(1.5)
+    expect(Math.abs(foldedTitle - wordyTitle), 'metadata labels never squeeze the title').toBeLessThan(2)
   }
 
   // Dashed only when EVERY trigger is off; solid while any polls; never a count or PAUSED.
@@ -214,6 +238,7 @@ async function runSurface(page: Page, pick: (p: Page, id: string) => Locator, f:
   await row(f.tagWorkerTrigger).screenshot({ path: `${SHOT_DIR}/${browserName}-${shotName}-tight.png` })
   await row(f.allPaused).screenshot({ path: `${SHOT_DIR}/${browserName}-${shotName}-paused-tight.png` })
   await row(f.leaderTrigger).screenshot({ path: `${SHOT_DIR}/${browserName}-${shotName}-leader-tight.png` })
+  await page.locator('.home-navigation-scroll').first().screenshot({ path: `${SHOT_DIR}/${browserName}-${shotName}-column-tight.png` })
 
   // ── Widening flips the rows live: every word is back, the Leader count too.
   await setColumnWidth(page, 640)
@@ -229,6 +254,7 @@ async function runSurface(page: Page, pick: (p: Page, id: string) => Locator, f:
   await expect(page.locator('.home-navigation-scroll').first()).toHaveAttribute('data-row-fit', 'tight')
   expect(await pillLook(row(f.tagWorkerTrigger), 'subtask-pill'), 'Worker back to W').toMatchObject({ wordDrawn: false, letter: 'W' })
   await setColumnWidth(page, null)
+  await page.locator('.home-navigation-scroll').first().screenshot({ path: `${SHOT_DIR}/${browserName}-${shotName}-column-default.png` })
 }
 
 /** A trigger that arrives after the row drew is a letter at once; it leaves without touching its neighbour. */

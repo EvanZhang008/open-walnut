@@ -184,6 +184,9 @@ export function sessionAreaShownPct(userPct: number | null, count: number, besid
   return besideChat && count > 0 ? Math.min(graduated, sessionAreaPctBesideChat(count)) : graduated;
 }
 
+/** The collapsed rail's width when `--home-rail-width` cannot be read (globals.css sets 56px). */
+const HOME_RAIL_DEFAULT_PX = 56;
+
 /**
  * The task panel's CSS width for its stored share `pct`. The share is of the window
  * less the collapsed rail (`--home-rail-width` on `.main-page`), so it reads the same
@@ -192,5 +195,14 @@ export function sessionAreaShownPct(userPct: number | null, count: number, besid
  * of Home's own width, which shrank with the sidebar and cut more of every row.
  */
 export function todoPanelWidth(pct: number): string {
-  return `calc((100vw - var(--home-rail-width, 56px)) * ${Math.round(pct * 100) / 10000})`;
+  return `calc((100vw - var(--home-rail-width, ${HOME_RAIL_DEFAULT_PX}px)) * ${Math.round(pct * 100) / 10000})`;
+}
+
+/**
+ * What 100% of the task panel's share is, in px: the window less the collapsed rail, the same
+ * room todoPanelWidth sizes it in, so a drag's px turn into the share the panel draws
+ * (useResizablePanel's `basis`). `railPx` is the read `--home-rail-width`; NaN falls back.
+ */
+export function todoPanelBasisPx(viewportPx: number, railPx: number): number {
+  return viewportPx - (Number.isFinite(railPx) ? railPx : HOME_RAIL_DEFAULT_PX);
 }

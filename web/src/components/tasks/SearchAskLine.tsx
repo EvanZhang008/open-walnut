@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import type { Task } from '@open-walnut/core';
+import { openActions, type ActionItem } from '@open-walnut/user-status';
 import { ActionNeeded } from '@/components/actions/ActionNeeded';
-import { openPageFrom, useAskPages } from '@/components/actions/ask-pages';
+import { anyOpen, openPageFrom, useAskPages } from '@/components/actions/ask-pages';
 import { AgentText } from '../common/AgentText';
 import { taskTextSource } from '@/utils/agent-text-source';
 
@@ -18,6 +19,12 @@ import { taskTextSource } from '@/utils/agent-text-source';
  * the first raw ask and stayed "Needs you" over an emptied card). A shown page answered since leads
  * with the next open one, and opening moves the card there, so what the line said is what opens.
  *
+ * "Needs you" means waiting on the user now: the line leads with and counts only the asks the status
+ * holds open (openActions, the same judgement the status's own Needs you makes, core/action-needed.ts),
+ * never a snoozed one (2026-11-22, the UI audit: the preview and its "+N" counted snoozed asks). With
+ * every ask snoozed the line says nothing; the card, once opened, stays until hidden, its snoozed pages
+ * greyed with their time and an Unsnooze, so a snooze made in it never pulls it from under the user.
+ *
  * Opened, the card shows the question itself, so the line keeps only its mark and the Hide button.
  * The card stays mounted once opened, also while the line is gone, and is only hidden: what the user
  * did in it and has not sent yet (a multiple choice's ticks, a typed answer, a send that failed and
@@ -28,21 +35,26 @@ export function SearchAskLine({ task }: { task: Task }) {
   const [everOpened, setEverOpened] = useState(false);
   const book = useAskPages(task.id, task.user_status?.actions ?? []);
   const { pages, answered } = book;
-  const lead = task.phase === 'COMPLETE' ? -1 : openPageFrom(pages, answered, book.index);
+  const pending = new Set(openActions(task.user_status).map((i) => i.id));
+  const waits = (p: ActionItem) => pending.has(p.id);
+  const done = task.phase === 'COMPLETE';
+  const lead = done ? -1 : openPageFrom(pages, answered, book.index, waits);
   const shown = lead >= 0 ? pages[lead] : undefined;
   if (!shown && !everOpened) return null;
-  const more = pages.filter((p) => p !== shown && !answered[p.id]).length;
+  // Open on asks that are all snoozed now: the card still has pages to show, so it stays.
+  const visible = !!shown || (open && !done && anyOpen(pages, answered));
+  const more = pages.filter((p) => p !== shown && !answered[p.id] && waits(p)).length;
   const toggle = () => {
     if (!open && shown && lead !== book.index) book.show(shown.id);
     setEverOpened(true);
     setOpen((v) => !v);
   };
   return (
-    <div className={`search-ask-line${open ? ' is-open' : ''}`} data-testid="search-ask-line" hidden={!shown}>
-      {shown ? (
+    <div className={`search-ask-line${open ? ' is-open' : ''}`} data-testid="search-ask-line" hidden={!visible}>
+      {visible ? (
         <div className="search-ask-head">
-          <span className="search-ask-mark wn-fixed">Needs you</span>
-          {open ? null : (
+          {shown ? <span className="search-ask-mark wn-fixed">Needs you</span> : null}
+          {open || !shown ? null : (
             // The question is agent text whose links open on their own: it sits beside the button, never inside one.
             <AgentText compact inline {...taskTextSource(task, 'needs')} className="search-ask-summary wn-title" text={shown.summary} testId="search-ask-summary" />
           )}

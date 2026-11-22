@@ -134,7 +134,7 @@ import { withDetectedOwner } from '@/components/sessions/draft-work-in';
 import { knownHomeOf } from '@/utils/home-folder';
 import { withHomeFolder } from '@/components/sessions/draft-home-default';
 import { reconcileActiveSession } from '@/stores/active-session';
-import { loadColWeights, saveColWeights, resizeAtBoundary, sessionAreaShownPct, todoPanelWidth, usersSessionWidth } from './columnSizing';
+import { loadColWeights, saveColWeights, resizeAtBoundary, sessionAreaShownPct, todoPanelBasisPx, todoPanelWidth, usersSessionWidth } from './columnSizing';
 import { HomeEmptyPane } from './HomeEmptyPane';
 import {
   HOME_CHAT_VISIBLE_DEFAULT, LS_HOME_CHAT_VISIBLE_KEY, autoDraftMayTakeFocus, firstDraftDecisionReady, focusHolderOf, homeChatChosenOpen, homeTaskPanelShown, readHomeChatVisible, shouldAutoOpenFirstDraft,
@@ -423,6 +423,13 @@ function sessionTaskMap(tasks: Iterable<Task>): Map<string, Task> {
     }
   }
   return m;
+}
+
+/** The task panel's 100% in px, read at grab time: the window less `--home-rail-width`. */
+function todoPanelBasis(): number {
+  const home = document.querySelector<HTMLElement>('.main-page');
+  const rail = home ? parseFloat(getComputedStyle(home).getPropertyValue('--home-rail-width')) : NaN;
+  return todoPanelBasisPx(window.innerWidth, rail);
 }
 
 interface MainPageProps {
@@ -916,11 +923,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const taskMapRef = useCommittedRef(taskMap);
 
   // Resizable panels
-  const todoPanel = useResizablePanel('open-walnut-todo-width', 25, 'left');
+  // A drag's px are a share of the window less the rail, the room todoPanelWidth sizes it in.
+  const todoPanel = useResizablePanel('open-walnut-todo-width', 25, 'left', { basis: todoPanelBasis });
   const todoWidth = todoPanelWidth(todoPanel.pct);
   // The session area's width is derived (sessionAreaShown below); a drag starts from what shows.
   const sessionAreaShownRef = useRef<number | null>(null);
-  const sessionPanel = useResizablePanel('walnut-session-panel-width-v2', 35, 'right', { measure: () => sessionAreaShownRef.current });
+  // Its `${pct}%` is a share of the content row beside the task panel (basis 'parent'), not the window.
+  const sessionPanel = useResizablePanel('walnut-session-panel-width-v2', 35, 'right', { measure: () => sessionAreaShownRef.current, basis: 'parent' });
 
   // Merge sessionPanel.panelRef (for width resize observer) with auto-animate's
   // callback ref on the sessions container. Must be stable — a new function

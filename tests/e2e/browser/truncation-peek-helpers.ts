@@ -166,6 +166,34 @@ export async function expectPeeksInPlace(el: Locator, text: string, label: strin
 }
 
 /** Whether `el` itself shows its whole text on its line (open or never cut). */
+/**
+ * No control is laid over text (2026-11-22 review: a card's ⋮ and its fade covered the end of the
+ * title's first line on hover). With the pointer on `row`, every shown control of it (▶, ⋮, a
+ * worker's put-back arrow) keeps clear of the boxes of the title's words.
+ */
+export async function expectToolsClearOfTitle(row: Locator, label = 'row'): Promise<void> {
+  const hits = await row.evaluate((el) => {
+    const title = el.querySelector('.todo-pinned-title, .todo-item-title')
+    if (!title) return ['no title']
+    const range = document.createRange()
+    range.selectNodeContents(title)
+    const words = [...range.getClientRects()].filter((r) => r.width > 0)
+    const tools = [...el.querySelectorAll<HTMLElement>('.task-kebab-btn, .task-start-btn, .worker-fold-row-back')]
+      .filter((t) => { const cs = getComputedStyle(t); return cs.visibility !== 'hidden' && cs.display !== 'none' && Number(cs.opacity) > 0 })
+    const out: string[] = []
+    for (const t of tools) {
+      const b = t.getBoundingClientRect()
+      for (const w of words) {
+        if (b.left < w.right - 0.5 && b.right > w.left + 0.5 && b.top < w.bottom - 0.5 && b.bottom > w.top + 0.5) {
+          out.push(`${t.className} [${Math.round(b.left)}..${Math.round(b.right)}] over title words [${Math.round(w.left)}..${Math.round(w.right)}]`)
+        }
+      }
+    }
+    return out
+  })
+  expect(hits, `${label}: no shown control covers the title's words`).toEqual([])
+}
+
 export const fits = (el: Locator): Promise<boolean> => el.evaluate((n) => n.scrollWidth <= n.clientWidth + 1 && n.scrollHeight <= n.clientHeight + 1)
 
 /** Marks the element after `row` so a test can measure it while `row` is open (the placeholder goes before the row). */

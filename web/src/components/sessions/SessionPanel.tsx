@@ -1658,10 +1658,10 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // The Board tab's "Ask for a board" goes out through the composer's own send
   // path (optimistic bubble, queueing, retry), like a diff comment.
   const handleBoardSend = useCallback((text: string) => send(sessionId, text), [send, sessionId]);
-  // Chat column in the split: resizable width (% of viewport) + collapse.
+  // Chat column in the split: resizable width (% of the split, its containing box) + collapse.
   // Fresh storage key (v3): re-baseline everyone at the new default. The middle
   // content pane (file preview / diff) is the priority — chat is a side column.
-  const chatPanel = useResizablePanel('open-walnut-split-chat-w3', 30, 'right');
+  const chatPanel = useResizablePanel('open-walnut-split-chat-w3', 30, 'right', { basis: 'parent' });
   // The chat column: the resizable width measures it while a view sits beside it,
   // Tree Mode's split measures it always (useTreeSplit).
   const chatPanelRef = chatPanel.panelRef as MutableRefObject<HTMLDivElement | null>;

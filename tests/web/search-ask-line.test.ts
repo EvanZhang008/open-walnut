@@ -8,7 +8,9 @@
  *   - several asks: the line leads with the page the card opens on, and counts the other open ones;
  *   - a page answered from here: the line leads with the next open one, and opening shows that one;
  *   - the last ask answered: the line goes at once, before the status drops it;
- *   - a send that failed: the line comes back with the card's error, which a fold and a reopen keep.
+ *   - a send that failed: the line comes back with the card's error, which a fold and a reopen keep;
+ *   - snoozed asks (openActions, the status's own Needs you judgement): never led with nor counted,
+ *     no line when all are snoozed, and the open card stays when its last ask is snoozed in it.
  */
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { parseHTML } from 'linkedom'
@@ -129,6 +131,47 @@ describe('the folded ask line reads the pages its card opens on', () => {
     expect((ui.host.querySelector('.search-ask-actions-below') as HTMLElement).hasAttribute('hidden')).toBe(true)
     await ui.toggle()
     expect(ui.q('card-error')!.textContent).toBe('Could not send: the host is offline')
+    await act(async () => { ui.root.unmount() })
+  })
+
+  const later = () => new Date(Date.now() + 3_600_000).toISOString()
+  const snoozed = (id: string): ActionItem => ({ ...ask(id), snoozedUntil: later() } as ActionItem)
+
+  it('one pending and one snoozed: the line leads with the pending one and counts nothing more', async () => {
+    const ui = await mount(taskWith([snoozed('a'), ask('b')]))
+    expect(ui.shown()).toBe(true)
+    expect(ui.host.querySelector('.search-ask-mark')!.textContent).toBe('Needs you')
+    expect(ui.q('search-ask-summary')!.textContent).toBe('Question b?')
+    expect(ui.host.querySelector('.search-ask-more')).toBeNull()
+    // Opening shows the page the line named, not the snoozed first one.
+    await ui.toggle()
+    expect(ui.q('card')!.dataset.page).toBe('b')
+    await act(async () => { ui.root.unmount() })
+  })
+
+  it('every ask snoozed: no line, and never "Needs you"', async () => {
+    const ui = await mount(taskWith([snoozed('a'), snoozed('b')]))
+    expect(ui.line()).toBeNull()
+    expect(ui.host.textContent).not.toContain('Needs you')
+    await act(async () => { ui.root.unmount() })
+  })
+
+  it('the last ask snoozed while its card is open keeps the card (and its Unsnooze) until hidden', async () => {
+    const task = taskWith([ask('a')])
+    const ui = await mount(task)
+    await ui.toggle()
+    await ui.render(taskWith([snoozed('a')], task.id))
+    expect(ui.shown()).toBe(true)
+    expect(ui.host.querySelector('.search-ask-mark')).toBeNull()
+    expect(ui.q('card')!.dataset.page).toBe('a')
+    expect(ui.q('search-ask-toggle')!.textContent).toContain('Hide')
+    // Hidden, with nothing pending: the line goes.
+    await ui.toggle()
+    expect(ui.shown()).toBe(false)
+    // Unsnoozed (its time ran out, or Unsnooze elsewhere): the line is back.
+    await ui.render(taskWith([ask('a')], task.id))
+    expect(ui.shown()).toBe(true)
+    expect(ui.q('search-ask-summary')!.textContent).toBe('Question a?')
     await act(async () => { ui.root.unmount() })
   })
 

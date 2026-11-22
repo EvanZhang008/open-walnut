@@ -17,6 +17,8 @@ import { openHome } from './home-navigation-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 
 const STAMP = Date.now().toString(36)
+// Its own project, so no other spec's tasks share (or fold) its group.
+const PROJECT = `Textfit ${STAMP}`
 // Long enough to wrap in every column; the end of each is what tells the tasks apart.
 const LATIN = [
   `Garden watering watch leader (shed box): the pumps, the timers and the hose workers, north bed ${STAMP}`,
@@ -34,7 +36,7 @@ const made: { tasks: string[]; letters: string[] } = { tasks: [], letters: [] }
 test.describe.configure({ mode: 'serial' })
 
 async function createTask(request: APIRequestContext, title: string): Promise<void> {
-  const res = await request.post('/api/tasks', { data: { title, source: 'local', project: 'Garden', pinned: false } })
+  const res = await request.post('/api/tasks', { data: { title, source: 'local', project: PROJECT, pinned: false } })
   expect(res.ok(), await res.text()).toBe(true)
   made.tasks.push(((await res.json()) as { task: { id: string } }).task.id)
 }
@@ -68,8 +70,9 @@ for (const [width, height] of [[1512, 920], [1280, 800], [1024, 768]] as const) 
     await isolateUiPrefs(page)
     await openHome(page, baseURL!)
     const panel = '.home-navigation-scroll'
-    // The fixture's Home groups by project: open the Garden group, where the long titles are.
-    await page.locator(panel).getByText(/^Garden\b/).first().click()
+    // The fixture's Home groups by project: open this spec's own group, where the long titles are.
+    const group = page.locator(panel).getByText(PROJECT, { exact: true }).first()
+    if (!(await page.locator(panel).getByText(LATIN[0]).isVisible())) await group.click()
     await expect(page.locator(panel).getByText(LATIN[0])).toBeVisible({ timeout: 20_000 })
     await expectNoCutTitle(page, [panel], `Home list ${width}`)
 

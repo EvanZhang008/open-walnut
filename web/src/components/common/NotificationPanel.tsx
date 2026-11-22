@@ -21,7 +21,7 @@
  * (one cron job's runs, one session's permissions) still collapse into an
  * expandable group, and a collapsed group never hides a pending ask.
  */
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { takeInboxReturn } from '@/components/inbox/item-drafts';
@@ -1005,6 +1005,33 @@ function FeedGroups({
  * tool input, then the buttons that actually answer it (ACP option list, an
  * AskUserQuestion answer form, or Approve/Deny).
  */
+/** A card's head: its dot and title, then one tail group (the card's own chips and count, its time,
+ *  its close). The title wraps and takes the line first; when the card is too narrow for both, the
+ *  tail moves under the title as one group, never the close alone on a line of its own (2026-11-22,
+ *  the UI audit; standard.md "Text that does not fit"). The close never reaches the card's own
+ *  click (navigate, expand). */
+function FeedItemHead({ n, title, onDismiss, children }: {
+  n: Notification; title: ReactNode; onDismiss: () => void; children?: ReactNode;
+}) {
+  return (
+    <div className="notification-feed-item-head">
+      <span className={`notification-feed-dot notification-feed-dot--${n.severity}`} />
+      <span className="notification-feed-item-title wn-title">{title}</span>
+      <span className="notification-feed-item-tail">
+        {children}
+        <span className="notification-feed-item-time wn-fixed">{formatRelative(effectiveTs(n))}</span>
+        <button
+          className="notification-feed-item-dismiss wn-fixed"
+          onClick={(e) => { e.stopPropagation(); onDismiss(); }}
+          aria-label="Dismiss notification"
+        >
+          &times;
+        </button>
+      </span>
+    </div>
+  );
+}
+
 const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }: {
   n: Notification;
   onNavigate: (to: string) => void;
@@ -1027,9 +1054,7 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
   return (
     // A decision card in a narrow panel: its text opens downward, never across the window.
     <div data-peek-row="" data-peek-grow="down" className={`notification-feed-item nfc-perm-card notification-feed-item--${n.severity}${n.read ? '' : ' unread'}`}>
-      <div className="notification-feed-item-head">
-        <span className={`notification-feed-dot notification-feed-dot--${n.severity}`} />
-        <span className="notification-feed-item-title wn-title">{title}</span>
+      <FeedItemHead n={n} title={title} onDismiss={onDismiss}>
         {/* Click-through, on EVERY permission card that has a session — pending or
             settled. The card body stays inert (decision surface, see the class
             comment), so this small header link is the only way to get from a
@@ -1047,17 +1072,7 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
             Open session ↗
           </button>
         )}
-        <span className="notification-feed-item-time wn-fixed">
-          {formatRelative(effectiveTs(n))}
-        </span>
-        <button
-          className="notification-feed-item-dismiss wn-fixed"
-          onClick={onDismiss}
-          aria-label="Dismiss notification"
-        >
-          &times;
-        </button>
-      </div>
+      </FeedItemHead>
 
       <ContextChips n={n} />
 
@@ -1240,9 +1255,7 @@ const FeedItem = memo(function FeedItem({
         },
       } : {})}
     >
-      <div className="notification-feed-item-head">
-        <span className={`notification-feed-dot notification-feed-dot--${n.severity}`} />
-        <span className="notification-feed-item-title wn-title">{presented.title}</span>
+      <FeedItemHead n={n} title={presented.title} onDismiss={onDismiss}>
         {/* All-section only: the Errors rail has category HEADERS, so a chip
             there would repeat the header on every row. */}
         {category && <span className="nfc-chip nfc-chip-category wn-fixed">{category}</span>}
@@ -1253,17 +1266,7 @@ const FeedItem = memo(function FeedItem({
             at 99+ like the rail badge — a 4-digit count would push the row's
             timestamp and dismiss button out of the card. */}
         {count >= 2 && <span className="nfc-count-badge wn-fixed">&times;{count > 99 ? '99+' : count}</span>}
-        <span className="notification-feed-item-time wn-fixed">
-          {formatRelative(effectiveTs(n))}
-        </span>
-        <button
-          className="notification-feed-item-dismiss wn-fixed"
-          onClick={(e) => { e.stopPropagation(); onDismiss(); }}
-          aria-label="Dismiss notification"
-        >
-          &times;
-        </button>
-      </div>
+      </FeedItemHead>
       {presented.body && (
         <div className="notification-feed-item-body">{presented.body}</div>
       )}

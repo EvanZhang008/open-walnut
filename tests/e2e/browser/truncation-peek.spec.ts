@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs, showAllSections } from './todo-panel-helpers'
 import { openHome } from './home-navigation-helpers'
-import { expectPeeksInPlace, expectRestored, expectStill, expectWidensInPlace, fits, followingOf, isOpen, openInRow, peekPill, topsOf } from './truncation-peek-helpers'
+import { expectPeeksInPlace, expectRestored, expectStill, expectToolsClearOfTitle, expectWidensInPlace, fits, followingOf, isOpen, openInRow, peekPill, topsOf } from './truncation-peek-helpers'
 
 /**
  * Cut-off text peeks in place (web/src/utils/truncation-peek.ts). A task row widens in place
@@ -89,12 +89,17 @@ test('a cut-off Home row widens in place: as tall as it was, nothing below moves
     const t = await box(cutOf(page, LONG_A))
     expect(t.x + t.width).toBeLessThanOrEqual(after.x + after.width + 1)
     await expectStill(neighbours, tops, 'Home row below')
+    // Its ▶ and ⋮ show now, in their own rail: none covers a word of the title.
+    await expectToolsClearOfTitle(row(page, LONG_A), 'open Home row')
     // No native title above the pointer, so no dark tooltip.
     expect(await titlesAt(page, a.x, a.y)).toEqual([])
     await page.screenshot({ path: `${SHOTS}/1-home-row.png`, clip: { x: 0, y: Math.max(0, a.y - 160), width: 1280, height: 320 } })
 
     // The widened part is the row too: the pointer out on it, over what was beside the row, keeps it open.
-    await page.mouse.move(after.x + after.width - 6, a.y, { steps: 4 })
+    // Measured again right before the move: other spec files share this server, and a pass that
+    // restates many tasks' status can move the list under a still row between two steps.
+    const open = await box(row(page, LONG_A))
+    await page.mouse.move(open.x + open.width - 6, open.y + Math.min(open.height / 2, 12), { steps: 4 })
     await page.waitForTimeout(250)
     expect(await isOpen(cutOf(page, LONG_A))).toBe(true)
     await page.mouse.move(a.x, a.y, { steps: 4 })
@@ -398,15 +403,16 @@ test('a task row widens as a whole: the pointer anywhere on a status row opens i
     await expect.poll(findCut, { timeout: 20_000 }).toBe(true)
     const full = (await card.locator('[data-spec-cut]').textContent()) ?? ''
 
-    // On the row, right of its title (the time and project side), not on the title's own text
-    // nor on the row's own ⋮.
+    // On the row, off the title's own text and off the row's own ⋮: the empty stretch of the meta
+    // line between the project and the time (a wrapped title fills its line up to the actions' rail,
+    // so there is no room right of it any more), or on a one-line row the gap before the rail.
     const kebab = card.getByRole('button', { name: 'More actions' })
     const at = await card.evaluate((el) => {
       const r = el.getBoundingClientRect()
       const t = el.querySelector('.todo-pinned-title')!.getBoundingClientRect()
-      const k = el.querySelector('[aria-label="More actions"]')?.getBoundingClientRect()
-      const x = Math.max(t.right + 4 - r.left, (k ? k.left : r.right) - r.left - 40)
-      return { x, y: t.top + t.height / 2 - r.top }
+      const fill = el.querySelector('.status-card-meta-fill')?.getBoundingClientRect()
+      if (fill && fill.width > 8) return { x: fill.left + fill.width / 2 - r.left, y: fill.top + fill.height / 2 - r.top }
+      return { x: t.right + 3 - r.left, y: t.top + 9 - r.top }
     })
     const title = card.locator('[data-spec-cut]')
     const cardBefore = await box(card)
@@ -419,6 +425,7 @@ test('a task row widens as a whole: the pointer anywhere on a status row opens i
     await expect.poll(() => openInRow(title)).toBe(true)
     await expect(title).toHaveText(full)
     if (following) await expectStill([following], tops, 'the status row below')
+    await expectToolsClearOfTitle(card, 'open status row')
     await page.screenshot({ path: `${SHOTS}/4-status-row.png`, clip: { x: 0, y: Math.max(0, cardBefore.y - 120), width: 1280, height: 300 } })
     // No native title from the pointer up to the page while it shows, so no dark tooltip opens.
     expect(await titlesAt(page, cardBefore.x + at.x, cardBefore.y + at.y)).toEqual([])
