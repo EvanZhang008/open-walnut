@@ -108,8 +108,9 @@ describe('a slow mail server', () => {
     expect(first.some((e) => e.source === 'eventkit')).toBe(true);
     expect(first.some((e) => e.source === SOURCE_ID)).toBe(false);
     expect(service.statuses()[1]).toMatchObject({ available: false, reason: 'fetch-error' });
-    await wait(450);
-    expect(announced).toBeGreaterThan(0); // the views are told to read again
+    // The late answer lands in the cache and the views are told to read again.
+    const told = announced;
+    await vi.waitFor(() => expect(announced).toBeGreaterThan(told), { timeout: 3000, interval: 10 });
     started = Date.now();
     const second = await service.getEvents('2026-08-03', '2026-08-09');
     expect(Date.now() - started).toBeLessThan(80);
