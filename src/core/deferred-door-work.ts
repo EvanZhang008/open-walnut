@@ -27,7 +27,7 @@
  *
  * Only a refusal at a door holds anything, and a door refuses only while a permit guards this
  * process (leaderPermitActive()): with the experiment off, or on with no witnesses, nothing here
- * reads or writes a file. Nothing holds or replays outside a normal boot (bootMode(): a switch's
+ * reads or writes a file. Nothing holds or replays outside a normal boot (bootMode(): a
  * trial start does no outward work). The permit runtime arms it at boot when the file is there
  * (armDeferredDoorWork), so what the process before held is replayed at the first opening; a hold
  * made later subscribes itself.

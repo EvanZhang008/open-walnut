@@ -385,12 +385,12 @@ describe('boot policy: the trial column', () => {
   it.each(rows.map((r) => [r.job, r] as const))('%s: on in a trial only where the trial needs it, and only where the leader runs it', (job, row) => {
     expect(row.trial, job).toBe(TRIAL_ON.has(job as BootJob))
     if (row.trial) expect(row.leader, job).toBe(true)
-    expect(bootPolicy(job as BootJob, 'mac', new Set(), 'switch-trial')).toBe(row.trial)
+    expect(bootPolicy(job as BootJob, 'mac', new Set(), 'trial')).toBe(row.trial)
   })
 
   it('the trial mode, once set, is what every gate reads by default; a later boot sets it back', () => {
     try {
-      setBootMode('switch-trial')
+      setBootMode('trial', 'leader-switch')
       expect(bootPolicy('cron')).toBe(false)
       expect(bootPolicy('plugins')).toBe(false)
       expect(bootPolicy('foreign-db-guard')).toBe(true)

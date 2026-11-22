@@ -64,8 +64,9 @@ afterEach(async () => {
 
 /** Plenty of room: these tests must not depend on how full the machine running them is. */
 const roomy = async (): Promise<number> => 1024 ** 4;
+// The boot check starts a real server (tests/e2e/restore-drill-boot.test.ts); these test the rest.
 const drill = (cfg: BackupConfig, over: Partial<Parameters<typeof runRestoreDrill>[0]> = {}) =>
-  runRestoreDrill({ cfg, dataDir: home, store, tmpRoot, mustHaveSlackMs: 0, outsideRoots: { 'xdg-state': stateDir }, freeBytes: roomy, ...over });
+  runRestoreDrill({ cfg, dataDir: home, store, tmpRoot, mustHaveSlackMs: 0, outsideRoots: { 'xdg-state': stateDir }, freeBytes: roomy, boot: false, ...over });
 
 const check = (r: DrillResult, id: string) => r.checks.find((c) => c.id === id)!;
 
@@ -88,9 +89,9 @@ describe.each([
     expect(r.ok, JSON.stringify(r.checks, null, 2)).toBe(true);
     expect(r.snapshot).toMatchObject({ encrypted: cfg.encrypt === true });
     for (const id of ['restore', 'files', 'databases', 'must-have', 'read-back']) expect(check(r, id).ok, id).toBe(true);
-    // No isolated boot mode exists: said, not faked.
+    // Asked not to boot: "not run", and why, never a pass.
     expect(check(r, 'boot')).toMatchObject({ ok: null });
-    expect(check(r, 'boot').detail).toMatch(/plugins.*session daemon/);
+    expect(check(r, 'boot').detail).toMatch(/^Not run: .*--no-boot/);
     expect(check(r, 'read-back').detail).toContain('Plan the garden');
     expect(check(r, 'read-back').detail).toContain('artifacts/notes/journal/2026-11-20.md');
     expect(check(r, 'files').detail).toMatch(/hashed back/);
@@ -155,6 +156,9 @@ describe('a damaged backup fails the drill and names the cause', () => {
     const r = await drill(plainCfg);
     expect(r.ok).toBe(false);
     expect(check(r, 'restore').problems![0]).toMatch(/Backup is incomplete: a part of .+ is missing/);
+    // Nothing restored, nothing to boot: "not run", told apart from a failed boot, even when asked to boot.
+    const booted = await drill(plainCfg, { boot: true });
+    expect(check(booted, 'boot')).toMatchObject({ ok: null, detail: expect.stringMatching(/^Not run: the backup did not restore/) });
   }, 60_000);
 
   it('a backup missing a must-have entry: the entry and its files are named', async () => {
@@ -253,7 +257,7 @@ describe('the drill the CLI and the schedule run holds the backup lock', () => {
     await fsp.writeFile(runLockPath(home), `${process.ppid} someone\n`);
     await expect(runRestoreDrillLocked({ cfg: plainCfg, dataDir: home, store, tmpRoot, freeBytes: roomy })).rejects.toThrow(/backing up or restoring/);
     await fsp.rm(runLockPath(home));
-    const r = await runRestoreDrillLocked({ cfg: plainCfg, dataDir: home, store, tmpRoot, mustHaveSlackMs: 0, outsideRoots: {}, freeBytes: roomy });
+    const r = await runRestoreDrillLocked({ cfg: plainCfg, dataDir: home, store, tmpRoot, mustHaveSlackMs: 0, outsideRoots: {}, freeBytes: roomy, boot: false });
     expect(r.ok).toBe(true);
     await expect(fsp.stat(runLockPath(home))).rejects.toThrow();
   }, 60_000);

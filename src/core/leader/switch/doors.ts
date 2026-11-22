@@ -169,6 +169,20 @@ export function setOutwardDoorChecker(c: OutwardDoorChecker | null, open: (() =>
 }
 
 /**
+ * A restore drill's trial server (src/core/trial-start/): it holds no write permission and asks
+ * none, so every door refuses for the life of the process, as they do in a switch's trial that
+ * the witnesses have not let act. The refusal is the permit's kind (isPermitRefusal), so each
+ * door does what its onRefusal says.
+ */
+export function closeOutwardDoorsForTrial(purpose: string): void {
+  setOutwardDoorChecker((kind, opId) => {
+    const err = new Error(`a ${purpose} trial server never acts outward (refused: ${kind} ${opId})`)
+    err.name = 'PermitNotHeld'
+    throw err
+  }, () => false)
+}
+
+/**
  * A send's op id, registered with the witnesses before it goes out (permit core, "Outward
  * sends"): what the runtime registers. `begin` throws PermitNotHeld when the send may not go
  * (no permission, an id an earlier holder left unknown, one known as sent); `report` says how it

@@ -5,18 +5,16 @@
  * into a new folder under the OS temp dir, never the data home, then checks it
  * (restore-drill-checks.ts): the restored tree against the backup's own list, every
  * database through integrity_check, the data-location manifest's must-have list
- * against the backup, a task and a note read back; and it lists what backups leave out
- * by design. The folder is removed at the end, also on failure; one a killed drill left
- * is removed by the next drill.
+ * against the backup, a task and a note read back; then it boots the restored copy once as
+ * a trial server and reads them back through it (restore-drill-boot.ts); and it lists what
+ * backups leave out by design. The folder is removed at the end, also on failure; one a
+ * killed drill left is removed by the next drill.
  *
  * Read-only on both sides: the destination is wrapped so a write throws, the data home
  * is only walked. The caller keeps the result (writeDrillRecord) and holds the backup
- * lock (runRestoreDrillLocked); the drill itself writes nothing there.
- *
- * Starting a server on the restored folder is not part of it: no boot mode exists with
- * plugins, the session daemon, schedules and outward sends all off (the ephemeral
- * server pauses schedules but loads plugins and starts its own daemon), so the drill
- * reads a task and a note straight from the restored stores instead and says so.
+ * lock (runRestoreDrillLocked); the drill itself writes nothing there. The boot writes
+ * only into the drill's folder: the copy is its data home, and every other place it may
+ * write is inside the folder too (restore-drill-boot.ts).
  */
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -31,10 +29,12 @@ import { parseRecoveryKey } from './repo/crypto.js';
 import { snapshotKey, type Snapshot, type TreeEntry } from './repo/format.js';
 import { PackCache, Repository } from './repo/repository.js';
 import { loadLiveIndex } from './repo/backup-run.js';
-import { restoreRepoSnapshot } from './repo/restore.js';
+import { restorePathOf, restoreRepoSnapshot } from './repo/restore.js';
 import { repoStore, resolveEncrypted } from './repo-mode.js';
 import type { BackupStore } from './stores/types.js';
 import type { BackupConfig } from './types.js';
+import { DRILL_DIR_PREFIX, DRILL_DIR_RE } from './restore-drill-dir.js';
+import { checkTrialBoot } from './restore-drill-boot.js';
 import {
   checkDatabases, checkMustHave, checkRestoredFiles, defaultOutsideRoots, notInBackups, readBackNote,
   type DatabaseReport, type DrillCheck, type NotInBackupEntry,
@@ -77,6 +77,12 @@ export interface DrillOptions {
   mustHaveSlackMs?: number;
   /** Tests: the drill's folder was made (the kill test stops the process here). */
   onFolder?: (dir: string) => void | Promise<void>;
+  /** false: skip the boot check (it reads "not run"). Default: boot. */
+  boot?: boolean;
+  /** How long the copy may take to boot (default BOOT_TIMEOUT_MS). */
+  bootTimeoutMs?: number;
+  /** Tests: the trial server runs (the kill test stops the drill here). */
+  onServer?: (pid: number) => void | Promise<void>;
   /** Tests: the free bytes where the drill's folder goes; default: what the file system says. */
   freeBytes?: (dir: string) => Promise<number | null>;
   /**
@@ -102,19 +108,12 @@ export async function freeBytesAt(dir: string): Promise<number | null> {
 
 const gb = (bytes: number): string => `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 
-export const DRILL_DIR_PREFIX = 'walnut-restore-drill-';
-const DRILL_DIR_RE = /^walnut-restore-drill-[A-Za-z0-9]{6}$/;
+export { DRILL_DIR_PREFIX };
 const OWNER_FILE = 'drill-owner.json';
 /** A drill folder with no owner file this old was left by a drill killed while making it. */
 const UNOWNED_STALE_MS = 10 * 60_000;
 /** No drill takes a day: a folder older than that goes whatever its owner file says (a reused pid). */
 const MAX_AGE_MS = 24 * 3_600_000;
-
-const BOOT_NOT_RUN =
-  'Not run: Walnut has no boot mode with plugins, the session daemon, schedules and outward sends all off ' +
-  '(the ephemeral server pauses schedules but loads plugins and starts its own session daemon; plugin safe mode ' +
-  'turns off only plugins that are not built in; a replica needs a leader to follow). ' +
-  'The drill reads a task and a note straight from the restored stores instead (read-back).';
 
 /** A store that refuses every write: the drill only reads the destination. */
 export function readOnlyStore(store: BackupStore): BackupStore {
@@ -257,6 +256,7 @@ export async function runRestoreDrill(opts: DrillOptions): Promise<DrillResult> 
       result.checks.push({ id: 'restore', ok: true, detail: `${r.restoredFiles} files, ${r.restoredBytes} bytes restored into a temporary folder; every chunk checked as it was read` });
     } catch (err) {
       result.checks.push({ id: 'restore', ok: false, detail: 'The backup did not restore', problems: [message(err)] });
+      result.checks.push({ id: 'boot', ok: null, detail: 'Not run: the backup did not restore, so there was no copy to boot' });
       return finish();
     }
 
@@ -285,7 +285,12 @@ export async function runRestoreDrill(opts: DrillOptions): Promise<DrillResult> 
       detail: readBack.length ? `Read back ${readBack.join(' and ')}` : problems.length ? 'Could not read back' : 'The backup holds no task database and no note to read back',
       ...(problems.length ? { problems } : {}),
     });
-    result.checks.push({ id: 'boot', ok: null, detail: BOOT_NOT_RUN });
+    result.checks.push(opts.boot === false
+      ? { id: 'boot', ok: null, detail: 'Not run: this drill was asked not to boot the copy (--no-boot)' }
+      : await checkTrialBoot({
+        dir, target, dataDir: opts.dataDir, files: tree.map((e) => restorePathOf(e.p)), task: db.task,
+        ...(opts.bootTimeoutMs ? { timeoutMs: opts.bootTimeoutMs } : {}), ...(opts.onServer ? { onServer: opts.onServer } : {}),
+      }));
     return finish();
   } finally {
     await fs.rm(dir, { recursive: true, force: true }).catch((err) => {

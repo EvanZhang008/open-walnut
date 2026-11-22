@@ -205,7 +205,7 @@ the shell history. The `restore-backup` skill walks a Claude Code session throug
 
 A backup is otherwise only proven when someone restores it. The restore drill proves it on an
 ordinary day: `open-walnut backup drill` (`--snapshot <id>` for another backup than the
-newest, `--key` for encrypted ones, `--json`), and once a week while the experiment "Weekly
+newest, `--key` for encrypted ones, `--json`, `--no-boot` to leave out the boot check), and once a week while the experiment "Weekly
 restore drill" (`restore_drill`, off by default) is on. Code: `src/core/backup/restore-drill*.ts`.
 
 The restored copy is as large as the backup, so the drill looks at the disk first: when the
@@ -231,10 +231,31 @@ It restores the backup into a new folder under the OS temp dir (never the data f
   not missing; backups another computer writes are not compared with this data folder;
 - **read-back**: the newest task of `tasks/tasks.sqlite` and a note are read from the
   restored folder;
-- **boot**: not run. Walnut has no boot mode with plugins, the session daemon, schedules and
-  outward sends all off (the ephemeral server pauses schedules but loads plugins and starts its
-  own daemon; plugin safe mode turns off only plugins that are not built in; a replica needs a
-  leader to follow), so the drill says so instead of starting one.
+- **boot**: once the checks above ran, the restored copy is started once as a real server in
+  the boot policy's trial column (the one the leader switch's trial uses, `src/core/boot-policy.ts`):
+  HTTP, the databases and their migrations, nothing else; no plugin, session daemon, schedule,
+  watcher or git job, and every outward door refuses for the life of the process. It runs as a
+  child process on loopback, on a port the OS picks (never 3456), with its own instance lock (the
+  copy's `server.lock.json`), and with its user home, XDG folders, temp dir, session daemon folder
+  and task folders all inside the drill's folder; strings in the copy's `config.yaml` that name the
+  live data folder are pointed at the copy first, as a restore in place would have them. Through
+  it the drill reads back the same task and a note as the files hold them (the read-back the
+  switch's trial shares, `src/core/trial-start/read-back.ts`), stops it (SIGTERM, then SIGKILL after
+  15 s) and runs `integrity_check` on every database again after its migrations. The check keeps
+  how long each step took (`timings`: start, the server's own boot, read-back, stop, total). A
+  copy that does not boot within 3 minutes, exits during its start, or comes up as anything but
+  the drill's trial fails it, with the last lines of the server's log; it is "not run" (`ok: null`)
+  only when there was no copy to boot (the restore failed) or `--no-boot` asked so. A drill killed
+  while its server runs leaves no server: the server stops once its parent is gone.
+
+  Nothing but the drill enters the trial (`src/core/trial-start/ticket.ts`): the server must be
+  started with the hidden `walnut web --_trial-start` flag (argv, which no child inherits), find in
+  the home it boots on a ticket the drill wrote a moment before (`local/trial-start.json`, used up as
+  it is read) naming the drill's pid as its parent and a nonce its environment carries, and that
+  home must be a drill's copy (`<tmp>/walnut-restore-drill-XXXXXX/home`), never the user's data
+  folder. Without the flag none of this is read, so an environment variable alone never moves a
+  server into the trial; with it, any part missing refuses the start, so a drill's server never
+  boots as a normal one on a restored copy.
 
 It also lists what backups leave out by design, read from the code: the leader-data places the
 backup's rules skip (everything under `cache/`, the applied-ops ledger included, `browser/`,
@@ -243,7 +264,7 @@ machine that collected them (`health/`, `places/`), and every leader-data place 
 data folder (the password vault, the fleet secrets). The list is reported, nothing changes.
 
 The drill only reads: the destination is opened through a store that refuses every write and
-the data folder is only walked. Like a restore, the command and the schedule hold the backup
+the data folder is only walked (the boot writes only into the drill's folder). Like a restore, the command and the schedule hold the backup
 lock (`local/backup/run.lock`, a machine file no backup takes) so a backup's prune never deletes
 packs the drill reads; a drill asked while a backup runs in another process is refused, and the
 schedule tries at its next check. On Google Drive, reading may refresh the stored sign-in, as

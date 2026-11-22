@@ -13,10 +13,12 @@
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import type { MachinePlace } from './settings.js'
 import { switchDir } from './records.js'
 import { confirmStandby, readStandbyServer, type StandbyServer } from './handed-over.js'
+import { alive, serverCommand, stopPid, tail } from '../../trial-start/process.js'
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 export type ServerMode = 'leader' | 'trial'
 
@@ -37,34 +39,6 @@ export interface SwitchSide {
   startServer(mode: ServerMode, timeoutMs?: number, commitHandover?: number): Promise<StartResult>
   /** One request to this side's server. */
   api(method: string, urlPath: string, body?: unknown): Promise<{ status: number; json: unknown }>
-}
-
-function alive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 1) return false
-  try { process.kill(pid, 0); return true } catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM' }
-}
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
-
-/** SIGTERM, SIGKILL after `graceMs`; resolves once the process is gone. Never a pid <= 1. */
-async function stopPid(pid: number, graceMs: number): Promise<void> {
-  if (!alive(pid)) return
-  try { process.kill(pid, 'SIGTERM') } catch { /* gone already */ }
-  const deadline = Date.now() + graceMs
-  while (alive(pid) && Date.now() < deadline) await sleep(100)
-  if (alive(pid)) {
-    try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
-    while (alive(pid)) await sleep(50)
-  }
-}
-
-function defaultCli(): string {
-  // src/core/leader/switch/side.ts -> src/cli.ts; dist/... bundles resolve their own entry.
-  const here = path.dirname(fileURLToPath(import.meta.url))
-  for (const c of [path.resolve(here, '../../../cli.ts'), path.resolve(here, '../../../cli.js'), path.resolve(here, 'cli.js')]) {
-    if (fs.existsSync(c)) return c
-  }
-  return process.argv[1]
 }
 
 export class LocalSide implements SwitchSide {
@@ -101,7 +75,7 @@ export class LocalSide implements SwitchSide {
     const m = this.machine
     // A standby of this home holds the port the server is to listen on.
     await this.stopStandby(30_000)
-    const cmd = m.start ?? [process.execPath, defaultCli(), 'web', '--port', String(m.port)]
+    const cmd = m.start ?? serverCommand(['web', '--port', String(m.port)])
     fs.mkdirSync(switchDir(m.home), { recursive: true, mode: 0o700 })
     const logFile = path.join(switchDir(m.home), `server-${mode}.log`)
     const out = fs.openSync(logFile, 'a', 0o600)
@@ -143,14 +117,5 @@ export class LocalSide implements SwitchSide {
       signal: AbortSignal.timeout(method === 'GET' ? 10_000 : 60_000),
     })
     return { status: res.status, json: await res.json().catch(() => null) }
-  }
-}
-
-function tail(file: string, bytes = 4_000): string {
-  try {
-    const b = fs.readFileSync(file)
-    return b.subarray(Math.max(0, b.length - bytes)).toString('utf8')
-  } catch {
-    return ''
   }
 }

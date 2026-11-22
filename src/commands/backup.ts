@@ -4,7 +4,7 @@
  *   backup run                         one backup now
  *   backup list [--key <k>]            the backups there are
  *   backup restore [--at <id>] [--to <dir>] [--force] [--key <k>] [--profile <p>]
- *   backup drill [--snapshot <id>] [--key <k>] [--json] [--no-record]   restore into a temp folder, check, delete
+ *   backup drill [--snapshot <id>] [--key <k>] [--json] [--no-record] [--no-boot]   restore into a temp folder, check, boot it once, delete
  *
  * With `backup.destination` in config.yaml or `--type` (and no --bucket flag) these work
  * on the repository backups, encrypted or not (`--encrypt` / `--no-encrypt`); otherwise on
@@ -263,6 +263,7 @@ export async function runBackupDrill(options: Record<string, unknown>): Promise<
     cfg, dataDir: WALNUT_HOME,
     ...(typeof options.snapshot === 'string' ? { snapshotId: options.snapshot } : {}),
     ...(keyOf(options) ? { recoveryKey: keyOf(options) } : {}),
+    ...(options.boot === false ? { boot: false } : {}),
   });
   if (options.record !== false) await writeDrillRecord(WALNUT_HOME, r);
   if (!r.ok) process.exitCode = 1;
@@ -275,8 +276,8 @@ export async function runBackupDrill(options: Record<string, unknown>): Promise<
   if (s) console.log(`  backup ${s.id} of ${s.createdAt} from ${s.hostname}, ${s.fileCount} files (${mb(s.totalBytes)}), ${s.encrypted ? 'encrypted' : 'unencrypted'}`);
   if (r.error) console.log(`  ${r.error}`);
   for (const c of r.checks) {
-    console.log(`  ${c.ok === true ? 'ok  ' : c.ok === false ? 'FAIL' : 'skip'} ${c.id}: ${c.detail}`);
-    for (const p of c.problems ?? []) console.log(`         ${p}`);
+    console.log(`  ${c.ok === true ? 'ok     ' : c.ok === false ? 'FAIL   ' : 'not run'} ${c.id}: ${c.detail}`);
+    for (const p of c.problems ?? []) console.log(`            ${p}`);
   }
   const here = r.notInBackups.filter((e) => e.present !== false);
   const absent = r.notInBackups.filter((e) => e.present === false);

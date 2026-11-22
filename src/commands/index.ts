@@ -184,6 +184,7 @@ export function registerCommands(program: Command): void {
     .option('--key <recoveryKey>', 'Recovery key of encrypted backups (default: this machine\'s saved key)')
     .option('--json', 'Print the result as JSON')
     .option('--no-record', 'Do not keep the result for Settings (local/restore-drill.json)')
+    .option('--no-boot', 'Do not start the restored copy as a trial server (its boot check reads "not run")')
     .action(async (options: Record<string, unknown>) => {
       const { runBackupDrill, plainFailure } = await import('./backup.js');
       await runBackupDrill(options).catch(plainFailure('Drill'));
@@ -397,10 +398,11 @@ export function registerCommands(program: Command): void {
     .option('--dev', 'Development mode (no static file serving)')
     .option('--ephemeral', 'Start an isolated ephemeral server (temp data copy, random port)')
     .addOption(new Option('--_ephemeral-child').hideHelp())
+    .addOption(new Option('--_trial-start').hideHelp())
     .option('--replica', 'Run as a replica on this host that follows your Mac (started by this host\'s Walnut daemon)')
     .action(async (options: Record<string, unknown>) => {
       const { runWeb } = await import('./web.js');
-      await runWeb(options as { port?: string; dev?: boolean; ephemeral?: boolean; _ephemeralChild?: boolean; replica?: boolean });
+      await runWeb(options as { port?: string; dev?: boolean; ephemeral?: boolean; _ephemeralChild?: boolean; _trialStart?: boolean; replica?: boolean });
     });
 
   program

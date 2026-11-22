@@ -52,6 +52,7 @@ export async function runWeb(options: {
   dev?: boolean
   ephemeral?: boolean
   _ephemeralChild?: boolean
+  _trialStart?: boolean
   replica?: boolean
 }): Promise<void> {
   // A server started in a directory deleted since (a deploy's build clone) moves
@@ -66,6 +67,11 @@ export async function runWeb(options: {
   // (restart-supervisor.ts). Read and removed before anything can inherit it.
   const { takeRestartSupervised, preloadRestartLoop } = await import('../core/self-update/restart-supervisor.js')
   const supervised = takeRestartSupervised()
+  // The restore drill's trial server (web-trial.ts): before the ephemeral child it also is, so
+  // it boots only on the ticket its drill left, and none of a normal start's installs and switches.
+  if (options._trialStart) {
+    return (await import('./web-trial.js')).runTrialChild({ bailMs: SHUTDOWN_BAIL_MS })
+  }
   if (options._ephemeralChild) {
     return (await import('./web-ephemeral.js')).runEphemeralChild()
   }

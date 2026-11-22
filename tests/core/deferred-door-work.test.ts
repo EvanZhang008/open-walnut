@@ -363,7 +363,7 @@ describe('held at a closed door', () => {
     const policy = await import('../../src/core/boot-policy.js')
     const run = vi.fn(async () => {})
     p.work.registerDeferredReplay('task-sync:delete', run)
-    policy.setBootMode('switch-trial')
+    policy.setBootMode('trial', 'leader-switch')
     try {
       guard(p, { now: true })
       await p.work.holdDurablyUntilDoorsOpen('task-sync:delete', 'task-sync:delete:ms-todo:trial', { n: 1 })

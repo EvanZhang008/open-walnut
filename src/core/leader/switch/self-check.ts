@@ -19,6 +19,7 @@ import YAML from 'yaml'
 import { inspectSqliteOffThread } from '../../../lib/sqlite.js'
 import type { BatchFile } from '../../standby/types.js'
 import type { SwitchSide } from './side.js'
+import { pickReadBackNote, readBackThroughServer, type ReadBackNote } from '../../trial-start/read-back.js'
 
 export interface CheckOutcome { ok: boolean; problems: string[]; detail: Record<string, unknown> }
 
@@ -41,7 +42,7 @@ export function configPathsInto(home: string, oldHome: string): string[] {
   return hits
 }
 
-export async function offlineCheck(o: { sourceHome: string; home: string; files: BatchFile[]; sizesAndRows?: boolean }): Promise<CheckOutcome & { task: { id: string; title: string } | null; note: string | null }> {
+export async function offlineCheck(o: { sourceHome: string; home: string; files: BatchFile[]; sizesAndRows?: boolean }): Promise<CheckOutcome & { task: { id: string; title: string } | null; note: ReadBackNote | null }> {
   const problems: string[] = []
   const exact = o.sizesAndRows !== false
   let missing = 0
@@ -71,7 +72,7 @@ export async function offlineCheck(o: { sourceHome: string; home: string; files:
     else if (exact && source.ok && !REWRITTEN.has(rel) && copy.rows !== source.rows) problems.push(`${rel}: ${copy.rows} rows in the new home, ${source.rows} in the old one`)
     if (rel === 'tasks/tasks.sqlite' && source.row && typeof source.row.id === 'string') task = { id: source.row.id, title: String(source.row.title ?? '') }
   }))
-  const note = o.files.map((f) => f.p).filter((p) => p.startsWith('notes/') && p.endsWith('.md')).sort()[0] ?? null
+  const note = pickReadBackNote(o.files.map((f) => f.p))
   return { ok: problems.length === 0, problems, detail: { files: o.files.length, databases: counts }, task, note }
 }
 
@@ -89,7 +90,7 @@ export function olderVersion(a: string, b: string): boolean {
   return false
 }
 
-export async function onlineCheck(o: { side: SwitchSide; sourceHome: string; sourceVersion: string; task: { id: string; title: string } | null; note: string | null }): Promise<CheckOutcome> {
+export async function onlineCheck(o: { side: SwitchSide; sourceHome: string; sourceVersion: string; task: { id: string; title: string } | null; note: ReadBackNote | null }): Promise<CheckOutcome> {
   const problems: string[] = []
   const detail: Record<string, unknown> = {}
   const st = await o.side.api('GET', '/api/leader/status').catch((err) => ({ status: 0, json: { error: String(err) } }))
@@ -98,20 +99,11 @@ export async function onlineCheck(o: { side: SwitchSide; sourceHome: string; sou
   if (st.status !== 200 || !s?.version) problems.push(`the trial server's leader status did not answer (${st.status})`)
   else if (olderVersion(s.version, o.sourceVersion)) problems.push(`the trial server runs ${s.version}, older than ${o.sourceVersion} that wrote the data`)
   if (s?.permit?.mayAct) problems.push('the trial server says it may act: a trial must keep every outward door closed')
-  if (o.task) {
-    const t = await o.side.api('GET', `/api/tasks/${encodeURIComponent(o.task.id)}`).catch(() => ({ status: 0, json: null }))
-    const title = (t.json as { task?: { title?: string }; title?: string } | null)
-    const got = title?.task?.title ?? title?.title
-    if (t.status !== 200 || got !== o.task.title) problems.push(`task ${o.task.id} did not read back (status ${t.status}, title ${JSON.stringify(got)})`)
-    detail.task = o.task.id
-  }
-  if (o.note) {
-    const want = fs.readFileSync(path.join(o.sourceHome, o.note), 'utf8')
-    const rel = o.note.replace(/^notes\//, '')
-    const n = await o.side.api('GET', `/api/notes-v2/content/${rel.split('/').map(encodeURIComponent).join('/')}`).catch(() => ({ status: 0, json: null }))
-    const content = (n.json as { content?: string } | null)?.content
-    if (n.status !== 200 || content !== want) problems.push(`note ${o.note} did not read back as in the old home (status ${n.status})`)
-    detail.note = o.note
-  }
+  // The newest task and a note of the old home, through the trial server (shared with the restore drill).
+  const note = o.note ? { ...o.note, content: fs.readFileSync(path.join(o.sourceHome, o.note.rel), 'utf8') } : null
+  const back = await readBackThroughServer((m, p) => o.side.api(m, p), { task: o.task, note })
+  problems.push(...back.problems)
+  if (o.task) detail.task = o.task.id
+  if (o.note) detail.note = o.note.rel
   return { ok: problems.length === 0, problems, detail }
 }

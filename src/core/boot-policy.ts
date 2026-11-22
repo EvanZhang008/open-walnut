@@ -20,30 +20,44 @@
  * A gate reads `bootPolicy(job)` instead of a raw `CLOUD_MODE`; conditions that
  * are not about the role (ephemeral, env opt-outs, cloud.exec.enabled) stay at the gate.
  *
- * A third column, `trial`, is the leader switch's trial start (docs/reference/leader-switch.md
- * "The trial column"): the new leader started once on its promoted home to show that the home
- * reads back. It runs only what that needs (HTTP, the databases and their migrations,
+ * A third column, `trial`, is a trial start (docs/reference/leader-switch.md "The trial column"):
+ * a server started once on a home only to show that the home reads back. Two things start one:
+ * the leader switch, on the new leader's promoted home, and the restore drill, on a backup it
+ * restored (docs/reference/backups.md, "Restore drill"; src/core/trial-start/). It runs only what that needs (HTTP, the databases and their migrations,
  * the guards on them); every route that acts outward, timer, watcher, session pass, plugin, git job and anything that
  * reaches outside the home is off. The trial is a leader start, so a row is on in a trial only
  * when it is on in the leader column too. server.ts sets the mode once, right after the write
- * permission's boot step decided it is a trial, before any gate reads the table.
+ * permission's boot step decided it is a switch's trial (or the drill's ticket was taken,
+ * src/core/trial-start/ticket.ts), before any gate reads the table.
  */
 
 import { placement, type Placement } from './server-role.js'
 import { capabilitiesAt, capabilityOfJob, type Capability } from './capabilities.js'
 
-/** How this process booted: a normal server, or a leader switch's trial start. */
-export type BootMode = 'normal' | 'switch-trial'
+/** How this process booted: a normal server, or a trial start (the trial column). */
+export type BootMode = 'normal' | 'trial'
+
+/** What started a trial: the leader switch, or the restore drill. */
+export type TrialPurpose = 'leader-switch' | 'restore-drill'
 
 let mode: BootMode = 'normal'
+let purpose: TrialPurpose | null = null
 
-/** Set once per boot by server.ts, before the first gate reads the table. */
-export function setBootMode(next: BootMode): void {
+/** Set once per boot by server.ts, before the first gate reads the table. A trial names its purpose. */
+export function setBootMode(next: 'normal'): void
+export function setBootMode(next: 'trial', why: TrialPurpose): void
+export function setBootMode(next: BootMode, why?: TrialPurpose): void {
   mode = next
+  purpose = next === 'trial' ? why ?? null : null
 }
 
 export function bootMode(): BootMode {
   return mode
+}
+
+/** What started this trial; null outside a trial. */
+export function trialPurpose(): TrialPurpose | null {
+  return purpose
 }
 
 /** The stage of docs/plan/walnut-companion-unified-replica.md that decides a `companionUntil` row. */
@@ -55,7 +69,7 @@ export interface BootRow {
   leader: boolean
   /** Every replica, the host replica and the companion alike. */
   replica: boolean
-  /** A leader switch's trial start (the header): on only where the trial needs it to read the home back. */
+  /** A trial start (the header): on only where the trial needs it to read the home back. */
   trial: boolean
   /** On the companion also, until this stage (see the header). Never on a capability's row. */
   companionUntil?: CompanionStage
@@ -183,7 +197,7 @@ export type BootJob = (typeof BOOT_POLICY)[number]['job']
 const byJob = new Map<string, BootRow>(BOOT_POLICY.map((r) => [r.job, r]))
 
 function column(row: BootRow, where: Placement, caps: ReadonlySet<Capability>, m: BootMode): boolean {
-  if (m === 'switch-trial' && !row.trial) return false
+  if (m === 'trial' && !row.trial) return false
   if (where === 'mac') return row.leader
   if (row.replica) return true
   const cap = capabilityOfJob(row.job)

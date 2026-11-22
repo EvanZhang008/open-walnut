@@ -25,6 +25,8 @@ export interface DrillCheck {
   detail: string;
   /** What failed, one line each (at most PROBLEM_LIMIT, then a count). */
   problems?: string[];
+  /** How long its steps took, in ms (the boot check: start, the server's own boot, read-back, stop, total). */
+  timings?: Record<string, number>;
 }
 
 export interface NotInBackupEntry {

@@ -90,7 +90,7 @@ import { CRON_FILE, IS_DEMO, IS_EPHEMERAL, LOG_DIR, PLUGIN_STORES_DIR, WALNUT_HO
 import { exitTraceFileFor, localDaemonDirChoice, localProductionDaemonDir } from '../lib/daemon-dir.js'
 import { isCompanion, isFollower, isHostReplica, placement, role, serviceRuntime } from '../core/server-role.js'
 import { capabilityFacts, capabilityList, hasCapability } from '../core/capabilities.js'
-import { bootMode, bootPolicy, setBootMode } from '../core/boot-policy.js'
+import { bootMode, bootPolicy, setBootMode, trialPurpose } from '../core/boot-policy.js'
 import { sessionRunner } from '../providers/claude-code-session.js'
 import { SessionHealthMonitor } from '../core/session-health-monitor.js'
 import { SessionReaper } from '../core/session-reaper.js'
@@ -221,7 +221,7 @@ import { setPrivacyModelReady } from '../core/private-tasks/privacy-judge.js'
  * Who a job turned off by the boot policy is off for, in its skip line: the
  * companion keeps its old 'cloud mode' wording, a host replica and a leader switch's trial say so.
  */
-function offByPolicy(): string { return bootMode() === 'switch-trial' ? 'leader switch trial' : isHostReplica() ? 'host replica' : 'cloud mode' }
+function offByPolicy(): string { return bootMode() === 'trial' ? `${trialPurpose() ?? 'trial'} trial` : isHostReplica() ? 'host replica' : 'cloud mode' }
 
 /**
  * Look up a task and build a rich reference: [id|Project / Title], or
@@ -626,6 +626,8 @@ export interface ServerOptions {
   port?: number
   dev?: boolean
   bindAddress?: string
+  /** A trial start on a restore drill's copy (only commands/web-trial.ts, after taking its ticket). */
+  trialStart?: import('../core/trial-start/ticket.js').TrialStartPurpose
   beforeRoutes?: import('express').RequestHandler
 }
 
@@ -1502,9 +1504,20 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           return serveHandedOverHome(err.standby, port, options)
         }
       }
-      // The switch's trial start only shows the new home reads back: every gate reads the boot
-      // policy's trial column from here on (no session, plugin, timer, git job or outward work).
-      setBootMode(leaderPermitHandle?.decision.kind === 'trial' ? 'switch-trial' : 'normal')
+      // A trial start only shows a home reads back: every gate reads the boot policy's trial
+      // column from here on (no session, plugin, timer, git job or outward work). The switch's
+      // trial is decided by the write permission; the restore drill's by the ticket its child
+      // runner took (commands/web-trial.ts, core/trial-start/ticket.ts), which holds no permit,
+      // so its doors are closed here for the life of the process.
+      if (options.trialStart) {
+        if (leaderPermitHandle) throw new Error('a restore drill trial never holds the write permission')
+        setBootMode('trial', options.trialStart)
+        ;(await import('../core/leader/switch/doors.js')).closeOutwardDoorsForTrial(options.trialStart)
+      } else if (leaderPermitHandle?.decision.kind === 'trial') {
+        setBootMode('trial', 'leader-switch')
+      } else {
+        setBootMode('normal')
+      }
     }
     // This process owns the data folder now: read back what earlier servers saw of this
     // machine's sleep and when no server ran, and stamp from now on that this one is alive

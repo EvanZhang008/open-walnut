@@ -122,7 +122,9 @@ in the old home before it runs and is safe to repeat; `--resume` continues after
    trial column ([below](#the-trial-column)): HTTP, the databases and their migrations, and
    nothing else (no plugin, standby copy, session, timer, routine, git job or outward work);
    its version must read the data, the
-   old home's newest task and a note must read back through its API. Then it stops. A
+   old home's newest task and a note must read back through its API (the same read-back as the
+   restore drill's boot check, `src/core/trial-start/read-back.ts`: the note is the first one under
+   the vault root, `artifacts/` once the notes moved into the one tree, `notes/` before). Then it stops. A
    resumed trial skips the size and row comparison (its server may have touched the home).
 7. **commit**: the new leader starts for real, told the handover's number: its own `renew` on
    top of the handover reaches a majority (a `grant` once the handover ran out at the
@@ -154,9 +156,13 @@ One switch command runs per home at a time (`local/leader-switch/switch.lock`): 
 ### The trial column
 
 `BOOT_POLICY` (`src/core/boot-policy.ts`) has a third column beside `leader` and `replica`:
-`trial`, what the switch's trial start runs. The permission's boot step decides the trial
-(`WALNUT_LEADER_TRIAL=1`, read once in `src/web/server.ts` and passed to `boot.ts`); server.ts
-then sets the boot mode (`setBootMode('switch-trial')`) before the first gate reads the table,
+`trial`, what a trial start runs: the switch's, and the restore drill's boot check
+(docs/reference/backups.md, "Restore drill"), one mode for both (`bootMode() === 'trial'`, with
+`trialPurpose()` naming which). The permission's boot step decides the switch's trial
+(`WALNUT_LEADER_TRIAL=1`, read once in `src/web/server.ts` and passed to `boot.ts`); the drill's
+is entered only through its ticket (`src/core/trial-start/ticket.ts`), holds no permit, and has
+its outward doors closed for the life of the process (`closeOutwardDoorsForTrial`). server.ts
+then sets the boot mode (`setBootMode('trial', 'leader-switch' | 'restore-drill')`) before the first gate reads the table,
 and from there `bootPolicy(job)` is on only where the row's `trial` is (a trial is a leader
 start, so a row on in a trial is on in the leader column too). The trial needs HTTP, the
 databases and their migrations to read the home back; everything else is off, routes that act
