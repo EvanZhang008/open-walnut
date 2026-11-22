@@ -9,6 +9,7 @@
  */
 
 import { TRIGGER_DESCRIPTION_MAX, parseEveryMs } from './trigger-fields.js'
+import { triggerWatchesOwnWork } from '../task-wait-wake.js'
 
 /**
  * What trigger_update may change, by its input field. A trigger_create field that is
@@ -112,6 +113,7 @@ export function triggerUpdateArgsOf(before: TriggerJobLike, after: TriggerJobLik
   if (promptOf(after) && promptOf(after) !== promptOf(before)) out.prompt = promptOf(after)
   if (text(after.description) && text(after.description) !== text(before.description)) out.description = text(after.description)
   if (text(after.name) && text(after.name) !== text(before.name)) out.name = text(after.name)
-  if (!!after.ownWork !== !!before.ownWork) out.watches = after.ownWork ? 'own' : 'outside'
+  const own = triggerWatchesOwnWork(after)
+  if (own !== triggerWatchesOwnWork(before)) out.watches = own ? 'own' : 'outside'
   return out
 }

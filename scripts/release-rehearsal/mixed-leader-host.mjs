@@ -119,7 +119,7 @@ function writeSourceTwin(newSrc, version, file) {
   // A source run bakes the hash of its source tree in, over DAEMON_VERSION: relabel that one literal.
   const label = /^const DAEMON_VERSION = '[^']*';$/gm
   if ((r.stdout.match(label) ?? []).length !== 1) throw new Error('the JS twin has no single DAEMON_VERSION literal to label')
-  fs.writeFileSync(file, r.stdout.replace(label, `const DAEMON_VERSION = ${JSON.stringify(version)};`), { mode: 0o755 })
+  fs.writeFileSync(file, r.stdout.replace(label, () => `const DAEMON_VERSION = ${JSON.stringify(version)};`), { mode: 0o755 })
 }
 
 /** Command and args that run a daemon of `kind` ('old', 'new', 'new-source') from its own files. */
