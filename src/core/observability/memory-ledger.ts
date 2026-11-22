@@ -175,6 +175,13 @@ export async function memoryReport(opts: { heap?: boolean } = {}, now = Date.now
 const HEAP_WALK_EVERY_MS = 60_000;
 let lastHeapWalkAt = -Infinity;
 
+const sampleNotes = new Map<string, () => string>();
+/** A short note a module adds to every `memory sample` line (what it moved lately). Returns its unregister. */
+export function registerSampleNote(name: string, read: () => string): () => void {
+  sampleNotes.set(name, read);
+  return () => { if (sampleNotes.get(name) === read) sampleNotes.delete(name); };
+}
+
 /** How often the health tick logs a sample. */
 export const SAMPLE_EVERY_MS = 10 * 60_000;
 /** A holder over budget re-warns at most this often. */
@@ -195,6 +202,9 @@ export function sampleMemory(now = Date.now()): void {
     uptimeSec: Math.round(process.uptime()),
     holdersMb: Math.round(rows.reduce((n, r) => n + r.bytes, 0) / MB),
     top: rows.slice(0, 8).map((r) => `${r.name}=${Math.round(r.bytes / MB)}MB/${r.entries}`).join(' '),
+    ...Object.fromEntries([...sampleNotes].map(([name, read]) => {
+      try { return [name, read()]; } catch { return [name, 'unreadable']; }
+    })),
   });
   for (const r of rows) {
     if (!r.overBudget) { overWarnedAt.delete(r.name); continue; }

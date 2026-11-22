@@ -6,6 +6,7 @@ import { log } from '../logging/index.js';
 import { withFileLock } from './file-lock.js';
 import { gated } from './write-gate.js';
 import { selfHealDataDirJson } from './json-conflict-recovery.js';
+import { noteJsonIo } from '../core/observability/json-io.js';
 
 /**
  * Atomically write JSON to a file (write to tmp, then rename).
@@ -19,7 +20,9 @@ export async function writeJsonFile(
   data: unknown,
   options: { mode?: number; durable?: boolean } = {},
 ): Promise<void> {
-  await writeTextFile(filePath, JSON.stringify(data, null, 2) + '\n', options);
+  const text = JSON.stringify(data, null, 2) + '\n';
+  noteJsonIo(filePath, false, text.length);
+  await writeTextFile(filePath, text, options);
 }
 
 /**
@@ -149,6 +152,7 @@ export async function readJsonFile<T>(filePath: string, fallback: T, options: { 
     return safeClone(fallback, filePath);
   }
 
+  noteJsonIo(filePath, true, content.length);
   // File exists and was read — parse it. If it's corrupt, throw rather than
   // silently returning the fallback (which could cause data loss on re-persist).
   try {
