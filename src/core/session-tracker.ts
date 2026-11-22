@@ -3174,6 +3174,9 @@ export async function completeTaskSessions(
     const undelivered: string[] = [];
     const rearm: { sid: string; since: number }[] = [];
     const nowMs = Date.parse(now);
+    // Sessions their host runs and judges: stopped by that host, their row untouched here (R2-M3).
+    const hostStops: { sid: string; host: string }[] = [];
+    const hereKey = thisHostKey();
 
     const insertCols = [...SESSION_COLUMNS, 'payload'];
     const insertSql =
@@ -3203,6 +3206,17 @@ export async function completeTaskSessions(
         const row = sel.get(sid) as Record<string, any> | undefined;
         if (!row) continue;
         const session = rowToSession(row);
+        if (judgedByHost(session) && !rowOwnedHere(session, hereKey)) {
+          if (isTerminalSession(session) || (session.process_status === 'stopped' && session.pid == null)) continue;
+          // It completed its own task mid-turn: it stops when that turn ends (its facts end it here).
+          if (opts?.actorSid && (sid === opts.actorSid || session.acpRuntimeId === opts.actorSid) && session.process_status === 'running') {
+            stopAtTurnEnd = sid;
+            continue;
+          }
+          hostStops.push({ sid, host: session.host! });
+          updated++;
+          continue;
+        }
         initializeStatusVersion(session);
         const beforeStatus = canonicalStatusProjection(session);
         const marker = session.taskCompleteStop;
@@ -3279,6 +3293,10 @@ export async function completeTaskSessions(
     });
     if (lockWait instanceof Promise) await lockWait;
     for (const session of stoppedRows) emitSessionStatusChanged(session, {}, ['*'], { source: 'session-tracker' });
+    if (hostStops.length > 0) {
+      log.session.info('completing task sessions: their hosts stop the sessions they run', { sessionIds: hostStops.map((h) => h.sid).join(','), count: hostStops.length });
+      (await import('./sessions/host-judged-complete.js')).stopHostRunForCompletion(hostStops);
+    }
     // Still under the lock every record write takes: the status write that
     // ends this turn lands after the wait is registered.
     if (stopAtTurnEnd) {

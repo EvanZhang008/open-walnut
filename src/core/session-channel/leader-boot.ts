@@ -88,6 +88,8 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
       void import('../../providers/host-judged-send.js').then((m) => m.redeliverWaitingFor(host)).catch((err: unknown) => {
         log.session.warn('host-run sessions: redelivering what waited for a host failed', { host, error: err instanceof Error ? err.message : String(err) })
       })
+      // The stops of completed tasks that did not reach this host (sessions/host-judged-complete.ts).
+      void import('../sessions/host-judged-complete.js').then((m) => m.retryCompletionStopsFor(host)).catch(() => {})
     },
     log: (level, msg, data) => log.session[level](msg, data),
   })
