@@ -22,6 +22,7 @@ vi.mock('../../web/node_modules/react', () => ({
   useState: <T,>(initial: T | (() => T)) => [typeof initial === 'function' ? (initial as () => T)() : initial, (v: unknown) => { stateWrites.push(v) }] as const,
   useCallback: <T,>(fn: T) => fn,
   useRef: <T,>(current: T) => ({ current }),
+  useEffect: () => {},
 }))
 // The drag's own handlers, so a test plays a drag the way the pointer does (start, move, end).
 type Drag = { onStart?: () => void; onMove?: (d: { dx: number }) => void; onEnd?: () => void }

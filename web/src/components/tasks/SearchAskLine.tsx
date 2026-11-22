@@ -46,7 +46,7 @@ export function SearchAskLine({ task }: { task: Task }) {
           {open ? 'Fold' : 'Answer'} <span aria-hidden="true">{open ? '▴' : '▾'}</span>
         </button>
       </div>
-      {everOpened ? <div className="search-ask-card" hidden={!open}><ActionNeeded task={task} /></div> : null}
+      {everOpened ? <div hidden={!open} className="search-ask-actions-below" data-asks-for={task.id}><ActionNeeded task={task} /></div> : null}
     </div>
   );
 }

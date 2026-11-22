@@ -149,9 +149,8 @@ export function useResizablePanel(storageKey: string, defaultPct = PANEL_PCT_DEF
     setDragged(false);
   }, [storageKey]);
 
-  const restore = useCallback(() => {
-    setPct(readStoredPct(storageKey, defaultRef.current));
-  }, [storageKey]);
+  // Called from an effect, never a dependency of one, so it needs no stable identity.
+  const restore = () => { setPct(readStoredPct(storageKey, defaultRef.current)); };
 
   const reset = useCallback(() => {
     try { localStorage.removeItem(storageKey); } catch { /* ignore */ }

@@ -587,7 +587,7 @@
 .search-ask-fill { flex: 1 1 auto; }
 .search-ask-line:not(.is-open) .search-ask-fill { display: none; }
 .search-ask-more { font-size: var(--font-size-xs); color: var(--fg-muted); }
-.search-ask-card[hidden] { display: none; }
+.search-ask-actions-below[hidden] { display: none; }
 /* A narrow list (the default panel at 1024): the mark and the button take a line of their own and
    the question the whole width under them, never a sliver between the two. */
 @container (max-width: 399px) {

@@ -1403,10 +1403,10 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
     </div>
     {/* What it asks of the user, each with its answer and its own Snooze (ActionNeeded): under the
         row, never inside it, as the row is a button and a box to type in cannot live in one. */}
-    {!isDone && task.user_status?.actions?.length ? <div className="todo-row-actions-below" data-asks-for={task.id}>
-      {/* A search list folds it to one line (SearchAskLine), so the results still scan. */}
-      {foldAsks ? <SearchAskLine task={task} /> : <ActionNeeded task={task} />}
-    </div> : null}
+    {/* A search list folds it to one line (SearchAskLine), so the results still scan. */}
+    {!isDone && task.user_status?.actions?.length ? (foldAsks
+      ? <div className="todo-row-actions-below" data-asks-for={task.id}><SearchAskLine task={task} /></div>
+      : <div className="todo-row-actions-below" data-asks-for={task.id}><ActionNeeded task={task} /></div>) : null}
     </>
   );
 });
