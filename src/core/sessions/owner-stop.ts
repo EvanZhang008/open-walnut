@@ -46,7 +46,7 @@ import type { SessionRecord } from '../types.js'
 import { engineCaps } from '../agents/engine-registry.js'
 import { stopProvenance, type StopInitiator } from './stop-provenance.js'
 import { refuseProcessAction } from './replica-process-guard.js'
-import { rowOwnedHere, thisHostKey } from './session-row-owner.js'
+import { execHostOf } from './session-row-owner.js'
 
 /** Daemon capability that answers orphan stops with an ownership proof. */
 export const ORPHAN_STOP_CAPABILITY = 'orphan-stop-v1'
@@ -94,8 +94,7 @@ type OwnedRow = Pick<SessionRecord, 'claudeSessionId' | 'host' | 'judge'>
  * A row this host's own service runs (judge 'host' with this host's key) is local here too.
  */
 export function ownerHostKey(row: Pick<SessionRecord, 'host' | 'judge'>): string {
-  if (rowOwnedHere(row, thisHostKey())) return '__local__'
-  return row.host || '__local__'
+  return execHostOf(row) ?? '__local__'
 }
 
 // ONE shared import for every caller. Stops run concurrently (idle reaps, four

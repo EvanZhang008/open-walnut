@@ -18,7 +18,7 @@ import type {
 import { dbGeneration, getDb, rowToSession, sessionToRow, sessionWriteHandle, ownRowHostKey, SESSION_COLUMNS, transactionWhenFree, writeChannelCursor } from './session-db.js';
 import { runSessionMigrationIfNeeded } from './session-db-migration.js';
 import { isHostReplica } from './server-role.js';
-import { refuseProcessAction } from './sessions/replica-process-guard.js';
+import { processActionsRefused, refuseProcessAction } from './sessions/replica-process-guard.js';
 import { bus, EventNames, type EmitOptions } from './event-bus.js';
 import type { SessionStatusChangedEvent } from './event-types.js';
 import { projectOrInbox } from './inbox-project.js';
@@ -959,10 +959,10 @@ export async function getActiveSessionsByHost(): Promise<Record<string, SessionR
     return true;
   }).map(cloneSession);
   const result: Record<string, SessionRecord[]> = {};
-  const staleIds: string[] = [];
+  const staleIds: SessionRecord[] = [];
   for (const s of candidates) {
     if (!await isSessionProcessAlive(s)) {
-      staleIds.push(s.claudeSessionId);
+      staleIds.push(s);
       continue;
     }
     const key = s.host || 'local';
@@ -991,10 +991,10 @@ export async function getAllAliveSessionsByHost(): Promise<Record<string, Sessio
     return true;
   }).map(cloneSession);
   const result: Record<string, SessionRecord[]> = {};
-  const staleIds: string[] = [];
+  const staleIds: SessionRecord[] = [];
   for (const s of candidates) {
     if (!await isSessionProcessAlive(s)) {
-      staleIds.push(s.claudeSessionId);
+      staleIds.push(s);
       continue;
     }
     const key = s.host || 'local';
@@ -1039,11 +1039,15 @@ const STALE_RECHECK_GAP_MS = 5 * 60_000;
  * instead of waiting for the health monitor's next pull. The legacy write still
  * goes through the gate, which hands its reason to the projection.
  */
-function fixStaleRecords(sessionIds: string[]): void {
+function fixStaleRecords(rows: SessionRecord[]): void {
   // A host replica repairs no copied row: its liveness is the Mac's label, and
   // its rows change only through the copy (sessions/replica-process-guard.ts).
+  // The rows of sessions it runs itself are its own to repair.
   // Every caller funnels here (the limit check and both alive-by-host reads).
-  if (refuseProcessAction('stale_repair')) return;
+  const own = rows.filter((r) => !processActionsRefused(r));
+  if (own.length < rows.length) refuseProcessAction('stale_repair');
+  if (own.length === 0) return;
+  const sessionIds = own.map((r) => r.claudeSessionId);
   const nowMs = Date.now();
   const ownedByProjection = getSnapshotStatusMode() === 'enforce';
   const warned: string[] = [];
@@ -1152,11 +1156,11 @@ export async function checkSessionLimit(
   }).map(cloneSession);
   const runningSessions: SessionRecord[] = [];
   const idleSessions: SessionRecord[] = [];
-  const staleIds: string[] = [];
+  const staleIds: SessionRecord[] = [];
 
   for (const s of candidates) {
     if (!await isSessionProcessAlive(s)) {
-      staleIds.push(s.claudeSessionId);
+      staleIds.push(s);
       continue;
     }
     // Lane sessions back a persistent UI surface (a conversation lane), not a

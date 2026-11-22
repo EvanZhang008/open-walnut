@@ -14979,10 +14979,12 @@ export class SessionRunner {
    * lives (cli-owner-core.ts).
    */
   private async isSessionStillAlive(record: SessionRecord): Promise<boolean> {
-    if (record.host) {
+    // A session this host's own service runs is local here (session-row-owner.ts execHostOf).
+    const execHost = execHostOf(record)
+    if (execHost) {
       try {
         const { probeDaemonSession } = await import('./daemon-connection.js')
-        const probe = await probeDaemonSession(record.host, record.claudeSessionId)
+        const probe = await probeDaemonSession(execHost, record.claudeSessionId)
         return probe?.alive === true
       } catch (err) {
         log.session.debug('isSessionStillAlive: remote probe threw', {
@@ -14994,7 +14996,7 @@ export class SessionRunner {
     }
     if (record.pid == null) return false
     // A host replica's rows are copies of the Mac's: no pid in one is probed here.
-    if (refuseProcessAction('pid_probe', record.claudeSessionId)) return false
+    if (refuseProcessAction('pid_probe', record.claudeSessionId, record)) return false
     try {
       process.kill(record.pid, 0)
       return true
