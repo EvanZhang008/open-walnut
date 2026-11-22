@@ -8,7 +8,7 @@
 import * as nodeFs from 'node:fs'
 import * as nodePath from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
-import { genesisConfigId, type OpEntry, type PermitProgress, type PermitRecord } from './types.js'
+import { genesisConfigId, type OpEntry, type PermitProgress, type PermitRecord, type PermitReply } from './types.js'
 import { ledgerError } from './ops.js'
 
 export interface StoredWitness {
@@ -143,13 +143,25 @@ export function bootstrapWitnessStore(store: PermitStore, list: string[]): void 
 }
 
 /**
+ * The generation a joining witness is set up from: the highest any set-up witness reported in
+ * one read round (PermitClient.readBack() of a machine that reads every witness of the list).
+ * Higher is only safer: a joining witness then refuses more. null when no witness answered.
+ */
+export function generationToJoin(reads: readonly PermitReply[]): number | null {
+  const set = reads.filter((r) => r.list && r.epoch !== null).map((r) => r.epoch!)
+  return set.length ? Math.max(...set) : null
+}
+
+/**
  * Sets up a witness that joins an existing Walnut (a new machine, or one that lost its
  * disk): it takes nothing until a list change from generation `epoch` or later names it.
- * Give the CURRENT generation for a witness that served before and lost its record: it must
- * not be able to join an older configuration it may have helped to leave.
+ * Take the generation from the witnesses, never from a person (generationToJoin, passed as
+ * `current`): one below the current generation could let the witness join an older
+ * configuration it may have helped to leave. `epoch` below `current` is refused.
  */
-export function prepareJoiningWitness(store: PermitStore, epoch: number): void {
+export function prepareJoiningWitness(store: PermitStore, epoch: number, current?: number | null): void {
   if (!Number.isSafeInteger(epoch) || epoch < 0) throw new Error('permit store: a generation is a whole number from 0')
+  if (current !== undefined && current !== null && epoch < current) throw new Error(`permit store: generation ${epoch} is below the current one (${current}); a joining witness starts from the current generation`)
   if (store.load() !== null) throw new Error('permit store: already set up')
   store.save({ held: null, list: null, joint: null, cfg: null, epoch, progress: null, ops: [] })
 }

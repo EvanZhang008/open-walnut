@@ -17,6 +17,8 @@ import type { OpChanges, OpEntry, OpState, PermitRecord } from './types.js'
 
 export const MAX_OPS_PER_RECORD = 200
 export const MAX_OP_ID_LENGTH = 200
+/** The most entries a list change carries (and a witness file holds): entries with no outcome are never dropped, so report them. */
+export const MAX_LEDGER_ENTRIES = 10_000
 
 /** An entry as a witness keeps it: `at` is when it last changed, on the witness's own clock. */
 export interface HeldOp extends OpEntry {
@@ -50,7 +52,7 @@ export function opChangesError(c: OpChanges): string | null {
 }
 
 export function ledgerError(l: unknown): string | null {
-  if (!Array.isArray(l) || !l.every(opEntryValid)) return 'bad-ledger'
+  if (!Array.isArray(l) || l.length > MAX_LEDGER_ENTRIES || !l.every(opEntryValid)) return 'bad-ledger'
   return new Set(l.map((e) => e.id)).size === l.length ? null : 'bad-ledger'
 }
 
@@ -103,13 +105,21 @@ export type OpStatus =
   | 'registered'
   /** Registered by another machine or an earlier incarnation, no outcome: never send it; list it for the user. */
   | 'unknown'
+  /** This process began its send (beginSend) and has reported no outcome yet: never send it again. */
+  | 'sending'
   | 'sent'
   | 'not-sent'
 
 /**
  * A machine's side of the op ids: what the witnesses reported, what it asked to register or
- * report and no majority took yet (every proposal carries all of it again), and the
- * registrations of its own that a majority took.
+ * report and no majority took yet (every proposal carries all of it again), the registrations
+ * of its own that a majority took, and what this process did with each of its own: began
+ * sending, or knows the outcome of. That last part is never dropped for the life of the
+ * process, so it never sends one op twice, even once the witnesses dropped the entry.
+ *
+ * A registration of this process stays good across a lapse of its own permission: no other
+ * process can register the id once a majority took it, and this one sends it at most once
+ * (beginSend), so sending it under a later permission of its own sends it once.
  */
 export class OpBook {
   private known = new Map<string, OpEntry & { seenAt: number }>()
@@ -117,6 +127,7 @@ export class OpBook {
   private wantSent = new Set<string>()
   private wantNotSent = new Set<string>()
   private mine = new Set<string>()
+  private done = new Map<string, 'sending' | 'sent' | 'not-sent'>()
 
   constructor(private readonly self: { by: string; nonce: string }, private readonly now: () => number, private readonly retainMs: number) {}
 
@@ -135,7 +146,11 @@ export class OpBook {
 
   status(id: string): OpStatus {
     const e = this.known.get(id)
+    const local = this.done.get(id)
+    // What this process did itself first: a report it made, or a send it began, is final here.
+    if (local && local !== 'sending') return e && e.state !== 'registered' ? laterState(local, e.state) : local
     if (e && e.state !== 'registered') return e.state
+    if (local) return local
     if (this.mine.has(id)) return 'registered'
     if (this.wantRegister.has(id) || (e && this.isMineEntry(e))) return 'pending'
     return e ? 'unknown' : 'free'
@@ -152,8 +167,17 @@ export class OpBook {
     return refused
   }
 
+  /** This process starts sending `id` (its registration stood): from now on it never sends it again. */
+  beginSend(id: string): void {
+    this.done.set(id, 'sending')
+  }
+
   askOutcome(id: string, sent: boolean): void {
     this.wantRegister.delete(id)
+    this.mine.delete(id)
+    // 'sent' is final; a later 'not-sent' for the same id changes nothing (never send twice).
+    if (this.done.get(id) === 'sent' && !sent) return
+    this.done.set(id, sent ? 'sent' : 'not-sent')
     ;(sent ? this.wantSent : this.wantNotSent).add(id)
     ;(sent ? this.wantNotSent : this.wantSent).delete(id)
   }
@@ -184,7 +208,15 @@ export class OpBook {
 
   /** Entries with no outcome registered by anyone but this incarnation: never sent again, listed for the user. */
   unresolved(): OpEntry[] {
-    return this.ledger().filter((e) => e.state === 'registered' && !this.mine.has(e.id) && !this.isMineEntry(e))
+    return this.ledger().filter((e) => e.state === 'registered' && !this.mine.has(e.id) && !this.done.has(e.id) && !this.isMineEntry(e))
+  }
+
+  /**
+   * Outcomes this process learned from the witnesses ('sent', 'not-sent') that its data must
+   * record before the witnesses drop them (opRetainMs): after that only the data remembers.
+   */
+  learnedOutcomes(): OpEntry[] {
+    return this.ledger().filter((e) => e.state !== 'registered')
   }
 
   private isMineEntry(e: OpEntry): boolean {

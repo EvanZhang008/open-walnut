@@ -33,6 +33,10 @@ export interface LockOwner {
   gen: number
   /** The owner's process namespace (Linux /proc/self/ns/pid; '' elsewhere): its pid means something only in the same one. */
   ns?: string
+  /** The machine's boot (Linux /proc/sys/kernel/random/boot_id; '' elsewhere): another one means the owner died with it. */
+  boot?: string
+  /** Wall clock at taking: the last resort when neither the pid nor the clock compares. */
+  takenWall?: number
 }
 
 export type LockFs = Pick<typeof nodeFs, 'link' | 'rename' | 'readFile' | 'readdir' | 'unlink' | 'open' | 'mkdir' | 'readlink'>
@@ -78,29 +82,47 @@ const beatPath = (path: string, o: { gen: number; token: string }) => `${genPath
 export class InstanceLock {
   private lost = false
   private timer: ReturnType<typeof setInterval> | null = null
+  /** The newest beat that was written and then found the lock still ours, on the shared clock. */
+  private lastBeat: number
 
   /** @internal use acquireInstanceLock */
-  constructor(readonly owner: LockOwner, private readonly o: Opts) {}
+  constructor(readonly owner: LockOwner, private readonly o: Opts) {
+    // The first beat was written before the generation was linked (tryTake).
+    this.lastBeat = owner.takenAt
+  }
 
-  /** In memory, cheap: false from the first check that found the lock taken over. */
+  /**
+   * In memory, cheap: false from the first check that found the lock taken over, and also once
+   * no beat has gone through for staleAfterMs - beatEveryMs (beats that fail to write, a
+   * process that was stopped): from staleAfterMs on, another process may judge it stale and
+   * take it, so this one stops a beat before that.
+   */
   held(): boolean {
-    return !this.lost
+    return !this.lost && this.o.clock.now() - this.lastBeat < this.o.staleAfterMs - this.o.beatEveryMs
   }
 
   /** Look again: is our generation still the newest, and still ours? */
   async check(): Promise<boolean> {
     if (this.lost) return false
     const top = await newest(this.o)
+    if (this.lost) return false
     if (top && top.gen === this.owner.gen && top.owner?.token === this.owner.token) return true
     this.markLost(top?.owner ?? null)
     return false
   }
 
-  /** Say we are alive, then check. */
+  /** Say we are alive, then check (the check runs even when the beat could not be written). */
   async beat(): Promise<boolean> {
     if (this.lost) return false
-    await writeAtomic(this.o.fs, beatPath(this.o.path, this.owner), JSON.stringify({ token: this.owner.token, at: this.o.clock.now() }))
-    return this.check()
+    const at = this.o.clock.now()
+    let wrote = false
+    try {
+      await writeAtomic(this.o.fs, beatPath(this.o.path, this.owner), JSON.stringify({ token: this.owner.token, at, wall: Date.now() }), false)
+      wrote = true
+    } finally {
+      if ((await this.check()) && wrote) this.lastBeat = Math.max(this.lastBeat, at)
+    }
+    return this.held()
   }
 
   /** Beat every beatEveryMs until lost or released (the timer does not keep the process up). */
@@ -118,12 +140,14 @@ export class InstanceLock {
     this.stopTimer()
     if (this.lost || !(await this.check())) return
     this.lost = true
-    const free: LockOwner = { token: `released-${this.owner.token}`, pid: 0, clock: this.owner.clock, takenAt: this.o.clock.now(), gen: this.owner.gen + 1 }
+    const free: LockOwner = { token: `released-${this.owner.token}`, pid: 0, clock: this.owner.clock, takenAt: this.o.clock.now(), gen: this.owner.gen + 1, takenWall: Date.now() }
     await linkComplete(this.o.fs, this.o.path, free).catch(() => false)
     await this.o.fs.unlink(beatPath(this.o.path, this.owner)).catch(() => {})
   }
 
   private markLost(by: LockOwner | null): void {
+    // Two checks at once can both find it taken: tell once.
+    if (this.lost) return
     this.lost = true
     this.stopTimer()
     this.o.onLost?.(by)
@@ -144,12 +168,13 @@ async function readText(fs: LockFs, path: string): Promise<string | null> {
   }
 }
 
-async function writeAtomic(fs: LockFs, path: string, text: string): Promise<void> {
+/** `durable`: fsync before the rename (a beat needs none: a beat lost to a power cut only looks older). */
+async function writeAtomic(fs: LockFs, path: string, text: string, durable = true): Promise<void> {
   const tmp = `${path}.${randomBytes(4).toString('hex')}.tmp`
   const fh = await fs.open(tmp, 'w', 0o600)
   try {
     await fh.writeFile(text)
-    await fh.sync()
+    if (durable) await fh.sync()
   } finally {
     await fh.close()
   }
@@ -203,15 +228,16 @@ export async function acquireInstanceLock(opts: InstanceLockOptions): Promise<Ac
   if (!(o.beatEveryMs * 2 <= o.staleAfterMs)) throw new Error('instance lock: beatEveryMs must be at most half of staleAfterMs')
   await o.fs.mkdir(nodePath.dirname(o.path), { recursive: true, mode: 0o700 })
   const ns = await pidNamespace(o.fs)
+  const boot = await bootId(o.fs)
   const token = randomBytes(8).toString('hex')
   let seen: LockOwner | null = null
   for (let round = 0; round < 10; round++) {
     const top = await newest(o)
     if (top) {
       seen = top.owner
-      if (top.owner && !(await staleness(o, top.owner, ns))) return { ok: false, owner: top.owner, reason: `held by pid ${top.owner.pid}` }
+      if (top.owner && !(await staleness(o, top.owner, ns, boot))) return { ok: false, owner: top.owner, reason: `held by pid ${top.owner.pid}` }
     }
-    const me: LockOwner = { token, pid: o.pid, clock: o.clock.kind, takenAt: o.clock.now(), gen: (top?.gen ?? 0) + 1, ns }
+    const me: LockOwner = { token, pid: o.pid, clock: o.clock.kind, takenAt: o.clock.now(), gen: (top?.gen ?? 0) + 1, ns, boot, takenWall: Date.now() }
     if (!(await tryTake(o, me))) continue
     // A process that judged an older generation may have taken a number that a cleanup had
     // freed: it yields to any newer generation it finds.
@@ -230,7 +256,7 @@ export async function acquireInstanceLock(opts: InstanceLockOptions): Promise<Ac
 async function tryTake(o: Opts, me: LockOwner): Promise<boolean> {
   // The first beat goes before the file: a taker never sees our generation without it.
   const beat = beatPath(o.path, me)
-  await writeAtomic(o.fs, beat, JSON.stringify({ token: me.token, at: me.takenAt }))
+  await writeAtomic(o.fs, beat, JSON.stringify({ token: me.token, at: me.takenAt, wall: me.takenWall }), false)
   if (await linkComplete(o.fs, o.path, me)) return true
   await o.fs.unlink(beat).catch(() => {})
   return false
@@ -248,13 +274,20 @@ async function linkComplete(fs: LockFs, path: string, who: LockOwner): Promise<b
   }
   try {
     await fs.link(tmp, genPath(path, who.gen))
-    return true
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'EEXIST') return false
+    if (code === 'EPERM' || code === 'ENOTSUP' || code === 'EOPNOTSUPP') {
+      throw new Error(`instance lock: the file system at ${nodePath.dirname(path)} cannot make hard links (${code}); put the lock on a local disk`)
+    }
     throw err
   } finally {
     await fs.unlink(tmp).catch(() => {})
   }
+  // The generation counts once its directory entry is on disk: a power cut must not hand it out again.
+  const dir = await fs.open(nodePath.dirname(path), 'r').catch(() => null)
+  if (dir) await dir.sync().catch(() => {}).finally(() => dir.close())
+  return true
 }
 
 /** Remove the generations below `gen`, and their beats (best effort). */
@@ -277,27 +310,43 @@ async function pidNamespace(fs: LockFs): Promise<string> {
   }
 }
 
-/** Why `owner` no longer holds it, or null while it does. */
-async function staleness(o: Opts, owner: LockOwner, ns: string): Promise<string | null> {
-  if (owner.pid <= 0) return 'given up'
-  // A pid from another namespace (a process in a container beside one outside) says nothing
-  // here: such an owner is judged by its beats alone.
-  if ((owner.ns ?? '') === ns && !o.isAlive(owner.pid)) return `pid ${owner.pid} is gone`
-  // Beats compare only on one clock; an owner on another one is judged by its process alone.
-  if (owner.clock !== o.clock.kind) return null
-  const beat = parseBeat(await readText(o.fs, beatPath(o.path, owner)), owner.token)
-  const last = Math.max(owner.takenAt, beat ?? -Infinity)
-  const age = o.clock.now() - last
-  // A beat far ahead of now: the clock started again (the machine restarted).
-  if (age > o.staleAfterMs || age < -o.staleAfterMs) return `no beat for ${Math.round(age)} ms`
-  return null
+/** Linux: this boot's id (every process of one boot reads the same, containers included); '' elsewhere. */
+async function bootId(fs: LockFs): Promise<string> {
+  if (process.platform !== 'linux') return ''
+  try {
+    return String(await fs.readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()
+  } catch {
+    return ''
+  }
 }
 
-function parseBeat(text: string | null, token: string): number | null {
+/** Why `owner` no longer holds it, or null while it does. */
+async function staleness(o: Opts, owner: LockOwner, ns: string, boot: string): Promise<string | null> {
+  if (owner.pid <= 0) return 'given up'
+  if (owner.boot && boot && owner.boot !== boot) return 'the machine restarted since'
+  // A pid from another namespace (a process in a container beside one outside) says nothing
+  // here: such an owner is judged by its beats alone.
+  const pidCompares = (owner.ns ?? '') === ns
+  if (pidCompares && !o.isAlive(owner.pid)) return `pid ${owner.pid} is gone`
+  const beat = parseBeat(await readText(o.fs, beatPath(o.path, owner)), owner.token)
+  if (owner.clock === o.clock.kind) {
+    const age = o.clock.now() - Math.max(owner.takenAt, beat?.at ?? -Infinity)
+    // A beat far ahead of now: the clock started again (the machine restarted).
+    if (age > o.staleAfterMs || age < -o.staleAfterMs) return `no beat for ${Math.round(age)} ms`
+    return null
+  }
+  if (pidCompares) return null
+  // Neither its pid nor its clock compares (another namespace on another clock): the wall clock,
+  // with a wide limit, so a lock nobody can judge is never stuck for good.
+  const wallAge = Date.now() - Math.max(owner.takenWall ?? -Infinity, beat?.wall ?? -Infinity)
+  return Math.abs(wallAge) > 3 * o.staleAfterMs ? `no beat for ${Math.round(wallAge)} ms by the wall clock` : null
+}
+
+function parseBeat(text: string | null, token: string): { at: number; wall?: number } | null {
   if (text === null) return null
   try {
-    const b = JSON.parse(text) as { token?: string; at?: number }
-    return b.token === token && Number.isFinite(b.at) ? b.at! : null
+    const b = JSON.parse(text) as { token?: string; at?: number; wall?: number }
+    return b.token === token && Number.isFinite(b.at) ? { at: b.at!, ...(Number.isFinite(b.wall) ? { wall: b.wall! } : {}) } : null
   } catch {
     return null
   }

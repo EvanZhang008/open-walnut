@@ -3,7 +3,7 @@
  * whether a set of timing parameters is safe for the assumed clock drift.
  */
 import type { PermitParams, PermitProgress, PermitRecord } from './types.js'
-import { HOLDER_CLOCK_KINDS, majorityOf, nextConfigId, sameList } from './types.js'
+import { MAX_CLOCK_MARK_LENGTH, majorityOf, nextConfigId, sameList } from './types.js'
 import { applyOps, ledgerError, opChangesError, registrationConflict, type HeldOp } from './ops.js'
 
 /** What one witness holds. `acceptedAt` is on the witness's own elapsed clock. */
@@ -99,7 +99,9 @@ function shapeError(r: PermitRecord, p: PermitParams): string | null {
     return 'bad-progress'
   }
   if (r.joint !== undefined && (!uniqueList(r.joint) || sameList(r.joint, r.list))) return 'bad-list'
-  if (r.clock !== undefined && !HOLDER_CLOCK_KINDS.includes(r.clock)) return 'bad-clock'
+  // The clock mark only informs: a kind this witness does not know yet (a newer holder) is
+  // taken, so an upgrade never splits holders from older witnesses; only a malformed one is not.
+  if (r.clock !== undefined && (typeof r.clock !== 'string' || r.clock.length === 0 || r.clock.length > MAX_CLOCK_MARK_LENGTH)) return 'bad-clock'
   if (r.ops !== undefined && (r.kind !== 'renew' || opChangesError(r.ops))) return 'bad-ops'
   if (r.ledger !== undefined && (r.kind !== 'members' || ledgerError(r.ledger))) return 'bad-ledger'
   if (r.pairBy !== undefined && (r.kind !== 'members' || r.stage !== 'final' || !uniqueList(r.pairBy))) return 'bad-evidence'

@@ -77,7 +77,8 @@ export interface PermitRecord {
    */
   pairBy?: string[]
   /** Which clock the writer counts its lease on (clock.ts HolderClockKind). */
-  clock?: HolderClockKind
+  /** A HolderClockKind from this version; any short string from a newer one is taken too. */
+  clock?: HolderClockKind | (string & {})
 }
 
 /**
@@ -87,6 +88,8 @@ export interface PermitRecord {
  */
 export type HolderClockKind = 'boottime' | 'continuous' | 'mono-wall'
 export const HOLDER_CLOCK_KINDS: readonly HolderClockKind[] = ['boottime', 'continuous', 'mono-wall']
+/** The longest clock mark a witness takes: the mark only informs, so unknown kinds pass. */
+export const MAX_CLOCK_MARK_LENGTH = 32
 
 /**
  * One outward send's op id, as the witnesses keep it (design section 6). 'registered': the

@@ -281,6 +281,111 @@ describe('the instance lock in places a simple lock gets wrong', () => {
   })
 })
 
+describe('the instance lock in its review round 3 cases', () => {
+  /** The real file system, with one step made to fail on demand. */
+  function failingFs(fail: (step: string, p: string) => NodeJS.ErrnoException | null): LockFs {
+    const wrap = <K extends keyof LockFs>(k: K) => (async (...a: unknown[]) => {
+      const err = fail(k, String(a[0]))
+      if (err) throw err
+      return (fsp[k] as (...x: unknown[]) => unknown)(...a)
+    }) as LockFs[K]
+    return { link: wrap('link'), rename: wrap('rename'), readFile: wrap('readFile'), readdir: wrap('readdir'), unlink: wrap('unlink'), open: wrap('open'), mkdir: wrap('mkdir'), readlink: wrap('readlink') }
+  }
+  const errno = (code: string) => Object.assign(new Error(code), { code })
+
+  it('an owner whose beats cannot be written stops holding a beat before another may take it, and still learns of the takeover (S-3)', async () => {
+    const lock = tmp()
+    let now = 1_000
+    const c = { kind: 'test', now: () => now }
+    let full = false
+    let lostTo: string | null = null
+    const a = await acquireInstanceLock({
+      path: lock, pid: 20_010, isAlive: () => true, clock: c, staleAfterMs: 20_000, beatEveryMs: 5_000,
+      fs: failingFs((step, p) => (full && step === 'open' && p.includes('.beat') ? errno('ENOSPC') : null)),
+      onLost: (by) => { lostTo = by?.token ?? null },
+    })
+    if (!a.ok) throw new Error('not taken')
+    now = 6_000
+    expect(await a.lock.beat()).toBe(true)
+    full = true
+    now = 11_000
+    await expect(a.lock.beat()).rejects.toThrow(/ENOSPC/)
+    expect(a.lock.held()).toBe(true)
+    now = 20_999
+    expect(a.lock.held()).toBe(true)
+    // 15 s (staleAfterMs - beatEveryMs) after the last beat that went through.
+    now = 21_000
+    expect(a.lock.held()).toBe(false)
+    // Another process may take it once the beat is 20 s old, and does.
+    now = 26_001
+    const b = await acquireInstanceLock({ path: lock, pid: 20_011, isAlive: () => true, clock: c })
+    if (!b.ok) throw new Error('not taken')
+    // The failed beat still checks: the old owner learns it lost.
+    await expect(a.lock.beat()).rejects.toThrow(/ENOSPC/)
+    expect(lostTo).toBe(b.lock.owner.token)
+  })
+
+  it('an owner on another clock in another pid namespace is judged by the wall clock, with a wide limit (S-4)', async () => {
+    const lock = tmp()
+    const c = { kind: 'test', now: () => 1_000 }
+    const far = (takenWall: number) => JSON.stringify({ token: 'far', pid: 999_999, clock: 'other-clock', takenAt: 5, gen: 1, ns: 'pid:[other]', takenWall })
+    fs.writeFileSync(gen(lock, 1), far(Date.now() - 50_000))
+    expect(await acquireInstanceLock({ path: lock, clock: c, isAlive: () => false })).toMatchObject({ ok: false, owner: { token: 'far' } })
+    // Taken long ago, but it beats: its beat's wall time counts.
+    fs.writeFileSync(gen(lock, 1), far(Date.now() - 3_600_000))
+    fs.writeFileSync(`${gen(lock, 1)}.far.beat`, JSON.stringify({ token: 'far', at: 99, wall: Date.now() - 1_000 }))
+    expect((await acquireInstanceLock({ path: lock, clock: c, isAlive: () => false })).ok).toBe(false)
+    // Three times staleAfterMs with no beat by the wall clock: stale, so the lock is never stuck for good.
+    fs.writeFileSync(`${gen(lock, 1)}.far.beat`, JSON.stringify({ token: 'far', at: 99, wall: Date.now() - 61_000 }))
+    expect((await acquireInstanceLock({ path: lock, clock: c, isAlive: () => false })).ok).toBe(true)
+  })
+
+  it.runIf(process.platform === 'linux')('an owner from an earlier boot of the machine is stale, even with its pid reused and a beat that looks fresh (N-4)', async () => {
+    const lock = tmp()
+    const c = { kind: 'test', now: () => 1_000 }
+    const boot = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim()
+    const owner = (b: string) => JSON.stringify({ token: 'old', pid: process.pid, clock: 'test', takenAt: 1_000, gen: 1, ns, boot: b })
+    fs.writeFileSync(gen(lock, 1), owner(boot))
+    expect((await acquireInstanceLock({ path: lock, clock: c })).ok).toBe(false)
+    fs.writeFileSync(gen(lock, 1), owner('00000000-0000-0000-0000-000000000000'))
+    expect((await acquireInstanceLock({ path: lock, clock: c })).ok).toBe(true)
+  })
+
+  it('tells of the loss once, when two checks find it at the same time (N-3)', async () => {
+    const lock = tmp()
+    let told = 0
+    const a = await acquireInstanceLock({ path: lock, pid: 20_012, isAlive: () => true, clock, onLost: () => { told++ } })
+    if (!a.ok) throw new Error('not taken')
+    fs.writeFileSync(gen(lock, 2), JSON.stringify({ token: 'other', pid: 20_013, clock: 'test', takenAt: 0, gen: 2 }))
+    expect(await Promise.all([a.lock.check(), a.lock.check(), a.lock.beat()])).toEqual([false, false, false])
+    expect(told).toBe(1)
+  })
+
+  it('syncs the directory after linking a generation, and says plainly when the file system has no hard links (N-5, N-8)', async () => {
+    const steps: string[] = []
+    const lock = tmp()
+    const spy: LockFs = {
+      ...failingFs((step, p) => { steps.push(`${step} ${path.basename(p)}`); return null }),
+      open: (async (p: string, flags: string, mode?: number) => {
+        steps.push(`open ${path.basename(p)} ${flags}`)
+        const fh = await fsp.open(p, flags, mode)
+        const sync = fh.sync.bind(fh)
+        return Object.assign(fh, { sync: async () => { steps.push(`sync ${path.basename(p)}`); return sync() } })
+      }) as LockFs['open'],
+    }
+    expect((await acquireInstanceLock({ path: lock, clock, fs: spy })).ok).toBe(true)
+    const link = steps.findIndex((x) => x.startsWith('link '))
+    const dir = path.basename(path.dirname(lock))
+    expect(steps.slice(link)).toEqual(expect.arrayContaining([`open ${dir} r`, `sync ${dir}`]))
+    expect(steps.indexOf(`sync ${dir}`)).toBeGreaterThan(link)
+    // A beat is written without an fsync: only the generation needs one.
+    expect(steps.filter((x) => x.startsWith('sync ') && x.includes('.beat'))).toEqual([])
+
+    const noLinks = failingFs((step) => (step === 'link' ? errno('EPERM') : null))
+    await expect(acquireInstanceLock({ path: tmp(), clock, fs: noLinks })).rejects.toThrow(/cannot make hard links \(EPERM\)/)
+  })
+})
+
 describe('the instance lock and the permission', () => {
   it('a lock found lost stops the client at once: mayAct false, nothing proposed again', async () => {
     const lock = tmp()

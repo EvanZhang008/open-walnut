@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   DEFAULT_PERMIT_PARAMS, PermitClient, PermitNotHeld, PermitWitness, bootstrapWitnessStore, checkTiming,
   DISTRUST_STEP_MS, createFilePermitStore, createHolderClock, encodeStored, judge, mayAskForTakeover, maxSafeDrift,
-  genesisConfigId, type PermitRecord, type PermitReply, type PermitRequest, type WitnessState,
+  genesisConfigId, generationToJoin, prepareJoiningWitness, type PermitRecord, type PermitReply, type PermitRequest, type WitnessState,
 } from '../../../../src/core/leader/permit/index.js'
 import { SimStore } from './sim.js'
 
@@ -329,6 +329,20 @@ describe('the file store', () => {
     // Not even a members record that names it: its operator must say from which generation.
     const m = w.handle({ type: 'propose', record: rec(2, 'members', 'A', { newList: ['w1', 'w2', 'w4'], joint: ['w1', 'w2', 'w4'], stage: 'final' }) })
     expect(m).toMatchObject({ ok: false, reason: 'not-set-up' })
+  })
+
+  it('a joining witness takes its generation from the witnesses, and one below it is refused (review round 3 S-2)', () => {
+    const reply = (epoch: number | null, list: string[] | null): PermitReply => ({
+      witness: 'w', re: 'read', ok: true, held: null, list, joint: null, cfg: list ? 'c' : null, epoch, progress: null, ops: [], grantable: false,
+    })
+    // Only witnesses that are set up count; one waiting to join says nothing of the current generation.
+    expect(generationToJoin([reply(2, W), reply(3, W), reply(5, null), reply(null, null)])).toBe(3)
+    expect(generationToJoin([reply(4, null)])).toBeNull()
+    const s = new SimStore()
+    expect(() => prepareJoiningWitness(s, 2, 3)).toThrow(/below the current one/)
+    expect(s.load()).toBeNull()
+    prepareJoiningWitness(s, 3, 3)
+    expect(s.load()?.epoch).toBe(3)
   })
 
   it('answers no, and nothing after, when the record cannot be made durable', () => {

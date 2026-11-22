@@ -41,6 +41,8 @@ interface Variant {
   ops?: boolean
   /** Negative control (ops): send as soon as the registration is proposed. */
   sendUnregistered?: boolean
+  /** Negative control (ops): a holder that reads an op as sent does not write that into its data. */
+  noRecordSeen?: boolean
   /** Negative control (ops + members): list changes carry no op entries. */
   dropLedger?: boolean
   /** Every machine runs a second process beside the first (same id, its own incarnation). */
@@ -80,7 +82,7 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
   }
   for (const id of processes) {
     pilot(world, id, {
-      ...(v.ops ? { ops: { markDoneShare: 0.5, sendUnregistered: v.sendUnregistered } } : {}),
+      ...(v.ops ? { ops: { markDoneShare: 0.5, sendUnregistered: v.sendUnregistered, noRecordSeen: v.noRecordSeen } } : {}),
       wantsLead: true,
       tickMs: v.tickMs,
       backoff: !v.noBackoff,
@@ -259,6 +261,14 @@ describe('write permission: random schedules', () => {
     expect(r.sent).toBeGreaterThan(600)
   }, 120_000)
 
+  // The witnesses drop a sent entry after opRetainMs (10 minutes here, shorter than a run):
+  // holders that read an op as sent write it into the data first, so it is never sent again.
+  it('never sends one op twice once the witnesses dropped its entry (60 seeds, 10-minute retention)', async () => {
+    const r = await sweep(60, { ops: true, restarts: true, tickMs: 1_000, params: { opRetainMs: 600_000 }, minutes: 25 })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    expect(r.sent).toBeGreaterThan(1_000)
+  }, 120_000)
+
   // Two processes of every machine (a second server beside the first): the witnesses tell them apart.
   it('never lets two processes act at once when each machine runs two (60 seeds)', async () => {
     const r = await sweep(60, { twins: true, tickMs: 1_000 })
@@ -298,8 +308,16 @@ describe('write permission: random schedules', () => {
       expect(r.violations).toBeGreaterThan(0)
     }, 120_000)
 
-    it('a send before its registration stood: crashes and takeovers send ops twice', async () => {
-      const r = await sweep(100, { ops: true, restarts: true, tickMs: 1_000, sendUnregistered: true }, 1, true)
+    // A registration that reached even one witness usually protects the op, since the next
+    // holder hears that witness too; the majority is for when it does not. The cut that shows
+    // it: a holder out of touch with every witness sends on a registration nobody took.
+    it('a send before its registration stood: a holder cut off from every witness sends, and the next holder sends again', async () => {
+      const r = await sweep(100, { ops: true, members: true, pool5: true, tickMs: 1_000, sendUnregistered: true }, 1, true)
+      expect(r.violations).toBeGreaterThan(0)
+    }, 120_000)
+
+    it('a holder that does not write what it read as sent into its data: once the entry is dropped, it is sent again', async () => {
+      const r = await sweep(60, { ops: true, restarts: true, tickMs: 1_000, params: { opRetainMs: 600_000 }, minutes: 25, noRecordSeen: true }, 1, true)
       expect(r.violations).toBeGreaterThan(0)
     }, 120_000)
 

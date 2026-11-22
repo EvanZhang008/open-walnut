@@ -6,7 +6,8 @@
  *   CLOCK_MONOTONIC leave suspend out), so a laptop that slept 90 s would wake with 90 s
  *   less counted and act on a permission that ran out on the witnesses. The holder counts
  *   on the machine's clock that includes sleep (Linux CLOCK_BOOTTIME, macOS
- *   mach_continuous_time: system-clock.ts). Where that cannot be read it takes the larger
+ *   mach_continuous_time: system-clock.ts), and counts the wall clock going forward too
+ *   (a virtual machine's boot clock may miss a pause of its host). Where that cannot be read it takes the larger
  *   of the monotonic and the wall-clock time passed (kind 'mono-wall', marked on every
  *   record): sleep shows in the wall clock, a wall clock set back is covered by the
  *   monotonic one, and a wall clock set forward only ends the permission early.
@@ -39,10 +40,13 @@ export const DISTRUST_STEP_MS = 3_600_000
 /**
  * Elapsed time that never runs slow, across sleep and wall-clock changes.
  *
- * With the sleep-counting clock (src.boot), each step counts the larger of its advance and the
- * monotonic one's; the wall clock is not read at all, so setting it changes nothing. A step
- * where that clock fell behind the monotonic one by more than WALL_BACK_TOLERANCE_MS (it never
- * should) counts DISTRUST_STEP_MS.
+ * With the sleep-counting clock (src.boot), each step counts the largest of its advance, the
+ * monotonic one's and the wall clock's advance when that went forward. The wall clock counts
+ * only forward: inside a virtual machine whose host was suspended or paused, the guest's boot
+ * clock may not count the pause, while the wall clock (put right after the pause) does. A wall
+ * clock set forward then only ends the permission early; one set back changes nothing. A step
+ * where the boot clock fell behind the monotonic one by more than WALL_BACK_TOLERANCE_MS (it
+ * never should) counts DISTRUST_STEP_MS.
  *
  * Without it ('mono-wall'), each step counts the larger of the monotonic and the wall clock's
  * advance. A wall clock set back while the machine slept would hide the sleep from both (the
@@ -52,23 +56,31 @@ export const DISTRUST_STEP_MS = 3_600_000
  * there: a set-back of almost exactly the length of the sleep; see the doc.
  */
 export function createHolderClock(src: ClockSources = systemClockSources()): ElapsedClock & { kind: HolderClockKind } {
-  const other = src.boot ? src.boot.now : src.wall
+  const boot = src.boot
   let mono = src.monotonic()
-  let o = other()
+  let wall = src.wall()
+  let b = boot ? boot.now() : 0
   let elapsed = 0
   return {
-    kind: src.boot ? src.boot.kind : 'mono-wall',
+    kind: boot ? boot.kind : 'mono-wall',
     now() {
       const m = src.monotonic()
-      const x = other()
+      const w = src.wall()
       const dm = m - mono
-      const dx = x - o
-      // Each step counts the larger of the two clocks' advance since the last read, so the
-      // sum is never below the monotonic time passed and never misses a sleep the other
-      // clock saw.
-      elapsed += dx < dm - WALL_BACK_TOLERANCE_MS ? DISTRUST_STEP_MS : Math.max(dm, dx, 0)
+      const dw = w - wall
+      if (boot) {
+        const x = boot.now()
+        const db = x - b
+        b = x
+        elapsed += db < dm - WALL_BACK_TOLERANCE_MS ? DISTRUST_STEP_MS : Math.max(dm, db, dw, 0)
+      } else {
+        // Each step counts the larger of the two clocks' advance since the last read, so the
+        // sum is never below the monotonic time passed and never misses a sleep the wall
+        // clock saw.
+        elapsed += dw < dm - WALL_BACK_TOLERANCE_MS ? DISTRUST_STEP_MS : Math.max(dm, dw, 0)
+      }
       mono = m
-      o = x
+      wall = w
       return elapsed
     },
   }

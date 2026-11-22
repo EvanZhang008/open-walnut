@@ -126,12 +126,21 @@ export class PermitClient {
 
   /**
    * The check an outward send makes first (design section 6): the permission, as assertMayAct,
-   * and the op id registered with a majority by this incarnation, with no outcome reported yet.
+   * and the op id registered with a majority by this incarnation, not yet begun, with no outcome.
    */
   assertMaySend(opId: string): void {
     this.assertMayAct(opId)
     const st = this.ops.status(opId)
     if (st !== 'registered') throw new PermitNotHeld(opId, `op ${st === 'pending' || st === 'free' ? 'not registered with a majority' : st}`)
+  }
+
+  /**
+   * assertMaySend, then mark the op as being sent by this process: a second call throws, so
+   * one process sends one op at most once, whatever happens to the witnesses' entry later.
+   */
+  beginSend(opId: string): void {
+    this.assertMaySend(opId)
+    this.ops.beginSend(opId)
   }
 
   /**
@@ -161,6 +170,15 @@ export class PermitClient {
   /** Ops registered by another machine or an earlier process with no outcome: never resent, to be checked by the user. */
   unresolvedOps(): OpEntry[] {
     return this.ops.unresolved()
+  }
+
+  /**
+   * Outcomes ('sent', 'not-sent') the witnesses reported. The holder writes them into the
+   * Walnut's own data (its outbox) before it sends anything: the witnesses drop an entry with a
+   * known outcome after opRetainMs, and then only the data says the op went out.
+   */
+  learnedOutcomes(): OpEntry[] {
+    return this.ops.learnedOutcomes()
   }
 
   isFrozen(): boolean {

@@ -26,10 +26,11 @@ describe('the machine clocks through libc', () => {
     expect(c!.boot()).toBeGreaterThanOrEqual(m - 1)
   })
 
-  it.runIf(onBunLinux)('advances with real time and costs well under a microsecond a read (no event loop stall)', async () => {
+  it.runIf(onBunLinux)('advances with real time and costs well under a microsecond a read (no event loop stall)', () => {
     const c = loadSystemClocks()!
     const b0 = c.boot(), p0 = performance.now()
-    await new Promise((r) => setTimeout(r, 60))
+    // Real time passing is what is under test here: spin 60 ms of it.
+    for (const end = performance.now() + 60; performance.now() < end;) { /* spin */ }
     const db = c.boot() - b0, dp = performance.now() - p0
     expect(Math.abs(db - dp)).toBeLessThan(15)
     const t = performance.now()
@@ -95,7 +96,7 @@ describe('the holder clock on the sleep-counting clock', () => {
     expect(fallback.now() - b).toBe(0)
   })
 
-  it('ignores the wall clock: set back two hours, it neither stops nor jumps', () => {
+  it('a wall clock set back two hours changes nothing; the fallback distrusts the step', () => {
     const m = machine()
     const c = createHolderClock({ monotonic: m.monotonic, wall: m.wall, boot: { kind: 'boottime', now: m.boot } })
     const f = createHolderClock({ monotonic: m.monotonic, wall: m.wall })
@@ -104,6 +105,21 @@ describe('the holder clock on the sleep-counting clock', () => {
     m.t.wallShift -= 7_200_000
     expect(c.now() - a).toBe(1_000)
     expect(f.now() - b).toBe(DISTRUST_STEP_MS)
+  })
+
+  it('a virtual machine paused 90 s that its boot clock missed: the wall clock going forward counts it (review round 3 S-5)', () => {
+    // In a guest whose host was suspended, the boot and monotonic clocks may both stand still
+    // while the wall clock is put right after the pause.
+    let mono = 0, boot = 0, wall = 1_700_000_000_000
+    const c = createHolderClock({ monotonic: () => mono, wall: () => wall, boot: { kind: 'boottime', now: () => boot } })
+    const a = c.now()
+    mono += 1_000; boot += 1_000; wall += 1_000
+    expect(c.now() - a).toBe(1_000)
+    wall += 90_000
+    expect(c.now() - a).toBe(91_000)
+    // Set forward an hour: the permission only ends early.
+    wall += 3_600_000
+    expect(c.now() - a).toBe(3_691_000)
   })
 
   it('distrusts a boot clock that falls behind the monotonic one (it never should)', () => {
@@ -128,10 +144,28 @@ describe('the clock a holder counts on is marked on its records', () => {
     expect(client(false).requestGrant().clock).toBe('mono-wall')
   })
 
-  it('a witness refuses a record that names a clock it does not know', () => {
+  it('a witness takes a clock mark it does not know yet (a newer holder), and refuses only a malformed one (review round 3 N-6)', () => {
     const s: WitnessState = { held: null, acceptedAt: 0, list: W, joint: null, cfg: genesisConfigId(W), epoch: 0, progress: null, ops: [] }
-    const r = { ...client(false).requestGrant(), clock: 'sundial' } as unknown as PermitRecord
-    expect(judge(s, 'w1', r, 0, P)).toEqual({ ok: false, reason: 'bad-clock' })
+    const grant = client(false).requestGrant()
+    expect(judge(s, 'w1', { ...grant, clock: 'sundial' }, 0, P).ok).toBe(true)
+    for (const clock of [7, '', 'x'.repeat(33)]) {
+      expect(judge(s, 'w1', { ...grant, clock } as unknown as PermitRecord, 0, P)).toEqual({ ok: false, reason: 'bad-clock' })
+    }
+  })
+})
+
+describe('the simulation checks the invariant at the instant a machine wakes (review round 3 N-7)', () => {
+  it('a wake is an event of its own', () => {
+    const w = new World(DEFAULT_PERMIT_PARAMS, { ...CALM }, 3)
+    for (const id of W) w.addWitness(id, { bootstrap: W })
+    const a = w.addMachine('A', W, { bootClock: true })
+    a.c.requestGrant()
+    w.run(1_000)
+    // Asleep from 2 s to 9 s: short of its lease, so it wakes still holding.
+    a.clock.sleeps.push([2_000, 9_000])
+    w.at(5_000, () => {})
+    w.run(20_000)
+    expect(w.timeline.filter(([t]) => t >= 2_000)).toEqual([[5_000, []], [9_000, ['A']]])
   })
 })
 

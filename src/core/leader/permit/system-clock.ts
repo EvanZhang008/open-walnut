@@ -33,11 +33,13 @@ function linuxClocks(ffi: Ffi): SystemClocks | null {
   for (const lib of LINUX_LIBC) {
     try {
       const { symbols } = ffi.dlopen(lib, { clock_gettime: { args: [ffi.FFIType.i32, ffi.FFIType.ptr], returns: ffi.FFIType.i32 } })
-      // struct timespec on a 64-bit build: two 64-bit fields, seconds and nanoseconds.
-      const ts = new BigInt64Array(2)
-      const p = ffi.ptr(ts)
+      // struct timespec on a 64-bit build: two 64-bit fields, seconds and nanoseconds. The
+      // array owns a buffer of its own from the start, so its storage never moves (a small
+      // typed array's storage moves the first time anything reads its .buffer) and the
+      // pointer stays good; it is still taken again on each read, which costs nothing.
+      const ts = new BigInt64Array(new ArrayBuffer(16))
       const read = (id: number): number => {
-        if (symbols.clock_gettime!(id, p) !== 0) throw new Error(`clock_gettime(${id}) failed`)
+        if (symbols.clock_gettime!(id, ffi.ptr(ts)) !== 0) throw new Error(`clock_gettime(${id}) failed`)
         return Number(ts[0]!) * 1_000 + Number(ts[1]!) / 1e6
       }
       read(CLOCK_BOOTTIME)

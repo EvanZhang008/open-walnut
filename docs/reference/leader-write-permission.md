@@ -27,9 +27,11 @@ old record never lowers it. It writes the record to disk (file fsync, rename, di
 before it answers yes; a file that is torn or fails its checksum makes it refuse everything,
 loudly, and is never read as "no record". A witness with no file at all is not set up and takes
 nothing: `bootstrapWitnessStore` sets up the first witnesses with the first list, and
-`prepareJoiningWitness(store, epoch)` sets up a new witness, or one that lost its disk, to join
-through a list change from generation `epoch` on (give the current one). Both refuse a store
-that already has a file.
+`prepareJoiningWitness(store, epoch, current)` sets up a new witness, or one that lost its disk, to join
+through a list change from generation `epoch` on. The generation comes from the witnesses, not
+from a person: `generationToJoin(reads)` gives the highest one any set-up witness reports, and a
+generation below `current` is refused (one below the current generation could let it join an
+older configuration). Both refuse a store that already has a file.
 
 ## When a machine may act
 
@@ -71,13 +73,18 @@ The holder's clock must never run slow, a witness's never fast:
   that ran out on the witnesses. `createHolderClock()` counts on the machine's clock that
   includes sleep: Linux `CLOCK_BOOTTIME`, macOS `mach_continuous_time`, read through libc with
   bun:ffi (`system-clock.ts`, about 0.4 us a read on Linux and 0.03 us on an Apple silicon Mac,
-  no I/O, so it never blocks the event loop). Each step counts the larger of its advance and the
-  monotonic clock's; the wall clock is not read, so setting it changes nothing. Where that clock
+  no I/O, so it never blocks the event loop). Each step counts the largest of its advance, the
+  monotonic clock's, and the wall clock's when it went forward: inside a virtual machine whose
+  host was suspended or paused, the guest's boot clock may not count the pause, while its wall
+  clock is put right after it. A wall clock set forward then only ends the permission early; one
+  set back changes nothing. Where that clock
   cannot be read (Node, Windows, a 32-bit build) it falls back to the larger of the monotonic and
   the wall-clock time passed, and every record says so: `clock: 'mono-wall'` (else `'boottime'`
   or `'continuous'`). On the fallback a wall clock set forward ends the permission early, and one
   set back by more than 1 s in one step ends the permission held now, since it may hide a sleep
   (the random schedules found a sleep of 88 s under a set-back of 100 s, stress seed 3564).
+  The mark only informs: a witness takes a kind it does not know yet (a newer holder, up to 32
+  characters), so an upgrade never splits holders from older witnesses.
 - **Witness**: the monotonic clock alone (`createWitnessClock`); a pause only makes it wait
   longer. After a restart it counts the record it holds as accepted at the restart.
 
@@ -85,7 +92,9 @@ The holder's clock must never run slow, a witness's never fast:
 (2) Only on the fallback clock: while a holder sleeps, its wall clock is not set back by nearly
 as long as the sleep lasted (within 1 s), since such a step hides the sleep from both clocks.
 The sleep-counting clock removes (2): a named case sleeps 90 s with the wall set back 90 s, and
-only the fallback wakes still acting. What was checked where: on Linux the tests read
+only the fallback wakes still acting. A VM pause that neither the boot clock nor the wall
+clock counts is outside both, as is a pause of the witness's own machine that its monotonic
+clock skips (that only makes it wait longer). What was checked where: on Linux the tests read
 `CLOCK_BOOTTIME` for real (it matches `/proc/uptime`); this host never suspends, so a real
 sleep is not tested there, only simulated. On macOS the binding was run once on an Apple
 silicon Mac (it loads, the timebase is 125/3, and continuous time ran 1253 minutes ahead of
@@ -195,7 +204,10 @@ the send ends in time either. So before a send the holder registers its op id wi
 (`registerOps(ids)`: a renew carrying `ops.register`; ids only, never content) and sends only
 once `assertMaySend(opId)` passes: the permission as `assertMayAct`, and the registration taken
 by a majority. Afterwards it reports the outcome (`reportOutcome(opId, sent)`, carried on the
-next renew); `sent: false` only when the send surely never left.
+next renew); `sent: false` only when the send surely never left. Use `beginSend(opId)` for the
+send itself: it is `assertMaySend` plus a mark that this process started it, so a second call
+throws. What this process began or reported stays in its memory for its whole life, so it
+never sends one op twice, even after the witnesses dropped the entry.
 
 Each witness keeps the entries (`registered`, `sent`, `not-sent`, with the registering
 machine and incarnation) beside its record, on disk, and answers every request with them. It
@@ -209,6 +221,15 @@ carries every entry its writer knows (`ledger` on the members records) to the wi
 join, so this holds across changes (a named case and a random sweep go red without it). An id
 whose outcome is known is kept `opRetainMs` (1 hour, counted again from a witness restart),
 longer than any standby copy may lag; one with no outcome stays until a holder reports it.
+A witness holds at most 10,000 entries (`MAX_LEDGER_ENTRIES`); entries with no outcome are never
+dropped, so the wiring must report outcomes and show the user the unresolved ones.
+
+**The wiring's duty for outcomes it learns.** A holder that reads an op as `sent` or `not-sent`
+(`learnedOutcomes()`) writes that outcome into the Walnut's own data before the entry can age out
+(`opRetainMs`): after that only the data remembers it, and an op the data still lists as to send
+would read `free` and be registered and sent again. The random sweeps model it (a holder that
+reads `sent` marks the op done) and run past `opRetainMs` (a 10-minute retention over 25
+minutes); a negative control that skips the mark sends ops twice.
 
 A new holder reads the entries: `opStatus(id)` is `unknown` for an id registered by another
 machine or an earlier process with no outcome: it is never sent again, and `unresolvedOps()`
@@ -227,7 +248,15 @@ is taken twice. A generation is stale when its process is gone (a crash: taken a
 only trusted inside its own pid namespace, so a process in a container is judged by its beats), or when
 its owner has not beaten (`<path>.g<n>.<token>.beat`, every 5 s) for `staleAfterMs` (20 s) on the
 machine's monotonic clock: a stopped or hung process. The machine's own sleep does not count, so
-a laptop that slept keeps it. The owner checks every beat; one that finds a newer generation
+a laptop that slept keeps it. A generation also records the machine's boot id (Linux), so an
+owner from an earlier boot is stale even when its pid was reused; and when neither its pid nor
+its clock can be compared (another pid namespace on another clock kind), it is judged by the
+wall clock with a wide limit (3 x `staleAfterMs`), so such a lock is never stuck for good. The
+generation's directory entry is fsynced once linked; beats are not (a lost beat only looks
+older). A file system without hard links is refused with a clear message. `held()` turns false
+on its own once no beat has gone through for `staleAfterMs - beatEveryMs` (beats that fail to
+write, a stopped process), a beat before another process may judge it stale; a failed beat
+still checks. The owner checks every beat; one that finds a newer generation
 calls `onLost`, and the wiring stops its `PermitClient` (`stop()`; the client also takes
 `guard: () => lock.held()`, so `mayAct()` is false from that moment). Every step is asynchronous
 file work. Tested with real processes: a crash, a process stopped with SIGSTOP and continued, and
@@ -256,7 +285,9 @@ minutes late, some with two processes per machine, some sending outward ops) aga
 invariants: at no real instant do two processes both have `mayAct()` true, and no op id is sent
 by two processes. Negative controls each remove one safety part (the margins, the fsync before
 the answer, the wall clock in the holder's clock, the fixed-list majority, waiting for the
-registration, the ledger on list changes, the incarnation) and must find a violation.
+registration, the ledger on list changes, the incarnation, the holder writing down an outcome it
+read) and must find a violation. Each wake of a sleeping machine is an event of its own, so the
+invariant is checked at the instant it wakes.
 `named-cases.test.ts` holds the named schedules of the first brief (the split, the 90 s sleep, a
 witness killed between accepting and answering, clocks 30 s off and 1% fast or slow, the drift
 bound's edge, late renews, a holder restarting mid-renew, the handover and cancel race, one

@@ -24,7 +24,15 @@ export function rng(seed: number): () => number {
 export class NodeClock {
   sleeps: Array<[number, number]> = []
   wallJumps: Array<[number, number]> = []
-  constructor(private readonly world: World, public drift = 0, public wallOffset = 0, public monoOffset = 0) {}
+  constructor(private readonly world: World, public drift = 0, public wallOffset = 0, public monoOffset = 0) {
+    // A machine that wakes may act at once: give the world an event at each wake, so the
+    // invariant is checked at that instant and not only at the next event.
+    const sleeps = this.sleeps
+    sleeps.push = (...items: Array<[number, number]>): number => {
+      for (const [, end] of items) world.at(end, () => {})
+      return Array.prototype.push.apply(sleeps, items)
+    }
+  }
   private active(t: number): number {
     let slept = 0
     for (const [s, e] of this.sleeps) if (t > s) slept += Math.min(t, e) - s
@@ -337,14 +345,18 @@ export interface PilotOptions {
 
 /**
  * The outward sends of the Walnut: world.outbox lists op ids to send; the holder registers
- * each, sends it once assertMaySend passes, and reports it. world.sends records every send.
+ * each, sends it once beginSend passes, and reports it. world.sends records every send.
  * `markDoneShare`: the share of sends whose "done" mark reaches the copy a later holder starts
- * from (the rest it does not know about, as with a copy a few minutes behind).
+ * from (the rest it does not know about, as with a copy a few minutes behind). A holder that
+ * reads from the witnesses that another process sent an op writes that into the data
+ * (world.done), as the wiring must (PermitClient.learnedOutcomes), before they drop the entry.
  */
 export interface OpsDriver {
   markDoneShare: number
   /** A negative control: send as soon as the registration is proposed, without waiting for a majority. */
   sendUnregistered?: boolean
+  /** A negative control: a holder that reads an op as sent does not write it into the data. */
+  noRecordSeen?: boolean
 }
 
 /**
@@ -438,20 +450,28 @@ export function pilot(world: World, key: string, opts: PilotOptions): void {
 /** One holder tick of outward sends (OpsDriver). */
 function driveOps(world: World, m: MachineNode, d: OpsDriver): void {
   const c = m.c
+  // Ops another process sent, as the witnesses report them: this holder writes them into the
+  // data (its own sends reach the data by markDoneShare, as before).
+  const seenSent = d.noRecordSeen ? null : new Set(c.learnedOutcomes().filter((e) => e.state === 'sent' && e.nonce !== c.incarnation()).map((e) => e.id))
   for (const id of world.outbox) {
     if (world.done.has(id)) continue
+    if (seenSent?.has(id)) {
+      world.done.add(id)
+      continue
+    }
     const st = c.opStatus(id)
     if (st === 'unknown') world.unknownSeen.add(id)
     if (st === 'registered' || (d.sendUnregistered && st === 'pending')) {
+      const sends = world.sends.get(id) ?? []
       try {
-        if (!d.sendUnregistered) c.assertMaySend(id)
+        // The client keeps one process from sending an op twice (beginSend). The control that
+        // skips the client keeps that by hand, so only sends across processes count there.
+        if (!d.sendUnregistered) c.beginSend(id)
+        else if (sends.some((x) => x.nonce === c.incarnation())) continue
         else c.assertMayAct(id)
       } catch {
         continue
       }
-      const sends = world.sends.get(id) ?? []
-      // Sent once per process: a process knows what it sent itself.
-      if (sends.some((x) => x.nonce === c.incarnation())) continue
       sends.push({ by: m.key, nonce: c.incarnation(), at: world.now })
       world.sends.set(id, sends)
       // The send takes a while; the report goes with the next renew, if this process lives.

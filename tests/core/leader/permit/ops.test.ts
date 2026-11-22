@@ -11,7 +11,7 @@ import {
   DEFAULT_PERMIT_PARAMS, OpBook, PermitNotHeld, PermitWitness, applyOps, createFilePermitStore, decodeStored, encodeStored, genesisConfigId, judge,
   registrationConflict, type HeldOp, type PermitRecord, type WitnessState,
 } from '../../../../src/core/leader/permit/index.js'
-import { CALM, World, type MachineNode } from './sim.js'
+import { CALM, World, pilot, type MachineNode } from './sim.js'
 
 const P = DEFAULT_PERMIT_PARAMS
 const W = ['w1', 'w2', 'w3']
@@ -114,6 +114,40 @@ describe("a machine's book of op ids", () => {
     expect(b.status('x')).toBe('unknown')
   })
 
+  it('an op this process began to send, or reported, is never "registered" again, also once its entry aged out (review round 3 B-1)', () => {
+    let t = 0
+    const b = new OpBook({ by: 'A', nonce: 'na' }, () => t, P.opRetainMs)
+    b.askRegister(['x', 'y'])
+    b.chosen({ register: ['x', 'y'] })
+    expect([b.status('x'), b.status('y')]).toEqual(['registered', 'registered'])
+    b.beginSend('x')
+    expect(b.status('x')).toBe('sending')
+    b.askOutcome('x', true)
+    b.askOutcome('x', false) // a late "not sent" changes nothing
+    b.askOutcome('y', false)
+    expect([b.status('x'), b.status('y')]).toEqual(['sent', 'not-sent'])
+    expect(b.changes()).toEqual({ sent: ['x'], notSent: ['y'] })
+    b.chosen(b.changes())
+    b.learn([{ id: 'x', state: 'sent', by: 'A', nonce: 'na' }, { id: 'y', state: 'not-sent', by: 'A', nonce: 'na' }])
+    expect(b.learnedOutcomes().map((e) => [e.id, e.state])).toEqual([['x', 'sent'], ['y', 'not-sent']])
+    // An hour on: the witnesses dropped both entries, and so did the book's copy of them.
+    t += P.opRetainMs + 1
+    b.learn([])
+    expect(b.ledger()).toEqual([])
+    expect([b.status('x'), b.status('y')]).toEqual(['sent', 'not-sent'])
+    expect(b.askRegister(['x'])).toEqual([{ id: 'x', status: 'sent' }])
+    expect(b.unresolved()).toEqual([])
+  })
+
+  it('an op reported before its registration stood is never asked for again: no proposal names one id twice (the old book did, and every witness refused it as bad-ops)', () => {
+    const b = new OpBook({ by: 'A', nonce: 'na' }, () => 0, P.opRetainMs)
+    b.askRegister(['x'])
+    b.askOutcome('x', true)
+    expect(b.status('x')).toBe('sent')
+    expect(b.askRegister(['x'])).toEqual([{ id: 'x', status: 'sent' }])
+    expect(b.changes()).toEqual({ sent: ['x'] })
+  })
+
   it('an earlier incarnation of the same machine is someone else', () => {
     const b = new OpBook({ by: 'A', nonce: 'n2' }, () => 0, P.opRetainMs)
     b.learn([{ id: 'x', state: 'registered', by: 'A', nonce: 'n1' }])
@@ -208,6 +242,43 @@ describe('a registration short of a majority', () => {
   })
 })
 
+describe('why a send waits for the majority', () => {
+  /**
+   * A registers while cut from w2 and w3, so only w1 takes it; then A dies, and w1 is down
+   * while B takes over. `early`: A sent while the registration was short of a majority.
+   */
+  function run(early: boolean): number {
+    const w = world()
+    const a = holds(w, 'A')
+    w.partition('A', 'w2')
+    w.partition('A', 'w3')
+    a.c.registerOps(['mail-9'])
+    w.run(w.now + 1_000)
+    expect(a.c.opStatus('mail-9')).toBe('pending')
+    let sends = 0
+    if (early) sends++
+    else expect(() => a.c.beginSend('mail-9')).toThrow(/not registered with a majority/)
+    w.restartMachine('A', W, 10 * 60_000)
+    w.crashWitness('w1', 10 * 60_000)
+    const b = bTakesOver(w)
+    b.c.registerOps(['mail-9'])
+    w.run(w.now + 1_000)
+    if (b.c.opStatus('mail-9') === 'registered') {
+      b.c.beginSend('mail-9')
+      sends++
+    }
+    return sends
+  }
+
+  it('waiting: the op goes out once, from the next holder', () => {
+    expect(run(false)).toBe(1)
+  })
+
+  it('negative control: a send on a registration only a minority took is sent again by the next holder', () => {
+    expect(run(true)).toBe(2)
+  })
+})
+
 describe('an outcome reported', () => {
   it('a later holder sees it sent and does not send it again', () => {
     const w = world()
@@ -220,8 +291,35 @@ describe('an outcome reported', () => {
     w.restartMachine('A', W, 10 * 60_000)
     const b = bTakesOver(w)
     expect(b.c.opStatus('mail-4')).toBe('sent')
+    // What its data must record before the witnesses drop the entry (review round 3 S-1).
+    expect(b.c.learnedOutcomes().map((e) => [e.id, e.state])).toEqual([['mail-4', 'sent']])
     expect(b.c.unresolvedOps()).toEqual([])
     expect(b.c.registerOps(['mail-4']).refused).toEqual([{ id: 'mail-4', status: 'sent' }])
+  })
+})
+
+describe('one process sends one op at most once (review round 3 B-1)', () => {
+  it('after beginSend, and after its report, assertMaySend refuses: before the report stands, after, and an hour on', () => {
+    const w = world()
+    const a = holds(w, 'A')
+    pilot(w, 'A', { wantsLead: true, tickMs: 1_000, backoff: false })
+    a.c.registerOps(['mail-5'])
+    w.run(w.now + 1_000)
+    a.c.beginSend('mail-5')
+    expect(a.c.opStatus('mail-5')).toBe('sending')
+    expect(() => a.c.assertMaySend('mail-5')).toThrow(/sending/)
+    expect(() => a.c.beginSend('mail-5')).toThrow(PermitNotHeld)
+    a.c.reportOutcome('mail-5', true)
+    expect(() => a.c.assertMaySend('mail-5')).toThrow(/op sent/)
+    w.run(w.now + 20_000)
+    expect(W.map((id) => w.witnesses.get(id)!.w!.handle({ type: 'read' }).ops?.find((e) => e.id === 'mail-5')?.state)).toEqual(['sent', 'sent', 'sent'])
+    // Still holding an hour later: every witness dropped the entry; the process still knows.
+    w.run(w.now + P.opRetainMs + 60_000)
+    expect(a.c.mayAct()).toBe(true)
+    expect(W.map((id) => w.witnesses.get(id)!.w!.handle({ type: 'read' }).ops?.some((e) => e.id === 'mail-5'))).toEqual([false, false, false])
+    expect(a.c.opStatus('mail-5')).toBe('sent')
+    expect(() => a.c.assertMaySend('mail-5')).toThrow(/op sent/)
+    expect(a.c.registerOps(['mail-5']).refused).toEqual([{ id: 'mail-5', status: 'sent' }])
   })
 })
 
