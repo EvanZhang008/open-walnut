@@ -208,6 +208,13 @@ ordinary day: `open-walnut backup drill` (`--snapshot <id>` for another backup t
 newest, `--key` for encrypted ones, `--json`), and once a week while the experiment "Weekly
 restore drill" (`restore_drill`, off by default) is on. Code: `src/core/backup/restore-drill*.ts`.
 
+The restored copy is as large as the backup, so the drill looks at the disk first: when the
+backup's size plus 10 GB does not fit where its folder goes, it fetches nothing and says so (the
+schedule tries again in a day). The schedule writes its record before it starts, so a drill the
+server's stop cut short is also tried again in a day, not at the next start. "Every experiment
+on" does not turn the weekly drill on: it downloads all of your data, so it keeps its own switch
+(`keepsOwnSwitch` in `src/core/experimental.ts`; the standby copy is the other one).
+
 It restores the backup into a new folder under the OS temp dir (never the data folder), then:
 
 - **files**: the restored tree against the backup's own list: the same files, each of its

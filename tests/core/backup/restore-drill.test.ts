@@ -21,7 +21,7 @@ import { repoStore } from '../../../src/core/backup/repo-mode.js';
 import { parseRecoveryKey } from '../../../src/core/backup/repo/crypto.js';
 import { readRecoveryKey } from '../../../src/core/backup/recovery-key.js';
 import {
-  DRILL_DIR_PREFIX, readDrillRecord, readOnlyStore, removeLeftoverDrills, runRestoreDrill, writeDrillRecord,
+  DRILL_DIR_PREFIX, DRILL_FREE_RESERVE_BYTES, readDrillRecord, readOnlyStore, removeLeftoverDrills, runRestoreDrill, writeDrillRecord,
   type DrillResult,
 } from '../../../src/core/backup/restore-drill.js';
 import type { BackupConfig } from '../../../src/core/backup/types.js';
@@ -62,8 +62,10 @@ afterEach(async () => {
   await fsp.rm(root, { recursive: true, force: true });
 });
 
+/** Plenty of room: these tests must not depend on how full the machine running them is. */
+const roomy = async (): Promise<number> => 1024 ** 4;
 const drill = (cfg: BackupConfig, over: Partial<Parameters<typeof runRestoreDrill>[0]> = {}) =>
-  runRestoreDrill({ cfg, dataDir: home, store, tmpRoot, mustHaveSlackMs: 0, outsideRoots: { 'xdg-state': stateDir }, ...over });
+  runRestoreDrill({ cfg, dataDir: home, store, tmpRoot, mustHaveSlackMs: 0, outsideRoots: { 'xdg-state': stateDir }, freeBytes: roomy, ...over });
 
 const check = (r: DrillResult, id: string) => r.checks.find((c) => c.id === id)!;
 
@@ -249,9 +251,9 @@ describe('the drill the CLI and the schedule run holds the backup lock', () => {
   it('waits for no one: refused while another live process holds the lock, and the lock is gone after', async () => {
     await runEncryptedBackup(plainCfg, { dataDir: home, store });
     await fsp.writeFile(runLockPath(home), `${process.ppid} someone\n`);
-    await expect(runRestoreDrillLocked({ cfg: plainCfg, dataDir: home, store, tmpRoot })).rejects.toThrow(/backing up or restoring/);
+    await expect(runRestoreDrillLocked({ cfg: plainCfg, dataDir: home, store, tmpRoot, freeBytes: roomy })).rejects.toThrow(/backing up or restoring/);
     await fsp.rm(runLockPath(home));
-    const r = await runRestoreDrillLocked({ cfg: plainCfg, dataDir: home, store, tmpRoot, mustHaveSlackMs: 0, outsideRoots: {} });
+    const r = await runRestoreDrillLocked({ cfg: plainCfg, dataDir: home, store, tmpRoot, mustHaveSlackMs: 0, outsideRoots: {}, freeBytes: roomy });
     expect(r.ok).toBe(true);
     await expect(fsp.stat(runLockPath(home))).rejects.toThrow();
   }, 60_000);
@@ -284,6 +286,49 @@ describe('read-only on the data home and the destination', () => {
     expect(r).toMatchObject({ ok: false, error: expect.stringMatching(/inside the data home/) });
     expect(await fsp.readdir(path.join(home, 'tmp'))).toEqual(['stt-recordings']);
   }, 60_000);
+});
+
+describe('the drill is never what fills the disk', () => {
+  it('refuses before it fetches a byte or makes a folder when the backup would not fit with room to spare', async () => {
+    await runEncryptedBackup(plainCfg, { dataDir: home, store });
+    const reads: string[] = [];
+    const counting: BackupStore = {
+      kind: store.kind, describe: () => store.describe(), list: (p) => store.list(p),
+      put: (k, b) => store.put(k, b), delete: (k) => store.delete(k),
+      get: (k) => { reads.push(k); return store.get(k); },
+    };
+    const ok = await drill(plainCfg, { store: counting });
+    expect(ok.ok).toBe(true);
+    const total = ok.snapshot!.totalBytes;
+    const fullReads = reads.length;
+    const fullKeys = new Set(reads);
+    reads.length = 0;
+
+    // One byte short of the backup's size plus the reserve.
+    const short = await drill(plainCfg, { store: counting, freeBytes: async () => total + DRILL_FREE_RESERVE_BYTES - 1 });
+    expect(short).toMatchObject({ ok: false, error: expect.stringMatching(/Not enough free disk space/) });
+    expect(short.checks).toEqual([]);
+    expect(await drillFolders()).toEqual([]);
+    // Only the snapshot list and the snapshot were read: far fewer reads than a restore, and no pack.
+    expect(reads.length).toBeLessThan(fullReads);
+    // What a restore reads and the refused drill did not: the packs that hold the files.
+    expect(reads.every((k) => fullKeys.has(k))).toBe(true);
+    expect([...fullKeys].filter((k) => !reads.includes(k)).length).toBeGreaterThan(0);
+
+    // Exactly enough: it runs.
+    expect((await drill(plainCfg, { freeBytes: async () => total + DRILL_FREE_RESERVE_BYTES })).ok).toBe(true);
+    // A file system that does not say how much is free is refused too.
+    expect(await drill(plainCfg, { freeBytes: async () => null })).toMatchObject({ ok: false, error: expect.stringMatching(/could not be read/) });
+    expect(await drillFolders()).toEqual([]);
+  }, 120_000);
+
+  it('reads the real free space when nothing is injected', async () => {
+    await runEncryptedBackup(plainCfg, { dataDir: home, store });
+    const r = await drill(plainCfg, { freeBytes: undefined });
+    // Either it ran, or it refused for room: never an error of another kind, never a leftover folder.
+    if (!r.ok) expect(r.error).toMatch(/Not enough free disk space/);
+    expect(await drillFolders()).toEqual([]);
+  }, 120_000);
 });
 
 describe('the temporary folder never stays', () => {

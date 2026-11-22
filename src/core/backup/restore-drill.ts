@@ -75,7 +75,25 @@ export interface DrillOptions {
   mustHaveSlackMs?: number;
   /** Tests: the drill's folder was made (the kill test stops the process here). */
   onFolder?: (dir: string) => void | Promise<void>;
+  /** Tests: the free bytes where the drill's folder goes; default: what the file system says. */
+  freeBytes?: (dir: string) => Promise<number | null>;
 }
+
+/** Kept free beside the restored copy: the drill must never be what fills the disk. */
+export const DRILL_FREE_RESERVE_BYTES = 10 * 1024 ** 3;
+
+/** Free bytes a non-root user can use where `dir` is; null when the file system does not say. */
+async function freeBytesAt(dir: string): Promise<number | null> {
+  try {
+    const st = await fs.statfs(dir);
+    const free = Number(st.bavail) * Number(st.bsize);
+    return Number.isFinite(free) ? free : null;
+  } catch {
+    return null;
+  }
+}
+
+const gb = (bytes: number): string => `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 
 export const DRILL_DIR_PREFIX = 'walnut-restore-drill-';
 const DRILL_DIR_RE = /^walnut-restore-drill-[A-Za-z0-9]{6}$/;
@@ -206,6 +224,16 @@ export async function runRestoreDrill(opts: DrillOptions): Promise<DrillResult> 
   result.snapshot = { id: snapshot.id, createdAt: snapshot.createdAt, hostname: snapshot.hostname, fileCount: snapshot.fileCount, totalBytes: snapshot.totalBytes, encrypted };
 
   await fs.mkdir(tmpRoot, { recursive: true });
+  // The restored copy is as large as the backup: refuse before a byte is fetched when it would
+  // not fit with room to spare. A file system that does not say how much is free is refused too.
+  const free = await (opts.freeBytes ?? freeBytesAt)(tmpRoot);
+  const needed = snapshot.totalBytes + DRILL_FREE_RESERVE_BYTES;
+  if (free === null || free < needed) {
+    result.error = free === null
+      ? `The free disk space at ${tmpRoot} could not be read, so the drill did not restore ${gb(snapshot.totalBytes)} there.`
+      : `Not enough free disk space for the drill: the backup is ${gb(snapshot.totalBytes)} and ${gb(DRILL_FREE_RESERVE_BYTES)} must stay free, but ${tmpRoot} has ${gb(free)}.`;
+    return finish();
+  }
   const dir = await fs.mkdtemp(path.join(tmpRoot, DRILL_DIR_PREFIX));
   try {
     await fs.chmod(dir, 0o700);

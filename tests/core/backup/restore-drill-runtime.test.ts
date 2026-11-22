@@ -12,7 +12,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js';
 
 vi.mock('../../../src/constants.js', () => createMockConstants());
 
-import { startRestoreDrillRuntime, DRILL_EVERY_MS, DRILL_RETRY_MS, DRILL_NOTICE_SCOPE, type DrillRuntime } from '../../../src/core/backup/restore-drill-runtime.js';
+import { startRestoreDrillRuntime, DRILL_EVERY_MS, DRILL_INTERRUPTED, DRILL_RETRY_MS, DRILL_NOTICE_SCOPE, type DrillRuntime } from '../../../src/core/backup/restore-drill-runtime.js';
 import { readDrillRecord, writeDrillRecord, type DrillResult } from '../../../src/core/backup/restore-drill.js';
 import { audienceOf } from '../../../src/core/notifications/audience.js';
 import { EXPERIMENTAL_FEATURES } from '../../../src/core/experimental.js';
@@ -95,6 +95,39 @@ describe('restore drill schedule', () => {
     now += 120_000;
     await runtime.check();
     expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it('a drill the server\'s stop cut short is not started again at the next boot: it waits a day', async () => {
+    let now = Date.parse('2026-11-21T10:00:00Z');
+    // The first drill never finishes (the process is killed while it restores).
+    let seenWhileRunning: DrillResult | null = null;
+    const run = vi.fn(async () => {
+      seenWhileRunning = await readDrillRecord(home);
+      return new Promise<DrillResult>(() => {});
+    });
+    const notify = vi.fn(async () => true);
+    const first = startRestoreDrillRuntime({ dataDir: home, isOn: async () => true, backupConfig: async () => cfg, run, notify, now: () => now, subscribe: false, tmpRoot: home });
+    void first.check();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    // The record was on disk before the drill fetched anything.
+    expect(seenWhileRunning).toMatchObject({ ok: false, error: DRILL_INTERRUPTED });
+    first.stop();
+
+    // The next server (a new process: its own job slot and lock) finds that record.
+    vi.resetModules();
+    const next = await import('../../../src/core/backup/restore-drill-runtime.js');
+    const rerun = vi.fn(async () => result(true, now));
+    runtime = next.startRestoreDrillRuntime({ dataDir: home, isOn: async () => true, backupConfig: async () => cfg, run: rerun, notify, now: () => now, subscribe: false, tmpRoot: home });
+    now += 10 * 60_000;
+    expect(await runtime.check()).toBeNull();
+    now += DRILL_RETRY_MS - 20 * 60_000;
+    expect(await runtime.check()).toBeNull();
+    expect(rerun).not.toHaveBeenCalled();
+    now += 20 * 60_000;
+    expect(await runtime.check()).toMatchObject({ ok: true });
+    expect(rerun).toHaveBeenCalledTimes(1);
+    // A cut-short drill is nobody's failure to read about.
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it('a pass from the CLI retires the failure card at the next check, once', async () => {

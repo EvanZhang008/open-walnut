@@ -13,6 +13,7 @@ await runRestoreDrill({
   dataDir: home,
   store: new LocalStore(dest),
   tmpRoot,
+  freeBytes: async () => 1024 ** 4,
   onFolder: async (dir) => {
     fs.writeFileSync(ready, dir);
     await new Promise(() => {});

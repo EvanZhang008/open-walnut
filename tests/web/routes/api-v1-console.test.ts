@@ -17,7 +17,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-apiv1-con
 import express from 'express'
 import request from 'supertest'
 import { consoleV1Router } from '../../../src/web/routes/console-v1.js'
-import { EXPERIMENTAL_FEATURES, GRADUATED_EXPERIMENTS } from '../../../src/core/experimental.js'
+import { EXPERIMENTAL_FEATURES, GRADUATED_EXPERIMENTS, keepsOwnSwitch } from '../../../src/core/experimental.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
 import { WALNUT_HOME, CONFIG_FILE, GLOBAL_SKILLS_DIR } from '../../../src/constants.js'
 
@@ -148,7 +148,8 @@ describe('GET /api/v1/config — allowlist projection', () => {
     const flags = (await request(createApp()).get('/api/v1/config')).body.config.experimental
     expect(flags.chat_reading_split).toBe(false)
     expect(flags.every_experiment).toBe(true)
-    for (const feature of EXPERIMENTAL_FEATURES) if (feature.id !== 'chat_reading_split') expect(flags[feature.id]).toBe(true)
+    // The few that copy or download all of the data keep their own switch (keepsOwnSwitch).
+    for (const feature of EXPERIMENTAL_FEATURES) if (feature.id !== 'chat_reading_split') expect(flags[feature.id]).toBe(!keepsOwnSwitch(feature.id))
   })
 })
 

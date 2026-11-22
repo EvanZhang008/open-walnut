@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { EVERY_EXPERIMENT, EXPERIMENTAL_FEATURES, GRADUATED_EXPERIMENTS, effectiveExperimentalFlags, experimentalEnabled, validExperimentalFlags } from '../../src/core/experimental.js';
+import { EVERY_EXPERIMENT, EXPERIMENTAL_FEATURES, GRADUATED_EXPERIMENTS, effectiveExperimentalFlags, experimentalEnabled, keepsOwnSwitch, validExperimentalFlags } from '../../src/core/experimental.js';
 import { workerStatus } from '../../src/core/worker-status.js';
 import { childrenByParent, completeStatusFacts, statusOf, type StatusFacts } from '../../src/core/user-status-sync.js';
 import type { Task } from '../../src/core/types.js';
@@ -39,16 +39,30 @@ describe('experimental choices', () => {
     const [first, ...rest] = EXPERIMENTAL_FEATURES;
     const flags = { [EVERY_EXPERIMENT]: true, [first.id]: false };
     expect(experimentalEnabled(flags, first.id)).toBe(false);
-    for (const feature of rest) expect(experimentalEnabled(flags, feature.id)).toBe(true);
+    for (const feature of rest) expect(experimentalEnabled(flags, feature.id)).toBe(!keepsOwnSwitch(feature.id));
     for (const feature of EXPERIMENTAL_FEATURES) expect(experimentalEnabled({ [EVERY_EXPERIMENT]: false }, feature.id)).toBe(feature.default);
     expect(validExperimentalFlags(flags)).toBe(true);
+  });
+
+  it('an experiment that copies or downloads all of the data keeps its own switch: "every experiment on" never turns it on', () => {
+    // The standby copy and the weekly restore drill: on a machine with every experiment on they
+    // would start copying the data folder and downloading the whole backup without being asked.
+    const own = EXPERIMENTAL_FEATURES.filter((f) => keepsOwnSwitch(f.id)).map((f) => f.id);
+    expect(own.sort()).toEqual(['restore_drill', 'switchable_leader']);
+    for (const id of own) {
+      expect(experimentalEnabled({ [EVERY_EXPERIMENT]: true }, id)).toBe(false);
+      expect(effectiveExperimentalFlags({ [EVERY_EXPERIMENT]: true })[id]).toBe(false);
+      expect(experimentalEnabled({ [EVERY_EXPERIMENT]: true, [id]: true }, id)).toBe(true);
+      // Its row says so, since the switch above it says "every experiment below is on".
+      expect(EXPERIMENTAL_FEATURES.find((f) => f.id === id)!.description).toContain('keeps its own switch');
+    }
   });
 
   it('the resolved map keeps unknown flags and gives every registered experiment its value', () => {
     const out = effectiveExperimentalFlags({ [EVERY_EXPERIMENT]: true, chat_reading_split: false, future_flag: false });
     expect(out.future_flag).toBe(false);
     expect(out.chat_reading_split).toBe(false);
-    for (const feature of EXPERIMENTAL_FEATURES) if (feature.id !== 'chat_reading_split') expect(out[feature.id]).toBe(true);
+    for (const feature of EXPERIMENTAL_FEATURES) if (feature.id !== 'chat_reading_split') expect(out[feature.id]).toBe(!keepsOwnSwitch(feature.id));
     const none = effectiveExperimentalFlags(undefined);
     for (const feature of EXPERIMENTAL_FEATURES) expect(none[feature.id]).toBe(false);
     for (const id of GRADUATED_EXPERIMENTS) expect(none[id]).toBe(true);

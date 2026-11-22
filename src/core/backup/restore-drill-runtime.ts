@@ -62,6 +62,13 @@ export interface DrillRuntime {
 export const DRILL_NOTICE_SCOPE = 'backup:drill';
 export const DRILL_RECOVERY_KEY = 'backup-drill';
 
+export const DRILL_INTERRUPTED = 'The drill was cut short before it finished (the server stopped or restarted).';
+
+/** The record a drill leaves while it runs: what stays when it never finishes. */
+function interrupted(at: number): DrillResult {
+  return { version: 1, at: new Date(at).toISOString(), durationMs: 0, ok: false, destination: '', checks: [], notInBackups: [], databases: [], error: DRILL_INTERRUPTED };
+}
+
 export function failureSummary(r: DrillResult): string {
   if (r.error) return r.error;
   return r.checks.filter((c) => c.ok === false).map((c) => `${c.id}: ${c.problems?.[0] ?? c.detail}`).join('; ');
@@ -103,7 +110,13 @@ export function startRestoreDrillRuntime(deps: DrillRuntimeDeps): DrillRuntime {
       if (currentBackupJob() !== null || (await backupLockHeld(dataDir))) return null;
       let result: DrillResult;
       try {
-        result = await runBackupJob('restore', () => run(cfg, dataDir));
+        result = await runBackupJob('restore', async () => {
+          // Written before the first byte is fetched: a drill the server's stop or a crash cuts
+          // short is then tried again in a day, like any drill that could not run, instead of
+          // downloading the whole backup again at every start of the server.
+          await writeDrillRecord(dataDir, interrupted(now()));
+          return run(cfg, dataDir);
+        });
       } catch (err) {
         if (err instanceof Error && (err.name === 'BackupLockedError' || err.name === 'BackupBusyError')) return null;
         throw err;

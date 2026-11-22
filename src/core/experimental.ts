@@ -207,8 +207,9 @@ export const EXPERIMENTAL_FEATURES = [
   {
     id: 'restore_drill',
     name: 'Weekly restore drill',
-    description: 'Once a week Walnut restores your newest backup into a temporary folder, checks every file and database in it, compares it with the list of what a backup must hold, then deletes the folder. Your data and your backups are only read. A drill that fails shows in Walnut Health.',
+    description: 'Once a week Walnut restores your newest backup into a temporary folder, checks every file and database in it, compares it with the list of what a backup must hold, then deletes the folder. Your data and your backups are only read. A drill that fails shows in Walnut Health. "Every experiment on" does not turn this on: it copies or downloads all of your data, so it keeps its own switch.',
     default: false,
+    ownSwitchOnly: true,
   },
   {
     id: 'focus_workspace',
@@ -219,8 +220,9 @@ export const EXPERIMENTAL_FEATURES = [
   {
     id: 'switchable_leader',
     name: 'Standby copy of this Walnut',
-    description: 'Every 30 seconds this Walnut copies its whole data folder, as it was at one moment, to the folder set as standby.dir in config.yaml (on this machine), keeps only complete copies there, and repairs and reports any file changed there directly. Off: nothing is copied and nothing runs.',
+    description: 'Every 30 seconds this Walnut copies its whole data folder, as it was at one moment, to the folder set as standby.dir in config.yaml (on this machine), keeps only complete copies there, and repairs and reports any file changed there directly. Off: nothing is copied and nothing runs. "Every experiment on" does not turn this on: it copies or downloads all of your data, so it keeps its own switch.',
     default: false,
+    ownSwitchOnly: true,
   },
   {
     id: 'real_use_watch',
@@ -244,7 +246,7 @@ export type ExperimentalFlags = Record<string, boolean>;
 /**
  * A key in the same flag map that names no experiment: on, every experiment whose own switch was
  * never set reads as on, each new one included as soon as it ships (for people who build or test
- * Walnut). An experiment's own choice still wins, so one that misbehaves can be turned off alone.
+ * Walnut), except the few that keep their own switch (keepsOwnSwitch). An experiment's own choice still wins, so one that misbehaves can be turned off alone.
  * An older Walnut keeps it as an unknown flag and ignores it.
  */
 export const EVERY_EXPERIMENT = 'every_experiment';
@@ -253,10 +255,20 @@ export function everyExperimentOn(flags: ExperimentalFlags | undefined): boolean
   return flags?.[EVERY_EXPERIMENT] === true;
 }
 
+/**
+ * An experiment "Every experiment on" never turns on (`ownSwitchOnly` in the registry): one that
+ * copies or downloads all of the user's data, or changes which machine leads. A person who
+ * turned every experiment on to try new screens did not ask for that; its own switch does.
+ */
+export function keepsOwnSwitch(id: ExperimentalFeatureId): boolean {
+  const feature: { ownSwitchOnly?: boolean } = EXPERIMENTAL_FEATURES.find((f) => f.id === id)!;
+  return feature.ownSwitchOnly === true;
+}
+
 export function experimentalEnabled(flags: ExperimentalFlags | undefined, id: ExperimentalFeatureId): boolean {
   const feature = EXPERIMENTAL_FEATURES.find((f) => f.id === id)!;
   if (typeof flags?.[id] === 'boolean') return flags[id];
-  return everyExperimentOn(flags) || feature.default;
+  return (everyExperimentOn(flags) && !keepsOwnSwitch(id)) || feature.default;
 }
 
 /**

@@ -62,7 +62,7 @@ test('"Every experiment on" turns on every switch never set alone, keeps one tur
   const everyId = '#experimental-every_experiment';
   const voiceId = '#experimental-voice_conversation';
   const flags = async () => (await (await request.get('/api/config')).json()).config.experimental ?? {};
-  const reset = { experimental: { every_experiment: false, voice_conversation: null, leader_status_follows_workers: false } };
+  const reset = { experimental: { every_experiment: false, voice_conversation: null, leader_status_follows_workers: false, restore_drill: null, switchable_leader: null } };
   await request.put('/api/config', { data: reset });
   try {
     await page.goto('/settings');
@@ -78,6 +78,12 @@ test('"Every experiment on" turns on every switch never set alone, keeps one tur
     await expect.poll(async () => (await flags()).every_experiment).toBe(true);
     // The experiment the user turned off stays off; the rest follow.
     await expect(leader).toHaveAttribute('aria-checked', 'false');
+    // The two that copy or download all of the data keep their own switch, and say so.
+    for (const id of ['restore_drill', 'switchable_leader']) {
+      await expect(page.locator(`#experimental-${id}`)).toHaveAttribute('aria-checked', 'false');
+      expect((await flags())[id]).toBeUndefined();
+    }
+    await expect(page.getByText('keep their own switch')).toBeVisible();
     await page.reload();
     await expect(every).toHaveAttribute('aria-checked', 'true', AFTER_RELOAD);
     await expect(voice).toHaveAttribute('aria-checked', 'true');

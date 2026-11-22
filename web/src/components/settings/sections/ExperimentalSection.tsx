@@ -23,7 +23,7 @@ export function ExperimentalSection({ config, onSave }: { config: Config; onSave
   return <SettingsSection id="experimental" title="Experimental">
     <SettingsGroup>
       <ExperimentalRow label="Every experiment on" flagKey={EVERY_EXPERIMENT}
-        help="For people who build or test Walnut: every experiment below is on unless you turn its own switch off, and each new one is on as soon as it arrives."
+        help="For people who build or test Walnut: every experiment below is on unless you turn its own switch off, and each new one is on as soon as it arrives. The few that copy or download all of your data say so and keep their own switch."
         value={everyExperimentOn(config.experimental)} save={write} />
     </SettingsGroup>
     <SettingsGroup>
