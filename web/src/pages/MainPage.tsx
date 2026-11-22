@@ -9,7 +9,6 @@ import { getEngineCatalog } from '@/hooks/useEngineCatalog';
 import { launchEngineForHost, normalizeEngine } from '@/utils/engines';
 import { knownFallbackEngine } from '@/api/engine-fallback';
 import { stripEntityRefsToText } from '@/utils/markdown';
-import { focusWhenShown } from '@/utils/focus-when-shown';
 import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { seedDraftComposer, waitUntilPrefix, WAIT_UNTIL_EVENT } from '@/utils/wait-until';
@@ -1179,9 +1178,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       const opening = !chatVisibleRef.current;
       if (opening) chatBorrowedByDraftRef.current = null;
       setChatVisible(prev => !prev);
-      // The slot the user just opened is where he types next: its box takes the caret
-      // (once it mounts), so there is one clear input beside the open columns.
-      if (opening) focusWhenShown(() => document.querySelector<HTMLTextAreaElement>('.main-page-chat textarea.chat-input-textarea'));
     };
     // `/session` (src/commands/session.ts) — one verb "New": grow a draft column
     // instead of opening the chat-anchored picker. Via the ref because this

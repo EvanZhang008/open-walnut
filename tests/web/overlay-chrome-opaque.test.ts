@@ -29,7 +29,6 @@ const WEB = path.resolve(__dirname, '../../web/src');
 const PAINTS_NOTHING: Record<string, string> = {
   'ask-walnut-bare-header': 'a lone menu button in the empty slot\'s corner: nothing scrolls under it',
   'thread-drawer': 'its .thread-drawer-body paints the drawer (var(--bg-elevated)); the drawer box is only its frame',
-  'session-panel': 'the panel itself, not chrome over another surface; its header and body paint',
   'editor-mic-dock': 'a zero-height sticky anchor; the mic inside it paints its own background',
   'thread-review-bar': 'a 12px rail in the gap between the text and the review cards: nothing lies under it',
 };
@@ -108,7 +107,8 @@ interface Hit { rule: Rule; pseudo: string | null }
 function rulesFor(cls: string): Hit[] {
   const out: Hit[] = [];
   for (const rule of RULES) {
-    for (const sel of rule.selector.split(',')) {
+    // Top-level commas only: `:is(.a, .b) > .c` styles `.c`, never `.a`.
+    for (const sel of topLevelLayers(rule.selector)) {
       const l = lastOf(sel);
       if (l.cls === cls) { out.push({ rule, pseudo: l.pseudo }); break; }
     }
@@ -123,7 +123,7 @@ function positionedSurfaces(): Set<string> {
     if (!pos || !/sticky|fixed|absolute/.test(pos)) continue;
     // A full-window scrim is the one layer allowed to be see-through.
     if (/fixed/.test(pos) && decl(r.body, 'inset') === '0') continue;
-    for (const sel of r.selector.split(',')) {
+    for (const sel of topLevelLayers(r.selector)) {
       const { cls, pseudo } = lastOf(sel);
       if (cls && !pseudo && SURFACE.test(cls)) out.add(cls);
     }
