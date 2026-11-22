@@ -185,6 +185,7 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-settings-menu { width: min(320px, calc(100vw - 16px)); gap: 12px; padding: 12px; }
 .org-settings-sub { color: var(--fg-secondary); font-size: var(--font-size-sm); }
 .org-settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.org-settings-row > .settings-segmented { flex-shrink: 0; }
 .org-settings-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; cursor: pointer; }
 .org-settings-all { align-self: flex-start; }
 /* With the Directors on: how they are listed (useDirectorSettings), one row each. */

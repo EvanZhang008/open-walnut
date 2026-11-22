@@ -74,7 +74,7 @@ export function OrgSettingsMenu() {
           {dir.on && (
             <div className="org-settings-directors" data-testid="org-settings-directors">
               <div className="org-settings-row" title={directorsLayoutHelp(dir.layout)}>
-                <span className="org-settings-label"><strong>Show Directors</strong></span>
+                <span className="org-settings-label"><strong>Directors</strong></span>
                 <SegmentedControl size="sm" aria-label={DIRECTORS_LAYOUT_LABEL} value={dir.layout} options={DIRECTORS_LAYOUT_OPTIONS} disabled={dir.busy} onChange={dir.setLayout} />
               </div>
               <div className="org-settings-row" title={DIRECTORS_PROJECTS_HELP}>
