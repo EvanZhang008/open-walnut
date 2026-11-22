@@ -19,7 +19,7 @@ function anchors(html: string): { text: string; title: string | null; attrs: str
 }
 
 const LONG_PATH = '/Users/someone/.local/state/open-walnut/tasks/b89f10f0-bdd0-5134/design-t3/index.html';
-const LONG_URL = 'https://reviews.example.com/projects/acme/changes/CR-321440753/revisions/2';
+const LONG_URL = 'https://reviews.example.com/projects/acme/changes/4471/revisions/2';
 
 describe('short link labels in a card', () => {
   it('every kind of bare link the renderer makes reads short and keeps its target', () => {
