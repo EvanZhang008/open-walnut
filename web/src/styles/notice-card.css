@@ -3,9 +3,11 @@
    never a coloured bar down one side, an avatar, a bold title, a status as a dot and a word, and a
    preview of two lines. The corner stack (corner-stack.css) says where; this file says how it looks. */
 
-/* The notice family's one corner: the card here and the System pane's blocks beside its rows
-   (globals.css .notification-card) read as one family. */
+/* The notice family's one corner and one solid fill: the card here and the System pane's blocks
+   beside its rows (globals.css .notification-card) read as one family. Notices keep their own card
+   (standard.md, "Cards"), a layer's fill, not the in-flow `--card-bg`. */
 :root { --radius-notice: 14px; }
+:root { --notice-bg: var(--bg-elevated); }
 
 .wn-notice {
   pointer-events: auto;
@@ -14,7 +16,7 @@
   width: 100%;
   min-width: 0;
   /* Solid until the glass applies (wn-glass-frost paints it where the engine blurs). */
-  background: var(--bg-elevated);
+  background: var(--notice-bg);
   color: var(--fg);
   border-radius: var(--radius-notice);
   font-size: var(--font-size-md);

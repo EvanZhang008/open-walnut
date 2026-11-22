@@ -625,7 +625,7 @@ textarea::placeholder { max-width: 100%; }
 .notification-card {
   border: 1px solid var(--glass-frost-border);
   border-radius: var(--radius-notice);
-  background: var(--bg-elevated);
+  background: var(--notice-bg);
   padding: 10px 12px;
   margin-bottom: 8px;
 }
@@ -27996,8 +27996,8 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 /* .wn-title on the element: a label never cuts, the rail takes its width. */
 .nfc-rail-name { min-width: 0; }
 
-/* A `.badge.badge-count` toned by its section (RailButton): Needs you the solid
-   red alert, Errors red, an unhealthy System amber, the rest grey. */
+/* A `.badge.badge-count` toned by its section (RailButton): Needs you and Inbox the
+   solid red alert, Errors red, an unhealthy System amber, the rest grey. */
 .nfc-rail-badge {
   margin-left: auto;
   flex-shrink: 0;
