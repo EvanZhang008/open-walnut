@@ -38,6 +38,8 @@ const OWN_WORDS: Record<string, string> = {
   'components/agents/AgentForm.tsx#def.label': 'a picker of context sources in the agent form: taken only by Save',
   'components/tasks/TasksColumnsMenu.tsx#def.label': 'a column picker: the column\'s name is the option',
   'components/org/OrgInlineAnswer.tsx#o.label': 'an answer option the user picks: its text is the option',
+  'focus-spaces/SpaceForm.tsx#label': 'a picker of the projects, tasks and apps a focus space holds: the name is the option, taken only by Save',
+  'focus-spaces/SpaceForm.tsx#detail': 'the option\'s own second line in the same picker (a task\'s project, an app\'s mode), taken only by Save',
   'components/org/OrgRouterSetup.tsx#lead.org_name || lead.title': 'a VP in the router\'s collaboration picker: taken only by Create router',
   'components/org/OrgRouterSettings.tsx#lead.org_name || lead.title': 'a VP in the router\'s collaboration picker: taken only by Save',
   'components/org/OrgRouterSettings.tsx#staleLinkLabel(row)': 'a closed or missing VP still linked, in the same picker: taken only by Save',
