@@ -462,7 +462,7 @@ test('a thread streams its answer, follows up, switches, and injects into the co
   const summaryButton = popover.getByRole('button', { name: /Inject summary/ })
   await ask(popover, 'slow:6000 one more thing')
   await expect(summaryButton).toBeDisabled({ timeout: 20_000 })
-  await expect(summaryButton).toHaveAttribute('title', /Wait for this thread to finish/)
+  await expect(summaryButton).toHaveAttribute('title', /Wait for this side chat to finish/)
   await expect(summaryButton).toBeEnabled({ timeout: 90_000 })
 
   // ── Inject SUMMARY: the thread writes it, and only the summary lands ──
