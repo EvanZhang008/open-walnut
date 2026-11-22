@@ -130,8 +130,8 @@ export const LockGlyph = () => (
 )
 
 /** One switch per part on the card: the footer's for a one-part app, a row each for more. */
-function partSwitch(part: AppPart, quietRail: boolean, testId: string) {
-  return <SidebarSwitch name={part.title} shown={part.shown} onChange={(next) => setPartOnRail(part, next, quietRail)} testId={testId} />
+function partSwitch(part: AppPart, quietRail: boolean, testId: string, labelled = false) {
+  return <SidebarSwitch name={part.title} shown={part.shown} onChange={(next) => setPartOnRail(part, next, quietRail)} testId={testId} labelled={labelled} />
 }
 
 /** What a search finds a held plugin by: its name, its description and its plugin parts. */
@@ -181,7 +181,7 @@ export function BuiltinAppsGrid({ entries, folded, facts, onOpen, onOpenPlugin }
             parts={parts}
             status={status}
             statusGlyph={status.tone === 'fixed' ? <LockGlyph /> : undefined}
-            control={one && !one.lock ? partSwitch(one, quietRail, `apps-builtin-card-toggle-${one.id}`) : undefined}
+            control={one && !one.lock ? partSwitch(one, quietRail, `apps-builtin-card-toggle-${one.id}`, true) : undefined}
             dim={row ? row.status === 'disabled' || row.status === 'unsupported' || !entry.shown : !entry.shown}
             onSelect={() => (row ? onOpenPlugin(row.id) : onOpen(entry.key))}
             // Every card opens its app; Apps is this page, and a page whose plugin is off has nothing to show.

@@ -426,6 +426,9 @@
 .apps-app-glyph { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: var(--radius-sm); color: var(--on-accent); flex: none; }
 .apps-app-glyph svg { stroke: currentColor; }
 .apps-app-switch-label { color: var(--fg-muted); font-size: var(--font-size-md); }
+/* A card footer's sidebar switch, named in words (its status beside it speaks of the plugin). */
+.apps-card-switch { display: inline-flex; align-items: center; gap: 6px; }
+.apps-card-switch-label { color: var(--fg-secondary); font-size: var(--font-size-xs); }
 .apps-app-row .apps-card-badge { position: static; display: inline-flex; border: none; }
 .apps-part + .apps-part { border-top: 1px solid var(--settings-hairline); }
 .apps-part-account { white-space: normal; }

@@ -12,8 +12,20 @@ import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch'
  * The one "Show <name> on the sidebar" switch every Apps page view draws: a built-in part on
  * its card and its page, a plugin App on its card and its plugin's page.
  */
-export function SidebarSwitch({ name, shown, onChange, testId }: { name: string; shown: boolean; onChange: (next: boolean) => void; testId: string }) {
-  return <ToggleSwitch checked={shown} onChange={onChange} aria-label={`Show ${name} on the sidebar`} data-testid={testId} />
+/**
+ * The one "is it on my sidebar" switch. `labelled`: a card's footer, where the status beside it
+ * speaks of something else (a plugin's On), names it "Sidebar" in words, or it reads as a second,
+ * unnamed on/off of the same thing (UI audit, 2026-11-22).
+ */
+export function SidebarSwitch({ name, shown, onChange, testId, labelled = false }: { name: string; shown: boolean; onChange: (next: boolean) => void; testId: string; labelled?: boolean }) {
+  const toggle = <ToggleSwitch checked={shown} onChange={onChange} aria-label={`Show ${name} on the sidebar`} data-testid={testId} />
+  if (!labelled) return toggle
+  return (
+    <span className="apps-card-switch" title={`Show ${name} on the sidebar`}>
+      <span className="apps-card-switch-label" aria-hidden="true">Sidebar</span>
+      {toggle}
+    </span>
+  )
 }
 
 export function AppBadge({ app }: { app: RegisteredApp }) {

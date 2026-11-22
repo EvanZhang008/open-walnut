@@ -217,8 +217,8 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen, folde
     const { status, note } = pluginCardFacts(store, row)
     // Every App of a plugin has its sidebar switch on the card, as a built-in app has (one App:
     // in the footer; several: a row each).
-    const appSwitch = (target: RegisteredApp) => (
-      <SidebarSwitch name={target.title} shown={onSidebar.has(target.key)} onChange={(next) => updateAppOnSidebar(target, next)} testId={`plugin-card-toggle-${target.key}`} />
+    const appSwitch = (target: RegisteredApp, labelled = false) => (
+      <SidebarSwitch name={target.title} shown={onSidebar.has(target.key)} onChange={(next) => updateAppOnSidebar(target, next)} testId={`plugin-card-toggle-${target.key}`} labelled={labelled} />
     )
     const parts: StoreCardPart[] | undefined = apps.length > 1
       ? apps.map((target) => ({ id: target.key, title: target.title, kind: 'App', shown: onSidebar.has(target.key), control: appSwitch(target) }))
@@ -249,7 +249,7 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen, folde
           >
             {store.busy === row.id ? 'Installing...' : 'Install'}
           </button>
-        ) : apps.length === 1 ? appSwitch(apps[0]) : undefined}
+        ) : apps.length === 1 ? appSwitch(apps[0], true) : undefined}
         // An App is registered only while its plugin runs, so Open is never a dead button.
         open={app ? { label: 'Open', onClick: () => navigate(app.path), testId: `plugin-card-open-${row.id}` } : undefined}
       />

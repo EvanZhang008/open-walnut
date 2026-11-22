@@ -183,6 +183,9 @@ test("a plugin App's card has its sidebar switch too, and it moves the App's rai
   const toggle = page.getByTestId('plugin-card-toggle-walnut-time:main')
   await expect(toggle).toBeVisible({ timeout: 60_000 })
   await expect(page.getByTestId('plugin-card-open-walnut-time')).toBeVisible()
+  // The footer names the switch: its status ("On") is the plugin's, so an unnamed switch beside it
+  // read as a second on/off of the same thing (UI audit, 2026-11-22).
+  await expect(page.getByTestId('plugin-card-walnut-time').locator('.apps-card-switch')).toHaveText('Sidebar')
   const before = await toggle.getAttribute('aria-checked')
   const row = page.locator('.sidebar-nav [data-testid="sidebar-app-walnut-time:main"]')
   for (let round = 0; round < 2; round += 1) {
