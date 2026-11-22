@@ -345,6 +345,9 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   start_needs_mac: 'Starting with these options needs your Mac.',
   engine_needs_mac: 'Only a Claude Code session starts on this host while your Mac is away.',
   no_folder: 'This task\'s project names no folder on this host.',
+  // A host that runs its own sessions, writing their task side (session-channel/host-port.ts).
+  no_self_api: 'This host\'s Walnut server is still starting; this goes through your Mac for now.',
+  no_caller_session: 'No session on this host runs this task, so this change goes through your Mac.',
   task_made_on_mac: 'This task was made on your Mac, or your Mac has its create already, so its first start is there.',
   context_needs_mac: 'This host could not prepare the task\'s session; starting it needs your Mac.',
   message_needs_mac: 'Sending with these options needs your Mac.',

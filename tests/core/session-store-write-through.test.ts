@@ -93,8 +93,10 @@ describe('session store write-through', () => {
     expect(scans()).toBe(before);
   });
 
-  it('a set-based update the section never enumerated drops the snapshot instead of patching', async () => {
-    // The pid scrub is one UPDATE over every row holding a pid (pids far above any real one).
+  it('a set-based update names each row it selected, so the snapshot is patched with them, not rescanned', async () => {
+    // The pid scrub is one UPDATE over every row holding a pid (pids far above any real one). It
+    // names the rows its SELECT found under the same lock (the row hook announces each one); an
+    // UPDATE that changed more rows than it named would drop the snapshot instead.
     await createSessionRecord('p-1', 'task-p-1', 'proj', '/tmp', { pid: 2 ** 22 + 1 });
     await createSessionRecord('p-2', 'task-p-2', 'proj', '/tmp', { pid: 2 ** 22 + 2 });
     await createSessionRecord('p-3', 'task-p-3', 'proj', '/tmp');
@@ -102,7 +104,9 @@ describe('session store write-through', () => {
     const before = scans();
     expect((await scrubInheritedSessionPids(() => false)).scrubbed).toBe(2);
     for (const s of await listSessions()) expect(s.pid, s.claudeSessionId).toBeUndefined();
-    expect(scans()).toBe(before + 1);
+    expect(scans()).toBe(before);
+    _dropSessionStoreCacheForTesting();
+    for (const s of await listSessions()) expect(s.pid, s.claudeSessionId).toBeUndefined();
   });
 
   it('a task unlink writes each row it changed, so the snapshot is patched, not rescanned', async () => {

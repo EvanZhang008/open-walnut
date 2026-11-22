@@ -41,6 +41,9 @@ const SIDE: Record<string, Side> = {
   'side-thread': 'not', 'quick-start': 'not',
   // Not send sources: a sentBy value, a log label or a fallback name found inside a send call.
   agent: 'not', human: 'not', person: 'not', unknown: 'not', 'web-ui': 'not', 'session.ts:handleSend': 'not', 'session.ts:handleSendSdk': 'not',
+  // The leader's label for the task side of a send its host ran (leader-tasks.ts); the send's own
+  // source rides `sendSource`, which is what adoption reads, as for handleSend's label.
+  'host-judged:send': 'not',
 }
 
 /** `const NAME = '...'` constants of src whose name says SOURCE, so a send naming one is read too. */

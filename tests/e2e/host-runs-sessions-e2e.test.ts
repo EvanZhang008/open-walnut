@@ -15,8 +15,8 @@
  * stdin user line with one assistant line and one result line.
  *
  * Isolation: one temp base for HOME, data dir, run dir and host daemon dir; PATH leads with the
- * fake `claude`, then an empty guard dir (WALNUT_TEST_EXEC_GUARD), then the system dirs. The
- * child is stopped by the pid this test spawned.
+ * fake `claude`, then the test run's exec guard (guardedPath, childExecGuardEnv), then the system
+ * dirs. The child is stopped by the pid this test spawned.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -28,6 +28,7 @@ import path from 'node:path'
 import { WebSocket } from '#ws'
 import type { ChannelFrame } from '../../src/core/session-channel/channel.js'
 import type { FactRecord } from '../../src/core/session-channel/fact-log.js'
+import { childExecGuardEnv, guardedPath } from '../setup/exec-guard.js'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..')
 const SRC = path.join(REPO_ROOT, 'src')
@@ -94,16 +95,15 @@ beforeAll(async () => {
   base = await fsp.mkdtemp(path.join(os.tmpdir(), 'host-runs-sessions-'))
   const d = { home: path.join(base, 'home'), data: path.join(base, 'home', '.open-walnut-host', 'data'), run: path.join(base, 'home', '.open-walnut-host', 'run'), hostd: path.join(base, 'hostd') }
   const fakeBin = path.join(base, 'fakebin')
-  const guard = path.join(base, 'guard')
-  for (const x of [d.data, d.run, d.hostd, fakeBin, guard, work()]) await fsp.mkdir(x, { recursive: true, mode: 0o700 })
+  for (const x of [d.data, d.run, d.hostd, fakeBin, work()]) await fsp.mkdir(x, { recursive: true, mode: 0o700 })
   await fsp.writeFile(path.join(fakeBin, 'claude'), FAKE_CLI, { mode: 0o755 })
   const script = path.join(base, 'boot.mts')
   await fsp.writeFile(script, BOOT(d.data))
   const port = await freePort()
   const env: NodeJS.ProcessEnv = {
-    PATH: [fakeBin, guard, path.dirname(process.execPath), '/usr/local/bin', '/usr/bin', '/bin'].join(path.delimiter),
+    PATH: guardedPath([fakeBin], [path.dirname(process.execPath), '/usr/local/bin', '/usr/bin', '/bin'].join(path.delimiter)),
     HOME: d.home, USERPROFILE: d.home, SHELL: '/bin/sh', TMPDIR: os.tmpdir(),
-    WALNUT_TEST_EXEC_GUARD: guard,
+    ...childExecGuardEnv(),
     WALNUT_HOST_DAEMON_DIR: d.hostd,
     OPEN_WALNUT_HOME: d.data, WALNUT_HOST_SERVER: '1', WALNUT_HOST_SERVER_PORT: String(port),
     WALNUT_LEADER_HOME: '/Users/marina/.open-walnut', WALNUT_WALNUT_ID: WALNUT_ID, WALNUT_HOST_LABEL: HOST_KEY, WALNUT_HOST_KEY: HOST_KEY,

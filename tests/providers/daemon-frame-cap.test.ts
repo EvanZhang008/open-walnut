@@ -154,6 +154,10 @@ const WRITERS: Record<string, Record<string, string>> = {
   'src/providers/daemon-service-cli.ts': {
     'socket.send(JSON.stringify({ ...command, id }))': 'the service handover\'s own commands, a few fields',
   },
+  'src/core/session-channel/leader-side.ts': {
+    'send: (frame: ChannelFrame) => sock.send(JSON.stringify(frame)),': 'a session channel frame into the WebSocket below, which rides a daemon stream',
+    'send: (text) => ws.send(text),': 'a WebSocket over openStream: link-stream.ts cuts its bytes into 48 KB pieces',
+  },
   'src/providers/daemon-service-ready.ts': {
     "socket.on('open', () => socket.send(JSON.stringify({ id: 1, cmd: 'hello' })))": 'a fixed frame (the probe that a daemon serves)',
   },
