@@ -73,8 +73,9 @@ describe('host call entry twin wiring', () => {
   })
 
   it.each(TWINS)('%s: a new session, an ACP worker and a plugin job get the entry beside the socket, and never an inherited one', (_n, src) => {
-    // Native spawn: cleared first, then this run's own.
-    expect(src).toMatch(/WALNUT_CALL_SOCKET: undefined,\n\s+WALNUT_CALL_TOKEN: undefined,\n\s+\.\.\.hostCallTokens\.envFor\(spawnInfo\.home (\?\?|\|\|) \(?resumeRec/)
+    // Native spawn: cleared first, then this run's own, keyed by the Walnut's first home here
+    // (a resumed record may still name a home that is now its alias: walnut-scope-core.ts).
+    expect(src).toMatch(/WALNUT_CALL_SOCKET: undefined,\n\s+WALNUT_CALL_TOKEN: undefined,\n\s+\.\.\.hostCallTokens\.envFor\(walnutScope\.canonical\(spawnInfo\.home (\?\?|\|\|) \(?resumeRec/)
     // ACP worker: '' unsets, then the worker's own WALNUT_SESSION_ID.
     expect(src).toMatch(/WALNUT_CALL_SOCKET: '',\n\s+WALNUT_CALL_TOKEN: '',/)
     expect(src).toMatch(/hostCallTokens\.envFor\(\(?cmd(?: as \{ home\?: unknown \}\))?\.home, /)

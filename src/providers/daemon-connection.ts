@@ -154,6 +154,7 @@ import * as sameDaemonRecord from '../core/hosts/same-daemon-record.js'
 import { TRIGGERS_DELTA_MAX } from './trigger-check-core.js'
 import { launcherFactsFrom, type LauncherFacts } from './service-launcher-beat.js'
 import { noteLauncherRollback } from '../core/hosts/host-launcher.js'
+import { isMachineId } from './machine-id-core.js'
 
 /** `walnut-boot=<epoch s>` in what a host printed, as `{ boot }` (a `started` record's), else {}. */
 function bootOf(said: string): { boot?: number } {
@@ -5996,6 +5997,19 @@ export class DaemonConnection {
       this._daemonInstanceId = newInstanceId
       this._helloConfirmed = true
       this._daemonStartedAt = newStartedAt
+      // The machine the daemon runs on (its stable id, machine-id-core.ts): kept in this alias's host
+      // profile, where aliases with one id are one machine (daemon-twins.ts). Off the hello path; a
+      // daemon older than the id sends none.
+      const said: unknown = res.machineId
+      const machineId = isMachineId(said) ? said : null
+      if (machineId) {
+        const target = JSON.stringify(this._helloTarget)
+        void import('./in-process-daemon.js')
+          .then(({ inProcessDaemonWanted }) => inProcessDaemonWanted())
+          // Recorded only under the one-service experiment (sameMachineAliases reads it only then).
+          .then((on): Promise<void> | undefined => on ? sameDaemonRecord.rememberMachineId(this.hostKey, machineId, target, () => this.helloTargetIdentity()) : undefined)
+          .catch((err) => log.session.warn('DaemonConnection: machine id not recorded', { host: this.hostKey, error: err instanceof Error ? err.message : String(err) }))
+      }
       log.session.info('DaemonConnection: capability handshake OK', {
         host: this.hostKey,
         version: res.version,

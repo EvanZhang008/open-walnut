@@ -26,6 +26,17 @@ export interface DaemonRuntimeOptions {
    * the runtime directly (connect()), and the agent-gateway unix socket stays open either way.
    */
   listen?: boolean
+  /**
+   * With listen false: open the door anyway (daemon-door.ts), for every process the server does not
+   * call directly (a leader's tunnel, walnut-net, a host's follower server, hub forwards). A program
+   * always opens it.
+   */
+  door?: boolean
+  /**
+   * With listen false: daemon.pid names this process. Only a host's one service, which a leader
+   * finds by its command line; a server on the leader's own machine never writes one.
+   */
+  pidFile?: boolean
   /** The program that runs this daemon (the `walnut` shim re-runs it): its executable and script (argv[1], '' for none). */
   program?: { script: string }
   /** The umask every child is forked with (077 as the daemon always gave them); null leaves the process's own. */

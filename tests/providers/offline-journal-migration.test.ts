@@ -673,7 +673,9 @@ describe('both twins wire the migration the same way', () => {
       // Nothing at module load copies, imports or sweeps (the binary also runs as the walnut CLI).
       expect(text, file).not.toMatch(/^(const|var) [^\n]*\.(migrateSlices|sweepBlobs|importLegacy)\(/m)
       expect(text, file).not.toMatch(/^offlineJournal\.(migrateSlices|sweepBlobs)\(/m)
-      const pid = text.indexOf('fs.writeFileSync(PID_FILE, String(process.pid))')
+      // daemon.pid is written directly (the JS twin) or through the door module (the bun twin,
+      // daemon-door.ts publishDoorFiles, which writes it before daemon.port).
+      const pid = Math.max(text.indexOf('fs.writeFileSync(PID_FILE, String(process.pid))'), text.indexOf('publishDoorFiles(fs, { pidFile: PID_FILE,'))
       const migrate = text.indexOf('migrateJournals()', pid)
       expect(pid, file).toBeGreaterThan(0)
       expect(migrate, file).toBeGreaterThan(pid)

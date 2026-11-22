@@ -69,7 +69,7 @@ describe('a data home inside another repository', () => {
 
   it('ensureRepo gives the data home a repo of its own, and a commit never touches the outer one', async () => {
     const outerHead = git(dirs.outer, 'rev-parse', 'HEAD');
-    expect(ensureRepo()).toMatchObject({ available: true });
+    expect(await ensureRepo()).toMatchObject({ available: true });
     expect(fs.existsSync(path.join(dirs.home, '.git'))).toBe(true);
     expect(git(dirs.home, 'rev-parse', '--show-toplevel')).toBe(fs.realpathSync(dirs.home));
 

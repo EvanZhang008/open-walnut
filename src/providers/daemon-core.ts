@@ -352,6 +352,8 @@ export function validLineFateQuery(sid: unknown, uuid: unknown, messageIds: unkn
 export interface DaemonCore<S extends CoreSessionData = CoreSessionData> {
   readRegistry: () => Record<string, RegistryEntry>
   persistRegistry: (strict?: boolean) => void
+  /** Write the registry once and keep it through an exit's reap (daemon-standalone.ts stopDaemon). */
+  holdRegistryForExit: () => void
   readStartTime: (pid: number) => string | null
   reapSession: (sid: string, code: number, reason: string, groupExited?: boolean) => void
   startOrphanPoll: (sid: string) => void
@@ -663,7 +665,19 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     return {}
   }
 
+  /**
+   * A stop that reaps without blocking (daemon-standalone.ts stopDaemon) writes the registry once
+   * first and keeps it: the reaped CLIs' exits must not drop them from it, as the old synchronous
+   * reap never let them (the next daemon reads the sessions it may resume there).
+   */
+  let registryHeldForExit = false
+  function holdRegistryForExit(): void {
+    persistRegistry()
+    registryHeldForExit = true
+  }
+
   function persistRegistry(strict = !!deps.bootId): void {
+    if (registryHeldForExit) return
     const out: Record<string, RegistryEntry> = {}
     for (const [sid, s] of sessions) {
       if (s.state !== 'running' || !s.pid) continue
@@ -1742,6 +1756,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
   return {
     readRegistry,
     persistRegistry,
+    holdRegistryForExit,
     readStartTime: readStartTimeFn,
     reapSession,
     startOrphanPoll,

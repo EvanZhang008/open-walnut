@@ -614,6 +614,14 @@ export async function getInstanceId(): Promise<string> {
   })
 }
 
+/**
+ * Whether `id` is the id this process keeps in memory only (auth.json did not read): it
+ * names no Walnut beyond this process, so a host never takes it as one (walnut-scope-core.ts).
+ */
+export function isVolatileInstanceId(id: string): boolean {
+  return volatileInstanceId !== null && id === volatileInstanceId
+}
+
 /** Test-only: forget the in-memory instance id (device-auth.ts _resetDeviceAuthForTesting). */
 export function resetInstanceIdForTesting(): void {
   volatileInstanceId = null

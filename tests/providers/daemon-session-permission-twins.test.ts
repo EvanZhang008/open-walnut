@@ -90,6 +90,9 @@ function buildTwin(kind: Twin, initial: Pending | null = pending(), owner = '') 
     // The served-Walnuts note handleCommand takes for a server socket's per-Walnut push.
     servedWalnuts: { note: vi.fn() },
     walnutScope: { askedHome: () => '' },
+    // Every command names its Walnut by its first home here (walnut-scope-core.ts): a
+    // session.permission names no home, so none is aliased in this run.
+    adoptCommandHome: (_ws: unknown, cmd: unknown) => cmd,
     gatewayClientHomes: new WeakMap(),
     // host_exec runs: handleCommand asks whether an exec.read is a resumable run's; none here.
     hostExec: { resumableJob: () => false },

@@ -206,7 +206,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/local/usage-watch.sqlite` | leader-data | no | Real use on this server: hourly counts of tool calls, requests and page errors, the watches of shipped changes and the notes sent (names, sizes, times and codes only) |
 | `~/.open-walnut/local/preview-storage/` | leader-data | no | Saved state of rich previews |
 | `~/.open-walnut/local/quiet-held-push.json` | leader-data | no | Phone pushes held during quiet hours |
-| `~/.open-walnut/local/machine-id` | machine | no | This machine's id for daemon updates |
+| `~/.open-walnut/local/machine-id` | machine | no | The id an older build made for daemon updates, read only to seed this machine's stable id |
 | `~/.open-walnut/local/leader-switch/` | machine | no | The leader switch of this home: its steps and lock, the handed-over marker, the promotion record, permission log |
 | `~/.open-walnut/local/restore-drill.json` | machine | no | The last restore drill of this machine's backups: when, which backup, each check |
 | `~/.open-walnut/local/health-monitor/` | machine | no | Walnut Health records of this machine |
@@ -301,6 +301,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `$XDG_STATE_HOME/open-walnut/leader-instance/` | machine | no | The instance lock of a switchable leader: one leader server per machine id holds the write permission |
 | `$XDG_STATE_HOME/open-walnut/approvals/` | machine | yes | Wait tokens of approval asks made from this machine's shell |
 | `$XDG_STATE_HOME/open-walnut/net/` | machine | yes | This machine's host network identity (always under ~/.local/state) |
+| `$XDG_STATE_HOME/open-walnut/machine-id` | machine | no | This machine's stable id, sent in the daemon's hello (always under ~/.local/state) |
 | `$XDG_STATE_HOME/open-walnut/net-members.json` | machine | no | The companion's list of machines allowed on the host network |
 | `$XDG_STATE_HOME/open-walnut/clone-identity/` | machine | no | Pending clone identity marks of this machine's sessions |
 | `$XDG_STATE_HOME/open-walnut/daemon-previous/` | machine | no | The previous daemon build, kept for a rollback |

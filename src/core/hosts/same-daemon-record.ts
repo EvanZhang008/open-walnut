@@ -10,10 +10,17 @@
  * reaches (linkIdentityOf: the network key, or the user, host and port ssh resolves); one that
  * now resolves anywhere else, cannot be resolved, or has no row, voids the pair. A pair whose two
  * aliases are both up on different daemon processes is dropped (forgetSameDaemon).
+ *
+ * A daemon whose hello carries this machine's stable id (`machineId`, machine-id-core.ts) needs no
+ * pair: each alias's profile keeps the id its last hello gave (`machine`, rememberMachineId), with
+ * what the row connected to then, and aliases with one id are one machine (sameMachineAliases),
+ * whether or not their links were ever up together. A pair is still how an older daemon, whose
+ * hello has no id, joins its aliases.
  */
 import { readHostProfile, updateHostProfile } from './host-profile.js';
 import type { SshTarget } from '../../providers/session-io.js';
 import type { Config } from '../types.js';
+import { isMachineId } from '../../providers/machine-id-core.js';
 
 type HostRow = { hostname?: unknown; user?: unknown; port?: unknown; transport?: unknown; endpoint?: unknown } | undefined;
 
@@ -147,4 +154,59 @@ export async function forgetSameDaemon(host: string, other: string): Promise<voi
 /** Tests: forget what this server wrote. */
 export function _resetSameDaemonRecordForTest(): void {
   written.clear();
+}
+
+/** The machine ids this server recorded, as `alias|id|target`, so a hello again costs nothing. */
+const machineWritten = new Set<string>();
+
+/**
+ * Record the machine id `host`'s hello gave, with what its link dialled (`dialled`, resolved here,
+ * off the hello path; `target` names the dialled target cheaply, for the memo). Written only when
+ * it changed; a change reads the twin snapshot again.
+ */
+export async function rememberMachineId(host: string, id: string, target: string, dialled: () => Promise<string | null>): Promise<void> {
+  if (!isMachineId(id)) return;
+  const memo = JSON.stringify([host, id, target]);
+  if (machineWritten.has(memo)) return;
+  const link = await dialled();
+  if (!link) return;
+  const current = (await readHostProfile(host)).machine;
+  if (current?.id !== id || current.link !== link) {
+    await updateHostProfile(host, (p) => { p.machine = { id, link, at: new Date().toISOString() }; });
+    if (host !== '__local__') void refreshTwins();
+  }
+  machineWritten.add(memo);
+}
+
+/**
+ * The aliases of one machine by the machine ids their hellos gave: each alias to the others with
+ * its id, every one checked to still connect where it did when its id was recorded. This Mac's own
+ * key is never in it. Profiles are read once; `ssh -G` runs only for ids two aliases share.
+ */
+export async function sameMachineAliases(config: Pick<Config, 'hosts'>): Promise<Map<string, string[]>> {
+  // One machine, one host joins aliases only under the one-service experiment, until its real-host
+  // evidence is in (A3b); off, the host list keeps today's pairs.
+  const { inProcessDaemonWanted } = await import('../../providers/in-process-daemon.js');
+  if (!(await inProcessDaemonWanted())) return new Map();
+  const rows = (config.hosts ?? {}) as Record<string, HostRow>;
+  const recorded = await Promise.all(Object.keys(rows).filter((a) => a !== '__local__').map(async (alias) => {
+    const m = await readHostProfile(alias).then((p) => p.machine, () => undefined);
+    return m && isMachineId(m.id) && typeof m.link === 'string' ? { alias, ...m } : null;
+  }));
+  const byId = new Map<string, Array<{ alias: string; link: string }>>();
+  for (const r of recorded) if (r) byId.set(r.id, [...(byId.get(r.id) ?? []), { alias: r.alias, link: r.link }]);
+  const out = new Map<string, string[]>();
+  for (const members of byId.values()) {
+    if (members.length < 2) continue;
+    const still: string[] = [];
+    for (const { alias, link } of members) if (await linkIdentityOf(alias, rows[alias]) === link) still.push(alias);
+    if (still.length < 2) continue;
+    for (const a of still) out.set(a, still.filter((b) => b !== a).sort());
+  }
+  return out;
+}
+
+/** Tests: forget the machine ids this server wrote. */
+export function _resetMachineIdRecordForTest(): void {
+  machineWritten.clear();
 }

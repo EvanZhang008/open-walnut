@@ -5,9 +5,11 @@
  * host picker, and Usage & Costs counted it two and three times (every alias read the same
  * transcripts and stored each response under its own name: about 40% of one week was copies).
  *
- * Which aliases are one daemon comes only from the daemon's own word: the pair recorded in the
- * host profiles (`sameDaemon`, same-daemon-record.ts) when both links' hellos named one process,
- * and only while each row still connects where it did then. Never a hostname or an address.
+ * Which aliases are one machine comes only from the daemon's own word, and only while each row
+ * still connects where it did then, never a hostname or an address: the machine id each alias's
+ * hello gave (`machine`, same-daemon-record.ts sameMachineAliases), so two aliases seen at
+ * different times are one machine; else, for a daemon older than that id, the pair recorded in the
+ * host profiles (`sameDaemon`) when both links' hellos named one process.
  *
  * The lists that read it are synchronous (joined-twins.ts, the one place every picker, host_list,
  * Usage and Settings take their hosts from), so the pairs are kept here as a snapshot: read at
@@ -31,17 +33,19 @@ export type TwinRow = {
 export type TwinRows = Record<string, TwinRow>
 
 /**
- * The aliases recorded as one daemon with `host`, `host` included, sorted. Each pair is checked
- * against the rows in `config` (both sides still connect where they did when it was recorded);
- * pairs are followed through, so A-B and B-C join C to A.
+ * The aliases recorded as one machine with `host`, `host` included, sorted: the same machine id
+ * (`machines`, sameMachineAliases of `config`, read here when not given), or a recorded pair. Each
+ * is checked against the rows in `config` (both sides still connect where they did when it was
+ * recorded); links are followed through, so A-B and B-C join C to A.
  */
-export async function sameDaemonAliases(host: string, config: Config): Promise<string[]> {
+export async function sameDaemonAliases(host: string, config: Config, machines?: ReadonlyMap<string, readonly string[]>): Promise<string[]> {
   // Loaded when asked: every list of hosts imports this module, and the record reaches the host profiles.
-  const { recordedSameDaemon } = await import('./same-daemon-record.js')
+  const { recordedSameDaemon, sameMachineAliases } = await import('./same-daemon-record.js')
+  const byMachine = machines ?? await sameMachineAliases(config).catch(() => new Map<string, string[]>())
   const seen = new Set<string>([host])
   const pending = [host]
   for (let i = 0; i < pending.length; i++) {
-    for (const other of await recordedSameDaemon(pending[i], config)) {
+    for (const other of [...(byMachine.get(pending[i]) ?? []), ...await recordedSameDaemon(pending[i], config)]) {
       if (!seen.has(other)) { seen.add(other); pending.push(other) }
     }
   }
@@ -122,9 +126,12 @@ export function refreshDaemonTwins(config?: Config): Promise<void> {
         const rows = (cfg.hosts ?? {}) as TwinRows
         const next: Array<Map<string, string>> = []
         const placed = new Set<string>()
+        // The machine ids are read once for every alias (each alias's profile, then `ssh -G` for shared ids only).
+        const { sameMachineAliases } = await import('./same-daemon-record.js')
+        const machines = await sameMachineAliases(cfg).catch(() => new Map<string, string[]>())
         for (const alias of Object.keys(rows).sort()) {
           if (alias === LOCAL_HOST_ALIAS || placed.has(alias)) continue
-          const members = (await sameDaemonAliases(alias, cfg).catch(() => [alias])).filter((a) => a !== LOCAL_HOST_ALIAS && rows[a])
+          const members = (await sameDaemonAliases(alias, cfg, machines).catch(() => [alias])).filter((a) => a !== LOCAL_HOST_ALIAS && rows[a])
           if (members.length < 2) continue
           for (const m of members) placed.add(m)
           next.push(new Map(members.map((m) => [m, reachOf(rows[m])])))

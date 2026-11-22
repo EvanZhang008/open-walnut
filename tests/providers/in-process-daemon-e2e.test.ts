@@ -2,8 +2,9 @@
  * The session daemon runtime inside the server's own process (experiment `in_process_daemon`,
  * in-process-daemon.ts), end to end: the server's RemoteSessionManager drives a session through
  * the in-process link (IN_PROCESS_DAEMON_URL), the runtime spawns a fake CLI and tails its output.
- *   1. Two rounds of one session: no daemon.port and no daemon.pid (a stale one is removed), so no
- *      stopper can signal the server; every output line reaches onOutput already parsed, and the
+ *   1. Two rounds of one session: no daemon.pid (a stale one is removed), so no stopper can signal
+ *      the server; the door is open (daemon.port: hello with the door's capabilities, the session's
+ *      status); every output line reaches onOutput already parsed, and the
  *      only child of the process is the fake CLI.
  *   2. Every line of the session's output is parsed at most once in the whole process.
  *   3. stop() gives the dir's lock back and reaps the isolated dir's CLI.
@@ -71,11 +72,15 @@ describe.skipIf(!BUN)('the session daemon in the server process', () => {
     expect(out.logDir).toBe(dir)
     expect(elapsed).toBeLessThan(75_000)
 
-    // 1. In process: no WebSocket door, both rounds answered in order, each line handed over parsed.
+    // 1. In process: both rounds answered in order, each line handed over parsed.
     expect(out.s1.started).toEqual({ kind: 'started', dir })
-    // Neither daemon.port nor daemon.pid (a stale one was removed): no stopper can signal the server's pid.
-    expect(out.s1.portFile).toBe(false)
+    // No daemon.pid (a stale one was removed): no stopper can signal the server's pid.
     expect(out.s1.pidFile).toBe(false)
+    // The door is open: walnut-net, a host's follower server and hub forwards keep working with the
+    // experiment on (A3b), and a client over the port reaches the same runtime.
+    expect(out.s1.portFile).toBe(true)
+    expect(out.s1.door.capabilities).toEqual(expect.arrayContaining(['net-v1', 'net-join-v1', 'host-server-v1', 'hub-forward-v1']))
+    expect(out.s1.door.statusExists).toBe(true)
     expect(out.s1.results).toEqual(['answer one', 'answer two'])
     expect(out.s1.secondWritten).toBe(true)
     expect(out.s1.everyOutputParsed).toBe(true)
@@ -93,6 +98,7 @@ describe.skipIf(!BUN)('the session daemon in the server process', () => {
     expect(out.s3.cliGone).toBe(true)
     expect(out.s3.againKind).toBe('started')
     expect(out.s3.stopAgain).toBe(0)
+    // Stopped: its door and the port file that named it are gone.
     expect(out.s3.portFile).toBe(false)
 
     // 4. Adopted: in process → in process → the program → in process; the last stop reaps.
@@ -111,7 +117,8 @@ describe.skipIf(!BUN)('the session daemon in the server process', () => {
     expect(s4.programExit).toBe(0)
     expect(s4.cliAliveAfterProgram).toBe(true)
     expect(s4.backKind).toBe('started')
-    expect(s4.backFiles).toEqual({ port: false, pid: false })
+    // Back in process: the door is open again (daemon.port names it), and no daemon.pid: the pid is the server's.
+    expect(s4.backFiles).toEqual({ port: true, pid: false })
     expect(s4.backInProcess).toMatchObject({ alive: true, hasState: true, written: true, result: 'answer k4' })
     expect(s4.finalStop).toBe(0)
     expect(s4.cliGoneAtEnd).toBe(true)

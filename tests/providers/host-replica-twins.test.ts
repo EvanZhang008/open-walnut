@@ -57,8 +57,11 @@ describe('host copy: both twins', () => {
       const cmd = fnBody(src, 'cmdAttachments')
       expect(cmd).toMatch(/origin === 'bridge'\) return sendError\(ws, id,/)
       expect(cmd).toMatch(/attachmentCopy\.command\(cmd\.home( as string)?, cmd\.cmd, cmd\)/)
-      // Beside the notes copy, under the same hashed home key.
-      expect(src).toMatch(/dirOf: (\(home\) => |function \(home\) \{ return )path\.join\(REPLICA_DIR, crypto\.createHash\('sha1'\)\.update\(home\)\.digest\('hex'\)\.slice\(0, 16\), 'attachments'\)/)
+      // Beside the notes copy, under the same hashed home key: the ONE key walnutScope gives a
+      // home (sha1 of the Walnut's first home here, 16 hex), which the notes copy takes too.
+      expect(src).toMatch(/dirOf: (\(home\) => |function \(home\) \{ return )path\.join\(REPLICA_DIR, walnutScope\.keyOf\(home\), 'attachments'\)/)
+      expect(src).toMatch(/const hostReplica = createHostReplica\(\{[\s\S]{0,200}?keyOf: walnutScope\.keyOf,|var hostReplica = [\s\S]{0,300}?keyOf: walnutScope\.keyOf,/)
+      expect(src).toMatch(/keyOf: (\(value\) => |function \(value\) \{ return )crypto\.createHash\('sha1'\)\.update\(value\)\.digest\('hex'\)\.slice\(0, 16\)/)
       expect(src).toMatch(/attachments: attachmentCopy,/)
     })
 

@@ -11,6 +11,8 @@
  * finishes the switch, or puts the old folder back, on the next start. This
  * machine's writer id (local/backup/machine-id, never backed up) moves with
  * the switch: it is the same computer, so it stays the writer of its backups.
+ * A home with no such file is written by the machine's stable id, which lives
+ * outside the data folder and so needs no carrying.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';

@@ -383,6 +383,54 @@ proves the process read past it, and only then is the line written again under i
 a marker out of the daemon's scan window proves nothing either. Ratchets:
 `tests/providers/daemon-send-dedupe-twins-e2e.test.ts`, `tests/providers/line-read-past-rewrite.test.ts`.
 
+## A machine has one id, whichever alias reaches it
+
+Each OS account on a machine keeps one stable id in `~/.local/state/open-walnut/machine-id` (32
+random hex digits, made once and never rewritten; never under `XDG_STATE_HOME`, the same rule as
+the net key). It lives outside every Walnut data dir, so it survives a reinstall that keeps the home,
+a new port, a new or moved data dir and a renamed alias; a copy of the data dir on another machine
+does not carry it. The first one is seeded from the id an older build kept in a data dir's
+`local/machine-id`: the served data dir's first (the server's `WALNUT_HOME`, a daemon's
+`OPEN_WALNUT_HOME` when it has one), then `~/.open-walnut`'s; one rule for the server and both
+twins. The daemon update stores still read an entry kept under the data dir's older id and move it
+under the stable one, so a stable id another process seeded first orphans none. Where the file
+system has no hard links the file is made with an exclusive create. The server reads it through `src/core/machine-id.ts`; both daemon twins send it in
+their hello as `machineId` (`src/providers/machine-id-core.ts`). The Mac records the id each alias's
+hello gave in that alias's host profile (`~/.open-walnut/hosts/<alias>.json`, `machine`, with what
+the row connected to then), and the `hosts` aliases with one id are one machine in every list
+(`src/core/hosts/daemon-twins.ts`), though their links were never up at once. A daemon older than
+the id sends none, and its aliases are joined only by the pair both links confirmed together, as
+before. The backup writer keeps an existing `local/backup/machine-id` and uses the stable id only
+where none exists. Tests: `tests/core/machine-id.test.ts`, `tests/core/hosts/machine-id-twins.test.ts`,
+`tests/providers/daemon-machine-id-twins-e2e.test.ts`.
+
+## A Walnut has one key on a host, whatever its data dir
+
+A host's daemon keys each Walnut's state by its first home there (`walnut-scope-core.ts`,
+`walnutScope.keyOf`, the ONE key every core takes). When a `leader.configure` that offers home moves
+(`walnutHomeMoves`, sent only under the one-service experiment) names a home this host does not
+know, and exactly one other home holds a leader record with that id and is not in use (no server
+socket or lane open, not heard within the takeover window), the new home becomes an alias of the
+first one (`<leader dir>/homes.json`, which older daemons never read). From then on
+every command's `home` (and the `home` inside a `spec` or `template`, a copy's `home`, a trigger
+def's `deliver`/`start` home) is read as the first home: the leader book's epoch, trigger memory
+(epoch, seq, seen), journals, copies, plugin jobs, the host server and the bridge link go on. What
+the new home's server pushed at connect, before its `leader.configure`, is folded into the first
+home (its trigger set, hooks, bridge link, copy, socket bindings). So a new home's first trigger
+checks wait for its `leader.configure` while an alias may still come: once a leader on this host
+offered home moves (kept in `homes.json`) and while that home has no leader record; at most 10
+minutes (`WALNUT_HOME_ALIAS_WAIT_MS`), then they run as its own. With the experiment off nothing
+waits. Only one home of a Walnut speaks at a time: while a live server socket speaks from one home,
+a server socket's command from another home of the same Walnut is refused (`another data dir speaks
+as this Walnut here`), and works again once the first is gone. No alias on a
+volatile id (`walnutIdVolatile`), over a home with a record of its own, while the first home is in
+use, from a test server's probe socket, or when two homes hold the id; a leader that sends no id
+keeps the path. No file is moved or rewritten, and every file's embedded `home` still hashes to its
+name, so a rollback reads every file as before; a rollback to a daemon without aliases reads the new
+home as a separate Walnut (its epoch starts at 0 and its trigger memory is empty). The served record (`daemon.serves.json`) keys the
+home the Walnut speaks from now, as its server computes. Tests: `tests/providers/walnut-scope-alias.test.ts`,
+`tests/providers/daemon-home-alias-twins-e2e.test.ts`.
+
 ## Keep the twins in sync, and auto-deploy
 
 **Keep in sync:** `daemon-standalone.ts` (bun binary) + `daemon-source.ts` (JS fallback). Build: `bash scripts/build-daemon.sh`.

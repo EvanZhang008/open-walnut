@@ -33,8 +33,17 @@ describe('transfer-private-v1 twin wiring', () => {
   })
 
   it('both twins pass the socket binding and origin to writePart, and nothing from the command', () => {
-    expect(writePartCase(standalone)).toContain('transferCore.writePart(cmd, { boundHome: gatewayClientHomes.get(ws) ?? null, origin: ws.data?.origin ?? null })')
-    expect(writePartCase(source)).toContain('transferCore.writePart(cmd, { boundHome: gatewayClientHomes.get(ws) || null, origin: ws.origin || null })')
+    expect(writePartCase(standalone)).toContain('transferCore.writePart(cmd, { boundHome: boundLocationOf(ws), origin: ws.data?.origin ?? null })')
+    expect(writePartCase(source)).toContain('transferCore.writePart(cmd, { boundHome: boundLocationOf(ws), origin: ws.origin || null })')
+    // The bound home is the socket's own binding (where that Walnut lives now), never the command's.
+    for (const src of [standalone, source]) {
+      const at = src.search(/function boundLocationOf\(ws/)
+      expect(at).toBeGreaterThan(0)
+      const body = src.slice(at, src.indexOf('\n}\n', at))
+      expect(body).toMatch(/(const|var) bound = gatewayClientHomes\.get\(ws\)/)
+      expect(body).toMatch(/return bound \? walnutScope\.whereNow\(bound\) : null/)
+      expect(body).not.toContain('cmd')
+    }
   })
 
   it('both twins give the factory getuid, the raw owner stamp and this incarnation\'s id', () => {

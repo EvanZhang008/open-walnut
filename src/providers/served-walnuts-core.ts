@@ -21,7 +21,10 @@ export interface ServedWalnutsDeps {
   fs: typeof import('node:fs')
   /** `<daemon dir>/daemon.serves.json`. */
   file: string
-  /** The same key the other cores take for a home (16 hex of its sha1). */
+  /**
+   * The key a server computes for its own home (16 hex of its sha1, daemon-shared.ts
+   * walnutKeyOf): of the home a Walnut speaks from now, never its alias target.
+   */
   keyOf: (home: string) => string
   /** This daemon's version and its capabilities as its hello says them. */
   version: string
@@ -43,6 +46,11 @@ export interface ServedWalnuts {
   knows(home: string): boolean
   /** Writes the file now (at startup, once capabilities are known). */
   write(): void
+  /**
+   * Forget one key: the home it names became another home's alias (walnut-scope-core.ts),
+   * so it is the same Walnut, which must not read as another one still using this daemon.
+   */
+  forgetKey(key: string): void
 }
 
 export function createServedWalnuts(deps: ServedWalnutsDeps): ServedWalnuts {
@@ -100,5 +108,11 @@ export function createServedWalnuts(deps: ServedWalnutsDeps): ServedWalnuts {
       return typeof at === 'number' && at > deps.now() - KEEP_MS
     },
     write,
+    forgetKey(key) {
+      if (!(key in seen)) return
+      delete seen[key]
+      delete written[key]
+      write()
+    },
   }
 }

@@ -15,90 +15,28 @@
  * /tmp/open-walnut) made one machine's day off hold a good build on the other, and two
  * writers made conflicts that lost holds.
  *
- * The id is random, made once and kept in WALNUT_HOME/local/machine-id (also when a test names a
- * store file elsewhere), never the host name: a Mac with no HostName set takes its name from the
- * network (DHCP, a VPN), so a laptop that moved lost every hold and every stop record (2026-11-04
- * review 4). An entry an older build kept under the host name is still read, once, and moved
- * under the id; of the two, the newer one counts (a build that ran in between, a downgrade).
+ * The id is this machine's stable id (src/core/machine-id.ts, outside the data home: also when a
+ * test names a store file elsewhere, nothing is written beside it), never the host name: a Mac with
+ * no HostName set takes its name from the network (DHCP, a VPN), so a laptop that moved lost every
+ * hold and every stop record (2026-11-04 review 4). An entry an older build kept under an older key
+ * is still read, once, and moved under the id: the id this file kept before in
+ * WALNUT_HOME/local/machine-id (it seeds the stable one, but another process, a daemon or a second
+ * data dir, may have made the stable one first) and, before that, the host name. Of the entries,
+ * the newest counts (a build that ran in between, a downgrade).
  *
  * Read and written async, writes in order, each through a temp file and a rename. A test
  * run keeps none unless it names the file (its env name): tests share one data home, and
  * one test's entry would steer the next test's update.
  */
-import { randomBytes } from 'node:crypto'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { WALNUT_HOME } from '../constants.js'
+import { readLegacyMachineId, readMachineId } from '../core/machine-id.js'
 
 /** Where a store file lives when no test names one: the machine-local part of the data home. */
 export function updateStoreFile(fileName: string): string {
   return path.join(WALNUT_HOME, 'local', fileName)
-}
-
-export const MACHINE_ID_FILE = 'machine-id'
-const MACHINE_ID = /^[0-9a-f]{32}$/
-const machineIds = new Map<string, Promise<string | null>>()
-
-/** Where this machine's id is kept: the machine-local part of the data home, which git-sync never syncs. */
-function machineIdDir(): string {
-  return path.join(WALNUT_HOME, 'local')
-}
-
-/**
- * This machine's id (`machine-id` in `dir`, WALNUT_HOME/local): read, or made once, whole or not at
- * all (a written file linked into place, so two processes that start together agree and neither
- * reads a half-made one). null when none can be read or made (the entries are then keyed by the
- * host name, as an older build did).
- */
-export function updateStoreMachineId(dir: string = machineIdDir()): Promise<string | null> {
-  let id = machineIds.get(dir)
-  if (!id) {
-    id = readOrMakeMachineId(dir)
-    machineIds.set(dir, id)
-    // One that could not be made is asked again later (a data home made meanwhile).
-    void id.then((made) => { if (!made && machineIds.get(dir) === id) machineIds.delete(dir) })
-  }
-  return id
-}
-
-/** Tests: the ids read so far are forgotten, as in a process that just started. */
-export function resetUpdateStoreMachineIdsForTest(): void {
-  machineIds.clear()
-}
-
-async function readOrMakeMachineId(dir: string): Promise<string | null> {
-  const file = path.join(dir, MACHINE_ID_FILE)
-  const read = async () => {
-    const text = (await fsp.readFile(file, 'utf8').catch(() => '')).trim()
-    return MACHINE_ID.test(text) ? text : null
-  }
-  const kept = await read()
-  if (kept) return kept
-  try {
-    await fsp.mkdir(dir, { recursive: true, mode: 0o700 })
-    const fresh = randomBytes(16).toString('hex')
-    const tmp = `${file}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`
-    await fsp.writeFile(tmp, `${fresh}\n`, { mode: 0o600 })
-    try {
-      // 2026-11-04 review 5: an O_EXCL create is written in a second step, and a process that met
-      // the file in between took it for a broken one and put its own id over it.
-      await fsp.link(tmp, file)
-      return fresh
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
-        // No hard links there: an O_EXCL create.
-        return await fsp.writeFile(file, `${fresh}\n`, { flag: 'wx', mode: 0o600 }).then(() => fresh, () => read())
-      }
-      // Made by another process meanwhile (its id), or a file that holds no id: replaced whole.
-      const other = await read()
-      if (other) return other
-      await fsp.rename(tmp, file)
-      return (await read()) ?? fresh
-    } finally {
-      await fsp.rm(tmp, { force: true }).catch(() => {})
-    }
-  } catch { return null }
 }
 
 /** The key an older build kept an entry under: this machine's host name. */
@@ -108,8 +46,15 @@ function hostKey(key: string): string {
 
 /** This machine's part of every key: a data home copied to another machine holds nothing for it there. */
 async function machineKey(key: string): Promise<string> {
-  const id = await updateStoreMachineId()
+  // An id that can be neither read nor made (a read-only home): keyed by the host name, as an older build did.
+  const id = await readMachineId().catch(() => null)
   return id ? `${id}|${key}` : hostKey(key)
+}
+
+/** The keys older builds kept this machine's entry for `key` under, other than `mine`: the data dir's old id, the host name. */
+async function olderKeys(key: string, mine: string): Promise<string[]> {
+  const old = await readLegacyMachineId()
+  return [...new Set([old ? `${old}|${key}` : null, hostKey(key)])].filter((k): k is string => !!k && k !== mine)
 }
 
 let writes: Promise<void> = Promise.resolve()
@@ -149,7 +94,7 @@ export class KeyedUpdateStore<T extends { at: number }> {
 
   /**
    * The entry kept for `key` (past its time or not), or null: none, unreadable, or no file in a
-   * test run. One an older build kept under this machine's host name is read too, and moved.
+   * test run. One an older build kept under an older key of this machine (olderKeys) is read too, and moved.
    */
   async read(key: string): Promise<T | null> {
     const file = this.file()
@@ -157,9 +102,13 @@ export class KeyedUpdateStore<T extends { at: number }> {
     const all = await this.readAll(file)
     const mine = await machineKey(key)
     const entry = this.valid(all[mine]) ? all[mine] as T : null
-    const legacy = mine !== hostKey(key) && this.valid(all[hostKey(key)]) ? all[hostKey(key)] as T : null
-    // The host-name key's entry moves under the id; of the two, the newer counts (an older build
-    // that ran in between wrote the host-name one).
+    let legacy: T | null = null
+    for (const k of await olderKeys(key, mine)) {
+      const e = all[k]
+      if (this.valid(e) && (!legacy || e.at > legacy.at)) legacy = e
+    }
+    // An older key's entry moves under the id; the newest counts (an older build that ran in
+    // between wrote under its own key).
     if (!legacy || (entry && entry.at >= legacy.at)) return entry
     void this.write(key, this.fresh(legacy) ? legacy : null)
     return legacy
@@ -175,8 +124,8 @@ export class KeyedUpdateStore<T extends { at: number }> {
       const mine = await machineKey(key)
       // Entries past their time are dropped on the way.
       for (const [k, e] of Object.entries(all)) if (!this.valid(e) || !this.fresh(e, now)) delete all[k]
-      // The host-name key an older build used for this place goes: the entry lives under the id now.
-      delete all[hostKey(key)]
+      // The keys older builds used for this place go: the entry lives under the id now.
+      for (const k of await olderKeys(key, mine)) delete all[k]
       if (entry) all[mine] = entry
       else delete all[mine]
       const tmp = `${file}.tmp-${process.pid}`

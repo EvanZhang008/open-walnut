@@ -561,6 +561,8 @@ describe('a fenced Demo: a tick mid-run, a late spawn and the counts, in each tw
       applyCheckError: core.applyCheckError, decideCheck: core.decideCheck, applyCheckOutcome: core.applyCheckOutcome,
       triggerCheckCore: { ...core, runCheckProcess },
       triggerCadenceMs: () => 60_000, runClock: () => 'held', GATEWAY_SHIM_DIR: '/stub-shim',
+      // No home here waits for its leader.configure (walnut-scope-core.ts aliases).
+      heldForLeader: () => false,
       // A run's gateway token (trigger-caller-v1): each twin's own way of minting it.
       checkCallers: core.createCheckCallers(), checkCallerEnv: core.checkCallerEnv, GATEWAY_SOCK_PATH: '/stub-sock',
       checkRunCaller: () => ({ env: {}, release: () => {} }),

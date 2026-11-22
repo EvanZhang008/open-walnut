@@ -2,11 +2,15 @@
  * What only this machine knows about its encrypted backups, kept beside the
  * recovery key in `<data home>/local/backup/`:
  *
- *   machine-id   a random id naming this machine as the repository's writer.
- *                Not the hostname: a Mac's hostname changes with the network
- *                (".local", "-2"), and two machines may share one. It never
- *                rides a backup (scan.ts), so a home restored on another
- *                machine is a new writer until the user moves the role.
+ *   machine-id   the id an earlier build made to name this machine as the
+ *                repository's writer. Where it exists it stays the writer id
+ *                (a repository already names it); where it does not, the
+ *                writer is this machine's stable id (src/core/machine-id.ts,
+ *                outside the data home), and nothing is written here. Not the
+ *                hostname: a Mac's hostname changes with the network (".local",
+ *                "-2"), and two machines may share one. Neither rides a backup
+ *                (scan.ts), so a home restored on another machine is a new
+ *                writer until the user moves the role.
  *   run.lock     one backup, prune or restore at a time across processes on
  *                this data home (the server and an `open-walnut backup` in a
  *                terminal), so one never deletes packs the other just used.
@@ -14,12 +18,14 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { pidAlive, processStart } from '../self-update/install-lock.js';
+import { readMachineId } from '../machine-id.js';
+import { isMachineId } from '../../providers/machine-id-core.js';
 
 export interface WriterIdentity {
-  /** Random, stable for this data home on this machine. */
+  /** Random, stable for this machine (an earlier build's, for this data home on this machine). */
   id: string;
   /** What the user reads ("Evans-MacBook-Pro"); stored sealed in the repository. */
   name: string;
@@ -31,8 +37,6 @@ export const runLockPath = (dataDir: string): string => path.join(backupDir(data
 
 /** Files under local/backup/ that belong to this machine and never ride a backup. */
 export const MACHINE_ONLY_FILES = ['local/backup/machine-id', 'local/backup/run.lock'];
-
-const ID_RE = /^[0-9a-f]{32}$/;
 
 let computerNameOnce: Promise<string> | null = null;
 
@@ -52,29 +56,27 @@ export function computerName(): Promise<string> {
   return computerNameOnce;
 }
 
+/**
+ * This machine's writer id for the data home: the one an earlier build made in
+ * `local/backup/machine-id` while it holds one (a repository names it), else one
+ * made from this machine's stable id and the data home's real path. Read only: it
+ * never writes the file.
+ *
+ * Per data home, not per machine: two data homes on one machine (a copy, an
+ * isolated one) are two writers, so a copy can never back up over its original's
+ * repository as if it were it; the same home keeps its id across restarts and
+ * upgrades because the machine id and its path do not change.
+ */
+export async function backupWriterId(dataDir: string): Promise<string> {
+  const kept = (await fs.readFile(machineIdPath(dataDir), 'utf8').catch(() => '')).trim();
+  if (isMachineId(kept)) return kept;
+  const real = await fs.realpath(dataDir).catch(() => path.resolve(dataDir));
+  return createHash('sha256').update(`${await readMachineId()}\0${real}`).digest('hex').slice(0, 32);
+}
+
 export async function localWriter(dataDir: string): Promise<WriterIdentity> {
-  const file = machineIdPath(dataDir);
-  const name = await computerName();
-  try {
-    const id = (await fs.readFile(file, 'utf8')).trim();
-    if (ID_RE.test(id)) return { id, name };
-  } catch {
-    /* none yet */
-  }
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  const id = randomBytes(16).toString('hex');
-  try {
-    // wx: two processes making it at once agree on the first one written.
-    await fs.writeFile(file, `${id}\n`, { mode: 0o600, flag: 'wx' });
-    return { id, name };
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-    const theirs = (await fs.readFile(file, 'utf8')).trim();
-    if (ID_RE.test(theirs)) return { id: theirs, name };
-    // Garbage in the file: replace it (no repository can name an id that never parsed).
-    await fs.writeFile(file, `${id}\n`, { mode: 0o600 });
-    return { id, name };
-  }
+  const [id, name] = await Promise.all([backupWriterId(dataDir), computerName()]);
+  return { id, name };
 }
 
 export class BackupLockedError extends Error {

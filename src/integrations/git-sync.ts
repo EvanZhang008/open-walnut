@@ -1479,7 +1479,7 @@ export function ensureMachineLocalUntracked(): string[] {
  * Must be async: the sync tick runs on the event loop and gitSafe's execSync
  * blocks every HTTP request for the duration (the bug fixed in 2928b29).
  */
-async function ensureMachineLocalUntrackedAsync(): Promise<string[]> {
+async function ensureMachineLocalUntrackedAsync(atBoot = false): Promise<string[]> {
   // `ls-files -i` only reports paths the CURRENT .gitignore ignores, so the
   // ignore rules must exist before the query — otherwise a repo whose
   // .gitignore predates CRITICAL_IGNORES reports nothing and the guard no-ops.
@@ -1499,13 +1499,34 @@ async function ensureMachineLocalUntrackedAsync(): Promise<string[]> {
       untracked.push(...detail.files);
     }
   }
-  if (untracked.length > 0) {
+  if (untracked.length > 0 && atBoot) {
+    log.git.warn(
+      'git-sync untracked machine-local files that were still in the index — a remote deletion could have wiped them from disk',
+      { files: untracked },
+    );
+  } else if (untracked.length > 0) {
     log.git.error(
       'git-sync found a machine-local file re-entering the index AT RUNTIME — untracked it before pulling. A remote deletion would have wiped it from disk (2026-07-25/26 incident).',
       { files: untracked },
     );
   }
   return untracked;
+}
+
+/** A new data home gets the standard .gitignore; an existing one gets its critical rules back. */
+function writeOrHealGitignore(): void {
+  const gitignorePath = path.join(WALNUT_HOME, '.gitignore');
+  if (!fs.existsSync(gitignorePath)) {
+    fs.writeFileSync(gitignorePath, GITIGNORE_CONTENT, 'utf-8');
+  } else {
+    ensureCriticalIgnores();
+  }
+}
+
+/** Async twin of ensureGitIdentity(), for the server's boot (ensureRepo). */
+async function ensureGitIdentityAsync(): Promise<void> {
+  if (!(await gitSafeAsync('config user.name'))) await gitAsync('config user.name "Open Walnut"');
+  if (!(await gitSafeAsync('config user.email'))) await gitAsync('config user.email "open-walnut@localhost"');
 }
 
 function ensureGitIdentity(): void {
@@ -1537,14 +1558,7 @@ export function initSync(remoteUrl?: string): void {
   }
 
   ensureGitIdentity();
-
-  // Create .gitignore if it doesn't exist
-  const gitignorePath = path.join(WALNUT_HOME, '.gitignore');
-  if (!fs.existsSync(gitignorePath)) {
-    fs.writeFileSync(gitignorePath, GITIGNORE_CONTENT, 'utf-8');
-  } else {
-    ensureCriticalIgnores();
-  }
+  writeOrHealGitignore();
 
   if (remoteUrl) {
     setRemote(remoteUrl);
@@ -3284,20 +3298,41 @@ export async function commitIfDirty(): Promise<boolean> {
 /**
  * Ensure ~/.open-walnut/ is a git repo. Initializes if needed.
  * Returns { available: true } if git works, or { available: false, error } if not.
+ *
+ * The server runs this at every boot, so every git call here is async: done with
+ * execSync it held the event loop for up to 1.3 s on a new data home (2026-11-22,
+ * a boot's stall profile: spawnSync 54%, all of it this function's git init,
+ * identity and probes). initSync() stays the CLI's synchronous setup.
  */
-export function ensureRepo(): { available: boolean; error?: string } {
-  if (!isGitAvailable()) {
+export async function ensureRepo(): Promise<{ available: boolean; error?: string }> {
+  if (!(await isGitAvailableAsync())) {
     return { available: false, error: 'git not found in PATH' };
   }
-  if (!isRepo()) {
+  // Asked fresh, never isRepoAsync's cache: a stale answer would init over a live repo.
+  if (!isOwnRepoPrefix(await gitSafeAsync('rev-parse --show-prefix'))) {
     try {
-      initSync();
+      // Inside another repository: the data home gets its own, nested in it (see initSync).
+      const outer = await gitSafeAsync('rev-parse --show-toplevel');
+      if (outer) log.git.warn('git-sync: the data home sits inside another git repository; giving it a repository of its own', { dataHome: WALNUT_HOME, outer });
+      try {
+        await gitAsync('init');
+        await gitAsync('checkout -b main');
+      } finally {
+        invalidateSyncProbeCache();
+      }
+      await ensureGitIdentityAsync();
+      writeOrHealGitignore();
+      // The first commit holds the .gitignore alone, as initSync's does.
+      if ((await gitSafeAsync('log --oneline -1')) === null) {
+        await gitAsync('add -- .gitignore');
+        await gitSafeAsync('commit -m "open-walnut init"');
+      }
     } catch (err) {
       return { available: false, error: `git init failed: ${err instanceof Error ? err.message : String(err)}` };
     }
   } else {
     try {
-      ensureGitIdentity();
+      await ensureGitIdentityAsync();
     } catch (err) {
       return {
         available: false,
@@ -3305,11 +3340,11 @@ export function ensureRepo(): { available: boolean; error?: string } {
       };
     }
     // Pre-existing repo: self-heal the .gitignore so sensitive/machine-local
-    // files added after the repo was initialized never enter the sync history…
-    try { ensureCriticalIgnores(); } catch { /* best-effort */ }
-    // …and drop any that are STILL tracked. Ignoring a tracked path does not
+    // files added after the repo was initialized never enter the sync history
+    // (ensureMachineLocalUntrackedAsync heals it first), and drop any that are
+    // STILL tracked. Ignoring a tracked path does not
     // protect it: a merge carrying its deletion removes the local file.
-    try { ensureMachineLocalUntracked(); } catch { /* best-effort */ }
+    try { await ensureMachineLocalUntrackedAsync(true); } catch { /* best-effort */ }
   }
   return { available: true };
 }

@@ -288,6 +288,20 @@ describe.skipIf(!isBun)('createSpawnPool', () => {
     expect(Buffer.compare(echoed as Buffer, raw)).toBe(0)
   })
 
+  // A1b leftover (2026-11-21): a closed pool ended its thread at once, and a detached child it had
+  // started stayed a zombie of the process once it exited (only its parent thread can reap it).
+  it.skipIf(!isBun || process.platform !== 'linux')('a detached child that ends after close() is reaped, never left a zombie', async () => {
+    pool = createSpawnPool({ umask: null })
+    const child = await pool.spawnDetached('/bin/sh', ['-c', 'sleep 0.4'], { detached: true, stdio: 'ignore' })
+    const pid = child.pid!
+    expect(pid).toBeGreaterThan(1)
+    pool.close()
+    pool = null
+    const state = () => { try { return fs.readFileSync(`/proc/${pid}/stat`, 'utf8').replace(/^.*\) /, '')[0] } catch { return 'gone' } }
+    // Reaped: /proc has no entry for it (a zombie keeps one, state Z).
+    await vi.waitFor(() => expect(state()).toBe('gone'), { timeout: 5000, interval: 50 })
+  })
+
   it('close() answers what still waits', async () => {
     pool = createSpawnPool({ umask: null })
     const waiting = runStarted(pool, 'sleep', ['5'])

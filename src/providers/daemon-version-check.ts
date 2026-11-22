@@ -199,6 +199,8 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/net-core.ts',
   'src/providers/net-binary.ts',
   'src/providers/net-config-core.ts',
+  // The stable id of this machine, sent in hello (imported by the binary, inlined by the source twin).
+  'src/providers/machine-id-core.ts',
   // A task on another host calling the MCP servers and web services of this host
   // (mcp.*, http.request): bundled into the binary AND shipped as host-reach-core.cjs.
   'src/providers/host-mcp-core.ts',
@@ -295,6 +297,7 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/spawn-pool.ts',
   'src/providers/session-spawn-files.ts',
   'src/providers/agent-file-chunk.ts',
+  'src/providers/daemon-door.ts',
   'src/providers/daemon-service-config.ts',
   'src/providers/daemon-service-manager.ts',
   // launchd and systemd steps the manager takes (bootout settled, bootstrap retried, the unit kept active).

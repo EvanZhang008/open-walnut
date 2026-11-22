@@ -97,7 +97,8 @@ export function prewarmCommand(
   compiled: boolean = singleFile() !== null,
 ): [string, string[]] {
   if (compiled && binaryPath === execPath) return [execPath, ['__daemon', '--prewarm-folds']]
-  if (binaryPath.endsWith('.cjs') || binaryPath.endsWith('.js')) return [execPath, [binaryPath, '--prewarm-folds']]
+  // A script runs on this runtime: the daemon bundle (.js/.cjs), or its source (.ts) under bun.
+  if (/\.(cjs|js|ts)$/.test(binaryPath)) return [execPath, [binaryPath, '--prewarm-folds']]
   return [binaryPath, ['--prewarm-folds']]
 }
 

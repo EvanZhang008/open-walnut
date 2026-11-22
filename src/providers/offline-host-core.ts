@@ -339,6 +339,11 @@ export interface OfflineHostDeps {
   randomHex: (bytes: number) => string
   /** Short stable file key for a home (a hash; homes are paths). */
   keyOf: (home: string) => string
+  /**
+   * The home a Walnut is kept under here (walnut-scope-core.ts canonical): a slice of a home
+   * that became another's alias is not that Walnut's copy. Absent: every home is its own.
+   */
+  canonical?: (home: string) => string
   kit: EnvelopeKit
   /** The send rules the server runs (core/sessions/send-rules.ts createSendRules): reply default, wake, deadlines, refusals. */
   rules: SendRules
@@ -647,6 +652,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       if (!name.startsWith('slice-') || !name.endsWith('.json')) continue
       const slice = readJson<HostSlice>(path.join(deps.dir, name))
       if (!slice || slice.v !== 1 || typeof slice.home !== 'string') continue
+      // A copy its home sent before this host knew the home as another's alias: that Walnut's own is kept.
+      if (deps.canonical && deps.canonical(slice.home) !== slice.home) continue
       // Read again after the boot migration copied slices here: a copy a Mac sent since wins.
       const mine = slices.get(slice.home)
       if (mine && Number(mine.asOf ?? 0) >= Number(slice.asOf ?? 0)) continue
@@ -822,6 +829,20 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (last !== undefined && at - last < 24 * 60 * 60 * 1000) return
     writtenAsOf.set(slice.home, at)
     writeAtomic(file('slice', slice.home), slice)
+  }
+
+  /**
+   * `from` became an alias of `to` (walnut-scope-core.ts adopt): the copy it sent first is
+   * `to`'s when it is newer, under `to`'s own name; `from` holds none from now on. Its file
+   * stays where it is (the boot load leaves it out), so nothing an older daemon reads moves.
+   */
+  function foldHome(from: string, to: string): void {
+    const slice = slices.get(from)
+    if (!slice || from === to) return
+    slices.delete(from)
+    writtenAsOf.delete(from)
+    const mine = slices.get(to)
+    if (!mine || Number(slice.asOf ?? 0) >= Number(mine.asOf ?? 0)) configure({ ...slice, home: to })
   }
 
   function hasHome(home: string | undefined): boolean {
@@ -3833,7 +3854,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   return {
     /** The slices on disk again (the boot migration copied some here). */
     reloadSlices: load,
-    configure, holdsSlice, hasHome, ownerOf, pendingHandover, hasRecords, drain, ack, noteSettings, noteStop, handle, handleLocal, handleFollower, holdWrite,
+    configure, foldHome, holdsSlice, hasHome, ownerOf, pendingHandover, hasRecords, drain, ack, noteSettings, noteStop, handle, handleLocal, handleFollower, holdWrite,
     /** A same-host send handleLocal may take (its message id set on the payload): the gateway hands it to a follower that answers it. */
     localCandidate: (home: string, rawCallerSid: string, capability: string, payload: Record<string, unknown>): boolean => localCall(home, rawCallerSid, capability, payload) !== null,
     /** A follower's peer message (`follower.peer`): the write into the live CLI and its records. */

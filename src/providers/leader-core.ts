@@ -308,6 +308,10 @@ export function createLeaderBook(deps: LeaderBookDeps) {
   return {
     configure, primaryClaim, witness, backupClaim, fence, backupLead, anyBackupLead, noteHeard, primaryAgeMs, heardSinceBoot, importLegacy,
     recordOf: (home: string) => records.get(home) ?? null,
+    /** Every home this book has a record for. */
+    homes: () => [...records.keys()],
+    /** The homes whose record names `walnutId` (walnut-scope-core.ts adopt). */
+    homesWith: (walnutId: string) => [...records.values()].filter((rec) => rec.walnutId === walnutId).map((rec) => rec.home),
     /** The v2 kinds the primary of `home` drains, or null (an older Mac, or none configured). */
     drainsFor: (home: string) => records.get(home)?.drains ?? null,
   }

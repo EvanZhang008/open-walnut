@@ -103,7 +103,8 @@ import type { Task } from '../core/types.js'
 import { log } from '../logging/index.js'
 import { usageTracker } from '../core/usage/index.js'
 import * as chatHistory from '../core/chat-history.js'
-import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize, getSyncGuardState, REPO_SIZE_RECOVERY_KEY } from '../integrations/git-sync.js'
+import { gitPullWalnut, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize, getSyncGuardState, REPO_SIZE_RECOVERY_KEY } from '../integrations/git-sync.js'
+import { bootPull, dataRepoReady } from './data-repo-boot.js'
 import { registry } from '../core/integration-registry.js'
 import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, forgetBundledPlugin, isStoreSourcePlugin, getPluginJobSources, getPluginLifecycleRecords, getPluginReloadIds, isPluginCatalogueLoading, loadNewPlugins, loadPlugins, migrateConfigToPlugins, pluginsDeclaringHubPorts, pluginsKeepingTasks, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins, pluginStarting } from '../core/integration-loader.js'
 import { disposeCoreServices, publishCalendarSource, publishFeatureNodes, publishMailCalendarCredentials } from '../core/platform-services.js'
@@ -723,7 +724,9 @@ let terminalReaperHandle: { stop: () => void } | null = null
 let notesWatcherHandle: { stop: () => void } | null = null
 let cancelNotesWarmup: (() => void) | null = null
 let searchV2WiringHandle: { stop(): Promise<void> } | null = null
-let gitAutoCommitHandle: { stop: () => void; health: GitAutoCommitHealth } | null = null
+/** The git auto-commit loop; `ready`: the data repo was checked (ensureRepo, after the recovery) and is there. */
+interface GitAutoCommitHandle { stop: () => void; health: GitAutoCommitHealth; ready: Promise<boolean> }
+let gitAutoCommitHandle: GitAutoCommitHandle | null = null
 let diskWatermarkHandle: { stop: () => void; poll: () => Promise<unknown> } | null = null
 let backupSchedulerHandle: import('../core/backup/backup-scheduler.js').BackupSchedulerHandle | null = null
 let restoreDrillHandle: import('../core/backup/restore-drill-runtime.js').DrillRuntime | null = null
@@ -1412,6 +1415,20 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }
     // Capture for the fatal-signal path (which cannot await an import).
     releaseInstanceLockSync = releaseInstanceLock
+    // One service per machine and daemon dir: with the session daemon in this process (experiment
+    // in_process_daemon), a dir whose daemon another server already runs in its own process is
+    // refused here, with why, before anything starts (never taken over or stopped as a program).
+    {
+      const { inProcessDaemonWanted, AnotherServiceError } = await import('../providers/in-process-daemon.js')
+      if (await inProcessDaemonWanted()) {
+        const { localDaemon } = await import('../providers/local-daemon.js')
+        const other = await localDaemon.otherServiceHolding()
+        if (other) {
+          releaseInstanceLock()
+          throw new AnotherServiceError(localDaemon.dir, other.pid)
+        }
+      }
+    }
     // A switchable leader (experiment switchable_leader with a leader_switch section) leads
     // only with the write permission: a home that was handed over, or whose permission
     // another machine holds, refuses to boot here (core/leader/switch/boot.ts). Off, this
@@ -3646,30 +3663,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })
     : Promise.resolve()
 
-  // Pull after listen without gating HTTP. Once any remote outbox/projection is
-  // reconciled, broadcast the existing bulk task signal so early clients fetch
-  // the post-pull source of truth.
-  if (!isEphemeral && bootPolicy('git-pull')) {
-    void compactionRecovered
-      .then(() => gitPullWalnut())
-      .then(async () => {
-        startupPhase('background git pull done')
-        const { reconcileAfterPull } = await import('../core/task-outbox.js')
-        await reconcileAfterPull()
-        bus.emit(
-          EventNames.TASK_UPDATED,
-          { task: null } as any,
-          ['web-ui'],
-          { source: 'startup-git-pull' },
-        )
-      })
-      .catch((err) => {
-        log.git.warn('startup git pull failed', {
-          error: err instanceof Error ? err.message : String(err),
-        })
-      })
-  }
-
   if (bootPolicy('link-tags')) {
     const { startLinkTagWatcher } = await import('../core/link-tags-apply.js')
     startLinkTagWatcher()
@@ -3972,6 +3965,30 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   if (!isEphemeral) {
     if (bootPolicy('git-auto-commit')) gitAutoCommitHandle = startGitAutoCommit(compactionRecovered)
+
+    // Pull after listen without gating HTTP, once the data repo is ready (data-repo-boot.ts:
+    // compaction recovery, then ensureRepo untracking machine-local files); with git-auto-commit
+    // off nothing checks the repo, so after the recovery alone, as before. Once any remote
+    // outbox/projection is reconciled, broadcast the existing bulk task signal so early clients
+    // fetch the post-pull source of truth.
+    if (bootPolicy('git-pull')) {
+      const repoReady = gitAutoCommitHandle?.ready ?? compactionRecovered.then(() => true)
+      void bootPull(repoReady, async () => {
+        startupPhase('background git pull done')
+        const { reconcileAfterPull } = await import('../core/task-outbox.js')
+        await reconcileAfterPull()
+        bus.emit(
+          EventNames.TASK_UPDATED,
+          { task: null } as any,
+          ['web-ui'],
+          { source: 'startup-git-pull' },
+        )
+      }).catch((err) => {
+        log.git.warn('startup git pull failed', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
+    }
 
     // Disk watermark monitor: warn at 80% used, block writes (507) + git
     // pull-only at 90% (see src/core/disk-watermark.ts). Runs on every
@@ -6754,7 +6771,7 @@ const GIT_POLL_INTERVAL_MS = 30_000
 function startGitAutoCommit(
   // Compaction crash recovery: it moves main, so nothing here touches git before it settles.
   recovered: Promise<unknown> = Promise.resolve(),
-): { stop: () => void; health: GitAutoCommitHealth } {
+): GitAutoCommitHandle {
   const health: GitAutoCommitHealth = { protected: false, consecutiveFailures: 0 }
   let notifiedForEpisode = false // only send one feed notification per failure episode
   let lockContentionCount = 0
@@ -6765,17 +6782,24 @@ function startGitAutoCommit(
     broadcastEvent('git-sync:status', { ...health, heldFiles: [] })
   }
 
-  // Check git availability
-  const repo = ensureRepo()
-  if (!repo.available) {
-    const msg = repo.error ?? 'git not available'
-    log.git.warn('data not protected', { error: msg })
-    health.error = msg
-    emitStatus()
-    return { stop() {}, health }
-  }
-
-  health.protected = true
+  // Check git availability, off the event loop and after the recovery (data-repo-boot.ts):
+  // ensureRepo's git calls are async (2026-11-22: done sync they held a boot for up to
+  // 1.3 s). Everything below waits for it, and so does the boot pull (the handle's
+  // `ready`); health reads "not protected" until it answers.
+  const ready = dataRepoReady(recovered)
+    .then((repo) => {
+      if (!repo.available) {
+        const msg = repo.error ?? 'git not available'
+        log.git.warn('data not protected', { error: msg })
+        health.error = msg
+        emitStatus()
+        return false
+      }
+      health.protected = true
+      log.git.info('git auto-commit started', { intervalMs: GIT_POLL_INTERVAL_MS })
+      emitStatus()
+      return true
+    })
 
   // Commit any leftover dirty state from a previous crash, THEN pull.
   //
@@ -6789,8 +6813,7 @@ function startGitAutoCommit(
   //
   // Still non-blocking: this is a detached promise chain, so server listen and
   // the rest of startup are not gated on git.
-  void recovered
-    .then(() => commitIfDirty())
+  void ready.then((ok): Promise<void> | undefined => (!ok || gitTickStopped) ? undefined : commitIfDirty()
     .then((committed) => {
       if (committed) {
         health.lastCommitAt = new Date().toISOString()
@@ -6805,7 +6828,7 @@ function startGitAutoCommit(
     .then(() => gitPullWalnut())
     .catch((err) => {
       log.git.warn('startup git pull failed', { error: String(err) })
-    })
+    }))
 
   let syncTick = 0
   // setTimeout self-reschedule (not setInterval): the next tick is armed only
@@ -6950,23 +6973,21 @@ function startGitAutoCommit(
       }
     }
   }
-  void recovered.then(() => {
-    if (gitTickStopped) return
+  void ready.then((ok) => {
+    if (!ok || gitTickStopped) return
     gitTickTimer = setTimeout(() => { void gitTick() }, GIT_POLL_INTERVAL_MS)
     gitTickTimer.unref?.()
   })
-
-  log.git.info('git auto-commit started', { intervalMs: GIT_POLL_INTERVAL_MS })
-  emitStatus()
 
   return {
     stop() {
       gitTickStopped = true
       if (gitTickTimer) clearTimeout(gitTickTimer)
-      // Final commit on shutdown (fire-and-forget — process is exiting)
-      commitIfDirty().catch(() => {})
+      // Final commit on shutdown (fire-and-forget — process is exiting); only into a repo ensureRepo vouched for.
+      if (health.protected) commitIfDirty().catch(() => {})
     },
     health,
+    ready,
   }
 }
 

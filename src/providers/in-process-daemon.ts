@@ -17,6 +17,8 @@ import type { DaemonRuntime, DaemonRuntimeOptions } from './daemon-runtime-types
 import { IN_PROCESS_DAEMON_URL, type InProcessConnect } from './in-process-daemon-socket.js'
 import { DAEMON_BINARIES_DIR } from '../constants.js'
 import { log } from '../logging/index.js'
+import os from 'node:os'
+import { readDaemonInstanceOwner, type DaemonLockOwnerInfo } from './daemon-instance-lock.js'
 
 export { IN_PROCESS_DAEMON_URL }
 
@@ -80,6 +82,19 @@ async function loadRuntimeModule(): Promise<{ module: RuntimeModule; script: str
   return { module: await import(pathToFileURL(found).href) as RuntimeModule, script: found }
 }
 
+/**
+ * What runs this build's fold prewarm (fold-prewarm.ts) before the runtime starts in process: the
+ * compiled file itself, or the runtime script; its version keys the prewarm's lock.
+ */
+export function inProcessRuntimeTarget(): { binaryPath: string; version: string } {
+  if (provided) return { binaryPath: process.execPath, version: `compiled:${process.execPath}` }
+  const candidates = daemonRuntimeCandidates(import.meta.url, DAEMON_BINARIES_DIR)
+  const found = candidates.find((file) => fs.existsSync(file)) ?? candidates[0]!
+  let version = `script:${found}`
+  try { version = fs.readFileSync(`${found}.version`, 'utf8').trim() || version } catch { /* source: no version file */ }
+  return { binaryPath: found, version }
+}
+
 interface Held { runtime: DaemonRuntime; dir: string; ended: boolean }
 let held: Held | null = null
 let starting: Promise<InProcessStart> | null = null
@@ -118,6 +133,10 @@ export function startInProcessDaemon(opts: { dir: string; env: NodeJS.ProcessEnv
       env: opts.env,
       mode: 'start',
       listen: false,
+      // The door stays open for everyone this server does not call directly (walnut-net, a
+      // host's follower server, hub forwards, a leader's tunnel): turning the experiment on
+      // takes none of them away. No daemon.pid: this pid is the server's, never a daemon's to signal.
+      door: true,
       program: { script },
       // The runtime ended itself (another daemon took its dir, a stop it was asked for): the
       // server stays up; its next dial starts it again or finds the daemon that took the dir.
@@ -203,6 +222,25 @@ export async function stopInProcessDaemon(reason: string, budgetMs?: number, opt
 export type InProcessVerdict = { kind: 'in-process'; url: string } | { kind: 'declined'; why: string }
 
 /**
+ * One service per machine and daemon dir: another Walnut server already runs the session daemon of
+ * this dir in its own process (its lock banner says inProcess). This one refuses, and never stops
+ * it the way it stops a daemon program (its door answers on daemon.port, as a program's does).
+ */
+export class AnotherServiceError extends Error {
+  constructor(readonly dir: string, readonly pid: number) {
+    super(`Another Walnut service (pid ${pid}) runs the session daemon of ${dir}: one service per machine and data dir. `
+      + 'Stop that one first, or give this one its own data and daemon dirs (OPEN_WALNUT_HOME, WALNUT_DAEMON_DIR).')
+    this.name = 'AnotherServiceError'
+  }
+}
+
+/** The other service that holds `dir` in its own process, or null (none, a daemon program, or this process). */
+export async function anotherServiceHolds(dir: string, read: (o: { runtimeDir: string; uid: number }) => Promise<DaemonLockOwnerInfo | null> = readDaemonInstanceOwner): Promise<{ pid: number } | null> {
+  const owner = await read({ runtimeDir: dir, uid: os.userInfo().uid }).catch(() => null)
+  return owner?.inProcess && owner.pid !== process.pid ? { pid: owner.pid } : null
+}
+
+/**
  * LocalDaemon's way to its daemon in process: a daemon program that still serves the dir is
  * stopped first (stopProgram, which refuses one a service manager runs), then the runtime starts.
  * `declined`: the dir stays with the daemon that serves it, and the caller dials that one.
@@ -213,9 +251,19 @@ export async function ensureInProcessDaemon(deps: {
   alive: (port: number) => Promise<boolean>
   stopProgram: () => Promise<void>
   env: () => Promise<NodeJS.ProcessEnv>
+  /** Who holds the dir's lock (anotherServiceHolds): tests hand their own. */
+  otherService?: () => Promise<{ pid: number } | null>
+  /**
+   * Folds the registry's streams in a child process first (fold-prewarm.ts), so the start adopts
+   * from fresh checkpoints: in process its re-fold holds the server's thread (A3b measure: about
+   * 10 ms per MB not yet folded, 16 s for 30 sessions of 50 MB). A failure is logged, never fatal.
+   */
+  prewarm?: () => Promise<void>
 }): Promise<InProcessVerdict> {
   if (inProcessDaemonRunning()) return { kind: 'in-process', url: IN_PROCESS_DAEMON_URL }
   if (closedForGood) throw new InProcessDaemonClosedError()
+  const other = await (deps.otherService ?? (() => anotherServiceHolds(deps.dir)))()
+  if (other) throw new AnotherServiceError(deps.dir, other.pid)
   const port = deps.readPort()
   if (port && await deps.alive(port)) {
     try {
@@ -224,6 +272,13 @@ export async function ensureInProcessDaemon(deps: {
     } catch (err) {
       return { kind: 'declined', why: err instanceof Error ? err.message : String(err) }
     }
+  }
+  if (deps.prewarm) {
+    const t0 = Date.now()
+    await deps.prewarm().then(
+      () => log.session.info('in-process daemon: fold prewarm done', { dir: deps.dir, ms: Date.now() - t0 }),
+      (err: unknown) => log.session.warn('in-process daemon: fold prewarm failed; adopting without it', { dir: deps.dir, error: err instanceof Error ? err.message : String(err) }),
+    )
   }
   let started: InProcessStart
   try {

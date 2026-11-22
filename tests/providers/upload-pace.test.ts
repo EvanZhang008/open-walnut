@@ -29,7 +29,8 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-upload-pace-
 import { CHANNEL_RULES, HostUploadPace, type UploadPaceDeps } from '../../src/providers/upload-pace.js'
 import { pacedForward } from '../../src/providers/paced-forward.js'
 import type { LaneForward } from '../../src/providers/stream-lane.js'
-import { updateStoreMachineId, updateStoresSettled } from '../../src/providers/daemon-update-store.js'
+import { updateStoresSettled } from '../../src/providers/daemon-update-store.js'
+import { readMachineId } from '../../src/core/machine-id.js'
 import { __resetHostLinkLedgerForTest, noteHostLinkDown } from '../../src/providers/host-link-ledger.js'
 
 const KB = 1024
@@ -289,7 +290,7 @@ describe('the memory is kept for the next server', () => {
   })
 
   it('a kept pace under the floor of today is read back at the floor', async () => {
-    const id = await updateStoreMachineId()
+    const id = await readMachineId()
     const at = Date.now()
     fs.writeFileSync(storeFile, JSON.stringify({ [`${id}|ssh:devbox#bulk`]: { rate: 1024, ceiling: 3072, cutAt: at, at, demandMs: 0 } }))
     const pace = new HostUploadPace('devbox', 'bulk', noLinkDrop)
@@ -302,7 +303,7 @@ describe('the memory is kept for the next server', () => {
     const broken = new HostUploadPace('devbox', 'bulk', noLinkDrop)
     await broken.ready()
     expect(broken.limits).toBeNull()
-    const id = await updateStoreMachineId()
+    const id = await readMachineId()
     fs.writeFileSync(storeFile, JSON.stringify({ [`${id}|ssh:devbox#bulk`]: { rate: 'slow', at: Date.now() } }))
     const odd = new HostUploadPace('devbox', 'bulk', noLinkDrop)
     await odd.ready()

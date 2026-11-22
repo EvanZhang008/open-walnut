@@ -2005,8 +2005,8 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
     // placeholder-seeded runtime list — daemonCapabilities() wraps
     // __DAEMON_CAPABILITIES__ to add sidecar-gated caps).
     expect(standaloneSrc).toMatch(/capabilities:\s*helloCapabilities\(\)/)
-    // In process the door's capabilities are left out (`advertised`, DOOR_CAPABILITIES); a program advertises them all.
-    expect(standaloneSrc).toMatch(/const advertised = LISTEN \? ADVERTISED_DAEMON_CAPABILITIES : ADVERTISED_DAEMON_CAPABILITIES\.filter\(\(c\) => !DOOR_CAPABILITIES\.has\(c\)\)/)
+    // With no door (a runtime in a server that opens none) the door's capabilities are left out (`advertised`, DOOR_CAPABILITIES).
+    expect(standaloneSrc).toMatch(/const advertised = DOOR \? ADVERTISED_DAEMON_CAPABILITIES : ADVERTISED_DAEMON_CAPABILITIES\.filter\(\(c\) => !DOOR_CAPABILITIES\.has\(c\)\)/)
     expect(standaloneSrc).toMatch(/return\s*\[\.\.\.advertised,\s*'service-handover-v1',\s*\.\.\.\(cronRuntime\s*\?\s*\['cron-supervision-v1',\s*'service-update-v1',\s*'service-update-force-v1'\]\s*:\s*\[\]\)/)
     expect(templateSrc).toMatch(/capabilities:\s*daemonCapabilities\(\)/)
     expect(templateSrc).toMatch(/__DAEMON_CAPABILITIES__\.slice\(\)/)
@@ -2345,8 +2345,13 @@ describe('cloud bridge daemon-standalone vs daemon-source parity', () => {
     const loop = standaloneSrc.slice(standaloneSrc.indexOf('const clientKeepaliveExpired'), standaloneSrc.indexOf('}, TRUSTED_CLIENT_BEAT_MS).unref?.()') + 40)
     expect(loop).toMatch(/if \(ws\.data\?\.origin === 'bridge'\) continue\s*\n\s*if \(clientKeepaliveExpired\(ws\)\) continue\s*\n\s*try \{ ws\.ping\(\) \} catch \{\}/)
     // Every inbound frame counts as an answer, on both twins.
-    for (const h of [/open\(ws\) \{\s*\n\s*heardFrom\(ws\)/, /message\(ws, msg\) \{\s*\n\s*heardFrom\(ws\)/, /ping\(ws\) \{\s*\n\s*heardFrom\(ws\)/, /pong\(ws\) \{\s*\n\s*heardFrom\(ws\)/]) {
+    // bun: the door (daemon-door.ts) hands every frame to the runtime's handlers, which hear it first.
+    for (const h of [/open\(ws\) \{\s*\n\s*heardFrom\(ws\)/, /message\(ws, text\) \{\s*\n\s*heardFrom\(ws\)/, /heard: \(ws\) => heardFrom\(ws\)/]) {
       expect(standaloneSrc).toMatch(h)
+    }
+    const doorSrc = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-door.ts'), 'utf-8')
+    for (const h of [/ping: \(ws\) => handlers\.heard\(ws\)/, /pong: \(ws\) => handlers\.heard\(ws\)/, /message: \(ws, msg\) => handlers\.message\(/]) {
+      expect(doorSrc).toMatch(h)
     }
     for (const h of [/wss\.on\('connection', \(ws\) => \{\s*\n\s*heardFrom\(ws\);/, /ws\.on\('pong', \(\) => heardFrom\(ws\)\);/, /ws\.on\('ping', \(\) => heardFrom\(ws\)\);/, /ws\.on\('message', \(msg\) => \{\s*\n\s*heardFrom\(ws\);/, /\/\/ pong\s*\n\s*ws\.emit\('ping'\);/]) {
       expect(templateSrc).toMatch(h)
@@ -3045,7 +3050,7 @@ describe('silent-death guards daemon-standalone vs daemon-source parity', () => 
       // …and an async handler's rejection is caught too (fs.* return promises).
       expect(hc).toMatch(/typeof (?:\(out as Promise<unknown>\)\.then|out\.then) === 'function'/)
       // …and a valid-JSON-but-not-object frame can't throw before the guard.
-      expect(hc).toMatch(/if \(!cmd \|\| typeof cmd !== 'object'\) return sendError/)
+      expect(hc).toMatch(/if \(!(cmd|sent) \|\| typeof \1 !== 'object'\) return sendError/)
       // The switch itself must live in dispatchCommand (nothing dispatches outside the guard).
       expect(src).toMatch(/function dispatchCommand\(ws(?:: ServerWebSocket<WsData>)?, id(?:: number)?, cmd(?:: Record<string, unknown>)?\) \{\s*\n\s*switch \(cmd\.cmd\)/)
     }
@@ -3644,7 +3649,8 @@ describe('one CLI per session id parity (cli-owner-v1)', () => {
       expect(wait).toMatch(/pid > 1 && \(signalable\(-pid\) \|\| signalable\(pid\)\)/)
       expect(wait).toMatch(/killProcessGroup\(pid, 'SIGKILL'\)/)
       expect(src).toMatch(/if \(cmd\.strict !== true\) return null/)
-      expect(src).toMatch(/if \(owner \? owner === home : !journaled && !resume\) return null/)
+      // The asking Walnut by its first home here (walnut-scope-core.ts canonical), as the journal's owner is.
+      expect(src).toMatch(/if \(owner \? owner === walnutScope\.canonical\(home (?:\?\?|\|\|) ''\) : !journaled && !resume\) return null/)
       expect(src).toContain("errorKind === 'session_other_walnut' ? { reason: 'session_other_walnut', code: 'SESSION_NOT_OURS' }")
     }
     expect(readFile(path.join(ROOT, 'src/providers/remote-session-manager.ts'))).toContain('...(IS_EPHEMERAL ? { strict: true } : {}),')

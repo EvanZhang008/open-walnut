@@ -19,6 +19,7 @@ export const OUTSIDE_ENTRIES: readonly OutsideEntry[] = [
   outside('machine', 'xdg-state', 'state.leader-instance', 'open-walnut/leader-instance', 'dir', 'The instance lock of a switchable leader: one leader server per machine id holds the write permission'),
   outside('machine', 'xdg-state', 'state.approvals', 'open-walnut/approvals', 'dir', 'Wait tokens of approval asks made from this machine\'s shell', { sensitive: true }),
   outside('machine', 'xdg-state', 'state.net', 'open-walnut/net', 'dir', 'This machine\'s host network identity (always under ~/.local/state)', { sensitive: true }),
+  outside('machine', 'xdg-state', 'state.machine-id', 'open-walnut/machine-id', 'file', 'This machine\'s stable id, sent in the daemon\'s hello (always under ~/.local/state)'),
   outside('machine', 'xdg-state', 'state.net-members', 'open-walnut/net-members.json', 'file', 'The companion\'s list of machines allowed on the host network'),
   outside('machine', 'xdg-state', 'state.clone-identity', 'open-walnut/clone-identity', 'dir', 'Pending clone identity marks of this machine\'s sessions'),
   outside('machine', 'xdg-state', 'state.daemon-previous', 'open-walnut/daemon-previous', 'dir', 'The previous daemon build, kept for a rollback'),

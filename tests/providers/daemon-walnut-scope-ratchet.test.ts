@@ -66,6 +66,7 @@ const FILES: Record<string, string> = {
   BRIDGE_FILE: 'walnut: the unnamed scope\'s bridge.json; named links under walnutScope.dirFor',
   WORKSPACE_STATE_DIR: 'walnut: workspace adapters per scope (workspace-core scopeDir)',
   LEADER_BOOK_DIR: 'walnut: leader-<keyOf(home)>.json',
+  HOME_ALIASES_FILE: 'walnut: which homes name a Walnut kept under its first home here (walnut-scope-core.ts aliases)',
   OFFLINE_HOST_DIR: 'walnut: offline host slices and journal keyed by home',
   HELD_PUSHES_FILE: 'host: the account\'s skill copies by hash (skills.sync is host-wide)',
   JOURNAL_ROOT: 'walnut: parent of the per-home journal dirs',
@@ -97,6 +98,7 @@ const FILES: Record<string, string> = {
   HOME_DIR: 'host: the account\'s home',
   PID_FILE: 'host: this daemon\'s pid',
   PORT_FILE: 'host: this daemon\'s port',
+  WRITES_PID_FILE: 'host: a flag (does this runtime write PID_FILE), not a path',
   VERSION_FILE: 'host: this daemon\'s version',
   SERVES_FILE: 'host: which Walnuts this daemon serves, by key, with its capabilities (served-walnuts-core.ts)',
   INSTANCE_ID_FILE: 'host: this daemon\'s instance id',
@@ -124,6 +126,7 @@ const TWIN_ONLY: Record<string, string> = {
   ACP_ARTIFACT_DIR: 'standalone: ACP sessions run only in the bun twin',
   HOST_EXEC_DIR: 'standalone: the source twin builds the path inline',
   WORKSPACE_STATE_DIR: 'standalone: the source twin passes the dir inline',
+  WRITES_PID_FILE: 'standalone: only its runtime can run inside a server, which writes no pid file',
 }
 
 /**

@@ -10,15 +10,14 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { BUILD_BACKOFF_MS, buildBackedOff, buildBackoffSettled, readBuildBackoff, writeBuildBackoff } from '../../src/providers/daemon-build-backoff.js'
-import { resetUpdateStoreMachineIdsForTest, updateStoreMachineId } from '../../src/providers/daemon-update-store.js'
-import { WALNUT_HOME } from '../../src/constants.js'
+import { machineIdFile, readMachineId } from '../../src/core/machine-id.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-build-backoff-')))
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }))
 afterEach(() => { delete process.env.WALNUT_BUILD_BACKOFF_FILE })
-/** This machine's key for a place (daemon-update-store.ts: its machine id, kept in the data home's local dir). */
+/** This machine's key for a place (daemon-update-store.ts: the machine's stable id, src/core/machine-id.ts). */
 let id = ''
-beforeAll(async () => { id = (await updateStoreMachineId())! })
+beforeAll(async () => { id = await readMachineId() })
 const mine = (key: string) => `${id}|${key}`
 
 describe('the kept build backoff', () => {
@@ -78,10 +77,10 @@ describe('the kept build backoff', () => {
 
   // 2026-11-04 review 4: the key was os.hostname(), which on a Mac with no HostName set follows
   // the network (DHCP, a VPN): a laptop that moved lost every hold and every stop record.
-  it('is keyed by a machine id made once and kept in the data home, not by the host name, which may change', async () => {
+  it('is keyed by the machine\'s stable id, not by the host name, which may change', async () => {
     const file = path.join(root, 'e.json')
     process.env.WALNUT_BUILD_BACKOFF_FILE = file
-    expect(fs.readFileSync(path.join(WALNUT_HOME, 'local', 'machine-id'), 'utf8').trim()).toBe(id)
+    expect(fs.readFileSync(machineIdFile(), 'utf8').trim()).toBe(id)
     // Never beside a store file a test names (os.tmpdir() there, 2026-11-04 review 5).
     expect(fs.existsSync(path.join(root, 'machine-id'))).toBe(false)
     expect(id).toMatch(/^[0-9a-f]{32}$/)
@@ -93,35 +92,6 @@ describe('the kept build backoff', () => {
     try {
       expect(await readBuildBackoff('local:/tmp/open-walnut')).toEqual({ expected: 'b1', at, reason: 'it did not stay' })
     } finally { named.mockRestore() }
-    // Two processes that start at the same time agree on the id (made once), and a later one reads it.
-    const other = path.join(root, 'twin')
-    resetUpdateStoreMachineIdsForTest()
-    const first = updateStoreMachineId(other)
-    resetUpdateStoreMachineIdsForTest()
-    const second = updateStoreMachineId(other)
-    const [a, b] = await Promise.all([first, second])
-    expect(a).toMatch(/^[0-9a-f]{32}$/)
-    expect(b).toBe(a)
-    resetUpdateStoreMachineIdsForTest()
-    expect(await updateStoreMachineId(other)).toBe(a)
-  })
-
-  // 2026-11-04 review 5: the id file was made with O_EXCL and written in a second step, so a process
-  // that met it in between read it empty and put its own id over it, while the first kept its own.
-  it('many processes that start at once all agree on one id, whole on disk', async () => {
-    for (let round = 0; round < 5; round++) {
-      const dir = path.join(root, `race-${round}`)
-      const made: Promise<string | null>[] = []
-      for (let i = 0; i < 12; i++) {
-        resetUpdateStoreMachineIdsForTest()
-        made.push(updateStoreMachineId(dir))
-      }
-      const ids = await Promise.all(made)
-      expect(new Set(ids).size).toBe(1)
-      expect(fs.readFileSync(path.join(dir, 'machine-id'), 'utf8').trim()).toBe(ids[0])
-      expect(fs.readdirSync(dir)).toEqual(['machine-id'])
-    }
-    resetUpdateStoreMachineIdsForTest()
   })
 
   it('of an entry under the id and one an older build wrote under the host name since, the newer counts', async () => {

@@ -95,6 +95,8 @@ function compileHandle(source: string, environment: Record<string, unknown>): (w
     SERVED_PUSHES: literalSet(source, 'SERVED_PUSHES'),
     isServerClient: compile<(ws: unknown) => boolean>(`return ${extract(source, 'isServerClient')};`, {}),
     servedWalnuts: { note: vi.fn() }, walnutScope: { askedHome: () => '' }, gatewayClientHomes: new WeakMap(),
+    // Every command names its Walnut by its first home here (walnut-scope-core.ts): none is aliased in this run.
+    adoptCommandHome: (_ws: unknown, cmd: unknown) => cmd,
     BRIDGE_ALLOWED_COMMANDS: new Set(), BRIDGE_SESSION_COMMANDS: new Set(), FOLLOWER_ALLOWED_COMMANDS: new Set(), LANE_ALLOWED_COMMANDS: new Set(),
     bridgeHearsSession: () => true, followerScope: () => false, safeSend: vi.fn(), sendError: vi.fn(), logMsg: vi.fn(),
     // host_exec runs: none here is resumable, so every read is admitted like other work.
@@ -123,6 +125,8 @@ const idleHostExec = () => ({ stuck: () => false, endForUpdate: vi.fn(), untilEn
  */
 // The runtime exits through exitRuntime (options.exit, then in process what an exit gives back).
 const STANDALONE_SHUTDOWN = 'requestDaemonShutdown = () => { if (exitAsked) return; exitAsked = true; void stopDaemon().then((code) => exitRuntime(code)) }'
+// A production dir's stop never reaps (tests/providers/in-process-stop-reap.test.ts covers the reap).
+const STOP_REAP_OFF = 'const shouldReapOnExit = () => false; const ownsDaemonDir = () => true; const reapAllSessionGroups = async () => {};'
 const stopDaemonSource = (source: string) => {
   if (/function exitDaemon\(/.test(source)) {
     const exit = `const EXIT_LOOK_GRACE_MS = 1000; let exitingDaemon = false; ${extract(source, 'exitDaemon')}\n`
@@ -130,7 +134,7 @@ const stopDaemonSource = (source: string) => {
   }
   if (!source.includes(STANDALONE_SHUTDOWN)) throw new Error('standalone: requestDaemonShutdown no longer exits with stopDaemon\'s code')
   const options = "const options = { exit: (code) => process.exit(code), hardExit: () => process.kill(process.pid, 'SIGKILL') };"
-  return `${options} const exitRuntime = (code) => options.exit(code); const daemonEnv = process.env; let shutdown = null; let requestDaemonShutdown = null; let exitAsked = false; const stopDaemon = ${extract(source, 'stopDaemon')}; ${STANDALONE_SHUTDOWN}; return requestDaemonShutdown;`
+  return `${options} const exitRuntime = (code) => options.exit(code); const daemonEnv = process.env; let shutdown = null; let requestDaemonShutdown = null; let exitAsked = false; ${STOP_REAP_OFF} const stopDaemon = ${extract(source, 'stopDaemon')}; ${STANDALONE_SHUTDOWN}; return requestDaemonShutdown;`
 }
 const template = getDaemonSource()
 const templateDrain = compile<typeof createDaemonCommandDrain>(
@@ -223,7 +227,7 @@ describe.each([
     const registryFs = { writeFileSync, openSync: () => 123, fsyncSync: vi.fn(), closeSync: vi.fn(), renameSync: vi.fn() }
     const registrySource = _kind === 'standalone' ? fs.readFileSync(path.resolve('src/providers/daemon-core.ts'), 'utf8') : source
     const persist = compile<() => void>(`${extract(registrySource, 'persistRegistry')}\nreturn persistRegistry;`, {
-      sessions, fs: registryFs, deps: { bootId: 'boot' }, daemonBootId: 'boot', clock: () => 0,
+      sessions, fs: registryFs, deps: { bootId: 'boot' }, daemonBootId: 'boot', clock: () => 0, registryHeldForExit: false,
       registryFile: '/fixture/sessions.json', REGISTRY_FILE: '/fixture/sessions.json',
       dirname: path.dirname, path, logger: vi.fn(), logMsg: vi.fn(),
     })

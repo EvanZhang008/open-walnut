@@ -115,6 +115,11 @@ const umasked = (umask, file, args, options) => {
   if (!found.exe) throw spawnError(file, found.code)
   return ['/bin/sh', ['-c', 'umask ' + umask.toString(8).padStart(3, '0') + ' && exec "$0" "$@"', found.exe, ...args]]
 }
+// A closed pool's thread stays only to reap the children it started (a process can wait only for
+// its own children: one this thread started and nobody waits for is a zombie until the process
+// exits), and closes itself once the last one ended.
+let retiring = false
+const retireIfIdle = () => { if (retiring && children.size === 0) self.close() }
 // Every stream of a child has a listener: an EPIPE is that child's matter, never this thread's end.
 const guard = (id, child) => {
   if (child.stdin) child.stdin.on('error', (err) => postMessage({ op: 'stdin-error', id, error: errorOf(err) }))
@@ -129,6 +134,7 @@ const handle = (m) => {
       child = cp.execFile(file, args, m.options, (err, stdout, stderr) => {
         children.delete(m.id)
         postMessage({ op: 'done', id: m.id, error: errorOf(err), stdout, stderr, exitCode: child.exitCode, signalCode: child.signalCode, spawnFailed: !child.pid })
+        retireIfIdle()
       })
     } catch (err) { postMessage({ op: 'done', id: m.id, error: errorOf(err), stdout: '', stderr: '', spawnFailed: true }); return }
     children.set(m.id, child)
@@ -149,7 +155,7 @@ const handle = (m) => {
     children.set(m.id, child)
     postMessage({ op: 'spawn', id: m.id, pid: child.pid })
     child.on('error', (err) => postMessage({ op: 'error', id: m.id, error: errorOf(err) }))
-    child.on('exit', (code, signal) => { children.delete(m.id); postMessage({ op: 'exit', id: m.id, code, signal }) })
+    child.on('exit', (code, signal) => { children.delete(m.id); postMessage({ op: 'exit', id: m.id, code, signal }); retireIfIdle() })
     child.unref()
   } else if (m.op === 'signal') {
     try { children.get(m.id)?.kill(m.signal) } catch {}
@@ -157,6 +163,9 @@ const handle = (m) => {
     try { children.get(m.id)?.stdin?.write(m.data) } catch {}
   } else if (m.op === 'stdin-end') {
     try { children.get(m.id)?.stdin?.end() } catch {}
+  } else if (m.op === 'retire') {
+    retiring = true
+    retireIfIdle()
   }
 }
 self.onmessage = (event) => {
@@ -221,7 +230,12 @@ export interface SpawnPool {
   spawnDetached(command: string, args: string[], options: Record<string, unknown>): Promise<PooledChild>
   /** Children still followed. */
   readonly pending: number
-  /** Ends the pool's thread: what still waits is answered POOL_CLOSED, helpers are killed, detached children run on (no longer followed). */
+  /**
+   * Closes the pool: what still waits is answered POOL_CLOSED, helpers are killed, detached children
+   * run on (no longer followed; the next runtime adopts them by pid). The thread stays, holding
+   * nothing open (unref'd), only to reap those children as they end, then closes itself: ended
+   * at once, it would leave each of them a zombie of this process.
+   */
   close(): void
   /** @internal Tests only: ends the pool's thread as a crash would. */
   __terminateWorkerForTest(): void
@@ -449,7 +463,10 @@ export function createSpawnPool(opts: SpawnPoolOptions = { umask: null }): Spawn
       const error = poolError('the spawn pool closed', 'POOL_CLOSED')
       for (const [id, p] of [...pending]) { try { giveUp(id, p, error, true) } catch { /* the caller's own */ } }
       for (const child of [...lost.keys()]) unfollow(child)
-      w?.terminate()
+      if (!w) return
+      // Nothing it says is heard any more (worker is null: died() ignores its close).
+      w.onmessage = null
+      try { w.postMessage({ op: 'retire' }) } catch { try { w.terminate() } catch { /* gone */ } }
     },
     __terminateWorkerForTest() { worker?.terminate() },
   }

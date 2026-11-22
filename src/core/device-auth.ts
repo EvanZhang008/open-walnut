@@ -40,7 +40,7 @@ import type { PushRevokeOutcome } from './push/device-revoke.js'
 
 export type { CompanionOwner, DeviceRecord, DeviceRegistry, DeviceSelfInfo, OwnerVia } from './device-store.js'
 export { tokenMatchesHash } from './device-store.js'
-export { getInstanceId, validateDeviceName } from './device-store.js'
+export { getInstanceId, isVolatileInstanceId, validateDeviceName } from './device-store.js'
 export { claimInstance, getSetupTokenIfUnclaimed, isClaimed, printSetupTokenBanner } from './device-claim.js'
 export { _settleRevokeWorkForTesting, type TwinRemoval } from './devices/revoke-parts.js'
 export {

@@ -56,6 +56,11 @@ export interface HostProfile {
    * rows connected to then (same-daemon-record.ts). One trigger set is pushed for all of them.
    */
   sameDaemon?: Record<string, { self: string; other: string; at: string }>;
+  /**
+   * The machine id this alias's daemon gave in its last hello (machine-id-core.ts), with what the
+   * alias's row connected to then (same-daemon-record.ts). Aliases with one id are one machine.
+   */
+  machine?: { id: string; link: string; at: string };
   updatedAt: string;
 }
 

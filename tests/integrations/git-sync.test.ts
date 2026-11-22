@@ -253,18 +253,18 @@ describe('auth.json is never synced (data-repo gitignore)', () => {
     initSync();
     await fsp.writeFile(path.join(tmpDir, '.gitignore'), 'images/\n', 'utf-8');
 
-    const result = ensureRepo();
+    const result = await ensureRepo();
     expect(result.available).toBe(true);
     const gitignore = await fsp.readFile(path.join(tmpDir, '.gitignore'), 'utf-8');
     expect(gitignore.split('\n')).toContain('auth.json');
   });
 
   it('ensureRepo repairs a missing Git identity in an existing repo', async () => {
-    await withNoConfiguredGitIdentity(() => {
+    await withNoConfiguredGitIdentity(async () => {
       execSync('git init -q', { cwd: tmpDir });
       execSync('git checkout -q -B main', { cwd: tmpDir });
 
-      expect(ensureRepo()).toEqual({ available: true });
+      expect(await ensureRepo()).toEqual({ available: true });
       expect(execSync('git config --local user.name', {
         cwd: tmpDir,
         encoding: 'utf-8',

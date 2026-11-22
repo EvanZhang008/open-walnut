@@ -63,7 +63,10 @@ import { daemonLaunch, discardPending, keepPendingBinary, keepPreviousSource, ke
 import { STAY_MS, StayWatch } from './local-daemon-stay.js'
 import { provenBuilds, stayWatches } from './daemon-update-store.js'
 import { backoffLeftMs, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
-import { ensureInProcessDaemon, inProcessDaemonRunning, inProcessDaemonWanted, stopInProcessDaemon } from './in-process-daemon.js'
+import { anotherServiceHolds, ensureInProcessDaemon, inProcessDaemonRunning, inProcessDaemonWanted, inProcessRuntimeTarget, stopInProcessDaemon } from './in-process-daemon.js'
+
+/** How long an in-process start waits for its fold prewarm before it adopts what is left itself (the first in-process dial waits as long; the event loop stays free). */
+const IN_PROCESS_PREWARM_MAX_MS = 120_000
 
 /** True only when the config says nothing runs on Claude Code (core/agents/claude-code-needed.ts); a read that fails says it may. */
 /**
@@ -414,6 +417,14 @@ export class LocalDaemon {
 
   private readonly readyListeners = new Set<() => void>()
 
+  /** The daemon dir this LocalDaemon serves. */
+  get dir(): string { return this.daemonDir }
+
+  /** Another Walnut service that runs this dir's daemon in its own process (one service per machine and dir), or null. */
+  otherServiceHolding(): Promise<{ pid: number } | null> {
+    return anotherServiceHolds(this.daemonDir)
+  }
+
   /** The daemon in this process when the experiment says so (and it can be had), else a daemon program. */
   private async ensureRunningOrInProcess(): Promise<number> {
     if (this.inProcess && !this._inProcessDeclined && await this.inProcess()) {
@@ -425,6 +436,14 @@ export class LocalDaemon {
         // and a persistent one keep their sessions for the registry); never two manage one dir.
         // A daemon a service manager runs is that manager's to stop: this refuses, and the server uses it.
         stopProgram: () => this.stopDaemon(),
+        prewarm: async () => {
+          if (!(await registryNeedsFoldPrewarm(this.daemonDir))) return
+          const target = inProcessRuntimeTarget()
+          // Bounded (fold-prewarm.ts): the child stops at its own deadline, 20 s before the bound,
+          // saving how far it got; one still running at the bound is killed (SIGTERM). Either way
+          // the start then adopts and folds what is left in process, as with no prewarm.
+          await runFoldPrewarm({ ...target, daemonDir: this.daemonDir, env: await this.buildSpawnEnv(), maxMs: IN_PROCESS_PREWARM_MAX_MS })
+        },
         env: async () => {
           const env = await this.buildSpawnEnv()
           // The server is the parent: nothing of a separate program's watchdog applies.

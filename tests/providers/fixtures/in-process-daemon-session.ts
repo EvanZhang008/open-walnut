@@ -175,8 +175,16 @@ try {
     await sleep(50)
     children = childrenOfSelf()
   }
+  // The door (daemon-door.ts) is open in process too: a client that is not this server (walnut-net,
+  // a host's follower, a leader's tunnel) says hello over daemon.port and asks for this session.
+  const { askOwnPort } = await import('../../../src/providers/service-launcher-beat.ts')
+  const doorPort = Number(fs.readFileSync(path.join(DIR, 'daemon.port'), 'utf8').trim())
+  const ask = askOwnPort(doorPort, WebSocket as never)
+  const doorHello = await ask({ cmd: 'hello' }) as { capabilities?: string[] }
+  const doorStatus = await ask({ cmd: 'status', sid: s1.sid }) as { exists?: boolean; ok?: boolean }
   out.s1 = {
     started: started1,
+    door: { port: doorPort, capabilities: doorHello.capabilities ?? null, statusExists: doorStatus.exists ?? null },
     portFile: fs.existsSync(path.join(DIR, 'daemon.port')),
     pidFile: fs.existsSync(path.join(DIR, 'daemon.pid')),
     cliPid: start1.pid,

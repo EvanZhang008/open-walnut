@@ -21,6 +21,7 @@ import { pruneRepo } from '../../../src/core/backup/repo/prune.js';
 import { Repository } from '../../../src/core/backup/repo/repository.js';
 import { ensureRecoveryKey, readRecoveryKey, recoveryKeyPath, writeRecoveryKey } from '../../../src/core/backup/recovery-key.js';
 import { BackupLockedError, backupLockHeld, localWriter, machineIdPath, runLockPath, withBackupLock } from '../../../src/core/backup/local-state.js';
+import { machineIdFile, readMachineId, setMachineIdHomeForTest } from '../../../src/core/machine-id.js';
 import { scanDataDir } from '../../../src/core/backup/scan.js';
 
 const H = { id: 'c'.repeat(32), name: 'h' };
@@ -41,6 +42,8 @@ async function write(rel: string, body: string | Buffer): Promise<void> {
 beforeEach(async () => {
   root = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-repo-safety-'));
   home = path.join(root, 'home');
+  // This machine's stable id lives under the account's home: a temp one per test.
+  setMachineIdHomeForTest(path.join(root, 'account'));
   await write('notes/a.md', '# a\n'.repeat(1000));
   await write('notes/blob.bin', randomBytes(2 * 1024 * 1024));
   store = new LocalStore(path.join(root, 'dest'));
@@ -48,6 +51,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  setMachineIdHomeForTest(null);
   await fsp.rm(root, { recursive: true, force: true });
 });
 
@@ -237,9 +241,47 @@ describe('what a restored home carries', () => {
     expect(await readRecoveryKey(target)).toBe(await readRecoveryKey(home));
     expect((await fsp.stat(path.join(target, 'plugins/x/bin/run.sh'))).mode & 0o777).toBe(0o700);
     expect((await fsp.stat(path.join(target, 'notes/a.md'))).mode & 0o777).toBe(0o600);
-    // The restored home is a new writer until the user moves the role to it.
+    // On another machine (another account home) the restored home is a new writer until the user moves the role to it.
+    setMachineIdHomeForTest(path.join(root, 'other-machine'));
     const other = await localWriter(target);
     expect(other.id).not.toBe(me.id);
     await expect(runRepoBackup(store, raw, { dataDir: target, writer: other })).rejects.toMatchObject({ code: 'other_writer' });
   }, 60_000);
+});
+
+describe('the writer id', () => {
+  it('an existing local/backup/machine-id stays the writer: repositories already name it', async () => {
+    await write('local/backup/machine-id', `${'7'.repeat(32)}\n`);
+    expect((await localWriter(home)).id).toBe('7'.repeat(32));
+    expect((await localWriter(home)).id).not.toBe(await readMachineId());
+    expect((await fsp.readFile(machineIdPath(home), 'utf8')).trim()).toBe('7'.repeat(32));
+  });
+
+  it('with none, the writer comes from this machine\'s stable id and the data home, and no backup id file is written', async () => {
+    const me = await localWriter(home);
+    expect(me.id).toMatch(/^[0-9a-f]{32}$/);
+    expect(me.id).not.toBe(await readMachineId());
+    expect((await localWriter(home)).id).toBe(me.id);
+    // The machine id file is the stable one; nothing is written in the data home.
+    expect((await fsp.readFile(machineIdFile(), 'utf8')).trim()).toBe(await readMachineId());
+    await expect(fsp.stat(machineIdPath(home))).rejects.toThrow();
+    // One that holds no id is no writer id either: the stable one is.
+    await write('local/backup/machine-id', 'broken');
+    expect((await localWriter(home)).id).toBe(me.id);
+  });
+
+  it('a full copy of the data home is a new writer, on this machine and on another', async () => {
+    const me = await localWriter(home);
+    const copy = path.join(root, 'copy');
+    await fsp.cp(home, copy, { recursive: true });
+    // A copy on the same machine is another data home, so another writer: it never backs up as the original.
+    const sameMachine = await localWriter(copy);
+    expect(sameMachine.id).toMatch(/^[0-9a-f]{32}$/);
+    expect(sameMachine.id).not.toBe(me.id);
+    setMachineIdHomeForTest(path.join(root, 'other-machine'));
+    const there = await localWriter(copy);
+    expect(there.id).toMatch(/^[0-9a-f]{32}$/);
+    expect(there.id).not.toBe(me.id);
+    expect(there.id).not.toBe(sameMachine.id);
+  });
 });

@@ -148,6 +148,7 @@ SOURCES=(
   src/providers/net-core.ts
   src/providers/net-binary.ts
   src/providers/net-config-core.ts
+  src/providers/machine-id-core.ts
   src/providers/host-mcp-core.ts
   src/providers/host-http-core.ts
   src/providers/host-reach-core.ts
@@ -217,6 +218,7 @@ SOURCES=(
   src/providers/spawn-pool.ts
   src/providers/session-spawn-files.ts
   src/providers/agent-file-chunk.ts
+  src/providers/daemon-door.ts
   src/providers/daemon-service-config.ts
   src/providers/daemon-service-manager.ts
   src/providers/daemon-service-launchd.ts

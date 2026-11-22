@@ -133,7 +133,15 @@ export async function configureHostLeader(conn: LeaderHostConnection): Promise<H
   const backup = await backupLeaderAllowed()
   // `drains`: the journal v2 kinds this Mac applies (journal-v2); a daemon writes them only then.
   const { MAC_DRAINS } = await import('../offline-merge/apply-v2.js')
-  const reply = await conn.send('leader.configure', { home: WALNUT_HOME, walnutId: await walnutId(), backup, drains: [...MAC_DRAINS] }, 15_000)
+  const id = await walnutId()
+  // An id this process keeps in memory only names no Walnut a host may continue (walnut-scope-core.ts adopt).
+  const { isVolatileInstanceId } = await import('../device-auth.js')
+  const volatile = isVolatileInstanceId(id) ? { walnutIdVolatile: true } : {}
+  // A host may take this home for the Walnut it already keeps under another one (walnut-scope-core.ts
+  // adopt) only under the one-service experiment, until its real-host evidence is in.
+  const { inProcessDaemonWanted } = await import('../../providers/in-process-daemon.js')
+  const moves = (await inProcessDaemonWanted()) ? { walnutHomeMoves: true } : {}
+  const reply = await conn.send('leader.configure', { home: WALNUT_HOME, walnutId: id, backup, drains: [...MAC_DRAINS], ...volatile, ...moves }, 15_000)
   if (reply.ok !== true) {
     log.leader.warn('leader: host refused the Walnut description', { host: conn.hostKey, error: String(reply.error ?? '') })
     return null

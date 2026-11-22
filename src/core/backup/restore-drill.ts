@@ -23,7 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { log } from '../../logging/index.js';
 import { pidAlive } from '../self-update/install-lock.js';
-import { machineIdPath, withBackupLock } from './local-state.js';
+import { backupWriterId, withBackupLock } from './local-state.js';
 import { atomicWriteSameDir } from '../bounded-memory-backup.js';
 import { describeDestination, makeStore } from './destination.js';
 import { readRecoveryKey } from './recovery-key.js';
@@ -152,9 +152,9 @@ function inside(child: string, parent: string): boolean {
 
 interface Picked { repo: Repository; store: BackupStore; snapshot: Snapshot; encrypted: boolean; raw: Buffer | null }
 
-/** This machine's backup writer id, read only (localWriter would make one). */
+/** This machine's backup writer id (local-state.ts backupWriterId); null when it cannot be read. */
 async function machineWriterId(dataDir: string): Promise<string | null> {
-  return (await fs.readFile(machineIdPath(dataDir), 'utf8').catch(() => '')).trim() || null;
+  return backupWriterId(dataDir).catch(() => null);
 }
 
 /** The repository holding the backup to drill, and that backup. */
