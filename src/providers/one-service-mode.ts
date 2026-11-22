@@ -146,8 +146,12 @@ export interface ServiceModeInputs {
   serveUnfit: { expected: string; why: string } | null
   /** The switch this host was last asked (ServiceModeAsk): read only when the mode is decided. */
   modeAsked(): Promise<ServiceModeAsk | null>
-  /** The offer for this host: in_process_daemon or the host in `host_service_offer` (service-launcher-flag.ts hostServiceOfferWanted). */
-  offerWanted(): Promise<boolean>
+  /**
+   * The offer for this host: in_process_daemon or the host in `host_service_offer` (service-launcher-flag.ts
+   * hostServiceOfferWanted). null: a listed name may be this same machine and its id is not known yet,
+   * so the mode is left as it is (never switched back on a guess).
+   */
+  offerWanted(): Promise<boolean | null>
   launcherWanted(): Promise<boolean>
   follower(): Promise<FollowerFact>
   /** Walnut Health: the host's offer as decided now, only while the experiments are on (one-service-health.ts). */
@@ -161,7 +165,9 @@ export interface ServiceModeInputs {
  * nothing else is read: the answer is "leave it".
  */
 export async function serviceModeWantNow(i: ServiceModeInputs): Promise<ServiceModeWant> {
-  const experiment = (await i.offerWanted()) && (await i.launcherWanted())
+  const offer = await i.offerWanted()
+  if (offer === null) return { want: null }
+  const experiment = offer && (await i.launcherWanted())
   if (!experiment) {
     i.noteOff?.()
     if (i.serves !== 'walnut-serve') return { want: null }

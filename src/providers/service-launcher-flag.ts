@@ -34,7 +34,7 @@ export async function serviceLauncherWanted(): Promise<boolean> {
  * start. A host taken out of the list is switched back at its next update, as when the experiment
  * goes off. WALNUT_HOST_SERVICE_OFFER=1 or 0 decides the offer alone for one process.
  */
-export async function hostServiceOfferWanted(hostKey: string): Promise<boolean> {
+export async function hostServiceOfferWanted(hostKey: string, machineIdOf?: (hostKey: string) => string | null): Promise<boolean | null> {
   const forced = process.env.WALNUT_HOST_SERVICE_OFFER
   if (forced === '1' || forced === '0') return forced === '1'
   try {
@@ -43,7 +43,22 @@ export async function hostServiceOfferWanted(hostKey: string): Promise<boolean> 
     if (experimentalEnabled(config.experimental, 'in_process_daemon')) return true
     // A hand-edited file may hold anything here: only a list of names counts.
     const listed: unknown = config.host_service_offer
-    return Array.isArray(listed) && listed.includes(hostKey)
+    if (!Array.isArray(listed)) return false
+    if (listed.includes(hostKey)) return true
+    // The list names config entries, and two entries can be one machine (two names for one box):
+    // a name of the same machine (the same hello machine id) counts, and while a listed name's
+    // machine is not known yet the answer is "not sure", so the box is never switched back and forth.
+    const others = listed.filter((k): k is string => typeof k === 'string' && k !== hostKey)
+    if (others.length === 0 || !machineIdOf) return false
+    const mine = machineIdOf(hostKey)
+    if (!mine) return null
+    let unknown = false
+    for (const k of others) {
+      const theirs = machineIdOf(k)
+      if (theirs === mine) return true
+      if (!theirs) unknown = true
+    }
+    return unknown ? null : false
   } catch {
     return false
   }

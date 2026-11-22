@@ -260,7 +260,7 @@ describe('PUT /api/config', () => {
     expect((await request(app).put('/api/config').set(page).send({ user: { name: 'Pat' } })).status).toBe(200);
     expect((await onDisk()).host_service_offer).toEqual(['devbox']);
 
-    for (const bad of ['devbox', [''], [7], { devbox: true }]) {
+    for (const bad of ['devbox', [''], [7], { devbox: true }, ['devbx'], ['__local__']]) {
       const res = await request(app).put('/api/config').send({ host_service_offer: bad });
       expect(res.status, JSON.stringify(bad)).toBe(400);
       expect(res.body.field).toBe('host_service_offer');

@@ -622,6 +622,15 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       res.status(400).json({ error: 'host_service_offer must be a list of host keys', field: 'host_service_offer' })
       return
     }
+    // A name that is no host of this Walnut offers nothing, silently: refused with the names it does know.
+    if (Array.isArray(offer)) {
+      const known = new Set(Object.keys({ ...(storedConfig.hosts ?? {}), ...((body.hosts as Record<string, unknown> | undefined) ?? {}) }))
+      const unknown = (offer as string[]).filter((k) => !known.has(k))
+      if (unknown.length > 0) {
+        res.status(400).json({ error: `host_service_offer names no host: ${unknown.join(', ')} (hosts: ${[...known].join(', ') || 'none'})`, field: 'host_service_offer' })
+        return
+      }
+    }
 
     if (body.version !== undefined && body.version !== 1) {
       res.status(400).json({ error: 'version must be 1' })

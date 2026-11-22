@@ -221,6 +221,34 @@ describe('hostServiceOfferWanted', () => {
     await expect(inProcessDaemonWanted()).resolves.toBe(false)
   })
 
+  // Offer-list review M1: two config names for one machine (the same hello machine id) are one box,
+  // so listing one of them never switches the box back and forth between the two names.
+  it('a name of the same machine counts as listed; an unknown machine id is "not sure" (null)', async () => {
+    delete process.env.WALNUT_HOST_SERVICE_OFFER
+    const offer = await withConfig({ experimental: { in_process_daemon: false }, host_service_offer: ['devbox'] })
+    const ids: Record<string, string | null> = { devbox: 'm-1', 'devbox-alias': 'm-1', 'gpu-box': 'm-2', newbox: null }
+    const idOf = (k: string) => ids[k] ?? null
+    await expect(offer('devbox-alias', idOf)).resolves.toBe(true)
+    await expect(offer('gpu-box', idOf)).resolves.toBe(false)
+    // This connection's machine is not known yet: no answer either way.
+    await expect(offer('newbox', idOf)).resolves.toBeNull()
+    // A listed name whose machine is not known yet: not sure, unless another listed name is this machine.
+    ids.devbox = null
+    await expect(offer('gpu-box', idOf)).resolves.toBeNull()
+    // No lookup given: by name only.
+    await expect(offer('devbox-alias')).resolves.toBe(false)
+  })
+
+  it('serviceModeWantNow leaves the mode as it is while the offer is not sure', async () => {
+    const i = {
+      serves: 'walnut-serve' as const, serviceHome: HOME, home: HOME, launcher: true, expected: 'walnut-daemon-new',
+      serveUnfit: null, modeAsked: vi.fn(async () => null), offerWanted: vi.fn(async () => null),
+      launcherWanted: vi.fn(async () => true), follower: vi.fn(async () => ({ kind: 'replica' as const })), note: vi.fn(), noteOff: vi.fn(),
+    }
+    await expect(serviceModeWantNow(i)).resolves.toEqual({ want: null })
+    expect(i.launcherWanted).not.toHaveBeenCalled()
+  })
+
   it('the experiment on offers every host, listed or not', async () => {
     delete process.env.WALNUT_HOST_SERVICE_OFFER
     const offer = await withConfig({ experimental: { in_process_daemon: true }, host_service_offer: ['devbox'] })

@@ -829,6 +829,9 @@ export class DaemonConnection {
   /** A successful hello on the current transport, not a cached id from the prior link. */
   private _helloConfirmed = false
   private _helloTarget: SshTarget | null = null
+  /** The machine id the daemon's last hello gave (machine-id-core.ts), null before or from an older daemon. */
+  private _helloMachineId: string | null = null
+  get helloMachineId(): string | null { return this._helloMachineId }
   /** What the link the current hello confirmed actually dials (same-daemon-record.ts); null while not confirmed. */
   helloTargetIdentity(): Promise<string | null> {
     if (!this._helloConfirmed) return Promise.resolve(null)
@@ -4020,7 +4023,7 @@ export class DaemonConnection {
     return serviceModeWantNow({
       ...this.servesAs, home: WALNUT_HOME, launcher: !!this._launcher, expected: this.getExpectedDaemonVersion(),
       serveUnfit: this._serveUnfit, modeAsked: () => this.modeAsked(),
-      offerWanted: () => hostServiceOfferWanted(this.hostKey),
+      offerWanted: () => hostServiceOfferWanted(this.hostKey, pooledMachineIdOf),
       launcherWanted: () => serviceLauncherWanted(),
       follower: async () => (await import('../core/host-server/index.js')).hostFollowerFact(this.hostKey),
       note: (w) => { void import('../core/hosts/one-service-health.js').then((m) => m.noteServiceOffer(this.hostKey, w)).catch(() => {}) },
@@ -6122,6 +6125,7 @@ export class DaemonConnection {
       // daemon older than the id sends none.
       const said: unknown = res.machineId
       const machineId = isMachineId(said) ? said : null
+      this._helloMachineId = machineId
       if (machineId) {
         const target = JSON.stringify(this._helloTarget)
         void import('./in-process-daemon.js')
@@ -11128,6 +11132,11 @@ export function getDaemonDisconnectedAwakeMs(hostKey: string): number {
  * pay SSH connect costs; when the pool is cold the event is simply dropped
  * (the phone's snapshot frame covers the gap on its next connect).
  */
+/** The machine id a pooled host connection's last hello gave; null when not pooled or not known. */
+export function pooledMachineIdOf(hostKey: string): string | null {
+  return connectionPool.get(hostKey)?.helloMachineId ?? null
+}
+
 export function getConnectedDaemonConnection(hostKey: string): DaemonConnection | null {
   const conn = connectionPool.get(hostKey)
   if (conn?.connected) return conn
