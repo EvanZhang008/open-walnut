@@ -20,7 +20,7 @@
  */
 import { test, expect, type Page, type Locator, type ElementHandle } from '@playwright/test';
 import { createEnvelopeKit } from '../../../src/core/peers/envelope-kit';
-import { TOOL_ROW_LINES, ENVELOPE_ROW_LINES, OTHER_ROW_LINES, ROW_DETAIL_PARTS } from '../../../web/src/components/sessions/step-row-kinds';
+import { TOOL_ROW_LINES, ENVELOPE_ROW_LINES, OTHER_ROW_LINES, ROW_DETAIL_PARTS, CUT_PARTS, CUT_SKIP, CUT_CHEVRONS } from '../../../web/src/components/sessions/step-row-kinds';
 import { MOCK_SESSION_ID as SID, mockSession, open } from './mock-session-harness';
 
 const SHOTS = process.env.STEP_ROW_SHOTS ?? '/tmp/step-row-lines';
@@ -168,14 +168,15 @@ function check(kind: string, state: string, l: Lines) {
 /** A row whose words are cut shows its open chevron at rest (cut-cue.ts, 2026-11-21: notices
  *  cut "with no way to expand"): its line parts, and its chevron's opacity with no pointer on it. */
 async function cueOf(row: Locator): Promise<{ cut: boolean; cue: number | null; text: string }> {
-  return row.evaluate((head: Element) => {
+  return row.evaluate((head: Element, sel: { parts: string; skip: string; chevrons: string }) => {
     const card = head.closest('.provenance-card') ?? head;
-    const parts = [...card.querySelectorAll<HTMLElement>('.op-card-title, .op-card-summary, .op-card-to, .op-card-to-pill, .op-card-to-text, .tool-run-label, .tool-run-detail')]
-      .filter((el) => { const inner = el.closest('.op-card-detail, .tool-run-body'); return !(inner && card.contains(inner)); });
+    const parts = [...card.querySelectorAll<HTMLElement>(sel.parts)]
+      .filter((el) => { const inner = el.closest(sel.skip); return !(inner && card.contains(inner)); });
     const cut = parts.some((el) => el.scrollWidth > el.clientWidth + 1);
-    const chev = card.querySelector<HTMLElement>(':scope > .op-card-main .op-card-more-chevron, :scope > .tool-run-toggle .tool-run-chevron, :scope .tool-run-chevron');
+    // Its own chevron: the first one on its line, never one inside its opened detail.
+    const chev = [...card.querySelectorAll<HTMLElement>(sel.chevrons)].find((c) => { const inner = c.closest(sel.skip); return !(inner && card.contains(inner)); }) ?? null;
     return { cut, cue: chev ? Number(getComputedStyle(chev).opacity) : null, text: (card.textContent ?? '').slice(0, 60) };
-  });
+  }, { parts: CUT_PARTS, skip: CUT_SKIP, chevrons: CUT_CHEVRONS });
 }
 
 async function rowsOf(hist: Locator, kind: string): Promise<Locator[]> {
@@ -247,16 +248,21 @@ for (const width of [1280, 720]) {
     // A row cut short says so at rest: its chevron shows with no pointer on it.
     await page.mouse.move(0, 0);
     await page.waitForTimeout(200);
-    let cutRows = 0;
-    for (const kind of [...Object.keys(ENVELOPE_ROW_LINES), 'sent', 'thinking', 'words']) {
+    // Every kind step-row-kinds.ts lists, so a new kind is held to it too.
+    const cutBy: Record<string, number> = {};
+    for (const kind of Object.keys(KINDS)) {
       for (const r of await rowsOf(hist, kind)) {
         const c = await cueOf(r);
         if (!c.cut || c.cue === null) continue;
-        cutRows++;
+        cutBy[kind] = (cutBy[kind] ?? 0) + 1;
         expect(c.cue, `${kind}: "${c.text}" is cut but its chevron is hidden at rest`).toBeGreaterThanOrEqual(0.5);
       }
     }
-    expect(cutRows, 'the fixture holds rows cut short, or this checks nothing').toBeGreaterThan(0);
+    console.log(`[step-rows] cut rows at ${width}px: ${JSON.stringify(cutBy)}`);
+    expect(Object.keys(cutBy).length, 'the fixture holds rows cut short, or this checks nothing').toBeGreaterThan(0);
+    // A call's line (Bash, Edit, any other tool) is one of them (2026-11-22, the last member).
+    const cutCalls = Object.keys(TOOL_ROW_LINES).reduce((n, k) => n + (cutBy[k] ?? 0), 0);
+    expect(cutCalls, 'the fixture holds a call whose line is cut, or the tool rows go unchecked').toBeGreaterThan(0);
     // Each card and call opened to its detail keeps its one or two lines.
     for (const kind of ['reply', 'peer-note', 'notification', 'trigger', 'app-state', 'sent', 'bash', 'generic', 'edit', 'run'] as const) {
       const [r] = await rowsOf(hist, kind);

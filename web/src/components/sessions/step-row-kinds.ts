@@ -58,3 +58,20 @@ export const OTHER_ROW_LINES = {
 
 /** The parts of a row that are its opened detail, never its line. */
 export const ROW_DETAIL_PARTS = '.op-card-detail, .chat-tool-block-body, .tool-run-body, .process-fold-body, .session-plan-card-body, .session-system-detail';
+
+/**
+ * The parts of a row's line that are cut with an ellipsis (cut-cue.ts marks a row whose part
+ * overflows; step-row-lines.spec.ts checks every kind above against the same list). A new part
+ * that ellipsizes goes here, or its row cuts silently.
+ */
+export const CUT_PARTS = [
+  '.op-card-title', '.op-card-summary', '.op-card-to', '.op-card-to-pill', '.op-card-to-text',
+  '.tool-run-label', '.tool-run-detail',
+  '.chat-tool-block-desc', '.chat-tool-block-summary', '.chat-tool-block-decision', '.edit-diff-filename',
+].join(', ');
+
+/** An opened row's detail, whose parts belong to the rows inside it, never to its line. */
+export const CUT_SKIP = '.op-card-detail, .tool-run-body, .chat-tool-block-body';
+
+/** The open chevron of a row that shows it only on hover unless the row is cut. */
+export const CUT_CHEVRONS = '.op-card-more-chevron, .tool-run-chevron, .chat-tool-block-arrow';

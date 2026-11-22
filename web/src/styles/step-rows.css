@@ -77,6 +77,8 @@
 :root .session-history .chat-tool-block .chat-tool-block-arrow .step-icon { width: 12px; height: 12px; flex-basis: 12px; }
 :root .session-history .chat-tool-block > .chat-tool-block-header:hover .chat-tool-block-arrow { opacity: .7; }
 :root .session-history .chat-tool-block--open .chat-tool-block-arrow { opacity: .7; transform: rotate(90deg); }
+/* A call whose line is cut shows its chevron at rest (cut-cue.ts), as a cut card or thought does. */
+:root .session-history .chat-tool-block > .chat-tool-block-header[data-cut="true"] .chat-tool-block-arrow { opacity: 1; color: var(--fg-secondary); }
 :root .session-history .chat-tool-block > .chat-tool-block-body {
   margin: 2px 0 8px 28px;
   border: none;

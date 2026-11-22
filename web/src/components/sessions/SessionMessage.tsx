@@ -110,9 +110,11 @@ function EditDiffView({ filePath, oldString, newString, replaceAll, status, resu
 
   const filename = filePath.split('/').pop() ?? filePath;
 
+  // Its line shows the chevron at rest while the file name is cut (cut-cue.ts).
+  const headRef = useCutCue<HTMLButtonElement>(`${collapsed}\n${filePath}`);
   return (
     <div className={`chat-tool-block ${statusClass}${collapsed ? '' : ' chat-tool-block--open'}`}>
-      <button className="chat-tool-block-header" aria-expanded={!collapsed} onClick={() => setCollapsed(p => !p)}>
+      <button ref={headRef} className="chat-tool-block-header" aria-expanded={!collapsed} onClick={() => setCollapsed(p => !p)}>
         <span className="chat-tool-block-icon">{statusIcon}</span>
         <span className="chat-tool-block-name">Edit</span>
         <span className="edit-diff-filename" title={filePath}>{filename}</span>
@@ -1040,9 +1042,11 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
   const toolFilePath = typeof safeInput.file_path === 'string' ? safeInput.file_path : null;
   const showViewFile = onFileOpen && toolFilePath && ['Edit', 'Read', 'Write', 'NotebookEdit'].includes(tool.name);
 
+  // Its line shows the chevron at rest while its words are cut (cut-cue.ts).
+  const headRef = useCutCue<HTMLButtonElement>(`${open}\n${status}\n${description ?? ''}\n${inputSummary ?? ''}\n${decision ?? ''}`);
   return (
     <div className={`chat-tool-block ${statusClass}${open ? ' chat-tool-block--open' : ''}`}>
-      <button className="chat-tool-block-header" aria-expanded={open} onClick={() => setOpen((p) => !p)}>
+      <button ref={headRef} className="chat-tool-block-header" aria-expanded={open} onClick={() => setOpen((p) => !p)}>
         <span className="chat-tool-block-icon">{statusIcon}</span>
         <span className="chat-tool-block-name" title={tool.name}>{toolDisplayName(tool.name)}</span>
         {description && (

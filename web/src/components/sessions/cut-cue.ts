@@ -10,14 +10,12 @@
  * of rows (Load earlier turns) costs one layout, not one per row.
  */
 import { useLayoutEffect, useRef, type RefObject } from 'react';
-
-/** The parts of a row that are cut with an ellipsis. */
-export const CUT_PARTS = '.op-card-title, .op-card-summary, .op-card-to, .op-card-to-pill, .op-card-to-text, .tool-run-label, .tool-run-detail';
+import { CUT_PARTS, CUT_SKIP } from './step-row-kinds';
 
 function isCut(row: Element): boolean {
   for (const el of row.querySelectorAll<HTMLElement>(CUT_PARTS)) {
     // Its own line only: an opened card's detail or a row's body may hold other rows.
-    const inner = el.closest('.op-card-detail, .tool-run-body');
+    const inner = el.closest(CUT_SKIP);
     if (inner && row.contains(inner)) continue;
     if (el.scrollWidth > el.clientWidth + 1) return true;
   }

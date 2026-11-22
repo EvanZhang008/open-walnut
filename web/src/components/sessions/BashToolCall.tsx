@@ -6,6 +6,7 @@ import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { findImagePaths, resolveImagePath } from '@/utils/markdown';
 import { isUserDenied, tooLongAnswer, TOO_LONG_ANSWER_NOTE } from './tool-run-phrase';
 import { useRunLive } from './fold-body-context';
+import { useCutCue } from './cut-cue';
 import { AnswerText } from './RuleDetail';
 import { answeredCallState, callAnswerText, callDecisionLabel, useDeniedNow, useSoleCall, useToolDecisions, useWaitingTools } from './waiting-tools';
 import { bashCommandSummary, toolDescription } from '@open-walnut/tool-header-text';
@@ -125,9 +126,11 @@ export function BashToolCall({ tool, status: statusProp = 'done', result: result
     : status === 'error' ? 'chat-tool-block-error'
     : status === 'done' ? 'chat-tool-block-done' : 'chat-tool-block-calling';
 
+  // Its line shows the chevron at rest while its words are cut (cut-cue.ts).
+  const headRef = useCutCue<HTMLButtonElement>(`${open}\n${status}\n${description ?? ''}\n${commandSummary ?? ''}\n${decision ?? ''}`);
   return (
     <div className={`chat-tool-block chat-tool-block-bash ${statusClass}${open ? ' chat-tool-block--open' : ''}`}>
-      <button className="chat-tool-block-header" aria-expanded={open} onClick={() => setOpen((p) => !p)}>
+      <button ref={headRef} className="chat-tool-block-header" aria-expanded={open} onClick={() => setOpen((p) => !p)}>
         <span className="chat-tool-block-icon">{statusIcon}</span>
         {/* The row reads the command itself, as a terminal does; the tool's name stays for
             screen readers and the run's own counts. */}
