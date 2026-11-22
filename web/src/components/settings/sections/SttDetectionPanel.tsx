@@ -236,7 +236,7 @@ export function SttDetectionPanel({ config, onSave, onConfigured, draft, onDraft
             {selected && (
               <span className="stt-engine-tags" data-testid="stt-engine-tags" style={{ display: 'inline-flex', gap: 6, marginLeft: 8, verticalAlign: 'top' }}>
                 <SettingsTag>{selected.badge}</SettingsTag>
-                {selected.recommended && <SettingsTag tone="success">Recommended</SettingsTag>}
+                {selected.recommended && <SettingsTag tone="accent">Recommended</SettingsTag>}
               </span>
             )}
           </>

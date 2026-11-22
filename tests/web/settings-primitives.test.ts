@@ -305,8 +305,12 @@ describe('control markup', () => {
   })
 
   it('tag, loading row and mono block', () => {
+    // A state is a dot and a word; a kind or a mark is the one badge.
     expect(renderToStaticMarkup(h(SettingsTag, { tone: 'warning' }, 'Needs setup'))).toBe(
-      '<span class="badge badge-warning settings-tag"><span>Needs setup</span></span>',
+      '<span class="wn-notice-status settings-tag settings-state" data-tone="warn"><span class="wn-dot" aria-hidden="true"></span>Needs setup</span>',
+    )
+    expect(renderToStaticMarkup(h(SettingsTag, {}, 'Built-in'))).toBe(
+      '<span class="badge settings-tag"><span>Built-in</span></span>',
     )
     const loading = renderToStaticMarkup(h(SettingsLoadingRow))
     expect(loading).toContain('Loading...')

@@ -27,7 +27,8 @@ import {
 import { createPortal } from 'react-dom'
 import { useInRouterContext, useLocation } from 'react-router-dom'
 import { log } from '@/utils/log'
-import { badge, type BadgeTone } from '@/components/common/badge'
+import { badge } from '@/components/common/badge'
+import { NoticeStatus, type NoticeTone } from '@/components/common/NoticeCard'
 import { PHONES_CLOUD_PANE, PHONES_CLOUD_TABS } from './settings-way-panes'
 import {
   SettingsPaneTile,
@@ -563,22 +564,29 @@ export function SettingsNotice({
   )
 }
 
-const SETTINGS_TAG_TONE: Record<'neutral' | 'warning' | 'success' | 'error', BadgeTone> = {
-  neutral: 'neutral', warning: 'warning', success: 'accent', error: 'error',
+const SETTINGS_STATE_TONE: Record<'warning' | 'success' | 'error', NoticeTone> = {
+  warning: 'warn', success: 'ok', error: 'error',
 }
 
-/** Status tag: `Built-in`, `Needs setup`, `Signed in`. The one `.badge`; success reads as "on" (accent). */
+/**
+ * A settings tag. A state (`Connected`, `Needs setup`, `Failed`: tone success, warning or error) is a
+ * dot and a word, the one state look (`NoticeStatus`, standard.md "Status labels"); a kind or a mark
+ * (`Built-in`, `Read only`, `Recommended`: neutral or accent) is the one `.badge`.
+ */
 export function SettingsTag({
   tone = 'neutral',
   title,
   children,
 }: {
-  tone?: 'neutral' | 'warning' | 'success' | 'error'
+  tone?: 'neutral' | 'accent' | 'warning' | 'success' | 'error'
   title?: string
   children: ReactNode
 }) {
+  if (tone !== 'neutral' && tone !== 'accent') {
+    return <NoticeStatus tone={SETTINGS_STATE_TONE[tone]} title={title} className="settings-tag settings-state">{children}</NoticeStatus>
+  }
   return (
-    <span className={`${badge(SETTINGS_TAG_TONE[tone])} settings-tag`} title={title}>
+    <span className={`${badge(tone)} settings-tag`} title={title}>
       <span>{children}</span>
     </span>
   )
