@@ -444,3 +444,44 @@ describe('a host replica\'s own sessions survive the purge', () => {
     }
   })
 })
+
+describe('a host replica\'s own rows (judged here) are its own', () => {
+  const OWN = 'sid-marina-own-1'
+  let savedKey: string | undefined
+  beforeAll(() => { savedKey = process.env.WALNUT_HOST_KEY; process.env.WALNUT_HOST_KEY = 'devbox' })
+  afterAll(() => { if (savedKey === undefined) delete process.env.WALNUT_HOST_KEY; else process.env.WALNUT_HOST_KEY = savedKey })
+
+  function seedOwn(over: Partial<SessionRecord> = {}): void {
+    sessionDb.applySessionCopy({ rows: [session(900, {
+      claudeSessionId: OWN, host: 'devbox', judge: 'host', process_status: 'running', messageCount: 7, title: 'Own',
+      pid: undefined, outputFile: undefined, ...over,
+    } as Partial<SessionRecord>)] })
+  }
+
+  it('a manifest that does not name it removes nothing of it, and the half rule does not count it', async () => {
+    await round()
+    seedOwn()
+    leaderRows = leaderRows.slice(1)
+    expect(await round()).toMatchObject({ action: 'synced', removed: 1 })
+    expect(await tracker.getSessionByClaudeId('sid-marina-00000')).toBeNull()
+    expect(await tracker.getSessionByClaudeId(OWN)).toMatchObject({ process_status: 'running', messageCount: 7, judge: 'host' })
+  })
+
+  it('the leader\'s copy of it brings only the leader fields; the host fields stay this host\'s', async () => {
+    seedOwn()
+    leaderRows = [...leaderRows, session(900, {
+      claudeSessionId: OWN, host: 'devbox', judge: 'host', process_status: 'stopped', messageCount: 1, title: 'Renamed on the leader', archived: true,
+    } as Partial<SessionRecord>)]
+    await round()
+    const row = await tracker.getSessionByClaudeId(OWN)
+    expect(row).toMatchObject({ title: 'Renamed on the leader', archived: true, process_status: 'running', messageCount: 7 })
+  })
+
+  it('another host\'s judged row, and a row the leader runs, are replaced and removed as before', async () => {
+    leaderRows = [...leaderRows, session(901, { claudeSessionId: 'sid-other-host', host: 'otherbox', judge: 'host', title: 'A' } as Partial<SessionRecord>)]
+    await round()
+    leaderRows = leaderRows.filter((r) => r.claudeSessionId !== 'sid-other-host')
+    await round()
+    expect(await tracker.getSessionByClaudeId('sid-other-host')).toBeNull()
+  })
+})

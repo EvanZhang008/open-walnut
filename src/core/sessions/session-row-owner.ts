@@ -1,0 +1,133 @@
+/**
+ * Who writes which part of a session record (docs/plan/one-service-every-host.md, phase 2).
+ *
+ * A session that its host's own service assembles, runs and judges (`judge: 'host'`) is the
+ * host's row: the host writes it and the leader keeps a copy of it. Inside that row a few fields
+ * are the leader's own: what a person sets about a session from any screen (its title, archive
+ * flag, note, output mode, pins, comments, thread fields), the summaries the leader's hooks write,
+ * and a stop a person asked for. The leader writes those on its own row and sends them down in the
+ * `sessions` copy (replication/kinds/sessions.ts); the host never writes them. Every other field
+ * is the host's: the leader never overwrites it, and the host's copy step never replaces it with
+ * the leader's value.
+ *
+ * Every field of SessionRecord has an owner here: the table must name each key of the type
+ * (`satisfies`), and tests/core/sessions/session-row-owner.test.ts reads the interface from
+ * types.ts so a new field fails until it is given one.
+ *
+ * A row without `judge: 'host'` (every row today, and every row of a host that has not upgraded)
+ * is the leader's whole: nothing here changes how it is written.
+ */
+import { AsyncLocalStorage } from 'node:async_hooks'
+import type { SessionRecord } from '../types.js'
+import { isHostReplica } from '../server-role.js'
+
+export type SessionFieldOwner = 'host' | 'leader'
+
+const H = 'host' as const
+const L = 'leader' as const
+
+export const SESSION_FIELD_OWNER = {
+  claudeSessionId: H, taskId: H, legacyTaskId: H, project: H, process_status: H, mode: H, modeChosen: H,
+  autoPermissionDenial: H, provider: H, engine: H, acpRuntimeId: H, acpJournalPath: H, acpCapabilities: H,
+  acpControlCut: H, acpModel: H, acpModelName: H, acpConfig: H, acpStartMode: H, lastAcceptedAcpCommandId: H,
+  type: H, activity: H, last_status_change: H, startedAt: H, lastActiveAt: H, messageCount: H, cwd: H, host: H,
+  hostname: H, host_label: H, description: H, pid: H, outputFile: H, planFile: H, planCompleted: H,
+  fromPlanSessionId: H, forkedFromSessionId: H, engineSwitch: H, supersededBy: H, leftContext: H,
+  resumedBySwitch: H, startedIdle: H, rewoundAtMessageUuid: H, inPlaceRewinds: H, pendingResumeSessionAt: H,
+  appliedAppendSystemPrompt: H, placeNoted: H, taskRoutingNoted: H, lastCompactUuid: H, lastCompactAt: H,
+  asksSent: H, commitShas: H, mcpMountStatus: H, output_mode_injected: H, hintState: H, outputModeHookAt: H,
+  model: H, cliModel: H, effort: H, effectiveEffort: H, modelMaxWindow: H, modelMaxWindowSource: H,
+  modelMaxWindowModel: H, autoCompactAt: H, contextTokens: H, promptCache: H, idleCompaction: H,
+  contextRecovery: H, safeguardSwitch: H, modelTemporary: H, contextStopsAt: H, idleCompactionLog: H,
+  promptRefresh: H, planContent: H, lastTurnSpeed: H, speedTotals: H, firstTurnAt: H, errorMessage: H,
+  errorKind: H, autoRecover: H, restartLoss: H, endpointWait: H, turn: H, usageLimit: H, usageLimitContinued: H,
+  humanInputAt: H, chatInputAt: H, heldElsewhere: H, cwdGone: H, workspaceTold: H, folderMoved: H,
+  cwdByPerson: H, ownFolderMove: H, startRefused: H, switchContext: H, taskCompleteStop: H, hostLost: H,
+  status_reason: H, status_changed_by: H, status_history: H, errorCount: H, statusRevision: H,
+  statusUpdatedAt: H, pendingPermission: H, promptAnswerLines: H, consumedOffset: H, streamEpoch: H,
+  costWatermark: H, costWatermarkPid: H, lineLifecyclePid: H, lineQueuedPid: H, profile: H, lane: H, judge: H,
+  // The leader's: set by a person (any screen) or by the leader's own hooks.
+  title: L, archived: L, archive_reason: L, human_note: L, output_mode: L, threadAnchors: L, threadMeta: L,
+  pinnedMessages: L, passageComments: L, summary: L, summaryGeneratedAt: L, recap: L, recapAt: L, overview: L,
+  overviewAt: L, stopRequest: L,
+} as const satisfies Record<keyof SessionRecord, SessionFieldOwner>
+
+export type LeaderSessionField = { [K in keyof typeof SESSION_FIELD_OWNER]: typeof SESSION_FIELD_OWNER[K] extends 'leader' ? K : never }[keyof typeof SESSION_FIELD_OWNER]
+
+export const LEADER_SESSION_FIELDS: readonly LeaderSessionField[] = (Object.keys(SESSION_FIELD_OWNER) as (keyof SessionRecord)[])
+  .filter((k): k is LeaderSessionField => SESSION_FIELD_OWNER[k] === 'leader')
+
+/** The owner of one field. A key the table does not know (a newer writer's) is the host's. */
+export function sessionFieldOwner(field: string): SessionFieldOwner {
+  return (SESSION_FIELD_OWNER as Record<string, SessionFieldOwner>)[field] ?? 'host'
+}
+
+/** Is this row run and judged by the service of its host (and so written by that host)? */
+export function judgedByHost(row: Pick<SessionRecord, 'judge' | 'host'> | null | undefined): boolean {
+  return !!row && row.judge === 'host' && typeof row.host === 'string' && row.host !== ''
+}
+
+/**
+ * Is this row written here? On the host whose service judges it: yes. `hostKey` is this server's
+ * own host key (a host replica's WALNUT_HOST_KEY); '' on the leader, where a host-judged row is
+ * never its own.
+ */
+export function rowOwnedHere(row: Pick<SessionRecord, 'judge' | 'host'> | null | undefined, hostKey: string): boolean {
+  return judgedByHost(row) && hostKey !== '' && row!.host === hostKey
+}
+
+/**
+ * The row a host keeps when the leader's copy of one of its own rows arrives: its own value of
+ * every host field, the leader's value of every leader field (an absent one is cleared). A field
+ * only one side names follows its owner.
+ */
+export function mergeLeaderCopy(own: SessionRecord, fromLeader: SessionRecord): SessionRecord {
+  const out: Record<string, unknown> = { ...own }
+  for (const f of LEADER_SESSION_FIELDS) {
+    const v = (fromLeader as unknown as Record<string, unknown>)[f]
+    if (v === undefined) delete out[f]
+    else out[f] = v
+  }
+  return out as unknown as SessionRecord
+}
+
+/** The fields of `patch` the leader may not write on a host's row: every host field it names. */
+export function hostFieldsIn(patch: Readonly<Record<string, unknown>>): string[] {
+  return Object.keys(patch).filter((k) => sessionFieldOwner(k) === 'host')
+}
+
+/** This server's own host key: a host replica's WALNUT_HOST_KEY, '' on the leader (and anywhere else). */
+export function thisHostKey(): string {
+  return isHostReplica() ? (process.env.WALNUT_HOST_KEY ?? '').trim() : ''
+}
+
+const hostCopy = new AsyncLocalStorage<true>()
+
+/**
+ * Run `fn` as the writer of a host's rows on the leader: the channel that applies what the host
+ * sent (its facts) is the one place a leader may write a host field of a host's row.
+ */
+export function writingAsHost<T>(fn: () => T): T {
+  return hostCopy.run(true, fn)
+}
+
+export function isWritingAsHost(): boolean {
+  return hostCopy.getStore() === true
+}
+
+/**
+ * The part of a patch this server may write on `row`. The leader drops the host fields of a
+ * host's row (outside writingAsHost); the host that owns a row drops its leader fields. Any other
+ * row takes the whole patch. `dropped` names what was left out, for the caller's log.
+ */
+export function ownedPartOf<P extends Record<string, unknown>>(row: Pick<SessionRecord, 'judge' | 'host'>, patch: P, hostKey = thisHostKey()): { patch: P; dropped: string[] } {
+  if (!judgedByHost(row)) return { patch, dropped: [] }
+  const mine = rowOwnedHere(row, hostKey)
+  if (!mine && isWritingAsHost()) return { patch, dropped: [] }
+  const keep: SessionFieldOwner = mine ? 'host' : 'leader'
+  const dropped = Object.keys(patch).filter((k) => sessionFieldOwner(k) !== keep)
+  if (dropped.length === 0) return { patch, dropped }
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(patch)) if (sessionFieldOwner(k) === keep) out[k] = v
+  return { patch: out as P, dropped }
+}

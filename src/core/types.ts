@@ -4233,4 +4233,8 @@ export interface SessionRecord {
    *  after 30 days, and a lane session must outlive that. Spilled into
    *  `payload` (no column). */
   lane?: string;
+  /** 'host': the service of `host` assembles, runs and judges this session and writes its
+   *  record; the leader keeps a copy and writes only its own fields
+   *  (sessions/session-row-owner.ts). Absent: the leader runs it (every session today). */
+  judge?: 'host';
 }

@@ -21,6 +21,7 @@ import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
 import { guardCopyHandle, openApplyConnection } from '../replica/copy-guard.js';
 import { isHostReplica } from './server-role.js';
+import { mergeLeaderCopy, rowOwnedHere } from './sessions/session-row-owner.js';
 import { reopenIfWiped } from '../lib/sqlite-wiped.js';
 import type { SessionRecord } from './types.js';
 import { lookForHolders } from './blocking-calls.js';
@@ -268,6 +269,18 @@ export function sessionIdsInStore(opts: { exceptHost?: string } = {}): string[] 
   return handle.prepare('SELECT claude_session_id FROM sessions').pluck().all() as string[];
 }
 
+/**
+ * The ids of the rows this host replica runs and judges itself (sessions/session-row-owner.ts
+ * rowOwnedHere): host `hostKey`, `judge: 'host'` (kept in the payload).
+ */
+export function ownSessionIdsInStore(hostKey: string): string[] {
+  const handle = getDb();
+  if (!handle || !hostKey) return [];
+  return handle.prepare(
+    `SELECT claude_session_id FROM sessions WHERE host = ? AND instr(payload, '"judge"') > 0 AND CASE WHEN json_valid(payload) THEN json_extract(payload, '$.judge') END = 'host'`,
+  ).pluck().all(hostKey) as string[];
+}
+
 /** Every session id and ACP runtime id in the store, without decoding records (the ephemeral session gate's copied set). */
 export function sessionIdentitiesInStore(): string[] {
   const handle = getDb();
@@ -286,22 +299,40 @@ export function sessionIdentitiesInStore(): string[] {
  * commit through `PRAGMA data_version`. Off a host replica (tests) it uses the
  * shared handle.
  */
-export function applySessionCopy(change: { rows?: readonly SessionRecord[]; removeIds?: readonly string[] }): void {
+export function applySessionCopy(change: { rows?: readonly SessionRecord[]; removeIds?: readonly string[]; ownHost?: string }): { keptOwn: number } {
   const shared = getDb();
   if (!shared) throw new Error('session-db: applySessionCopy() called before database was successfully opened');
   const handle = isHostReplica() ? (applyHandle ??= openCopyApplyConnection()) : shared;
   const cols = [...EXPLICIT_SESSION_COLUMNS, 'payload'];
   const ins = handle.prepare(`INSERT OR REPLACE INTO sessions (${cols.join(', ')}) VALUES (${cols.map((c) => '@' + c).join(', ')})`);
   const del = handle.prepare('DELETE FROM sessions WHERE claude_session_id = ?');
+  const get = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?');
+  // This host's own rows (judged here, sessions/session-row-owner.ts): never removed by the copy,
+  // and only their leader fields take the leader's values. Read and written in one write
+  // transaction, so a write of this host's own between the read and the write cannot be lost.
+  const own = (change.ownHost ?? '').trim();
+  const ownRow = (id: string): SessionRecord | null => {
+    if (!own) return null;
+    const raw = get.get(id) as Record<string, any> | undefined;
+    if (!raw) return null;
+    const rec = rowToSession(raw);
+    return rowOwnedHere(rec, own) ? rec : null;
+  };
+  let keptOwn = 0;
   handle.transaction(() => {
-    for (const id of change.removeIds ?? []) del.run(id);
+    for (const id of change.removeIds ?? []) {
+      if (ownRow(id)) { keptOwn++; continue; }
+      del.run(id);
+    }
     for (const r of change.rows ?? []) {
-      const row = sessionToRow(r);
+      const mine = ownRow(r.claudeSessionId);
+      const row = sessionToRow(mine ? mergeLeaderCopy(mine, r) : r);
       const bound: Record<string, unknown> = {};
       for (const c of cols) bound[c] = row[c] === undefined ? null : row[c];
       ins.run(bound);
     }
-  })();
+  }).immediate();
+  return { keptOwn };
 }
 
 // ── The cloud companion's copy of the Mac's sessions (stage 2c of

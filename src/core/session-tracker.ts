@@ -44,6 +44,7 @@ import { isAcpEngine, resolveEngine } from './agents/engine-registry.js';
 import { CLOUD_BOX_DEFAULT_IDLE_LIMIT, CLOUD_BOX_DEFAULT_LIMIT, CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js';
 import { NeedsLeaderError } from './replication/needs-leader.js';
 import { foldTurnSpeed } from './sessions/speed-totals.js';
+import { ownedPartOf } from './sessions/session-row-owner.js';
 import { OrgError } from './org/org-store.js';
 import { registerMemoryHolder, sampledStringChars } from './observability/memory-ledger.js';
 import {
@@ -2199,6 +2200,15 @@ function applyUpdateToSession(
   logLabel: string,
 ): boolean {
   updates = withoutStatusVersionOverrides(updates);
+  // A host's row is written by its host (sessions/session-row-owner.ts): the leader writes only
+  // the leader's fields of it, the owning host only its own.
+  const owned = ownedPartOf(session, updates as Record<string, unknown>);
+  if (owned.dropped.length > 0) {
+    log.session.warn('session write left out fields another server owns', {
+      sessionId: session.claudeSessionId, host: session.host, fields: owned.dropped,
+    });
+    updates = owned.patch as SessionRecordUpdates;
+  }
 
   // ── C2 enforce-mode legacy-writer gate (contract §5) ──────────────────────
   // When the snapshot projection is the sole status writer for a session

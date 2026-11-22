@@ -185,6 +185,10 @@ function isRow(v: unknown): v is SessionRecord {
 function changed(): void {}
 
 let follower: RowSetFollower | null = null
+/** This host's own session ids, as the last manifest step read them (localKeys). */
+let ownIds: ReadonlySet<string> = new Set()
+/** This host replica's own host key ('' anywhere else): its judged rows are its own. */
+const ownHostKey = (): string => (process.env.WALNUT_HOST_KEY ?? '').trim()
 
 const onCompanion = (): boolean => followerKind() === 'companion'
 /** The companion's copy: `cache/replica/home/sessions.sqlite` (gate.ts copyPath), never the live registry. */
@@ -217,14 +221,20 @@ export function sessionsFollower(): RowSetFollower {
     hash: sessionCopyHash,
     localKeys: async () => {
       const db = await import('../../session-db.js')
-      return onCompanion() ? db.companionSessionCopyIds(companionCopyFile()) : db.sessionIdsInStore()
+      if (onCompanion()) { ownIds = new Set(); return db.companionSessionCopyIds(companionCopyFile()) }
+      // This host's own rows (sessions/session-row-owner.ts) stay listed, so their leader
+      // fields still come down, but are never counted for removal (keptBy below).
+      const own = ownHostKey()
+      ownIds = own ? new Set(db.ownSessionIdsInStore(own)) : new Set()
+      return db.sessionIdsInStore()
     },
+    keptBy: (id) => ownIds.has(id),
     apply: async ({ rows, removeIds }) => {
       const db = await import('../../session-db.js')
       // Projected again here: whatever a leader sends, no stored row names a process.
       const projected = (rows ?? []).map(projectSession)
       if (onCompanion()) db.applyCompanionSessionCopy(companionCopyFile(), { rows: projected, removeIds })
-      else db.applySessionCopy({ rows: projected.map(forHostStore), removeIds })
+      else db.applySessionCopy({ rows: projected.map(forHostStore), removeIds, ownHost: ownHostKey() })
       return { skipped: [] }
     },
     held: async () => (await import('../../../replica/journal-overlay.js')).journalHeld('sessions'),
