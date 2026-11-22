@@ -9,9 +9,10 @@
  * button, an outside pointerdown or Escape closes it, and the body scrolls
  * inside the placement's height cap.
  */
-import { useCallback, useEffect, useRef, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, type CSSProperties, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { timeAgo } from '@/utils/time';
 import { AgentText } from '@/components/common/AgentText';
 import '@/styles/session-recap.css';
@@ -44,36 +45,30 @@ export function LatestUpdatePopover(props: {
     if (placed) rootRef.current?.focus({ preventScroll: true });
   }, [placed]);
 
-  useEffect(() => {
-    const onPointerDown = (e: PointerEvent) => {
-      const root = rootRef.current;
-      if (!root || root.contains(e.target as Node)) return;
-      close('outside');
-    };
-    document.addEventListener('pointerdown', onPointerDown, true);
-    return () => document.removeEventListener('pointerdown', onPointerDown, true);
-  }, [close]);
-
-  const onKeyDown = (e: ReactKeyboardEvent) => {
-    if (e.key !== 'Escape') return;
-    e.preventDefault();
-    e.stopPropagation();
-    const anchor = anchorRef.current;
-    close('escape');
-    anchor?.focus({ preventScroll: true });
-  };
+  // Escape gives focus back to the "+" button. A press outside closes it and its
+  // click goes through, as with the engine settings from the same "+": the
+  // anchor is not exempt, so pressing "+" closes this and the click opens the menu.
+  useOverlayLayer({
+    open: true,
+    refs: [rootRef],
+    passOutsideClick: true,
+    onClose: (reason) => {
+      const anchor = anchorRef.current;
+      close(reason);
+      if (reason === 'escape') anchor?.focus({ preventScroll: true });
+    },
+  });
 
   const ago = at ? timeAgo(at) : '';
   return createPortal(
     <div
       ref={rootRef}
-      className="latest-update-popover"
+      className="latest-update-popover wn-overlay"
       role="dialog"
       aria-label="Latest update"
       tabIndex={-1}
       data-testid="latest-update-popover"
       onPointerDown={(e) => e.stopPropagation()}
-      onKeyDown={onKeyDown}
       style={{
         top: placement?.top,
         right: placement?.right,

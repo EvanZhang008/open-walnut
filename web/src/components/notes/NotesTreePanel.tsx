@@ -1120,7 +1120,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
       {contextMenu && (
         <div
           ref={contextMenuRef}
-          className="notes-context-menu"
+          className="notes-context-menu wn-overlay wn-menu"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           {/* A folder-note row stands for two things: its note first (it has no

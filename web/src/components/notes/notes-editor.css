@@ -360,10 +360,6 @@
   min-width: 190px;
   overflow-y: auto;
   padding: 4px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--card-shadow);
 }
 .notes-format-block-item {
   display: flex;
@@ -398,10 +394,6 @@
   max-height: 280px;
   overflow-y: auto;
   padding: 4px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--card-shadow);
 }
 .notes-tag-item {
   display: flex;
@@ -423,23 +415,16 @@
 .notes-cmdk-overlay {
   position: fixed;
   inset: 0;
-  z-index: 10050;
   display: flex;
   align-items: flex-start;
   justify-content: center;
   padding-top: 12vh;
-  background: rgba(0, 0, 0, 0.4);
-  backdrop-filter: blur(2px);
 }
 .notes-cmdk {
   width: min(640px, 92vw);
   max-height: 70vh;
   display: flex;
   flex-direction: column;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
   overflow: hidden;
 }
 .notes-cmdk-input-row {

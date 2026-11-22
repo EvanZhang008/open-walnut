@@ -88,13 +88,16 @@ export function TranscriptOverlay({
 }: { title: string; meta?: string; live?: boolean; onClose: () => void; children: ReactNode }) {
   useModalOverlay(onClose);
   return createPortal(
-    <div className="wf-modal-overlay" onClick={onClose}>
-      <div className="wf-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="wf-modal-header">
-          <span className="wf-modal-title">{title}</span>
-          {live && <span className="wf-modal-live" title="Agent still running — refreshing while open">{'●'}</span>}
-          {meta && <span className="wf-modal-meta">{meta}</span>}
-          <button className="wf-modal-close" onClick={onClose} aria-label="Close transcript" title="Close (Esc)">
+    <div className="wf-modal-overlay wn-scrim" onClick={onClose}>
+      <div className="wf-modal wn-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="wf-modal-header wn-dialog-head">
+          {/* Title, live dot and meta read as one title (the head's first child takes the room). */}
+          <span style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+            <span className="wf-modal-title">{title}</span>
+            {live && <span className="wf-modal-live" title="Agent still running — refreshing while open">{'●'}</span>}
+            {meta && <span className="wf-modal-meta">{meta}</span>}
+          </span>
+          <button className="btn btn-icon wf-modal-close wn-dialog-close" onClick={onClose} aria-label="Close transcript" title="Close (Esc)">
             {ICON_CLOSE}
           </button>
         </div>

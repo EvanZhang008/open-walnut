@@ -8,9 +8,9 @@
  * server to read the task's changes now.
  *
  * Overlay rules (web/src/AGENTS.md): the card is portalled to <body>, placed by useMenuPlacement,
- * stops pointerdown (rows are dnd-kit draggables), and closes on an outside pointerdown or Escape,
- * both heard in the capture phase (the pills beside it stop their own). Inside the session
- * header's tags flyout the card is that flyout's child portal: it closes first on Escape.
+ * stops pointerdown (rows are dnd-kit draggables), and closes through useOverlayLayer (an outside
+ * press or Escape). Inside the session header's tags flyout the card is that flyout's child
+ * portal: it is the top layer, so it closes first on Escape.
  */
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -18,6 +18,7 @@ import type { ChangeSnapshot } from '../../../../src/core/changes/model';
 import { changePillState } from '../../../../src/core/changes/model';
 import { apiGet, apiPost } from '@/api/client';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { log } from '@/utils/log';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { ChangeCard } from './ChangeCard';
@@ -72,26 +73,14 @@ export function ChangePill({ tag, snap, taskId, inline, linkName }: {
   }, [open, taskId, snap.url]);
 
   useEffect(() => {
-    if (!open) return;
-    setRefreshError(null);
-    const onPointerDown = (e: PointerEvent) => {
-      const t = e.target as Node | null;
-      if (t && (pillRef.current?.contains(t) || cardRef.current?.contains(t))) return;
-      close(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      e.stopPropagation();
-      close(!!cardRef.current?.contains(document.activeElement));
-    };
-    document.addEventListener('pointerdown', onPointerDown, true);
-    document.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown, true);
-      document.removeEventListener('keydown', onKey, true);
-    };
-  }, [open, close]);
+    if (open) setRefreshError(null);
+  }, [open]);
+  useOverlayLayer({
+    passOutsideClick: true,
+    open,
+    refs: [cardRef, pillRef],
+    onClose: (reason) => close(reason === 'escape' && !!cardRef.current?.contains(document.activeElement)),
+  });
 
   const refresh = useLeanCallback(() => {
     setRefreshing(true);
@@ -123,7 +112,7 @@ export function ChangePill({ tag, snap, taskId, inline, linkName }: {
       {open && createPortal(
         <div
           ref={cardRef}
-          className="change-card change-card-popover"
+          className="change-card change-card-popover wn-overlay"
           role="dialog"
           aria-label={`${shown.label}: ${text}`}
           data-testid="change-card"

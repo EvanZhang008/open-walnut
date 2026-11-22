@@ -18,6 +18,7 @@ import { useShowPriority } from '@/hooks/useShowPriority';
 import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '../common/DatePicker';
 import { snoozeWhenWords } from '../common/date-time-pick';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { SnoozeUntilEvent, WAIT_UNTIL_ICON } from './TaskStatusControl';
 import { TaskMenuRows } from './TaskMenuRows';
 import { AgentMemoryPanel } from '@/components/org/AgentMemoryPanel';
@@ -470,7 +471,7 @@ export function ProjectPickerFlyout({ open, anchorRef, anchorPoint, align, curre
   return createPortal(
     <div
       ref={listRef}
-      className="task-kebab-project-flyout"
+      className="task-kebab-project-flyout wn-overlay wn-menu"
       style={menuPlacementStyle(placement)}
       onClick={(e) => e.stopPropagation()}
       // Same drag guard as the parent menu: portal events bubble through the
@@ -541,6 +542,9 @@ export function MoveToProjectSection({ current, onMove, afterAction }: {
   );
 }
 
+/** The menu's own child portals: a press or a scroll in one is inside the menu. */
+const KEBAB_CHILD_PORTALS = '.task-kebab-project-flyout, .adopt-worker-flyout, .mic-popover';
+
 export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onPinTask, onUnpinTask, onSetTier, onStartSession, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveDown, onUngroup, isGroupHidden, onUnhideGroup, onStartSelect, onMoveToProject, onDelete, onSetPhase }: TaskKebabMenuProps) {
   const [open, setOpen] = useState(false);
   // Main's, a lead's or a VP's Memory & instructions, opened from the menu.
@@ -561,28 +565,21 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
     onAnchorLost: closeMenu,
   });
 
+  // Escape and an outside press go through the overlay stack. The Project picker's option list
+  // is a separate portal (see MoveToProjectSection): a press inside it is NOT "outside the menu",
+  // and it keeps no Esc of its own, so one Esc closes it with the menu. A worker picker (Adopt,
+  // Release), the pin flyout and a mic popover are layers on top of this one: each takes its own Esc
+  // and the menu stays.
+  useOverlayLayer({
+    passOutsideClick: true,
+    open,
+    refs: [menuRef, btnRef],
+    exemptSelectors: [KEBAB_CHILD_PORTALS],
+    onClose: closeMenu,
+  });
+
   useEffect(() => {
     if (!open) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (btnRef.current?.contains(e.target as Node)) return;
-      if (menuRef.current?.contains(e.target as Node)) return;
-      // The Project picker's option list is a separate portal (see
-      // MoveToProjectSection) — clicks inside it are NOT "outside the menu". Same
-      // for the Adopt a worker picker (TeamMenuItems).
-      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout, .adopt-worker-flyout, .mic-popover')) return;
-      closeMenu();
-    };
-    // Its Esc is its own (capture phase, consumed): the layer under it stays open (TaskQuickActions.tsx).
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.isComposing) return;
-      // A worker picker opened from the menu (Adopt, Release) is the layer on top and takes its own
-      // Esc (its capture listener): the menu stays. The menu's other pickers (Project, a plugin
-      // field) keep no Esc of their own, so one Esc closes them with the menu, as before.
-      if (document.querySelector('.adopt-worker-flyout, .mic-popover')) return;
-      e.preventDefault();
-      e.stopPropagation();
-      closeMenu();
-    };
     // Three different scroll cases, deliberately:
     //  1. Inside the menu — the menu scrolls its own overflow now, so this must
     //     NOT dismiss it (that would make the fix unusable).
@@ -599,17 +596,13 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
     const handleScroll = (e: Event) => {
       if (menuRef.current?.contains(e.target as Node)) return;
       // Scrolling the Project (or Adopt) flyout's own list is reading, not page scroll.
-      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout, .adopt-worker-flyout, .mic-popover')) return;
+      if ((e.target as HTMLElement).closest?.(KEBAB_CHILD_PORTALS)) return;
       if (cursorAnchor) { if (scrollMovedRow(rowAnchor.current, e.target)) closeMenu(); return; }
       const r = btnRef.current?.getBoundingClientRect();
       if (r && (r.bottom < 0 || r.top > window.innerHeight)) closeMenu();
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    document.addEventListener('keydown', handleKey, true);
     window.addEventListener('scroll', handleScroll, true);
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleKey, true);
       window.removeEventListener('scroll', handleScroll, true);
     };
   }, [open, closeMenu, cursorAnchor]);
@@ -665,7 +658,7 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
       {open && createPortal(
         <div
           ref={menuRef}
-          className="task-kebab-menu"
+          className="task-kebab-menu wn-overlay wn-menu"
           style={menuPlacementStyle(menuPos)}
           // The portal target is <body>, but React synthetic events still bubble
           // through the PORTAL to this row's component tree — so a pointerdown

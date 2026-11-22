@@ -17,8 +17,10 @@
  * clipping can't cut it off. Reuses the .notes-context-menu skin — one menu look
  * across the app.
  */
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { parentPath } from './reveal-ancestors';
 import { relativeTo } from './file-tree-edit';
 import { copyTextRobust } from '@/utils/clipboard';
@@ -57,14 +59,13 @@ interface Props {
   onDelete?: (path: string, type: 'dir' | 'file') => void;
 }
 
-const MENU_MARGIN = 8;
-
 export function FileTreeContextMenu({
   target, onClose, onOpen, onOpenInNotes, onOpenInNewTab, onDownload, onReveal, canReveal,
   onNewFile, onNewFolder, onRename, onDuplicate, onDelete,
 }: Props) {
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const [pos, setPos] = useState({ left: target.point.x, top: target.point.y });
+  /** No trigger element: the menu hangs from the pointer (anchorPoint). */
+  const noTriggerRef = useRef<HTMLElement | null>(null);
   const [copied, setCopied] = useState<'path' | 'rel' | null>(null);
   /** The "✓ Copied" dwell before the menu closes itself. Held in a ref because an
    *  UNOWNED timer outlives what armed it: right-click A → Copy path → right-click
@@ -85,33 +86,15 @@ export function FileTreeContextMenu({
     return clearCloseTimer;
   }, [target.path, target.point.x, target.point.y]);
 
-  // Clamp into the viewport AFTER mount — the menu's height depends on which
-  // items rendered, so a pre-measure guess would hang items off the bottom edge
-  // (and a fixed element in no scroll container makes them unreachable).
-  useLayoutEffect(() => {
-    const el = menuRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    setPos({
-      left: Math.max(MENU_MARGIN, Math.min(target.point.x, window.innerWidth - r.width - MENU_MARGIN)),
-      top: Math.max(MENU_MARGIN, Math.min(target.point.y, window.innerHeight - r.height - MENU_MARGIN)),
-    });
-  }, [target.point.x, target.point.y]);
+  // Measured after mount (the height depends on which items rendered), its left
+  // edge on the pointer, flipped and capped to the viewport: a fixed element in
+  // no scroll container would leave items off the bottom edge unreachable.
+  const placement = useMenuPlacement(true, noTriggerRef, menuRef, { anchorPoint: target.point, align: 'start' });
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } };
-    // The menu is the top layer, so it claims Escape before anything else hears it
-    // (same rule as ContextMenu): the Files popup's own Escape (a `document`
-    // listener, which runs before this `window` one) skips a key someone took.
-    // Without it one Esc closed the menu AND the whole Files popup (2026-11-07).
-    const claimEscape = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.isComposing) e.preventDefault(); };
-    window.addEventListener('keydown', claimEscape, true);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('keydown', claimEscape, true);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [onClose]);
+  // The menu is the top layer: one Escape closes it alone, never also the Files
+  // popup under it (2026-11-07), and a press outside closes it and is swallowed,
+  // so it cannot also act on what it landed on.
+  useOverlayLayer({ open: true, onClose: () => onClose(), refs: [menuRef] });
 
   const isFile = target.type === 'file';
   const canMutate = !target.isRoot;
@@ -227,31 +210,26 @@ export function FileTreeContextMenu({
 
   const rendered = groups.filter((g) => g.length > 0);
 
+  // No backdrop: the overlay layer closes it on a press outside. A right-click
+  // on another row closes this one and opens that row's.
   return createPortal(
-    <>
-      {/* Backdrop swallows the next click AND the next right-click, so a
-          right-click elsewhere closes this menu instead of stacking two. */}
-      <div
-        className="file-ctx-backdrop"
-        onClick={onClose}
-        onContextMenu={(e) => { e.preventDefault(); onClose(); }}
-      />
-      <div
-        className="notes-context-menu file-ctx-menu"
-        ref={menuRef}
-        style={{ left: pos.left, top: pos.top }}
-        role="menu"
-        data-testid="file-ctx-menu"
-        onContextMenu={(e) => e.preventDefault()}
-      >
-        {rendered.map((group, i) => (
-          <Fragment key={i}>
-            {i > 0 && <div className="notes-context-menu-divider" />}
-            {group}
-          </Fragment>
-        ))}
-      </div>
-    </>,
+    <div
+      className="notes-context-menu file-ctx-menu wn-overlay wn-menu"
+      ref={menuRef}
+      // The layer is the family's (wn-overlay); a capped menu scrolls inside.
+      style={{ ...menuPlacementStyle(placement), zIndex: undefined, overflowY: 'auto' }}
+      role="menu"
+      data-testid="file-ctx-menu"
+      onContextMenu={(e) => e.preventDefault()}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      {rendered.map((group, i) => (
+        <Fragment key={i}>
+          {i > 0 && <div className="notes-context-menu-divider" />}
+          {group}
+        </Fragment>
+      ))}
+    </div>,
     document.body,
   );
 }

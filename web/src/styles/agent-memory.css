@@ -4,7 +4,6 @@
   max-height: calc(100vh - 64px);
   overflow-y: auto;
   /* Some themes make --card-bg translucent; text over a busy chat must stay readable. */
-  background: var(--bg-elevated);
 }
 .am-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .am-close {

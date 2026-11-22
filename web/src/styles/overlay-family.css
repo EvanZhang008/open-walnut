@@ -1,0 +1,151 @@
+/* The overlay family: ONE frame for everything that floats over the page
+   (2026-11-21, the UI audit: 67 portalled overlays had 7 radii, 42 shadow
+   strings, 17 z-index values and 10 scrim alphas). Each kind is one class here;
+   an overlay's own CSS keeps only its size, padding and content layout, never its
+   own background, border, radius, shadow or z-index
+   (tests/web/overlay-family-ratchet.test.ts).
+
+     wn-overlay  a menu, popover, flyout or hover card: the solid raised surface
+                 (overlay-glass.css keeps it solid: rows read through WebKit glass,
+                 2026-11-04), a hairline, --overlay-radius, --overlay-shadow,
+                 the menu layer.
+     wn-menu     a wn-overlay that is a list of rows: 4 px all round, so a row's
+                 hover never touches the rounded corner, rows at --overlay-row-radius.
+     wn-dialog   a dialog's panel: the same surface at --dialog-radius over
+                 a wn-scrim; its header is wn-dialog-head (title left, ONE
+                 wn-dialog-close at the right) and its footer wn-dialog-foot
+                 (buttons right-aligned, 8 px apart).
+     wn-scrim    the full-window layer behind a dialog or sheet: --overlay-bg.
+     wn-tip      a tooltip: small, dark in both themes, the tooltip layer.
+
+   A glass overlay (GLASS_OVERLAYS in tests/web/overlays-opaque.test.ts) takes
+   wn-overlay for its radius and layer and wn-glass for its material; wn-glass
+   wins on background, border and shadow. */
+
+:root {
+  /* Layers, lowest first. Everything that floats takes one of these. */
+  --z-sheet: 9000;         /* a full-height sheet (Org chart, notes popup) */
+  /* Dialogs and menus share ONE layer, so the one opened last (portalled later into <body>) is on
+     top: a menu opened in a dialog sits over it, and a dialog opened over a menu left open (Usage &
+     Budget from the model picker, an approval that arrives) sits over that menu. */
+  --z-modal: 10000;        /* a dialog and its scrim, a viewer */
+  --z-menu: 10000;         /* menus, popovers, hover cards */
+  /* A plugin's dialog stays where plugins were written against (9200): a plugin's own portal (its
+     menu at 9250, say) keeps opening over it. Walnut's menus and dialogs still open above. */
+  --z-plugin-dialog: 9200;
+  --z-tooltip: 10100;      /* over the menu it explains */
+
+  --overlay-radius: var(--radius-md);
+  --overlay-row-radius: var(--radius-sm);
+  --dialog-radius: var(--radius-lg);
+  --overlay-border: var(--border-strong);
+  --overlay-shadow: 0 12px 32px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.08);
+  /* A tooltip is dark in both themes (one step lighter than the page in dark). */
+  --tip-bg: #1d1d1f;
+  --tip-fg: #fff;
+  --tip-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+}
+
+:root[data-theme="dark"] {
+  --overlay-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --tip-bg: #3a3a3c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --overlay-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
+    --tip-bg: #3a3a3c;
+  }
+}
+
+html .wn-overlay:not(.wn-glass),
+html .wn-dialog:not(.wn-glass) {
+  /* The raised surface (overlay-glass.css keeps it solid: --overlay-glass-bg is the same value). */
+  background: var(--bg-elevated, var(--card-bg));
+  border: 1px solid var(--overlay-border);
+  box-shadow: var(--overlay-shadow);
+  color: var(--fg);
+}
+
+html .wn-overlay {
+  border-radius: var(--overlay-radius);
+  z-index: var(--z-menu);
+}
+
+html .wn-menu {
+  padding: 4px;
+}
+
+/* More below the fold (useMoreBelow sets data-more on the scroll box while rows are past its foot and it
+   is not scrolled down there): the foot fades, so a list cut by its height cap reads as one that goes
+   on. On the box itself, the scroll container: a child would scroll away with the rows. */
+html .wn-overlay[data-more='true'],
+html .wn-overlay [data-more='true'] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent 100%);
+}
+
+/* Every row of a menu has the same corner: a role'd row anywhere in it, and a plain button or link
+   that is a row of the list itself (a direct child), so a menu that forgot the role matches too. */
+html .wn-menu [role^='menuitem'],
+html .wn-menu [role='option'],
+html .wn-menu > :is(button, a) {
+  border-radius: var(--overlay-row-radius);
+}
+
+html .wn-dialog {
+  border-radius: var(--dialog-radius);
+}
+
+html .wn-scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay-bg);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  z-index: var(--z-modal);
+}
+
+html .wn-dialog-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+html .wn-dialog-head > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The one close of a dialog is the button family's icon key (`btn btn-icon wn-dialog-close`,
+   buttons.css), drawing ICON_CLOSE; wn-dialog-close only marks it, and never restyles it. */
+html .wn-dialog-close {
+  flex: none;
+}
+
+html .wn-dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+html .wn-tip {
+  position: fixed;
+  max-width: min(360px, calc(100vw - 12px));
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--tip-bg);
+  color: var(--tip-fg);
+  box-shadow: var(--tip-shadow);
+  font-size: var(--font-size-sm);
+  font-weight: 400;
+  line-height: 16px;
+  /* One line; a long title ends in an ellipsis. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  z-index: var(--z-tooltip);
+  pointer-events: none;
+}

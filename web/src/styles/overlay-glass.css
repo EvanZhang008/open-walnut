@@ -136,6 +136,8 @@ html:root[data-theme="dark"] {
 }
 
 html .wn-glass {
+  /* Solid where the glass below cannot run (no blur or no color-mix: an older WebKit). */
+  background: var(--bg-elevated, var(--card-bg));
   border: 1px solid var(--glass-legible-border);
   box-shadow: inset 0 1px 0 var(--glass-legible-highlight), var(--glass-legible-shadow);
 }

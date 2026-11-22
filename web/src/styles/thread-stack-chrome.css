@@ -254,8 +254,7 @@
 /* ── Thread menus (More, path, Done options, the path bar's levels): portalled, fixed,
    placed by useMenuPlacement (inline top/right/maxHeight). ── */
 .thread-menu {
-  min-width: 190px; max-width: 320px; padding: 4px; overflow-y: auto; border: 1px solid var(--border);
-  border-radius: 10px; background: var(--bg-elevated); box-shadow: var(--thread-drawer-shadow);
+  min-width: 190px; max-width: 320px; padding: 4px; overflow-y: auto;
   color: var(--fg); font-size: var(--font-size-md);
 }
 .thread-menu-item {

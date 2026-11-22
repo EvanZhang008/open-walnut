@@ -12,13 +12,14 @@
  *
  * Overlay rules (web/src/AGENTS.md): portalled to <body>, placed by
  * `useMenuPlacement` so it cannot overflow the viewport, `onPointerDown`
- * stopPropagation so a press can't reach a drag sensor, Escape and outside-click
- * dismissal — with its own portal exempted from "outside", or the mousedown that
- * precedes a click on Unpin would close the popover before the click lands.
+ * stopPropagation so a press can't reach a drag sensor, Escape and outside-press
+ * dismissal through the overlay layer (its own portal is inside, so the press of
+ * a click on Unpin never closes it first).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { pinKeyOf, pinLabelFor } from '@/hooks/useSessionPins';
 import type { SessionPinnedMessage } from '@/types/session';
 import { isPressClaimed } from '@/utils/thread-mark-hit';
@@ -177,15 +178,18 @@ export function QuotePinPopover({ containerRef, pins, paintedRanges, onUnpin, re
   }, [containerRef, paintedRanges]);
 
   const isOpen = !!open;
+  // A press outside closes it and its click goes through: a link in the
+  // timeline still navigates, and a press on another painted passage opens that
+  // one (on its pointerup, above). Focus stays where the reader is: no trap.
+  useOverlayLayer({
+    open: isOpen,
+    refs: [menuRef],
+    passOutsideClick: true,
+    trapFocus: false,
+    onClose: () => setOpen(null),
+  });
   useEffect(() => {
     if (!isOpen) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(null); };
-    const onDown = (e: MouseEvent) => {
-      // Exempt our OWN portal: it is not inside the container, so a naive
-      // "outside" test would close it on the mousedown of its own Unpin click.
-      if ((e.target as HTMLElement | null)?.closest('.quote-pin-popover')) return;
-      setOpen(null);
-    };
     /**
      * A scroll RE-ANCHORS the popover to the passage instead of closing it.
      *
@@ -218,14 +222,10 @@ export function QuotePinPopover({ containerRef, pins, paintedRanges, onUnpin, re
         });
       });
     };
-    document.addEventListener('keydown', onKey);
-    document.addEventListener('mousedown', onDown, true);
     window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', onScroll);
     return () => {
       cancelAnimationFrame(raf);
-      document.removeEventListener('keydown', onKey);
-      document.removeEventListener('mousedown', onDown, true);
       window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', onScroll);
     };
@@ -241,7 +241,7 @@ export function QuotePinPopover({ containerRef, pins, paintedRanges, onUnpin, re
   return createPortal(
     <div
       ref={menuRef}
-      className="quote-pin-popover"
+      className="quote-pin-popover wn-overlay"
       style={menuPlacementStyle(placement)}
       role="dialog"
       aria-label="Pinned passage"

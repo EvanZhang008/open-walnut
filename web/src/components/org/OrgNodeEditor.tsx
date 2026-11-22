@@ -137,7 +137,7 @@ export function OrgNodeEditor({ mode, onClose, onBusy, onDone }: Props) {
 
   return (
     <div className="oc-confirm-layer">
-      <form className="oc-confirm oc-form" role="dialog" aria-modal="true" aria-label={title} data-testid="org-node-editor" onKeyDown={onFormKey} onSubmit={(e) => { e.preventDefault(); gate.send(); }}>
+      <form className="oc-confirm oc-form wn-dialog" role="dialog" aria-modal="true" aria-label={title} data-testid="org-node-editor" onKeyDown={onFormKey} onSubmit={(e) => { e.preventDefault(); gate.send(); }}>
         <h3 className="oc-confirm-title">{title}</h3>
         {mode.kind === 'new-vp' && <p className="oc-form-hint">A VP with no project yet: drag projects onto it once it is made.</p>}
         {mode.kind === 'new-project' && <p className="oc-form-hint">A project comes with its own VP. Drag it under another VP whenever you like.</p>}

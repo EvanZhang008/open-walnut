@@ -40,6 +40,8 @@ import { SparklesIcon } from '@/components/icons/SparklesIcon';
 import { ICON_CHECK } from './Icons';
 import '@/styles/context-menu-setting.css';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useMoreBelow } from '@/hooks/useMoreBelow';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import {
   keepNativeContextMenu,
   normalizeContextMenuItems,
@@ -322,12 +324,19 @@ export function ContextMenu({
   // open and the task lost its selection instead (2026-09-23, after a Locate).
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
-  useEffect(() => {
-    const close = () => closeRef.current();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.stopPropagation();
-      close();
+  const backdropRef = useRef<HTMLDivElement | null>(null);
+  // Escape is the shared overlay layer's (useOverlayLayer): it is taken in the capture phase before
+  // any page handler (the full screen's Esc, a task deselect) and only the topmost layer closes, so
+  // one Esc never closes the menu AND the full screen under it (2026-10-02, the chat column's tab
+  // list). An outside press is the backdrop's (it is in `refs`, so the layer never closes twice).
+  useOverlayLayer({
+    passOutsideClick: true,
+    open: true,
+    refs: [menuRef, backdropRef],
+    trapFocus: false,
+    onClose: (reason) => {
+      if (reason !== 'escape') return;
+      closeRef.current();
       // ESCAPE ONLY, and that narrowness is the design. Escape is the one dismissal whose whole point is
       // "put me back where I was": without this `document.activeElement` was `<body>`, so a keyboard user
       // in a fifty-row list restarted at the top of the document. The other dismissals must NOT do this:
@@ -337,13 +346,10 @@ export function ContextMenu({
       // `isConnected`, because a sync can have dropped the row in the meantime.
       const row = back.current;
       if (row?.isConnected) row.focus({ preventScroll: true });
-    };
-    // The menu is the top layer, so its Escape is consumed BEFORE anything else hears it: the full
-    // screen's Esc (a `document` listener, which runs before this `window` one) and every other
-    // handler gated on `escapeWasConsumedByOthers` skip a key someone took. Without it one Esc closed
-    // the menu AND left the full screen under it (2026-10-02, the chat column's tab list).
-    // preventDefault only: `onKey` above still closes the menu and puts focus back.
-    const claimEscape = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.isComposing) e.preventDefault(); };
+    },
+  });
+  useEffect(() => {
+    const close = () => closeRef.current();
     // Where the anchored row sat once the menu was up (a frame late: the gesture's own re-render can
     // clamp its list's scrollTop first).
     let anchor: RowAnchor | null = null;
@@ -390,15 +396,11 @@ export function ContextMenu({
       }
       if (scrollMovedRow(anchor, e.target)) close();
     };
-    window.addEventListener('keydown', claimEscape, true);
-    window.addEventListener('keydown', onKey);
     window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', close);
     window.addEventListener('blur', close);
     return () => {
       cancelAnimationFrame(arm);
-      window.removeEventListener('keydown', claimEscape, true);
-      window.removeEventListener('keydown', onKey);
       window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', close);
       window.removeEventListener('blur', close);
@@ -475,43 +477,9 @@ export function ContextMenu({
     else if (bottom > box.scrollTop + box.clientHeight) box.scrollTop = bottom - box.clientHeight;
   }, [focusIndex]);
 
-  // Is anything past the bottom edge, and is the box already down there? `useMenuPlacement` caps the
-  // height, so a short window hid 42% of the items behind a flush-cut border with no scrollbar track,
-  // no arrow and no fade: the menu read as one that simply did not have those items. Measured after
-  // every placement change, because the cap is what creates the overflow.
-  const [more, setMore] = useState(false);
-  // A LAYOUT effect, so the attribute is on the box in the same paint the capped menu first appears in:
-  // measured through a dev server against real data, an ordinary effect left the fade off for the first
-  // few frames, which is exactly when somebody is looking at the menu they just opened.
-  useLayoutEffect(() => {
-    const box = menuRef.current;
-    if (!box) return;
-    const read = () => {
-      const over = box.scrollHeight - box.clientHeight;
-      setMore(over > 1 && box.scrollTop < over - 1);
-    };
-    read();
-    // Read again on the next few frames, and whenever the box resizes. The cap arrives from a MEASURED
-    // placement, so the effect can run in a commit where `maxHeight` has not become a smaller
-    // `clientHeight` yet: a single read then saw no overflow and nothing would ever re-run it, which
-    // showed up as the affordance missing about one open in ten.
-    let frame = 0;
-    let left = 3;
-    const tick = () => {
-      read();
-      if (left > 0) { left -= 1; frame = requestAnimationFrame(tick); }
-    };
-    frame = requestAnimationFrame(tick);
-    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(read) : null;
-    observer?.observe(box);
-    box.addEventListener('scroll', read);
-    return () => {
-      cancelAnimationFrame(frame);
-      left = 0;
-      observer?.disconnect();
-      box.removeEventListener('scroll', read);
-    };
-  }, [placement, rows.length]);
+  // Anything past the bottom edge fades the foot (useMoreBelow); measured after every placement
+  // change, because the cap is what creates the overflow.
+  const more = useMoreBelow(menuRef, [placement, rows.length]);
 
   // The reason a row is disabled is drawn ONCE per run of adjacent disabled rows that share it: the
   // three send items share one capability gate, and three copies of one sentence is a wall rather than
@@ -532,6 +500,7 @@ export function ContextMenu({
   return createPortal(
     <>
       <div
+        ref={backdropRef}
         className="wn-context-backdrop"
         onPointerDown={(e) => {
           const own = back.current ?? anchorRef?.current ?? null;
@@ -550,7 +519,7 @@ export function ContextMenu({
       />
       <div
         ref={menuRef}
-        className={`wn-context-menu${rows.some((row) => row.pill) ? ' has-pills' : ''}${className ? ` ${className}` : ''}`}
+        className={`wn-context-menu wn-overlay wn-menu${rows.some((row) => row.pill) ? ' has-pills' : ''}${className ? ` ${className}` : ''}`}
         style={menuPlacementStyle(placement)}
         role="menu"
         aria-label={ariaLabel}

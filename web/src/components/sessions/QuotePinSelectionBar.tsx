@@ -795,7 +795,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
   const menu = menuOpen ? (
     <div
       ref={menuRef}
-      className="quote-pin-menu"
+      className="quote-pin-menu wn-overlay"
       style={{
         ...menuPlacementStyle(menuPlacement),
         ...(menuRoom ? { '--quote-menu-room': `${menuRoom - 12}px` } : {}),
@@ -875,7 +875,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
     <>
     <div
       ref={pillRef}
-      className={`quote-pin-pill${compact ? ' is-compact' : ''}`}
+      className={`quote-pin-pill wn-overlay${compact ? ' is-compact' : ''}`}
       style={menuPlacementStyle(placement)}
       data-testid="quote-pin-pill"
       {...stopPress}

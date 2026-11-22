@@ -9,10 +9,11 @@
  * "Hide calendar" patched the grid, so the same action felt instant one way and
  * laggy the other.
  */
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { useCalendarVisibility } from '@/hooks/useCalendarEvents';
 import type { CalendarEvent, CalendarInfo } from '@/api/calendar';
 import './visibility.css';
@@ -44,8 +45,8 @@ function HiddenEventsFlyout({ anchorRef, events, onShow, onClose }: {
   return createPortal(
     <div
       ref={listRef}
-      className="cal-cals-popover cal-hidden-events wn-glass"
-      style={{ ...menuPlacementStyle(placement), zIndex: 10001 }}
+      className="cal-cals-popover cal-hidden-events wn-overlay wn-glass"
+      style={{ ...menuPlacementStyle(placement) }}
       role="dialog"
       aria-label="Hidden events"
       data-testid="cal-hidden-events"
@@ -78,15 +79,8 @@ export function CalendarsPopover({ anchorEl, onClose, hiddenEvents = [], onShowE
   const placement = useMenuPlacement(true, anchorRef, menuRef);
   const { calendars, unavailable, setHidden } = useCalendarVisibility();
 
-  // Window-level Escape — the popover contains no autofocused input, so a div
-  // onKeyDown never fires (focus stays on the toolbar button / body).
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  // Escape wherever focus is (the shared layer); an outside press is the backdrop's.
+  useOverlayLayer({ passOutsideClick: true, open: true, refs: [menuRef], closeOnOutside: false, trapFocus: false, onClose: (reason) => { if (reason === 'escape') onClose(); } });
 
   const byAccount = new Map<string, CalendarInfo[]>();
   for (const c of calendars ?? []) {
@@ -99,7 +93,7 @@ export function CalendarsPopover({ anchorEl, onClose, hiddenEvents = [], onShowE
     <>
       <div className="cal-popover-backdrop" onClick={onClose} />
       <div
-        className="cal-cals-popover wn-glass"
+        className="cal-cals-popover wn-overlay wn-menu wn-glass"
         ref={menuRef}
         style={menuPlacementStyle(placement)}
         data-testid="cal-cals-popover"

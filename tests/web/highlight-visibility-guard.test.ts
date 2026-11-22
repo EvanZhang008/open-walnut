@@ -216,7 +216,6 @@ const NO_PAINTED_WORDS: Record<string, string> = {
   'web/src/components/tasks/LinkHoverCard.tsx :: inline (1)': PLACING,
   'web/src/popout/ExtRelay.tsx :: inline (1)': PLACING,
   'web/src/components/passwords/ItemEditor.tsx :: inline (1)': PLACING,
-  'web/src/components/passwords/VaultBrowser.tsx :: inline (2)': PLACING,
   'web/src/components/content/CeoComposer.tsx :: inline (1)': PLACING,
   'web/src/components/common/SelectionAskPill.tsx :: inline (1)': PLACING,
   'web/src/components/sessions/ThreadStackFrame.tsx :: inline (1)': PLACING,

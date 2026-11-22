@@ -4,12 +4,13 @@
  * already on the calendar uses ONE view-level useDragGesture (pointer math
  * over captured cell rects — no per-cell droppable churn mid-drag).
  */
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { memo, useCallback, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { createPortal } from 'react-dom';
 import { useDroppable } from '@dnd-kit/core';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { formatDateOnly, monthGridRange, sameDay } from '@/utils/calendar-date';
 import type { CalendarItem } from './calendar-items';
 import { CalendarChip } from './CalendarChip';
@@ -189,14 +190,7 @@ export const MonthView = memo(function MonthView({
   // drag: pointerdown landed on the backdrop, no gesture armed, and the
   // trailing mouseup closed the popover — so the retry "mysteriously" worked
   // and the failure read as speed-dependent (customer-journey finding).
-  useEffect(() => {
-    if (overflowDay === null) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOverflowDay(null);
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [overflowDay]);
+useOverlayLayer({ passOutsideClick: true, open: overflowDay !== null, refs: [overflowMenuRef], closeOnOutside: false, trapFocus: false, onClose: (reason) => { if (reason === 'escape') setOverflowDay(null); } });
 
   // ---- chip move gesture (one per view) -------------------------------------
   const dragRef = useRef<ChipDrag | null>(null);
@@ -367,7 +361,7 @@ export const MonthView = memo(function MonthView({
         createPortal(
           <>
             <div className="cal-popover-backdrop" onClick={() => setOverflowDay(null)} />
-            <div className="cal-overflow-popover wn-glass" ref={overflowMenuRef} style={menuPlacementStyle(overflowPlacement)}>
+            <div className="cal-overflow-popover wn-overlay wn-menu wn-glass" ref={overflowMenuRef} style={menuPlacementStyle(overflowPlacement)}>
               <div className="cal-overflow-title">{overflowDay}</div>
               {overflowItems.map((it) => (
                 <CalendarChip

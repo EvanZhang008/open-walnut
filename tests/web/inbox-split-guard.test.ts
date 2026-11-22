@@ -17,7 +17,10 @@ describe('inbox split uses one reader and kept view choices', () => {
     const source = read('components/inbox/LetterReader.tsx');
     expect(source.match(/<LetterView\b/g)).toHaveLength(1);
     expect(source).toContain('key={letterId}');
-    expect(source).toContain('if (!embedded) lockScroll()');
+    // The overlay lens is a dialog (useModalOverlay: Escape, scroll lock, nesting); the embedded
+    // column has neither, and keeps its own Escape.
+    expect(source).toContain('useModalOverlay(onClose)');
+    expect(source).toContain('if (!embedded) return');
     expect(source).toContain('if (embedded) return');
   });
 

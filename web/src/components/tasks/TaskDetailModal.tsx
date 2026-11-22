@@ -62,10 +62,10 @@ export function TaskDetailModal({
   }, [close]);
 
   return createPortal(
-    <div className={`wf-modal-overlay task-detail-modal-overlay${phone ? ' is-phone-layer' : ''}`} onClick={close}>
+    <div className={`wf-modal-overlay task-detail-modal-overlay wn-scrim${phone ? ' is-phone-layer' : ''}`} onClick={close}>
       {/* Reuse the wf-modal shell; the pane brings its own header (project +
           external link + close), so we don't add a second header row. */}
-      <div className="wf-modal task-detail-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="wf-modal task-detail-modal wn-dialog" onClick={(e) => e.stopPropagation()}>
         {phone && <PhoneTaskDetailHead task={task} />}
         <TaskDetailPane
           task={task}

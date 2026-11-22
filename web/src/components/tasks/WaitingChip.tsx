@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task } from '@open-walnut/core';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { useTaskTriggers } from '@/hooks/useTaskTriggers';
 import { triggerPillTitle } from '@/components/routines/TriggerPill';
 import { formatWaitUntil } from './TaskStatusControl';
@@ -119,17 +120,6 @@ export function WaitingChip({ task, compact = false }: { task: Task | null | und
 
   useEffect(() => {
     if (!open) { byClick.current = false; return; }
-    const onPointerDown = (e: PointerEvent) => {
-      const target = e.target as Node | null;
-      if (target && (chipRef.current?.contains(target) || cardRef.current?.contains(target))) return;
-      setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      e.stopPropagation();
-      setOpen(false);
-    };
     const onViewerOpen = () => {
       if (timer.current !== null) { window.clearTimeout(timer.current); timer.current = null; }
       setOpen(false);
@@ -138,17 +128,16 @@ export function WaitingChip({ task, compact = false }: { task: Task | null | und
     window.addEventListener(OPEN_FILE_EVENT, onViewerOpen);
     window.addEventListener(OPEN_CENTER_EVENT, onViewerOpen);
     window.addEventListener(TASK_OPEN_EVENT, onViewerOpen);
-    // Capture phase: every pill on a row stops its own pointerdown (see LeaderPill.tsx).
-    document.addEventListener('pointerdown', onPointerDown, true);
-    document.addEventListener('keydown', onKey, true);
     return () => {
       window.removeEventListener(OPEN_FILE_EVENT, onViewerOpen);
       window.removeEventListener(OPEN_CENTER_EVENT, onViewerOpen);
       window.removeEventListener(TASK_OPEN_EVENT, onViewerOpen);
-      document.removeEventListener('pointerdown', onPointerDown, true);
-      document.removeEventListener('keydown', onKey, true);
     };
   }, [open]);
+
+  // A hover card: Escape or a press outside closes it through the overlay stack. Focus stays on
+  // the chip (no trap), and the press outside still does what it presses.
+  useOverlayLayer({ open, refs: [cardRef, chipRef], onClose: () => setOpen(false), trapFocus: false, passOutsideClick: true });
 
   if (!task || !isParked(task)) return null;
   const label = waitingChipLabel(task);
@@ -187,7 +176,7 @@ export function WaitingChip({ task, compact = false }: { task: Task | null | und
         ? createPortal(
             <div
               ref={cardRef}
-              className="task-waiting-card"
+              className="task-waiting-card wn-overlay"
               role="dialog"
               aria-label={reads === 'waiting' ? 'Why this task is waiting' : 'When this task checks back'}
               data-testid="session-waiting-card"

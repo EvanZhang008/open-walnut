@@ -10,13 +10,14 @@
  * together); the rest fold into "+N", whose tooltip names them. The detail pane
  * passes a larger max.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { TagChip } from './TagChip';
 import { ChangePill } from './ChangePill';
 import { changeOfTag, type ChangeTask } from './change-status';
 import { useExperimental } from '@/hooks/useExperimental';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { useTagDisplay } from '@/stores/tag-display-store';
 import { shownTags, tagValue, type CompiledTagDisplay } from '../../../../src/core/tag-display-rules';
 import { isLinkTag, linkPathOfTag, linkTagNames } from '../../../../src/core/link-tags';
@@ -66,17 +67,16 @@ function OverflowMenu({ rest, compiled, onOpenPath, links }: { rest: string[]; c
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const placement = useMenuPlacement(open, btnRef, menuRef, { minHeight: 60, onAnchorLost: () => setOpen(false) });
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: globalThis.MouseEvent) => {
-      if (menuRef.current?.contains(e.target as Node) || btnRef.current?.contains(e.target as Node)) return;
+  // A pill's own card (a change's status) is a layer above this list: a press in it stays inside.
+  useOverlayLayer({
+    passOutsideClick: true,
+    open,
+    refs: [menuRef, btnRef],
+    onClose: (reason) => {
       setOpen(false);
-    };
-    const key = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('mousedown', close);
-    document.addEventListener('keydown', key);
-    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', key); };
-  }, [open]);
+      if (reason === 'escape') btnRef.current?.focus({ preventScroll: true });
+    },
+  });
   return (
     <>
       <button
@@ -95,7 +95,7 @@ function OverflowMenu({ rest, compiled, onOpenPath, links }: { rest: string[]; c
       {open && createPortal(
         <div
           ref={menuRef}
-          className="tag-pills-menu"
+          className="tag-pills-menu wn-overlay wn-menu"
           role="menu"
           data-testid="tag-pills-menu"
           style={menuPlacementStyle(placement)}

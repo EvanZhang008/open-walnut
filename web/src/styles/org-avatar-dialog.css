@@ -1,5 +1,5 @@
 /* "Edit name and avatar…" (OrgAvatarDialog.tsx). */
-.app-modal.org-avatar-dialog { display: flex; flex-direction: column; box-sizing: border-box; width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; overflow: hidden; background: var(--bg-elevated); }
+.app-modal.org-avatar-dialog { display: flex; flex-direction: column; box-sizing: border-box; width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; overflow: hidden; }
 .app-modal.org-avatar-dialog:focus { outline: none; }
 .org-avatar-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px 6px 18px; }
 .org-avatar-head h2 { flex: 1; min-width: 0; margin: 0; font-size: var(--font-size-lg); font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

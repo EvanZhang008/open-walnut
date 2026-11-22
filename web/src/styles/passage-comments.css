@@ -32,13 +32,8 @@
   gap: 6px;
   width: min(320px, 80vw);
   padding: 10px 12px;
-  background: var(--bg-elevated);
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
   font-size: var(--font-size-md);
-  z-index: 1000;
   /* useMenuPlacement caps the height to the room it has; the card scrolls inside it. */
   overflow-y: auto;
   overscroll-behavior: contain;

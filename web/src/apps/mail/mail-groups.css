@@ -380,11 +380,9 @@
 .mail-unsub-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 1000;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: color-mix(in srgb, var(--fg) 28%, transparent);
 }
 
 .mail-unsub-plan {
@@ -394,11 +392,7 @@
   flex-direction: column;
   gap: 8px;
   padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg);
   color: var(--fg);
-  box-shadow: 0 12px 40px color-mix(in srgb, var(--fg) 22%, transparent);
   box-sizing: border-box;
 }
 

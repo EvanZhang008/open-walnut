@@ -16,6 +16,7 @@ import { refreshRouterAreas, routerAreaSources } from './router-area-names';
 import { folderList, sameFolders } from './RouterFolderPicker';
 import '@/styles/router-settings.css';
 import { routerStateWord } from './org-channels-model';
+import { ICON_CLOSE } from '../common/Icons';
 import {
   RouterSettingsBody, editRouterValue, isOpenVp, mailAccountNames, routerFormProblem, routerLinkRows, routerPatch,
   shownRouterValue, useRouterSaved, type RouterSettingsValue,
@@ -108,9 +109,9 @@ export function RouterSettingsDialog({ router, tasks, tasksLoading = false, onCl
   const titleId = `router-settings-title-${id}`;
   return createPortal(
     <ModalOverlayOwner.Provider value={modalOwner}>
-      <div className="app-modal-overlay router-settings-overlay" onMouseDown={onClose}>
+      <div className="app-modal-overlay router-settings-overlay wn-scrim" onMouseDown={onClose}>
         <div
-          className="app-modal router-settings-dialog"
+          className="app-modal router-settings-dialog wn-dialog"
           role="dialog"
           aria-modal="true"
           aria-labelledby={titleId}
@@ -120,12 +121,12 @@ export function RouterSettingsDialog({ router, tasks, tasksLoading = false, onCl
           tabIndex={-1}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <header className="router-settings-dialog-head">
+          <header className="router-settings-dialog-head wn-dialog-head">
             <div className="router-settings-dialog-titles">
               <h2 className="router-settings-dialog-title wn-title" id={titleId}>{value.name.trim() || fresh.org_name || fresh.title}</h2>
               <span className="router-settings-dialog-sub">Router · {areaLabel || 'Area not configured'} · {routerStateWord(baseline.paused)}</span>
             </div>
-            <button type="button" className="router-settings-dialog-close" aria-label="Close" data-testid="router-settings-close" onClick={onClose}>×</button>
+            <button type="button" className="btn btn-icon wn-dialog-close" aria-label="Close" data-testid="router-settings-close" onClick={onClose}>{ICON_CLOSE}</button>
           </header>
           <div className="router-settings-dialog-body">
             <RouterSettingsBody

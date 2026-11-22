@@ -136,24 +136,7 @@
 .worker-fold-foot { padding: 2px 0 0 26px; }
 
 /* What a control does, shown the moment the pointer is on it (fold-tip.ts; a native title waits about
-   a second). A fixed box on the body, kept inside the window, so no column or scroller cuts it off. */
-.worker-fold-tip {
-  position: fixed;
-  z-index: 10000;
-  max-width: min(320px, calc(100vw - 12px));
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
-  background: rgba(28, 28, 30, 0.95);
-  color: var(--on-accent);
-  font-size: var(--font-size-sm);
-  font-weight: 400;
-  line-height: 16px;
-  white-space: nowrap;
-  /* A leader's long title ends in an ellipsis. */
-  overflow: hidden;
-  text-overflow: ellipsis;
-  pointer-events: none;
-}
+   a second): the one tooltip, wn-tip (overlay-family.css). */
 .worker-fold-tip[hidden] { display: none; }
 
 /* A worker shown separately: the put-back arrow on the row's hover, beside its start button. */

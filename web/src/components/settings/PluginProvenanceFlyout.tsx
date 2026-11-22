@@ -10,6 +10,7 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement'
+import { useOverlayLayer } from '@/hooks/useOverlayLayer'
 import { formatAbsoluteTime } from './sections/addons-format'
 import { PluginUpdateIcon } from './plugin-update-icons'
 import { shortRemote, shortenHome } from './plugin-update-view'
@@ -118,24 +119,14 @@ export function PluginProvenanceFlyout(props: PluginProvenanceFlyoutProps) {
     if (restoreFocus) triggerRef.current?.focus()
   }, [])
 
-  // Outside pointerdown closes it; clicks inside (this flyout is portalled, so the class
-  // check is the test) do not. Scrolling does NOT close it (N2-4): the click that opens the
-  // flyout often scrolls its trigger into view first, and a trackpad keeps emitting scroll
-  // events after the fingers lift, so a scroll listener swallowed the first click. The
-  // placement hook already follows the anchor on scroll and calls `onAnchorLost` when the
-  // trigger leaves the viewport, which is the one scroll that should close a popover.
-  useEffect(() => {
-    if (!open) return
-    const onPointerDown = (e: PointerEvent) => {
-      const target = e.target as Element | null
-      if (!target) return
-      if (target.closest('.plugin-provenance-flyout')) return
-      if (triggerRef.current?.contains(target)) return
-      close(false)
-    }
-    document.addEventListener('pointerdown', onPointerDown)
-    return () => document.removeEventListener('pointerdown', onPointerDown)
-  }, [open, close])
+  // Esc (wherever focus is, ahead of a settings pane's own Esc) and an outside pointerdown
+  // close it through the one overlay layer; Esc gives the focus back to the trigger.
+  // Scrolling does NOT close it (N2-4): the click that opens the flyout often scrolls its
+  // trigger into view first, and a trackpad keeps emitting scroll events after the fingers
+  // lift, so a scroll listener swallowed the first click. The placement hook already follows
+  // the anchor on scroll and calls `onAnchorLost` when the trigger leaves the viewport, which
+  // is the one scroll that should close a popover.
+  useOverlayLayer({ passOutsideClick: true, open, refs: [menuRef, triggerRef], onClose: (reason) => close(reason === 'escape') })
 
   // Focus moves into the dialog on open (first focusable), back to the trigger on Esc.
   useEffect(() => {
@@ -143,21 +134,6 @@ export function PluginProvenanceFlyout(props: PluginProvenanceFlyoutProps) {
     const first = menuRef.current?.querySelector<HTMLElement>(FOCUSABLE)
     first?.focus()
   }, [open])
-
-  // Esc closes while open, wherever focus is: a click on non-focusable text inside the
-  // dialog drops focus to <body>, and a React handler on the dialog root never hears it.
-  // Capture phase, so a settings pane's own Esc handler (close panel) does not run first.
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      e.preventDefault()
-      e.stopPropagation()
-      close(true)
-    }
-    document.addEventListener('keydown', onKey, true)
-    return () => document.removeEventListener('keydown', onKey, true)
-  }, [open, close])
 
   const checked = checkedAt
     ? `Checked ${formatAbsoluteTime(checkedAt, now !== undefined ? new Date(now) : undefined)}`
@@ -212,7 +188,7 @@ export function PluginProvenanceFlyout(props: PluginProvenanceFlyoutProps) {
         ? createPortal(
             <div
               ref={menuRef}
-              className="plugin-provenance-flyout"
+              className="plugin-provenance-flyout wn-overlay"
               role="dialog"
               aria-label={isLinked ? 'Plugin checkout' : 'Plugin source'}
               data-testid={`provenance-flyout-${rowId}`}

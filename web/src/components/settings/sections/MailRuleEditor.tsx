@@ -33,6 +33,7 @@ import {
 } from '@/api/mail-groups';
 import type { MailAccountDto } from '@/api/mail';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { useDraftValue } from '@/hooks/useDraft';
 import { draftHash, draftKey } from '@/utils/drafts';
 import { SettingsButton } from '../inputs/SettingsButton';
@@ -94,26 +95,15 @@ export function MailRulesPicker({ value, options, onChange, ariaLabel, testId, d
   const listId = useId();
   const placement = useMenuPlacement(open, trigger, list, { align: 'start', minHeight: 120, onAnchorLost: () => setOpen(false) });
   const current = options.find((one) => one.value === value);
+  // Escape (focus back to the trigger) and an outside press close it: the one overlay layer.
+  useOverlayLayer({
+    passOutsideClick: true,
+    open,
+    refs: [list, trigger],
+    onClose: (reason) => { setOpen(false); if (reason === 'escape') trigger.current?.focus(); },
+  });
   useEffect(() => {
-    if (!open) return;
-    const onDown = (event: PointerEvent) => {
-      const node = event.target as Node | null;
-      if (node && (list.current?.contains(node) || trigger.current?.contains(node))) return;
-      setOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.stopPropagation();
-      setOpen(false);
-      trigger.current?.focus();
-    };
-    document.addEventListener('pointerdown', onDown, true);
-    document.addEventListener('keydown', onKey, true);
-    list.current?.querySelector<HTMLElement>('[aria-selected="true"], [role="option"]')?.focus();
-    return () => {
-      document.removeEventListener('pointerdown', onDown, true);
-      document.removeEventListener('keydown', onKey, true);
-    };
+    if (open) list.current?.querySelector<HTMLElement>('[aria-selected="true"], [role="option"]')?.focus();
   }, [open]);
   const pick = (next: string) => { onChange(next); setOpen(false); trigger.current?.focus(); };
   const onListKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -132,7 +122,7 @@ export function MailRulesPicker({ value, options, onChange, ariaLabel, testId, d
         <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" focusable="false"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth="1.5" /></svg>
       </button>
       {open && createPortal(
-        <div ref={list} id={listId} role="listbox" aria-label={ariaLabel} className="mail-rules-picker-list"
+        <div ref={list} id={listId} role="listbox" aria-label={ariaLabel} className="mail-rules-picker-list wn-overlay wn-menu"
           data-testid={testId ? `${testId}-list` : undefined} style={menuPlacementStyle(placement)}
           onPointerDown={(event) => event.stopPropagation()} onKeyDown={onListKey}>
           {options.map((one) => (

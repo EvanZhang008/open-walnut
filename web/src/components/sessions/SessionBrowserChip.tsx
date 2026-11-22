@@ -114,7 +114,7 @@ export function SessionBrowserChip({ taskId, view, compact = false }: {
         ? createPortal(
             <div
               ref={cardRef}
-              className="session-browser-popover"
+              className="session-browser-popover wn-overlay"
               role="dialog"
               aria-label="Browser view"
               data-testid="session-browser-popover"

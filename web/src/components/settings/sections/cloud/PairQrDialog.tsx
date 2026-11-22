@@ -57,8 +57,8 @@ export function PairQrDialog({ name, phase, repair, reach, created, qrDataURL, e
   const steps = repair ? SCAN_STEPS_REPAIR : SCAN_STEPS_NEW;
 
   return createPortal(
-    <div className="app-modal-overlay" role="dialog" aria-modal="true" aria-label={title} onMouseDown={onBackdrop}>
-      <div ref={boxRef} tabIndex={-1} className="app-modal devices-qr-dialog" data-phase={phase} data-qr-for={name} onMouseDown={(e) => e.stopPropagation()}>
+    <div className="app-modal-overlay wn-scrim" role="dialog" aria-modal="true" aria-label={title} onMouseDown={onBackdrop}>
+      <div ref={boxRef} tabIndex={-1} className="app-modal devices-qr-dialog wn-dialog" data-phase={phase} data-qr-for={name} onMouseDown={(e) => e.stopPropagation()}>
         <div className="app-modal-title">{title}</div>
         {reach && phase !== 'shown' && <div className="devices-qr-dialog-sub">{reach}</div>}
 
@@ -93,7 +93,7 @@ export function PairQrDialog({ name, phase, repair, reach, created, qrDataURL, e
           </>
         )}
 
-        <div className="app-modal-actions">
+        <div className="app-modal-actions wn-dialog-foot">
           {phase === 'shown' ? (
             <button ref={primaryRef} tabIndex={0} className="btn btn-primary" onClick={onClose} data-testid="devices-qr-done">Done</button>
           ) : (

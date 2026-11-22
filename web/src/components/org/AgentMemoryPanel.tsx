@@ -29,6 +29,7 @@ import { log } from '@/utils/log';
 import { instructionsSource } from './instructions-source';
 import { NodeDuties } from './NodeDuties';
 import '@/styles/agent-memory.css';
+import { ICON_CLOSE } from '../common/Icons';
 
 /** Org agents have instructions and a memory of their own; other tasks have neither. */
 export function hasMemoryAndInstructions(task: Pick<Task, 'org_role'> | null | undefined): boolean {
@@ -195,7 +196,7 @@ export function AgentMemoryPanel({ task, onClose }: { task: Task; onClose: () =>
 
   return createPortal(
     <div
-      className="app-modal-overlay"
+      className="app-modal-overlay wn-scrim"
       // A click outside closes it, unless that would drop unsaved words.
       onMouseDown={() => { if (!busy && !dirty) onClose(); }}
       onPointerDown={(e) => e.stopPropagation()}
@@ -204,16 +205,16 @@ export function AgentMemoryPanel({ task, onClose }: { task: Task; onClose: () =>
       onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}
     >
       <div
-        className="app-modal am-modal"
+        className="app-modal am-modal wn-dialog"
         role="dialog"
         aria-modal="true"
         aria-label={`Memory and instructions: ${name}`}
         data-testid="agent-memory-panel"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="am-head">
+        <div className="am-head wn-dialog-head">
           <div className="app-modal-title">Memory &amp; instructions</div>
-          <button type="button" className="am-close" onClick={onClose} disabled={busy} aria-label="Close">×</button>
+          <button type="button" className="btn btn-icon wn-dialog-close" onClick={onClose} disabled={busy} aria-label="Close">{ICON_CLOSE}</button>
         </div>
         <div className="am-sub">{name}</div>
 
@@ -258,7 +259,7 @@ export function AgentMemoryPanel({ task, onClose }: { task: Task; onClose: () =>
         <OwnMemory load={own} />
         {isMain && <WalnutMemory onOpen={openMemory} held={dirty} />}
 
-        <div className="app-modal-actions">
+        <div className="app-modal-actions wn-dialog-foot">
           <button type="button" className="btn" onClick={onClose} disabled={busy}>{dirty ? 'Cancel' : 'Close'}</button>
           <button type="button" className="btn btn-primary" onClick={gate.send} disabled={(!dirty && !gate.micBusy && !gate.waiting) || busy || !fresh} data-testid="am-save" {...dictationWaitProps(gate)}>
             {busy ? 'Saving…' : 'Save'}

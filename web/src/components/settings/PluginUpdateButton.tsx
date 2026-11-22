@@ -122,7 +122,7 @@ export function PluginUpdateButton({ rowId, mode, onClick }: PluginUpdateButtonP
             <span
               ref={tipRef}
               id={id}
-              className="plugin-update-reason"
+              className="plugin-update-reason wn-overlay"
               role="status"
               data-testid={`plugin-update-reason-${rowId}`}
               style={menuPlacementStyle(placement)}

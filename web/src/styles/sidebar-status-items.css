@@ -106,11 +106,7 @@
   max-width: calc(100vw - 16px);
   box-sizing: border-box;
   padding: 14px 14px 12px;
-  background: var(--bg-elevated);
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.06);
   font-size: var(--font-size-md);
   overflow-y: auto;
   overscroll-behavior: contain;

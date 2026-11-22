@@ -18,6 +18,7 @@ import { detectMention } from '@/components/chat/mention-trigger';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { draftKey } from '@/utils/drafts';
 import { mentionCandidates, mentionKeyAction, mentionSpans, orgRef, refKey, taskRef, type MentionCandidate } from './topic-model';
 import { useOpenTaskNames, useOrgNodeNames } from './member-candidates';
@@ -42,6 +43,9 @@ export function TopicComposer({ topic, actions }: { topic: Topic; actions: Pick<
   // Every "@Name" that names a member is drawn as a pill in the box: the same rule that decides who it wakes.
   const namedPills = useLeanCallback((body: string) => mentionSpans(body, topic.members), [topic.members]);
   const placement = useMenuPlacement(open, wrap, menuRef, { preferSide: 'up', align: 'start', minHeight: 120, onAnchorLost: () => setAt(null) });
+  // Escape and a press outside the composer close the list (the shared overlay layer); the
+  // typing stays in the box (no focus trap), and the confirm a task pick opens counts as inside.
+  useOverlayLayer({ passOutsideClick: true, open, onClose: () => setAt(null), refs: [menuRef, wrap], exemptSelectors: ['.wn-scrim', '.wn-dialog'], trapFocus: false });
 
   const box = () => wrap.current?.querySelector('textarea') ?? null;
   const read = (text: string) => {
@@ -108,7 +112,7 @@ export function TopicComposer({ topic, actions }: { topic: Topic; actions: Pick<
       />
       {refused && <div className="topic-composer-refused" role="alert" data-testid="topic-composer-refused">{refused}</div>}
       {open && createPortal(
-        <div ref={menuRef} role="listbox" aria-label="Mention a member" className="task-kebab-menu topic-mention-menu" data-testid="topic-mention-menu"
+        <div ref={menuRef} role="listbox" aria-label="Mention a member" className="task-kebab-menu topic-mention-menu wn-overlay wn-menu" data-testid="topic-mention-menu"
           style={menuPlacementStyle(placement)} onPointerDown={(e) => e.stopPropagation()} onMouseDown={(e) => e.preventDefault()}>
           {rows.map((c, i) => {
             const ref = c.kind === 'member' ? c.member.ref : c.kind === 'org' ? orgRef(c.node) : taskRef(c.taskId);

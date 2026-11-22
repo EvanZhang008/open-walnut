@@ -92,13 +92,13 @@ export function ConfirmDialog({
   return createPortal(
     <ModalOverlayOwner.Provider value={modalOwner}>
       <div
-        className="app-modal-overlay"
+        className="app-modal-overlay wn-scrim"
         role="dialog"
         aria-modal="true"
         aria-label={title}
         onMouseDown={onCancel}
       >
-        <div className="app-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="app-modal wn-dialog" onMouseDown={(e) => e.stopPropagation()}>
           <div className="app-modal-title">{title}</div>
           {message != null && message !== '' && (
             <div className="app-modal-message">{message}</div>
@@ -116,7 +116,7 @@ export function ConfirmDialog({
               onEnter={sendGate.send}
             />
           )}
-          <div className="app-modal-actions">
+          <div className="app-modal-actions wn-dialog-foot">
             {cancelLabel && (
               <button ref={cancelRef} className="btn" onClick={() => { draft.clear(); onCancel(); }}>
                 {cancelLabel}

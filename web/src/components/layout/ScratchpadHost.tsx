@@ -131,7 +131,7 @@ function ScratchpadSheet({ onClose }: { onClose: () => void }) {
   useYieldsToTaskOpen(onClose);
   useScratchpadSlot(slot, true, { onClose, tasks });
   return createPortal(
-    <div className="app-modal-overlay scratchpad-sheet-overlay" onPointerDown={(e) => { e.stopPropagation(); if (e.target === e.currentTarget) onClose(); }}>
+    <div className="app-modal-overlay scratchpad-sheet-overlay wn-scrim" onPointerDown={(e) => { e.stopPropagation(); if (e.target === e.currentTarget) onClose(); }}>
       <div ref={slot} className="scratchpad-sheet" role="dialog" aria-modal="true" aria-label="Scratchpad" data-testid="scratchpad-sheet" onPointerDown={(e) => e.stopPropagation()} />
     </div>,
     document.body,

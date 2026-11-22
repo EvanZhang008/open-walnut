@@ -34,7 +34,7 @@ export default function PasswordsUnlockSheet({ request }: { request: PasswordsUn
   }, [])
   const sub = `${request.pluginName} asks to unlock Passwords${request.reason ? ` ${request.reason}` : ''}. Enter your master password; Walnut does not give it to ${request.pluginName}.`
   return createPortal(
-    <div className="pw-unlock-sheet-overlay" onPointerDown={(event) => event.stopPropagation()}>
+    <div className="pw-unlock-sheet-overlay wn-scrim" onPointerDown={(event) => event.stopPropagation()}>
       <div ref={ref} className="pw-unlock-sheet" role="dialog" aria-modal="true" aria-label="Unlock Passwords" tabIndex={-1} data-testid="pw-unlock-sheet">
         {kit ? <KitScreen {...kit} doneLabel="Done" onDone={() => done(!!vaultSession())} />
           : <UnlockScreen status={request.status} sub={sub} onBusy={onBusy} onCancel={() => done(false)} onKit={setKit} onUnlocked={() => done(!!vaultSession())} />}

@@ -27,7 +27,7 @@ function hide(): void {
 function place(el: HTMLElement): void {
   if (!box) {
     box = document.createElement('div');
-    box.className = 'worker-fold-tip';
+    box.className = 'worker-fold-tip wn-tip';
     box.setAttribute('role', 'tooltip');
     box.dataset.testid = 'worker-fold-tip';
     document.body.appendChild(box);

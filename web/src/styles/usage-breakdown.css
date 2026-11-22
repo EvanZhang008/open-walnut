@@ -33,10 +33,9 @@
 .usage-bd-cross circle { stroke: var(--card-bg); stroke-width: 2; }
 
 .usage-bd-tip {
-  position: absolute; top: 8px; z-index: 2; min-width: 180px; max-width: 280px; pointer-events: none;
-  padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border);
-  background: var(--bg-elevated); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  font-size: var(--font-size-sm); color: var(--fg);
+  /* A chart readout is a hover card: its frame is wn-overlay (overlay-family.css). */
+  position: absolute; top: 8px; min-width: 180px; max-width: 280px; pointer-events: none;
+  padding: 8px 12px; font-size: var(--font-size-sm);
 }
 .usage-bd-tip-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 4px; font-weight: 600; }
 .usage-bd-tip-row { display: flex; align-items: center; gap: 6px; line-height: 1.6; }

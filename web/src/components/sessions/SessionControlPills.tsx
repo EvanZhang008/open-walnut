@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import type { SessionControl } from '@/api/sessions';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 
 interface SessionControlPillsProps {
   controls: SessionControl[];
@@ -113,25 +114,16 @@ function ThoughtControlPill({ control, setControl }: Pick<SessionControlPillsPro
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const placement = useMenuPlacement(open, trigger, menu, { preferSide: 'up', onAnchorLost: () => setOpen(false) });
-  useEffect(() => {
-    if (!open) return;
-    const outside = (event: PointerEvent) => {
-      if (!trigger.current?.contains(event.target as Node) && !menu.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
-    document.addEventListener('pointerdown', outside);
-    document.addEventListener('keydown', escape);
-    return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape); };
-  }, [open]);
+  useOverlayLayer({ passOutsideClick: true, open, onClose: () => setOpen(false), refs: [menu, trigger] });
   const current = control.options.find((option) => option.value === control.currentValue);
   if (!control.options.length) return null;
   return <>
     <button ref={trigger} type="button" className="btn btn-sm btn-ghost mode-toggle-pill" title={control.name} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(!open)}>
       <span className="mode-toggle-pill-label">{current?.name ?? control.currentValue}</span>
     </button>
-    {open && createPortal(<div ref={menu} className="session-control-menu" role="listbox" aria-label={control.name}
+    {open && createPortal(<div ref={menu} className="session-control-menu wn-overlay wn-menu" role="listbox" aria-label={control.name}
       onPointerDown={(event) => event.stopPropagation()}
-      style={{ position: 'fixed', bottom: 'auto', left: 'auto', width: 'min(280px, calc(100vw - 24px))', zIndex: 10020, ...placement, visibility: placement ? 'visible' : 'hidden' }}>
+      style={{ position: 'fixed', bottom: 'auto', left: 'auto', width: 'min(280px, calc(100vw - 24px))', zIndex: 'var(--z-menu)', ...placement, visibility: placement ? 'visible' : 'hidden' }}>
       <div className="session-control-menu-title">{control.name}</div>
       {control.options.map((option) => <button key={option.value} type="button" role="option" className="session-control-option" aria-selected={option.value === control.currentValue} disabled={busy}
         onClick={() => {
@@ -157,21 +149,8 @@ function ApprovalControlPills({
   const collab = controls.find((control) => control.id === 'collaboration_mode');
   const planOn = collab?.currentValue === 'plan';
 
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [open]);
+  // The root holds the pill and its menu (drawn in place, not portalled).
+  useOverlayLayer({ passOutsideClick: true, open, onClose: () => setOpen(false), refs: [rootRef] });
 
   if (!mode) return null;
   const current = mode.options.find((option) => option.value === mode.currentValue);
@@ -199,7 +178,7 @@ function ApprovalControlPills({
           </span>
         </button>
         {open && (
-          <span className="session-control-menu" role="listbox" aria-label={mode.name}>
+          <span className="session-control-menu wn-overlay wn-menu" role="listbox" aria-label={mode.name}>
             <span className="session-control-menu-title">
               How should {engineName} actions be approved?
             </span>

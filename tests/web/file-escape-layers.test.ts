@@ -73,7 +73,6 @@ const OWNERS: Record<string, 'rules' | 'toolbar' | 'card' | 'field' | 'menu' | '
   'components/common/FileQuestionRail.tsx': 'menu',
   'components/sessions/SessionDiffView.tsx': 'field',
   'components/common/FileContentView.tsx': 'sheet',
-  'components/common/FileViewer.tsx': 'sheet',
   'hooks/useFullscreen.tsx': 'sheet',
   'components/common/preview-frame.ts': 'forward',
 };

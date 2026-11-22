@@ -4,13 +4,16 @@
  * portalled to <body>, placed by useMenuPlacement, pointerdown stops at the
  * portal, and a marker attribute lets every outside-click closer exempt it.
  *
- * Esc is caught on window in the CAPTURE phase while open, so it closes this
- * layer and nothing else (not the stack, the drawer or fullscreen), wherever
- * focus is. Default focus is the cancel button.
+ * Esc and an outside press go through the one overlay layer (useOverlayLayer),
+ * so Esc closes this layer and nothing else (not the stack, the drawer or
+ * fullscreen), wherever focus is. A light confirm: the press outside also does
+ * what it pressed. Default focus is the cancel button, and it goes back where
+ * it was when the confirm closes.
  */
 import { useEffect, useId, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import '@/styles/thread-stack.css';
 
 /** Every thread overlay (confirm, toast) carries this attribute. */
@@ -41,8 +44,7 @@ export function ThreadConfirm({ anchorEl, title, body, confirmLabel, cancelLabel
   const place = useMenuPlacement(true, triggerRef, boxRef, { align: 'right', minHeight: 80, onAnchorLost: onDismiss ?? onCancel });
   const titleId = useId();
   const bodyId = useId();
-  const dismissRef = useRef(onDismiss ?? onCancel);
-  dismissRef.current = onDismiss ?? onCancel;
+  useOverlayLayer({ open: true, refs: [boxRef, triggerRef], onClose: onDismiss ?? onCancel, passOutsideClick: true });
 
   // Default focus waits for placement: until `place` lands the box is
   // visibility:hidden, and focusing a hidden button is a no-op in every engine.
@@ -55,24 +57,7 @@ export function ThreadConfirm({ anchorEl, title, body, confirmLabel, cancelLabel
 
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.isComposing) return;
-      e.preventDefault();
-      e.stopPropagation();
-      dismissRef.current();
-    };
-    const onDown = (e: PointerEvent) => {
-      if (boxRef.current?.contains(e.target as Node)) return;
-      if (anchorEl?.contains(e.target as Node)) return;
-      dismissRef.current();
-    };
-    window.addEventListener('keydown', onKey, true);
-    document.addEventListener('pointerdown', onDown, true);
-    return () => {
-      window.removeEventListener('keydown', onKey, true);
-      document.removeEventListener('pointerdown', onDown, true);
-      if (prev && document.contains(prev)) prev.focus({ preventScroll: true });
-    };
+    return () => { if (prev && document.contains(prev)) prev.focus({ preventScroll: true }); };
   }, [anchorEl]);
 
   const style = place
@@ -82,7 +67,7 @@ export function ThreadConfirm({ anchorEl, title, body, confirmLabel, cancelLabel
   return createPortal(
     <div
       ref={boxRef}
-      className="thread-confirm"
+      className="thread-confirm wn-overlay"
       role="alertdialog"
       aria-modal="false"
       aria-labelledby={titleId}

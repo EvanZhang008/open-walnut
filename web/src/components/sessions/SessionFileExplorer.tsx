@@ -214,9 +214,10 @@ function PathSuggestions({ anchorRef, paths, active, onPick }: {
   return createPortal(
     <div
       ref={listRef}
-      className="sfe-path-suggest sfe-path-suggest-floating"
+      className="sfe-path-suggest sfe-path-suggest-floating wn-overlay wn-menu"
       role="listbox"
       style={{ ...menuPlacementStyle(placement), width }}
+      onPointerDown={(e) => e.stopPropagation()}
     >
       {paths.map((p, i) => (
         <div

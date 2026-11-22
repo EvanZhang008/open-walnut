@@ -14,6 +14,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task } from '@open-walnut/core';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import type { PlacementArrow } from '@/hooks/menu-placement-beside';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
@@ -114,16 +115,10 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
 
   const onPreview = useLeanCallback((p: EventPreview) => setPreview(p), []);
 
-  // Window-level Escape: the composer/form inputs handle Escape only while
-  // focused; after clicking non-focusable popover chrome focus sits on <body>.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      // A flyout's own Escape (EventCreateForm) stops the event before it gets here.
-      if (e.key === 'Escape' && !e.isComposing) onClose();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  // Escape closes the popover wherever focus is (a field, its chrome, <body>): the shared layer takes
+  // it first, so a flyout opened from the form (its own layer, on top) closes alone. An outside press
+  // is the backdrop's (double-click guard below), never the layer's.
+  useOverlayLayer({ passOutsideClick: true, open: true, refs: [menuRef], closeOnOutside: false, trapFocus: false, onClose: (reason) => { if (reason === 'escape') onClose(); } });
 
   // Flat list of existing project names for the composer's datalist. Registry
   // first (an existing-but-EMPTY project must not be badged "new"), then names
@@ -177,7 +172,7 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
         />
       )}
       <div
-        className="cal-create-popover wn-glass"
+        className="cal-create-popover wn-overlay wn-glass"
         ref={menuRef}
         style={menuPlacementStyle(placement)}
         data-kind={shown}
@@ -242,7 +237,7 @@ function PopoverArrow({ arrow }: { arrow?: PlacementArrow }) {
     <div
       className="cal-create-arrow wn-glass-fill"
       data-edge={arrow.edge}
-      style={{ position: 'fixed', left: arrow.x, top: arrow.y, zIndex: 9999 }}
+      style={{ position: 'fixed', left: arrow.x, top: arrow.y, zIndex: 'var(--z-menu)' }}
       aria-hidden="true"
     />
   );

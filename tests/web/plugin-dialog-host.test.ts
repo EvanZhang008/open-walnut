@@ -13,6 +13,7 @@ const routeNavigate = vi.fn()
 const navigator = { createHref: () => '/', go: vi.fn(), push: routeNavigate, replace: routeNavigate }
 vi.mock('@/hooks/useOverlayLayer', () => ({
   useOverlayLayer: () => {},
+  registerModalOrder: () => () => {},
   overlayTabStops: (root: HTMLElement) => Array.from(root.querySelectorAll<HTMLElement>('button,input')).filter(el => !(el as HTMLButtonElement).disabled),
 }))
 vi.mock('@/utils/log', () => ({ log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }))

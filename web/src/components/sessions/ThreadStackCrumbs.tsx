@@ -5,13 +5,14 @@
  * (ThreadPathBar.tsx), which replaced the crumbs that used to sit in this row.
  *
  * Menus follow web/src/AGENTS.md: portal to body, useMenuPlacement,
- * pointerdown stops at the portal, outside click exempts the other thread
- * portals.
+ * pointerdown stops at the portal, Escape and an outside press close it
+ * through the one overlay layer (the other thread portals count as inside).
  */
 import { useEffect, useMemo, useRef, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { THREAD_OVERLAY_SELECTOR } from '@/components/sessions/ThreadConfirm';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { displayTitleOf, type ThreadMetaIndex } from '@/utils/thread-meta';
 import { ROOT_THREAD_KEY, type ThreadNode } from '@/utils/thread-tree';
 
@@ -42,19 +43,15 @@ export function ThreadPathMenu({ anchorEl, items, label, onPick, onClose }: Thre
   const triggerRef = useMemo(() => ({ current: anchorEl }), [anchorEl]);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const place = useMenuPlacement(true, triggerRef, menuRef, { align: 'start', minHeight: 60, onAnchorLost: onClose });
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
-
-  useEffect(() => {
-    const onDown = (e: PointerEvent) => {
-      const t = e.target;
-      if (!(t instanceof Element)) return;
-      if (menuRef.current?.contains(t) || anchorEl?.contains(t) || t.closest(MENU_EXEMPT)) return;
-      closeRef.current();
-    };
-    document.addEventListener('pointerdown', onDown, true);
-    return () => document.removeEventListener('pointerdown', onDown, true);
-  }, [anchorEl]);
+  // Escape gives the focus back to the back button. No focus trap: Tab leaves the menu (onKey).
+  useOverlayLayer({
+    passOutsideClick: true,
+    open: true,
+    refs: [menuRef, triggerRef],
+    exemptSelectors: [MENU_EXEMPT],
+    trapFocus: false,
+    onClose: (reason) => { onClose(); if (reason === 'escape') anchorEl?.focus({ preventScroll: true }); },
+  });
   useEffect(() => {
     if (place) menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus({ preventScroll: true });
   }, [place]);
@@ -62,8 +59,7 @@ export function ThreadPathMenu({ anchorEl, items, label, onPick, onClose }: Thre
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     const list = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
     const at = list.indexOf(document.activeElement as HTMLButtonElement);
-    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(); anchorEl?.focus({ preventScroll: true }); }
-    else if (e.key === 'ArrowDown') { e.preventDefault(); list[(at + 1) % list.length]?.focus(); }
+    if (e.key === 'ArrowDown') { e.preventDefault(); list[(at + 1) % list.length]?.focus(); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); list[(at - 1 + list.length) % list.length]?.focus(); }
     else if (e.key === 'Tab') onClose();
   };
@@ -71,7 +67,7 @@ export function ThreadPathMenu({ anchorEl, items, label, onPick, onClose }: Thre
   return createPortal(
     <div
       ref={menuRef}
-      className="thread-menu thread-path-menu"
+      className="thread-menu thread-path-menu wn-overlay wn-menu"
       role="menu"
       aria-label={label}
       style={menuPlacementStyle(place)}

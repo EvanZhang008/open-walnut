@@ -18,6 +18,7 @@ import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { Checkbox } from '@/components/controls';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { DatePicker } from '@/components/common/DatePicker';
 import { clockLabel, longDayLabel } from '@/utils/calendar-date';
 import type { CreateSeed } from './QuickCreatePopover';
@@ -298,19 +299,10 @@ function FlyoutBackdrop({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** Escape closes an open flyout alone: stopped in the capture phase, the popover's window listener never sees it. */
+/** Escape closes an open flyout alone: a layer of its own over the popover's (useOverlayLayer), so
+ *  the topmost one closes. An outside press is the flyout's backdrop's. */
 function useFlyoutEscape(open: boolean, close: () => void) {
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.isComposing) return;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      close();
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [open, close]);
+  useOverlayLayer({ passOutsideClick: true, open, refs: [], closeOnOutside: false, trapFocus: false, onClose: (reason) => { if (reason === 'escape') close(); } });
 }
 
 /** Target calendar: a colour dot and its name; the list is its own flyout (no native select in a popover). */
@@ -353,7 +345,7 @@ function CalendarPicker({ calendars, value, onChange }: { calendars: CalendarInf
           <FlyoutBackdrop onClose={() => setOpen(false)} />
           <div
             ref={listRef}
-            className="cal-cal-list wn-glass"
+            className="cal-cal-list wn-overlay wn-menu wn-glass"
             role="listbox"
             aria-label="Calendars"
             style={menuPlacementStyle(placement)}
@@ -419,7 +411,7 @@ function DayButton({ day, onChange, label }: { day: string; onChange: (day: stri
           <FlyoutBackdrop onClose={() => setOpen(false)} />
           <div
             ref={flyRef}
-            className="dp-popover cal-day-flyout wn-glass"
+            className="dp-popover cal-day-flyout wn-overlay wn-glass"
             style={menuPlacementStyle(placement)}
             onPointerDown={(e) => e.stopPropagation()}
             onMouseDown={(e) => e.stopPropagation()}

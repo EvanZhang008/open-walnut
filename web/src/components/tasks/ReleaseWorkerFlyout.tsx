@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import type { Task } from '@open-walnut/core';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { log } from '@/utils/log';
 import { taskStatusLabel } from '@/utils/session-status';
 import { subtaskPlaceLabel } from './subtask-index';
@@ -49,29 +50,9 @@ export function ReleaseWorkerFlyout({ open, anchorRef, leader, onClose, onPicked
     [open, tasks, leader.id, filter, all],
   );
 
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (e: PointerEvent) => {
-      const target = e.target as Element | null;
-      if (!target) return;
-      if (target.closest('.release-worker-flyout')) return;
-      if (anchorRef.current?.contains(target)) return;
-      onClose();
-    };
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      // Ours alone: a host menu under this flyout stays open.
-      e.preventDefault();
-      e.stopPropagation();
-      onClose();
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKey, true);
-    };
-  }, [open, onClose, anchorRef]);
+  // One close policy with every popover (useOverlayLayer): Escape closes only this
+  // flyout, so a host menu under it stays open; an outside press closes it.
+  useOverlayLayer({ passOutsideClick: true, open, refs: [rootRef, anchorRef], onClose: () => onClose() });
 
   if (!open || typeof document === 'undefined') return null;
 
@@ -100,7 +81,7 @@ export function ReleaseWorkerFlyout({ open, anchorRef, leader, onClose, onPicked
   return createPortal(
     <div
       ref={rootRef}
-      className="adopt-worker-flyout release-worker-flyout"
+      className="adopt-worker-flyout release-worker-flyout wn-overlay wn-menu"
       role="dialog"
       aria-label={`Release a worker of ${orgDisplayTitle(leader)}`}
       data-testid="release-worker-flyout"

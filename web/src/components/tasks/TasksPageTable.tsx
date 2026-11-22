@@ -6,6 +6,7 @@ import { draftKey, readDraft, writeDraft } from '@/utils/drafts';
 import { useNavigate } from 'react-router-dom';
 import type { Task, TaskPriority } from '@open-walnut/core';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { createPortal } from 'react-dom';
 import { DatePicker, isOverdue } from '../common/DatePicker';
@@ -97,18 +98,7 @@ function PriorityCell({ task, onUpdate }: { task: Task; onUpdate: TasksPageTable
   const menuRef = useRef<HTMLDivElement>(null);
   const placement = useMenuPlacement(open, btnRef, menuRef, { onAnchorLost: () => setOpen(false) });
 
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: globalThis.MouseEvent) => {
-      if (menuRef.current?.contains(e.target as Node)) return;
-      if (btnRef.current?.contains(e.target as Node)) return;
-      setOpen(false);
-    };
-    const key = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('mousedown', close);
-    document.addEventListener('keydown', key);
-    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', key); };
-  }, [open]);
+  useOverlayLayer({ passOutsideClick: true, open, refs: [menuRef, btnRef], onClose: () => setOpen(false) });
 
   const pri = PRIORITY_META[task.priority];
   return (
@@ -132,7 +122,7 @@ function PriorityCell({ task, onUpdate }: { task: Task; onUpdate: TasksPageTable
       {open && createPortal(
         <div
           ref={menuRef}
-          className="tp-pri-popover"
+          className="tp-pri-popover wn-overlay wn-menu"
           style={menuPlacementStyle(placement)}
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
@@ -177,19 +167,8 @@ function ProjectCell({ task, sourceByName, projectNames, onUpdate }: {
   const placement = useMenuPlacement(open, btnRef, menuRef, { minHeight: 160, onAnchorLost: () => setOpen(false) });
   const project = projectGroupKey(task.project);
 
-  useEffect(() => {
-    if (!open) return;
-    setFilter('');
-    const close = (e: globalThis.MouseEvent) => {
-      if (menuRef.current?.contains(e.target as Node)) return;
-      if (btnRef.current?.contains(e.target as Node)) return;
-      setOpen(false);
-    };
-    const key = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('mousedown', close);
-    document.addEventListener('keydown', key);
-    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', key); };
-  }, [open]);
+  useEffect(() => { if (open) setFilter(''); }, [open]);
+  useOverlayLayer({ passOutsideClick: true, open, refs: [menuRef, btnRef], onClose: () => setOpen(false) });
 
   // The task's own project may be missing from the registry (race, legacy
   // data) — include it so the list always shows the true current value.
@@ -222,7 +201,7 @@ function ProjectCell({ task, sourceByName, projectNames, onUpdate }: {
       {open && createPortal(
         <div
           ref={menuRef}
-          className="tp-proj-popover"
+          className="tp-proj-popover wn-overlay wn-menu"
           style={menuPlacementStyle(placement)}
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}

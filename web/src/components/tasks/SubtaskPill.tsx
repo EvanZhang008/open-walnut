@@ -1,12 +1,13 @@
 import { resolveTaskToken, subscribeEntityLabels, getEntityLabelsVersion } from '@/stores/entity-label-store';
 import { matchParentRef } from '../../../../src/lib/id-ref';
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task } from '@open-walnut/core';
 import { TaskStateIcon } from '@/components/common/TaskStateIcon';
 import { taskIconState } from '@/utils/task-icon-state';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { useKeyboardOpenFocus } from '@/hooks/useKeyboardOpenFocus';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import { resolveTaskSessionId, taskStatusLabel } from '@/utils/session-status';
@@ -60,28 +61,8 @@ export function SubtaskPill({ task, className }: { task: { id?: string; parent_t
     if (restoreFocus) triggerRef.current?.focus();
   }, []);
 
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (e: PointerEvent) => {
-      const target = e.target as Element | null;
-      if (!target) return;
-      if (menuRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
-      close(false);
-    };
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      e.stopPropagation();
-      close(true);
-    };
-    // Capture phase: every pill on a row stops its own pointerdown (see LeaderPill.tsx).
-    document.addEventListener('pointerdown', onPointerDown, true);
-    document.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown, true);
-      document.removeEventListener('keydown', onKey, true);
-    };
-  }, [open, close]);
+  // One close policy with every popover (useOverlayLayer, capture phase: see LeaderPill.tsx).
+  useOverlayLayer({ passOutsideClick: true, open, refs: [menuRef, triggerRef], onClose: (reason) => close(reason === 'escape') });
 
   const parentId = task.parent_task_id;
   if (!parentId) return null;
@@ -160,7 +141,7 @@ export function SubtaskPill({ task, className }: { task: { id?: string; parent_t
         ? createPortal(
             <div
               ref={menuRef}
-              className="leader-subtasks-flyout worker-team-flyout"
+              className="leader-subtasks-flyout worker-team-flyout wn-overlay wn-menu"
               role="dialog"
               aria-label="This task's team"
               data-testid="worker-team-flyout"

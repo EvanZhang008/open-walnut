@@ -2,13 +2,8 @@
    where a click takes it. Never takes the pointer, so it cannot steal a click. */
 .link-hover-card {
   position: fixed;
-  z-index: 9600;
   max-width: min(380px, calc(100vw - 16px));
   padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
   color: var(--fg);
   font-size: var(--font-size-xs);
   line-height: 1.4;

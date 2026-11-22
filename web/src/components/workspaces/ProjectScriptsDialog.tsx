@@ -21,6 +21,7 @@ import { log } from '@/utils/log';
 import '@/styles/workspaces.css';
 import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
+import { ICON_CLOSE } from '../common/Icons';
 
 /** `timeout_sec` has no field here (the API sets it); an edit keeps it. */
 type Draft = { id?: string; name: string; command: string; setup: boolean; wait: boolean; teardown: boolean; timeout_sec?: number };
@@ -271,11 +272,11 @@ export function ProjectScriptsDialog({ project, cwd, host, onClose, onSaved }: {
   );
 
   return createPortal(
-    <div className="app-modal-overlay project-scripts-overlay" role="dialog" aria-modal="true" aria-label={`Scripts of ${project}`} onMouseDown={() => { if (!draftRef.current) onClose(); }}>
-      <div className="app-modal project-scripts-dialog" data-testid="project-scripts-dialog" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="project-scripts-head">
+    <div className="app-modal-overlay project-scripts-overlay wn-scrim" role="dialog" aria-modal="true" aria-label={`Scripts of ${project}`} onMouseDown={() => { if (!draftRef.current) onClose(); }}>
+      <div className="app-modal project-scripts-dialog wn-dialog" data-testid="project-scripts-dialog" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="project-scripts-head wn-dialog-head">
           <div className="app-modal-title">Scripts · {project}</div>
-          <button className="session-panel-close" onClick={onClose} title="Close (Esc)" aria-label="Close">&times;</button>
+          <button className="btn btn-icon wn-dialog-close" onClick={onClose} title="Close (Esc)" aria-label="Close">{ICON_CLOSE}</button>
         </div>
         <div className="project-scripts-lede">
           Commands for this project's workspaces: a setup script runs by itself in every new isolated

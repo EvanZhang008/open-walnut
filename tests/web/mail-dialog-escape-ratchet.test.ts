@@ -23,7 +23,8 @@ function sources(dir: string, prefix = ''): { file: string; text: string }[] {
 }
 
 const hearsDocument = (text: string): boolean => (
-  /document\.addEventListener\(\s*'keydown'/.test(text) || /\buseModalOverlay\(/.test(text)
+  // useOverlayLayer listens on window in the capture phase, before any document listener.
+  /document\.addEventListener\(\s*'keydown'/.test(text) || /\buse(?:ModalOverlay|OverlayLayer)\(/.test(text)
 );
 
 describe('Mail dialogs and Escape', () => {

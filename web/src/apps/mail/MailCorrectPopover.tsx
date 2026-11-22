@@ -25,6 +25,7 @@ import {
   type MailRulesResponse,
 } from '@/api/mail-groups';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { log } from '@/utils/log';
 import {
   closeMailLearnRequest,
@@ -286,27 +287,15 @@ export function MailCorrectPopover({ request }: { request: MailCorrectRequest })
     align: 'start', edgeOverflow: 'clamp', gap: 4, minHeight: 240, onAnchorLost: () => close(false),
   });
 
-  // Outside pointer closes; the card's own portal content never counts as outside.
-  useEffect(() => {
-    const onDown = (event: PointerEvent) => {
-      const node = event.target as Element | null;
-      if (node && typeof node.closest === 'function' && node.closest('.mail-correct')) return;
-      if (saving) return;
-      close(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || saving) return;
-      event.preventDefault();
-      event.stopPropagation();
-      close(true);
-    };
-    document.addEventListener('pointerdown', onDown, true);
-    document.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('pointerdown', onDown, true);
-      document.removeEventListener('keydown', onKey, true);
-    };
-  }, [close, saving]);
+  // Outside press closes, Esc closes and hands focus back; neither while a save runs.
+  useOverlayLayer({
+    passOutsideClick: true,
+    open: true,
+    refs: [cardRef],
+    closeOnEscape: !saving,
+    closeOnOutside: !saving,
+    onClose: (reason) => close(reason === 'escape'),
+  });
 
   const groupLabel = (groupId: string) => groupLabelOf(catalog, groupId);
 
@@ -373,7 +362,7 @@ export function MailCorrectPopover({ request }: { request: MailCorrectRequest })
   return createPortal(
     <div
       ref={cardRef}
-      className="mail-correct"
+      className="mail-correct wn-overlay"
       role="dialog"
       aria-modal="false"
       aria-label="Where should this mail go?"

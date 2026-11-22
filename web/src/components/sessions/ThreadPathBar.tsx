@@ -12,8 +12,9 @@
  * the segment (the levels right of it are cut back to it).
  *
  * The level list follows web/src/AGENTS.md's menu rules: portalled to body,
- * placed by useMenuPlacement, pointerdown stops at the portal, an outside click
- * closes it and exempts the other question overlays, no native select.
+ * placed by useMenuPlacement, pointerdown stops at the portal, Escape and an
+ * outside press close it through the one overlay layer (the other question
+ * overlays and the drawer count as inside), no native select.
  * Separators and carets are CSS / SVG, never glyph characters (the question UI
  * bans arrow and dash glyphs in visible text).
  */
@@ -25,6 +26,7 @@ import { ThreadStatusDot } from '@/components/sessions/ThreadStatusDot';
 import { ThreadStatusWord } from '@/components/sessions/ThreadStatusWord';
 import { isMacPlatform } from '@/hooks/usePanelKeyRouter';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import type { ThreadViewStatus } from '@/utils/thread-meta';
 import type { SegmentRole } from '@/utils/tree-split-state';
 import '@/styles/tree-split.css';
@@ -146,19 +148,15 @@ function LevelMenu({ anchorEl, heading, items, onPick, onClose }: {
   triggerRef.current = anchorEl;
   const menuRef = useRef<HTMLDivElement | null>(null);
   const place = useMenuPlacement(true, triggerRef, menuRef, { align: 'start', minHeight: 120, onAnchorLost: onClose });
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
-
-  useEffect(() => {
-    const onDown = (e: PointerEvent) => {
-      const t = e.target;
-      if (!(t instanceof Element)) return;
-      if (menuRef.current?.contains(t) || anchorEl?.contains(t) || t.closest(MENU_EXEMPT)) return;
-      closeRef.current();
-    };
-    document.addEventListener('pointerdown', onDown, true);
-    return () => document.removeEventListener('pointerdown', onDown, true);
-  }, [anchorEl]);
+  // Escape gives the focus back to the segment's caret. No focus trap: Tab leaves the list (onKey).
+  useOverlayLayer({
+    passOutsideClick: true,
+    open: true,
+    refs: [menuRef, triggerRef],
+    exemptSelectors: [MENU_EXEMPT],
+    trapFocus: false,
+    onClose: (reason) => { onClose(); if (reason === 'escape') anchorEl?.focus({ preventScroll: true }); },
+  });
   // Focus the segment's own question (else the first), so arrows start there.
   useEffect(() => {
     if (!place) return;
@@ -170,8 +168,7 @@ function LevelMenu({ anchorEl, heading, items, onPick, onClose }: {
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     const list = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]') ?? []);
     const at = list.indexOf(document.activeElement as HTMLButtonElement);
-    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(); anchorEl?.focus({ preventScroll: true }); }
-    else if (e.key === 'ArrowDown') { e.preventDefault(); list[(at + 1) % list.length]?.focus(); }
+    if (e.key === 'ArrowDown') { e.preventDefault(); list[(at + 1) % list.length]?.focus(); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); list[(at - 1 + list.length) % list.length]?.focus(); }
     // Tab leaves the list where it was opened (a portalled menu has no place
     // in the tab order of its own).
@@ -181,7 +178,7 @@ function LevelMenu({ anchorEl, heading, items, onPick, onClose }: {
   return createPortal(
     <div
       ref={menuRef}
-      className="thread-menu tree-path-menu"
+      className="thread-menu tree-path-menu wn-overlay wn-menu"
       role="menu"
       aria-label={heading}
       {...{ [THREAD_OVERLAY_ATTR]: 'path-level' }}

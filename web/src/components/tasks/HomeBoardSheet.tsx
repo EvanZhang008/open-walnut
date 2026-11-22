@@ -316,13 +316,7 @@ export function HomeBoardSheet() {
     if (e.isPrimary && e.button === 0 && mode === 'pin' && !moving && (target.closest('.home-board-drag') || (e.pointerType === 'mouse' && target.closest('[data-board-task]') && !target.closest('button, a, input, textarea, select, [contenteditable="true"]')))) pointerHeld.current = true;
   }} onKeyDownCapture={e => {
     if (e.defaultPrevented || (e.key === 'Escape' && dragging)) return;
-    if (e.key === 'Escape' && (picker.state || datePicker.state || snoozePicker.state)) {
-      e.preventDefault(); e.stopPropagation();
-      const origin = snoozePicker.state?.origin;
-      picker.close(); datePicker.close(); snoozePicker.close();
-      if (origin?.isConnected) origin.focus({ preventScroll: true });
-      return;
-    }
+    // An open picker's Escape is its overlay layer's (useCursorFlyout): it closes the picker and puts focus back.
     // A text box on the board (a Sort card's reply) takes its own Escape: it closes that box, never the search.
     if (e.key === 'Escape' && (e.target as HTMLElement | null)?.closest?.('textarea, [contenteditable="true"]')) return;
     if (e.key === 'Escape' && searching) { e.preventDefault(); e.stopPropagation(); setQuery(''); return; }
@@ -335,7 +329,7 @@ export function HomeBoardSheet() {
     <header className="home-board-head" data-fit-header=""><h1 data-fit-title="">Board</h1><span className="home-board-count" data-fit-sub="">{total} open {total === 1 ? 'task' : 'tasks'}{mode === 'status' && ` · ${completed} completed`}</span>
       <div className="home-board-controls"><SegmentedControl className="home-board-mode" aria-label="Group board" value={mode} onChange={setMode} options={BOARD_MODES} />
         <MicInput fieldClassName="home-board-search" data-no-draft="search" aria-label="Search board tasks" placeholder="Search tasks" value={query} setText={setQuery} />
-        <button type="button" className="home-board-close" aria-label="Close board" title="Close board" onClick={fullscreen.exitFullscreen}>{ICON_CLOSE}</button>
+        <button type="button" className="btn btn-icon home-board-close wn-dialog-close" aria-label="Close board" title="Close board" onClick={fullscreen.exitFullscreen}>{ICON_CLOSE}</button>
       </div>
     </header>
     <div className="home-board-hint">{(error || moveError) ? <div className="home-board-error" role="alert"><span title={error || moveError || undefined}>{error || moveError}</span><button type="button" disabled={moving} onClick={() => {

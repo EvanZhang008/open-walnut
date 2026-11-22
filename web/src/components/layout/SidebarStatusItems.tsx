@@ -22,6 +22,7 @@ import { useAppCatalog } from '@/apps/hooks';
 import { attentionHeld, railTone, useNotifications } from '@/contexts/notifications';
 import { runOpAction } from '@/contexts/notifications/notification-actions';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { PluginSlots, type SlotEntry } from '@/plugins/PluginSlots';
 import { log } from '@/utils/log';
 import {
@@ -199,36 +200,27 @@ function StatusItemPopover({ item, now, triggerRef, busyOp, error, takeFocus, on
   const placement = useMenuPlacement(true, triggerRef, popRef, {
     anchorPoint: anchor, align: 'left', preferSide: 'up', gap: 0, minHeight: 120, onAnchorLost: onClose,
   });
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
-
   // Focus moves in, so Tab reaches the buttons even though the portal sits at the end of <body>.
   useEffect(() => { if (focusOnOpen.current) popRef.current?.focus({ preventScroll: true }); }, []);
 
+  // The trigger is inside: it toggles on its own click, and closing here too would reopen it.
+  useOverlayLayer({
+    passOutsideClick: true,
+    open: true,
+    refs: [popRef, triggerRef],
+    onClose: (reason) => {
+      onClose();
+      if (reason === 'escape') triggerRef.current?.focus({ preventScroll: true });
+    },
+  });
+
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
     const close = () => closeRef.current();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.stopPropagation();
-      close();
-      triggerRef.current?.focus({ preventScroll: true });
-    };
-    const onPointer = (e: PointerEvent) => {
-      const target = e.target as Node | null;
-      if (!target || popRef.current?.contains(target)) return;
-      // The trigger toggles on its own click; closing here too would reopen it.
-      if (triggerRef.current?.contains(target)) return;
-      close();
-    };
-    window.addEventListener('keydown', onKey);
-    document.addEventListener('pointerdown', onPointer, true);
     window.addEventListener('resize', close);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      document.removeEventListener('pointerdown', onPointer, true);
-      window.removeEventListener('resize', close);
-    };
-  }, [triggerRef]);
+    return () => window.removeEventListener('resize', close);
+  }, []);
 
   const app = item.app
     ? catalog.findByRouteId(`${item.pluginId}~${item.app}`)
@@ -239,7 +231,7 @@ function StatusItemPopover({ item, now, triggerRef, busyOp, error, takeFocus, on
   return createPortal(
     <div
       ref={popRef}
-      className="status-item-popover"
+      className="status-item-popover wn-overlay"
       data-tone={item.tone}
       data-status-key={item.key}
       data-panel={panel.shown ? 'true' : undefined}

@@ -12,6 +12,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { previewMailRule } from '@/api/mail-groups';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { log } from '@/utils/log';
 import { Checkbox } from '@/components/controls';
 import { useDraft } from '@/hooks/useDraft';
@@ -69,25 +70,15 @@ export function MailFilterCard({ request }: { request: MailFilterRequest }) {
 
   useEffect(() => { firstRef.current?.focus({ preventScroll: true }); }, []);
 
-  useEffect(() => {
-    const onDown = (event: PointerEvent) => {
-      const node = event.target as Element | null;
-      if (saving || (node && typeof node.closest === 'function' && node.closest('.mail-filter-card'))) return;
-      close(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || saving) return;
-      event.preventDefault();
-      event.stopPropagation();
-      close(true);
-    };
-    document.addEventListener('pointerdown', onDown, true);
-    document.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('pointerdown', onDown, true);
-      document.removeEventListener('keydown', onKey, true);
-    };
-  }, [close, saving]);
+  // Outside press closes, Esc closes and hands focus back; neither while a save runs.
+  useOverlayLayer({
+    passOutsideClick: true,
+    open: true,
+    refs: [cardRef],
+    closeOnEscape: !saving,
+    closeOnOutside: !saving,
+    onClose: (reason) => close(reason === 'escape'),
+  });
 
   const rule = folderFilterRule({ fromContains, subject, folder, ...(request.accountId ? { accountId: request.accountId } : {}) });
   // Which account's mail it takes, said plainly: a letter's own account, a group seen in one account, else every account.
@@ -160,7 +151,7 @@ export function MailFilterCard({ request }: { request: MailFilterRequest }) {
   return createPortal(
     <div
       ref={cardRef}
-      className="mail-correct mail-group-card mail-filter-card"
+      className="mail-correct mail-group-card mail-filter-card wn-overlay"
       role="dialog"
       aria-modal="false"
       aria-labelledby={titleId}

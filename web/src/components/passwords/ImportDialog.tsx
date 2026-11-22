@@ -8,8 +8,9 @@ import { createPortal } from 'react-dom'
 import { useModalOverlay } from '@/hooks/useModalOverlay'
 import { vaultApi, VaultApiError, type ImportReport } from '@/api/vault'
 import { IMPORT_FORMATS } from '../../../../src/core/vault/import'
-import { ImportIcon, CloseIcon } from './pw-icons'
+import { ImportIcon } from './pw-icons'
 import { Chip, ChipGroup } from '@/components/controls'
+import { ICON_CLOSE } from '../common/Icons'
 
 const MAX_FILE_BYTES = 12 * 1024 * 1024
 
@@ -60,17 +61,17 @@ export function ImportDialog({ onClose, onImported }: { onClose: () => void; onI
   }
 
   return createPortal(
-    <div className="app-modal-overlay pw-modal-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="pw-modal" role="dialog" aria-modal="true" aria-label="Import passwords" data-testid="pw-import">
-        <div className="pw-modal-head">
+    <div className="app-modal-overlay pw-modal-overlay wn-scrim" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="pw-modal wn-dialog" role="dialog" aria-modal="true" aria-label="Import passwords" data-testid="pw-import">
+        <div className="pw-modal-head wn-dialog-head">
           <h2>Import passwords</h2>
-          <button type="button" className="btn btn-icon" aria-label="Close" onClick={onClose}><CloseIcon /></button>
+          <button type="button" className="btn btn-icon wn-dialog-close" aria-label="Close" onClick={onClose}>{ICON_CLOSE}</button>
         </div>
         {added !== null ? (
           <div className="pw-modal-body">
             <p className="pw-import-done">Imported {added} item{added === 1 ? '' : 's'}.</p>
             <p className="pw-hint">Delete the exported file now: it holds every password in plain text.</p>
-            <div className="pw-modal-actions"><button type="button" className="btn btn-sm btn-primary" onClick={onClose}>Done</button></div>
+            <div className="pw-modal-actions wn-dialog-foot"><button type="button" className="btn btn-sm btn-primary" onClick={onClose}>Done</button></div>
           </div>
         ) : (
           <div className="pw-modal-body">
@@ -106,7 +107,7 @@ export function ImportDialog({ onClose, onImported }: { onClose: () => void; onI
                 )}
               </div>
             )}
-            <div className="pw-modal-actions">
+            <div className="pw-modal-actions wn-dialog-foot">
               <button type="button" className="btn btn-sm btn-ghost" onClick={onClose}>Cancel</button>
               <button type="button" className="btn btn-sm btn-primary" disabled={!report || report.toAdd === 0 || busy} onClick={() => void go()}>
                 Import {report?.toAdd ? `${report.toAdd} item${report.toAdd === 1 ? '' : 's'}` : ''}

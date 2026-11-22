@@ -250,7 +250,7 @@ export function PanelMenu({ filters: c, display: d, flashOption }: PanelMenuProp
   return createPortal(
     <div
       ref={menuRef}
-      className="fb-menu tp-pop"
+      className="fb-menu tp-pop wn-overlay"
       role="dialog"
       aria-label="Filter and display"
       data-page={pageKey ?? 'home'}

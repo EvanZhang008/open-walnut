@@ -184,9 +184,9 @@ export function AddAccountDialog({ providers, onClose, onAdded }: Props) {
     // The dialog ROLE belongs on the dialog, not on the backdrop: with it on the overlay, the
     // scrim is the dialog as far as assistive tech is concerned, and everything inside is
     // "content of the backdrop".
-    <div className="app-modal-overlay" onMouseDown={onClose}>
+    <div className="app-modal-overlay wn-scrim" onMouseDown={onClose}>
       <div
-        className="app-modal mail-add-dialog"
+        className="app-modal wn-dialog mail-add-dialog"
         data-testid="mail-add-dialog"
         role="dialog"
         aria-modal="true"
@@ -286,7 +286,7 @@ export function AddAccountDialog({ providers, onClose, onAdded }: Props) {
               </div>
             )}
 
-            <div className="app-modal-actions">
+            <div className="app-modal-actions wn-dialog-foot">
               <button type="button" className="btn" onClick={() => { draft.clear(); onClose(); }}>Cancel</button>
               <button
                 type="submit"

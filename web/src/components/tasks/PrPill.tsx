@@ -25,6 +25,7 @@ import {
 import { apiGet, apiPatch, apiPost } from '@/api/client';
 import { completeTask } from '@/api/tasks';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { useKeyboardOpenFocus } from '@/hooks/useKeyboardOpenFocus';
 import { useStoreTask } from '@/contexts/TasksContext';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
@@ -420,35 +421,15 @@ export function PrPill({ task: given, className, compact = false }: { task: Task
     setFailure(null);
     setSetHere({});
     void load();
-    const onPointerDown = (e: PointerEvent) => {
-      const target = e.target as Node | null;
-      if (target && (triggerRef.current?.contains(target) || cardRef.current?.contains(target))) return;
-      close(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Tab' && cardRef.current?.contains(document.activeElement)) {
-        // A dialog keeps Tab inside it: from the last control back to the first, and the reverse.
-        const items = Array.from(cardRef.current.querySelectorAll<HTMLElement>('a[href], button:not(:disabled)'));
-        const first = items[0];
-        const last = items[items.length - 1];
-        if (!first || !last) return;
-        if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-        else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-        return;
-      }
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      e.stopPropagation();
-      close(openedByKeys.current || !!cardRef.current?.contains(document.activeElement));
-    };
-    // Capture phase: every pill on a row stops its own pointerdown (LeaderPill.tsx).
-    document.addEventListener('pointerdown', onPointerDown, true);
-    document.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown, true);
-      document.removeEventListener('keydown', onKey, true);
-    };
-  }, [open, close, load]);
+  }, [open, load]);
+  // One close policy with every popover (useOverlayLayer, capture phase: see LeaderPill.tsx). It
+  // also keeps Tab inside the card, from the last control back to the first and the reverse.
+  useOverlayLayer({
+    passOutsideClick: true,
+    open,
+    refs: [cardRef, triggerRef],
+    onClose: (reason) => close(reason === 'escape' && (openedByKeys.current || !!cardRef.current?.contains(document.activeElement))),
+  });
 
   if (urls.length === 0) return null;
 
@@ -607,7 +588,7 @@ export function PrPill({ task: given, className, compact = false }: { task: Task
         ? createPortal(
             <div
               ref={cardRef}
-              className="pr-card"
+              className="pr-card wn-overlay"
               role="dialog"
               aria-label="Pull request status"
               data-testid="pr-card"

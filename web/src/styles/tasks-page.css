@@ -382,11 +382,6 @@
 }
 .tp-cols-popover {
   position: fixed;
-  z-index: 9500;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
   padding: 4px;
   display: flex;
   flex-direction: column;
@@ -479,11 +474,6 @@
 /* priority picker popover */
 .tp-pri-popover {
   position: fixed;
-  z-index: 9500;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
   padding: 4px;
   display: flex;
   flex-direction: column;
@@ -513,11 +503,6 @@
 /* project picker popover — same shell as the priority one, plus a filter */
 .tp-proj-popover {
   position: fixed;
-  z-index: 9500;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
   padding: 4px;
   display: flex;
   flex-direction: column;

@@ -326,25 +326,19 @@
 .drawing-library-overlay {
   position: fixed;
   inset: 0;
-  z-index: 10030;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgb(0 0 0 / 30%);
 }
 .drawing-library-dialog {
   display: flex;
   flex-direction: column;
   width: min(720px, 100%);
   height: min(640px, calc(100dvh - 48px));
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   overflow: hidden;
-  background: var(--bg-elevated);
   color: var(--fg);
   font-size: var(--font-size-md);
-  box-shadow: 0 16px 48px rgb(0 0 0 / 20%);
 }
 .drawing-library-head {
   display: flex;
@@ -403,7 +397,8 @@
   .drawing-workspace-files { flex-basis: 176px; }
   .drawing-workspace-title { max-width: 36%; }
   .drawing-library-overlay { padding: 0; }
-  .drawing-library-dialog { height: 100dvh; border-radius: 0; }
+  .drawing-library-dialog { height: 100dvh; }
+  html body .drawing-library-dialog { border-radius: 0; }
   .drawing-library-preview { width: 72px; height: 48px; }
 }
 

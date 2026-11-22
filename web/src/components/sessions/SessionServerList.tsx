@@ -125,7 +125,7 @@ function StopPopover({ server, anchor, placeAt, sent, onConfirm, onCancel }: {
   }, [onCancel]);
 
   return createPortal(
-    <div ref={ref} className="session-server-popover" style={{ ...menuPlacementStyle(placement), maxHeight: undefined }} role="dialog"
+    <div ref={ref} className="session-server-popover wn-overlay" style={{ ...menuPlacementStyle(placement), maxHeight: undefined }} role="dialog"
       aria-label={`Stop the server on port ${server.port}?`} data-testid="session-server-stop-popover"
       onPointerDown={(e) => e.stopPropagation()}>
       <div className="session-server-popover-title">

@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useImperativeHandle,
 import { createPortal } from 'react-dom';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { detailFits, foldDirectButtons, pickVisibleControls, rowExcess, type ControlFitInput, type RowShape } from './composer-controls-fit';
 import { log } from '@/utils/log';
@@ -318,18 +319,15 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
     // `ids` covers "a control appeared or disappeared"; `measure` covers the rest.
   }, [measure, ids, routeShown]);
 
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: Event) => {
-      const t = e.target as HTMLElement | null;
-      if (buttonRef.current?.contains(t as Node) || menuRef.current?.contains(t as Node)) return;
+  useOverlayLayer({
+    passOutsideClick: true,
+    open,
+    refs: [menuRef, buttonRef],
+    onClose: (reason) => {
       setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('mousedown', close);
-    document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', onKey); };
-  }, [open]);
+      if (reason === 'escape') buttonRef.current?.focus({ preventScroll: true });
+    },
+  });
 
   // The control you last touched stays on the row (priority 0) until the column
   // grows enough for everything or you touch another one. Two things need it: a
@@ -413,7 +411,7 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
       {open && createPortal(
         <div
           ref={menuRef}
-          className="composer-overflow-menu"
+          className="composer-overflow-menu wn-overlay wn-menu"
           role="menu"
           style={menuPlacementStyle(placement)}
           // Portals escape clipping, not bubbling: without this the composer's

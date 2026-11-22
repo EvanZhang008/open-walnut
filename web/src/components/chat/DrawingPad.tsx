@@ -99,13 +99,13 @@ function DrawingAppDialog({ draftId, taskId, sessionId, onClose, onAttach, canAt
     onClose();
   };
   return createPortal(
-    <div className="drawing-app-overlay" onKeyDown={onKeyDown}
+    <div className="drawing-app-overlay wn-scrim" onKeyDown={onKeyDown}
       // The overlay itself is the outside: a press inside a portal of the editor (its menus and
       // modals) reaches here through React with another target, so it counts as inside.
       onPointerDown={(e) => { e.stopPropagation(); press.down(e.target === e.currentTarget); if (e.target === e.currentTarget) e.preventDefault(); }}
       onPointerUp={(e) => { if (press.up(e.target === e.currentTarget)) onClose(); }}
       onPointerCancel={() => press.cancel()}>
-      <div ref={dialog} className="drawing-app-dialog" role="dialog" aria-modal="true" aria-label="Drawing" tabIndex={-1}>
+      <div ref={dialog} className="drawing-app-dialog wn-dialog" role="dialog" aria-modal="true" aria-label="Drawing" tabIndex={-1}>
         {Workspace
           ? <Workspace draftId={draftId} taskId={taskId} sessionId={sessionId} onClose={onClose} onAttach={onAttach} canAttach={canAttach}
               barExtra={sessionId && paneApp && !phone ? ({ saveNow }) => <>

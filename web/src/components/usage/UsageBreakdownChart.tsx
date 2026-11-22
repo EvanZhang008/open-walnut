@@ -140,7 +140,7 @@ export function UsageBreakdownChart({ data, loading, onPick, coverage }: {
         </svg>
       )}
       {hover !== null && (
-        <div className="usage-bd-tip" data-testid="usage-breakdown-tip"
+        <div className="usage-bd-tip wn-overlay" data-testid="usage-breakdown-tip"
           style={tipOnLeft ? { right: width - hx + 12 } : { left: hx + 12 }}>
           <div className="usage-bd-tip-head"><span>{buckets[hover].label}</span><b>{money(totals[hover])}</b></div>
           {series.filter((s) => s.values[hover] > 0).sort((a, b) => b.values[hover] - a.values[hover]).map((s) => (

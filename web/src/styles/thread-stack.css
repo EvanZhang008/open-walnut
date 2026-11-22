@@ -179,17 +179,12 @@ html .thread-toast.wn-notice.wn-notice.is-bare { padding: 8px 10px 8px 14px; }
 /* ── Confirm layer (portal, placed by useMenuPlacement) ── */
 .thread-confirm {
   position: fixed;
-  z-index: 10000;
   box-sizing: border-box;
   width: 300px;
   max-width: calc(100vw - 16px);
   overflow-y: auto;
   padding: 12px 14px;
-  background: var(--card-bg);
   color: var(--fg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.08);
   font-size: var(--font-size-md);
   line-height: 18px;
 }

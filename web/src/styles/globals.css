@@ -1964,16 +1964,11 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   position: absolute;
   bottom: calc(100% + 6px);
   left: 0;
-  z-index: 80;
   display: block;
   width: min(380px, calc(100vw - 24px));
   max-height: min(420px, calc(100vh - 24px));
   overflow-y: auto;
   padding: 6px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--card-shadow-hover);
 }
 
 .session-control-menu-title {
@@ -3848,13 +3843,9 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 .wf-modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 9001;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--overlay-bg);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
   animation: fullscreen-fade-in 0.15s ease-out;
 }
 .wf-modal {
@@ -3863,11 +3854,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   width: 90vw;
   height: 90vh;
   max-width: 1100px;
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   overflow: hidden;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.3);
   animation: fullscreen-enter 0.15s ease-out;
 }
 .wf-modal-header {
@@ -3891,18 +3878,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 }
 .wf-modal-close {
   margin-left: auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--fg-muted);
-  cursor: pointer;
 }
-.wf-modal-close:hover { background: var(--bg); color: var(--fg); }
 .wf-modal-body {
   flex: 1;
   min-height: 0;
@@ -6716,12 +6692,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   left: 0;
   min-width: 180px;
   /* The raised surface every overlay paints (overlay-glass.css); --bg is pure black in dark. */
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
   padding: 4px;
-  z-index: 50;
   animation: contextBarSlideIn 0.12s ease;
 }
 .chat-plus-menu-item,
@@ -6988,16 +6959,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 }
 .chat-send-caret:hover { color: var(--accent); background: var(--accent-subtle); }
 .chat-send-menu {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  right: 0;
   min-width: 180px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
-  padding: 4px;
-  z-index: 50;
   animation: contextBarSlideIn 0.12s ease;
 }
 
@@ -8795,13 +8757,9 @@ body.walnut-dragging {
 .plan-popup-overlay {
   position: fixed;
   inset: 0;
-  z-index: 9100;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.15);
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
   animation: lightbox-fade-in 0.15s ease-out;
 }
 
@@ -8809,14 +8767,7 @@ body.walnut-dragging {
   width: 78vw;
   max-width: 1170px;
   max-height: 85vh;
-  border-radius: var(--radius-lg);
   overflow: hidden;
-  box-shadow:
-    0 0 0 0.5px rgba(0, 0, 0, 0.05),
-    0 2px 4px rgba(0, 0, 0, 0.02),
-    0 12px 32px rgba(0, 0, 0, 0.08),
-    0 32px 80px rgba(0, 0, 0, 0.12);
-  background: var(--card-bg);
   color: var(--fg);
   display: flex;
   flex-direction: column;
@@ -8839,25 +8790,6 @@ body.walnut-dragging {
   font-weight: 500;
   color: var(--fg-muted);
   letter-spacing: 0.01em;
-}
-
-.plan-popup-close {
-  background: none;
-  border: none;
-  font-size: var(--font-size-xl);
-  line-height: 1;
-  cursor: pointer;
-  color: var(--fg-muted);
-  padding: 4px 6px;
-  border-radius: var(--radius-sm);
-  transition: color 0.15s, background 0.15s;
-  opacity: 0.6;
-}
-
-.plan-popup-close:hover {
-  opacity: 1;
-  color: var(--fg);
-  background: var(--bg-hover);
 }
 
 .plan-popup-body {
@@ -8899,18 +8831,6 @@ body.walnut-dragging {
   .plan-popup-overlay { animation: none; }
 }
 
-@media (prefers-color-scheme: dark) {
-  .plan-popup-container {
-    box-shadow:
-      0 0 0 0.5px rgba(255, 255, 255, 0.08),
-      0 2px 4px rgba(0, 0, 0, 0.1),
-      0 12px 32px rgba(0, 0, 0, 0.3),
-      0 32px 80px rgba(0, 0, 0, 0.45);
-  }
-  .plan-popup-close:hover {
-    background: rgba(255, 255, 255, 0.06);
-  }
-}
 
 .session-panel-meta {
   display: flex;
@@ -9180,11 +9100,9 @@ body.walnut-dragging {
   /* Rendered in a portal on document.body — top/left/width/maxHeight come inline
      from ViewDropdown's placement math (PANEL_WIDTH const), so no ancestor can
      clip or cover it. z-index matches .session-fork-popover (above overlays). */
-  position: fixed; z-index: 10001;
+  position: fixed;
   display: flex; flex-direction: column;
   overflow: hidden;
-  background: var(--card-bg); border: 1px solid var(--border-strong);
-  border-radius: 10px; box-shadow: var(--card-shadow-hover);
   animation: contextBarSlideIn 0.12s ease-out;
 }
 
@@ -10983,12 +10901,7 @@ body.walnut-dragging {
 /* "+N" as a button (the session header) opens the rest of the tags as a list. */
 .tag-pills-menu {
   position: fixed;
-  z-index: 9500;
-  background: var(--bg-elevated);
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
   padding: 4px;
   display: flex;
   flex-direction: column;
@@ -11833,10 +11746,6 @@ body.walnut-dragging {
 }
 
 .notes-slash-panel {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
   min-width: 220px;
   max-width: 360px;
   max-height: 280px;
@@ -11996,13 +11905,9 @@ body.walnut-dragging {
 .notes-popup-overlay {
   position: fixed;
   inset: 0;
-  background: var(--overlay-bg);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 10000;
   animation: notes-popup-fade-in 0.15s ease-out;
 }
 
@@ -12010,9 +11915,6 @@ body.walnut-dragging {
   width: 60vw;
   max-width: 800px;
   max-height: 80vh;
-  background: var(--card-bg);
-  border-radius: var(--radius-md);
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -12043,20 +11945,6 @@ body.walnut-dragging {
   font-size: var(--font-size-sm);
   color: var(--fg-muted);
   font-style: italic;
-}
-
-.notes-popup-close {
-  background: none;
-  border: none;
-  font-size: var(--font-size-2xl);
-  color: var(--fg-muted);
-  cursor: pointer;
-  padding: 0 4px;
-  line-height: 1;
-}
-
-.notes-popup-close:hover {
-  color: var(--fg);
 }
 
 .notes-popup-body {
@@ -13229,10 +13117,6 @@ body.walnut-dragging {
 
 .task-kebab-menu {
   min-width: 180px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
   padding: 4px 0;
   font-size: var(--font-size-sm);
 }
@@ -13555,10 +13439,6 @@ a.task-kebab-info:hover {
 .task-kebab-project-flyout {
   min-width: 220px;
   max-width: 300px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
   overflow-y: auto;
   overscroll-behavior: contain;
   display: flex;
@@ -13669,12 +13549,7 @@ a.task-kebab-info:hover {
 }
 .dp-popover {
   min-width: 220px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
   padding: 8px;
-  z-index: 9999;
   /* Required counterpart to useMenuPlacement's `maxHeight`: a cap WITHOUT
      overflow-y clips the calendar and makes the hidden rows unreachable, since a
      position:fixed popover belongs to no scroll container. Keep the 16px in step
@@ -14978,11 +14853,6 @@ a.task-kebab-info:hover {
   left: 0;
   right: 0;
   margin-bottom: 4px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--card-shadow-hover);
-  z-index: 50;
   overflow: hidden;
   /* Never past the window's top (--composer-popover-room, ChatInput's useRoomAbove). */
   display: flex;
@@ -14997,6 +14867,8 @@ a.task-kebab-info:hover {
   flex: 0 1 auto;
   overflow-y: auto;
   padding: 4px;
+  /* The arrow keys bring a row in clear of the "more below" fade (useMoreBelow). */
+  scroll-padding-bottom: 22px;
 }
 
 .command-palette-footer {
@@ -17013,10 +16885,6 @@ a.task-kebab-info:hover {
   flex-direction: column;
   gap: 10px;
   padding: 14px;
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
   min-width: 200px;
 }
 
@@ -17133,42 +17001,6 @@ a.task-kebab-info:hover {
 
 .usage-chart-wrapper {
   position: relative;
-}
-
-.usage-chart-tooltip {
-  position: absolute;
-  transform: translate(-50%, calc(-100% - 10px));
-  pointer-events: none;
-  background: var(--fg);
-  color: var(--bg);
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-sm);
-  white-space: nowrap;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
-  z-index: 20;
-}
-
-.usage-chart-tooltip-date {
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.usage-chart-tooltip-cost {
-  font-size: 16px;
-  font-weight: 700;
-  margin: 2px 0;
-}
-
-.usage-chart-tooltip-meta {
-  opacity: 0.8;
-  font-variant-numeric: tabular-nums;
-}
-
-.usage-chart-tooltip-hint {
-  margin-top: 3px;
-  opacity: 0.6;
-  font-style: italic;
 }
 
 /* Breakdown tables: clickable rows + share bar */
@@ -17622,12 +17454,7 @@ td.usage-share-col {
   top: 100%;
   left: 0;
   right: 0;
-  z-index: 50;
   margin-top: 2px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
   overflow: hidden;
 }
 .sfe-path-suggest-item {
@@ -18034,11 +17861,6 @@ a.tag-chip:hover .tag-chip-value,
   left: 0;
   min-width: 140px;
   max-width: 220px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--card-shadow-hover);
-  z-index: 100;
   padding: 4px 0;
   margin-top: 2px;
 }
@@ -20517,13 +20339,8 @@ a.tag-chip:hover .tag-chip-value,
 
 .notes-context-menu {
   position: fixed;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
   padding: 4px;
   min-width: 140px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  z-index: 1000;
 }
 
 .notes-context-menu button {
@@ -20753,10 +20570,6 @@ a.tag-chip:hover .tag-chip-value,
 /* ─── WikiLink Autocomplete ─── */
 
 .notes-wikilink-panel {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
   max-height: 280px;
   overflow-y: auto;
   min-width: 220px;
@@ -20940,25 +20753,18 @@ a.file-link:hover {
 .file-viewer-overlay {
   position: fixed;
   inset: 0;
-  z-index: 9999;
-  background: rgba(0, 0, 0, 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
-  backdrop-filter: blur(2px);
 }
 
 .file-viewer-panel {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   width: 90vw;
   max-width: 900px;
   height: 80vh;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
   overflow: hidden;
 }
 
@@ -21034,25 +20840,6 @@ a.file-link:hover {
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
-}
-
-.file-viewer-close {
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  background: none;
-  color: var(--fg-muted);
-  font-size: 14px;
-  cursor: pointer;
-  border-radius: var(--radius-xs);
-}
-
-.file-viewer-close:hover {
-  background: var(--bg-tertiary);
-  color: var(--fg);
 }
 
 .file-viewer-body {
@@ -21611,14 +21398,8 @@ a.file-link:hover {
    drew this menu UNDERNEATH the panel — a menu you could see in the DOM, could
    not see on screen, and whose items were unclickable (a tree row won every hit
    test). Same trap, same numbers as .code-ctx-menu / .code-ctx-backdrop. */
-.file-ctx-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 10009;
-}
 .file-ctx-menu {
   min-width: 172px;
-  z-index: 10010;
 }
 
 /* Download button — an <a> styled like the toolbar tabs */
@@ -21814,13 +21595,10 @@ a.file-link:hover {
 .session-terminal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 9999;
-  background: rgba(0, 0, 0, 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
-  backdrop-filter: blur(2px);
 }
 
 .session-terminal-panel {
@@ -21939,18 +21717,6 @@ a.file-link:hover {
   gap: 6px;
   flex-shrink: 0;
 }
-
-.session-terminal-close {
-  font-size: 14px;
-  line-height: 1;
-  padding: 4px 8px;
-  border-radius: 6px;
-  border: none;
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-.session-terminal-close:hover { color: var(--fg); }
 
 .session-terminal-body {
   flex: 1;
@@ -22808,23 +22574,15 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .app-modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 9300;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.32);
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
   animation: lightbox-fade-in 0.12s ease-out;
 }
 .app-modal {
   width: min(420px, calc(100vw - 48px));
-  background: var(--card-bg);
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
   padding: 20px 22px 16px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.2);
   -webkit-font-smoothing: antialiased;
 }
 .app-modal-title {
@@ -22861,7 +22619,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   max-width: 440px;
   /* var(--card-bg) is translucent glass in some themes; a permission dialog
      over dense settings text must be fully opaque to stay readable. */
-  background: var(--bg);
 }
 .permission-fix-modal .app-modal-message { white-space: normal; }
 /* Prose paragraphs with no gap read as one wall of text, and this dialog has
@@ -23214,14 +22971,9 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .session-diff-compare-pop {
   position: fixed;
   /* Over a session panel open as a modal (the engine settings popover's layer). */
-  z-index: 10020;
   display: flex;
   flex-direction: column;
-  background: var(--bg-elevated);
   color: var(--fg);
-  border: 1px solid var(--border-strong);
-  border-radius: 10px;
-  box-shadow: var(--card-shadow-hover);
   overflow: hidden;
   font-size: var(--font-size-sm);
 }
@@ -23455,12 +23207,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
    diff column's overflow:hidden, which was clipping the old absolute popover. */
 .session-diff-base-popover.is-fixed {
   position: fixed;
-  z-index: 1000;
   display: block;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: 10px;
-  box-shadow: var(--card-shadow-hover);
   padding: 12px 14px;
   cursor: default;
 }
@@ -24957,15 +24704,10 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 /* The flyout the pill opens: the trigger itself, with its actions. */
 .trigger-jobs-flyout {
   position: fixed;
-  z-index: 9500;
   /* Wide enough for one audit line ("15:31 fired, 1 new item → resumed session
      …") to read without wrapping into three rows. */
   width: min(460px, calc(100vw - 16px));
   padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-elevated);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
   color: var(--fg);
   font-size: var(--font-size-sm);
   overflow: auto;
@@ -25311,9 +25053,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 /* 1) Consistent popover chrome (all browsers): continuous 12px corners +
       iOS-soft shadow (low alpha, large blur). */
 .chat-plus-menu,
-.chat-send-menu,
 .todo-launcher-popover,
-.command-palette-wrap,
 .phase-picker-menu,
 .priority-picker-menu,
 .task-kebab-menu,
@@ -25335,9 +25075,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
   /* Popovers & menus — iOS "menu" material. */
   .chat-plus-menu,
-  .chat-send-menu,
     .todo-launcher-popover,
-  .command-palette-wrap,
   .phase-picker-menu,
   .priority-picker-menu,
   .filter-more-menu,
@@ -26571,14 +26309,9 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 .cal-overflow-popover {
   position: fixed;
-  z-index: 1000;
   min-width: 240px;
   max-width: 340px;
   padding: 8px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-  background: var(--card-bg);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
 }
 
 .cal-overflow-popover {
@@ -26601,7 +26334,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .cal-create-popover {
   --cal-pop-border: color-mix(in srgb, var(--fg) 13%, transparent);
   position: fixed;
-  z-index: 1000;
   box-sizing: border-box;
   width: 330px;
   max-width: calc(100vw - 16px);
@@ -26609,10 +26341,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   flex-direction: column;
   gap: 8px;
   padding: 10px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--cal-pop-border);
-  background: var(--card-bg);
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.2), 0 1px 3px rgba(0, 0, 0, 0.08);
   /* useMenuPlacement caps height — scroll internally so the footer buttons
      never land outside the viewport */
   overflow-y: auto;
@@ -26839,10 +26567,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   max-width: 320px;
   padding: 4px;
   overflow-y: auto;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--card-bg);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
 }
 
 .cal-cal-option {
@@ -26885,14 +26609,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   white-space: nowrap;
   font-size: var(--font-size-sm);
   color: var(--fg-muted);
-}
-
-/* Under a flyout (the calendar list, the month): a click outside closes the
-   flyout alone, never the popover under it. */
-.cal-flyout-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
 }
 
 /* The date and times on one line that reads as text; each part is edited in place. */
@@ -27084,14 +26800,9 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 .cal-cals-popover {
   position: fixed;
-  z-index: 10000;
   min-width: 240px;
   max-width: 320px;
   padding: 8px 10px;
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
   /* position:fixed popover has no scroll container — cap + scroll (see .dp-popover). */
   max-height: calc(100vh - 16px);
   overflow-y: auto;
@@ -27178,13 +26889,8 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 /* --- right-click context menu -------------------------------------------------- */
 .cal-ctx-menu {
   position: fixed;
-  z-index: 10000;
   min-width: 170px;
   padding: 4px;
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
   display: flex;
   flex-direction: column;
 }
@@ -27228,7 +26934,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
    ride just under it — the shared .cal-popover-backdrop sits at 999, which is
    BELOW fullscreen panels, so outside-click would never reach it there. */
 .code-ctx-menu { min-width: 220px; max-width: 340px; overflow-y: auto; }
-.code-ctx-backdrop { z-index: 10009; }
+.code-ctx-backdrop { z-index: var(--z-menu); } /* the menu's layer, as .wn-context-backdrop */
 .code-ctx-menu button {
   display: flex;
   align-items: center;
@@ -27306,17 +27012,12 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 /* --- item edit popover (click a chip) ------------------------------------------- */
 .cal-item-popover {
   position: fixed;
-  z-index: 10000;
   width: 300px;
   max-width: 86vw;
   padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.26);
   max-height: calc(100vh - 16px);
   overflow-y: auto;
   overflow-x: hidden;
@@ -29046,17 +28747,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   padding: 4px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
 }
-/* On a dark page the light shadow does not show: a deeper one keeps the lift. */
-[data-theme="dark"] .quote-pin-menu { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55); }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .quote-pin-menu { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55); }
-}
-
 /* The choice: inline or in Tree, each with what it does under its name. */
 .quote-ask-modes {
   display: flex; flex-direction: column; gap: 2px;
@@ -29197,7 +28888,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 /* ── Rewind confirm dialog ── */
 /* Rewind dialog: the app confirm skin (.app-modal-*) plus its option rows. The
    overlay sits above the session panel's own layers (message menus, pin overlays). */
-.rewind-dialog-overlay { z-index: 9500; }
 .app-modal.rewind-dialog { width: min(460px, calc(100vw - 48px)); }
 .rewind-dialog-target {
   margin-top: 6px;
@@ -29265,7 +28955,9 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 .wn-context-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 9998;   /* just under the menu (menuPlacementStyle uses 9999) */
+  /* The menu's own layer: portalled just before the menu, so it is under the menu and over any
+     dialog the menu opened in (same layer, later in <body>). */
+  z-index: var(--z-menu);
 }
 
 .wn-context-menu {
@@ -29274,10 +28966,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
      by `useMenuPlacement` into a box whose own content could not fit: the labels wrapped or clipped.
      The viewport is the ceiling, on the SHARED rule, so no surface needs a width rule of its own. */
   max-width: min(340px, 100vw - 16px);
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
   padding: 4px 0;
   font-size: var(--font-size-sm);
   overflow-y: auto;
@@ -29296,17 +28984,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 }
 
 .wn-context-menu:focus-visible { outline: none; }
-
-/* There is more below the fold. `useMenuPlacement` caps the height in a short window, and the capped
-   edge cut the last row flush with the border: no fade, no arrow, no scrollbar track, so a menu
-   missing four of its items read as a menu that does not have them. The fade is on the BOX rather
-   than a pseudo element, because the box is the scroll container and a child would scroll away with
-   the content. `data-more` is dropped once the bottom is reached, so it is an affordance and not
-   decoration. */
-.wn-context-menu[data-more='true'] {
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent 100%);
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent 100%);
-}
 
 .wn-context-menu-item {
   display: flex;

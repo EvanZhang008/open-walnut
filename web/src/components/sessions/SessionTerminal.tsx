@@ -28,6 +28,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent a
 import { createPortal } from 'react-dom';
 import { terminalList, terminalReserve } from '@/api/terminal';
 import { useConfirm } from '@/hooks/useConfirm';
+import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { remoteHostTag } from '@/utils/host-display-label';
 import { log } from '@/utils/log';
@@ -98,6 +99,12 @@ const EMPTY_STATE: TerminalPaneState = { ending: false, exited: false, plain: nu
 const terminalName = (slot: number) => `Terminal ${slot}`;
 
 /** What a key sends to a shell, for the keys kept while a new terminal opens; null: not kept. */
+/** The centered terminal's Escape, scroll lock and nesting, mounted only in that mode. */
+function TerminalModalEscape({ onClose }: { onClose: () => void }) {
+  useModalOverlay(onClose);
+  return null;
+}
+
 function keyText(e: { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean }): string | null {
   if (e.metaKey || e.altKey) return null;
   if (e.ctrlKey) return /^[a-z]$/i.test(e.key) ? String.fromCharCode(e.key.toUpperCase().charCodeAt(0) - 64) : null;
@@ -410,7 +417,7 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
   }, [viewTabs, viewActive, activateViewTab]);
 
   const header = (
-    <div className="session-terminal-header">
+    <div className={`session-terminal-header${embedded ? '' : ' wn-dialog-head'}`}>
       <div className="session-terminal-title">
         <span className="session-terminal-icon">&#x2328;</span>
         <span className={`session-terminal-label${folderGone ? ' is-gone' : ''}`} title={fullTitle ?? undefined}>{title ?? 'Terminal'}</span>
@@ -461,8 +468,8 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
         )}
         {/* In embedded mode the split's header owns closing (Changed/Files/Terminal toggle). */}
         {!embedded && (
-          <button className="session-terminal-close" onClick={onClose} title={focusedState.plain ? 'Close (Esc). Not persistent: the shell ends about 2 minutes after closing' : 'Close (Esc). The terminals keep running'}>
-            &#x2715;
+          <button className="btn btn-icon session-terminal-close wn-dialog-close" onClick={onClose} aria-label="Close" title={focusedState.plain ? 'Close (Esc). Not persistent: the shell ends about 2 minutes after closing' : 'Close (Esc). The terminals keep running'}>
+            {ICON_CLOSE}
           </button>
         )}
         {barRightSlot}
@@ -579,17 +586,9 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
     onDockWantRef.current(rows > 1 ? chrome + rows * PANE_ROW_PX : 0);
   }, [dock?.docked, rows, viewTabs.length, listed]);
 
-  // Centered-modal mode: Escape closes (detach, dtach session kept).
-  useEffect(() => {
-    if (embedded) return;
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose, embedded]);
-
   const panel = (
     <div
-      className={`session-terminal-panel${embedded ? ' session-terminal-panel-embedded' : ''}${dock?.docked ? ' is-docked' : ''}`}
+      className={`session-terminal-panel${embedded ? ' session-terminal-panel-embedded' : ' wn-dialog'}${dock?.docked ? ' is-docked' : ''}`}
       data-shown-tab={shown?.id}
       ref={panelRef}
     >
@@ -615,7 +614,9 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
 
   // Default: centered portal modal over a dim backdrop.
   return createPortal(
-    <div className="session-terminal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="session-terminal-overlay wn-scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      {/* Centered-modal mode: Escape closes (detach, dtach session kept), through the shared dialog hook. */}
+      <TerminalModalEscape onClose={onClose} />
       {panel}
     </div>,
     document.body,

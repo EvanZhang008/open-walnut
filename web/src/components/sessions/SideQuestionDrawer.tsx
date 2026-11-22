@@ -96,6 +96,7 @@ import { SIDE_CHAT_LABEL, SIDE_CHAT_TITLE } from '@/components/chat/composer-wor
 import { SELECTION_BAR_LAYERS } from './selection-bar-layers';
 import { Chip, DisclosureButton } from '@/components/controls';
 import '@/styles/header-fit.css';
+import { hasActiveModalOverlay } from '@/hooks/useModalOverlay';
 
 interface SideQuestionDrawerProps {
   /** The PARENT Claude session id. Drawer is disabled until the session has one. */
@@ -417,7 +418,7 @@ function SideQuestionDrawerBody({
     };
     const onKey = (e: KeyboardEvent) => {
       // Full screen: Escape leaves it first (useFullscreen), the next one closes the drawer.
-      if (e.key === 'Escape' && !e.defaultPrevented && !isFullscreen) closeDrawer();
+      if (e.key === 'Escape' && !e.defaultPrevented && !isFullscreen && !hasActiveModalOverlay()) closeDrawer();
     };
     document.addEventListener('mousedown', onDoc);
     document.addEventListener('keydown', onKey);

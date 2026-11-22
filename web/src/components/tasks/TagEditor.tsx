@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { TagChip } from './TagChip';
 import { DisclosureButton } from '@/components/controls';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { fetchTags } from '../../api/tasks';
 import { useTagDisplay } from '@/stores/tag-display-store';
 import { isDerivedTag, normalizeTag, tagInputProblem } from '../../../../src/core/tag-model';
@@ -136,17 +137,19 @@ export function TagEditor({ tags, onAdd, onRemove, derived = [], placeholder = '
     }
   };
 
-  // Close dropdown on outside click
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node) &&
-          inputRef.current && !inputRef.current.contains(e.target as Node)) {
-        setShowDropdown(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
+  // The suggestions are an overlay layer: Escape or a press outside closes them. Focus stays in
+  // the input (no trap), and a press elsewhere still does what it presses: the list is passive.
+  useOverlayLayer({
+    open: showDropdown,
+    refs: [dropdownRef, inputRef],
+    trapFocus: false,
+    passOutsideClick: true,
+    onClose: (reason) => {
+      setShowDropdown(false);
+      setSelectedIdx(-1);
+      if (reason === 'escape') setProblem(null);
+    },
+  });
 
   return (
     <div className="tag-editor" data-testid="tag-editor">
@@ -195,7 +198,7 @@ export function TagEditor({ tags, onAdd, onRemove, derived = [], placeholder = '
           />
           {showDropdown && createPortal(
             <div
-              className="tag-autocomplete tag-autocomplete-portal"
+              className="tag-autocomplete tag-autocomplete-portal wn-overlay wn-menu"
               ref={dropdownRef}
               style={menuPlacementStyle(placement)}
               onPointerDown={(e) => e.stopPropagation()}

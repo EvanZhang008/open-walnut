@@ -135,14 +135,9 @@ button.task-status-badge:hover { background: var(--bg-hover); }
 .task-waiting-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .task-waiting-card {
   position: fixed;
-  z-index: 10050;
   max-width: 340px;
   padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
   color: var(--fg-secondary);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
   font-size: var(--font-size-sm);
   line-height: 1.45;
 }

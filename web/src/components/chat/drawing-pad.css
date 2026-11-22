@@ -1,23 +1,17 @@
 .drawing-pad-overlay {
   position: fixed;
   inset: 0;
-  z-index: 10020;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: rgb(0 0 0 / 35%);
 }
 .drawing-pad {
   width: min(1000px, 100%);
   max-height: calc(100dvh - 40px);
   overflow: auto;
   padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
   color: var(--fg);
-  box-shadow: 0 16px 64px rgb(0 0 0 / 25%);
   outline: none;
 }
 .drawing-pad-header, .drawing-pad-tools, .drawing-pad-footer {
@@ -93,12 +87,10 @@
 .drawing-app-overlay {
   position: fixed;
   inset: 0;
-  z-index: 10020;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: rgb(0 0 0 / 35%);
 }
 .drawing-app-dialog {
   /* As wide and tall as a session window in full screen (globals.css --sheet-*), never past the
@@ -106,16 +98,14 @@
   width: min(var(--sheet-width), var(--sheet-max-width), 100%);
   height: min(var(--sheet-height), calc(100dvh - 40px));
   display: flex;
-  border: 1px solid var(--border);
-  border-radius: 14px;
   overflow: hidden;
-  background: var(--bg-elevated);
-  box-shadow: 0 16px 64px rgb(0 0 0 / 25%);
   outline: none;
 }
 @media (max-width: 600px) {
   .drawing-app-overlay { padding: 0; }
-  .drawing-app-dialog { height: 100dvh; border-radius: 0; }
+  .drawing-app-dialog { height: 100dvh; }
+  /* Full screen on a phone: square corners over the family radius. */
+  html body .drawing-app-dialog { border-radius: 0; }
 }
 .drawing-app-loading { margin: auto; display: flex; align-items: center; gap: 8px; color: var(--fg-muted); }
 .drawing-app-beside-note { font-size: var(--font-size-sm); color: var(--fg-muted); }

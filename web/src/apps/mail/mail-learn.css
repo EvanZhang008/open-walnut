@@ -4,11 +4,7 @@
   width: min(360px, calc(100vw - 24px));
   box-sizing: border-box;
   overflow-y: auto;
-  background: var(--card-bg);
   color: var(--fg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--card-shadow-hover);
   padding: 12px;
   font-size: var(--font-size-md);
 }

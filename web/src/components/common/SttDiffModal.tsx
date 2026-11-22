@@ -9,6 +9,7 @@ import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { diffSpeech, diffStats } from '@/utils/stt-diff';
 import type { VoiceRecording } from '@/api/stt';
+import { ICON_CLOSE } from './Icons';
 
 interface SttDiffModalProps {
   rec: VoiceRecording;
@@ -31,11 +32,11 @@ export function SttDiffModal({ rec, onInsert, onClose }: SttDiffModalProps) {
     : '';
 
   return createPortal(
-    <div className="app-modal-overlay" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="app-modal stt-diff-modal" role="dialog" aria-label="Compare transcriptions">
-        <div className="app-modal-title stt-diff-title">
+    <div className="app-modal-overlay wn-scrim" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="app-modal stt-diff-modal wn-dialog" role="dialog" aria-label="Compare transcriptions">
+        <div className="app-modal-title stt-diff-title wn-dialog-head">
           <span>Voice A/B · {time}</span>
-          <button type="button" className="stt-diff-close" aria-label="Close" onClick={onClose}>✕</button>
+          <button type="button" className="btn btn-icon wn-dialog-close" aria-label="Close" onClick={onClose}>{ICON_CLOSE}</button>
         </div>
 
         {/* Merged diff — the actual comparison. Trivial (punctuation-only)

@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useCallback, useRef } from 'react';
 import { afterPhoneOverlayBacks } from './usePhoneOverlayHistory';
+import { registerModalOrder } from './useOverlayLayer';
 
 /**
  * Ref-counted body scroll lock — multiple overlapping modals
@@ -95,7 +96,9 @@ export function useModalOverlay(onClose: () => void) {
 
   useEffect(() => {
     openModalClosers.add(closeRef);
-    return () => { openModalClosers.delete(closeRef); };
+    // One order with the popover layers (useOverlayLayer): a dialog opened over a popover owns Escape.
+    const dropOrder = registerModalOrder();
+    return () => { openModalClosers.delete(closeRef); dropOrder(); };
   }, []);
 
   useEffect(() => {

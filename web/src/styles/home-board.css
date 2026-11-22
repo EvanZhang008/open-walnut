@@ -6,8 +6,7 @@
 .home-board-controls > .home-board-search { width: 150px; }
 /* :where keeps this at the old weight, so the mic field's own input rule (full width, room for the mic) still wins. */
 .home-board-controls input:where(:not(.wn-seg-input)) { width: 150px; font-size: var(--font-size-sm); }
-.home-board-close { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: var(--radius-xs); color: var(--fg-muted); background: transparent; }
-.home-board-close:hover { color: var(--fg); background: var(--bg-secondary); }
+.home-board-close { place-items: center; }
 .home-board-hint { display: flex; align-items: center; flex: 0 0 48px; box-sizing: border-box; padding: 8px 18px; color: var(--fg-muted); font-size: var(--font-size-sm); line-height: 1.5; border-bottom: 1px solid var(--border); }
 .home-board-columns { display: flex; align-items: stretch; flex: 1; min-height: 0; gap: 12px; overflow-x: auto; padding: 14px; border-radius: 0 0 var(--radius-md) var(--radius-md); background: var(--bg-secondary); }
 .home-board-column { display: flex; flex-direction: column; flex: 1 0 235px; min-width: 235px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-secondary); overflow: hidden; }

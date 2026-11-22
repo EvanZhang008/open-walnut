@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { ICON_MINIMIZE } from '../common/Icons';
 import { SLOT_ID_PREFIX, TOOL_ITEMS, toolItemSpec, useToolRowFit } from './useSessionHeaderFit';
 import { HEADER_TOOL_CLASS, TASK_SLOT_SPACER } from './header-record-gate';
@@ -107,18 +108,23 @@ export function SessionHeaderMoreMenu({ rowRef, ids: folded, spacerIds }: MoreMe
     align: 'left', preferSide: 'down', minHeight: 100, onAnchorLost: () => setOpen(false),
   });
 
+  // One overlay layer: a press outside closes it, Escape closes it and returns
+  // the focus to the chip.
+  useOverlayLayer({
+    passOutsideClick: true,
+    open,
+    refs: [menuRef, buttonRef],
+    onClose: (reason) => {
+      setOpen(false);
+      if (reason === 'escape') buttonRef.current?.focus();
+    },
+  });
   useEffect(() => {
     if (!open) return;
-    const close = (e: Event) => {
-      const t = e.target as Node | null;
-      if (buttonRef.current?.contains(t) || menuRef.current?.contains(t)) return;
-      setOpen(false);
-    };
-    // Keyboard: focus lands on the first row, arrows move, Escape returns to the
-    // chip. The hidden chips left the tab order with their display, so this menu
-    // is the keyboard's only way to them.
+    // Keyboard: focus lands on the first row and arrows move. The hidden chips
+    // left the tab order with their display, so this menu is the keyboard's only
+    // way to them.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { setOpen(false); buttonRef.current?.focus(); return; }
       if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
       const rows = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? []);
       if (!rows.length) return;
@@ -126,10 +132,9 @@ export function SessionHeaderMoreMenu({ rowRef, ids: folded, spacerIds }: MoreMe
       const at = rows.indexOf(document.activeElement as HTMLElement);
       rows[(at + (e.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length]?.focus();
     };
-    document.addEventListener('mousedown', close);
     document.addEventListener('keydown', onKey);
     menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus();
-    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', onKey); };
+    return () => document.removeEventListener('keydown', onKey);
   }, [open]);
 
   // The menu lists what is hidden; when the row widens and nothing is, it goes.
@@ -174,7 +179,7 @@ export function SessionHeaderMoreMenu({ rowRef, ids: folded, spacerIds }: MoreMe
       {open && createPortal(
         <div
           ref={menuRef}
-          className="task-kebab-menu session-header-more-menu"
+          className="task-kebab-menu session-header-more-menu wn-overlay wn-menu"
           role="menu"
           style={menuPlacementStyle(placement)}
           // A portal escapes clipping, not bubbling: the header's own handlers

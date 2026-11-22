@@ -16,6 +16,7 @@ import type { ThreadStackMenuProps } from '@/components/sessions/thread-ui-contr
 import { ThreadConfirm, THREAD_OVERLAY_SELECTOR } from '@/components/sessions/ThreadConfirm';
 import { ThreadMoreIcon, ThreadReopenIcon, ThreadTrashIcon } from '@/components/sessions/ThreadIcons';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { pluralFollowUps } from '@/utils/thread-meta';
 import '@/styles/thread-stack.css';
 
@@ -75,18 +76,17 @@ export function ThreadStackMenu(props: ThreadStackMenuProps & ThreadStackMenuExt
     if (hiddenCount > 0) items.push({ id: 'show-hidden', label: `Show hidden questions (${hiddenCount})`, run: props.onShowHidden });
   }
 
-  // Outside click closes; the drawer, toast, confirm and crumb menu are exempt.
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: PointerEvent) => {
-      const t = e.target;
-      if (!(t instanceof Element)) return;
-      if (menuRef.current?.contains(t) || triggerRef.current?.contains(t) || t.closest(THREAD_MENU_EXEMPT)) return;
-      setOpen(false);
-    };
-    document.addEventListener('pointerdown', onDown, true);
-    return () => document.removeEventListener('pointerdown', onDown, true);
-  }, [open]);
+  // Escape and an outside press close it (the one overlay layer); the drawer, toast, confirm and
+  // crumb menu count as inside. Escape gives the focus back to the trigger. No focus trap: Tab
+  // leaves the menu (onMenuKey).
+  useOverlayLayer({
+    passOutsideClick: true,
+    open,
+    refs: [menuRef, triggerRef],
+    exemptSelectors: [THREAD_MENU_EXEMPT],
+    trapFocus: false,
+    onClose: (reason) => { setOpen(false); if (reason === 'escape') triggerRef.current?.focus({ preventScroll: true }); },
+  });
 
   // Focus the first item once placed (keyboard users land in the menu).
   useEffect(() => {
@@ -99,12 +99,7 @@ export function ThreadStackMenu(props: ThreadStackMenuProps & ThreadStackMenuExt
     const list = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
     const at = list.indexOf(document.activeElement as HTMLButtonElement);
     const move = (i: number) => { e.preventDefault(); list[(i + list.length) % list.length]?.focus(); };
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
-      setOpen(false);
-      triggerRef.current?.focus({ preventScroll: true });
-    } else if (e.key === 'ArrowDown') move(at + 1);
+    if (e.key === 'ArrowDown') move(at + 1);
     else if (e.key === 'ArrowUp') move(at - 1);
     else if (e.key === 'Home') move(0);
     else if (e.key === 'End') move(list.length - 1);
@@ -133,7 +128,7 @@ export function ThreadStackMenu(props: ThreadStackMenuProps & ThreadStackMenuExt
       {open && createPortal(
         <div
           ref={menuRef}
-          className="thread-menu"
+          className="thread-menu wn-overlay wn-menu"
           role="menu"
           aria-label="More"
           style={menuPlacementStyle(place)}

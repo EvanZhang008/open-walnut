@@ -3,10 +3,7 @@
 .org-sheet-layer {
   position: fixed;
   inset: 0;
-  z-index: 9000;
   display: flex;
-  background: color-mix(in srgb, var(--bg) 70%, transparent);
-  backdrop-filter: blur(2px);
 }
 .org-sheet {
   position: relative;
@@ -17,11 +14,7 @@
   min-height: 0;
   margin: 24px;
   padding: 16px 20px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg);
   color: var(--fg);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
 }
 .org-sheet:focus { outline: none; }
 .org-sheet-head {
@@ -268,6 +261,7 @@
 .oc-own.is-over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); color: var(--fg); }
 
 /* The question before a change. */
+/* A veil over the org chart sheet only (not a window scrim): the question sits inside the sheet. */
 .oc-confirm-layer {
   position: absolute;
   inset: 0;
@@ -282,11 +276,7 @@
 .oc-confirm {
   width: min(440px, 100%);
   padding: 14px 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg);
   color: var(--fg);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
 }
 .oc-confirm-title { margin: 0 0 6px; font-size: var(--font-size-lg); font-weight: 650; }
 .oc-confirm-lines { margin: 0; padding-left: 18px; font-size: var(--font-size-md); line-height: 1.5; color: var(--fg); }
@@ -294,7 +284,8 @@
 .oc-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 
 @media (max-width: 720px) {
-  .org-sheet { margin: 0; border-radius: 0; padding: 12px; }
+  .org-sheet { margin: 0; padding: 12px; }
+  html body .org-sheet { border-radius: 0; }
   .oc-vps { grid-template-columns: minmax(0, 1fr); }
 }
 .oc-card-btn:focus-visible, .oc-project-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 6px; }
@@ -349,3 +340,9 @@
 /* A router's card (OrgChartSheet.tsx): in the VPs' grid after them, because a router sits beside the
    VPs, but drawn apart from them: a Router label, no drag, no drop. */
 .oc-router .oc-card-btn { align-items: center; }
+
+/* The org chart is a sheet: under the corner notices and the notification panel, as before the
+   overlay family (its scrim class would put it on the dialog layer). */
+html .org-sheet-layer.wn-scrim {
+  z-index: var(--z-sheet);
+}

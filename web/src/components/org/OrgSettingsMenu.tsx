@@ -53,7 +53,7 @@ export function OrgSettingsMenu() {
       {open && createPortal(
         <div
           ref={menuRef}
-          className="org-answer-menu org-settings-menu"
+          className="org-answer-menu org-settings-menu wn-overlay"
           role="dialog"
           aria-label="Org settings"
           data-testid="org-settings-menu"

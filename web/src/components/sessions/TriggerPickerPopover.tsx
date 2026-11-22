@@ -5,18 +5,19 @@
  *
  * A dialog, not a menu (it holds inputs), placed like the Engine settings
  * popover: portalled, `useMenuPlacement` against the "+" button, an outside
- * pointerdown or Escape closes it. Its height is capped by the placement and it
+ * pointerdown or Escape closes it (the one overlay layer). Its height is capped by the placement and it
  * scrolls itself, so a long template or option list never pushes it off screen.
  */
 import { useDraft, useDraftValue } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import {
   createTemplateTrigger, fetchTriggerTemplateOptions, fetchTriggerTemplates, triggerErrorMessage,
   type CreatedTemplateTrigger, type TriggerTemplate, type TriggerTemplateOption, type TriggerTemplateParam,
 } from '@/api/trigger-templates';
 import { useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { onRoutinesChanged } from '@/stores/routines-store';
 import { log } from '@/utils/log';
 import {
@@ -72,17 +73,26 @@ export function TriggerPickerPopover(props: TriggerPickerPopoverProps) {
     if (placed) rootRef.current?.focus({ preventScroll: true });
   }, [placed]);
 
-  useEffect(() => {
-    const onPointerDown = (e: PointerEvent) => {
-      const root = rootRef.current;
-      if (!root || root.contains(e.target as Node)) return;
-      // At once, not on the next frame: a click on "Add a trigger…" in the "+"
-      // menu reopens it in its own click, which a late close would undo.
-      close('outside');
-    };
-    document.addEventListener('pointerdown', onPointerDown, true);
-    return () => document.removeEventListener('pointerdown', onPointerDown, true);
-  }, [close]);
+  // Escape steps back from a picked trigger's form to the list, then closes and gives the focus
+  // back to the "+" button. An outside press closes at once, and its click goes through: a click
+  // on "Add a trigger…" in the "+" menu reopens it in its own click.
+  useOverlayLayer({
+    open: true,
+    refs: [rootRef],
+    passOutsideClick: true,
+    onEscape: () => {
+      if (!picked) return false;
+      setPicked(null);
+      rootRef.current?.focus({ preventScroll: true });
+      return true;
+    },
+    onClose: (reason) => {
+      if (reason === 'outside') { close('outside'); return; }
+      const anchor = anchorRef.current;
+      close('escape');
+      anchor?.focus({ preventScroll: true });
+    },
+  });
 
   const prefill = useCallback((text: string, what: string) => {
     log.info('trigger', 'trigger picker handed to the AI', { sessionId, taskId, what });
@@ -90,27 +100,16 @@ export function TriggerPickerPopover(props: TriggerPickerPopoverProps) {
     close('prefill');
   }, [onPrefill, close, sessionId, taskId]);
 
-  const onKeyDown = (e: ReactKeyboardEvent) => {
-    if (e.key !== 'Escape') return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (picked) { setPicked(null); rootRef.current?.focus({ preventScroll: true }); return; }
-    const anchor = anchorRef.current;
-    close('escape');
-    anchor?.focus({ preventScroll: true });
-  };
-
   return createPortal(
     <div
       ref={rootRef}
-      className="trigger-picker"
+      className="trigger-picker wn-overlay"
       role="dialog"
       aria-label="Add a trigger"
       tabIndex={-1}
       data-testid="trigger-picker"
       data-view={picked ? 'form' : 'list'}
       onPointerDown={(e) => e.stopPropagation()}
-      onKeyDown={onKeyDown}
       style={{
         top: placement?.top,
         right: placement?.right,
@@ -351,6 +350,10 @@ function ParamField({ param, template, value, inputRef, onType, onChoose, draftK
   const [listOpen, setListOpen] = useState(false);
   const [optionsError, setOptionsError] = useState<string | null>(null);
   const fieldRef = useRef<HTMLDivElement>(null);
+  // The open choices are the layer above the picker: Escape closes them first, and only the
+  // next one leaves the form. Focus stays in the input; a press elsewhere in the picker closes
+  // the choices and still does what it pressed.
+  useOverlayLayer({ open: listOpen, refs: [fieldRef], onClose: () => setListOpen(false), trapFocus: false, passOutsideClick: true });
   // The newest lookup wins: each keystroke cancels the one still waiting, and
   // an answer for an older one (or after unmount) is dropped.
   const requestRef = useRef(0);
@@ -394,14 +397,10 @@ function ParamField({ param, template, value, inputRef, onType, onChoose, draftK
           // A click into the field it already has focus in (after Escape closed the choices) opens them again.
           onClick={() => { if (param.options && !listOpen) setListOpen(true); }}
           onChange={(e) => { onType(e.target.value); if (param.options) { setListOpen(true); query(e.target.value); } }}
-          onKeyDown={(e) => {
-            // Escape closes the choices first; only the next one leaves the form.
-            if (e.key === 'Escape' && listOpen) { e.preventDefault(); e.stopPropagation(); setListOpen(false); }
-          }}
         />
         {param.options && listOpen && (
           <div
-            className="trigger-picker-options"
+            className="trigger-picker-options wn-overlay wn-menu"
             role="listbox"
             aria-label={`${param.label} choices`}
             // Keep the focus in the input: WebKit does not focus a clicked button, so the

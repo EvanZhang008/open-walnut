@@ -5,12 +5,13 @@
  * last done lane cannot be deleted or change kind, and a board keeps one lane:
  * those rows are aria-disabled with a tooltip saying why. Portalled to body,
  * placed by useMenuPlacement, pointer downs stopped (no drag starts under it),
- * arrows move, Escape (window capture, wherever focus is) closes and gives the focus back to the kebab.
+ * arrows move, Escape (useOverlayLayer, wherever focus is) closes and gives the focus back to the kebab.
  */
 import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { ICON_CHECK } from '@/components/common/Icons';
-import { useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { LANE_KINDS, LANE_KIND_LABELS, type BoardLane, type BoardLaneKind } from '../../../../../src/core/boards/board-lanes';
 import { READ_ONLY_TITLE } from './kanban-contract';
 
@@ -79,30 +80,17 @@ export function KanbanLaneMenu(p: KanbanLaneMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const placement = useMenuPlacement(open, anchorRef, menuRef, { minHeight: 160 });
 
+  // An open menu owns Escape wherever focus is: WebKit leaves focus on <body> after a click on a
+  // row, and a bubbling Escape there exits the fullscreen Board instead of closing this menu.
+  useOverlayLayer({
+    passOutsideClick: true,
+    open,
+    refs: [menuRef, anchorRef],
+    onClose: (reason) => { onClose(); if (reason === 'escape') anchorRef.current?.focus(); },
+  });
   useEffect(() => {
-    if (!open) return;
-    const onDown = (e: PointerEvent) => {
-      const t = e.target as Node | null;
-      if (menuRef.current?.contains(t) || anchorRef.current?.contains(t)) return;
-      onClose();
-    };
-    // An open menu owns Escape wherever focus is: WebKit leaves focus on <body> after a click on a
-    // row, and a bubbling Escape there exits the fullscreen Board instead of closing this menu.
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.isComposing) return;
-      e.preventDefault();
-      e.stopPropagation();
-      onClose();
-      anchorRef.current?.focus();
-    };
-    document.addEventListener('pointerdown', onDown, true);
-    window.addEventListener('keydown', onKey, true);
-    menuRef.current?.querySelector<HTMLButtonElement>('button:not([aria-disabled])')?.focus();
-    return () => {
-      document.removeEventListener('pointerdown', onDown, true);
-      window.removeEventListener('keydown', onKey, true);
-    };
-  }, [open, onClose, anchorRef]);
+    if (open) menuRef.current?.querySelector<HTMLButtonElement>('button:not([aria-disabled])')?.focus();
+  }, [open]);
 
   if (!open) return null;
   const ro = readOnly ? READ_ONLY_TITLE : '';
@@ -118,15 +106,12 @@ export function KanbanLaneMenu(p: KanbanLaneMenuProps) {
   return createPortal(
     <div
       ref={menuRef}
-      className="kanban-menu kanban-lane-menu"
+      className="kanban-menu kanban-lane-menu wn-overlay wn-menu"
       data-testid="kanban-lane-menu"
       data-lane-id={lane.id}
       role="menu"
       aria-label={`${lane.name} lane`}
-      style={{
-        position: 'fixed', top: placement?.top ?? -9999, right: placement?.right ?? 0,
-        maxHeight: placement?.maxHeight, visibility: placement ? 'visible' : 'hidden',
-      }}
+      style={menuPlacementStyle(placement)}
       onPointerDown={(e) => e.stopPropagation()}
       onKeyDown={onKeyDown}
     >

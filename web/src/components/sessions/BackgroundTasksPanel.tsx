@@ -391,14 +391,14 @@ export function BackgroundTasksPanel({
   const detailLive = !!liveLane || target?.live === true;
 
   return createPortal(
-    <div className="wf-modal-overlay" onClick={onClose}>
-      <div className="wf-modal wf-modal--tasks" onClick={(e) => e.stopPropagation()}>
-        <div className="wf-modal-header">
+    <div className="wf-modal-overlay wn-scrim" onClick={onClose}>
+      <div className="wf-modal wf-modal--tasks wn-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="wf-modal-header wn-dialog-head">
           <span className="wf-modal-title">Background tasks</span>
           <span className="wf-modal-meta">
             {[...present.map(k => plural(groups[k].length, KIND_NOUN[k])), allRunning > 0 && `${allRunning} running`].filter(Boolean).join(' · ')}
           </span>
-          <button className="wf-modal-close" onClick={onClose} aria-label="Close background tasks" title="Close (Esc)">
+          <button className="btn btn-icon wn-dialog-close" onClick={onClose} aria-label="Close background tasks" title="Close (Esc)">
             {ICON_CLOSE}
           </button>
         </div>

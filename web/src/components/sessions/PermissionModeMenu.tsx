@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import { createPortal } from 'react-dom';
 import { SESSION_MODES, type SessionMode } from '@open-walnut/core';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 
 /**
  * The permission-mode pill of a Claude Code composer (session panel, side
@@ -33,27 +34,17 @@ export function PermissionModeMenu({ mode, onPick, title, heading = 'Permission 
   });
   const entry = SESSION_MODES.find((m) => m.id === mode);
 
-  useEffect(() => {
-    if (!open) return;
-    const outside = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (!triggerRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
-    };
-    const escape = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      // One layer: the menu closes, the composer under it keeps its draft and its Escape.
-      event.preventDefault();
-      event.stopPropagation();
+  // One layer: Escape closes the menu (the composer under it keeps its draft and
+  // its Escape) and focus goes back to the pill; a press outside closes it.
+  useOverlayLayer({
+    passOutsideClick: true,
+    open,
+    refs: [menuRef, triggerRef],
+    onClose: (reason) => {
       setOpen(false);
-      triggerRef.current?.focus({ preventScroll: true });
-    };
-    document.addEventListener('pointerdown', outside);
-    document.addEventListener('keydown', escape, true);
-    return () => {
-      document.removeEventListener('pointerdown', outside);
-      document.removeEventListener('keydown', escape, true);
-    };
-  }, [open]);
+      if (reason === 'escape') triggerRef.current?.focus({ preventScroll: true });
+    },
+  });
 
   const options = () => [...(menuRef.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])];
   // Opened from the keyboard: focus lands on the current mode.
@@ -88,14 +79,14 @@ export function PermissionModeMenu({ mode, onPick, title, heading = 'Permission 
     {open && createPortal(
       <div
         ref={menuRef}
-        className="session-control-menu permission-mode-menu"
+        className="session-control-menu permission-mode-menu wn-overlay wn-menu"
         role="listbox"
         aria-label={heading}
         // A menu opened from the side chat's own composer belongs to that drawer.
         data-composer-scope={triggerRef.current?.closest('.side-question-popover') ? 'side-question' : undefined}
         onPointerDown={(event) => event.stopPropagation()}
         onKeyDown={onMenuKey}
-        style={{ ...menuPlacementStyle(placement), bottom: 'auto', ...(placement ? { left: 'auto' } : {}), zIndex: 10020 }}
+        style={{ ...menuPlacementStyle(placement), bottom: 'auto', ...(placement ? { left: 'auto' } : {}), zIndex: 'var(--z-menu)' }}
       >
         <div className="model-picker-col-title">{heading}</div>
         {SESSION_MODES.map((option) => {

@@ -11,9 +11,11 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { fetchSessionHistory } from '@/api/sessions';
+import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { log } from '@/utils/log';
 import { rawTurnsOf, type RawTurn } from '@/utils/raw-turns';
 import '@/styles/session-raw-view.css';
+import { ICON_CLOSE } from '../common/Icons';
 
 let openSid: string | null = null;
 const listeners = new Set<() => void>();
@@ -86,21 +88,21 @@ function RawViewDialog({ sessionId }: { sessionId: string }) {
     return () => ac.abort();
   }, [sessionId, turns]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeSessionRawView(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  // Escape, scroll lock and nesting: the shared dialog hook.
+  useModalOverlay(closeSessionRawView);
 
   const rows = useMemo(() => rawTurnsOf(state.messages), [state.messages]);
 
   return (
-    <div className="raw-view-backdrop" onPointerDown={(e) => { if (e.target === e.currentTarget) closeSessionRawView(); }}>
-      <div className="raw-view" role="dialog" aria-label="Raw input and output" data-testid="session-raw-view">
-        <div className="raw-view-bar">
-          <strong>Raw input &amp; output</strong>
-          <span className="raw-view-sid">{sessionId}</span>
-          <button type="button" className="raw-view-close" onClick={closeSessionRawView} aria-label="Close">×</button>
+    <div className="raw-view-backdrop wn-scrim" onPointerDown={(e) => { if (e.target === e.currentTarget) closeSessionRawView(); }}>
+      <div className="raw-view wn-dialog" role="dialog" aria-label="Raw input and output" data-testid="session-raw-view">
+        <div className="raw-view-bar wn-dialog-head">
+          {/* The title and the session id read as one title (the head's first child takes the room). */}
+          <span style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+            <strong>Raw input &amp; output</strong>
+            <span className="raw-view-sid">{sessionId}</span>
+          </span>
+          <button type="button" className="btn btn-icon raw-view-close wn-dialog-close" onClick={closeSessionRawView} aria-label="Close">{ICON_CLOSE}</button>
         </div>
         <div className="raw-view-body">
           {rows.length >= turns && (

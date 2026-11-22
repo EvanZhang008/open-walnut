@@ -54,8 +54,8 @@ function AddToTopicDialog({ members, onClose, onAdded }: { members: PickedMember
 
   return createPortal(
     <ModalOverlayOwner.Provider value={modalOwner}>
-      <div className="app-modal-overlay" role="dialog" aria-modal="true" aria-label="Add to topic" data-testid="topic-add-dialog" onMouseDown={onClose}>
-        <div className="app-modal topic-dialog" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="app-modal-overlay wn-scrim" role="dialog" aria-modal="true" aria-label="Add to topic" data-testid="topic-add-dialog" onMouseDown={onClose}>
+        <div className="app-modal topic-dialog wn-dialog" onMouseDown={(e) => e.stopPropagation()}>
           <div className="app-modal-title">Add {who} to a topic</div>
           {list === null && !listError && <p className="topic-muted" aria-busy="true">Loading…</p>}
           {listError && <p className="topic-error">{listError}</p>}
@@ -79,7 +79,7 @@ function AddToTopicDialog({ members, onClose, onAdded }: { members: PickedMember
             </ul>
           )}
           {error && <p className="topic-error" data-testid="topic-add-error">{error}</p>}
-          <div className="app-modal-actions">
+          <div className="app-modal-actions wn-dialog-foot">
             <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
             <button type="button" className="btn btn-primary" data-testid="topic-add-new" onClick={() => openNewTopic(members)}>+ New topic with them</button>
           </div>

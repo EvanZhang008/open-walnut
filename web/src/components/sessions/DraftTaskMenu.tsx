@@ -36,6 +36,7 @@ import { createPortal } from 'react-dom';
 import type { TaskPriority } from '@open-walnut/core';
 import { KebabDateRow, ProjectPickerFlyout, TaskActionMenuItems } from '@/components/tasks/TaskKebabMenu';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { projectDisplayName } from '@/utils/project-display';
 import type { QuickStartTaskMeta } from './SessionPathSelector';
 import type { DraftTaskField, DraftTaskFieldPatch } from './draft-column';
@@ -165,7 +166,7 @@ export function DraftTaskMenuPopover({
   return createPortal(
     <div
       ref={menuRef}
-      className="task-kebab-menu draft-task-menu"
+      className="task-kebab-menu draft-task-menu wn-overlay wn-menu"
       data-testid="draft-task-menu"
       role="dialog"
       aria-label="Task settings"
@@ -242,19 +243,20 @@ export function DraftTaskMenuPopover({
 function ProjectSection({ project, onDone }: { project: DraftMenuProject; onDone: () => void }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
-  // One Escape closes one layer: the flyout first. Window capture runs before
-  // the draft menu's own document-capture Escape, which would close both.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.stopPropagation();
+  // The flyout is the top layer: one Escape closes it alone (the draft menu's own
+  // Escape never sees that key) and focus goes back to the Project button. Focus is
+  // not trapped: the flyout is a portal of TaskKebabMenu this file holds no ref to.
+  useOverlayLayer({
+    passOutsideClick: true,
+    open,
+    onClose: (reason) => {
       setOpen(false);
-      btnRef.current?.focus({ preventScroll: true });
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [open]);
+      if (reason === 'escape') btnRef.current?.focus({ preventScroll: true });
+    },
+    refs: [btnRef],
+    exemptSelectors: ['.task-kebab-project-flyout'],
+    trapFocus: false,
+  });
   return (
     <>
       <div className="task-kebab-project draft-task-menu-project" data-testid="draft-menu-project">

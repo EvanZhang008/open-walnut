@@ -202,7 +202,7 @@ function RecentMore({ ids, tasks, onRestore, onClose }: { ids: readonly string[]
       {open && createPortal(
         <div
           ref={menuRef}
-          className="session-taskbar-more-menu"
+          className="session-taskbar-more-menu wn-overlay wn-menu"
           role="menu"
           aria-label="More recent sessions"
           data-testid="session-taskbar-recent-more-menu"
@@ -367,18 +367,10 @@ function PeekCard({ sessionId, task, title, state, running, anchorRef, processSt
   // The status line is the task's stored words: their recorded writer, never this card's session.
   const lineSource = taskTextSource(task, needsText ? 'needs' : 'report');
 
-  useEffect(() => {
-    // Capture phase: the page's own Escape handlers (panel router, beep guard) run in bubble
-    // and may consume it first.
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.isComposing) { e.stopPropagation(); onDismiss(); } };
-    const onDown = (e: PointerEvent) => {
-      const t = e.target as Node;
-      if (!cardRef.current?.contains(t) && !anchorRef.current?.contains(t)) onDismiss();
-    };
-    window.addEventListener('keydown', onKey, true);
-    window.addEventListener('pointerdown', onDown, true);
-    return () => { window.removeEventListener('keydown', onKey, true); window.removeEventListener('pointerdown', onDown, true); };
-  }, [onDismiss, anchorRef]);
+  // Escape and a press outside the card and its chip dismiss it (the one overlay layer, ahead of
+  // the page's own Escape handlers). The press's click goes through: a press on another chip
+  // opens that one. A peek card never takes Tab from the page.
+  useOverlayLayer({ open: true, refs: [cardRef, anchorRef], onClose: onDismiss, passOutsideClick: true, trapFocus: false });
 
   const submit = useCallback(async (raw: string) => {
     const text = raw.trim();
@@ -394,7 +386,7 @@ function PeekCard({ sessionId, task, title, state, running, anchorRef, processSt
   return createPortal(
     <div
       ref={cardRef}
-      className="session-taskbar-card"
+      className="session-taskbar-card wn-overlay"
       data-state={state}
       data-running={running || undefined}
       data-testid="session-taskbar-card"

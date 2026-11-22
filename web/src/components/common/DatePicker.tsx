@@ -9,6 +9,7 @@
 import { useState, useRef, useEffect, useCallback, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { MonthGrid } from './MonthGrid';
 import { dateTimeWords, hourPickerMin, localDateTimeIso, parseClock, timeTarget, tomorrowTimePills } from './date-time-pick';
 
@@ -301,23 +302,12 @@ export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty, bare
 
   const close = useCallback(() => setOpen(false), []);
 
+  // Escape (topmost only, before a dialog under the picker sees it) and an outside
+  // press close the picker alone: the shared overlay layer.
+  useOverlayLayer({ passOutsideClick: true, open, onClose: close, refs: [menuRef, wrapperRef] });
+
   useEffect(() => {
     if (!open) return;
-    const handleClick = (e: MouseEvent) => {
-      if (wrapperRef.current?.contains(e.target as Node)) return;
-      if (menuRef.current?.contains(e.target as Node)) return;
-      close();
-    };
-    // Escape closes the picker alone. On window in the capture phase it runs before
-    // the bubble-phase listener of a popup under the picker (useModalOverlay, the task
-    // details), which would otherwise close the whole popup on the same key.
-    // preventDefault first: the beep guard reads the stop (see useModalOverlay).
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.isComposing) return;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      close();
-    };
     // A scroll inside the popover (the calendar can scroll when capped) must not
     // dismiss it; outside, useMenuPlacement keeps it glued to the trigger until
     // the trigger itself leaves the viewport.
@@ -326,14 +316,8 @@ export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty, bare
       const r = btnRef.current?.getBoundingClientRect();
       if (r && (r.bottom < 0 || r.top > window.innerHeight)) close();
     };
-    document.addEventListener('mousedown', handleClick);
-    window.addEventListener('keydown', handleKey, true);
     window.addEventListener('scroll', handleScroll, true);
-    return () => {
-      document.removeEventListener('mousedown', handleClick);
-      window.removeEventListener('keydown', handleKey, true);
-      window.removeEventListener('scroll', handleScroll, true);
-    };
+    return () => window.removeEventListener('scroll', handleScroll, true);
   }, [open, close]);
 
   // Inline mode: render content directly
@@ -377,8 +361,9 @@ export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty, bare
       {open && createPortal(
         <div
           ref={menuRef}
-          className="dp-popover"
+          className="dp-popover wn-overlay"
           style={menuPlacementStyle(menuPos)}
+          onPointerDown={(e) => e.stopPropagation()}
         >
           <DatePickerContent date={date} onChange={handleChange} minDate={minDate} withTime={withTime} />
         </div>,

@@ -48,7 +48,7 @@ export function ComposerMoreMenu({ children }: { children: ReactNode }) {
       <span className="chat-plus-menu-control-value" aria-hidden="true">›</span>
     </button>
     {open && createPortal(<div ref={menuRef} role="menu" aria-label="More composer actions"
-      className="chat-plus-menu chat-plus-more-flyout" style={menuPlacementStyle(placement)}
+      className="chat-plus-menu chat-plus-more-flyout wn-overlay wn-menu" style={menuPlacementStyle(placement)}
       data-composer-scope={scope} onKeyDown={onMenuKey}
       onPointerDown={(event) => event.stopPropagation()}>
       {children}

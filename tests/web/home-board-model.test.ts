@@ -13,7 +13,7 @@ describe('Home board grouping', () => {
   it('keeps every shared task-settings flyout out of the glass layer', () => {
     const picker = fs.readFileSync(path.resolve(__dirname, '../../web/src/components/tasks/CursorFlyout.tsx'), 'utf8');
     const glass = fs.readFileSync(path.resolve(__dirname, '../../web/src/styles/overlay-glass.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-    const portals = [...picker.matchAll(/createPortal\([\s\S]*?className="([\w-]+)"/g)].map(m => m[1]);
+    const portals = [...picker.matchAll(/createPortal\([\s\S]*?className="([\w-]+)[^"]*"/g)].map(m => m[1]);
     expect(portals).toContain('task-kebab-project-flyout');
     for (const name of portals) expect(glass).not.toContain(`.${name}`);
   });

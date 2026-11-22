@@ -20,7 +20,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, typ
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
-import { useOutsidePress } from '@/hooks/useOutsidePress';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import type { WorkingDirEntry } from '@/api/sessions';
 import type { SessionEffort, SessionMode, TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
@@ -721,10 +721,6 @@ export function SessionPathSelector({
         if (action === 'drill' && sel) drillOrFill(sel);
         else if (action === 'confirm') handleConfirm();
         else if (action === 'create') handleCreate();
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        setEditMode(false);
-        setEditingPath('');
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
         manualNavRef.current = true;
@@ -791,14 +787,28 @@ export function SessionPathSelector({
         // Enter: enter edit mode with selected item
         e.preventDefault();
         if (flatItems[selectedIdx]) drillOrFill(flatItems[selectedIdx]);
-      } else if (e.key === 'Escape') {
-        handleDismiss();
       }
     }
-  }, [editMode, flatItems, selectedIdx, handleDismiss, confirmCurrent, handleSelect, drillOrFill, hostFilter, hostTabs, ghost, editingPath, inputState, fillPath, validity, createOption, createTarget, handleConfirm, handleCreate]);
+  }, [editMode, flatItems, selectedIdx, confirmCurrent, handleSelect, drillOrFill, hostFilter, hostTabs, ghost, editingPath, inputState, fillPath, validity, createOption, createTarget, handleConfirm, handleCreate]);
 
-  // Close on outside click — saves edits when editing an existing selection (see handleDismiss).
-  useOutsidePress(open, popoverRef, handleDismiss);
+  // Escape and an outside press go through the one overlay layer. Escape in edit mode steps
+  // back to browse first; otherwise both dismiss (which saves a picked path, see handleDismiss).
+  // The outside press's click goes through: a press on the draft's More both takes the typed
+  // folder and opens that menu (workspace-scripts.spec.ts). Focus stays in the search box, whose
+  // Tab and Shift+Tab complete a path and cycle host tabs, so no focus trap.
+  useOverlayLayer({
+    open,
+    refs: [popoverRef],
+    onClose: handleDismiss,
+    onEscape: () => {
+      if (!editMode) return false;
+      setEditMode(false);
+      setEditingPath('');
+      return true;
+    },
+    passOutsideClick: true,
+    trapFocus: false,
+  });
 
   if (!open) return null;
 
@@ -841,7 +851,7 @@ export function SessionPathSelector({
 
   const panel = (
     <div
-      className={`session-path-selector${popoutAnchor ? ' sps-popout' : ''}`}
+      className={`session-path-selector wn-overlay${popoutAnchor ? ' sps-popout' : ''}`}
       ref={popoverRef}
       // Popout: fixed position from useMenuPlacement (top/right/maxHeight),
       // portalled below. Classic mode keeps the stylesheet's anchored geometry.

@@ -11,36 +11,19 @@
 
 .engine-settings-popover {
   position: fixed;
-  z-index: 10020;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
   width: min(620px, 100vw - 24px);
   height: min(720px, var(--menu-max-height, 720px));
   padding: 0;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-lg);
   /* The raised surface, not the page's. In the light theme both are
      white; in the dark theme --bg-elevated is one step lighter than the
      near-black panel under it, so the popover reads as a layer. */
-  background: var(--bg-elevated);
   color: var(--fg);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22), var(--shadow-md);
   font-size: var(--font-size-sm);
   line-height: 1.45;
   outline: none;
-}
-
-/* Dark theme: a deeper shadow and a hairline of light on the edge,
-   so the overlap over a neighbouring column is visible. */
-:root[data-theme="dark"] .engine-settings-popover {
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 6px rgba(0, 0, 0, 0.5);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .engine-settings-popover {
-    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 6px rgba(0, 0, 0, 0.5);
-  }
 }
 
 /* No focus ring on the root itself: the dialog takes programmatic focus on

@@ -7,9 +7,10 @@
  * actions — no separate batch menu to drift out of sync.
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import type { FocusTier } from '@/api/focus';
 import { TaskActionMenuItems, MoveToProjectSection } from './TaskKebabMenu';
 import * as ICONS from '../common/Icons';
@@ -51,22 +52,9 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
   // the task panel's toolbar, so it opens down; it follows the button while the page scrolls.
   const menuPos = useMenuPlacement(open, caretRef, menuRef, { onAnchorLost: close });
 
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (wrapRef.current?.contains(e.target as Node) || menuRef.current?.contains(e.target as Node)) return;
-      // The Project picker's list is its own portal (MoveToProjectSection).
-      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout')) return;
-      setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
+  // The overlay stack: Escape closes this menu only (the selection stays), and a press outside
+  // closes it. The Project picker's list is its own portal (MoveToProjectSection).
+  useOverlayLayer({ passOutsideClick: true, open, refs: [menuRef, wrapRef], exemptSelectors: ['.task-kebab-project-flyout'], onClose: close });
 
   return (
     <div className="task-batch-menu" ref={wrapRef}>
@@ -134,7 +122,7 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
       {open && createPortal(
         <div
           ref={menuRef}
-          className="task-kebab-menu task-batch-dropdown"
+          className="task-kebab-menu task-batch-dropdown wn-overlay wn-menu"
           role="menu"
           style={menuPlacementStyle(menuPos)}
           onPointerDown={(e) => e.stopPropagation()}

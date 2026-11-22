@@ -20,6 +20,7 @@
  *    value too.
  */
 import { useEffect, useRef, type RefObject } from 'react';
+import { isImeKey } from '@/utils/ime-key';
 
 export type OverlayCloseReason = 'escape' | 'outside';
 
@@ -49,7 +50,29 @@ interface Layer {
 }
 
 const stack: Layer[] = [];
+/** One counter for layers AND dialogs (useModalOverlay), so "which opened last" has one answer. */
 let nextId = 1;
+/** Open dialogs, by the order they opened in (useModalOverlay registers each). */
+const modals = new Set<number>();
+
+/**
+ * A dialog (useModalOverlay) took its place in the same order as the layers: while a dialog that
+ * opened AFTER the topmost layer is up, Escape and Tab are the dialog's, so one Escape closes the
+ * dialog on top and never the popover left open under it. Returns its removal.
+ */
+export function registerModalOrder(): () => void {
+  const id = nextId++;
+  modals.add(id);
+  return () => { modals.delete(id); };
+}
+
+/** True when a dialog opened after the topmost layer: the keyboard belongs to that dialog. */
+function dialogAboveTop(): boolean {
+  const top = stack[stack.length - 1];
+  if (!top) return false;
+  for (const id of modals) if (id > top.id) return true;
+  return false;
+}
 let swallowClick = false;
 let swallowTimer: ReturnType<typeof setTimeout> | null = null;
 const SWALLOW_MS = 1000;
@@ -97,8 +120,10 @@ export function overlayTabStops(root: HTMLElement): HTMLElement[] {
 }
 
 function cycleTab(e: KeyboardEvent): void {
-  const top = stack[stack.length - 1];
-  if (top.opts.current.trapFocus === false) return;
+  // The topmost layer that traps: a hover card on top (trapFocus false) leaves the flyout under it trapping.
+  let top: Layer | undefined;
+  for (let i = stack.length - 1; i >= 0 && !top; i -= 1) if (stack[i].opts.current.trapFocus !== false) top = stack[i];
+  if (!top) return;
   const root = top.opts.current.refs[0]?.current;
   if (!root || typeof root.querySelectorAll !== 'function') return;
   const stops = overlayTabStops(root);
@@ -113,11 +138,13 @@ function cycleTab(e: KeyboardEvent): void {
 }
 
 function onKeyDownCapture(e: KeyboardEvent): void {
-  if (e.key === 'Tab' && !e.isComposing && !e.altKey && !e.ctrlKey && !e.metaKey && stack.length > 0) {
+  if (dialogAboveTop()) return;
+  if (e.key === 'Tab' && !isImeKey(e) && !e.altKey && !e.ctrlKey && !e.metaKey && stack.length > 0) {
     cycleTab(e);
     return;
   }
-  if (e.key !== 'Escape' || e.isComposing || stack.length === 0) return;
+  // isImeKey: WebKit's Escape that cancels an IME candidate has isComposing false, keyCode 229.
+  if (e.key !== 'Escape' || isImeKey(e) || stack.length === 0) return;
   const top = stack[stack.length - 1];
   const opts = top.opts.current;
   if (opts.closeOnEscape === false) return;
@@ -127,16 +154,26 @@ function onKeyDownCapture(e: KeyboardEvent): void {
   opts.onClose('escape');
 }
 
+/** A press on another popover's trigger opens it: the click goes through, so switching menus takes one click. */
+function isPopoverTrigger(target: EventTarget | null): boolean {
+  const node = target as (Node & { closest?: Element['closest'] }) | null;
+  const el = node && typeof node.closest === 'function' ? (node as unknown as Element) : (node?.parentElement ?? null);
+  return !!el?.closest?.('[aria-haspopup]:not([aria-haspopup=false])');
+}
+
 function onPointerDownCapture(e: PointerEvent): void {
-  if (stack.length === 0) return;
+  // A dialog opened over the popover owns the pointer too: pressing in it never closes the popover under it.
+  if (stack.length === 0 || dialogAboveTop()) return;
   let swallow = false;
   for (let i = stack.length - 1; i >= 0; i -= 1) {
     const layer = stack[i];
     if (contains(layer, e.target) || layer.opts.current.closeOnOutside === false) break;
-    if (layer.opts.current.passOutsideClick !== true) swallow = true;
+    // Only a primary press is followed by a click to swallow: a right press (it opens another menu)
+    // makes no click, and arming would eat the first click in the menu it opened.
+    if (layer.opts.current.passOutsideClick !== true && (e.button ?? 0) === 0) swallow = true;
     layer.opts.current.onClose('outside');
   }
-  if (swallow) armSwallow();
+  if (swallow && !isPopoverTrigger(e.target)) armSwallow();
 }
 
 function onClickCapture(e: MouseEvent): void {

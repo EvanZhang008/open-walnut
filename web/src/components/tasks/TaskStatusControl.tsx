@@ -31,6 +31,7 @@ import * as ICONS from '../common/Icons';
 import { Chip, ChipGroup, DisclosureChevron } from '@/components/controls';
 import { DatePicker } from '../common/DatePicker';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { updateTask as apiUpdateTask } from '@/api/tasks';
 import { requestWaitUntil, WAIT_UNTIL_MENU_LABEL, WAIT_UNTIL_TITLE } from '@/utils/wait-until';
@@ -301,29 +302,16 @@ export function TaskStatusBadge({ task, onSetPhase, onSetWaitUntil, quiet = fals
   const close = useCallback(() => setOpen(false), []);
   const pos = useMenuPlacement(open, btnRef, menuRef, { align: 'start', minHeight: 120, onAnchorLost: close });
 
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: PointerEvent) => {
-      const t = e.target as Node;
-      if (btnRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+  // The overlay stack: this Escape closes the menu only, not the detail modal around the badge.
+  useOverlayLayer({
+    passOutsideClick: true,
+    open,
+    refs: [menuRef, btnRef],
+    onClose: (reason) => {
       close();
-    };
-    // Capture phase, and stopped: this Escape closes the menu only, not the
-    // detail modal around the badge, whose own document listener would also run.
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.stopPropagation();
-      e.preventDefault();
-      close();
-      btnRef.current?.focus();
-    };
-    document.addEventListener('pointerdown', onDown);
-    window.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('pointerdown', onDown);
-      window.removeEventListener('keydown', onKey, true);
-    };
-  }, [open, close]);
+      if (reason === 'escape') btnRef.current?.focus();
+    },
+  });
 
   return (
     <>
@@ -343,7 +331,7 @@ export function TaskStatusBadge({ task, onSetPhase, onSetWaitUntil, quiet = fals
       {open && createPortal(
         <div
           ref={menuRef}
-          className={`task-kebab-menu task-status-menu${quiet ? ' task-status-menu-quiet' : ''}`}
+          className={`task-kebab-menu task-status-menu wn-overlay wn-menu${quiet ? ' task-status-menu-quiet' : ''}`}
           role="menu"
           style={menuPlacementStyle(pos)}
           onPointerDown={(e) => e.stopPropagation()}

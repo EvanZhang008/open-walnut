@@ -24,6 +24,7 @@ import { TransferLaunchRows } from './TransferLaunchRows';
 import { TransferChoice } from './TransferChoice';
 import { Checkbox } from '@/components/controls';
 import '@/styles/transfer.css';
+import { ICON_CLOSE } from '../common/Icons';
 
 interface Props {
   options: TransferOptions | null;
@@ -193,7 +194,7 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
 
   return createPortal(
     <div
-      className="app-modal-overlay"
+      className="app-modal-overlay wn-scrim"
       onMouseDown={onClose}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
@@ -201,23 +202,23 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
       onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}
     >
       <div
-        className="app-modal xfer-modal"
+        className="app-modal xfer-modal wn-dialog"
         role="dialog"
         aria-modal="true"
         aria-label="Transfer task"
         data-testid="transfer-dialog"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="xfer-head">
+        <div className="xfer-head wn-dialog-head">
           <div className="app-modal-title">Transfer to another harness or host</div>
-          <button type="button" className="xfer-close" onClick={onClose} aria-label="Close">×</button>
+          <button type="button" className="btn btn-icon wn-dialog-close" onClick={onClose} aria-label="Close">{ICON_CLOSE}</button>
         </div>
         <div className="xfer-intro">
           A new task takes over the work.{options?.source ? ` ${sourceLine(options)}.` : ''}
         </div>
         <div className="xfer-body">{body}</div>
         {error && <div className="xfer-error" role="alert" data-testid="xfer-error">{error}</div>}
-        <div className="app-modal-actions xfer-actions">
+        <div className="app-modal-actions xfer-actions wn-dialog-foot">
           {blocker && options?.source && !busy && <span className="xfer-hint" data-testid="xfer-hint">{blocker}</span>}
           {busy && <span className="xfer-hint">You can close this. Walnut opens the new task when it is ready.</span>}
           <button type="button" className="btn" onClick={() => { if (!busy) { messageDraft.clear(); pathDraft.clear(); } onClose(); }}>{busy ? 'Hide' : 'Cancel'}</button>

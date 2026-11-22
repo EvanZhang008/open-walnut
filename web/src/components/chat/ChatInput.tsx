@@ -816,22 +816,22 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
       if (reason === 'escape') textareaRef.current?.focus({ preventScroll: true });
     },
   });
-  // The send dropdown is independent from the add menu's overlay stack.
-  useEffect(() => {
-    if (!sendMenuOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (!sendGroupRef.current?.contains(e.target as Node)) setSendMenuOpen(false);
-    };
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
+  // The send split's menu: the family's placement (above the whole composer, never over the draft:
+  // 2026-11-22 audit) and the one close (Escape, or a press outside, which goes through).
+  const sendMenuRef = useRef<HTMLDivElement>(null);
+  const sendPlacement = useMenuPlacement(sendMenuOpen, sendGroupRef, sendMenuRef, {
+    align: 'right', preferSide: 'up', minHeight: 80,
+    onAnchorLost: () => setSendMenuOpen(false),
+  });
+  useOverlayLayer({
+    passOutsideClick: true,
+    open: sendMenuOpen,
+    refs: [sendMenuRef, sendGroupRef],
+    onClose: (reason) => {
       setSendMenuOpen(false);
-      textareaRef.current?.focus({ preventScroll: true });
-    };
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
-  }, [sendMenuOpen]);
+      if (reason === 'escape') textareaRef.current?.focus({ preventScroll: true });
+    },
+  });
 
   const queueFull = isStreaming && (queueCount ?? 0) >= MAX_QUEUE_SIZE;
 
@@ -2207,7 +2207,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
             </svg>
           </button>
           {plusOpen && (
-            <div ref={plusMenuRef} className="chat-plus-menu" role="menu" onPointerDown={(event) => event.stopPropagation()} style={menuPlacementStyle(plusPlacement)}>
+            <div ref={plusMenuRef} className="chat-plus-menu wn-overlay wn-menu" role="menu" onPointerDown={(event) => event.stopPropagation()} style={menuPlacementStyle(plusPlacement)}>
               <button
                 className="chat-plus-menu-item"
                 onClick={handleAttachClick}
@@ -2441,7 +2441,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                 </svg>
               </button>
               {sendMenuOpen && (
-                <div className="chat-send-menu" role="menu">
+                <div ref={sendMenuRef} className="chat-send-menu wn-overlay wn-menu" role="menu" onPointerDown={(event) => event.stopPropagation()} style={menuPlacementStyle(sendPlacement)}>
                   {isStreaming && onInterruptSend && (
                     <button
                       className="chat-send-menu-item"

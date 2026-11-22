@@ -79,8 +79,8 @@ export function TurnRestoreDialog({ sessionId, snapshot, label, turnRunning, onC
   }, [sessionId, snapshot.n, onRestored]);
 
   return createPortal(
-    <div className="app-modal-overlay rewind-dialog-overlay" role="dialog" aria-modal="true" aria-label="Restore files" onMouseDown={onClose}>
-      <div className="app-modal rewind-dialog turn-restore-dialog" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="app-modal-overlay rewind-dialog-overlay wn-scrim" role="dialog" aria-modal="true" aria-label="Restore files" onMouseDown={onClose}>
+      <div className="app-modal rewind-dialog turn-restore-dialog wn-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="app-modal-title">Restore files to {label}</div>
         <div className="app-modal-message">
           {!plan && !planError && 'Checking which files would change…'}
@@ -108,7 +108,7 @@ export function TurnRestoreDialog({ sessionId, snapshot, label, turnRunning, onC
           <div className="rewind-dialog-hint turn-restore-running">A turn is running. Restore after it ends.</div>
         )}
         {error && <div className="rewind-dialog-error">{error}</div>}
-        <div className="app-modal-actions">
+        <div className="app-modal-actions wn-dialog-foot">
           <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
           <button
             type="button"

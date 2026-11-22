@@ -80,7 +80,7 @@ export function OrgAlertSnooze({ alert, current, onStart }: {
       {open && createPortal(
         <div
           ref={menuRef}
-          className="org-answer-menu org-snooze-menu"
+          className="org-answer-menu org-snooze-menu wn-overlay"
           role="dialog"
           aria-label={`Snooze ${alert.title} until`}
           data-testid="org-snooze-menu"

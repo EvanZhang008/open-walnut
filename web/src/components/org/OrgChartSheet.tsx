@@ -42,6 +42,7 @@ import { useOrgSettings } from './useOrgSettings';
 import { cardOf, ceoLine, dropPlan, nowLine, theVp, vpCards, type DropPlan, type VpCard, type VpProject } from './org-chart-model';
 import type { ChannelRow } from './org-channels-model';
 import '@/styles/org-chart.css';
+import { ICON_CLOSE } from '../common/Icons';
 
 /** A question the sheet opens on: put `project` (a project row key) under `to`'s VP (a card key; null = its own). */
 export interface ChartStart {
@@ -284,7 +285,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
 
   const sheet = (
     <div
-      className="org-sheet-layer"
+      className="org-sheet-layer wn-scrim"
       data-testid="org-chart"
       // Not part of the board: a pointer here must never start the home page's drag sensors.
       onPointerDown={(e) => { e.stopPropagation(); pressAt(e.target, e.currentTarget); }}
@@ -301,13 +302,13 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
         onClose();
       }}
     >
-      <div ref={setPanel} className="org-sheet" role="dialog" aria-modal="true" aria-label="Org chart" tabIndex={-1}>
-        <header className="org-sheet-head">
+      <div ref={setPanel} className="org-sheet wn-dialog" role="dialog" aria-modal="true" aria-label="Org chart" tabIndex={-1}>
+        <header className="org-sheet-head wn-dialog-head">
           <div>
             <h2 className="org-sheet-title">Org chart</h2>
             <p className="org-sheet-hint">Drag a project onto another VP to put it under that VP. Nothing changes until you confirm.</p>
           </div>
-          <button type="button" className="btn btn-icon btn-sm task-action-btn" onClick={onClose} aria-label="Close the org chart" title="Close">&times;</button>
+          <button type="button" className="btn btn-icon wn-dialog-close" onClick={onClose} aria-label="Close the org chart" title="Close">{ICON_CLOSE}</button>
         </header>
         {done && <p className="oc-done" role="status" data-testid="org-chart-done">{done}</p>}
 
@@ -412,7 +413,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
         {pending && (
           <div className="oc-confirm-layer">
             <div
-              className="oc-confirm"
+              className="oc-confirm wn-dialog"
               role="alertdialog"
               aria-modal="true"
               aria-label={pending.title}
@@ -433,7 +434,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
                 {pending.lines.map((l) => <li key={l}>{l}</li>)}
               </ul>
               {error && <p className="oc-confirm-error" role="alert" data-testid="org-chart-error">Not changed. {error}</p>}
-              <div className="oc-confirm-actions">
+              <div className="oc-confirm-actions wn-dialog-foot">
                 <button type="button" className="btn btn-sm btn-ghost" onClick={cancelAsk} disabled={busy}>Cancel</button>
                 <button type="button" className="btn btn-sm btn-primary" data-testid="org-chart-apply" onClick={() => { void apply(); }} disabled={busy} autoFocus>
                   {busy ? 'Working…' : pending.confirm}

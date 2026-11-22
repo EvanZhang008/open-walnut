@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
-  hasOpenOverlayLayer, overlayLayerDepth, overlayLayerHandlers, registerOverlayLayer,
+  hasOpenOverlayLayer, overlayLayerDepth, overlayLayerHandlers, registerOverlayLayer, registerModalOrder,
   type OverlayLayerOptions,
 } from '../../web/src/hooks/useOverlayLayer';
 
@@ -16,7 +16,8 @@ function node(cls: string, parent: FakeNode | null = null): FakeNode {
   const n: FakeNode = {
     nodeType: 1, cls, parent, parentElement: parent,
     contains: (other) => { for (let c: FakeNode | null = other; c; c = c.parent) if (c === n) return true; return false; },
-    closest: (sel) => { for (let c: FakeNode | null = n; c; c = c.parent) if (sel === `.${c.cls}`) return c; return null; },
+    // `.cls` matches the class; an `[aria-haspopup]` selector matches a node whose class is `popup-trigger`.
+    closest: (sel) => { for (let c: FakeNode | null = n; c; c = c.parent) if (sel === `.${c.cls}` || (sel.startsWith('[aria-haspopup]') && c.cls === 'popup-trigger')) return c; return null; },
   };
   return n;
 }
@@ -148,4 +149,50 @@ describe('useOverlayLayer stack', () => {
   overlayLayerHandlers.click(click as unknown as MouseEvent);
   expect(click.stopImmediatePropagation).not.toHaveBeenCalled();
 });
+  it('a dialog opened over a popover owns Escape; a popover opened over a dialog keeps it', () => {
+    const closeMenu = layer({ el: menu });
+    const dropDialog = registerModalOrder();
+    removers.push(dropDialog);
+    const e = ev({ key: 'Escape' });
+    overlayLayerHandlers.keydown(e as unknown as KeyboardEvent);
+    // The layer leaves the key alone: useModalOverlay's own listener closes the dialog on top.
+    expect(closeMenu).not.toHaveBeenCalled();
+    expect(e.stopImmediatePropagation).not.toHaveBeenCalled();
+    const closeFly = layer({ el: flyout });
+    overlayLayerHandlers.keydown(ev({ key: 'Escape' }) as unknown as KeyboardEvent);
+    expect(closeFly).toHaveBeenCalledWith('escape');
+    expect(closeMenu).not.toHaveBeenCalled();
+  });
+  it('an Escape that cancels an IME candidate (WebKit: keyCode 229) leaves the layer open', () => {
+    const closeMenu = layer({ el: menu });
+    const e = ev({ key: 'Escape', isComposing: false, keyCode: 229 });
+    overlayLayerHandlers.keydown(e as unknown as KeyboardEvent);
+    expect(closeMenu).not.toHaveBeenCalled();
+    expect(e.stopImmediatePropagation).not.toHaveBeenCalled();
+  });
+  it('a press on another popover\'s trigger closes this one and its click goes through (one click switches menus)', () => {
+    const closeMenu = layer({ el: menu });
+    overlayLayerHandlers.pointerdown(ev({ target: node('popup-trigger', body) }) as unknown as PointerEvent);
+    expect(closeMenu).toHaveBeenCalledWith('outside');
+    const click = ev();
+    overlayLayerHandlers.click(click as unknown as MouseEvent);
+    expect(click.stopImmediatePropagation).not.toHaveBeenCalled();
+  });
+  it('a press in a dialog opened over a popover leaves the popover and the click alone', () => {
+    const closeMenu = layer({ el: menu });
+    removers.push(registerModalOrder());
+    overlayLayerHandlers.pointerdown(ev({ target: row }) as unknown as PointerEvent);
+    expect(closeMenu).not.toHaveBeenCalled();
+    const click = ev();
+    overlayLayerHandlers.click(click as unknown as MouseEvent);
+    expect(click.stopImmediatePropagation).not.toHaveBeenCalled();
+  });
+  it('a right press closes the layer but never swallows the next click', () => {
+    const closeMenu = layer({ el: menu });
+    overlayLayerHandlers.pointerdown(ev({ target: row, button: 2 }) as unknown as PointerEvent);
+    expect(closeMenu).toHaveBeenCalledWith('outside');
+    const click = ev();
+    overlayLayerHandlers.click(click as unknown as MouseEvent);
+    expect(click.stopImmediatePropagation).not.toHaveBeenCalled();
+  });
 });

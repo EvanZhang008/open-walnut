@@ -131,8 +131,8 @@ export function PermissionFixDialog({ permission, launcherName, onClose, onGrant
     : permission.label;
 
   return createPortal(
-    <div className="app-modal-overlay" role="dialog" aria-modal="true" aria-label={`${permission.label} permission`} onMouseDown={onClose}>
-      <div className="app-modal permission-fix-modal" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="app-modal-overlay wn-scrim" role="dialog" aria-modal="true" aria-label={`${permission.label} permission`} onMouseDown={onClose}>
+      <div className="app-modal permission-fix-modal wn-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="app-modal-title">
           {state === 'granted'
             ? `${permission.label} access granted`
@@ -222,7 +222,7 @@ export function PermissionFixDialog({ permission, launcherName, onClose, onGrant
           </div>
         )}
 
-        <div className="app-modal-actions">
+        <div className="app-modal-actions wn-dialog-foot">
           <button className="btn" onClick={onClose}>
             {state === 'granted' ? 'Done' : 'Close'}
           </button>

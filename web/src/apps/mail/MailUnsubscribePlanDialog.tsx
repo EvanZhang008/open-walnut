@@ -11,6 +11,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { mailFailure } from '@/api/mail';
+import { useModalOverlay } from '@/hooks/useModalOverlay';
 import {
   getMailUnsubscribeBatch, getMailUnsubscribePlan, startMailUnsubscribeBatch, stopMailUnsubscribeBatch,
   type MailGroupsScope, type MailUnsubscribePlan,
@@ -201,21 +202,9 @@ export function MailUnsubscribePlanDialog({ scope, groupId, groupLabel, plan, ac
   const running = !!batch && !over;
   const runningRef = useRef(running);
   runningRef.current = running;
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
-  // Escape is heard on the DOCUMENT (capture, the way the group card and the correct popover hear it),
-  // not on the dialog: WebKit, the Mac app's engine, focuses nothing a click lands on, so after one click
-  // on a tick box or a button focus sat on <body> and the dialog's own handler never saw the key.
-  useEffect(() => {
-    const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      event.stopPropagation();
-      if (!runningRef.current) closeRef.current();
-    };
-    document.addEventListener('keydown', onKey, true);
-    return () => { document.removeEventListener('keydown', onKey, true); };
-  }, []);
+  // Escape and scroll lock through the one dialog hook (heard on the document, so it works with focus
+  // on <body>, as WebKit leaves it after a click). While the batch runs, Escape is taken and does nothing.
+  useModalOverlay(() => { if (!runningRef.current) onClose(); });
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     // Enter never submits from a checkbox (it would be a slip, not a decision).
     if (event.key === 'Enter' && (event.target as HTMLElement).tagName !== 'BUTTON' && (event.target as HTMLElement).tagName !== 'A') {
@@ -238,7 +227,7 @@ export function MailUnsubscribePlanDialog({ scope, groupId, groupLabel, plan, ac
   const titleId = `mail-unsub-plan-title-${groupId}`;
   return createPortal(
     <div
-      className="mail-unsub-backdrop"
+      className="mail-unsub-backdrop wn-scrim"
       onPointerDown={(event) => {
         event.stopPropagation();
         if (event.target === event.currentTarget && !running) onClose();
@@ -246,7 +235,7 @@ export function MailUnsubscribePlanDialog({ scope, groupId, groupLabel, plan, ac
     >
       <div
         ref={dialog}
-        className="mail-unsub-plan"
+        className="mail-unsub-plan wn-dialog"
         data-testid="mail-unsub-plan"
         role="dialog"
         aria-modal="true"
@@ -284,7 +273,7 @@ export function MailUnsubscribePlanDialog({ scope, groupId, groupLabel, plan, ac
         {without && <p className="mail-unsub-note" data-testid="mail-unsub-without">{without}</p>}
         {unknown && <p className="mail-unsub-note" data-testid="mail-unsub-header-unknown">{unknown}</p>}
         {error && <p className="mail-inline-error" role="alert">{error}</p>}
-        <div className="mail-unsub-buttons">
+        <div className="mail-unsub-buttons wn-dialog-foot">
           {empty || over ? (
             <button type="button" className="mail-group-btn primary" data-testid="mail-unsub-close" onClick={onClose}>Close</button>
           ) : running ? (

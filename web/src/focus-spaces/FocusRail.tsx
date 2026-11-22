@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement'
+import { useOverlayLayer } from '@/hooks/useOverlayLayer'
 import { FOCUS_ENDED_EVENT, useFocusSnapshot, type ActiveFocus } from './focus-store'
 import { useFocusOn } from './useFocusView'
 import { FocusPanel } from './FocusPanel'
@@ -75,33 +76,26 @@ function FocusPopover({ triggerRef, ended, onClose }: { triggerRef: React.RefObj
   closeRef.current = onClose
 
   useEffect(() => { popRef.current?.focus({ preventScroll: true }) }, [])
+  // Escape and a press outside close it (the shared overlay layer); Escape gives focus back to the entry.
+  useOverlayLayer({
+    passOutsideClick: true,
+    open: true,
+    refs: [popRef, triggerRef],
+    onClose: (reason) => {
+      onClose()
+      if (reason === 'escape') triggerRef.current?.focus({ preventScroll: true })
+    },
+  })
   useEffect(() => {
     const close = () => closeRef.current()
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      e.stopPropagation()
-      close()
-      triggerRef.current?.focus({ preventScroll: true })
-    }
-    const onPointer = (e: PointerEvent) => {
-      const target = e.target as Node | null
-      if (!target || popRef.current?.contains(target) || triggerRef.current?.contains(target)) return
-      close()
-    }
-    window.addEventListener('keydown', onKey)
-    document.addEventListener('pointerdown', onPointer, true)
     window.addEventListener('resize', close)
-    return () => {
-      window.removeEventListener('keydown', onKey)
-      document.removeEventListener('pointerdown', onPointer, true)
-      window.removeEventListener('resize', close)
-    }
-  }, [triggerRef])
+    return () => window.removeEventListener('resize', close)
+  }, [])
 
   return createPortal(
     <div
       ref={popRef}
-      className="status-item-popover focus-popover"
+      className="status-item-popover focus-popover wn-overlay"
       role="dialog"
       aria-label="Focus"
       tabIndex={-1}

@@ -39,8 +39,8 @@
 .hii-projects [aria-pressed="true"] { outline: 1px solid var(--accent); }
 .hii-confirm-footer { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 .hii-operation-details pre { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px; background: var(--bg-secondary); }
-.hii-selector-overlay { position: fixed; inset: 0; z-index: 9800; display: flex; align-items: center; justify-content: center; background: var(--overlay-bg); }
-.hii-selector { width: min(640px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); display: flex; flex-direction: column; color: var(--fg); background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; box-sizing: border-box; font-size: var(--font-size-sm); overflow-wrap: anywhere; }
+.hii-selector-overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+.hii-selector { width: min(640px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); display: flex; flex-direction: column; color: var(--fg); padding: 12px; box-sizing: border-box; font-size: var(--font-size-sm); overflow-wrap: anywhere; }
 .hii-selector header { display: flex; align-items: center; justify-content: space-between; flex: none; }
 .hii-selector h2 { font-size: 14px; margin: 4px 0 12px; }
 .hii-selector label { flex: none; }

@@ -16,7 +16,7 @@
  * costs nothing beyond the selector itself.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useEditorState } from '@tiptap/react';
 import type { Editor } from '@tiptap/core';
@@ -26,6 +26,7 @@ import { insertImageFile } from './image-insert';
 import { editLinkViaPrompt } from './link-prompt';
 import { usePrompt } from '@/hooks/useConfirm';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 
 interface NotesFormatToolbarProps {
   editor: Editor;
@@ -220,23 +221,10 @@ function BlockPicker({ editor, current, disabled }: { editor: Editor; current: B
   // reads as attached (right-aligned would hang under the mark buttons).
   const placement = useMenuPlacement(open, btnRef, menuRef, { align: 'center', onAnchorLost: close });
 
-  // Outside click / Escape closes. The menu is portalled, so "outside" is
-  // "not in the menu and not the trigger".
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node | null;
-      if (menuRef.current?.contains(t) || btnRef.current?.contains(t)) return;
-      close();
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } };
-    document.addEventListener('mousedown', onDown, true);
-    document.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('mousedown', onDown, true);
-      document.removeEventListener('keydown', onKey, true);
-    };
-  }, [open, close]);
+  // Outside press / Escape closes. The menu is portalled, so "outside" is
+  // "not in the menu and not the trigger". Focus stays in the editor (the rows
+  // keep it on press), so Tab is not trapped in the menu.
+  useOverlayLayer({ passOutsideClick: true, open, onClose: close, refs: [menuRef, btnRef], trapFocus: false });
 
   const pick = (kind: BlockKind) => {
     close();
@@ -266,12 +254,12 @@ function BlockPicker({ editor, current, disabled }: { editor: Editor; current: B
       {open && createPortal(
         <div
           ref={menuRef}
-          className="notes-format-block-menu"
+          className="notes-format-block-menu wn-overlay wn-menu"
           role="menu"
           // 10002: above the Global Notes popup overlay (z 10000), where the
           // hook's default 9999 would paint the menu UNDER the popup card. Same
           // layer the bubble menu uses.
-          style={{ ...menuPlacementStyle(placement), zIndex: 10002 }}
+          style={{ ...menuPlacementStyle(placement), zIndex: 'var(--z-menu)' }}
           onPointerDown={(e) => e.stopPropagation()}
         >
           {BLOCK_OPTIONS.map((o) => (

@@ -8,6 +8,7 @@ import { PHASE_TEXT } from './item-receipt-model';
 import { projectDisplayName } from '@/utils/project-display';
 import { itemDraftKey, useItemDraft } from './item-drafts';
 import { MicInput } from '@/components/common/BoxMic';
+import { ICON_CLOSE } from '../common/Icons';
 
 export function ItemTaskSelector({ open, letterId, itemId, onClose, onChoose, onNavigate }: {
   open: boolean; letterId: string; itemId: string; onClose: () => void; onChoose: (task: InboxTaskCandidate) => void;
@@ -71,9 +72,9 @@ export function ItemTaskSelector({ open, letterId, itemId, onClose, onChoose, on
     finally { fetching.current = false; setMoreLoading(false); }
   }
   if (!open) return null;
-  return createPortal(<div className="hii-selector-overlay" onPointerDown={e => e.stopPropagation()}>
-    <div className="hii-selector" role="dialog" aria-modal="true" aria-label="Choose a task" ref={root}>
-      <header><h2>Choose a task</h2><button type="button" className="btn btn-sm hib-row-btn" onClick={onClose} aria-label="Close task selector">×</button></header>
+  return createPortal(<div className="hii-selector-overlay wn-scrim" onPointerDown={e => e.stopPropagation()}>
+    <div className="hii-selector wn-dialog" role="dialog" aria-modal="true" aria-label="Choose a task" ref={root}>
+      <header className="wn-dialog-head"><h2>Choose a task</h2><button type="button" className="btn btn-icon wn-dialog-close" onClick={onClose} aria-label="Close task selector">{ICON_CLOSE}</button></header>
       <label htmlFor={searchId} className={preview ? 'hii-hidden' : ''}>Search tasks
         <MicInput id={searchId} aria-label="Search tasks" ref={input} data-draft-key={itemDraftKey(draftKey, 'query')} value={query} placeholder="Search by title, project, or full task ID" setText={setQuery} />
       </label>
@@ -98,7 +99,7 @@ export function ItemTaskSelector({ open, letterId, itemId, onClose, onChoose, on
           {page && page.tasks.length > 0 && <p>Showing {page.tasks.length} of {page.total}.{page.hasMore ? ' Refine your search.' : ''}</p>}
           {page?.hasMore && <button type="button" className="btn btn-sm hib-row-btn" disabled={moreLoading} onClick={() => void more()}>{moreLoading ? 'Loading more…' : 'Load more'}</button>}
         </div>}
-      <footer><div>Selected task: {selected?.title ?? 'None'}
+      <footer className="wn-dialog-foot"><div>Selected task: {selected?.title ?? 'None'}
         {selected?.phase === 'COMPLETE' && <p>This task is completed. Open it to review or choose an open task.</p>}</div>
         <button type="button" className="btn btn-sm hib-row-btn" onClick={onClose}>Cancel</button>
         <button type="button" className="btn btn-sm btn-primary" disabled={!selected || selected.phase === 'COMPLETE' || loading || error}

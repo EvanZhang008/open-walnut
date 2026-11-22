@@ -19,6 +19,7 @@ import { useCallback, useEffect, useId, useRef, useState, type RefObject } from 
 import { createPortal } from 'react-dom';
 import { getMailRules, putMailRules, renameMailGroup } from '@/api/mail-groups';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { AnswerBox } from '@/components/common/AnswerBox';
@@ -107,25 +108,15 @@ export function MailGroupCard({ request }: { request: MailGroupCardRequest }) {
     if (field instanceof HTMLInputElement) field.select();
   }, []);
 
-  useEffect(() => {
-    const onDown = (event: PointerEvent) => {
-      const node = event.target as Element | null;
-      if (saving || (node && typeof node.closest === 'function' && node.closest('.mail-group-card'))) return;
-      close(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || saving) return;
-      event.preventDefault();
-      event.stopPropagation();
-      close(true);
-    };
-    document.addEventListener('pointerdown', onDown, true);
-    document.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('pointerdown', onDown, true);
-      document.removeEventListener('keydown', onKey, true);
-    };
-  }, [close, saving]);
+  // Outside press closes, Esc closes and hands focus back; neither while a save runs.
+  useOverlayLayer({
+    passOutsideClick: true,
+    open: true,
+    refs: [cardRef],
+    closeOnEscape: !saving,
+    closeOnOutside: !saving,
+    onClose: (reason) => close(reason === 'escape'),
+  });
 
   const name = text.replace(/\s+/g, ' ').trim();
   const renameProblem = important || filter ? null
@@ -164,7 +155,7 @@ export function MailGroupCard({ request }: { request: MailGroupCardRequest }) {
   return createPortal(
     <div
       ref={cardRef}
-      className="mail-correct mail-group-card"
+      className="mail-correct mail-group-card wn-overlay"
       role="dialog"
       aria-modal="false"
       aria-labelledby={titleId}

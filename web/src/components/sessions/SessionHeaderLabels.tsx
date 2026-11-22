@@ -165,7 +165,7 @@ export function SessionHeaderLabels({ children }: { children: ReactNode }) {
       {createPortal(
         <div
           ref={menuRef}
-          className="session-header-labels-flyout"
+          className="session-header-labels-flyout wn-overlay"
           role="dialog"
           aria-label="Tags"
           hidden={!open}

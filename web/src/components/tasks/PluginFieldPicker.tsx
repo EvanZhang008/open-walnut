@@ -22,6 +22,7 @@ import { apiGet } from '@/api/client';
 import { setPluginFieldValue } from '@/api/tasks';
 import { useStoreTask, useTasksContextSafe } from '@/contexts/TasksContext';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 
 // ── Types + declared-fields cache (module-level, same pattern as useIntegrations) ──
 
@@ -174,7 +175,7 @@ export function PluginFieldFlyout({ open, anchorRef, anchorPoint, field, current
       ref={listRef}
       // task-kebab-project-flyout: reuse the flyout class family so host menus'
       // outside-click and scroll guards (which exempt it) cover this flyout too.
-      className="task-kebab-project-flyout plugin-field-flyout"
+      className="task-kebab-project-flyout plugin-field-flyout wn-overlay wn-menu"
       style={menuPlacementStyle(placement)}
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
@@ -272,6 +273,17 @@ export function PluginFieldPill({ task, field }: {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const { current, write } = usePluginField(task, field);
+  // The pill owns this flyout (no host menu around it): it closes on Escape or a press outside.
+  useOverlayLayer({
+    passOutsideClick: true,
+    open,
+    refs: [btnRef],
+    exemptSelectors: ['.plugin-field-flyout'],
+    onClose: (reason) => {
+      setOpen(false);
+      if (reason === 'escape') btnRef.current?.focus({ preventScroll: true });
+    },
+  });
   return (
     <>
       <button

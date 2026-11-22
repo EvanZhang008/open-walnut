@@ -13,6 +13,7 @@ import {
 } from './session-usage-model';
 import { SessionCostBlock } from './SessionCostBlock';
 import '@/styles/session-usage.css';
+import { ICON_CLOSE } from '../common/Icons';
 
 interface SessionUsageDialogProps {
   sessionId: string;
@@ -105,14 +106,14 @@ export function SessionUsageDialog({ sessionId, title, usage, onClose }: Session
   const parsed = draft ? parseBudgetLimit(draft.text) : null;
   const pauseLabel = budgetPauseLabel(data);
   return createPortal(
-    <div className="app-modal-overlay session-usage-overlay" onPointerDown={event => { event.stopPropagation(); if (event.target === event.currentTarget) onClose(); }}>
-      <div ref={setPanel} className="app-modal session-usage-dialog" role="dialog" aria-modal="true" aria-labelledby={labelId} tabIndex={-1} onPointerDown={event => event.stopPropagation()}>
-        <header className="session-usage-heading">
+    <div className="app-modal-overlay session-usage-overlay wn-scrim" onPointerDown={event => { event.stopPropagation(); if (event.target === event.currentTarget) onClose(); }}>
+      <div ref={setPanel} className="app-modal session-usage-dialog wn-dialog" role="dialog" aria-modal="true" aria-labelledby={labelId} tabIndex={-1} onPointerDown={event => event.stopPropagation()}>
+        <header className="session-usage-heading wn-dialog-head">
           <div>
             <h2 id={labelId} className="app-modal-title">Usage &amp; Budget</h2>
             <p className="session-usage-title">{title || data?.title || 'This session'}</p>
           </div>
-          <button type="button" className="session-usage-close" aria-label="Close Usage & Budget" onClick={onClose}>×</button>
+          <button type="button" className="btn btn-icon session-usage-close wn-dialog-close" aria-label="Close Usage & Budget" onClick={onClose}>{ICON_CLOSE}</button>
         </header>
         {!data && <p role="status">{usage.loading ? 'Checking the budget…' : 'The budget is unavailable.'}</p>}
         {usage.error && (
@@ -155,7 +156,7 @@ export function SessionUsageDialog({ sessionId, title, usage, onClose }: Session
             {data.checkedAt && <p className="session-usage-hint">Last checked: {new Date(data.checkedAt).toLocaleString()}</p>}
           </>
         )}
-        <footer className="app-modal-actions"><button type="button" className="btn" onClick={onClose}>Close</button></footer>
+        <footer className="app-modal-actions wn-dialog-foot"><button type="button" className="btn" onClick={onClose}>Close</button></footer>
       </div>
     </div>, document.body,
   );

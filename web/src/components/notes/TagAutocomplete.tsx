@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom';
 import type { Editor } from '@tiptap/core';
 import type { TagTriggerState } from './extensions/tag-trigger';
 import { normalizeTagName } from './extensions/tag-node';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 
 export interface TagSuggestion { tag: string; count: number }
 
@@ -63,30 +64,25 @@ export function TagAutocomplete({ editor, state, tags, onClose, onSelect }: TagA
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.isComposing || e.keyCode === 229) return;
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(); return; }
       if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); setSelectedIdx(i => Math.min(i + 1, Math.max(0, rowCount - 1))); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); setSelectedIdx(i => Math.max(i - 1, 0)); return; }
       if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); choose(selectedIdx); return; }
     };
     document.addEventListener('keydown', handleKeyDown, true);
     return () => document.removeEventListener('keydown', handleKeyDown, true);
-  }, [rowCount, selectedIdx, choose, onClose]);
+  }, [rowCount, selectedIdx, choose]);
 
-  useEffect(() => {
-    const handleClick = (e: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) onClose();
-    };
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [onClose]);
+  // Escape and an outside press close. Focus stays in the editor (no Tab trap: Tab picks a row),
+  // and the outside click goes through: a press on the toolbar or the text does what it says.
+  useOverlayLayer({ open: true, onClose, refs: [panelRef], trapFocus: false, passOutsideClick: true });
 
   if (!coords || rowCount === 0) return null;
 
   return createPortal(
     <div
       ref={panelRef}
-      className="notes-tag-panel"
-      style={{ position: 'fixed', left: coords.left, top: coords.top, zIndex: 10001 }}
+      className="notes-tag-panel wn-overlay wn-menu"
+      style={{ position: 'fixed', left: coords.left, top: coords.top, zIndex: 'var(--z-menu)' }}
     >
       {filtered.map((t, i) => (
         <div

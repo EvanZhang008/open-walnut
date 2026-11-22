@@ -136,7 +136,7 @@ function MentionCard({ member, anchor, onClose }: { member: Member; anchor: RefO
   const facts = mentionCardFacts(member, { ...(leads ? { leads } : {}), ...(phase ? { phase } : {}) });
   const openTask = useOpenTask();
   return createPortal(
-    <div ref={cardRef} role="dialog" aria-label={member.name} className="task-kebab-menu topic-mention-card" data-testid="topic-mention-card"
+    <div ref={cardRef} role="dialog" aria-label={member.name} className="task-kebab-menu topic-mention-card wn-overlay" data-testid="topic-mention-card"
       style={menuPlacementStyle(placement)} onPointerDown={(e) => e.stopPropagation()}>
       <div className="topic-mention-card-head">
         <MemberAvatar who={{ name: member.name, ref: member.ref }} size={40} />

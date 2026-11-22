@@ -6,6 +6,7 @@ import {
 } from '@/api/session-changes';
 import { timeAgo } from '@/utils/time';
 import { log } from '@/utils/log';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 
 /**
  * The Changed tab's "Compare" control: a button naming the current comparison
@@ -166,16 +167,15 @@ export function DiffComparePicker({ sessionId, compare, resolved, onChange }: {
     return () => window.removeEventListener('resize', onResize);
   }, [open, place]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node | null;
-      if (t && (popRef.current?.contains(t) || triggerRef.current?.contains(t))) return;
-      close(false);
-    };
-    document.addEventListener('mousedown', onDown, true);
-    return () => document.removeEventListener('mousedown', onDown, true);
-  }, [open, close]);
+  // Escape closes it and gives focus back to the Compare button; a press outside closes it
+  // in place. Tab is not trapped: it leaves the picker (onKeyDown below closes it).
+  useOverlayLayer({
+    passOutsideClick: true,
+    open,
+    onClose: (reason) => close(reason === 'escape'),
+    refs: [popRef, triggerRef],
+    trapFocus: false,
+  });
 
   // Placed in the same update that opens it, so the popover and its focused
   // filter exist before the next key: typing right after the click is not lost.
@@ -289,7 +289,6 @@ export function DiffComparePicker({ sessionId, compare, resolved, onChange }: {
   }, [open, loading, items, active, pick]);
 
   const onKeyDown = (e: ReactKeyboardEvent) => {
-    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
     // Tab leaves the picker: it closes and focus goes back to the Compare button.
     if (e.key === 'Tab') { e.preventDefault(); close(); return; }
     if (e.key === 'ArrowDown') { e.preventDefault(); movedRef.current = true; setActive((a) => Math.min(items.length - 1, a + 1)); return; }
@@ -394,12 +393,13 @@ export function DiffComparePicker({ sessionId, compare, resolved, onChange }: {
       {open && pos && createPortal(
         <div
           ref={popRef}
-          className="session-diff-compare-pop"
+          className="session-diff-compare-pop wn-overlay wn-menu"
           role="dialog"
           aria-label="Compare with"
           style={{ left: pos.left, top: pos.top, width: pos.width, maxHeight: pos.maxHeight }}
           onKeyDown={onKeyDown}
           onBlur={onBlur}
+          onPointerDown={(e) => e.stopPropagation()}
         >
           <div className="sdc-search">
             <input

@@ -8,6 +8,7 @@ import { createPortal } from 'react-dom';
 import type { Editor } from '@tiptap/core';
 import type { WikiLinkState } from './WikiLinkExtension';
 import type { NoteListItem } from '@/api/notes-v2';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 
 interface WikiLinkAutocompleteProps {
   editor: Editor;
@@ -74,13 +75,6 @@ export function WikiLinkAutocomplete({
   // Keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
-        return;
-      }
-
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         e.stopPropagation();
@@ -106,22 +100,15 @@ export function WikiLinkAutocomplete({
     // The `true` flag registers in the capture phase, which fires before the
     // bubble phase. This is essential because ProseMirror consumes keyboard
     // events during the bubble phase; listening in the bubble phase would mean
-    // our handler never receives ArrowUp/ArrowDown/Enter/Tab/Escape when the
+    // our handler never receives ArrowUp/ArrowDown/Enter/Tab when the
     // editor is focused.
     document.addEventListener('keydown', handleKeyDown, true);
     return () => document.removeEventListener('keydown', handleKeyDown, true);
-  }, [filtered, selectedIdx, onClose, handleSelect]);
+  }, [filtered, selectedIdx, handleSelect]);
 
-  // Click outside
-  useEffect(() => {
-    const handleClick = (e: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
-        onClose();
-      }
-    };
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [onClose]);
+  // Escape and an outside press close. Focus stays in the editor (no Tab trap: Tab picks a row),
+  // and the outside click goes through: a press on the toolbar or the text does what it says.
+  useOverlayLayer({ open: true, onClose, refs: [panelRef], trapFocus: false, passOutsideClick: true });
 
   if (!coords) return null;
 
@@ -131,12 +118,12 @@ export function WikiLinkAutocomplete({
   return createPortal(
     <div
       ref={panelRef}
-      className="notes-wikilink-panel"
+      className="notes-wikilink-panel wn-overlay wn-menu"
       style={{
         position: 'fixed',
         left: coords.left,
         top: coords.top,
-        zIndex: 10001,
+        zIndex: 'var(--z-menu)',
       }}
     >
       {filtered.length === 0 && !showCreateOption ? (

@@ -5,6 +5,7 @@ import { TaskStateIcon } from '@/components/common/TaskStateIcon';
 import { taskIconState } from '@/utils/task-icon-state';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { useKeyboardOpenFocus } from '@/hooks/useKeyboardOpenFocus';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import { resolveTaskSessionId, taskStatusLabel } from '@/utils/session-status';
@@ -42,7 +43,7 @@ const ICON_UNLINK = (
  *
  * Overlay rules (web/src/AGENTS.md): placed by useMenuPlacement, portalled to
  * <body>, root stops pointerdown propagation (the rows are dnd-kit draggables),
- * outside-click closer exempts `.leader-subtasks-flyout`. The list's last row,
+ * closes through useOverlayLayer (outside press, Escape). The list's last row,
  * "Adopt a task…", swaps it for the AdoptWorkerFlyout on the same pill.
  */
 export function LeaderPill({ task, className }: { task: Task; className?: string }) {
@@ -74,32 +75,9 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
     if (open && subtasks.length === 0) setOpen(false);
   }, [open, subtasks.length]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (e: PointerEvent) => {
-      const target = e.target as Element | null;
-      if (!target) return;
-      if (target.closest('.leader-subtasks-flyout')) return;
-      if (triggerRef.current?.contains(target)) return;
-      close(false);
-    };
-    // Capture phase: every pill on a row stops its own pointerdown, so a press on the next
-    // pill would never reach a bubbling listener and two flyouts would stay open.
-    document.addEventListener('pointerdown', onPointerDown, true);
-    return () => document.removeEventListener('pointerdown', onPointerDown, true);
-  }, [open, close]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      e.stopPropagation();
-      close(true);
-    };
-    document.addEventListener('keydown', onKey, true);
-    return () => document.removeEventListener('keydown', onKey, true);
-  }, [open, close]);
+  // One close policy with every popover: the layer hears presses in the capture phase, so a
+  // press on the next pill (which stops its own pointerdown) still closes this one.
+  useOverlayLayer({ passOutsideClick: true, open, refs: [menuRef, triggerRef], onClose: (reason) => close(reason === 'escape') });
 
   if (subtasks.length === 0) return null;
 
@@ -155,7 +133,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
         ? createPortal(
             <div
               ref={menuRef}
-              className="leader-subtasks-flyout"
+              className="leader-subtasks-flyout wn-overlay wn-menu"
               role="dialog"
               aria-label="Subtasks of this task"
               data-testid="leader-subtasks-flyout"

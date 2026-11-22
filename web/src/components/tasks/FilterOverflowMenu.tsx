@@ -98,7 +98,7 @@ export function FilterOverflowMenu({ anchorRef, chips, chipMenuDim, onOpenChipMe
   return createPortal(
     <div
       ref={ref}
-      className="fb-overflow-menu tp-pop"
+      className="fb-overflow-menu tp-pop wn-overlay"
       role="dialog"
       aria-label="More active filters"
       style={menuPlacementStyle(placement)}

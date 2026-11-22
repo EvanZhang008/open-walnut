@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { SlashCommand } from '../../commands/types';
+import { useMoreBelow } from '@/hooks/useMoreBelow';
 
 /** Minimal shape required for palette rendering. Both SlashCommand and SlashCommandItem satisfy this. */
 export interface PaletteItem {
@@ -42,6 +43,7 @@ const SOURCE_LABELS: Record<string, string> = {
 
 export function CommandPalette<T extends PaletteItem = SlashCommand>({ commands, selectedIndex, onSelect, showSource, onRefresh, refreshing, footerNote }: CommandPaletteProps<T>) {
   const listRef = useRef<HTMLDivElement>(null);
+  const more = useMoreBelow(listRef, [commands.length]);
 
   useEffect(() => {
     const list = listRef.current;
@@ -53,8 +55,8 @@ export function CommandPalette<T extends PaletteItem = SlashCommand>({ commands,
   if (commands.length === 0) return null;
 
   return (
-    <div className="command-palette-wrap">
-      <div className="command-palette" ref={listRef}>
+    <div className="command-palette-wrap wn-overlay">
+      <div className="command-palette" ref={listRef} data-more={more ? 'true' : undefined}>
         {commands.map((cmd, i) => (
           <div
             key={cmd.name}

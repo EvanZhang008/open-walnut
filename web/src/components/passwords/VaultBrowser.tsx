@@ -4,11 +4,9 @@
  * opened item (with its secrets) lives only in memory and is dropped on lock.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { vaultApi, VaultApiError, isLockedError, type SecurityReport, type VaultItem, type VaultItemSummary, type VaultStatus } from '@/api/vault'
 import { usePageView } from '@/utils/view-memory'
-import { useMenuPlacement } from '@/hooks/useMenuPlacement'
 import { log } from '@/utils/log'
 import type { VaultItemType } from '../../../../src/core/vault/types'
 import { displayHost } from '../../../../src/core/vault/url-match'
@@ -17,7 +15,7 @@ import {
   type PasswordsSection, type PasswordsSort,
 } from './passwords-model'
 import { ItemView, SiteTile } from './ItemView'
-import { ItemEditor } from './ItemEditor'
+import { ItemEditor, PasswordsPopover } from './ItemEditor'
 import { ImportDialog } from './ImportDialog'
 import { GeneratorPanel } from './GeneratorPanel'
 import { AgentActivity } from './AgentActivity'
@@ -41,22 +39,15 @@ type Editing = null | { kind: 'new'; type: VaultItemType } | { kind: 'edit'; ite
 function NewItemButton({ onPick }: { onPick: (t: VaultItemType) => void }) {
   const [newMenuOpen, setNewMenuOpen] = useState(false)
   const trigger = useRef<HTMLButtonElement>(null)
-  const menu = useRef<HTMLDivElement>(null)
-  const place = useMenuPlacement(newMenuOpen, trigger, menu, { minHeight: 120, onAnchorLost: () => setNewMenuOpen(false) })
+  const close = () => setNewMenuOpen(false)
   return (
     <>
       <button ref={trigger} type="button" className="btn btn-icon pw-new-btn" aria-label="New item" title="New item" aria-expanded={newMenuOpen} onClick={() => setNewMenuOpen((o) => !o)}><PlusIcon /></button>
-      {newMenuOpen && createPortal(
-        <div className="pw-popover-backdrop" onPointerDown={(e) => { if (e.target === e.currentTarget) setNewMenuOpen(false) }}>
-          <div ref={menu} className="pw-menu" role="menu" onPointerDown={(e) => e.stopPropagation()}
-            style={place ? { top: place.top, right: place.right, maxHeight: place.maxHeight } : { visibility: 'hidden' }}>
-            {NEW_TYPES.map((t) => (
-              <button key={t} type="button" role="menuitem" className="pw-menu-item" onClick={() => { setNewMenuOpen(false); onPick(t) }}>New {typeLabel(t).toLowerCase()}</button>
-            ))}
-          </div>
-        </div>,
-        document.body,
-      )}
+      <PasswordsPopover open={newMenuOpen} onClose={close} triggerRef={trigger} menu minHeight={120}>
+        {NEW_TYPES.map((t) => (
+          <button key={t} type="button" role="menuitem" className="pw-menu-item" onClick={() => { close(); onPick(t) }}>New {typeLabel(t).toLowerCase()}</button>
+        ))}
+      </PasswordsPopover>
     </>
   )
 }
@@ -64,22 +55,14 @@ function NewItemButton({ onPick }: { onPick: (t: VaultItemType) => void }) {
 function GeneratorToolButton() {
   const [generatorPopoverOpen, setGeneratorPopoverOpen] = useState(false)
   const trigger = useRef<HTMLButtonElement>(null)
-  const menu = useRef<HTMLDivElement>(null)
-  const place = useMenuPlacement(generatorPopoverOpen, trigger, menu, { minHeight: 260, align: 'left', onAnchorLost: () => setGeneratorPopoverOpen(false) })
   return (
     <>
       <button ref={trigger} type="button" className="pw-side-item" aria-expanded={generatorPopoverOpen} onClick={() => setGeneratorPopoverOpen((o) => !o)}>
         <span className="pw-side-icon"><DiceIcon /></span><span className="pw-side-label">Generator</span>
       </button>
-      {generatorPopoverOpen && createPortal(
-        <div className="pw-popover-backdrop" onPointerDown={(e) => { if (e.target === e.currentTarget) setGeneratorPopoverOpen(false) }}>
-          <div ref={menu} className="pw-popover" onPointerDown={(e) => e.stopPropagation()}
-            style={place ? { top: place.top, right: place.right, maxHeight: place.maxHeight } : { visibility: 'hidden' }}>
-            <GeneratorPanel />
-          </div>
-        </div>,
-        document.body,
-      )}
+      <PasswordsPopover open={generatorPopoverOpen} onClose={() => setGeneratorPopoverOpen(false)} triggerRef={trigger} minHeight={260} align="left">
+        <GeneratorPanel />
+      </PasswordsPopover>
     </>
   )
 }

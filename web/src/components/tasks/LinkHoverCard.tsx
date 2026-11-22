@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import '@/styles/link-hover-card.css';
 
 /**
@@ -68,21 +69,16 @@ function LinkHoverCard({ info, anchor, onGone }: { info: LinkHoverInfo; anchor: 
     return () => window.removeEventListener('scroll', onGone, true);
   }, [onGone]);
 
-  // Escape closes the card first, and only the card: a list it opened from (the session
-  // header's tags) leaves the press to it while it shows, and closes on the next one.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      e.stopPropagation();
-      onGone();
-    };
-    document.addEventListener('keydown', onKey, true);
-    return () => document.removeEventListener('keydown', onKey, true);
-  }, [onGone]);
+  // Escape closes the card first, and only the card: it is the top overlay layer, so a list it
+  // opened from (the session header's tags) leaves the press to it while it shows, and closes on
+  // the next one. Focus stays on the pill (no trap), and a press outside goes through: the card
+  // is information, never in the way of a click.
+  const anchorRef = useRef<HTMLElement | null>(anchor);
+  anchorRef.current = anchor;
+  useOverlayLayer({ open: true, refs: [ref, anchorRef], onClose: onGone, trapFocus: false, passOutsideClick: true });
 
   return createPortal(
-    <div ref={ref} className="link-hover-card" role="tooltip" style={style} data-testid="link-hover-card">
+    <div ref={ref} className="link-hover-card wn-overlay" role="tooltip" style={style} data-testid="link-hover-card">
       <div className="link-hover-card-head">
         {info.name && <span className="link-hover-card-name">{info.name}</span>}
         <span className="link-hover-card-kind">{info.kind}</span>

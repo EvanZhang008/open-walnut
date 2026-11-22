@@ -353,9 +353,9 @@ export function FirstRunDialog({ steps, mode, onClose, onAddByHand }: {
 
   return createPortal(
     <ModalOverlayOwner.Provider value={owner}>
-      <div className="app-modal-overlay fr-overlay" role="dialog" aria-modal="true" aria-label={mode === 'picker' ? 'Add machines from your SSH config' : 'Set up Walnut'} data-testid="first-run-dialog">
-        <div className="app-modal fr-modal" ref={modalRef} tabIndex={-1}>
-          <div className="fr-head">
+      <div className="app-modal-overlay fr-overlay wn-scrim" role="dialog" aria-modal="true" aria-label={mode === 'picker' ? 'Add machines from your SSH config' : 'Set up Walnut'} data-testid="first-run-dialog">
+        <div className="app-modal fr-modal wn-dialog" ref={modalRef} tabIndex={-1}>
+          <div className="fr-head wn-dialog-head">
             <div className="app-modal-title">{mode === 'picker' ? 'Remote Hosts' : 'Set up Walnut'}</div>
             {steps.length > 1 && (
               <div className="fr-dots" aria-label={`Step ${index + 1} of ${steps.length}`}>
@@ -368,7 +368,7 @@ export function FirstRunDialog({ steps, mode, onClose, onAddByHand }: {
             {!config && !loadError && <div className="fr-state fr-state-busy"><span className="fr-spinner" aria-hidden="true" />Looking for your machines…</div>}
             {config && step === 'hosts' && <HostsStep hosts={config.hosts} saidYes={saidYes} onSaidYes={onSaidYes} onUndone={onUndone} onAddByHand={onAddByHand} />}
           </div>
-          <div className="fr-foot">
+          <div className="fr-foot wn-dialog-foot">
             <span className="fr-later" data-testid="first-run-later">
               {connectingHere
                 ? 'Connecting keeps going in the background: you can close this.'

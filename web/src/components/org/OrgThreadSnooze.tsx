@@ -94,7 +94,7 @@ export function OrgThreadSnooze({ title, current, onSnooze }: {
       {open && createPortal(
         <div
           ref={menuRef}
-          className="org-answer-menu org-snooze-menu"
+          className="org-answer-menu org-snooze-menu wn-overlay"
           role="dialog"
           aria-label={`Snooze "${title}" until`}
           data-testid="org-thread-snooze-menu"

@@ -283,7 +283,6 @@
   width: min(600px, calc(100vw - 48px));
   max-height: calc(100vh - min(10vh, 80px) - 40px);
   overflow: auto;
-  background: var(--card-bg);
 }
 /* The title and its close stay in view while a long list scrolls under them. */
 .project-scripts-head {

@@ -34,8 +34,8 @@ export function RewindGuardStep({ guard, busy, error, onConversationOnly, onRest
   const files = guard.conflicts;
   const n = files.length;
   return createPortal(
-    <div className="app-modal-overlay rewind-dialog-overlay" role="dialog" aria-modal="true" aria-label="Files changed since this session wrote them" onMouseDown={onCancel}>
-      <div className="app-modal rewind-dialog rewind-guard-dialog" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="app-modal-overlay rewind-dialog-overlay wn-scrim" role="dialog" aria-modal="true" aria-label="Files changed since this session wrote them" onMouseDown={onCancel}>
+      <div className="app-modal rewind-dialog rewind-guard-dialog wn-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="app-modal-title">{n === 1 ? 'A file changed' : `${n} files changed`} after this session wrote {n === 1 ? 'it' : 'them'}</div>
         <div className="app-modal-message">
           Restoring files puts back this session’s earlier version and throws away {n === 1 ? 'this change' : 'these changes'}.
@@ -50,7 +50,7 @@ export function RewindGuardStep({ guard, busy, error, onConversationOnly, onRest
           {n > MAX_ROWS && <div className="rewind-dialog-file-more">+{n - MAX_ROWS} more</div>}
         </div>
         {error && <div className="rewind-dialog-error">{error}</div>}
-        <div className="app-modal-actions rewind-guard-actions">
+        <div className="app-modal-actions rewind-guard-actions wn-dialog-foot">
           <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={busy}>Cancel</button>
           <button type="button" className="btn btn-primary btn-danger" onClick={onRestoreAnyway} disabled={busy}>Restore anyway</button>
           <button type="button" className="btn btn-primary" onClick={onConversationOnly} disabled={busy}>

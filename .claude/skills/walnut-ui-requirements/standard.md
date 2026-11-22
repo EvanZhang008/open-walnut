@@ -298,6 +298,30 @@ twice). `tests/e2e/browser/chat-reading.spec.ts` measures the column, the scale,
 one notice and the split's first row; `step-row-lines.spec.ts` checks the cut-row cue on every row
 kind.
 
+## Overlays: menus, popovers, hover cards, tooltips, dialogs
+
+Every surface that floats over the page is one of five classes in `web/src/styles/overlay-family.css`,
+and closes through one hook. Its own CSS keeps only its size, padding and content layout.
+
+| Kind | Class | Look | Closes with |
+|---|---|---|---|
+| Menu (a list of rows) | `wn-overlay wn-menu` | solid raised surface (`--overlay-glass-bg`), 1 px `--overlay-border`, corner `--overlay-radius` (12 px), `--overlay-shadow`, 4 px inside, rows at `--overlay-row-radius` (8 px), layer `--z-menu` | `useOverlayLayer` (Escape closes only the top layer; an outside press closes and its click is swallowed), placed by `useMenuPlacement` |
+| Popover, flyout, hover card, chart readout | `wn-overlay` | the same frame; its own padding | the same |
+| Dialog panel | `wn-dialog` over a `wn-scrim` | the same surface at `--dialog-radius` (16 px); header `wn-dialog-head` (title, then ONE `wn-dialog-close` at the right, drawing `{ICON_CLOSE}` from `web/src/components/common/Icons.tsx`), footer `wn-dialog-foot` (buttons right-aligned, 8 px apart) | `useModalOverlay` (Escape, scroll lock, nesting; a dialog opened over a popover owns Escape) |
+| Scrim | `wn-scrim` | `--overlay-bg` (30% black light, 50% dark), layer `--z-modal`; an image viewer keeps its dark stage | the dialog's |
+| Tooltip | `wn-tip` | dark in both themes (`--tip-bg`), corner 8 px, 12 px text, one line, layer `--z-tooltip` | hover and focus |
+
+- Menus and popovers stay SOLID: rows were unreadable through WebKit glass (2026-11-04,
+  `overlay-glass.css`); only the overlays in `GLASS_OVERLAYS` (`tests/web/overlays-opaque.test.ts`)
+  add `wn-glass`, which then owns the material while `wn-overlay` keeps the corner and the layer.
+- Layers come only from the tokens (`--z-raised`, `--z-sticky`, `--z-dock`, `--z-sheet`, `--z-notice`,
+  `--z-modal`, `--z-menu`, `--z-tooltip`, `--z-system`), never a number of its own.
+- `tests/web/overlay-family-ratchet.test.ts` finds every portalled overlay from the source and counts,
+  per file, the ones off the family, without a close hook, with a hand-written Escape, with a frame of
+  their own in CSS, and tooltips without `wn-tip`; the counts only go down.
+  `tests/e2e/browser/overlay-family.spec.ts` opens a list of them on the page and checks the window
+  edges, the corner, the layer, Escape and an outside press.
+
 ## Status labels
 
 Why (2026-11-21, the user, of the pill-shaped controls): "什么鬼东西都要是圆形的呀？所有东西都应该统一啊"

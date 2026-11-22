@@ -34,6 +34,7 @@ import { createPortal } from 'react-dom';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { LOCAL_HOST, type EngineSettingsWriteScope } from '@/api/engine-settings';
 import { useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { findItem, sessionsGroup } from '@/hooks/engine-settings-model';
 import {
   aboutScopeLine, dialogAriaLabel, hostLabel, scopeUnavailableReason, shortenCwd, splitCwdShort,
@@ -53,6 +54,7 @@ import '@/styles/engine-settings.css';
 import '@/styles/engine-settings-popover.css';
 import '@/styles/engine-settings-popover-rows.css';
 import '@/styles/engine-settings-popover-footer.css';
+import { hasActiveModalOverlay } from '@/hooks/useModalOverlay';
 
 export type EngineSettingsCloseReason = 'escape' | 'close' | 'outside' | 'link' | 'anchor-lost';
 
@@ -217,20 +219,24 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
     if (open && placement) rootRef.current?.focus({ preventScroll: true });
   }, [open, placed]);
 
-  // Outside closer: capture-phase pointerdown anywhere outside the root. The
-  // anchor is NOT exempt: a press on "+" closes this and the click that
-  // follows opens the menu, one state flip each.
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (e: PointerEvent) => {
-      const root = rootRef.current;
-      if (!root || root.contains(e.target as Node)) return;
+  // One overlay layer for the outside press: anywhere outside the root closes it.
+  // The anchor is NOT exempt and the click goes through: a press on "+" closes
+  // this and the click that follows opens the menu, one state flip each (the
+  // composer's textarea takes its caret the same way). Escape and Tab stay the
+  // root's own (below): a row's input, a native select, the filter and the About
+  // overlay each take an Escape before the popover does, which a window-level
+  // Escape would steal from them.
+  useOverlayLayer({
+    open,
+    refs: [rootRef],
+    closeOnEscape: false,
+    trapFocus: false,
+    passOutsideClick: true,
+    onClose: () => {
       (document.activeElement as HTMLElement | null)?.blur?.();
       requestAnimationFrame(() => close('outside'));
-    };
-    document.addEventListener('pointerdown', onPointerDown, true);
-    return () => document.removeEventListener('pointerdown', onPointerDown, true);
-  }, [open, close]);
+    },
+  });
 
   const returnFocusAndClose = useCallback((reason: EngineSettingsCloseReason) => {
     const anchor = anchorRef.current;
@@ -246,7 +252,8 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
     if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
       const root = rootRef.current;
-      if (!root || focusInside(root)) return;
+      // A dialog opened over the popover (an approval) takes the keys first.
+      if (!root || focusInside(root) || hasActiveModalOverlay()) return;
       if (e.key === 'Escape') {
         e.preventDefault();
         if (aboutOpen) { setAboutOpen(false); aboutButtonRef.current?.focus(); return; }
@@ -355,7 +362,7 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
   return createPortal(
     <div
       ref={rootRef}
-      className="engine-settings-popover"
+      className="engine-settings-popover wn-overlay"
       role="dialog"
       tabIndex={-1}
       data-testid="engine-settings-popover"

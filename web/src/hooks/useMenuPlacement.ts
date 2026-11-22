@@ -350,12 +350,17 @@ export function useMenuPlacement(
       // the trigger button's box.
       const trigger = triggerRef.current;
       const triggerRect = trigger?.getBoundingClientRect();
-      // Phone: a menu opened from inside a composer clears the whole composer
-      // (spec 4.4: popovers open above it, under the top bar), not just its pill.
+      // A menu opened from inside a composer clears the whole composer, not just its pill: on the
+      // phone (spec 4.4: popovers open above it, under the top bar), and on the desktop for a menu
+      // that opens upward (2026-11-22 audit: the permission-mode menu and the send menu covered the
+      // first line of the draft).
       const vertical = verticalAnchorRef?.current
         ?? (bounds === 'visual'
           ? trigger?.closest<HTMLElement>('.session-panel-input') ?? trigger?.closest<HTMLElement>('.chat-input-container') ?? null
-          : null);
+          // Not a submenu: a trigger inside another menu (the "+" menu's More) opens beside its row.
+          : preferSide === 'up' && !beside && !trigger?.closest('.wn-menu, [role="menu"]')
+            ? trigger?.closest<HTMLElement>('.chat-input-container') ?? null
+            : null);
       // Vertical anchor: the element's own top/bottom, the trigger's left/right.
       const r = anchorPoint
         ? (anchorPoint.right !== undefined
@@ -586,7 +591,7 @@ export function menuPlacementStyle(p: MenuPlacement | null): CSSProperties {
     // be measurable. pointerEvents:none because an element at left:-9999 is
     // still hit-testable and still matches Playwright's `:visible`, so without
     // it a click could land on the unplaced frame.
-    return { position: 'fixed', top: 0, left: -9999, zIndex: 9999, pointerEvents: 'none' };
+    return { position: 'fixed', top: 0, left: -9999, zIndex: 'var(--z-menu)', pointerEvents: 'none' };
   }
-  return { position: 'fixed', top: p.top, right: p.right, maxHeight: p.maxHeight, zIndex: 9999 };
+  return { position: 'fixed', top: p.top, right: p.right, maxHeight: p.maxHeight, zIndex: 'var(--z-menu)' };
 }

@@ -27,6 +27,7 @@ import { useStoreTask } from '@/contexts/TasksContext';
 import { avatarFileValue } from './avatar-upload';
 import { Tabs } from '@/components/controls';
 import '@/styles/org-avatar-dialog.css';
+import { ICON_CLOSE } from '../common/Icons';
 
 type Tab = 'presets' | 'ai' | 'upload';
 const TABS: ReadonlyArray<[Tab, string]> = [['presets', 'Presets'], ['ai', 'Ask AI to draw'], ['upload', 'Upload']];
@@ -135,12 +136,12 @@ export function OrgAvatarDialog({ target, onRename, onClose }: Props) {
   const titleId = `org-avatar-title-${target.taskId}`;
   return createPortal(
     <ModalOverlayOwner.Provider value={modalOwner}>
-      <div className="app-modal-overlay org-avatar-overlay" onMouseDown={onClose}>
-        <div className="app-modal org-avatar-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} data-testid="org-avatar-dialog"
+      <div className="app-modal-overlay org-avatar-overlay wn-scrim" onMouseDown={onClose}>
+        <div className="app-modal org-avatar-dialog wn-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} data-testid="org-avatar-dialog"
           ref={box} tabIndex={-1} onMouseDown={(e) => e.stopPropagation()}>
-          <header className="org-avatar-head">
+          <header className="org-avatar-head wn-dialog-head">
             <h2 id={titleId}>Edit {target.name}</h2>
-            <button type="button" className="org-avatar-close" aria-label="Close" onClick={onClose}>×</button>
+            <button type="button" className="btn btn-icon wn-dialog-close" aria-label="Close" onClick={onClose}>{ICON_CLOSE}</button>
           </header>
           <div className="org-avatar-who">
             <img className="org-avatar-now" src={shown} width={64} height={64} alt="" data-testid="org-avatar-current" />
@@ -211,7 +212,7 @@ export function OrgAvatarDialog({ target, onRename, onClose }: Props) {
             )}
             {error && <p className="org-avatar-error" role="alert" data-testid="org-avatar-error">{error}</p>}
           </div>
-          <footer className="org-avatar-foot">
+          <footer className="org-avatar-foot wn-dialog-foot">
             <button type="button" className="btn" disabled={busy || !current.custom} data-testid="org-avatar-reset" onClick={() => saveAs({ reset: true })}>Reset to default</button>
             <span className="org-avatar-gap" />
             <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>

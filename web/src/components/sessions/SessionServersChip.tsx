@@ -125,7 +125,7 @@ export function SessionServersChip({ servers, activePort, onOpen, compact = fals
         ? createPortal(
             <div
               ref={cardRef}
-              className="session-web-card"
+              className="session-web-card wn-overlay"
               role="dialog"
               aria-label="Servers this session started"
               data-testid="session-web-card"

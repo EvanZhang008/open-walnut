@@ -27,6 +27,7 @@
 import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { useProjectActions } from '@/hooks/useProjectActions';
 import { projectDisplayName } from '@/utils/project-display';
 import { rowAnchorOf, scrollMovedRow, type RowAnchor } from '@/utils/cursor-menu-scroll';
@@ -52,26 +53,17 @@ function useHeaderMenu() {
     setOpen(true);
   }, []);
 
+  useOverlayLayer({ passOutsideClick: true, open, refs: [menuRef, btnRef], onClose: closeMenu });
   useEffect(() => {
     if (!open) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (btnRef.current?.contains(e.target as Node)) return;
-      if (menuRef.current?.contains(e.target as Node)) return;
-      closeMenu();
-    };
-    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeMenu(); };
     const handleScroll = (e: Event) => {
       if (menuRef.current?.contains(e.target as Node)) return;
       if (cursorAnchor) { if (scrollMovedRow(rowAnchor.current, e.target)) closeMenu(); return; }
       const r = btnRef.current?.getBoundingClientRect();
       if (r && (r.bottom < 0 || r.top > window.innerHeight)) closeMenu();
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    document.addEventListener('keydown', handleKey);
     window.addEventListener('scroll', handleScroll, true);
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleKey);
       window.removeEventListener('scroll', handleScroll, true);
     };
   }, [open, closeMenu, cursorAnchor]);
@@ -156,10 +148,8 @@ function PlusControl({ actions, restLabel, wrapClassName }: {
         // would arm a reorder while the user is just pressing "+".
         onPointerDown={(e) => e.stopPropagation()}
         // ONLY the keys the host row itself acts on (a tier sublabel toggles its
-        // collapse on Enter/Space). A blanket stopPropagation here also swallowed
-        // ESCAPE — the button keeps focus after opening the menu, so the document
-        // keydown listener that closes it never saw the key and the menu could only
-        // be dismissed by clicking away.
+        // collapse on Enter/Space). A blanket stopPropagation here once swallowed
+        // ESCAPE, and the menu could only be dismissed by clicking away.
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); }}
         title={title}
         aria-label={title}
@@ -171,7 +161,7 @@ function PlusControl({ actions, restLabel, wrapClassName }: {
       {open && !single && createPortal(
         <div
           ref={menuRef}
-          className="task-kebab-menu"
+          className="task-kebab-menu wn-overlay wn-menu"
           style={menuPlacementStyle(menuPos)}
           onPointerDown={(e) => e.stopPropagation()}
           data-testid="plus-menu"
@@ -308,7 +298,7 @@ export function ProjectKebabMenu({ project, isFavorite, onToggleFavorite, onView
       {open && createPortal(
         <div
           ref={menuRef}
-          className="task-kebab-menu"
+          className="task-kebab-menu wn-overlay wn-menu"
           style={menuPlacementStyle(menuPos)}
           // Rail rows are dnd-kit sortables — a pointerdown inside the menu
           // bubbles through the portal to the row's PointerSensor and arms a

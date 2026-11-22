@@ -1,5 +1,5 @@
-import { useEffect, useCallback } from 'react';
 import { useYieldsToTaskOpen } from '@/hooks/useOpenTask';
+import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { createPortal } from 'react-dom';
 import { MarkdownEditorPanel } from './MarkdownEditorPanel';
 import type { RawFlushIO } from './MarkdownEditorPanel';
@@ -29,30 +29,19 @@ interface GlobalNotesPopupProps {
 }
 
 export function GlobalNotesPopup({ content, onDirty, saving, onClose, tasks, focusedTaskId }: GlobalNotesPopupProps) {
-  const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    if (e.key === 'Escape') onClose();
-  }, [onClose]);
+  // Escape and the shared scroll lock; a picker inside the editor that took the key keeps it.
+  useModalOverlay(onClose);
   // A task link in the notes opens on Home: the popup gives way.
   useYieldsToTaskOpen(onClose);
 
-  useEffect(() => {
-    document.addEventListener('keydown', handleKeyDown);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      document.body.style.overflow = prev;
-    };
-  }, [handleKeyDown]);
-
   return createPortal(
-    <div className="notes-popup-overlay" role="dialog" aria-modal="true" aria-label="Global Notes" onClick={onClose}>
-      <div className="notes-popup-container" onClick={e => e.stopPropagation()}>
-        <div className="notes-popup-header">
+    <div className="notes-popup-overlay wn-scrim" role="dialog" aria-modal="true" aria-label="Global Notes" onClick={onClose}>
+      <div className="notes-popup-container wn-dialog" onClick={e => e.stopPropagation()}>
+        <div className="notes-popup-header wn-dialog-head">
           <span className="notes-popup-title">Global Notes</span>
           <div className="notes-popup-actions">
             {saving && <span className="notes-popup-saving">Saving...</span>}
-            <button className="notes-popup-close" onClick={onClose} aria-label="Collapse notes" title="Collapse notes">{ICON_COLLAPSE}</button>
+            <button className="btn btn-icon notes-popup-close wn-dialog-close" onClick={onClose} aria-label="Collapse notes" title="Collapse notes">{ICON_COLLAPSE}</button>
           </div>
         </div>
         <div className="notes-popup-body">

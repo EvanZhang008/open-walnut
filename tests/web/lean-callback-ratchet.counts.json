@@ -93,7 +93,6 @@
   "web/src/components/memory/MemoryContentPanel.tsx": [1, 0],
   "web/src/components/memory/MemoryTreePanel.tsx": [1, 0],
   "web/src/components/notes/CommandPalette.tsx": [3, 0],
-  "web/src/components/notes/GlobalNotesPopup.tsx": [1, 0],
   "web/src/components/notes/MarkdownEditorPanel.tsx": [5, 0],
   "web/src/components/notes/NoteZoom.tsx": [6, 0],
   "web/src/components/notes/NotesBubbleMenu.tsx": [5, 1],

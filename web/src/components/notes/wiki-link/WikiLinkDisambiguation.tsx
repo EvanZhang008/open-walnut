@@ -5,9 +5,10 @@
  * path (id is display-only here); we never silently mis-resolve.
  */
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import type { NoteListItem } from '@/api/notes-v2';
+import { useModalOverlay } from '@/hooks/useModalOverlay';
 
 interface WikiLinkDisambiguationProps {
   /** The link text the user clicked. */
@@ -20,7 +21,6 @@ interface WikiLinkDisambiguationProps {
 
 export function WikiLinkDisambiguation({ target, candidates, onPick, onClose }: WikiLinkDisambiguationProps) {
   const [selectedIdx, setSelectedIdx] = useState(0);
-  const panelRef = useRef<HTMLDivElement>(null);
 
   const pick = useCallback(
     (idx: number) => {
@@ -30,15 +30,14 @@ export function WikiLinkDisambiguation({ target, candidates, onPick, onClose }: 
     [candidates, onPick],
   );
 
-  // Keyboard: arrows to move, Enter to pick, Esc to close. Capture phase so the
-  // editor's own keymap doesn't swallow the keys while it still holds focus.
+  // Escape, the shared scroll lock and nesting: the editor lets Escape through (NotesEditor).
+  useModalOverlay(onClose);
+
+  // Keyboard: arrows to move, Enter to pick. Capture phase so the editor's own
+  // keymap doesn't swallow the keys while it still holds focus.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
-      } else if (e.key === 'ArrowDown') {
+      if (e.key === 'ArrowDown') {
         e.preventDefault();
         e.stopPropagation();
         setSelectedIdx((i) => Math.min(i + 1, candidates.length - 1));
@@ -54,19 +53,19 @@ export function WikiLinkDisambiguation({ target, candidates, onPick, onClose }: 
     };
     document.addEventListener('keydown', onKey, true);
     return () => document.removeEventListener('keydown', onKey, true);
-  }, [candidates.length, selectedIdx, pick, onClose]);
+  }, [candidates.length, selectedIdx, pick]);
 
   return createPortal(
-    <div className="notes-wikilink-disambig-overlay" onMouseDown={onClose}>
+    <div className="notes-wikilink-disambig-overlay app-modal-overlay wn-scrim" onMouseDown={onClose}>
       <div
-        ref={panelRef}
-        className="notes-wikilink-disambig"
+        className="notes-wikilink-disambig app-modal wn-dialog"
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"
+        aria-modal="true"
         aria-label={`Choose a note named ${target}`}
       >
-        <div className="notes-wikilink-disambig-header">
-          Multiple notes named <strong>{target}</strong> — pick one:
+        <div className="notes-wikilink-disambig-header wn-dialog-head">
+          <span>Multiple notes named <strong>{target}</strong> — pick one:</span>
         </div>
         <div className="notes-wikilink-disambig-list">
           {candidates.map((note, i) => (

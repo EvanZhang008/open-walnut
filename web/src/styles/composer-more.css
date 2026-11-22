@@ -5,9 +5,6 @@
   width: max-content;
   max-width: min(300px, calc(100vw - 16px));
   overflow-y: auto;
-  background: var(--bg-elevated);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
 }
 
 .chat-plus-more-flyout > .chat-plus-menu-divider:first-child {

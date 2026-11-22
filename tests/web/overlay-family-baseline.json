@@ -1,0 +1,47 @@
+{
+  "offFamily": {
+    "components/calendar/MonthView.tsx": 1,
+    "components/calendar/QuickCreatePopover.tsx": 1,
+    "components/notes/slash-commands/SlashCommandPortal.tsx": 1,
+    "components/sessions/ModelPicker.tsx": 1,
+    "components/sessions/SessionRawView.tsx": 1,
+    "components/topics/TopicMention.tsx": 1
+  },
+  "noCloseHook": {
+    "components/sessions/QuotePinSelectionBar.tsx": 1,
+    "components/sessions/RewindGuardStep.tsx": 1,
+    "components/sessions/SessionFileExplorer.tsx": 1,
+    "components/sessions/SessionHeaderLabels.tsx": 1,
+    "components/sessions/ThreadStackFrame.tsx": 1,
+    "components/settings/PluginUpdateButton.tsx": 1,
+    "components/tasks/SnoozeChoices.tsx": 1
+  },
+  "handEscape": {
+    "components/calendar/EventCreateForm.tsx": 1,
+    "components/chat/ClassicDrawingPad.tsx": 1,
+    "components/chat/DrawingPad.tsx": 1,
+    "components/common/DatePicker.tsx": 1,
+    "components/drawing/LibraryBrowser.tsx": 1,
+    "components/inbox/LetterReader.tsx": 1,
+    "components/org/AgentMemoryPanel.tsx": 1,
+    "components/passwords/ItemEditor.tsx": 1,
+    "components/sessions/EngineSettingsPopover.tsx": 2,
+    "components/sessions/ModelPicker.tsx": 2,
+    "components/sessions/QuotePinSelectionBar.tsx": 2,
+    "components/sessions/SessionCommitDialog.tsx": 1,
+    "components/sessions/SessionFileExplorer.tsx": 2,
+    "components/sessions/SessionHeaderLabels.tsx": 1,
+    "components/tasks/ProjectHeaderMenus.tsx": 1,
+    "components/tasks/TagEditor.tsx": 1,
+    "components/tasks/TasksPageTable.tsx": 1,
+    "components/transfer/TransferDialog.tsx": 1
+  },
+  "ownFrame": {
+    "styles/change-card.css": 5,
+    "styles/composer-controls.css": 3,
+    "styles/globals.css": 9,
+    "styles/org-chart.css": 1,
+    "styles/plugin-dialog.css": 1
+  },
+  "offTip": {}
+}

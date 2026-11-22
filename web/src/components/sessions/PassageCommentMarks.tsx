@@ -22,6 +22,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { createPortal } from 'react-dom';
 import { useQuotePinPaint } from '@/hooks/useQuotePinPaint';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { HL_COMMENT, HL_COMMENT_SENT, panelLayer } from '@/utils/pin-highlights';
 import { MAX_COMMENT_CHARS, snippetOf } from '@/utils/passage-comments';
 import { AnswerBox } from '@/components/common/AnswerBox';
@@ -304,24 +305,33 @@ export function PassageCommentMarks({ containerRef, comments, panelKey, renderNo
     anchorPoint: open?.anchor ?? null, align: 'center', gap: 6, minHeight: 60,
   });
   const isOpen = !!open;
+  // One overlay layer. Escape closes one layer (the panel's router never also
+  // closes a drawer or page); inside the editor it puts the old words back and
+  // the card stays. A press outside keeps the typed words first (synchronously,
+  // so a Send pressed next carries them) and its click goes through, for that
+  // same Send; refused (a send holds them), the card stays open on the words.
+  // A marker is not outside: its own click toggles or moves the card. Tab is not
+  // trapped: Tab to the composer is the keyboard way out.
+  useOverlayLayer({
+    open: isOpen,
+    refs: [cardRef],
+    exemptSelectors: ['.passage-comment-marker'],
+    passOutsideClick: true,
+    trapFocus: false,
+    onEscape: (e) => {
+      // An Esc that ends an IME composition is the composition's, not a close.
+      if (isImeKey(e)) return true;
+      if (!(e.target as Element | null)?.closest?.('.passage-comment-card-edit')) return false;
+      cancelEdit();
+      return true;
+    },
+    onClose: (reason) => {
+      if (reason === 'outside' && commitDraft.current('press') === 'refused') return;
+      setOpen(null);
+    },
+  });
   useEffect(() => {
     if (!isOpen) return;
-    // Esc inside the editor is the editor's (it stops there); here it closes the card.
-    const onKey = (e: KeyboardEvent) => {
-      // An Esc that ends an IME composition is the composition's, not a close.
-      if (e.key !== 'Escape' || isImeKey(e)) return;
-      // One Esc closes one layer: the panel's router must not also close a drawer or page.
-      e.preventDefault();
-      setOpen(null);
-    };
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t?.closest('.passage-comment-card')) return;
-      // Refused: a send holds it; closing now would drop the typed words.
-      if (commitDraft.current('press') === 'refused') return;
-      if (t?.closest('.passage-comment-marker')) return;
-      setOpen(null);
-    };
     // The keyboard way out (Tab or a shortcut to the composer, then Enter): no press,
     // so the focus leaving the card keeps the words the same way.
     const onFocus = (e: FocusEvent) => {
@@ -329,14 +339,8 @@ export function PassageCommentMarks({ containerRef, comments, panelKey, renderNo
       if (!t || t.closest?.('.passage-comment-card')) return;
       commitDraft.current('focus');
     };
-    document.addEventListener('keydown', onKey);
-    document.addEventListener('mousedown', onDown, true);
     document.addEventListener('focusin', onFocus, true);
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      document.removeEventListener('mousedown', onDown, true);
-      document.removeEventListener('focusin', onFocus, true);
-    };
+    return () => document.removeEventListener('focusin', onFocus, true);
   }, [isOpen]);
   // Follow the passage while the timeline scrolls; close when it leaves the view.
   // An open editor stays (a streamed turn may scroll the timeline under it): it
@@ -370,7 +374,8 @@ export function PassageCommentMarks({ containerRef, comments, panelKey, renderNo
           data-comment-id={m.id}
           title={m.comment || 'Quoted'}
           aria-label={m.comment ? `Comment: ${m.comment}` : 'Quoted passage'}
-          onPointerDown={(e) => e.stopPropagation()}
+          // A press on a marker keeps an open editor's words too, before its click.
+          onPointerDown={(e) => { e.stopPropagation(); if (open) commitDraft.current('press'); }}
           onClick={() => (open?.id === m.id ? setOpen(null) : openAt(m.id, { x: m.x, y: m.y + MARKER_SIZE }))}
         >
           {m.comment ? (
@@ -385,7 +390,7 @@ export function PassageCommentMarks({ containerRef, comments, panelKey, renderNo
       {open && openItem && (
         <div
           ref={cardRef}
-          className="passage-comment-card"
+          className="passage-comment-card wn-overlay"
           style={menuPlacementStyle(placement)}
           role="dialog"
           aria-label={openItem.comment ? 'Comment' : 'Quote'}
@@ -400,16 +405,9 @@ export function PassageCommentMarks({ containerRef, comments, panelKey, renderNo
           </div>
           <div className="passage-comment-card-quote" title={openItem.text}>❝ {snippetOf(openItem.text, 120)}</div>
           {isEditing ? (
-            <div
-              className="passage-comment-card-edit"
-              onKeyDown={(e) => {
-                // Esc anywhere in the editor puts the old words back and stays in the card.
-                if (e.key !== 'Escape' || isImeKey(e.nativeEvent)) return;
-                e.preventDefault();
-                e.stopPropagation();
-                cancelEdit();
-              }}
-            >
+            // Esc anywhere in the editor puts the old words back and stays in the card
+            // (the overlay layer's onEscape above).
+            <div className="passage-comment-card-edit">
               <AnswerBox
                 value={draft}
                 onChange={(t) => { setDraft(t); setRefused(false); }}

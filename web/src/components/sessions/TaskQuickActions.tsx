@@ -22,6 +22,7 @@ import { useIdleCompactingSession } from '@/stores/idle-compacting-store';
 import { NEEDS_CATEGORY_LABELS, needsLineOf } from '@open-walnut/user-status';
 import type { FocusTier } from '@/api/focus';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { keepNativeContextMenu } from '@/utils/context-menu';
 import { useStoreTask, useTasksContextSafe } from '@/contexts/TasksContext';
 import { useTaskUndo } from '@/undo/TaskUndoContext';
@@ -210,7 +211,19 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
   useEvent('task:updated', fromEvent);
   useEvent('task:completed', fromEvent);
 
-  // Close kebab on outside click, Escape, or once the trigger scrolls away.
+  // Escape and an outside press close the kebab through the one overlay layer. The menu's own
+  // pickers are layers above it (Adopt and Release a worker, a plugin field) and take their own
+  // Esc first (one Esc closes one layer); the Project list, its own portal, counts as inside.
+  // Escape gives the caret back to the button; a press elsewhere just closes.
+  useOverlayLayer({
+    passOutsideClick: true,
+    open: kebabOpen,
+    refs: [kebabMenuRef, kebabBtnRef],
+    exemptSelectors: ['.task-kebab-project-flyout', '.adopt-worker-flyout'],
+    onClose: (reason) => { if (reason === 'escape') closeKebab(); else dismissKebab(); },
+  });
+
+  // Close kebab once the trigger scrolls away.
   // The menu now scrolls internally, so a scroll event originating INSIDE it
   // must not dismiss it — and an outside scroll only closes the menu when the
   // trigger actually leaves the viewport (useMenuPlacement repositions
@@ -223,25 +236,6 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
   // TaskKebabMenu.tsx, which runs the same rules plus a cursor-anchor branch.
   useEffect(() => {
     if (!kebabOpen) return;
-    const handleClick = (e: MouseEvent) => {
-      if (kebabBtnRef.current?.contains(e.target as Node)) return;
-      if (kebabMenuRef.current?.contains(e.target as Node)) return;
-      // The Project picker's list and the Adopt a worker picker are their own portals.
-      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout, .adopt-worker-flyout')) return;
-      dismissKebab();
-    };
-    // The menu's Esc is its own: taken in the capture phase and consumed, so the layer under it
-    // (full screen, a Board peek tab) stays open (one Esc closes one layer).
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.isComposing) return;
-      // A worker picker opened from the menu (Adopt, Release) is the layer on top and takes its own
-      // Esc (its capture listener): the menu stays. The menu's other pickers (Project, a plugin
-      // field) keep no Esc of their own, so one Esc closes them with the menu, as before.
-      if (document.querySelector('.adopt-worker-flyout')) return;
-      e.preventDefault();
-      e.stopPropagation();
-      closeKebab();
-    };
     const handleScroll = (e: Event) => {
       if (kebabMenuRef.current?.contains(e.target as Node)) return;
       if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout, .adopt-worker-flyout')) return;
@@ -252,15 +246,9 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       const r = kebabBtnRef.current?.getBoundingClientRect();
       if (r && (r.bottom < 0 || r.top > window.innerHeight)) dismissKebab();
     };
-    document.addEventListener('mousedown', handleClick);
-    document.addEventListener('keydown', handleKey, true);
     window.addEventListener('scroll', handleScroll, true);
-    return () => {
-      document.removeEventListener('mousedown', handleClick);
-      document.removeEventListener('keydown', handleKey, true);
-      window.removeEventListener('scroll', handleScroll, true);
-    };
-  }, [kebabOpen, closeKebab, dismissKebab, cursorAnchor]);
+    return () => window.removeEventListener('scroll', handleScroll, true);
+  }, [kebabOpen, dismissKebab, cursorAnchor]);
 
   const handlePhaseChange = useCallback((phase: string, ring = false) => {
     if (!task || task.phase === phase) return;
@@ -451,8 +439,9 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       {slot !== 'phase' && kebabOpen && createPortal(
         <div
           ref={kebabMenuRef}
-          className="task-kebab-menu"
+          className="task-kebab-menu wn-overlay wn-menu"
           style={menuPlacementStyle(kebabPos)}
+          onPointerDown={(e) => e.stopPropagation()}
         >
           {/* The surface's own controls first (the panel count), then the task. */}
           {leadingSection && (

@@ -7,9 +7,10 @@
  *            toggle for the date this chip represents, Unschedule, Open task
  * Saves go through the same optimistic paths as drags (moveEvent / update).
  */
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import type { CalendarItem } from './calendar-items';
@@ -117,20 +118,11 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') saveGate.send();
-    if (e.key === 'Escape') onClose();
   };
 
-  // Escape must work regardless of focus. The div's onKeyDown only fires with
-  // focus inside the popover — read-only popovers never autofocus and task
-  // popovers have a static title, so Escape was dead there (backdrop click was
-  // the only way out). Same window-level pattern as CalendarContextMenu.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  // Escape must work regardless of focus (read-only popovers never autofocus): the shared layer
+  // takes it wherever focus is. An outside press is the backdrop's.
+  useOverlayLayer({ passOutsideClick: true, open: true, refs: [menuRef], closeOnOutside: false, trapFocus: false, onClose: (reason) => { if (reason === 'escape') onClose(); } });
 
   // Moving an event's START (time or date) keeps its duration — macOS Calendar
   // behavior; holding end fixed dead-ended "push the meeting later" edits in
@@ -237,7 +229,7 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
         }}
       />
       <div
-        className="cal-item-popover wn-glass"
+        className="cal-item-popover wn-overlay wn-glass"
         ref={menuRef}
         style={menuPlacementStyle(placement)}
         role="dialog"

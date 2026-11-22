@@ -35,8 +35,10 @@ import {
 import { askNoticePermission, nativeNoticeStatus, noticeAccess, openNoticeSettings, OPEN_APPROVAL_EVENT, takeClickedApproval, type NoticeAccess } from './approval-notify';
 import { ApprovalContextRows, AskerLink, hostWords, summaryOf, technicalDetail, wordsOf } from './approval-context';
 import { useYieldsToTaskOpen } from '@/hooks/useOpenTask';
+import { useModalOverlay } from '@/hooks/useModalOverlay';
 import './approvals.css';
 import { useSnoozedApprovalIds } from './snoozed-approvals';
+import { ICON_CLOSE } from '../common/Icons';
 
 export function useNow(ms: number): number {
   const [now, setNow] = useState(() => Date.now());
@@ -258,28 +260,26 @@ function NoticeOffer() {
   );
 }
 
-function ApprovalDialog({ s, now }: { s: ApprovalsState; now: number }) {
+/** Mounts the dialog only while a request is open, so its modal hook runs only then. */
+function OpenApprovalDialog({ s, now }: { s: ApprovalsState; now: number }) {
   const id = s.openId;
+  if (!id) return null;
+  return <ApprovalDialog s={s} now={now} id={id} />;
+}
+
+function ApprovalDialog({ s, now, id }: { s: ApprovalsState; now: number; id: string }) {
   // Focus goes into the dialog (its close button, never Approve) and back where it came from.
   const boxRef = useRef<HTMLDivElement>(null);
-  const isOpen = !!id;
   useEffect(() => {
-    if (!isOpen) return;
     const from = document.activeElement as HTMLElement | null;
     boxRef.current?.querySelector<HTMLElement>('.approval-dialog-close')?.focus();
     return () => { if (from?.isConnected) from.focus(); };
-  }, [isOpen]);
-  useEffect(() => {
-    if (!id) return;
-    // Escape closes this, the top layer, alone: caught before the layers under it (the
-    // notification center listens on document) and kept from them.
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); closeApproval(); } };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [id]);
+  }, []);
+  // Escape closes this, the top layer, alone (the dialog hook: the notification center under it
+  // yields while a dialog is open), and the page behind does not scroll.
+  useModalOverlay(closeApproval);
   // A task opening (its AskerLink, or any task link) takes the screen: the dialog yields to it.
-  useYieldsToTaskOpen(closeApproval, !!id);
-  if (!id) return null;
+  useYieldsToTaskOpen(closeApproval, true);
   const a = s.items.get(id);
   const settled = s.done[id];
   const live = a && Date.parse(a.expiresAt) > now ? a : null;
@@ -288,9 +288,9 @@ function ApprovalDialog({ s, now }: { s: ApprovalsState; now: number }) {
   const list = pendingAt(s, now);
   const at = live ? list.findIndex((x) => x.id === id) : -1;
   return createPortal(
-    <div className="app-modal-overlay approval-dialog-overlay" role="dialog" aria-modal="true" aria-label="Approval" data-testid="approval-dialog" onMouseDown={closeApproval}>
-      <div ref={boxRef} className="app-modal approval-dialog" data-approval-id={id} onMouseDown={(e) => e.stopPropagation()}>
-        <button type="button" className="approval-dialog-close" aria-label="Close" onClick={closeApproval}>×</button>
+    <div className="app-modal-overlay approval-dialog-overlay wn-scrim" role="dialog" aria-modal="true" aria-label="Approval" data-testid="approval-dialog" onMouseDown={closeApproval}>
+      <div ref={boxRef} className="app-modal approval-dialog wn-dialog" data-approval-id={id} onMouseDown={(e) => e.stopPropagation()}>
+        <button type="button" className="btn btn-icon approval-dialog-close wn-dialog-close" aria-label="Close" onClick={closeApproval}>{ICON_CLOSE}</button>
         {live ? (
           <ApprovalBody a={live} s={s} now={now} />
         ) : settled ? (
@@ -431,7 +431,7 @@ export function ApprovalPrompts() {
 
   return (
     <>
-      <ApprovalDialog s={s} now={now} />
+      <OpenApprovalDialog s={s} now={now} />
       {(card || lastSettled || (s.stoppedAsking && s.stoppedAsking.id !== s.openId)) && (
         <CornerSlot order={CORNER_ORDER.approvals} className="corner-slot-approvals">
         <div className="approval-stack" role="region" aria-label="Approvals">

@@ -30,6 +30,7 @@ import { jumpNeedles, findQueries } from './jump-target';
 import { noteHitLabel, type NoteHitLabel } from '../../../../src/core/note-hit-label';
 import { log } from '@/utils/log';
 import { MicInput } from '@/components/common/BoxMic';
+import { useModalOverlay } from '@/hooks/useModalOverlay';
 
 interface CommandPaletteProps {
   /**
@@ -167,14 +168,6 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
     return () => clearTimeout(t);
   }, [open]);
 
-  // Lock body scroll while open.
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = prev; };
-  }, [open]);
-
   // ── Debounced hybrid search ──
   useEffect(() => {
     if (!open) return;
@@ -299,7 +292,6 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
 
   const onInputKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (composingRef.current || e.nativeEvent.isComposing || (e.nativeEvent as KeyboardEvent).keyCode === 229) return;
-    if (e.key === 'Escape') { e.preventDefault(); close(); return; }
     // ⌘↵ / Ctrl+↵ — quick-capture a blank/untitled note (0 required decisions).
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
@@ -335,8 +327,9 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
   const showHint = q.length > 0;
 
   return createPortal(
-    <div className="notes-cmdk-overlay" onMouseDown={close} role="dialog" aria-modal="true" aria-label="Notes command palette">
-      <div className="notes-cmdk" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="notes-cmdk-overlay wn-scrim" onMouseDown={close} role="dialog" aria-modal="true" aria-label="Notes command palette">
+      <PaletteModal onClose={close} />
+      <div className="notes-cmdk wn-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="notes-cmdk-input-row">
           <span className="notes-cmdk-glyph" aria-hidden>{'⌘K'}</span>
           <MicInput fieldClassName="mic-field-grow" data-no-draft="picker"
@@ -435,4 +428,10 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
     </div>,
     document.body,
   );
+}
+
+/** Mounted only while the palette is open: Escape, the shared scroll lock and nesting (useModalOverlay). */
+function PaletteModal({ onClose }: { onClose: () => void }) {
+  useModalOverlay(onClose);
+  return null;
 }

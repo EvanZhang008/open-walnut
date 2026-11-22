@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { rowAnchorOf, scrollMovedRow, type RowAnchor } from '@/utils/cursor-menu-scroll';
 
 export interface CursorPoint { x: number; y: number }
@@ -30,8 +31,9 @@ export interface CursorFlyoutHandle<T> {
   noTrigger: RefObject<HTMLElement | null>;
 }
 
+const FLYOUT_SELECTOR = '.task-kebab-project-flyout';
 const insideFlyout = (target: EventTarget | null) =>
-  !!(target as HTMLElement | null)?.closest?.('.task-kebab-project-flyout');
+  !!(target as HTMLElement | null)?.closest?.(FLYOUT_SELECTOR);
 
 export function useCursorFlyout<T>(): CursorFlyoutHandle<T> {
   const [state, setState] = useState<{ payload: T; point: CursorPoint; origin?: HTMLElement | null } | null>(null);
@@ -39,6 +41,18 @@ export function useCursorFlyout<T>(): CursorFlyoutHandle<T> {
   const picking = state !== null;
   const origin = state?.origin ?? null;
 
+  // Escape and a press outside go through the one overlay stack (useOverlayLayer). The picker
+  // element belongs to the host, so "inside" is its class, not a ref.
+  useOverlayLayer({
+    passOutsideClick: true,
+    open: picking,
+    refs: [],
+    exemptSelectors: [FLYOUT_SELECTOR],
+    onClose: (reason) => {
+      setState(null);
+      if (reason === 'escape' && origin?.isConnected) origin.focus({ preventScroll: true });
+    },
+  });
   // The picker outlives the menu that opened it, so it owns its own dismissal. A scroll closes it:
   // a cursor anchor is a frozen viewport point. With the row it was opened on known, only a scroll
   // that moved that row does, the rule ContextMenu keeps (cursor-menu-scroll.ts; 2026-09-22: a pane
@@ -49,13 +63,6 @@ export function useCursorFlyout<T>(): CursorFlyoutHandle<T> {
   useEffect(() => {
     if (!picking) return;
     const close = () => setState(null);
-    const onDown = (e: MouseEvent) => { if (!insideFlyout(e.target)) close(); };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.stopPropagation();
-      close();
-      if (origin?.isConnected) origin.focus({ preventScroll: true });
-    };
     let row: RowAnchor | null = null;
     let armed = false;
     const arm = requestAnimationFrame(() => { armed = true; row = rowAnchorOf(origin); });
@@ -63,14 +70,10 @@ export function useCursorFlyout<T>(): CursorFlyoutHandle<T> {
       if (!armed || insideFlyout(e.target)) return;
       if (scrollMovedRow(row, e.target)) close();
     };
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
     window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', close);
     return () => {
       cancelAnimationFrame(arm);
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
       window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', close);
     };
@@ -125,7 +128,7 @@ export function OptionPickerFlyout<V extends string>({ anchorPoint, anchorRef, o
   return createPortal(
     <div
       ref={listRef}
-      className="task-kebab-project-flyout"
+      className="task-kebab-project-flyout wn-overlay wn-menu"
       role="listbox"
       aria-label={ariaLabel}
       style={menuPlacementStyle(placement)}

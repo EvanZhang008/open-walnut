@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Checkbox } from '@/components/controls';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import {
   TP_DEFAULT_COLUMNS, offerColumns, toggleColumn,
   type ColumnScope, type TpColumnId,
@@ -25,18 +26,7 @@ export function TasksColumnsMenu({ columns, scope, onChange }: TasksColumnsMenuP
   const menuRef = useRef<HTMLDivElement>(null);
   const placement = useMenuPlacement(open, btnRef, menuRef, { onAnchorLost: () => setOpen(false) });
 
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: globalThis.MouseEvent) => {
-      if (menuRef.current?.contains(e.target as Node)) return;
-      if (btnRef.current?.contains(e.target as Node)) return;
-      setOpen(false);
-    };
-    const key = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('mousedown', close);
-    document.addEventListener('keydown', key);
-    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', key); };
-  }, [open]);
+  useOverlayLayer({ passOutsideClick: true, open, refs: [menuRef, btnRef], onClose: () => setOpen(false) });
 
   const offers = offerColumns(columns, scope);
   const isDefault = columns.length === TP_DEFAULT_COLUMNS.length
@@ -63,7 +53,7 @@ export function TasksColumnsMenu({ columns, scope, onChange }: TasksColumnsMenuP
       {open && createPortal(
         <div
           ref={menuRef}
-          className="tp-cols-popover"
+          className="tp-cols-popover wn-overlay wn-menu"
           role="menu"
           data-testid="tasks-columns-menu"
           style={menuPlacementStyle(placement)}

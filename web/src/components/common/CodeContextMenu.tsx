@@ -12,9 +12,10 @@
  * wired) don't render — a menu of disabled rows helps nobody. Anchored at the
  * pointer via useMenuPlacement's anchorPoint mode (the menus hard rules).
  */
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 
 export interface CodeContextTarget {
   point: { x: number; y: number };
@@ -54,17 +55,8 @@ export function CodeContextMenu({ target, onClose, onCopy, onAsk, onFindReferenc
   const menuRef = useRef<HTMLDivElement | null>(null);
   const placement = useMenuPlacement(true, anchorRef, menuRef, { anchorPoint: target.point });
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
-    };
-    // Capture-phase listener. NOTE: stopPropagation does NOT silence sibling
-    // window-capture listeners (that would need stopImmediatePropagation and
-    // registration order on our side), so one Esc may also close a reference
-    // panel that is open underneath — acceptable: Esc means "dismiss".
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
+  // Escape through the shared layer (only the topmost closes); an outside press is the backdrop's.
+  useOverlayLayer({ passOutsideClick: true, open: true, refs: [menuRef], closeOnOutside: false, trapFocus: false, onClose: (reason) => { if (reason === 'escape') onClose(); } });
 
   const run = (fn: () => void) => () => { fn(); onClose(); };
 
@@ -120,12 +112,12 @@ export function CodeContextMenu({ target, onClose, onCopy, onAsk, onFindReferenc
         {...stopMouse}
       />
       <div
-        className="cal-ctx-menu code-ctx-menu"
+        className="cal-ctx-menu code-ctx-menu wn-overlay wn-menu"
         ref={menuRef}
         // The inline zIndex must beat .fv-fullscreen (10000) and
         // .file-viewer-overlay (9999) — menuPlacementStyle's default 9999 ties
         // or loses inside those, leaving an invisible menu on a dead click.
-        style={{ ...menuPlacementStyle(placement), zIndex: 10010 }}
+        style={{ ...menuPlacementStyle(placement) }}
         role="menu"
         data-testid="code-ctx-menu"
         onContextMenu={(e) => e.preventDefault()}

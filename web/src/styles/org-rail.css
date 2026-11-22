@@ -114,12 +114,11 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 
 /* Snooze's date picker (OrgAlertSnooze), placed by useMenuPlacement. */
 .org-answer-menu {
-  position: fixed; z-index: 1200; width: min(300px, calc(100vw - 16px)); overflow-y: auto;
+  position: fixed; width: min(300px, calc(100vw - 16px)); overflow-y: auto;
   display: flex; flex-direction: column; gap: 8px; padding: 10px;
-  border: 1px solid var(--border); border-radius: 10px;
   /* Solid in both themes, never the overlays' glass: the raised surface, one step
      lighter than the page in dark (tests/web/org-overlays-opaque.test.ts). */
-  background: var(--bg-elevated); color: var(--fg); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18); font-size: var(--font-size-md);
+  color: var(--fg); font-size: var(--font-size-md);
 }
 .org-answer-menu > * { flex-shrink: 0; }
 .org-answer-q { color: var(--fg-muted); line-height: 1.35; }

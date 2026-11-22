@@ -2,14 +2,14 @@
  * LetterReader — the notification center's letter surface: a large portalled
  * overlay (PlanPopup scale) wrapping the shared `LetterView`.
  *
- * This file owns ONLY what makes it an overlay: the portal, the ref-counted
- * scroll lock, the layered Escape, and the file preview a body link opens. The
+ * This file owns ONLY what makes it an overlay: the portal, the dialog hook
+ * (scroll lock, the layered Escape), and the file preview a body link opens. The
  * letter's own behavior (load, decide, thread, reply) lives in LetterView, which
  * the session panel's Inbox tab renders too — one implementation, two lenses.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { lockScroll, unlockScroll } from '@/hooks/useModalOverlay';
+import { useModalOverlay, hasActiveModalOverlay } from '@/hooks/useModalOverlay';
 import { FileViewer } from '@/components/common/FileViewer';
 import type { LetterEnvelope } from '@/api/human-inbox';
 import { LetterView, type LetterFileTarget } from './LetterView';
@@ -42,20 +42,20 @@ export function LetterReader({
 
   const onOpenFile = useCallback((target: LetterFileTarget) => setFileView(target), []);
 
-  // Escape closes the top-most layer only: with a file preview open it belongs
-  // to that preview, which owns its own listener. (The panel underneath also
-  // guards on the reader being open, so one Escape never closes three layers.)
+  // Embedded in the Inbox column it is no overlay, yet Escape still closes the letter. Not while a
+  // file preview is up: that preview (a dialog) takes the key. (The panel underneath also guards on
+  // the reader being open, so one Escape never closes two layers.)
   useEffect(() => {
+    if (!embedded) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || fileViewRef.current || document.querySelector('.file-viewer-overlay')) return;
+      if (e.key !== 'Escape' || fileViewRef.current || document.querySelector('.file-viewer-overlay') || hasActiveModalOverlay()) return;
       // An Esc a box inside already took (the reply's @ or / list closing) is that box's alone.
       if (e.defaultPrevented) return;
       e.stopPropagation();
       onClose();
     };
     document.addEventListener('keydown', onKey);
-    if (!embedded) lockScroll();
-    return () => { document.removeEventListener('keydown', onKey); if (!embedded) unlockScroll(); };
+    return () => { document.removeEventListener('keydown', onKey); };
   }, [onClose, embedded]);
 
   const view = <LetterView
@@ -81,28 +81,35 @@ export function LetterReader({
   />;
   if (embedded) return <>{view}{filePreview}</>;
 
+  return <>
+    <ReaderOverlay label={envelope?.subject || 'Letter'} onClose={onClose}>{view}</ReaderOverlay>
+    {filePreview}
+  </>;
+}
+
+/** The overlay lens: a dialog (Escape, scroll lock and nesting through useModalOverlay, so the file
+ *  preview opened over it takes the first Escape). */
+function ReaderOverlay({ label, onClose, children }: { label: string; onClose: () => void; children: ReactNode }) {
+  useModalOverlay(onClose);
   return createPortal(
-    <>
+    <div
+      className="hib-reader-overlay wn-scrim"
+      role="dialog"
+      aria-modal="true"
+      aria-label={label}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      {/* Portalled overlay inside the panel's own portal: stop pointer events
+          at the container so a drag sensor on an ancestor row can't see them
+          (web/src/AGENTS.md — portals escape clipping, not bubbling). */}
       <div
-        className="hib-reader-overlay"
-        role="dialog"
-        aria-modal="true"
-        aria-label={envelope?.subject || 'Letter'}
-        onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+        className="hib-reader wn-dialog"
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
       >
-        {/* Portalled overlay inside the panel's own portal: stop pointer events
-            at the container so a drag sensor on an ancestor row can't see them
-            (web/src/AGENTS.md — portals escape clipping, not bubbling). */}
-        <div
-          className="hib-reader"
-          onClick={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
-        >
-          {view}
-        </div>
+        {children}
       </div>
-      {filePreview}
-    </>,
+    </div>,
     document.body,
   );
 }

@@ -7,13 +7,8 @@
    TRIGGER flyout (fixed, placed by useMenuPlacement, above the columns). */
 .leader-subtasks-flyout {
   position: fixed;
-  z-index: 9500;
   width: min(380px, calc(100vw - 16px));
   padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-elevated);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
   color: var(--fg);
   font-size: var(--font-size-sm);
   overflow: auto;
@@ -114,15 +109,10 @@
    useMenuPlacement (maxHeight inline) and the list scrolls inside. */
 .adopt-worker-flyout {
   position: fixed;
-  z-index: 9500;
   display: flex;
   flex-direction: column;
   width: min(380px, calc(100vw - 16px));
   padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-elevated);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
   color: var(--fg);
   font-size: var(--font-size-sm);
   overflow-y: auto;

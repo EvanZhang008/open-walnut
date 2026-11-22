@@ -99,7 +99,8 @@ describe('the Org page overlays are solid', () => {
         }
       }
     }
-    expect(painted).toBeGreaterThanOrEqual(3);
+    // The overlay family's one surface rule (overlay-family.css: wn-overlay, wn-dialog) paints them now.
+    expect(painted).toBeGreaterThanOrEqual(2);
     expect(bad, 'an Org overlay is see-through; give it var(--bg-elevated) and no blur').toEqual([]);
   });
 

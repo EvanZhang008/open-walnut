@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { Chip } from '@/components/controls';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 
 interface Props {
   active: boolean;                     // is a custom range currently the active selection
@@ -33,34 +34,19 @@ export function UsageDateRange({ active, start, end, bounds, onApply }: Props) {
   useEffect(() => { if (start) setS(start); }, [start]);
   useEffect(() => { if (end) setE(end); }, [end]);
 
-  // Close on a press outside both the trigger and the popover, on Escape, and
-  // when the trigger scrolls out of view (a scroll inside the popover is not one).
+  // Escape and a press outside both the trigger and the popover close it (the shared
+  // overlay layer); so does the trigger scrolling out of view (a scroll inside the
+  // popover is not one).
+  useOverlayLayer({ passOutsideClick: true, open, onClose: close, refs: [popRef, wrapperRef] });
   useEffect(() => {
     if (!open) return;
-    const onDoc = (ev: MouseEvent) => {
-      const target = ev.target as Node;
-      if (wrapperRef.current?.contains(target) || popRef.current?.contains(target)) return;
-      close();
-    };
-    const onKey = (ev: KeyboardEvent) => {
-      if (ev.key !== 'Escape' || ev.isComposing) return;
-      ev.preventDefault();
-      ev.stopImmediatePropagation();
-      close();
-    };
     const onScroll = (ev: Event) => {
       if (popRef.current?.contains(ev.target as Node)) return;
       const r = wrapperRef.current?.getBoundingClientRect();
       if (r && (r.bottom < 0 || r.top > window.innerHeight)) close();
     };
-    document.addEventListener('mousedown', onDoc);
-    window.addEventListener('keydown', onKey, true);
     window.addEventListener('scroll', onScroll, true);
-    return () => {
-      document.removeEventListener('mousedown', onDoc);
-      window.removeEventListener('keydown', onKey, true);
-      window.removeEventListener('scroll', onScroll, true);
-    };
+    return () => window.removeEventListener('scroll', onScroll, true);
   }, [open, close]);
 
   const label = active && start && end
@@ -92,7 +78,7 @@ export function UsageDateRange({ active, start, end, bounds, onApply }: Props) {
       {open && createPortal(
         <div
           ref={popRef}
-          className="usage-daterange-pop"
+          className="usage-daterange-pop wn-overlay"
           role="dialog"
           aria-label="Custom period"
           data-testid="usage-daterange-pop"

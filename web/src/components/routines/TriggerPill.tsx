@@ -18,7 +18,7 @@
  *
  * Overlay rules (web/src/AGENTS.md): placed by useMenuPlacement, portalled to
  * <body>, root stops pointerdown propagation (the rows are dnd-kit draggables),
- * outside-click closer exempts `.trigger-jobs-flyout`.
+ * closed through useOverlayLayer (Escape, an outside press).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -27,6 +27,7 @@ import type { Routine } from '@/api/routines';
 import { useTaskTriggers } from '@/hooks/useTaskTriggers';
 import { DisclosureButton } from '@/components/controls';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { removeRoutine, runRoutineNow, setRoutineEnabled } from '@/stores/routines-store';
 import {
   auditHistory, clockHostTitle, describeCheck, describeClockHost, describeFireTally,
@@ -274,32 +275,9 @@ export function TriggerPill({ taskId }: TriggerPillProps) {
     if (open && triggers.length === 0) setOpen(false);
   }, [open, triggers.length]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (e: PointerEvent) => {
-      const target = e.target as Element | null;
-      if (!target) return;
-      if (target.closest('.trigger-jobs-flyout')) return;
-      if (triggerRef.current?.contains(target)) return;
-      close(false);
-    };
-    // Capture phase: every pill on a row stops its own pointerdown, so a press on the next
-    // pill would never reach a bubbling listener and two flyouts would stay open.
-    document.addEventListener('pointerdown', onPointerDown, true);
-    return () => document.removeEventListener('pointerdown', onPointerDown, true);
-  }, [open, close]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      e.stopPropagation();
-      close(true);
-    };
-    document.addEventListener('keydown', onKey, true);
-    return () => document.removeEventListener('keydown', onKey, true);
-  }, [open, close]);
+  // Escape (focus back to the pill) and an outside press close. The layer listens in the window's
+  // capture phase, so a press on the next pill (which stops its own pointerdown) closes this one.
+  useOverlayLayer({ passOutsideClick: true, open, refs: [menuRef, triggerRef], onClose: (reason) => close(reason === 'escape') });
 
   if (!taskId || triggers.length === 0) return null;
 
@@ -338,7 +316,7 @@ export function TriggerPill({ taskId }: TriggerPillProps) {
         ? createPortal(
             <div
               ref={menuRef}
-              className="trigger-jobs-flyout"
+              className="trigger-jobs-flyout wn-overlay"
               role="dialog"
               aria-label="Triggers on this task"
               data-testid="trigger-jobs-flyout"

@@ -13,6 +13,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from 
 import { createPortal } from 'react-dom';
 import { ICON_CHECK, ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import type { BoardLane } from '../../../../../src/core/boards/board-lanes';
 import { READ_ONLY_TITLE, type KanbanWriteApi } from './kanban-contract';
 import type { KanbanCardVM } from './kanban-card-model';
@@ -64,27 +65,23 @@ export function KanbanCardMenu({ card, anchor, triggerRef, lanes, api, onEdit, o
 
   useEffect(() => {
     const t = setTimeout(() => items(menuRef.current)[0]?.focus(), 0);
-    const outside = (e: PointerEvent) => {
-      const n = e.target as Node;
-      if (menuRef.current?.contains(n) || flyRef.current?.contains(n) || triggerRef.current?.contains(n)) return;
-      onClose(false);
-    };
-    // The open menu owns Escape wherever focus is (WebKit leaves it on <body> after a row click,
-    // where a bubbling Escape would exit the fullscreen Board): the flyout first, then the menu.
-    const onEsc = (e: globalThis.KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.isComposing) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (flyOpen.current) { setFly(false); moveRef.current?.focus(); } else onClose(true);
-    };
-    document.addEventListener('pointerdown', outside, true);
-    window.addEventListener('keydown', onEsc, true);
-    return () => {
-      clearTimeout(t);
-      document.removeEventListener('pointerdown', outside, true);
-      window.removeEventListener('keydown', onEsc, true);
-    };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    return () => clearTimeout(t);
+  }, []);
+  // The open menu owns Escape wherever focus is (WebKit leaves it on <body> after a row click,
+  // where a bubbling Escape would exit the fullscreen Board): the flyout first, then the menu.
+  useOverlayLayer({
+    passOutsideClick: true,
+    open: true,
+    refs: [menuRef, flyRef, triggerRef],
+    onClose: (reason) => onClose(reason === 'escape'),
+  });
+  useOverlayLayer({
+    passOutsideClick: true,
+    open: fly,
+    // A press on the menu's own rows is inside: it picks the row, the flyout does not close first.
+    refs: [flyRef, menuRef],
+    onClose: (reason) => { setFly(false); if (reason === 'escape') moveRef.current?.focus(); },
+  });
   useEffect(() => { if (fly) setTimeout(() => items(flyRef.current).find((el) => el.getAttribute('aria-disabled') !== 'true')?.focus(), 0); }, [fly]);
 
   const pick = (run: () => void, refocus = true) => { onClose(refocus); run(); };
@@ -126,7 +123,7 @@ export function KanbanCardMenu({ card, anchor, triggerRef, lanes, api, onEdit, o
     <>
       {createPortal(
         <div
-          ref={menuRef} role="menu" aria-label="Card actions" className="task-kebab-menu kanban-menu" data-testid="kanban-card-menu"
+          ref={menuRef} role="menu" aria-label="Card actions" className="task-kebab-menu kanban-menu wn-overlay wn-menu" data-testid="kanban-card-menu"
           style={menuPlacementStyle(pos)} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}
           onKeyDown={onMenuKey}
         >
@@ -155,7 +152,7 @@ export function KanbanCardMenu({ card, anchor, triggerRef, lanes, api, onEdit, o
       )}
       {fly && createPortal(
         <div
-          ref={flyRef} role="menu" aria-label="Move to lane" className="task-kebab-menu kanban-menu kanban-menu-flyout" data-testid="kanban-card-move-flyout"
+          ref={flyRef} role="menu" aria-label="Move to lane" className="task-kebab-menu kanban-menu kanban-menu-flyout wn-overlay wn-menu" data-testid="kanban-card-move-flyout"
           style={menuPlacementStyle(flyPos)} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}
           onKeyDown={onFlyKey}
         >

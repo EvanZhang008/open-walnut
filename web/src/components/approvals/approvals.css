@@ -241,7 +241,6 @@
 }
 
 /* The dialog a Needs you row or the system notification opens. */
-.approval-dialog-overlay { z-index: 10001; }
 
 .approval-dialog {
   position: relative;
@@ -259,12 +258,6 @@
   position: absolute;
   top: 10px;
   right: 12px;
-  border: 0;
-  background: none;
-  color: var(--fg-muted);
-  font-size: var(--font-size-2xl);
-  line-height: 1;
-  cursor: pointer;
 }
 
 /* A Needs you row, on Home and the Org page. */

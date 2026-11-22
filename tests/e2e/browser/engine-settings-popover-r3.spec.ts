@@ -276,7 +276,8 @@ test.describe('engine settings popover: round three, copy and chrome', () => {
     test.info().annotations.push({ type: 'dark-surface', description: JSON.stringify(colours) })
     expect(colours.lighter).toBeGreaterThanOrEqual(20)
     expect(colours.shadow).not.toBe('none')
-    expect(colours.shadow).toContain('rgba(0, 0, 0, 0.7)')
+    // The family's dark shadow (overlay-family.css --overlay-shadow), deeper than the light one.
+    expect(colours.shadow).toContain('rgba(0, 0, 0, 0.5)')
     await shot(page, 'r4/dark-raised')
     await page.keyboard.press('Escape')
     await page.evaluate(() => { localStorage.setItem('open-walnut-theme', 'light'); document.documentElement.setAttribute('data-theme', 'light') })

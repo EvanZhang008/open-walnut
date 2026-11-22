@@ -1,5 +1,6 @@
 import { countRender } from '@/utils/render-count';
 import { useCoalescedRefresh } from '@/hooks/useCoalescedRefresh';
+import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { useCommittedRef } from '@/hooks/useCommittedRef';
 import { useShownReadLane } from '@/hooks/useShownReadLane';
 import { sameJson } from '@/utils/same-json';
@@ -299,6 +300,12 @@ function SessionPanelErrorBoundary({ sessionId, onClose, clearsColumnLayout, chi
       {children}
     </RegionErrorBoundary>
   );
+}
+
+/** The plan dialog's Escape, scroll lock and nesting: the shared modal hook, mounted while the dialog is. */
+function PlanModalEscape({ onClose }: { onClose: () => void }) {
+  useModalOverlay(onClose);
+  return null;
 }
 
 /** Plan markdown in the popover, rendered and opened as its writer's (the panel's own, or the from-plan source). */
@@ -2122,16 +2129,6 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
     }
   }, [planPopoverOpen, shouldFetchPlan, planRefresh]);
 
-  // Close plan modal on Escape
-  useEffect(() => {
-    if (!planPopoverOpen) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setPlanPopoverOpen(false);
-    };
-    document.addEventListener('keydown', handleKey);
-    return () => document.removeEventListener('keydown', handleKey);
-  }, [planPopoverOpen]);
-
   // Listen for PlanCard expand → open the same plan modal
   useEffect(() => {
     const handler = () => setPlanPopoverOpen(true);
@@ -3405,9 +3402,10 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   Plan <span className="btn-caret" aria-hidden="true">{'\u25BE'}</span>
                 </button>
                 {planPopoverOpen && (
-                  <div className="plan-popup-overlay" onClick={() => setPlanPopoverOpen(false)}>
-                    <div className="plan-popup-container" onClick={e => e.stopPropagation()}>
-                      <div className="plan-popup-header">
+                  <div className="plan-popup-overlay wn-scrim" onClick={() => setPlanPopoverOpen(false)}>
+                    <PlanModalEscape onClose={() => setPlanPopoverOpen(false)} />
+                    <div className="plan-popup-container wn-dialog" onClick={e => e.stopPropagation()}>
+                      <div className="plan-popup-header wn-dialog-head">
                         <span className="plan-popup-title">
                           {plan?.planFile?.split('/').pop() ?? 'Plan'}
                           {isFromPlan && plan?.sourceSessionId && (
@@ -3448,7 +3446,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                             {' '}Refresh
                           </button>
                         </div>
-                        <button className="plan-popup-close" onClick={() => setPlanPopoverOpen(false)} aria-label="Close">&times;</button>
+                        <button className="btn btn-icon plan-popup-close wn-dialog-close" onClick={() => setPlanPopoverOpen(false)} aria-label="Close">{ICON_CLOSE}</button>
                       </div>
                       <div className="plan-popup-body">
                         {planLoading && !plan && (

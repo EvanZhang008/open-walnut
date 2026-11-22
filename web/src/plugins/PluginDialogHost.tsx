@@ -11,6 +11,7 @@ import { usePluginUi, useWebPluginRuntime } from './hooks'
 import { closePluginDialog, getPluginDialog, getPluginDialogOpener, invalidatePluginDialog, isDialogNavigationPath, subscribePluginDialog, pluginDialogSlot, type PluginDialogRequest } from './dialog-store'
 import type { PluginDialogSlotProps } from './types'
 import '@/styles/plugin-dialog.css'
+import { ICON_CLOSE } from '../components/common/Icons'
 
 export function PluginDialogHost() {
   const request = useSyncExternalStore(subscribePluginDialog, getPluginDialog, getPluginDialog)
@@ -96,7 +97,7 @@ function PluginDialog({ request }: { request: PluginDialogRequest }) {
   const title = bound.current?.title ?? entry?.value.title ?? 'Plugin dialog'
   const Component = entry?.value.component as ComponentType<PluginDialogSlotProps> | undefined
   return createPortal(
-    <div ref={overlayRef} className="plugin-dialog-overlay" onPointerDown={event => event.stopPropagation()} onKeyDown={event => {
+    <div ref={overlayRef} className="plugin-dialog-overlay wn-scrim" onPointerDown={event => event.stopPropagation()} onKeyDown={event => {
       const root = ref.current
       if (event.key !== 'Tab' || event.defaultPrevented || event.nativeEvent.isComposing || event.altKey || event.ctrlKey || event.metaKey || !root?.contains(event.target as Node)) return
       const stops = overlayTabStops(root)
@@ -107,11 +108,11 @@ function PluginDialog({ request }: { request: PluginDialogRequest }) {
       stops[next].focus({ preventScroll: true })
       stops[next].scrollIntoView?.({ block: 'nearest' })
     }}>
-      <div ref={ref} className="plugin-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} data-testid="plugin-dialog">
-        <header className="plugin-dialog-header">
+      <div ref={ref} className="plugin-dialog wn-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} data-testid="plugin-dialog">
+        <header className="plugin-dialog-header wn-dialog-head">
           <h2 id={titleId}>{title}</h2>
-          <button type="button" className="plugin-dialog-close" aria-label="Close dialog" onClick={close}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+          <button type="button" className="btn btn-icon plugin-dialog-close wn-dialog-close" aria-label="Close dialog" onClick={close}>
+            {ICON_CLOSE}
           </button>
         </header>
         <div className="plugin-dialog-body">

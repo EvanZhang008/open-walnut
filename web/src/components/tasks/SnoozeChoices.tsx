@@ -41,7 +41,8 @@ export function SnoozeRows({ onSnooze, onPickDate, onClear, soon }: {
 }
 
 /** A flyout placed at a viewport point, wearing the project flyout's class so every outside-press
- *  and scroll closer already exempts it. Focus lands on its first button. */
+ *  and scroll closer already exempts it. Focus lands on its first button. Its host owns the close
+ *  (useCursorFlyout's overlay layer, or the host's own). */
 function PointFlyout({ point, anchorRef, label, className, onClose, children }: {
   point: CursorPoint; anchorRef: RefObject<HTMLElement | null>; label: string; className?: string;
   onClose: () => void; children: ReactNode;
@@ -58,7 +59,7 @@ function PointFlyout({ point, anchorRef, label, className, onClose, children }: 
     buttons[(at + step + buttons.length) % buttons.length]?.focus({ preventScroll: true });
   };
   return createPortal(
-    <div ref={ref} className={`task-kebab-project-flyout${className ? ` ${className}` : ''}`} role="dialog" aria-label={label}
+    <div ref={ref} className={`task-kebab-project-flyout wn-overlay${className ? ` ${className}` : ''}`} role="dialog" aria-label={label}
       style={menuPlacementStyle(placement)} onKeyDown={onKeyDown} onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
       {children}
     </div>,
@@ -71,7 +72,7 @@ export function SnoozeFlyout({ point, anchorRef, onSnooze, onPickDate, onClear, 
   onSnooze: (date: string) => void; onPickDate: () => void; onClear?: () => void; onClose: () => void;
   soon?: boolean;
 }) {
-  return <PointFlyout point={point} anchorRef={anchorRef} label="Snooze until" onClose={onClose}>
+  return <PointFlyout point={point} anchorRef={anchorRef} label="Snooze until" className="wn-menu" onClose={onClose}>
     <SnoozeRows soon={soon} onSnooze={d => { onSnooze(d); onClose(); }} onPickDate={onPickDate} onClear={onClear ? () => { onClear(); onClose(); } : undefined} />
   </PointFlyout>;
 }

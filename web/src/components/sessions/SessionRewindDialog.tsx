@@ -192,13 +192,13 @@ export function SessionRewindDialog({
 
   return createPortal(
     <div
-      className="app-modal-overlay rewind-dialog-overlay"
+      className="app-modal-overlay rewind-dialog-overlay wn-scrim"
       role="dialog"
       aria-modal="true"
       aria-label="Rewind to this message"
       onMouseDown={onClose}
     >
-      <div className="app-modal rewind-dialog" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="app-modal rewind-dialog wn-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="app-modal-title">Rewind to this message</div>
         {label && <div className="rewind-dialog-target">“{label}”</div>}
 
@@ -254,7 +254,7 @@ export function SessionRewindDialog({
 
         {error && <div className="rewind-dialog-error">{error}</div>}
 
-        <div className="app-modal-actions">
+        <div className="app-modal-actions wn-dialog-foot">
           <button type="button" className="btn btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
           <button type="button" className="btn btn-primary" onClick={confirm} disabled={busy || checkingGuard || !preview}>
             {confirmLabel}

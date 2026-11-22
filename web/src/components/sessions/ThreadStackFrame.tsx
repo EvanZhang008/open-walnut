@@ -47,7 +47,7 @@ export function ThreadHoverTip({ text, at }: { text: string; at: { x: number; y:
   return createPortal(
     <div
       ref={tipRef}
-      className="thread-hover-tip"
+      className="thread-hover-tip wn-tip"
       role="tooltip"
       {...{ [THREAD_OVERLAY_ATTR]: '' }}
       onPointerDown={(e) => e.stopPropagation()}

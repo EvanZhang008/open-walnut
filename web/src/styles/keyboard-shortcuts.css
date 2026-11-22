@@ -14,18 +14,6 @@
 }
 .shortcuts-help-head .app-modal-title { flex: 1; }
 
-.shortcuts-help-close {
-  border: none;
-  background: transparent;
-  color: var(--fg-muted);
-  font-size: var(--font-size-2xl);
-  line-height: 1;
-  padding: 2px 6px;
-  border-radius: 6px;
-  cursor: pointer;
-}
-.shortcuts-help-close:hover { color: var(--fg); background: var(--bg-hover); }
-
 .shortcuts-help-group + .shortcuts-help-group { margin-top: 14px; }
 
 .shortcuts-help-group-title {

@@ -14,6 +14,7 @@ import { SHORTCUTS_HELP_EVENT } from './shortcuts-help-event';
 import { useShortcutOverrides } from './shortcut-overrides';
 import { ShortcutKeys } from './ShortcutKeys';
 import '@/styles/keyboard-shortcuts.css';
+import { ICON_CLOSE } from '../components/common/Icons';
 
 
 export function ShortcutsHelpHost() {
@@ -48,19 +49,19 @@ function ShortcutsHelpDialog({ onClose }: { onClose: () => void }) {
   useModalOverlay(onClose);
   useDialogFocus(dialogEl, 'Keyboard shortcuts');
   return createPortal(
-    <div className="app-modal-overlay shortcuts-help-overlay" onPointerDown={(e) => { e.stopPropagation(); if (e.target === e.currentTarget) onClose(); }}>
+    <div className="app-modal-overlay shortcuts-help-overlay wn-scrim" onPointerDown={(e) => { e.stopPropagation(); if (e.target === e.currentTarget) onClose(); }}>
       <div
         ref={setDialogEl}
-        className="app-modal shortcuts-help"
+        className="app-modal shortcuts-help wn-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby={labelId}
         tabIndex={-1}
         onPointerDown={(e) => e.stopPropagation()}
       >
-        <header className="shortcuts-help-head">
+        <header className="shortcuts-help-head wn-dialog-head">
           <h2 id={labelId} className="app-modal-title">Keyboard shortcuts</h2>
-          <button type="button" className="shortcuts-help-close" aria-label="Close keyboard shortcuts" onClick={onClose}>×</button>
+          <button type="button" className="btn btn-icon shortcuts-help-close wn-dialog-close" aria-label="Close keyboard shortcuts" onClick={onClose}>{ICON_CLOSE}</button>
         </header>
         <div className="shortcuts-help-groups">
           {groups.map((g) => (

@@ -23,6 +23,7 @@ import { log } from '@/utils/log';
 import '@/styles/session-commit.css';
 import { FitButton, HeaderFitMore, useHeaderFit } from '@/components/common/HeaderFit';
 import { ICON_REFRESH } from '@/components/common/Icons';
+import { ICON_CLOSE } from '../common/Icons';
 
 
 export interface CommitConfirm { repoRoot: string; kind: 'push' | 'pr' }
@@ -118,7 +119,7 @@ export function SessionCommitDialog({ sessionId, onClose, onCommitted }: {
 
   return createPortal(
     <div
-      className="app-modal-overlay"
+      className="app-modal-overlay wn-scrim"
       onMouseDown={onClose}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
@@ -127,19 +128,19 @@ export function SessionCommitDialog({ sessionId, onClose, onCommitted }: {
       onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}
     >
       <div
-        className="app-modal scd-modal"
+        className="app-modal scd-modal wn-dialog"
         role="dialog"
         aria-modal="true"
         aria-label="Commit this session's changes"
         data-testid="session-commit-dialog"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="scd-head" ref={headRef} data-fit-header="">
+        <div className="scd-head wn-dialog-head" ref={headRef} data-fit-header="">
           <div className="app-modal-title" data-fit-title="">Commit this session's changes</div>
           <div className="scd-head-actions" data-fit-actions="">
             <FitButton icon={ICON_REFRESH} label={loading ? 'Reading…' : 'Reload'} className="scd-reload" onClick={() => void load()} disabled={loading} title="Read the repositories again" />
             <HeaderFitMore testId="scd-more" />
-            <button type="button" className="scd-close" onClick={onClose} aria-label="Close">×</button>
+            <button type="button" className="btn btn-icon scd-close wn-dialog-close" onClick={onClose} aria-label="Close">{ICON_CLOSE}</button>
           </div>
         </div>
         <div className="scd-body">{body}</div>

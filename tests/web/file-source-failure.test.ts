@@ -79,7 +79,8 @@ describe('a path whose source machine is unknown', () => {
     expect(h.explorer).not.toHaveBeenCalled();
     const escape = new window.Event('keydown');
     Object.assign(escape, { key: 'Escape' });
-    window.dispatchEvent(escape);
+    // The viewer is a dialog (useModalOverlay), which hears Escape on the document.
+    document.dispatchEvent(escape);
     expect(close).toHaveBeenCalledOnce();
 
     await render({ host: 'devbox', sourceOnly: true });

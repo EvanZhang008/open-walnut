@@ -124,14 +124,10 @@
   inset: 0;
   /* Above the notification panel (9200) and the plan popup (9100); the file
      preview (9999) still layers on top of the reader, which is correct. */
-  z-index: 9250;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(0, 0, 0, 0.28);
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
 }
 
 .hib-reader {
@@ -142,11 +138,8 @@
   /* Bounded by the viewport, never by content: an agent can write a 200KB body. */
   max-height: 88vh;
   min-height: 0;
-  border-radius: var(--radius-lg);
-  background: var(--card-bg);
   color: var(--fg);
   overflow: hidden;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16), 0 32px 80px rgba(0, 0, 0, 0.18);
 }
 
 /* The letter's inside (LetterView) — one box, two hosts: this overlay and the

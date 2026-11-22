@@ -16,6 +16,7 @@ import { NoteLinkPanel } from './NoteLinkPanel';
 import { taskPath } from '@/utils/task-path';
 import { taskReferenceLabel } from '@/utils/project-display';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 
 interface SlashCommandPortalProps {
   editor: Editor;
@@ -69,19 +70,6 @@ export function SlashCommandPortal({ editor, state, tasks, focusedTaskId, wikiLi
       // coordsAtPos can fail for invalid positions — panel stays hidden
     }
   }, [state, editor]);
-
-  // Close when clicking outside the panel (only when visible)
-  useEffect(() => {
-    if (state.phase === 'closed') return;
-
-    const handleClickOutside = (e: MouseEvent) => {
-      if (panelRef.current && !e.composedPath().includes(panelRef.current)) {
-        onClose();
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [state.phase, onClose]);
 
   const handleCommandSelect = useCallback((cmd: NoteSlashCommand) => {
     // Block-insert commands run immediately as one transaction, then close.
@@ -151,6 +139,22 @@ export function SlashCommandPortal({ editor, state, tasks, focusedTaskId, wikiLi
     editor.commands.focus();
   }, [editor]);
 
+  // Escape and an outside press close (the layer takes Escape before the panels see it, so a
+  // sub-panel's Escape goes back to the command list here). Focus stays in the editor or the
+  // sub-panel's field (Tab picks a row: no trap), and the outside click goes through.
+  useOverlayLayer({
+    open: state.phase !== 'closed',
+    onClose,
+    onEscape: () => {
+      if (!subPanel) return false;
+      handleBack();
+      return true;
+    },
+    refs: [panelRef],
+    trapFocus: false,
+    passOutsideClick: true,
+  });
+
   if (state.phase === 'closed' || !coords) return null;
 
   let panel: React.ReactNode = null;
@@ -188,7 +192,7 @@ export function SlashCommandPortal({ editor, state, tasks, focusedTaskId, wikiLi
     <div
       ref={panelRef}
       className="notes-slash-portal"
-      style={{ position: 'fixed', left: coords.left, top: coords.top, zIndex: 10001 }}
+      style={{ position: 'fixed', left: coords.left, top: coords.top, zIndex: 'var(--z-menu)' }}
     >
       {panel}
     </div>,

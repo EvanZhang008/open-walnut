@@ -1,7 +1,7 @@
 /* Session-local usage and lifetime allowance, sharing the app dialog skin. */
 /* Above every placed menu (useMenuPlacement sets 9999 inline): it opens from the model picker's popout.
    Two classes, so it outranks .app-modal-overlay's 9300 in globals.css, which loads later. */
-.app-modal-overlay.session-usage-overlay { z-index: 10000; padding: 12px; box-sizing: border-box; }
+.app-modal-overlay.session-usage-overlay { padding: 12px; box-sizing: border-box; }
 .session-usage-dialog.app-modal {
   width: min(540px, calc(100vw - 24px));
   max-height: calc(100dvh - 24px);
@@ -14,8 +14,7 @@
 .session-usage-heading > div { min-width: 0; }
 .session-usage-heading h2 { margin: 0; }
 .session-usage-title { margin: 4px 0 0; color: var(--fg-muted); font-size: var(--font-size-sm); overflow-wrap: anywhere; }
-.session-usage-close { flex-shrink: 0; border: 0; background: transparent; color: var(--fg-muted); font-size: 22px; cursor: pointer; width: 32px; height: 32px; border-radius: 6px; }
-.session-usage-close:hover { background: var(--bg-hover); color: var(--fg); }
+.session-usage-close { flex-shrink: 0; }
 .session-usage-total { display: flex; flex-direction: column; gap: 5px; padding: 22px 0 18px; }
 .session-usage-label { font-size: var(--font-size-sm); color: var(--fg-secondary); }
 .session-usage-total strong { color: var(--fg); font-size: 34px; line-height: 1.2; font-weight: 600; letter-spacing: -0.8px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }

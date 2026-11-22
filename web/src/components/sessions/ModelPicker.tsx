@@ -20,6 +20,8 @@ import { engineLockReason, pickerRailEngines } from '@/utils/engines';
 import { engineCaps, engineLabel } from '@/utils/engine-capabilities';
 import { useHostModelCatalog, seedHostCatalog } from '@/hooks/useModelCatalog';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
+import { isImeKey } from '@/utils/ime-key';
 import { formatModelName } from '@/utils/model-name';
 import { sortByModelStrength } from '@/utils/model-strength-order';
 import { parseAcpModelId, acpProviderGroupId, shortAcpModelName, acpModelDisplayName, groupAcpModels, acpFilterMatch, acpEffortLadder, acpEffortLabel } from './acp-model-id';
@@ -47,15 +49,6 @@ const CONTEXT_WARN_PCT = 90;
  *  value/resolvedModel carries the full ID, so derive the versioned name from
  *  it. Falls back to displayName when no version is derivable (legacy alias
  *  rows like 'opus', GPT rows whose displayName is already right). */
-/**
- * A modal opened over the picker (Usage & Budget, from its cost block) owns its own clicks and
- * Esc: the picker stays open beneath it and shows the new budget when it closes.
- */
-function inModalAbove(target: EventTarget | null, pop: HTMLElement | null): boolean {
-  const modal = target instanceof Element ? target.closest('[aria-modal="true"]') : null;
-  return !!modal && !(pop && modal.contains(pop));
-}
-
 export function catalogRowLabel(m: SessionModelCatalogEntry): string {
   const derived = formatModelName(m.resolvedModel ?? m.value);
   const versioned = /^(Opus|Sonnet|Haiku|Fable) \d/.test(derived) ? derived : null;
@@ -670,23 +663,12 @@ export function ModelPicker({
   const activeEffort: SessionEffort = appliedEffort ?? requestedEffort;
   const effortMismatch = applied !== null && appliedEffort !== null && appliedEffort !== requestedEffort;
 
-  // Close on Escape key
-  React.useEffect(() => {
-    // document, not window: it must run BEFORE the panel key router (window) so
-    // its preventDefault tells the router this Esc is taken.
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || inModalAbove(e.target, popRef.current)) return;
-      e.preventDefault(); onClose();
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [onClose]);
-
   // ── POPOUT (anchorRef callers): portal to <body>, placed by useMenuPlacement
   // against the clicked pill — a narrow session column can no longer clip the
   // panel (user report 2026-08-15: half the picker was cut off). preferSide
   // 'up' because every pill lives in a bottom mode bar. Outside-click closes;
-  // the pill's own click is exempt (it already toggles).
+  // the pill's own click is exempt (it already toggles). See the overlay layer
+  // below the filter state.
   const popRef = React.useRef<HTMLDivElement>(null);
   const popped = !!anchorRef;
   // Inside the pill's own session column when it fits there, never over the task list beside it
@@ -699,18 +681,6 @@ export function ModelPicker({
     // The pill leaving the page is no close the user made: a host may tell it apart.
     preferSide: 'up', align: 'center', margin: 12, onAnchorLost: onAnchorLost ?? onClose, boundsRef: columnRef,
   });
-  React.useEffect(() => {
-    if (!popped) return;
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (popRef.current?.contains(t)) return;
-      if (anchorRef?.current?.contains(t)) return;
-      if (inModalAbove(t, popRef.current)) return;
-      onClose();
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [popped, onClose, anchorRef]);
 
   // ── ACP pane rows. ACP encodes effort into the model id (…-sol[xhigh],
   // …/claude-sonnet-4-6/high), which as raw rows is a wall — opencode
@@ -779,6 +749,29 @@ export function ModelPicker({
   // "us.anthropic" hit) and each match says which provider it came from.
   const [acpQuery, setAcpQuery] = React.useState('');
   React.useEffect(() => { setAcpQuery(''); setAcpGroupSel(null); }, [engine]);
+
+  // One overlay layer: Escape closes the picker (a typed filter is cleared first,
+  // the next Escape closes), and a popout closes on a press outside it and its
+  // pill. In place (no popout) only its own × and Escape close it. The Usage &
+  // Budget dialog opened from the cost block sits above: it takes Escape itself
+  // (a dialog opened after the layer owns the keyboard) and a press on it or its
+  // scrim leaves the picker open beneath, showing the new budget when it closes.
+  // Only the popout is a layer. In place (a draft panel's picker) it is part of the page: it neither
+  // traps Tab nor takes Escape from the composer beside it; Escape inside it closes it (onKeyDown below).
+  useOverlayLayer({
+    passOutsideClick: true,
+    open: popped,
+    onClose: () => onClose(),
+    refs: anchorRef ? [popRef, anchorRef] : [popRef],
+    exemptSelectors: ['.session-usage-overlay'],
+    closeOnOutside: popped,
+    onEscape: (e) => {
+      const t = e.target as Element | null;
+      if (!acpQuery || !t?.classList?.contains('model-picker-filter')) return false;
+      setAcpQuery('');
+      return true;
+    },
+  });
   const acpNeedle = acpQuery.trim();
   const acpFilterable = acpGrouped || acpAllFamilies.length > 8;
   const acpMatches = React.useMemo(() => {
@@ -1086,12 +1079,9 @@ export function ModelPicker({
                   placeholder={`Filter ${acpAllFamilies.length} models…`}
                   value={acpQuery}
                   onChange={(e) => setAcpQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    // Escape clears the query first; a second Escape (empty
-                    // query → not handled here) closes the picker as usual.
-                    if (e.key === 'Escape' && acpQuery) { e.preventDefault(); setAcpQuery(''); e.stopPropagation(); }
-                    else if (e.key !== 'Escape') e.stopPropagation();
-                  }}
+                  // Escape is the overlay layer's (it clears the query first); the
+                  // other keys stay with the filter.
+                  onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}
                   spellCheck={false}
                   data-testid="acp-model-filter"
                   // eslint-disable-next-line jsx-a11y/no-autofocus -- a pane
@@ -1237,12 +1227,19 @@ export function ModelPicker({
 
   const panel = (
     <div
-      className={`model-picker${popped ? ' model-picker-popout' : ''}${isAcpPane && onAcpSwitch ? ' model-picker-acp' : ''}${isAcpPane && acpGrouped && onAcpSwitch ? ' model-picker-acp-grouped' : ''}`}
+      className={`model-picker${popped ? ' wn-overlay model-picker-popout' : ''}${isAcpPane && onAcpSwitch ? ' model-picker-acp' : ''}${isAcpPane && acpGrouped && onAcpSwitch ? ' model-picker-acp-grouped' : ''}`}
       ref={popRef}
       style={popped ? menuPlacementStyle(placement) : undefined}
       // Portal menus still bubble React events into the host row's drag
       // sensors — stop pointerdown at the boundary (menu hard rule).
       onPointerDown={popped ? (e) => e.stopPropagation() : undefined}
+      onKeyDown={popped ? undefined : (e) => {
+        if (e.key !== 'Escape' || e.defaultPrevented || isImeKey(e.nativeEvent)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (acpQuery && (e.target as Element).classList?.contains('model-picker-filter')) setAcpQuery('');
+        else onClose();
+      }}
     >
       <ProviderRail active={engine} onSwitch={onProviderSwitch} lockReason={providerLockReason} onClose={onAnchorLost ?? onClose} />
       <div className="model-picker-pane">

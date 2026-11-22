@@ -6,9 +6,10 @@
  *   empty slot  → New task… · New event… (seeds the quick-create popover)
  * Anchored at the pointer via useMenuPlacement's anchorPoint mode.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import type { CalendarItem } from './calendar-items';
 import { calendarEventNeedsApproval } from '@/api/calendar';
 import './visibility.css';
@@ -64,13 +65,8 @@ export function CalendarContextMenu({
   // undo, so a single stray right-click+click must not be enough.
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  // Escape through the shared layer; an outside press is the backdrop's.
+  useOverlayLayer({ passOutsideClick: true, open: true, refs: [menuRef], closeOnOutside: false, trapFocus: false, onClose: (reason) => { if (reason === 'escape') onClose(); } });
 
   const { item, seed } = target;
   const isTask = item && item.kind !== 'event';
@@ -86,7 +82,7 @@ export function CalendarContextMenu({
     <>
       <div className="cal-popover-backdrop" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
       <div
-        className="cal-ctx-menu wn-glass"
+        className="cal-ctx-menu wn-overlay wn-menu wn-glass"
         ref={menuRef}
         style={menuPlacementStyle(placement)}
         role="menu"

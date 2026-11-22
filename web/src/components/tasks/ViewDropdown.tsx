@@ -29,6 +29,7 @@
 
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import type { TaskPhase } from '@open-walnut/core';
 import { ICON_CHECK, ICON_CLOSE, ICON_SLIDERS } from '../common/Icons';
 import '@/styles/view-menu-choices.css';
@@ -204,33 +205,21 @@ export function ViewDropdown({
     };
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (containerRef.current?.contains(t)) return;
-      if (panelRef.current?.contains(t)) return;
-      setOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
-
-  // Escape clears an in-progress search first; a second Escape closes the
-  // panel (closing while results are up loses the user's place). Reads the DOM
-  // value so the listener needs no dep on every keystroke.
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      // Claimed, so the page's own Escape (deselect the task) does not run as well.
-      e.preventDefault();
-      if (searchRef.current?.value) { setSearch(''); return; }
-      setOpen(false);
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [open]);
+  // The overlay stack: a press outside closes the panel. Escape clears an in-progress search
+  // first; a second Escape closes the panel (closing while results are up loses the user's place).
+  // Either Escape is claimed, so the page's own Escape (deselect the task) does not run as well.
+  // Reads the DOM value so the callback needs no dep on every keystroke.
+  useOverlayLayer({
+    passOutsideClick: true,
+    open,
+    refs: [panelRef, containerRef],
+    onClose: () => setOpen(false),
+    onEscape: () => {
+      if (!searchRef.current?.value) return false;
+      setSearch('');
+      return true;
+    },
+  });
 
   // Reset transient state per open: no stale search, rail on the first section.
   // Focus is autoFocus on the search input (this effect can run before the
@@ -293,7 +282,7 @@ export function ViewDropdown({
         // Portals escape clipping, NOT event bubbling: without stopPropagation
         // dnd-kit's sensors see these pointer downs and drag the row behind.
         <div
-          className="vd-panel"
+          className="vd-panel wn-overlay"
           ref={panelRef}
           onPointerDown={(e) => e.stopPropagation()}
           style={{ top: pos.top, left: pos.left, width: pos.width, maxHeight: pos.maxHeight }}

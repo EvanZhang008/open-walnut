@@ -1711,7 +1711,7 @@ function CompareHelp({ base }: { base: SessionDiffBase }) {
     >?
       {open && pos && (
         <span
-          className="session-diff-base-popover is-fixed"
+          className="session-diff-base-popover is-fixed wn-overlay"
           role="tooltip"
           style={{ left: pos.left, top: pos.top, width: POP_W }}
           onMouseEnter={show}

@@ -90,8 +90,8 @@ export function NewTopicDialog({ initial, onClose, onMade }: {
 
   return createPortal(
     <ModalOverlayOwner.Provider value={modalOwner}>
-      <div className="app-modal-overlay" role="dialog" aria-modal="true" aria-label="New topic" data-testid="topic-new-dialog" onMouseDown={onClose}>
-        <div className="app-modal topic-dialog" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="app-modal-overlay wn-scrim" role="dialog" aria-modal="true" aria-label="New topic" data-testid="topic-new-dialog" onMouseDown={onClose}>
+        <div className="app-modal topic-dialog wn-dialog" onMouseDown={(e) => e.stopPropagation()}>
           <div className="app-modal-title">New topic</div>
           <p className="topic-muted">A group chat of tasks, VPs and people. A message wakes the members it names with @, or everyone when it names no one.</p>
           <label className="topic-field-label" htmlFor="topic-new-title">Title</label>
@@ -130,7 +130,7 @@ export function NewTopicDialog({ initial, onClose, onMade }: {
             />
           </MicField>
           {error && <p className="topic-error" data-testid="topic-new-error">{error}</p>}
-          <div className="app-modal-actions">
+          <div className="app-modal-actions wn-dialog-foot">
             <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
             <button type="button" className="btn btn-primary" data-testid="topic-new-create" disabled={!ready && !gate.micBusy && !gate.waiting} onClick={gate.send} {...dictationWaitProps(gate)}>
               {busy ? 'Creating…' : 'Create topic'}

@@ -25,6 +25,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { usePageView } from '@/utils/view-memory';
 import {
   DEFAULT_PIN_SHORTCUTS, firstLevelPinChoices, isPinShortcutList, normalizePinShortcuts,
@@ -160,31 +161,18 @@ function PinMoreFlyout({ open, anchorRef, customizing, setCustomizing, more, all
   const ref = useRef<HTMLDivElement>(null);
   const placement = useMenuPlacement(open, anchorRef, ref, { minHeight: 120, onAnchorLost: onClose });
 
-  useEffect(() => {
-    if (!open) return;
-    // Capture phase, so the host menu's own pointerdown guard cannot hide a click elsewhere in
-    // it: that click closes the flyout, and the menu row still runs.
-    const onPointerDown = (e: PointerEvent) => {
-      const target = e.target as Node | null;
-      if (!target) return;
-      if (ref.current?.contains(target) || anchorRef.current?.contains(target)) return;
+  // The overlay stack (capture phase, before every host's own listeners): Escape closes only
+  // this flyout and puts focus back on More. A click elsewhere in the host menu closes the
+  // flyout and still runs that menu row, so the outside click goes through.
+  useOverlayLayer({
+    open,
+    refs: [ref, anchorRef],
+    passOutsideClick: true,
+    onClose: (reason) => {
       onClose();
-    };
-    // On window, capture: it runs before every host's document capture listener and stops there.
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.isComposing) return;
-      e.preventDefault();
-      e.stopPropagation();
-      onClose();
-      anchorRef.current?.focus({ preventScroll: true });
-    };
-    document.addEventListener('pointerdown', onPointerDown, true);
-    window.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown, true);
-      window.removeEventListener('keydown', onKey, true);
-    };
-  }, [open, onClose, anchorRef]);
+      if (reason === 'escape') anchorRef.current?.focus({ preventScroll: true });
+    },
+  });
 
   // Keyboard users land on the first row once the flyout is placed, and again on a view switch.
   const placed = placement !== null;
@@ -259,7 +247,7 @@ function PinMoreFlyout({ open, anchorRef, customizing, setCustomizing, more, all
   return createPortal(
     <div
       ref={ref}
-      className="task-kebab-project-flyout task-pin-flyout"
+      className="task-kebab-project-flyout task-pin-flyout wn-overlay wn-menu"
       data-testid="task-pin-flyout"
       role="dialog"
       aria-label={customizing ? 'Choose the pin shortcuts' : 'More pin choices'}

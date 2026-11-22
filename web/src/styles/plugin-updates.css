@@ -163,10 +163,6 @@
   display: block;
   max-width: min(360px, calc(100vw - 16px));
   padding: 5px 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
   color: var(--fg-secondary);
   font-size: var(--font-size-sm);
   line-height: 1.4;
@@ -207,10 +203,6 @@
   min-width: 280px;
   max-width: min(420px, calc(100vw - 16px));
   padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   color: var(--fg);
   font-size: var(--font-size-sm);
   line-height: 1.4;

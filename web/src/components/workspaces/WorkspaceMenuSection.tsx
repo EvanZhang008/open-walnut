@@ -20,6 +20,7 @@ import { unwatchSetupRun, watchSetupRun } from './cleanup-notices';
 import { useStoreTask } from '@/contexts/TasksContext';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { useAlert, useConfirm } from '@/hooks/useConfirm';
 import { fetchWorkspaceRemoval, removeTaskWorkspace, rerunTaskSetup, retryTaskWorkspace, startTaskAnyway } from '@/api/workspaces';
 import { ScriptRunCard } from './ScriptRunCard';
@@ -57,6 +58,9 @@ function WorkspaceFlyout({ open, anchorRef, anchorPoint, taskId, taskTitle, ws, 
   const listRef = useRef<HTMLDivElement>(null);
   const point = useMemo(() => (anchorPoint ? { x: anchorPoint.x, y: anchorPoint.y } : null), [anchorPoint]);
   const placement = useMenuPlacement(open, anchorRef, listRef, { minHeight: 160, anchorPoint: point, align: anchorPoint?.align ?? 'right', onAnchorLost: onClose });
+  // Its own layer over the menu it opened from: the first Escape closes the flyout alone, and a
+  // press in that menu (a kebab of the task-kebab-menu family) is not outside it. Focus stays in the menu.
+  useOverlayLayer({ passOutsideClick: true, open, onClose, refs: [listRef, anchorRef], exemptSelectors: ['.task-kebab-menu'], trapFocus: false });
   const confirm = useConfirm();
   const alert = useAlert();
   const [busy, setBusy] = useState<string | null>(null);
@@ -150,7 +154,7 @@ function WorkspaceFlyout({ open, anchorRef, anchorPoint, taskId, taskTitle, ws, 
   return createPortal(
     <div
       ref={listRef}
-      className="task-kebab-project-flyout workspace-flyout"
+      className="task-kebab-project-flyout workspace-flyout wn-overlay"
       // A short panel beside the menu, never one to the window's bottom: its outputs scroll on their own.
       style={{ ...menuPlacementStyle(placement), ...(placement ? { maxHeight: Math.min(placement.maxHeight, FLYOUT_MAX_HEIGHT) } : {}) }}
       data-testid="workspace-flyout"

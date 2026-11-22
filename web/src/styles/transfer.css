@@ -6,7 +6,6 @@
   display: flex;
   flex-direction: column;
   /* var(--card-bg) is glass in some themes; a form over a busy board must stay readable. */
-  background: var(--card-bg);
 }
 .xfer-head { display: flex; align-items: center; gap: 8px; }
 .xfer-head .app-modal-title { flex: 1; min-width: 0; }

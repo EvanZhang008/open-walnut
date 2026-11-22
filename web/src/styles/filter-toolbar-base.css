@@ -69,16 +69,8 @@
 
 /* Popover shell (Filter, Display, chip menus): a soft two-layer shadow, 10px corners. */
 .tp-pop {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.08);
   color: var(--fg);
   animation: tp-pop-in 120ms ease-out;
-}
-:root[data-theme='dark'] .tp-pop { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04); }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .tp-pop { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04); }
 }
 @keyframes tp-pop-in {
   from { opacity: 0; transform: translateY(-4px); }

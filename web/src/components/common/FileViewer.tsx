@@ -11,6 +11,7 @@
  */
 import { useState, useEffect, useLayoutEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { SessionFileExplorer } from '../sessions/SessionFileExplorer';
 import { useHostDisplayLabel, useHostRoute } from '@/hooks/useHostDisplayLabel';
 import { useAllHostStatus } from '@/hooks/useHostStatus';
@@ -18,6 +19,7 @@ import { hostDisplayLabel, remoteHostTag } from '@/utils/host-display-label';
 import { locateClickedPath, missingPathLine, type ClickedPathTarget } from '@/hooks/useClickedPathOpener';
 import { sourceFailureNeedsPick, type SourceFailReason } from '@/utils/agent-text-source';
 import { forgetMachine, rememberMachine, rememberedMachine } from '@/utils/path-machine-memory';
+import { ICON_CLOSE } from './Icons';
 
 const LOCAL = '__local__';
 const LOCAL_ALIASES = new Set(['', 'local', LOCAL]);
@@ -110,14 +112,8 @@ export function FileViewer({ path: filePath, line, endLine, host: askedHost, sou
   const hostName = useHostDisplayLabel(remote);
   const hostVia = useHostRoute(remote);
 
-  // Escape key closes
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  // Escape closes (the newest dialog only), and the page behind stops scrolling.
+  useModalOverlay(onClose);
 
   const handleCopyPath = useCallback(() => {
     navigator.clipboard.writeText(filePath).then(() => {
@@ -132,9 +128,9 @@ export function FileViewer({ path: filePath, line, endLine, host: askedHost, sou
   const showRemembered = fromMemory && !failure && !!target && !target.missing;
 
   const overlay = (
-    <div className="file-viewer-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="file-viewer-panel file-viewer-panel-explorer">
-        <div className="file-viewer-header">
+    <div className="file-viewer-overlay wn-scrim" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="file-viewer-panel file-viewer-panel-explorer wn-dialog">
+        <div className="file-viewer-header wn-dialog-head">
           <div className="file-viewer-title">
             <span className="file-viewer-icon">&#x1F4C2;</span>
             <span className="file-viewer-path" title={filePath}>{filename}</span>
@@ -148,8 +144,8 @@ export function FileViewer({ path: filePath, line, endLine, host: askedHost, sou
             >
               {copied ? 'Copied!' : 'Copy Path'}
             </button>
-            <button className="file-viewer-close" onClick={onClose} title="Close (Esc)">
-              &#x2715;
+            <button className="btn btn-icon file-viewer-close wn-dialog-close" onClick={onClose} title="Close (Esc)" aria-label="Close">
+              {ICON_CLOSE}
             </button>
           </div>
         </div>

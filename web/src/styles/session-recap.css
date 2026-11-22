@@ -10,17 +10,12 @@
    instead of drawn above every composer. Placed like the trigger picker. */
 .latest-update-popover {
   position: fixed;
-  z-index: 10020;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
   width: min(420px, 100vw - 24px);
   max-height: min(480px, var(--menu-max-height, 480px));
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
   color: var(--fg);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22), var(--shadow-md);
   font-size: var(--font-size-md);
   line-height: 19px;
 }

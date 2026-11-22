@@ -52,7 +52,7 @@ export function FilterChipMenu({ controller: c, dim, anchorRef, onClose, onRemov
   return createPortal(
     <div
       ref={ref}
-      className="fb-chip-menu tp-pop"
+      className="fb-chip-menu tp-pop wn-overlay"
       role="dialog"
       aria-label={`${dimLabel(dim)} filter`}
       data-chip-menu-dim={dim}

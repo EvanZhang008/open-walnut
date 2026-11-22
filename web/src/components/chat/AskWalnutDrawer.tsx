@@ -35,6 +35,7 @@ import { ICON_CHEVRON_DOWN, ICON_SEARCH, ICON_SLIDERS } from '@/components/commo
 import { GENERAL_AGENT_ID, type AskAgent } from './ask-walnut-slot-model';
 import { DrawerItem, heldRowView, TaskDot } from './AskWalnutDrawerItem';
 import { MicInput } from '@/components/common/BoxMic';
+import { hasActiveModalOverlay } from '@/hooks/useModalOverlay';
 
 /** A row in the drawer's list. The just-launched task is not in the store yet,
  *  so a row is `{ id, title }` plus the Task when the store has it. */
@@ -171,7 +172,8 @@ export function AskWalnutDrawer({
     if (isPhoneLayout()) panelRef.current?.focus({ preventScroll: true });
     else searchRef.current?.focus({ preventScroll: true });
     const key = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
+      // A dialog opened over the drawer (an approval, the command palette) takes Escape first.
+      if (e.key !== 'Escape' || hasActiveModalOverlay()) return;
       e.preventDefault();
       e.stopPropagation();
       if (agentsOpenRef.current) {

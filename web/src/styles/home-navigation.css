@@ -395,7 +395,7 @@
 .scratchpad-host { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 /* The phone's place for the one scratchpad editor ("Take me there" while it saves): a sheet over the page.
    Two classes, so it outranks .app-modal-overlay's 9300 in globals.css, which loads later. */
-.app-modal-overlay.scratchpad-sheet-overlay { z-index: 10000; padding: 12px; box-sizing: border-box; }
+.app-modal-overlay.scratchpad-sheet-overlay { padding: 12px; box-sizing: border-box; }
 .scratchpad-sheet {
   width: min(560px, calc(100vw - 24px)); height: min(640px, calc(100dvh - 24px));
   display: flex; flex-direction: column; min-height: 0; overflow: hidden; box-sizing: border-box; padding: 0 12px 12px;

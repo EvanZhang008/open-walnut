@@ -8,7 +8,8 @@
  */
 import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import type { KanbanChange } from './kanban-changes-model';
 
 export interface KanbanChangesProps {
@@ -23,29 +24,16 @@ export function KanbanChanges({ open, anchorRef, changes, onPick, onClose }: Kan
   const menuRef = useRef<HTMLDivElement>(null);
   const placement = useMenuPlacement(open, anchorRef, menuRef, { align: 'left', minHeight: 120 });
 
+  useOverlayLayer({
+    passOutsideClick: true,
+    open,
+    refs: [menuRef, anchorRef],
+    onClose: (reason) => { onClose(); if (reason === 'escape') anchorRef.current?.focus(); },
+  });
+  // First row takes focus, so the arrows walk the list.
   useEffect(() => {
-    if (!open) return;
-    const onDown = (e: PointerEvent) => {
-      const t = e.target as Node | null;
-      if (menuRef.current?.contains(t) || anchorRef.current?.contains(t)) return;
-      onClose();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      e.stopPropagation();
-      onClose();
-      anchorRef.current?.focus();
-    };
-    document.addEventListener('pointerdown', onDown, true);
-    document.addEventListener('keydown', onKey, true);
-    // First row takes focus, so the arrows walk the list.
-    menuRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
-    return () => {
-      document.removeEventListener('pointerdown', onDown, true);
-      document.removeEventListener('keydown', onKey, true);
-    };
-  }, [open, onClose, anchorRef]);
+    if (open) menuRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+  }, [open]);
 
   if (!open) return null;
   const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
@@ -60,14 +48,11 @@ export function KanbanChanges({ open, anchorRef, changes, onPick, onClose }: Kan
   return createPortal(
     <div
       ref={menuRef}
-      className="kanban-changes"
+      className="kanban-changes wn-overlay wn-menu"
       data-testid="kanban-changes"
       role="menu"
       aria-label="What changed"
-      style={{
-        position: 'fixed', top: placement?.top ?? -9999, right: placement?.right ?? 0, maxHeight,
-        visibility: placement ? 'visible' : 'hidden',
-      }}
+      style={placement ? { ...menuPlacementStyle(placement), maxHeight } : menuPlacementStyle(null)}
       onPointerDown={(e) => e.stopPropagation()}
       onKeyDown={onKeyDown}
     >

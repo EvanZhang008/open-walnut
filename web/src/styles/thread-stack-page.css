@@ -48,21 +48,6 @@
 .thread-sliver-bar:focus:not(:focus-visible) { outline: none; }
 
 /* A tooltip at the pointer (sliver bars, marks). Portalled, placed fixed. */
-.thread-hover-tip {
-  position: fixed;
-  z-index: 9990;
-  max-width: min(360px, 80vw);
-  padding: 4px 8px;
-  border-radius: 6px;
-  background: #1d1d1f;
-  color: var(--on-accent);
-  font-size: var(--font-size-sm);
-  line-height: 1.35;
-  pointer-events: none;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 
 /* ── Quote head: the passage this page was asked about ── */
 .thread-quote-head-wrap { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 10px; }

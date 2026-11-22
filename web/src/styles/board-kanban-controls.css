@@ -157,13 +157,13 @@
 
 /* ── Menus and the What changed flyout (portalled to body) ── */
 .kanban-menu, .kanban-changes {
-  z-index: 10050; min-width: 200px; max-width: min(360px, calc(100vw - 16px)); overflow-y: auto; padding: 4px;
-  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); color: var(--fg);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18); font-size: var(--font-size-md);
+  min-width: 200px; max-width: min(360px, calc(100vw - 16px)); overflow-y: auto; padding: 4px;
+  color: var(--fg);
+  font-size: var(--font-size-md);
 }
 .kanban-changes { max-width: min(440px, calc(100vw - 16px)); }
 .kanban-menu-row, .kanban-changes-row {
-  display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: none; padding: 5px 8px; border-radius: var(--radius-xs);
+  display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: none; padding: 5px 8px;
   font: inherit; color: inherit; text-align: left; cursor: pointer;
 }
 .kanban-menu-row:hover:not([aria-disabled="true"]), .kanban-changes-row:hover, .kanban-changes-row:focus-visible { background: var(--bg-hover); }
@@ -258,4 +258,3 @@
 
 /* R3-25: the card menu stays opaque. WebKit blurs a backdrop only up to its nearest backdrop root, so
    inside the board the card behind read through the glass unblurred (the folder picker's precedent). */
-.task-kebab-menu.kanban-menu { background: var(--bg-elevated); -webkit-backdrop-filter: none; backdrop-filter: none; }

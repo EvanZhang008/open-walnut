@@ -71,7 +71,7 @@
 .app-modal.router-settings-dialog:focus { outline: none; }
 .app-modal.router-settings-dialog {
   display: flex; flex-direction: column; box-sizing: border-box; width: min(640px, calc(100vw - 48px)); max-height: calc(100vh - 64px);
-  padding: 0; overflow: hidden; background: var(--bg-elevated);
+  padding: 0; overflow: hidden;
 }
 .router-settings-dialog-head { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px 12px 20px; border-bottom: 1px solid var(--border); }
 .router-settings-dialog-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
