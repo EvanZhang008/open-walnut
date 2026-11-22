@@ -38,6 +38,7 @@ import type { SessionHistoryTool } from '@/types/session';
 import { sendTargetRefs } from '@open-walnut/send-targets';
 import { isCardedOp, opCardFields, type OpCardFields } from '../../../../src/core/op-cards';
 import { findOpCalls, soleOpCall, tokenizeCommand, type OpArgForm } from '../../../../src/lib/walnut-op-command';
+import { tooLongAnswer } from './tool-run-phrase';
 
 export { tokenizeCommand };
 
@@ -296,8 +297,9 @@ export function detectOutboundCalls(tool: SessionHistoryTool, result?: string): 
     const target = targetFrom(res);
     const delivery = str(res?.delivery) ?? str(res?.outcome);
     // A non-JSON failure line is still the honest answer to "what happened": show
-    // its first line rather than a card that looks like it succeeded.
-    const fallbackError = tool.isError && result && !res && calls.length === 1
+    // its first line rather than a card that looks like it succeeded. Never the
+    // harness's note that the answer was too long: that call succeeded (tooLongAnswer).
+    const fallbackError = tool.isError && result && !res && calls.length === 1 && !tooLongAnswer(result)?.wordedAsError
       ? result.split('\n').map((l) => l.trim()).find((l) => l.length > 0)?.slice(0, 200)
       : undefined;
     const error = errorText(res?.error) ?? fallbackError;

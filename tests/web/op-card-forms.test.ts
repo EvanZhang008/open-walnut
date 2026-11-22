@@ -28,6 +28,7 @@ import { apiPost } from '@/api/client'
 import type { SessionHistoryTool } from '@/types/session'
 import { findOpCalls } from '../../src/lib/walnut-op-command.js'
 import { isOutboundSendCall, toolMergesIntoRun } from '@/stream/tool-merge'
+import { MCP_NO_LINE_COUNT, MCP_ONE_LINE } from './fixtures/too-long-answers'
 
 vi.mock('@/utils/log', () => ({ log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } }))
 // The markdown renderer needs a real DOM (DOMPurify); the folded card shows plain
@@ -170,6 +171,38 @@ describe('one command, several calls', () => {
     _setOpCalls(SID, 'toolu_1', [{ ...recordFor('human_inbox_send'), ok: false, error: '409 user_kind: name the kind' }])
     const html = render(bash('walnut tools call human_inbox_send @/tmp/l.json'))
     expect(html).toContain('409 user_kind: name the kind')
+  })
+})
+
+// 2026-11-21: a thread_update that worked read "Error: result (N characters) exceeds maximum
+// allowed tokens..." in red on its card: its answer was too long, so the CLI saved it to a file.
+describe('a card whose call worked shows no error', () => {
+  const threadUpdate = (result: string, isError = true): SessionHistoryTool => ({
+    name: 'mcp__walnut__thread_update', input: { task: 'mw0abcde-1234', id: 'th-aaaa', merge_into: 'th-bbbb' }, toolUseId: 'toolu_1', result, isError,
+  })
+  const cards = (tool: SessionHistoryTool): string => renderToStaticMarkup(createElement(SessionOutboundCards, {
+    calls: detectOutboundCalls(tool, tool.result), toolUseId: tool.toolUseId, running: false, result: tool.result, sessionId: SID,
+  }))
+
+  it('an answer saved to a file for being too long is not the card\'s error; a real failure still is', () => {
+    for (const text of [MCP_ONE_LINE, MCP_NO_LINE_COUNT]) {
+      expect(detectOutboundCalls(threadUpdate(text), text)[0].error).toBeUndefined()
+      const html = cards(threadUpdate(text))
+      expect(html).not.toContain('data-outbound-error')
+      expect(html).not.toContain('exceeds maximum allowed tokens')
+    }
+    const failed = threadUpdate('Error: thread th-aaaa not found')
+    expect(detectOutboundCalls(failed, failed.result)[0].error).toBe('Error: thread th-aaaa not found')
+    expect(cards(failed)).toContain('data-outbound-error')
+  })
+
+  it("Walnut's record that the call worked clears an error the transcript holds", () => {
+    const tool = threadUpdate('Error: the connection was reset')
+    expect(cards(tool)).toContain('data-outbound-error')
+    _setOpCalls(SID, 'toolu_1', [recordFor('thread_update')])
+    const html = cards(tool)
+    expect(html).not.toContain('data-outbound-error')
+    expect(html).not.toContain('the connection was reset</div>')
   })
 })
 

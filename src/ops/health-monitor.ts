@@ -6,9 +6,112 @@
 
 import { z } from 'zod'
 import { defineOp } from './registry.js'
+import { clipText } from './doc-page.js'
 import { withOutcome } from './outcome.js'
 
 const rec = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {})
+const clip = (v: unknown, max: number): string | undefined =>
+  typeof v === 'string' && v ? clipText(v, max) : undefined
+const iso = (ms: unknown): string | undefined => (typeof ms === 'number' && Number.isFinite(ms) ? new Date(ms).toISOString() : undefined)
+
+/** health_monitor's cap: every alarm in a line or two. */
+const LIST_MAX = 10_000
+const LIST_HEAD_ROOM = 1_200
+/** A detail's history: its newest entries. */
+const HISTORY_SHOWN = 10
+
+/**
+ * One alarm in the facts an agent decides on: its state and value against its condition, whether
+ * its actions are held, its fix task and what Walnut last did. The 24-hour spark and the long
+ * description are left out (health_monitor {"alarm"} reads them). An OK alarm is a shorter line.
+ */
+function alarmLine(value: unknown): Record<string, unknown> {
+  const a = rec(value)
+  const o = rec(a.override)
+  const actions = Array.isArray(a.actions) ? a.actions.map(rec) : []
+  const last = actions[actions.length - 1]
+  const head = {
+    id: a.id,
+    title: a.title,
+    state: a.state,
+    value: a.value,
+    ...(a.unit ? { unit: a.unit } : {}),
+    ...(a.held ? { held: true } : {}),
+  }
+  if (a.state === 'OK' && !a.fixTaskId && !o.ownerTask) return head
+  return {
+    ...head,
+    since: iso(a.since),
+    condition: a.condition,
+    ...(a.signature ? { signature: clip(a.signature, 120) } : {}),
+    ...(a.labels ? { labels: a.labels } : {}),
+    ...(a.fixTaskId ? { fixTaskId: a.fixTaskId } : {}),
+    ...(o.ownerTask ? { ownerTask: o.ownerTask } : {}),
+    ...(typeof o.mutedUntil === 'number' ? { mutedUntil: iso(o.mutedUntil) } : {}),
+    ...(o.enabled === false ? { enabled: false } : {}),
+    ...(last ? { actions: actions.length, lastAction: `${String(last.kind)} ${last.ok ? 'ok' : 'failed'} at ${iso(last.at) ?? '?'}: ${clip(last.detail, 120) ?? ''}` } : {}),
+  }
+}
+
+/** A detail's minute series as a summary and its last hour; `_full` reads every point. */
+function seriesSummary(series: unknown): Record<string, unknown> | undefined {
+  if (!Array.isArray(series) || !series.length) return undefined
+  const points = series.map(rec)
+  const values = points.map((p) => p.v).filter((v): v is number => typeof v === 'number')
+  return {
+    points: points.length,
+    from: iso(points[0].t),
+    to: iso(points[points.length - 1].t),
+    ...(values.length ? { min: Math.min(...values), max: Math.max(...values), last: values[values.length - 1] } : { noData: true }),
+    lastPoints: points.slice(-30).map((p) => p.v ?? null),
+  }
+}
+
+function alarmDetailShort(value: unknown): Record<string, unknown> {
+  const d = rec(value)
+  const history = Array.isArray(d.history) ? d.history.map(rec) : []
+  const series = seriesSummary(d.series)
+  return {
+    ...alarmLine(d),
+    since: iso(d.since),
+    condition: d.condition,
+    ...(clip(d.description, 300) ? { description: clip(d.description, 300) } : {}),
+    ...(Array.isArray(d.spark) ? { spark: d.spark } : {}),
+    ...(series ? { series } : {}),
+    ...(history.length ? {
+      history: history.slice(-HISTORY_SHOWN).reverse().map((h) => `${iso(h.at) ?? '?'} ${String(h.from)} -> ${String(h.to)} (${String(h.value)}): ${clip(h.reason, 140) ?? ''}`),
+      ...(history.length > HISTORY_SHOWN ? { historyCount: history.length } : {}),
+    } : {}),
+    ...(clip(d.sample, 400) ? { sample: clip(d.sample, 400) } : {}),
+    ...(series || history.length > HISTORY_SHOWN ? { more: 'The minute series and the whole history: repeat this call with "_full": true.' } : {}),
+  }
+}
+
+/** The alarms that fit the cap, in the route's order (ALARM first); the rest are counted with the call that reads them. */
+function alarmList(result: unknown): unknown {
+  const r = rec(result)
+  if (!Array.isArray(r.alarms)) return result
+  const budget = LIST_MAX - LIST_HEAD_ROOM
+  const kept: Record<string, unknown>[] = []
+  let used = 0
+  for (const a of r.alarms) {
+    const line = alarmLine(a)
+    const n = JSON.stringify(line).length + 1
+    if (kept.length && used + n > budget) break
+    kept.push(line)
+    used += n
+  }
+  const left = r.alarms.length - kept.length
+  const leftStates = [...new Set(r.alarms.slice(kept.length).map((a) => String(rec(a).state)))]
+  return {
+    ...r,
+    alarms: kept,
+    ...(left ? {
+      more: `${left} more alarm(s) not shown (${leftStates.join(', ')}): health_monitor ${JSON.stringify({ state: leftStates[0] ?? 'OK' })} lists one state, `
+        + 'health_monitor {"alarm":"<id>"} reads one whole.',
+    } : { detail: 'health_monitor {"alarm":"<id>"} reads one alarm whole: its spark, series and history.' }),
+  }
+}
 
 defineOp({
   name: 'health_monitor',
@@ -18,10 +121,11 @@ defineOp({
     + 'links, event-loop stalls, slow sends, hung sessions, open files, memory pressure, restarts, cut-off shutdowns, '
     + 'status drift, the SSH certificate) and every log alarm (a kind of warn/error line far above its normal, or high '
     + 'every day), each with its state (OK, ALARM, INSUFFICIENT_DATA), value, condition, a 24-hour spark and what '
-    + 'Walnut did about it (an auto-fix, a fix task, a notification). Give `alarm` for one alarm with its minute series '
-    + 'and its history. Runs on the primary.',
+    + 'Walnut did about it (an auto-fix, a fix task, a notification). `state` lists only the alarms in that state. Give '
+    + '`alarm` for one alarm with its minute series and its history. Runs on the primary.',
   input: {
     alarm: z.string().max(200).optional().describe('One alarm id (as listed), for its series and history'),
+    state: z.enum(['ALARM', 'INSUFFICIENT_DATA', 'OK']).optional().describe('Only the alarms in this state'),
   },
   bind: { method: 'GET', path: '/health-monitor', query: ['alarm'] },
   mapResult: ({ body, args }) => {
@@ -29,8 +133,17 @@ defineOp({
     if (args.alarm) return withOutcome({ ...b }, `Alarm ${String(args.alarm)} is ${String(b.state)}.`, 'Change it with health_alarm_set.')
     const c = rec(b.counts)
     const n = Number(c.ALARM ?? 0)
-    return withOutcome({ ...b }, n ? `${n} alarm${n === 1 ? '' : 's'} in ALARM.` : 'No alarm is in ALARM.',
+    // `state` narrows the list here, for every caller; the counts stay the whole monitor's.
+    const view = typeof args.state === 'string' && Array.isArray(b.alarms)
+      ? { ...b, alarms: b.alarms.filter((a) => rec(a).state === args.state) }
+      : { ...b }
+    return withOutcome(view, n ? `${n} alarm${n === 1 ? '' : 's'} in ALARM.` : 'No alarm is in ALARM.',
       n ? 'Each one names what Walnut did (actions) and its fix task, if any.' : 'Nothing else is required.')
+  },
+  answer: {
+    kind: 'content',
+    max: LIST_MAX,
+    shape: ({ result, args }) => (args.alarm ? alarmDetailShort(result) : alarmList(result)),
   },
   tags: { readonly: true, remote: 'allow', primaryOnly: true },
 })
@@ -56,6 +169,17 @@ defineOp({
   },
   bind: { method: 'PATCH', path: '/health-monitor/alarms/:id' },
   mapResult: ({ body }) => withOutcome({ ...rec(body) }, 'The alarm was changed.', 'Read it back with health_monitor.'),
+  // A receipt: the change and the alarm's state now, never the alarm's whole minute series (2026-11-21: up to 40,000 characters).
+  answer: {
+    kind: 'receipt',
+    whole: 'health_monitor {"alarm":"<id>"}',
+    shape: ({ result }) => {
+      const r = rec(result)
+      if (!('alarm' in r)) return result
+      const a = r.alarm ? alarmLine(r.alarm) : null
+      return { ...r, alarm: a && { state: a.state, value: a.value, ...(a.held ? { held: true } : {}), ...(a.condition ? { condition: a.condition } : {}), ...(a.fixTaskId ? { fixTaskId: a.fixTaskId } : {}) } }
+    },
+  },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 })
 

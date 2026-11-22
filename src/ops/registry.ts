@@ -20,6 +20,7 @@
 import { z } from 'zod'
 import { OwnedRegistry } from '../core/plugins/owned-registry.js'
 import type { Disposable } from '../core/plugins/disposable.js'
+import type { OpAnswer } from './answer.js'
 
 /** How an op reaches the server when it has no custom handler. */
 export interface HttpBinding {
@@ -98,6 +99,13 @@ export interface WalnutOp {
   remoteDenyNext?: string
   /** Reshape a successful bound result (e.g. attach the task-ref citation). */
   mapResult?: (ctx: OpResultContext) => unknown
+  /**
+   * What an agent reads back (answer.ts): a write answers a receipt, a read answers
+   * content up to a cap. Left out, a write is a receipt of 2,000 characters and a read
+   * is content of 8,000. A write that returns what it ran (a command's output) says
+   * `kind: 'content'`; an op with a known large object gives its compact `shape`.
+   */
+  answer?: OpAnswer
   /** When a write partly succeeds the result is kept, but every entry point must clearly report the op as failed. */
   resultError?: (result: unknown) => string | undefined
   /**

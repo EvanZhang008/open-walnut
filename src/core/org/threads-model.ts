@@ -1290,8 +1290,20 @@ export function addMovedMessages(file: ThreadsFile, left: OrgThread, at: string)
   return { ...file, threads: file.threads.map((t) => (t.id === left.id ? next : t)) };
 }
 
-/** Take one message out of a thread into a thread of its own (a wrong merge undone). */
-export function splitThreadMessage(file: ThreadsFile, threadId: string, messageId: string, by: ThreadWriter, at: string, newId?: string, lang: LetterLang = 'en'): { file: ThreadsFile; thread: OrgThread; from: OrgThread } {
+export interface SplitOptions {
+  /**
+   * Keep the source open even when nothing is left open on it (every message answered and he
+   * reacted): by default such a source closes as acked (ackReaction), which a node splitting
+   * out a thread's last message did not expect (2026-11-21).
+   */
+  keepOpen?: boolean;
+}
+
+/**
+ * Take one message out of a thread into a thread of its own (a wrong merge undone).
+ * `closedFrom`: the source closed with this split (nothing was left open on it).
+ */
+export function splitThreadMessage(file: ThreadsFile, threadId: string, messageId: string, by: ThreadWriter, at: string, newId?: string, lang: LetterLang = 'en', opts: SplitOptions = {}): { file: ThreadsFile; thread: OrgThread; from: OrgThread; closedFrom: boolean } {
   file = stampLegacyReplyAt(file);
   const found = find(file, threadId);
   const cur = preserveReaction(found);
@@ -1311,8 +1323,23 @@ export function splitThreadMessage(file: ThreadsFile, threadId: string, messageI
     id: newId && THREAD_ID_RE.test(newId) ? newId : newThreadId(),
     title: fallbackTitle(msg.text, lang), state: 'new', messages: [msg], createdAt: msg.at, updatedAt: at, by,
   };
-  const settled = ackReaction(from, by, at);
-  return { file: { ...file, threads: [...file.threads.map((t) => (t.id === threadId ? settled : t)), thread] }, thread, from: settled };
+  const settled = opts.keepOpen ? from : ackReaction(from, by, at);
+  return {
+    file: { ...file, threads: [...file.threads.map((t) => (t.id === threadId ? settled : t)), thread] },
+    thread, from: settled, closedFrom: !cur.closed && !!settled.closed,
+  };
+}
+
+/**
+ * Take one message out of a thread straight into another open thread (thread_split with
+ * merge_into): the split and the merge in one write, so nothing is written when either refuses
+ * (the target closed, the message the source's only one). Answers the target as it is now.
+ */
+export function splitMessageInto(file: ThreadsFile, threadId: string, messageId: string, intoId: string, by: ThreadWriter, at: string, lang: LetterLang = 'en', opts: SplitOptions = {}): { file: ThreadsFile; thread: OrgThread; from: OrgThread; closedFrom: boolean } {
+  if (intoId === threadId) throw new ThreadError('same_thread', 400, `The message is already in ${threadId}: name another open thread as merge_into.`);
+  const split = splitThreadMessage(file, threadId, messageId, by, at, undefined, lang, opts);
+  const merged = mergeThreads(split.file, split.thread.id, intoId, by, at);
+  return { file: merged.file, thread: merged.thread, from: split.from, closedFrom: split.closedFrom };
 }
 
 export interface OpenThreadInput {

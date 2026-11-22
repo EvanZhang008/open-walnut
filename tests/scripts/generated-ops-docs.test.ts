@@ -16,8 +16,9 @@ describe('generated operations docs', () => {
   it('renders every op and preserves schema details', () => {
     const catalog = generateOpsCatalog();
     for (const op of listOps()) expect(catalog).toContain(`\`${op.name}\``);
-    expect(catalog).toContain('types? (string)');
-    expect(catalog).toContain('task,memory,session');
+    // A union of a string and an enum list keeps both members (search takes types either way since 2026-11-21).
+    expect(catalog).toContain('types? (string\\|array<task\\|memory\\|session>)');
+    expect(catalog).toContain('a comma-separated string (default: all three)');
     expect(catalog).toContain('array<string>');
   });
 });

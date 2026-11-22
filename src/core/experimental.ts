@@ -230,6 +230,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'When a real-use alarm rings (a tool answer the agent got cut, tool errors, slow reads, server errors, page failures), Walnut tells the task that shipped the change and watches it, or the project lead when none does, at most one note every 4 hours. A task that shipped a change cannot complete before it names what real use should show (usage_watch). Off: Walnut still records real use and shows it in Settings, and tells nobody.',
     default: false,
   },
+  {
+    id: 'mcp_tools_by_role',
+    name: 'Fewer Walnut tools listed per role',
+    description: 'A Claude Code session lists only the Walnut tools its role uses: a task lists its work tools (tasks, notes, memory, hosts, watches, subagents, the browser and Boards) and the tools of the plugin it comes from, and Main, the VPs and Ask Walnut also list Threads, the Brief, the inbox, the org and the tools of every plugin. Every other tool still runs through the walnut CLI, and the walnut tools list command shows them all by group. It applies when a session next starts its Walnut tools. Off: every session lists every tool, as before.',
+    default: false,
+  },
 ] as const;
 
 /**

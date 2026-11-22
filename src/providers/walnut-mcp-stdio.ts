@@ -135,7 +135,10 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
   const fetchList = async (): Promise<{ tools: Record<string, unknown>[]; full: boolean } | { error: string }> => {
     let resp: GatewayResponse
     try {
-      resp = await deps.request('tools.list', { schemas: true }, MCP_LIST_TIMEOUT_MS)
+      // `listing: 'role'`: this server's instructions say how to reach a tool it does not list, so
+      // the hub may list only the session's role's tools (experiment mcp_tools_by_role). An older
+      // hub ignores it and lists everything; every tool still runs by name (callTool below).
+      resp = await deps.request('tools.list', { schemas: true, listing: 'role' }, MCP_LIST_TIMEOUT_MS)
     } catch (err) {
       return { error: `Walnut's tool list did not arrive: ${err instanceof Error ? err.message : String(err)}` }
     }

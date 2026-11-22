@@ -23,7 +23,6 @@ const { wsListeners, mockOnEvent, reducerCalls } = vi.hoisted(() => {
 
 vi.mock('@/api/ws', () => ({ wsClient: { onEvent: mockOnEvent, sendRpc: vi.fn() } }));
 vi.mock('@/api/sessions', () => ({ fetchSessionHistory: vi.fn(), HISTORY_TAIL_LIMIT: 400 }));
-vi.mock('@/api/chat', () => ({ isToolResultError: (r: string | undefined) => !!r && r.startsWith('Error:') }));
 vi.mock('@/utils/log', () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 vi.mock('@/stream/stream-reducer', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/stream/stream-reducer')>();

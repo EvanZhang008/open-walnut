@@ -56,7 +56,100 @@ describe('gateway tools.list with schemas (walnut mcp-server)', () => {
   });
 });
 
+// Experiment mcp_tools_by_role (src/ops/op-groups.ts): a host server that asks for its role's
+// list gets only that, an older one keeps every tool, and every tool still runs by name.
+describe('gateway tools.list with schemas, per role', () => {
+  const names = async (payload: Record<string, unknown>, role: 'worker' | 'org' | undefined) => {
+    const asked: string[] = [];
+    const d = { ...deps(), listingRole: async (sid: string) => { asked.push(sid); return role ? { role } : undefined; } };
+    const r = await handleGatewayCapability('tools.list', CALLER, payload, 'devbox', d);
+    expect(r.ok).toBe(true);
+    return { names: r.ok ? (r.result.ops as Array<{ name: string }>).map((o) => o.name) : [], asked };
+  };
+
+  it('a worker\'s server lists the worker groups only; an org node\'s adds the org', async () => {
+    const { listOps } = await import('../../../src/ops/index.js');
+    const { listedForRole } = await import('../../../src/ops/op-groups.js');
+    const worker = await names({ schemas: true, listing: 'role' }, 'worker');
+    expect(worker.asked).toEqual([CALLER]);
+    const expected = listOps().filter((o) => o.tags.remote !== 'deny' && listedForRole('worker', o.name)).map((o) => o.name).sort();
+    expect(worker.names.sort()).toEqual(expected);
+    expect(worker.names).toContain('task_get');
+    expect(worker.names).toContain('host_exec');
+    expect(worker.names).toContain('thread_list');
+    expect(worker.names).not.toContain('org_get');
+    expect(worker.names).not.toContain('topic_post');
+    const org = await names({ schemas: true, listing: 'role' }, 'org');
+    expect(org.names).toContain('org_get');
+    expect(org.names).toContain('brief_write');
+    expect(org.names).toContain('thread_update');
+    expect(org.names).not.toContain('topic_post');
+    // Still only what this host's gateway runs.
+    expect(org.names).not.toContain('task_delete');
+    expect(worker.names.length).toBeLessThan(org.names.length);
+  });
+
+  it('an older host server (no `listing`), the experiment off (no role) and a router keep their whole list', async () => {
+    const { listOps } = await import('../../../src/ops/index.js');
+    const all = listOps().filter((o) => o.tags.remote !== 'deny').map((o) => o.name).sort();
+    const older = await names({ schemas: true }, 'worker');
+    expect(older.asked).toEqual([]);
+    expect(older.names.sort()).toEqual(all);
+    const off = await names({ schemas: true, listing: 'role' }, undefined);
+    expect(off.names.sort()).toEqual(all);
+    const failing = { ...deps(), listingRole: async () => { throw new Error('store locked'); } };
+    const r = await handleGatewayCapability('tools.list', CALLER, { schemas: true, listing: 'role' }, 'devbox', failing);
+    expect(r.ok && (r.result.ops as unknown[]).length).toBe(all.length);
+  });
+
+  it('a plugin\'s ops: an org node lists them, a worker only those of the plugin its task comes from', async () => {
+    const { definePluginOp } = await import('../../../src/ops/registry.js');
+    const op = (name: string) => ({ name, title: name, description: name, input: {}, handler: async () => ({}), tags: { readonly: true, remote: 'allow' as const } });
+    const mail = definePluginOp('listing-mail', op('listing_mail_read'));
+    const sync = definePluginOp('listing-sync', op('listing_sync_status'));
+    try {
+      const list = async (listing: { role: 'worker' | 'org'; plugins?: string[] }) => {
+        const r = await handleGatewayCapability('tools.list', CALLER, { schemas: true, listing: 'role' }, 'devbox', { ...deps(), listingRole: async () => listing });
+        return r.ok ? (r.result.ops as Array<{ name: string }>).map((o) => o.name) : [];
+      };
+      const org = await list({ role: 'org' });
+      expect(org).toContain('listing_mail_read');
+      expect(org).toContain('listing_sync_status');
+      const worker = await list({ role: 'worker' });
+      expect(worker).not.toContain('listing_mail_read');
+      expect(worker).not.toContain('listing_sync_status');
+      const synced = await list({ role: 'worker', plugins: ['listing-sync'] });
+      expect(synced).toContain('listing_sync_status');
+      expect(synced).not.toContain('listing_mail_read');
+    } finally { await mail.dispose(); await sync.dispose(); }
+  });
+
+  it('an op a worker does not list still runs by name: listing never refuses a call', async () => {
+    const fetcher = vi.spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => new Response(JSON.stringify({ groups: [] }), { status: 200 }));
+    try {
+      const d = { ...deps(), listingRole: async () => ({ role: 'worker' as const }) };
+      const r = await handleGatewayCapability('tools.call', CALLER, { name: 'folder_list', args: {} }, 'devbox', d);
+      expect(r.ok).toBe(true);
+      expect(fetcher).toHaveBeenCalled();
+    } finally { fetcher.mockRestore(); }
+  });
+});
+
 describe('gateway tools.list', () => {
+  it('names each op\'s group, and the groups in catalog order', async () => {
+    const r = await handleGatewayCapability('tools.list', CALLER, {}, 'devbox', deps());
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const ops = r.result.ops as Array<{ name: string; group?: string }>;
+    for (const op of ops) expect(op.group, op.name).toBeTruthy();
+    expect(ops.find((o) => o.name === 'task_get')?.group).toBe('tasks');
+    expect(ops.find((o) => o.name === 'board_post')?.group).toBe('board');
+    const groups = r.result.groups as Array<{ id: string; title: string; count: number }>;
+    expect(groups[0]).toMatchObject({ id: 'tasks' });
+    expect(groups.reduce((n, g) => n + g.count, 0)).toBe(ops.length);
+  });
+
   it('returns the registry catalog with names and remote policy', async () => {
     const r = await handleGatewayCapability('tools.list', CALLER, {}, 'devbox', deps());
     expect(r.ok).toBe(true);
@@ -86,7 +179,7 @@ describe('gateway tools.list', () => {
     if (!r.ok) return;
     const ops = r.result.ops as Array<{ name: string; signature?: string; params?: unknown }>;
     for (const op of ops) expect(op.signature, op.name).toBeTruthy();
-    expect(ops.find((o) => o.name === 'note_read')?.signature).toBe('path?, id?');
+    expect(ops.find((o) => o.name === 'note_read')?.signature).toBe('path?, id?, offset?, section?');
     expect(ops.find((o) => o.name === 'walnut_status')?.signature).toBe('(none)');
     // The full catalog stays light: per-parameter descriptions ride only the
     // single-op request below.

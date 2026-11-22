@@ -12,7 +12,7 @@
 // stop discarding events for non-current sessions and accumulate them here.
 
 import { wsClient } from '@/api/ws';
-import { isToolResultError } from '@/api/chat';
+import { toolResultFailed } from '@/api/chat';
 import {
   applyMainTextDelta,
   appendMainThinking,
@@ -398,14 +398,16 @@ function registerGlobalListeners(): void {
 
   // ── tool-result ──
   onSessionEvent('session:tool-result', (data: unknown) => {
-    const { sessionId: sid, toolUseId, result } = data as {
+    const { sessionId: sid, toolUseId, result, isError } = data as {
       sessionId: string;
       toolUseId: string;
       result: string;
+      /** The transcript's is_error, when the emitter sends it (api/chat.ts toolResultFailed). */
+      isError?: boolean;
     };
     if (!sid || !trackedSessions.has(sid)) return;
     const state = settledState(sid);
-    state.blocks = backfillToolResult(state.blocks, toolUseId, result, isToolResultError(result));
+    state.blocks = backfillToolResult(state.blocks, toolUseId, result, toolResultFailed(result, isError));
   });
 
   // ── user-line (Claude Code took a user line here; see stream-reducer) ──

@@ -15,7 +15,11 @@
  * MACHINE SAFETY: pure functions over answer bodies, no process, file or network.
  */
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { getOp } from '../../../src/ops/index.js'
+
+/** host_exec's full rules: its tool description keeps the ones every call needs (2026-11-21). */
+const HOST_EXEC_RULES = readFileSync(new URL('../../../docs/reference/host-exec.md', import.meta.url), 'utf8')
 
 type Answer = { outcome: string; next: string }
 const JOB = 'hx-review-0001'
@@ -296,8 +300,8 @@ describe('the sixth review round (2026-11-04: code review 6, usability review cl
     expect(d).not.toMatch(/setsid/)
   })
 
-  it('the help says how a file is looked for: about every 0.2 s, a symlink once its target exists, only ~ and $WALNUT_TASK_DIR expanded', () => {
-    const d = getOp('host_exec')!.description
+  it('the full rules say how a file is looked for: about every 0.2 s, a symlink once its target exists, only ~ and $WALNUT_TASK_DIR expanded', () => {
+    const d = HOST_EXEC_RULES
     expect(d).toContain('it is looked for about every 0.2 s, so a file there for less may be missed')
     expect(d).toContain('a symlink once its target does')
     expect(d).toContain('$WALNUT_TASK_DIR expanded and no other variable')
@@ -306,8 +310,8 @@ describe('the sixth review round (2026-11-04: code review 6, usability review cl
 })
 
 describe('the help', () => {
-  it('comes in short sections, each thing said once: what it waits for, lines and patterns, bounds, background runs and `&`, reading on', () => {
-    const d = getOp('host_exec')!.description
+  it('the full rules come in short sections, each thing said once: what it waits for, lines and patterns, bounds, background runs and `&`, reading on', () => {
+    const d = HOST_EXEC_RULES
     const sections = d.split('\n\n').map((p) => p.split('.')[0])
     expect(sections).toEqual(expect.arrayContaining(['The command', 'Bounds', 'Background runs and `&`', 'What wait_for waits for', 'Lines and patterns', 'How long it waits', 'Reading on']))
     for (const once of ['run them unbuffered (python3 -u, stdbuf -oL) or wait for their port', '`/ready/i` is read as ready with the i flag', 'matchAt (the log offset of that line)', 'are refused before the command runs']) {

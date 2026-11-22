@@ -144,6 +144,7 @@ export const AWAY_OP_DECISIONS: Readonly<Record<string, AwayOpDecision>> = {
   org_report: macWrite('An org report'),
   org_pin: macWrite('An org pin'),
   thread_list: read(),
+  thread_get: read(),
   thread_create: macWrite('A new thread'),
   thread_update: macWrite('A thread'),
   thread_split: macWrite('Splitting a thread'),

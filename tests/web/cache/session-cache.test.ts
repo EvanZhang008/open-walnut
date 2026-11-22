@@ -33,12 +33,8 @@ vi.mock('@/api/sessions', () => ({
   HISTORY_TAIL_LIMIT: 400,
 }));
 
-vi.mock('@/api/chat', () => ({
-  isToolResultError: (result: string | undefined) => {
-    if (!result) return false;
-    return result.trimStart().startsWith('Error:');
-  },
-}));
+// '@/api/chat' is the real one: a live tool result's status follows its one rule
+// (toolResultFailed), which the tool-result tests below exercise.
 
 vi.mock('@/utils/log', () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -58,6 +54,7 @@ import {
   MAX_CACHED_MESSAGES,
   type CachedHistory,
 } from '@/cache/session-cache';
+import { BASH_PERSISTED, MCP_MANY_LINES, MCP_NO_LINE_COUNT, MCP_NO_PREFIX, MCP_ONE_LINE, READ_TOO_BIG } from '../fixtures/too-long-answers';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -426,6 +423,30 @@ describe('WS: session:tool-result', () => {
 
     const block = getStreamState('sid')!.blocks[0] as any;
     expect(block.status).toBe('error');
+  });
+
+  // A reload reads only the transcript's is_error, so the live status follows the
+  // event's flag when it carries one, and the text rule only when it does not.
+  it('the event\'s own error flag wins over the text', () => {
+    trackSession('sid');
+    fireEvent('session:tool-use', { sessionId: 'sid', toolName: 'Bash', toolUseId: 'tu-a' });
+    fireEvent('session:tool-use', { sessionId: 'sid', toolName: 'Bash', toolUseId: 'tu-b' });
+    fireEvent('session:tool-result', { sessionId: 'sid', toolUseId: 'tu-a', result: 'Error: printed by the command', isError: false });
+    fireEvent('session:tool-result', { sessionId: 'sid', toolUseId: 'tu-b', result: 'Exit code 1', isError: true });
+
+    const blocks = getStreamState('sid')!.blocks as any[];
+    expect(blocks[0].status).toBe('done');
+    expect(blocks[1].status).toBe('error');
+  });
+
+  it('an answer saved to a file for being too long is done, the Read tool refusing a big file is not', () => {
+    trackSession('sid');
+    const texts = [MCP_ONE_LINE, MCP_MANY_LINES, MCP_NO_LINE_COUNT, MCP_NO_PREFIX, BASH_PERSISTED, READ_TOO_BIG];
+    texts.forEach((_, i) => fireEvent('session:tool-use', { sessionId: 'sid', toolName: 'mcp__walnut__host_list', toolUseId: `tu-${i}` }));
+    texts.forEach((result, i) => fireEvent('session:tool-result', { sessionId: 'sid', toolUseId: `tu-${i}`, result }));
+
+    const statuses = (getStreamState('sid')!.blocks as any[]).map((b) => b.status);
+    expect(statuses).toEqual(['done', 'done', 'done', 'done', 'done', 'error']);
   });
 
   it('finds the correct block when multiple tool calls exist', () => {

@@ -141,6 +141,21 @@ describe.each(SHELLS)('the org work reminder under %s', (shell) => {
     expect(call(shell, 'mcp__walnut__host_exec', { host: 'h', command: 'id' })).toBe('')
   })
 
+  it('reading back a Walnut tool answer kept in a file is the op\'s own answer, never a command', () => {
+    // src/lib/tool-answer-fit.ts writes an answer too big for one result to <tmp>/walnut-tool-answers-<uid>/.
+    const dir = path.join(tmp, `walnut-tool-answers-${process.getuid?.() ?? 0}`)
+    for (let i = 0; i < 6; i++) {
+      expect(call(shell, 'Read', { file_path: `${dir}/board_get-mhx1-ab12cd34.json`, offset: 1, limit: 200 })).toBe('')
+      expect(call(shell, 'Grep', { pattern: 'html', path: dir })).toBe('')
+    }
+    // Only that folder of the temp dir: another file there, or one reached through it, still counts.
+    call(shell, 'Read', { file_path: `${tmp}/notes.json` })
+    call(shell, 'Read', { file_path: `${dir}/../other/x.json` })
+    expect(call(shell, 'Read', { file_path: `${tmp}/walnut-tool-answers-x/a.json` })).toBe(orgWorkReminder('lead'))
+    // Its own awk variable: TMPD (tmp-path-awk.ts volatile()) stays unset, so nothing else moves.
+    expect(orgWorkGuardCommand('lead')).not.toMatch(/-v TMPD=/)
+  })
+
   it('Walnut\'s own ops never count toward it', () => {
     for (let i = 0; i < 6; i++) expect(call(shell, 'mcp__walnut__task_send', { to: 'x', text: 'y' })).toBe('')
     call(shell, ...bash('ls'))

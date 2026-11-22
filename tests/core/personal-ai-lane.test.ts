@@ -289,7 +289,7 @@ describe('the SESSION_START a lane emits', () => {
     expect(ev.profile?.systemPrompt).toContain('Personal AI')
     expect(ev.profile?.systemPrompt).toContain('## Walnut operating contract')
     // Walnut's data reaches the CLI over MCP, not native tools.
-    expect(ev.profile?.mcpServers).toEqual(walnutMcpProfile().mcpServers)
+    expect(ev.profile?.mcpServers).toEqual(walnutMcpProfile({ role: 'org' }).mcpServers)
     // Latency guard: without an explicit effort the CLI inherits the user's
     // global effortLevel (xhigh on coding-tuned machines → 100s+ chat turns).
     expect(ev.effort).toBe('medium')
@@ -307,7 +307,7 @@ describe('personalAiProfile', () => {
     // The precedence header settles the identity conflict with the CLI's own
     // prompt (persona wins on identity/tone, default keeps tools/safety/env).
     expect(profile.systemPrompt).toContain('## Persona override')
-    expect(profile.mcpServers).toEqual(walnutMcpProfile().mcpServers)
+    expect(profile.mcpServers).toEqual(walnutMcpProfile({ role: 'org' }).mcpServers)
     // No tool restriction in the MVP — the Personal AI runs on the user's own machine.
     expect(profile.allowedTools).toBeUndefined()
   })

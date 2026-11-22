@@ -472,10 +472,15 @@ describe('lane sessions are hidden from the default listings', () => {
 // ══════════════════════════════════════════════════════════════════
 
 describe('profile presets', () => {
-  it('walnutMcpProfile mounts `open-walnut mcp` and nothing else', () => {
+  it('walnutMcpProfile mounts `open-walnut mcp` and nothing else; a listing role only when the caller names one', () => {
     expect(walnutMcpProfile()).toEqual({
       mcpServers: { walnut: { command: 'open-walnut', args: ['mcp'] } },
     })
+    // Experiment mcp_tools_by_role: the Personal AI's lanes are the org.
+    expect(walnutMcpProfile({ role: 'org' })).toEqual({
+      mcpServers: { walnut: { command: 'open-walnut', args: ['mcp'], env: { WALNUT_MCP_ROLE: 'org' } } },
+    })
+    expect(personalAiProfile('Ada').mcpServers).toEqual(walnutMcpProfile({ role: 'org' }).mcpServers)
   })
 
   it('personalAiProfile is an appended persona + the walnut MCP mount', () => {
@@ -486,7 +491,7 @@ describe('profile presets', () => {
     expect(profile.systemPromptMode).toBe('append')
     expect(profile.systemPrompt).toContain('## Persona override')
     expect(profile.systemPrompt).toContain('You are Walnut')
-    expect(profile.mcpServers).toEqual(walnutMcpProfile().mcpServers)
+    expect(profile.mcpServers).toEqual(walnutMcpProfile({ role: 'org' }).mcpServers)
   })
 
   it('mergeProfiles unions mcpServers per key and dedupes allowedTools', () => {

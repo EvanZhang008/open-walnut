@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
 import { boardOfPossessive, boardPath, resolveBoardTask, TASK_ARG } from './boards.js';
+import { objOf, pick, receiptBase } from './org-answer-shapes.js';
 
 interface LaneBody { id?: string; name?: string; kind?: string }
 
@@ -49,6 +50,17 @@ defineOp({
       `Lanes of ${boardOfPossessive(target)}: ${names}.${unplaced ? ` ${unplaced} card${unplaced === 1 ? '' : 's'} lost a deleted lane and went back to automatic placement.` : ''}`,
       'Keep each card current with board_card_set (summary, lane, waiting_on).',
     );
+  },
+  answer: {
+    kind: 'receipt',
+    shape: ({ result }) => {
+      const r = objOf(result);
+      return {
+        ...receiptBase(r),
+        ...(Array.isArray(r.lanes) ? { lanes: r.lanes.map((l) => pick(l, ['id', 'name', 'kind'])) } : {}),
+        ...(Array.isArray(r.cards_unplaced) ? { cards_unplaced: r.cards_unplaced.length } : {}),
+      };
+    },
   },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
@@ -93,5 +105,6 @@ defineOp({
       'Update it again when the worker reports or the ticket moves.',
     );
   },
+  answer: { kind: 'receipt', shape: ({ result }) => ({ ...receiptBase(result), ...(objOf(result).card ? { card: pick(objOf(result).card, ['id', 'task', 'lane', 'waiting_on', 'updated_at']) } : {}) }) },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });

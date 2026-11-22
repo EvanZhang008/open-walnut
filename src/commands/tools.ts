@@ -1,7 +1,7 @@
 /**
  * `walnut tools` — the CLI face of the shared operation registry (src/ops/).
  *
- *   walnut tools list [--readonly]        catalog: name + one-line summary
+ *   walnut tools list [--readonly] [--group <group>]   catalog by group: name + one-line summary
  *   walnut tools help <op>                description, parameters, call syntax
  *   walnut tools call <op> ['{json}']     execute with inline JSON
  *   walnut tools call <op> @<file> | -    execute with the JSON from a file / stdin
@@ -20,13 +20,14 @@ import {
   formatOpHelp,
   formatParamSignature,
   formatToolsTable,
+  inGroup,
   opParams,
   type ToolRow,
   type ZodLike,
 } from '../ops/op-help.js'
 
 /** One `tools list` row; core and plugin ops render the same way. */
-type ToolsListRow = Required<Pick<ToolRow, 'name' | 'title' | 'readonly' | 'remote' | 'signature'>>
+type ToolsListRow = Required<Pick<ToolRow, 'name' | 'title' | 'readonly' | 'remote' | 'signature' | 'group'>>
 
 /**
  * Parse `--flag value` pairs into args, coercing types from the op's zod
@@ -71,7 +72,7 @@ function parseFlagArgs(
 }
 
 export async function runTools(argv: string[], globals: GlobalOptions): Promise<void> {
-  const { listOps, getOp, executeOp } = await import('../ops/index.js')
+  const { listOps, getOp, getOpOwner, executeOp } = await import('../ops/index.js')
   // --json before the subcommand, between call and the op, or after the JSON argument.
   const { splitToolsJsonFlag } = await import('../providers/tool-call-output.js')
   const split = splitToolsJsonFlag(argv)
@@ -90,8 +91,17 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
 
   if (sub === 'list' || sub === undefined) {
     const readonly = args.includes('--readonly')
+    // --group <group> (or --group=<group>): one group of the catalog (src/ops/op-groups.ts).
+    const groupAt = args.indexOf('--group')
+    const wantedGroup = groupAt >= 0 ? args[groupAt + 1] : args.find((a) => a.startsWith('--group='))?.slice('--group='.length)
+    if ((groupAt >= 0 || wantedGroup !== undefined) && (!wantedGroup || wantedGroup.startsWith('--'))) {
+      console.error('usage: walnut tools list --group <group> (`walnut tools list` names the groups)')
+      process.exitCode = 1
+      return
+    }
+    const { compareGroups, groupOfOp, summarizeGroups } = await import('../ops/op-groups.js')
     const ops = listOps().filter((o) => !readonly || o.tags.readonly)
-    const rows: ToolsListRow[] = ops.map((o) => ({
+    let rows: ToolsListRow[] = ops.map((o) => ({
       name: o.name,
       title: o.title,
       readonly: o.tags.readonly,
@@ -99,6 +109,7 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
       // The signature is the whole point of the catalog for an agent: without
       // it the next step is guessing `q` vs `query`.
       signature: formatParamSignature(opParams(o.input as Record<string, ZodLike>)),
+      group: groupOfOp(o.name, getOpOwner(o.name)),
     }))
     // Plugin ops live in the server process only; a session sees them through
     // its host daemon. No daemon or no answer: core ops alone, as before.
@@ -112,14 +123,26 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
         readonly: hub.readonly === true,
         remote: hub.remote ?? 'deny',
         signature: hub.signature ?? '(none)',
+        // An older server names no group: the op is a plugin's (this process knows every core op).
+        group: hub.group ?? 'plugin',
       })
+    }
+    rows = rows.map((row, i) => ({ row, i })).sort((a, b) => compareGroups(a.row.group, b.row.group) || a.i - b.i).map((x) => x.row)
+    if (wantedGroup !== undefined) {
+      const all = summarizeGroups(rows)
+      rows = rows.filter((row) => inGroup(row.group, wantedGroup))
+      if (rows.length === 0) {
+        console.error(`No group named ${wantedGroup}. The groups: ${all.map((g) => g.id).join(', ')}`)
+        process.exitCode = 1
+        return
+      }
     }
     if (globals.json) {
       const { outputJson } = await import('../utils/json-output.js')
       outputJson(rows)
       return
     }
-    console.log(formatToolsTable(rows))
+    console.log(formatToolsTable(rows, summarizeGroups(rows)))
     return
   }
 
@@ -346,7 +369,9 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
     // Outside every session and with no terminal, the call is a script's, never the user's.
     const { cliOpCaller } = await import('../lib/cli-sender.js')
     const caller = cliOpCaller()
-    let r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, callId, ...caller })
+    // A session's call reads a receipt or capped content (ops/answer.ts); a person's or a check script's reads the result as it is.
+    const forAgent = !!process.env.WALNUT_SESSION_ID?.trim() && !process.env.WALNUT_CHECK_TOKEN
+    let r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, callId, forAgent, ...caller })
     // A server older than the run id refused it before anything ran: the same call without it.
     if (!r.ok && runId && refusedRunId(name, r.message)) {
       dropRunId(name, parsed)
@@ -356,7 +381,7 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
       // The id is gone from the call: a stop now must not name it (2026-11-05 review).
       answered()
       answered = () => {}
-      r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, callId, ...caller })
+      r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, callId, forAgent, ...caller })
     }
     if (!r.ok && r.unreachable) {
       // The same call id: a write the server took before its connection reset runs once.

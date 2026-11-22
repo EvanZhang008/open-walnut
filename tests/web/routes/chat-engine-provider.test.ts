@@ -236,7 +236,8 @@ describe('the lane session answers the turn', () => {
       expect(started[0].message).toContain('plan my week')
       expect(started[0].profile?.systemPromptMode).toBe('append')
       expect(started[0].profile?.systemPrompt).toContain('## Walnut operating contract')
-      expect(started[0].profile?.mcpServers?.walnut).toEqual({ command: 'open-walnut', args: ['mcp'] })
+      // As the org role: the mount lists the org's tools under the experiment mcp_tools_by_role.
+      expect(started[0].profile?.mcpServers?.walnut).toEqual({ command: 'open-walnut', args: ['mcp'], env: { WALNUT_MCP_ROLE: 'org' } })
 
       const { getSessionByLane } = await import('../../../src/core/session-tracker.js')
       expect((await getSessionByLane(`chat:general:${conv}`))?.claudeSessionId).toBe(laneSessionId)

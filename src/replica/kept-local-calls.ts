@@ -49,6 +49,7 @@ export const OWN_TASK_OPS: Readonly<Record<string, readonly string[]>> = {
   board_lanes_set: ['task'],
   board_card_set: ['task'],
   thread_list: ['task'],
+  thread_get: ['task'],
   thread_update: ['task'],
   thread_create: ['task'],
   thread_split: ['task'],

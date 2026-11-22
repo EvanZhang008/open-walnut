@@ -6,7 +6,9 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { isRoutedQuestion, isUserDenied, runSegments, toolRunPhrase } from '../../web/src/components/sessions/tool-run-phrase.js'
+import { isFailedCall, isRoutedQuestion, isUserDenied, runSegments, tooLongAnswer, toolRunPhrase } from '../../web/src/components/sessions/tool-run-phrase.js'
+import { isToolResultError, toolResultFailed } from '../../web/src/api/chat.js'
+import { BASH_PERSISTED, MCP_MANY_LINES, MCP_NO_LINE_COUNT, MCP_NO_PREFIX, MCP_ONE_LINE, READ_TOO_BIG, READ_TOO_BIG_BLOCK } from './fixtures/too-long-answers.js'
 import { answeredCallState, callAnswerText, callDecisionLabel, runAnswerLines } from '../../web/src/components/sessions/waiting-tools.js'
 import { denyNoteMessage } from '../../web/src/components/sessions/prompt-keys.js'
 import { cliDenyMessage, MESSAGE_DENIES_PROMPT } from '../../src/providers/claude-permission-options.js'
@@ -107,6 +109,73 @@ describe('isUserDenied', () => {
     }
     expect(found.size).toBeGreaterThanOrEqual(3)
     for (const msg of found) expect(isUserDenied(msg), msg).toBe(true)
+  })
+})
+
+// 2026-11-21: a thread_update and a host_list that worked read as red failures ("Ran 1 tool,
+// 2 failed"): their answers were over Claude Code's limit, so the CLI saved each to a file and
+// gave the model a note starting "Error: result (N characters ...)". The call succeeded.
+describe('tooLongAnswer', () => {
+  it('reads every wording of an MCP answer saved to a file as a call that succeeded', () => {
+    for (const [text, size, tool] of [
+      [MCP_ONE_LINE, '43,240 characters', 'host_list'],
+      [MCP_MANY_LINES, '165,884 characters', 'board_get'],
+      [MCP_NO_LINE_COUNT, '945,049 characters', 'read_page'],
+      [MCP_NO_PREFIX, '49,128 characters', 'task_list'],
+    ] as const) {
+      const t = tooLongAnswer(text)
+      expect(t, text.slice(0, 60)).toMatchObject({ engine: 'claude-code', size, wordedAsError: true })
+      expect(t?.file).toMatch(new RegExp(`/tool-results/mcp-[a-z]+-${tool}-\\d+\\.txt$`))
+      expect(tooLongAnswer(`\n  ${text}`)?.size).toBe(size)
+    }
+  })
+
+  it('reads a built-in tool\'s saved output as a note only: it keeps the call\'s own outcome', () => {
+    expect(tooLongAnswer(BASH_PERSISTED)).toMatchObject({ engine: 'claude-code', size: '10.5KB', wordedAsError: false })
+    expect(tooLongAnswer(BASH_PERSISTED)?.file).toMatch(/\/tool-results\/b81xo6s6w\.txt$/)
+  })
+
+  it('never takes the Read tool refusing a big file, or a text that only quotes the note', () => {
+    expect(tooLongAnswer(READ_TOO_BIG)).toBeUndefined()
+    expect(tooLongAnswer(READ_TOO_BIG_BLOCK)).toBeUndefined()
+    expect(tooLongAnswer(`grep found:\n${MCP_ONE_LINE}`)).toBeUndefined()
+    expect(tooLongAnswer('Error: result (12 characters) exceeds maximum allowed tokens.')).toBeUndefined()
+    expect(tooLongAnswer('Error: connection refused')).toBeUndefined()
+    expect(tooLongAnswer(undefined)).toBeUndefined()
+  })
+})
+
+describe('isFailedCall', () => {
+  it('is the one rule: an errored call that is none of the errors that are not failures', () => {
+    // A history row reads the transcript's flag, a live block its status.
+    expect(isFailedCall({ name: 'Bash', result: 'Exit code 1', isError: true })).toBe(true)
+    expect(isFailedCall({ name: 'Bash', result: 'Exit code 1', status: 'error' })).toBe(true)
+    expect(isFailedCall({ name: 'Bash', result: 'ok' })).toBe(false)
+    expect(isFailedCall({ name: 'Bash', result: 'ok', status: 'done' })).toBe(false)
+    expect(isFailedCall({ name: 'Read', result: READ_TOO_BIG_BLOCK, isError: true })).toBe(true)
+    expect(isFailedCall({ name: 'Read', result: READ_TOO_BIG, status: 'error' })).toBe(true)
+    // Not failures: a routed question, the person's no, a rule's no, a too-long answer.
+    expect(isFailedCall({ name: 'AskUserQuestion', result: 'In this team your questions go to your leader, "T" (task t-1).', isError: true })).toBe(false)
+    expect(isFailedCall({ name: 'Bash', result: 'User denied permission', isError: true })).toBe(false)
+    expect(isFailedCall({ name: 'Bash', result: 'Permission for this action was denied by a rule', status: 'error' })).toBe(false)
+    for (const text of [MCP_ONE_LINE, MCP_MANY_LINES, MCP_NO_LINE_COUNT, MCP_NO_PREFIX]) {
+      expect(isFailedCall({ name: 'mcp__walnut__thread_update', result: text, isError: true })).toBe(false)
+      expect(isFailedCall({ name: 'mcp__walnut__thread_update', result: text, status: 'error' })).toBe(false)
+    }
+    // A command that failed keeps failing, however long its saved output.
+    expect(isFailedCall({ name: 'Bash', result: BASH_PERSISTED, isError: true })).toBe(true)
+  })
+
+  it('the live text rule agrees: a too-long answer is done, the Read failure is not', () => {
+    for (const text of [MCP_ONE_LINE, MCP_MANY_LINES, MCP_NO_LINE_COUNT, MCP_NO_PREFIX, BASH_PERSISTED]) {
+      expect(isToolResultError(text), text.slice(0, 60)).toBe(false)
+      expect(toolResultFailed(text, undefined)).toBe(false)
+    }
+    expect(isToolResultError(READ_TOO_BIG)).toBe(true)
+    // The transcript's flag, when the event carries it, wins over the text.
+    expect(toolResultFailed(READ_TOO_BIG_BLOCK, true)).toBe(true)
+    expect(toolResultFailed('Error: printed by the command', false)).toBe(false)
+    expect(toolResultFailed('Error: no flag sent', undefined)).toBe(true)
   })
 })
 

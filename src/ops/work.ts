@@ -5,16 +5,19 @@ import { REVIEW_SCORE_INPUT } from './review-score-input.js';
 // time (the ops modules are imported in a fixed order by ./index.ts).
 import type { OpCall } from './core.js';
 import { defineOp, getOp } from './registry.js';
+import { DOC_ANSWER_MAX_CHARS, DOC_PART_INPUT, askedPart, pageOnce, pagedResult } from './doc-page.js';
 import { startTask, TASK_START_INPUT, THREAD_HANDOFF_ARG } from './task-execution.js';
 import { handOffLine, type HandOffResult } from '../core/org/thread-follow.js';
 import { deliveryWaitLine, NO_REPLY_ASKED, sendBehindSlowHostLine, REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 import { USER_SPOKE_TEXT, USER_WORDS_BACK, userSaidLine, type UserSaid } from '../core/sessions/user-spoke.js';
 import { WORK_PLACE_RULE } from '../core/work-place.js';
-import { leftOutLine, shapeHistory, type HistoryShape, type ShapeResult } from './task-history-shape.js';
+import { leftOutLine, shapeHistory, TASK_HISTORY_ANSWER, type HistoryShape, type ShapeResult } from './task-history-shape.js';
+import { TASK_FOCUS_TIER_SET_ANSWER, TASK_PIN_SET_ANSWER, TASK_RECEIPT } from './task-answers.js';
 import { isInboxProject, SESSION_EFFORT_IDS, SESSION_ENGINE_IDS, SESSION_MODE_IDS } from '../core/types.js';
 import { CLAUDE_PLUGIN_ID_MAX_CHARS, CLAUDE_PLUGINS_OFF_MAX_ITEMS } from '../core/sessions/claude-plugins-off.js';
 import { isoDateTime, LIST_MAX } from '../lib/zod-rules.js'
+import { OPEN_ITEMS_ANSWER } from './org-answer-shapes.js'
 import { TASK_DIR_VAR, stopTmpPathNote } from '../lib/tmp-draft-path.js';
 import { STATUS_REPORT_CHANNEL } from '../lib/internal-lines.js';
 
@@ -33,6 +36,7 @@ defineOp({
     ...TASK_START_INPUT,
   },
   handler: async ({ id, ...body }, call) => startTask(String(id), body, call),
+  answer: TASK_RECEIPT,
   // The start answers once its session is up or failed (up to 110 s: src/web/routes/task-v1.ts).
   timeoutMs: 130_000,
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
@@ -301,7 +305,8 @@ defineOp({
     + 'To skim a long task without a huge answer: compact:true keeps the messages and folds each tool call, thinking block and '
     + 'status notice to one line (the person\'s words stay whole, a long reply is clipped; `left_out` says how much it dropped); '
     + 'limit:N keeps the newest N messages; since:<ISO> only what came after a time (the last row you read; on a busy task add limit). '
-    + 'Read without compact when you need a tool\'s result or a long reply in full.',
+    + 'Read without compact when you need a tool\'s result or a long reply in full. '
+    + 'Naming none of limit, since and compact, an agent reads the newest 20 messages compact (`shown` says so); "_full": true reads the route\'s whole page.',
   input: {
     id: z.string().min(1).describe('Task id or unique prefix'),
     fresh: z.boolean().optional().describe('true: force a live transcript read on the primary box. false: never read live, '
@@ -435,6 +440,7 @@ defineOp({
     };
   },
   timeoutMs: HISTORY_CALL_MS,
+  answer: TASK_HISTORY_ANSWER,
   tags: { readonly: true, remote: 'allow' },
 });
 
@@ -576,6 +582,8 @@ defineOp({
     'Unfinished subtasks of your task, replies you are still waiting for, requests to you that you have not answered, ' +
     'the user\'s messages in your chat you have not answered yet, ' +
     'and where your task stands now (project, folder, leader). Walnut also puts this into your context after every compaction.',
+  // A hook's call prints what a harness reads as it is: never shaped or cut.
+  answer: { ...OPEN_ITEMS_ANSWER, whole_for: (args) => args.hook !== undefined },
   input: {
     hook: z.enum(['compact', 'stop']).optional().describe(
       'Set by Walnut\'s own hooks: compact = after a compaction, in the JSON shape a Claude Code SessionStart hook prints; '
@@ -663,16 +671,31 @@ defineOp({
   tags: { readonly: true, remote: 'allow' },
 });
 
+/** The call that reads more of a skill: its name and the part asked for. */
+const skillAgain = (args: Record<string, unknown>) => (more: Record<string, unknown>) => `skill_read ${JSON.stringify({ dirName: args.dirName, ...more })}`
+
 defineOp({
   name: 'skill_read',
   title: 'Read a Walnut skill',
   description:
     'Read one skill body on demand by its directory name. Use this when the operating contract names a skill, such as ' +
-    '`walnut-self-knowledge`; do not load every skill into the prompt.',
+    '`walnut-self-knowledge`; do not load every skill into the prompt. A long skill comes in pages: `page` names its sections and ' +
+    'the call that reads on (`offset`, or `section` by heading).',
   input: {
     dirName: z.string().min(1).regex(/^[A-Za-z0-9._-]+$/).describe('Skill directory name'),
+    ...DOC_PART_INPUT,
   },
-  handler: async (args, call) => call('GET', `/skills/${encodeURIComponent(String(args.dirName))}`),
+  handler: async (args, call) => {
+    const body = await call('GET', `/skills/${encodeURIComponent(String(args.dirName))}`)
+    // Asked for a part: every caller gets that part. Asked for none: an agent gets the first page (answer.shape).
+    return askedPart(args) ? pagedResult(body, 'skill.content', args, skillAgain(args)) : body
+  },
+  // A skill is a document an agent reads to do its work: pages up to the document cap (doc-page.ts).
+  // 2026-11-21: p95 32,500 characters, and up to 4.6 MB through the CLI.
+  answer: {
+    kind: 'content', max: DOC_ANSWER_MAX_CHARS,
+    shape: ({ result, args }) => pageOnce(result, () => pagedResult(result, 'skill.content', args, skillAgain(args))),
+  },
   tags: { readonly: true, remote: 'allow' },
 });
 
@@ -957,6 +980,7 @@ defineOp({
       'No further action is required.',
     );
   },
+  answer: TASK_PIN_SET_ANSWER,
   tags: { readonly: false, remote: 'allow' },
 });
 
@@ -983,5 +1007,6 @@ defineOp({
       'No further action is required.',
     );
   },
+  answer: TASK_FOCUS_TIER_SET_ANSWER,
   tags: { readonly: false, remote: 'allow' },
 });

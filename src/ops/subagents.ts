@@ -2,6 +2,20 @@ import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
 import { OWN_WAIT_TURN_END } from '../lib/turn-end-marker.js';
+import { DOC_ANSWER_MAX_CHARS, DOC_PART_INPUT, askedPart, clipText, pageOnce, pagedResult } from './doc-page.js';
+import type { OpAnswer } from './answer.js';
+
+/** The read that goes on in a subagent's answer. */
+const answerAgain = (id: unknown) => (more: Record<string, unknown>) => `subagent_read ${JSON.stringify({ id, ...more })}`;
+
+/**
+ * subagent_run and subagent_send answer what the subagent answered: content, its deliverable, in
+ * pages up to the document cap (doc-page.ts); subagent_read {id, offset} reads on.
+ */
+const ANSWERED: OpAnswer = {
+  kind: 'content', max: DOC_ANSWER_MAX_CHARS,
+  shape: ({ result }) => pageOnce(result, () => pagedResult(result, 'answer', {}, answerAgain((result as { id?: unknown }).id))),
+};
 
 const ENGINES = ['codex', 'opencode', 'goose', 'pi', 'gemini', 'dsh', 'custom', 'claude'] as const;
 
@@ -9,27 +23,21 @@ defineOp({
   name: 'subagent_run',
   title: 'Run a subagent on another host or another engine',
   description: [
-    'USE YOUR OWN Agent TOOL FOR MOST SUBAGENTS. Use subagent_run only when the step must run on ANOTHER HOST (UI tests on clouddev, '
-      + 'an iOS build on a Mac, the user\'s own browser: `host`, an alias from host_list or a selector like "@ios" or "@browser"; never '
-      + 'task_move for one step) or on ANOTHER ENGINE (`engine`: codex for GPT models such as Sol or Astra, opencode, goose, pi, gemini, '
-      + 'dsh, custom). Default: Claude Code with its own default model.',
-    'It works like your Agent tool: one prompt (it sees nothing else of your conversation, so write everything it needs into it), and '
-      + 'its answer comes back to you. Underneath it is a hidden Walnut task session (no task, no board row): started the way a task\'s '
-      + 'session starts on that host, with the same tools, skills, MCP servers and permissions (full access when yours has it), and its '
-      + '`walnut` calls act as you. It shows in your Background tasks panel, where the user can read its conversation and write to it.',
-    'YOU NEVER WAIT ON IT OR POLL IT. By default the call waits for its answer (up to wait_ms, at most 10 minutes, less through a '
-      + 'host\'s gateway). background:true returns at once. A run still going when the call returns, or a background one, sends its '
-      + 'answer into this session by itself when it ends, which wakes this session if it is idle, the way a background Agent\'s '
-      + 'completion does: carry on with other work, or ' + OWN_WAIT_TURN_END + '.',
-    'It keeps its context after it answers: subagent_send {id, message} tells it more, and its answer comes back the same way. It is '
-      + 'closed after an hour with no message, when you stop it (subagent_stop), or when this session ends.',
-    'With `host`, Walnut copies your work there (your folder\'s git repository: its commits, uncommitted changes and untracked files; '
-      + '`cwd` picks the folder, by default your session\'s working directory; your own folder is left as it is). Every file it puts in '
-      + 'its out folder or names by absolute path (videos, screenshots, logs) is copied into your task directory under subagents/<id>/ '
-      + '(`files` lists them). The copy is removed when it is closed: ask it to describe or return a change (a patch file). A host other '
-      + 'than yours needs this task\'s grant there, the one host_exec uses. Model and effort: omit for the engine\'s own default; a model '
-      + 'the engine does not offer is refused with the list it offers. At most 4 answer at once per session; each turn has its time '
-      + 'limit (timeout_min, default 30, at most 120).',
+    'USE YOUR OWN Agent TOOL FOR MOST SUBAGENTS. Use subagent_run only for a step that must run on ANOTHER HOST (`host`: an alias '
+      + 'from host_list or a selector like "@ios" or "@browser"; never task_move for one step) or on ANOTHER ENGINE (`engine`: codex '
+      + 'for GPT models, opencode, goose, pi, gemini, dsh, custom). Default: Claude Code with its own default model.',
+    'Like your Agent tool: one prompt (it sees nothing else of your conversation, so write everything it needs into it), and its '
+      + 'answer comes back to you. It is a hidden Walnut session started the way a task\'s session starts on that host, with the '
+      + 'same tools, skills and permissions, and its `walnut` calls act as you; the user sees it in your Background tasks panel.',
+    'YOU NEVER WAIT ON IT OR POLL IT. The call waits for its answer up to wait_ms (at most 10 minutes, less through a host\'s '
+      + 'gateway); background:true returns at once. An answer the call did not return comes into this session by itself, waking it '
+      + 'if idle: carry on with other work, or ' + OWN_WAIT_TURN_END + '. subagent_send {id, message} tells it more; it is closed '
+      + 'after an hour with no message, by subagent_stop, or when this session ends.',
+    'With `host`, Walnut copies your work there (the git repository of `cwd`, default your working directory: commits, uncommitted '
+      + 'and untracked files), and every file it puts in its out folder or names by absolute path comes back under '
+      + 'subagents/<id>/ in your task directory (`files`); the copy is removed when it closes, so ask it to return a change as a patch. '
+      + 'Another host needs this task\'s grant there, as host_exec does. At most 4 answer at once per session; a turn stops at '
+      + 'timeout_min (default 30, at most 120).',
   ].join('\n\n'),
   input: {
     engine: z.enum(ENGINES).optional().describe('The engine: claude (default), codex (GPT, e.g. Sol/Astra), opencode, goose, pi, gemini, dsh, or custom'),
@@ -47,6 +55,7 @@ defineOp({
   bind: { method: 'POST', path: '/subagents' },
   timeoutMs: 11 * 60_000,
   mapResult: ({ body }) => runOutcome(body),
+  answer: ANSWERED,
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
@@ -67,6 +76,7 @@ defineOp({
   bind: { method: 'POST', path: '/subagents/:id/message' },
   timeoutMs: 11 * 60_000,
   mapResult: ({ body }) => runOutcome(body),
+  answer: ANSWERED,
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
@@ -75,16 +85,24 @@ defineOp({
   title: 'Look at a subagent',
   description: 'A subagent of this session (subagent_run): its state (running, completed, failed, stopped), whether it is still open '
     + 'for a message, what it is doing, and its last `answer`. Only to look: its answers come to you by themselves, so never call this to '
-    + 'wait for one. With no id: every subagent of this session, open and recent.',
+    + 'wait for one. With no id: every subagent of this session, open and recent, one short row each. A long answer comes in '
+    + 'pages (`page` says how to read on).',
   input: {
     id: z.string().regex(/^sa-[a-f0-9]{4,32}$/).optional().describe('The id subagent_run returned (sa-...); omit to list them all'),
+    ...DOC_PART_INPUT,
   },
   handler: async (args, call) => {
     if (!args.id) return call('GET', '/subagents');
-    return runOutcome(await call('GET', `/subagents/${encodeURIComponent(String(args.id))}`));
+    const read = runOutcome(await call('GET', `/subagents/${encodeURIComponent(String(args.id))}`));
+    // Asked for a part of its answer: every caller gets that part.
+    return askedPart(args) ? pagedResult(read, 'answer', args, answerAgain(args.id)) : read;
   },
   routes: [{ method: 'GET', path: '/subagents' }, { method: 'GET', path: '/subagents/:id' }],
   timeoutMs: 11 * 60_000,
+  answer: {
+    kind: 'content', max: DOC_ANSWER_MAX_CHARS,
+    shape: ({ result, args }) => args.id ? pageOnce(result, () => pagedResult(result, 'answer', {}, answerAgain(args.id))) : subagentRows(result),
+  },
   tags: { readonly: true, remote: 'allow', primaryOnly: true },
 });
 
@@ -100,6 +118,29 @@ defineOp({
   timeoutMs: 30_000,
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
+
+/** The start of a listed subagent's answer: subagent_read {id} reads it whole. */
+const ROW_ANSWER_CHARS = 300;
+
+/** The list for an agent: one short row per subagent, each answer's start only. */
+function subagentRows(result: unknown): unknown {
+  const b = result as { subagents?: unknown } | null;
+  if (!b || typeof b !== 'object' || !Array.isArray(b.subagents)) return result;
+  const rows = (b.subagents as Array<Record<string, unknown>>).map((r) => {
+    const answer = typeof r.answer === 'string' ? r.answer : undefined;
+    return {
+      id: r.id, state: r.state, open: r.open, engine: r.engine, host: r.host, description: r.description, elapsed_ms: r.elapsed_ms,
+      ...(typeof r.error === 'string' ? { error: r.error } : {}),
+      ...(Array.isArray(r.files) && r.files.length ? { files: r.files.length } : {}),
+      ...(answer !== undefined ? { answer: clipText(answer, ROW_ANSWER_CHARS) } : {}),
+    };
+  });
+  return {
+    subagents: rows,
+    outcome: `${rows.length} subagent${rows.length === 1 ? '' : 's'} of this session, ${rows.filter((r) => r.state === 'running').length} running.`,
+    next: rows.length ? 'subagent_read {"id":"<id>"} reads one with its whole answer and files.' : 'Nothing to read.',
+  };
+}
 
 /** What a subagent call answers (exported for the no-polling guard test). */
 export function runOutcome(body: unknown): unknown {

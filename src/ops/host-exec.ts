@@ -1,8 +1,17 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
+import { clipText } from './doc-page.js';
 import { withOutcome } from './outcome.js';
 import { runOutcome, stoppedEnd } from './host-exec-answers.js';
+import { RUN_ANSWER_MAX_CHARS, shownRun } from './host-exec-shown.js';
 import { LIST_MAX } from '../lib/zod-rules.js';
+import type { OpAnswer } from './answer.js';
+
+/**
+ * A run's answer is what it ran (its exit code and output), not an object it changed: content, with
+ * the first lines and the tail of the output and the read for the rest (host-exec-shown.ts).
+ */
+const RUN_ANSWER: OpAnswer = { kind: 'content', max: RUN_ANSWER_MAX_CHARS, shape: shownRun };
 
 const WAIT_FOR = z.object({
   output: z.string().min(1).max(200).optional().describe('A JavaScript regular expression (`/ready/i` is read as ready with the i flag; `/ready/` with no flags keeps its slashes), tested on each whole line of output on its own (a line ends at a newline or \\r; colour codes are removed first; a line is tested on its first 64 K characters)'),
@@ -16,94 +25,38 @@ defineOp({
   name: 'host_exec',
   title: 'Run a command on another host',
   description: [
-    'Run one command on ANOTHER host Walnut knows (host_list names them), as the user, and get its exit code and output: '
-      + 'like your Bash tool, but on that machine (Xcode and the iOS simulator on the Mac, its signed-in tools, its files).',
-    'Common uses. A build or a test: {host, command, cwd}, then read exitCode and output. A dev server: {host, command: "npm run '
-      + 'dev", cwd, background: true, wait_for: {port: 5173}} answers once it listens and leaves it running (host_exec_stop ends '
-      + 'it). A long job: background:true, then host_exec_read with wait_for (the line it prints when done) and wait_ms.',
-    'The command. Give `command` (a shell line) or `argv` (a program and its arguments, no shell parsing). It runs in bash '
-      + '(sh where there is none) after the user\'s login shell set up PATH, so zsh rules never apply. $WALNUT_TASK_DIR there is '
-      + 'your task\'s directory on that host. strict:true runs the line under bash\'s set -e and pipefail: it stops at the first '
-      + 'command that fails, a pipe included, except where bash tests the result (after if, while, && or ||, and anything a '
-      + 'function runs when it is called that way, so `f || echo x` runs all of f). failedStep names the step, and the output '
-      + 'ends with Walnut\'s line `walnut strict <job_id>: exit N [pipe codes] line L: command`, which a wait never matches. '
-      + 'A `trap … ERR` of your own replaces the one strict names the step with.',
-    'Shell state across calls. keep:true starts the run where this task\'s last keep call on that host ended: its working '
-      + 'directory (unless you give cwd, which wins) and its exported variables, new, changed and unset ones (a venv\'s PATH '
-      + 'and VIRTUAL_ENV too); at its end its own directory and exported variables carry to the next keep call there. Calls '
-      + 'without keep never see or change that state. Not carried: shell functions (a venv\'s `deactivate`), aliases, '
-      + 'unexported variables, shell options, traps, POSIXLY_CORRECT. It is saved when the line ends, `exit N` and a stop '
-      + '(SIGTERM) included, but not when the line sets its own EXIT trap, runs `exec`, is killed hard (SIGKILL), leaves a '
-      + 'DEBUG trap that fails under extdebug, or runs with background:true (that run starts from the kept state and saves '
-      + 'nothing). keep never adds output, changes the exit code or signal, or shows a value, whatever the line turned on '
-      + '(tracing, aliases, functions over builtins, a DEBUG trap). Once a run ended, Walnut reads the host\'s state again: '
-      + 'keep.saved is true only when it holds this run\'s end, false when it does not (keep.why), null when it could not '
-      + 'be read; only true says the state carries. A save that cannot complete (a walnut_ variable or a function over a '
-      + 'builtin it needs that the line made readonly, a task directory it cannot write) also ends the output with one '
-      + '`walnut: keep could not save ...` line. The kept directory is the run\'s cwd, so the host\'s macOS permission check and a relative '
-      + 'wait_for.file use it: a call that starts in or reads a place macOS guards needs allow_prompts on that call too. One '
-      + 'that is gone: the run starts in the home directory and keep.gone names it. A daemon that cannot hand Walnut the '
-      + 'state (keep.shellCd) has the shell enter the directory, after those checks. Limits: a trace sent to a descriptor '
-      + 'of 10 or more (BASH_XTRACEFD) is not silenced in the save, nor is a trace when the line\'s own DEBUG trap under '
-      + 'extdebug fails on some commands only (its exported values can then show in its own output); a readonly POSIXLY_CORRECT can stop the save with no '
-      + 'line; under set -v the output ends with the save\'s first line (no value in it); on macOS\'s bash 3.2 an exported '
-      + 'value of a few hundred KB makes each keep call seconds slower; on Linux one exported value over 128 KiB makes '
-      + 'every program a later keep call starts fail with "Argument list too long" until it is unset, as in a shell; the '
-      + 'Command Line Tools check reads the login PATH, '
-      + 'not one keep restored. It needs bash (under sh it does nothing) and a task directory there (else 409 '
-      + 'task_dir_unset): each save is one 0600 snapshot in it and a pointer to it, and values never come back in the '
-      + 'answer. With argv it is refused.',
-    'The host. `host` is an alias or a selector ("@ios"), never your own host. The first call for this task on a host asks the '
-      + 'user by letter (403 exec_grant_required): do other work; a notice comes when they allow it. A revoke, or the host '
-      + 'closed in Settings, ends a waiting call at once with a 403; runs already going keep going to their deadline, and '
-      + 'host_exec_list and host_exec_stop still reach them. host_exec_pinned runs under one named grant and never asks.',
-    'Dialogs on a Mac. The command runs in the user\'s session, so a dialog shows on their screen and the run waits for '
-      + 'someone: a keychain read (`security`), `osascript ... with administrator privileges`, or a read of a place macOS guards '
-      + '(Desktop, Documents, Downloads, iCloud Drive, Mail, Messages, app containers, /Volumes, or du, find or grep -r over ~ or '
-      + '~/Library). Walnut refuses those with 409 may_prompt: ask the user, then pass allow_prompts:true. A run found waiting at '
-      + 'a dialog is stopped and comes back `blocked`.',
-    'Sound. A command that makes sound there (say without -o, afplay or another player, a volume change or an unmute) is '
-      + 'refused with 409 makes_sound, no override: render audio to a file or a virtual device instead.',
-    'Input. A command that sends real input to the front window there (cliclick, xdotool, Peekaboo click or type, System Events '
-      + 'keystrokes or clicks, an input event API in inline code) is refused with 409 foreground_input: drive a window the test '
-      + 'owns from inside it (Playwright, XCUITest, xcrun simctl io); a command that truly must, names why on its own line: '
-      + 'WALNUT_INPUT_REASON=\'<why, 10+ characters>\' <command>.',
-    'Bounds. A run ends at its deadline, timeout_ms: 2 minutes by default and 10 at most (background:true: 2 hours), and its '
-      + 'whole process group is stopped. The call waits for the run to end; through a host\'s gateway (a session on another '
-      + 'host) it answers after about 12 s (heldMs). A run still going comes back running:true with its job_id: host_exec_read '
-      + 'waits on it; never run it again. The walnut CLI prints the job_id when no answer came back, and host_exec_list lists '
-      + 'this task\'s jobs. A task runs at most 4 commands at once and a host 8; over a cap a call waits up to 20 s for a slot, '
-      + 'then answers 429 busy. The last 256 KB of output comes back (the full log stays there); lines that look like a '
-      + 'credential are hidden.',
-    'Background runs and `&`. background:true returns at once with the job_id (with wait_for, once it holds). What a run starts '
-      + 'in the background (`cmd &`, `nohup cmd &` too) stays in its process group: about 2 s after its shell exits it gets '
-      + 'SIGTERM (SIGKILL 3 s later), whatever it does with its output (a `> file` too). To keep a process running, start it '
-      + 'as its own job, background:true and no `&`, and wait on it with wait_for (its port, or the line it prints when ready).',
-    'What wait_for waits for. The call returns as soon as a line of the output matches `output`, `port` listens there (127.0.0.1, '
-      + '::1 or one of the host\'s addresses), or `file` exists there; else when the run ends or the wait runs out. `file` is '
-      + 'one path, relative to cwd, with ~, $HOME and $WALNUT_TASK_DIR expanded and no other variable, never a pattern: one with '
-      + 'another $VAR, ~name, * or ? is refused before anything runs; [, ], { and } are part of the name. It counts once it '
-      + 'exists, empty too, and a symlink once its target does; it is looked for about every 0.2 s, so a file there for less may '
-      + 'be missed. A wait ends with its job, so a port or file made outside the job is waited for in a job that stays alive '
-      + '(`sleep 600`, background:true). On a Mac a port look connects, so a one-client server (`nc -l` without -k) takes it as '
-      + 'its client: wait for the line it prints instead.',
-    'Lines and patterns. `output` is a JavaScript regular expression tested on each line on its own: a line ends at a newline '
-      + 'or \\r, colour codes are removed first, and only a line\'s first 64 K characters are tested. The line still being '
-      + 'written counts only with `partial: true` (a prompt) or once the run ended. `flags`: "i" ignores case (so does a leading '
-      + '`(?i)`), "u" is Unicode mode (\\p{...} needs it). `/ready/i` is read as ready with the i flag, while `/ready/` with no '
-      + 'flags is matched with its slashes. Textbook slow shapes (a repeat in a repeat, such as `(a+)+`) are refused before the '
-      + 'command runs; a pattern that takes about 200 ms of CPU on its lines is stopped (`tooSlow`), and one the regex engine '
-      + 'itself gives up on (too much backtracking, under bun) may read as no match. Many programs (python, build tools) hold '
-      + 'their output when it is not a terminal: run them unbuffered (python3 -u, stdbuf -oL) or wait for their port.',
-    'How long it waits. wait_ms, at most 10 minutes; by default a foreground run to its deadline, a background one 2 minutes '
-      + '(timeout_ms stays the run\'s deadline). Through a host\'s gateway about 12 s. The answer\'s `next` is the host_exec_read '
-      + 'that waits on.',
-    'Reading on. `waitedFor` says what held: matched (output, port, file, or null), match (the line, the address, the path), '
-      + 'matchAt (the log offset of that line), size and dir (a file\'s), ms, scanned (the log offset tested up to: the offset '
-      + 'to wait on from), untested, long (lines over 64 K), tooSlow, unfinished (the matched line had no line end yet), '
-      + 'wouldMatch (a line still being written that would match), unchecked (what it could not look at), unreachable (the '
-      + 'file\'s path is closed to the user, so the wait ended). `already`: the port or file was there when the wait began '
-      + '(`beforeRun`: before the job started, so another process may have it).',
+    'Run one command on ANOTHER host Walnut knows (host_list names them; never your own host), as the user, and get its exit code '
+      + 'and output: like your Bash tool, but on that machine (Xcode and the iOS simulator on the Mac, its signed-in tools, its files). '
+      + 'A build or a test: {host, command, cwd}. A dev server: {host, command: "npm run dev", cwd, background: true, wait_for: {port: '
+      + '5173}} answers once it listens and leaves it running (host_exec_stop ends it). A long job: background:true, then host_exec_read '
+      + 'with wait_for (the line it prints when done) and wait_ms.',
+    'The command. `command` is a shell line run by bash (sh where there is none) after the user\'s login shell set up PATH, so zsh '
+      + 'rules never apply; `argv` is a program and its arguments, no shell parsing. $WALNUT_TASK_DIR there is your task\'s directory '
+      + 'on that host. strict:true runs it under set -e and pipefail: failedStep names the step that failed, and the output ends with '
+      + 'Walnut\'s line `walnut strict <job_id>: exit N [pipe codes] line L: command`. keep:true starts where this task\'s last keep call '
+      + 'on that host ended (its directory, unless cwd is given, and its exported variables) and carries this run\'s end to the next; '
+      + 'only keep.saved true says it carried (not with argv or background:true; the answer says why when it did not).',
+    'The host. The first call for this task on a host asks the user by letter (403 exec_grant_required): do other work; a notice '
+      + 'comes when they allow it. host_exec_pinned runs under one named grant and never asks. Refused before anything runs: 409 '
+      + 'may_prompt, a command that would show a dialog on a Mac (a keychain read, administrator privileges, a place macOS guards such '
+      + 'as Desktop, Documents or Downloads, or du, find or grep -r over ~): ask the user, then pass allow_prompts:true; 409 makes_sound '
+      + '(no override: render audio to a file); 409 foreground_input, real input to the front window (drive a window the test owns, or '
+      + 'name why on its own line: WALNUT_INPUT_REASON=\'<why, 10+ characters>\' <command>).',
+    'Bounds. timeout_ms is the run\'s deadline: 2 minutes by default and 10 at most (background:true: 2 hours); then its whole process '
+      + 'group is stopped. Through a host\'s gateway (a session on another host) the call answers after about 12 s. A run still going '
+      + 'comes back running:true with its job_id: host_exec_read waits on it; never run it again (host_exec_list finds a job whose answer '
+      + 'was lost). A task runs at most 4 commands at once and a host 8 (429 busy after a 20 s wait for a slot). The answer shows the '
+      + 'first lines and the last 6,000 characters of output; `outputShown` names the log file there and the host_exec_read that shows '
+      + 'the rest. Lines that look like a credential are hidden.',
+    'Background runs and `&`. What a line starts with `&` (`cmd &`, `nohup cmd &` too) stays in its process group: about 2 s after its '
+      + 'shell exits it gets SIGTERM, whatever it does with its output. To keep a process running, start it as its own job, '
+      + 'background:true and no `&`, and wait on it with wait_for.',
+    'wait_for. The call returns as soon as a line of output matches `output` (a JavaScript regular expression tested on each line on '
+      + 'its own; flags "i" or "u"; partial:true also tests a line still being written, such as a prompt), `port` listens there, or '
+      + '`file` exists there (one path, relative to cwd, never a pattern); else when the run ends or the wait runs out. A wait ends '
+      + 'with its job. Programs that hold their output off a terminal: run them unbuffered (python3 -u, stdbuf -oL) or wait for their '
+      + 'port. wait_ms is how long the call waits, at most 10 minutes. `waitedFor` says what held, and the answer\'s `next` is the '
+      + 'exact read that waits on. Full rules: docs/reference/host-exec.md in the Walnut repository.',
   ].join('\n\n'),
   input: {
     host: z.string().min(1).describe('Host alias ("__local__" = the machine the Walnut server runs on, usually the Mac) or a selector like "@ios"'),
@@ -123,6 +76,7 @@ defineOp({
   bind: { method: 'POST', path: '/hosts/:host/exec' },
   timeoutMs: 11 * 60_000,
   mapResult: ({ body, args }) => runOutcome(body, args),
+  answer: RUN_ANSWER,
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
@@ -156,6 +110,7 @@ defineOp({
   bind: { method: 'POST', path: '/host-exec/grants/:grant_id/exec' },
   timeoutMs: 11 * 60_000,
   mapResult: ({ body, args }) => runOutcome(body, args),
+  answer: RUN_ANSWER,
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
@@ -163,16 +118,15 @@ defineOp({
   name: 'host_exec_read',
   title: 'Read a command\'s output on another host',
   description:
-    'The output of a host_exec job: from `offset` (bytes into its log) or, with no offset, its last 256 KB; `nextOffset` continues. '
-    + '`wait_ms` holds the answer until the job ends (up to 60000: a longer one waits 60000 and says so; with wait_for up to 600000; about 10000 through a host\'s gateway, as a session on another host calls, then call again: heldMs says so). '
-    + '`running` false means it ended, with `exitCode`. `truncated` means the start of the output is not here; `more`, that output '
-    + 'after nextOffset is. Only the task that started a job reads or stops it. `wait_for` (as host_exec\'s) waits up to wait_ms '
-    + '(default 60000, at most 600000; about 10000 through a host\'s gateway) until a line of the output matches (tested from offset, else '
-    + 'from the start of the log), the port listens, the file exists, or the job ends. To go on after a match or a miss, pass the '
-    + 'answer\'s waitedFor.scanned as offset: from the same offset, the same line matches again. An offset inside a line reads and '
-    + 'tests that whole line, and a match there counts only when it ends past the offset, so a prompt already seen is not seen '
-    + 'again. A revoke of the task\'s grant there, or the host closed, ends a waiting read at once with a 403, and '
-    + 'later reads of its jobs there are refused the same way (403 exec_grant_revoked) until the user grants it again; host_exec_list and host_exec_stop still work.',
+    'The output of a host_exec job, from `offset` (bytes into its log; `nextOffset` goes on) or, with no offset, its tail: the answer '
+    + 'shows the first lines and the last 6,000 characters, and `outputShown` names the read for the rest. `running` false means it '
+    + 'ended, with `exitCode`. Do not poll: `wait_ms` holds the answer until the job ends (60000 at most), and `wait_for` (as '
+    + 'host_exec\'s) until a line of the output matches (tested from offset, else from the start of the log), the port listens, the '
+    + 'file exists or the job ends (wait_ms up to 600000); through a host\'s gateway (a session on another host) about 10000, then call '
+    + 'again (heldMs says so). A read that finds nothing new says so in a sentence. To go on after a match or a miss, pass the '
+    + 'answer\'s waitedFor.scanned as offset; an offset inside a line tests that whole line, and only a match ending past the offset '
+    + 'counts. Only the task that started a job reads or stops it. After a revoke of the task\'s grant there, or the host closed, '
+    + 'reads of its jobs are refused (403 exec_grant_revoked) until the user grants it again; host_exec_list and host_exec_stop still work.',
   input: {
     host: z.string().min(1).describe('The host the job runs on'),
     job_id: z.string().min(1).describe('The jobId host_exec returned'),
@@ -184,6 +138,7 @@ defineOp({
   // With wait_for a read may wait 10 minutes (wait_ms 600000): the call must outlast it.
   timeoutMs: 11 * 60_000,
   mapResult: ({ body, args }) => runOutcome(body, args),
+  answer: RUN_ANSWER,
   tags: { readonly: true, remote: 'allow', primaryOnly: true },
 });
 
@@ -246,5 +201,25 @@ defineOp({
       : jobs.length ? 'host_exec_read a jobId for its output.' : 'Nothing to read.'
     return withOutcome(b, `${typeof b.hostAway === 'string' ? `${head} The host did not answer (${b.hostAway}); these are the runs Walnut started there.` : head}${grant}`, next)
   },
+  // One short row per job (2026-11-21: up to 21,000 characters): host_exec_read a jobId for its output and log file.
+  answer: { kind: 'content', shape: ({ result }) => jobRows(result) },
   tags: { readonly: true, remote: 'allow', primaryOnly: true },
 });
+
+/** The start of a listed job's command an agent reads: enough to tell the jobs apart. */
+const ROW_COMMAND_CHARS = 120;
+
+function jobRows(result: unknown): unknown {
+  const b = result as { jobs?: unknown } | null;
+  if (!b || typeof b !== 'object' || !Array.isArray(b.jobs)) return result;
+  return {
+    ...(b as Record<string, unknown>),
+    jobs: (b.jobs as Array<Record<string, unknown>>).map((j) => {
+      const command = typeof j.command === 'string' ? clipText(j.command, ROW_COMMAND_CHARS) : j.command;
+      const row: Record<string, unknown> = { jobId: j.jobId, command, startedAt: j.startedAt, state: j.state };
+      for (const k of ['exitCode', 'signal', 'ms']) if (j[k] !== null && j[k] !== undefined) row[k] = j[k];
+      if (j.blocked) row.blocked = true;
+      return row;
+    }),
+  };
+}

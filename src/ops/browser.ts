@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
+import { ANSWER_CEILING_CHARS } from './answer.js';
 import { withOutcome } from './outcome.js';
 import { noBrowserLine, noBrowserNext, type GoneBrowser } from '../core/browser-control/gone-words.js';
 
@@ -186,42 +187,29 @@ defineOp({
   description:
     'Act in the user\'s own browser (Chrome or Firefox with the Walnut extension, signed in to their sites), in a separate Walnut agent window. '
     + 'Start here (a read takes 3 to 5 calls): open {url, read_text: true} (the tab and its main text); snapshot (the elements on screen, a ref each: e12); '
-    + 'click {ref} or {text: its words} (read_text: true reads the page after); type {ref, text, submit?}; text (the main content without menus, header or footer, 4000 characters; ref or selector: one element; max; all: the whole page); '
+    + 'click {ref} or {text: its words} (read_text: true reads the page after); type {ref, text, submit?}; text (the main content without menus, header or footer, 4000 characters; max, ref, selector or all for more); '
     + 'find {text} (the best few matches); wait {text | url | textGone, ms?} (10 s unless ms); close. '
-    + 'Every acting step answers `changed`: went to <url>, opened tab N, the page content changed, a field\'s value changed (only the field typed in), or nothing changed on the page (then do not wait: snapshot and act again); a type with submit says what its Enter did ("Enter: went to <url>", or "Enter changed nothing ..." with what to try). '
-    + 'Subagents may use it too: the same task, tabs and approvals. With two or more tabs (or subagents in the browser at the same time) every step on a tab names it with tab (open answers the id): one with no tab is refused then, never sent to a guessed tab. '
-    + 'You act only in tabs your task opened (and the tabs those open), or a tab of the user\'s you take. Actions: tabs (all: every tab of the browser, title and address only); '
-    + 'take {tab} (one of the user\'s tabs, never the one they are on: person_is_here); open {url}; navigate {tab, url}; back; close (a taken tab is given back, not closed); '
-    + 'snapshot (all: the whole page and its text; refs like e12, f3:e12 inside a frame); find {text, exact?, role?, limit?}; form_values (every field: label, name, type, value; secrets hidden); '
-    + 'click {ref} or {x, y} or {text} (the best match by its words, in the page or a frame); hover {ref} or {x, y}; type {ref or x, y, text, clear?, submit?, slowly? (one key at a time)}; fill_form {fields: [{ref or label, value}]}; select {ref, value}; press {key: Enter, Tab, Escape...}; '
-    + 'scroll {direction: up|down|left|right, amount? (screens) or by? (px)} or {to: top|bottom} or {ref} (into view); with a direction and a ref or x, y it scrolls that box inside the page; wait {text} or {textGone} or {url: substring or /regex/} or {ms}; '
-    + 'screenshot (full: the whole page, cut at 12000 px; annotate: numbers on the elements on screen, labels map number to ref); click_label {label}; '
-    + 'zoom {x, y, width, height} (that region of the screen at full pixel resolution); text {all_frames: each frame\'s text on its own}; upload {ref, files: [{name, type, base64}]} (10 MB in all; `walnut browser upload e5 ./a.pdf` in a shell); '
-    + 'downloads {wait?, ms?}; fill_login {item?} (signs in with the user\'s saved login for the page: you never see the password; needs_ok waits for their approval: call again with request); fill_code {item?} (on the page that asks for a sign-in\'s one-time code: fills the code of the saved login\'s two-step setup, you never see it; the same approvals). '
-    + 'Real input (Chrome only; on unless the user turned it off in the extension: trusted_off): click, hover, type and press in your own tab in the agent window use it by default (trusted: false for the page\'s events; a covered or minimized agent window gets the page\'s events, and the answer says trusted: false and why; a frame, a link to a new tab, a picker, a shortcut with Control, Meta or Alt, or long text stay the page\'s); trusted: true asks for it by name on click, hover, type, press, scroll (the wheel), upload {paths on the browser\'s machine}; '
-    + 'drag {ref or x, y; to_ref or to_x, to_y; steps?} (always real input, top frame); a trusted step that opens an alert, confirm or prompt answers with it (dialog), and the page waits: '
-    + 'dialog {read: true} reads it (type, message, default_prompt), dialog {accept, text?} answers it (text: a prompt\'s answer). You decide every dialog yourself, never the user, except an OK that pays (needs_ok). '
-    + 'navigate, back and close never lose a page\'s work silently: one whose page holds text typed and not sent or files chosen, or whose page would ask "Leave site?" (asked first, so no dialog shows), answers unsaved_work (naming them) while you stay on the page; '
-    + 'a "Leave site?" that shows anyway answers with that dialog: dialog {accept: false} stays, dialog {accept: true} leaves; discard: true leaves anyway. Walnut answers a dialog nobody answered within 5 minutes the safe way (OK on an alert, else Cancel or Stay). evaluate {expression} runs page JavaScript in a tab you opened (result JSON, 50 KB). '
-    + 'Recording, in a tab you opened, also with that switch (Chrome shows its debugging bar there): network {url?, method?, status?: 404 or "4xx", type?, limit?, include_static?, stop?} lists the requests the page made '
-    + '(id, url, method, status, type, ms, size) since recording began (open {url, record: true} records from before the page loads; the first network or console starts it otherwise); '
-    + 'network_body {request_id, max_chars?} a response body (200,000 characters, base64 for bytes); network_request_body {request_id} what the request sent; console {level?, limit?}. '
-    + 'upload {selector, files} also reaches a file field a page hides (a CSS selector). resize {width, height, viewport?} sizes Walnut\'s agent window (viewport: the page gets that size); never the person\'s window. '
-    + 'Tabs you open are muted and their media does not play by itself. '
-    + '`tab` may be left out after you used one. A site agents have not used yet may ask the user first (needs_ok): call the same action again (wait_ms up to 25000 holds for the answer). '
-    + 'Every open, take, navigate and back names the window (Walnut\'s agent window, behind theirs, not minimized; or the person\'s own) and the tab (id, title, address): '
-    + 'say which in your first line to the user when you start using the browser. An open or navigate to a site the person already has open in a tab of their own lists those tabs (person_tabs): '
-    + 'ask them to hand that tab over, or take it, instead of signing in again; fill_login there answers site_open_in_person_tab; when they asked you for a fresh sign-in, fresh_sign_in: true asks them to approve it (needs_ok, call again with request), and only their yes fills. '
-    + 'A sign-in only the person can do (a login you have no saved login for, a code sent to their phone, a check, or a page that refuses this browser: the answer carries hand_off): '
-    + 'request_sign_in {tab, text: what to sign in to} asks them on the task\'s Browser view (they take the tab over, sign in themselves, and hand it back); it answers needs_ok with request: call again with it and wait_ms until it answers done. '
-    + 'A step that sends a code to the person\'s phone or mail (Send code, Text me, a sign-in that texts one): first say in one line, where they read it, which task, which site and why; '
-    + 'never between 22:00 and 08:00 their local time: do it in the morning (a trigger or wait_until). '
+    + 'Every acting step answers `changed` (went to <url>, opened tab N, the page content changed, a field\'s value changed, or nothing changed: then do not wait, snapshot and act again). '
+    + 'Subagents may use it too: the same task, tabs and approvals. With two or more tabs every step names its tab (open answers the id); `tab` may be left out after you used one. '
+    + 'You act only in tabs your task opened (and the tabs those open), or a tab of the user\'s you take {tab} (never the one they are on: person_is_here). '
+    + 'More actions (their arguments are described on each field): tabs, navigate, back, form_values, hover, fill_form, select, press, scroll, screenshot (full, annotate), '
+    + 'click_label {label}, zoom {x, y, width, height}, upload, downloads, drag {ref or x, y; to_ref or to_x, to_y; steps?}, dialog, evaluate (a tab you opened; JSON, 50 KB), '
+    + 'resize (Walnut\'s agent window only), and with the real input switch network, network_body, network_request_body and console (open {url, record: true} records from the start). '
+    + 'Real input (Chrome only, unless the user turned it off: trusted_off) is used by default for click, hover, type and press in your own tab; trusted: false sends the page\'s events. '
+    + 'A trusted step that opens an alert, confirm or prompt answers with it: you decide it yourself with dialog {accept, text?}, except an OK that pays (needs_ok). '
+    + 'navigate, back and close never lose a page\'s work silently: unsaved_work names it and you stay; discard: true leaves anyway. '
+    + 'Every open, take, navigate and back names the window and the tab: say which in your first line to the user when you start using the browser. '
+    + 'A site the person already has open in a tab of their own (person_tabs): ask them to hand that tab over, or take it, instead of signing in again. '
+    + 'A site agents have not used yet may ask the user first (needs_ok): call the same action again with request (wait_ms up to 25000 holds for the answer). '
+    + 'Passwords: sign in with fill_login, then fill_code where a one-time code is asked (you never see either); never type one you read from elsewhere. '
+    + 'A sign-in only the person can do (no saved login, a code sent to their phone, a check, a page that refuses this browser: hand_off): request_sign_in {tab, text: what to sign in to}, then call again with request and wait_ms until it answers done. '
+    + 'A step that sends a code to the person\'s phone or mail: first say in one line, where they read it, which task, which site and why; never between 22:00 and 08:00 their local time. '
     + 'While the person has a tab (Take over), every action there answers person_driving: work elsewhere or wait. '
-    + 'Refusals: window_hidden or input_dropped (real input asked by name on a covered agent window: leave trusted out), browser_not_connected (the user turns agents on in the extension popup), browser_disconnected (the user disconnected the extension: ask them to connect it), site_denied, not_your_tab, person_is_here, trusted_off (its message says which switch the user turns on, and where: pass it on as it is), not_agent_opened (open the page in a tab of your own), filled_here, test_run. '
-    + 'Passwords: sign in with fill_login, then fill_code where a one-time code is asked; never type one you read from elsewhere. A click, Enter or other key that buys or pays, sends or posts, or deletes '
-    + '(Place order, Pay, Send, Post, Publish, Delete, a form with card details or a message) waits for the user\'s approval: needs_ok with request, call the same action again with it; '
-    + 'only the user can approve it. Add to cart, search, sign in, Next, filters and opening pages never ask. The ask does not judge evaluate, the page\'s own scripts '
-    + 'or a link that acts on a plain visit (evaluate needs the user\'s real input switch): never use them to take a step the user has not approved.',
+    + 'A click, Enter or other key that buys or pays, sends or posts, or deletes (Place order, Pay, Send, Post, Publish, Delete, a form with card details or a message) waits for the user\'s approval: '
+    + 'needs_ok with request, call the same action again with it; only the user can approve it. Add to cart, search, sign in, Next, filters and opening pages never ask. '
+    + 'Never use evaluate, the page\'s own scripts or a link that acts on a plain visit to take a step the user has not approved. '
+    + 'Every refusal says what to do (window_hidden, browser_not_connected, site_denied, not_your_tab, trusted_off: pass its message on as it is). '
+    + 'Full rules: docs/reference/browser-control.md ("For agents") in the Walnut repository.',
   input: {
     action: z.enum(ACTIONS).describe('What to do'),
     tab: z.number().int().optional().describe('The tab id (from open or tabs). Needed once the task holds two or more tabs (subagents share them); with one, that one'),
@@ -291,6 +279,9 @@ defineOp({
   },
   bind: { method: 'POST', path: '/browser/act' },
   timeoutMs: 75_000,
+  // Its answer is what the page showed (a snapshot, its text, a response body): content, up to the ceiling.
+  // An inline screenshot is an image the CLI saves to a file: cut, it is a broken file.
+  answer: { kind: 'content', max: ANSWER_CEILING_CHARS, whole_for: (args) => args.inline === true },
   mapResult: ({ body, args }) => {
     const b = { ...((body ?? {}) as Record<string, unknown>) }
     if ((args.action === 'screenshot' || args.action === 'zoom') && !args.inline) delete b.image

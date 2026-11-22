@@ -48,7 +48,7 @@ function took(ms: unknown): string {
 }
 
 /** Seconds for a sentence: one decimal under ten. */
-function secs(ms: unknown): string {
+export function secs(ms: unknown): string {
   const n = typeof ms === 'number' && ms > 0 ? ms / 1000 : 0
   return `${n < 10 ? n.toFixed(1) : Math.round(n)} s`
 }

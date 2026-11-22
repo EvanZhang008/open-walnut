@@ -4,6 +4,30 @@ import { startTask, THREAD_HANDOFF_ARG } from './task-execution.js';
 import { handOffLine, type HandOffResult } from '../core/org/thread-follow.js';
 import { NO_REPLY_ASKED, sendBehindSlowHostLine, REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
+import { fitPage, line, nextPageCall, objOf, pageOf, pageWords, pick, receiptBase } from './org-answer-shapes.js';
+
+/** Rows of org_get an agent reads when the call names no limit. */
+const ORG_ROWS_PAGE = 30;
+const COUNT_KEYS = ['open', 'running', 'needs_you', 'to_read', 'waiting'] as const;
+
+/** One org_get row in short: its counts that are not zero, its contact and the few waiting on the user. */
+function orgRow(row: unknown): Record<string, unknown> {
+  const r = objOf(row);
+  const contact = objOf(r.contact);
+  const waiting = Array.isArray(r.waiting_on_user) ? r.waiting_on_user : [];
+  return {
+    ...pick(r, ['id']), title: line(r.title, 80), kind: r.kind, ...pick(r, ['phase', 'director']),
+    ...Object.fromEntries(COUNT_KEYS.filter((k) => typeof r[k] === 'number' && r[k] !== 0).map((k) => [k, r[k]])),
+    ...(r.contact ? { contact: { ...pick(contact, ['id', 'kind']), title: line(contact.title, 60) } } : {}),
+    ...(waiting.length ? { waiting_on_user: waiting.map((w) => ({ ...pick(w, ['id']), title: line(objOf(w).title, 60) })) } : {}),
+  };
+}
+
+/** A write's receipt naming the task it changed: its id and title, never the whole task. */
+const taskReceipt = (result: unknown): Record<string, unknown> => {
+  const r = objOf(result);
+  return { ...receiptBase(r), ...(r.task ? { task: pick(r.task, ['id', 'title', 'org_name', 'project']) } : {}) };
+};
 
 defineOp({
   name: 'org_get',
@@ -14,9 +38,11 @@ defineOp({
     + 'the user, and its `contact`: the project\'s lead, or its one team, the one to talk to with org_send. '
     + 'For a project lead: its teams (the project\'s open top-level tasks) and `directors`, the Directors under it. '
     + 'For any other task: its workers. A row with director: true is a Director. '
-    + 'Pass `of` to read another node. Read this before reading tasks one by one.',
+    + `Pass \`of\` to read another node. Read this before reading tasks one by one. Rows are short (counts that are not zero), ${ORG_ROWS_PAGE} at a time (offset, limit).`,
   input: {
     of: z.string().min(1).optional().describe('Task id whose reports to list; default: your own task'),
+    offset: z.number().int().min(0).optional().describe('Skip this many rows (the next page)'),
+    limit: z.number().int().min(1).max(200).optional().describe(`At most this many rows (default ${ORG_ROWS_PAGE})`),
   },
   handler: async ({ of }, call) => {
     const body = await call('GET', `/org/reports${of ? `?of=${encodeURIComponent(String(of))}` : ''}`) as {
@@ -30,6 +56,25 @@ defineOp({
         + (directors ? ` ${directors} Director${directors === 1 ? '' : 's'} right under this VP (directors).` : ''),
       'For detail on a project, org_send to it; read one task with task_get.',
     );
+  },
+  answer: {
+    kind: 'content',
+    shape: ({ result, args }) => {
+      const r = objOf(result);
+      const all = Array.isArray(r.rows) ? r.rows : [];
+      const { rows, page: window } = pageOf(all, args, ORG_ROWS_PAGE);
+      const directors = Array.isArray(r.directors) ? r.directors : undefined;
+      return fitPage(rows.map(orgRow), window.offset, window.total, (shown, page) => {
+        const more = nextPageCall('org_get', args, page);
+        return {
+          ...receiptBase(r),
+          rows: shown, page,
+          ...(directors ? { directors: directors.slice(0, 20).map((d) => ({ ...pick(d, ['id', 'project']), title: line(objOf(d).title, 80) })), ...(directors.length > 20 ? { directors_more: directors.length - 20 } : {}) } : {}),
+          outcome: `${String(r.outcome ?? '')} Showing ${pageWords(page, 'rows')}.`.trim(),
+          ...(more ? { next: `Next page: ${more}. ${String(r.next ?? '')}` } : {}),
+        };
+      });
+    },
   },
   routes: [{ method: 'GET', path: '/org/reports' }],
   tags: { readonly: true, remote: 'allow' },
@@ -97,6 +142,14 @@ defineOp({
       throw err;
     }
   },
+  answer: {
+    kind: 'receipt',
+    shape: ({ result }) => {
+      const r = objOf(result);
+      const contact = objOf(r.contact);
+      return { ...receiptBase(r), contact: { ...pick(contact.task, ['id', 'title']), ...pick(contact, ['kind', 'project']) } };
+    },
+  },
   routes: [
     { method: 'POST', path: '/org/contact' },
     { method: 'POST', path: '/messages' },
@@ -131,6 +184,13 @@ defineOp({
         : `${name} has its own VP again; ${body?.moved?.length ?? 0} worker(s) went back to it.`;
     return withOutcome(body ?? {}, outcome, 'org_get shows the projects and who leads them.');
   },
+  answer: {
+    kind: 'receipt',
+    shape: ({ result }) => {
+      const r = objOf(result);
+      return { ...receiptBase(r), ...(r.lead ? { lead: pick(r.lead, ['id', 'title']) } : {}), ...(Array.isArray(r.moved) ? { moved: r.moved.length } : {}) };
+    },
+  },
   routes: [{ method: 'POST', path: '/org/vp' }],
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
@@ -163,6 +223,7 @@ defineOp({
     const lead = body?.task;
     return withOutcome(body ?? {}, `Made ${lead?.title ?? name} (${lead?.id ?? 'no id'}).`, 'org_get shows it; org_node_edit names or instructs it.');
   },
+  answer: { kind: 'receipt', shape: ({ result }) => taskReceipt(result) },
   routes: [{ method: 'POST', path: '/org/vps' }, { method: 'POST', path: '/org/projects' }],
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
@@ -196,6 +257,7 @@ defineOp({
     const who = body?.task?.org_name ? `the ${body.task.org_name} VP` : body?.task?.title ?? 'the node';
     return withOutcome(body ?? {}, `Saved for ${who}.`, 'Its session reads new instructions with its next message.');
   },
+  answer: { kind: 'receipt', shape: ({ result }) => taskReceipt(result) },
   routes: [{ method: 'PUT', path: '/org/nodes/:id' }, { method: 'PUT', path: '/org/projects/:project/vp' }],
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
@@ -223,6 +285,7 @@ defineOp({
     const what = reset ? 'Back to the default avatar' : 'Avatar set';
     return withOutcome(body ?? {}, `${what} for ${body?.task?.title ?? task_id}.`, 'The Org page shows it at once while "Org avatars" is on (Settings › Experimental).');
   },
+  answer: { kind: 'receipt', shape: ({ result }) => taskReceipt(result) },
   routes: [{ method: 'PUT', path: '/org/avatars/:taskId' }],
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
@@ -250,6 +313,13 @@ defineOp({
     const body = await call('PUT', `/org/nodes/${encodeURIComponent(String(task_id))}/duties/${encodeURIComponent(String(duty))}`, { on }) as { task?: { title?: string; org_name?: string } };
     const who = body?.task?.org_name ? `the ${body.task.org_name} VP` : body?.task?.title ?? 'the node';
     return withOutcome(body ?? {}, `${duty} is ${on ? 'on' : 'off'} for ${who}.`, on ? 'It runs from now on; no restart needed.' : 'It stops acting for this node now.');
+  },
+  answer: {
+    kind: 'receipt',
+    shape: ({ result }) => {
+      const r = objOf(result);
+      return { ...taskReceipt(r), ...(Array.isArray(r.duties) ? { duties: r.duties.map((d) => pick(d, ['id', 'name', 'on'])) } : {}) };
+    },
   },
   routes: [{ method: 'GET', path: '/org/duties' }, { method: 'PUT', path: '/org/nodes/:id/duties/:duty' }],
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
@@ -284,6 +354,15 @@ defineOp({
     if (body?.letterId) return withOutcome(body, `Sent to the user's inbox (${body.letterId}).`, 'His answers in its thread come to this session.');
     return withOutcome(body ?? {}, body?.report?.subject ?? 'Report built.', 'send:true sends it; at schedules it.');
   },
+  // Built and not sent, the report is what was asked for (content); sent or scheduled, a receipt.
+  answer: {
+    kind: 'content',
+    shape: ({ result }) => {
+      const r = objOf(result);
+      if (!r.letterId && !r.scheduledAt) return result;
+      return { ...receiptBase(r), ...(r.report ? { report: pick(r.report, ['subject']) } : {}) };
+    },
+  },
   routes: [{ method: 'POST', path: '/org/report' }],
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
@@ -315,6 +394,7 @@ defineOp({
     if (!out?.changed) return withOutcome(out ?? {}, unpin ? `${what} was not watched.` : `${what} was already watched${where}.`, 'Nothing changed.');
     return withOutcome(out, unpin ? `Stopped watching ${what}.` : `Watching ${what}${where}.`, 'Home and the Org page show it at once.');
   },
+  answer: { kind: 'receipt', shape: ({ result }) => taskReceipt(result) },
   routes: [{ method: 'PUT', path: '/org/pins/:taskId' }, { method: 'DELETE', path: '/org/pins/:taskId' }],
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });

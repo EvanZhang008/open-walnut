@@ -17,43 +17,44 @@ function msText(n: unknown): string {
   return v < 1000 ? `${v} ms` : `${(v / 1000).toFixed(1)} s`
 }
 
-/** The copy in a line: copied (with its checksum), or still copying with its copy_id. */
+/**
+ * The copy in a line: done (with its checksum), or still copying with its copy_id.
+ * 2026-11-21: 134 of 1,543 host_copy calls in a week repeated a copy that had already
+ * answered, so a finished copy says it is finished and that nothing more is needed.
+ */
 function copyOutcome(body: unknown) {
   const b = (body ?? {}) as Record<string, unknown>
   const from = `${String(b.from_host)}:${String(b.from)}`
   const to = `${String(b.to_host)}:${String(b.to)}`
   if (b.running) {
     const sofar = typeof b.bytes === 'number' ? `: ${sizeText(b.sent)} of ${sizeText(b.bytes)} so far` : ''
-    return withOutcome(b, `Copying ${from} to ${to} as copy ${String(b.copyId)}${sofar}.`,
-      'host_copy_result with this copy_id waits for it; never start it again (it is still copying).')
+    return withOutcome(b, `Still copying ${from} to ${to} as copy ${String(b.copyId)}${sofar}. Not done yet.`,
+      `host_copy_result ${JSON.stringify({ copy_id: b.copyId })} waits for it (up to a minute a call); never start it again: it is still copying.`)
   }
-  return withOutcome(b, `Copied ${sizeText(b.bytes)} from ${from} to ${to} in ${msText(b.ms)} (sha256 ${String(b.sha256)})${b.replaced ? ', replacing the file that was there' : ''}.`,
-    'Nothing needed: the file is there, checked.')
+  return withOutcome(b, `Done: copied ${sizeText(b.bytes)} from ${from} to ${to} in ${msText(b.ms)} (sha256 ${String(b.sha256)})${b.replaced ? ', replacing the file that was there' : ''}. The file is there, its size and checksum checked.`,
+    'Nothing more to do: do not copy it again (only a file that changed since needs a new copy).')
 }
+
+/** A copy's answer is a few hundred characters; this leaves room for a long path on each side. */
+const COPY_ANSWER = { kind: 'content', max: 3_000 } as const
 
 defineOp({
   name: 'host_copy',
   title: 'Copy a file between hosts',
   description:
-    'Copy ONE file from one host Walnut knows to another (host_list names them), through Walnut: send a source tarball to the Mac '
-    + 'that builds and tests the iOS app, bring test results, screenshots and videos back. `from_host` and `to_host` are host aliases or '
-    + 'selectors ("@ios"); each defaults to your own host, and at least one must be another host. A selector can pick a different host '
-    + 'on each call, so after the first call name the host the answer gave (`to_host`, `from_host`). `from` and `to` are paths on those '
-    + 'hosts, absolute or ~/... (write them out: no $VARIABLES); a `to` ending in "/", or naming a folder, gets the file\'s own name. '
-    + 'The file lands whole or not at all: its size and sha256 are checked before it replaces anything there (`replaced` says it did). '
-    + 'It lands as a plain file (mode 0644 by the umask there, the executable bit is not kept): chmod it there with host_exec if it must run. '
-    + 'One regular file of at most 2 GB: a folder is refused, so tar it first (host_exec on that host, or your own Bash on yours), and '
-    + 'unpack it there with host_exec. Never credentials (~/.ssh, ~/.aws, secrets...) or Walnut\'s own data. On a Mac, a place macOS '
-    + 'guards (Desktop, Documents, Downloads, Pictures, Movies, Music, Mail, Messages, other apps\' data, /Volumes) is refused with 409 '
-    + 'may_prompt: reading or writing there shows a permission dialog on that Mac\'s screen and the copy waits in it. Use another '
-    + 'folder there, or ask the user first, then pass allow_prompts:true. A host that is not yours '
-    + 'needs this task\'s grant there, the same one host_exec uses: the first call asks the user by letter (403 exec_grant_required); do '
-    + 'other work, you get a notice when they allow it. Big files take time: the call waits up to a minute (about 10 seconds from a '
-    + 'session on another host), then answers running:true with a copyId, and host_copy_result waits for it. The same call again while '
-    + 'it runs, or the same copy_id (the walnut CLI picks one), answers that copy and never starts a second. Up to 2 copies at once per '
-    + 'task and 4 on Walnut; one at a time onto one file (409 target_busy); a copy stops at 1 hour. On another host, $WALNUT_TASK_DIR is '
-    + 'the `taskDir` a host_exec answer names. Example: {"from": "<your $WALNUT_TASK_DIR>/src.tgz", "to_host": "@ios", "to": "~/build/"}, '
-    + 'build there with host_exec, then {"from_host": "<that host>", "from": "~/build/results.tgz", "to": "<your $WALNUT_TASK_DIR>/"}.',
+    'Copy ONE regular file (at most 2 GB) from one host Walnut knows to another (host_list names them), through Walnut: '
+    + 'sources to the Mac that builds the iOS app, results back. `from_host` and `to_host` are aliases or selectors ("@ios"); each '
+    + 'defaults to your own host, and one must be another host. A selector may pick another host each call: after the first, name '
+    + 'the host the answer gave. `from` and `to` are absolute or ~/ paths there, written out (no $VARIABLES; on another host '
+    + '$WALNUT_TASK_DIR is the `taskDir` a host_exec answer names); a `to` ending in "/", or naming a folder, keeps the file\'s name. '
+    + 'It lands whole or not at all, size and sha256 checked (`replaced` says it replaced one), as a plain file: chmod it there with '
+    + 'host_exec if it must run. A folder is refused: tar it first, unpack it there with host_exec. Never credentials or Walnut\'s '
+    + 'own data. On a Mac, a place macOS guards (Desktop, Documents, Downloads...) is refused with 409 may_prompt: use another folder, '
+    + 'or ask the user, then pass allow_prompts:true. A host that is not yours needs this task\'s host_exec grant there: the first '
+    + 'call asks the user by letter (403 exec_grant_required); do other work, a notice comes when they allow it. The call waits up '
+    + 'to a minute (about 10 s from a session on another host) for the copy to end. An outcome starting "Done" means the file is '
+    + 'there, checked: do not copy it again. running:true means still copying: host_copy_result with its copyId waits for it, '
+    + 'and the same call again joins that copy, never a second one.',
   input: {
     from: z.string().min(1).describe('The file on the sending host: an absolute path or ~/...'),
     to: z.string().min(1).describe('Where it goes on the receiving host: an absolute path or ~/...; ending in "/" (or a folder) keeps the file\'s name'),
@@ -66,6 +67,8 @@ defineOp({
   // The route waits up to a minute for the copy, after its grant check and two reads.
   timeoutMs: 3 * 60_000,
   mapResult: ({ body }) => copyOutcome(body),
+  // Content, not a receipt: the answer is the copy it ran (done, or the copyId still copying).
+  answer: COPY_ANSWER,
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
@@ -83,5 +86,6 @@ defineOp({
   bind: { method: 'GET', path: '/host-copy/:copy_id' },
   timeoutMs: 2 * 60_000,
   mapResult: ({ body }) => copyOutcome(body),
+  answer: COPY_ANSWER,
   tags: { readonly: true, remote: 'allow', primaryOnly: true },
 });

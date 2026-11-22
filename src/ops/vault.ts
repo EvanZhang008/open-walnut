@@ -65,19 +65,15 @@ defineOp({
   name: 'password_use',
   title: 'Use a password from the vault',
   description:
-    'Get fields of one vault item for a step you are doing now. Name the item (its id from password_list, its name, a site, or an env var name) '
-    + 'and say why in `purpose`, in words the user reads on their phone ("sign in to git.example.com to merge PR 12"). '
-    + 'What happens follows the user\'s setting: Any (the default) releases it at once, Ask sends the user an approval for each use, '
-    + 'Off sends an approval for the one item you name; a sensitive item always asks. Pending: you get `status: "pending"` '
-    + 'with requestId and waitToken, then call password_wait. An approval lets this task use the item again for the user\'s grant length '
-    + '(48 hours by default) without asking; `scope: "once"` asks for this use only. `use: "reveal"` (the default) is explicit: the plaintext '
-    + 'comes back to you and Agent Activity records it as shown. ' + LEAST_SEEN + ' Fields: password (default), username, totp '
-    + '(the current one-time code), notes, card_number, card_code, card_expiry, or a custom field\'s name. '
-    + 'The values come back in this result, so they are in your session\'s transcript from then on: use password_use only for a value you must '
-    + 'type yourself (a browser sign-in, a form, a one-time code). For anything a command reads, use `walnut pass run --env NAME=<item> -- <command>`: '
-    + 'the command gets the secret and you never see it. A task grant covers the fields the user approved, nothing more. '
-    + 'Refusals: agent_never (the user keeps that item from agents: ask them to do the step), denied (do not ask again unless they say so), '
-    + 'agent_paused (three denials: wait), agents_off, vault_locked, ambiguous (ask again with the id). ' + USE_RULE,
+    'Get fields of one vault item for a step you are doing now: name the item (its id from password_list, its name, a site or an env '
+    + 'var name) and say why in `purpose`, in words the user reads on their phone ("sign in to git.example.com to merge PR 12"). The '
+    + 'user\'s setting decides: Any releases it at once, Ask and Off send the user an approval (a sensitive item always asks). Pending: '
+    + '`status: "pending"` with requestId and waitToken, then password_wait. An approval covers this task for the user\'s grant length '
+    + '(48 hours by default); `scope: "once"` asks for this use only. The plaintext comes back here, so it stays in your transcript: use '
+    + 'this only for a value you must type yourself (a browser sign-in, a form, a one-time code). ' + LEAST_SEEN + ' Fields: password '
+    + '(default), username, totp (the current code), notes, card_number, card_code, card_expiry, or a custom field\'s name. Refusals: '
+    + 'agent_never (ask the user to do the step), denied (do not ask again unless they say so), agent_paused (three denials: wait), '
+    + 'agents_off, vault_locked, ambiguous (ask again with the id). ' + USE_RULE,
   input: {
     item: z.string().min(1).max(500).describe('Item id, name, site or env var name'),
     fields: z.array(z.string().max(100)).max(10).optional().describe('Fields to get (default ["password"])'),
@@ -89,6 +85,8 @@ defineOp({
   },
   bind: { method: 'POST', path: '/vault/agent/use' },
   mapResult: ({ body }) => useOutcome(body),
+  // Its answer is the item's values: a cut secret is a wrong secret.
+  answer: { kind: 'content', max: 6_000 },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
@@ -107,6 +105,8 @@ defineOp({
   bind: { method: 'POST', path: '/vault/agent/use/:id/wait' },
   timeoutMs: 20_000,
   mapResult: ({ body }) => useOutcome(body),
+  // Its answer is the values it waited for (what password_use would have released), never cut short.
+  answer: { kind: 'content', max: 6_000 },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 

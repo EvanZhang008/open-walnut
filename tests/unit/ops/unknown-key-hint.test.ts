@@ -61,12 +61,19 @@ describe('a typo of a declared key', () => {
   })
 })
 
+// search itself takes `query` for `q` since 2026-11-21 (renamedInput): the hint is shown on an op shaped like the old search.
+const oldSearch = fakeOp({ q: z.string().min(1), limit: z.number().optional() })
+
 describe('one missing required key next to one unknown key', () => {
-  it('search called with query instead of q', () => {
-    const msg = refusal(op('search'), { query: 'deploy failures' })
+  it('an op called with query instead of q', () => {
+    const msg = refusal(oldSearch, { query: 'deploy failures' })
     expect(msg).toContain('(root): Unrecognized key: "query"; did you mean "q"?')
     // The missing key is still reported as its own issue.
     expect(msg).toContain('q: ')
+  })
+
+  it('search takes query as q', () => {
+    expect(parseOpArgs(op('search'), { query: 'deploy failures' })).toEqual({ ok: true, args: { q: 'deploy failures' } })
   })
 
   it('works with a typo too far to match by spelling', () => {
@@ -76,7 +83,7 @@ describe('one missing required key next to one unknown key', () => {
 
 describe('no guess when the intended key is not clear', () => {
   it('several unknown keys and one missing required key', () => {
-    const msg = refusal(op('search'), { query: 'x', text: 'y' })
+    const msg = refusal(oldSearch, { query: 'x', text: 'y' })
     expect(msg).toContain('Unrecognized keys: "query", "text"')
     expect(msg).not.toContain('did you mean')
   })
@@ -237,13 +244,12 @@ describe('a well-known wrong key says what to do instead', () => {
 })
 
 // 2026-11-06: `walnut tools call search '{"q":"controller","types":["task","session"]}'`.
+// Since 2026-11-21 search takes that list as it is; task_list's phases still take one string.
 describe('a list where the op takes one comma-separated string', () => {
-  it('spells out the string, and still refuses the call', () => {
-    const raw = { q: 'controller', types: ['task', 'session'] }
-    const msg = refusal(op('search'), raw)
-    expect(msg).toBe('Invalid arguments for search: types: Invalid input: expected string, received array; '
-      + 'types takes one comma-separated string, e.g. "task,session", not a list')
-    expect(raw.types).toEqual(['task', 'session'])
+  it('search takes types as a list or as a string', () => {
+    expect(parseOpArgs(op('search'), { q: 'controller', types: ['task', 'session'] })).toEqual({ ok: true, args: { q: 'controller', types: ['task', 'session'] } })
+    expect(parseOpArgs(op('search'), { q: 'controller', types: 'task,session' }).ok).toBe(true)
+    expect(parseOpArgs(op('search'), { q: 'controller', types: ['tasks'] }).ok).toBe(false)
   })
 
   it('task_list phases too', () => {

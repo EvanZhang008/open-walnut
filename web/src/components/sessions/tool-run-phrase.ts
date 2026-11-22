@@ -53,6 +53,79 @@ export function isRuleDenied(result: unknown): boolean {
   return typeof result === 'string' && /^(Permission for this action was denied|Permission to use \S+ (?:has been|was) denied)/.test(result.trimStart());
 }
 
+/** A call's answer that the agent's harness found too long and saved to a file instead. */
+export interface TooLongAnswer {
+  /** The harness whose wording it is. */
+  engine: 'claude-code';
+  /** Its size as the harness wrote it ("43,240 characters", "10.5KB"). */
+  size: string;
+  /** Where the harness saved the whole answer. */
+  file?: string;
+  /** The harness words it as an error ("Error: result ...") although the call succeeded, so
+   *  the call is never a failed one. False where the harness keeps the tool's own outcome:
+   *  a command whose long output it saved keeps its exit code's flag. */
+  wordedAsError: boolean;
+}
+
+/**
+ * Every known wording of a too-long answer, one row per engine and wording; a new one is
+ * one more row. Each is anchored at the start of the result: only the harness's own note
+ * matches, never a tool's output that quotes it.
+ */
+const TOO_LONG_ANSWERS: ReadonlyArray<{ engine: TooLongAnswer['engine']; wordedAsError: boolean; re: RegExp }> = [
+  // Claude Code, any MCP server's tool (the CLI's words, the server's answer is not an error):
+  // "Error: result (43,240 characters across 1 line) exceeds maximum allowed tokens. Output has
+  // been saved to <dir>/tool-results/mcp-<server>-<tool>-<ms>.txt." It is keyed on "result ("
+  // and "Output has been saved to" because the Read tool's "File content (N tokens) exceeds
+  // maximum allowed tokens (25000)" is a real failure: the file was not read.
+  {
+    engine: 'claude-code', wordedAsError: true,
+    re: /^(?:Error: )?result \(([\d,]+ characters)(?: across [\d,]+ lines?)?\) exceeds maximum allowed tokens\. Output has been saved to (.+?\.txt)(?=\.?(?:\s|$))/,
+  },
+  // Claude Code, a built-in tool's output (Bash and the rest), with a preview; never worded
+  // as an error: "<persisted-output>\nOutput too large (10.5KB). Full output saved to: <file>".
+  {
+    engine: 'claude-code', wordedAsError: false,
+    re: /^<persisted-output>\s*Output too large \(([\d.]+ ?[KMG]?B)\)\. Full output saved to: (.+)/,
+  },
+  // Codex: none known. It cuts the middle of a long output in place ("...N tokens truncated..."),
+  // which is not an error, and Walnut reads a Codex call's failure from its status alone.
+];
+
+/** The harness's note that a call's answer was too long and went to a file, or undefined. */
+export function tooLongAnswer(result: unknown): TooLongAnswer | undefined {
+  if (typeof result !== 'string') return undefined;
+  const text = result.trimStart();
+  for (const row of TOO_LONG_ANSWERS) {
+    const m = row.re.exec(text);
+    if (m) return { engine: row.engine, size: m[1], ...(m[2]?.trim() ? { file: m[2].trim() } : {}), wordedAsError: row.wordedAsError };
+  }
+  return undefined;
+}
+
+/** A too-long answer's line on its call: it completed, and its answer went to a file. */
+export const TOO_LONG_ANSWER_NOTE = 'Done. The answer was too long and was saved to a file.';
+
+/** A call as a history row (`isError`, the transcript's flag) or a live block (`status`) holds it. */
+export interface CallOutcome {
+  name?: string;
+  result?: string;
+  isError?: boolean;
+  status?: string;
+}
+
+/**
+ * The one rule for a failed call, which every failed count and every row's red reads: the
+ * call errored, and it is none of the errors that are not failures (a question routed to
+ * the leader, the person's no, a permission rule's no, an answer the harness saved to a
+ * file for being too long). Never write this filter by hand (tests/web/fold-failures.test.ts).
+ */
+export function isFailedCall(t: CallOutcome): boolean {
+  if (!t.isError && t.status !== 'error') return false;
+  return !isRoutedQuestion(t.name, t.result) && !isUserDenied(t.result) && !isRuleDenied(t.result)
+    && !tooLongAnswer(t.result)?.wordedAsError;
+}
+
 export interface ToolRunMember {
   name: string;
   input?: Record<string, unknown>;

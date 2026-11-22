@@ -8,6 +8,8 @@
  * and the projects were the bulk, not the html. Pure functions, no I/O.
  */
 import { threadMeta } from '../core/boards/board-html.js';
+import { objOf, pick, receiptBase } from './org-answer-shapes.js';
+import { PAGE_MARK } from './doc-page.js';
 
 /** One read answers at most this many characters of JSON before it becomes a summary. */
 export const BOARD_GET_BUDGET = 30_000;
@@ -187,9 +189,9 @@ function summaryAt(full: Body, cap: number, dueIds: string[], threadRows: Return
  * The default read: `full` itself when it fits the budget, else a summary that
  * fits it (lists shortened until it does), with each left-out part's size.
  */
-export function defaultView(full: Body, dueIds: string[]): { body: Body; fullChars: number; summarized: boolean } {
+export function defaultView(full: Body, dueIds: string[], budget = BOARD_GET_BUDGET): { body: Body; fullChars: number; summarized: boolean } {
   const fullChars = len(full);
-  if (fullChars <= BOARD_GET_BUDGET) return { body: full, fullChars, summarized: false };
+  if (fullChars <= budget) return { body: full, fullChars, summarized: false };
   const head: Body = {};
   for (const k of ALWAYS) if (full[k] !== undefined) head[k] = full[k];
   const sizes = partSizes(full);
@@ -198,7 +200,150 @@ export function defaultView(full: Body, dueIds: string[]): { body: Body; fullCha
   // Room for outcome/next beside the body.
   for (const cap of [40, 20, 10, 5, 0]) {
     body = { ...head, summarized: true, full_chars: fullChars, part_chars: sizes, summary: summaryAt(full, cap, dueIds, rows) };
-    if (len(body) <= BOARD_GET_BUDGET - 2_000) break;
+    if (len(body) <= budget - 2_000) break;
   }
   return { body, fullChars, summarized: true };
+}
+
+/**
+ * What one agent answer holds of a board (answer.ts holds board_get to its content cap): the
+ * read's own parts, made to fit by the board's own rules instead of a blind cut. Pure.
+ */
+export const BOARD_AGENT_BUDGET = 6_500;
+
+/** A summary (defaultView) with its lists shortened until it fits `budget`, each saying how many more. */
+export function shrinkSummary(body: Body, budget = BOARD_AGENT_BUDGET): Body {
+  if (len(body) <= budget || !body.summary || typeof body.summary !== 'object') return body;
+  const summary = body.summary as Record<string, Record<string, unknown>>;
+  let out = body;
+  for (const cap of [20, 10, 5, 2, 0]) {
+    const next: Record<string, unknown> = {};
+    for (const [part, v] of Object.entries(summary)) {
+      if (!v || typeof v !== 'object') { next[part] = v; continue; }
+      const copy: Record<string, unknown> = { ...v };
+      if (Array.isArray(v.list) && v.list.length > cap) {
+        copy.list = v.list.slice(0, cap);
+        copy.more = Number(v.more ?? 0) + v.list.length - cap;
+      }
+      if (Array.isArray(v.sections) && v.sections.length > cap * 2) {
+        copy.sections = v.sections.slice(0, cap * 2);
+        copy.sections_more = Number(v.sections_more ?? 0) + v.sections.length - cap * 2;
+      }
+      next[part] = copy;
+    }
+    out = { ...body, summary: next };
+    if (len(out) <= budget) break;
+  }
+  return out;
+}
+
+/**
+ * Each thread's newest messages only, until the answer fits `budget`: a long thread loses its
+ * oldest messages first (a blind cut drops the newest), counted under `threads_earlier`.
+ */
+export function newestThreadMessages(body: Body, budget = BOARD_AGENT_BUDGET): Body {
+  if (len(body) <= budget || !body.threads || typeof body.threads !== 'object') return body;
+  const threads = body.threads as Record<string, Msg[]>;
+  let out = body;
+  for (const keep of [20, 10, 5, 2, 1]) {
+    const earlier: Record<string, number> = {};
+    const next: Record<string, Msg[]> = {};
+    for (const [id, msgs] of Object.entries(threads)) {
+      if (Array.isArray(msgs) && msgs.length > keep) { next[id] = msgs.slice(-keep); earlier[id] = msgs.length - keep; } else next[id] = msgs;
+    }
+    out = { ...body, threads: next, ...(Object.keys(earlier).length ? { threads_earlier: earlier } : {}) };
+    if (len(out) <= budget) break;
+  }
+  return out;
+}
+
+/**
+ * The page's html from `from`, as much as fits `budget`, then a line marking it as one part of the
+ * page (doc-page.ts PAGE_MARK). The part itself is exact text, so board_edit can quote any of it
+ * (`html_window.chars` says where the part ends and the mark begins). The mark is what keeps a
+ * part from being written back whole: board_set refuses html that holds it, and so does the
+ * executor for every write (answer.ts cutTextRefusal). A separate field could not do that, since
+ * board_set takes no version it must have. The answer also leaves out the page's version, which
+ * only a whole read should hand to a write.
+ */
+export function htmlWindow(body: Body, from: number, readOn: (next: number) => string, budget = BOARD_AGENT_BUDGET): Body {
+  const board = map(body.board) as Record<string, unknown>;
+  const html = typeof board.html === 'string' ? board.html : '';
+  if (!html || len(body) <= budget) return body;
+  const start = Math.max(0, Math.min(Math.floor(from), html.length));
+  // Room for the mark line too.
+  const room = Math.max(800, budget - len({ ...body, board: { ...board, html: '' } }) - 600);
+  let take = room;
+  let part = html.slice(start, start + take);
+  // An escaped character (a quote, a newline) is two in JSON: take less until it fits.
+  while (take > 400 && len(part) > room) { take = Math.floor(take * 0.85); part = html.slice(start, start + take); }
+  const end = start + part.length;
+  const next = end < html.length ? readOn(end) : '';
+  const mark = `\n\n${PAGE_MARK}: characters ${start} to ${end} of ${html.length} of the board's html.${next ? ` Read on: ${next}.` : ''} `
+    + 'Change it with board_edit, quoting exact text from above this line; never write this part back with board_set.]\n';
+  const { version: _v, ...rest } = board;
+  const { board_version: _bv, ...outer } = body;
+  return {
+    ...outer,
+    board: { ...rest, html: `${part}${mark}` },
+    html_window: { from: start, chars: part.length, total: html.length, ...(end < html.length ? { next_from: end } : {}) },
+  };
+}
+
+/** A summary hands no page version to a write: only a whole read of the html does. */
+function withoutVersion(body: Body): Body {
+  const { board_version: _bv, ...outer } = body;
+  const summary = map(outer.summary);
+  if (!summary.page) return outer;
+  const { version: _v, ...page } = summary.page;
+  return { ...outer, summary: { ...summary, page } };
+}
+
+/** The call, as the tool takes it. */
+const getCall = (args: Record<string, unknown>) => `board_get ${JSON.stringify(args)}`;
+
+/**
+ * Board_get's answer to an agent, made to fit by the board's own rules: the default read a
+ * summary (shorter lists), a part's html in exact windows, a thread its newest messages.
+ */
+export function boardGetAnswer(result: unknown, args: Record<string, unknown>, dueOf: (full: Body) => string[]): unknown {
+  const r = objOf(result);
+  const size = JSON.stringify(r).length;
+  if (size <= BOARD_AGENT_BUDGET) return result;
+  const task = typeof r.task_id === 'string' ? { task: r.task_id } : {};
+  const picked = Array.isArray(args.parts) || typeof args.thread === 'string' || typeof args.since === 'string';
+  if (!picked) {
+    if (r.summarized) return withoutVersion(shrinkSummary(r));
+    // A board under the server's budget is answered whole; an agent's answer holds less.
+    const { outcome, next, ...full } = r;
+    const view = defaultView(full, dueOf(full), BOARD_AGENT_BUDGET);
+    return withoutVersion(shrinkSummary({
+      ...view.body,
+      outcome: `${String(outcome ?? '')} The whole board is ${size.toLocaleString('en-US')} characters, more than one answer holds, so this is a summary: counts and short lists under \`summary\`, each part's size under \`part_chars\`.`,
+      next: `Read the parts you need: ${getCall({ ...task, parts: ['html'] })} (in windows: html_from), ${getCall({ ...task, parts: ['threads'], thread: '<id>' })}. ${String(next ?? '')}`,
+    }));
+  }
+  let out: Record<string, unknown> = newestThreadMessages(r);
+  if (objOf(out.board).html) {
+    out = htmlWindow(out, typeof args.html_from === 'number' ? args.html_from : 0, (n) => getCall({ ...args, html_from: n }));
+    const w = objOf(out.html_window);
+    if (typeof w.total === 'number') {
+      out = {
+        ...out,
+        outcome: `${String(r.outcome ?? '')} The html is ${w.total} characters; this is ${String(w.from)}-${Number(w.from) + Number(w.chars)}, one part of it, without the page's version.`,
+        next: `${w.next_from !== undefined ? `The next part: ${getCall({ ...args, html_from: w.next_from })}. ` : ''}Quote board_edit's old text from one part (above its closing mark); board_set needs the whole page (${getCall({ ...args, html_from: undefined, _full: true })}). ${String(r.next ?? '')}`,
+      };
+    }
+  }
+  return out;
+}
+
+/** A board write's receipt: the version and size it left, never the html it wrote. */
+export function boardWriteReceipt(result: unknown): Record<string, unknown> {
+  const r = objOf(result);
+  const board = objOf(r.board);
+  return {
+    ...receiptBase(r),
+    ...(r.board ? { board: { ...pick(board, ['version', 'updated_at', 'updated_by']), ...(typeof board.html === 'string' ? { html_chars: board.html.length } : {}) } } : {}),
+  };
 }

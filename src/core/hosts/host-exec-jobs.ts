@@ -101,7 +101,40 @@ export async function readHostJob(params: { host: string; job_id: string; offset
   const out = await jobAnswer(host, params.job_id, reply, { fromOffset })
   // A read without wait_for waits a minute at most (2026-11-04 review: a refusal of a longer one cost a call).
   const capped = !cut && asked > most && out.running === true ? { waitCappedMs: most } : {}
-  return { ...out, ...held(out), ...capped }
+  const repeat = fromOffset ? {} : repeatedTailRead(callerSid, host, params.job_id, out)
+  return { ...out, ...held(out), ...capped, ...repeat }
+}
+
+/**
+ * Each session's last tail read (no offset, no wait_for) of a running job: its next read of the
+ * same job that finds the log no longer than then is marked `noNewOutput`, and an agent reads a
+ * sentence and the output's last lines instead of the same tail again (ops/host-exec-shown.ts).
+ * Keyed by the calling session, never the task: a subagent of the task has not read it. A session
+ * that compacted lost what it read; nothing tells this server cheaply, so the quiet answer always
+ * carries the last lines and the read that shows all of it. 2026-11-21: 27% of host_exec_read
+ * calls in seven days repeated the previous call's exact arguments within 30 minutes.
+ */
+const lastTailRead = new Map<string, { outputBytes: number; at: number }>()
+const TAIL_READ_KEEP_MS = 30 * 60_000
+const TAIL_READ_MAX = 2_000
+
+export function repeatedTailRead(callerSid: string | undefined, host: string, jobId: string, out: Record<string, unknown>): { noNewOutput?: { sinceMs: number } } {
+  // Per calling session: another session of the task has not read it; a caller with no session gets the plain answer.
+  const sid = callerSid?.trim()
+  if (!sid) return {}
+  const key = `${sid}\u0000${host}\u0000${jobId}`
+  const now = Date.now()
+  const before = lastTailRead.get(key)
+  lastTailRead.delete(key)
+  if (typeof out.outputBytes !== 'number' || out.running !== true) return {}
+  lastTailRead.set(key, { outputBytes: out.outputBytes, at: now })
+  // The oldest reads go first (a Map keeps insertion order, and each read is put back at the end).
+  for (const k of lastTailRead.keys()) {
+    if (lastTailRead.size <= TAIL_READ_MAX) break
+    lastTailRead.delete(k)
+  }
+  if (!before || now - before.at > TAIL_READ_KEEP_MS || before.outputBytes !== out.outputBytes) return {}
+  return { noNewOutput: { sinceMs: now - before.at } }
 }
 
 /** Stop a running job (its whole process group). */
@@ -219,4 +252,5 @@ export async function listHostJobs(params: { host: string }, callerSid: string |
 export function resetHostJobsForTest(): void {
   started.clear()
   byJob.clear()
+  lastTailRead.clear()
 }

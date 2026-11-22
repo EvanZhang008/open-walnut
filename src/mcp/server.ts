@@ -21,6 +21,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { registerWalnutTools, resolveApiBase } from './tools.js'
 import { walnutMcpInstructions } from './instructions.js'
+import type { ListingRole } from '../ops/op-groups.js'
 
 export interface McpOptions {
   /** Register only the read-only tools (for triage-style consumers). */
@@ -29,6 +30,8 @@ export interface McpOptions {
   apiBase?: string
   /** List only the core tools, and tool_help / tool_call for every other one (CORE_TOOL_NAMES). */
   core?: boolean
+  /** List only this role's tool groups (experiment mcp_tools_by_role, src/ops/op-groups.ts); `core` wins. */
+  role?: ListingRole
 }
 
 /** Build a configured (but unconnected) MCP server — also the test entry point. */

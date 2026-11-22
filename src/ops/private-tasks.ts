@@ -5,6 +5,7 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
+import { TASK_RECEIPT } from './task-answers.js';
 
 defineOp({
   name: 'task_make_local',
@@ -27,6 +28,7 @@ defineOp({
     return withOutcome(body, body.outcome ?? 'The task is local.', 'No further action is required.');
   },
   routes: [{ method: 'POST', path: '/tasks/:id/make-local' }],
+  answer: TASK_RECEIPT,
   tags: { readonly: false, remote: 'allow' },
 });
 
@@ -52,6 +54,7 @@ defineOp({
     );
   },
   routes: [{ method: 'POST', path: '/tasks/:id/sync-to-project' }],
+  answer: TASK_RECEIPT,
   tags: { readonly: false, remote: 'allow' },
 });
 

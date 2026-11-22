@@ -5,6 +5,7 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
+import { TASK_RECEIPT } from './task-answers.js';
 
 defineOp({
   name: 'task_watch',
@@ -39,5 +40,6 @@ defineOp({
     );
   },
   routes: [{ method: 'PUT', path: '/tasks/:id/watch' }],
+  answer: TASK_RECEIPT,
   tags: { readonly: false, remote: 'allow' },
 });

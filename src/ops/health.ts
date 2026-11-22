@@ -47,6 +47,62 @@ defineOp({
   tags: HEALTH_TAGS,
 })
 
+const rec = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {})
+
+/** health_sleep's cap: a few nights with stages, or a month of summaries. */
+const SLEEP_MAX = 10_000
+/** What the window's averages, baseline, units and caveats take. */
+const SLEEP_HEAD_ROOM = 3_000
+
+/** "23:10" out of an ISO time with its offset, as the phone recorded it (no zone conversion). */
+const clock = (v: unknown): string => (typeof v === 'string' ? (/T(\d{2}:\d{2})/.exec(v)?.[1] ?? v) : String(v))
+
+/** One night in the fields a reply uses: the sources by name, the hypnogram as "23:10-23:40 core" lines. */
+function sleepNight(value: unknown, tz: unknown): Record<string, unknown> {
+  const n = rec(value)
+  const { primarySource, otherSources, hypnogram, tz: nightTz, ...rest } = n
+  return {
+    ...rest,
+    ...(nightTz !== tz && nightTz ? { tz: nightTz } : {}),
+    ...(rec(primarySource).name ? { source: rec(primarySource).name } : {}),
+    ...(Array.isArray(otherSources) && otherSources.length
+      ? { otherSources: otherSources.map((o) => `${String(rec(o).name)} (${String(rec(o).asleepMin)} min asleep)`) }
+      : {}),
+    ...(Array.isArray(hypnogram) && hypnogram.length
+      ? { hypnogram: hypnogram.map((h) => `${clock(rec(h).start)}-${clock(rec(h).end)} ${String(rec(h).stage)}`) }
+      : {}),
+  }
+}
+
+/**
+ * health_sleep's answer for an agent: every night compact, the newest that fit the cap (2026-11-21:
+ * up to 36,000 characters for a long window or one with stages), the older ones named with the call
+ * that reads them. The averages, the baseline and the caveats (which a reply must pass on) stay whole.
+ */
+function sleepAnswer(result: unknown): unknown {
+  const r = rec(result)
+  if (!Array.isArray(r.nights)) return result
+  const nights = r.nights.map((n) => sleepNight(n, r.tz))
+  const budget = SLEEP_MAX - SLEEP_HEAD_ROOM
+  let used = 0
+  let first = nights.length
+  while (first > 0) {
+    const n = JSON.stringify(nights[first - 1]).length + 1
+    if (first < nights.length && used + n > budget) break
+    used += n
+    first--
+  }
+  const older = nights.slice(0, first)
+  return {
+    ...r,
+    nights: nights.slice(first),
+    ...(older.length ? {
+      olderNights: older.length,
+      more: `${older.length} older night(s) not shown: health_sleep ${JSON.stringify({ from: older[0].date, to: older[older.length - 1].date })}`,
+    } : {}),
+  }
+}
+
 defineOp({
   name: 'health_sleep',
   title: 'Sleep nights from Apple Health',
@@ -68,6 +124,7 @@ defineOp({
   },
   bind: { method: 'GET', path: '/api/health/sleep' },
   localOnlyMessage: HEALTH_LOCAL_ONLY_MESSAGE,
+  answer: { kind: 'content', max: SLEEP_MAX, shape: ({ result }) => sleepAnswer(result) },
   tags: HEALTH_TAGS,
 })
 
@@ -115,20 +172,18 @@ defineOp({
   name: 'health_samples',
   title: 'Stored Apple Health samples of one type',
   description:
-    'The rows of ONE raw type, newest first: any catalog raw type or any generic type health_status lists. Each row has '
-    + 'start, end, value, code, unit, source (app or device name), device, tz and meta. `value` is in `unit` (the unit the '
-    + 'phone pinned for the type). `code` is HealthKit\'s raw value: for a category type (c.) the HKCategoryValue of that '
-    + 'type (c.MenstrualFlow 1 unspecified, 2 light, 3 medium, 4 heavy, 5 none; symptoms such as c.Headache: 0 '
-    + 'unspecified, 1 not present, 2 mild, 3 moderate, 4 severe; events such as c.HighHeartRateEvent: 0, the event '
-    + 'happened); sleep: 0 in bed, 1 asleep, 2 awake, 3 core, 4 deep, 5 REM. x.Electrocardiogram: code = '
-    + 'HKElectrocardiogram.Classification (0 not set, 1 sinus rhythm, 2 atrial fibrillation, 3 inconclusive low heart '
-    + 'rate, 4 inconclusive high heart rate, 5 inconclusive poor reading, 6 inconclusive other, 100 unrecognized), value = '
-    + 'average heart rate in count/min. x.GAD7 and x.PHQ9: code = the questionnaire score. Characteristics: code = the '
-    + 'HealthKit enum raw value (x.BiologicalSex 1 female, 2 male, 3 other; x.BloodType 1 A+, 2 A-, 3 B+, 4 B-, 5 AB+, '
-    + '6 AB-, 7 O+, 8 O-; x.FitzpatrickSkinType 1..6 = I..VI; x.WheelchairUse 1 no, 2 yes; x.ActivityMoveMode 1 active '
-    + 'energy, 2 move time; 0 = not set), and x.DateOfBirth code = yyyymmdd; a characteristic ignores from/to. Default '
-    + 'window: the 90 days ending today. Never state a diagnosis from these numbers (an ECG classification or a '
-    + `questionnaire score is the device's reading, not a clinician's). ${PRIVACY}`,
+    'The rows of ONE raw type, newest first: a catalog raw type or a generic type health_status lists. Each row: start, end, '
+    + 'value (in `unit`, the one the phone pinned), code, source (app or device), device, tz and meta. `code` is HealthKit\'s raw '
+    + 'value: a category type (c.) its HKCategoryValue (c.MenstrualFlow 1 unspecified, 2 light, 3 medium, 4 heavy, 5 none; '
+    + 'symptoms such as c.Headache 0 unspecified, 1 not present, 2 mild, 3 moderate, 4 severe; events such as '
+    + 'c.HighHeartRateEvent 0, it happened); sleep 0 in bed, 1 asleep, 2 awake, 3 core, 4 deep, 5 REM. x.Electrocardiogram: '
+    + 'code = its classification (0 not set, 1 sinus rhythm, 2 atrial fibrillation, 3 to 6 inconclusive: low heart rate, high '
+    + 'heart rate, poor reading, other; 100 unrecognized), value = average heart rate in count/min. x.GAD7, x.PHQ9: code = the '
+    + 'score. Characteristics, which ignore from/to: x.BiologicalSex 1 female, 2 male, 3 other; x.BloodType 1 A+, 2 A-, 3 B+, '
+    + '4 B-, 5 AB+, 6 AB-, 7 O+, 8 O-; x.FitzpatrickSkinType 1..6 = I..VI; x.WheelchairUse 1 no, 2 yes; x.ActivityMoveMode 1 '
+    + 'active energy, 2 move time; 0 = not set; x.DateOfBirth code = yyyymmdd. Default window: the 90 days ending today. Never '
+    + 'state a diagnosis from these numbers (a classification or a score is the device\'s reading, not a clinician\'s). '
+    + `${PRIVACY}`,
   input: {
     type: z.string().min(1).max(HEALTH_MAX_TYPE_LENGTH).describe(`A catalog raw type (${RAW_TYPES}) or a q. / c. / x. type from health_status`),
     from: z.string().max(40).optional().describe('YYYY-MM-DD or ISO-8601 instant (default 90 days before `to`)'),

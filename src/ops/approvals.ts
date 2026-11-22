@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
 import { OWN_WAIT_TURN_END } from '../lib/turn-end-marker.js';
+import { clipText } from './doc-page.js';
 
 /**
  * Approvals (core/approvals/): ask a person to say yes before a step goes on. A script
@@ -19,6 +20,46 @@ function stateLine(body: unknown): string {
     return `Approval ${a.id} was ${a.status} by a person (${a.answer?.mode ?? 'tap'}, ${a.answer?.device?.name ?? 'a device'}).`
   }
   return `Approval ${a.id} is ${a.status}.`
+}
+
+const rec = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {})
+const clip = (v: unknown, max: number): string | undefined =>
+  typeof v === 'string' && v ? clipText(v, max) : undefined
+/** Rows approval_list answers by default; `limit` or `id` reads others. */
+const LIST_DEFAULT_LIMIT = 10
+/** The head of an approval's detail an agent reads in a list or a wait. */
+const DETAIL_HEAD = 160
+
+/**
+ * One approval as an agent reads it: its state and who answered, the asker in a line, and the
+ * head of its detail (the asker wrote it; approval_list {"id"} reads it whole). The digest stays
+ * for a single_use approval: approval_consume needs it.
+ */
+function approvalRow(value: unknown, wholeDetail = false): Record<string, unknown> {
+  const a = rec(value)
+  const answer = rec(a.answer)
+  const asker = rec(a.requester)
+  const title = clip(asker.taskTitle, 60)
+  const why = clip(rec(a.context).why, 120)
+  const detail = typeof a.detail === 'string' ? a.detail : ''
+  return {
+    id: a.id,
+    status: a.status,
+    what: a.what,
+    ...(a.singleUse ? { singleUse: true, digest: a.digest } : {}),
+    ...(a.requestOnly ? { requestOnly: true } : {}),
+    createdAt: a.createdAt,
+    expiresAt: a.expiresAt,
+    ...(answer.decision ? { answer: `${String(answer.decision)} at ${String(answer.at)} on ${String(rec(answer.device).name ?? 'a device')}` } : {}),
+    ...(a.consumedAt ? { consumedAt: a.consumedAt } : {}),
+    ...(asker.taskId || asker.host
+      ? { asker: { ...(asker.taskId ? { taskId: asker.taskId } : {}), ...(title ? { taskTitle: title } : {}), ...(asker.host ? { host: asker.host } : {}) } }
+      : {}),
+    ...(why ? { why } : {}),
+    ...(detail ? { detail: wholeDetail ? detail : clip(detail, DETAIL_HEAD), detailChars: detail.length } : {}),
+    ...(a.canceledReason ? { canceledReason: clip(a.canceledReason, DETAIL_HEAD) } : {}),
+    ...(a.unasked ? { unasked: a.unasked } : {}),
+  }
 }
 
 defineOp({
@@ -70,6 +111,18 @@ defineOp({
   },
   bind: { method: 'POST', path: '/approvals/:id/wait' },
   timeoutMs: 20_000,
+  // Content, not a receipt: its answer is the decision it waited for. The asker's own detail and
+  // context are cut to a head (it wrote them), except a single_use one's detail; the digest stays for approval_consume.
+  answer: {
+    kind: 'content',
+    max: 4_000,
+    shape: ({ result }) => {
+      const r = rec(result)
+      if (!r.approval) return result
+      // A single_use approval is checked against its detail before approval_consume: that one keeps it.
+      return { ...r, approval: approvalRow(r.approval, rec(r.approval).singleUse === true) }
+    },
+  },
   mapResult: ({ body }) => withOutcome(body as Record<string, unknown>, stateLine(body), (body as { approval?: { singleUse?: boolean } }).approval?.singleUse
     ? 'Do not run yet. Check the record, rebuild the current operation context, then approval_consume; run only after used:true.'
     : 'Go on only when status is approved.'),
@@ -109,10 +162,42 @@ defineOp({
   name: 'approval_list',
   title: 'List approvals',
   description: 'The approvals waiting for the user (`status: "all"` adds the decided ones of the last 30 days, with who answered, '
-    + 'when and on which device), and `askMe`: whether the user\'s Approvals switch is on.',
+    + `when and on which device), newest first, and \`askMe\`: whether the user's Approvals switch is on. An agent reads ${LIST_DEFAULT_LIMIT} `
+    + `rows (\`limit\` for more), each with the head of its detail; \`id\` reads one approval whole.`,
   input: {
     status: z.enum(['pending', 'all']).optional().describe('pending (default) or all'),
+    limit: z.number().int().min(1).max(200).optional().describe(`At most this many, newest first (an agent reads ${LIST_DEFAULT_LIMIT} by default)`),
+    id: z.string().min(1).max(80).optional().describe('One approval id: that approval whole, its detail and context included'),
   },
   bind: { method: 'GET', path: '/approvals', query: ['status'] },
+  // A handler for `id` (GET /approvals/:id) and `limit`; without them it answers what the binding did.
+  handler: async (args, call) => {
+    const id = typeof args.id === 'string' ? args.id.trim() : ''
+    if (id) return call('GET', `/approvals/${encodeURIComponent(id)}`)
+    const body = rec(await call('GET', `/approvals${args.status === 'all' ? '?status=all' : ''}`))
+    if (typeof args.limit !== 'number' || !Array.isArray(body.approvals)) return body
+    return { ...body, approvals: body.approvals.slice(0, args.limit), count: body.approvals.length }
+  },
+  answer: {
+    kind: 'content',
+    shape: ({ result, args }) => {
+      const r = rec(result)
+      // One approval asked by id is answered whole (the cap still holds a very long detail).
+      if (r.approval || !Array.isArray(r.approvals)) return result
+      const limit = typeof args.limit === 'number' ? args.limit : LIST_DEFAULT_LIMIT
+      const total = typeof r.count === 'number' ? r.count : r.approvals.length
+      const rows = r.approvals.slice(0, limit).map((row) => approvalRow(row))
+      const more = total - rows.length
+      const headOnly = rows.some((row) => typeof row.detailChars === 'number' && row.detailChars > DETAIL_HEAD)
+      const status = args.status === 'all' ? { status: 'all' } : {}
+      return {
+        ...r,
+        approvals: rows,
+        count: total,
+        ...(more > 0 ? { more, next: `${more} older not shown: approval_list ${JSON.stringify({ ...status, limit: Math.min(200, total) })}` } : {}),
+        ...(headOnly ? { detail: `A detail shows its first ${DETAIL_HEAD} characters: approval_list {"id":"<id>"} reads one whole.` } : {}),
+      }
+    },
+  },
   tags: { readonly: true, remote: 'allow', primaryOnly: true },
 });

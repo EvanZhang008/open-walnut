@@ -198,10 +198,11 @@ describe('thread write fields', () => {
     const missing = fields.filter((k) => !listed.has(k) && !new RegExp(`\\bb\\.${k}\\b|ids\\(b, '${k}'\\)`).test(src))
     expect(missing).toEqual([])
   })
-  it('the op offers every field', () => {
-    const src = code('src/ops/org-threads.ts')
-    const op = src.slice(src.indexOf("name: 'thread_update'"), src.indexOf("name: 'thread_create'"))
-    const missing = fields.filter((k) => !new RegExp(`\\b${k}: z\\.`).test(op))
+  // Read from the registered op, not its source text: the input is a named const (UPDATE_INPUT) since 2026-11-21.
+  it('the op offers every field', async () => {
+    const { getOp } = await import('../../../src/ops/index.js')
+    const input = getOp('thread_update')!.input as Record<string, unknown>
+    const missing = fields.filter((k) => !Object.hasOwn(input, k))
     expect(missing).toEqual([])
   })
 })

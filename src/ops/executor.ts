@@ -33,6 +33,7 @@ import { selfCallRefusal } from './origin-policy.js'
 import { declaredKeysNote, invalidTypeHint, unknownKeyHint, unknownKeyNotes } from './arg-hints.js'
 import { isCallId, takeCallIdArg, writeOpId } from '../lib/op-call-id.js'
 import { runOnce } from './op-calls.js'
+import { FULL_ARG, agentAnswer, cutTextRefusal, takeFullArg } from './answer.js'
 import { COLLECTION_MAX, oversizedCollection } from '../lib/zod-rules.js'
 import { TASK_DIR_VAR, opTmpPathNote } from '../lib/tmp-draft-path.js'
 import { opLinkNotes } from '../lib/missing-links.js'
@@ -344,6 +345,11 @@ export interface ExecuteOpOptions {
    * A caller re-running a call may give it as `_call_id` in the arguments instead.
    */
   callId?: string
+  /**
+   * The answer goes to an agent (a session's MCP tool or its CLI): shaped and capped by the
+   * op's answer policy (answer.ts). Server code that reads the result itself leaves it out.
+   */
+  forAgent?: boolean
   /** The CLI's automation label when no session and no person stands behind the call (cli-sender.ts). */
   sender?: string
   /** Recheck a frozen human plan immediately before each mutation self-call. */
@@ -479,9 +485,20 @@ export async function executeOp(
     if (taken.bad) return { ok: false, message: `Invalid arguments for ${op.name}: ${taken.bad}`, invalidArgs: true }
     callId = taken.callId ?? callId
   }
+  // An agent caller lifts its answer's cap for one call with `_full` (answer.ts): never one of the op's own arguments.
+  let full = false
+  if (isPlainObject(given) && Object.hasOwn(given, FULL_ARG)) {
+    if (given === rawArgs) given = { ...rawArgs }
+    const taken = takeFullArg(given)
+    if (taken.bad) return { ok: false, message: `Invalid arguments for ${op.name}: ${taken.bad}`, invalidArgs: true }
+    full = taken.full
+  }
   const parsed = parseOpArgs(op, given)
   if (!parsed.ok) return parsed
   const args = parsed.args
+  // A shortened read written back would delete the rest of what it was cut from (answer.ts).
+  const cutText = cutTextRefusal(op, args)
+  if (cutText) return { ok: false, message: cutText, invalidArgs: true }
 
   const base = resolveApiBase(options.apiBase)
   const inherited = explicitCallerScope.getStore()
@@ -523,7 +540,10 @@ export async function executeOp(
   // Text a session hands on gets one line back when it names a draft in a temp dir (tmp-draft-path.ts)
   // or, for the user, an id with no link to open it (missing-links.ts).
   if (human || pluginId) return outcome
-  return withHandedTextNote(op.name, args, outcome, origin, explicitSid)
+  const noted = await withHandedTextNote(op.name, args, outcome, origin, explicitSid)
+  // An agent reads a receipt for a write and capped content for a read (answer.ts).
+  if (!options.forAgent || noted.result === undefined) return noted
+  return { ...noted, result: agentAnswer(op, args, noted.result, full) }
 }
 
 /**

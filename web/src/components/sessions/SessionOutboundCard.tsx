@@ -27,6 +27,7 @@ import {
   splitOutboundHandle,
   type OutboundSend,
 } from './session-outbound';
+import { tooLongAnswer, TOO_LONG_ANSWER_NOTE } from './tool-run-phrase';
 import { fetchRequestAsker, peekSessionRecord } from '@/api/sessions';
 import { sessionTextSource } from '@/utils/agent-text-source';
 import { candidateTaskId, resolveRefInIndex } from '@/components/chat/session-mention';
@@ -250,8 +251,10 @@ function directionOf(send: OutboundSend, kind: OpCardFields['kind']): string {
 function withRecord(send: OutboundSend, record: OpCallRecord | undefined): OutboundSend {
   if (!record) return send;
   const f = record.fields;
+  // The record says whether the call worked, over an error read from the transcript.
+  const { error: _transcriptError, ...rest } = send;
   return {
-    ...send,
+    ...rest,
     fields: f,
     ...(f.detail !== undefined ? { body: f.detail } : {}),
     ...(f.title && !send.title ? { title: f.title } : {}),
@@ -314,7 +317,8 @@ export function SessionOutboundCard({
     ? send.error
     : send.delivery === 'queued' ? 'Delivered to the session’s queue'
       : send.delivery === 'deferred' ? 'Held: the target is waiting on a permission prompt'
-        : send.delivery;
+        // The call worked; its answer was too long for the agent and went to a file.
+        : send.delivery ?? (tooLongAnswer(result) ? TOO_LONG_ANSWER_NOTE : undefined);
   const direction = directionOf(send, send.fields.kind);
   const taskIds = useToTaskIds(send, resolved);
   const hasDetail = send.body !== undefined;

@@ -12,13 +12,15 @@ import { SOURCE_TWIN } from '../../helpers/source-twin.js'
 import { guardedPath } from '../../setup/exec-guard.js'
 
 const REPO = path.resolve(__dirname, '../../..')
-const REPRO = '{"q":"controller","types":["task","session"]}'
+// A search the hub refuses before any request, with its hint (the capture recipe calls search).
+// The 2026-11-06 list for types is no repro any more: search takes a list since 2026-11-21.
+const REPRO = '{"q":"controller","tpyes":"task,session"}'
+const HINT = 'did you mean "types"?'
 const REFUSAL = {
   ok: false,
   error: {
     code: 'internal',
-    message: 'Invalid arguments for search: types: Invalid input: expected string, received array; '
-      + 'types takes one comma-separated string, e.g. "task,session", not a list',
+    message: 'Invalid arguments for search: (root): Unrecognized key: "tpyes"; did you mean "types"?; search takes: q, types, limit',
   },
 }
 const RESULT = { results: [{ type: 'task', title: 'Controller' }] }
@@ -156,7 +158,7 @@ describe.each(['hub', 'full', 'minimal'] as const)('the %s entry with FORCE_COLO
     expect(r.out).toBe('')
     const f = plainJson(r.err, 'stderr')
     expect(f).toMatchObject({ ok: false, error: { code: 'invalid_arguments' } })
-    expect(f.error.message).toContain('types takes one comma-separated string')
+    expect(f.error.message).toContain(HINT)
 
     const both = await run(entry, ['call', 'search', REPRO], REFUSAL, true)
     expect(both.code).toBe(1)
@@ -227,7 +229,7 @@ describe.each(['hub', 'full', 'minimal'] as const)('the capture recipe through t
     expect(r.out).toBe('')
     const f = plainJson(r.err, 'stderr')
     expect(f).toMatchObject({ ok: false, error: { code: 'invalid_arguments' } })
-    expect(f.error.message).toContain('types takes one comma-separated string')
+    expect(f.error.message).toContain(HINT)
   }, 60_000)
 
   it.each(Object.keys(RECIPES))('%s: a success is parsed for its results', async (name) => {

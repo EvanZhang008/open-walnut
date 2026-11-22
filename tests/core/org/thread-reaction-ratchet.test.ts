@@ -67,6 +67,22 @@ describe('a reaction is durable news provenance, not a state', () => {
     expect(cardView(u.thread).unread).toEqual([]);
   });
 
+  it('splitting a known answer into another thread keeps it known there; keepOpen keeps the source\'s reaction', () => {
+    // splitMessageInto is splitThreadMessage then mergeThreads in one write (thread_split merge_into).
+    const r = reacted();
+    const target = model.fileMessage(r.file, { text: 'Other question?', via: 'chat', at: at(1), newThreadId: 'th-bbbbbb' });
+    const s = model.splitMessageInto(target.file, r.thread.id, 'tm-aaaaaa', target.thread.id, by, at(4));
+    const u = model.updateThread(s.file, s.thread.id, { state: 'answered' }, by, at(5));
+    expect(shownToHim(u.thread)).toBe(false);
+    expect(cardView(u.thread).unread).toEqual([]);
+    // The source keeps only its answered, reacted message: by default it closes as acked; kept open, it stays read.
+    const kept = model.splitMessageInto(target.file, r.thread.id, r.message.id, target.thread.id, by, at(4), 'en', { keepOpen: true });
+    expect(kept.closedFrom).toBe(false);
+    expect(kept.from.closed).toBeUndefined();
+    expect(kept.from.known).toMatchObject({ through: 'tm-aaaaaa', by: 'human' });
+    expect(cardView(kept.from).unread).toEqual([]);
+  });
+
   it('moving and retrying a move keep the reaction on the receiving node', () => {
     const r = reacted();
     const out = model.moveThreadOut(r.file, r.thread.id, { task: 'other', title: 'Other' }, by, at(4));
@@ -186,7 +202,7 @@ describe('a reaction is durable news provenance, not a state', () => {
     expect(writes.sort()).toEqual([
       'addMovedMessages', 'emptyThreads', 'enteredNeeds', 'fileMessage', 'lastUserAt', 'markClosesTold',
       'markRechecked', 'mergeThreads', 'moveThreadIn', 'moveThreadOut', 'normalizeThreads', 'openThread',
-      'reactedSince', 'recentConversation', 'relocateThreadOut', 'setAnswers', 'sortedThreads', 'splitThreadMessage',
+      'reactedSince', 'recentConversation', 'relocateThreadOut', 'setAnswers', 'sortedThreads', 'splitMessageInto', 'splitThreadMessage',
       'stampLegacyReplyAt', 'sweepClosed', 'updateThread',
     ].sort());
   });

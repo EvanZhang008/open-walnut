@@ -17,7 +17,7 @@ import type { OrgThreadsChangedEvent } from '../event-types.js';
 import { isFollower } from '../server-role.js';
 import { walnutLetterLanguage as letterLang } from '../human-inbox/walnut-letters/languages.js';
 import {
-  addMovedMessages, deliveryOpen, emptyThreads, enteredNeeds, fileMessage, markClosesTold, markRechecked, mergeThreads, movedAway, moveThreadIn, moveThreadOut, normalizeThreads, openThread, patchHandsToUser, relocateThreadOut, setAnswers, splitThreadMessage, stampLegacyReplyAt, sweepClosed, ThreadError, updateThread,
+  addMovedMessages, deliveryOpen, emptyThreads, enteredNeeds, fileMessage, markClosesTold, markRechecked, mergeThreads, movedAway, moveThreadIn, moveThreadOut, normalizeThreads, openThread, patchHandsToUser, relocateThreadOut, setAnswers, splitMessageInto, splitThreadMessage, stampLegacyReplyAt, sweepClosed, ThreadError, updateThread,
   type FileMessageInput, type FileMessageResult, type MoveEnd, type OpenThreadInput, type ThreadAskOwner, type ThreadMoveKind, type OrgThread, type ThreadAnswer, type ThreadDelivery, type ThreadMessage, type ThreadPatch, type ThreadState, type ThreadRecheck, type ThreadsFile, type ThreadTextSource, type ThreadWriter,
 } from './threads-model.js';
 import { threadsDbOnNow, useThreadsDb, writeThreadsLeftovers } from './threads-backend.js';
@@ -332,14 +332,29 @@ export async function mergeThread(taskId: string, fromId: string, intoId: string
   return thread;
 }
 
-export async function splitThread(taskId: string, threadId: string, messageId: string, by: ThreadWriter): Promise<{ thread: OrgThread; from: OrgThread }> {
+export interface SplitThreadOptions {
+  /** Keep the source open even when nothing is left open on it (threads-model.ts SplitOptions). */
+  keepOpen?: boolean;
+  /** Move the message straight into this open thread instead of a new one (splitMessageInto). */
+  mergeInto?: string;
+}
+
+/**
+ * One message out of a thread: into a new thread of its own, or with `mergeInto` straight into
+ * another open thread, in one locked write. `closedFrom`: the source closed with it.
+ */
+export async function splitThread(taskId: string, threadId: string, messageId: string, by: ThreadWriter, opts: SplitThreadOptions = {}): Promise<{ thread: OrgThread; from: OrgThread; closedFrom: boolean; mergedInto?: string }> {
   const at = new Date().toISOString();
   const lang = await letterLang();
+  const keep = { keepOpen: opts.keepOpen === true };
+  const into = opts.mergeInto;
   const res = await mutateThreads(taskId, (cur) => {
-    const r = splitThreadMessage(cur, threadId, messageId, by, at, undefined, lang);
-    return { file: r.file, out: { thread: r.thread, from: r.from } };
+    const r = into
+      ? splitMessageInto(cur, threadId, messageId, into, by, at, lang, keep)
+      : splitThreadMessage(cur, threadId, messageId, by, at, undefined, lang, keep);
+    return { file: r.file, out: { thread: r.thread, from: r.from, closedFrom: r.closedFrom, ...(into ? { mergedInto: into } : {}) } };
   });
-  emit({ taskId, kind: 'split', threadId: res.thread.id });
+  emit(into ? { taskId, kind: 'merged', threadId: into } : { taskId, kind: 'split', threadId: res.thread.id });
   return res;
 }
 

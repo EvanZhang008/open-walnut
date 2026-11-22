@@ -6,6 +6,7 @@
 
 import { z } from 'zod'
 import { defineOp } from './registry.js'
+import { clipText } from './doc-page.js'
 
 const MIN = 60_000
 const rec = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {})
@@ -50,6 +51,105 @@ defineOp({
  */
 const LIST = (max: number) => z.union([z.string().max(max), z.array(z.string().max(20)).max(12)])
 
+/** time_report's cap: an agent's shell keeps about 10,000 characters of a command's output. */
+const REPORT_MAX = 10_000
+const TITLE_MAX = 60
+/** Rows per group when the whole report does not fit: the biggest first, the rest folded into otherMin. */
+const FIT_TOPS = [10, 5, 3]
+
+const clip = (v: unknown, max: number): unknown => (typeof v === 'string' ? clipText(v, max) : v)
+
+/** A task in a report row: who it is, without the bookkeeping fields (parent, source, completedAt). */
+function taskRef(row: Record<string, unknown>): Record<string, unknown> {
+  const { createdBeforeRange: _b, completedAt: _c, parentTaskId: _p, source: _s, ...rest } = row
+  return { ...rest, ...('title' in row ? { title: clip(row.title, TITLE_MAX) } : {}) }
+}
+
+/** A group row: a task without bookkeeping, an app's sites as "site 10m" (its top 3), no offMin (min less workMin). */
+function groupRow(name: string, value: unknown): Record<string, unknown> {
+  const { offMin: _off, ...row } = rec(value)
+  if (name === 'task') return taskRef(row)
+  if (name === 'app' && Array.isArray(row.topHosts)) {
+    return { ...row, topHosts: row.topHosts.slice(0, 3).map((h) => `${String(rec(h).host)} ${String(rec(h).min)}m`) }
+  }
+  return row
+}
+
+/** One day of the report as an agent reads it: its totals, its top tasks and apps in a few words, its fragmentation in numbers. */
+function dayRow(value: unknown): Record<string, unknown> {
+  const d = rec(value)
+  const out = rec(d.outside)
+  const frag = rec(d.fragmentation)
+  const { byKind: _k, outside: _o, topTasks, fragmentation: _f, sent, ...rest } = d
+  return {
+    ...rest,
+    ...(d.outside ? { outsideMin: out.min, topApps: (Array.isArray(out.topApps) ? out.topApps : []).slice(0, 3).map((a) => `${String(rec(a).app)} ${String(rec(a).min)}m`) } : {}),
+    ...(rec(sent).count ? { sent: rec(sent).count } : {}),
+    // "<task id> 50m": the task's title is in the task group.
+    topTasks: (Array.isArray(topTasks) ? topTasks : []).map((t) => `${String(rec(t).taskId) || '(no task)'} ${String(rec(t).min)}m`),
+    fragmentation: { tasks: frag.tasks, switches: frag.switches, deepMin: frag.deepMin, longestMin: rec(frag.longest).min ?? 0 },
+  }
+}
+
+/** A day in one line, for a range too long for a row a day. */
+function dayLine(value: unknown): string {
+  const d = rec(value)
+  const attention = d.attentionMin !== undefined ? `, attention ${String(d.attentionMin)}m` : ''
+  return `${String(d.date)} ${String(d.weekday)}: walnut ${String(d.walnutMin)}m (work hours ${String(d.workMin)}m)${attention}, agent ${String(d.agentMin)}m`
+}
+
+/** Every group with at most `top` rows (null: all), the rows left out counted in `more` and their minutes in `otherMin`. */
+function groupsAt(groups: Record<string, unknown>, top: number | null): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(groups).map(([name, g]) => {
+    const group = rec(g)
+    if (!Array.isArray(group.rows)) return [name, g]
+    const rows = group.rows.map((row) => groupRow(name, row))
+    if (top === null || rows.length <= top) return [name, { ...group, rows }]
+    const left = rows.slice(top)
+    const leftMin = left.reduce<number>((n, row) => n + (typeof row.min === 'number' ? row.min : 0), 0)
+    return [name, {
+      ...group,
+      rows: rows.slice(0, top),
+      otherMin: (typeof group.otherMin === 'number' ? group.otherMin : 0) + leftMin,
+      more: (typeof group.more === 'number' ? group.more : 0) + left.length,
+    }]
+  }))
+}
+
+/**
+ * time_report's answer for an agent (2026-11-21: answers past the 8,000-character cap): every
+ * total kept, the task rows without bookkeeping fields, each day in its numbers, the field notes
+ * left to the description. When that does not fit: each day in a line, then fewer rows per group
+ * (the biggest kept, the rest summed in otherMin), and it says which call reads more.
+ */
+function reportAnswer(result: unknown, args: Record<string, unknown>): unknown {
+  const r = rec(result)
+  if (!Array.isArray(r.days)) return result
+  const frag = rec(r.fragmentation)
+  const { notes: _notes, ...rest } = r
+  const base: Record<string, unknown> = {
+    ...rest,
+    days: r.days.map(dayRow),
+    ...(r.fragmentation ? { fragmentation: { ...frag, ...(frag.longest ? { longest: taskRef(rec(frag.longest)) } : {}) } } : {}),
+    notes: 'Each number is explained in the time_report description; a group row\'s offMin is min less workMin. "_full": true reads the notes and every day whole.',
+  }
+  const groups = rec(r.groups)
+  const whole = { ...base, groups: groupsAt(groups, null) }
+  if (JSON.stringify(whole).length <= REPORT_MAX) return whole
+  const lines = { ...base, days: r.days.map(dayLine) }
+  let shaped: Record<string, unknown> = { ...lines, groups: groupsAt(groups, null) }
+  for (const top of FIT_TOPS) {
+    if (JSON.stringify(shaped).length <= REPORT_MAX) break
+    shaped = {
+      ...lines,
+      groups: groupsAt(groups, top),
+      shortened: `Each group shows its top ${top} rows here (the rest are summed in otherMin): time_report `
+        + `${JSON.stringify({ ...args, group_by: '<one group>', top: 15 })} reads one group's rows, or repeat this call with "_full": true.`,
+    }
+  }
+  return shaped
+}
+
 defineOp({
   name: 'time_report',
   title: 'Where the time went over a range of days',
@@ -82,6 +182,7 @@ defineOp({
   },
   bind: { method: 'GET', path: '/api/time/report' },
   timeoutMs: 30_000,
+  answer: { kind: 'content', max: REPORT_MAX, shape: ({ result, args }) => reportAnswer(result, args) },
   tags: { readonly: true, remote: 'allow', primaryOnly: true },
 })
 
@@ -106,20 +207,19 @@ defineOp({
   name: 'time_timeline',
   title: 'One day (or a few) as a single timeline from every source',
   description:
-    'WHEN things happened: one serial timeline per local day (default today, at most 7 days) merged from every '
-    + 'source: Walnut attention, other Mac apps, sleep and workouts (Apple Health), calendar meetings and planned '
-    + 'blocks, places (iPhone visits, with the user\'s own labels such as home/office/gym and inferred travel), and any '
-    + 'plugin source. Each block has kind (screen, sleep, workout, meeting, plan, gap…), source and confidence '
-    + '(measured / planned / inferred); a screen block lists its top tasks and apps and the meeting it sat in. '
-    + '`plan` compares every calendar block with what was measured inside it (verdict kept / partly / other_work / '
-    + 'meeting_on_screen / not_on_screen). A meeting also gets `attendance` from the calls on this Mac: attended (a call '
-    + 'ran; attendedMin = time on the call, past the calendar end too (overrunMin), meetingMin = the part with nothing else on screen), not_attended (a recurring meeting never on a call, or other '
-    + 'work on screen), needs_confirmation (no call and nothing recorded, or two meetings at once on one call: ASK the '
-    + 'user, never guess; record the answer with time_meeting_attendance_set) or unknown (no call data). `summary` gives minutes per kind for the whole day '
-    + 'and for work hours, plus callMin, adHocCallMin, attendedMeetingMin, meetingMin and needsConfirmation. '
-    + '`sources[]` says what each source could see: a source with available:false is MISSING, never zero. Flags '
-    + '(a workout left running, a sleep recording gap) must be passed on. For totals over weeks use time_report. '
-    + 'Places and health stay on this Mac: summarise ("gym 1h05"), never paste addresses or raw values.',
+    'WHEN things happened: one timeline per local day (default today, at most 7 days) from every source: Walnut '
+    + 'attention, other Mac apps, sleep and workouts (Apple Health), calendar meetings and planned blocks, places (iPhone '
+    + 'visits, with the user\'s own labels such as home/office/gym and inferred travel), and any plugin source. Each block has '
+    + 'kind (screen, sleep, workout, meeting, plan, gap…), source and confidence (measured / planned / inferred); a screen block '
+    + 'lists its top tasks and apps and the meeting it sat in. `plan` compares each calendar block with what was measured in it '
+    + '(kept / partly / other_work / meeting_on_screen / not_on_screen). A meeting gets `attendance` from the calls on this Mac: '
+    + 'attended (attendedMin = time on the call, past its end too as overrunMin; meetingMin = the part with nothing else on '
+    + 'screen), not_attended (a recurring meeting never on a call, or other work on screen), needs_confirmation (no call and '
+    + 'nothing recorded, or two meetings on one call: ASK the user, never guess; record the answer with '
+    + 'time_meeting_attendance_set) or unknown (no call data). `summary`: minutes per kind for the day and for work hours, plus '
+    + 'callMin, adHocCallMin, attendedMeetingMin, meetingMin and needsConfirmation. `sources[]` says what each source saw: '
+    + 'available:false is MISSING, never zero. Pass on its flags (a workout left running, a sleep recording gap). Totals over '
+    + 'weeks: time_report. Places and health stay on this Mac: summarise ("gym 1h05"), never paste addresses or raw values.',
   input: {
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('One local date YYYY-MM-DD (default today)'),
     from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('Or: first date of a range (at most 7 days)'),

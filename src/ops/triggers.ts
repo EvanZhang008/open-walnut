@@ -10,6 +10,7 @@
 
 import { z } from 'zod'
 import { defineOp, type HttpBinding } from './registry.js'
+import { clipText, tailText } from './doc-page.js'
 import { awayAnswer, withOutcome } from './outcome.js'
 import { triggerRunState } from '../core/cron/trigger-run-state.js'
 import { TIME_LIMIT_DEFAULT_S, TIME_LIMIT_MAX_S, testCallTimeoutMs } from '../core/cron/trigger-time-limit.js'
@@ -22,18 +23,14 @@ import {
 } from './trigger-list-rows.js'
 
 const CHECK_CONTRACT =
-  'The check reads ONE JSON object on stdin ({state, lastFireAt, now}) and must print ONE JSON object as '
-  + 'the LAST line of stdout: {"fire":true|false, "items":[{"id":"..."}]?, "input":"free text for the AI '
-  + 'this run"?, "state":{cursor}?}. Log freely above that line. `items[].id` is the DEDUP key: ids the '
-  + 'daemon already delivered are dropped, so fire:true with only known ids is quiet, and fire:true with '
-  + 'NO items fires every single time (the script did its own judging). `input` goes to the AI THIS run; '
-  + '`state` is the script talking to its NEXT run (stored verbatim, handed back on stdin). They are never '
-  + 'merged. Non-zero exit, a timeout, no JSON on the last line, or over 64KB of stdout is a check error: '
-  + 'the first one is reported into this session, and five in a row stop the trigger and tell this session (or its lead); '
-  + 'trigger_update fixes its command, interval or time limit in place. '
-  + 'One bad item does not fail the run: an id over 200 chars is shortened to a stable id (its head plus a '
-  + 'hash, the original kept as fullId) and an item with no string id is dropped, each with a warning in the '
-  + 'fire and on the History row; only output with no usable item left is an error.'
+  'The check reads ONE JSON object on stdin ({state, lastFireAt, now}) and prints ONE JSON object as the LAST line of '
+  + 'stdout: {"fire":true|false, "items":[{"id":"..."}]?, "input":"text for the AI this run"?, "state":{cursor}?}; log '
+  + 'freely above it. `items[].id` is the DEDUP key: ids already delivered are dropped, so fire:true with only known ids '
+  + 'is quiet, and fire:true with NO items fires every time (the script judged). `input` goes to the AI this run; `state` '
+  + 'comes back verbatim on the next run\'s stdin. A non-zero exit, a timeout, no JSON last line or over 64KB of stdout is a '
+  + 'check error: the first is reported into this session, five in a row stop the trigger and tell this session (or its '
+  + 'lead); trigger_update fixes it in place. An id over 200 chars is shortened (the original kept as fullId) and an item '
+  + 'with no string id dropped, each with a warning.'
 
 const TRIGGER_LIST_BINDING: HttpBinding = { method: 'GET', path: '/routines' }
 
@@ -71,45 +68,54 @@ async function setTriggerEnabled(
   return { job: updated, changed: true }
 }
 
+const rec = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {})
+
+/**
+ * trigger_create's answer for an agent: the trigger in a few facts, what happened to the task,
+ * its time limit (the last test of the same script included), the outcome and next. 2026-11-21: a
+ * create answered 2,800 characters (median), most of it the job echoing the caller's own script,
+ * prompt and description back.
+ */
+function createdTrigger(result: unknown): unknown {
+  const r = rec(result)
+  const job = rec(r.job)
+  if (r.offline === true || !r.job) return result
+  const { job: _job, ...rest } = r
+  const schedule = rec(job.schedule)
+  const check = rec(job.check)
+  const target = rec(rec(job.executor).config).target
+  return {
+    ...rest,
+    every: everyLabel(schedule.everyMs),
+    enabled: job.enabled !== false,
+    state: triggerRunState(job as ListedJob),
+    ...(typeof target === 'string' && target ? { task: target } : {}),
+    ...(rec(check.template).id ? { template: rec(check.template).id } : {}),
+  }
+}
+
 defineOp({
   name: 'trigger_create',
   title: 'Create a Walnut trigger',
   description:
-    'Arm a check script the daemon on a host runs on an interval, delivering a prompt into a session '
-    + 'when it fires. Use it for "tell me when X happens", "watch this and act", "keep an eye on Y". '
-    + 'Look at trigger_templates FIRST: when a plugin offers the watch (a Slack channel, new mail), pass '
-    + '`template` + `params` instead of writing a script. '
+    'Arm a check script the daemon on a host runs on an interval; when it fires, its prompt is delivered into a session. '
+    + 'For "tell me when X happens", "watch this and act". Look at trigger_templates FIRST: when a plugin offers the watch '
+    + '(a Slack channel, new mail), pass `template` + `params` instead of a script. '
     + `${CHECK_CONTRACT} `
-    + 'Write the script to a file first (~/.open-walnut/triggers/<slug>/check.sh) and run trigger_test '
-    + 'until it parses — a trigger armed on an unparseable script only reports errors. `every` accepts '
-    + '"30s" / "5m" / "1h" or a number of ms; never poll faster than 10s, and 5m is the sensible default. '
-    + 'session defaults to "this" (the calling session\'s task), so a fire lands in this conversation even '
-    + 'if it has gone quiet meanwhile (it is resumed; a new session on the same task only if none can be '
-    + 'resumed). Pass a task id to point it elsewhere; a completed task is an error, never a resurrected one. '
-    + 'Keep credentials inside the script file: `run` is stored with the routine and shown on its card. '
-    + '`description` is required: the card otherwise shows only a name and a script path, which does not '
-    + 'tell the user what fires it. '
-    + 'It does NOT park the task unless you pass wait:true: a watch alone is no reason to leave the user\'s list. '
-    + 'Waiting is only for a real wait outside your task and the user (a colleague\'s review, another team\'s pipeline, '
-    + 'a reply, a date), and only you put the task there. Your own build, test run, CI run, deploy or land is your work '
-    + 'going on, never a wait: arm its watch with watches:"own", which never parks the task (it reads Working). '
-    + 'Pass wait:true only when the rest of the work truly waits on that outside thing and nothing of this turn '
-    + 'is for the user to read (never in the turn that answers the user\'s message: that stays Needs you). Then the '
-    + 'task goes to Waiting (off the user\'s list, no letter is sent) and the fire (or its clock, wait_until) '
-    + 'brings it back; one that watches the user\'s ask (`watches`) never parks, since a wait on the user is '
-    + 'Needs you. Set wait_until yourself to when you expect the '
-    + 'event, kept short (hours, a day at most unless the user named a later time; 4 hours when left out): a new '
-    + 'trigger may be wrong or miss the event, and the clock running out is how you find out. On each fire and '
-    + 'each clock wake, look at the thing itself and at whether the trigger is still right and enough, fix it, '
-    + 'and only then park again with a fresh wait_until. '
-    + 'While you or the user still have work on this task, leave wait out, and park it later with task_update '
-    + 'phase=WAITING once only the wait is left. The main agent\'s task is never parked. '
-    + 'Use it on your own whenever the rest of the work is waiting on something outside this session '
-    + '(a review, a merge, a deploy, CI, another host, someone\'s reply): do not ask the user to watch it. '
-    + 'Never for this session\'s own background command (run_in_background) or subagent: Claude Code wakes the '
-    + 'session when it finishes, so a trigger on it only wakes the session for nothing. '
-    + 'It works while the Walnut server is away too: the host your session runs on arms the check at once and '
-    + 'Walnut records it, with the same id, when the server is back (the answer then says queued).',
+    + 'Write the script to a file (~/.open-walnut/triggers/<slug>/check.sh) and run trigger_test until it parses. `every`: '
+    + '"30s", "5m", "1h" or ms, never under 10s; 5m is the sensible default. `session` defaults to "this" (your task): a fire '
+    + 'lands in this conversation even after it went quiet; a task id points it elsewhere (a completed one is an error). Keep '
+    + 'credentials in the script file: `run` shows on its card. `description` is required: the card shows it to the user. '
+    + 'It does NOT park the task unless you pass wait:true. Your own build, test run, CI run, deploy or land is your work going '
+    + 'on, never a wait: watch it with watches:"own", which never parks (it reads Working). Pass wait:true only when the rest of '
+    + 'the work truly waits on something outside your task and the user (a review, another team\'s pipeline, a reply, a date) '
+    + 'and nothing of this turn is for the user to read (never in the turn that answers the user\'s message): the task goes to '
+    + 'Waiting (off the user\'s list, no letter is sent) until the fire or its clock; one that watches the user\'s ask never parks. '
+    + 'Set wait_until yourself to when you expect the event, kept short (4 hours when left out): the clock running out is how you '
+    + 'find out the trigger is wrong. While work remains, leave wait out and park later with task_update phase=WAITING; the main '
+    + 'agent\'s task never parks. Arm one on your own whenever the work waits on something outside this session: do not ask the '
+    + 'user to watch it. Never for this session\'s own background command (run_in_background) or subagent: Claude Code wakes the '
+    + 'session when it ends. With the Walnut server away, your host arms it at once (the answer says queued).',
   input: {
     run: z.string().min(1).optional().describe('Shell command that decides whether to fire (e.g. "bash ~/.open-walnut/triggers/pr-comments/check.sh"). '
       + 'Required unless `template` is given'),
@@ -212,6 +218,14 @@ defineOp({
         : `${timeWarning ? `Fix the time limit first: trigger_test, then trigger_update '{"id":"${id}","timeoutSeconds":<seconds>}' (same id, nothing it saw is lost). ` : ''}${next} See its last check with trigger_list.`,
     )
   },
+  // Content, not a receipt: what it armed and what it did to the task are the answer. The stored
+  // job (the script, the prompt and the description the caller just sent) is left out.
+  answer: {
+    kind: 'content',
+    max: 4_000,
+    whole: 'trigger_list {"name":"<id>","full":true}',
+    shape: ({ result }) => createdTrigger(result),
+  },
   tags: { readonly: false, remote: 'allow', destructive: false },
 })
 
@@ -272,29 +286,65 @@ defineOp({
   handler: async (args, call) => call('POST', `/trigger-templates/${encodeURIComponent(String(args.template))}/check`, {
     params: args.params ?? {}, input: args.input ?? {},
   }),
+  // A check script reads this answer as the check's own output ({fire, items, state}): a cut item would never fire.
+  answer: { kind: 'content', whole_for: () => true },
   tags: { readonly: true, remote: 'allow' },
 })
+
+/** trigger_list's cap: about 20 compact rows, or a few whole ones; an agent's shell keeps about 10,000 characters. */
+const LIST_ANSWER_MAX = 10_000
+/** What a list answer keeps for its other fields (the task, its clocks, the hint). */
+const LIST_HEAD_ROOM = 2_500
+
+/**
+ * The rows of a trigger_list answer that fit its cap, newest activity first (2026-11-21: a list
+ * answered up to 91,700 characters). A row left out is counted in `more`, and the hint names the
+ * calls that read it: a narrower list, or one trigger whole. At least one row stays.
+ */
+function fittedList(result: unknown): unknown {
+  const r = rec(result)
+  if (!Array.isArray(r.triggers)) return result
+  const budget = Math.max(1_000, LIST_ANSWER_MAX - LIST_HEAD_ROOM - JSON.stringify(r.clocks ?? []).length)
+  const kept: unknown[] = []
+  let used = 0
+  for (const row of r.triggers) {
+    const n = JSON.stringify(row).length + 1
+    if (kept.length && used + n > budget) break
+    kept.push(row)
+    used += n
+  }
+  const left = r.triggers.length - kept.length
+  if (!left) return result
+  const more = (typeof r.more === 'number' ? r.more : 0) + left
+  // The route's own "N more not shown" sentence counts only the limit; this one counts both.
+  const rest = typeof r.hint === 'string' ? r.hint.replace(/^\d+ more not shown:[^.]*\.\s*/, '') : ''
+  return {
+    ...r,
+    shown: kept.length,
+    more,
+    triggers: kept,
+    hint: `${more} more not shown (this answer holds ${kept.length}): narrow with name, task or state, `
+      + 'or read one trigger whole with trigger_list {"name":"<its id>","full":true}.'
+      + (rest ? ` ${rest}` : ''),
+  }
+}
 
 defineOp({
   name: 'trigger_list',
   title: 'List Walnut triggers',
   description:
-    'The triggers, newest activity first, one short row each: id, name, description, interval, host, the task '
-    + 'it wakes, its state ("armed" = polling, "paused" = switched off by someone, with pausedAt; "stopped" = '
-    + 'switched off by Walnut after its check failed 5 times in a row), how many times it has fired, `last` (the '
-    + 'last check in one line: fired with an item count / quiet with a reason / the error text), `lastFire`, '
-    + 'the next check, `timeLimit` (the seconds the daemon lets a check run before it kills it), `lastRun` (how long '
-    + 'the last check ran, or that the limit killed it) and `limitWarning` when it ran over half its limit. To find one trigger, narrow it: `name` (a piece of its name, id or description, any case), '
-    + '`task` (what would wake that task), `state:"armed"`; e.g. {"name":"reflection","task":"<the VP\'s task id>"}. '
-    + `At most \`limit\` rows (default 25, up to ${MAX_LIMIT}); \`count\` is how many matched and \`more\` how many `
-    + 'were left out. `full:true` adds the script, the last check object and the recent check history (default '
-    + 'limit 5 then) and the prompt the session is told: read it for one trigger you are debugging. With `name`, '
-    + 'the scheduled routines that start a session turn match too (kind "routine", their time in `at`): find a '
-    + 'routine\'s prompt this way, change it with trigger_update. Use it to answer "what are you watching?" and to '
-    + 'check whether a trigger you created is healthy; one that has never fired may be a script that never says '
-    + 'fire. With task: only what would wake that task (and with team:true every open task under it): its '
-    + 'triggers, its plain timed routines (cron, kind "routine"), and its wake clocks; team_stop with '
-    + 'sessions:"keep" pauses all of them at once.',
+    'The triggers, newest activity first, one short row each: id, name, description, interval, host, the task it wakes, '
+    + '`state` ("armed" = polling; "paused" = switched off by someone, with pausedAt; "stopped" = switched off by Walnut after '
+    + '5 failed checks in a row), fires, `last` (the last check in a line: fired with an item count, quiet with a reason, or '
+    + 'the error), `lastFire`, the next check, `timeLimit` (seconds a check may run), `lastRun` (how long the last one ran) '
+    + 'and `limitWarning` (over half its limit). To find one trigger, narrow it: `name` (a piece of its name, id or description, '
+    + 'any case), `task` (what would wake that task), `state:"armed"`; e.g. {"name":"reflection","task":"<task id>"}. '
+    + `At most \`limit\` rows (default 25, up to ${MAX_LIMIT}); \`count\` matched, \`more\` were left out. `
+    + '`full:true` adds the script, the last check object, recent checks and the prompt the session is told (default limit '
+    + '5): for one trigger you debug. With `name`, scheduled routines that start a session turn match too (kind "routine", '
+    + 'their time in `at`): change their prompt with trigger_update. One that never fired may be a script that never says '
+    + 'fire. With task (team:true adds every open task under it): its triggers, its timed routines and its wake clocks; '
+    + 'team_stop with sessions:"keep" pauses all of them.',
   input: {
     task: z.string().optional().describe('Task id or unique prefix: list only the triggers, routines and clocks that would wake it'),
     team: z.boolean().optional().describe('With task: every open task under it too (default false)'),
@@ -363,25 +413,67 @@ defineOp({
     const hint = moreHint ?? emptyHint
     return { ...page, ...(hint ? { hint } : {}) }
   },
+  // The rows that fit, newest activity first; the rest are counted with the call that reads them.
+  answer: { kind: 'content', max: LIST_ANSWER_MAX, shape: ({ result }) => fittedList(result) },
   tags: { readonly: true, remote: 'allow' },
 })
+
+/** What trigger_test's answer keeps of each tail, from its end, and of the parsed object's items. */
+const STDOUT_TAIL = 2_000
+const STDERR_TAIL = 1_200
+const ITEMS_SHOWN = 20
+const INPUT_HEAD = 1_000
+const STATE_MAX = 600
+
+const tailOf = (v: unknown, max: number): unknown =>
+  typeof v === 'string' ? tailText(v, max) : v
+
+/** trigger_test's answer for an agent: the verdict whole, the tails and the parsed object short. */
+function testedRun(result: unknown): unknown {
+  const r = rec(result)
+  const run = rec(r.result)
+  if (!r.result) return result
+  const parsed = run.parsed && typeof run.parsed === 'object' ? rec(run.parsed) : null
+  const items = parsed && Array.isArray(parsed.items) ? parsed.items : []
+  const state = parsed && 'state' in parsed ? JSON.stringify(parsed.state) ?? 'null' : ''
+  const cut: string[] = []
+  if (typeof run.stdoutTail === 'string' && run.stdoutTail.length > STDOUT_TAIL) cut.push(`stdout to its last ${STDOUT_TAIL} characters`)
+  if (typeof run.stderrTail === 'string' && run.stderrTail.length > STDERR_TAIL) cut.push(`stderr to its last ${STDERR_TAIL} characters`)
+  if (items.length > ITEMS_SHOWN) cut.push(`items to the first ${ITEMS_SHOWN} of ${items.length}`)
+  if (typeof parsed?.input === 'string' && parsed.input.length > INPUT_HEAD) cut.push(`input to its first ${INPUT_HEAD} characters`)
+  if (state.length > STATE_MAX) cut.push(`state (${state.length} characters of JSON)`)
+  if (!cut.length) return result
+  return {
+    ...r,
+    result: {
+      ...run,
+      stdoutTail: tailOf(run.stdoutTail, STDOUT_TAIL),
+      stderrTail: tailOf(run.stderrTail, STDERR_TAIL),
+      ...(parsed ? {
+        parsed: {
+          ...parsed,
+          ...(items.length > ITEMS_SHOWN ? { items: items.slice(0, ITEMS_SHOWN), itemCount: items.length } : {}),
+          ...(typeof parsed.input === 'string' && parsed.input.length > INPUT_HEAD ? { input: clipText(parsed.input, INPUT_HEAD) } : {}),
+          ...(state.length > STATE_MAX ? { state: `(${state.length} characters of JSON)` } : {}),
+        },
+      } : {}),
+    },
+    shortened: `Shortened for this answer, nothing failed: ${cut.join('; ')}. Repeat the same trigger_test with "_full": true for all of it.`,
+  }
+}
 
 defineOp({
   name: 'trigger_test',
   title: 'Test a trigger check script',
   description:
-    'Run a check ONCE on its host and report exactly what the daemon saw: exit code, stdout/stderr tails, '
-    + 'the parsed object, whether it WOULD fire, how many items are new, and how long it ran against its time '
-    + 'limit (`timeLimit`; over half of it is a warning: the daemon kills a check at its limit, so a script '
-    + 'whose call timeouts times its retries exceed it is killed before its retry runs). It waits as long as the '
-    + 'check may run. A link to the host that drops while the test runs is retried once; a second drop answers '
-    + '"transport failure", which is the link, not the script. A run longer than this call can wait answers '
-    + '"still running" with a testId: call trigger_test {testId} for its result. Reads and writes no state, so '
-    + 'it is safe to run repeatedly. Always do this before trigger_create and keep fixing until '
-    + '`parsed` is non-null: `error` names the contract violation (not JSON on the last line, "fire" '
-    + 'missing, an item with no id). wouldFire:false with parsed set is a WORKING script that simply has '
-    + 'nothing to report right now, except when newItemCount > 0 for an existing trigger id: then its fire '
-    + 'budget is holding the fire (trigger_list shows reason "rate-limited") and it fires on a later check. '
+    'Run a check ONCE on its host and report what the daemon saw: exit code, stdout/stderr tails, the parsed object, '
+    + 'whether it WOULD fire, how many items are new, and how long it ran against its time limit (`timeLimit`; over half of '
+    + 'it is a warning: the daemon kills a check at its limit, so call timeouts times retries must fit inside it). Reads and '
+    + 'writes no state, so run it as often as needed: always before trigger_create, until `parsed` is non-null (`error` names '
+    + 'the contract violation). wouldFire:false with parsed set is a WORKING script with nothing to report now, except when '
+    + 'newItemCount > 0 for an existing trigger id: its fire budget holds the fire (trigger_list shows reason "rate-limited"). '
+    + 'A run longer than this call can wait answers "still running" with a testId: trigger_test {testId} reads it. '
+    + '"transport failure" is the link to the host dropping twice, not the script. '
     + CHECK_CONTRACT,
   input: {
     run: z.string().min(1).optional().describe('The shell command to run once. Required unless testId is given'),
@@ -461,6 +553,9 @@ defineOp({
             : 'Arm it with trigger_create (same run/cwd/host), then tell the user what is watched and how often.',
     )
   },
+  // Content, not a receipt: the answer is the run it made. Long tails keep their END (the last
+  // stdout line is the JSON the daemon parsed); a long item list keeps its head and its count.
+  answer: { kind: 'content', max: 8_000, shape: ({ result }) => testedRun(result) },
   tags: { readonly: false, remote: 'allow', destructive: false },
 })
 

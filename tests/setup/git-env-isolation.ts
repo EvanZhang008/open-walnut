@@ -106,3 +106,8 @@ if (removed.length > 0) {
     + 'without this, every test git call would have targeted that repo instead of its temp dir.',
   );
 }
+
+// A test run started from an agent session's shell inherits that session's id, and the CLI
+// answers a session's call in its short agent form (src/ops/answer.ts). A test that wants
+// that form sets the id itself.
+delete process.env.WALNUT_SESSION_ID;

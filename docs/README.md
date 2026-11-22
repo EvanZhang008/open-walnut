@@ -88,6 +88,8 @@ must live under one of these top-level categories instead of directly under
   compaction readback, lost op answers, unreachable hosts, task directories and notices.
 - [Machine guards](reference/agent-guards.md): no pattern kills, no content on command lines,
   no sound and no foreground input from agent sessions.
+- [host_exec: the full rules](reference/host-exec.md): every rule of running a command on another
+  host (strict, keep, dialogs, waits, patterns), and how much output an agent reads back.
 - [The session daemon](reference/session-daemon.md): host-local work in the daemon, the
   resilience model, CLI ownership, daemon updates, and directory-scoped CLI crons.
 - [Logs and debugging](reference/logs-and-debugging.md): where logs land, the log toolkit, the
@@ -99,6 +101,7 @@ must live under one of these top-level categories instead of directly under
 - [Passwords](reference/passwords.md): Walnut's own password vault, its keys and recovery code, the Walnut browser extension for Chrome and Firefox, and how agents ask for a credential.
 - [Agents in your browser](reference/browser-control.md): the extension lets Walnut agents open, read and act in tabs of their own in your signed-in browser, on sites you approve; Walnut in the side panel, asking about the page you are on and acting in a tab you hand it; `walnut browser` and the `browser` op.
 - [Approvals](reference/approvals.md): `walnut approve "<what>"` in any script stops it until you say yes with one tap on any device you are signed in on; exit codes, the rules and the API.
+- [Walnut tools: groups and what each session lists](reference/walnut-tools.md): every op in one group (`walnut tools list --group`, `tool_help`), and the per-role tool listing of the experiment `mcp_tools_by_role`.
 - [Message hints](reference/message-hints.md): the one registry for Walnut text sent with messages to a session's model (question number, rich output, voice reply, the org notes, custom hints), its `<system-reminder>` format, triggers, audience, and how people and agents change it.
 - [Plugin development](reference/plugin-development.md): the authoritative plugin guide. One-command authoring, the full-trust model and its real security boundaries, the manifest, server and native web entries, the `walnut.ui.app` atom with its host-derived route, deep links and badge, the shared App Registry, storage and secrets, lifecycle, publish-check, and troubleshooting. The runnable companion is [examples/plugins/walnut-demo](../examples/plugins/walnut-demo), the Walnut Plugin Demo.
 - [Workspace providers](reference/workspace-providers.md): per-task isolated workspaces. The built-in git worktree provider, how cleanup decides, and the stdin/stdout protocol a plugin provider speaks (a monorepo tool whose workspace holds several repositories, for example).

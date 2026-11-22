@@ -99,6 +99,21 @@ export interface ToolRow {
   signature?: string
   /** Full parameter rows — only sent for a single-op `tools help` request. */
   params?: OpParam[]
+  /** The op's group (src/ops/op-groups.ts); an older hub sends none. */
+  group?: string
+}
+
+/** A catalog section as the hub names it: a group id and what its tools are for. */
+export interface ToolGroupRow { id: string; title?: string }
+
+/**
+ * Whether `wanted` (what follows `--group`, or tool_help's `group`) names `group`: the id
+ * itself, or `plugin` for every plugin's group (`plugin:<id>`).
+ */
+export function inGroup(group: string | undefined, wanted: string): boolean {
+  const w = wanted.trim().toLowerCase()
+  const g = (group ?? '').toLowerCase()
+  return !!g && (g === w || (w === 'plugin' && g.startsWith('plugin:')))
 }
 
 /** `read`/`write` + `local-only`, the access labels the catalog shows. */
@@ -124,22 +139,43 @@ export const SKILL_POINTER =
  * The operations catalog: one line per op, plus an indented `args:` line
  * carrying its parameter signature. The signature is what stops an agent from
  * guessing argument names, so it is never truncated — long ones wrap.
+ *
+ * Rows that carry a group are shown by group, in the order of `groups` (the hub's
+ * sections, with what each is for), any other group after them in the order its rows
+ * came. Rows with no group at all (an older hub) are one flat list, as before.
  */
-export function formatToolsTable(ops: ToolRow[]): string {
+export function formatToolsTable(ops: ToolRow[], groups: readonly ToolGroupRow[] = []): string {
   if (ops.length === 0) return '(no operations)'
   const width = Math.max(...ops.map((o) => o.name.length))
+  const rowLines = (o: ToolRow): string[] => {
+    const out = [`  ${o.name.padEnd(width)}  ${o.title ?? ''} (${accessLabel(o)})`]
+    if (o.signature) out.push(...wrapSignature(`args: ${o.signature}`, CATALOG_WIDTH, ' '.repeat(width + 4)))
+    return out
+  }
   const lines: string[] = []
-  for (const o of ops) {
-    lines.push(`  ${o.name.padEnd(width)}  ${o.title ?? ''} (${accessLabel(o)})`)
-    if (o.signature) {
-      const indent = ' '.repeat(width + 4)
-      const wrapped = wrapSignature(`args: ${o.signature}`, CATALOG_WIDTH, indent)
-      lines.push(...wrapped)
+  let head = 'Available operations:'
+  if (ops.some((o) => o.group)) {
+    head = 'Available operations, by group (`walnut tools list --group <group>` shows one group):'
+    const sections = new Map<string, ToolRow[]>()
+    for (const g of groups) sections.set(g.id, [])
+    for (const o of ops) {
+      const id = o.group ?? 'other'
+      if (!sections.has(id)) sections.set(id, [])
+      sections.get(id)!.push(o)
     }
+    const titleOf = new Map(groups.map((g) => [g.id, g.title]))
+    for (const [id, rows] of sections) {
+      if (rows.length === 0) continue
+      const title = titleOf.get(id)
+      lines.push('', `${id} (${rows.length})${title ? `: ${title}` : ''}`)
+      for (const o of rows) lines.push(...rowLines(o))
+    }
+  } else {
+    lines.push('')
+    for (const o of ops) lines.push(...rowLines(o))
   }
   return [
-    'Available operations:',
-    '',
+    head,
     ...lines,
     '',
     'Run `walnut tools help <op>`, then `walnut tools call <op> \'{json}\'`.',

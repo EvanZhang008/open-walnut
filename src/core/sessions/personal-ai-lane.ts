@@ -31,7 +31,7 @@ import { getSessionByLane, createSessionRecord } from '../session-tracker.js';
 // One source of truth for the seed's header: the store renders the block, this
 // module splices it into the spawn prompt and has to find it again on a repair.
 import { CONVERSATION_SEED_HEADER, clipRenderedSeed } from '../chat-history.js';
-import { GLOBAL_MEMORY_HEADING, TASK_ROUTING_OPENING, personaBuiltBesideSessionContext, personaLeftRoutingOut, personalAiPersona, consoleAgentPersona, mergeProfiles, walnutMcpProfile } from './profiles.js';
+import { GLOBAL_MEMORY_HEADING, TASK_ROUTING_OPENING, personaBuiltBesideSessionContext, personaLeftRoutingOut, personalAiPersona, consoleAgentPersona, mergeProfiles, personalAiMcpProfile } from './profiles.js';
 import { promptRollback } from './prompt-blocks.js';
 
 const LANE_EFFORTS: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
@@ -480,7 +480,7 @@ export async function buildLaneProfile(
   const { isFollower } = await import('../server-role.js');
   const uncapped = !!opts?.uncapped || isFollower();
   if (persona) {
-    profile = mergeProfiles({ systemPrompt: persona.systemPrompt, systemPromptMode: persona.systemPromptMode }, walnutMcpProfile())!;
+    profile = mergeProfiles({ systemPrompt: persona.systemPrompt, systemPromptMode: persona.systemPromptMode }, personalAiMcpProfile())!;
   } else {
     let built;
     if (agentId === 'general') {
@@ -497,7 +497,7 @@ export async function buildLaneProfile(
     // the shared memory folder, which every node's agent_memory_read falls back to.
     const { writeOverflows } = await import('./memory-folder.js');
     await writeOverflows(null, 'persona', built.overflows);
-    profile = mergeProfiles({ systemPrompt: built.systemPrompt, systemPromptMode: 'append' }, walnutMcpProfile())!;
+    profile = mergeProfiles({ systemPrompt: built.systemPrompt, systemPromptMode: 'append' }, personalAiMcpProfile())!;
   }
   // Chat latency matters more than reasoning depth here. Without an explicit
   // effort the CLI inherits the user's global settings.json effortLevel (often

@@ -6,6 +6,29 @@ import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { withOutcome } from './outcome.js'
 import { ROUND_WAKES } from '../core/topics/topics-model.js'
+import { PAGE_BUDGET, cut, fitPage, line, nextPageCall, objOf, pageOf, pageWords, pick, receiptBase } from './org-answer-shapes.js'
+
+/** Topics an agent's topic_list shows, and messages its topic_read shows, when the call names no limit. */
+const TOPIC_LIST_PAGE = 20
+const TOPIC_READ_MESSAGES = 20
+const TOPIC_TEXT_SHOWN = 600
+
+/** A member in one short string: id, @name, kind, and its status when not active. */
+function memberLine(m: unknown): string {
+  const x = objOf(m)
+  const kind = String(objOf(x.ref).kind ?? '')
+  return `${String(x.id)} @${line(x.name, 40)}${kind ? ` ${kind}` : ''}${x.role === 'host' ? ' host' : ''}${x.status && x.status !== 'active' ? ` ${String(x.status)}` : ''}`
+}
+
+/** A topic in a few fields, for a list row or a write's receipt. */
+function topicHead(t: unknown): Record<string, unknown> {
+  const x = objOf(t)
+  const members = Array.isArray(x.members) ? x.members : []
+  return {
+    ...pick(x, ['id', 'host', 'updatedAt']), title: line(x.title, 120), ...(x.closed ? { closed: true } : {}),
+    members: members.map(memberLine),
+  }
+}
 
 const TOPICS_SCOPE = 'A topic is a group chat the user starts with tasks (yours among them), Main, a VP or people outside Walnut reached by mail. '
   + 'When you are woken in a topic, your reply in that turn is posted to it as you by itself: you need no op to answer. '
@@ -46,15 +69,52 @@ function deliveryWords(topic: TopicView | undefined, d: Delivery | undefined): s
   return parts.join('; ')
 }
 
+/** A topic write's receipt: the topic in a few fields and the message it posted, never the conversation. */
+function topicReceipt(result: unknown): Record<string, unknown> {
+  const r = objOf(result)
+  return {
+    ...receiptBase(r),
+    ...(r.topic ? { topic: topicHead(r.topic) } : {}),
+    ...(r.message ? { message: pick(r.message, ['id', 'at']) } : {}),
+    ...(r.delivery ? { delivery: pick(r.delivery, ['wake', 'fold', 'mail', 'mailNow', 'refused']) } : {}),
+  }
+}
+
 defineOp({
   name: 'topic_list',
   title: 'List topics',
-  description: `${TOPICS_SCOPE} Lists every topic, newest change first: its id, title, members (id, @name, kind, status), host and last message.`,
-  input: {},
+  description: `${TOPICS_SCOPE} Lists the topics, newest change first, ${TOPIC_LIST_PAGE} at a time: its id, title, members (id, @name, kind, status), host and one line of the last message.`,
+  input: {
+    open: z.boolean().optional().describe('Only the open ones'),
+    offset: z.number().int().min(0).optional().describe('Skip this many (the next page)'),
+    limit: z.number().int().min(1).max(100).optional().describe(`At most this many (default ${TOPIC_LIST_PAGE})`),
+  },
   handler: async (_args, call) => {
     const body = await call('GET', '/api/topics') as { topics: Array<TopicView & { closed?: unknown }> }
     const open = body.topics.filter((t) => !t.closed).length
     return withOutcome(body, `${body.topics.length} topic(s), ${open} open.`, 'No further action is required.')
+  },
+  answer: {
+    kind: 'content', whole: 'topic_read {"id":"<id>"}',
+    shape: ({ result, args }) => {
+      const r = objOf(result)
+      const all = (Array.isArray(r.topics) ? r.topics : []).filter((t) => !args.open || !objOf(t).closed)
+      const { rows, page: window } = pageOf(all, args, TOPIC_LIST_PAGE)
+      const topics = rows.map((t) => {
+        const last = objOf(objOf(t).last)
+        return { ...topicHead(t), ...(last.at ? { last: { author: last.author, at: last.at, text: line(last.text, 120) } } : {}) }
+      })
+      return fitPage(topics, window.offset, window.total, (shown, page) => {
+        const more = nextPageCall('topic_list', args, page)
+        return {
+          ...receiptBase(r),
+          topics: shown,
+          page,
+          outcome: `${String(r.outcome ?? '')} Showing ${pageWords(page, 'topics')}.`.trim(),
+          next: `${more ? `Next page: ${more}. ` : ''}Read one with topic_read {"id":"<id>"}.`,
+        }
+      })
+    },
   },
   tags: { readonly: true, remote: 'allow' },
 })
@@ -62,14 +122,52 @@ defineOp({
 defineOp({
   name: 'topic_read',
   title: 'Read a topic',
-  description: `${TOPICS_SCOPE} Reads one topic whole: members, round (wakes used), and its messages (each with who it woke, who reads it next time and who was mailed); since: only the messages after that message id.`,
+  description: `${TOPICS_SCOPE} Reads one topic: members, round (wakes used), and its newest messages (${TOPIC_READ_MESSAGES} by default, each cut to ${TOPIC_TEXT_SHOWN} characters, with who it woke, who reads it next time and who was mailed); since: only the messages after that message id; limit: the newest this many.`,
   input: {
     id: TOPIC_ID,
     since: z.string().regex(/^tpm-[a-f0-9]{12}$/).optional().describe('Only the messages after this one (tpm-...)'),
+    limit: z.number().int().min(1).max(500).optional().describe(`The newest this many messages (default ${TOPIC_READ_MESSAGES})`),
   },
   handler: async (args, call) => {
     const body = await call('GET', `/api/topics/${encodeURIComponent(String(args.id))}${args.since ? `?since=${encodeURIComponent(String(args.since))}` : ''}`) as { topic: TopicView }
     return withOutcome(body, `Topic ${body.topic.id} "${body.topic.title}": ${body.topic.members?.length ?? 0} members, ${body.topic.messages?.length ?? 0} message(s) shown${body.topic.closed ? ', closed' : ''}.`, 'No further action is required.')
+  },
+  answer: {
+    kind: 'content', whole: 'topic_read {"id":"<id>","since":"<tpm-id>"}',
+    shape: ({ result, args }) => {
+      const r = objOf(result)
+      const t = objOf(r.topic)
+      const messages = Array.isArray(t.messages) ? t.messages : []
+      const build = (limit: number, max: number) => {
+        const shown = messages.slice(-limit)
+        const earlier = messages.length - shown.length
+        return {
+          ...receiptBase(r),
+          topic: {
+            ...topicHead(t), ...pick(t, ['round', 'mail', 'thread']),
+            messages: shown.map((m) => {
+              const x = objOf(m)
+              const text = typeof x.text === 'string' ? x.text : ''
+              return {
+                ...pick(x, ['id', 'at', 'author', 'via', 'woke', 'folded', 'mailed', 'refused']),
+                text: cut(text, max), ...(text.length > max ? { chars: text.length } : {}),
+              }
+            }),
+            ...(earlier ? { earlier_messages: earlier } : {}),
+          },
+          next: earlier
+            ? `${earlier} earlier message(s): topic_read {"id":"${String(t.id)}","limit":${Math.min(500, messages.length)}}; uncut: the same call with "_full": true.`
+            : 'No further action is required.',
+        }
+      }
+      // Shorter texts first, then fewer of the newest messages, until the answer fits.
+      const fits = (v: unknown) => JSON.stringify(v).length <= PAGE_BUDGET
+      let limit = typeof args.limit === 'number' ? args.limit : TOPIC_READ_MESSAGES
+      let out = build(limit, TOPIC_TEXT_SHOWN)
+      for (const max of [300, 150]) { if (fits(out)) return out; out = build(limit, max) }
+      while (limit > 1 && !fits(out)) { limit = limit > 10 ? Math.floor(limit * 0.8) : limit - 1; out = build(limit, 150) }
+      return out
+    },
   },
   tags: { readonly: true, remote: 'allow' },
 })
@@ -91,6 +189,7 @@ defineOp({
     const body = await call('POST', '/api/topics', args) as { topic: TopicView; delivery?: Delivery }
     return withOutcome(body, `Started topic ${body.topic.id} "${body.topic.title}" with ${names(body.topic, (body.topic.members ?? []).map((m) => m.id))}.${body.delivery ? ` First message: ${deliveryWords(body.topic, body.delivery)}.` : ''}`, 'Replies are posted to the topic; read them with topic_read.')
   },
+  answer: { kind: 'receipt', whole: 'topic_read {"id":"<id>"}', shape: ({ result }) => topicReceipt(result) },
   tags: { readonly: false, remote: 'allow' },
 })
 
@@ -109,6 +208,7 @@ defineOp({
     const body = await call('POST', `/api/topics/${encodeURIComponent(String(id))}/messages`, rest) as { message: { id: string }; delivery: Delivery }
     return withOutcome(body, `Posted ${body.message.id}: ${deliveryWords(undefined, body.delivery)}.`, 'Replies come back to the topic; read them with topic_read.')
   },
+  answer: { kind: 'receipt', whole: 'topic_read {"id":"<id>"}', shape: ({ result }) => topicReceipt(result) },
   tags: { readonly: false, remote: 'allow' },
 })
 
@@ -130,6 +230,7 @@ defineOp({
     const pending = members.filter((m) => m.status === 'pending')
     return withOutcome(body, `Topic ${body.topic.id} has ${members.filter((m) => m.status === 'active').length} active member(s)${pending.length ? `; waiting for the user's yes: ${pending.map((m) => m.name).join(', ')}` : ''}.`, 'No further action is required.')
   },
+  answer: { kind: 'receipt', whole: 'topic_read {"id":"<id>"}', shape: ({ result }) => topicReceipt(result) },
   tags: { readonly: false, remote: 'allow' },
 })
 
@@ -142,6 +243,7 @@ defineOp({
     const body = await call('POST', `/api/topics/${encodeURIComponent(String(args.id))}/close`, { ...(args.clientId ? { clientId: args.clientId } : {}) }) as { topic: TopicView; delivery: Delivery }
     return withOutcome(body, `Closed topic ${body.topic.id} "${body.topic.title}": ${deliveryWords(body.topic, body.delivery)}.`, 'No further action is required.')
   },
+  answer: { kind: 'receipt', whole: 'topic_read {"id":"<id>"}', shape: ({ result }) => topicReceipt(result) },
   tags: { readonly: false, remote: 'allow' },
 })
 
@@ -161,5 +263,6 @@ defineOp({
     const mail = body.topic.mail
     return withOutcome(body, mail?.accountId ? `Topic ${body.topic.id} emails from account ${mail.accountId}, every ${mail.everyMinutes} min at most.` : `Topic ${body.topic.id} has no mailbox: nothing is emailed.`, 'No further action is required.')
   },
+  answer: { kind: 'receipt', whole: 'topic_read {"id":"<id>"}', shape: ({ result }) => topicReceipt(result) },
   tags: { readonly: false, remote: 'allow' },
 })

@@ -16,8 +16,10 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
-import { getOp, listOps, opNames, executeOp, resolveApiBase } from '../ops/index.js'
+import { getOp, getOpOwner, listOps, opNames, executeOp, resolveApiBase } from '../ops/index.js'
 import { opInputJsonSchema } from '../ops/registry.js'
+import { groupOfOp, listedForRole, summarizeGroups, type ListingRole } from '../ops/op-groups.js'
+import { inGroup } from '../ops/op-help.js'
 import { LOCAL_ORIGIN } from '../lib/caller-origin.js'
 import { callIdFor, lostCallLines } from '../lib/op-call-id.js'
 import { fitToolAnswer } from '../lib/tool-answer-fit.js'
@@ -36,7 +38,7 @@ export const WRITE_TOOL_NAMES: readonly string[] = opNames({ readonly: false })
 /** JSON text content — the one result shape every tool returns on success. */
 function ok(payload: unknown, op = 'tool'): CallToolResult {
   // Never more than an agent's tool result takes, whatever the op (tool-answer-fit.ts).
-  return { content: [{ type: 'text', text: fitToolAnswer(payload, { op, pretty: true }) }] }
+  return { content: [{ type: 'text', text: fitToolAnswer(payload, { op }) }] }
 }
 
 /** MCP tool error (isError) carrying a human-readable message. */
@@ -67,16 +69,24 @@ function registerOpGateway(server: McpServer, base: string, readonly: boolean): 
     const op = getOp(name) ?? (name.startsWith('walnut_') ? getOp(name.slice('walnut_'.length)) : undefined)
     return op && listOps({ includeDeprecated: true }).some((o) => o.name === op.name) && (!readonly || op.tags.readonly) ? op : undefined
   }
-  const help = async (args: { name?: unknown; filter?: unknown }): Promise<CallToolResult> => {
+  const help = async (args: { name?: unknown; filter?: unknown; group?: unknown }): Promise<CallToolResult> => {
     if (typeof args.name === 'string' && args.name) {
       const op = allowed(args.name)
       if (!op) return fail(`No Walnut tool named ${args.name}. Call tool_help with no name for the list.`)
       return ok({ name: op.name, title: op.title, description: op.description, arguments: opInputJsonSchema(op) })
     }
-    const word = typeof args.filter === 'string' ? args.filter.toLowerCase() : undefined
-    const rows = listOps().filter((op) => (!readonly || op.tags.readonly)
-      && (!word || op.name.includes(word) || op.title.toLowerCase().includes(word)))
-    return { content: [{ type: 'text', text: rows.map((op) => `${op.name}: ${op.title}`).join('\n') || 'No tool matches.' }] }
+    const word = typeof args.filter === 'string' && args.filter.trim() ? args.filter.trim().toLowerCase() : undefined
+    const group = typeof args.group === 'string' && args.group.trim() ? args.group : undefined
+    const rows = listOps().filter((op) => !readonly || op.tags.readonly).map((op) => ({ op, group: groupOfOp(op.name, getOpOwner(op.name)) }))
+    // No word and no group: every tool name, one line per group (names only, so the answer stays small).
+    if (!word && !group) {
+      const lines = summarizeGroups(rows).map((g) => `${g.id}: ${rows.filter((r) => r.group === g.id).map((r) => r.op.name).join(', ')}`)
+      return { content: [{ type: 'text', text: ['Walnut tools by group. tool_help group=<group> adds their titles; name=<tool> shows one tool\'s arguments.', ...lines].join('\n') }] }
+    }
+    const shown = rows.filter((r) => (!group || inGroup(r.group, group))
+      && (!word || r.op.name.includes(word) || r.op.title.toLowerCase().includes(word)))
+    if (shown.length === 0) return { content: [{ type: 'text', text: group && !rows.some((r) => inGroup(r.group, group)) ? `No group named ${group}. Call tool_help with no arguments for the groups.` : 'No tool matches.' }] }
+    return { content: [{ type: 'text', text: shown.map((r) => `${r.op.name}: ${r.op.title}`).join('\n') }] }
   }
   const call = async (args: { name?: unknown; args?: unknown }): Promise<CallToolResult> => {
     const op = typeof args.name === 'string' ? allowed(args.name) : undefined
@@ -93,9 +103,13 @@ function registerOpGateway(server: McpServer, base: string, readonly: boolean): 
   server.registerTool('tool_help', {
     title: 'List Walnut tools, or show one tool\'s arguments',
     description: 'Walnut has more tools than the ones listed here (boards, triggers, notes, folders, hosts, time, health and more). '
-      + 'With no name: every tool name with its title (filter narrows by a word). With name: that tool\'s full description and '
-      + 'its argument schema. Then run it with tool_call.',
-    inputSchema: { name: z.string().optional().describe('A tool name, e.g. "board_post"'), filter: z.string().optional().describe('A word to narrow the list, e.g. "board"') },
+      + 'With no arguments: every tool name, by group. With group: that group\'s tools with their titles (filter narrows by a '
+      + 'word, with or without a group). With name: that tool\'s full description and its argument schema. Then run it with tool_call.',
+    inputSchema: {
+      name: z.string().optional().describe('A tool name, e.g. "board_post"'),
+      group: z.string().optional().describe('A group from the no-argument answer, e.g. "board"'),
+      filter: z.string().optional().describe('A word to narrow the list, e.g. "board"'),
+    },
     annotations: { readOnlyHint: true },
   }, help)
   server.registerTool('tool_call', {
@@ -116,7 +130,7 @@ async function runWithCallId(name: string, given: Record<string, unknown>, base:
   const args = { ...given }
   const { callId, bad } = callIdFor(args)
   if (bad) return fail(bad)
-  const r = await executeOp(name, args, { apiBase: base, origin: LOCAL_ORIGIN, callId, callerSid: process.env.WALNUT_SESSION_ID?.trim() })
+  const r = await executeOp(name, args, { apiBase: base, origin: LOCAL_ORIGIN, callId, callerSid: process.env.WALNUT_SESSION_ID?.trim(), forAgent: true })
   if (r.ok) return ok(r.result, name)
   if (r.result !== undefined) return { ...ok(r.result, name), isError: true }
   return fail(r.lost || r.unreachable ? [r.message, ...lostCallLines(name, args, callId)].join('\n') : r.message)
@@ -126,16 +140,21 @@ async function runWithCallId(name: string, given: Record<string, unknown>, base:
  * Register Walnut's registry ops on an McpServer. `readonly` restricts the
  * surface to readonly-tagged ops (nothing that mutates the user's data is even
  * advertised, so a read-only consumer cannot be talked into a write).
+ *
+ * `role` (experiment mcp_tools_by_role, src/ops/op-groups.ts) lists only that role's groups;
+ * `core` wins over it. Listing only: the CallTool handler below runs every op by name.
  */
 export function registerWalnutTools(
   server: McpServer,
-  options: { readonly?: boolean; apiBase?: string; core?: boolean } = {},
+  options: { readonly?: boolean; apiBase?: string; core?: boolean; role?: ListingRole } = {},
 ): void {
   const base = resolveApiBase(options.apiBase)
+  const role = options.core ? undefined : options.role
 
   for (const op of listOps()) {
     if (options.readonly && !op.tags.readonly) continue
     if (options.core && !CORE_TOOL_NAMES.includes(op.name)) continue
+    if (role && !listedForRole(role, op.name, getOpOwner(op.name))) continue
     server.registerTool(op.name, {
       title: op.title,
       description: op.description,

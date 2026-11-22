@@ -23,7 +23,9 @@ import type { OpCall } from './core.js';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
-import { BOARD_GET_BUDGET, BOARD_PART_NAMES, defaultView, selectParts, type BoardPart } from './board-get-view.js';
+import { BOARD_GET_BUDGET, BOARD_PART_NAMES, boardGetAnswer, boardWriteReceipt, defaultView, selectParts, type BoardPart } from './board-get-view.js';
+import { objOf, pick, receiptBase } from './org-answer-shapes.js';
+import { holdsPageMark } from './doc-page.js';
 import { LIST_MAX } from '../lib/zod-rules.js'
 
 interface CallerMe {
@@ -200,6 +202,7 @@ defineOp({
     parts: PARTS_ARG,
     thread: z.string().min(1).max(128).optional().describe('Only this thread\'s messages (a <walnut-thread id>)'),
     since: z.string().optional().describe('Only thread messages after this ISO time'),
+    html_from: z.number().int().min(0).optional().describe('With parts ["html"]: the html from this character on (a page too long for one answer comes in parts; html_window names the next)'),
   },
   handler: async (args, call) => {
     const target = await resolveBoardTask(args, call);
@@ -248,6 +251,7 @@ defineOp({
     }
     return withOutcome(result, outcome, next);
   },
+  answer: { kind: 'content', shape: ({ result, args }) => boardGetAnswer(result, args, (full) => dueReminders(full as unknown as BoardBody, Date.now())) },
   tags: { readonly: true, remote: 'allow' },
 });
 
@@ -267,6 +271,13 @@ defineOp({
     same_ask_reason: z.string().optional().describe('Only for a new <walnut-choice> Walnut refused as already asked (409 same_ask): one line saying why it is a different decision'),
   },
   handler: async (args, call) => {
+    // A board_get window ends with the part-of-a-longer-document line: written whole, it would
+    // replace the page with that part (board-get-view.ts htmlWindow). Refused for every caller.
+    if (holdsPageMark(args.html)) {
+      throw new Error('board_set refused: this html is one part of the page (a board_get window; it ends with "[Walnut: this is part of a longer document"). '
+        + 'Writing it would replace the whole board with that part. Change the page with board_edit, quoting exact text from the part, '
+        + 'or read the whole page first: board_get {"parts":["html"],"_full":true}.');
+    }
     const target = await resolveBoardTask(args, call);
     const body = await call('PUT', boardPath(target.taskId), {
       html: args.html,
@@ -279,6 +290,7 @@ defineOp({
       EDIT_NEXT,
     );
   },
+  answer: { kind: 'receipt', whole: 'board_get {"parts":["html"]}', shape: ({ result }) => boardWriteReceipt(result) },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
@@ -313,6 +325,7 @@ defineOp({
       EDIT_NEXT,
     );
   },
+  answer: { kind: 'receipt', whole: 'board_get {"parts":["html"]}', shape: ({ result }) => boardWriteReceipt(result) },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
@@ -341,6 +354,13 @@ defineOp({
       `Posted ${id ? `${id} ` : ''}in thread "${String(args.thread)}" of ${boardOfPossessive(target)}.`,
       'If the answer changed a status or a decision, update that section with board_edit too.',
     );
+  },
+  answer: {
+    kind: 'receipt',
+    shape: ({ result }) => {
+      const r = objOf(result);
+      return { ...receiptBase(r), ...(r.message ? { message: pick(r.message, ['id', 'ts', 'author']) } : {}), ...(r.delivery ? { delivery: pick(r.delivery, ['state', 'to', 'reason']) } : {}) };
+    },
   },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
@@ -375,6 +395,7 @@ defineOp({
       'Nothing else is needed; post a corrected answer with board_post if one is due.',
     );
   },
+  answer: { kind: 'receipt', shape: ({ result }) => ({ ...receiptBase(result), ...(objOf(result).message ? { message: pick(objOf(result).message, ['id', 'ts', 'author']) } : {}) }) },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
@@ -435,6 +456,18 @@ defineOp({
         : 'Remove its section from the html with board_edit if it is still there.',
     );
   },
+  answer: {
+    kind: 'receipt',
+    shape: ({ result }) => {
+      const r = objOf(result);
+      const p = objOf(r.project);
+      return {
+        ...receiptBase(r),
+        project: r.project ? { ...pick(p, ['title', 'status', 'status_by']), tasks: Array.isArray(p.tasks) ? p.tasks.length : 0 } : null,
+        ...(r.delivery ? { delivery: pick(r.delivery, ['state', 'to', 'reason']) } : {}),
+      };
+    },
+  },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
@@ -474,5 +507,6 @@ defineOp({
         : 'Nothing else is needed.',
     );
   },
+  answer: { kind: 'receipt', shape: ({ result }) => ({ ...receiptBase(result), reminder: objOf(result).reminder ? pick(objOf(result).reminder, ['at', 'by']) : null }) },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });

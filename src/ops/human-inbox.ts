@@ -33,6 +33,7 @@ import { USER_KINDS, USER_KIND_ABOUT_PARAM, USER_KIND_PARAM, USER_KIND_WHY_PARAM
 import { awayAnswer, withOutcome } from './outcome.js'
 import { PROOF_IN_PLACE_RULE, WORD_TO_USER_RULE } from '../core/org/thread-rules.js'
 import { LIST_MAX } from '../lib/zod-rules.js'
+import { fitPage, line, nextPageCall, objOf, pick, receiptBase } from './org-answer-shapes.js'
 
 /** The sender's open decision letter asking the same thing, from the send's answer (duplicate-letter.ts). */
 function openAskOf(body: unknown): { letterId: string; subject: string; sentAt: string; hint: string } | undefined {
@@ -203,6 +204,22 @@ defineOp({
     items: inboxItemsSchema.optional().describe('New independent email items for this reply only. Item and action ids must be unique across the whole letter and thread.'),
   },
   bind: { method: 'POST', path: '/human-inbox/:letter/reply' },
+  answer: {
+    kind: 'receipt', whole: 'human_inbox_get {"id":"<id>"}',
+    shape: ({ result, args }) => {
+      // Only the letter the reply landed in is summed up; any other answer (held for the leader) passes as it is.
+      if (!objOf(result).letter) return result
+      const l = objOf(objOf(result).letter)
+      const turns = Array.isArray(l.thread) ? l.thread.length : undefined
+      // The server's own outcome and next, when it gives them, are what happened: kept.
+      return {
+        outcome: `Replied in ${String(l.id ?? args.letter)}${turns !== undefined ? ` (turn ${turns})` : ''}; it is unread for the user again.`,
+        next: 'His answer arrives as a message in this session.',
+        ...receiptBase(result),
+        letter: { ...pick(l, ['id', 'subject', 'read']), ...(turns !== undefined ? { turns } : {}) },
+      }
+    },
+  },
   tags: { readonly: false, remote: 'allow' },
 })
 
@@ -271,32 +288,69 @@ function envelope(l: LetterRow) {
   }
 }
 
+/** A list row an agent reads: the envelope in short (one line each), no options' text. */
+function compactEnvelope(row: unknown) {
+  const e = objOf(row)
+  const from = objOf(e.from)
+  const actions = Array.isArray(e.actions) ? e.actions.length : 0
+  return {
+    id: e.id, subject: line(e.subject, 120), type: e.type,
+    ...(from.task || from.taskId || from.plugin ? { from: from.task ? `${line(from.task, 60)}${from.taskId ? ` (${String(from.taskId)})` : ''}` : from.plugin ?? from.taskId } : {}),
+    at: e.at, read: e.read,
+    ...(e.pinned ? { pinned: true } : {}), ...(e.archived ? { archived: true } : {}),
+    ...(actions ? { actions } : {}),
+    ...(e.answered ? { answered: typeof e.answered === 'object' ? pick(e.answered, ['actionId', 'label', 'at', 'by']) : true } : {}),
+    ...(e.settled ? { settled: true } : {}),
+    turns: e.turns,
+    ...(e.preview ? { preview: line(e.preview, 120) } : {}),
+  }
+}
+
+/** Rows of human_inbox_list an agent reads when the call names no limit. */
+const INBOX_LIST_PAGE = 20
+
 defineOp({
   name: 'human_inbox_list',
   title: 'List the letters in the user\'s inbox',
   description:
     'The letters in your user\'s inbox, newest first, as the inbox lists them (subject, type, sender, '
-    + 'read, pinned, answered; no documents). `task_id` keeps the letters that task sent or that name it. '
+    + 'read, pinned, answered; no documents), one line each, 20 at a time (offset for the next). `task_id` keeps the letters that task sent or that name it. '
     + 'Read one with human_inbox_get.',
   input: {
     task_id: z.string().optional().describe('Only letters this task sent, or that name it in their task pills'),
     archived: z.boolean().optional().describe('The archive instead of the inbox'),
     unread: z.boolean().optional().describe('Only letters the user has not read'),
-    limit: z.number().int().min(1).max(200).optional().describe('At most this many (default 30)'),
+    limit: z.number().int().min(1).max(200).optional().describe('At most this many (default 30; 20 to an agent)'),
+    offset: z.number().int().min(0).optional().describe('Skip this many, newest first (the next page)'),
   },
-  handler: async ({ task_id, archived, unread, limit }, call) => {
+  handler: async ({ task_id, archived, unread, limit, offset }, call) => {
     const body = await call('GET', `/human-inbox${archived ? '?archived=1' : ''}`) as { letters?: LetterRow[]; unreadCount?: number }
     const all = Array.isArray(body?.letters) ? body.letters : []
     const task = typeof task_id === 'string' ? task_id.trim() : ''
     const kept = all
       .filter((l) => !task || l.sender?.taskId === task || (l.taskRefs ?? []).includes(task))
       .filter((l) => !unread || !l.read)
-    const letters = kept.slice(0, typeof limit === 'number' ? limit : 30).map(envelope)
+    const from = typeof offset === 'number' ? offset : 0
+    const letters = kept.slice(from, from + (typeof limit === 'number' ? limit : 30)).map(envelope)
     return withOutcome(
-      { letters, total: kept.length, unreadCount: body?.unreadCount ?? 0 },
-      letters.length ? `${kept.length} letter${kept.length === 1 ? '' : 's'}${kept.length > letters.length ? `, the newest ${letters.length} shown` : ''}.` : 'No letters match.',
+      { letters, total: kept.length, unreadCount: body?.unreadCount ?? 0, ...(from ? { offset: from } : {}) },
+      letters.length ? `${kept.length} letter${kept.length === 1 ? '' : 's'}${kept.length > letters.length ? `, ${from ? `${from + 1}-${from + letters.length}` : `the newest ${letters.length}`} shown` : ''}.` : 'No letters match.',
       'Read one with human_inbox_get; mark it with human_inbox_mark.',
     )
+  },
+  answer: {
+    kind: 'content', whole: 'human_inbox_get {"id":"<id>"}',
+    shape: ({ result, args }) => {
+      const r = objOf(result)
+      const all = Array.isArray(r.letters) ? r.letters : []
+      const offset = typeof args.offset === 'number' ? args.offset : 0
+      const rows = (typeof args.limit === 'number' ? all : all.slice(0, INBOX_LIST_PAGE)).map(compactEnvelope)
+      const total = typeof r.total === 'number' ? r.total : rows.length
+      return fitPage(rows, offset, total, (letters, page) => {
+        const more = nextPageCall('human_inbox_list', args, page)
+        return { ...receiptBase(r), letters, page, ...(more ? { next: `Next page: ${more}. ${String(r.next ?? '')}` } : {}) }
+      })
+    },
   },
   routes: [{ method: 'GET', path: '/human-inbox' }],
   tags: { readonly: true, remote: 'allow' },
@@ -400,6 +454,7 @@ defineOp({
       redacted === undefined ? `Letter ${id} updated.` : redacted > 0 ? `Letter ${id}: ${redacted} line(s) with a credential taken out.` : `Letter ${id} holds no credential; nothing changed.`,
       'human_inbox_list shows the inbox as the user sees it.')
   },
+  answer: { kind: 'receipt', shape: ({ result }) => ({ ...receiptBase(result), ...(objOf(result).letter ? { letter: compactEnvelope(objOf(result).letter) } : {}) }) },
   routes: [
     { method: 'POST', path: '/human-inbox/:id/redact-credentials' },
     { method: 'POST', path: '/human-inbox/:id/read' },
@@ -452,6 +507,13 @@ defineOp({
       `Letter ${id} answered for the user${status ? `; to its sender: ${status}${r.delivery?.reason ? ` (${r.delivery.reason})` : ''}` : ''}.`,
       'Tell the user what you answered when they asked you to.',
     )
+  },
+  answer: {
+    kind: 'receipt',
+    shape: ({ result }) => {
+      const r = objOf(result)
+      return { ...receiptBase(r), ...(r.letter ? { letter: compactEnvelope(r.letter) } : {}), ...(r.delivery ? { delivery: pick(r.delivery, ['status', 'reason']) } : {}) }
+    },
   },
   routes: [
     { method: 'POST', path: '/human-inbox/:id/answer' },

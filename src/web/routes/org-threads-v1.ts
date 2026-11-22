@@ -14,7 +14,10 @@
  *   POST  /api/v1/tasks/:id/threads/open                   { title, text, from, ref?, state?, reply?, options?, user_kind?, user_kind_why?, user_kind_words?, user_kind_about?, design_review?, same_ask_reason?, tasks? } -> the node opens one itself
  *                                                          (`options`: with needs, the choices he clicks, [{ id?, label, detail?, recommended? }], 2 to 5;
  *                                                          a needs write whose words list A:/B: or 1./2. choices with none answers 409 needs_options)
- *   POST  /api/v1/tasks/:id/threads/:thread/split          { message } -> that message becomes its own thread
+ *   POST  /api/v1/tasks/:id/threads/:thread/split          { message, keep_open?, merge_into? } -> that message becomes its own thread
+ *                                                          (201), or with merge_into goes straight into that open thread (200,
+ *                                                          `merged_into`); `from_closed` when the source closed with it (nothing
+ *                                                          was left open on it), which keep_open: true prevents
  *   POST  /api/v1/tasks/:id/threads/:thread/move           { to, why? } -> it goes to another node's Threads with its work
  *                                                          (core/org/thread-follow.ts): `to` a node, a task in its team, a project or a VP's name
  *   PUT   /api/v1/tasks/:id/threads/:thread/follow-ups/:messageId -> the message with that id, relayed
@@ -388,7 +391,7 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
   else if (b.pin !== undefined) throw new RouteError(400, 'bad_request', 'pin must be true or false.')
   // A merge removes this thread: anything else asked of it would be written and then lost.
   if (mergeInto && Object.keys(patch).length) {
-    throw new RouteError(400, 'bad_request', 'merge_into goes alone: change the target thread with its own update.')
+    throw new RouteError(400, 'bad_request', `merge_into goes alone (this thread is gone after the merge, so ${Object.keys(patch).join(', ')} would be lost): send { merge_into } by itself, then change ${mergeInto} with its own update.`)
   }
   let thread
   // A task's thread below: changed on its one record, where it lives.
@@ -412,12 +415,21 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
 orgThreadsV1Router.post('/tasks/:id/threads/:thread/split', route(async (req, res) => {
   const task = await nodeTask(req)
   const id = threadIdOf(req)
-  const message = str(body(req), 'message') ?? ''
+  const b = body(req)
+  const message = str(b, 'message') ?? ''
   if (!THREAD_MESSAGE_ID_RE.test(message)) throw new RouteError(400, 'bad_request', 'message (a tm- id of this thread) is required')
+  const mergeInto = str(b, 'merge_into')
+  if (mergeInto !== undefined && !THREAD_ID_RE.test(mergeInto)) throw new RouteError(400, 'bad_request', `merge_into must be a thread id (th-...), not ${mergeInto}`)
+  if (b.keep_open !== undefined && typeof b.keep_open !== 'boolean') throw new RouteError(400, 'bad_request', 'keep_open must be true or false.')
   const by = await writerOf(req)
-  const out = await splitThread(task.id, id, message, by)
-  log.task.info('org thread split', { taskId: task.id, threadId: id, newThreadId: out.thread.id, by })
-  res.status(201).json({ task_id: task.id, thread: out.thread, from: out.from })
+  const out = await splitThread(task.id, id, message, by, { keepOpen: b.keep_open === true, ...(mergeInto ? { mergeInto } : {}) })
+  log.task.info('org thread split', { taskId: task.id, threadId: id, newThreadId: mergeInto ? undefined : out.thread.id, mergeInto, closedFrom: out.closedFrom, by })
+  // Additive: `from_closed` when the source closed with it (nothing was left open on it), `merged_into`
+  // when the message went straight into that thread (`thread` is then that thread, not a new one).
+  res.status(mergeInto ? 200 : 201).json({
+    task_id: task.id, thread: out.thread, from: out.from,
+    ...(out.closedFrom ? { from_closed: true } : {}), ...(mergeInto ? { merged_into: mergeInto } : {}),
+  })
 }))
 
 orgThreadsV1Router.post('/tasks/:id/threads/:thread/move', route(async (req, res) => {

@@ -4,7 +4,7 @@ import { StepIcon } from './StepIcon';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { findImagePaths, resolveImagePath } from '@/utils/markdown';
-import { isUserDenied } from './tool-run-phrase';
+import { isUserDenied, tooLongAnswer, TOO_LONG_ANSWER_NOTE } from './tool-run-phrase';
 import { useRunLive } from './fold-body-context';
 import { AnswerText } from './RuleDetail';
 import { answeredCallState, callAnswerText, callDecisionLabel, useDeniedNow, useSoleCall, useToolDecisions, useWaitingTools } from './waiting-tools';
@@ -75,7 +75,10 @@ export function BashToolCall({ tool, status: statusProp = 'done', result: result
   const [popupOpen, setPopupOpen] = useState(false);
 
   const result = resultProp ?? (tool as { result?: string }).result;
-  const failed = (tool as { isError?: boolean }).isError || statusProp === 'error';
+  // An output the harness saved to a file for being too long: a note on the line. It keeps the
+  // command's own outcome (a failed command stays failed), unless the harness worded it as an error.
+  const tooLong = tooLongAnswer(result);
+  const failed = ((tool as { isError?: boolean }).isError || statusProp === 'error') && !tooLong?.wordedAsError;
   // The person said no: not a failure. Held by an open prompt: not running yet (waiting-tools.ts).
   const waitingTools = useWaitingTools();
   const decision = useToolDecisions().get(tool.toolUseId ?? '');
@@ -84,7 +87,7 @@ export function BashToolCall({ tool, status: statusProp = 'done', result: result
   const waiting = !denied && result === undefined && !!tool.toolUseId && waitingTools.has(tool.toolUseId);
   // Sent beside a call whose prompt is open: the CLI runs nothing until it is answered.
   const queued = !waiting && !denied && !failed && !answered && result === undefined && waitingTools.size > 0;
-  const status = waiting || queued ? 'waiting' : denied ? 'denied' : failed ? 'error' : statusProp;
+  const status = waiting || queued ? 'waiting' : denied ? 'denied' : failed ? 'error' : statusProp === 'error' ? 'done' : statusProp;
   const input = (tool.input && typeof tool.input === 'object') ? tool.input : {};
   const command = typeof input.command === 'string' ? input.command : '';
   const rawDesc = typeof input.description === 'string' ? input.description.trim() : '';
@@ -137,6 +140,7 @@ export function BashToolCall({ tool, status: statusProp = 'done', result: result
         {status === 'calling' && runLive && <span className="chat-tool-block-calling-dot" />}
         {status === 'waiting' && <span className="chat-tool-block-waiting-label">{queued ? 'Queued' : 'Waiting for approval'}</span>}
         {status !== 'waiting' && decision && <span className="chat-tool-block-decision" title={decision}><AnswerText text={callDecisionLabel(decision)} /></span>}
+        {status === 'done' && tooLong && <span className="chat-tool-block-decision" data-too-long-answer="" title={tooLong.file}>{TOO_LONG_ANSWER_NOTE}</span>}
         <span className="chat-tool-block-arrow"><StepIcon name="chevron" /></span>
         <span
           className="bash-tool-expand-btn"

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
+import { TASK_RECEIPT } from './task-answers.js';
 
 const ENGINES = ['claude', 'codex', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'] as const;
 
@@ -37,6 +38,7 @@ defineOp({
   bind: { method: 'POST', path: '/tasks/:id/transfer' },
   timeoutMs: 60_000,
   mapResult: ({ body }) => transferOutcome(body),
+  answer: TASK_RECEIPT,
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
@@ -100,6 +102,69 @@ defineOp({
   tags: { readonly: true, remote: 'allow' },
 });
 
+/**
+ * host_list for an agent: one compact row per host, what a task picks a host by. The whole card
+ * (history, vitals, daemon, placement reasons) is host_get's; 2026-11-21 a fleet answered up to
+ * 104,000 characters and 18 answers were cut by the agent's harness.
+ */
+function fleetRows({ result }: { result: unknown }): unknown {
+  const b = (result ?? {}) as Record<string, unknown>
+  if (!Array.isArray(b.hosts)) return result
+  const hosts = (b.hosts as Array<Record<string, unknown>>).map((h) => {
+    const conn = (h.connection ?? {}) as { connected?: unknown; phaseLabel?: unknown; unstable?: unknown }
+    const caps = (h.capabilities ?? {}) as { tags?: unknown; unknown?: unknown }
+    const place = (h.placement ?? {}) as { busy?: unknown; weight?: unknown; longRunning?: { ok?: unknown } }
+    const sessions = (h.sessions ?? {}) as { running?: unknown }
+    return {
+      host: h.host,
+      label: h.label,
+      connected: conn.connected === true,
+      ...(conn.connected !== true && typeof conn.phaseLabel === 'string' ? { why: conn.phaseLabel } : {}),
+      ...(conn.unstable ? { unstable: true } : {}),
+      kind: (h.system as { kind?: unknown } | null)?.kind ?? null,
+      tags: Array.isArray(caps.tags) ? caps.tags : [],
+      ...(Array.isArray(caps.unknown) && caps.unknown.length ? { unknown: caps.unknown } : {}),
+      sessions: typeof sessions.running === 'number' ? sessions.running : null,
+      busy: place.busy ?? null,
+      ...(place.weight === 0 ? { never_picked: true } : {}),
+      long_running_ok: place.longRunning?.ok === true,
+    }
+  })
+  return {
+    hosts,
+    ...(typeof b.checkedAt === 'number' ? { checkedAt: b.checkedAt } : {}),
+    outcome: b.outcome,
+    next: 'Ask for a host by tag in task_create or task_start: host "@ios", "@ios+always-on". host_get {"host":"<alias>"} gives one host\'s whole card '
+      + '(system, vitals, history, daemon, placement reasons); "_full": true gives every card.',
+  }
+}
+
+/**
+ * host_get for an agent: the whole card, with the newest history buckets when they do not all fit
+ * (buckets are oldest first, so the generic cut would keep the oldest). 2026-11-21: up to 21,600 characters.
+ */
+const HOST_GET_MAX = 12_000
+function hostCard({ result }: { result: unknown }): unknown {
+  const b = (result ?? {}) as Record<string, unknown>
+  const host = b.host as Record<string, unknown> | undefined
+  const history = host?.history as { buckets?: unknown[] } | null | undefined
+  if (!host || !history || !Array.isArray(history.buckets) || JSON.stringify(b).length <= HOST_GET_MAX) return result
+  const buckets = history.buckets
+  const rest = JSON.stringify({ ...b, host: { ...host, history: { ...history, buckets: [] } } }).length
+  let room = HOST_GET_MAX - rest - 600
+  let keep = 0
+  for (let i = buckets.length - 1; i >= 0 && room > 0; i--) {
+    room -= JSON.stringify(buckets[i]).length + 1
+    if (room >= 0) keep++
+  }
+  const kept = buckets.slice(buckets.length - keep)
+  return {
+    ...b,
+    host: { ...host, history: { ...history, buckets: kept } },
+    historyShown: `The newest ${kept.length} of ${buckets.length} history buckets; fewer days, a larger bucket, or "_full": true shows them all.`,
+  }
+}
+
 /** One line per host, so an agent reads the fleet without walking the day buckets. */
 function fleetOutcome(body: unknown, one: boolean) {
   const b = (body ?? {}) as { hosts?: Array<Record<string, unknown>>; host?: Record<string, unknown> }
@@ -113,22 +178,19 @@ defineOp({
   name: 'host_list',
   title: 'Every host Walnut runs work on, and how each is doing',
   description:
-    'The fleet view, the same cards Settings › Remote Hosts shows: for each host (this Mac first) what it is (OS, CPUs, memory), '
-    + 'how it is doing now (CPU use, load, memory available, uptime; `now.stale` when it stopped answering), how it did lately '
-    + '(its own minute ledger: share of minutes up and linked over 1, 7 and 30 days, outages, boots, daemon restarts), running sessions, '
-    + 'model spend there over 30 days at public list prices (not a bill), how it connects (local, SSH tunnel, bridge; round trip), '
-    + 'the Walnut server it runs for the Mac, its daemon (version, whether it starts by itself after a reboot), '
-    + 'and placement: the room score session placement judges it by (busy, which caps, its weight) and whether a job that must keep running fits there, with the reasons. '
-    + '`capabilities` says what a task can use it for: `tags` (always-on, cloud or local, macos or linux, ios with its Xcode and simulator runtimes, '
-    + 'browser = the user\'s own signed-in browser through the Walnut extension, docker, mcp:<server> for each Claude Code MCP server there, and the user\'s own tags), '
-    + 'with `unknown` naming what its daemon has not reported yet. Ask for a host by tag in task_create or task_start: host "@ios", "@browser", "@ios+always-on". '
-    + 'Read-only; never dials a host.',
+    'Every host Walnut runs work on, one row each (this Mac first): alias, label, whether it is connected, its kind, `tags` (what '
+    + 'a task can use it for: always-on, cloud or local, macos or linux, ios, browser = the user\'s own signed-in browser through the '
+    + 'Walnut extension, docker, mcp:<server>, and the user\'s own tags; `unknown` names what its daemon has not reported yet), '
+    + 'sessions open there, whether placement finds it busy, and whether a job that must keep running fits (`long_running_ok`). '
+    + '`outcome` has one line per host. Ask for a host by tag in task_create or task_start: host "@ios", "@browser", "@ios+always-on". '
+    + 'host_get gives one host\'s whole card (system, vitals, history, spend, daemon, server, placement reasons). Read-only; never dials a host.',
   input: {
     days: z.number().int().min(1).max(31).optional().describe('History window in days (default 30, one bucket a day)'),
   },
   bind: { method: 'GET', path: '/hosts' },
   timeoutMs: 20_000,
   mapResult: ({ body }) => fleetOutcome(body, false),
+  answer: { kind: 'content', whole: 'host_get {"host":"<alias>"}', shape: fleetRows },
   tags: { readonly: true, remote: 'allow' },
 });
 
@@ -147,5 +209,6 @@ defineOp({
   bind: { method: 'GET', path: '/hosts/:host' },
   timeoutMs: 20_000,
   mapResult: ({ body }) => fleetOutcome(body, true),
+  answer: { kind: 'content', max: HOST_GET_MAX, shape: hostCard },
   tags: { readonly: true, remote: 'allow' },
 });

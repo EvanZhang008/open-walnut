@@ -19,13 +19,36 @@ function bad(message: string): HostExecError {
   return new HostExecError(message, 400, 'bad_request')
 }
 
-/** A path as a host's daemon takes it: absolute or under `~`, never relative (the daemon's own cwd). */
-export function checkPath(p: unknown, what: 'from' | 'to'): string {
+/**
+ * What $WALNUT_TASK_DIR is on a host that does not set XDG_STATE_HOME (lib/task-dir.ts), for a hint:
+ * a refusal names the path a task most likely meant. `<task id>` when the caller is not known.
+ */
+export function taskDirGuess(taskId?: string): string {
+  return `~/.local/state/open-walnut/tasks/${taskId || '<task id>'}`
+}
+
+const TASK_DIR_NOTE = 'where XDG_STATE_HOME is not set; `echo "$WALNUT_TASK_DIR"` in your Bash shows yours, and on another host it is the taskDir a host_exec answer names'
+
+/**
+ * A path as a host's daemon takes it: absolute or under `~`, never relative (the daemon's own cwd).
+ * A refusal says the path to write instead (2026-11-21: 37 of a week's host_copy calls had a bad
+ * argument, most a $VARIABLE or a relative path). `taskId` fills in the task directory it names.
+ */
+export function checkPath(p: unknown, what: 'from' | 'to', taskId?: string): string {
   const side = what === 'from' ? 'sending' : 'receiving'
   if (typeof p !== 'string' || !p.trim()) throw bad(`${what} is required: a file path on the ${side} host`)
   if (p.includes('\u0000')) throw bad(`${what} contains a NUL byte`)
   if (!(p === '~' || p.startsWith('~/') || p.startsWith('/'))) {
-    throw bad(`${what} must be absolute or start with ~/ (write it out: no $VARIABLES, no relative path): ${p}`)
+    const taskDir = /^\$(\{WALNUT_TASK_DIR\}|WALNUT_TASK_DIR\b)/.exec(p)
+    const home = /^\$(\{HOME\}|HOME\b)/.exec(p)
+    const fixed = taskDir ? `${taskDirGuess(taskId)}${p.slice(taskDir[0].length)}`
+      : home ? `~${p.slice(home[0].length)}`
+      : p.startsWith('$') ? null
+      : `${taskDirGuess(taskId)}/${p.replace(/^\.\//, '')}`
+    const instead = fixed
+      ? ` Most likely "${what}": "${fixed}"${taskDir || !home ? ` (your task directory ${TASK_DIR_NOTE})` : ''}.`
+      : ' Write the variable\'s value out.'
+    throw bad(`${what} must be absolute or start with ~/, written out (no $VARIABLES, no relative path): ${p}.${instead}`)
   }
   if (p.split('/').includes('..')) throw bad(`${what} has a .. in it; write the path out without one: ${p}`)
   return p
@@ -57,11 +80,15 @@ export function protectedPath(p: string, opts: { foldCase?: boolean } = {}): str
   return null
 }
 
-export function refuseProtected(host: string, p: string): void {
+/** Refuses a protected path, naming where to copy instead: the task's own directory there (taskDirGuess). */
+export function refuseProtected(host: string, p: string, taskId?: string): void {
   const why = protectedPath(p)
-  if (why) {
-    throw new HostExecError(`host_copy never reads or writes ${why}: ${host}:${p}. If this file must move, ask the user.`, 403, 'protected_path', { path: p })
-  }
+  if (!why) return
+  const instead = why === 'credentials'
+    ? 'If this file must move, ask the user.'
+    : `Copy to or from your task directory there instead: ${host}:${taskDirGuess(taskId)}/ (${TASK_DIR_NOTE}). `
+      + 'To read Walnut\'s own files there (its logs), run tail or grep on them with host_exec instead of copying them.'
+  throw new HostExecError(`host_copy never reads or writes ${why}: ${host}:${p}. Nothing was copied. ${instead}`, 403, 'protected_path', { path: p })
 }
 
 // ── macOS places a program may not read or write without the person's OK (TCC) ──
@@ -143,13 +170,30 @@ function folderRefusal(host: string, p: string, own: boolean): HostExecError {
   return new HostExecError(`${host}:${p} is a folder; host_copy copies one file. Pack it first, ${how}: ${tar}, then copy the .tgz.`, 400, 'is_directory')
 }
 
+/**
+ * What a missing source says: where it looked, why that host, and the fix (2026-11-21: 34 of a
+ * week's host_copy calls named a source that was not there, most on the wrong host).
+ */
+function missingSource(host: string, from: string, own: boolean, partIsFile: boolean): HostExecError {
+  const which = own
+    ? `${host} is your own host (from_host left out means it): if the file is on another host, name that host in from_host (host_list names them).`
+    : `${host} is the from_host you named: if the file is on your own host, leave from_host out.`
+  const home = from === '~' || from.startsWith('~/') ? ` ~ there is the home of the account Walnut runs as on ${host}.` : ''
+  return new HostExecError(
+    `No file at ${host}:${from}${partIsFile ? ' (a part of that path is a file, not a folder)' : ''}; nothing was copied. ${which}${home} `
+    + 'Each host has its own task directory ($WALNUT_TASK_DIR on yours, the taskDir of a host_exec answer on another). '
+    + 'Look there (ls) and call again with the path it shows.',
+    404, 'source_missing', { path: from, host },
+  )
+}
+
 /** The source's size; refuses a missing file, a folder (with how to pack it) and anything not a regular file. */
 export async function sourceSize(host: string, from: string, own: boolean, gate?: SendGate): Promise<number> {
   const p = trimSlashes(from)
   const { at, size } = await probe(host, p, gate)
   if (at === 'file') return size!
-  if (at === 'missing') throw new HostExecError(`No file at ${host}:${from}.`, 404, 'source_missing')
-  if (at === 'parent_not_dir') throw new HostExecError(`No file at ${host}:${from} (a part of that path is a file, not a folder).`, 404, 'source_missing')
+  if (at === 'missing') throw missingSource(host, from, own, false)
+  if (at === 'parent_not_dir') throw missingSource(host, from, own, true)
   if (at === 'not_file') {
     // `dir/.` is a folder too; under a pipe, socket or device it is ENOTDIR.
     if ((await probe(host, p === '/' ? '/.' : `${p}/.`, gate)).at === 'not_file') throw folderRefusal(host, p, own)

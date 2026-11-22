@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect, useLayoutEffect } from 'react
 import { isFolderGoneReason } from '@/utils/folder-gone';
 import { useEvent } from './useWebSocket';
 import { wsClient, type ConnectionState } from '@/api/ws';
-import { isToolResultError } from '@/api/chat';
+import { toolResultFailed } from '@/api/chat';
 import { log } from '@/utils/log';
 import {
   trackSession,
@@ -688,12 +688,12 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
   // Handle tool result events
   useEvent('session:tool-result', (data) => {
-    const { sessionId: sid, toolUseId, result } = data as {
-      sessionId: string; toolUseId: string; result: string; taskId: string;
+    const { sessionId: sid, toolUseId, result, isError } = data as {
+      sessionId: string; toolUseId: string; result: string; taskId: string; isError?: boolean;
     };
     if (!sessionId || sid !== sessionId) return;
 
-    setBlocks((prev) => backfillToolResult(prev, toolUseId, result, isToolResultError(result)));
+    setBlocks((prev) => backfillToolResult(prev, toolUseId, result, toolResultFailed(result, isError)));
   });
 
   useEvent('session:thinking-delta', (data) => {

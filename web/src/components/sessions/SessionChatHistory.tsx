@@ -99,7 +99,7 @@ import { foldPlace, joinedRows, readReaderView, restoreReaderRow, rowKeysAttr, r
 import { shapeTurns, type PagedTurnShape as TurnShape } from '@/utils/turn-shape';
 import { noActionRows, readTurnMarker, stripTurnMarker } from '@/utils/turn-end-marker';
 import { detectOutboundCalls, detectOutboundSend, walnutToolView, type OutboundSend } from './session-outbound';
-import { isRoutedQuestion, isRuleDenied, isUserDenied } from './tool-run-phrase';
+import { isFailedCall, isRoutedQuestion } from './tool-run-phrase';
 import { DeniedNowContext, ToolDecisionsContext, useSessionToolDecisions, WaitingToolsContext } from './waiting-tools';
 import { permissionRequestStore } from '@/stores/permission-request-store';
 import { isMergeableHistoryTool } from './SessionMessage';
@@ -4473,7 +4473,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     } as SessionHistoryTool] : []
   ));
   const streamFailedOf = (members: readonly StreamRunMember[]): number => members
-    .filter((b) => b.type === 'tool_call' && b.status === 'error' && !isRoutedQuestion(b.name, b.result) && !isUserDenied(b.result)).length;
+    .filter((b) => b.type === 'tool_call' && isFailedCall(b)).length;
 
   /** A group's runtime error lines (the fold's red "N errors", as history counts them). */
   const streamErrorLinesOf = (group: StepGroup): number => group.members.filter((k) => {
@@ -5264,11 +5264,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     // Words that carry a card of their own (an Agent, a plan, a question) keep it in sight.
     && (part.suppressTools || !(part.m.tools?.length));
   /** The failures a stretch of rows holds, for its fold's red count: the runtime's
-   *  error lines and the failed calls (a routed question is an answer; a call the
-   *  person denied did not fail, the line counts it as denied). */
+   *  error lines and the failed calls (isFailedCall: a routed question is an answer, a
+   *  call the person denied did not fail, a too-long answer went to a file). */
   const failedOf = (parts: readonly HistoryPart[]): FoldFailures => countFoldFailures(
     parts.flatMap((part) => rowsOf(part).map((row) => ({ row, toolsShown: !(part.kind === 'msg' && part.suppressTools) }))),
-    (t: SessionHistoryTool) =>  !!t.isError && !isRoutedQuestion(t.name, t.result) && !isUserDenied(t.result) && !isRuleDenied(t.result),
+    isFailedCall,
   );
   // A message to someone: a send card, or Walnut's other messaging ops (to a
   // lead, to the inbox, an answer in it), which render as plain tool rows.

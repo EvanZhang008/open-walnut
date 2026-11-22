@@ -17,6 +17,7 @@ import { WORK_PLACE_RULE } from '../work-place.js'
 import { TEAM_CHARTER } from '../team-charter.js'
 import { TASK_ROUTING_CONTRACT } from '../task-routing-contract.js'
 import type { SessionProfile } from '../types.js'
+import { WALNUT_MCP_ROLE_ENV, type ListingRole } from '../../ops/op-groups.js'
 
 /**
  * The walnut CLI entry of THIS running install, when identifiable.
@@ -47,16 +48,25 @@ const CLI_ENTRY: string | null = cliEntryOf(process.argv[1])
  * mount targets this install's own CLI entry via the running bun or walnut file
  * (PATH-independent); the bare bin name is only a fallback for exotic setups.
  * The server talks to the local API (see src/mcp/server.ts).
+ *
+ * `role`: the listing role of the session it is for (experiment mcp_tools_by_role, src/ops/op-groups.ts),
+ * which the mount reads with the switch at its start (src/commands/mcp.ts). Only a caller that knows
+ * the role passes one: the Personal AI's lanes (Main, the asks, a console agent) are the org. Left
+ * out (an ordinary task on the old opt-in mount, an ACP engine), the mount lists everything.
  */
-export function walnutMcpProfile(): SessionProfile {
+export function walnutMcpProfile(opts: { role?: ListingRole } = {}): SessionProfile {
+  const env = opts.role ? { env: { [WALNUT_MCP_ROLE_ENV]: opts.role } } : {}
   return {
     mcpServers: {
       walnut: CLI_ENTRY
-        ? { command: process.execPath, args: [CLI_ENTRY, 'mcp'] }
-        : { command: 'open-walnut', args: ['mcp'] },
+        ? { command: process.execPath, args: [CLI_ENTRY, 'mcp'], ...env }
+        : { command: 'open-walnut', args: ['mcp'], ...env },
     },
   }
 }
+
+/** The mount of a Personal AI lane (Main, an ask, a console agent): the org's listing role. */
+export const personalAiMcpProfile = (): SessionProfile => walnutMcpProfile({ role: 'org' })
 
 /**
  * Persona precedence header for APPEND-mode profiles.
@@ -142,7 +152,7 @@ export type ComposedPersona = { systemPrompt: string; overflows: PromptOverflow[
 export function personalAiProfile(name: string, skillsIndex?: string, memoryContext?: string, opts: PersonaOpts = {}): SessionProfile {
   return mergeProfiles(
     { systemPrompt: personalAiPersona(name, skillsIndex, memoryContext, opts).systemPrompt, systemPromptMode: 'append' },
-    walnutMcpProfile(),
+    personalAiMcpProfile(),
   )!
 }
 
@@ -215,7 +225,7 @@ export function consoleAgentProfile(
 ): SessionProfile {
   return mergeProfiles(
     { systemPrompt: consoleAgentPersona(agentDef, skillsIndex, contextBlock, opts).systemPrompt, systemPromptMode: 'append' },
-    walnutMcpProfile(),
+    personalAiMcpProfile(),
   )!
 }
 

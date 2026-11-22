@@ -322,7 +322,7 @@ async function runCopy(job: CopyJob, mine: { from: boolean; to: boolean }, grant
     if (size > MAX_COPY_BYTES) {
       throw new HostExecError(`${where(job.fromHost, job.from)} is ${sizeText(size)} (${size} bytes); host_copy copies at most ${MAX_COPY_BYTES} bytes (2 GB). Nothing was copied. Compress it, or split it (split -b 1000m) and copy the parts.`, 413, 'too_large')
     }
-    refuseProtected(job.toHost, plan.path)
+    refuseProtected(job.toHost, plan.path, job.taskId)
     if (!job.allowPrompts) await refuseMacPlace(job.toHost, plan.path, job.macs.to, 'write')
     else if (!job.dialog && job.macs.to && macPlace(plan.path, job.macs.to)) job.dialog = { host: job.toHost, path: plan.path }
     const lockKey = `${job.toHost}\u0000${path.posix.normalize(plan.path)}`
@@ -410,11 +410,28 @@ function answerOf(job: CopyJob, same = false): Record<string, unknown> {
   }
 }
 
+/**
+ * `from` and `to` as a daemon takes them. A refusal names the path the caller most likely meant,
+ * with its own task's directory in it when the caller is a task's session (checkPath).
+ */
+async function checkedPaths(params: CopyParams, callerSid: string | undefined): Promise<{ from: string; to: string }> {
+  try {
+    return { from: checkPath(params.from, 'from'), to: checkPath(params.to, 'to') }
+  } catch (err) {
+    if (!(err instanceof HostExecError) || err.code !== 'bad_request') throw err
+    const taskId = await callerOf(callerSid).then((c) => c.taskId, () => undefined)
+    if (taskId) {
+      checkPath(params.from, 'from', taskId)
+      checkPath(params.to, 'to', taskId)
+    }
+    throw err
+  }
+}
+
 /** Copy one file between two hosts for the caller's task (see the file comment). */
 export async function copyBetweenHosts(params: CopyParams, callerSid: string | undefined): Promise<Record<string, unknown>> {
   const t0 = Date.now()
-  const from = checkPath(params.from, 'from')
-  const to = checkPath(params.to, 'to')
+  const { from, to } = await checkedPaths(params, callerSid)
   const asked = typeof params.copy_id === 'string' && params.copy_id !== '' ? params.copy_id : null
   if (asked !== null && !COPY_ID_RE.test(asked)) throw new HostExecError('copy_id must be hc- and 4 to 64 letters, digits, - or _ (the walnut CLI picks one)', 400, 'bad_request')
   const { caller, own } = await theCaller(callerSid)
@@ -427,8 +444,8 @@ export async function copyBetweenHosts(params: CopyParams, callerSid: string | u
       : `Both sides are ${fromHost}: copy it there with cp through host_exec.`, 400, 'same_host')
   }
   // Before the grant: a copy it would refuse asks nothing of the user.
-  refuseProtected(fromHost, from)
-  refuseProtected(toHost, to)
+  refuseProtected(fromHost, from, caller.taskId)
+  refuseProtected(toHost, to, caller.taskId)
   const allowPrompts = params.allow_prompts === true
   const macs = { from: await macSide(fromHost), to: await macSide(toHost) }
   if (!allowPrompts) {

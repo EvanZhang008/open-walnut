@@ -36,5 +36,7 @@ defineOp({
     const notes = [missingLinksNote(missing, 'This text', fix), deadCommitLinksNote(dead, 'This text', fix)].filter(Boolean)
     return { missing, dead_commit_links: dead, note: notes.length ? notes.join(' ') : null }
   },
+  // A hook's call prints what a harness reads as it is.
+  answer: { kind: 'content', whole_for: (args) => args.hook_input !== undefined },
   tags: { readonly: true, remote: 'allow' },
 })

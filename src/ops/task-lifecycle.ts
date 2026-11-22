@@ -13,6 +13,7 @@
 import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { withOutcome } from './outcome.js'
+import { TASK_RECEIPT } from './task-answers.js'
 import { SESSION_EFFORT_IDS, SESSION_MODE_IDS, SESSION_OUTPUT_MODE_IDS, type SessionEffort, type SessionOutputMode } from '../core/types.js'
 
 type Call = (method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, body?: unknown) => Promise<unknown>
@@ -109,6 +110,7 @@ defineOp({
   routes: [{ method: 'GET', path: '/tasks/:id' }, { method: 'GET', path: '/me' }, { method: 'POST', path: '/sessions/:id/terminate' },
     { method: 'DELETE', path: '/tasks/:id/start-queue' }],
   timeoutMs: 40_000,
+  answer: TASK_RECEIPT,
   tags: { readonly: false, remote: 'allow' },
 })
 
@@ -199,6 +201,7 @@ defineOp({
   },
   routes: [{ method: 'GET', path: '/tasks/:id' }, { method: 'GET', path: '/me' }, { method: 'POST', path: '/sessions/:id/restart' }],
   timeoutMs: 60_000,
+  answer: TASK_RECEIPT,
   tags: { readonly: false, remote: 'allow' },
 })
 
@@ -264,6 +267,7 @@ defineOp({
     { method: 'POST', path: '/sessions/:id/effort' }, { method: 'PATCH', path: '/sessions/:id' },
   ],
   timeoutMs: 40_000,
+  answer: TASK_RECEIPT,
   tags: { readonly: false, remote: 'allow' },
 })
 

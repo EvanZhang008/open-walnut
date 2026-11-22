@@ -17,11 +17,15 @@ import { z } from 'zod'
 import { sessionHandle } from '../core/peers/walnut-message-tag.js'
 import { defineOp } from './registry.js'
 import { withTaskRouting } from './task-routing-rows.js'
+import { DOC_ANSWER_MAX_CHARS, DOC_PART_INPUT, askedPart, clipText, pageOnce, pagedResult } from './doc-page.js'
+import { cutTextPath } from './answer.js'
 
 /** How long an agent's search waits for the meaning lane's query embedding. */
 export const SEARCH_SEMANTIC_WAIT_MS = 2500
 
 // ── Reads (ported from the original MCP tools) ──────────────────────────────
+
+const SEARCH_TYPES = ['task', 'memory', 'session'] as const
 
 defineOp({
   name: 'search',
@@ -35,15 +39,20 @@ defineOp({
     'other language), then judge the candidates: each task row carries its phase, `deliverable`, `first_request` and `latest` report.',
   input: {
     q: z.string().min(1).describe('Search query'),
-    types: z.string().optional().describe('Comma-separated subset of: task,memory,session (default: all three)'),
+    types: z.union([z.string(), z.array(z.enum(SEARCH_TYPES)).min(1).max(SEARCH_TYPES.length)]).optional()
+      .describe('Which of task, memory, session: a list, or a comma-separated string (default: all three)'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default 20)'),
   },
+  // 2026-11-21: 6.3% of 631 calls failed on their arguments, most of them `query` for `q`.
+  retiredInput: ['query'],
+  renamedInput: [{ from: 'query', to: 'q', max: 2_000 }],
   // An agent is not typing: give the meaning lane time for the query's embedding (the library's
   // default is sized for a search box), so a query in one language still finds a task titled in another.
   handler: async ({ q, types, limit }, call) => {
+    const lanes = Array.isArray(types) ? types.join(',') : types
     const query = new URLSearchParams({
       q: String(q),
-      ...(typeof types === 'string' && types ? { types } : {}),
+      ...(typeof lanes === 'string' && lanes ? { types: lanes } : {}),
       ...(typeof limit === 'number' ? { limit: String(limit) } : {}),
       semanticWaitMs: String(SEARCH_SEMANTIC_WAIT_MS),
     })
@@ -52,8 +61,36 @@ defineOp({
   // Cold embedding model + three semantic legs measured >10s; the default
   // 10s timeout made "search is broken" out of "search is warming up".
   timeoutMs: 30_000,
+  // Rows an agent judges candidates by: short lines, and room for the routing lines of the first task rows.
+  answer: { kind: 'content', max: 12_000, shape: ({ result }) => searchRows(result) },
   tags: { readonly: true, remote: 'allow' },
 })
+
+/** The longest snippet or routing line a search row carries for an agent. */
+const SEARCH_LINE_MAX = 110
+const short = (v: unknown): unknown => typeof v === 'string' ? clipText(v, SEARCH_LINE_MAX) : v
+
+/**
+ * search's rows for an agent: what it judges a candidate by, each line short. The score and the
+ * sort keys stay with the web UI. 2026-11-21: p95 9,200 characters.
+ */
+export function searchRows(result: unknown): unknown {
+  const b = result as { results?: unknown } | null
+  if (!b || typeof b !== 'object' || !Array.isArray(b.results)) return result
+  const keep = ['type', 'title', 'taskId', 'sessionId', 'parentTaskId', 'path', 'phase']
+  const lines = ['snippet', 'deliverable', 'first_request', 'latest']
+  return {
+    ...(b as Record<string, unknown>),
+    results: (b.results as Array<Record<string, unknown>>).map((r) => {
+      if (!r || typeof r !== 'object') return r
+      const row: Record<string, unknown> = {}
+      for (const k of keep) if (r[k] !== undefined && r[k] !== null && r[k] !== '') row[k] = r[k]
+      for (const k of lines) if (typeof r[k] === 'string' && r[k]) row[k] = short(r[k])
+      if (r.isAutoExpanded === true) row.isAutoExpanded = true
+      return row
+    }),
+  }
+}
 
 defineOp({
   name: 'project_list',
@@ -295,14 +332,24 @@ defineOp({
     'Read one of the user\'s standing memory documents: "global" = MEMORY.md (project/world ' +
     'knowledge index), "user" = USER.md (who the user is). Returns { memory: { content, contentHash, ' +
     'updatedAt, ... } }: the text is memory.content, not a top-level field. To change a few lines, ' +
-    'pass memory_write edits instead of rewriting the file from a script.',
+    'pass memory_write edits instead of rewriting the file from a script. A long one comes in pages (`page` says how to read on).',
   input: {
     doc: z.enum(['global', 'user']).describe('Which memory document'),
+    ...DOC_PART_INPUT,
   },
   bind: { method: 'GET', path: '/memory/:doc' },
-  mapResult: ({ body, args }) => memoryReadResult(body, args),
+  // Asked for a part: every caller gets that part (the route ignores offset and section).
+  mapResult: ({ body, args }) => {
+    const read = memoryReadResult(body, args)
+    return askedPart(args) ? pagedResult(read, 'memory.content', args, memoryAgain(args), MEMORY_PAGE) : read
+  },
+  // A memory document is read to work from: pages up to the document cap (doc-page.ts).
+  answer: { kind: 'content', max: DOC_ANSWER_MAX_CHARS, shape: ({ result, args }) => pageOnce(result, () => pagedResult(result, 'memory.content', args, memoryAgain(args), MEMORY_PAGE)) },
   tags: { readonly: true, remote: 'allow' },
 })
+
+const MEMORY_PAGE = { changeWith: 'memory_write edits' }
+const memoryAgain = (args: Record<string, unknown>) => (more: Record<string, unknown>) => `memory_read ${JSON.stringify({ doc: args.doc, ...more })}`
 
 defineOp({
   name: 'memory_write',
@@ -343,8 +390,10 @@ defineOp({
     })
     return memoryWriteResult(body, args)
   },
+  answer: { kind: 'receipt', whole: 'memory_read {"doc":"<doc>"}' },
   tags: { readonly: false, remote: 'allow' },
 })
+
 
 function memoryFileName(args: Record<string, unknown>): string {
   return args.doc === 'global' ? 'MEMORY.md' : 'USER.md'
@@ -458,17 +507,27 @@ defineOp({
   description:
     'Read one note from the user\'s notes vault by path (e.g. "Projects/Example" — the .md ' +
     'suffix is optional) OR by the id note_search returns. Returns { content, contentHash, ' +
-    'updatedAt }; keep contentHash for a later note_write or note_edit.',
+    'updatedAt }; keep contentHash for a later note_write or note_edit. A long note comes in pages (`page` says how to read on).',
   input: {
     path: z.string().min(1).optional().describe('Vault-relative note path (or a note title)'),
     id: z.string().min(1).optional().describe('Frontmatter note id from note_search (n_...) — use either id or path'),
+    ...DOC_PART_INPUT,
   },
   handler: async (args, call) => {
     const note = await readNote(args, call)
-    return { path: note.path, content: note.content, contentHash: note.contentHash, updatedAt: note.updatedAt }
+    const body = { path: note.path, content: note.content, contentHash: note.contentHash, updatedAt: note.updatedAt }
+    return askedPart(args) ? pagedResult(body, 'content', args, noteAgain(note.path), NOTE_PAGE) : body
+  },
+  // A note is a document read to work from: pages up to the document cap (doc-page.ts). 2026-11-21: up to 20,000 characters.
+  answer: {
+    kind: 'content', max: DOC_ANSWER_MAX_CHARS,
+    shape: ({ result }) => pageOnce(result, () => pagedResult(result, 'content', {}, noteAgain(String((result as { path?: unknown }).path ?? '')), NOTE_PAGE)),
   },
   tags: { readonly: true, remote: 'allow' },
 })
+
+const NOTE_PAGE = { changeWith: 'note_edit' }
+const noteAgain = (path: string) => (more: Record<string, unknown>) => `note_read ${JSON.stringify({ path, ...more })}`
 
 defineOp({
   name: 'note_write',
@@ -504,6 +563,7 @@ defineOp({
     }
     return call('PUT', `/notes/content/${encoded}`, { content, expectedHash })
   },
+  answer: { kind: 'receipt', whole: 'note_read {"path":"<path>"}' },
   tags: { readonly: false, remote: 'allow' },
 })
 
@@ -561,6 +621,7 @@ defineOp({
     })
     return { path: note.path, replacements: replaceAll ? occurrences : 1, ...(written as Record<string, unknown>) }
   },
+  answer: { kind: 'receipt', whole: 'note_read {"path":"<path>"}' },
   tags: { readonly: false, remote: 'allow' },
 })
 
@@ -620,9 +681,18 @@ defineOp({
     if (!path.startsWith('/api/')) {
       throw new Error('api passthrough only accepts paths starting with /api/')
     }
+    // A write here stores what it is given, like a receipt op, which the executor guards (answer.ts):
+    // a body built from a shortened read would delete the rest of what it was cut from.
+    const cut = method === 'GET' ? undefined : cutTextPath(args.body)
+    if (cut) {
+      throw new Error(`refused: body.${cut} holds text Walnut shortened when you read it (a "[Walnut cut: ...]" or "part of a longer document" line), `
+        + `so ${method} ${path} would store the part and delete the rest. Nothing was sent. Read it whole first (repeat the read with "_full": true), then send it again`)
+    }
     // A path starting with /api/ is server-root-absolute by the executor's
     // contract (rawRequest), so non-v1 routes are reachable too.
     return call(method, path, args.body)
   },
+  // Its answer is what the endpoint answered (a GET as much as a write): content, with a larger cap.
+  answer: { kind: 'content', max: 12_000 },
   tags: { readonly: false, remote: 'allow' },
 })

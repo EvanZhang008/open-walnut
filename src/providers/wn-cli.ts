@@ -35,7 +35,7 @@ import { GATEWAY_INLINE_ARGS_MAX_BYTES, classifyArgsSource, parseToolArgs, strip
 import {
   classifyTemplateGateway, templateCheckGap, templateCheckInput, templateCheckReplyMs, templateCheckRequestInput,
 } from './trigger-check-core.js'
-import { SKILL_POINTER, formatOpHelp, formatToolsTable, type ToolRow } from '../ops/op-help.js'
+import { SKILL_POINTER, formatOpHelp, formatToolsTable, inGroup, type ToolGroupRow, type ToolRow } from '../ops/op-help.js'
 import { gatewayFailureCode, renderToolCallFailure, splitToolsJsonFlag, toolCallFailure } from './tool-call-output.js'
 import { awayLines, callerRunId, dropRunId, lostRunLines, namedOnSignal, neverSent, refusedRunId } from './host-exec-run-id.js'
 import { CALL_ID_ARG, callIdFor, callIdInJsonText, isCallId, lostCallDetail, lostCallLines, newCallId } from '../lib/op-call-id.js'
@@ -76,7 +76,7 @@ export type WalnutCliParsed =
   | { kind: 'guide' }
   // `ids`/`mode` only when more than one id was named: the one-id shape is unchanged.
   | { kind: 'wait'; id: string; ids?: string[]; mode?: WaitMode; timeoutSecs: number; json: boolean }
-  | { kind: 'tools.list'; json: boolean }
+  | { kind: 'tools.list'; json: boolean; group?: string }
   | { kind: 'tools.help'; name: string }
   // `json` only when --json was given: the failure is then one JSON object on stdout, stderr empty.
   | { kind: 'tools.call'; name: string; rawJson: string | undefined; json?: true }
@@ -157,12 +157,18 @@ function parseToolsArgs(argv: string[]): WalnutCliParsed {
   if (sub === '--help' || sub === '-h' || sub === undefined) return { kind: 'help', topic: 'tools' }
   if (sub === 'list') {
     let json = split.json
-    for (const a of rest) {
+    let group: string | undefined
+    for (let i = 0; i < rest.length; i++) {
+      const a = rest[i]
       if (a === '--json') json = true
       else if (a === '--help' || a === '-h') return { kind: 'help', topic: 'tools' }
-      else return { kind: 'usage-error', message: `unexpected argument: ${a}` }
+      // One group of the catalog (src/ops/op-groups.ts); the hub names each op's group.
+      else if (a === '--group' || a.startsWith('--group=')) {
+        group = a === '--group' ? rest[++i] : a.slice('--group='.length)
+        if (!group || group.startsWith('-')) return { kind: 'usage-error', message: 'tools list --group requires <group>' }
+      } else return { kind: 'usage-error', message: `unexpected argument: ${a}` }
     }
-    return { kind: 'tools.list', json }
+    return { kind: 'tools.list', json, ...(group ? { group } : {}) }
   }
   if (sub === 'help') {
     const name = rest.find((a) => !a.startsWith('-'))
@@ -335,7 +341,8 @@ session: use those whenever they are listed, and this CLI where they are missing
 for a scripted chain of calls.
 
 USAGE
-  walnut tools list [--json]           catalog of available operations, each with its arguments
+  walnut tools list [--json]           catalog of available operations by group, each with its arguments
+  walnut tools list --group <group>    one group of the catalog (plugin: every plugin's)
   walnut tools help <op>               parameters + call syntax for one operation
   walnut tools call <op> --help        the same detail, from the call you were about to make
   walnut tools call <op> ['{json}']    execute with inline JSON
@@ -1087,7 +1094,12 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
 
   // tools.list's --json prints the whole answer; a call's success is its result either way.
   if (parsed.kind !== 'tools.call' && 'json' in parsed && parsed.json) {
-    await writeStdout(JSON.stringify(resp) + '\n')
+    // --group narrows the answer's ops the same way the table is narrowed.
+    const group = parsed.kind === 'tools.list' ? parsed.group : undefined
+    const shown = group && resp.ok && Array.isArray(resp.result.ops)
+      ? { ...resp, result: { ...resp.result, ops: (resp.result.ops as ToolRow[]).filter((o) => inGroup(o.group, group)) } }
+      : resp
+    await writeStdout(JSON.stringify(shown) + '\n')
     return resp.ok ? 0 : errorToExitCode(resp.error.code)
   }
 
@@ -1122,8 +1134,18 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
     }
     await writeStdout(skill.content.endsWith('\n') ? skill.content : skill.content + '\n')
   } else if (parsed.kind === 'tools.list') {
-    const ops = (resp.result.ops ?? []) as ToolRow[]
-    await writeStdout(formatToolsTable(ops) + '\n')
+    const all = (resp.result.ops ?? []) as ToolRow[]
+    const groups = Array.isArray(resp.result.groups) ? resp.result.groups as ToolGroupRow[] : []
+    const group = parsed.group
+    const ops = group ? all.filter((o) => inGroup(o.group, group)) : all
+    if (group && ops.length === 0) {
+      const named = [...new Set(all.map((o) => o.group).filter(Boolean))]
+      process.stderr.write(named.length > 0
+        ? `walnut: no group named ${group}. The groups: ${named.join(', ')}\n`
+        : 'walnut: this Walnut server names no groups yet; run `walnut tools list`\n')
+      return 1
+    }
+    await writeStdout(formatToolsTable(ops, groups) + '\n')
   } else if (parsed.kind === 'tools.help') {
     const ops = (resp.result.ops ?? []) as ToolRow[]
     const opRow = ops.find((o) => o.name === parsed.name)

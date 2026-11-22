@@ -1,5 +1,6 @@
 import { apiGet, apiPost } from './client';
 import type { StreamingBlock } from '@/hooks/useSessionStream';
+import { tooLongAnswer } from '@/components/sessions/tool-run-phrase';
 
 // Block types for rich chat messages — shared between API layer, hooks, and components
 export interface ThinkingBlock {
@@ -18,10 +19,23 @@ export interface ToolCallBlock {
   streamBlocks?: StreamingBlock[];
 }
 
-/** Detect if a tool call result indicates an error */
+/**
+ * A live tool result's status, the same rule a reloaded transcript follows: the result's
+ * own error flag (the transcript's is_error) when the server sent one, else the text rule
+ * below, kept for the emitters that send no flag (the main chat's own tools, a session
+ * server's events).
+ */
+export function toolResultFailed(result: string | undefined, isError: boolean | undefined): boolean {
+  return typeof isError === 'boolean' ? isError : isToolResultError(result);
+}
+
+/** Detect if a tool call result indicates an error, from its text alone (no flag known). */
 export function isToolResultError(result: string | undefined): boolean {
   if (!result) return false;
   const trimmed = result.trimStart();
+  // The harness's note that the answer was too long and went to a file starts with
+  // "Error:", but the call succeeded (tool-run-phrase.ts tooLongAnswer).
+  if (tooLongAnswer(trimmed)) return false;
   // Plain-text error prefixes (used by most tools)
   if (trimmed.startsWith('Error:')
     || trimmed.startsWith('Error -')

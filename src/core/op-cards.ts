@@ -194,6 +194,7 @@ export const NOT_CARDED: Record<string, string> = {
   agent_skill_write: 'the session writes its own skill',
   triage_rule_set: 'saves a routing rule; its note is the rule\'s own',
   router_context: 'reads routing context; its message names the item to read',
+  thread_get: 'reads a thread; its message is the id (tm-...) of the message to read whole',
   task_note_write: 'the session writes its own task note',
   agent_memory_write: 'the session writes its own memory',
   memory_write: 'writes memory, not to anyone',

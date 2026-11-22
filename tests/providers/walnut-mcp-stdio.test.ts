@@ -175,7 +175,8 @@ describe('walnut mcp-server e2e: real MCP client, real CLI entry, fake gateway s
       const body = JSON.parse((r.content as Array<{ text: string }>)[0].text) as { echoed: { description: string } }
       expect(body.echoed.description).toBe(hostile)
       expect(seen.map((s) => s.op)).toEqual(['tools.list', 'tools.call'])
-      expect(seen[0].args).toEqual({ schemas: true })
+      // It asks for its role's list (experiment mcp_tools_by_role): it can say how to reach the rest.
+      expect(seen[0].args).toEqual({ schemas: true, listing: 'role' })
       for (const s of seen) expect(s.sid).toBe('sess-1234')
     } finally {
       await client.close()

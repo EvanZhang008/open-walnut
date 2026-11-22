@@ -4,7 +4,9 @@
  * tool output ceiling, and had to grep the saved file. A reader that needs the gist asks for the
  * newest N messages, the rows after a time, or the compact form: message text kept, every tool
  * call and thinking block one line, and a count of what was left out. None of it applies unless
- * asked, so the default answer stays the route's own.
+ * asked, so the default answer stays the route's own; an AGENT that names none of them reads
+ * the newest messages in the compact form instead (agentHistory, 2026-11-21: task_history
+ * answers ran to p95 24,000 and max 86,000 characters).
  */
 
 export interface HistoryShape {
@@ -17,6 +19,8 @@ export interface HistoryShape {
 }
 
 import { parseSessionEnvelopes, type SessionEnvelope } from '../lib/history-session-envelope.js'
+import type { OpAnswer } from './answer.js'
+import { cutText } from './answer-text.js'
 
 type Row = Record<string, unknown>
 
@@ -38,15 +42,18 @@ export function isTextRow(r: Row): boolean {
 
 const time = (r: Row): number => (typeof r.timestamp === 'string' ? Date.parse(r.timestamp) : NaN)
 
+/** One line of at most `max` characters; a longer one ends with the cut mark (answer-text.ts). */
 function oneLine(s: string, max: number): string {
-  const flat = s.replace(/\s+/g, ' ').trim()
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
+  return cutText(s.replace(/\s+/g, ' ').trim(), max)
 }
 
-/** Clip only when it saves more than its own marker costs. */
+/**
+ * At most `max` characters, the mark included, when that saves more than the mark costs. The
+ * mark is the one every cut answer carries: a cut message quoted into a write is refused.
+ */
 function clip(s: string, max: number): { text: string; clipped: boolean } {
   if (s.length <= max + 100) return { text: s, clipped: false }
-  return { text: `${s.slice(0, max)}… [+${s.length - max} chars; read without compact for all of it]`, clipped: true }
+  return { text: cutText(s, max), clipped: true }
 }
 
 /**
@@ -153,4 +160,96 @@ export function leftOutLine(r: Pick<ShapeResult, 'cutOlder' | 'cutSince' | 'fold
   if (r.cutOlder) parts.push(`${r.cutOlder} older rows past the limit${paged ? ' (older.before reads them)' : ''}`)
   if (r.cutSince) parts.push(`${r.cutSince} rows at or before since`)
   return parts.length ? `${parts.join('; ')}: ${r.chars.toLocaleString('en-US')} characters left out.` : 'Nothing left out.'
+}
+
+/** The newest messages an agent's task_history gives when it names no window (limit, since) and no form (compact). */
+export const AGENT_HISTORY_LIMIT = 20
+/** What those messages may take of the answer's cap (8,000), leaving room for its other keys. */
+const AGENT_HISTORY_BUDGET = 6_500
+/** An older assistant reply in that default, when the messages do not fit: its gist. */
+const AGENT_OLDER_REPLY_MAX = 600
+
+const isSessionHeader = (m: Row): boolean => m.role === 'system' && m.kind === 'notification' && !m.timestamp
+
+/**
+ * Every assistant reply but the newest held to AGENT_OLDER_REPLY_MAX, cut from its whole text (row
+ * `cutOlder + i` of `rows`: no `since` here, so the shaped rows are the tail of the page one for one).
+ * The newest is the result a reader came for.
+ */
+function clipOlderReplies(rows: Row[], out: ShapeResult): ShapeResult {
+  const replies = out.messages.flatMap((m, i) => (m.role === 'assistant' && !m.kind && typeof m.text === 'string' ? [i] : []))
+  const newest = replies.at(-1)
+  let { clipped, chars } = out
+  const messages = out.messages.map((m, i) => {
+    if (i === newest || !replies.includes(i)) return m
+    const whole = rows[out.cutOlder + i]?.text
+    const c = clip(typeof whole === 'string' ? whole : String(m.text), AGENT_OLDER_REPLY_MAX)
+    if (!c.clipped || c.text.length >= String(m.text).length) return m
+    if (String(m.text) === whole) clipped++
+    chars += String(m.text).length - c.text.length
+    return { ...m, text: c.text }
+  })
+  return { ...out, messages, clipped, chars }
+}
+
+/**
+ * An agent's default task_history: the newest AGENT_HISTORY_LIMIT messages in the compact form,
+ * older replies cut to their gist and then fewer messages when they still would not fit (the
+ * oldest go first, never the newest), with how many older rows there are and the call that reads
+ * the page before. A caller that named limit, since or compact gets the answer it asked for;
+ * `"_full": true` skips this altogether.
+ */
+export function agentHistory(result: unknown, args: Record<string, unknown>): unknown {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result
+  const r = result as Row
+  const rows = r.messages
+  if (!Array.isArray(rows) || rows.length === 0) return result
+  if (args.limit !== undefined || args.since !== undefined || args.compact !== undefined) return result
+  // Already this default (a host's call relayed through a gateway that shapes it too).
+  if (typeof r.shown === 'string') return result
+  const all = rows as Row[]
+  const chars = (list: Row[]) => list.reduce((n, m) => n + JSON.stringify(m).length + 1, 0)
+  const shaped = (n: number): ShapeResult => {
+    const one = shapeHistory(all, { limit: n, compact: true })
+    return chars(one.messages) > AGENT_HISTORY_BUDGET ? clipOlderReplies(all, one) : one
+  }
+  let limit = AGENT_HISTORY_LIMIT
+  let out = shaped(limit)
+  while (limit > 3 && chars(out.messages) > AGENT_HISTORY_BUDGET) {
+    limit = Math.max(3, Math.floor(limit * 0.7))
+    out = shaped(limit)
+  }
+  let messages = out.messages
+  // all:true holds several sessions: a cut inside one keeps its header row, which says whose rows these are.
+  if (out.cutOlder > 0 && args.all === true) {
+    const header = all.slice(0, out.cutOlder).reverse().find(isSessionHeader)
+    if (header && messages[0] !== header) messages = [header, ...messages]
+  }
+  const first = messages.find((m) => typeof m.timestamp === 'string')?.timestamp as string | undefined
+  const before = r.truncated === true
+  const paged = (out.cutOlder > 0 || before) && first !== undefined
+  // The page before names no limit or form, so it gets this same default, fitted to its own messages.
+  const page = { id: r.taskId ?? args.id, ...(args.all === true ? { all: true } : {}), before: first }
+  const more = [
+    out.cutOlder > 0 ? `${out.cutOlder} older rows of this page` : '',
+    before ? 'older pages before it' : '',
+  ].filter(Boolean).join(' and ')
+  // The route's own `older` is replaced by the page before what this answer shows.
+  const { older: _routeOlder, ...rest } = r
+  return {
+    ...rest,
+    messages,
+    truncated: paged,
+    ...(paged ? { older: { before: first, how: `walnut tools call task_history '${JSON.stringify(page)}'` } } : {}),
+    left_out: { cutOlder: out.cutOlder, cutSince: 0, folded: out.folded, clipped: out.clipped, chars: out.chars, note: leftOutLine(out, paged) },
+    shown: `The newest ${limit} messages, compact (an agent's default)${more ? `; not shown: ${more} (older.how reads the page before)` : ''}. `
+      + 'Pass limit (up to 200), since, compact:false, or "_full": true for the whole answer.',
+  }
+}
+
+/** task_history's answer policy (the op is in src/ops/work.ts). */
+export const TASK_HISTORY_ANSWER: OpAnswer = {
+  kind: 'content',
+  whole: 'task_history {"id":"<id>","limit":200}',
+  shape: ({ result, args }) => agentHistory(result, args),
 }

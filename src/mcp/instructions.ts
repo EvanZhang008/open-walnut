@@ -44,8 +44,11 @@ export function walnutMcpInstructions(opts: { core?: boolean } = {}): string {
     'notes note_search / note_read; a team board board_get; watches trigger_list / trigger_create; what is open for you ' +
     'open_items; a letter to the user human_inbox_send; any other route api. ' +
     'These tools are the same operations as the `walnut` CLI (`walnut tools call <tool> \'<json>\'`), the same ' +
-    'arguments and answers: call them here, and use the CLI only for a scripted chain of calls or where a tool is ' +
-    'missing. They were read when your session started: after a Walnut update, a field or tool that Walnut\'s ' +
+    'arguments and answers: call them here, and use the CLI only for a scripted chain of calls or ' +
+    // A role may list only its groups (src/ops/op-groups.ts): the CLI is the way to the rest. Worded to be
+    // true whether or not anything is left out, since a host server says it before it lists.
+    (rollback || opts.core ? 'where a tool is missing. ' : 'to reach a tool not listed here (`walnut tools list` shows every tool by group). ') +
+    'They were read when your session started: after a Walnut update, a field or tool that Walnut\'s ' +
     'words name may be missing here, and the CLI always runs the current one.' +
     (opts.core
       ? ' Only the most used tools are listed. Every other Walnut tool (boards, triggers, folders, notes, hosts, ' +

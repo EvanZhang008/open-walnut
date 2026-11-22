@@ -28,7 +28,8 @@
  *
  * What counts: a command (a Bash command with anything but Walnut ops in it, Monitor), host_exec /
  * host_mcp_call / host_http however they are called (`walnut tools call host_exec` too), reading, searching or editing files outside the task's own
- * directory and Claude Code's per-project store (tool results, memory), web fetches, a subagent that may
+ * directory, Claude Code's per-project store (tool results, memory) and a Walnut tool answer kept in a file
+ * (`<tmp>/walnut-tool-answers-<uid>/`, src/lib/tool-answer-fit.ts), web fetches, a subagent that may
  * change things (its start; the calls it makes inside are its own), and any other MCP server's tool. What
  * does not: a read-only subagent (Explore, Plan: how a lead answers the user's direct question itself,
  * 2026-11-16), the calls inside any subagent, Walnut's own ops (the `walnut` CLI, `walnut-cloud
@@ -51,7 +52,18 @@ function own(p) {
   if (p == "") return 0
   if (substr(p, 1, 1) != "/") p = CWD "/" p
   p = norm(p)
-  return (TD != "" && under(p, TD)) || under(p, HOME "/.claude/projects")
+  return (TD != "" && under(p, TD)) || under(p, HOME "/.claude/projects") || answer_file(p)
+}
+# A Walnut tool answer too big for one result, kept whole under <tmp>/walnut-tool-answers-<uid>/
+# (src/lib/tool-answer-fit.ts): reading it back reads the op's own answer. Its temp dir rides
+# ANSWER_TMP, never TMPD: tmp-path-awk.ts volatile() reads TMPD (this program never calls it), so
+# nothing but this one folder changes what counts.
+function answer_file(p,   t, rest) {
+  t = canon(norm(ANSWER_TMP == "" ? "/tmp" : ANSWER_TMP))
+  p = canon(p)
+  if (substr(p, 1, length(t) + 1) != t "/") return 0
+  rest = substr(p, length(t) + 2)
+  return rest ~ /^walnut-tool-answers-[0-9]+(\/[^\/]+)?$/
 }
 # What one simple command is, from its words w[1..nw]: "W" a Walnut op, "X" a Walnut op that runs
 # work on a host (host_exec, host_mcp_call, host_http), "F" a helper (cd, a heredoc's cat, echo; jq or
@@ -177,7 +189,7 @@ export function orgWorkGuardCommand(role: CoreInstructionRole): string {
   const remind = `printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s"}}\\n' ${shQuote(orgWorkReminder(role))}`
   return [
     'in=$(cat 2>/dev/null)',
-    `v=$(printf '%s' "$in" | awk -v HOME="$HOME" -v TD="\${WALNUT_TASK_DIR%/}" ${program} 2>/dev/null)`,
+    `v=$(printf '%s' "$in" | awk -v HOME="$HOME" -v TD="\${WALNUT_TASK_DIR%/}" -v ANSWER_TMP="\${TMPDIR:-/tmp}" ${program} 2>/dev/null)`,
     'case $v in "count "*) sid=${v#count } ;; *) exit 0 ;; esac',
     `mkdir -p ${SLOTS} 2>/dev/null || exit 0`,
     // One slot per call: mkdir is atomic, so parallel calls of a turn each get their own number.

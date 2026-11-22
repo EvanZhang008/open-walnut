@@ -12,13 +12,16 @@ import { SOURCE_TWIN } from '../../helpers/source-twin.js'
 import { spyCliStreams } from '../../helpers/cli-streams.js'
 
 const REPO = path.resolve(__dirname, '../../..')
-const REPRO = '{"q":"controller","types":["task","session"]}'
+// The 2026-11-06 call sent a list for a comma-separated string (search's types). Since 2026-11-21 search
+// takes that list, so the same refusal is made with task_list's phases, which still takes one string.
+const REPRO_OP = 'task_list'
+const REPRO = '{"phases":["TODO","IN_PROGRESS"]}'
 const REPRO_REFUSAL = {
   ok: false,
   error: {
     code: 'internal',
-    message: 'Invalid arguments for search: types: Invalid input: expected string, received array; '
-      + 'types takes one comma-separated string, e.g. "task,session", not a list',
+    message: 'Invalid arguments for task_list: phases: Invalid input: expected string, received array; '
+      + 'phases takes one comma-separated string, e.g. "TODO,IN_PROGRESS", not a list',
   },
 }
 
@@ -105,14 +108,14 @@ function failureIn(text: string): Failure {
 
 describe.each(['wn-cli', 'twin'] as const)('the %s face', (face) => {
   it('the 2026-11-06 call: one JSON object on stderr with the real reason, and `2>&1` parses', async () => {
-    const r = await runFace(face, ['tools', 'call', 'search', REPRO], REPRO_REFUSAL)
+    const r = await runFace(face, ['tools', 'call', REPRO_OP, REPRO], REPRO_REFUSAL)
     expect(r.code).toBe(1)
     expect(r.out).toBe('')
     const f = failureIn(r.err)
     expect(f.error.code).toBe('invalid_arguments')
-    expect(f.error.message).toContain('types takes one comma-separated string, e.g. "task,session"')
+    expect(f.error.message).toContain('phases takes one comma-separated string, e.g. "TODO,IN_PROGRESS"')
 
-    const both = await runFace(face, ['tools', 'call', 'search', REPRO], REPRO_REFUSAL, { shell2to1: true })
+    const both = await runFace(face, ['tools', 'call', REPRO_OP, REPRO], REPRO_REFUSAL, { shell2to1: true })
     expect(both.code).toBe(1)
     expect(both.err).toBe('')
     expect(JSON.parse(both.out)).toEqual(f)
@@ -120,19 +123,19 @@ describe.each(['wn-cli', 'twin'] as const)('the %s face', (face) => {
 
   it('--json before call, before the op, or after the JSON: the object on stdout, stderr empty', async () => {
     for (const argv of [
-      ['tools', '--json', 'call', 'search', REPRO],
-      ['tools', 'call', '--json', 'search', REPRO],
-      ['tools', 'call', 'search', REPRO, '--json'],
+      ['tools', '--json', 'call', REPRO_OP, REPRO],
+      ['tools', 'call', '--json', REPRO_OP, REPRO],
+      ['tools', 'call', REPRO_OP, REPRO, '--json'],
     ]) {
       const r = await runFace(face, argv, REPRO_REFUSAL)
       expect(r.code, argv.join(' ')).toBe(1)
       expect(r.err, argv.join(' ')).toBe('')
       // The twin keeps its old envelope for a --json before call or the op.
-      const legacy = face === 'twin' && argv.indexOf('--json') < argv.indexOf('search')
+      const legacy = face === 'twin' && argv.indexOf('--json') < argv.indexOf(REPRO_OP)
       if (legacy) expect(JSON.parse(r.out)).toEqual(REPRO_REFUSAL)
       else expect(failureIn(r.out).error.code).toBe('invalid_arguments')
       // The payload went out as written.
-      expect(JSON.parse(r.received.trim()).args).toMatchObject({ name: 'search', args: { q: 'controller', types: ['task', 'session'] } })
+      expect(JSON.parse(r.received.trim()).args).toMatchObject({ name: REPRO_OP, args: { phases: ['TODO', 'IN_PROGRESS'] } })
     }
   }, 90_000)
 
@@ -289,7 +292,7 @@ describe('the hub CLI (src/commands/tools.ts)', () => {
   })
 
   it('the 2026-11-06 call is refused before any request, as one JSON object on stderr', async () => {
-    await runTools(['call', 'search', REPRO], {})
+    await runTools(['call', REPRO_OP, REPRO], {})
     expect(process.exitCode).toBe(1)
     expect(hits).toEqual([])
     expect(logs).toEqual([])
@@ -301,11 +304,11 @@ describe('the hub CLI (src/commands/tools.ts)', () => {
 
   it('--json in each place: the object on stdout, nothing on stderr', async () => {
     for (const [argv, globals] of [
-      [['--json', 'call', 'search', REPRO], {}],
-      [['call', '--json', 'search', REPRO], {}],
-      [['call', 'search', REPRO, '--json'], {}],
+      [['--json', 'call', REPRO_OP, REPRO], {}],
+      [['call', '--json', REPRO_OP, REPRO], {}],
+      [['call', REPRO_OP, REPRO, '--json'], {}],
       // The entry strips a --json anywhere and passes it as the global flag.
-      [['call', 'search', REPRO], { json: true }],
+      [['call', REPRO_OP, REPRO], { json: true }],
     ] as const) {
       logs = []
       errors = []

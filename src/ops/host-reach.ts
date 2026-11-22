@@ -87,6 +87,8 @@ defineOp({
   bind: { method: 'POST', path: '/hosts/:host/mcp/:server/call' },
   timeoutMs: 11 * 60_000,
   mapResult: ({ body }) => mcpOutcome(body),
+  // Its answer is the tool's answer (what it ran), not an object it changed: content, with a larger cap.
+  answer: { kind: 'content', max: 12_000 },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
@@ -130,5 +132,7 @@ defineOp({
     const notes = [b.truncated ? 'Only the first 256 KB of the body is here.' : '', b.redactedLines ? `${String(b.redactedLines)} line(s) that looked like a credential were hidden.` : ''].filter(Boolean).join(' ')
     return withOutcome(b, `HTTP ${String(b.status)} from ${String(b.url)} via ${String(b.host)} after ${String(b.ms)} ms.${notes ? ` ${notes}` : ''}`, 'Read status, headers and body.')
   },
+  // Its answer is the response it fetched: content, with a larger cap ("_full": true for the whole body).
+  answer: { kind: 'content', max: 12_000 },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });

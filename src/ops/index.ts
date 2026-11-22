@@ -61,4 +61,5 @@ export {
   type HttpBinding,
 } from './registry.js'
 export { jsonSchemaToZodShape, jsonSchemaToZodType } from './schema-to-zod.js'
+export { OP_GROUPS, groupOfOp, groupTitle, listedForRole, summarizeGroups, type ListingRole } from './op-groups.js'
 export { executeOp, parseOpArgs, resolveApiBase, materializeBinding, CALLER_SID_HEADER, type OpOutcome } from './executor.js'

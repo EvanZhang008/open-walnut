@@ -67,7 +67,7 @@ import { shortenFileAboutLine } from '@/utils/thread-tree';
 import { InjectedBannerRow } from './InjectedBannerRow';
 import { searchPromptBannerSplit } from './search-ask';
 import { SearchAnswerCard } from './SearchAnswerCard';
-import { isRoutedQuestion, isUserDenied, runSegments, toolRunPhrase, type RunCall } from './tool-run-phrase';
+import { isFailedCall, isRoutedQuestion, isUserDenied, runSegments, tooLongAnswer, TOO_LONG_ANSWER_NOTE, toolRunPhrase, type RunCall } from './tool-run-phrase';
 import { AnswerText } from './RuleDetail';
 import { answeredCallState, callAnswerText, callDecisionLabel, runAnswerLines, SoleCallContext, useSoleCall, useDeniedNow, useToolDecisions, useWaitingTools } from './waiting-tools';
 import { toolCallsLabel } from './tool-call-grouping';
@@ -656,7 +656,7 @@ function ToolRunRow({ tools, assistantLabel, sessionId, sessionCwd, sessionHost,
   tools: SessionHistoryTool[];
 } & Omit<SessionToolCallProps, 'tool'>) {
   const phrase = toolRunPhrase(tools);
-  const failCount = tools.filter(t => t.isError && !isRoutedQuestion(t.name, t.result) && !isUserDenied(t.result)).length;
+  const failCount = tools.filter(isFailedCall).length;
   return (
     <ToolRunShell phrase={phrase} calls={tools.map(historyRunCall)} failCount={failCount} running={tools.some((t) => t.liveStatus === 'calling')} count={tools.length} disclosureId={disclosureIds.run({ toolUseId: tools[0]?.toolUseId })}>
       {tools.map((t, i) => (
@@ -751,7 +751,7 @@ export function streamRunSummary(members: readonly StreamRunMember[]): { phrase:
   const tools = members.filter((b): b is StreamingBlock & { type: 'tool_call' } => b.type === 'tool_call');
   return {
     phrase: toolRunPhrase(tools.map(b => ({ name: b.name ?? 'unknown', input: b.input }))),
-    failCount: tools.filter(b => b.status === 'error' && !isRoutedQuestion(b.name, b.result) && !isUserDenied(b.result)).length,
+    failCount: tools.filter(isFailedCall).length,
     calls: tools.map(streamRunCall),
   };
 }
@@ -845,8 +845,7 @@ export const MergedHistoryToolRun = memo(function MergedHistoryToolRun({ message
     ...allTools,
     ...trailingTools.map(b => ({ name: b.name ?? 'unknown', input: b.input })),
   ]);
-  const failCount = allTools.filter(t => t.isError && !isRoutedQuestion(t.name, t.result) && !isUserDenied(t.result)).length
-    + trailingTools.filter(b => b.status === 'error' && !isRoutedQuestion(b.name, b.result) && !isUserDenied(b.result)).length;
+  const failCount = allTools.filter(isFailedCall).length + trailingTools.filter(isFailedCall).length;
   // The run's first member, as the live run names it (runRowKey): a message's
   // reasoning streams before its tools.
   const head = messages[0];
@@ -944,9 +943,12 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
   const waiting = !denied && result === undefined && !!tool.toolUseId && waitingTools.has(tool.toolUseId);
   // Sent beside a call whose prompt is open: the CLI runs nothing until it is answered.
   const queued = !waiting && !denied && !answered && result === undefined && waitingTools.size > 0 && !(tool as { isError?: boolean }).isError && statusProp !== 'error';
+  // An answer the harness saved to a file for being too long: the call completed (tooLongAnswer).
+  const tooLong = tooLongAnswer(result);
+  const errored = !!(tool as { isError?: boolean }).isError || statusProp === 'error';
   const status = waiting || queued ? 'waiting' : denied ? 'denied'
-    : (tool as { isError?: boolean }).isError && !routed ? 'error'
-    : statusProp === 'error' && routed ? 'done' : statusProp;
+    : errored && (routed || tooLong?.wordedAsError) ? 'done'
+    : errored ? 'error' : statusProp;
   const safeInput = (tool.input && typeof tool.input === 'object') ? tool.input : {};
   const description = toolDescription(safeInput);
   // Memoized: JSON.stringify over a large Write/Edit input on EVERY render was
@@ -1048,6 +1050,7 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
         )}
         {status === 'waiting' && <span className="chat-tool-block-waiting-label">{queued ? 'Queued' : tool.name === 'AskUserQuestion' ? 'Waiting for your answer' : 'Waiting for approval'}</span>}
         {status !== 'waiting' && decision && <span className="chat-tool-block-decision" title={decision}><AnswerText text={callDecisionLabel(decision)} /></span>}
+        {status === 'done' && tooLong && <span className="chat-tool-block-decision" data-too-long-answer="" title={tooLong.file}>{TOO_LONG_ANSWER_NOTE}</span>}
         {!open && inputSummary && (
           <span className="chat-tool-block-summary">{inputSummary}</span>
         )}

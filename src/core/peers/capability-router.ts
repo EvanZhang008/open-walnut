@@ -46,6 +46,12 @@ export interface CapabilityRouterDeps {
   throttle: PeerThrottle;
   /** WALNUT_CLOUD_MODE replica — gateway capabilities are refused there (P1). */
   cloudMode: boolean;
+  /**
+   * The listing (role and plugins) of a caller whose MCP server asks for one (tool-listing-role.ts), or
+   * undefined to list everything. Tests inject it; the default reads the experiment and the
+   * caller's task.
+   */
+  listingRole?: (callerSid: string) => Promise<import('../../ops/op-groups.js').ToolListing | undefined>;
 }
 
 // Shared across all daemon connections — the throttle is per-sender state
@@ -111,7 +117,7 @@ export async function handleGatewayCapability(
   callerSid = (await import('../sessions/acp-caller-sid.js')).canonicalCallerSid(callerSid);
   switch (capability) {
     case 'tools.list':
-      return handleToolsList(payload ?? {}, host, callerSid);
+      return handleToolsList(payload ?? {}, host, callerSid, d);
     case 'tools.call':
       return handleToolsCall(callerSid, payload ?? {}, host, d, meta);
     case 'history.fetch':
@@ -160,13 +166,15 @@ async function handleHistoryFetch(payload: Record<string, unknown>, host: string
  * `query` vs `q` from the old output). `payload.name` narrows the answer to one
  * op and adds its full parameter rows — that is how `walnut tools help <op>`
  * and `walnut tools call <op> --help` get a schema without shipping every op's
- * parameter descriptions over the socket.
+ * parameter descriptions over the socket. Each row names its group (src/ops/op-groups.ts)
+ * and the answer lists the groups, so the CLI prints the catalog by group.
  */
-async function handleToolsList(payload: Record<string, unknown>, host: string, callerSid: string): Promise<CapabilityOutcome> {
+async function handleToolsList(payload: Record<string, unknown>, host: string, callerSid: string, deps: CapabilityRouterDeps): Promise<CapabilityOutcome> {
   const { areaOpsForCaller } = await import('../router/gateway-policy.js');
   const areaOps = await areaOpsForCaller(callerSid);
   const { listOps, getOpOwner } = await import('../../ops/index.js');
   const { opParams, formatParamSignature } = await import('../../ops/op-help.js');
+  const { groupOfOp, listedForRole, summarizeGroups } = await import('../../ops/op-groups.js');
   const wanted = typeof payload.name === 'string' ? payload.name.trim() : '';
   // `schemas: true` is the Walnut MCP server on a host (`walnut mcp-server`,
   // src/providers/walnut-mcp-stdio.ts): every op with its JSON schema, and only
@@ -174,8 +182,16 @@ async function handleToolsList(payload: Record<string, unknown>, host: string, c
   // refused. An older hub ignores the flag; that server then lists permissive schemas.
   if (payload.schemas === true) {
     const { opInputJsonSchema } = await import('../../ops/registry.js');
+    // `listing: 'role'`: a server that tells its session how to reach what it does not list asks
+    // for its role's tools only (experiment mcp_tools_by_role, tool-listing-role.ts). An older
+    // one never asks, so it keeps listing everything. Listing only: tools.call runs every op.
+    // A router is held to its own ops above and gets no role.
+    const listing = !areaOps && payload.listing === 'role'
+      ? await (deps.listingRole ?? (async (sid: string) => (await import('../sessions/tool-listing-role.js')).listingRoleForCaller(sid)))(callerSid).catch(() => undefined)
+      : undefined;
     const ops = listOps()
       .filter((o) => (!areaOps || areaOps.has(o.name)) && !gatewayRefusal(o, host, getOpOwner(o.name)))
+      .filter((o) => !listing || listedForRole(listing, o.name, getOpOwner(o.name)))
       .map((o) => ({
         name: o.name,
         title: o.title,
@@ -196,22 +212,25 @@ async function handleToolsList(payload: Record<string, unknown>, host: string, c
   const ops = (wanted ? listOps({ includeDeprecated: true }).filter((o) => o.name === wanted) : listOps())
     .filter((o) => !areaOps || areaOps.has(o.name));
   const away = await awayCatalog();
+  const rows = ops.map((o) => {
+    const params = opParams(o.input);
+    return {
+      name: o.name,
+      title: o.title,
+      description: o.description,
+      readonly: o.tags.readonly,
+      remote: o.tags.remote,
+      signature: formatParamSignature(params),
+      group: groupOfOp(o.name, getOpOwner(o.name)),
+      ...(wanted ? { params } : {}),
+      ...(away ? { away: away.of(o.name) } : {}),
+    };
+  });
   return {
     ok: true,
     result: {
-      ops: ops.map((o) => {
-        const params = opParams(o.input);
-        return {
-          name: o.name,
-          title: o.title,
-          description: o.description,
-          readonly: o.tags.readonly,
-          remote: o.tags.remote,
-          signature: formatParamSignature(params),
-          ...(wanted ? { params } : {}),
-          ...(away ? { away: away.of(o.name) } : {}),
-        };
-      }),
+      ops: rows,
+      groups: summarizeGroups(rows),
       ...(away ? { hint: away.hint } : {}),
     },
   };
@@ -368,6 +387,9 @@ async function handleToolsCall(
   callerSid, callerHost: host, origin: hostOrigin(host), ...(proofToken ? { callerProof: proofToken } : {}), ...(triggerToken ? { callerTrigger: triggerToken } : {}), ...(callId ? { callId } : {}),
   ...(meta.pluginJob ? { callerPluginId: meta.pluginJob.plugin, callerPluginJob: meta.pluginJob.job } : {}),
   ...(jobToken ? { callerJob: jobToken } : {}),
+  // A session reads a receipt or capped content (ops/answer.ts); a check script or a plugin job reads the result as it is.
+  // A call no session made (a person's terminal on that host, an outside script) reads the result as it is too.
+  forAgent: !payload.triggerCaller && !meta.pluginJob && !!callerSid && !isExternalCallerSid(callerSid),
 }));
   // Real use (core/usage-watch): the call's outcome and its answer's size as its client prints it.
   // A test run's calls stay out of it.

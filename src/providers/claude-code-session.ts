@@ -190,6 +190,8 @@ const dropStaleNotices: typeof import('../core/sessions/stale-notice.js').dropSt
  */
 export async function acpWalnutMcpServer(): Promise<import('./acp-worker/protocol.js').AcpMcpServer> {
   const { walnutMcpProfile } = await sessionPort().launch.loadProfiles()
+  // No listing role: that is for an engine that loads tools on demand (Claude Code); an ACP
+  // engine keeps its own tool set (acp-worker/protocol.ts walnutMcpToolSet).
   const server = walnutMcpProfile().mcpServers?.walnut
   if (!server) throw new Error('Walnut MCP profile is unavailable')
   return sessionMcpServerToAcp('walnut', server)

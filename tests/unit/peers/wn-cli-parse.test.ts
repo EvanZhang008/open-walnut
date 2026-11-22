@@ -47,6 +47,10 @@ describe('parseWalnutCliArgs — tools + guide', () => {
   it('parses the tools subcommands', () => {
     expect(parseWalnutCliArgs(['tools', 'list'])).toEqual({ kind: 'tools.list', json: false });
     expect(parseWalnutCliArgs(['tools', 'list', '--json'])).toEqual({ kind: 'tools.list', json: true });
+    // One group of the catalog (src/ops/op-groups.ts).
+    expect(parseWalnutCliArgs(['tools', 'list', '--group', 'board'])).toEqual({ kind: 'tools.list', json: false, group: 'board' });
+    expect(parseWalnutCliArgs(['tools', 'list', '--group=plugin', '--json'])).toEqual({ kind: 'tools.list', json: true, group: 'plugin' });
+    expect(parseWalnutCliArgs(['tools', 'list', '--group'])).toMatchObject({ kind: 'usage-error' });
     expect(parseWalnutCliArgs(['tools', 'help', 'session_send'])).toEqual({ kind: 'tools.help', name: 'session_send' });
     expect(parseWalnutCliArgs(['tools', 'call', 'session_send', '{"to":"9f3a","text":"hi"}'])).toEqual({
       kind: 'tools.call', name: 'session_send', rawJson: '{"to":"9f3a","text":"hi"}',

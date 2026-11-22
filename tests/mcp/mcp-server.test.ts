@@ -175,11 +175,25 @@ describe('walnut mcp --core', () => {
     } finally { await full.close(); await core.close() }
   })
 
-  it('tool_help lists every op and shows one op\'s arguments', async () => {
+  it('tool_help lists the groups, every op by its group, and shows one op\'s arguments', async () => {
     const { client, close } = await connect({ core: true })
     try {
+      // No arguments: every op's name, one line per group (names only: the answer stays small).
       const list = textOf(await client.callTool({ name: 'tool_help', arguments: {} }))
-      for (const n of opNames()) expect(list).toContain(`${n}: `)
+      const named = new Set(list.split('\n').slice(1).flatMap((l) => l.slice(l.indexOf(': ') + 2).split(', ')))
+      for (const n of opNames()) expect(named, n).toContain(n)
+      expect(list).toMatch(/^tasks: .*\btask_list\b/m)
+      expect(list.length).toBeLessThan(4_000)
+      // group=: that group's ops with their titles; every op is in one of the groups listed.
+      const groups = list.split('\n').slice(1).map((l) => l.slice(0, l.indexOf(': ')))
+      let seen = ''
+      for (const group of groups) seen += textOf(await client.callTool({ name: 'tool_help', arguments: { group } })) + '\n'
+      for (const n of opNames()) expect(seen).toContain(`${n}: `)
+      const inBoard = textOf(await client.callTool({ name: 'tool_help', arguments: { group: 'board' } }))
+      expect(inBoard).toContain('board_post: ')
+      expect(inBoard).not.toContain('task_list: ')
+      const noGroup = textOf(await client.callTool({ name: 'tool_help', arguments: { group: 'no_such_group' } }))
+      expect(noGroup).toContain('No group named no_such_group')
       const boards = textOf(await client.callTool({ name: 'tool_help', arguments: { filter: 'board' } }))
       expect(boards).toContain('board_get: ')
       expect(boards).not.toContain('task_list: ')
@@ -219,7 +233,8 @@ describe('walnut mcp --core', () => {
       const names = (await client.listTools()).tools.map((t) => t.name)
       expect(names).toContain('tool_call')
       expect(names).not.toContain('task_create')
-      const list = textOf(await client.callTool({ name: 'tool_help', arguments: {} }))
+      const list = textOf(await client.callTool({ name: 'tool_help', arguments: { group: 'tasks' } }))
+      expect(list).toContain('task_get: ')
       expect(list).not.toContain('task_create: ')
       const refused = await client.callTool({ name: 'tool_call', arguments: { name: 'task_create', args: { record_only: true, title: 'core readonly' } } })
       expect(refused.isError).toBe(true)
@@ -228,6 +243,40 @@ describe('walnut mcp --core', () => {
       const res = await fetch(`http://127.0.0.1:${port}/api/v1/tasks`)
       const { tasks } = await res.json() as { tasks: Array<{ title: string }> }
       expect(tasks.some((t) => t.title === 'core readonly')).toBe(false)
+    } finally { await close() }
+  })
+})
+
+// Experiment mcp_tools_by_role: Main's and an ask's mount lists the org role's groups
+// (src/ops/op-groups.ts). Listing only: an op it leaves out still runs when called by name.
+describe('walnut mcp with a listing role', () => {
+  it('lists the role\'s groups only, and still runs an unlisted op by name', async () => {
+    const full = await connect()
+    const org = await connect({ role: 'org' })
+    const worker = await connect({ role: 'worker' })
+    try {
+      const all = (await full.client.listTools()).tools.map((t) => t.name)
+      const orgNames = (await org.client.listTools()).tools.map((t) => t.name)
+      const workerNames = (await worker.client.listTools()).tools.map((t) => t.name)
+      expect(all.length).toBe(opNames().length)
+      expect(orgNames.length).toBeLessThan(all.length)
+      expect(workerNames.length).toBeLessThan(orgNames.length)
+      for (const n of ['task_get', 'task_send', 'org_get', 'brief_write', 'thread_update', 'host_exec']) expect(orgNames, n).toContain(n)
+      for (const n of ['topic_post', 'folder_list', 'approval_list', 'router_route']) expect(orgNames, n).not.toContain(n)
+      expect(workerNames).not.toContain('org_get')
+      expect(orgNames).not.toContain('tool_help')
+      // Not listed, still callable: the same CallTool handler that runs a deprecated name.
+      const unlisted = await org.client.callTool({ name: 'folder_list', arguments: {} })
+      expect(unlisted.isError).toBeFalsy()
+      expect(Array.isArray(jsonOf(unlisted).folders)).toBe(true)
+    } finally { await full.close(); await org.close(); await worker.close() }
+  })
+
+  it('--core wins over a role', async () => {
+    const { client, close } = await connect({ core: true, role: 'org' })
+    try {
+      const names = (await client.listTools()).tools.map((t) => t.name).sort()
+      expect(names).toEqual([...CORE_TOOL_NAMES, 'tool_call', 'tool_help'].sort())
     } finally { await close() }
   })
 })

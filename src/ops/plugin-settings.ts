@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { defineOp } from './registry.js'
+import { clipText } from './doc-page.js'
 import { withOutcome } from './outcome.js'
 
 type Change = { key: string; label: string; from?: unknown; to?: unknown; removed?: boolean }
@@ -11,6 +12,48 @@ interface SetBody {
 
 const rec = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {})
 const show = (v: unknown): string => (v === undefined ? '(unset)' : JSON.stringify(v))
+const clip = (v: unknown, max: number): string | undefined =>
+  typeof v === 'string' && v ? clipText(v, max) : undefined
+
+/** A value an agent reads in the field list; a longer one is told by its size, and `key` reads it. */
+const VALUE_MAX = 200
+const HELP_MAX = 120
+const ENUM_SHOWN = 20
+/** plugin_settings' cap: an agent's shell keeps about 10,000 characters. */
+const SETTINGS_MAX = 10_000
+
+/** A long value in a line: what it is and how big, never the value. */
+function sized(v: unknown): unknown {
+  const json = JSON.stringify(v)
+  if (json === undefined || json.length <= VALUE_MAX) return v
+  const what = Array.isArray(v) ? `a list of ${v.length}` : v && typeof v === 'object' ? `an object of ${Object.keys(v).length} keys` : 'a text'
+  return `(${what}, ${json.length} characters: read it with key)`
+}
+
+/**
+ * One setting as an agent picks from: what it is, whether it is set, and its value when short. A
+ * long value, a long allowed list and the schema inside a list or an object are read with `key`.
+ */
+function fieldLine(value: unknown): Record<string, unknown> {
+  const f = rec(value)
+  const choices = Array.isArray(f.enum) ? f.enum : null
+  return {
+    key: f.key,
+    label: f.label,
+    type: f.type,
+    ...(f.required ? { required: true } : {}),
+    ...(f.secret ? { secret: true } : {}),
+    ...(f.declared === false ? { declared: false } : {}),
+    set: f.set,
+    ...('value' in f ? { value: sized(f.value) } : {}),
+    ...('default' in f ? { default: sized(f.default) } : {}),
+    ...(choices ? { enum: choices.length > ENUM_SHOWN ? [...choices.slice(0, ENUM_SHOWN), `(${choices.length - ENUM_SHOWN} more: read it with key)`] : choices } : {}),
+    ...(typeof f.minimum === 'number' ? { minimum: f.minimum } : {}),
+    ...(typeof f.maximum === 'number' ? { maximum: f.maximum } : {}),
+    ...(clip(f.help, HELP_MAX) ? { help: clip(f.help, HELP_MAX) } : {}),
+    ...(f.items !== undefined || f.properties !== undefined ? { schema: 'what is inside: read it with key' } : {}),
+  }
+}
 
 defineOp({
   name: 'plugin_settings',
@@ -19,15 +62,57 @@ defineOp({
     'Every plugin\'s settings, the same ones its page in Apps shows. Without `plugin`: every running plugin '
     + '(or one waiting for required settings), one line each. With `plugin` (its id or name): each setting with its '
     + 'label, help, type, allowed values, whether it is required or a secret, its value now (secrets masked), and where its '
-    + 'page is. Read this before plugin_settings_set. Skill `walnut-configure-plugin` has the whole way to configure a plugin.',
+    + 'page is; a long value or help reads short, and `key` reads one setting whole (the schema of a list or an object too). '
+    + 'Read this before plugin_settings_set. Skill `walnut-configure-plugin` has the whole way to configure a plugin.',
   input: {
     plugin: z.string().min(1).max(120).optional().describe('Plugin id or name; omit for the list of plugins'),
+    key: z.string().min(1).max(120).optional().describe('With plugin: one setting key, that setting whole'),
   },
   handler: async (args, call) => {
     const plugin = typeof args.plugin === 'string' ? args.plugin : ''
-    return plugin ? call('GET', `/plugin-settings/${encodeURIComponent(plugin)}`) : call('GET', '/plugin-settings')
+    if (!plugin) return call('GET', '/plugin-settings')
+    const view = await call('GET', `/plugin-settings/${encodeURIComponent(plugin)}`)
+    const key = typeof args.key === 'string' ? args.key : ''
+    const v = rec(view)
+    if (!key || !Array.isArray(v.fields)) return view
+    const fields = v.fields.filter((f) => rec(f).key === key)
+    return fields.length ? { ...v, fields } : {
+      ...v,
+      fields: [],
+      hint: `${String(v.name ?? plugin)} has no setting "${key}". Its keys: ${v.fields.map((f) => String(rec(f).key)).join(', ') || 'none'}.`,
+    }
   },
   routes: [{ method: 'GET', path: '/plugin-settings' }, { method: 'GET', path: '/plugin-settings/:plugin' }],
+  // A plugin's settings in a line each (2026-11-21: one plugin answered up to 21,000 characters);
+  // `key` reads one whole. The list of plugins is short already: its page links are left to one plugin's read.
+  answer: {
+    kind: 'content',
+    max: SETTINGS_MAX,
+    shape: ({ result, args }) => {
+      const r = rec(result)
+      if (Array.isArray(r.plugins)) {
+        return { ...r, plugins: r.plugins.map((p) => { const { page: _page, ...rest } = rec(p); return rest }) }
+      }
+      if (!Array.isArray(r.fields) || typeof args.key === 'string') return result
+      // The settings that fit, in the plugin's order; the rest by key, each read with `key`.
+      const fields: Record<string, unknown>[] = []
+      // Room for the plugin's own fields, the note and the keys left out.
+      let used = JSON.stringify({ ...r, fields: [] }).length + 1_200
+      for (const f of r.fields) {
+        const line = fieldLine(f)
+        const n = JSON.stringify(line).length + 1
+        if (fields.length && used + n > SETTINGS_MAX) break
+        fields.push(line)
+        used += n
+      }
+      const left = r.fields.slice(fields.length).map((f) => String(rec(f).key))
+      return {
+        ...r,
+        fields,
+        ...(left.length ? { moreKeys: left, more: `${left.length} more setting(s) by key: plugin_settings ${JSON.stringify({ plugin: args.plugin, key: '<key>' })} reads one whole.` } : {}),
+      }
+    },
+  },
   tags: { readonly: true, remote: 'allow' },
 })
 

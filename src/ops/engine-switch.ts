@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
+import { TASK_RECEIPT } from './task-answers.js';
 
 const ENGINES = ['claude', 'codex', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'] as const;
 
@@ -35,6 +36,7 @@ defineOp({
   bind: { method: 'POST', path: '/tasks/:id/switch-engine' },
   timeoutMs: 60_000,
   mapResult: ({ body }) => switchOutcome(body),
+  answer: TASK_RECEIPT,
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
@@ -100,6 +102,7 @@ defineOp({
   bind: { method: 'POST', path: '/tasks/:id/move' },
   timeoutMs: 200_000,
   mapResult: ({ body }) => moveOutcome(body),
+  answer: TASK_RECEIPT,
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
