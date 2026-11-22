@@ -48,8 +48,13 @@ export interface NoticeCardProps {
   status?: { tone: NoticeTone; text?: ReactNode; title?: string };
   /** The preview under the title, two lines at most (its own element keeps any refs and classes). */
   line?: ReactNode;
-  /** Controls at the end of the title row (×, "N more ›", –). */
+  /** Controls at the end of the title row ("N more ›", –). */
   end?: ReactNode;
+  /** The card's ×, at the end of the title row: every notice in the stack can be closed (2026-11-22,
+   *  the user, of a "Not sent" receipt that stayed: "why there is no x so that i cna close"). */
+  onClose?: () => void;
+  /** What the × says to a screen reader (default "Dismiss"). */
+  closeLabel?: string;
   /** A click on the head (the avatar, title, status and preview): open what it is about. */
   onOpen?: () => void;
   openTitle?: string;
@@ -101,7 +106,13 @@ export function NoticeCard(p: NoticeCardProps) {
       </span>
     </>
   );
-  const hasHead = !!(p.avatar || p.who !== undefined || p.status || p.line || p.end);
+  const hasHead = !!(p.avatar || p.who !== undefined || p.status || p.line || p.end || p.onClose);
+  const close = p.onClose && (
+    <button type="button" className="wn-notice-x" aria-label={p.closeLabel ?? 'Dismiss'} title={p.closeLabel ?? 'Dismiss'}
+      onClick={(e) => { e.stopPropagation(); p.onClose!(); }}>
+      &times;
+    </button>
+  );
   return (
     <div
       ref={p.cardRef}
@@ -128,7 +139,7 @@ export function NoticeCard(p: NoticeCardProps) {
           ) : (
             <span className={cx('wn-notice-open', p.parts?.open)}>{words}</span>
           )}
-          {p.end && <span className="wn-notice-end">{p.end}</span>}
+          {(p.end || close) && <span className="wn-notice-end">{p.end}{close}</span>}
         </div>
       )}
       {/* With a head, the notice's own content sits under its words; with none (a form that lays

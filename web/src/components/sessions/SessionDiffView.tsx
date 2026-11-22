@@ -3264,7 +3264,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               surfaceNonce={`${selectedChange.filePath}:${phoneDiff ? 'unified' : viewType}:${rendered}:${selectedChange.after.length}`}
             />
           )}
-          {askNotice && <FileAskNotice text={askNotice.text} />}
+          {askNotice && <FileAskNotice text={askNotice.text} onClose={() => setAskNotice(null)} />}
           </div>
           {refState && (
             <ReferencePanel

@@ -2794,7 +2794,7 @@ export function FileContentView({
           getDocText={docTextNow}
         />
       )}
-      {askNotice && <FileAskNotice text={askNotice.text} />}
+      {askNotice && <FileAskNotice text={askNotice.text} onClose={() => setAskNotice(null)} />}
       {selection && (
         <SelectionAskPill
           anchor={selection}

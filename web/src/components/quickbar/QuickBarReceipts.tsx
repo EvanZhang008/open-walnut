@@ -1,7 +1,7 @@
 /**
  * The receipts after a send (useQuickReceipts.ts): a notice card (NoticeCard) per message, newest at the bottom,
  * that says where it stands in words and, once it came, the reply's first line. Click opens the
- * whole reply with "Open chat"; a message that never went out offers "Put it back".
+ * whole reply with "Open chat"; a message that never went out offers "Put it back". Each has its ×.
  */
 import { CORNER_ORDER, CornerSlot } from '@/components/common/corner-stack';
 import { NoticeCard, type NoticeTone } from '@/components/common/NoticeCard';
@@ -69,6 +69,7 @@ export function QuickBarReceipts({ receipts, floating, onOpenChat, onPutBack, on
             // Open, the reply shows whole below: the line then says what was sent.
             line={r.open ? `You: ${r.text}` : line || r.text}
             onOpen={() => onToggle(r.id)}
+            onClose={() => onDismiss(r.id)}
             expanded={!!r.open}
             parts={{ open: 'qb-receipt-head', who: 'qb-receipt-who', status: 'qb-receipt-status', line: `qb-receipt-line${r.open ? ' qb-receipt-said' : ''}`, body: 'qb-receipt-more' }}
           >

@@ -7,10 +7,10 @@ import { CornerSlot, CORNER_ORDER } from '@/components/common/corner-stack';
 import { NoticeCard } from '@/components/common/NoticeCard';
 import { ICON_INFO } from '@/components/common/Icons';
 
-export function FileAskNotice({ text }: { text: string }) {
+export function FileAskNotice({ text, onClose }: { text: string; onClose: () => void }) {
   return (
     <CornerSlot order={CORNER_ORDER.fileAsk} className="corner-slot-file-ask">
-      <NoticeCard className="fv-ask-notice" role="status" testId="file-ask-notice" avatar={{ glyph: ICON_INFO, tone: 'warn' }} who="Ask here" status={{ tone: 'warn', text: 'No card opened' }}>
+      <NoticeCard className="fv-ask-notice" role="status" testId="file-ask-notice" avatar={{ glyph: ICON_INFO, tone: 'warn' }} who="Ask here" status={{ tone: 'warn', text: 'No card opened' }} onClose={onClose}>
         {/* Whole, never cut: it says why the press did nothing. */}
         <div className="fv-ask-notice-text">{text}</div>
       </NoticeCard>
