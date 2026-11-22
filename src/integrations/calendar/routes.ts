@@ -14,6 +14,8 @@
  *          'delegated'). Cancelled and declined events are MARKED, not dropped:
  *          the calendar shows what macOS holds and callers decide how to render.
  * GET    /sources                              → { sources, calendars, defaultCalendar }
+ *          `sources[0]` is always the Mac's (EventKit); a mail account's calendar adds its own
+ *          entry (`kind: 'caldav'`, `account`) while the `mail_calendars` experiment is on.
  *          `defaultCalendar`: { id, configuredId, title?, account?, warning? }; `id` is null
  *          when nothing usable is set (a configured id that is gone or read-only carries a warning).
  * PUT    /sources/eventkit                     → { enabled?, hidden_calendar_ids?, visible_calendar_ids?, default_calendar_id? }
@@ -26,6 +28,8 @@
  * POST   /events                               → { calendarId?, title, start, end, allDay? }
  *          No calendarId (or `calendar_id`) creates on the default calendar; 400 when none is usable.
  * DELETE /events/:id
+ * POST   /mail-accounts/:accountId/calendar     → { address? } → { ok, source, calendars } | { ok: false, reason, message }
+ * DELETE /mail-accounts/:accountId/calendar     → { removed }   (mail-calendars.ts, behind `mail_calendars`)
  *
  * Date contract: tz-less local ISO (same as task dates).
  */
@@ -36,6 +40,15 @@ import { isPermitRefusal, NOT_LEADER_MESSAGE } from '../../core/leader/switch/do
 import { ORIGIN_HEADER, LOCAL_ORIGIN } from '../../lib/caller-origin.js'
 import type { CalendarService } from './service.js'
 import type { CalendarInfo } from './types.js'
+
+/**
+ * A yes only the person at this Mac can give (a protected write's human_confirm, a calendar
+ * server Walnut found): never from a session (it carries its caller sid) or a caller off this Mac.
+ */
+export function fromPersonHere(request: Pick<PluginRouteRequest, 'headers'>): boolean {
+  const origin = request.headers[ORIGIN_HEADER]
+  return !request.headers['x-walnut-caller-sid'] && (!origin || origin === LOCAL_ORIGIN)
+}
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
 const LOCAL_ISO_RE = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}):(\d{2}))?$/
@@ -50,7 +63,7 @@ function errorReply(walnut: WalnutServerPluginApi, err: unknown): PluginRouteRep
       code === 'not-found' ? 404
       : code === 'usage' ? 400
       : code === 'human-approval-required' || code === 'approval-canceled' ? 403
-      : code === 'readonly' ? 409
+      : code === 'readonly' || code === 'conflict' ? 409
       : code === 'permission-denied' ? 403
       : code === 'disabled' || code === 'not-configured' || code === 'unsupported-platform' || code === 'cloud' ? 503
       : 502
@@ -130,10 +143,10 @@ export function registerCalendarRoutes(
     }
     try {
       const events = await service.getEvents(from, to, { force, includeHidden })
-      return { json: { events, sources: [service.status()] } }
+      return { json: { events, sources: service.statuses() } }
     } catch (err) {
       // Reads degrade gracefully: the calendar view still renders tasks.
-      if (calendarErrorCode(err)) return { json: { events: [], sources: [service.status()] } }
+      if (calendarErrorCode(err)) return { json: { events: [], sources: service.statuses() } }
       return errorReply(walnut, err)
     }
   })
@@ -141,13 +154,16 @@ export function registerCalendarRoutes(
   walnut.http.route('get', '/sources', async () => {
     try {
       const service = resolve()
-      const status = service.status()
       let calendars: CalendarInfo[] = []
       let listed = false
-      if (status.available && status.enabled) {
+      // Asked when any source can answer (the Mac's, or a mail account's calendar): each one
+      // that fails says why in its own status, and the others' calendars still come back.
+      if (service.statuses().some((s) => s.available && s.enabled)) {
         try {
-          calendars = await service.listCalendars()
-          listed = true
+          const read = await service.listCalendarsDetailed()
+          calendars = read.calendars
+          // A default is checked only against a complete list: one source missing would call it gone.
+          listed = read.complete
         } catch {
           calendars = [] // status() will carry the failure reason on next call
         }
@@ -158,7 +174,7 @@ export function registerCalendarRoutes(
       const defaultCalendar = listed
         ? service.describeDefault(calendars)
         : { id: null, configuredId: service.configuredDefaultId() }
-      return { json: { sources: [service.status()], calendars, defaultCalendar } }
+      return { json: { sources: service.statuses(), calendars, defaultCalendar } }
     } catch (err) {
       return errorReply(walnut, err)
     }
@@ -225,14 +241,14 @@ export function registerCalendarRoutes(
     if (Object.keys(patch).length > 0) await walnut.config.patch(patch)
     await service.reloadConfig()
     service.refreshAll().catch(() => {})
-    return { json: { sources: [service.status()] } }
+    return { json: { sources: service.statuses() } }
   })
 
   walnut.http.route('post', '/refresh', async () => {
     try {
       const service = resolve()
       await service.refreshAll()
-      return { json: { sources: [service.status()] } }
+      return { json: { sources: service.statuses() } }
     } catch (err) {
       return errorReply(walnut, err)
     }
@@ -256,7 +272,7 @@ export function registerCalendarRoutes(
     }
     try {
       const result = await service.setEventHidden(id, hidden, (patch) => walnut.config.patch(patch))
-      return { json: { ...result, sources: [service.status()] } }
+      return { json: { ...result, sources: service.statuses() } }
     } catch (err) {
       return errorReply(walnut, err)
     }
@@ -267,7 +283,7 @@ export function registerCalendarRoutes(
     if (!body) return { status: 400, json: { error: 'body must be JSON' } }
     const { start, end, title, human_confirm } = body as { start?: string; end?: string; title?: string; human_confirm?: boolean }
     if (human_confirm !== undefined && typeof human_confirm !== 'boolean') return { status: 400, json: { error: 'human_confirm must be a boolean' } }
-    if (human_confirm && (request.headers['x-walnut-caller-sid'] || (request.headers[ORIGIN_HEADER] && request.headers[ORIGIN_HEADER] !== LOCAL_ORIGIN))) return { status: 403, json: { error: 'Protected calendar writes must be confirmed in Walnut on the Mac. Use Hide event instead.', code: 'human-approval-required' } }
+    if (human_confirm && !fromPersonHere(request)) return { status: 403, json: { error: 'Protected calendar writes must be confirmed in Walnut on the Mac. Use Hide event instead.', code: 'human-approval-required' } }
     if (!start || !end || !LOCAL_ISO_RE.test(start) || !LOCAL_ISO_RE.test(end)) {
       return { status: 400, json: { error: 'start and end are required, tz-less local ISO' } }
     }
@@ -309,7 +325,7 @@ export function registerCalendarRoutes(
   walnut.http.route('delete', '/events/:id', async (request) => {
     const confirmation = firstQuery(request.query.human_confirm)
     if (confirmation !== undefined && confirmation !== '1') return { status: 400, json: { error: 'human_confirm must be 1' } }
-    if (confirmation && (request.headers['x-walnut-caller-sid'] || (request.headers[ORIGIN_HEADER] && request.headers[ORIGIN_HEADER] !== LOCAL_ORIGIN))) return { status: 403, json: { error: 'Protected calendar writes must be confirmed in Walnut on the Mac. Use Hide event instead.', code: 'human-approval-required' } }
+    if (confirmation && !fromPersonHere(request)) return { status: 403, json: { error: 'Protected calendar writes must be confirmed in Walnut on the Mac. Use Hide event instead.', code: 'human-approval-required' } }
     try {
       await resolve().deleteEvent(eventIdFrom(request), confirmation ? { humanConfirm: true } : undefined)
       return { json: { ok: true } }

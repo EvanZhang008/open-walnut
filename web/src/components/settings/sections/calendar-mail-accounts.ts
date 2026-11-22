@@ -45,3 +45,24 @@ export function mailCalendarHelp(match: MailCalendarMatch): string {
     case 'missing': return 'No calendar here matches this address. If it should be here, check that this account is in macOS System Settings, Internet Accounts, with Calendars on.'
   }
 }
+
+/**
+ * A mail account's calendar read from its own server (the `mail_calendars` experiment): the
+ * line its row says. `status` is that calendar's source status from `GET /sources`.
+ */
+export function mailServerCalendarHelp(status: { available: boolean; reason?: string; message?: string }, calendarCount: number): string {
+  if (!status.available) {
+    if (status.reason === 'disabled') return 'Its calendar comes from its mail server; external calendars are off above.'
+    return `Its calendar is not read right now: ${status.message ?? 'its server did not answer.'}`
+  }
+  if (calendarCount === 0) return 'Its calendar comes from its mail server.'
+  return `Its calendar comes from its mail server: ${calendarCount === 1 ? 'one calendar' : `${calendarCount} calendars`}, listed above under its address.`
+}
+
+/** The line of a row that can still get its calendar from the mail server. */
+export function addMailCalendarHelp(match: MailCalendarMatch): string {
+  switch (match.kind) {
+    case 'missing': return 'No calendar here matches this address. Add its calendar to read it straight from its mail server with the password saved for its mail.'
+    default: return `${mailCalendarHelp(match)} Or add its calendar from its mail server.`
+  }
+}

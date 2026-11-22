@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { mailCalendarHelp, mailCalendarMatch } from '../../web/src/components/settings/sections/calendar-mail-accounts.js'
+import { addMailCalendarHelp, mailCalendarHelp, mailCalendarMatch, mailServerCalendarHelp } from '../../web/src/components/settings/sections/calendar-mail-accounts.js'
+import { signInProvider } from '../../src/integrations/calendar/sign-in-provider.js'
 
 const calendars = [
   { account: 'iCloud', title: 'Home' },
@@ -29,5 +30,30 @@ describe("a mail account's calendar through the Mac", () => {
     for (const match of [mailCalendarMatch('pat@gmail.com', calendars), mailCalendarMatch('sam@gmail.com', calendars), mailCalendarMatch('x@y.z', calendars)]) {
       expect(mailCalendarHelp(match).length).toBeGreaterThan(10)
     }
+  })
+})
+
+describe("a mail account's calendar from its own server (mail_calendars)", () => {
+  it('offers to add it, saying where it would come from', () => {
+    expect(addMailCalendarHelp({ kind: 'missing' })).toContain('straight from its mail server')
+    expect(addMailCalendarHelp({ kind: 'kind-here', account: 'Google' })).toContain('Or add its calendar from its mail server')
+  })
+  it('says how many calendars came, or why none is read', () => {
+    expect(mailServerCalendarHelp({ available: true }, 1)).toContain('one calendar')
+    expect(mailServerCalendarHelp({ available: true }, 3)).toContain('3 calendars')
+    expect(mailServerCalendarHelp({ available: false, reason: 'auth-failed', message: 'refused the saved mail password' }, 0)).toContain('refused the saved mail password')
+    expect(mailServerCalendarHelp({ available: false, reason: 'disabled' }, 2)).toContain('external calendars are off')
+  })
+})
+
+
+describe('signInProvider: the accounts a mail password cannot read a calendar of', () => {
+  it('names Google and Microsoft by address or by mail server, and nothing else', () => {
+    expect(signInProvider({ address: 'pat@gmail.com' })).toBe('Google')
+    expect(signInProvider({ address: 'pat@acme.example', hosts: { imap: 'imap.gmail.com' } })).toBe('Google')
+    expect(signInProvider({ address: 'pat@outlook.com' })).toBe('Microsoft')
+    expect(signInProvider({ address: 'pat@acme.example', hosts: { smtp: 'smtp.office365.com' } })).toBe('Microsoft')
+    expect(signInProvider({ address: 'pat@icloud.com' })).toBeNull()
+    expect(signInProvider({ address: 'pat@fastmail.com', hosts: { imap: 'imap.fastmail.com' } })).toBeNull()
   })
 })

@@ -73,8 +73,11 @@ export function createCalendarTools(
           let events = await service.getEvents(from, to, { includeHidden: params.include_hidden === true });
           const filter = (params.calendar as string | undefined)?.toLowerCase();
           if (filter) events = events.filter((e) => e.calendarName.toLowerCase().includes(filter));
+          const statuses = service.statuses();
           const result: Record<string, unknown> = {
             status: service.status(),
+            // Each source's own status once a mail account's calendar is read beside the Mac's.
+            ...(statuses.length > 1 ? { sources: statuses } : {}),
             events: events.map((e) => ({
               id: e.id,
               title: e.title,

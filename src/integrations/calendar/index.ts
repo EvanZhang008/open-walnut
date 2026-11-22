@@ -23,6 +23,8 @@ import {
   type CalendarService,
 } from './service.js'
 import { createCalendarTools } from './tools.js'
+import { mailCalendarSourceFactory, registerMailCalendarRoutes } from './mail-calendars.js'
+import type { CoreMailCalendarCredentialsApi } from '../../core/calendar/mail-credentials.js'
 
 /**
  * The Permission Doctor's grant event (payload: `PermissionGrantedEvent`, declared in
@@ -31,6 +33,8 @@ import { createCalendarTools } from './tools.js'
  * the PAYLOAD is typed, so the two ends cannot drift.
  */
 const PERMISSION_GRANTED = 'permission:granted'
+/** The host's config change (any save, Settings > Experimental included). */
+const CONFIG_CHANGED = 'config:changed'
 
 const OP_TITLES: Record<string, string> = {
   calendar_query: 'Query calendar events',
@@ -62,6 +66,11 @@ export async function activate(walnut: WalnutServerPluginApi): Promise<Disposabl
   // helper is never built (which on a developer's Mac would compile Swift and prompt).
   const service = adoptCalendarService(() => source.createSource())
   live = service
+  // A mail account can bring its calendar (the `mail_calendars` experiment): its password comes
+  // from the host's broker, which hands it to this plugin only. Lazy, so a Walnut without the
+  // broker just has no such calendars.
+  const mailCredentials = walnut.services.get<CoreMailCalendarCredentialsApi>('core:mail-calendar-credentials')
+  service.setMailCalendarSourceFactory(mailCalendarSourceFactory(mailCredentials))
 
   for (const tool of createCalendarTools(getCalendarService, (patch) => walnut.config.patch(patch))) {
     walnut.registry.tool({
@@ -92,6 +101,17 @@ export async function activate(walnut: WalnutServerPluginApi): Promise<Disposabl
   // Resolved per request, not captured: the route tests swap the service instance between
   // requests while the server stays up.
   registerCalendarRoutes(walnut, getCalendarService)
+  registerMailCalendarRoutes(walnut, getCalendarService, mailCredentials)
+
+  // The experiment switched in Settings takes effect at once: mail accounts' calendars come
+  // or go without a restart. Only a switch of `mail_calendars` reloads anything.
+  walnut.events.on(CONFIG_CHANGED, () => {
+    try {
+      getCalendarService().experimentsChanged().catch((err: unknown) =>
+        walnut.log.warn('calendar reload after an experiment change failed', { error: String(err).slice(0, 200) }),
+      )
+    } catch { /* torn down meanwhile */ }
+  })
 
   // The user granting Calendar access mid-session used to be wired by the permissions
   // route reaching into the service directly. It goes through the bus now, so core keeps

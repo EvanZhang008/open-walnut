@@ -10,7 +10,12 @@ import net from 'node:net'
 import { expect, test, type Page } from '@playwright/test'
 import { bunRuntime } from '../../helpers/bun-runtime.js'
 
-interface Fixture { port: number; home: string }
+interface Fixture { port: number; home: string; [key: string]: unknown }
+
+/** Another fixture server for the Apps page (its script, the line it prints when ready, its port variable). */
+export interface AppsFixtureServer { script: string; readyMark: string; portEnv: string }
+
+const PLUGIN_STORE: AppsFixtureServer = { script: 'tests/e2e/browser/plugin-store-server.ts', readyMark: 'PLUGIN_STORE_READY', portEnv: 'PW_PLUGIN_STORE_PORT' }
 
 async function reservePort(): Promise<number> {
   const server = net.createServer()
@@ -24,8 +29,11 @@ async function reservePort(): Promise<number> {
   return address.port
 }
 
-/** Registers this file's beforeAll/afterAll; `port` reads once beforeAll has run. */
-export function useAppsFixture(): { readonly port: number } {
+/**
+ * Registers this file's beforeAll/afterAll; `port` (and the server's own `info`) read once
+ * beforeAll has run. `server` picks a fixture other than the plugin store's.
+ */
+export function useAppsFixture(server: AppsFixtureServer = PLUGIN_STORE): { readonly port: number; readonly info: Fixture } {
   let child: ChildProcessWithoutNullStreams | null = null
   let fixture: Fixture | null = null
   let output = ''
@@ -33,9 +41,9 @@ export function useAppsFixture(): { readonly port: number } {
     // A hook does not inherit the file's timeout, and a server plus Vite boots slowly on a busy machine.
     test.setTimeout(420_000)
     const port = await reservePort()
-    child = spawn(bunRuntime(), ['tests/e2e/browser/plugin-store-server.ts'], {
+    child = spawn(bunRuntime(), [server.script], {
       cwd: process.cwd(),
-      env: { ...process.env, PW_PLUGIN_STORE_PORT: String(port) },
+      env: { ...process.env, [server.portEnv]: String(port) },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     child.stdout.on('data', (chunk) => { output = `${output}${String(chunk)}`.slice(-20_000) })
@@ -43,7 +51,7 @@ export function useAppsFixture(): { readonly port: number } {
     fixture = await new Promise<Fixture>((resolve, reject) => {
       const deadline = setTimeout(() => reject(new Error(`fixture did not start\n${output.slice(-8000)}`)), 180_000)
       const timer = setInterval(() => {
-        const match = /PLUGIN_STORE_READY (\{.*\})/.exec(output)
+        const match = new RegExp(`${server.readyMark} (\\{.*\\})`).exec(output)
         if (match) {
           clearInterval(timer)
           clearTimeout(deadline)
@@ -68,7 +76,8 @@ export function useAppsFixture(): { readonly port: number } {
     await new Promise((resolve) => setTimeout(resolve, 2000))
     if (child.exitCode === null) child.kill('SIGKILL')
   })
-  return { get port() { if (!fixture) throw new Error('the Apps fixture has not started'); return fixture.port } }
+  const started = (): Fixture => { if (!fixture) throw new Error('the Apps fixture has not started'); return fixture }
+  return { get port() { return started().port }, get info() { return started() } }
 }
 
 /** Home, with the sidebar expanded. */

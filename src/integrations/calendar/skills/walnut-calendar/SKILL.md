@@ -176,6 +176,21 @@ curl -s 'http://localhost:3456/api/calendar/events?from=2026-08-03&to=2026-08-09
 - Personal AI tools: `calendar_event_visibility {id, hidden}`, and
   `calendar_query` with `include_hidden: true`.
 
+## Mail accounts' calendars (experiment `mail_calendars`)
+
+With the experiment on, a mail account set up in Walnut can bring its calendar (CalDAV, with
+the password saved for its mail): Apps > Calendar > Mail accounts > Add its calendar. Its
+events and calendars come back beside the Mac's, with ids that start with
+`caldav:<mail account id>/`; `sources` then lists one status per source (`sources[0]` is
+always the Mac's), and a source that fails says why in its own entry while the others still
+answer. Writes take the same ids and follow the same safety rule as the Mac's events, with one
+more: a mail account's event with other people on it is read-only in Walnut (`readonly: true`,
+`readonlyReason`), and an update or delete answers 409 `readonly` whatever `human_confirm` says.
+Tell the user to change it in its own calendar app, or hide it. A whole repeating mail event
+moves only within its day; to move it to another day, move one occurrence. A calendar server Walnut found
+somewhere the account does not point is answered as `found-server`; only the person picks it
+(the row's "Use <host>"), and a `server` Walnut did not just report for that account is refused (409).
+
 ## Error codes
 
 | HTTP | code | meaning |
@@ -185,7 +200,8 @@ curl -s 'http://localhost:3456/api/calendar/events?from=2026-08-03&to=2026-08-09
 | 403 | `human-approval-required` | protected update/delete; use Hide event instead |
 | 403 | `approval-canceled` | the person canceled the Mac confirmation; nothing changed |
 | 404 | `not-found` | event id doesn't resolve |
-| 409 | `readonly` | target calendar is read-only |
+| 409 | `readonly` | target calendar is read-only, or a mail account's event has other people on it (`message` says which) |
+| 409 | `conflict` | a mail account's calendar: the event changed on its server meanwhile; nothing was saved, read it again |
 | 503 | `disabled` / `cloud` / `not-configured` | source off in Settings, cloud companion (no Mac calendars), or helper unavailable |
 | 502 | other | EventKit helper failure — surface `message` to the user |
 

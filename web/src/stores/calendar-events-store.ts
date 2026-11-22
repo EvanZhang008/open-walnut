@@ -29,6 +29,7 @@ import {
   type CalendarSourceStatus,
 } from '@/api/calendar';
 import { log } from '@/utils/log';
+import { calendarSourceOf } from '../../../src/integrations/calendar/event-rules';
 import { createEventVisibility } from './calendar-event-visibility';
 
 /** A newly mounted surface reuses a range list this fresh instead of re-fetching. */
@@ -334,7 +335,7 @@ function provisionalEvent(input: { calendarId: string; title: string; start: str
   const info = sourcesEntry.calendars.find((c) => c.id === input.calendarId);
   return {
     id: `pending-${provisionalSeq}`,
-    source: 'eventkit',
+    source: calendarSourceOf(input.calendarId) as CalendarEvent['source'],
     calendarId: input.calendarId,
     calendarName: sibling?.calendarName ?? info?.title ?? '',
     accountName: sibling?.accountName ?? info?.account ?? '',
@@ -435,10 +436,10 @@ export function ensureCalendarsLoaded(force = false): Promise<CalendarInfo[]> {
   if (calendarsInflight) return calendarsInflight;
   calendarsInflight = listCalendarSources()
     .then((res) => {
-      const first = res.sources[0];
       setSources(res.sources);
       sourcesEntry = { ...sourcesEntry, defaultCalendar: res.defaultCalendar };
-      setCalendars(res.calendars, !first?.available || !first?.enabled);
+      // Unavailable only when no source reads (the Mac's, or a mail account's calendar).
+      setCalendars(res.calendars, !res.sources.some((s) => s.available && s.enabled));
       return res.calendars;
     })
     .catch((err) => {

@@ -11,7 +11,7 @@ export function useCalendarWriteConfirmation() {
     const organizer = event.organizerName ? `Organizer: ${event.organizerName}. ` : '';
     const accepted = !needsApproval || await confirm({
       title: `${action === 'delete' ? 'Delete' : 'Update'} "${event.title}"?`,
-      message: `${series}${organizer}The organizer may be notified. To skip this meeting without changing the source calendar, use Hide event instead. Continue to the Mac confirmation dialog?`,
+      message: `${series}${organizer}The organizer may be notified. To skip this meeting without changing the source calendar, use Hide event instead. ${event.source === 'eventkit' ? 'Continue to the Mac confirmation dialog?' : 'Continue?'}`,
       confirmLabel: 'Continue',
       danger: action === 'delete',
     });

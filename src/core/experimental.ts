@@ -242,6 +242,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'When your Mac has not answered for 5 minutes (asleep, offline or shut down) and the cloud companion has taken over for it (Settings, Phones & Cloud, Cloud companion: "Cloud companion takes over"), your replies to letters and the options you pick on them go straight to the session that sent the letter, if that session runs on another host such as a dev box. Without it they wait on the companion and reach the session when the Mac is back. Either way, the Mac records them on their letters when it returns and sends nothing twice. Replies with pictures, and sessions that run on the Mac itself, always wait for the Mac.',
     default: false,
   },
+  {
+    id: 'mail_calendars',
+    name: 'Calendars of mail accounts',
+    description: 'A mail account set up in Walnut can bring its calendar too: Apps > Calendar offers "Add its calendar" on each mail account, which finds the account\'s calendars on its mail provider (CalDAV: iCloud, Fastmail, Yahoo and most mail hosts) with the password already saved for its mail. Its events then show in the Calendar page and the Agenda beside the Mac\'s. Gmail and Outlook calendars need their own sign-in and say so. Off: Walnut reads only the Mac\'s calendars, as before.',
+    default: false,
+  },
 ] as const;
 
 /**

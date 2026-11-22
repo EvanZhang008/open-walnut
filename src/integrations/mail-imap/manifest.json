@@ -83,6 +83,10 @@
                 ]
               }
             },
+            "caldav_url": {
+              "type": "string",
+              "description": "Optional. This account's calendar server (CalDAV), for a host whose domain does not say where it is. Used only when the account's calendar is added in Apps > Calendar"
+            },
             "server_saves_sent": {
               "type": "boolean",
               "description": "This account's outgoing server files its own Sent copy, so Walnut must not add a second one. Stamped automatically for a known service that does (Gmail); absent means the plugin-level server_saves_sent applies"

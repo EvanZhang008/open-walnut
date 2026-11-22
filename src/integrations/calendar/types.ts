@@ -19,13 +19,20 @@ export type CalendarEventStatus = 'confirmed' | 'tentative' | 'canceled';
 /** The current user's own response to an invitation, when the source tracks it. */
 export type CalendarSelfStatus = 'pending' | 'accepted' | 'declined' | 'tentative' | 'delegated';
 
+/**
+ * Where an event comes from: the Mac's calendars (`eventkit`), or a mail account's calendar
+ * read over CalDAV (`caldav:<mail account id>`). Id shapes: src/integrations/calendar/event-rules.ts.
+ */
+export type CalendarSourceId = 'eventkit' | `caldav:${string}`;
+
 export interface CalendarEvent {
   /**
    * Stable occurrence id: "<ekEventId>" for one-off events,
-   * "<ekEventId>#<startEpoch>" for occurrences of recurring events.
+   * "<ekEventId>#<startEpoch>" for occurrences of recurring events. A CalDAV event's id
+   * carries its source first (event-rules.ts), so a write reaches the source that holds it.
    */
   id: string;
-  source: 'eventkit';
+  source: CalendarSourceId;
   calendarId: string;
   calendarName: string;
   /** Owning account ("iCloud", "Google", "Exchange", "Local"). */
@@ -39,6 +46,8 @@ export interface CalendarEvent {
   location?: string;
   /** Calendar disallows writes (subscriptions, holidays, shared read-only). */
   readonly?: boolean;
+  /** Why the event is read-only when its calendar is not (a mail account's event with attendees). */
+  readonlyReason?: string;
   /** Omitted when the source reports nothing. Cancelled events are MARKED, never
    *  dropped: the API stays honest and each caller decides how to render them. */
   status?: CalendarEventStatus;
@@ -54,10 +63,8 @@ export interface CalendarEvent {
   writeSafetyVersion?: number;
 }
 
-export function calendarEventNeedsApproval(event: CalendarEvent): boolean {
-  return event.writeSafetyVersion !== 1 || event.walnutCreated !== true || event.hasAttendees !== false ||
-    (event.organizerIsCurrentUser !== undefined && event.organizerIsCurrentUser !== true);
-}
+// One rule for every source and for the browser too: see event-rules.ts.
+export { calendarEventNeedsApproval } from './event-rules.js';
 
 export interface CalendarWriteOptions { humanConfirm?: boolean }
 
@@ -80,10 +87,22 @@ export type CalendarSourceReason =
   /** This machine's system has no calendar source Walnut can read (EventKit needs macOS). */
   | 'unsupported-platform'
   | 'fetch-error'
-  | 'disabled';
+  | 'disabled'
+  /** A mail account's calendar whose provider takes only its own sign-in (Google, Microsoft). */
+  | 'needs-sign-in'
+  /** The server refused the saved password for calendars. */
+  | 'auth-failed'
+  /** The server offers no calendar for this account. */
+  | 'no-calendar';
 
 export interface CalendarSourceStatus {
-  id: 'eventkit';
+  id: CalendarSourceId;
+  /** Set for a mail account's calendar; absent for the Mac's calendars (older clients read only `eventkit`). */
+  kind?: 'caldav';
+  /** The mail account this calendar comes with (`imap:<id>`), for a CalDAV source. */
+  account?: string;
+  /** What the user knows the source by (the account's address), for a CalDAV source. */
+  label?: string;
   available: boolean;
   enabled: boolean;
   reason?: CalendarSourceReason;
@@ -113,9 +132,11 @@ export interface CalendarEventCreate {
 /** A create as callers hand it to CalendarService: no calendar id means the configured default. */
 export type CalendarEventCreateInput = Omit<CalendarEventCreate, 'calendarId'> & { calendarId?: string };
 
-/** A pluggable event source (EventKit today; a direct API source later). */
+/** A pluggable event source: EventKit, and a CalDAV source per mail account that brings its calendar. */
 export interface CalendarSource {
-  id: 'eventkit';
+  id: CalendarSourceId;
+  /** Extra status fields a non-EventKit source reports about itself (kind, account, label). */
+  describe?(): Pick<CalendarSourceStatus, 'kind' | 'account' | 'label'>;
   /** Cheap static availability check (platform / cloud-mode gates). */
   available(): { ok: boolean; reason?: CalendarSourceReason; message?: string };
   /** Optional: reads work but through a degraded path, described for the user. */

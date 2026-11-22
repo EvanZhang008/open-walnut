@@ -268,6 +268,7 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
             : `${projectDisplayName(item.task.project)}${item.kind === 'task-due' ? ' · due date' : ' · start date'}`}
         </div>
         {isEvent && item.event.location && <div className="cal-item-location">{item.event.location}</div>}
+        {isEvent && readonly && item.event.readonlyReason && <div className="cal-item-warning" data-testid="cal-item-readonly-reason">{item.event.readonlyReason}</div>}
         {isEvent && !readonly && calendarEventNeedsApproval(item.event) && (
           <div className="cal-item-warning">{item.event.recurring ? 'Recurring series. ' : ''}Editing or deleting may notify the organizer{item.event.organizerName ? ` (${item.event.organizerName})` : ''}{item.event.recurring ? ' and affect the whole series' : ''}. Use Hide event to skip it locally.</div>
         )}

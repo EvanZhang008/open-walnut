@@ -33,6 +33,7 @@ import {
   requestCalendarAccess,
 } from './calendar/sources/eventkit.js'
 import type { CalendarSource } from '../integrations/calendar/types.js'
+import { createMailCalendarCredentials } from './calendar/mail-credentials.js'
 
 /**
  * Publish a host capability as `core:<name>`. Same method-bag rule as a plugin's own.
@@ -95,4 +96,12 @@ export function publishCalendarSource(): Disposable {
     helperFallback: () => calendarHelperFallback(),
   } satisfies CoreCalendarSourceApi
   return publishCoreService('calendar-source', api)
+}
+
+/**
+ * `core:mail-calendar-credentials` — a mail account's password, handed from the IMAP plugin
+ * to the calendar plugin only (src/core/calendar/mail-credentials.ts says why the host brokers it).
+ */
+export function publishMailCalendarCredentials(): Disposable {
+  return publishCoreService('mail-calendar-credentials', { ...createMailCalendarCredentials() })
 }

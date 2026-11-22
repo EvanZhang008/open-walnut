@@ -52,6 +52,12 @@ export interface ImapStoredAccount extends Record<string, unknown> {
    * (setup-presets.ts), so nobody has to know this about their own mail host.
    */
   server_saves_sent?: boolean
+  /**
+   * Where this account's calendar server is, for a host whose own domain does not say
+   * (RFC 6764 discovery finds the rest). Read only by the calendar, through
+   * `core:mail-calendar-credentials`; absent for nearly every account.
+   */
+  caldav_url?: string
 }
 
 interface ImapPluginConfig extends Record<string, unknown> {
@@ -99,6 +105,8 @@ export interface ImapAccountEntry {
   smtp?: SmtpSettings
   displayName: string
   roles: Record<string, string>
+  /** The account's calendar server, when its settings name one (`caldav_url`). */
+  caldavUrl?: string
 }
 
 function toSmtp(stored: ImapStoredAccount): SmtpSettings | undefined {
@@ -132,6 +140,7 @@ function toEntry(localId: string, stored: ImapStoredAccount): ImapAccountEntry |
     ...(smtp ? { smtp } : {}),
     displayName: stored.display_name?.trim() || stored.address,
     roles: stored.roles ?? {},
+    ...(stored.caldav_url?.trim() ? { caldavUrl: stored.caldav_url.trim() } : {}),
   }
 }
 
@@ -223,6 +232,7 @@ export class ImapAccountStore {
         : {}),
       ...(input.displayName ? { display_name: input.displayName } : {}),
       ...(config.accounts?.[localId]?.roles ? { roles: config.accounts[localId].roles! } : {}),
+      ...(config.accounts?.[localId]?.caldav_url ? { caldav_url: config.accounts[localId].caldav_url! } : {}),
       ...(typeof input.serverSavesSent === 'boolean'
         ? { server_saves_sent: input.serverSavesSent }
         : typeof config.accounts?.[localId]?.server_saves_sent === 'boolean'
@@ -234,6 +244,16 @@ export class ImapAccountStore {
     await this.walnut.secrets.set(secretKeyFor(accountId), input.password)
     await this.walnut.config.patch({ accounts: { ...(config.accounts ?? {}), [localId]: stored } })
     return toEntry(localId, stored)!
+  }
+
+  /** Record where the account's calendar server is (`caldav_url`); false when the account is gone. */
+  async setCalendarServer(accountId: string, url: string): Promise<boolean> {
+    const localId = localIdOf(accountId)
+    const config = await this.walnut.config.get<ImapPluginConfig>()
+    const stored = config.accounts?.[localId]
+    if (!stored) return false
+    await this.walnut.config.patch({ accounts: { ...(config.accounts ?? {}), [localId]: { ...stored, caldav_url: url } } })
+    return true
   }
 
   async remove(accountId: string): Promise<void> {

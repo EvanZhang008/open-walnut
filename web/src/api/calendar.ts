@@ -4,11 +4,17 @@
  * Dates are tz-less local ISO, same contract as task dates.
  */
 import { apiGet, apiPost, apiPatch, apiPut, apiDelete } from './client';
+// One rule and one id shape for the server and this browser (the server refuses exactly the
+// writes this asks about first).
+export { calendarEventNeedsApproval, calendarSourceOf } from '../../../src/integrations/calendar/event-rules';
+
+/** `eventkit` for the Mac's calendars, `caldav:<mail account id>` for a mail account's calendar. */
+export type CalendarSourceId = 'eventkit' | `caldav:${string}`;
 
 export interface CalendarEvent {
-  /** Source-prefixed stable id, e.g. "eventkit:<ekEventId>". */
+  /** Stable id; a mail account's event carries its source first ("caldav:imap:<id>/..."). */
   id: string;
-  source: 'eventkit';
+  source: CalendarSourceId;
   calendarId: string;
   calendarName: string;
   /** Owning account, e.g. "iCloud", "Google" — how users tell calendars apart. */
@@ -23,6 +29,8 @@ export interface CalendarEvent {
   location?: string;
   /** True when the source calendar can't be written (subscriptions, holidays). */
   readonly?: boolean;
+  /** Why the event is read-only when its calendar is not (a mail account's event with other people on it). */
+  readonlyReason?: string;
   /** Absent unless the source says something. 'canceled' means the organizer
    *  cancelled it and macOS still holds the row — show it struck through rather
    *  than as a live meeting. */
@@ -39,16 +47,17 @@ export interface CalendarEvent {
   writeSafetyVersion?: number;
 }
 
-export function calendarEventNeedsApproval(event: CalendarEvent): boolean {
-  return event.writeSafetyVersion !== 1 || event.walnutCreated !== true || event.hasAttendees !== false ||
-    (event.organizerIsCurrentUser !== undefined && event.organizerIsCurrentUser !== true);
-}
-
 export interface CalendarSourceStatus {
-  id: 'eventkit';
+  id: CalendarSourceId;
+  /** Set for a mail account's calendar. */
+  kind?: 'caldav';
+  /** The mail account it comes with (`imap:<id>`). */
+  account?: string;
+  /** The account's address. */
+  label?: string;
   available: boolean;
   enabled: boolean;
-  reason?: 'cloud' | 'permission-denied' | 'not-configured' | 'unsupported-platform' | 'fetch-error' | 'disabled';
+  reason?: 'cloud' | 'permission-denied' | 'not-configured' | 'unsupported-platform' | 'fetch-error' | 'disabled' | 'needs-sign-in' | 'auth-failed' | 'no-calendar';
   message?: string;
   /** Reads work, but through a fallback the user has to fix (see CalendarPage). */
   degraded?: string;
@@ -121,4 +130,28 @@ export function createCalendarEvent(input: { calendarId: string; title: string; 
 export function deleteCalendarEvent(id: string, humanConfirm = false) {
   return apiDelete(`/api/calendar/events/${encodeURIComponent(id)}${humanConfirm ? '?human_confirm=1' : ''}`,
     { ...(humanConfirm ? { timeoutMs: 180_000 } : {}), quietStatuses: [403] });
+}
+
+export type AddMailCalendarAnswer =
+  | { ok: true; source: CalendarSourceStatus; calendars: CalendarInfo[] }
+  /** `server`: with `found-server`, a calendar server the person may pick for the account. */
+  | { ok: false; reason: string; message: string; server?: string };
+
+/**
+ * Try a mail account's calendar with its saved password and, when it has one, read it from now
+ * on. `server` (the person picked a server Walnut found) is saved as the account's calendar
+ * server first.
+ */
+export function addMailCalendar(accountId: string, address: string, server?: string) {
+  // Discovery may try a few URLs, each with its own deadline on the server.
+  return apiPost<AddMailCalendarAnswer>(
+    `/api/calendar/mail-accounts/${encodeURIComponent(accountId)}/calendar`,
+    server ? { address, server } : { address },
+    { timeoutMs: 60_000 },
+  );
+}
+
+/** Stop reading a mail account's calendar (the calendar itself is untouched). */
+export function removeMailCalendar(accountId: string) {
+  return apiDelete<{ removed: boolean; sources: CalendarSourceStatus[] }>(`/api/calendar/mail-accounts/${encodeURIComponent(accountId)}/calendar`);
 }

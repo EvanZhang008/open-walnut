@@ -125,6 +125,7 @@ export function CalendarContextMenu({
               {item.event.calendarName} · {item.event.accountName}
               {item.event.readonly ? ' (read-only)' : ''}
             </div>
+            {item.event.readonly && item.event.readonlyReason && <div className="cal-item-warning">{item.event.readonlyReason}</div>}
             {onHideEvent && (
               <button role="menuitem" onClick={run(() => onHideEvent(item.event.id))}>
                 Hide event

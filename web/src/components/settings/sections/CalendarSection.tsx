@@ -34,6 +34,7 @@ import {
   shownCount,
 } from './addons-format';
 import { CalendarMailAccounts } from './CalendarMailAccounts';
+import { useExperimental } from '@/hooks/useExperimental';
 import '@/styles/settings-sections-addons.css';
 
 /** Row error for one calendar (`cal:<id>`) or one account (`acct:<name>`). */
@@ -58,6 +59,9 @@ export function CalendarSection() {
  */
 export function CalendarAccounts({ heading }: { heading?: string } = {}) {
   const [status, setStatus] = useState<CalendarSourceStatus | null>(null);
+  // Every source: the Mac's first, then each mail account's calendar (the `mail_calendars` experiment).
+  const [sources, setSources] = useState<CalendarSourceStatus[]>([]);
+  const mailCalendars = useExperimental('mail_calendars');
   const [calendars, setCalendars] = useState<CalendarInfo[]>([]);
   const [defaultCal, setDefaultCal] = useState<CalendarDefault | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -84,6 +88,7 @@ export function CalendarAccounts({ heading }: { heading?: string } = {}) {
     try {
       const res = await listCalendarSources();
       setStatus(res.sources[0] ?? null);
+      setSources(res.sources);
       setCalendars(res.calendars);
       setDefaultCal(res.defaultCalendar ?? null);
       setLoadError(null);
@@ -190,6 +195,8 @@ export function CalendarAccounts({ heading }: { heading?: string } = {}) {
     else byAccount.set(c.account, [c]);
   }
   const on = enabled.value;
+  // Some source reads calendars: the Mac's, or (with the experiment) a mail account's.
+  const reading = status?.available || (mailCalendars && sources.some((s) => s.available && s.enabled));
   const denied = !!status && !status.available && status.reason === 'permission-denied';
   // This machine cannot read calendars at all (not a Mac, or the cloud companion): the switch reads
   // disabled and off, its saved choice kept, and its row says why (2026-11-21 review: it showed a
@@ -240,9 +247,11 @@ export function CalendarAccounts({ heading }: { heading?: string } = {}) {
                 />
               }
             />
-            {/* Only a machine that reads calendars has rows to govern (unsupported: the row says why). */}
-            {status.available && (
+            {/* Only a machine that reads calendars has rows to govern (unsupported: the row says why);
+                with the experiment a mail account's calendar is read on any machine. */}
+            {(status.available || mailCalendars) && (
             <ControlGroup id={CAL_ROWS} off={!on} className="settings-rows-contents" reason="Turn on Show external calendar events to use these.">
+              {status.available && (
               <SettingsRow
                 // Names what the line reports, so "Not refreshed yet" never
                 // sits under a "Last refreshed" label (N3-31).
@@ -263,7 +272,8 @@ export function CalendarAccounts({ heading }: { heading?: string } = {}) {
                   </SettingsButton>
                 }
               />
-            {(writableByAccount.size > 0 || !!defaultCal?.configuredId) && (
+              )}
+            {reading && (writableByAccount.size > 0 || !!defaultCal?.configuredId) && (
               <SettingsRow
                 label="Default calendar"
                 htmlFor="calendar-default"
@@ -387,7 +397,11 @@ export function CalendarAccounts({ heading }: { heading?: string } = {}) {
           })}
           {/* Only on a list the server read with the calendars on (its answer, never the switch's
               optimistic value) and no failed reload since: an empty list would call every account missing. */}
-          {status.available && status.enabled && !loadError && <CalendarMailAccounts calendars={calendars} />}
+          {/* With the experiment, mail accounts show while EventKit cannot read too (another OS, no
+              grant): their own calendars come from their servers, not from this Mac. */}
+          {(status.available || mailCalendars) && status.enabled && !loadError && (
+            <CalendarMailAccounts calendars={calendars} sources={sources} onChanged={load} />
+          )}
           </ControlGroup>
         </>
       )}

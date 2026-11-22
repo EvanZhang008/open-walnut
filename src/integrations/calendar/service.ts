@@ -2,28 +2,21 @@
  * CalendarService — the single owner of external calendar data.
  *
  * All consumers (the plugin's REST routes, the Personal AI calendar_* tools) go through
- * this service: a month-window TTL cache over a CalendarSource, a periodic refresh, and
- * write-through edits that refresh the touched window and announce the change so the web
- * UI reflects agent/API edits live.
+ * this service: a month-window TTL cache over the calendar's sources (source-set.ts), a
+ * periodic refresh, and write-through edits that refresh the cached windows and announce the
+ * change so the web UI reflects agent/API edits live.
  *
- * The SOURCE is not ours. It arrives from `core:calendar-source`, because the signed
- * EventKit helper carries the macOS calendar grant and a TCC identity cannot move into a
- * plugin. This file owns the cache, the clocks, the visibility rules and the config; the
- * host owns the door to the platform.
+ * The Mac's SOURCE arrives from `core:calendar-source`, because the signed EventKit helper
+ * carries the macOS calendar grant and a TCC identity cannot move into a plugin.
  *
  * Two separate clocks, deliberately:
- *   - READ_TTL (`read_ttl_seconds`, default 60s) bounds how stale a served read may be. It
- *     used to be the same knob as the poll interval, which meant a read could be a full 15
- *     minutes behind reality — a meeting cancelled or moved in Exchange kept showing up
- *     long after macOS knew better. Re-fetching a month window costs ~0.25s, so a short
- *     TTL is cheap.
- *   - refresh_minutes (default 15) is the BACKGROUND poll: it exists to notice changes
- *     nobody asked about and push an update to open views.
+ *   - READ_TTL (`read_ttl_seconds`, default 60s) bounds how stale a served read may be (it
+ *     once shared the poll's 15 minutes, and a moved meeting kept showing long after macOS
+ *     knew better). Re-fetching a month window costs ~0.25s, so a short TTL is cheap.
+ *   - refresh_minutes (default 15) is the BACKGROUND poll, to notice changes nobody asked
+ *     about and push an update to open views.
  * Callers that must not be fooled at all pass `{ force: true }`.
  */
-import { createHash } from 'node:crypto';
-import { bus, EventNames } from '../../core/event-bus.js';
-import { getConfig } from '../../core/config-manager.js';
 import { log } from '../../logging/index.js';
 import { assertOutwardDoor, leaderPermitActive } from '../../core/leader/switch/doors.js';
 // The error CLASS only, from its own leaf module: importing it from sources/eventkit.js
@@ -32,7 +25,16 @@ import { assertOutwardDoor, leaderPermitActive } from '../../core/leader/switch/
 // through `calendarErrorCode` (name-based), because a builtin plugin is its own bundle and
 // `instanceof` does not cross that seam.
 import { CalendarHelperError } from '../../core/calendar/helper-error.js';
-import { calendarErrorCode } from './api.js';
+import {
+  activeMailCalendarAccounts,
+  mailCalendarsOn,
+  readCalendarConfig,
+  readExperimentalFlags,
+  type CalendarConfigPatcher,
+} from './config.js';
+import { CalendarSourceSet, type SourceMember } from './source-set.js';
+import { announce } from './announce.js';
+import { describeDefaultCalendar, type CalendarDefaultState } from './default-calendar.js';
 import { calendarEventNeedsApproval } from './types.js';
 import type {
   CalendarWriteOptions,
@@ -43,8 +45,17 @@ import type {
   CalendarSource,
   CalendarSourceStatus,
 } from './types.js';
+import { assertEventId, eventsHash, filterRange, occurrenceDay, windowKey, windowOfKey, windowRange } from './windows.js';
+
+// Moved to their own modules; their importers keep this path.
+export { mergeCalendarConfig, type CalendarPluginConfig, type CalendarConfigPatcher } from './config.js';
+export { setCalendarAnnouncer, type CalendarUpdatePayload } from './announce.js';
+export type { CalendarDefaultState } from './default-calendar.js';
 
 const DEFAULT_REFRESH_MINUTES = 15;
+/** A cache window's read key (for a mail account's late answer), and back. */
+const lateKey = (key: string) => { const w = windowOfKey(key); return `${w.from}|${w.to}`; };
+const windowOf = (late: string) => late.split('|') as [string, string];
 const DEFAULT_READ_TTL_SECONDS = 60;
 
 interface CacheEntry {
@@ -53,205 +64,24 @@ interface CacheEntry {
   hash: string;
 }
 
-/**
- * `plugins.calendar` in config.yaml.
- *
- * `source_enabled`, not `enabled`: `plugins.<id>.enabled` is the plugin LIFECYCLE switch
- * the store writes, so putting the calendar's own on/off flag there would mean a user
- * turning the calendar off in Settings also unregisters its routes, and the toggle that
- * would turn it back on goes with them.
- */
-export interface CalendarPluginConfig {
-  source_enabled?: boolean;
-  hidden_calendar_ids?: string[];
-  /**
-   * Allowlist. `null` means CLEARED and is not the same as absent: absent falls back to the
-   * legacy top-level `calendar.visible_calendar_ids` (which the migration deliberately keeps),
-   * so a cleared allowlist written as `undefined` would be dropped by `yaml.dump` and the old
-   * one would come back on the next read. See {@link mergeCalendarConfig}.
-   */
-  visible_calendar_ids?: string[] | null;
-  /** Single events hidden in Walnut by exact id (an occurrence id hides one occurrence). Plugin-only. */
-  hidden_event_ids?: string[];
-  /**
-   * Where a create with no calendar id goes. `''` means CLEARED (written by Settings), which
-   * wins over a legacy top-level value the same way a `null` allowlist does. See
-   * {@link CalendarService.defaultCalendar} for what makes a configured id usable.
-   */
-  default_calendar_id?: string | null;
-  refresh_minutes?: number;
-  read_ttl_seconds?: number;
-}
-
-/**
- * The configured default calendar, checked against the calendars macOS has right now.
- *
- * `id` is the calendar a create with no calendar id goes to, or null when there is none.
- * A configured id that is gone or read-only is NOT replaced by some other calendar: the
- * create is refused with `warning` instead, because guessing is how agent-made blocks kept
- * landing on a work calendar.
- */
-export interface CalendarDefaultState {
-  id: string | null;
-  /** What config.yaml says, or null when nothing is set. */
-  configuredId: string | null;
-  title?: string;
-  account?: string;
-  /** Set when a configured id cannot be used; says why and what to do. */
-  warning?: string;
-}
-
-/** The legacy top-level `config.calendar`, read for one release. */
-interface LegacyCalendarConfig extends Omit<CalendarPluginConfig, 'source_enabled' | 'hidden_event_ids'> {
-  enabled?: boolean;
-}
-
-/** The HOST's `walnut.config.patch`: this bundle's own config-manager copy would hold a second write lock. */
-export type CalendarConfigPatcher = (patch: Record<string, unknown>) => Promise<void>;
-
 export interface CalendarEventVisibility {
   id: string;
   hidden: boolean;
   changed: boolean;
 }
 
-function idList(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  return value.filter((v): v is string => typeof v === 'string' && v.length > 0);
-}
-
-const MAX_EVENT_ID_LENGTH = 1024;
-
-function assertEventId(id: unknown): string {
-  if (typeof id !== 'string' || id.trim() === '') throw new CalendarHelperError('event id is required', 'usage');
-  if (id.length > MAX_EVENT_ID_LENGTH) throw new CalendarHelperError('event id is too long', 'usage');
-  return id;
-}
-
-/** Local start day of an occurrence id "<ekid>#<epochSeconds>" (walnut-calendar.swift `eventJson`); null for one-off ids. */
-function occurrenceDay(id: string): string | null {
-  const match = /^.+#(\d{1,10})$/.exec(id);
-  if (!match) return null;
-  const date = new Date(Number(match[1]) * 1000);
-  if (Number.isNaN(date.getTime())) return null;
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-/**
- * Plugin config wins; the legacy top-level section fills the gaps.
- *
- * Both halves are read because `migrateConfigToPlugins` COPIES rather than moves: a config
- * that already had `plugins.calendar` (the store wrote `enabled` there when the user
- * toggled the plugin) never receives the copy, so the visibility lists can still only
- * exist at the top level. Delete this function, the legacy branch and the top-level
- * `calendar` key (`Config.calendar`, src/core/types.ts) and the copy block in
- * src/core/integration-loader.ts together once 0.4.6 has shipped.
- *
- * `visible_calendar_ids` is merged by PRESENCE, not by nullishness: every hide/unhide the web
- * UI performs sends `visible_calendar_ids: null` to mean "no allowlist", and a `??` here read
- * that as "nothing to say" and resurrected the legacy allowlist, so clearing it silently did
- * nothing. A present `null` therefore wins over the legacy value. `hidden_calendar_ids: []`
- * and `source_enabled: false` need no such care: neither is nullish.
- */
-export function mergeCalendarConfig(
-  pluginConfig: CalendarPluginConfig | undefined,
-  legacy: LegacyCalendarConfig | undefined,
-): CalendarPluginConfig {
-  const plugin = pluginConfig ?? {};
-  const old = legacy ?? {};
-  return {
-    source_enabled: plugin.source_enabled ?? old.enabled,
-    hidden_calendar_ids: plugin.hidden_calendar_ids ?? old.hidden_calendar_ids,
-    visible_calendar_ids:
-      plugin.visible_calendar_ids !== undefined ? plugin.visible_calendar_ids : old.visible_calendar_ids,
-    hidden_event_ids: idList(plugin.hidden_event_ids),
-    // By presence, like the allowlist: Settings clears it by writing '' into the plugin
-    // section, and that has to win over an id still sitting in the legacy section.
-    default_calendar_id:
-      plugin.default_calendar_id !== undefined ? plugin.default_calendar_id : old.default_calendar_id,
-    refresh_minutes: plugin.refresh_minutes ?? old.refresh_minutes,
-    read_ttl_seconds: plugin.read_ttl_seconds ?? old.read_ttl_seconds,
-  };
-}
-
-/**
- * Read this plugin's config straight off `getConfig()` rather than through
- * `walnut.config.get()`, which can only see `plugins.calendar`: the legacy fallback above
- * needs the top-level section too. This is a read of a file with no cache in front of it,
- * so a builtin plugin's own copy of config-manager answers the same bytes as the host's.
- * WRITES still go through `walnut.config.patch`, so there stays exactly one writer.
- */
-async function readCalendarConfig(): Promise<CalendarPluginConfig> {
-  const config = (await getConfig()) as {
-    plugins?: Record<string, Record<string, unknown>>;
-    calendar?: LegacyCalendarConfig;
-  };
-  return mergeCalendarConfig(
-    config.plugins?.calendar as CalendarPluginConfig | undefined,
-    config.calendar,
-  );
-}
-
-/** What the service announces after a change. See {@link setCalendarAnnouncer}. */
-export interface CalendarUpdatePayload {
-  status: CalendarSourceStatus;
-}
-
-/**
- * How the service tells the world a window changed.
- *
- * Installed by the plugin's `activate` so the event rides the HOST's bus as
- * `plugin:calendar:updated` (which core forwards to the legacy `calendar:updated`). That
- * indirection is not ceremony: a builtin plugin is its own bundle, so a `bus` imported
- * here is a DIFFERENT EventBus instance from the server's in a built install, and an event
- * emitted on it would reach nobody. The direct fallback below keeps a service built
- * outside the plugin lifecycle (a unit test) observable.
- */
-let announcer: ((payload: CalendarUpdatePayload) => void) | null = null;
-
-export function setCalendarAnnouncer(fn: ((payload: CalendarUpdatePayload) => void) | null): void {
-  announcer = fn;
-}
-
-function announce(payload: CalendarUpdatePayload): void {
-  if (announcer) {
-    announcer(payload);
-    return;
-  }
-  bus.emit(EventNames.CALENDAR_UPDATED, payload, ['web-ui'], { source: 'calendar' });
-}
-
-function eventsHash(events: CalendarEvent[]): string {
-  const h = createHash('sha1');
-  // status/selfStatus are part of the identity: a meeting being cancelled often
-  // changes nothing else, and leaving them out meant open views never heard.
-  for (const e of events)
-    h.update(
-      JSON.stringify([e.id, e.title, e.start, e.end, e.calendarId, e.status, e.selfStatus,
-        e.readonly, e.walnutCreated, e.hasAttendees, e.organizerIsCurrentUser, e.organizerName,
-        e.recurring, e.writeSafetyVersion])
-    );
-  return h.digest('hex');
-}
-
-/** Month-aligned cache window containing [from, to] (day strings). */
-function windowKey(from: string, to: string): string {
-  return `${from.slice(0, 7)}..${to.slice(0, 7)}`;
-}
-
-function windowRange(from: string, to: string): { from: string; to: string } {
-  const [fy, fm] = [Number(from.slice(0, 4)), Number(from.slice(5, 7))];
-  const [ty, tm] = [Number(to.slice(0, 4)), Number(to.slice(5, 7))];
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const lastDay = new Date(ty, tm, 0).getDate(); // day 0 of next month = last of `tm`
-  return { from: `${fy}-${pad(fm)}-01`, to: `${ty}-${pad(tm)}-${pad(lastDay)}` };
-}
+/** Builds the source for one mail account's calendar (`imap:<id>`). Installed by activate. */
+export type MailCalendarSourceFactory = (mailAccountId: string) => CalendarSource;
 
 export class CalendarService {
-  private source: CalendarSource;
+  /** The Mac's source (first) and one per mail account whose calendar is read (source-set.ts). */
+  private sources: CalendarSourceSet;
+  private mailFactory: MailCalendarSourceFactory | null = null;
+  /** Built once per mail account and kept, so its discovery and calendar list survive reloads. */
+  private mailSources = new Map<string, CalendarSource>();
   private cache = new Map<string, CacheEntry>();
   private refreshTimer: NodeJS.Timeout | null = null;
+  private initialised = false;
   private hiddenIds = new Set<string>();
   /** When non-null, ONLY these ids are visible (allowlist); hiddenIds still applies on top. */
   private visibleIds: Set<string> | null = null;
@@ -265,23 +95,48 @@ export class CalendarService {
   private enabled = true;
   private refreshMinutes = DEFAULT_REFRESH_MINUTES;
   private readTtlMs = DEFAULT_READ_TTL_SECONDS * 1000;
-  /** In-flight fetch per window, so N concurrent readers (web + iOS + agent)
-   *  hitting an expired window spawn ONE helper process, not N. */
+  /** In-flight fetch per window: N concurrent readers of an expired window spawn ONE helper run. */
   private inFlight = new Map<string, Promise<CalendarEvent[]>>();
   private lastRefresh: string | undefined;
-  private lastError: { reason: CalendarSourceStatus['reason']; message: string } | null = null;
+  /** The `mail_calendars` experiment as the last reload read it. */
+  private mailOn = false;
 
-  constructor(source: CalendarSource) {
-    this.source = source;
+  constructor(source: CalendarSource, options: { extraReadDeadlineMs?: number } = {}) {
+    this.sources = new CalendarSourceSet(source, {
+      ...options,
+      // A mail account's late answer is kept by the set: let every view read again.
+      onLateResult: () => {
+        for (const entry of this.cache.values()) entry.fetchedAt = 0;
+        this.emitUpdated();
+      },
+    });
+  }
+
+  /** How a mail account's calendar source is built; null (the default) reads only the Mac's. */
+  setMailCalendarSourceFactory(factory: MailCalendarSourceFactory | null): void {
+    this.mailFactory = factory;
+    this.mailSources.clear();
+  }
+
+  /** A source for a mail account not read yet ("Add its calendar" tries it); `adopt` keeps it for the next reload. */
+  mailCalendarCandidate(mailAccountId: string): { source: CalendarSource; adopt: () => void } | null {
+    if (!this.mailFactory) return null;
+    const source = this.mailSources.get(mailAccountId) ?? this.mailFactory(mailAccountId);
+    return { source, adopt: () => { this.mailSources.set(mailAccountId, source); } };
   }
 
   /** Load config + start the periodic refresh loop. Called by activate. */
   async init(): Promise<void> {
-    // A second init on the same instance would otherwise overwrite the handle and orphan
-    // the first interval, which is the exact shape of the leak this slice exists to fix.
-    this.stop();
+    this.stop(); // a second init must not orphan the first interval
+    this.initialised = true;
     await this.reloadConfig();
-    if (!this.source.available().ok) return; // nothing to poll
+    this.armLoop();
+  }
+
+  /** Arms the poll when some source can be read and none is armed (a mail calendar added later). */
+  private armLoop(): void {
+    if (!this.initialised || this.refreshTimer) return;
+    if (this.sources.usable().length === 0) return; // nothing to poll
     this.refreshTimer = setInterval(
       () => {
         this.refreshAll().catch((err) =>
@@ -296,14 +151,10 @@ export class CalendarService {
   stop(): void {
     if (this.refreshTimer) clearInterval(this.refreshTimer);
     this.refreshTimer = null;
+    this.initialised = false;
   }
 
-  /**
-   * Is the background poll armed?
-   *
-   * Exists because nothing could observe the timer, which is how it went unstopped for as
-   * long as it did: `stopServer` tore the process down and left this interval polling.
-   */
+  /** Is the background poll armed? (Nothing could observe the timer, so it once outlived stopServer.) */
   refreshLoopActive(): boolean {
     return this.refreshTimer !== null;
   }
@@ -323,12 +174,12 @@ export class CalendarService {
     this.refreshMinutes = Math.max(1, cal.refresh_minutes ?? DEFAULT_REFRESH_MINUTES);
     // 0 is legal and means "never serve from cache" (every read re-fetches).
     this.readTtlMs = Math.max(0, cal.read_ttl_seconds ?? DEFAULT_READ_TTL_SECONDS) * 1000;
-    // Visibility is applied at read time (cache keeps everything), so a toggle
-    // never changes the cache hash — announce it explicitly or the UI would
-    // only notice on its next unrelated refetch.
+    const sourcesChanged = await this.reloadMailSources(cal.mail_calendar_accounts);
+    // Visibility applies at read time, so a toggle never changes the cache hash: announce it.
     const setChanged = (a: Set<string> | null, b: Set<string> | null) =>
       (a === null) !== (b === null) || (a && b && (a.size !== b.size || [...b].some((id) => !a.has(id))));
     if (
+      sourcesChanged ||
       prevEnabled !== this.enabled ||
       setChanged(prevHidden, this.hiddenIds) ||
       setChanged(prevVisible, this.visibleIds) ||
@@ -337,81 +188,83 @@ export class CalendarService {
       this.emitUpdated();
   }
 
+  /** A config change: reloads only when it turned the `mail_calendars` experiment on or off. */
+  async experimentsChanged(): Promise<void> {
+    if (mailCalendarsOn(await readExperimentalFlags()) !== this.mailOn) await this.reloadConfig();
+  }
+
+  /** Mail accounts' sources from config, only while the experiment is on. True when the set changed. */
+  private async reloadMailSources(accounts: string[] | undefined): Promise<boolean> {
+    const flags = await readExperimentalFlags();
+    this.mailOn = mailCalendarsOn(flags);
+    if (!this.mailFactory) return this.sources.setExtras([]);
+    const wanted = activeMailCalendarAccounts({ mail_calendar_accounts: accounts }, flags);
+    const next = wanted.map((account) => this.mailSources.get(account) ?? this.mailSources.set(account, this.mailFactory!(account)).get(account)!);
+    for (const account of [...this.mailSources.keys()]) if (!wanted.includes(account)) this.mailSources.delete(account);
+    const changed = this.sources.setExtras(next);
+    // The cache holds merged windows: one built before a source came or went is wrong now.
+    if (changed) this.cache.clear();
+    this.armLoop();
+    return changed;
+  }
+
+  /** The Mac's source status, as it always was (`sources[0]` of every answer). */
   status(): CalendarSourceStatus {
-    const avail = this.source.available();
-    if (!this.enabled) {
-      return { id: this.source.id, available: avail.ok, enabled: false, reason: 'disabled' };
-    }
-    if (!avail.ok) {
-      return { id: this.source.id, available: false, enabled: true, reason: avail.reason, message: avail.message };
-    }
-    if (this.lastError) {
-      return {
-        id: this.source.id,
-        available: false,
-        enabled: true,
-        reason: this.lastError.reason,
-        message: this.lastError.message,
-        lastRefresh: this.lastRefresh,
-      };
-    }
+    return this.statusOf(this.sources.primary);
+  }
+
+  /** Every source's status, the Mac's first. With only the Mac's this is `[status()]`. */
+  statuses(): CalendarSourceStatus[] {
+    return this.sources.members().map((m) => this.statusOf(m));
+  }
+
+  private statusOf(member: SourceMember): CalendarSourceStatus {
+    const own = member.source.id;
+    const alone = !this.sources.hasExtras();
     let count = 0;
-    for (const entry of this.cache.values()) count += entry.events.length;
-    // Available but degraded is its own state: reads work, yet something the user
-    // has to fix is silently propping them up. Reporting only available:true would
-    // hide it forever (nothing else ever mentions it again).
-    const degraded = this.source.degraded?.();
-    return {
-      id: this.source.id,
-      available: true,
-      enabled: true,
-      ...(degraded ? { degraded } : {}),
-      lastRefresh: this.lastRefresh,
-      eventCount: count,
-    };
+    for (const entry of this.cache.values()) {
+      count += alone ? entry.events.length : entry.events.filter((e) => e.source === own).length;
+    }
+    return this.sources.statusOf(member, this.enabled, count, this.lastRefresh);
   }
 
   async listCalendars(): Promise<CalendarInfo[]> {
-    this.assertUsable();
-    // The service owns the hidden/visible sets (config) — overlay them here so
-    // every source (incl. test mocks) reports visibility consistently.
-    const cals = await this.trackErrors(() => this.source.listCalendars());
-    return cals.map((c) => ({
+    return (await this.listCalendarsDetailed()).calendars;
+  }
+
+  /** Every usable source's calendars; `complete` is false when one of them failed to answer. */
+  async listCalendarsDetailed(): Promise<{ calendars: CalendarInfo[]; complete: boolean }> {
+    const members = this.readableMembers();
+    // The service owns the hidden/visible sets (config): overlaid here for every source.
+    const { items, complete } = await this.sources.readAll(members, (m) => m.source.listCalendars());
+    const calendars = items.map((c) => ({
       ...c,
       hidden: this.isHidden(c.id),
       ...(c.id === this.defaultCalendarId && !c.readonly ? { default: true } : {}),
     }));
+    return { calendars, complete };
+  }
+
+  /** The sources a read asks: refused as before when the calendar is off or nothing can be read. */
+  private readableMembers(): SourceMember[] {
+    if (!this.enabled) throw new CalendarHelperError('calendar source is disabled', 'disabled');
+    const usable = this.sources.usable();
+    if (usable.length === 0) this.assertUsable(this.sources.primary);
+    return usable;
   }
 
   /**
    * The configured default checked against `calendars` (a list the caller already holds, so
-   * GET /sources adds no helper call). Never picks a replacement: an unusable configured id
-   * comes back as `id: null` plus a warning, and a create without a calendar id is refused.
-   * A hidden calendar is still a valid default; the user chose it on purpose.
+   * GET /sources adds no helper call). See default-calendar.ts.
    */
   describeDefault(calendars: CalendarInfo[]): CalendarDefaultState {
-    const configuredId = this.defaultCalendarId;
-    if (!configuredId) return { id: null, configuredId: null };
-    const cal = calendars.find((c) => c.id === configuredId);
-    const problem = !cal
-      ? 'The default calendar is not on this Mac any more (it was deleted, or its account was removed).'
-      : cal.readonly
-        ? `The default calendar "${cal.title}" (${cal.account}) is read-only.`
-        : null;
-    if (!problem) {
-      this.loggedDefaultWarning = null;
-      return { id: configuredId, configuredId, title: cal!.title, account: cal!.account };
-    }
-    if (this.loggedDefaultWarning !== problem) {
+    const { state, problem } = describeDefaultCalendar(this.defaultCalendarId, calendars);
+    if (!problem) this.loggedDefaultWarning = null;
+    else if (this.loggedDefaultWarning !== problem) {
       this.loggedDefaultWarning = problem;
-      log.calendar.warn('default calendar unusable, creates without a calendar id are refused', { configuredId, problem });
+      log.calendar.warn('default calendar unusable, creates without a calendar id are refused', { configuredId: this.defaultCalendarId, problem });
     }
-    return {
-      id: null,
-      configuredId,
-      ...(cal ? { title: cal.title, account: cal.account } : {}),
-      warning: `${problem} Pick another in Settings → Calendar Accounts → Default calendar.`,
-    };
+    return state;
   }
 
   /** What config says, unchecked (null when unset). */
@@ -425,14 +278,11 @@ export class CalendarService {
     return this.describeDefault(await this.listCalendars());
   }
 
-  /** Events within [from, to] (inclusive day strings), served from cache when it
-   *  is younger than READ_TTL. `force` skips the cache entirely — for callers
-   *  that would rather wait ~0.25s than report a cancelled meeting as live.
-   *  Hidden-calendar filtering happens HERE, not in the source: the cache
-   *  keeps everything, so toggling visibility applies on the next read with
-   *  no refetch. `includeHidden` marks single hidden events instead of dropping them. */
+  /** Events within [from, to] (inclusive days), from cache while younger than READ_TTL; `force`
+   *  skips it. Hidden calendars are filtered HERE (the cache keeps everything, so a toggle needs
+   *  no refetch); `includeHidden` marks single hidden events instead of dropping them. */
   async getEvents(from: string, to: string, opts?: { force?: boolean; includeHidden?: boolean }): Promise<CalendarEvent[]> {
-    if (!this.enabled || !this.source.available().ok) return [];
+    if (!this.enabled || this.sources.usable().length === 0) return [];
     const includeHidden = opts?.includeHidden === true;
     const key = windowKey(from, to);
     const cached = this.cache.get(key);
@@ -470,8 +320,9 @@ export class CalendarService {
     for (const entry of this.cache.values()) {
       if (entry.events.some((e) => e.id === id)) return;
     }
-    if (this.source.getEvent) {
-      await this.source.getEvent(id);
+    const member = this.sources.memberFor(id);
+    if (member.source.getEvent) {
+      await member.source.getEvent(id);
       return;
     }
     const day = occurrenceDay(id);
@@ -481,9 +332,15 @@ export class CalendarService {
         'usage',
       );
     }
-    this.assertUsable();
+    this.assertUsable(member);
     const events = await this.fetchWindow(windowKey(day, day), day, day);
     if (!events.some((e) => e.id === id)) throw new CalendarHelperError(`event not found: ${id}`, 'not-found');
+  }
+
+  /** One window from every usable source, merged; throws only when every source failed. */
+  private async readWindow(from: string, to: string): Promise<CalendarEvent[]> {
+    const { items } = await this.sources.readAll(this.sources.usable(), (m) => m.source.listEvents(from, to), { key: `${from}|${to}` });
+    return items;
   }
 
   /** Fetch + cache one month window, collapsing concurrent callers onto a single
@@ -494,7 +351,7 @@ export class CalendarService {
     const window = windowRange(from, to);
     const task = (async () => {
       const before = this.cache.get(key);
-      const events = await this.trackErrors(() => this.source.listEvents(window.from, window.to));
+      const events = await this.readWindow(window.from, window.to);
       const hash = eventsHash(events);
       const changed = before?.hash !== hash;
       this.cache.set(key, { events, fetchedAt: Date.now(), hash });
@@ -525,51 +382,50 @@ export class CalendarService {
     return shown.map((e) => (this.hiddenEventIds.has(e.id) ? { ...e, hidden: true } : e));
   }
 
-  /** Re-fetch every cached window (periodic refresh / manual refresh). Asks the
-   *  source to pull from the remote accounts first — that pull is asynchronous
-   *  inside macOS, so it freshens the poll after this one, not this one. */
+  /** Re-fetch every cached window (periodic / manual refresh), asking the sources to pull from
+   *  their remote accounts first (async inside macOS: it freshens the next poll, not this one). */
   async refreshAll(): Promise<void> {
-    if (!this.enabled || !this.source.available().ok) return;
+    if (!this.enabled || this.sources.usable().length === 0) return;
     let anyChanged = false;
-    for (const [key, entry] of this.cache) {
-      const [fromMonth, toMonth] = key.split('..');
-      const window = windowRange(`${fromMonth}-01`, `${toMonth}-01`);
-      try {
-        const events = await this.trackErrors(() =>
-          this.source.listEvents(window.from, window.to, { refresh: true })
-        );
-        const hash = eventsHash(events);
-        if (hash !== entry.hash) anyChanged = true;
-        this.cache.set(key, { events, fetchedAt: Date.now(), hash });
-      } catch (err) {
-        log.calendar.warn('window refresh failed', { key, error: String(err).slice(0, 200) });
-      }
-    }
+    const keys = [...this.cache.keys()];
+    const read = await this.sources.readWindows(keys.map(lateKey), (m, k) => m.source.listEvents(...windowOf(k), { refresh: true }));
+    keys.forEach((key, i) => {
+      const result = read[i];
+      if ('error' in result) return log.calendar.warn('window refresh failed', { key, error: String(result.error).slice(0, 200) });
+      // A source that failed this time keeps the events it gave before, rather than vanishing until the next refresh.
+      const kept = result.failed.length ? (this.cache.get(key)?.events ?? []).filter((e) => result.failed.includes(e.source)) : [];
+      const events = kept.length ? [...result.items, ...kept] : result.items;
+      const hash = eventsHash(events);
+      if (hash !== this.cache.get(key)?.hash) anyChanged = true;
+      this.cache.set(key, { events, fetchedAt: Date.now(), hash });
+    });
     this.lastRefresh = new Date().toISOString();
     if (anyChanged) this.emitUpdated();
   }
 
-  private async guardWrite(id: string, opts?: CalendarWriteOptions): Promise<void> {
-    if (!this.source.getEvent) throw new CalendarHelperError('Calendar write safety is unavailable. Use Hide event instead.', 'human-approval-required');
-    const event = await this.source.getEvent(assertEventId(id));
-    if (event.readonly) throw new CalendarHelperError('calendar is read-only', 'readonly');
+  /** The same rule for every source (event-rules.ts): an event Walnut did not make alone needs the person's yes. */
+  private async guardWrite(member: SourceMember, id: string, opts?: CalendarWriteOptions): Promise<void> {
+    const { source } = member;
+    if (!source.getEvent) throw new CalendarHelperError('Calendar write safety is unavailable. Use Hide event instead.', 'human-approval-required');
+    const event = await source.getEvent(assertEventId(id));
+    // Before any yes: a mail account's event with other people on it is read-only, confirmed or not.
+    if (event.readonly) throw new CalendarHelperError(event.readonlyReason ?? 'calendar is read-only', 'readonly');
     if (calendarEventNeedsApproval(event) && opts?.humanConfirm !== true) {
       throw new CalendarHelperError(`\"${event.title}\"${event.recurring ? ' belongs to a recurring series' : ' is not a private Walnut-created block'}. This change may affect the whole series and notify the organizer. Use Hide event instead, or ask the user to confirm in Calendar.`, 'human-approval-required');
     }
   }
 
-  // Writes are NOT wrapped in trackErrors: a write can go to a different program than the
-  // reads (the current helper while an older Walnut.app serves reads, see eventkit.ts
-  // runSafeWrite), so a write refused for want of a grant says nothing about whether reads
-  // work. Latching it flipped the source to unavailable and took the calendar view down.
+  // Writes are NOT tracked: a write can go to another program than the reads (eventkit.ts
+  // runSafeWrite), so its refusal says nothing about reads; latching it took the view down.
 
   /** Moves or renames in place: an event never changes calendar here, whatever the default is. */
   async updateEvent(id: string, patch: CalendarEventPatch, opts?: CalendarWriteOptions): Promise<CalendarEvent> {
-    this.assertUsable();
+    const member = this.sources.memberFor(id);
+    this.assertUsable(member);
     if (leaderPermitActive()) assertOutwardDoor('calendar-write', `update:${id}`);
-    await this.guardWrite(id, opts);
+    await this.guardWrite(member, id, opts);
     // Only the fields an update may carry: nothing a caller adds can move it to another calendar.
-    const event = await this.source.updateEvent(id, {
+    const event = await member.source.updateEvent(id, {
       start: patch.start,
       end: patch.end,
       ...(patch.title !== undefined ? { title: patch.title } : {}),
@@ -580,10 +436,12 @@ export class CalendarService {
 
   /** No `calendarId` (absent or blank) creates on the configured default calendar. */
   async createEvent(input: CalendarEventCreateInput): Promise<CalendarEvent> {
-    this.assertUsable();
+    this.assertUsable(this.sources.primary, true);
     if (leaderPermitActive()) assertOutwardDoor('calendar-write', `create:${input.start}:${input.title}`);
     const calendarId = await this.createTarget(input.calendarId);
-    const event = await this.source.createEvent({ ...input, calendarId });
+    const member = this.sources.memberFor(calendarId);
+    this.assertUsable(member);
+    const event = await member.source.createEvent({ ...input, calendarId });
     await this.writeThrough();
     return event;
   }
@@ -601,118 +459,43 @@ export class CalendarService {
   }
 
   async deleteEvent(id: string, opts?: CalendarWriteOptions): Promise<void> {
-    this.assertUsable();
+    const member = this.sources.memberFor(id);
+    this.assertUsable(member);
     if (leaderPermitActive()) assertOutwardDoor('calendar-write', `delete:${id}`);
-    await this.guardWrite(id, opts);
-    await this.source.deleteEvent(id, opts);
+    await this.guardWrite(member, id, opts);
+    await member.source.deleteEvent(id, opts);
     await this.writeThrough();
   }
 
-  /** After a write: refresh cached windows so reads see it, then notify UIs. */
+  /** After a write: refresh cached windows (all at once, recording no source failure, as before) so reads see it, then notify UIs. */
   private async writeThrough(): Promise<void> {
-    for (const [key] of this.cache) {
-      const [fromMonth, toMonth] = key.split('..');
-      const window = windowRange(`${fromMonth}-01`, `${toMonth}-01`);
-      try {
-        const events = await this.source.listEvents(window.from, window.to);
-        this.cache.set(key, { events, fetchedAt: Date.now(), hash: eventsHash(events) });
-        // A read that worked: the one place a write path may clear a stale read failure.
-        this.lastError = null;
-      } catch {
-        this.cache.delete(key); // stale after a write — better a miss than a lie
-      }
-    }
+    this.sources.forgetLate(); // a late answer read before this write is older than it
+    const keys = [...this.cache.keys()];
+    const read = await this.sources.readWindows(keys.map(lateKey), (m, k) => m.source.listEvents(...windowOf(k)), { record: false, keyed: false });
+    keys.forEach((key, i) => {
+      const result = read[i];
+      // Stale after a write: better a miss than a lie (a source that failed is read again next time).
+      if ('error' in result || result.failed.length) this.cache.delete(key);
+      else this.cache.set(key, { events: result.items, fetchedAt: Date.now(), hash: eventsHash(result.items) });
+    });
     this.emitUpdated();
   }
 
   private emitUpdated(): void {
-    announce({ status: this.status() });
+    announce({ status: this.status(), ...(this.sources.hasExtras() ? { sources: this.statuses() } : {}) });
   }
 
-  private assertUsable(): void {
+  /**
+   * Refuses a call to a source that cannot take it. `anySource`: the calendar as a whole
+   * (a create whose target is not known yet) is usable when some source is.
+   */
+  private assertUsable(member: SourceMember, anySource = false): void {
     if (!this.enabled) throw new CalendarHelperError('calendar source is disabled', 'disabled');
-    const avail = this.source.available();
+    if (anySource && this.sources.usable().length > 0) return;
+    const avail = member.source.available();
     if (!avail.ok) throw new CalendarHelperError(avail.message ?? 'calendar unavailable', avail.reason ?? 'not-configured');
   }
-
-  /** Record permission/fetch failures so status() explains what's wrong. */
-  private async trackErrors<T>(fn: () => Promise<T>): Promise<T> {
-    try {
-      const result = await fn();
-      this.lastError = null;
-      return result;
-    } catch (err) {
-      const code = calendarErrorCode(err);
-      if (code) {
-        // Per-EVENT failures (deleting an already-deleted event, editing a
-        // readonly one) say nothing about the SOURCE's health — latching them
-        // into lastError flipped available:false and silently removed the
-        // Event tab + "New event…" everywhere until a manual refresh.
-        if (code === 'not-found' || code === 'readonly' || code === 'human-approval-required' || code === 'approval-canceled') throw err;
-        this.lastError = {
-          reason: code === 'permission-denied' ? 'permission-denied' : code === 'not-configured' ? 'not-configured' : 'fetch-error',
-          message: err instanceof Error ? err.message : String(err),
-        };
-      }
-      throw err;
-    }
-  }
 }
 
-function filterRange(events: CalendarEvent[], from: string, to: string): CalendarEvent[] {
-  return events.filter((e) => {
-    const startDay = e.start.slice(0, 10);
-    const endDay = e.end ? e.end.slice(0, 10) : startDay;
-    return startDay <= to && endDay >= from;
-  });
-}
-
-// ── the plugin's one instance ────────────────────────────────────────────────
-//
-// A module-level slot, not a field on the activation closure, for two reasons: the routes
-// and tools resolve it PER CALL (a test may swap the instance between requests while the
-// server stays up), and the fixture seam below has to be able to put an instance in place
-// before the plugin activates so activate never builds one over the real EventKit helper.
-
-let service: CalendarService | null = null;
-
-/**
- * activate's entry: adopt whatever is already in the slot, else build one over the host's
- * source. `createSource` is a factory, not a value, so the EventKit helper is never
- * constructed when a fixture already supplied a mock.
- */
-export function adoptCalendarService(createSource: () => CalendarSource): CalendarService {
-  if (!service) service = new CalendarService(createSource());
-  return service;
-}
-
-/**
- * The live instance, resolved per request and per tool call.
- *
- * A helper error rather than a plain throw: a request already in flight when the plugin is
- * torn down (the Disposable runs before the route registrations are withdrawn) then answers
- * 503 "not configured" like any other unavailable source, instead of a bare 500.
- */
-export function getCalendarService(): CalendarService {
-  if (!service) throw new CalendarHelperError('the calendar plugin is not active', 'not-configured');
-  return service;
-}
-
-/**
- * deactivate's exit: stop the loop and clear the slot, so a reload builds a fresh service
- * and re-runs init() instead of adopting one whose timer is already stopped.
- *
- * Consequence worth knowing before you test a reload: the fresh service is built over the
- * HOST's real EventKit source, so a fixture that injected a mock before boot has to inject
- * again after a reload or the next read compiles the Swift helper and reads real calendars.
- */
-export function releaseCalendarService(instance: CalendarService): void {
-  instance.stop();
-  if (service === instance) service = null;
-}
-
-/** Test hook: swap in a service over a mock source, before or after activate. */
-export function _setCalendarServiceForTest(s: CalendarService | null): void {
-  if (service !== s) service?.stop();
-  service = s;
-}
+// The plugin's one instance lives in service-slot.ts; its importers keep this path.
+export { adoptCalendarService, getCalendarService, releaseCalendarService, _setCalendarServiceForTest } from './service-slot.js';

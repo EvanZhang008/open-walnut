@@ -47,7 +47,10 @@ const GATES: Record<string, Gate> = {
   'src/core/offline-merge/letter.ts': { asks: 1, kept: 'a review of what two Walnuts wrote while apart: a report, not an ask' },
   'src/web/routes/human-inbox-v1.ts': { asks: 1, kept: 'answering a plugin\'s letter is the person\'s own act' },
   'src/integrations/calendar/routes.ts': { asks: 3, kept: 'changing a meeting other people are in: the native helper shows its own confirmation on the Mac, and an agent is refused at once (it hides the event instead), so nothing waits' },
-  'src/integrations/calendar/service.ts': { asks: 3, kept: 'the same protected calendar write, refused at once' },
+  'src/integrations/calendar/service.ts': { asks: 2, kept: 'the same protected calendar write, refused at once' },
+  // Not an ask: the source set reads a refusal as being about one event, not the source's health.
+  'src/integrations/calendar/mail-calendars.ts': { asks: 1, kept: 'a calendar server Walnut found for a mail account: its password goes there, so only the person at the Mac approves it, and an agent is refused at once' },
+  'src/integrations/calendar/source-set.ts': { asks: 1, kept: 'the same protected calendar write: a refusal read as about one event, so it never marks the source down' },
   'src/core/calendar/sources/eventkit.ts': { asks: 2, kept: 'the same protected calendar write: the helper\'s confirmation dialog' },
 };
 
