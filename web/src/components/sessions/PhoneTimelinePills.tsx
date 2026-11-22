@@ -14,7 +14,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent, type RefObject } from 'react';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
-import { ScrollToBottomButton } from '@/components/common/ScrollToBottomButton';
+import { ScrollToBottomButton, setJumpHidden } from '@/components/common/ScrollToBottomButton';
 
 const ROW_SELECTOR = '[data-msg-role]';
 const PROMPT_SELECTOR = '[data-prompt-pending="true"]';
@@ -69,9 +69,11 @@ export function useJumpCount(containerRef: RefObject<HTMLElement | null>, button
     const btn = buttonRef.current;
     if (el && btn) {
       const over = overlapsPrompt(btn, el);
-      btn.toggleAttribute('data-over-prompt', over);
-      // Stepped aside is out of the Tab order too, not only out of sight.
-      btn.tabIndex = over ? -1 : 0;
+      if (over !== btn.hasAttribute('data-over-prompt')) {
+        btn.toggleAttribute('data-over-prompt', over);
+        // Stepped aside is hidden for the keyboard and screen readers too, not only the eye.
+        setJumpHidden(btn, over);
+      }
     }
     const seen = lastSeen.current;
     if (!el || !seen || !seen.isConnected) { setCount(0); return; }

@@ -7,7 +7,7 @@
  * Rendered inside the scroller (a flex column) it rides sticky at the bottom; `seated` is for a
  * place that positions it itself. `badge` is a small count of rows that arrived below.
  */
-import { forwardRef, type ReactNode } from 'react';
+import { forwardRef, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import '@/styles/scroll-jump.css';
 
 const ARROW_DOWN = (
@@ -15,6 +15,22 @@ const ARROW_DOWN = (
     <path d="M8 3v9.5M3.75 8.25L8 12.5l4.25-4.25" />
   </svg>
 );
+
+/** Out of sight, out of the Tab order and the accessibility tree; focus leaves it. */
+export function setJumpHidden(btn: HTMLElement, hidden: boolean): void {
+  btn.tabIndex = hidden ? -1 : 0;
+  if (hidden) btn.setAttribute('aria-hidden', 'true');
+  else btn.removeAttribute('aria-hidden');
+  if (hidden) releaseFocus(btn);
+}
+
+function releaseFocus(btn: HTMLElement | null): void {
+  if (!btn || document.activeElement !== btn) return;
+  // The scroller it jumps is where the reader is: focus goes there when it can take it.
+  const scroller = btn.parentElement;
+  if (scroller && scroller.tabIndex >= 0) scroller.focus({ preventScroll: true });
+  else btn.blur();
+}
 
 export interface ScrollToBottomButtonProps {
   visible: boolean;
@@ -32,9 +48,18 @@ export const ScrollToBottomButton = forwardRef<HTMLButtonElement, ScrollToBottom
   { visible, onClick, label = 'Scroll to bottom', badge, seated, testId },
   ref,
 ) {
+  const own = useRef<HTMLButtonElement | null>(null);
+  const setRef = useCallback((el: HTMLButtonElement | null) => {
+    own.current = el;
+    if (typeof ref === 'function') ref(el);
+    else if (ref) ref.current = el;
+  }, [ref]);
+  // Hidden is hidden for focus too: a keyboard user who pressed it (or Tab'd onto it) is not
+  // left on an invisible control.
+  useEffect(() => { if (!visible) releaseFocus(own.current); }, [visible]);
   return (
     <button
-      ref={ref}
+      ref={setRef}
       type="button"
       className={`scroll-to-bottom-btn wn-glass-frost${visible ? ' visible' : ''}${seated ? ' is-seated' : ''}`}
       onClick={onClick}
