@@ -149,7 +149,7 @@ export type Counts = {
   rawAccent: Record<string, number>;
   bareButton: Record<string, number>;
   restyledInput: Record<string, number>;
-cutTitle: Record<string, number>;
+  cutTitle: Record<string, number>;
 } & Record<TokenKind, Record<string, number>>;
 
 /** Roles of a choice control (segmented, tabs, switches, boxes): their own components, not buttons. */
