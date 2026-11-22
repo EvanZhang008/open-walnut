@@ -117,10 +117,10 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
   const alerted = calendarAlertOf(calendar) !== null;
   const unread = calendar.sources.length > 0 && !calendar.sources.some((s) => s.available && s.enabled);
   const why = calendar.sources.find((s) => s.enabled && !s.available) ?? calendar.sources.find((s) => s.message);
-  const status = calendar.loading
-    ? <LoadingState size="row" testId="cal-side-status" title="Loading events…" />
-    : alerted
-      ? null
+  const status = alerted
+    ? null
+    : calendar.loading
+      ? <LoadingState size="row" testId="cal-side-status" title="Loading events…" />
       : unread
       ? (
         <UnavailableState

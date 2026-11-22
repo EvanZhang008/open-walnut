@@ -152,15 +152,22 @@ test("the Agenda header: its time stays inside the panel, one kind of button, an
   // An empty day says it is empty; calendars that could not be read say so instead.
   await expect(panel.getByTestId('cal-side-status')).toHaveAttribute('data-kind', 'empty');
   await expect(panel.getByTestId('cal-side-status').locator('.empty-state-title')).toHaveText(/^Nothing scheduled/);
-  sources = [{ id: 'eventkit', available: false, enabled: true, reason: 'permission-denied', message: 'Not allowed to read calendars.' }];
-  await page.reload();
-  // This file's prefs are its own (isolateUiPrefs), so a reload may come back with the side bar shut.
-  await expect(page.getByTestId('sidebar-toggle-calendar')).toBeVisible();
-  if (!(await panel.count())) await page.getByTestId('sidebar-toggle-calendar').click();
-  // ...with the reason, whole, on its own line.
+  const reloadWith = async (next: typeof sources) => {
+    sources = next;
+    await page.reload();
+    // This file's prefs are its own (isolateUiPrefs), so a reload may come back with the side bar shut.
+    await expect(page.getByTestId('sidebar-toggle-calendar')).toBeVisible();
+    if (!(await panel.count())) await page.getByTestId('sidebar-toggle-calendar').click();
+  };
+  // Access lost is the alert's to say (with Retry), never a second line under it.
+  await reloadWith([{ id: 'eventkit', available: false, enabled: true, reason: 'permission-denied', message: 'Not allowed to read calendars.' }]);
+  await expect(panel.getByTestId('cal-alert')).toContainText('Calendar access lost', { timeout: 15_000 });
+  await expect(panel.getByTestId('cal-side-status')).toHaveCount(0);
+  // Calendars not read for another reason: the status says so, with the reason, whole, on its own line.
+  await reloadWith([{ id: 'eventkit', available: false, enabled: true, reason: 'not-configured', message: 'Calendars are not set up on this Mac.' }]);
   await expect(panel.getByTestId('cal-side-status').locator('.empty-state-title')).toHaveText('Calendars not read', { timeout: 15_000 });
   await expect(panel.getByTestId('cal-side-status')).toHaveAttribute('data-kind', 'unavailable');
-  await expect(panel.getByTestId('cal-side-status').locator('.empty-state-hint')).toHaveText('Not allowed to read calendars.');
+  await expect(panel.getByTestId('cal-side-status').locator('.empty-state-hint')).toHaveText('Calendars are not set up on this Mac.');
   await expect.poll(() => panel.getByTestId('cal-side-status').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
 });
 
