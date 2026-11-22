@@ -24,6 +24,7 @@
  * newer model with no `modelSettings` entry runs at its own default (Fable 5.2: medium) even
  * though the file says `effortLevel: "high"`. A `--effort` flag wins over every settings layer.
  */
+import { normalizeEngine } from '../agents/engine-registry.js';
 import { isClaudeModelName, VALID_SESSION_EFFORT_IDS, type SessionEffort } from '../types.js';
 
 /** The config keys this module reads (a structural slice of Config). */
@@ -137,7 +138,8 @@ export function observedClaudeDefaultEfforts(
 ): ObservedClaudeDefaultEffort[] {
   const byModel = new Map<string, ObservedClaudeDefaultEffort>();
   for (const r of records) {
-    if (r.engine && r.engine !== 'claude') continue;
+    // Another engine's session (normalizeEngine names only engines other than the default).
+    if (normalizeEngine(r.engine)) continue;
     if (r.effort !== undefined && r.effort !== null) continue;
     const effort = effortOf(r.effectiveEffort);
     const model = typeof r.model === 'string' ? r.model.trim() : '';
