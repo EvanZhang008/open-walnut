@@ -59,6 +59,8 @@ export interface LeaderSideDeps {
   noteLive(sid: string, state: LiveState): void
   noteRename(from: string, to: string): void
   noteHostJudged(sid: string, host: string): void
+  /** The channel to `hostId` linked (its hello): what waits here for that host goes now (host-judged-send.ts). */
+  onLinked?(hostId: string): void
   backoffMs?(attempt: number): number
   callTimeoutMs?: number
   startTimeoutMs?: number
@@ -214,7 +216,11 @@ export function createLeaderSide(deps: LeaderSideDeps) {
         let frame: unknown
         try { frame = JSON.parse(text) } catch { return }
         if (!isChannelFrame(frame)) return
-        if (frame.op === 'hello') { s.attempt = 0; void flushDrops(hostKey) }
+        if (frame.op === 'hello') {
+          s.attempt = 0
+          void flushDrops(hostKey)
+          try { deps.onLinked?.(hostKey) } catch (err) { deps.log('warn', 'session channel: what waited for the host was not sent', { host: hostKey, error: err instanceof Error ? err.message : String(err) }) }
+        }
         channel.onFrame(frame)
       })
       sock.onClose(() => {

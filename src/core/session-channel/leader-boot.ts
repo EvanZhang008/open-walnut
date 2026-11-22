@@ -76,6 +76,12 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
       void import('./leader-tasks.js').then((m) => m.noteHostSessionRenamed(from, to))
     },
     noteHostJudged,
+    // Lines that did not reach a host (its link was down, an answer lost) go again when it links.
+    onLinked: (host) => {
+      void import('../../providers/host-judged-send.js').then((m) => m.redeliverWaitingFor(host)).catch((err: unknown) => {
+        log.session.warn('host-run sessions: redelivering what waited for a host failed', { host, error: err instanceof Error ? err.message : String(err) })
+      })
+    },
     log: (level, msg, data) => log.session[level](msg, data),
   })
   active = side

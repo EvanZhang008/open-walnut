@@ -118,7 +118,13 @@ export async function enqueueMessage(
     /** With heldReason: a cold hold's send (QueuedMessage.coldSend). */
     coldSend?: { source: string; endsWait?: true };
     /** Written to disk before this returns, or throws (QueueNotStoredError): never a row only the cache holds. */
-    strict?: boolean },
+    strict?: boolean;
+    /**
+     * With `id`: this queue takes the id once, ever (within the fates' horizon, relay-fates.ts):
+     * its 'taken' fate is written with its row, and a later enqueue of the id, after the row ran or
+     * went, queues nothing. A host's queue takes its leader's rows so, and a resend is a no-op.
+     */
+    onceById?: boolean },
 ): Promise<QueuedMessage> {
   // A stopping Demo queues nothing more (sessions/demo-admission.ts); checked again inside the write.
   assertDemoAdmission();
@@ -156,13 +162,17 @@ export async function enqueueMessage(
   const relayed = opts?.relayTaken === true;
   // Also a row whose sender acts on its being stored (a routine's sent mark, cron/sent-run.ts).
   const strict = relayed || itemAction || opts?.strict === true;
-  const outcome = await mutateStore((s): { queueDepth: number; existing: QueuedMessage | null; refused?: true } => {
+  const outcome = await mutateStore((s): { queueDepth: number; existing: QueuedMessage | null; refused?: true; ranAlready?: true } => {
     if (demoAdmissionClosed()) return { queueDepth: 0, existing: null, refused: true };
     if (!s.queues[sessionId]) {
       s.queues[sessionId] = [];
     }
-    // A phone message the companion relayed: its fate is written with its row.
-    if (opts?.relayTaken && opts.id) setFate(s, opts.id, 'taken');
+    // Taken once already, and no longer queued: it ran (or went), never a second time.
+    if (opts?.onceById && opts.id && fateOf(s, opts.id) === 'taken' && !s.queues[sessionId].some((m) => m.id === opts.id)) {
+      return { queueDepth: s.queues[sessionId].length, existing: null, ranAlready: true };
+    }
+    // A phone message the companion relayed, a row taken once: its fate is written with its row.
+    if ((opts?.relayTaken || opts?.onceById) && opts.id) setFate(s, opts.id, 'taken');
     if (opts?.id) {
       const existing = s.queues[sessionId].find((m) => m.id === opts.id);
       if (existing) return { queueDepth: s.queues[sessionId].length, existing };
@@ -171,6 +181,10 @@ export async function enqueueMessage(
     return { queueDepth: s.queues[sessionId].length, existing: null };
   }, strict, strict).catch((err: unknown) => { throw strict ? new QueueNotStoredError(err) : err; });
   if (outcome.refused) throw new DemoAdmissionClosedError();
+  if (outcome.ranAlready) {
+    log.session.info('message enqueue skipped: this queue took the id once already', { sessionId, messageId: msg.id });
+    return msg;
+  }
   if (outcome.existing) {
     log.session.info('message enqueue deduped by id (already queued)', {
       sessionId, messageId: outcome.existing.id, queueDepth: outcome.queueDepth,
@@ -907,6 +921,18 @@ export async function takeLinesForHost(sessionId: string, opts?: { heldOnly?: bo
       }, false, true);
     },
   };
+}
+
+/**
+ * The sessions with lines takeLinesForHost would take (a pending row, a handed hold): what waits
+ * for a host that runs its sessions to take it (providers/host-judged-send.ts redelivery).
+ */
+export async function sessionsWithLinesForHost(): Promise<string[]> {
+  const { isHandedHold } = await import('./sessions/handed-holds.js');
+  const s = await getStore();
+  return Object.entries(s.queues)
+    .filter(([, q]) => q.some((m) => m.status === 'pending' || isHandedHold(m)))
+    .map(([sid]) => sid);
 }
 
 /**

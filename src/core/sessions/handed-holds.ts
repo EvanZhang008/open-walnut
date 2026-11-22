@@ -5,9 +5,10 @@
  * leader, where the send is made, and then handed to the host with its hold:
  *
  *   leader   sendMessageToSession stores the held row, then handHeldRowsToHost: the row leaves this
- *            queue for the host's (providers/host-judged-runner.ts handHeldToHost, a `holdOnly`
- *            send). A hand that fails is tried again a few times, and any later send to the session
- *            takes the held rows with its own lines (session-message-queue.ts takeLinesForHost).
+ *            queue for the host's (providers/host-judged-send.ts handHeldToHost, a `holdOnly`
+ *            send). A hand that fails goes again until the host takes it (that module's one
+ *            redelivery path), and any later send to the session takes the held rows with its own
+ *            lines (session-message-queue.ts takeLinesForHost).
  *   host     the routes queue each handed line held under the same reason (queueLinesOnHost), so the
  *            host's own queue-after-turn releases it when the host's turn ends and its cold hold
  *            when the session wakes or the hold reaches its max, whether the leader is there or not.
@@ -38,7 +39,7 @@ export function handHeldRowsToHost(sid: string): void {
   void (async () => {
     const { judgingHostOf } = await import('./judge-of.js')
     if (!judgingHostOf(sid)) return
-    const { handHeldToHost } = await import('../../providers/host-judged-runner.js')
+    const { handHeldToHost } = await import('../../providers/host-judged-send.js')
     handHeldToHost(sid)
   })().catch(() => { /* handHeldToHost logs and retries itself */ })
 }
@@ -70,7 +71,8 @@ export async function queueLinesOnHost(sid: string, lines: readonly QueuedLine[]
     const held = heldEnqueueOptions(l)
     if (held.heldReason) reasons.add(held.heldReason)
     await enqueueMessage(sid, text, {
-      ...(l.id ? { id: l.id } : {}), ...(l.userUuid ? { userUuid: l.userUuid } : {}), ...(l.lineUuid ? { lineUuid: l.lineUuid } : {}),
+      // By the leader's row id, once: a resend whose first answer was lost queues nothing again.
+      ...(l.id ? { id: l.id, onceById: true } : {}), ...(l.userUuid ? { userUuid: l.userUuid } : {}), ...(l.lineUuid ? { lineUuid: l.lineUuid } : {}),
       ...(l.closesPrompt ? { closesPrompt: true } : {}), ...(l.sentBy ? { sentBy: l.sentBy } : {}),
       ...held,
     })
