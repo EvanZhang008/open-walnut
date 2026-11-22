@@ -1,0 +1,67 @@
+/**
+ * What a session's own tool results tell the real-use monitor:
+ *  - a Walnut tool's answer Claude Code saved to a file instead of passing on (its own note,
+ *    `exceeds maximum allowed tokens` or `Output too large`): a confirmed cut of that op;
+ *  - a command that lands, deploys or publishes (ships.ts): the task shipped, unless the result
+ *    shows the command failed.
+ * Matched by the tool call's id, so a result is judged with the call that made it.
+ */
+import { log } from '../../logging/index.js'
+import type { OnToolResultPayload, OnToolUsePayload, SessionHookDefinition } from '../session-hooks/types.js'
+import { agentCutChars, walnutOpOfToolCall } from './normalize.js'
+import { recordConfirmedCut } from './record.js'
+import { recordShip, setShipState, shipFailed, shipOfCommand } from './ships.js'
+
+const PENDING_MS = 3 * 60 * 60_000
+const MAX_PENDING = 500
+
+interface Pending { at: number; op?: string; client?: 'mcp' | 'cli'; ship?: string }
+const pending = new Map<string, Pending>()
+
+function remember(id: string, p: Pending): void {
+  for (const [key, entry] of pending) if (p.at - entry.at > PENDING_MS) pending.delete(key)
+  if (pending.size >= MAX_PENDING) pending.delete(pending.keys().next().value!)
+  pending.set(id, p)
+}
+
+export const realUseHook: SessionHookDefinition = {
+  id: 'real-use-watch',
+  name: 'Count real use of the session\'s tools',
+  description: 'Counts a Walnut tool answer Claude Code had to save to a file, and notes when the task ships a change (a land, deploy or publish), for Settings › Diagnostics › Real Use.',
+  hooks: ['onToolUse', 'onToolResult'],
+  priority: 61,
+  source: 'builtin',
+  enabled: true,
+  timeoutMs: 5_000,
+  handler: async (payload) => {
+    if ('toolName' in payload) {
+      const use = payload as OnToolUsePayload
+      if (!use.toolUseId) return
+      const op = walnutOpOfToolCall(use.toolName, use.input)
+      const command = use.toolName === 'Bash' && typeof use.input?.command === 'string' ? use.input.command : ''
+      const ship = command ? shipOfCommand(command) : null
+      if (!op && !ship) return
+      const now = Date.now()
+      remember(use.toolUseId, { at: now, ...(op ? { op, client: use.toolName === 'Bash' ? 'cli' : 'mcp' } : {}), ...(ship ? { ship } : {}) })
+      if (ship && use.taskId) {
+        recordShip({ taskId: use.taskId, key: use.toolUseId, at: now, how: ship, state: 'started' })
+        log.task.info('real use: the task ships', { taskId: use.taskId, how: ship })
+      }
+      return
+    }
+    const res = payload as OnToolResultPayload
+    const run = res.toolUseId ? pending.get(res.toolUseId) : undefined
+    if (!run) return
+    pending.delete(res.toolUseId!)
+    const text = typeof res.result === 'string' ? res.result : ''
+    if (run.op) {
+      const cut = agentCutChars(text)
+      if (cut !== null) recordConfirmedCut(run.op, cut, run.client ?? 'unknown')
+    }
+    if (run.ship && res.taskId) setShipState(res.taskId, res.toolUseId!, shipFailed(text) ? 'failed' : 'done')
+  },
+}
+
+export function _resetRealUseHookForTesting(): void {
+  pending.clear()
+}

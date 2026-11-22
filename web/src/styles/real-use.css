@@ -1,0 +1,169 @@
+/*
+ * Settings > Real Use (RealUseSection.tsx, RealUseTables.tsx, RealUseWatches.tsx). Rows, their
+ * hover, the opened row and task links are Walnut Health's (health-monitor.css: health-row,
+ * health-detail-row, health-detail, health-task-link, health-dim); this file adds the columns,
+ * sparks, summary and legends. The tables never scroll sideways: columns that do not fit hide
+ * (ru-wide under 860 px, ru-mid under 560 px) and their numbers show in the opened row.
+ */
+
+/* Like Remote Hosts, the page may grow past the 680 px column on a wide window: 12 columns. */
+@media (min-width: 1100px) {
+  .settings-container .settings-pane.settings-content:has(#real-use) { --settings-pane-column: 920px; }
+}
+
+.real-use {
+  container: real-use / inline-size;
+  font-size: 13px;
+  color: var(--fg-secondary);
+}
+
+.ru-note { margin: 0 0 12px; line-height: 18px; }
+
+/* ── Summary: numbers bold, only the alarm count in error colour ── */
+.ru-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.ru-count b { color: var(--fg); font-weight: 600; }
+.ru-meta { margin: 0 0 12px; font-size: 12px; }
+.ru-bad, .ru-count.ru-bad b { color: var(--settings-error-text); }
+
+/* ── Blocks: Tools, Requests, Page errors, Watches, Notes ── */
+.ru-block { margin: 24px 0 0; }
+.ru-h { margin: 0 0 4px; font-size: 15px; font-weight: 600; color: var(--fg); }
+.ru-caption { margin: 0 0 8px; font-size: 12px; }
+.ru-legend { margin: 0; font-size: 12px; line-height: 16px; }
+.ru-legend b { color: var(--fg); font-weight: 600; }
+.ru-empty { margin: 0; padding: 12px 8px; font-size: 13px; color: var(--fg-secondary); }
+.ru-empty-all { margin: 12px 0 0; padding: 12px 0; }
+
+.ru-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0 0 8px;
+}
+.ru-toolbar-label { margin-left: auto; font-size: 12px; }
+/* The Find a setting box's look (settings-nav.css), at a toolbar's width and without the nav's margins. */
+.settings-container .real-use .ru-find { flex: 0 1 240px; width: 240px; min-width: 0; margin: 0; }
+.app-shell-navigation .settings-container .settings-layout[data-phone-settings] .real-use .ru-find { margin: 0; }
+
+/* ── Tables ── */
+.ru-table {
+  width: 100%;
+  margin: 0 0 8px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.ru-table th {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: bottom;
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+.ru-table .health-row td { padding: 6px; vertical-align: middle; }
+.ru-table .ru-num { text-align: right; }
+/* Wide enough for each head's longest word ("(confirmed)", "Largest"), so no head runs into the next. */
+.ru-w-num { width: 56px; }
+.ru-w-err { width: 84px; }
+.ru-w-refused, .ru-w-largest { width: 60px; }
+.ru-w-small { width: 48px; }
+.ru-w-cut { width: 80px; }
+.ru-w-over { width: 56px; }
+.ru-w-size { width: 72px; }
+.ru-w-spark { width: 104px; }
+.ru-w-state { width: 112px; }
+.ru-w-who { width: 120px; }
+.ru-zero { color: var(--fg-muted); }
+.ru-share { color: var(--fg-muted); font-size: 11px; }
+.ru-table td.ru-name { color: var(--fg); }
+.ru-mono { font-family: var(--font-mono); font-size: 12px; color: var(--fg); overflow-wrap: anywhere; }
+
+/* A row's name is its button: chevron and name, the whole width of the cell. */
+.ru-open {
+  appearance: none;
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 4px;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ru-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+.ru-chev { display: inline-flex; flex: none; margin-top: 2px; color: var(--fg-muted); transition: transform 120ms ease-out; }
+.ru-row.is-open .ru-chev { transform: rotate(90deg); }
+.ru-kind { min-width: 0; overflow-wrap: anywhere; }
+
+.ru-spark-cell { display: block; }
+.ru-spark { display: block; width: 100%; height: 22px; }
+.ru-spark path { fill: none; stroke-width: 1.5; }
+.ru-spark-uses { stroke: var(--fg-muted); }
+.ru-spark-bad { stroke: var(--error); }
+
+.ru-detail { font-size: 12px; line-height: 16px; }
+.ru-more-row td { padding: 8px; border-bottom: 1px solid var(--border); }
+
+/* States: the dot keeps its colour; the words reach 4.5:1 on white, and wrap rather than cut. */
+.real-use .wn-notice-status { color: var(--fg-secondary); white-space: normal; }
+.real-use .wn-notice-status[data-tone='error'] { color: var(--settings-error-text); }
+
+/* ── Watches ── */
+.ru-watch-table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.ru-sub { display: block; margin-top: 4px; font-size: 11px; }
+.ru-target { display: block; }
+.ru-target + .ru-target { margin-top: 4px; }
+
+/* ── Notes sent ── */
+.ru-notes { margin: 0; padding: 0; list-style: none; }
+.ru-note-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.ru-when { min-width: 80px; font-variant-numeric: tabular-nums; }
+.ru-note-text { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+
+/* ── Narrow panes: hide columns, show their numbers in the opened row ── */
+.ru-wide-only, .ru-mid-only { display: none; }
+@container real-use (max-width: 860px) {
+  .ru-wide { display: none; }
+  .ru-detail .ru-wide-only { display: block; }
+}
+@container real-use (max-width: 560px) {
+  .ru-mid { display: none; }
+  .ru-detail .ru-mid-only { display: block; }
+  .ru-w-size { width: 64px; }
+  .ru-w-state { width: 96px; }
+  .ru-toolbar-label { margin-left: 0; }
+  .settings-container .real-use .ru-find { flex: 1 1 100%; width: auto; }
+  /* A watch reads as a short stack of lines: five columns do not fit a phone. */
+  .ru-watch-table, .ru-watch-table tbody { display: block; }
+  .ru-watch-table thead { display: none; }
+  .ru-watch-table tr { display: block; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .ru-watch-table td { display: block; padding: 2px 8px; border-bottom: 0; }
+}

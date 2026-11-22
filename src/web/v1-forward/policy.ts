@@ -318,13 +318,15 @@ export function parseConsoleCopyCall(method: unknown, url: unknown): { rel: stri
 
 /**
  * The request headers that cross: what a route reads to understand the body and the cache,
- * and a test window's marker (core/test-run.ts), so what a test run writes through the
- * companion is a test object on the Mac too, never the user's (2026-10-31: prefs).
+ * a test window's marker (core/test-run.ts), so what a test run writes through the
+ * companion is a test object on the Mac too, never the user's (2026-10-31: prefs), and an op's
+ * own-call marker (ops/executor.ts OP_CALL_HEADER), so the Mac's real-use numbers count it under
+ * its tool, never as a route's request. Neither grants anything.
  */
 const REQUEST_HEADERS = new Set([
   'accept', 'accept-language', 'content-type',
   'if-match', 'if-none-match', 'if-modified-since', 'if-unmodified-since',
-  'x-walnut-test-run',
+  'x-walnut-test-run', 'x-walnut-op-call',
 ])
 
 /**

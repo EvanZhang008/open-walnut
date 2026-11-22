@@ -19,6 +19,8 @@ const SYNC_STALE_MS = 5_000
 let cached: string | null = null
 /** The Approvals switch (approvals/ask-me.ts), read with the language: both are the user's settings in the prompt. */
 let askMe = true
+/** The real-use watch experiment (core/usage-watch/gate.ts), read with them: its rule is in the prompt only while on. */
+let realUse = false
 let checkedAt = 0
 let inflight: Promise<string | null> | null = null
 
@@ -34,6 +36,8 @@ export function refreshReplyLanguage(): Promise<string | null> {
       cached = replyLanguageText(config)
       const { askMeOf } = await import('../approvals/ask-me.js')
       askMe = askMeOf(config)
+      const { experimentalEnabled } = await import('../experimental.js')
+      realUse = experimentalEnabled(config.experimental, 'real_use_watch')
     } catch { /* keep the last copy */ }
     checkedAt = Date.now()
     return cached
@@ -85,10 +89,31 @@ export function approvalsLine(ask: boolean): string {
     + 'and settle a teammate\'s ask of those kinds (task_send answers_ask) only with user_words quoting them.\n\n'
 }
 
+/** The last real-use experiment read, for the sync prompt builders (false until one is read). */
+export function currentRealUseWatch(): boolean {
+  if (Date.now() - checkedAt > SYNC_STALE_MS) void refreshReplyLanguage()
+  return realUse
+}
+
+/**
+ * The prompt's rule while the real-use watch is on (2026-11-21, the user, after a tool's answer was
+ * cut three times in one day: "it need to not just complete the task, need to have some monitoring
+ * to gather real world feedback ... for each task taht change these kind of thing"). Off: no line.
+ */
+export function realUseLine(on: boolean): string {
+  if (!on) return ''
+  return 'Real use: a change you ship (a land, deploy or publish) is watched in real use after it ships. Before you '
+    + 'complete a task that shipped, arm a watch on what you changed: usage_watch {"action":"set","targets":["op:<tool>", '
+    + '"route:GET /api/...", "page:<part>"],"who":"this task","check_after":"24h"}; task_complete refuses without one. '
+    + 'Only copy, colour, docs or tests, a ship that did not happen, or one watched outside Walnut (a pipeline alarm): usage_watch {"action":"exempt","kind":...,"reason":...}. '
+    + 'An alarm on your targets comes to this task until the check time: fix it there.\n\n'
+}
+
 /** Tests: forget the copy. */
 export function _resetReplyLanguageForTesting(value: string | null = null): void {
   cached = value
   askMe = true
+  realUse = false
   checkedAt = value === null ? 0 : Date.now()
   inflight = null
 }

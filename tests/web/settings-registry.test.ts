@@ -45,9 +45,10 @@ const EXPECTED_IDS = [
   // was removed on 2026-10-31.
   // Page Use (2026-10-31): local counts of which pages and panes get opened.
   // Walnut Health (2026-11-08): Walnut's own alarms, like CloudWatch.
-  'walnut-health', 'usage', 'page-use', 'suggest-accuracy', 'bug-report',
+  // Real Use (2026-11-21): how Walnut's tools, requests and pages behave in real use.
+  'walnut-health', 'real-use', 'usage', 'page-use', 'suggest-accuracy', 'bug-report',
 ]
-const DIAGNOSTICS_IDS = ['walnut-health', 'usage', 'page-use', 'suggest-accuracy', 'bug-report']
+const DIAGNOSTICS_IDS = ['walnut-health', 'real-use', 'usage', 'page-use', 'suggest-accuracy', 'bug-report']
 
 describe('core settings registry', () => {
   it('keeps one owner-scoped source of truth for page and navigation order', () => {

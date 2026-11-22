@@ -63,6 +63,7 @@ SOURCES=(
   src/providers/walnut-mcp-stdio.ts
   src/mcp/instructions.ts
   src/lib/tool-answer-fit.ts
+  src/lib/tool-answer-size.ts
   src/lib/op-call-id.ts
   src/providers/acp-daemon.ts
   src/providers/acp-survive.ts

@@ -32,6 +32,7 @@ import { KeyboardShortcutsSection } from './sections/KeyboardShortcutsSection'
 import { TriageSection } from './sections/TriageSection'
 import { UsageSection } from './sections/UsageSection'
 import { HealthMonitorSection } from './sections/HealthMonitorSection'
+import { RealUseSection } from './sections/RealUseSection'
 import type { SettingsGlyphName } from './settings-icons'
 import type { SettingsPaneGate } from './settings-pane-gates'
 
@@ -395,6 +396,13 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     description: 'Alarms on Walnut\'s own health, like CloudWatch: what is high, what Walnut fixed itself, and its fix tasks.',
     keywords: ['health', 'alarm', 'monitor', 'metrics', 'cloudwatch', 'errors', 'disk', 'stall', 'anomaly'],
     render: () => <HealthMonitorSection />,
+  },
+  {
+    owner: 'walnut', id: 'real-use', label: 'Real Use', title: 'Real Use', group: 'diagnostics',
+    icon: 'bar-chart', tint: '#5856D6',
+    description: 'How Walnut\'s tools, requests and pages behave in real use, and the watches of shipped changes.',
+    keywords: ['real use', 'tool', 'answer', 'cut', 'failure', 'slow', 'request', 'page error', 'watch', 'usage watch'],
+    render: () => <RealUseSection />,
   },
   {
     owner: 'walnut', id: 'usage', label: 'Usage & Costs', title: 'Usage & Costs', group: 'diagnostics',

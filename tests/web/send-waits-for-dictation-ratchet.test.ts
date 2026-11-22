@@ -232,6 +232,7 @@ const SELF_GATED: Record<string, Role> = {
   'components/settings/SettingsNav.tsx|MicInput data-testid="settings-filter"': FILTER,
   'components/settings/sections/FocusTiersSection.tsx|MicInput aria-label=`Rename ${t.label}`': LEAVE,
   'components/settings/sections/GeneralSection.tsx|MicInput id="settings-name"': LEAVE,
+  'components/settings/sections/RealUseTables.tsx|MicInput data-testid="real-use-find"': FILTER,
   'components/settings/sections/SessionsSection.tsx|MicInput data-testid="session-reply-language"': LEAVE,
   'components/settings/sections/TasksSection.tsx|MicInput id="settings-project"': LEAVE,
   'components/settings/sections/TriageRoutingRules.tsx|MicInput data-testid="triage-rule-task-search"': FILTER,

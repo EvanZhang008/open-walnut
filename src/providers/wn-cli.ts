@@ -39,6 +39,7 @@ import { SKILL_POINTER, formatOpHelp, formatToolsTable, type ToolRow } from '../
 import { gatewayFailureCode, renderToolCallFailure, splitToolsJsonFlag, toolCallFailure } from './tool-call-output.js'
 import { awayLines, callerRunId, dropRunId, lostRunLines, namedOnSignal, neverSent, refusedRunId } from './host-exec-run-id.js'
 import { CALL_ID_ARG, callIdFor, callIdInJsonText, isCallId, lostCallDetail, lostCallLines, newCallId } from '../lib/op-call-id.js'
+import { cliAnswerText } from '../lib/tool-answer-size.js'
 import { RESTART_MARK_FRESH_SECS, RESTART_MARK_NAME, RESTART_POLL_MS, RESTART_RIDE_MAX_MS, restartMarkFresh } from './daemon-restart-mark.js'
 import {
   MCP_CLI_HELP, formatMcpServers, formatMcpToolHelp, formatMcpTools, isNotReadOnlyRefusal, parseMcpCliArgs,
@@ -1024,6 +1025,8 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
         ...(argsFile !== undefined ? { argsFile } : { args: callArgs }),
         // Arguments in a file keep a "_call_id" of their own there (the server takes it out).
         callId: callId || (callId = newCallId()),
+        // The hub measures the answer as this CLI prints it (lib/tool-answer-size.ts).
+        client: 'cli',
         ...testRunArg(),
       }
       : parsed.kind === 'guide' ? { name: 'skill_read', args: { dirName: 'walnut' } }
@@ -1130,8 +1133,8 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
     }
     await writeStdout(formatOpHelp(opRow) + '\n')
   } else {
-    // tools.call — the op result verbatim, pretty JSON.
-    await writeStdout(JSON.stringify(resp.result, null, 2) + '\n')
+    // tools.call — the op result verbatim, pretty JSON (the same text the hub measures).
+    await writeStdout(cliAnswerText(resp.result))
   }
   return 0
 }

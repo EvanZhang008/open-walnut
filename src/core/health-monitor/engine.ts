@@ -22,7 +22,7 @@ import {
   chronicDays, chronicVerdict, hourStart, logDef, signatureId, spikeBaseline, spikeThreshold, spikeVerdict, HOUR_MS,
 } from './log-alarms.js'
 import { HealthStore, MEMORY_MINUTES, pruneLogHours, type LogHoursFile, type StateFile } from './store.js'
-import type { AlarmActionRecord, AlarmDef, AlarmInstanceState, AlarmOverride, AlarmState, EngineDeps, FixMode, MinuteRow, TellTaskResult } from './types.js'
+import type { AlarmActionRecord, AlarmDef, AlarmInstanceState, AlarmOverride, AlarmState, EngineDeps, FixMode, MinuteRow, RouteAlarmResult, TellTaskResult } from './types.js'
 import { fixBrief, recoveredNote, ringAgainNote, type BriefInput } from './brief.js'
 import { bootOnSameBuild, plannedStopBefore, shutdownBailsSince, unplannedRestart } from './exit-trace.js'
 import { effectiveOverride, overrideHolds, ownerOf, patchOverride, type OverridePatch } from './overrides.js'
@@ -361,12 +361,27 @@ export class HealthMonitor {
     const fixAt = inst.actions.find((a) => a.kind === 'auto-fix')?.at
     if (fixAt !== undefined && now - fixAt < graceMin * MINUTE_MS) return
     if (then === 'none') return
+    if (then === 'route') { await this.routed(def, inst, reason, now); return }
     if (def.action.card) this.card(def, inst, reason, now)
     // A task that owns the problem hears it instead of a new fix task (the user's card still goes out).
     const owner = ownerOf(effectiveOverride(this.state.overrides, inst.id, inst.defId), def.ownerTask)
     if (owner && await this.toOwner(def, inst, owner, reason, now) && then === 'fix-task') return
     if (then === 'notify') { this.card(def, inst, reason, now); return }
     await this.fixTask(def, inst, reason, now)
+  }
+
+  /** A real-use alarm to its target's owner, once per episode; with nobody to tell, the fix-task way. */
+  private async routed(def: AlarmDef, inst: AlarmInstanceState, reason: string, now: number): Promise<void> {
+    if (!this.deps.route || inst.actions.some((a) => a.kind === 'fix-task' && a.ok)) return
+    const r = await this.deps.route({ def, inst, reason, now })
+      .catch((err): RouteAlarmResult => ({ handled: false, fallback: false, detail: `could not route it: ${err instanceof Error ? err.message : String(err)}` }))
+    if (r.handled) {
+      this.record(inst, undefined, { ok: true, detail: r.detail, taskId: r.taskId, started: r.delivered }, now)
+      return
+    }
+    if (r.fallback) { await this.fixTask(def, inst, reason, now); return }
+    // Off, or the route failed: the Health row says so; nothing else is sent.
+    this.record(inst, inst.actions.find((a) => a.kind === 'fix-task'), { ok: false, detail: r.detail }, now)
   }
 
   /** The user's card in the notification center, once per episode. */

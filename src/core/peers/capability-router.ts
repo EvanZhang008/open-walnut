@@ -363,11 +363,18 @@ async function handleToolsCall(
   // same call runs it at most once, and op_result reads what it did.
   const { isCallId } = await import('../../lib/op-call-id.js');
   const callId = isCallId(payload.callId) ? payload.callId : undefined;
+  const startedAt = Date.now();
   const r = await withTestRun(testRun, () => executeOp(name, (args ?? {}) as Record<string, unknown>, {
   callerSid, callerHost: host, origin: hostOrigin(host), ...(proofToken ? { callerProof: proofToken } : {}), ...(triggerToken ? { callerTrigger: triggerToken } : {}), ...(callId ? { callId } : {}),
   ...(meta.pluginJob ? { callerPluginId: meta.pluginJob.plugin, callerPluginJob: meta.pluginJob.job } : {}),
   ...(jobToken ? { callerJob: jobToken } : {}),
 }));
+  // Real use (core/usage-watch): the call's outcome and its answer's size as its client prints it.
+  // A test run's calls stay out of it.
+  if (!testRun) {
+    const { recordGatewayCall } = await import('../usage-watch/gateway-record.js');
+    recordGatewayCall(name, payload.client, r, Date.now() - startedAt);
+  }
   // The server's own call to its API went out and got no answer: the caller hears the answer
   // was lost (hub_timeout), so its client names the call id and the read, never a bare error.
   // Nothing answering at all (a refused connection) ran nothing and stays `internal`.

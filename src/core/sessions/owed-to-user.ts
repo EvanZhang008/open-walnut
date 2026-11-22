@@ -211,7 +211,9 @@ export type CloseAdmission =
   /** Its own session closing it while its note still reads as unfinished (admitOwnNote): asked once. */
   | { ok: false; code: 'stale_note'; message: string; items: Array<{ source: 'note'; kind: OpenLineKind; text: string }> }
   /** Its own session closing it while it holds a request someone waits on (requests-held.ts). */
-  | HeldRequestRefusal;
+  | HeldRequestRefusal
+  /** A task that shipped a change and names nothing real use should show (usage-watch/gate.ts). */
+  | import('../usage-watch/gate.js').ShipWatchRefusal;
 
 interface Closer { taskId: string; /** The resolved session's own id, never the header's text. */ sessionId?: string }
 
@@ -409,6 +411,11 @@ export async function admitSessionClose(
   if (closer.taskId === task.id && !opts.replayed) {
     const held = await admitHeldRequests(task, closer.sessionId ?? callerSid);
     if (held) return held;
+    // A task that shipped a change names what real use should show before it closes itself
+    // (usage-watch/gate.ts). Its own session knows what it changed; a lead closing it decides itself.
+    const { admitShipWatch, gateDeps } = await import('../usage-watch/gate.js');
+    const unwatched = await admitShipWatch(task, gateDeps).catch(() => null);
+    if (unwatched) return unwatched;
   }
   const items = await owedToUser(task, opts.fields);
   if (!items.length) return closer.taskId === task.id ? admitOwnNote(task, opts.fields) : { ok: true };

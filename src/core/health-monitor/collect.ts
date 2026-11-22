@@ -18,6 +18,7 @@ import { addObserveTap } from '../observability/metrics.js'
 import { setLogLevelTap } from '../../logging/subsystem.js'
 import { seriesKeyOf } from './evaluate.js'
 import { signatureKey } from './signature.js'
+import { USAGE_COUNTERS } from '../usage-watch/counters.js'
 import type { MinuteRow } from './types.js'
 import { STALL_MACHINE_METRIC, STALL_OWN_METRIC } from '../stall-cause.js'
 
@@ -26,8 +27,8 @@ const GiB = 1024 ** 3
 /** A resumed CLI's start on a machine short of memory (delivery-latency.ts resumeMachineShare). */
 export const RESUME_MACHINE_METRIC = 'send.delivery.resume.machine'
 
-/** Registry counters kept as `<name>{labels}` sums. */
-const COUNTERS = new Set(['host.link.lost'])
+/** Registry counters kept as `<name>{labels}` sums (the real-use recorder's too: usage-watch/record.ts). */
+const COUNTERS = new Set(['host.link.lost', ...USAGE_COUNTERS])
 
 /** Registry latencies kept as a minute max, under the health key their labels map to. */
 function maxKeyOf(name: string, labels: Record<string, string> | undefined): string | null {

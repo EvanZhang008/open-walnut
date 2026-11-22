@@ -128,6 +128,12 @@ function nextWriteOpId(prov: CallerProvenance, method: string, path: string): st
 /** The op-id header the applied-ops ledger dedups a write by (src/web/middleware/op-id.ts). */
 const OP_ID_HEADER = 'x-walnut-op-id'
 
+/**
+ * Marks an op's own call to this API: real use counts it under its tool (core/usage-watch), so
+ * the request log leaves it out of the routes' numbers. Not a credential; it changes no access.
+ */
+export const OP_CALL_HEADER = 'x-walnut-op-call'
+
 /** An error a handler op's self-call throws, carrying whether its answer was lost. */
 class SelfCallError extends Error {
   constructor(message: string, readonly lost: boolean, readonly status?: number, readonly code?: string, readonly retryAfterMs?: number) { super(message) }
@@ -207,6 +213,7 @@ async function rawRequest(
         ...answerByHeader(),
         // Always sent, so no self-call can reach a loopback-trusting route unlabelled.
         [ORIGIN_HEADER]: prov.origin,
+        [OP_CALL_HEADER]: '1',
       },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),

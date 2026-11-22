@@ -110,7 +110,7 @@ import { ORG_INSTRUCTIONS_MAX } from '../org/org-tree.js'
 import { defaultOrgInstructions, orgSelfWorkRule, ordinal, ORG_SELF_COMMAND_LIMIT } from '../org/core-instructions.js'
 import { orgInstructionsAuthor } from '../org/instructions-author.js'
 import { currentUserProfile, refreshUserProfile, userProfileLine } from './user-profile-context.js'
-import { approvalsLine, currentApprovalsAsk, currentReplyLanguage, refreshReplyLanguage, replyLanguageLine } from './reply-language-context.js'
+import { approvalsLine, currentApprovalsAsk, currentRealUseWatch, currentReplyLanguage, realUseLine, refreshReplyLanguage, replyLanguageLine } from './reply-language-context.js'
 
 import { TASK_ROUTING_CONTRACT } from '../task-routing-contract.js'
 import { PromptComposer, promptRollback, type PromptBlockId } from './prompt-blocks.js'
@@ -720,6 +720,8 @@ export function composeInstructions(task: InstructionTask | undefined, state: Pr
     + replyLanguageLine(currentReplyLanguage())
     // The Approvals switch, off by default: it changes what Walnut stops, never whose decision a step is.
     + approvalsLine(currentApprovalsAsk())
+    // The real-use watch (usage-watch/gate.ts): a worker that ships names what real use should show.
+    + (mainAgent || projectLead ? '' : realUseLine(currentRealUseWatch()))
     // The two words the user reaches for, pinned to the two different things
     // (2026-09-30: "use a subagent" was answered with a Walnut subtask).
     // subagent_run: the native Agent tool first, a Walnut subagent only where it cannot go (T3 Code's rule too).

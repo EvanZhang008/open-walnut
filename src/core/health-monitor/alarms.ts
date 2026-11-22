@@ -13,6 +13,7 @@ import {
   HISTOGRAM_STALL_MESSAGE, PROBE_LATE_MESSAGE, STALL_LOG_SUBSYSTEM, STALL_MACHINE_METRIC, STALL_OWN_METRIC,
 } from '../stall-cause.js'
 import { signatureKey } from './signature.js'
+import { USAGE_ALARMS } from './usage-alarms.js'
 
 /**
  * The stalls the event-loop monitor logs. The probe line is the event the two stall
@@ -167,6 +168,7 @@ export const BUILTIN_ALARMS: readonly AlarmDef[] = [
     evaluationPeriods: 1, datapointsToAlarm: 1, missing: 'notBreaching',
     unit: '', action: { then: 'none' },
   },
+  ...USAGE_ALARMS,
 ]
 
 /** The person's own alarms on their own command metrics (custom-metrics.ts, from config). */

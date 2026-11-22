@@ -41,6 +41,8 @@ import { routeLogMessage, routeRecoveryKey } from '../../core/notifications/rout
 import { createRecoveryTransitionTracker } from '../../core/notifications/recovery-transition.js'
 import { isHandledFailure } from './handled-failure.js'
 import { registerBurstContext } from '../../core/observability/memory-ledger.js'
+import { isLongPoll } from '../../core/usage-watch/normalize.js'
+import { recordRequestUse } from '../../core/usage-watch/request-record.js'
 
 // Extend Express Request to carry the request ID
 declare global {
@@ -306,6 +308,13 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
     // latency series keeps meaning what it says.
     const isStream = String(res.getHeader('content-type') ?? '').startsWith('text/event-stream')
     if (isStream) meta.stream = true
+    // Real use (core/usage-watch): a request from a browser, the phone (direct or through the cloud
+    // relay), a plugin or another client, under the route template Express matched. An op's own call
+    // to the API (ops/executor.ts OP_CALL_HEADER) is counted under its tool instead; a test run's
+    // requests stay out.
+    if (fullPath.startsWith('/api/') && !req.headers['x-walnut-op-call'] && !req.headers['x-walnut-test-run']) {
+      recordRequestUse(req.method, req.baseUrl, req.route?.path, status, duration, isStream || isLongPoll(url) || aborted)
+    }
     observe(isStream ? 'http.sse' : 'http.request', duration, {
       route: routeGroup,
       method,

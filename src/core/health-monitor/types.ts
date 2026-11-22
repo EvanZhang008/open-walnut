@@ -41,9 +41,10 @@ export interface AlarmAction {
    * After the auto-fix (or at once with none):
    *  - `fix-task`: one "fix Walnut" task for this alarm (fix-task.ts);
    *  - `notify`: a card in the notification center (only the user can act on it);
-   *  - `none`: shown on the Health page only (another part of Walnut already tells the user).
+   *  - `none`: shown on the Health page only (another part of Walnut already tells the user);
+   *  - `route`: a real-use alarm, told to the task that owns its target (EngineDeps.route).
    */
-  then: 'fix-task' | 'notify' | 'none'
+  then: 'fix-task' | 'notify' | 'none' | 'route'
   /**
    * Also a card in the notification center, once per episode, before `then` runs. For an alarm
    * the user should see that an agent can still fix: a card alone is acted on by nobody when
@@ -183,4 +184,14 @@ export interface EngineDeps {
   recover?: (alarmId: string) => void
   /** Something a reader shows changed (a state, an action). */
   onChange?: () => void
+  /**
+   * A `route` alarm to the task that owns its target (core/usage-watch/route.ts). `handled`: it was
+   * delivered or queued for its owner; else `fallback` sends it the fix-task way, or nothing.
+   */
+  route?: (input: RouteAlarmInput) => Promise<RouteAlarmResult>
 }
+
+export interface RouteAlarmInput { def: AlarmDef; inst: AlarmInstanceState; reason: string; now: number }
+export type RouteAlarmResult =
+  | { handled: true; delivered: boolean; taskId: string; detail: string }
+  | { handled: false; fallback: boolean; detail: string }

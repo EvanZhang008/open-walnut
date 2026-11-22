@@ -105,6 +105,9 @@ export async function startHealthMonitor(opts: StartOptions): Promise<HealthMoni
     notify: (id, title, body) => { if (actionsOn) opts.notify(id, title, body) },
     recover: (id) => { if (actionsOn) opts.recover(id) },
     onChange: debounce(opts.onChange, 1_000),
+    route: async (input) => (actionsOn
+      ? (await import('../usage-watch/runtime.js')).routeHealthAlarm(input)
+      : { handled: false, fallback: false, detail: 'actions are off on an isolated server' }),
   })
   await monitor.start()
   setGaugeSink((k, v) => monitor.setGauge(k, v))

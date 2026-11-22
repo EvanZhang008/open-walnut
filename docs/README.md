@@ -128,6 +128,8 @@ must live under one of these top-level categories instead of directly under
 - [macOS session identity](reference/macos-session-identity.md) - why sessions are
   attributed to Walnut instead of to `node`, what to grant, and what the separation
   does not cover
+- [Real use: watching what ships](reference/real-use-watch.md) - every tool call, request and page
+  error counted (no content), alarms sent to the task that shipped the change, and the completion check
 - [Who sees a notice](reference/notice-audience.md) - one rule: only what needs the person pops up; every other error goes to Walnut Health; every source classified
 - [Notification lifecycle](reference/notification-lifecycle.md) - the condition
   system: every error/permission notification declares how it ends (recover,

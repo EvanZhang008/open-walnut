@@ -1140,7 +1140,7 @@ if (outputFormat === 'stream-json') {
 
     // 2a.-1.2. "bash-steps:<json>": a turn that runs the given Bash steps, each with the output
     //          the spec names, then answers. <json> (first line only) is
-    //          { steps: [{ command, output?, outputB64? }], text? }; e.g. a `gh pr create` that
+    //          { steps: [{ command | name+input, output?, outputB64? }], text? }; e.g. a `gh pr create` that
     //          prints the new pull request's URL, for the hook that links it to the task
     //          (outputB64 keeps that URL out of the message itself, which is linked on its own).
     //          Stays alive for the next FIFO turn.
@@ -1155,7 +1155,8 @@ if (outputFormat === 'stream-json') {
         const id = `toolu_bs_${process.pid}_${turn}_${i}`;
         emit({ type: 'assistant', session_id: sid, parent_tool_use_id: null, message: {
           id: `msg_bs_${process.pid}_${turn}_${i}`, type: 'message', role: 'assistant', model: 'mock-model',
-          content: [{ type: 'tool_use', id, name: 'Bash', input: { command: String(step.command ?? '') } }],
+          // A step may name another tool (`name`, `input`): an MCP tool's call, say, with the result the spec names.
+          content: [{ type: 'tool_use', id, name: String(step.name ?? 'Bash'), input: step.input ?? { command: String(step.command ?? '') } }],
           stop_reason: 'tool_use', usage: { input_tokens: 20, output_tokens: 8 },
         } });
         emit({ type: 'user', session_id: sid, parent_tool_use_id: null, message: { role: 'user', content: [

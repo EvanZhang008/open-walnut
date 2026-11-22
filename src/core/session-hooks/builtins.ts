@@ -28,6 +28,7 @@ import type {
 } from './types.js';
 import { engineCaps, isAcpEngine } from '../agents/engine-registry.js';
 import { linkMadeHook } from '../link-made-hook.js';
+import { realUseHook } from '../usage-watch/session-hook.js';
 import { toDisplayedUserText } from '../sessions/reference-cards.js';
 import { isAwaitingTurnEnd } from '../sessions/self-complete-stop.js';
 import { agentMemoryPrompt, applyAgentMemoryAnswer, keepsAgentMemory, readAgentMemoryField, splitAgentMemory } from '../sessions/agent-memory.js';
@@ -2561,4 +2562,5 @@ export const builtinHooks: SessionHookDefinition[] = [
   cwdRenameDetectorHook,
   sessionRequestWatchHook,
   linkMadeHook,
+  realUseHook,
 ];

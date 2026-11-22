@@ -222,6 +222,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'Every 30 seconds this Walnut copies its whole data folder, as it was at one moment, to the folder set as standby.dir in config.yaml (on this machine), keeps only complete copies there, and repairs and reports any file changed there directly. Off: nothing is copied and nothing runs.',
     default: false,
   },
+  {
+    id: 'real_use_watch',
+    name: 'Real-use watch',
+    description: 'When a real-use alarm rings (a tool answer the agent got cut, tool errors, slow reads, server errors, page failures), Walnut tells the task that shipped the change and watches it, or the project lead when none does, at most one note every 4 hours. A task that shipped a change cannot complete before it names what real use should show (usage_watch). Off: Walnut still records real use and shows it in Settings, and tells nobody.',
+    default: false,
+  },
 ] as const;
 
 /**

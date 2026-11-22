@@ -17,6 +17,7 @@ import { registerMethod } from '../ws/handler.js'
 import { log } from '../../logging/index.js'
 import { writeLogEntry } from '../../logging/logger.js'
 import type { LogLevel } from '../../logging/levels.js'
+import { recordPageLine } from '../../core/usage-watch/page-record.js'
 
 // ── Types ──
 
@@ -112,6 +113,8 @@ function writeEntries(entries: BrowserLogEntry[]): void {
       browserLevel: entry.level, // preserve original level (e.g. 'log' vs 'info')
       ...meta,
     })
+    // Real use (core/usage-watch): a page's failed request or uncaught error, as its kind only.
+    if (entry.level === 'error' && entrySubsystem(entry) === 'browser') recordPageLine(entry.message, entry.args, entry.count)
   }
 }
 

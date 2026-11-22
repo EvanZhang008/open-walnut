@@ -204,14 +204,15 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
       fs.writeFileSync(spilled, raw, { encoding: 'utf-8', mode: 0o600 })
     }
     try {
-      let resp = await deps.request('tools.call', spilled ? { name, argsFile: spilled, callId } : { name, args, callId })
+      // `client` lets the hub measure the answer as this server prints it (lib/tool-answer-size.ts).
+      let resp = await deps.request('tools.call', spilled ? { name, argsFile: spilled, callId, client: 'mcp' } : { name, args, callId, client: 'mcp' })
       // A server older than the run id refused it before anything ran: the same call without it.
       if (!resp.ok && runId && !spilled && refusedRunId(name, resp.error.message)) {
         dropRunId(name, args)
         runId = null
         // Other arguments, so another call: nothing of the first ran.
         callId = newCallId()
-        resp = await deps.request('tools.call', { name, args, callId })
+        resp = await deps.request('tools.call', { name, args, callId, client: 'mcp' })
       }
       // Never more than an agent's tool result takes, whatever the op (tool-answer-fit.ts).
       if (resp.ok) return { content: [{ type: 'text', text: fitToolAnswer(resp.result, { op: name, dir: deps.answerDir }) }] }

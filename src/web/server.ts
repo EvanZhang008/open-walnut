@@ -2277,6 +2277,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // Remote hosts that stay down for a reason Walnut has to clear, for the `host.down` alarm.
       const { startHostDownWatch } = await import('../core/hosts/host-down-gauge.js')
       startHostDownWatch()
+      // Real use: the recorder, the watches' check times and the notes due (src/core/usage-watch/).
+      const { startRealUse } = await import('../core/usage-watch/runtime.js')
+      startRealUse()
     }).catch((err) => log.web.warn('health monitor: not started', { error: err instanceof Error ? err.message : String(err) }))
   }
 
@@ -2859,6 +2862,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', (await import('./routes/org-pains-v1.js')).orgPainsV1Router)
   app.use('/api/v1', (await import('./routes/org-avatars-v1.js')).orgAvatarsV1Router)
   app.use('/api/v1', (await import('./routes/health-monitor-v1.js')).healthMonitorV1Router)
+  // Real use of tools, requests and pages, and the watches of shipped changes (src/core/usage-watch/).
+  app.use('/api/v1', (await import('./routes/usage-watch-v1.js')).usageWatchV1Router)
   // Every plugin's settings for an AI: the plugin_settings ops.
   app.use('/api/v1', (await import('./routes/plugin-settings-v1.js')).pluginSettingsV1Router)
   // Personal AI conversation management (additive, Wave 1): rename/delete/stop/
@@ -7648,6 +7653,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   void import('../core/health-monitor/index.js').then((m) => m.stopHealthMonitor()).catch(() => { /* never started */ })
   void import('../core/notifications/health-investigate.js').then((m) => m.stopHealthErrorWatch()).catch(() => { /* never started */ })
   void import('../core/hosts/host-down-gauge.js').then((m) => m.stopHostDownWatch()).catch(() => { /* never started */ })
+  // Real use: its timers stop and the last minute's counts are written (core/usage-watch/runtime.ts).
+  void import('../core/usage-watch/runtime.js').then((m) => m.stopRealUse()).catch(() => { /* never started */ })
   void import('../core/human-inbox/complete-archive.js').then((m) => m.stopCompleteArchive()).catch(() => { /* never started */ })
   void import('../core/routines/trigger-completion-pause.js').then((m) => m.stopTriggerCompletionPause()).catch(() => { /* never started */ })
   void import('../core/org/lead-waits.js').then((m) => m.stopLeadWaits()).catch(() => { /* never started */ })

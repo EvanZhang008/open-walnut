@@ -176,6 +176,7 @@ const PASSING: Record<string, string> = {
   'components/settings/sections/ReposSection.tsx#selectedSlug': 'one repository being edited',
   'components/settings/sections/SuggestAccuracyPanel.tsx#recentShown': 'the list expanded past its first rows for one look',
   'components/settings/sections/HealthMonitorSection.tsx#openId': 'one alarm opened for a look, a disclosure; the list it sits in is the view',
+  'components/settings/sections/RealUseTables.tsx#openKey': 'one tool, request or page error opened for a look, a disclosure; the table it sits in is the view',
   'components/settings/sections/cloud/RemoteAccessCard.tsx#openBusy': 'a request in flight, not a choice',
   'components/tasks/FilterBar.tsx#overflowOpen': 'the filter overflow, a menu',
   'components/tasks/LeaderPill.tsx#adoptOpen': 'the adopt flyout',
