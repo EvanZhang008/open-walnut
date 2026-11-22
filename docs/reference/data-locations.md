@@ -113,6 +113,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/time-tracking/` | leader-data | no | Time records: work hours, calls, app and site samples |
 | `~/.open-walnut/health/` | machine | no | Health data: it follows the existing rule that this data stays on the machine that collected it (git sync and backups leave it out) |
 | `~/.open-walnut/places/` | machine | no | Place visits from the phone: they follow the existing rule that this data stays on the machine that collected it |
+| `~/.open-walnut/stt-compare/` | machine | no | Voice Accuracy (experimental): this machine's takes heard again by other engines, their texts and scores; it points at this machine's own recordings |
 | `~/.open-walnut/browser/` | leader-data | no | Replays of what agents did in the browser, per task |
 | `~/.open-walnut/local/` | machine | no | Per-machine records (children with another class are listed) |
 | `~/.open-walnut/server.lock.json` | machine | no | The running server's singleton lock: pid and port |

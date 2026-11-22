@@ -1,6 +1,7 @@
 /**
- * A multi-select list row (calendars, session modes): checkbox on the LEFT,
- * label after it, the whole row clickable. The box is the shared drawn native
+ * A multi-select list row (calendars, session modes, consent ticks): checkbox on
+ * the LEFT on the label's first line, the label after it wrapping in full, the
+ * whole row clickable. The box is the shared drawn native
  * checkbox (`.wn-check`, controls/Checkbox.tsx), so it stays focusable, Space
  * toggles it, and specs can `.check()` it.
  */
@@ -13,7 +14,7 @@ export interface SettingsCheckboxProps {
   checked: boolean
   onChange: (v: boolean) => void
   disabled?: boolean
-  /** Full text for long names that are truncated. */
+  /** A tooltip for the row (the label itself is always shown in full). */
   title?: string
   label: ReactNode
   /** Before the label, e.g. a calendar colour dot. */

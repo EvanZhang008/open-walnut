@@ -147,6 +147,31 @@ describe('transcribeAudio for a speaker who writes Chinese', () => {
     }
   })
 
+  it('a comparison hearing (Voice Accuracy) neither ends nor reads the live English-preview pause', async () => {
+    // The user is speaking English: previews pause their second hearing.
+    withContext = EN_REAL
+    asChinese = EN_REAL
+    const preview = { audio: 'AAAA', format: 'wav', prompt: CONTEXT, preview: true }
+    await transcribeAudio(config, preview)
+    calls.length = 0
+    // A comparison of an old Chinese take, heard back as Chinese, would end that pause if it counted.
+    withContext = EN
+    asChinese = ZH
+    const compared = await transcribeAudio(config, { audio: 'AAAA', format: 'wav', prompt: CONTEXT }, { comparison: true })
+    expect(compared.text).toBe(ZH)
+    expect(calls).toEqual(['auto', 'zh'])
+    calls.length = 0
+    // The live pause still stands: the next English preview is heard once.
+    withContext = EN_REAL
+    asChinese = EN_REAL
+    await transcribeAudio(config, preview)
+    expect(calls).toEqual(['auto'])
+    // And a comparison flagged as a preview is never skipped by the live pause.
+    calls.length = 0
+    await transcribeAudio(config, preview, { comparison: true })
+    expect(calls).toEqual(['auto', 'zh'])
+  })
+
   it('a preview heard back as Chinese keeps every next preview checked', async () => {
     const preview = { audio: 'AAAA', format: 'wav', prompt: CONTEXT, preview: true }
     await transcribeAudio(config, preview)

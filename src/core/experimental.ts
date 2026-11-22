@@ -252,6 +252,12 @@ export const EXPERIMENTAL_FEATURES = [
     description: 'A mail account set up in Walnut can bring its calendar too: Apps > Calendar offers "Add its calendar" on each mail account, which finds the account\'s calendars on its mail provider (CalDAV: iCloud, Fastmail, Yahoo and most mail hosts) with the password already saved for its mail. Its events then show in the Calendar page and the Agenda beside the Mac\'s. Gmail and Outlook calendars need their own sign-in and say so. Off: Walnut reads only the Mac\'s calendars, as before.',
     default: false,
   },
+  {
+    id: 'stt_compare',
+    name: 'Voice Accuracy',
+    description: 'Settings › Diagnostics › Voice Accuracy hears your recent voice takes again with other speech-to-text engines and shows how often each one gets your words wrong, against a reference an AI judge writes from all their texts. Engines that run on this computer start right away; an engine or the judge that sends audio or text to a cloud service runs only after you tick its consent. Off: nothing is run or uploaded and nothing new is kept; to remove what it kept, use Delete comparison data in its pane before turning it off.',
+    default: false,
+  },
 ] as const;
 
 /**

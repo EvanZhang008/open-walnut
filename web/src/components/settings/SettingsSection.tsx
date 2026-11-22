@@ -26,6 +26,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { useInRouterContext, useLocation } from 'react-router-dom'
+import { NoticeCard } from '@/components/common/NoticeCard'
 import { log } from '@/utils/log'
 import { badge } from '@/components/common/badge'
 import { NoticeStatus, type NoticeTone } from '@/components/common/NoticeCard'
@@ -501,6 +502,8 @@ export function SettingsDisclosure({
   return (
     <>
       {inRouter && <RouterHashWatcher onHash={openForHash} />}
+      {/* The whole row is the button (focusable: WebKit tabs to a button only with an explicit
+          tabindex); its expand key at the right is drawn as the button family's quiet icon tool. */}
       <button
         type="button"
         className={`settings-row settings-disclosure-row${indent ? ' settings-row-indent' : ''}`}
@@ -518,7 +521,9 @@ export function SettingsDisclosure({
         </span>
         <span className="settings-row-actions">
           {hasContent(summary) && <span className="settings-disclosure-summary">{summary}</span>}
-          <DisclosureChevron open={shown} className="settings-disclosure-chevron" />
+          <span className="btn btn-ghost btn-icon btn-sm" aria-hidden="true">
+            <DisclosureChevron open={shown} className="settings-disclosure-chevron" />
+          </span>
         </span>
       </button>
       <div id={contentId} ref={contentRef} className="settings-disclosure-content" hidden={!shown}>
@@ -537,7 +542,11 @@ export function SettingsEmpty({ children }: { children: ReactNode }) {
   return <div className="settings-empty">{children}</div>
 }
 
-/** The single notice (info / success / warn / error), optional trailing action. */
+/**
+ * The single notice (info / success / warn / error), optional trailing action. It is the app's one
+ * notice card (NoticeCard, solid inside the pane: the same frame as every notice, never a tinted
+ * block); inside a group it reads as a row with coloured text, never a box in a box (settings-rows.css).
+ */
 export function SettingsNotice({
   kind = 'info',
   children,
@@ -549,18 +558,20 @@ export function SettingsNotice({
   role?: string
   action?: ReactNode
 }) {
-  if (!hasContent(action)) {
-    return (
-      <p className={`settings-notice settings-notice-${kind}`} role={role}>
-        {children}
-      </p>
-    )
-  }
+  const withAction = hasContent(action)
   return (
-    <div className={`settings-notice settings-notice-${kind} settings-notice-with-action`} role={role}>
-      <span className="settings-notice-text">{children}</span>
-      <span className="settings-notice-action">{action}</span>
-    </div>
+    <NoticeCard
+      solid
+      className={`settings-notice settings-notice-${kind}${withAction ? ' settings-notice-with-action' : ''}`}
+      role={role}
+    >
+      {withAction ? (
+        <>
+          <span className="settings-notice-text">{children}</span>
+          <span className="settings-notice-action">{action}</span>
+        </>
+      ) : children}
+    </NoticeCard>
   )
 }
 

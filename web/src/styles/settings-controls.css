@@ -35,21 +35,31 @@
   to { transform: rotate(360deg); }
 }
 
-/* ── Checkbox list row (SettingsCheckbox): the native input IS the box ── */
+/* ── Checkbox list row (SettingsCheckbox): the native input IS the box ──
+   The tick stays on the label's first line at the left and the label wraps at its right, in full,
+   at any width: the row never wraps the label under the tick, and never cuts it (2026-11-22: on a
+   phone a consent tick sat alone on its line and the words saying what is sent ended in "..."). */
 .settings-row.settings-checkbox-row {
+  flex-wrap: nowrap;
+  align-items: flex-start;
   justify-content: flex-start;
   gap: 10px;
+  /* The 44 px row of one line (12 + 20 + 12), measured from the top so a long label grows down. */
+  padding-top: 12px;
+  padding-bottom: 12px;
   cursor: pointer;
 }
+
+/* The box centred on the label's first 20 px line. */
+.settings-checkbox-row > .settings-checkbox-input { margin-top: 2px; }
 
 .settings-checkbox-label {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   font-size: 14px;
-  line-height: 19px;
+  line-height: 20px;
   color: var(--fg);
 }
 
@@ -58,8 +68,12 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-height: 20px;
   margin-left: auto;
 }
+
+/* A segmented control that wraps where it does not fit (SegmentedControl `wrap`): never sideways. */
+.wn-seg.wn-seg-wrap { flex-wrap: wrap; overflow-x: visible; }
 
 /* ── Buttons: SettingsButton is the family's small key (styles/buttons.css), nothing of its own ── */
 

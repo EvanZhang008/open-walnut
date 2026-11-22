@@ -47,12 +47,6 @@
 .settings-checklist .settings-checkbox-row:not(:first-child)::before {
   left: 40px;
 }
-.settings-checklist .settings-checkbox-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .settings-addons-link {
   appearance: none;
   background: none;
@@ -424,9 +418,9 @@ span.plugin-store-why {
 /* Settings, Sessions, "Share new tasks" (EngineSplitRow): the state word beside its off switch, and the add row. */
 .engine-split-control { display: inline-flex; align-items: center; gap: 8px; }
 /* An entry names an engine and a model id the user typed, which can be long: it wraps beside
-   its checkbox instead of ending in an ellipsis (a phone width cut "Claude Code · <model>"). */
+   its checkbox like every checkbox row (settings-controls.css), and the raw id may take a line of its own. */
 .engine-split-list .settings-checkbox-row { flex-wrap: wrap; }
-.engine-split-list .settings-checkbox-label { flex: 1 1 0; min-width: 10em; white-space: normal; overflow-wrap: anywhere; }
+.engine-split-list .settings-checkbox-label { flex: 1 1 0; min-width: 10em; }
 /* The raw model id beside it: on a narrow width it takes the next line, never the label's room. */
 .engine-split-list .settings-checkbox-trailing { flex: 0 1 auto; min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 .engine-split-add { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }

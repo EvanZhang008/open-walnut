@@ -555,7 +555,7 @@ export function ModelPicker({
   // Unmount guard: the picker is routinely closed while a refresh is in
   // flight — the settled promise must not setState on a dead component.
   const aliveRef = React.useRef(true);
-  React.useEffect(() => () => { aliveRef.current = false; }, []);
+  React.useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
   const refreshCatalog = () => {
     if (!sessionId || refreshing) return;
     setRefreshState('refreshing');

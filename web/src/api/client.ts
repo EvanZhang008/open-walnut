@@ -648,7 +648,16 @@ export function apiGet<T>(path: string, params?: Record<string, string>, opts?: 
 }
 
 /** GET a text/plain endpoint (e.g. /api/bug-report) with the same auth/timeout plumbing. */
-export async function apiGetText(path: string, params?: Record<string, string>, opts?: { timeoutMs?: number }): Promise<string> {
+export function apiGetText(path: string, params?: Record<string, string>, opts?: { timeoutMs?: number }): Promise<string> {
+  return apiGetRaw(path, params, opts, (res) => res.text());
+}
+
+/** GET a binary endpoint (a recording) as a Blob, with the same auth/timeout plumbing. */
+export function apiGetBlob(path: string, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<Blob> {
+  return apiGetRaw(path, undefined, opts, (res) => res.blob());
+}
+
+async function apiGetRaw<T>(path: string, params: Record<string, string> | undefined, opts: { timeoutMs?: number; signal?: AbortSignal } | undefined, read: (res: Response) => Promise<T>): Promise<T> {
   const url = params ? `${path}?${new URLSearchParams(params)}` : path;
   const headers: Record<string, string> = {};
   const deviceToken = getDeviceToken();
@@ -661,7 +670,7 @@ export async function apiGetText(path: string, params?: Record<string, string>, 
       let res: Response;
       const deadline = AbortSignal.timeout(opts?.timeoutMs ?? 30_000);
       try {
-        res = await fetch(url, { method: 'GET', headers, signal: deadline });
+        res = await fetch(url, { method: 'GET', headers, signal: opts?.signal ? AbortSignal.any([opts.signal, deadline]) : deadline });
       } catch (err) {
         throw asDeadlineError(err, deadline);
       }
@@ -673,7 +682,7 @@ export async function apiGetText(path: string, params?: Record<string, string>, 
         } catch { /* use statusText */ }
         throw new ApiError(res.status, message);
       }
-      return await res.text();
+      return await read(res);
     } finally {
       releaseFetchSlot(slot);
     }

@@ -7,13 +7,13 @@
 
 /* ── Group: the only surface. Heading above, footer below, never nested ── */
 .settings-group-block {
-  margin: 0 0 22px;
+  margin: 0 0 24px;
 }
 
 .settings-group.settings-subcard,
 .settings-group {
   box-sizing: border-box;
-  margin: 0 0 22px;
+  margin: 0 0 24px;
   padding: 0;
   background: var(--settings-group-bg);
   border: 1px solid var(--settings-group-border);
@@ -26,6 +26,21 @@
 
 .settings-group-block > .settings-group {
   margin: 0;
+}
+
+/* A long list whose column names must stay in view: the group clips instead of being a scroller
+   (overflow: hidden makes one, and a sticky row inside it would never stick), and its
+   .settings-sticky-head row pins under the pane's 44 px compact bar (settings-shell.css). */
+.settings-group.settings-group-sticky {
+  overflow: clip;
+}
+
+.settings-group-sticky > .settings-sticky-head {
+  position: sticky;
+  top: calc(44px - var(--settings-pane-pad-top, 0px));
+  z-index: 1;
+  background: var(--settings-group-bg);
+  box-shadow: 0 1px 0 var(--settings-hairline);
 }
 
 /* A group that is off: the card surface stays solid and its contents fade,
@@ -245,10 +260,10 @@
 
 /* Only the checkbox rows: a checklist group may also hold ordinary rows (the engine split's
    switch, its Add row), which keep the normal row's height and padding. */
-.settings-checklist .settings-checkbox-row {
+.settings-checklist .settings-row.settings-checkbox-row {
   min-height: 36px;
-  padding-top: 7px;
-  padding-bottom: 7px;
+  padding-top: 8px;
+  padding-bottom: 8px;
 }
 
 /* Label above, full-width content below (mono blocks, editors). */
@@ -312,12 +327,12 @@
   color: var(--fg-muted);
 }
 
-.settings-notice {
+/* A notice is the one notice card (SettingsNotice draws NoticeCard, solid inside the pane): its frame
+   and padding are the card's (notice-card.css), never a tinted block; its kind colours its words. */
+.wn-notice.settings-notice {
   margin: 0 0 12px;
-  padding: 8px 12px;
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-md);
-  line-height: 18px;
+  /* It is part of the page, not a toast: it does not slide in. */
+  animation: none;
 }
 
 .settings-notice-with-action {
@@ -335,23 +350,24 @@
   flex: 0 0 auto;
 }
 
-.settings-notice-info { background: var(--bg-tertiary); color: var(--fg-secondary); }
-.settings-notice-success { background: rgba(52, 199, 89, 0.12); color: var(--fg); }
-.settings-notice-warn { background: rgba(255, 149, 0, 0.12); color: var(--priority-important-text); }
-.settings-notice-error { background: rgba(255, 59, 48, 0.12); color: var(--settings-error-text); }
+.wn-notice.settings-notice-info { color: var(--fg-secondary); }
+.wn-notice.settings-notice-success { color: var(--fg); }
+.wn-notice.settings-notice-warn { color: var(--priority-important-text); }
+.wn-notice.settings-notice-error { color: var(--settings-error-text); }
 
-/* Inside a group a notice is a row with coloured text, never a box in a box. */
-.settings-group .settings-notice {
+/* Inside a group a notice is a row with coloured text, never a box in a box: no card frame there. */
+html .settings-group .wn-notice.wn-notice.settings-notice {
   box-sizing: border-box;
   min-height: 44px;
   margin: 0;
   padding: 12px var(--settings-row-pad-x);
+  border: 0;
   border-radius: 0;
   background: transparent;
+  box-shadow: none;
 }
 
-.settings-group .settings-notice-info,
-.settings-group .settings-notice-success {
+.settings-group .wn-notice:is(.settings-notice-info, .settings-notice-success) {
   color: var(--fg-secondary);
 }
 
@@ -366,7 +382,7 @@
 
 .settings-stack {
   display: grid;
-  gap: 22px;
+  gap: 24px;
 }
 
 /* ── Row wrapping by GROUP width (container sgroup), never the viewport ── */

@@ -136,6 +136,8 @@ button.wn-notice-open:focus-visible { outline: 2px solid var(--accent); outline-
   border-radius: 50%;
   background: var(--fg-muted);
 }
+/* A status shown whole (a settings row's state): it keeps its width and is never cut. */
+.wn-notice-status.wn-notice-status-whole { flex: none; overflow: visible; text-overflow: clip; }
 [data-tone='live'] > .wn-dot, [data-tone='ask'] > .wn-dot { background: var(--accent); }
 /* On its way (sending, thinking): the dot breathes until it settles. */
 .wn-notice-status[data-tone='live'] > .wn-dot { animation: wn-dot-breathe 1.4s ease-in-out infinite; }

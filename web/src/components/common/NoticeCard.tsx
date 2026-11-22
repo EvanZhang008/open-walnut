@@ -21,9 +21,13 @@ import '@/styles/notice-card.css';
 export type NoticeTone = 'live' | 'ok' | 'warn' | 'error' | 'ask' | 'muted';
 
 /** The status of a notice: a small dot and its word, coloured by tone (the "● Delivered" of the quick bar). */
-export function NoticeStatus({ tone, children, className, title }: { tone: NoticeTone; children?: ReactNode; className?: string; title?: string }) {
+export function NoticeStatus({ tone, children, className, title, whole }: {
+  tone: NoticeTone; children?: ReactNode; className?: string; title?: string;
+  /** Never cut the word (a settings row's state); by default it yields in a narrow notice head. */
+  whole?: boolean;
+}) {
   return (
-    <span className={`wn-notice-status${className ? ` ${className}` : ''}`} data-tone={tone} title={title}>
+    <span className={`wn-notice-status${whole ? ' wn-notice-status-whole' : ''}${className ? ` ${className}` : ''}`} data-tone={tone} title={title}>
       <span className="wn-dot" aria-hidden="true" />
       {children}
     </span>

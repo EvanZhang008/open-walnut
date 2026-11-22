@@ -74,6 +74,12 @@ export function isMediaHoldId(id: unknown): id is string {
 
 export class MediaHold {
   private readonly holds = new Map<string, Hold>()
+  /**
+   * Every voice input that holds or renews, with when its hold would end, kept
+   * even where the music is not touched (stt.pause_media off): `listening()`
+   * tells the background voice work (Voice Accuracy) that a microphone is open.
+   */
+  private readonly heard = new Map<string, number>()
   /** Ids released lately: a renew that was on its way when its release landed starts nothing. */
   private readonly ended = new Map<string, number>()
   /** Call order, so a release that lands while a hold call still waits is seen by it. */
@@ -99,6 +105,7 @@ export class MediaHold {
     const known = this.holds.get(id)
     const endedAt = this.ended.get(id)
     if (!known && endedAt !== undefined && this.now() - endedAt < HOLD_MAX_MS) return this.view(await this.deps.enabled())
+    this.heard.set(id, this.now() + ttlMs)
     if (!known && !(await this.deps.enabled())) return this.view(false)
     // Its release landed while this call waited above: the hold is over before it began.
     if ((this.endedSeq.get(id) ?? -1) > asked) return this.view(true)
@@ -120,10 +127,18 @@ export class MediaHold {
 
   /** End a hold. The last one plays again what Walnut paused. Unknown ids are fine (a late end). */
   async release(id: string): Promise<MediaHoldView> {
+    this.heard.delete(id)
     const had = this.holds.delete(id)
     this.markEnded(id)
     if (had) await this.afterChange()
     return this.view(await this.deps.enabled())
+  }
+
+  /** A voice input on this machine has its microphone open now (a hold live, whether or not it paused the music). */
+  listening(): boolean {
+    const now = this.now()
+    for (const [id, until] of this.heard) if (until <= now) this.heard.delete(id)
+    return this.heard.size > 0 || this.holds.size > 0
   }
 
   async status(): Promise<MediaHoldView> {

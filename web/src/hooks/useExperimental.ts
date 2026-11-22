@@ -76,7 +76,8 @@ export function experimentalOn(id: ExperimentalFeatureId): boolean {
   return experimentalEnabled(cached ?? lastRead(), id);
 }
 
-export function useExperimental(id: ExperimentalFeatureId): boolean {
+/** Every experiment's switch, for a view that gates on several (Settings' pane gates). */
+export function useExperimentalFlags(): ExperimentalFlags {
   const [flags, setFlags] = useState<ExperimentalFlags>(() => cached ?? lastRead());
   useEffect(() => {
     listeners.add(setFlags);
@@ -85,5 +86,9 @@ export function useExperimental(id: ExperimentalFeatureId): boolean {
     else if (!inflight) void read(false);
     return () => { listeners.delete(setFlags); };
   }, []);
-  return experimentalEnabled(flags, id);
+  return flags;
+}
+
+export function useExperimental(id: ExperimentalFeatureId): boolean {
+  return experimentalEnabled(useExperimentalFlags(), id);
 }

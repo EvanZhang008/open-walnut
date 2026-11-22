@@ -24,9 +24,18 @@ import { vocabWords } from './vocab.js';
 import { voiceOffHere } from './voice-here.js';
 
 export type { SttEngine, SttRequest, SttResult } from './types.js';
+export { STT_ENGINE_SENDS } from './sends-by-engine.js';
 
 type SttSection = NonNullable<Config['stt']>;
 type EngineName = NonNullable<SttSection['engine']>;
+
+/** Options of an engine made for one caller (Voice Accuracy's own whisper-cli). */
+export interface EngineOptions {
+  /** whisper-cpp: kill whisper-cli after this long (default 0, no limit). */
+  timeoutMs?: number;
+  /** whisper-cpp: kill whisper-cli when the request's signal aborts (default: ignored). */
+  abortOnSignal?: boolean;
+}
 
 /** Create an STT engine from config. Returns null if not configured. */
 export function createEngine(config: Config): SttEngine | null {
@@ -40,7 +49,7 @@ export function createEngine(config: Config): SttEngine | null {
  * the secondary (shadow) engine both resolve through here — they share the same
  * per-engine fields, only the engine NAME differs.
  */
-export function createEngineByName(engine: EngineName, stt: SttSection): SttEngine | null {
+export function createEngineByName(engine: EngineName, stt: SttSection, opts: EngineOptions = {}): SttEngine | null {
   switch (engine) {
     case 'sherpa-onnx':
       return createSherpaEngine({
@@ -59,6 +68,8 @@ export function createEngineByName(engine: EngineName, stt: SttSection): SttEngi
         modelPath: stt.whisper_cpp_model ?? '',
         vadModelPath: stt.whisper_cpp_vad_model,
         prompt: stt.whisper_cpp_prompt,
+        ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+        ...(opts.abortOnSignal ? { abortOnSignal: true } : {}),
       });
     case 'whisper-server':
       return createWhisperServerEngine({
@@ -340,8 +351,16 @@ export function _resetLanguageMemoryForTest(): void {
 /** Engines that run Qwen3-ASR, whose context is the vocabulary prompt. */
 const QWEN_ENGINES = new Set(['qwen', 'mlx']);
 
+export interface TranscribeOptions {
+  /**
+   * A comparison hearing (Voice Accuracy), not the user's dictation: the live
+   * dictation's language memory (englishPreviewsUntil) is neither read nor written.
+   */
+  comparison?: boolean;
+}
+
 /** Transcribe audio using the configured engine. */
-export async function transcribeAudio(config: Config, req: SttRequest): Promise<SttResult> {
+export async function transcribeAudio(config: Config, req: SttRequest, opts: TranscribeOptions = {}): Promise<SttResult> {
   const engine = getOrCreateEngine(config);
   if (!engine) {
     throw new Error('No STT engine configured. Go to Settings → Voice to set one up.');
@@ -378,7 +397,7 @@ export async function transcribeAudio(config: Config, req: SttRequest): Promise<
       result = { ...plain, durationMs: result.durationMs + plain.durationMs };
     } else if (QWEN_ENGINES.has(engine.name) && (!req.language || req.language === 'auto')
       && result.durationMs <= LANGUAGE_RECHECK_MAX_MS && mayBeTranslated(result.text)
-      && !(req.preview && Date.now() < englishPreviewsUntil)
+      && !(req.preview && !opts.comparison && Date.now() < englishPreviewsUntil)
       && (await import('./user-terms.js')).userWritesCjk()) {
       // Qwen3-ASR can write a Chinese speaker's take, or a stretch of it, as an
       // English translation (context-language.ts). Heard again as Chinese it
@@ -388,7 +407,8 @@ export async function transcribeAudio(config: Config, req: SttRequest): Promise<
         req.signal?.throwIfAborted();
         const zh = await engine.transcribe({ ...req, language: 'zh' });
         const chinese = chineseHearingWins(result.text, zh.text);
-        englishPreviewsUntil = chinese ? 0 : req.preview ? Date.now() + ENGLISH_PREVIEW_PAUSE_MS : englishPreviewsUntil;
+        // A comparison hearing is not the speaker talking now: it leaves the live memory alone.
+        if (!opts.comparison) englishPreviewsUntil = chinese ? 0 : req.preview ? Date.now() + ENGLISH_PREVIEW_PAUSE_MS : englishPreviewsUntil;
         log.stt.warn(`Transcription came back (partly) in English for a speaker who writes Chinese; heard as Chinese it ${chinese ? 'came back in Chinese, kept that' : 'stayed English, kept the first'}`);
         result = chinese
           ? { ...zh, durationMs: result.durationMs + zh.durationMs }

@@ -249,7 +249,7 @@ export class VoiceArchiveStore {
       }
       stored.record = { ...stored.record, text, via, state: 'transcribed', primarySaved: !this.cloud, ...(asr ? { asr } : {}) }
       const saved = await this.save(id, stored)
-      void import('./learn-from-sends.js').then((m) => m.noteDictation(text), () => {})
+      void import('./learn-from-sends.js').then((m) => m.noteDictation(text, Date.now(), { kind: 'archive', id }), () => {})
       return saved
     })
   }
@@ -400,6 +400,9 @@ export class VoiceArchiveStore {
     return this.commit(id, { chunkCount, audioSizeBytes: audio.length, audioSha256: hash(audio) })
   }
 }
+const AUDIO_TYPES: Record<string, string> = { caf: 'audio/x-caf', wav: 'audio/wav', m4a: 'audio/mp4', mp4: 'audio/mp4', mp3: 'audio/mpeg', webm: 'audio/webm', ogg: 'audio/ogg', flac: 'audio/flac' }
+/** The Content-Type a recording's audio is served with. */
+export const audioContentType = (format: string): string => AUDIO_TYPES[format] ?? 'application/octet-stream'
 export const voiceArchive = new VoiceArchiveStore()
 export const readAudio = (id: string) => voiceArchive.readAudio(id)
 export const saveText = (id: string, text: string, via?: string, asr?: VoiceAsr) => voiceArchive.saveText(id, text, via, asr)

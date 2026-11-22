@@ -71,6 +71,22 @@ describe('pruneVoiceRecordings', () => {
     expect(old).not.toBe(fresh)
   })
 
+  it('never removes a take Voice Accuracy compares (the ids it is given), in either store', async () => {
+    const store = new VoiceArchiveStore(home, false)
+    const compared = await take(store, '2026-10-01T00:00:00.000Z')
+    const other = await take(store, '2026-10-02T00:00:00.000Z')
+    const web = join(home, 'tmp', 'stt-recordings')
+    await mkdir(web, { recursive: true })
+    await writeFile(join(web, '2026-09-30T00-00-00-000Z.webm'), Buffer.alloc(100))
+    await writeFile(join(web, '2026-09-30T00-00-00-000Z.json'), '{}')
+    const later = Date.now() + 2 * HOUR
+    const result = await pruneVoiceRecordings({ maxCount: 1, maxBytes: 1 << 30 }, later, store, new Set([`phone-${compared}`, 'rec-2026-09-30T00-00-00-000Z']))
+    expect(result.removed).toBe(1)
+    expect(await ids(store)).toEqual([compared])
+    expect(await readdir(web)).toHaveLength(2)
+    expect(other).not.toBe(compared)
+  })
+
   it('never removes a take in flight, nor one the Mac has not received from the companion', async () => {
     const companion = new VoiceArchiveStore(home, true)
     const notCopied = await take(companion, '2026-10-01T00:00:00.000Z')

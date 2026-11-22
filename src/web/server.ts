@@ -134,6 +134,8 @@ import { mentionSourcesRouter } from './routes/mention-sources.js'
 import { repositoriesRouter } from './routes/repositories.js'
 import { audioRouter } from './routes/audio.js'
 import { sttRouter, STT_CLIP_RAW_LIMIT } from './routes/stt.js'
+import { sttCompareRouter } from './routes/stt-compare.js'
+import { voiceRequestStarted } from '../core/stt/media-hold-runtime.js'
 import { sttMediaHoldRouter } from './routes/stt-media-hold.js'
 import { sttTakesRouter } from './routes/stt-takes.js'
 import { subscriptionLimitsRouter } from './routes/subscription-limits.js'
@@ -1992,6 +1994,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // wrong error shape for the v1 contract. 35mb ≈ the routes' own 25MB-base64
   // audio cap (~100min) plus JSON envelope headroom; past that the routes
   // return a contract-shaped 413 themselves.
+  // Background voice work (Voice Accuracy) waits while a voice request is answered and
+  // a little after it ends (core/stt/media-hold-runtime.ts voiceInputLive).
+  app.use(['/api/stt/transcribe', '/api/stt/draft', '/api/stt/dictation', '/api/v1/stt/transcribe', '/api/v1/stt/draft', '/api/v1/stt/recordings'], (req, res, next) => {
+    if (req.method === 'POST') {
+      const end = voiceRequestStarted()
+      res.once('finish', end)
+      res.once('close', end)
+    }
+    next()
+  })
   app.use(['/api/v1/stt/transcribe', '/api/stt/transcribe'], express.json({ limit: '35mb' }))
   // The web recorder sends its whole clip as raw bytes, no base64 JSON to parse:
   // a take has no time limit (2026-11-20: the 25MB-base64 cap ended a Mac app take
@@ -3149,6 +3161,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Voice input holds the music off while it listens (core/stt/media-hold.ts).
   app.use('/api/stt/media-hold', sttMediaHoldRouter)
   app.use('/api/stt', sttTakesRouter)
+  // Voice Accuracy (experimental stt_compare): inert, 409, while the experiment is off.
+  app.use('/api/stt/compare', sttCompareRouter)
   app.use('/api/stt', sttRouter)
   app.use('/api/incidents', incidentsRouter)
   app.use('/api/metrics', metricsRouter)
@@ -3648,6 +3662,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   void import('../core/stt/voice-retention.js').then((m) => m.scheduleVoiceRetention(), () => {})
   // The correction list learns from dictations the user fixed by hand before sending.
   void import('../core/stt/learn-from-sends.js').then((m) => m.startLearningFromSends(), () => {})
+  // Voice Accuracy's 03:00 comparison: reads its switches when the clock fires.
+  void import('../core/stt/compare/nightly.js').then((m) => m.startCompareNightly(), () => {})
   // The speech context's title words, read once now so the first take has them.
   void import('../core/stt/user-terms.js').then((m) => m.cachedTitleTerms(), () => {})
   if (!bootPolicy('audio')) {

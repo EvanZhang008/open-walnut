@@ -5,7 +5,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFile, writeFile, unlink, open } from 'node:fs/promises';
+import { readFile, stat, writeFile, unlink, open } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -111,22 +111,30 @@ export async function convertToWav(audioBase64: string, inputFormat: string): Pr
   return (await toHeardWav(audioBase64, inputFormat)).path;
 }
 
+/** Bytes per second of the WAV the engines hear: 16 kHz, mono, 16-bit. */
+const HEARD_WAV_BYTES_PER_SEC = 16_000 * 2;
+
 /**
  * The audio a cloud engine uploads: the original bytes as they are, unless the
  * repair (wav-repair.ts) changed what the engine would hear, then that WAV.
  * A WAV over `maxBytes`, or no ffmpeg on this box, keeps the original.
+ * `durationSec`: the length of what is uploaded, read from the heard WAV
+ * (rounded up; absent when the audio could not be decoded here).
  */
 export async function audioForUpload(
   audioBase64: string, format: string, maxBytes: number,
-): Promise<{ audio: Buffer; format: string }> {
+): Promise<{ audio: Buffer; format: string; durationSec?: number }> {
   const original = { audio: Buffer.from(audioBase64, 'base64'), format };
   let path: string | null = null;
   try {
     const wav = await toHeardWav(audioBase64, format);
     path = wav.path;
-    if (!wav.repaired) return original;
+    // The header is counted as audio: the length errs long, never short.
+    const durationSec = Math.ceil((await stat(wav.path)).size / HEARD_WAV_BYTES_PER_SEC);
+    if (!wav.repaired) return { ...original, durationSec };
     const audio = await readFile(wav.path);
-    return audio.length <= maxBytes ? { audio, format: 'wav' } : original;
+    // The original is longer than the repaired WAV (the repair shortens it): its length is unknown here.
+    return audio.length <= maxBytes ? { audio, format: 'wav', durationSec } : original;
   } catch {
     return original;
   } finally {

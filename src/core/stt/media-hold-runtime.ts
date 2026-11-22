@@ -81,3 +81,49 @@ export function _setMediaControllerForTest(controller: MediaController | null | 
   instance = null
   fake = null
 }
+
+// ── Voice input in progress ──
+//
+// Background voice work (Voice Accuracy's comparison runner) waits while the
+// person dictates, so it never queues in front of their own hearing. Dictation
+// is live while a microphone holds (above: every voice input on this machine
+// takes a media hold, tests/core/stt-media-hold-ratchet.test.ts), while a voice
+// request is being answered (a long final, a phone's take: server.ts counts
+// them), and for a short while after either.
+
+let voiceRequests = 0
+let lastVoiceAt = 0
+
+/** server.ts: a voice request (dictation, a draft, a transcribe) began. Returns its end, to call once. */
+export function voiceRequestStarted(at = Date.now()): () => void {
+  voiceRequests++
+  lastVoiceAt = Math.max(lastVoiceAt, at)
+  let ended = false
+  return () => {
+    if (ended) return
+    ended = true
+    voiceRequests = Math.max(0, voiceRequests - 1)
+    lastVoiceAt = Math.max(lastVoiceAt, Date.now())
+  }
+}
+
+/** When the last voice request began or ended (ms). */
+export function lastVoiceActivityAt(): number {
+  return lastVoiceAt
+}
+
+/** The person is dictating now, or was within `quietMs`. */
+export function voiceInputLive(quietMs: number, now = Date.now()): boolean {
+  if (voiceRequests > 0 || now - lastVoiceAt < quietMs) return true
+  if (instance?.listening()) {
+    lastVoiceAt = now
+    return true
+  }
+  return false
+}
+
+/** Tests: nobody is dictating. */
+export function _resetVoiceActivityForTest(): void {
+  voiceRequests = 0
+  lastVoiceAt = 0
+}

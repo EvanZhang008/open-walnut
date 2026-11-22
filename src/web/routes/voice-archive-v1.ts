@@ -1,7 +1,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { createReadStream } from 'node:fs'
 import { pipeline } from 'node:stream/promises'
-import { voiceArchive, VoiceArchiveError, voiceRecordingId, decodeVoiceAudio, voiceAsr, VOICE_MAX_CHUNK_BYTES, type VoiceAsr, type VoiceChunkBody, type VoiceCommitBody } from '../../core/stt/voice-archive.js'
+import { audioContentType, voiceArchive, VoiceArchiveError, voiceRecordingId, decodeVoiceAudio, voiceAsr, VOICE_MAX_CHUNK_BYTES, type VoiceAsr, type VoiceChunkBody, type VoiceCommitBody } from '../../core/stt/voice-archive.js'
 import { deferVoiceReplication, startVoiceArchiveReplication } from '../../core/stt/voice-archive-replication.js'
 import { scheduleVoiceRetention } from '../../core/stt/voice-retention.js'
 import { transcribeVoiceRecording } from '../../core/stt/voice-archive-transcribe.js'
@@ -98,7 +98,7 @@ async function finishLiveHere(raw: string, body: Record<string, unknown> | undef
   const text = await finishLiveFromSamples(id, pcmBytes as number, pcmSha256, localTranscribe, language as string | undefined)
   if (text === null) throw new VoiceArchiveError(409, 'live_unusable', 'The live pieces do not match the finished recording')
   // The Mac answers the take before the companion's copy of it arrives: the user may send it on now.
-  void import('../../core/stt/learn-from-sends.js').then((m) => m.noteDictation(text), () => {})
+  void import('../../core/stt/learn-from-sends.js').then((m) => m.noteDictation(text, Date.now(), { kind: 'archive', id }), () => {})
   return { text, asr: await localAsr(id, language as string | undefined, since) }
 }
 
@@ -129,8 +129,7 @@ voiceArchiveV1Router.get('/stt/recordings/:id', async (req, res, next) => {
 voiceArchiveV1Router.get('/stt/recordings/:id/audio', async (req, res, next) => {
   try {
     const { path, record } = await voiceArchive.audioPath(String(req.params.id))
-    const types: Record<string, string> = { caf: 'audio/x-caf', wav: 'audio/wav', m4a: 'audio/mp4', mp4: 'audio/mp4', mp3: 'audio/mpeg', webm: 'audio/webm', ogg: 'audio/ogg', flac: 'audio/flac' }
-    res.set({ 'Content-Type': types[record.format] ?? 'application/octet-stream', 'Content-Length': String(record.audioSizeBytes), 'Cache-Control': 'no-store' })
+    res.set({ 'Content-Type': audioContentType(record.format), 'Content-Length': String(record.audioSizeBytes), 'Cache-Control': 'no-store' })
     await pipeline(createReadStream(path), res)
   } catch (err) { archiveError(err, res, next) }
 })

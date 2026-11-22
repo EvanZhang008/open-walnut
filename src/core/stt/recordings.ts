@@ -92,7 +92,7 @@ export async function writeRecordingResult(
   const stamped = { timestamp: new Date().toISOString(), ...meta };
   await writeFile(join(dir(), `${id}.json`), JSON.stringify(stamped, null, 2));
   void import('./voice-retention.js').then((m) => m.scheduleVoiceRetention(), () => {});
-  if (meta.result?.text) void import('./learn-from-sends.js').then((m) => m.noteDictation(meta.result!.text), () => {});
+  if (meta.result?.text) void import('./learn-from-sends.js').then((m) => m.noteDictation(meta.result!.text, Date.now(), { kind: 'recording', id }), () => {});
   return stamped.timestamp;
 }
 
@@ -123,6 +123,36 @@ export async function writeRecordingSecondary(
   await writeFile(path, JSON.stringify({ ...existing, secondary }, null, 2));
 }
 
+/** A recording id is its ISO time with `:` and `.` as `-`: that time, or undefined for another id. */
+export function recordingIdTime(id: string): string | undefined {
+  const m = /^(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/.exec(id);
+  return m ? `${m[1]}:${m[2]}:${m[3]}.${m[4]}Z` : undefined;
+}
+
+function metaOf(id: string, raw: Partial<RecordingMeta>): RecordingMeta {
+  return {
+    id,
+    timestamp: raw.timestamp ?? '',
+    format: raw.format ?? 'webm',
+    language: raw.language ?? 'auto',
+    audioSizeBytes: raw.audioSizeBytes ?? 0,
+    engine: raw.engine ?? undefined,
+    result: raw.result ?? undefined,
+    error: raw.error ?? undefined,
+    secondary: raw.secondary ?? undefined,
+  };
+}
+
+/** One recording's metadata, or null when it has none (or it does not parse). */
+export async function getRecordingMeta(id: string): Promise<RecordingMeta | null> {
+  if (!ID_RE.test(id)) return null;
+  try {
+    return metaOf(id, JSON.parse(await readFile(join(dir(), `${id}.json`), 'utf-8')));
+  } catch {
+    return null;
+  }
+}
+
 /** List recent recordings, newest first. */
 export async function listRecordings(limit = 20): Promise<RecordingMeta[]> {
   let files: string[];
@@ -135,32 +165,15 @@ export async function listRecordings(limit = 20): Promise<RecordingMeta[]> {
   const jsonFiles = files.filter(f => f.endsWith('.json')).sort().reverse().slice(0, limit);
   const out: RecordingMeta[] = [];
   for (const jf of jsonFiles) {
-    const id = jf.slice(0, -5);
-    if (!ID_RE.test(id)) continue;
-    try {
-      const raw = JSON.parse(await readFile(join(dir(), jf), 'utf-8'));
-      out.push({
-        id,
-        timestamp: raw.timestamp ?? '',
-        format: raw.format ?? 'webm',
-        language: raw.language ?? 'auto',
-        audioSizeBytes: raw.audioSizeBytes ?? 0,
-        engine: raw.engine ?? undefined,
-        result: raw.result ?? undefined,
-        error: raw.error ?? undefined,
-        secondary: raw.secondary ?? undefined,
-      });
-    } catch {
-      // Unreadable metadata — skip
-    }
+    // Unreadable metadata is skipped.
+    const meta = await getRecordingMeta(jf.slice(0, -5));
+    if (meta) out.push(meta);
   }
   return out;
 }
 
-/** Read a recording's audio back as base64 (for re-transcription). */
-export async function readRecordingAudio(
-  id: string,
-): Promise<{ audio: string; format: string } | null> {
+/** Where a recording's audio file is, with its format, or null. */
+export async function recordingAudioPath(id: string): Promise<{ path: string; format: string } | null> {
   if (!ID_RE.test(id)) return null;
   let files: string[];
   try {
@@ -170,9 +183,17 @@ export async function readRecordingAudio(
   }
   const audioFile = files.find(f =>
     f.startsWith(`${id}.`) && AUDIO_EXTS.includes(f.slice(id.length + 1)));
-  if (!audioFile) return null;
-  const buf = await readFile(join(dir(), audioFile));
-  return { audio: buf.toString('base64'), format: audioFile.slice(id.length + 1) };
+  return audioFile ? { path: join(dir(), audioFile), format: audioFile.slice(id.length + 1) } : null;
+}
+
+/** Read a recording's audio back as base64 (for re-transcription). */
+export async function readRecordingAudio(
+  id: string,
+): Promise<{ audio: string; format: string } | null> {
+  const found = await recordingAudioPath(id);
+  if (!found) return null;
+  const buf = await readFile(found.path);
+  return { audio: buf.toString('base64'), format: found.format };
 }
 
 /** Every recording with its size, for retention (voice-retention.ts). */

@@ -884,6 +884,10 @@ plugin-data/
 # server's own pending state, with approval wait-token hashes. Never synced.
 /kept-asks/
 
+# Voice Accuracy (src/core/stt/compare/): this machine's takes heard again by other
+# engines. They point at this machine's own recordings, which never sync. ROOT-ANCHORED.
+/stt-compare/
+
 # Voice recordings + transcripts (machine-local binary). Pre-1a location; new
 # writes go to tmp/stt-recordings/, but old installs still have this dir.
 stt-debug/
@@ -987,6 +991,8 @@ const GITIGNORE_CONTENT = withPluginFilesBlockLast(GITIGNORE_BODY);
  *    pid and instance id). Tracked since 2026-08-18, so the other box read the
  *    Mac's running editor as its own. Not a credential (the editor binds loopback
  *    with no auth, and the id only detects a stale URL), just machine-local.
+ *  - stt-compare/: Voice Accuracy's compared takes. Each points at a recording
+ *    of this machine (which never syncs), so another box could not use it.
  *
  * These are also actively untracked (see ensureMachineLocalUntracked): being
  * gitignored on THIS box while still tracked in the index is the dangerous
@@ -997,7 +1003,7 @@ const CRITICAL_IGNORE_FILES = [
   'triage-state.json', 'session-requests.json', 'code-server/instance.json',
 ];
 /** Repo-relative dir prefixes: what the untrack pass matches `ls-files` output against. */
-const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'places/', 'voice-archive/', 'plugin-data/', 'secrets/', 'local/', 'components/', 'vault/', 'router/', 'kept-asks/'];
+const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'places/', 'voice-archive/', 'plugin-data/', 'secrets/', 'local/', 'components/', 'vault/', 'router/', 'kept-asks/', 'stt-compare/'];
 /**
  * The .gitignore LINE for a dir when it differs from the prefix. `models/` is
  * root-anchored: a `models` folder inside notes/ is user content, and an
@@ -1007,7 +1013,7 @@ const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'places/', 'voice-archive/',
  */
 const CRITICAL_IGNORE_LINES: Record<string, string> = {
   'health/': '/health/', 'models/': '/models/', 'places/': '/places/', 'voice-archive/': '/voice-archive/', 'local/': '/local/',
-  'components/': '/components/', 'vault/': '/vault/', 'router/': '/router/', 'kept-asks/': '/kept-asks/',
+  'components/': '/components/', 'vault/': '/vault/', 'router/': '/router/', 'kept-asks/': '/kept-asks/', 'stt-compare/': '/stt-compare/',
 };
 const CRITICAL_IGNORES = [
   ...CRITICAL_IGNORE_FILES,

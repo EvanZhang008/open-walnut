@@ -9,15 +9,16 @@
  *
  * Never removed: a take still being recorded, transcribed or copied (or
  * touched within the hour, or an upload younger than a day), a take with no
- * text yet for a week (its phone may retry it), and on the companion a take the
- * Mac has not received yet, which is that take's only other copy. A removed
+ * text yet for a week (its phone may retry it), on the companion a take the
+ * Mac has not received yet, which is that take's only other copy, and while
+ * Voice Accuracy is on, a take it compares (at most its 500, compare/store.ts). A removed
  * take leaves a mark, so a copy from the other server is refused (410) rather
  * than bringing it back.
  */
 
 import { log } from '../../logging/index.js'
 import type { VoiceArchiveStore, VoiceRecord } from './voice-archive.js'
-import { discardRecording, inventoryRecordings } from './recordings.js'
+import { discardRecording, inventoryRecordings, recordingIdTime } from './recordings.js'
 
 export const DEFAULT_KEEP_COUNT = 1000
 export const DEFAULT_KEEP_MB = 1024
@@ -43,10 +44,10 @@ export function keepLimits(stt: { keep_recordings?: { max_count?: unknown; max_m
 
 interface Entry { at: number; bytes: number; removable: boolean; remove: () => Promise<boolean> }
 
-/** Web recording ids are ISO stamps with `:` and `.` as `-`. */
+/** A web recording's time from its id (an ISO stamp), else NaN. */
 function stampTime(id: string): number {
-  const m = /^(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/.exec(id)
-  return m ? Date.parse(`${m[1]}:${m[2]}:${m[3]}.${m[4]}Z`) : Number.NaN
+  const iso = recordingIdTime(id)
+  return iso ? Date.parse(iso) : Number.NaN
 }
 
 /** Work on `id` that is running in this server right now: a transcribe, a live take, a copy. */
@@ -67,8 +68,11 @@ function takeRemovable(record: VoiceRecord | undefined, modifiedMs: number, now:
   return record.text !== undefined || quiet > UNTRANSCRIBED_MS
 }
 
-/** Remove the oldest recordings until both stores together fit the limits. */
-export async function pruneVoiceRecordings(limits: KeepLimits, now = Date.now(), given?: VoiceArchiveStore): Promise<{ removed: number; freedBytes: number; kept: number; keptBytes: number }> {
+/**
+ * Remove the oldest recordings until both stores together fit the limits.
+ * `compared`: Voice Accuracy's take ids (`rec-<id>`, `phone-<id>`), never removed.
+ */
+export async function pruneVoiceRecordings(limits: KeepLimits, now = Date.now(), given?: VoiceArchiveStore, compared: ReadonlySet<string> = new Set()): Promise<{ removed: number; freedBytes: number; kept: number; keptBytes: number }> {
   const store = given ?? (await import('./voice-archive.js')).voiceArchive
   const entries: Entry[] = []
   for (const take of await store.inventory()) {
@@ -77,14 +81,14 @@ export async function pruneVoiceRecordings(limits: KeepLimits, now = Date.now(),
     entries.push({
       at: Number.isFinite(at) ? at : take.modifiedMs,
       bytes: take.bytes,
-      removable: takeRemovable(record, take.modifiedMs, now, store.cloud),
+      removable: !compared.has(`phone-${take.id}`) && takeRemovable(record, take.modifiedMs, now, store.cloud),
       // Judged again under the take's own lock: it may have moved on since.
       remove: async () => !(await busy(take.id)) && store.discard(take.id, (fresh, modifiedMs) => takeRemovable(fresh, modifiedMs, now, store.cloud)),
     })
   }
   for (const rec of await inventoryRecordings()) {
     const at = stampTime(rec.id)
-    entries.push({ at: Number.isFinite(at) ? at : rec.modifiedMs, bytes: rec.bytes, removable: now - rec.modifiedMs > SETTLE_MS, remove: async () => { await discardRecording(rec.id); return true } })
+    entries.push({ at: Number.isFinite(at) ? at : rec.modifiedMs, bytes: rec.bytes, removable: !compared.has(`rec-${rec.id}`) && now - rec.modifiedMs > SETTLE_MS, remove: async () => { await discardRecording(rec.id); return true } })
   }
   entries.sort((a, b) => a.at - b.at)
   let count = entries.length
@@ -108,8 +112,12 @@ let sweeper: ReturnType<typeof setInterval> | null = null
 let running: Promise<void> | null = null
 
 async function runOnce(): Promise<void> {
-  const { getConfig } = await import('../config-manager.js')
-  const result = await pruneVoiceRecordings(keepLimits((await getConfig()).stt))
+  const [{ getConfig }, { compareFlag }] = await Promise.all([import('../config-manager.js'), import('./compare/settings.js')])
+  // Off, the experiment keeps nothing: its entries protect no recording.
+  const compared = await compareFlag.on()
+    ? new Set((await (await import('./compare/store.js')).compareStore.all()).map((t) => t.id))
+    : new Set<string>()
+  const result = await pruneVoiceRecordings(keepLimits((await getConfig()).stt), Date.now(), undefined, compared)
   if (result.removed) {
     log.stt.info(`voice retention removed ${result.removed} oldest recording(s), ${Math.round(result.freedBytes / 1024 / 1024)} MB; ${result.kept} kept (${Math.round(result.keptBytes / 1024 / 1024)} MB)`)
   }

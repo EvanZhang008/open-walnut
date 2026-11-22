@@ -20,6 +20,10 @@ interface WhisperCppConfig {
   modelPath: string;    // path to ggml model file
   vadModelPath?: string; // path to Silero VAD model — prevents hallucination during silence
   prompt?: string;       // domain words to bias decoder (max 224 tokens)
+  /** Kill whisper-cli after this long; 0 or unset: no limit (dictation's default). */
+  timeoutMs?: number;
+  /** Kill whisper-cli when the request's signal aborts; unset: the signal is ignored. */
+  abortOnSignal?: boolean;
 }
 
 async function fileExists(p: string): Promise<boolean> {
@@ -100,8 +104,11 @@ export function createWhisperCppEngine(cfg: WhisperCppConfig): SttEngine {
         log.stt.info(`Running whisper-cpp: ${bin} ${args.join(' ')}`);
 
         const { stdout } = await execFileAsync(bin, args, {
-          timeout: 0,             // No timeout — whisper-cli is RAM-bounded (~115 MB/hr audio), not time-bounded.
+          // Dictation: no timeout, whisper-cli is RAM-bounded (~115 MB/hr audio), not time-bounded.
+          // A caller that must not wait forever (Voice Accuracy) sets its own.
+          timeout: cfg.timeoutMs ?? 0,
           maxBuffer: 50 * 1024 * 1024,
+          ...(cfg.abortOnSignal && req.signal ? { signal: req.signal } : {}),
         });
 
         const text = stdout.trim();

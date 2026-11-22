@@ -21,6 +21,7 @@ export function useMailConsole(): MailSnapshot {
   useWebSocket();
 
   useEffect(() => {
+    mounted.current = true;
     ensureMailLive();
     void openMailConsole();
     return () => { mounted.current = false; };

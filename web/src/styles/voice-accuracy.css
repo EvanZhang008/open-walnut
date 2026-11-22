@@ -1,0 +1,391 @@
+/*
+ * Voice Accuracy (Settings › Diagnostics, experiment stt_compare). Built on the
+ * settings rows and groups, the shared tag, status and buttons; this file only
+ * lays out the numbers and the texts: one grid template for the matrix's header
+ * and every row (the recording column, fixed engine columns, the Details
+ * key's room), which the pane swaps for a stacked list when it does not fit
+ * (voice-accuracy-model.ts matrixFits), so nothing here ever scrolls sideways;
+ * the summary's labelled numbers; a recording's dialog (the app's modal in the
+ * shared frosted glass, a full-height sheet on a phone); and the marks of a word
+ * diff. Tokens only.
+ */
+
+.va-grid {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(var(--va-cols, 1), 88px) 24px;
+  align-items: baseline;
+  column-gap: 0;
+  font-size: var(--font-size-md);
+  line-height: 20px;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The last column: the take row's Details key, empty in the header and the day rows. */
+.va-grid-end {
+  display: flex;
+  justify-content: flex-end;
+  align-self: start;
+}
+
+.va-grid-head {
+  font-size: var(--font-size-xs);
+  line-height: 16px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+
+.settings-row.va-grid-head-row {
+  min-height: 32px;
+}
+
+.va-num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.va-num-sub {
+  display: block;
+  font-size: var(--font-size-xs);
+  line-height: 16px;
+  color: var(--fg-secondary);
+}
+
+.va-num[data-tone='muted'] { color: var(--fg-secondary); }
+.va-num[data-tone='error'] { color: var(--settings-error-text); }
+.va-num[data-marked='true'] { font-weight: 600; }
+/* A state in a number's place (Failed, Not run): the shared status, at the column's right edge. */
+.va-num-status { justify-content: flex-end; }
+
+/* A recording: its time and length, then its words in full, named by where they come from. */
+.va-take-when {
+  font-size: var(--font-size-md);
+  line-height: 20px;
+  color: var(--fg);
+}
+
+.va-take-text {
+  display: block;
+  font-size: var(--font-size-sm);
+  line-height: 16px;
+  color: var(--fg-secondary);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.va-take-source {
+  font-weight: 600;
+}
+
+/* A recording's row opens its dialog from anywhere on it; its Details key is the keyboard's way in. */
+.va-take-row {
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.va-take-row:hover {
+  background: var(--bg-hover);
+}
+
+.va-take-end {
+  flex: none;
+}
+
+/* Stacked: the recording's words, then one tag per engine under them. */
+.va-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.va-badges .settings-tag { font-variant-numeric: tabular-nums; }
+
+/* The summary: one row per engine, its rate at the right, its other numbers named under it. */
+.va-summary-label {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.va-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.va-metric {
+  color: var(--fg);
+}
+
+.va-metric-label {
+  color: var(--fg-secondary);
+}
+
+/* The rate: one right-aligned column down the summary; the Lowest badge sits under its number, so
+   it never moves the number. */
+.va-rate {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 64px;
+  text-align: right;
+  font-size: var(--font-size-lg);
+  line-height: 20px;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.va-rate[data-marked='true'] { font-weight: 600; }
+
+/* On a phone the rate drops under the row's words: it lines up with them at the left (right-aligned
+   in its 64 px column it sat indented under the name). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .va-rate {
+    align-items: flex-start;
+    min-width: 0;
+    text-align: left;
+  }
+}
+
+/* The model the row's results were made with, beside its name: secondary detail. */
+.va-summary-model {
+  color: var(--fg-secondary);
+}
+
+/* An engine's state at the left of its switch; where the row wraps, the switch stays at the right. */
+.va-engine-control {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.va-model-line {
+  display: block;
+}
+
+.va-fix {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.va-fix-error {
+  flex: 1 1 100%;
+  font-size: var(--font-size-sm);
+  line-height: 16px;
+  color: var(--settings-error-text);
+  text-align: right;
+}
+
+/* A recording's dialog: the app's modal (app-modal, globals.css) in the shared legible glass
+   (wn-glass: frosted, but opaque enough that the table behind never shows through long text). Its head with the close key
+   stays put; only its body scrolls, up and down. */
+.app-modal.va-take-dialog {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: min(760px, calc(100vw - 48px));
+  max-height: calc(100dvh - 48px);
+  padding: 0;
+  overflow: hidden;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-lg);
+}
+
+.app-modal.va-take-dialog:focus { outline: none; }
+
+.va-take-dialog-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 12px 12px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.va-take-dialog-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.va-take-dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 16px 20px 20px;
+}
+
+/* On a phone: a sheet the full height and width of the screen. */
+.app-modal-overlay.va-take-overlay[data-sheet='true'] {
+  align-items: stretch;
+  justify-content: stretch;
+}
+
+.app-modal.va-take-dialog[data-sheet='true'] {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  border-radius: 0;
+}
+
+.va-take-dialog[data-sheet='true'] .va-take-dialog-body {
+  padding: 16px;
+}
+
+/* The opened recording: actions, the text switch, one engine's text beside the AI's guess, the legend. */
+.va-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: var(--font-size-md);
+  line-height: 20px;
+}
+
+/* Play and Recalculate first, the text switch at the right of the same line (it wraps under them). */
+.va-detail-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.va-detail-bar > .settings-segmented {
+  margin-left: auto;
+}
+
+.va-detail-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 8px 16px;
+}
+
+.va-detail-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.va-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  font-size: var(--font-size-sm);
+  line-height: 16px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+
+/* The model or the judge beside a heading: secondary detail, never bold. */
+.va-detail-head-quiet {
+  font-weight: 400;
+}
+
+.va-detail-text {
+  margin: 0;
+  color: var(--fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A Retry that could not start, on its recording's row and beside the engine's Retry in the dialog. */
+.va-error {
+  display: block;
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: 16px;
+  color: var(--settings-error-text);
+  overflow-wrap: anywhere;
+}
+
+.va-detail-note {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: 16px;
+  color: var(--fg-secondary);
+}
+
+.va-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.va-detail-actions audio {
+  height: 32px;
+  max-width: 100%;
+}
+
+/* Word diff against the AI's guess: told apart by shape (underline, strike, caret), not colour alone. */
+.va-diff {
+  padding: 0;
+  background: none;
+  color: var(--settings-error-text);
+}
+
+.va-diff-wrong {
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+.va-diff-extra {
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+}
+
+/* An empty mark: the caret is generated content, so selecting and copying the text never takes it. */
+.va-diff-missing::before {
+  content: '\2038';
+  padding: 0 2px;
+  font-weight: 700;
+  color: var(--success-text);
+  user-select: none;
+}
+
+.va-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 16px;
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: 16px;
+  color: var(--fg-secondary);
+}
+
+.va-progress {
+  font-size: var(--font-size-sm);
+  line-height: 16px;
+  color: var(--fg-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The pane's badges show their words whole (a rate, a model, Lowest, Mixed models): the shared
+   badge cuts with an ellipsis by default, and these are a few words that must read in full. */
+.va-badges .badge,
+.va-badges .badge > *,
+.va-num .badge,
+.va-rate .badge,
+.va-summary-label .badge {
+  overflow: visible;
+  text-overflow: clip;
+}

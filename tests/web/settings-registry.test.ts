@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('@/components/common/AgentText', () => ({ AgentText: () => null }))
 import { CORE_SETTINGS_CONTRIBUTIONS } from '../../web/src/components/settings/core-settings-registry.js'
 import { PHONES_CLOUD_TABS } from '../../web/src/components/settings/settings-way-panes'
+import { closedGates } from '../../web/src/components/settings/settings-pane-gates'
 import { isSettingsGlyph, tileKey } from '../../web/src/components/settings/settings-icons.js'
 
 const EXPECTED_IDS = [
@@ -48,9 +49,10 @@ const EXPECTED_IDS = [
   // Page Use (2026-10-31): local counts of which pages and panes get opened.
   // Walnut Health (2026-11-08): Walnut's own alarms, like CloudWatch.
   // Real Use (2026-11-21): how Walnut's tools, requests and pages behave in real use.
-  'walnut-health', 'real-use', 'usage', 'page-use', 'suggest-accuracy', 'bug-report',
+  // Voice Accuracy (2026-11-21): only while the stt_compare experiment is on.
+  'walnut-health', 'real-use', 'usage', 'page-use', 'suggest-accuracy', 'voice-accuracy', 'bug-report',
 ]
-const DIAGNOSTICS_IDS = ['walnut-health', 'real-use', 'usage', 'page-use', 'suggest-accuracy', 'bug-report']
+const DIAGNOSTICS_IDS = ['walnut-health', 'real-use', 'usage', 'page-use', 'suggest-accuracy', 'voice-accuracy', 'bug-report']
 
 describe('core settings registry', () => {
   it('keeps one owner-scoped source of truth for page and navigation order', () => {
@@ -175,5 +177,32 @@ describe('core settings registry', () => {
 
   it('lists the macOS Access entry only where the server has a report', () => {
     expect(CORE_SETTINGS_CONTRIBUTIONS.find((e) => e.id === 'permissions')?.requires).toBe('mac-access')
+  })
+
+  // An experiment's pane (Voice Accuracy) is in the nav and Find only while its switch is on.
+  it('keeps an experiment pane closed until its switch reads on', () => {
+    const entry = CORE_SETTINGS_CONTRIBUTIONS.find((e) => e.id === 'voice-accuracy')
+    expect(entry?.requires).toBe('experiment:stt_compare')
+    const known = { 'mac-access': true }
+    expect(closedGates(known, false, {}).has('experiment:stt_compare')).toBe(true)
+    expect(closedGates(known, false, { stt_compare: false }).has('experiment:stt_compare')).toBe(true)
+    const on = closedGates(known, false, { stt_compare: true })
+    expect(on.has('experiment:stt_compare')).toBe(false)
+    // The other gates are untouched by the flags.
+    expect(on.has('mac-access')).toBe(false)
+    expect(closedGates({ 'mac-access': null }, true, { stt_compare: true }).has('primary')).toBe(true)
+  })
+
+  it('gates every experiment pane through the one experiment gate (Focus too)', () => {
+    const focus = CORE_SETTINGS_CONTRIBUTIONS.find((e) => e.id === 'focus-spaces')
+    expect(focus?.requires).toBe('experiment:focus_workspace')
+    const known = { 'mac-access': true }
+    expect(closedGates(known, false, {}).has('experiment:focus_workspace')).toBe(true)
+    expect(closedGates(known, false, { focus_workspace: true }).has('experiment:focus_workspace')).toBe(false)
+    // An entry gated on an experiment names one that exists.
+    for (const e of CORE_SETTINGS_CONTRIBUTIONS) {
+      const gate = (e as { requires?: string }).requires
+      if (gate?.startsWith('experiment:')) expect(closedGates(known, false, {}).has(gate as never), `${e.id}: ${gate}`).toBe(true)
+    }
   })
 })

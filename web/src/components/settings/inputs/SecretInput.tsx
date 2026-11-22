@@ -14,6 +14,8 @@ interface SecretInputProps {
   value: string
   onChange: (v: string) => void
   onBlur?: () => void
+  /** Enter in the field (a caller that saves on an explicit action, not on blur). */
+  onEnter?: () => void
   placeholder?: string
   disabled?: boolean
   /** A secret is stored server-side (the value itself is never sent back). */
@@ -31,6 +33,7 @@ export function SecretInput({
   value,
   onChange,
   onBlur,
+  onEnter,
   placeholder,
   disabled,
   saved,
@@ -72,6 +75,7 @@ export function SecretInput({
         data-no-draft="secret"
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onKeyDown={onEnter ? (e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); onEnter() } } : undefined}
         onBlur={() => {
           onBlur?.()
           if (saved && !inputRef.current?.value) setReplacing(false)

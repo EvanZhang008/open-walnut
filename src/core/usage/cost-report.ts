@@ -101,6 +101,7 @@ const FEATURE: Record<string, string> = {
   'ask-check': 'Readability checks of asks before the user sees them',
   'reply-language': 'Reply language rewrites',
   drawing: 'Drawing diagrams', reflection: 'Org reflection', avatar: 'Org avatars',
+  'voice-accuracy': 'Voice Accuracy judge and clean-up',
 };
 const ENGINE: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', goose: 'Goose' };
 /** An engine name as a query may carry it (the rollup's own values are lowercase words). */

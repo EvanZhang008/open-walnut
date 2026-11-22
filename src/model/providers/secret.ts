@@ -128,3 +128,38 @@ export function resolveProviderSecrets(
 
   return resolved;
 }
+
+// ── Managed secret files ──
+//
+// A key a Settings page stores for the user: the literal goes to
+// <walnut-home>/secrets/<name> (0600, the dir 0700; secrets/ is git-sync-excluded)
+// and config keeps only the `${file:...}` reference these return.
+
+/** The path of a managed secret file under the secrets dir. */
+export function managedSecretPath(name: string): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/.test(name)) throw new Error(`bad secret file name: ${name}`);
+  return path.join(WALNUT_HOME, 'secrets', name);
+}
+
+/** The `${file:...}` reference of a managed secret file. */
+export function managedSecretRef(name: string): string {
+  return `\${file:${managedSecretPath(name)}}`;
+}
+
+/** Write the key to its managed file; returns the reference config keeps. */
+export async function writeManagedSecret(name: string, key: string): Promise<string> {
+  const file = managedSecretPath(name);
+  await fs.promises.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  await fs.promises.writeFile(file, key + '\n', { mode: 0o600 });
+  return managedSecretRef(name);
+}
+
+/**
+ * Remove a managed secret file, only when config pointed at it (`ref`): a
+ * `${file:}` path the user keeps elsewhere is theirs. True when it was removed.
+ */
+export async function removeManagedSecret(name: string, ref: string | undefined): Promise<boolean> {
+  if (ref !== managedSecretRef(name)) return false;
+  await fs.promises.rm(managedSecretPath(name), { force: true });
+  return true;
+}

@@ -7,18 +7,16 @@
  * config. Responses never echo the key.
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import fs from 'node:fs/promises'
-import path from 'node:path'
-import { WALNUT_HOME } from '../../constants.js'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
 import { getJevClient } from '../../core/decision/jev-client.js'
 import { log } from '../../logging/index.js'
+import { managedSecretPath, removeManagedSecret, writeManagedSecret } from '../../model/providers/secret.js'
 
 export const jevRouter = Router()
 
-const KEY_FILE = path.join(WALNUT_HOME, 'secrets', 'jev-api.key')
+const KEY_NAME = 'jev-api.key'
 /** The SHARED OpenRouter credential file — provider-level, not Jev's own. */
-const OPENROUTER_KEY_FILE = path.join(WALNUT_HOME, 'secrets', 'openrouter.key')
+const OPENROUTER_KEY_NAME = 'openrouter.key'
 const DEFAULT_ENDPOINT = 'https://api.typesafe.ai/v1/systemone'
 
 function isOpenRouter(endpoint: string | undefined): boolean {
@@ -41,10 +39,9 @@ jevRouter.post('/key', async (req: Request, res: Response, next: NextFunction) =
     // serves chat models and Jev alike. Only a first-party/other-gateway key
     // is Jev-specific. Which one this is follows from the effective endpoint.
     const shared = isOpenRouter(config.jev?.endpoint)
-    const file = shared ? OPENROUTER_KEY_FILE : KEY_FILE
-    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
-    await fs.writeFile(file, key + '\n', { mode: 0o600 })
-    const ref = `\${file:${file}}`
+    const name = shared ? OPENROUTER_KEY_NAME : KEY_NAME
+    const file = managedSecretPath(name)
+    const ref = await writeManagedSecret(name, key)
     if (shared) {
       const providers = { ...(config.providers as Record<string, object> | undefined) }
       providers.openrouter = { ...(providers.openrouter as object | undefined), api_key: ref }
@@ -68,9 +65,7 @@ jevRouter.delete('/key', async (req: Request, res: Response, next: NextFunction)
     // a user-managed ${file:} path is theirs to keep, and the SHARED OpenRouter
     // provider credential is never touched here: chat models may be riding it,
     // and this endpoint's contract is "disconnect Jev", not "revoke the key".
-    if (config.jev?.api_key === `\${file:${KEY_FILE}}`) {
-      await fs.rm(KEY_FILE, { force: true })
-    }
+    await removeManagedSecret(KEY_NAME, config.jev?.api_key)
     res.json({ ok: true })
   } catch (err) {
     next(err)

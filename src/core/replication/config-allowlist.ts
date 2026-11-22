@@ -216,6 +216,7 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
     keep_recordings: 'each server sizes its own recordings to its own disk',
     auto_context: 'each server reads its own task titles (and an older replica would refuse an stt row naming it)',
     pause_media: 'each server pauses the music of its own machine (and an older replica would refuse an stt row naming it)',
+    compare: 'the voice comparison of this machine: its own consents, nightly switch and a credential reference (and an older replica would refuse an stt row naming it)',
   },
 })
 

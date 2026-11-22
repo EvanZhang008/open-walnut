@@ -26,6 +26,7 @@ import { SearchSection } from './sections/SearchSection'
 import { SessionsSection } from './sections/SessionsSection'
 import { SttSection } from './sections/SttSection'
 import { SuggestAccuracySection } from './sections/SuggestAccuracySection'
+import { VoiceAccuracySection } from './sections/VoiceAccuracySection'
 import { TagsSection } from './sections/TagsSection'
 import { TaskProvidersSection } from './sections/TaskProvidersSection'
 import { TasksSection } from './sections/TasksSection'
@@ -35,7 +36,7 @@ import { UsageSection } from './sections/UsageSection'
 import { HealthMonitorSection } from './sections/HealthMonitorSection'
 import { RealUseSection } from './sections/RealUseSection'
 import type { SettingsGlyphName } from './settings-icons'
-import type { SettingsPaneGate } from './settings-pane-gates'
+import { experimentGate, type SettingsPaneGate } from './settings-pane-gates'
 
 export interface SaveSectionOptions {
   /** Row that made the change: a failure is replayed on that row if its pane was hidden. */
@@ -178,7 +179,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   // focus_workspace). Its own entry, moved off the side bar on 2026-11-23 (the user's ask).
   {
     owner: 'walnut', id: 'focus-spaces', label: 'Focus', title: 'Focus', group: 'configure',
-    requires: 'focus-workspace',
+    requires: 'experiment:focus_workspace',
     icon: 'target', tint: '#5856D6',
     description: 'Show only the projects or tasks you pick, and let everything else wait until you leave.',
     keywords: ['focus', 'focus space', 'workspace', 'space', 'quiet', 'leave focus', 'enter focus'],
@@ -435,6 +436,15 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     description: "How often Walnut's suggested project and folder for a new session were right.",
     keywords: ['suggestion', 'accuracy', 'quick add', 'guesses'],
     render: () => <SuggestAccuracySection />,
+  },
+  // Voice Accuracy (experiment stt_compare): the user's takes heard again by other engines.
+  {
+    owner: 'walnut', id: 'voice-accuracy', label: 'Voice Accuracy', title: 'Voice Accuracy', group: 'diagnostics',
+    requires: experimentGate('stt_compare'),
+    icon: 'waveform', tint: '#5856D6',
+    description: "Your saved dictations heard again by other engines, with each one's estimated errors.",
+    keywords: ['voice accuracy', 'speech', 'dictation', 'engine', 'whisper', 'elevenlabs', 'compare', 'error rate'],
+    render: () => <VoiceAccuracySection />,
   },
   // Time tracking's OWN UI is the walnut-time Plugin App, not a section here. The old
   // `time` section was a second copy of it and was deleted; the server side

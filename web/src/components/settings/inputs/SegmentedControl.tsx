@@ -51,6 +51,8 @@ export interface SegmentedControlProps<V extends string> {
   'data-testid'?: string
   /** Tooltip on the whole group (e.g. why it is disabled). */
   title?: string
+  /** Wrap the segments onto more lines where they do not fit, instead of scrolling sideways. */
+  wrap?: boolean
 }
 
 /** Index reached by an arrow key from `from`, wrapping around. */
@@ -78,6 +80,7 @@ export function SegmentedControl<V extends string>({
   reselect,
   'data-testid': testId,
   title,
+  wrap,
 }: SegmentedControlProps<V>) {
   // Inside a ControlGroup that is off (a disabled fieldset) the segments are disabled too: the
   // fieldset reaches the hidden radios, not the labels that take the focus.
@@ -127,7 +130,7 @@ export function SegmentedControl<V extends string>({
       aria-disabled={disabled ? true : undefined}
       data-testid={testId}
       title={title}
-      className={`wn-seg settings-segmented${fill ? ' wn-seg-fill' : ''}${size === 'sm' ? ' wn-seg-sm' : ''}${className ? ` ${className}` : ''}`}
+      className={`wn-seg settings-segmented${fill ? ' wn-seg-fill' : ''}${size === 'sm' ? ' wn-seg-sm' : ''}${wrap ? ' wn-seg-wrap' : ''}${className ? ` ${className}` : ''}`}
     >
       {options.map((opt, i) => {
         const selected = opt.value === value

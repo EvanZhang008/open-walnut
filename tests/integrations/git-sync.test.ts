@@ -324,6 +324,25 @@ describe('auth.json is never synced (data-repo gitignore)', () => {
     expect(execSync('git check-ignore kept-asks/vault-agent-asks.json', { cwd: tmpDir, encoding: 'utf-8' }).trim()).toBe('kept-asks/vault-agent-asks.json');
   });
 
+  it('keeps Voice Accuracy\'s compared takes (stt-compare/) out of sync, fresh and on an older install that committed one', async () => {
+    initSync();
+    expect((await fsp.readFile(path.join(tmpDir, '.gitignore'), 'utf-8')).split('\n')).toContain('/stt-compare/');
+    await fsp.writeFile(path.join(tmpDir, '.gitignore'), 'images/\n');
+    const take = path.join(tmpDir, 'stt-compare', 'takes', 'rec-2026-11-21T10-00-00-000Z.json');
+    const note = path.join(tmpDir, 'notes', 'stt-compare', 'idea.md');
+    await fsp.mkdir(path.dirname(take), { recursive: true });
+    await fsp.mkdir(path.dirname(note), { recursive: true });
+    await fsp.writeFile(take, '{"id":"rec-2026-11-21T10-00-00-000Z"}\n');
+    await fsp.writeFile(note, 'A note about voice accuracy\n');
+    execSync('git add -f stt-compare/takes/rec-2026-11-21T10-00-00-000Z.json notes/stt-compare/idea.md && git commit -q -m "older build"', { cwd: tmpDir });
+    ensureCriticalIgnores();
+    expect(ensureMachineLocalUntracked()).toContain('stt-compare/takes/rec-2026-11-21T10-00-00-000Z.json');
+    const tracked = execSync('git ls-files', { cwd: tmpDir, encoding: 'utf-8' }).split('\n');
+    expect(tracked).not.toContain('stt-compare/takes/rec-2026-11-21T10-00-00-000Z.json');
+    expect(tracked).toContain('notes/stt-compare/idea.md');
+    expect(fs.existsSync(take)).toBe(true);
+  });
+
   it('repairs and untracks private Plugin paths on an older install', async () => {
     initSync();
     await fsp.writeFile(path.join(tmpDir, '.gitignore'), 'images/\n', 'utf-8');

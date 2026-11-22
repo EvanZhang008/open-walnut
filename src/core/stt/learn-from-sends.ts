@@ -34,15 +34,22 @@ const SEEN_IDS = 200
 export interface EditPair { heard: string; term: string }
 interface Learned { term: string; heard: string; count: number; at: string; days?: string[] }
 
-const held: { text: string; at: number }[] = []
+/** Which recording a dictation came from (Voice Accuracy pairs the sent text with it). */
+export interface DictationSource { kind: 'recording' | 'archive'; id: string }
+
+const held: { text: string; at: number; source?: DictationSource }[] = []
 const seenIds: string[] = []
 
 /** A transcript the user may now send on, made at `at`. */
-export function noteDictation(text: string, at = Date.now()): void {
+export function noteDictation(text: string, at = Date.now(), source?: DictationSource): void {
   if (!text || !Number.isFinite(at) || Date.now() - at > WINDOW_MS) return
   const i = held.findIndex((d) => d.text === text)
-  if (i >= 0) held.splice(i, 1) // the same take noted twice (live finish, then the archive)
-  held.push({ text, at })
+  // The same take noted twice (live finish, then the archive): the one that names its recording stays.
+  if (i >= 0) {
+    const [prev] = held.splice(i, 1)
+    source ??= prev!.source
+  }
+  held.push({ text, at, ...(source ? { source } : {}) })
   held.sort((a, b) => a.at - b.at)
   while (held.length > MAX_HELD) held.shift()
 }
@@ -79,21 +86,30 @@ export function termShaped(term: string): boolean {
   return words.length <= 3 && !words.some((w) => STOP.has(w.toLowerCase().replace(/[^a-z0-9]/g, '')))
 }
 
-/** The spans a send changed in a dictation, when the send is that dictation edited by hand. */
-export function editPairs(dictated: string, sent: string): EditPair[] | null {
-  const a = tokens(dictated)
-  const b = tokens(sent)
+/**
+ * The longest-common-subsequence table of two token lists, or null when they
+ * share less than MIN_SHARE of the longer one (the send is not that dictation).
+ */
+function commonTable(a: Token[], b: Token[]): Uint16Array[] | null {
   if (!a.length || !b.length || a.length > MAX_TOKENS || b.length > MAX_TOKENS) return null
   // The common part can be no longer than the shorter text: skip the table when that already fails.
   if (Math.min(a.length, b.length) < MIN_SHARE * Math.max(a.length, b.length)) return null
-  // Longest common subsequence, then the runs between its matches.
   const dp: Uint16Array[] = Array.from({ length: a.length + 1 }, () => new Uint16Array(b.length + 1))
   for (let i = a.length - 1; i >= 0; i--) {
     for (let j = b.length - 1; j >= 0; j--) {
       dp[i]![j] = a[i]!.text === b[j]!.text ? dp[i + 1]![j + 1]! + 1 : Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!)
     }
   }
-  if (dp[0]![0]! < MIN_SHARE * Math.max(a.length, b.length)) return null
+  return dp[0]![0]! < MIN_SHARE * Math.max(a.length, b.length) ? null : dp
+}
+
+/** The spans a send changed in a dictation, when the send is that dictation edited by hand. */
+export function editPairs(dictated: string, sent: string): EditPair[] | null {
+  const a = tokens(dictated)
+  const b = tokens(sent)
+  // Longest common subsequence, then the runs between its matches.
+  const dp = commonTable(a, b)
+  if (!dp) return null
   const runs: { a: Token[]; b: Token[] }[] = []
   let run: { a: Token[]; b: Token[] } = { a: [], b: [] }
   let i = 0
@@ -173,6 +189,26 @@ export function learnedTerms(): string[] {
 
 const day = (ms: number) => new Date(ms).toISOString().slice(0, 10)
 
+/**
+ * The recent dictation a person's send carries, as it was heard or edited by
+ * hand: the same text, else the one sharing the most of its tokens (at least
+ * MIN_SHARE of the longer text's). A guess by text, never by recording id:
+ * `similarity` says how close it is, 1 for the same text.
+ */
+export function sentDictation(sent: string, now = Date.now(), from: readonly (typeof held)[number][] = held): { text: string; source?: DictationSource; similarity: number } | null {
+  const recent = from.filter((d) => now - d.at <= WINDOW_MS)
+  const same = recent.filter((d) => d.text === sent).at(-1)
+  if (same) return { ...same, similarity: 1 }
+  const b = tokens(sent)
+  let best: { d: (typeof held)[number]; shared: number; of: number } | null = null
+  for (const d of recent) {
+    const a = tokens(d.text)
+    const dp = commonTable(a, b)
+    if (dp && (!best || dp[0]![0]! > best.shared)) best = { d, shared: dp[0]![0]!, of: Math.max(a.length, b.length) }
+  }
+  return best ? { ...best.d, similarity: best.shared / best.of } : null
+}
+
 /** A person's send: learn from it when it is a recent dictation edited by hand. */
 export async function learnFromSend(sent: string, now = Date.now(), messageId?: string): Promise<EditPair[]> {
   if (messageId) {
@@ -239,6 +275,18 @@ async function promoteToConfig(pairs: EditPair[]): Promise<void> {
 
 const HINT_BLOCK = /<system-reminder>[\s\S]*?<\/system-reminder>/g
 
+/**
+ * A message without Walnut's hint blocks and the line breaks that joined them to it, the person's
+ * own text otherwise untouched (never trimmed: Voice Accuracy keeps it as sent).
+ */
+export function withoutHints(message: string): string {
+  if (!message.includes('<system-reminder>')) return message
+  return message
+    .replace(/^(?:\s*<system-reminder>[\s\S]*?<\/system-reminder>)+\n*/, '')
+    .replace(/\n*(?:<system-reminder>[\s\S]*?<\/system-reminder>\s*)+$/, '')
+    .replace(HINT_BLOCK, '')
+}
+
 let started = false
 
 /** Listen to every message a person sends into a session (the leader only). */
@@ -256,6 +304,16 @@ export async function startLearningFromSends(): Promise<void> {
     if (by !== 'person') return
     const text = data.message.replace(HINT_BLOCK, '').trim()
     const id = typeof data.messageId === 'string' ? data.messageId : undefined
+    // Voice Accuracy keeps what was sent beside its take, only while its experiment is on: the
+    // dictations are copied now (learning below may use one up) and matched once the switch is read.
+    // It keeps the text as the person sent it (spaces and line breaks included), only without
+    // Walnut's own hint blocks, which the person never typed.
+    if (held.some((d) => d.source)) {
+      const now = Date.now()
+      const dictations = held.slice()
+      const asSent = withoutHints(data.message)
+      void import('./compare/sent-text.js').then((m) => m.recordSentTextOf(asSent, now, dictations)).catch(() => {})
+    }
     void learnFromSend(text, Date.now(), id).catch((err) => log.stt.warn(`learning from an edit failed: ${err instanceof Error ? err.message : String(err)}`))
   }, { global: true, interest: [EventNames.SESSION_MESSAGE_QUEUED] })
 }

@@ -436,6 +436,11 @@
   .app-shell-navigation .settings-layout[data-phone-settings] .settings-row.settings-checkbox-row {
     min-height: 44px;
     box-sizing: border-box;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+  .app-shell-navigation .settings-layout[data-phone-settings] .settings-checkbox-control {
+    margin-top: 0;
   }
   /* N20: a larger box in the 44 px row (the shared box's tick is placed from its centre, so it
      stays centred at this size). */

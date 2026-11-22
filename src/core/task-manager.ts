@@ -3534,10 +3534,15 @@ function slimSelectSql(minimal: boolean): string {
   return sqlCols;
 }
 
-/** Every task's title and nothing else: one column, no row decoding (speech context, stt/user-terms.ts). */
-export async function listTaskTitles(): Promise<string[]> {
+/**
+ * Every task's title and nothing else: one column, no row decoding (speech
+ * context, stt/user-terms.ts); `recent` keeps only that many, the newest first.
+ */
+export async function listTaskTitles(opts: { recent?: number } = {}): Promise<string[]> {
   await ensureInit();
-  const rows = getDb()!.prepare('SELECT title FROM tasks').all() as { title: string | null }[];
+  const rows = (opts.recent
+    ? getDb()!.prepare('SELECT title FROM tasks ORDER BY created_at DESC LIMIT ?').all(Math.max(1, Math.floor(opts.recent)))
+    : getDb()!.prepare('SELECT title FROM tasks').all()) as { title: string | null }[];
   return rows.map((r) => r.title ?? '');
 }
 

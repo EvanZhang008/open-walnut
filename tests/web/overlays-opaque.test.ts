@@ -37,6 +37,7 @@ const GLASS_OVERLAYS: Record<string, string> = {
   'cal-day-flyout': 'the new-event form\'s mini month (date picker)',
   'qb-center': 'the quick bar over the page (Control-Option-Command-Space): one line of words, read as you speak',
   'wn-notice': 'every notice card (common/NoticeCard.tsx): drawn into the corner stack, a child of <body>; a card inside a panel is `solid` and carries no glass',
+  'va-take-dialog': 'one Voice Accuracy recording opened over Settings (settings/sections/VoiceAccuracyTakeDialog.tsx; 2026-11-22: its detail grew a row to 3.9 times its height, so it became a dialog of the legible glass, opaque enough for its long text)',
   'scroll-to-bottom-btn': 'the jump-to-latest circle (common/ScrollToBottomButton.tsx; 2026-11-22, the user: "need to be round and in middle, and glass"): an arrow, no words, over its own scroller\'s rows, which sit in its backdrop root',
 };
 /** Glass carriers that float over their own scroller instead of the page (not portalled): what is

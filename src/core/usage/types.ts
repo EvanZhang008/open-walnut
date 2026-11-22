@@ -36,7 +36,8 @@ export type UsageSource =
   | 'reply-language' // retired: older rows only (a progress line rewritten in the user's language)
   | 'drawing'      // a drawing turned into a clean diagram, or a description drawn as one
   | 'reflection'   // an org node's reflection judging one moment of a session it manages (core/org/reflection)
-  | 'avatar';      // an Org avatar drawn from a description (core/org/avatars)
+  | 'avatar'       // an Org avatar drawn from a description (core/org/avatars)
+  | 'voice-accuracy'; // Voice Accuracy's judge and text clean-up (core/stt/compare)
 
 export interface UsageRecord {
   id: string;

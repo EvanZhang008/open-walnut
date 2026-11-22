@@ -2327,6 +2327,22 @@ export interface Config {
      */
     keep_recordings?: { max_count?: number; max_mb?: number };
     /**
+     * Voice Accuracy (experimental `stt_compare`, src/core/stt/compare/): which
+     * engines hear the user's takes again for comparison, and their consent.
+     * An engine that sends audio or text anywhere runs only with `allow_upload`.
+     */
+    compare?: {
+      engines?: Record<string, { enabled?: boolean; allow_upload?: boolean }>;
+      /** Compare the last day's takes at 03:00 local time. */
+      nightly?: boolean;
+      /** A `${file:...}` reference (PUT /api/stt/compare/settings writes the file). */
+      elevenlabs_api_key?: string;
+      /** Default scribe_v3. */
+      elevenlabs_model?: string;
+      /** Default https://api.elevenlabs.io (tests point it at a local server). */
+      elevenlabs_base_url?: string;
+    };
+    /**
      * Qwen3-ASR hears the English words the user mixes into Chinese task titles
      * as context (user-terms.ts). Default on; false keeps only the vocab file and
      * the correction list's terms.
