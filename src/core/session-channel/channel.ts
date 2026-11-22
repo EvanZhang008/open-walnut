@@ -6,13 +6,17 @@
  * leader's own confirmed position.
  *
  *   host -> any   hello  {walnutId, hostId, logId, floor, head, now}
- *   leader -> host resume {walnutId, hostId, permitNumber, logId, after}
+ *   leader -> host resume {walnutId, hostId, permitNumber, epoch, logId, after}
  *                         after: the last seq of this log the leader applied (0: none; -1: the
  *                         leader knew this host under another log, so it always gets the rows
  *                         first); a log that still holds every record after `after`
- *                         replays them, one that trimmed some sends its rows first; the host refuses a permit number lower than the
- *                         highest it has seen (a leader that lost its permit replays nothing and
- *                         trims nothing)
+ *                         replays them, one that trimmed some sends its rows first. The leader's
+ *                         standing is the pair (permitNumber, epoch), compared in that order
+ *                         (comparePermit): permitNumber the write permission's record number (0
+ *                         while the permit system is off), epoch the leader's claim on this host;
+ *                         a resume without `epoch` (an older leader) reads as (0, permitNumber).
+ *                         The host refuses a pair lower than the highest it has seen (a leader
+ *                         that lost its permit replays nothing and trims nothing)
  *   listener -> host listen {walnutId}        a reader that never confirms (the cloud companion):
  *                         it gets this host's own rows as they are now, then everything live
  *   host -> reader  rows  {rows, upTo, rowsAt} the host's own rows as of record `rowsAt`, standing for
@@ -48,7 +52,7 @@ import type { SessionRecord } from '../types.js'
 
 export type ChannelFrame =
   | { ch: 'sf'; op: 'hello'; walnutId: string; hostId: string; logId: string; floor: number; head: number; now?: number }
-  | { ch: 'sf'; op: 'resume'; walnutId: string; hostId: string; permitNumber: number; logId: string; after: number }
+  | { ch: 'sf'; op: 'resume'; walnutId: string; hostId: string; permitNumber: number; epoch?: number; logId: string; after: number }
   | { ch: 'sf'; op: 'listen'; walnutId: string }
   | { ch: 'sf'; op: 'rows'; rows: SessionRecord[]; upTo: number; rowsAt: number; logId: string; gone?: string[] }
   | { ch: 'sf'; op: 'facts'; recs: FactRecord[]; replay?: true; sentAt?: number }
@@ -65,6 +69,31 @@ export interface ChannelLink {
 export function isChannelFrame(v: unknown): v is ChannelFrame {
   const f = v as { ch?: unknown; op?: unknown } | null
   return !!f && typeof f === 'object' && f.ch === 'sf' && typeof f.op === 'string'
+}
+
+/** Which leader a host trusts: the write permission's record number (0: no permit system), then the leader's claim epoch. */
+export interface PermitPair { permitNumber: number; epoch: number }
+
+/** Is `v` a pair of two safe non-negative integers? */
+export function isPermitPair(v: unknown): v is PermitPair {
+  const p = v as Partial<PermitPair> | null
+  return !!p && typeof p === 'object' && Number.isSafeInteger(p.permitNumber) && Number.isSafeInteger(p.epoch) && p.permitNumber! >= 0 && p.epoch! >= 0
+}
+
+/**
+ * The one comparison of two leaders' standing (resume and the door's welcome): by permitNumber,
+ * then by epoch. Negative when `a` is lower, 0 when equal, positive when higher.
+ */
+export function comparePermit(a: PermitPair, b: PermitPair): number {
+  if (a.permitNumber !== b.permitNumber) return a.permitNumber < b.permitNumber ? -1 : 1
+  if (a.epoch !== b.epoch) return a.epoch < b.epoch ? -1 : 1
+  return 0
+}
+
+/** A resume's pair: an older leader sends no epoch, and its permitNumber was the epoch (0, n). */
+export function permitOfResume(f: { permitNumber?: unknown; epoch?: unknown }): PermitPair | null {
+  const pair = f.epoch === undefined ? { permitNumber: 0, epoch: f.permitNumber as number } : { permitNumber: f.permitNumber as number, epoch: f.epoch as number }
+  return isPermitPair(pair) ? pair : null
 }
 
 /** Records per facts frame when the log is read back. */
@@ -146,8 +175,9 @@ export class HostChannel {
     const log = this.o.log
     if (f.walnutId !== this.o.walnutId) return refuse('walnut_mismatch')
     if (f.hostId !== this.o.hostId) return refuse('host_mismatch')
-    if (!Number.isSafeInteger(f.permitNumber) || f.permitNumber < log.permit) return refuse('stale_permit')
-    await log.notePermit(f.permitNumber)
+    const pair = permitOfResume(f)
+    if (!pair || comparePermit(pair, log.permitPair) < 0) return refuse('stale_permit')
+    await log.notePermit(pair)
     // One leader at a time: a newer resume (same or higher permit) replaces the link before it.
     if (this.leaderReader && this.leaderReader !== reader) {
       const old = this.leaderReader
@@ -236,7 +266,8 @@ export interface LeaderChannelOptions {
   walnutId: string
   /** The host this link should be ('' accepts the host the hello names: tests, a door that already authenticated it). */
   hostId: string
-  permitNumber(): number
+  /** This leader's standing now (comparePermit), sent in each resume. */
+  permit(): PermitPair
   loadCursor(hostId: string): Promise<ChannelCursor | null>
   /** Apply records in order and keep `next` as the new position, atomically with their effects. */
   apply(hostId: string, recs: AppliedFact[], next: ChannelCursor): Promise<void>
@@ -299,7 +330,8 @@ export function attachLeaderChannel(link: ChannelLink, o: LeaderChannelOptions):
           cursor = known ? c! : { logId, seq: 0 }
           // A host this leader knew under another log (set up again, its log lost): -1, so it sends
           // its rows first (channel header). A host it never heard of replays its log from the start.
-          link.send({ ch: 'sf', op: 'resume', walnutId: o.walnutId, hostId, permitNumber: o.permitNumber(), logId, after: known || !c ? cursor.seq : -1 })
+          const p = o.permit()
+          link.send({ ch: 'sf', op: 'resume', walnutId: o.walnutId, hostId, permitNumber: p.permitNumber, epoch: p.epoch, logId, after: known || !c ? cursor.seq : -1 })
         })
       } else if (frame.op === 'rows') {
         serial(async () => {

@@ -31,6 +31,7 @@ export type OutwardDoorKind =
   | 'plugin-fetch'
   | 'git-push'
   | 'companion-upload'
+  | 'host-credential'
 
 /** One function that checks a door, and what a refusal there does. */
 export interface OutwardDoor {
@@ -104,6 +105,7 @@ export const OUTWARD_DOORS: readonly OutwardDoor[] = [
   { kind: 'companion-upload', file: 'web/routes/events-v1.ts', fn: 'forwardMobileEventToBridge', onRefusal: 'answers false, as with no lane' },
   { kind: 'companion-upload', file: 'integrations/cloud-bridge-config.ts', fn: 'mintMachineToken', onRefusal: 'creates and revokes no companion device: answers null like any failed mint (the bridge config is not changed), the re-mint window not spent; the next bridge push of a server that may send mints it' },
   { kind: 'companion-upload', file: 'integrations/cloud-bridge-config.ts', fn: 'adoptOnce', onRefusal: 'offers nothing and keeps the offer for the next mint or start' },
+  { kind: 'host-credential', file: 'core/session-channel/leader-issue.ts', fn: 'issueOnce', onRefusal: 'throws before the credential is minted or sent: the host keeps what it holds, and the check runs again at its next link' },
 ]
 
 export type OutwardDoorChecker = (kind: OutwardDoorKind, opId: string) => void

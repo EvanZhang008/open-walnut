@@ -844,7 +844,12 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
     } else {
       hostDaemon = await startHostDaemon(opts.twin, d.hostDaemon, d.hostHome, d.bin, opts.daemonBuilt === true)
     }
-    if (opts.linkProxy) link = await startSilentLinkProxy(hostDaemon.port)
+    // A launcher's host moves its door's port at each start: the proxy asks where it is at each connection.
+    const doorPortFile = path.join(d.hostDaemon, 'daemon.port')
+    // Between two starts (and once the cluster stops) there is no file: the last port it named.
+    let doorPort = hostDaemon.port
+    const doorPortNow = (): number => { try { doorPort = Number(fs.readFileSync(doorPortFile, 'utf8').trim()) || doorPort } catch { /* between starts */ } return doorPort }
+    if (opts.linkProxy) link = await startSilentLinkProxy(launcher ? doorPortNow : hostDaemon.port)
     seedHostStream(path.join(d.hostDaemon, 'streams'))
     seedHostTranscript(d.hostHome, d.hostCwd)
     const macEnv: Record<string, string> = {
@@ -862,7 +867,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
       ...(opts.hostService ? { WALNUT_SERVICE_LAUNCHER: '1', WALNUT_HOST_SERVICE_OFFER: '1' } : {}),
     }
     if (opts.seedMac) await opts.seedMac({ base, macData: d.macData, env: macEnv })
-    mac = await bootMac(macBoot({ macData: d.macData, daemonPort: link?.port ?? hostDaemon.port, macCwd: d.macCwd, hostCwd: d.hostCwd, dev: app !== 'built', hostDaemon: d.hostDaemon, plugin: !!opts.plugin, extra: opts.macBootExtra, ...(launcher ? { doorPortFile: path.join(d.hostDaemon, 'daemon.port') } : {}) }), macBootFile, macEnv, macLog)
+    mac = await bootMac(macBoot({ macData: d.macData, daemonPort: link?.port ?? hostDaemon.port, macCwd: d.macCwd, hostCwd: d.hostCwd, dev: app !== 'built', hostDaemon: d.hostDaemon, plugin: !!opts.plugin, extra: opts.macBootExtra, ...(launcher && !link ? { doorPortFile } : {}) }), macBootFile, macEnv, macLog)
     // The server mac-boot runs: the child itself, its command line this runtime and that file.
     macPin = pin('mac', mac.pid, (c) => c.startsWith(`${HOST_RUNTIME} `) && c.includes(` ${macBootFile}`))
     if (!macPin) throw new Error(`the Mac reported pid ${mac.pid}, which does not run ${macBootFile}`)

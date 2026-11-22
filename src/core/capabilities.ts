@@ -30,6 +30,7 @@ import { bridgeDoor } from './capabilities/bridge-door.js'
 import { cloudExec } from './capabilities/cloud-exec.js'
 import { backupLeader } from './capabilities/backup-leader.js'
 import { hostLocalCalls } from './capabilities/host-local-calls.js'
+import { LEADER_DOORS, openLeaderDoor } from './leader-doors.js'
 
 /** Every capability, in the order the boot policy line and serverCapabilities list them. */
 export const MANIFESTS = [publicDoor, bridgeDoor, cloudExec, backupLeader, hostLocalCalls] as const
@@ -44,13 +45,16 @@ export function capabilityOfJob(job: string): Capability | undefined {
 /**
  * The socket door at `path` this server has open, or null. A path no manifest
  * declares is null on every server: the upgrade handler refuses it. `caps`
- * defaults to this server's own (a test reads another set).
+ * defaults to this server's own (a test reads another set). A leader door
+ * (leader-doors.ts) is no capability's: it is open only while the code that
+ * serves it opened it in this process.
  */
 export function openSocketDoor(path: string, caps: ReadonlySet<Capability> = capabilityFacts().capabilities): Entrance | null {
   for (const m of MANIFESTS) {
     const door = m.doors.find((d) => d.path === path)
     if (door) return caps.has(m.name) ? door : null
   }
+  if (LEADER_DOORS.some((d) => d.path === path)) return openLeaderDoor(path)
   return null
 }
 

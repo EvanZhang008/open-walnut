@@ -79,7 +79,7 @@ function leaderStore() {
 function makeSide(port: number, store: ReturnType<typeof leaderStore>, opts: { opened?: string[]; flag?: { on: boolean }; refuse?: string[]; gone?: string[]; drops?: string[]; owned?: string[]; extra?: Partial<Parameters<typeof createLeaderSide>[0]> } = {}) {
   return createLeaderSide({
     walnutId: async () => 'w1',
-    permitNumber: () => 1,
+    permit: () => ({ permitNumber: 0, epoch: 1 }),
     flagOn: async () => opts.flag?.on ?? true,
     openStream: async (_host, purpose) => { opts.opened?.push(purpose); return net.connect(port, '127.0.0.1') },
     applyBatch: async (b) => {
@@ -276,7 +276,7 @@ describe('the leader side of a host that runs its sessions', () => {
     const store = leaderStore()
     let throws = 1
     side = createLeaderSide({
-      walnutId: async () => 'w1', permitNumber: () => 1, flagOn: async () => true,
+      walnutId: async () => 'w1', permit: () => ({ permitNumber: 0, epoch: 1 }), flagOn: async () => true,
       openStream: async () => net.connect(port, '127.0.0.1'),
       // The store had applied up to seq 2 already (a link before this one): the transaction says so.
       applyBatch: async (b) => { store.cursor = b.cursor; return { written: [], skipped: [], after: 2 } },

@@ -11,6 +11,8 @@
  *                   (host-resend.ts), subscribed before the emitter
  *   the routes      on the leader door (host-routes.ts), and SESSION_JUDGE_CAP in the report the
  *                   leader reads of this host's service (replica/front.ts status)
+ *   the dialer      the leader's door, with the credential the leader issued over its link
+ *                   (host-dialer.ts, host-credential-file.ts), and HOST_DOOR_CAP in the report
  *
  * "Can run sessions": this is a host's one Walnut service (src/binary/service-entry.ts), which holds
  * the host's session runtime in its own process (server-role.ts hasLocalDaemon). While its sessions
@@ -24,6 +26,8 @@ import { FactLog } from './fact-log.js'
 import { GoneRows } from './gone-rows.js'
 import { HostChannel } from './channel.js'
 import { SESSION_JUDGE_CAP } from './switch.js'
+import { HOST_DOOR_CAP } from './door-wire.js'
+import { startHostDialer, type HostDialer } from './host-dialer.js'
 import { createHostEmitter, type HostEmitter } from './host-emitter.js'
 import { createHostSessionPort, selfOwnApi, StartBundles } from './host-port.js'
 import { createHostSessionRoutes, type HostSessionRoutes } from './host-routes.js'
@@ -43,6 +47,7 @@ export interface HostSessions {
   routes: HostSessionRoutes
   bundles: StartBundles
   resend: HostResendFamily
+  dialer: HostDialer
 }
 
 let current: HostSessions | null = null
@@ -54,7 +59,7 @@ export function hostSessionRoutes(): HostSessionRoutes | null {
 
 /** What this host's service adds to the capabilities its report names. */
 export function hostSessionCapabilities(): string[] {
-  return current ? [SESSION_JUDGE_CAP] : []
+  return current ? [SESSION_JUDGE_CAP, HOST_DOOR_CAP] : []
 }
 
 export function hostSessionsRunning(): HostSessions | null {
@@ -142,7 +147,9 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   // Before the emitter subscribes: at a turn end each retrier takes it first, then the emitter stamps it.
   const resend = await startHostResendFamily({ say })
   await emitter.start()
-  const [{ hostRunsSessionsNow }, { bus }] = await Promise.all([import('./switch.js'), import('../event-bus.js')])
+  const [{ hostRunsSessionsNow }, { bus }, { readMachineId }] = await Promise.all([import('./switch.js'), import('../event-bus.js'), import('../machine-id.js')])
+  // Made just below; a credential the leader issues pokes it.
+  let dialerRef: HostDialer | null = null
   const routes = createHostSessionRoutes({
     enabled: hostRunsSessionsNow,
     runner: async () => sessionRunner as never,
@@ -170,9 +177,19 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
       const { getSessionByClaudeId } = await import('../session-tracker.js')
       return rowOwnedHere(await getSessionByClaudeId(sid).catch(() => null), o.hostKey)
     },
+    // The leader's door credential (host-credential-file.ts): only this Walnut's, only this machine's.
+    credential: { walnutId: o.walnutId, machineId: readMachineId, seenPermit: () => log.permitPair, onIssued: () => dialerRef?.poke(), onDoors: () => dialerRef?.poke() },
     log: say,
   })
-  current = { log, gone, channel, emitter, routes, bundles, resend }
+  const dialer = startHostDialer({
+    walnutId: o.walnutId, machineId: readMachineId, enabled: hostRunsSessionsNow,
+    channel: () => current?.channel ?? null,
+    routes: () => current?.routes ?? null,
+    seenPermit: () => log.permitPair,
+    log: say,
+  })
+  dialerRef = dialer
+  current = { log, gone, channel, emitter, routes, bundles, resend, dialer }
   // The session runner may reach the runtime in this process from now on (the own-sessions link).
   ;(await import('../../providers/daemon-connection.js')).setOwnSessionsLink(true)
   say('info', 'host sessions: this host runs and judges its sessions', { hostKey: o.hostKey, logId: log.logId, head: log.head })
@@ -184,6 +201,7 @@ export async function stopHostSessions(): Promise<void> {
   current = null
   if (!c) return
   ;(await import('../../providers/daemon-connection.js')).setOwnSessionsLink(false)
+  c.dialer.stop()
   c.emitter.stop()
   c.resend.stop()
   c.routes.close()

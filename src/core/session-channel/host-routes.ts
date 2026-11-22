@@ -11,6 +11,13 @@
  *              bashCallMatching with the op and file the leader's predicate would test
  *   drop       the sessions the leader deleted: this host drops its rows of them (leader-drops.ts)
  *   channel    a WebSocket whose frames are the channel's (channel.ts HostChannel.attach)
+ *   credential the door credential the leader issues this host (host-credential-file.ts), on this
+ *              door only: never through `call`
+ *   doors      the leader's door list (`/host-api/doors`, host-credential-file.ts answerDoorsRoute),
+ *              on this door only: never through `call`
+ *
+ * `call` answers the same session routes from frames a leader sends on a socket this host dialed
+ * into its door (host-dialer.ts): one route table, whichever link carried the request.
  *
  * The switch is asked on every start: off, a start answers `host_runs_sessions_off`; the sessions
  * this host already runs keep their other routes and the channel.
@@ -26,6 +33,8 @@ import { checkPermissionAnswer } from './host-permission.js'
 import { isChannelFrame, type HostChannel } from './channel.js'
 import { HOST_CHANNEL_PATH, HOST_SESSIONS_OFF, HOST_SESSIONS_PATH, type CallBody, type QueuedLine, type StartBody } from './host-api.js'
 import type { StartBundles } from './host-port.js'
+import { HOST_CREDENTIAL_PATH, HOST_DOORS_PATH } from './door-wire.js'
+import { answerCredentialRoute, answerDoorsRoute, type CredentialRouteOptions } from './host-credential-file.js'
 
 /** The largest body a route reads (a start's large prompt rides it). */
 const MAX_BODY_BYTES = 32 * 1024 * 1024
@@ -87,6 +96,8 @@ export interface HostRoutesOptions {
   lifecycle?: Record<string, (sid: string, ...args: unknown[]) => Promise<unknown>>
   /** The op test of a Bash call (lib/walnut-op-command.ts commandRunsOp); tests pass their own. */
   commandRunsOp?(command: string, op: string, file?: string): boolean
+  /** The door credential route (host-credential-file.ts); absent: it answers 404. */
+  credential?: CredentialRouteOptions
   now?: () => number
   log?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 }
@@ -94,6 +105,8 @@ export interface HostRoutesOptions {
 export interface HostSessionRoutes {
   /** True when the request was one of these routes (and was answered). */
   handle(req: IncomingMessage, res: ServerResponse): boolean
+  /** One session route from a leader's call frame (host-dialer.ts): its answer. The credential route is never one. */
+  call(method: string, pathname: string, body: unknown): Promise<{ status: number; body: unknown }>
   /** True when the upgrade was the channel's (and was taken). */
   upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): boolean
   close(): void
@@ -120,7 +133,7 @@ export function refuseChannelUpgrade(socket: Duplex): void {
 
 /** Is this path one of the host session routes (the door answers them off without the routes)? */
 export function isHostSessionsPath(pathname: string): boolean {
-  return pathname === HOST_CHANNEL_PATH || pathname.startsWith(HOST_SESSIONS_PATH + '/')
+  return pathname === HOST_CHANNEL_PATH || pathname === HOST_CREDENTIAL_PATH || pathname === HOST_DOORS_PATH || pathname.startsWith(HOST_SESSIONS_PATH + '/')
 }
 
 function readJson(req: IncomingMessage): Promise<unknown> {
@@ -277,54 +290,61 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
   async function serve(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
     try {
       if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: 'method_not_allowed' })
+      if (pathname === HOST_CREDENTIAL_PATH || pathname === HOST_DOORS_PATH) {
+        if (!o.credential) { req.resume(); return sendJson(res, 404, { ok: false, error: 'not_found' }) }
+        const r = await (pathname === HOST_CREDENTIAL_PATH ? answerCredentialRoute : answerDoorsRoute)(await readJson(req), o.credential)
+        return sendJson(res, r.status, r.body)
+      }
       const op = pathname.slice(HOST_SESSIONS_PATH.length + 1)
       // The switch decides only where a NEW session runs: a session this host already runs keeps
       // taking its sends, interrupts and calls, and keeps reporting, after the switch went off.
       if (op === 'start' && !(await o.enabled())) { req.resume(); return answerHostSessionsOff(res) }
-      const body = await readJson(req)
-      if (op === 'start') {
-        const r = await start(body as StartBody)
-        return sendJson(res, r.status, r.body)
-      }
-      if (op === 'send' || op === 'interrupt') {
-        const b = body as { sessionId?: unknown; busSource?: unknown }
-        if (typeof b?.sessionId !== 'string' || !b.sessionId) return sendJson(res, 400, { ok: false, error: 'sessionId is required' })
-        // Only a session this host owns, or one starting here now: an interrupt reaches a process, and a
-        // send to a session this host does not have would be queued here for nobody while the leader
-        // drops its lines as delivered (round 3 MF2). Refused, the leader keeps them and tries again.
-        if (o.owns && !(await o.owns(b.sessionId)) && !(op === 'send' && o.bundles.startingSid(b.sessionId))) {
-          return sendJson(res, 403, { ok: false, error: NOT_OWN_SESSION })
-        }
-        const { busSource, queued, holdOnly, ...payload } = b as Record<string, unknown>
-        const source = typeof busSource === 'string' && busSource ? busSource : 'host-api'
-        // A send's lines are queued here first, as the leader's send route queues them for its own
-        // runner: the SESSION_SEND only tells the runner to drain.
-        if (op === 'send') {
-          const lines = Array.isArray(queued)
-            ? (queued as QueuedLine[]).filter((l) => l && typeof l.message === 'string')
-            : typeof payload.message === 'string' && payload.message ? [{ message: payload.message }] : []
-          if (lines.length > 0) await o.enqueue(b.sessionId, lines, source)
-          // Held rows handed over with their hold (sessions/handed-holds.ts): queued, nothing delivered.
-          if (holdOnly === true) return sendJson(res, 200, { ok: true })
-        }
-        o.emit(op === 'send' ? 'session:send' : 'session:interrupt', payload, source)
-        return sendJson(res, 200, { ok: true })
-      }
-      if (op === 'call') {
-        const r = await call(body as CallBody)
-        return sendJson(res, r.status, r.body)
-      }
-      if (op === 'drop') {
-        const sids = Array.isArray((body as { sids?: unknown })?.sids) ? ((body as { sids: unknown[] }).sids).filter((x): x is string => typeof x === 'string' && x !== '') : null
-        if (!sids || !o.drop) return sendJson(res, 400, { ok: false, error: 'sids are required' })
-        return sendJson(res, 200, { ok: true, dropped: await o.drop(sids) })
-      }
-      sendJson(res, 404, { ok: false, error: 'not_found' })
+      const r = await route(op, await readJson(req))
+      sendJson(res, r.status, r.body)
     } catch (err) {
       const status = typeof (err as { status?: unknown })?.status === 'number' ? (err as { status: number }).status : 500
       o.log?.('warn', 'host sessions: a route failed', { path: pathname, error: errText(err) })
       if (!res.headersSent) sendJson(res, status, { ok: false, error: errText(err) })
     }
+  }
+
+  /** One session route (`op` under HOST_SESSIONS_PATH) with its body read: its answer. */
+  async function route(op: string, body: unknown): Promise<{ status: number; body: unknown }> {
+    if (op === 'start') {
+      if (!(await o.enabled())) return { status: 503, body: { ok: false, error: HOST_SESSIONS_OFF } }
+      return start(body as StartBody)
+    }
+    if (op === 'send' || op === 'interrupt') {
+      const b = body as { sessionId?: unknown; busSource?: unknown }
+      if (typeof b?.sessionId !== 'string' || !b.sessionId) return { status: 400, body: { ok: false, error: 'sessionId is required' } }
+      // Only a session this host owns, or one starting here now: an interrupt reaches a process, and a
+      // send to a session this host does not have would be queued here for nobody while the leader
+      // drops its lines as delivered (round 3 MF2). Refused, the leader keeps them and tries again.
+      if (o.owns && !(await o.owns(b.sessionId)) && !(op === 'send' && o.bundles.startingSid(b.sessionId))) {
+        return { status: 403, body: { ok: false, error: NOT_OWN_SESSION } }
+      }
+      const { busSource, queued, holdOnly, ...payload } = b as Record<string, unknown>
+      const source = typeof busSource === 'string' && busSource ? busSource : 'host-api'
+      // A send's lines are queued here first, as the leader's send route queues them for its own
+      // runner: the SESSION_SEND only tells the runner to drain.
+      if (op === 'send') {
+        const lines = Array.isArray(queued)
+          ? (queued as QueuedLine[]).filter((l) => l && typeof l.message === 'string')
+          : typeof payload.message === 'string' && payload.message ? [{ message: payload.message }] : []
+        if (lines.length > 0) await o.enqueue(b.sessionId, lines, source)
+        // Held rows handed over with their hold (sessions/handed-holds.ts): queued, nothing delivered.
+        if (holdOnly === true) return { status: 200, body: { ok: true } }
+      }
+      o.emit(op === 'send' ? 'session:send' : 'session:interrupt', payload, source)
+      return { status: 200, body: { ok: true } }
+    }
+    if (op === 'call') return call(body as CallBody)
+    if (op === 'drop') {
+      const sids = Array.isArray((body as { sids?: unknown })?.sids) ? ((body as { sids: unknown[] }).sids).filter((x): x is string => typeof x === 'string' && x !== '') : null
+      if (!sids || !o.drop) return { status: 400, body: { ok: false, error: 'sids are required' } }
+      return { status: 200, body: { ok: true, dropped: await o.drop(sids) } }
+    }
+    return { status: 404, body: { ok: false, error: 'not_found' } }
   }
 
   function attach(ws: WebSocket, channel: HostChannel): void {
@@ -347,6 +367,16 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
       if (!isHostSessionsPath(pathname) || pathname === HOST_CHANNEL_PATH) return false
       void serve(req, res, pathname)
       return true
+    },
+    async call(method, pathname, body) {
+      if (method !== 'POST') return { status: 405, body: { ok: false, error: 'method_not_allowed' } }
+      if (!pathname.startsWith(HOST_SESSIONS_PATH + '/')) return { status: 404, body: { ok: false, error: 'not_found' } }
+      try {
+        return await route(pathname.slice(HOST_SESSIONS_PATH.length + 1), body)
+      } catch (err) {
+        o.log?.('warn', 'host sessions: a route failed', { path: pathname, error: errText(err) })
+        return { status: 500, body: { ok: false, error: errText(err) } }
+      }
     },
     upgrade(req, socket, head) {
       const pathname = new URL(req.url ?? '/', 'http://host').pathname

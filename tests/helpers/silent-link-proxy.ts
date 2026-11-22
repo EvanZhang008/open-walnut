@@ -66,7 +66,9 @@ export interface SilentLinkOptions {
 
 const silent = (mode: LinkMode) => mode === 'blackhole' || mode === 'drop-hold' || mode === 'severed'
 
-export async function startSilentLinkProxy(targetPort: number, targetHost = '127.0.0.1', opts: SilentLinkOptions = {}): Promise<SilentLinkProxy> {
+/** `targetPort`: a port, or where the target listens now, asked at each connection (a target that moves, as a launcher's host does). */
+export async function startSilentLinkProxy(targetPort: number | (() => number), targetHost = '127.0.0.1', opts: SilentLinkOptions = {}): Promise<SilentLinkProxy> {
+  const portNow = typeof targetPort === 'function' ? targetPort : () => targetPort
   let mode: LinkMode = 'pass'
   let slow: SlowLink = { delayMs: 300, bytesPerSec: 64 * 1024 }
   let accepted = 0
@@ -136,7 +138,7 @@ export async function startSilentLinkProxy(targetPort: number, targetHost = '127
   const start = (pair: Pair, head: Buffer | null) => {
     const client = pair.client
     if (!pair.exempt && silent(mode)) { client.on('data', () => {}); return }
-    const up = net.connect(targetPort, targetHost)
+    const up = net.connect(portNow(), targetHost)
     pair.upstream = up
     up.on('error', () => client.destroy())
     up.on('close', () => client.destroy())

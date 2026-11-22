@@ -181,6 +181,12 @@ describe('every outward primitive is called only where a door guards it (source)
     expect(callSites('mintMachineToken'), NEW_SITE).toEqual({ 'integrations/cloud-bridge-config.ts': 1 })
     expect(callSites('adoptOnce'), NEW_SITE).toEqual({ 'integrations/cloud-bridge-config.ts': 1 })
   })
+
+  it('a host is issued its door credential only from issueOnce', () => {
+    // The credential is minted and sent to the host only after the door (session-channel/leader-issue.ts).
+    expect(callSites('mintHostCredential'), NEW_SITE).toEqual({ 'core/session-channel/leader-issue.ts': 1 })
+    expect(callSites('sendCredential'), NEW_SITE).toEqual({ 'core/session-channel/leader-issue.ts': 1 })
+  })
 })
 
 describe('every IntegrationSync method is classified for the task-sync door', () => {
@@ -338,6 +344,7 @@ const PRIMITIVE_OF: Record<string, RegExp | null> = {
   'web/routes/events-v1.ts#forwardMobileEventToBridge': /\.send\('mobile-event'/,
   'integrations/cloud-bridge-config.ts#mintMachineToken': /\bfetch\(/,
   'integrations/cloud-bridge-config.ts#adoptOnce': /\bfetch\(/,
+  'core/session-channel/leader-issue.ts#issueOnce': /mintHostCredential\(/,
 }
 
 /** A door call that acts: it asks the permission under a kind, and refuses. */

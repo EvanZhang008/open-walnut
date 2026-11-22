@@ -30,13 +30,15 @@
  *         GET /acp?sid=      what the Mac's runner answers for an ACP session (findAcpSession)
  *         GET /parses?sid=   how many CLI lines of it this process parsed (line-parse-count.ts)
  *         GET /judge?sid=    judgeOf and the judging host
- *         GET /side?host=    the leader side: on, linked to the host, judging its starts
+ *         GET /side?host=    the leader side: on, linked to the host (and which side dialed), judging its starts
+ *         GET /link?host=    is the Mac's daemon link to the host up (the host-server manager's link)
  *         GET /cursor?host=  the channel cursor in the Mac's sessions store
  *   host  GET /facts?after=  the fact log: its id, head, floor, acked, permit and records
  *         GET /row?sid=      the host's own row of a session (null: none)
  *         GET /events?sid=   the host's own bus events of a session (as above)
  *         GET /queue?sid=    the host's queue rows of a session (id, status, parkedReason, message)
  *         GET /live          is a leader linked and caught up
+ *         GET /dialer        is the host's door dialer linked, and does it hold a door credential (never its token)
  */
 import fs from 'node:fs'
 import http from 'node:http'
@@ -101,7 +103,8 @@ await serveProbe({
   '/events': (q) => eventsOf(q.get('sid')),
   '/parses': (q) => ({ parses: lpc.lineParsesOf(q.get('sid')) }),
   '/judge': (q) => ({ judge: jo.judgeOf(q.get('sid')), host: jo.judgingHostOf(q.get('sid')) }),
-  '/side': (q) => { const s = lb.activeLeaderSide(); return { active: !!s, linked: !!s && s.linked(q.get('host')), judges: !!s && s.hostJudges(q.get('host')) } },
+  '/side': (q) => { const s = lb.activeLeaderSide(); return { active: !!s, linked: !!s && s.linked(q.get('host')), kind: s ? s.linkKind(q.get('host')) : null, judges: !!s && s.hostJudges(q.get('host')) } },
+  '/link': async (q) => ({ connected: (await import(${url('src/core/host-server/index.ts')})).hostServerLink(q.get('host')) !== null }),
   '/cursor': (q) => ({ cursor: sdb.loadChannelCursor(q.get('host')) }),
   '/delete': async (q) => ({ removed: await trk.deleteSessionRecords(new Set([q.get('sid')]), 'cluster-probe') }),
   '/drops': (q) => ({ sids: drp.leaderDropsOf(q.get('host')) }),
@@ -144,6 +147,11 @@ await serveProbe({
   '/events': (q) => eventsOf(q.get('sid')),
   '/row': async (q) => ({ row: await (await import(${url('src/core/session-tracker.ts')})).getSessionByClaudeId(q.get('sid')) }),
   '/live': () => ({ live: !!boot.hostSessionsRunning()?.channel.leaderLive() }),
+  '/dialer': async () => {
+    const cf = await import(${url('src/core/session-channel/host-credential-file.ts')})
+    const held = await cf.readHostCredential(process.env.WALNUT_WALNUT_ID ?? '')
+    return { linked: !!boot.hostSessionsRunning()?.dialer.linked(), holds: !!held, doors: held ? held.doors : [] }
+  },
   '/queue': async (q) => (await (await import(${url('src/core/session-message-queue.ts')})).getQueue(q.get('sid'))).map((m) => ({ id: m.id, status: m.status, parkedReason: m.parkedReason ?? null, message: m.message })),
 }, { door: doorPort, hasDoor: !!door, running: !!boot.hostSessionsRunning() })
 `
@@ -196,9 +204,11 @@ export interface HostJudgeCluster {
   stop(): Promise<void>
 }
 
-export async function startHostJudgeCluster(): Promise<HostJudgeCluster> {
+/** `linkProxy`: the Mac's daemon link to the host runs through a proxy the test can cut (replica-cluster.ts cutLink). */
+export async function startHostJudgeCluster(o: { linkProxy?: boolean } = {}): Promise<HostJudgeCluster> {
   const c = await startReplicaCluster({
     twin: 'standalone',
+    ...(o.linkProxy ? { linkProxy: true } : {}),
     hostService: { env: hostJudgeServiceEnv, after: hostJudgeServiceProbe() },
     macBootExtra: MAC_PROBE,
     macConfigExtra: ['experimental:', '  host_runs_sessions: true'],

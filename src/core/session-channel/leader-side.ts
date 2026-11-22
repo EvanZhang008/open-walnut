@@ -11,34 +11,31 @@
  *     bus (`source: 'host-channel'`, `late` for a record read back long after it happened), and
  *     the `live` records into the proxies' mirrored state (providers/remote-judged-session.ts).
  *     A dropped link dials again with a backoff.
+ *   - or the socket the host dialed into this leader's door (host-door.ts), once both proved who
+ *     they are: `adopt`. One link per host: the newer one wins and the older is closed `replaced`;
+ *     while a host-dialed socket is up the leader dials nothing to that host.
  *   - the commands: start, send, interrupt and the allowlisted calls (host-calls.ts), each one
- *     HTTP request on a stream of its own (`openStream('follower', 'session-call')`).
+ *     HTTP request on a stream of its own (`openStream('follower', 'session-call')`), or call
+ *     frames on the host-dialed socket while that is the link (leader-links.ts).
  *   - the deletes this leader made of the host's sessions (leader-drops.ts): sent when one is made
  *     and again each time the channel links, until the host's `drop` record answers each one.
  */
 import type { Duplex } from 'node:stream'
-import { attachLeaderChannel, isChannelFrame, type AppliedFact, type ChannelCursor, type ChannelFrame, type ChannelLink } from './channel.js'
+import { attachLeaderChannel, isChannelFrame, type AppliedFact, type ChannelCursor, type ChannelFrame, type ChannelLink, type PermitPair } from './channel.js'
 import { channelClassOf, sessionIdOf } from './event-classes.js'
 import { EventNames } from '../event-bus.js'
-import { HOST_CHANNEL_PATH, HOST_SESSIONS_PATH, type LiveState } from './host-api.js'
+import { HOST_SESSIONS_PATH, type LiveState } from './host-api.js'
 import { SESSION_JUDGE_CAP } from './switch.js'
+import { answerOf, dialOverStream, requestOverStream, type ChannelSocket, type HostCallAnswer } from './leader-links.js'
 import type { HostChannelBatch, HostChannelBatchResult } from '../session-tracker.js'
 import type { SessionRecord } from '../types.js'
 
-/** A text link: a WebSocket in production, anything that carries whole frames in tests. */
-export interface ChannelSocket {
-  send(text: string): void
-  close(why?: string): void
-  onMessage(fn: (text: string) => void): void
-  onClose(fn: () => void): void
-}
-
-export interface HostCallAnswer { ok: boolean; value?: unknown; error?: string; why?: string; [k: string]: unknown }
+export { HostRequestNotSent, requestNotSent, type ChannelSocket, type HostCallAnswer } from './leader-links.js'
 
 export interface LeaderSideDeps {
   walnutId(): Promise<string>
-  /** The lead this leader holds on the host (its epoch): the channel's permit number. */
-  permitNumber(hostId: string): number
+  /** This leader's standing on the host (channel.ts PermitPair): the permit's number and its claim epoch there. */
+  permit(hostId: string): PermitPair
   /** Is the switch on now? */
   flagOn(): Promise<boolean>
   /** A byte stream to the server on `hostKey`, through its daemon; throws when it is not connected. */
@@ -93,6 +90,8 @@ interface HostState {
   resyncAt: Map<string, number>
   /** Runs while the link is down: past it, the host's live state reads unknown here (R2-M1). */
   lostTimer: ReturnType<typeof setTimeout> | null
+  /** The current socket is one the host dialed into the door (adopt): kept whatever the daemon link says, never redialed. */
+  dialedIn: boolean
 }
 
 /** A session's whole row is asked for again at most this often. */
@@ -106,20 +105,6 @@ function startedOf(hostId: string, sid: string, row: Record<string, unknown>): R
   return { sessionId: sid, claudeSessionId: sid, taskId: str(row.taskId), project: str(row.project) ?? '', host: hostId }
 }
 
-/** A request that never left this server (no stream to the host): the host cannot have taken it. */
-export class HostRequestNotSent extends Error {
-  readonly notSent = true
-  constructor(hostKey: string, cause: unknown) {
-    super(`the request did not reach the host ${hostKey}: ${cause instanceof Error ? cause.message : String(cause)}`)
-    this.name = 'HostRequestNotSent'
-  }
-}
-
-/** Did this error come from a request that never left this server? */
-export function requestNotSent(err: unknown): boolean {
-  return !!err && typeof err === 'object' && (err as { notSent?: unknown }).notSent === true
-}
-
 export function createLeaderSide(deps: LeaderSideDeps) {
   const hosts = new Map<string, HostState>()
   let flag = false
@@ -129,7 +114,7 @@ export function createLeaderSide(deps: LeaderSideDeps) {
   const stateOf = (hostKey: string): HostState => {
     let s = hosts.get(hostKey)
     if (!s) {
-      s = { connected: false, judges: false, socket: null, dialing: false, attempt: 0, timer: null, channel: null, resyncAt: new Map(), lostTimer: null }
+      s = { connected: false, judges: false, socket: null, dialing: false, attempt: 0, timer: null, channel: null, resyncAt: new Map(), lostTimer: null, dialedIn: false }
       hosts.set(hostKey, s)
     }
     return s
@@ -137,9 +122,10 @@ export function createLeaderSide(deps: LeaderSideDeps) {
   /**
    * The channel is kept while the host is linked and runs its sessions, whatever the switch says
    * now: a session the leader handed it before the switch went off still reports through it. The
-   * switch decides only where a new start goes (hostJudges).
+   * switch decides only where a new start goes (hostJudges). A socket the host dialed in is kept
+   * whatever the daemon link says: the host proved itself at the door (host-door.ts).
    */
-  const wanted = (s: HostState): boolean => !stopped && s.connected && s.judges
+  const wanted = (s: HostState): boolean => !stopped && ((s.dialedIn && !!s.socket) || (s.connected && s.judges))
 
   /** One step after the commit: a throw is logged, never closes the link (the position is already past it). */
   function after(hostId: string, what: string, sid: string, fn: () => void): void {
@@ -272,8 +258,14 @@ export function createLeaderSide(deps: LeaderSideDeps) {
   function closeLink(s: HostState, why: string): void {
     if (s.timer) { clearTimeout(s.timer); s.timer = null }
     if (s.lostTimer) { clearTimeout(s.lostTimer); s.lostTimer = null }
+    dropSocket(s, why)
+  }
+
+  /** Close the current socket (its channel first), leaving the timers as they are. */
+  function dropSocket(s: HostState, why: string): void {
     const sock = s.socket
     s.socket = null
+    s.dialedIn = false
     s.channel?.onClose()
     s.channel = null
     try { sock?.close(why) } catch { /* gone */ }
@@ -286,51 +278,12 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     s.dialing = true
     void (async () => {
       walnutId ??= await deps.walnutId()
-      return (deps.dial ?? defaultDial)(hostKey)
+      return (deps.dial ?? ((k: string) => dialOverStream(deps.openStream, k)))(hostKey)
     })().then((sock) => {
       s.dialing = false
-      if (!wanted(s)) { try { sock.close('not_wanted') } catch { /* gone */ } return }
-      s.socket = sock
-      if (s.lostTimer) { clearTimeout(s.lostTimer); s.lostTimer = null }
-      const link: ChannelLink = {
-        send: (frame: ChannelFrame) => sock.send(JSON.stringify(frame)),
-        close: (why?: string) => sock.close(why),
-      }
-      const channel = attachLeaderChannel(link, {
-        walnutId: walnutId!,
-        hostId: hostKey,
-        permitNumber: () => deps.permitNumber(hostKey),
-        loadCursor: deps.loadCursor,
-        apply: applyRecs,
-        applyRows,
-        onFlow: (hostId, sid, name, data, to) => {
-          // A text delta of a session this host owns, naming that session, or nothing (M1).
-          if (!hostsOwn(hostId || hostKey, sid, new Set()) || sessionIdOf(name, data) !== sid) return
-          try { deps.emit(name, data, { late: false, ...(to ? { to } : {}) }) } catch { /* a flow event is never kept */ }
-        },
-        onLog: deps.log,
-      })
-      s.channel = channel
-      sock.onMessage((text) => {
-        let frame: unknown
-        try { frame = JSON.parse(text) } catch { return }
-        if (!isChannelFrame(frame)) return
-        if (frame.op === 'hello') {
-          s.attempt = 0
-          void flushDrops(hostKey)
-          try { deps.onLinked?.(hostKey) } catch (err) { deps.log('warn', 'session channel: what waited for the host was not sent', { host: hostKey, error: err instanceof Error ? err.message : String(err) }) }
-        }
-        channel.onFrame(frame)
-      })
-      sock.onClose(() => {
-        if (s.socket !== sock) return
-        s.socket = null
-        channel.onClose()
-        if (s.channel === channel) s.channel = null
-        deps.log('info', 'session channel: the link to the host closed', { host: hostKey })
-        armLost(hostKey, s)
-        schedule(hostKey, s)
-      })
+      // Not wanted any more, or the host dialed in meanwhile: a host-dialed link is never replaced by a dial of ours.
+      if (!wanted(s) || s.socket) { try { sock.close(s.socket ? 'replaced' : 'not_wanted') } catch { /* gone */ } return }
+      bind(hostKey, s, sock)
     }, (err: unknown) => {
       s.dialing = false
       deps.log('warn', 'session channel: dialing the host failed; trying again', { host: hostKey, error: err instanceof Error ? err.message : String(err) })
@@ -338,45 +291,61 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     })
   }
 
-  async function defaultDial(hostKey: string): Promise<ChannelSocket> {
-    const stream = await deps.openStream(hostKey, 'session-channel')
-    const { WebSocket } = await import('#ws')
-    const ws = new WebSocket(`ws://host-server${HOST_CHANNEL_PATH}`, { createConnection: () => stream } as never)
-    // The host speaks first (its hello), possibly in the same read as the upgrade's answer: frames
-    // are held from the start until the channel takes them, and so is a close.
-    const held: string[] = []
-    let onText: ((text: string) => void) | null = null
-    let closed = false
-    let onGone: (() => void) | null = null
-    ws.on('message', (data) => { const text = String(data); if (onText) onText(text); else held.push(text) })
-    ws.on('close', () => { closed = true; onGone?.() })
-    ws.on('error', () => { /* a close follows */ })
-    await new Promise<void>((resolve, reject) => {
-      ws.once('open', () => resolve())
-      ws.once('error', reject)
-      ws.once('unexpected-response', (_req: unknown, res: { statusCode?: number }) => reject(new Error(`the host refused the session channel (HTTP ${res.statusCode ?? '?'})`)))
-      ws.once('close', () => reject(new Error('the host closed the session channel before it opened')))
-    })
-    return {
-      send: (text) => ws.send(text),
-      close: (why) => { try { ws.close(1000, (why ?? '').slice(0, 100)) } catch { ws.terminate() } },
-      onMessage: (fn) => { onText = fn; for (const text of held.splice(0)) fn(text) },
-      onClose: (fn) => { onGone = fn; if (closed) fn() },
+  /** Speak the channel on `sock`, now this host's one link. */
+  function bind(hostKey: string, s: HostState, sock: ChannelSocket): void {
+    s.socket = sock
+    s.dialedIn = sock.kind === 'host-dialed'
+    if (s.lostTimer) { clearTimeout(s.lostTimer); s.lostTimer = null }
+    const link: ChannelLink = {
+      send: (frame: ChannelFrame) => sock.send(JSON.stringify(frame)),
+      close: (why?: string) => sock.close(why),
     }
+    const channel = attachLeaderChannel(link, {
+      walnutId: walnutId!,
+      hostId: hostKey,
+      permit: () => deps.permit(hostKey),
+      loadCursor: deps.loadCursor,
+      apply: applyRecs,
+      applyRows,
+      onFlow: (hostId, sid, name, data, to) => {
+        // A text delta of a session this host owns, naming that session, or nothing (M1).
+        if (!hostsOwn(hostId || hostKey, sid, new Set()) || sessionIdOf(name, data) !== sid) return
+        try { deps.emit(name, data, { late: false, ...(to ? { to } : {}) }) } catch { /* a flow event is never kept */ }
+      },
+      onLog: deps.log,
+    })
+    s.channel = channel
+    sock.onMessage((text) => {
+      let frame: unknown
+      try { frame = JSON.parse(text) } catch { return }
+      if (!isChannelFrame(frame)) return
+      if (frame.op === 'hello') {
+        s.attempt = 0
+        void flushDrops(hostKey)
+        try { deps.onLinked?.(hostKey) } catch (err) { deps.log('warn', 'session channel: what waited for the host was not sent', { host: hostKey, error: err instanceof Error ? err.message : String(err) }) }
+      }
+      channel.onFrame(frame)
+    })
+    sock.onClose(() => {
+      channel.onClose()
+      if (s.channel === channel) s.channel = null
+      if (s.socket !== sock) return
+      s.socket = null
+      s.dialedIn = false
+      deps.log('info', 'session channel: the link to the host closed', { host: hostKey, kind: sock.kind ?? 'leader-dialed' })
+      armLost(hostKey, s)
+      schedule(hostKey, s)
+    })
   }
 
   async function defaultRequest(hostKey: string, route: string, body: unknown, timeoutMs: number): Promise<HostCallAnswer> {
-    let stream: Duplex
-    // No stream: nothing reached the host (not connected, the stream refused). The caller knows the
-    // host never saw it, unlike a request sent whose answer was lost.
-    try { stream = await deps.openStream(hostKey, 'session-call') } catch (err) { throw new HostRequestNotSent(hostKey, err) }
-    const { requestOver } = await import('../host-server/request-over.js')
-    const res = await requestOver(stream, 'POST', route, Buffer.from(JSON.stringify(body ?? {})), timeoutMs)
-    const text = await res.text()
-    let answer: HostCallAnswer
-    try { answer = JSON.parse(text) as HostCallAnswer } catch { answer = { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}` } }
-    if (!answer || typeof answer !== 'object') answer = { ok: false, error: `HTTP ${res.status}` }
-    return answer
+    // A host-dialed socket is the link: its calls ride it as frames (the daemon link may be gone).
+    const sock = hosts.get(hostKey)?.socket
+    if (sock?.call) {
+      const r = await sock.call('POST', route, body ?? {}, timeoutMs)
+      return typeof r.body === 'object' && r.body !== null ? r.body as HostCallAnswer : answerOf(r.status, JSON.stringify(r.body ?? null))
+    }
+    return requestOverStream(deps.openStream, hostKey, route, body, timeoutMs)
   }
 
   const request = (hostKey: string, op: string, body: unknown, timeoutMs: number): Promise<HostCallAnswer> =>
@@ -424,6 +393,43 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     },
     /** Is the channel to `hostKey` linked now? */
     linked(hostKey: string): boolean { return !!hosts.get(hostKey)?.socket },
+    /** Which side opened the link to `hostKey` now, or null when none is up. */
+    linkKind(hostKey: string): 'leader-dialed' | 'host-dialed' | null {
+      const sock = hosts.get(hostKey)?.socket
+      return sock ? (sock.kind ?? 'leader-dialed') : null
+    },
+    /**
+     * A socket `hostKey` dialed into this leader's door, after both proved who they are (host-door.ts):
+     * it is the link now. The link before it (leader-dialed or an earlier dial-in) is closed
+     * `replaced`, and no dial of the leader's runs while it is up. False when this side is stopped.
+     */
+    adopt(hostKey: string, sock: ChannelSocket): boolean {
+      if (stopped) { try { sock.close('stopping') } catch { /* gone */ } return false }
+      // The door is open only while the switch is on: read it again for the next start.
+      void deps.flagOn().then((on) => { if (!stopped) flag = on }, () => {})
+      const s = stateOf(hostKey)
+      if (s.timer) { clearTimeout(s.timer); s.timer = null }
+      if (s.socket) {
+        deps.log('info', 'session channel: the host dialed in; the link before it is replaced', { host: hostKey, was: s.socket.kind ?? 'leader-dialed' })
+        dropSocket(s, 'replaced')
+      }
+      s.attempt = 0
+      const dialed: ChannelSocket = { ...sock, kind: 'host-dialed' }
+      // Held as the link at once (no dial of ours starts meanwhile); the socket holds its frames
+      // until the channel takes them (host-door.ts).
+      s.socket = dialed
+      s.dialedIn = true
+      if (walnutId) { bind(hostKey, s, dialed); return true }
+      void deps.walnutId().then((id) => {
+        walnutId ??= id
+        if (s.socket === dialed && !stopped) bind(hostKey, s, dialed)
+      }, (err: unknown) => {
+        deps.log('warn', 'session channel: a host-dialed link was not taken (no Walnut id)', { host: hostKey, error: err instanceof Error ? err.message : String(err) })
+        if (s.socket === dialed) { s.socket = null; s.dialedIn = false }
+        try { sock.close('error') } catch { /* gone */ }
+      })
+      return true
+    },
     /** One allowlisted call on a session the host runs (POST /host-api/sessions/call): its value, or a throw. */
     async callHost(hostKey: string, body: { sid: string; target: string; member: string; args: unknown[] }): Promise<unknown> {
       const a = await request(hostKey, 'call', body, deps.callTimeoutMs ?? 60_000)

@@ -43,6 +43,8 @@ import { DAEMON_LINK_KINDS, type DaemonLinkKind } from '../../../src/providers/d
 import { CLOUD_BOX_HOST_ALIAS } from '../../../src/core/hosts/cloud-box-host.js'
 import { TERMINAL_ROUTE_BY_TRANSPORT, hostHasSshRoute, hostRouteFields, hostTerminalNow, terminalRouteKind } from '../../../src/core/hosts/host-status.js'
 import { resolveServiceTarget } from '../../../src/core/session-service-preview.js'
+import { createLeaderSide } from '../../../src/core/session-channel/leader-side.js'
+import { SESSION_LINK_KINDS, type ChannelSocket, type SessionLinkKind } from '../../../src/core/session-channel/leader-links.js'
 
 const ROOT = path.resolve(__dirname, '../../..')
 
@@ -241,3 +243,55 @@ describe('every branch on the connection kind is a decided one', () => {
     expect(over, 'more branches in a listed file: check each still gives every kind the feature, then raise its max').toEqual([])
   })
 })
+
+/**
+ * The session channel's links (src/core/session-channel/leader-links.ts SESSION_LINK_KINDS): a
+ * host that runs its sessions is reached the way the leader dialed it, or over the socket the host
+ * dialed into the leader's door. Each kind carries the channel and every host call; only what must
+ * ride the host's authenticated daemon link (the door credential's issue) is said to need it.
+ */
+const SESSION_LINK_FEATURES: Record<SessionLinkKind, { channel: string; calls: string; issue: string }> = {
+  'leader-dialed': { channel: 'a WebSocket on a session-channel stream through the host\'s daemon link', calls: 'one HTTP request per call on a session-call stream', issue: 'over this link (POST /host-api/credential)' },
+  'host-dialed': { channel: 'the socket the host dialed into /host-door, after both proved who they are', calls: 'call/reply frames on the same socket, answered by the host\'s route table', issue: 'never: a credential is issued only over the daemon link, so a host reached only this way keeps the one it holds' },
+}
+
+describe('every kind of session channel link carries the channel and the host calls', () => {
+  it('every kind is classified (read from the source)', () => {
+    expect([...SESSION_LINK_KINDS].sort()).toEqual(Object.keys(SESSION_LINK_FEATURES).sort())
+  })
+
+  for (const kind of SESSION_LINK_KINDS) {
+    it(`${kind}: a send to a host session takes this link's own way`, async () => {
+      const opened: string[] = []
+      const framed: string[] = []
+      const side = createLeaderSide({
+        walnutId: async () => 'w1', permit: () => ({ permitNumber: 0, epoch: 1 }), flagOn: async () => true,
+        openStream: async (_h, purpose) => { opened.push(purpose); throw new Error('no daemon link in this test') },
+        ...(kind === 'leader-dialed' ? { dial: async () => fakeSocket() } : {}),
+        applyBatch: async () => ({ written: [], skipped: [] }), loadCursor: async () => null,
+        emit: () => {}, noteLive: () => {}, noteRename: () => {}, noteHostJudged: () => {}, ownerOf: () => 'devbox', log: () => {},
+      })
+      try {
+        if (kind === 'host-dialed') side.adopt('devbox', { ...fakeSocket(), kind: 'host-dialed', call: async (_m, route) => { framed.push(route); return { status: 200, body: { ok: true } } } })
+        else await side.noteHost('devbox', { connected: true, judges: true })
+        await vi.waitFor(() => expect(side.linkKind('devbox')).toBe(kind))
+        const sent = side.sendToHost('devbox', { sessionId: 's1', message: 'hi' })
+        if (kind === 'host-dialed') {
+          await expect(sent).resolves.toMatchObject({ ok: true })
+          expect(framed).toEqual(['/host-api/sessions/send'])
+          expect(opened).toEqual([])
+        } else {
+          // The stream way: this test has no daemon link, so the request is said never sent.
+          await expect(sent).rejects.toMatchObject({ notSent: true })
+          expect(opened).toEqual(['session-call'])
+        }
+      } finally {
+        side.stop()
+      }
+    })
+  }
+})
+
+function fakeSocket(): ChannelSocket {
+  return { send: () => {}, close: () => {}, onMessage: () => {}, onClose: () => {} }
+}

@@ -718,6 +718,18 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       }
     }
 
+    // The leader's door addresses its hosts dial (core/session-channel/door-wire.ts): each wss://, or
+    // ws:// to a loopback or private-network address (the host's token is a bearer), path /host-door.
+    const doorUrls = (body.session as { host_door_urls?: unknown } | undefined)?.host_door_urls
+    if (doorUrls !== undefined && doorUrls !== null) {
+      const { doorUrlRefusal } = await import('../../core/session-channel/door-wire.js')
+      const why = !Array.isArray(doorUrls) || doorUrls.length > 8 ? 'a list of at most 8 URLs' : doorUrls.map(doorUrlRefusal).find((x) => x !== null)
+      if (why) {
+        res.status(400).json({ error: `session.host_door_urls: ${why}`, field: 'session.host_door_urls' })
+        return
+      }
+    }
+
     // Whether agents' steps wait for the person (core/approvals/ask-me.ts): the person's own choice,
     // from any of their screens. A session cannot turn the asking off (or on) for itself, and a test
     // browser cannot move the person's switch. A write that carries it back unchanged is fine.

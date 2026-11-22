@@ -155,7 +155,9 @@ const WRITERS: Record<string, Record<string, string>> = {
     'socket.send(JSON.stringify({ ...command, id }))': 'the service handover\'s own commands, a few fields',
   },
   'src/core/session-channel/leader-side.ts': {
-    'send: (frame: ChannelFrame) => sock.send(JSON.stringify(frame)),': 'a session channel frame into the WebSocket below, which rides a daemon stream',
+    'send: (frame: ChannelFrame) => sock.send(JSON.stringify(frame)),': 'a session channel frame into the WebSocket of leader-links.ts, which rides a daemon stream',
+  },
+  'src/core/session-channel/leader-links.ts': {
     'send: (text) => ws.send(text),': 'a WebSocket over openStream: link-stream.ts cuts its bytes into 48 KB pieces',
   },
   'src/providers/daemon-service-ready.ts': {
@@ -170,6 +172,7 @@ const NOT_WRITERS: Record<string, string> = {
   'src/integrations/cloud-bridge-config.ts': 'writes no frame (a probe of the companion)',
   'src/providers/daemon-standalone.ts': 'the daemon itself: what it sends goes to a Walnut server, whose limit is 100 MB',
   'src/commands/net.ts': 'dials the Walnut server, not a daemon',
+  'src/core/session-channel/host-dialer.ts': 'the host dials its leader\'s Walnut server door (/host-door, 64 MB maxPayload), not a daemon',
 }
 
 /** `X.send(<one argument>)` outside comments, with X not this (the method that checks). */

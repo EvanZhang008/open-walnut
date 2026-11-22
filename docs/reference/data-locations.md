@@ -320,6 +320,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `$XDG_STATE_HOME/open-walnut/net/` | machine | yes | This machine's host network identity (always under ~/.local/state) |
 | `$XDG_STATE_HOME/open-walnut/console/` | machine | yes | The console of this machine after it handed the leader over (always under ~/.local/state): the address its leader served, the switch and the console device's token, written at the handover; and which replica holds that address now |
 | `$XDG_STATE_HOME/open-walnut/machine-id` | machine | no | This machine's stable id (always under ~/.local/state): sent in the daemon's hello, and the holder id of a switchable leader's write permission |
+| `$XDG_STATE_HOME/open-walnut/host-credentials/` | machine | yes | This host's door credential for each Walnut it serves (always under ~/.local/state, next to the machine id): the token it dials its leader's door with and the key that proves the leader |
 | `$XDG_STATE_HOME/open-walnut/net-members.json` | machine | no | The companion's list of machines allowed on the host network |
 | `$XDG_STATE_HOME/open-walnut/clone-identity/` | machine | no | Pending clone identity marks of this machine's sessions |
 | `$XDG_STATE_HOME/open-walnut/daemon-previous/` | machine | no | The previous daemon build, kept for a rollback |

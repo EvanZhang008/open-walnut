@@ -9,7 +9,7 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { FactLog, type FactRecord } from '../../../src/core/session-channel/fact-log.js'
-import { HostChannel, attachLeaderChannel, type AppliedFact, type ChannelCursor, type ChannelFrame, type ChannelLink } from '../../../src/core/session-channel/channel.js'
+import { HostChannel, attachLeaderChannel, comparePermit, permitOfResume, type AppliedFact, type ChannelCursor, type ChannelFrame, type ChannelLink } from '../../../src/core/session-channel/channel.js'
 import type { SessionRecord } from '../../../src/core/types.js'
 
 let dir = ''
@@ -67,7 +67,7 @@ function connect(host: HostChannel, leader: Leader, opts: { cutAfterSeq?: number
   }
   const toHost: ChannelLink = { send: (f) => { if (up) queueMicrotask(() => { if (up) hostSide!.onFrame(f) }) }, close: cut }
   leaderSide = attachLeaderChannel(toHost, {
-    walnutId: 'w1', hostId: 'devbox', permitNumber: () => leader.permit, ackEveryMs: 1, now: () => Date.now() + clockOffset,
+    walnutId: 'w1', hostId: 'devbox', permit: () => ({ permitNumber: 0, epoch: leader.permit }), ackEveryMs: 1, now: () => Date.now() + clockOffset,
     loadCursor: async () => leader.cursor,
     apply: async (_h, recs, next) => { leader.applied.push(...recs); leader.cursor = next },
     applyRows: async (_h, rows, next) => { leader.snapshots++; for (const r of rows) leader.rows.set(r.claudeSessionId, r); leader.cursor = next },
@@ -278,7 +278,7 @@ describe('late facts, on the leader\'s clock', () => {
     const applied: AppliedFact[] = []
     const sent: ChannelFrame[] = []
     const side = attachLeaderChannel({ send: (f) => { sent.push(f) }, close: () => {} }, {
-      walnutId: 'w1', hostId: 'devbox', permitNumber: () => 1, ackEveryMs: 1_000_000, now: () => clock.now,
+      walnutId: 'w1', hostId: 'devbox', permit: () => ({ permitNumber: 0, epoch: 1 }), ackEveryMs: 1_000_000, now: () => clock.now,
       loadCursor: async () => null,
       apply: async (_h, recs) => { applied.push(...recs) },
       applyRows: async () => {},
@@ -339,5 +339,54 @@ describe('late facts, on the leader\'s clock', () => {
     side.onFrame({ ch: 'sf', op: 'facts', recs: [rec(1, T + skew + 30)], sentAt: T + skew + 35 })
     await side.idle()
     expect(applied.map((r) => r.late)).toEqual([false])
+  })
+})
+
+describe('the leader standing: (permitNumber, epoch), compared in that order', () => {
+  it('comparePermit orders by the permit number first, then the epoch', () => {
+    expect(comparePermit({ permitNumber: 1, epoch: 9 }, { permitNumber: 2, epoch: 0 })).toBeLessThan(0)
+    expect(comparePermit({ permitNumber: 2, epoch: 0 }, { permitNumber: 1, epoch: 9 })).toBeGreaterThan(0)
+    expect(comparePermit({ permitNumber: 3, epoch: 4 }, { permitNumber: 3, epoch: 5 })).toBeLessThan(0)
+    expect(comparePermit({ permitNumber: 3, epoch: 5 }, { permitNumber: 3, epoch: 5 })).toBe(0)
+    // A resume from an older leader (no epoch): its one number was the epoch.
+    expect(permitOfResume({ permitNumber: 7 })).toEqual({ permitNumber: 0, epoch: 7 })
+    expect(permitOfResume({ permitNumber: 2, epoch: 1 })).toEqual({ permitNumber: 2, epoch: 1 })
+    expect(permitOfResume({ permitNumber: -1, epoch: 1 })).toBeNull()
+    expect(permitOfResume({ permitNumber: 1.5 })).toBeNull()
+  })
+
+  it('a resume is refused below the highest pair seen; a higher permit number wins whatever its epoch', async () => {
+    const { log, host } = await hostOf()
+    const resume = (permitNumber: number, epoch?: number) => new Promise<string>((resolve) => {
+      const side = host.attach({ send: (f) => { if (f.op === 'rows' || f.op === 'facts') resolve('taken') }, close: (w) => resolve(w ?? '') })
+      side.onFrame({ ch: 'sf', op: 'resume', walnutId: 'w1', hostId: 'devbox', permitNumber, ...(epoch === undefined ? {} : { epoch }), logId: log.logId, after: -1 })
+    })
+    log.append('s1', 'session:tool-use', {})
+    await log.flush()
+    expect(await resume(1, 5)).toBe('taken')
+    expect(log.permitPair).toEqual({ permitNumber: 1, epoch: 5 })
+    expect(await resume(1, 4)).toBe('stale_permit')
+    // An older leader's resume reads (0, 9): below (1, 5).
+    expect(await resume(9)).toBe('stale_permit')
+    expect(await resume(2, 0)).toBe('taken')
+    expect(log.permitPair).toEqual({ permitNumber: 2, epoch: 0 })
+    // The epoch an older build reads stays in `permit`.
+    expect(log.permit).toBe(0)
+    await log.close()
+  })
+
+  it('a log an older build wrote (one number) reads as (0, n), and an older build still reads its epoch', async () => {
+    await fsp.writeFile(path.join(dir, 'facts-w1.state.json'), JSON.stringify({ v: 1, logId: 'abcd', acked: 0, permit: 6, sseq: {} }))
+    const log = await FactLog.open({ dir, walnutId: 'w1', flushMs: 1, durable: false })
+    expect(log.permitPair).toEqual({ permitNumber: 0, epoch: 6 })
+    await log.notePermit({ permitNumber: 0, epoch: 5 })
+    expect(log.permitPair).toEqual({ permitNumber: 0, epoch: 6 })
+    await log.notePermit({ permitNumber: 3, epoch: 2 })
+    await log.close()
+    const state = JSON.parse(await fsp.readFile(path.join(dir, 'facts-w1.state.json'), 'utf8'))
+    expect(state).toMatchObject({ permit: 2, permitNumber: 3 })
+    const again = await FactLog.open({ dir, walnutId: 'w1', flushMs: 1, durable: false })
+    expect(again.permitPair).toEqual({ permitNumber: 3, epoch: 2 })
+    await again.close()
   })
 })

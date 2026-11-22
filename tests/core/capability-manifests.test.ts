@@ -25,6 +25,15 @@ import {
 import { DAEMON_TUNNEL_PATH } from '../../src/core/hosts/cloud-box-host.js'
 import { BRIDGE_SESSION_STREAM_PATH } from '../../src/web/ws/bridge-session-stream.js'
 import { listTsFiles } from '../helpers/cloud-mode-scan.js'
+import { LEADER_DOORS } from '../../src/core/leader-doors.js'
+
+/**
+ * The credential call each leader door's branch hands the upgrade with (core/leader-doors.ts): a
+ * leader door is no capability's, and it checks its own credential, not a companion's device token.
+ */
+const LEADER_DOOR_VERIFY: Record<string, string> = {
+  '/host-door': 'verify: () => verifyHostDoorUpgrade(url, request)',
+}
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -205,7 +214,7 @@ describe('capability manifests', () => {
   })
 
   it('every way in is declared once, says who may come in, and its check is in the code of the file it names', () => {
-    const all = MANIFESTS.flatMap((m) => [...m.doors, ...m.routes].map((e) => ({ m: m.name, e })))
+    const all = [...MANIFESTS.flatMap((m) => [...m.doors, ...m.routes].map((e) => ({ m: m.name as string, e }))), ...LEADER_DOORS.map((e) => ({ m: 'leader door', e }))]
     const paths = all.map(({ e }) => e.path)
     expect(new Set(paths).size).toBe(paths.length)
     for (const { m, e } of all) {
@@ -239,6 +248,13 @@ describe('capability manifests', () => {
     for (const b of branches) {
       for (const t of b[0].matchAll(/door === ('([^']+)'|[A-Z_]+)/g)) named.add(t[2] ?? consts[t[1]!] ?? `unknown ${t[1]}`)
       const block = blockAt(handler, b.index!)
+      const leaderDoor = [...b[0].matchAll(/door === '([^']+)'/g)].map((t) => t[1]!).find((p) => p in LEADER_DOOR_VERIFY)
+      if (leaderDoor) {
+        // A leader door hands the socket to its module with its own credential check, to run first.
+        expect(block, b[0]).toContain(LEADER_DOOR_VERIFY[leaderDoor]!)
+        expect(block, b[0]).not.toMatch(/wss!?\.handleUpgrade\(/)
+        continue
+      }
       expect(block, b[0]).toContain('verifyCloudUpgrade(url, request)')
       // A socket is handed on only after a credential call earlier in the branch, or to a
       // module that is given the check to run first.
@@ -246,7 +262,8 @@ describe('capability manifests', () => {
       for (const h of block.matchAll(/(?:wss!?\.handleUpgrade|upgradeFeatureNode)\(/g)) expect(h.index!, `${b[0]}: ${h[0]} before any check`).toBeGreaterThan(firstCheck)
       for (const h of block.matchAll(/handle\w+Upgrade\(request, socket, head, \{([^}]*)\}/g)) expect(h[1], h[0]).toContain('verify: () => verifyCloudUpgrade(url, request)')
     }
-    expect(named).toEqual(new Set(MANIFESTS.flatMap((m) => m.doors.map((d) => d.path))))
+    expect(named).toEqual(new Set([...MANIFESTS.flatMap((m) => m.doors.map((d) => d.path)), ...LEADER_DOORS.map((d) => d.path)]))
+    expect(Object.keys(LEADER_DOOR_VERIFY).sort()).toEqual(LEADER_DOORS.map((d) => d.path).sort())
   })
 
   it('a door is shut on every server that lacks its capability, and an unknown path is never a door', () => {
@@ -261,6 +278,8 @@ describe('capability manifests', () => {
     for (const p of ['/ws', '/', '/bridge/', '/BRIDGE', '/bridge?x', '/daemon-tunnel/x', '']) expect(openSocketDoor(p, all), p).toBeNull()
     // The Mac and a host replica have no capability, so no door at all.
     for (const p of MANIFESTS.flatMap((m) => m.doors.map((d) => d.path))) expect(openSocketDoor(p, new Set()), p).toBeNull()
+    // A leader door is shut until the code that serves it opens it, whatever the capabilities.
+    for (const d of LEADER_DOORS) expect(openSocketDoor(d.path, all), d.path).toBeNull()
   })
 
   it('everything server.ts mounts outside /api is a declared route or named here as no capability\'s', () => {

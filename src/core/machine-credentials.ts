@@ -34,7 +34,7 @@
 import { liveOwnerOf, ownerRecord, proofClaim, recordForToken, type DeviceActor } from './device-actor.js'
 import { newMachineRecord, notifyRevoked } from './device-auth.js'
 import {
-  daemonKeyFor, isMacReport, isPhoneRecord, platformFromInfo, readRegistry, updateAuth,
+  daemonKeyFor, isHostCredentialRecord, isMacReport, isPhoneRecord, platformFromInfo, readRegistry, updateAuth,
   type CompanionOwner, type DeviceRecord, type DeviceRegistry, type LockedAuth,
 } from './device-store.js'
 import { PRIMARY_MACHINE_CREDENTIAL } from './device-actor.js'
@@ -94,7 +94,7 @@ export function machineCredentialDecision(
   if (isPhoneRecord(me)) return { ok: false, status: 403, code: 'phone_cannot_mint', error: OWNER_ONLY }
   const existing = reg.devices.find((d) => d.name === input.name)
   const notMachine: Refusal = { ok: false, status: 400, code: 'not_machine', error: NOT_MACHINE }
-  const legacy = reg.devices.filter((d) => d.kind === 'machine' && liveOwnerOf(d, reg.devices) === undefined)
+  const legacy = reg.devices.filter((d) => d.kind === 'machine' && !isHostCredentialRecord(d) && liveOwnerOf(d, reg.devices) === undefined)
   const recorded = ownerRecord(reg)
   if (recorded) {
     if (recorded !== me) {

@@ -86,6 +86,28 @@ export interface DeviceRecord {
    * extension, a browser not renewed since this field came).
    */
   browserSignIn?: BrowserSignInState
+  /**
+   * Machine credentials only: 'leader' = a host's door credential this leader issued for its own
+   * host (core/session-channel/host-credentials.ts), named `host-<machineId>`. Only the leader's
+   * door (`/host-door`) takes it: verifyDeviceToken never answers it (so /bridge, /ws and every
+   * REST route refuse it), and no pairing or owner rule touches it. Absent: a companion's own.
+   */
+  issuer?: 'leader'
+  /** A host door credential: the host's stable machine id (machine-id.ts), its Walnut, and the leader's host key for it. */
+  machineId?: string
+  walnutId?: string
+  hostKey?: string
+  /** A host door credential: S, the key the leader proves itself with at the door (32 bytes hex; auth.json is leader data, sensitive). */
+  verifyKey?: string
+  /** A host door credential: when the token was issued (ISO). */
+  issuedAt?: string
+  /** A host door credential: the token and key a rotation replaced, still taken until `until` (ISO). */
+  previous?: { tokenHash: string; verifyKey: string; until: string }
+}
+
+/** A host's door credential this leader issued (DeviceRecord.issuer): only the leader's door takes it. */
+export function isHostCredentialRecord(d: Pick<DeviceRecord, 'kind' | 'issuer'>): boolean {
+  return d.kind === 'machine' && d.issuer === 'leader'
 }
 
 /** A browser's renewing sign-in (browser-sign-in.ts). */

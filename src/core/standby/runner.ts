@@ -174,6 +174,17 @@ export interface StandbyRunner {
   runOnce(): Promise<BatchOutcome | null>
 }
 
+let running: StandbyRunner | null = null
+
+/**
+ * The standby runner this server started, or null (no standby: the experiment off, an ephemeral
+ * server). A caller that wants its change in the standby copy now takes one batch with runOnce;
+ * null, or a runOnce that resolves null (no standby.dir), is nothing to wait for, never a failure.
+ */
+export function standbyRunner(): StandbyRunner | null {
+  return running
+}
+
 export function startStandbyRunner(deps?: StandbyRunnerDeps): StandbyRunner {
   let stopped = false
   let live: { stop: () => void; runOnce: () => Promise<BatchOutcome | null> } | null = null
@@ -311,7 +322,7 @@ export function startStandbyRunner(deps?: StandbyRunnerDeps): StandbyRunner {
     bus.subscribe(SUBSCRIBER, () => { void reconcile() }, { global: true, interest: ['config:changed'] })
   })
 
-  return {
+  const runner: StandbyRunner = {
     reconcile,
     running: () => live !== null,
     runOnce: () => live ? live.runOnce() : Promise.resolve(null),
@@ -319,7 +330,10 @@ export function startStandbyRunner(deps?: StandbyRunnerDeps): StandbyRunner {
       stopped = true
       live?.stop()
       live = null
+      if (running === runner) running = null
       void import('../event-bus.js').then(({ bus }) => bus.unsubscribe(SUBSCRIBER)).catch(() => {})
     },
   }
+  running = runner
+  return runner
 }

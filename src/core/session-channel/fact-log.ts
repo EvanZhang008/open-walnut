@@ -33,6 +33,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { TURN_DETAIL_FACTS, TURN_END_FACT } from './event-classes.js'
+import { comparePermit, isPermitPair, type PermitPair } from './channel.js'
 
 export interface FactRef { epoch?: string; v?: number; bytes: number }
 
@@ -67,7 +68,12 @@ export interface FactLogOptions {
   log?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 }
 
-interface LogState { v: 1; logId: string; acked: number; permit: number; sseq: Record<string, number> }
+/**
+ * `permit` and `permitNumber`: the highest leader standing seen (channel.ts PermitPair), kept as its
+ * epoch in `permit` (the field an older build wrote and reads: its one number was the epoch) and
+ * its permit number beside it (absent in an older file: 0).
+ */
+interface LogState { v: 1; logId: string; acked: number; permit: number; permitNumber?: number; sseq: Record<string, number> }
 
 const SAFE_ID = /^[A-Za-z0-9_.-]{1,128}$/
 
@@ -103,7 +109,8 @@ export class FactLog {
     try {
       const raw = JSON.parse(await fsp.readFile(stateFile, 'utf8')) as Partial<LogState>
       if (raw?.v === 1 && typeof raw.logId === 'string') {
-        state = { v: 1, logId: raw.logId, acked: Number(raw.acked) || 0, permit: Number(raw.permit) || 0, sseq: raw.sseq && typeof raw.sseq === 'object' ? raw.sseq : {} }
+        const permitNumber = Number(raw.permitNumber) || 0
+        state = { v: 1, logId: raw.logId, acked: Number(raw.acked) || 0, permit: Number(raw.permit) || 0, ...(permitNumber > 0 ? { permitNumber } : {}), sseq: raw.sseq && typeof raw.sseq === 'object' ? raw.sseq : {} }
       }
     } catch { /* a new log */ }
     const { records, validBytes, totalBytes } = await readRecords(file)
@@ -129,7 +136,10 @@ export class FactLog {
   /** The lowest seq still in the file (head + 1 when it holds none). */
   get floor(): number { return this.firstSeq }
   get acked(): number { return this.state.acked }
+  /** The epoch of the highest leader standing seen (the one number an older build kept). */
   get permit(): number { return this.state.permit }
+  /** The highest leader standing seen: (0, n) for a log an older build wrote. */
+  get permitPair(): PermitPair { return { permitNumber: this.state.permitNumber ?? 0, epoch: this.state.permit } }
   get sizeBytes(): number { return this.bytes }
   private get file(): string { return path.join(this.o.dir, `facts-${this.o.walnutId}.ndjson`) }
   private get stateFile(): string { return path.join(this.o.dir, `facts-${this.o.walnutId}.state.json`) }
@@ -182,10 +192,12 @@ export class FactLog {
     })
   }
 
-  /** A leader with this permit number spoke: remember the highest. */
-  async notePermit(n: number): Promise<void> {
-    if (!Number.isSafeInteger(n) || n <= this.state.permit) return
-    this.state.permit = n
+  /** A leader with this standing spoke: remember the highest (channel.ts comparePermit). */
+  async notePermit(p: PermitPair): Promise<void> {
+    if (!isPermitPair(p) || comparePermit(p, this.permitPair) <= 0) return
+    this.state.permit = p.epoch
+    if (p.permitNumber > 0) this.state.permitNumber = p.permitNumber
+    else delete this.state.permitNumber
     await this.serial(() => this.saveState())
   }
 

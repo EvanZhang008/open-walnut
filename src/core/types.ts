@@ -2033,6 +2033,11 @@ export interface Config {
     /** Live Claude Code processes on this machine before the longest-quiet idle ones exit and
      *  automatic starts wait. Default one per 2.4 GB of memory (4 to 64), 0 = no limit. */
     local_live_limit?: number;
+    /** The leader's door addresses its hosts dial (experiment host_runs_sessions;
+     *  core/session-channel/door-wire.ts): each wss://, or ws:// to a loopback or private-network
+     *  address, path /host-door. Handed to each host with its door credential. Empty: hosts do not
+     *  dial, the leader dials them as before. */
+    host_door_urls?: string[];
     /** Maximum number of idle sessions per host before evicting the oldest.
      *  Default: local=30, remote=40. Set to 0 to disable idle limit. */
     max_idle?: number;

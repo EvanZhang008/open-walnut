@@ -28,7 +28,7 @@ import {
 } from './device-actor.js'
 import { resetClaimForTesting } from './device-claim.js'
 import {
-  accessExpired, cleanSelfInfo, freshRecord, hashesEqual, isPhoneRecord, ownByProof, platformFromInfo, readRegistry, readRegistryAndRevoked, recordForToken, resetInstanceIdForTesting,
+  accessExpired, cleanSelfInfo, freshRecord, hashesEqual, isHostCredentialRecord, isPhoneRecord, ownByProof, platformFromInfo, readRegistry, readRegistryAndRevoked, recordForToken, resetInstanceIdForTesting,
   sha256Hex, tombstone, updateAuth, validateDeviceName,
   type DevicePlatform, type DeviceRecord, type DeviceRegistry, type DeviceSelfInfo, type LockedAuth,
 } from './device-store.js'
@@ -86,8 +86,9 @@ function applyProof(auth: LockedAuth, by: DeviceActor, proof: string | undefined
 function goneWith(auth: LockedAuth, target: DeviceRecord): DeviceRecord[] {
   const devices = auth.devices
   const owner = ownsMachineCredentials(devices, target)
+  // A host's door credential this leader issued belongs to no device: no pairing takes it with it.
   return devices.filter((d) => d === target
-    || (owner && d.kind === 'machine' && (liveOwnerOf(d, devices) === target || liveOwnerOf(d, devices) === undefined)))
+    || (owner && d.kind === 'machine' && !isHostCredentialRecord(d) && (liveOwnerOf(d, devices) === target || liveOwnerOf(d, devices) === undefined)))
 }
 
 /**
@@ -112,7 +113,7 @@ function removeGone(auth: LockedAuth, gone: readonly DeviceRecord[], markRefresh
 function makeOwner(auth: LockedAuth, target: DeviceRecord): string[] {
   if (target.kind === 'machine') throw new Error(`${target.name} is a computer's connection, not a paired device.`)
   if (isPhoneRecord(target)) throw new Error(`${target.name} is a phone; the owner is the Mac this cloud companion belongs to.`)
-  const gone = auth.devices.filter((d) => d.kind === 'machine' && d.ownerId !== target.id)
+  const gone = auth.devices.filter((d) => d.kind === 'machine' && !isHostCredentialRecord(d) && d.ownerId !== target.id)
   auth.devices = auth.devices.filter((d) => !gone.includes(d))
   auth.owner = { id: target.id!, via: 'operator' }
   return gone.map((d) => d.name)
@@ -251,6 +252,8 @@ export async function verifyDeviceToken(token: string, opts: { touch?: boolean }
   }
   // A browser's access token lasts hours; its page renews it (browser-sign-in.ts).
   if (accessExpired(matched)) return null
+  // A host's door credential opens the leader's door only (host-credentials.ts verifies it there).
+  if (isHostCredentialRecord(matched)) return null
 
   const now = Date.now()
   const lastWrite = lastUsedWriteAt.get(matched.name) ?? 0

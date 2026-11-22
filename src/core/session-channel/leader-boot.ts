@@ -3,6 +3,10 @@
  * data, the host-server manager's views and links, this server's bus. Started by the web server on
  * every leader: it links only to hosts that name session-judge-v1, and with the switch off every
  * new start is 'legacy' (judge-of.ts), while the sessions a host already runs keep reporting.
+ *
+ * With the switch on it also serves the door hosts dial into (host-door.ts, `/host-door`) and
+ * issues each host that names host-door-v1 its door credential (leader-issue.ts); off, the door is
+ * shut and nothing is issued.
  */
 import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../event-bus.js'
@@ -11,8 +15,38 @@ import { hostRunsSessionsNow } from './switch.js'
 import { reemitDestinations } from './event-classes.js'
 import { forgetHostJudged, judgingHostOf, noteHostJudged, setHostJudgeProbe } from '../sessions/judge-of.js'
 import { leaderDropHosts, leaderDropsOf } from './leader-drops.js'
+import type { PermitPair } from './channel.js'
+import { leaderPermitNumberForHosts } from './leader-permit.js'
 
 let active: LeaderSide | null = null
+let standing: ((hostKey: string) => LeaderStanding) | null = null
+let pushDoors: ((doors: readonly string[]) => Promise<HostDoorsPush>) | null = null
+
+/**
+ * This leader's standing toward a host (channel.ts PermitPair) and who holds the write permission:
+ * the permit's record number (leader-permit.ts, the one read of it) and holder (B1,
+ * src/core/leader/switch/), 0 and this machine's id while the permit system is off, and the
+ * leader's claim epoch on that host (primary-leader.ts).
+ */
+export interface LeaderStanding { pair: PermitPair; holder: string }
+
+/** The running leader side's standing toward `hostKey`, or null when the leader side is not on. */
+export function leaderStandingOf(hostKey: string): LeaderStanding | null {
+  return standing?.(hostKey) ?? null
+}
+
+/** What a doors push reached: hosts told over their dialed socket, over their daemon link, and the ones that did not take it. */
+export interface HostDoorsPush { dialed: string[]; routed: string[]; failed: string[] }
+
+/**
+ * Tell every linked host the door list `doors` now (the leader switch, before it hands over): a
+ * `doors` frame on each host-dialed socket, `POST /host-api/doors` over the daemon link of every
+ * other host that names the door capability. Each host keeps it only from a standing not below
+ * what it holds. Nothing while the leader side is not on.
+ */
+export async function pushHostDoors(doors: readonly string[]): Promise<HostDoorsPush> {
+  return pushDoors ? pushDoors(doors) : { dialed: [], routed: [], failed: [] }
+}
 const CONFIG_SUBSCRIBER = 'host-session-switch'
 const DELETE_SUBSCRIBER = 'host-session-deletes'
 
@@ -42,17 +76,28 @@ export function sayHostFact(name: string, data: unknown, opts: { late: boolean; 
 
 export async function startLeaderSessionChannels(): Promise<() => void> {
   if (active) return () => {}
-  const [{ applyHostChannelBatch, loadChannelCursor }, hostServer, { hostLeaderStates }, { getInstanceId }, remote, { saidHereAlready, hostStartsInFlight, noteHostStartBorn }] = await Promise.all([
+  const [{ applyHostChannelBatch, loadChannelCursor }, hostServer, { hostLeaderStates }, { getInstanceId }, remote, { saidHereAlready, hostStartsInFlight, noteHostStartBorn }, { currentLeaderPermit }, { permitHolderId }, { cleanDoorUrls }] = await Promise.all([
     import('../session-tracker.js'),
     import('../host-server/index.js'),
     import('../leader/primary-leader.js'),
     import('../device-auth.js'),
     import('../../providers/remote-judged-session.js'),
     import('../../providers/host-judged-runner.js'),
+    import('../leader/switch/boot.js'),
+    import('../leader/switch/machine-id.js'),
+    import('./door-wire.js'),
   ])
+  const ownMachine = permitHolderId() ?? ''
+  const standingNow = (hostKey: string): LeaderStanding => {
+    const permit = currentLeaderPermit()
+    return {
+      pair: { permitNumber: leaderPermitNumberForHosts(), epoch: hostLeaderStates()[hostKey]?.epoch ?? 0 },
+      holder: permit?.runtime.status().record?.holder ?? permit?.machine ?? ownMachine,
+    }
+  }
   const side = createLeaderSide({
     walnutId: async () => getInstanceId(),
-    permitNumber: (hostId) => hostLeaderStates()[hostId]?.epoch ?? 0,
+    permit: (hostId) => standingNow(hostId).pair,
     flagOn: hostRunsSessionsNow,
     openStream: async (hostKey, purpose) => {
       const link = hostServer.hostServerLink(hostKey)
@@ -94,13 +139,58 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     log: (level, msg, data) => log.session[level](msg, data),
   })
   active = side
+  standing = standingNow
+  // The door hosts dial into, and their credentials (host-door.ts, leader-issue.ts).
+  const [{ startHostDoor, pushDoorsToDialed }, issue, { setLeaderDoorOpen }, { pooledMachineIdOf }, { standbyRunner }, { isCompanion }, { getConfig }] = await Promise.all([
+    import('./host-door.js'), import('./leader-issue.js'), import('../leader-doors.js'), import('../../providers/daemon-connection.js'),
+    import('../standby/runner.js'), import('../server-role.js'), import('../config-manager.js'),
+  ])
+  const doorUrls = async (): Promise<string[]> => cleanDoorUrls((await getConfig()).session?.host_door_urls)
+  const stopDoor = await startHostDoor({
+    walnutId: async () => getInstanceId(),
+    standing: standingNow,
+    doors: doorUrls,
+    adopt: (hostKey, sock) => side.adopt(hostKey, sock),
+    log: (level, msg, data) => log.session[level](msg, data),
+  })
+  const syncStandby = async () => (await standbyRunner()?.runOnce()) ?? null
+  issue.setRevokeStandbySync(syncStandby)
+  const issuer = issue.startCredentialIssuer({
+    walnutId: async () => getInstanceId(),
+    flagOn: hostRunsSessionsNow,
+    doorUrls,
+    // The machine id the host's daemon link said in its hello (the link the manager holds, else the pooled one).
+    machineIdOf: (hostKey) => hostServer.hostServerLink(hostKey)?.helloMachineId ?? pooledMachineIdOf(hostKey),
+    openStream: async (hostKey, purpose) => {
+      const link = hostServer.hostServerLink(hostKey)
+      if (!link) throw new Error(`the host ${hostKey} is not connected`)
+      return link.openStream('follower', purpose)
+    },
+    standing: (hostKey) => standingNow(hostKey).pair,
+    syncStandby,
+    log: (level, msg, data) => log.session[level](msg, data),
+  })
+  // Open only on the leader (never the companion in this land) while the switch is on.
+  const syncDoor = async (): Promise<void> => {
+    const on = !isCompanion() && await hostRunsSessionsNow().catch(() => false)
+    setLeaderDoorOpen('/host-door', on)
+  }
+  await syncDoor()
+  pushDoors = async (doors) => {
+    const clean = cleanDoorUrls(doors)
+    const dialed = clean.length > 0 && await hostRunsSessionsNow().catch(() => false) ? pushDoorsToDialed(clean) : []
+    const { told, failed } = await issuer.pushDoors(clean, new Set(dialed))
+    return { dialed, routed: told, failed }
+  }
   setHostJudgeProbe((host) => side.hostJudges(host))
   remote.setRemoteJudgedCaller((host, body) => side.callHost(host, body))
   const look = (view: { hostKey: string; phase: string; server?: { capabilities?: unknown } | null }) => {
-    void side.noteHost(view.hostKey, {
-      connected: hostServer.hostServerLink(view.hostKey) !== null,
-      judges: view.phase === 'running' && reportJudges(view.server),
-    })
+    const connected = hostServer.hostServerLink(view.hostKey) !== null
+    void side.noteHost(view.hostKey, { connected, judges: view.phase === 'running' && reportJudges(view.server) })
+    lookIssue(view)
+  }
+  const lookIssue = (view: { hostKey: string; phase: string; server?: { capabilities?: unknown } | null }) => {
+    issuer.noteHost(view.hostKey, { connected: hostServer.hostServerLink(view.hostKey) !== null, dials: view.phase === 'running' && issue.reportDials(view.server) })
   }
   const { startHostSessionTasks } = await import('./leader-tasks.js')
   const stopTasks = startHostSessionTasks()
@@ -110,7 +200,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   setHostTurnSource((sid) => remote.hostTurnStateOf(sid))
   const unlisten = hostServer.onHostServerView(look)
   // The switch is read again at every config write, so a start after it went off stays here.
-  bus.subscribe(CONFIG_SUBSCRIBER, () => { void side.refreshFlag() }, { global: true, interest: [EventNames.CONFIG_CHANGED] })
+  bus.subscribe(CONFIG_SUBSCRIBER, () => { void side.refreshFlag(); void syncDoor(); issuer.refresh(); for (const v of hostServer.peekHostServerViews()) lookIssue(v) }, { global: true, interest: [EventNames.CONFIG_CHANGED] })
   // A delete of a host's session: its host drops its row too (leader-drops.ts), now when linked, else at its next link.
   bus.subscribe(DELETE_SUBSCRIBER, (event) => {
     const ids = (event.data as { sessionIds?: unknown } | null)?.sessionIds
@@ -130,9 +220,13 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     stopTasks()
     stopRetryOver()
     setHostTurnSource(null)
+    setLeaderDoorOpen('/host-door', false)
+    issuer.stop()
+    issue.setRevokeStandbySync(null)
+    stopDoor()
     side.stop()
     setHostJudgeProbe(null)
     remote.setRemoteJudgedCaller(null)
-    if (active === side) active = null
+    if (active === side) { active = null; standing = null; pushDoors = null }
   }
 }

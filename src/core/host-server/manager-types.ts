@@ -46,6 +46,8 @@ export interface HostServerHost {
   daemonKeeper?(): Promise<string>
   /** The daemon process this link reached (its hello instanceId): what it was sent before, it still holds. */
   readonly daemonInstanceId?: string | null
+  /** The machine the daemon runs on, as its hello said it (machine-id-core.ts); null: not said (an older daemon). */
+  readonly helloMachineId?: string | null
   /**
    * What the hello says runs there (one-service-mode.ts): 'walnut-serve' is a host's one Walnut
    * service, the follower of `serviceHome` itself. Absent (an older connection): the daemon.
