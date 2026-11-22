@@ -52,7 +52,9 @@ export function ApprovalsAskRow({ config, save }: { config: Config; save: Save }
     <>
       <SettingsRow
         label={APPROVALS_SWITCH_LABEL}
-        help="Agents wait for your yes before they post, mail, upload, use a saved password or act on another host."
+        help={setting.value
+          ? 'On: posts, mail, uploads, browser steps, saved passwords and first commands on another host wait for your yes.'
+          : 'Off: posts, mail, uploads, browser steps, saved passwords and first remote commands go ahead; payments may still ask.'}
         title="On: agents wait for your yes before a post, mail, browser step, upload, saved password or first command on another host. Off: these go ahead without asking, and each is listed below. A walnut approve in your own script always asks you, whatever this says."
         htmlFor="settings-approvals-ask-me"
         error={setting.error}

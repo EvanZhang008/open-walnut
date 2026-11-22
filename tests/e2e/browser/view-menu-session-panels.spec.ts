@@ -8,7 +8,7 @@
  * (2026-09-23: "this should show the number of session panels we can adjust"). So the
  * assertions are about the shared setting, not a local copy: the menu reads the current
  * value, a pick moves the strip at once and reaches config, the session kebab agrees
- * (both ways, the same "Auto (N)" words), and under Auto the row names the count Auto
+ * (both ways, the same "N columns now" words), and under Auto the row names the count Auto
  * means in this window.
  */
 import { test, expect, type Page } from '@playwright/test'
@@ -17,6 +17,7 @@ import { closeViewMenu, openHome, openViewMenu } from './home-navigation-helpers
 import { holdPanelCountLock } from './panel-count-lock'
 
 const SHOTS = '/tmp/filterbar/shots'
+const autoWords = (n: number) => `Auto (${n} column${n === 1 ? '' : 's'} now)`
 const SIDS = ['pw-normal-session', 'pw-plan-session-completed', 'pw-vscode-session'] as const
 
 test.describe.configure({ mode: 'serial' })
@@ -158,7 +159,7 @@ test('a change made in the session kebab shows in the Display menu, and Auto nam
 
   // Auto: the row says how many panels Auto means at this window width.
   await choice(page, 'auto').click()
-  await expect(checked(page)).toHaveText([`Auto (${await autoBudget(page)})`])
+  await expect(checked(page)).toHaveText([autoWords(await autoBudget(page))])
   await expect.poll(() => readMode(page), { timeout: 45_000, intervals: [500, 1000, 2000] }).toBe('auto')
   await page.locator('.fb-menu').screenshot({ path: `${SHOTS}/${test.info().project.name}-display-menu-auto.png` })
   await closeViewMenu(page)
@@ -176,7 +177,7 @@ test('a change made in the session kebab shows in the Display menu, and Auto nam
   const wide = await autoBudget(page)
   expect(wide).toBeGreaterThan(1)
   await openViewMenu(page)
-  await expect(checked(page)).toHaveText([`Auto (${wide})`])
+  await expect(checked(page)).toHaveText([autoWords(wide)])
   await closeViewMenu(page)
 
   // The session kebab's Columns row holds the same state, and its Auto names the same count.
@@ -191,5 +192,5 @@ test('a change made in the session kebab shows in the Display menu, and Auto nam
   await page.reload()
   await expect(page.locator('#home-task-navigation .todo-panel-toolbar button[aria-label="Display"]')).toBeVisible({ timeout: 90_000 })
   await openViewMenu(page)
-  await expect(checked(page)).toHaveText([`Auto (${wide})`], { timeout: 30_000 })
+  await expect(checked(page)).toHaveText([autoWords(wide)], { timeout: 30_000 })
 })

@@ -5,7 +5,7 @@
  * in-context surfaces show the same choice and the same count. The task panel has it
  * because that is where the user is when the strip feels too crowded or too sparse
  * (2026-09-23: "this should show the number of session panels we can adjust"). Under Auto
- * the row also says how many panels Auto means in this window right now ("Auto (2 now)").
+ * the row also says how many panels Auto means in this window right now ("Auto (fits 2)").
  */
 import {
   autoPanelCountWords, MAX_PANELS, MIN_PANELS, useLiveSessionPanelCount, useSessionPanelMode, type SessionPanelMode,

@@ -21,11 +21,11 @@ export const GRANT_OPTIONS: Array<{ value: number; label: string }> = [
 /** One line for the lock screen: how long an unlock lasts here. */
 export function unlockFootText(status: Pick<VaultStatus, 'unlockFor' | 'lockAfterIdleMinutes' | 'autoLockMinutes'>): string {
   switch (status.unlockFor) {
-    case undefined: return `Locks again after ${status.autoLockMinutes} minutes unused.`
-    case 'idle': return `Locks again after ${status.lockAfterIdleMinutes ?? status.autoLockMinutes} minutes unused.`
-    case '1h': return 'Stays unlocked for 1 hour.'
-    case '12h': return 'Stays unlocked for 12 hours.'
-    case '48h': return 'Stays unlocked for 48 hours after you last use it, until you lock it or the computer Walnut runs on restarts.'
+    case undefined: return `Locks again after ${status.autoLockMinutes} minutes unused. Restarting Walnut does not lock it.`
+    case 'idle': return `Locks again after ${status.lockAfterIdleMinutes ?? status.autoLockMinutes} minutes unused. Restarting Walnut does not lock it.`
+    case '1h': return 'Stays unlocked for 1 hour, even if Walnut restarts.'
+    case '12h': return 'Stays unlocked for 12 hours, even if Walnut restarts.'
+    case '48h': return 'Stays unlocked 48 hours after your last use, until you lock it or the computer restarts. Restarting Walnut keeps it.'
     case 'restart': return 'Stays unlocked until Walnut restarts.'
     default: return 'Stays unlocked; agents can use it while you are away.'
   }

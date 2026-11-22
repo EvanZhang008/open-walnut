@@ -35,7 +35,7 @@ export const EXPERIMENTAL_FEATURES = [
     id: 'isolated_workspace_by_default',
     name: 'Code tasks start in an isolated workspace',
     description: 'Each new code task gets its own copy of the code, so two tasks never edit the same files. It applies when the task\'s folder is in a git repository (the copy is a git worktree) or a workspace plugin manages it. A project\'s own settings can turn it on or off for that project.',
-    summary: 'Each new code task gets its own copy of the code, so two tasks never edit the same files.',
+    summary: 'A new code task in a git repository gets its own copy of the code, unless its project turns this off.',
     default: false,
   },
   {

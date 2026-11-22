@@ -86,7 +86,7 @@ test('Settings says plainly how long Passwords stays unlocked', async ({ page })
   // The fixture's config may hold any choice; with the default it is 48 hours after the last use.
   await expect(row.getByText(/Stays unlocked|Locks again/).first()).toBeVisible({ timeout: 20_000 })
   const help = await row.getByText(/Stays unlocked|Locks again/).first().textContent()
-  if (/48 hours/.test(help ?? '')) expect(help).toContain('48 hours after you last use it, until you lock it or the computer Walnut runs on restarts.')
+  if (/48 hours/.test(help ?? '')) expect(help).toContain('48 hours after your last use, until you lock it or the computer restarts. Restarting Walnut keeps it.')
   await page.setViewportSize({ width: 1280, height: 800 })
   await row.screenshot({ path: `${SHOTS}/settings-passwords.png` })
 })
