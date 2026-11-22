@@ -100,6 +100,7 @@ import {
 } from '../../src/core/stt/voice-here.js';
 import { isIsolatedServer } from '../../src/core/stt/auto-setup.js';
 import { createMlxEngine } from '../../src/core/stt/engine-mlx.js';
+import { MLX_DAEMON_REV } from '../../src/core/stt/mlx-daemon-script.js';
 import { createLlamaEngine } from '../../src/core/stt/engine-llama.js';
 import { createWhisperServerEngine } from '../../src/core/stt/engine-whisper-server.js';
 import { createWhisperCppEngine } from '../../src/core/stt/engine-whisper-cpp.js';
@@ -336,7 +337,7 @@ describe.each([
 
   it('mlx adopts the warm daemon its port answers for, and spawns none', async () => {
     const model = 'test/model';
-    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ status: 'ok', model }), { status: 200 }));
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ status: 'ok', model, rev: MLX_DAEMON_REV }), { status: 200 }));
     const engine = createMlxEngine({ pythonPath: REAL_FILE, model, port: 1 });
     expect(await engine.isAvailable()).toEqual({ available: true });
     expect(calls.execFile.map((c) => c.args.join(' '))).toEqual(['-c import mlx_audio']);

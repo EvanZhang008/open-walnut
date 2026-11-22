@@ -11,7 +11,7 @@
  * long-lived server. A per-start file only narrows that to the spawn-to-open
  * window and adds a dir to dispose; stdin removes the dependency: nothing to
  * sweep, nothing to leak, nothing for `ps` to name that no longer exists. Both
- * scripts read only sys.argv[1..3], which `-` leaves in place (argv[0] is "-").
+ * scripts read only sys.argv[1..], which `-` leaves in place (argv[0] is "-").
  */
 
 import type { ChildProcess } from 'node:child_process';

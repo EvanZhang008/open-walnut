@@ -23,7 +23,8 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createServer, connect } from 'node:net';
 import http from 'node:http';
 import { createMlxEngine } from '../../src/core/stt/engine-mlx.js';
-import { probeDaemon, probeDaemonPatiently, isDaemonConnectionLost } from '../../src/core/stt/daemon-health.js';
+import { probeDaemon, probeDaemonPatiently, isDaemonConnectionLost, identifyWalnutDaemon } from '../../src/core/stt/daemon-health.js';
+import { MLX_DAEMON_REV } from '../../src/core/stt/mlx-daemon-script.js';
 import type { SttEngine } from '../../src/core/stt/types.js';
 import { removeTempTree } from '../helpers/temp-home.js';
 import { optInToVoice } from '../helpers/voice-opt-in.js';
@@ -109,7 +110,8 @@ async function makeFakePython(): Promise<string> {
     `#!${process.execPath}`,
     "import http from 'node:http';",
     "import fs from 'node:fs';",
-    'const [mode, model, port] = process.argv.slice(2);',
+    // argv: - <model> <port> <idle ttl s> [<script rev>], as the real daemon takes it.
+    'const [mode, model, port, , rev] = process.argv.slice(2);',
     "if (mode === '-c') process.exit(0);",
     'const CONTROL = process.env.FAKE_MLX_CONTROL;',
     'const LOG = process.env.FAKE_MLX_LOG;',
@@ -130,7 +132,7 @@ async function makeFakePython(): Promise<string> {
     "    if (req.method === 'GET') {",
     "      if (take('badGets').hit) { res.statusCode = 503; res.end('{}'); return; }",
     "      const slow = take('slowGets');",
-    "      const answer = () => res.end(JSON.stringify({ status: 'ok', model, pid: process.pid }));",
+    "      const answer = () => res.end(JSON.stringify({ status: 'ok', model, rev, pid: process.pid }));",
     '      if (slow.hit) setTimeout(answer, slow.c.getDelayMs ?? 2600); else answer();',
     '      return;',
     '    }',
@@ -149,8 +151,9 @@ async function makeFakePython(): Promise<string> {
 }
 
 /** Start a daemon the way a PREVIOUS walnut server would have, so the engine adopts it. */
-async function spawnForeignOwnedDaemon(pythonPath: string, port: number): Promise<number> {
-  const proc = spawn(pythonPath, ['-', MODEL, String(port), '60'], { stdio: ['pipe', 'ignore', 'ignore'], env: process.env });
+async function spawnForeignOwnedDaemon(pythonPath: string, port: number, rev: string | null = MLX_DAEMON_REV): Promise<number> {
+  const args = ['-', MODEL, String(port), '60', ...(rev === null ? [] : [rev])];
+  const proc = spawn(pythonPath, args, { stdio: ['pipe', 'ignore', 'ignore'], env: process.env });
   proc.stdin.end('# program\n');
   proc.unref();
   const deadline = Date.now() + 10_000;
@@ -303,6 +306,68 @@ describe('mlx engine: slow is not dead', () => {
     expect(Date.now() - t0).toBeLessThan(10_000); // no patient look, no restart
     expect((await requestLog()).filter(l => l.endsWith('POST /shutdown'))).toEqual([]);
   }, 40_000);
+});
+
+describe('mlx engine: a warm daemon running an older script', () => {
+  optInToVoice();
+  for (const [name, rev] of [['another rev', 'older-script'], ['no rev at all (before revisions)', null]] as const) {
+    it(`is retired once and replaced when it runs ${name}`, async () => {
+      const pythonPath = await makeFakePython();
+      const port = await freePort();
+      const oldPid = await spawnForeignOwnedDaemon(pythonPath, port, rev);
+      engine = createMlxEngine({ pythonPath, port, model: MODEL });
+
+      const result = await engine.transcribe({ audio: conformingWav(), format: 'wav' });
+
+      const newPid = await daemonPid(port);
+      expect(newPid).not.toBe(oldPid);
+      expect(result.text).toBe(`heard by ${newPid}`);
+      const log = await requestLog();
+      expect(log.filter(l => l === `${oldPid} POST /shutdown`)).toHaveLength(1);
+      expect(log.filter(l => l === `${oldPid} POST /inference`)).toEqual([]);
+      // The engine spawned the new one with the current script's rev.
+      const health = await (await fetch(`http://127.0.0.1:${port}/`)).json() as { rev?: string };
+      expect(health.rev).toBe(MLX_DAEMON_REV);
+    }, 30_000);
+  }
+
+  it('is adopted, not reloaded, when it runs the same script', async () => {
+    const pythonPath = await makeFakePython();
+    const port = await freePort();
+    const pid = await spawnForeignOwnedDaemon(pythonPath, port);
+    engine = createMlxEngine({ pythonPath, port, model: MODEL });
+
+    expect((await engine.transcribe({ audio: conformingWav(), format: 'wav' })).text).toBe(`heard by ${pid}`);
+    expect((await requestLog()).filter(l => l.endsWith('POST /shutdown'))).toEqual([]);
+  }, 30_000);
+});
+
+describe('identifyWalnutDaemon', () => {
+  function answering(body: unknown): Promise<number> {
+    return new Promise((resolve) => {
+      const srv = http.createServer((_req, res) => res.end(JSON.stringify(body)));
+      servers.push(srv);
+      srv.listen(0, '127.0.0.1', () => resolve((srv.address() as { port: number }).port));
+    });
+  }
+
+  it('tells our rev, an older rev, a missing rev and another model apart', async () => {
+    const same = await answering({ status: 'ok', model: MODEL, rev: 'r1' });
+    expect(await identifyWalnutDaemon(same, MODEL, 'r1')).toBe('ours');
+    expect(await identifyWalnutDaemon(same, MODEL, 'r2')).toBe('other-model');
+    expect(await identifyWalnutDaemon(same, 'other/model', 'r1')).toBe('other-model');
+    const noRev = await answering({ status: 'ok', model: MODEL });
+    expect(await identifyWalnutDaemon(noRev, MODEL, 'r1')).toBe('other-model');
+    expect(await identifyWalnutDaemon(await answering({ hello: 1 }), MODEL, 'r1')).toBe('foreign');
+    expect(await identifyWalnutDaemon(await freePort(), MODEL, 'r1')).toBe('none');
+  });
+
+  it('without a rev, judges the model only (as before revisions)', async () => {
+    const noRev = await answering({ status: 'ok', model: MODEL });
+    expect(await identifyWalnutDaemon(noRev, MODEL)).toBe('ours');
+    const withRev = await answering({ status: 'ok', model: MODEL, rev: 'anything' });
+    expect(await identifyWalnutDaemon(withRev, MODEL)).toBe('ours');
+  });
 });
 
 describe('daemon health probe classification', () => {

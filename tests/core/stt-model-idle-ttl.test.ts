@@ -19,7 +19,8 @@ const MAX_IDLE_S = 10 * 60
 
 /** The idle exits each model server declares, in seconds. */
 const MODEL_SERVERS: Record<string, (src: string) => number[]> = {
-  'engine-mlx.ts': (s) => [ms(s, /DEFAULT_IDLE_TTL_MS = ([\d *]+);/), py(s)],
+  // The daemon's Python lives in its own file (mlx-daemon-script.ts).
+  'engine-mlx.ts': (s) => [ms(s, /DEFAULT_IDLE_TTL_MS = ([\d *]+);/), py(readFileSync(join(DIR, 'mlx-daemon-script.ts'), 'utf8'))],
   'cleanup-mlx.ts': (s) => [ms(s, /const IDLE_TTL_MS = ([\d *]+);/), py(s)],
   'engine-whisper-server.ts': (s) => [ms(s, /DEFAULT_IDLE_TTL_MS = ([\d *]+);/)],
   'engine-llama.ts': (s) => [Number(/sleepIdleSec \?\? (\d+)/.exec(s)?.[1])],

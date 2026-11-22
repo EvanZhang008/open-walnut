@@ -64,8 +64,12 @@ export async function probeDaemonPatiently(
  * (anything else, including a listener that answers nothing even to a patient
  * probe: leave it be). A slow answer is not "nothing there": spawning onto a
  * held port loads the whole model only to fail the bind.
+ *
+ * With `rev`, a daemon must also run that revision of its script: one left
+ * warm by an older server (another rev, or none) counts as 'other-model', so
+ * a changed script is loaded once instead of the old one being adopted forever.
  */
-export async function identifyWalnutDaemon(port: number, model: string): Promise<'ours' | 'other-model' | 'none' | 'foreign'> {
+export async function identifyWalnutDaemon(port: number, model: string, rev?: string): Promise<'ours' | 'other-model' | 'none' | 'foreign'> {
   for (const timeoutMs of [QUICK_PROBE_MS, PATIENT_PROBE_MS]) {
     let res: Response;
     try {
@@ -76,9 +80,10 @@ export async function identifyWalnutDaemon(port: number, model: string): Promise
     }
     if (!res.ok) return 'foreign';
     try {
-      const json = await res.json() as { status?: string; model?: string };
+      const json = await res.json() as { status?: string; model?: string; rev?: string };
       if (json.status !== 'ok' || !json.model) return 'foreign';
-      return json.model === model ? 'ours' : 'other-model';
+      if (json.model !== model) return 'other-model';
+      return rev === undefined || json.rev === rev ? 'ours' : 'other-model';
     } catch {
       return 'foreign';
     }
