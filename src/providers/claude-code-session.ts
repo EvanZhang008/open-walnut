@@ -163,7 +163,7 @@ import {
   rememberModelWindow, recallModelWindow,
 } from './context-window.js'
 import { hardStopTokens } from '../core/sessions/context-full.js'
-import { deliveryLatency, outOfPathBetween, REAL_WAITS, resumeMachineShare, type KnownLineFate, type OutOfPathWaits } from './delivery-latency.js'
+import { deliveryLatency, deliverySeries, outOfPathBetween, REAL_WAITS, resumeMachineShare, type KnownLineFate, type OutOfPathWaits } from './delivery-latency.js'
 import { memoryPressureSeenSince } from '../core/memory-pressure.js'
 import { linkDownIntervals, loadHostLinkLedger } from './host-link-ledger.js'
 import { joinAppendedPrompt, joinCallerAndContext } from '../core/sessions/prompt-blocks.js'
@@ -2486,6 +2486,13 @@ export class ClaudeCodeSession {
    * come back under a different id. Delivery waits on this instead.
    */
   private _spawnSettled: Promise<void> | null = null
+  /** When the latest start stopped being in flight (ms), on success or failure; 0 before the
+   *  first. A row enqueued before it arrived while the session was not live (delivery-latency.ts deliverySeries). */
+  private _startSettledAtMs = 0
+  /** The session's last start: whether one is in flight now, and when the last one settled. */
+  get startState(): { inFlight: boolean; settledAtMs: number } {
+    return { inFlight: this._spawnSettled !== null, settledAtMs: this._startSettledAtMs }
+  }
   /** Wall-clock ts of the HTTP request that triggered this start (latency instrumentation only).
    *  Not `private` — SessionRunner stamps it on the instance before send(). */
   _requestTs = 0
@@ -3240,6 +3247,10 @@ export class ClaudeCodeSession {
     // delivery clock through a failed cold resume.
     this.clearStallDiagTimer()
     this._lastMessageDeliveryTs = 0
+    // Nor a delivery a dead process's turn never reported: the new process's turns report their own.
+    this._lastDeliveryMs = undefined
+    this._lastDeliveryPath = undefined
+    this._lastDeliveryMachineMs = undefined
     const transport = createSessionManager(tmpId, host ?? undefined, sshTarget, undefined, this.cliCommand, this._testDaemonUrl)
     this._transport = transport
 
@@ -3523,7 +3534,7 @@ export class ClaudeCodeSession {
       throw err
     })
     this._spawnSettled = spawnPromise.then(() => {}, () => {})
-      .finally(() => { this._spawnSettled = null })
+      .finally(() => { this._spawnSettled = null; this._startSettledAtMs = Date.now() })
 
     // The daemon confirmed the spawn: a throw in the body below is not a start that failed.
     let spawnResolved = false
@@ -15454,18 +15465,25 @@ export class SessionRunner {
     const now = Date.now()
     const waits: OutOfPathWaits = { ...REAL_WAITS, linkDown: (from, to) => linkDownIntervals(hostKey, from, to, now) }
     const lat = deliveryLatency(msgs, now, known, waits)
+    const enqueuedAtMs = Math.min(...msgs.map((m) => Date.parse(m.enqueuedAt)).filter((t) => !Number.isNaN(t)), now)
+    // A row that arrived while the session was not live waited on its start, whatever path wrote it.
+    const start = target?.startState
+    const series = deliverySeries(path, {
+      enqueuedAtMs, startInFlight: start?.inFlight ?? false, startSettledAtMs: start?.settledAtMs ?? 0,
+    })
     // A resumed CLI that waited on this machine's paging: that share is the machine's, not the path's.
-    const machineMs = path === 'resume' && lat.deliveryMs !== undefined && !lat.writtenEarlier
+    const machineMs = series === 'resume' && lat.deliveryMs !== undefined && !lat.writtenEarlier
       ? resumeMachineShare({
         local: hostKey === '__local__', spawnedAtMs: target?.cliStartAtMs ?? 0, now, deliveryMs: lat.deliveryMs,
         outOfPathSinceSpawnMs: target?.cliStartAtMs ? outOfPathBetween(waits, target.cliStartAtMs, now) : 0,
-        enqueuedAtMs: Math.min(...msgs.map((m) => Date.parse(m.enqueuedAt)).filter((t) => !Number.isNaN(t)), now),
+        enqueuedAtMs,
         pressuredSinceSpawn: !!target?.cliStartAtMs && memoryPressureSeenSince(target.cliStartAtMs),
       })
       : 0
     log.session.info('message delivered', {
       sessionId,
       path,
+      ...(series !== path ? { series } : {}),
       count: msgs.length,
       ...(lat.deliveryMs !== undefined ? { deliveryMs: lat.deliveryMs } : {}),
       messageId: lat.messageId ?? msgs[0]?.id,
@@ -15482,9 +15500,11 @@ export class SessionRunner {
     // (forensic observability). The result handler that reads these lives on
     // ClaudeCodeSession, so the values MUST land on that instance — not on the
     // runner. Fall back to a lookup if the caller didn't pass the instance.
-    if (target) {
+    // A turn reports its slowest delivery: a fast mid-turn line after a slow start must not
+    // hide it (2026-11-22: a 208 s resume was replaced by the turn's next, shorter, delivery).
+    if (target && (target._lastDeliveryMs === undefined || lat.deliveryMs >= target._lastDeliveryMs)) {
       target._lastDeliveryMs = lat.deliveryMs
-      target._lastDeliveryPath = path
+      target._lastDeliveryPath = series
       target._lastDeliveryMachineMs = machineMs > 0 ? machineMs : undefined
     }
   }

@@ -188,3 +188,32 @@ export function resumeMachineShare(input: {
   const cliStart = Math.min(deliveryMs, Math.max(0, now - spawnedAtMs - outOfPathSinceSpawnMs))
   return cliStart * 2 >= deliveryMs ? Math.round(cliStart) : 0
 }
+
+/** The delivery series a wait is counted under (core/health-monitor/collect.ts). */
+export type DeliverySeries = 'stdin' | 'mid-turn' | 'resume'
+
+/**
+ * The series a delivered batch's wait belongs to: the path that wrote it, except
+ * that a row which arrived while the session was not live counts under `resume`
+ * however its line went in at the end. Such a row waited for the session's CLI to
+ * start: it arrived before the latest start settled, or while one is in flight.
+ *
+ * 2026-11-22 the send.delivery alarm (sends into a live session) fired on 87 s and
+ * 67 s that were waits on a start: the Mac woke from sleep on 3 % battery, the VP's
+ * CLI died on its first write, and the messages that came in while its --resume
+ * started (routed with no pid) went in through stdin and mid-turn once it was up,
+ * so they read as slow live sends. A send into a live session is one that arrived
+ * after the CLI it reached had started.
+ */
+export function deliverySeries(path: DeliverySeries, input: {
+  /** When the batch's oldest row was enqueued (ms). */
+  enqueuedAtMs: number
+  /** A start of the session's CLI is in flight now. */
+  startInFlight: boolean
+  /** When the latest start settled (ms), 0 when this server started none (an attach). */
+  startSettledAtMs: number
+}): DeliverySeries {
+  if (path === 'resume') return path
+  if (input.startInFlight) return 'resume'
+  return input.enqueuedAtMs < input.startSettledAtMs ? 'resume' : path
+}

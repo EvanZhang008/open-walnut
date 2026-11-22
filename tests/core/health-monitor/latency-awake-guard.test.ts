@@ -75,7 +75,7 @@ describe('millisecond health alarms leave sleep out', () => {
 
   it('one delivery reports into one turn only', () => {
     const src = read('src/providers/claude-code-session.ts')
-    const writes = src.match(/_lastDeliveryMs = [^\n]+/g) ?? []
+    const writes = [...new Set(src.match(/_lastDeliveryMs = [^\n]+/g) ?? [])]
     expect(writes.sort()).toEqual(['_lastDeliveryMs = lat.deliveryMs', '_lastDeliveryMs = undefined'])
     expect(src).toMatch(/deliveryMs: this\._lastDeliveryMs,[\s\S]{0,1200}?this\._lastDeliveryMs = undefined/)
     // Only the per-turn wide event observes the delivery metric.
