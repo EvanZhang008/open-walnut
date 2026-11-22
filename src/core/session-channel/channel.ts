@@ -45,7 +45,7 @@ export type ChannelFrame =
   | { ch: 'sf'; op: 'listen'; walnutId: string }
   | { ch: 'sf'; op: 'rows'; rows: SessionRecord[]; upTo: number; rowsAt: number; logId: string }
   | { ch: 'sf'; op: 'facts'; recs: FactRecord[]; replay?: true; sentAt?: number }
-  | { ch: 'sf'; op: 'flow'; sid: string; name: string; data: unknown }
+  | { ch: 'sf'; op: 'flow'; sid: string; name: string; data: unknown; to?: string[] }
   | { ch: 'sf'; op: 'ack'; logId: string; upTo: number }
   | { ch: 'sf'; op: 'refuse'; why: string }
 
@@ -115,8 +115,8 @@ export class HostChannel {
   }
 
   /** A text delta: only to readers that are caught up, never kept. */
-  flow(sid: string, name: string, data: unknown): void {
-    for (const r of this.readers) if (r.caughtUp && r.alive) r.link.send({ ch: 'sf', op: 'flow', sid, name, data })
+  flow(sid: string, name: string, data: unknown, to?: string[]): void {
+    for (const r of this.readers) if (r.caughtUp && r.alive) r.link.send({ ch: 'sf', op: 'flow', sid, name, data, ...(to ? { to } : {}) })
   }
 
   private now(): number { return (this.o.now ?? Date.now)() }
@@ -215,7 +215,7 @@ export interface LeaderChannelOptions {
   apply(hostId: string, recs: AppliedFact[], next: ChannelCursor): Promise<void>
   /** The host's own rows, standing for every record up to `next.seq`: apply them and keep `next`. */
   applyRows(hostId: string, rows: SessionRecord[], next: ChannelCursor): Promise<void>
-  onFlow?(hostId: string, sid: string, name: string, data: unknown): void
+  onFlow?(hostId: string, sid: string, name: string, data: unknown, to?: string[]): void
   /** How old a record must be, on this leader's clock, when it is applied to read as late (default 60 s). */
   lateMs?: number
   ackEveryMs?: number
@@ -296,7 +296,7 @@ export function attachLeaderChannel(link: ChannelLink, o: LeaderChannelOptions):
           scheduleAck()
         })
       } else if (frame.op === 'flow') {
-        o.onFlow?.(hostId, frame.sid, frame.name, frame.data)
+        o.onFlow?.(hostId, frame.sid, frame.name, frame.data, frame.to)
       } else if (frame.op === 'refuse') {
         o.onLog?.('warn', 'session channel: the host refused this leader', { hostId, why: frame.why })
         open = false

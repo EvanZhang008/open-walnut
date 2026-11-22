@@ -30,6 +30,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('push-producer-ratchet'))
 
 import { bus, EventNames } from '../../src/core/event-bus.js'
+import { reemitDestinations } from '../../src/core/session-channel/event-classes.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const SUBSCRIBER = 'push-notifications'
@@ -39,6 +40,8 @@ const LETTER_STORE = 'src/core/human-inbox/store.ts'
 const COMPUTED_DESTINATIONS: Record<string, string> = {
   // ACP sessions emit their normalized events, results and errors included, to acpEventDestinations(name).
   'src/providers/acp-session.ts destinations': 'acpEventDestinations',
+  // A host's session facts, said again on the leader to the destinations the host's own emit named.
+  'src/core/session-channel/leader-boot.ts reemitDestinations(opts.to)': 'reemitDestinations',
 }
 
 interface Emit { file: string; line: number; name: string | null; nameText: string; dest: string[] | null; destText: string }
@@ -190,6 +193,22 @@ describe('the source: who addresses the general push subscriber', () => {
       expect(dest, name).not.toContain('*')
     }
   })
+
+  it('a host fact said again on the leader goes where the host\'s emit went, never to the phone', () => {
+    // Every list a host's emit of a handled event can name is one of the literal lists scanned above.
+    for (const e of emits) {
+      if (!e.dest || !e.name || !handled.includes(e.name)) continue
+      const dest = reemitDestinations(e.dest)
+      expect(dest, at(e)).toEqual(e.dest)
+      expect(dest, at(e)).not.toContain('*')
+    }
+    expect(reemitDestinations([SUBSCRIBER, 'main-ai'])).toEqual(['main-ai'])
+    for (const none of [undefined, [], [SUBSCRIBER]]) {
+      const dest = reemitDestinations(none)
+      expect(dest).not.toContain(SUBSCRIBER)
+      expect(dest).not.toContain('*')
+    }
+  })
 })
 
 describe('the bus: replaying every producer of a handled event', () => {
@@ -200,7 +219,8 @@ describe('the bus: replaying every producer of a handled event', () => {
     try {
       const replays: Array<[string, string[]]> = []
       for (const e of emits) if (e.name && handled.includes(e.name) && e.dest) replays.push([e.name, e.dest])
-      for (const name of handled) replays.push([name, acpEventDestinations(name)])
+      for (const name of handled) replays.push([name, acpEventDestinations(name)], [name, reemitDestinations(undefined)])
+      for (const e of emits) if (e.name && handled.includes(e.name) && e.dest) replays.push([e.name, reemitDestinations(e.dest)])
       expect(replays.length).toBeGreaterThan(15)
       for (const [name, dest] of replays) bus.emit(name, { sessionId: 'sess-acme-1', text: 'probe' }, [...dest], { source: 'ratchet' })
       expect(heard).toEqual([])

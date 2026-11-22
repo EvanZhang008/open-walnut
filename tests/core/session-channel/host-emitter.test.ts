@@ -5,7 +5,7 @@
  * reaches the log; row patches carry only what changed; `live` is written at most once per window
  * and only when it changed.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -97,6 +97,8 @@ describe('the emitter', () => {
     expect(recs.map((r) => r.name)).toEqual(['session:tool-use', 'session:result'])
     expect(recs[0]!.line).toEqual({ epoch: 'ep1', v: 42 })
     expect(recs.map((r) => r.sseq)).toEqual([1, 2])
+    // Each keeps the destinations its emit named, for the leader to say it to the same subscribers.
+    expect(recs.map((r) => r.to)).toEqual([['x'], ['x']])
     expect(flows).toEqual([[OWN, 'session:text-delta']])
   })
 
@@ -162,12 +164,14 @@ describe('the emitter', () => {
     await sleep(80)
     live.set(OWN, { turnGen: 2, processStatus: 'idle', consumedOffset: 120 })
     bus.emit('session:status-changed', { sessionId: OWN }, ['x'])
-    await sleep(80)
-    const lives = (await records()).filter((r) => r.name === 'live').map((r) => (r.data as { state: LiveState }).state)
-    expect(lives).toEqual([
-      { turnGen: 1, processStatus: 'running', consumedOffset: 10 },
-      { turnGen: 2, processStatus: 'idle', consumedOffset: 120 },
-    ])
+    // The last change is written within its window; an extra write before it never matches.
+    await vi.waitFor(async () => {
+      const lives = (await records()).filter((r) => r.name === 'live').map((r) => (r.data as { state: LiveState }).state)
+      expect(lives).toEqual([
+        { turnGen: 1, processStatus: 'running', consumedOffset: 10 },
+        { turnGen: 2, processStatus: 'idle', consumedOffset: 120 },
+      ])
+    })
   })
 
   it('a rename continues the session\'s sequence under the new id; a drop forgets it', async () => {

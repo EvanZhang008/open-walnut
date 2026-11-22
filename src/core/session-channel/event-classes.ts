@@ -88,3 +88,19 @@ export const TURN_DETAIL_FACTS: ReadonlySet<string> = new Set([
 
 /** The fact that ends a turn (the summary goes in front of it). */
 export const TURN_END_FACT = 'session:result'
+
+/** The subscriber that turns a session's result or error into a phone notification (push-notification.ts). */
+const PHONE_PUSH = 'push-notifications'
+/** Who hears a record that names no destinations: the subscriber the leader's own start names (host-judged-runner.ts). */
+const UNNAMED_DESTINATIONS: readonly string[] = ['main-ai']
+
+/**
+ * Who the leader says a host's fact or flow event to (leader-boot.ts): the destinations the host's
+ * own emit named (the record's `to`), so the leader's subscribers hear it as they hear one of its
+ * own sessions; never the phone's push subscriber, which no session event names (a host session
+ * buzzes the phone no more than one here does). Ratchet: tests/core/push-producer-ratchet.test.ts.
+ */
+export function reemitDestinations(to: readonly string[] | undefined): string[] {
+  const named = Array.isArray(to) ? to.filter((d) => typeof d === 'string' && d !== PHONE_PUSH) : []
+  return named.length > 0 ? named : [...UNNAMED_DESTINATIONS]
+}

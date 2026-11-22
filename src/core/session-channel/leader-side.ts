@@ -47,8 +47,8 @@ export interface LeaderSideDeps {
   request?(hostKey: string, route: string, body: unknown, timeoutMs: number): Promise<HostCallAnswer>
   applyBatch(batch: HostChannelBatch): Promise<{ written: string[]; skipped: string[] }>
   loadCursor(hostId: string): Promise<ChannelCursor | null>
-  /** Re-emit one host fact or flow event on this server's bus. */
-  emit(name: string, data: unknown, opts: { late: boolean }): void
+  /** Re-emit one host fact or flow event on this server's bus; `to`: the destinations the host's emit named. */
+  emit(name: string, data: unknown, opts: { late: boolean; to?: string[] }): void
   noteLive(sid: string, state: LiveState): void
   noteRename(from: string, to: string): void
   noteHostJudged(sid: string, host: string): void
@@ -116,8 +116,9 @@ export function createLeaderSide(deps: LeaderSideDeps) {
         // began itself says none the leader hears (a native one has no id yet), so this is its
         // only one; for a start this leader handed on, the channel's emit keeps one in all
         // (leader-tasks.ts claimHostStarted). A rows frame (applyRows) is a resync, never a start.
+        // It names no destinations: it goes where a start this leader hands on says it (reemitDestinations).
         const d = (r.data ?? {}) as { born?: unknown; patch?: Record<string, unknown> }
-        if (d.born === true && wrote.has(r.sid)) emitFact(hostId, r.sid, EventNames.SESSION_STARTED, startedOf(hostId, r.sid, d.patch ?? {}), r.late)
+        if (d.born === true && wrote.has(r.sid)) emitFact(hostId, r.sid, EventNames.SESSION_STARTED, startedOf(hostId, r.sid, d.patch ?? {}), r.late, undefined)
         continue
       }
       if (r.name === 'drop' || r.name === 'turn-summary') continue
@@ -131,12 +132,12 @@ export function createLeaderSide(deps: LeaderSideDeps) {
         continue
       }
       if (channelClassOf(r.name) !== 'fact') continue
-      emitFact(hostId, r.sid, r.name, r.data, r.late)
+      emitFact(hostId, r.sid, r.name, r.data, r.late, r.to)
     }
   }
 
-  function emitFact(hostId: string, sid: string, name: string, data: unknown, late: boolean): void {
-    try { deps.emit(name, data, { late }) } catch (err) {
+  function emitFact(hostId: string, sid: string, name: string, data: unknown, late: boolean, to: string[] | undefined): void {
+    try { deps.emit(name, data, { late, ...(to ? { to } : {}) }) } catch (err) {
       deps.log('warn', 'session channel: a re-emitted fact failed', { hostId, name, sessionId: sid, error: err instanceof Error ? err.message : String(err) })
     }
   }
@@ -190,7 +191,7 @@ export function createLeaderSide(deps: LeaderSideDeps) {
         loadCursor: deps.loadCursor,
         apply: applyRecs,
         applyRows,
-        onFlow: (_hostId, _sid, name, data) => { try { deps.emit(name, data, { late: false }) } catch { /* a flow event is never kept */ } },
+        onFlow: (_hostId, _sid, name, data, to) => { try { deps.emit(name, data, { late: false, ...(to ? { to } : {}) }) } catch { /* a flow event is never kept */ } },
         onLog: deps.log,
       })
       s.channel = channel

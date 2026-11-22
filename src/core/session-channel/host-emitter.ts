@@ -74,7 +74,7 @@ export interface HostEmitter {
   flushLive(): void
 }
 
-interface Pending { events: { name: string; data: unknown; at: number }[]; timer: ReturnType<typeof setTimeout> }
+interface Pending { events: { name: string; data: unknown; at: number; to: string[] }[]; timer: ReturnType<typeof setTimeout> }
 
 /** The session id an event names. */
 export function sessionIdOf(name: string, data: unknown): string | null {
@@ -123,7 +123,7 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
 
   const warn = (msg: string, data?: Record<string, unknown>): void => o.onLog?.('warn', msg, data)
 
-  function append(sid: string, name: string, data: unknown, opts: { at?: number; continueFrom?: string } = {}): void {
+  function append(sid: string, name: string, data: unknown, opts: { at?: number; continueFrom?: string; to?: string[] } = {}): void {
     const v = name === 'row' || name === 'live' || name === 'rename' || name === 'drop' ? undefined : o.offsetOf?.(sid)
     const epoch = lastRows.get(sid)?.streamEpoch
     try {
@@ -131,6 +131,7 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
         ...(typeof v === 'number' ? { line: { ...(epoch ? { epoch } : {}), v } } : {}),
         ...(opts.at !== undefined ? { at: opts.at } : {}),
         ...(opts.continueFrom ? { continueFrom: opts.continueFrom } : {}),
+        ...(opts.to ? { to: opts.to } : {}),
       })
     } catch (err) {
       warn('session channel: a record was not kept', { sessionId: sid, name, error: err instanceof Error ? err.message : String(err) })
@@ -164,7 +165,7 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
     if (!p) return
     clearTimeout(p.timer)
     pending.delete(sid)
-    for (const e of p.events) append(sid, e.name, e.data, { at: e.at })
+    for (const e of p.events) append(sid, e.name, e.data, { at: e.at, to: e.to })
   }
 
   function onRow(row: SessionRecord): void {
@@ -185,7 +186,7 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
     scheduleLive(sid)
   }
 
-  function hold(sid: string, name: string, data: unknown): void {
+  function hold(sid: string, name: string, data: unknown, to: string[]): void {
     let p = pending.get(sid)
     if (!p) {
       const timer = setTimeout(() => {
@@ -197,7 +198,7 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
       p = { events: [], timer }
       pending.set(sid, p)
     }
-    if (p.events.length < PENDING_MAX) p.events.push({ name, data, at: now() })
+    if (p.events.length < PENDING_MAX) p.events.push({ name, data, at: now(), to })
   }
 
   const onEvent = (event: BusEvent): void => {
@@ -207,7 +208,7 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
     const sid = sessionIdOf(event.name, event.data)
     if (!sid) return
     if (cls === 'flow') {
-      if (own.has(sid)) o.channel?.flow(sid, event.name, event.data)
+      if (own.has(sid)) o.channel?.flow(sid, event.name, event.data, event.destinations)
       return
     }
     if (cls !== 'fact') {
@@ -216,10 +217,10 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
       return
     }
     if (own.has(sid)) {
-      append(sid, event.name, event.data)
+      append(sid, event.name, event.data, { to: event.destinations })
       scheduleLive(sid)
     } else {
-      hold(sid, event.name, event.data)
+      hold(sid, event.name, event.data, event.destinations)
     }
   }
 

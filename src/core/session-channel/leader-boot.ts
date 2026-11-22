@@ -8,6 +8,7 @@ import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../event-bus.js'
 import { createLeaderSide, reportJudges, type LeaderSide } from './leader-side.js'
 import { hostRunsSessionsNow } from './switch.js'
+import { reemitDestinations } from './event-classes.js'
 import { noteHostJudged, setHostJudgeProbe } from '../sessions/judge-of.js'
 
 let active: LeaderSide | null = null
@@ -46,7 +47,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     loadCursor: async (hostId) => loadChannelCursor(hostId),
     emit: (name, data, opts) => {
       if (saidHereAlready(name, data)) return
-      bus.emit(name, data, ['*'], { source: 'host-channel', ...(opts.late ? { late: true as const } : {}) })
+      bus.emit(name, data, reemitDestinations(opts.to), { source: 'host-channel', ...(opts.late ? { late: true as const } : {}) })
     },
     noteLive: remote.noteLiveState,
     noteRename: (from, to) => {
