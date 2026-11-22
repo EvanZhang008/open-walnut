@@ -168,8 +168,9 @@ placeholder). Its look is in the same file, `web/src/styles/input-box.css` ("Fie
   or height: `tests/web/ui-standard-ratchet.test.ts` (`restyledField`) fails on a new one. A
   rule that takes a field's look away (`border: 0` for the words inside a `wn-field`) is fine.
 - Keyboard focus is always visible (3:1 or more), never only the faint edge: a 2 px `--accent`
-  ring (`:focus-visible`) on the field, or on the `wn-field` or `wn-input` box holding the words,
-  never on the words inside one; checkboxes, radios and ranges keep the engine's control and get
+  ring (`:focus-visible`) on the field, or on the `wn-field` box holding the words, never on the
+  words inside one (a message box, `wn-input`, keeps its edge and caret: in a chat the accent is
+  grey, and a ring framed every composer in dark); checkboxes, radios and ranges keep the engine's control and get
   the same ring. No rule draws a glow around every focused field
   (`tests/web/focus-ring-owner-guard.test.ts`).
 

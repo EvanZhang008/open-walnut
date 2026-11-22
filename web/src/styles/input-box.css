@@ -202,13 +202,14 @@ select { cursor: pointer; }
 input[list]::-webkit-calendar-picker-indicator,
 input[list]::-webkit-list-button { display: none !important; opacity: 0; }
 :where(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='hidden'], [type='button'], [type='submit'], [type='reset'], [type='image']), textarea, select):focus { border-color: var(--input-focus-edge); }
-/* Keyboard focus always shows, at 3:1 or more: a 2 px accent ring on the field, the field box or
-   the message box holding the words (never on the words inside one, which would ring twice). The
+/* Keyboard focus always shows, at 3:1 or more: a 2 px accent ring on the field or the field box
+   holding the words (never on the words inside one, which would ring twice). The message box
+   (`wn-input`) keeps its edge only: inside a chat --accent is grey (chat-palette.css), so the ring
+   drew a heavy dark frame round every composer on a click, and its caret and edge show focus. The
    faint edge above alone is 1.4:1 (review, 2026-11-22). A browser counts every focus of a text
    field as keyboard focus, so a text field shows it on a click too; a select only from the keys. */
 :where(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='hidden'], [type='button'], [type='submit'], [type='reset'], [type='image']), textarea, select):not(.wn-field > *, .wn-input *):focus-visible,
-.wn-field:has(> :is(input, textarea):focus-visible),
-.wn-input:not(.is-drag-over):has(:is(input, textarea, [contenteditable='true']):focus-visible) {
+.wn-field:has(> :is(input, textarea):focus-visible) {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
 }

@@ -95,13 +95,14 @@ describe('a focused field draws one ring: its edge, and a keyboard ring', () => 
     expect(rule!.body).toBe('border-color: var(--input-focus-edge);');
   });
 
-  it('keyboard focus is a 2 px accent ring on fields, field boxes, message boxes and native controls', () => {
+  it('keyboard focus is a 2 px accent ring on fields, field boxes and native controls', () => {
     const ring = (r: { body: string }) => /outline:\s*2px solid var\(--accent\)/.test(r.body);
     const rules = rulesOf(css()).filter(ring);
     const sels = rules.flatMap((r) => r.sels);
     expect(sels.some((x) => /^:where\(input:not\(.*\), textarea, select\):not\(\.wn-field > \*, \.wn-input \*\):focus-visible$/.test(x)), 'fields').toBe(true);
     expect(sels.some((x) => x.startsWith('.wn-field:has(') && x.includes(':focus-visible')), 'field boxes').toBe(true);
-    expect(sels.some((x) => x.startsWith('.wn-input') && x.includes(':focus-visible')), 'message boxes').toBe(true);
+    // The message box keeps its edge (input-box.css): a grey chat accent ringed every composer.
+    expect(sels.some((x) => x.startsWith('.wn-input')), 'no ring on message boxes').toBe(false);
     expect(sels.some((x) => /type='checkbox'.*type='radio'.*type='range'.*:focus-visible$/.test(x)), 'checkboxes, radios and ranges').toBe(true);
   });
 });
