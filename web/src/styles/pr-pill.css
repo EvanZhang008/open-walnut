@@ -1,39 +1,8 @@
-/* The pull request pill (PrPill.tsx): the shape of every status pill in a title row (the
-   Trigger pill's, .task-trigger-pill in globals.css), its tint saying what the pull request
-   needs: red for a failed check, a conflict or changes asked for, amber while checks run,
-   green once they pass or it is approved, violet once merged, grey when closed or unread.
-   Every selector pairs two classes: this file can load before globals.css. */
-.task-row-pill.pr-pill {
-  --pr-tone: var(--fg-secondary);
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  box-sizing: border-box;
-  margin: 0;
-  height: auto;
-  padding: 1px 7px 1px 6px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--pr-tone) 12%, transparent);
-  color: var(--pr-tone);
-  font: inherit;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  letter-spacing: normal;
-  line-height: 1.2;
-  white-space: nowrap;
-  cursor: pointer;
-  appearance: none;
-  -webkit-appearance: none;
-}
-.task-row-pill.pr-pill:hover,
-.task-row-pill.pr-pill:focus-visible,
-.task-row-pill.pr-pill[aria-expanded="true"] {
-  background: color-mix(in srgb, var(--pr-tone) 20%, transparent);
-  outline: none;
-}
-.task-row-pill.pr-pill:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--pr-tone) 45%, transparent); }
+/* The pull request pill (PrPill.tsx) is a `.badge` (styles/badge.css): its tone says what the pull
+   request needs (prBadgeTone: red asks for a fix, amber while checks run, blue open or passing, grey
+   merged, closed or unread), dashed when it is another person's and never acts on this task. This
+   file keeps only its parts' layout and the phone top bar's icon. */
+.task-row-pill.pr-pill { flex: 0 0 auto; }
 .pr-pill .pr-pill-glyph { flex: 0 0 auto; }
 
 /* Folded in a tight column (row-pill-fit.css draws other pills' data-short as one ::after):
@@ -65,8 +34,8 @@
 .pr-pill .pr-pill-short .pr-pill-who { flex: none; margin-right: 3px; font-style: italic; }
 /* A narrower column drops the number from every pill at once (row-fit.ts), never row by row. */
 .home-navigation-scroll[data-row-narrow="true"] .task-row-pill.pr-pill .pr-pill-n { display: none; }
-/* ... with less padding, so whose it is still fits beside the word in the narrowest column. */
-.home-navigation-scroll[data-row-narrow="true"] .task-row-pill.pr-pill { padding-inline: 5px; gap: 3px; }
+/* ... with a closer gap, so whose it is still fits beside the word in the narrowest column. */
+.home-navigation-scroll[data-row-narrow="true"] .task-row-pill.pr-pill { gap: 3px; }
 /* ... and says the state in its short word ("Failed", "Changes"). */
 .home-navigation-scroll[data-row-narrow="true"] .task-row-pill.pr-pill .pr-pill-text::before { content: attr(data-tn); }
 /* What Walnut last saw is not news: there, "not current" takes the word's place. */
@@ -88,30 +57,7 @@
   html .app-shell-navigation .home-navigation-scroll[data-row-fit] .task-row-pill.pr-pill .pr-pill-short { display: none; }
 }
 
-/* What Walnut saw before a read that failed (signed out, gh gone): grey, whatever it said. */
-/* :root + four: past the dark theme's tone rules. */
-:root .task-row-pill.pr-pill[data-stale="true"][data-tone] { --pr-tone: var(--fg-muted); }
 
-/* On a status card's meta line every tag reads as a word, not a pill (status-sections.css): no
-   fill, the line's own size, with the line's "·" in front. The tint stays, it carries the state.
-   `html` + four classes: past that file's rule and the dark theme's. */
-html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill,
-html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill:hover,
-html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill:focus-visible,
-html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill[aria-expanded="true"] {
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: none;
-  box-shadow: none;
-  font-size: var(--font-size-xs);
-  line-height: 15px;
-}
-html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill:hover,
-html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill[aria-expanded="true"] { text-decoration: underline; }
-html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
-/* The line's "·" is this pill's own ::before: an inline-block keeps the underline off it. */
-.status-card-meta .pr-pill.task-row-pill::before { display: inline-block; }
 /* A meta line too short for the project's name and the pull request: the pill keeps the line
    whole, and the name (with the pill's "·" after it) leaves rather than shrink to a letter. The
    class comes from the row (StatusSections.tsx), not :has(): WebKit misses a pill arriving late. */
@@ -121,42 +67,12 @@ html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill:focus-visi
   .status-card-meta-pr > .pr-pill.task-row-pill::before { display: none; }
 }
 
-/* Another person's pull request: a dashed edge (a dotted underline as a word), since it is shown
-   and never acts on this task. */
-.task-row-pill.pr-pill[data-theirs="true"] { border: 1px dashed color-mix(in srgb, var(--pr-tone) 55%, transparent); }
-html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill[data-theirs="true"] {
-  border: 0;
-  text-decoration: underline dotted;
-  text-underline-offset: 2px;
-}
-
-/* Tones, shared by the pill and the card. The text colours are the darker variants so 10px
-   text keeps its contrast on the light theme; the dark theme uses the bright ones. The three
-   that ask for a fix differ at a glance: red for a failed check, orange for a conflict, pink
-   for changes asked for. */
-.pr-pill[data-tone="failed"] { --pr-tone: #d1242f; }
-.pr-pill[data-tone="conflict"] { --pr-tone: #bc4c00; }
-.pr-pill[data-tone="changes"] { --pr-tone: #bf3989; }
-.pr-pill[data-tone="pending"] { --pr-tone: #9a6700; }
-.pr-pill[data-tone="passed"] { --pr-tone: #1a7f37; }
-.pr-pill[data-tone="merged"] { --pr-tone: #8250df; }
-.pr-pill[data-tone="closed"], .pr-pill[data-tone="unknown"], .pr-pill[data-tone="draft"] { --pr-tone: var(--fg-muted); }
-.pr-pill[data-tone="open"] { --pr-tone: var(--accent-text); }
-
-:root[data-theme="dark"] .pr-pill[data-tone="failed"] { --pr-tone: #ff7b72; }
-:root[data-theme="dark"] .pr-pill[data-tone="conflict"] { --pr-tone: #ffa657; }
-:root[data-theme="dark"] .pr-pill[data-tone="changes"] { --pr-tone: #f778ba; }
-:root[data-theme="dark"] .pr-pill[data-tone="pending"] { --pr-tone: #e3b341; }
-:root[data-theme="dark"] .pr-pill[data-tone="passed"] { --pr-tone: #56d364; }
-:root[data-theme="dark"] .pr-pill[data-tone="merged"] { --pr-tone: #bc8cff; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .pr-pill[data-tone="failed"] { --pr-tone: #ff7b72; }
-  :root:not([data-theme]) .pr-pill[data-tone="conflict"] { --pr-tone: #ffa657; }
-  :root:not([data-theme]) .pr-pill[data-tone="changes"] { --pr-tone: #f778ba; }
-  :root:not([data-theme]) .pr-pill[data-tone="pending"] { --pr-tone: #e3b341; }
-  :root:not([data-theme]) .pr-pill[data-tone="passed"] { --pr-tone: #56d364; }
-  :root:not([data-theme]) .pr-pill[data-tone="merged"] { --pr-tone: #bc8cff; }
-}
+/* The phone top bar's icon takes the tone from the same four (tokens only). */
+.pr-pill { --pr-tone: var(--fg-muted); }
+.pr-pill:is([data-tone="failed"], [data-tone="conflict"], [data-tone="changes"]) { --pr-tone: var(--error); }
+.pr-pill[data-tone="pending"] { --pr-tone: var(--priority-important-text, var(--warning)); }
+.pr-pill:is([data-tone="open"], [data-tone="passed"]) { --pr-tone: var(--accent-text, var(--accent)); }
+.pr-pill[data-stale="true"] { --pr-tone: var(--fg-muted); }
 
 /* ── The card ── */
 .pr-card {
@@ -187,27 +103,8 @@ html .home-navigation-scroll .status-card-meta .pr-pill.task-row-pill[data-their
 
 .pr-card .pr-card-pr + .pr-card-pr { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .pr-card .pr-card-head { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
-.pr-card .pr-card-state {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 1px;
-  padding: 1px 7px 1px 6px;
-  border-radius: 999px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  color: var(--on-accent);
-  background: var(--pr-green);
-}
-/* Open is the ordinary state: a plain outline, so the checks' and the review's colours are the
-   only ones that speak. */
-.pr-card .pr-card-state[data-tone="open"] { background: transparent; color: var(--fg-secondary); box-shadow: inset 0 0 0 1px var(--border); }
-.pr-card .pr-card-state[data-tone="merged"] { background: var(--pr-violet); }
-.pr-card .pr-card-state[data-tone="closed"] { background: var(--pr-red); }
-.pr-card .pr-card-state[data-tone="draft"] { background: var(--fg-muted); }
-:root[data-theme="dark"] .pr-card .pr-card-state:not([data-tone="open"]) { color: #0d1117; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme]) .pr-card .pr-card-state:not([data-tone="open"]) { color: #0d1117; } }
+/* The state is a `.badge` in the pull request's tone (prBadgeTone); the card only places it. */
+.pr-card .pr-card-state { flex: 0 0 auto; margin-top: 1px; }
 
 .pr-card .pr-card-title {
   min-width: 0;

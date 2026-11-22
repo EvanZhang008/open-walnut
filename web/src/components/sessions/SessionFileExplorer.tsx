@@ -1630,11 +1630,11 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
       {!(phone && !selectedFile) && pathEditor}
       {onHostNote && (
         <span
-          className="sfe-host-chip"
+          className="badge sfe-host-chip"
           data-testid="sfe-host-chip"
           title={`This file is on ${fileHostName}; the session runs on ${sessionHostName}.`}
         >
-          on {fileHostName}
+          <span>on {fileHostName}</span>
         </span>
       )}
     </div>
@@ -1793,7 +1793,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                     <span className="sfe-name-base">{section.label}</span>
                   </span>
                   {section.fileCount != null && section.fileCount > 0 && (
-                    <span className="sfe-size sfe-changed-badge">{section.fileCount} changed</span>
+                    <span className="sfe-size badge sfe-changed-badge"><span>{section.fileCount} changed</span></span>
                   )}
                 </div>
                 {/* A create straight into this root: first row under the header. */}

@@ -160,22 +160,9 @@
 .mail-group-title > .mail-group-name { flex: 0 1 auto; }
 .mail-group-title > .mail-group-who { flex: 1 1 0; }
 
-.mail-group-pill {
-  flex: 0 0 auto;
-  min-width: 18px;
-  box-sizing: border-box;
-  padding: 0 6px;
-  border-radius: var(--radius-sm);
-  background: var(--accent-subtle);
-  color: var(--accent);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  line-height: 17px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
+/* A group's unread is the neutral `.badge.badge-count` (MailGroupLine.tsx), like every mailbox count. */
+.mail-group-pill { flex: 0 0 auto; }
 
-.mail-group-pill.zero { background: var(--bg-secondary); color: var(--fg-muted); }
 
 .mail-group-who {
   flex: 1 1 0;

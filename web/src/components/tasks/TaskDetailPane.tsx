@@ -40,6 +40,7 @@ import { TaskFieldEditor } from './TaskFieldEditor';
 import { TaskDependencies, TaskDetailActions, TaskNoteAdd } from './TaskDetailEdits';
 import { StartQueueLine } from './StartQueueLine';
 import { AnsweredForLine } from './AnsweredForLine';
+import { badge, priorityTone } from '@/components/common/badge';
 import '@/styles/task-detail-pane.css';
 
 type Task = CoreTask & { has_description?: boolean; has_summary?: boolean; has_ext?: boolean; has_note?: boolean };
@@ -212,7 +213,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenTriageForTask, o
         <div className="todo-detail-badges">
           <TaskStatusBadge task={task} quiet />
           {showPriority && task.priority && PRIORITY_TEXT[task.priority] && (
-            <span className={`todo-detail-priority-pill priority-${task.priority}`}>{PRIORITY_TEXT[task.priority]}</span>
+            <span className={`${badge(priorityTone(task.priority))} todo-detail-priority-pill`}><span>{PRIORITY_TEXT[task.priority]}</span></span>
           )}
           <PluginFieldPills task={task} />
           <TagEditor

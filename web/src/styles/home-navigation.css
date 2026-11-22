@@ -449,7 +449,6 @@
 .home-navigation-scroll .todo-pinned-subgroup + .todo-pinned-subgroup { margin-top: 24px; }
 /* Parent tasks: the shared fold chevron trails the row, and a plain count instead of a blue pill. */
 .home-navigation-scroll .todo-panel-item > .collapse-chevron { position: static; order: 2; align-self: center; }
-.home-navigation-scroll .task-children-badge { background: none; color: var(--fg-muted); padding: 0; font-weight: 400; }
 /* A long project draws in batches; the next batch hangs off this row (list-batch.ts). Its
    text starts on the title column. */
 .todo-list-show-more {
@@ -565,10 +564,6 @@
 .todo-offview-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
 /* Its keys are the family's (.btn-sm, the × .btn-icon.btn-sm). */
 .todo-offview-show, .todo-offview-dismiss { flex-shrink: 0; }
-.task-filter-outside-pill {
-  display: inline-flex; align-items: center; font-size: var(--font-size-xs); padding: 1px 6px; border-radius: var(--radius-sm);
-  background: var(--bg-hover); color: var(--fg-muted); white-space: nowrap;
-}
 .todo-minibar-icon { display: inline-flex; margin-right: 4px; }
 .todo-minibar-icon svg { width: 12px; height: 12px; }
 /* The result count is shown once, in the section row under the toolbar (5.7), never in the

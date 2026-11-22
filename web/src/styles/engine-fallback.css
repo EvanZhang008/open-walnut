@@ -19,18 +19,8 @@
 /* The words take the row; the button goes on the line below them. */
 .engine-fallback-body { flex: 1 1 0; min-width: 0; }
 .engine-fallback-head { font-weight: 600; }
-.engine-fallback-tag {
-  display: inline-block;
-  margin-right: 4px;
-  padding: 0 6px;
-  border-radius: var(--radius-xs);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  line-height: 18px;
-  vertical-align: 1px;
-  color: var(--fg-secondary);
-  background: color-mix(in srgb, var(--fg) 8%, transparent);
-}
+/* "Fallback" is the one neutral `.badge`, here and on a task row (fallback-row.tsx). */
+.engine-fallback-tag { margin-right: 4px; }
 /* The limit and its reset: a line of their own under where it started, so no width leaves a dot
    hanging at a line's end or a "· resets 4:38 PM" starting one (2026-11-09 reviews). */
 .engine-fallback-why { display: block; color: var(--fg); font-weight: 500; }
@@ -45,18 +35,6 @@
 }
 .engine-fallback-close:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
 .engine-fallback-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-
-/* A task row's tag (StatusSections.tsx): the banner's tag, at the row's size. */
-.status-card-fallback-tag {
-  display: inline-block;
-  padding: 0 5px;
-  border-radius: var(--radius-xs);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  line-height: 15px;
-  color: var(--fg-secondary);
-  background: color-mix(in srgb, var(--fg) 8%, transparent);
-}
 
 /* The narrow Pinned strip's form (FocusSatelliteCards.tsx): the banner's mark, no fill. */
 .status-card-fallback-mark {

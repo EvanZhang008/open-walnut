@@ -34,6 +34,7 @@ import { useExperimental } from '@/hooks/useExperimental';
 import type { ChangeSnapshot } from '../../../../src/core/changes/model';
 import { ChangeDeployView } from './ChangeDeployView';
 import { ToggleSwitch } from '@/components/controls';
+import { badge, type BadgeTone } from '@/components/common/badge';
 import '@/styles/pr-pill.css';
 import '@/styles/change-card.css';
 
@@ -135,6 +136,16 @@ export interface PrPillShort {
   more?: string; stale?: string;
 }
 
+/** The pull request's state as the console's label tone (styles/badge.css): what asks for a fix is
+ *  red, checks still running amber, open or passing blue, the rest (merged, closed, unread) grey. */
+export function prBadgeTone(tone: PrTone, stale = false): BadgeTone {
+  if (stale) return 'neutral';
+  if (tone === 'failed' || tone === 'conflict' || tone === 'changes') return 'error';
+  if (tone === 'pending') return 'warning';
+  if (tone === 'open' || tone === 'passed') return 'accent';
+  return 'neutral';
+}
+
 export function prPillText(prs: readonly PrSnapshot[], urls: readonly string[]): {
   tone: PrTone; text: string; short: string; parts: PrPillShort; stale: boolean; lead?: PrSnapshot;
 } {
@@ -214,9 +225,9 @@ function PrSection({ pr, alone, onComplete, completing, done, errorAbove, waitin
   return (
     <section className="pr-card-pr" data-testid="pr-card-pr" data-pr-url={pr.url} data-tone={tone}>
       <div className="pr-card-head">
-        <span className="pr-card-state" data-tone={pr.state === 'open' && pr.draft ? 'draft' : pr.state}>
+        <span className={`${badge(prBadgeTone(tone))} pr-card-state`} data-tone={pr.state === 'open' && pr.draft ? 'draft' : pr.state}>
           <PrGlyph pr={pr} />
-          {pr.state === 'open' && pr.draft ? 'Draft' : STATE_WORDS[pr.state]}
+          <span>{pr.state === 'open' && pr.draft ? 'Draft' : STATE_WORDS[pr.state]}</span>
         </span>
         <a className="pr-card-title" href={pr.url} target="_blank" rel="noreferrer" title={`Open #${pr.number} on GitHub`}>
           <span className="pr-card-number">#{pr.number}</span> {pr.title || pr.repo}
@@ -534,7 +545,7 @@ export function PrPill({ task: given, className, compact = false }: { task: Task
       <button
         ref={triggerRef}
         type="button"
-        className={`task-row-pill pr-pill${compact ? ' is-compact' : ''}${className ? ` ${className}` : ''}`}
+        className={`${compact ? '' : `${badge(prBadgeTone(tone, stale), { paused: theirs })} `}task-row-pill pr-pill${compact ? ' is-compact' : ''}${className ? ` ${className}` : ''}`}
         data-testid="pr-pill"
         data-tone={tone}
         data-short={short}

@@ -16,7 +16,7 @@ export function ImportedPill({ task, className }: { task: { tags?: string[] }; c
   if (!isExternalImportTask(task)) return null;
   return (
     <span
-      className={`todo-item-due-pill todo-item-imported-pill${className ? ` ${className}` : ''}`}
+      className={`badge badge-paused todo-item-due-pill todo-item-imported-pill${className ? ` ${className}` : ''}`}
       title={IMPORTED_PILL_TITLE}
       data-testid="imported-pill"
     >

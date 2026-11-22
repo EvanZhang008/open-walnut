@@ -36,6 +36,7 @@ import { readUnreadOnly, subscribeUnreadOnly, unreadOnlyVersion } from './mail-u
 import { useMailFolderContextMenu } from './MailFolderContextMenu';
 import { DraftsIcon, MailboxRoleIcon, TwistIcon } from './mail-icons';
 import { MailInboxBadge } from './MailGroupedHeader';
+import { NoticeStatus } from '@/components/common/NoticeCard';
 
 interface Props {
   account: MailAccountDto;
@@ -80,14 +81,6 @@ function withDraftsRow(rows: ReactNode[], at: number, draftsRow: ReactNode): Rea
 
 /** A tail long enough that scrolling back to its toggle is a journey (measured: 58 rows is 1,860px). */
 const SECOND_TOGGLE_AT = 12;
-
-/**
- * The roles whose unread nobody acts on, so their badge is drawn quiet rather than as an alert.
- *
- * Archive, Junk and Trash. Never the badge's VALUE: it is the mailbox row's exact unread, the same number
- * the list header reads, and suppressing it would make the sidebar and the header disagree.
- */
-const QUIET_ROLES = new Set<MailboxDto['role']>(['archive', 'spam', 'trash']);
 
 export function MailAccountFolders({
   account, rows, live, draftsCount, selected, arrivals, recent, expanded, manyAccounts, folderFetch,
@@ -188,7 +181,7 @@ export function MailAccountFolders({
         )}
         {stateLabel && (
           <span className="mail-account-state" data-testid="mail-account-state" data-state={account.state}>
-            {stateLabel}
+            <NoticeStatus tone={account.state === 'disabled' ? 'muted' : 'warn'}>{stateLabel}</NoticeStatus>
           </span>
         )}
       </header>
@@ -369,25 +362,22 @@ function FolderRow({
           hover text claims that anything which just received mail is above the line: without this the
           claim cannot be checked on screen. The badge is the folder's unread, which is a different fact. */}
       {arrived && (
-        <span className="mail-mailbox-new" data-testid="mail-mailbox-new" aria-label="new mail">New</span>
+        <span className="badge badge-accent mail-mailbox-new" data-testid="mail-mailbox-new" aria-label="new mail">New</span>
       )}
       {/* The EXACT number, from this mailbox row, which is the same row the list header's own two
           numbers come from. It used to cap at "99+", and a folder saying "Inbox 99+" next to a header
           saying "5 unread" is two numbers a human cannot reconcile by looking. The badge grows instead
           and the folder name gives up the width (see mail.css).
 
-          MUTED on the three roles nobody triages. At real density this pane showed ten badges, of which
-          an Archive row's 177 and another account's Trash 2,609 and Junk 37 were the loudest, and the
-          eight on All Inboxes (the one number the group exists to answer) was the fourth smallest. The
-          number is still exact and still on screen, because unread that only Walnut can see is the thing
-          this pane must never hide; it just stops being the brightest thing in the column. */}
+          Every mailbox count is the one neutral count badge, Trash and Archive included: the only
+          accent count is All Inboxes, the unread total of the primary list (MailSmartRows.tsx). At real
+          density a solid blue Trash 2,609 had been the loudest thing in the column. */}
       {mailbox.role === 'inbox' ? (
         <MailInboxBadge scope={{ accountId, mailboxId: mailbox.mailboxId }} providerUnread={mailbox.unread} testId="mail-mailbox-unread" />
       ) : mailbox.unread > 0 && (
         <span
-          className={`mail-unread-badge${QUIET_ROLES.has(mailbox.role) ? ' quiet' : ''}`}
+          className="badge badge-count mail-unread-badge"
           data-testid="mail-mailbox-unread"
-          data-quiet={QUIET_ROLES.has(mailbox.role) ? 'true' : undefined}
         >
           {formatCount(mailbox.unread)}
         </span>
@@ -434,7 +424,7 @@ function DraftsRow({ accountId, count, active, onPicked }: {
           same list, and one of them capping while the other does not is a difference with no
           meaning behind it. */}
       {waiting > 0 && (
-        <span className="mail-unread-badge" data-testid="mail-drafts-count">
+        <span className="badge badge-count mail-unread-badge" data-testid="mail-drafts-count">
           {formatCount(waiting)}
         </span>
       )}

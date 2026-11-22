@@ -50,7 +50,7 @@ describe('the Org chart draws each router beside the VPs', () => {
     expect(read('web/src/pages/OrgPage.tsx')).toContain('routers={channels.routers}');
     const sheet = read('web/src/components/org/OrgChartSheet.tsx');
     expect(sheet).toContain('data-testid="org-chart-router"');
-    expect(sheet).toContain('<span className="oc-role">Router</span>');
+    expect(sheet).toContain('<span className="badge oc-role">Router</span>');
     // In the same grid as the VP cards, after them (2026-11-21: VPs first, routers fill the short
     // columns), before "+ New", and never a drop zone or a drag handle.
     const routerAt = sheet.indexOf('routers.map((r)');

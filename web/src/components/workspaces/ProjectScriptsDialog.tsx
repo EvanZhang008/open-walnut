@@ -53,7 +53,7 @@ export function scriptRoles(s: { setup?: boolean; wait?: boolean; teardown?: boo
 function Roles({ s, replaced }: { s: { setup?: boolean; wait?: boolean; teardown?: boolean }; replaced?: { setup?: boolean; teardown?: boolean } }) {
   const roles = scriptRoles(s, replaced);
   if (!roles.length) return null;
-  return <span className="project-scripts-roles">{roles.map((r) => <span key={r} className={`project-scripts-role${/replaced/.test(r) ? ' is-replaced' : ''}`}>{r}</span>)}</span>;
+  return <span className="project-scripts-roles">{roles.map((r) => <span key={r} className={`badge${/replaced/.test(r) ? ' badge-paused is-replaced' : ''} project-scripts-role`}><span>{r}</span></span>)}</span>;
 }
 
 export function ProjectScriptsDialog({ project, cwd, host, onClose, onSaved }: {
@@ -294,7 +294,7 @@ export function ProjectScriptsDialog({ project, cwd, host, onClose, onSaved }: {
                   <span className="project-scripts-name">{s.name}</span>
                   <Roles s={s} />
                   {fileScripts.some((f) => f.name.toLowerCase() === s.name.toLowerCase()) && (
-                    <span className="project-scripts-role" title={`Used instead of the "${s.name}" in ${answer.file?.name ?? 'walnut.json'}`}>Replaces {answer.file?.name ?? 'walnut.json'}'s</span>
+                    <span className="badge project-scripts-role" title={`Used instead of the "${s.name}" in ${answer.file?.name ?? 'walnut.json'}`}><span>Replaces {answer.file?.name ?? 'walnut.json'}'s</span></span>
                   )}
                   <ScriptCommand className="project-scripts-command" command={s.command} />
                 </div>
@@ -325,7 +325,7 @@ export function ProjectScriptsDialog({ project, cwd, host, onClose, onSaved }: {
                 <div className="project-scripts-row-main">
                   <span className="project-scripts-name">{s.name}</span>
                   <Roles s={s} replaced={{ setup: list.some((p) => p.setup), teardown: list.some((p) => p.teardown) }} />
-                  {list.some((p) => p.name.toLowerCase() === s.name.toLowerCase()) && <span className="project-scripts-role is-replaced">Replaced by the project's</span>}
+                  {list.some((p) => p.name.toLowerCase() === s.name.toLowerCase()) && <span className="badge badge-paused project-scripts-role is-replaced">Replaced by the project's</span>}
                   <ScriptCommand className="project-scripts-command" command={s.command} />
                 </div>
               </div>

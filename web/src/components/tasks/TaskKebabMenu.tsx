@@ -27,6 +27,7 @@ import { projectDisplayName, projectGroupKey } from '@/utils/project-display';
 import { rowAnchorOf, scrollMovedRow, type RowAnchor } from '@/utils/cursor-menu-scroll';
 import { PinShortcutChoices, PinTierButton, type PinChoice } from './PinShortcutChoices';
 import { MicInput } from '@/components/common/BoxMic';
+import { badge, priorityTone } from '@/components/common/badge';
 
 type TaskListProjection = Task & {
   /** Precomputed by fields=list because that projection intentionally omits ext. */
@@ -340,7 +341,7 @@ export function TaskActionMenuItems({
               {PRIORITY_OPTIONS.map((p) => (
                 <button
                   key={p.value}
-                  className={`badge badge-${p.value}${task && task.priority === p.value ? ' badge-active' : ''} badge-clickable`}
+                  className={`${badge(priorityTone(p.value))}${task && task.priority === p.value ? ' badge-active' : ''}`}
                   title={p.label}
                   aria-pressed={showPriorityLabels ? (!!task && task.priority === p.value) : undefined}
                   onClick={(e) => {
@@ -349,7 +350,7 @@ export function TaskActionMenuItems({
                     afterAction();
                   }}
                 >
-                  {showPriorityLabels ? `${p.icon} ${p.label}` : p.icon}
+                  <span>{showPriorityLabels ? `${p.icon} ${p.label}` : p.icon}</span>
                 </button>
               ))}
             </div>

@@ -22,7 +22,7 @@ export function ContextSection({ title, tokens, count, defaultOpen = false, chil
       >
         <span className="context-section-arrow">{open ? '\u25BC' : '\u25B6\uFE0E'}</span>
         <span className="context-section-title">{label}</span>
-        <span className="context-token-badge">~{tokens.toLocaleString()} tokens</span>
+        <span className="badge context-token-badge"><span>~{tokens.toLocaleString()} tokens</span></span>
       </button>
       {open && (
         <div className="context-section-content">

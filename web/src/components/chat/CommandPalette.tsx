@@ -70,7 +70,7 @@ export function CommandPalette<T extends PaletteItem = SlashCommand>({ commands,
             <div className="command-palette-row">
               <span className="command-palette-name">/{cmd.name}</span>
               {(showSource || cmd.source === 'app' || cmd.source === 'control' || cmd.source === 'skill' || cmd.source === 'plugin') && cmd.source && (
-                <span className={`command-palette-source${cmd.source ? ` command-palette-source-${cmd.source}` : ''}`}>{SOURCE_LABELS[cmd.source] ?? cmd.source}</span>
+                <span className={`badge command-palette-source${cmd.source ? ` command-palette-source-${cmd.source}` : ''}`}><span>{SOURCE_LABELS[cmd.source] ?? cmd.source}</span></span>
               )}
             </div>
             {cmd.description && <span className="command-palette-desc">{cmd.description}</span>}

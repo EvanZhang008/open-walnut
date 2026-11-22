@@ -192,18 +192,8 @@
 }
 
 /* Phones & Cloud for a browser signed in with a code (any width). */
-.devices-own-tag {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 6px;
-  border-radius: 6px;
-  font-size: var(--font-size-sm);
-  line-height: 16px;
-  font-weight: 600;
-  color: var(--accent-text);
-  background: var(--accent-subtle);
-}
+/* "This phone": the one `.badge`, accent because it is yours (DeviceList.tsx). */
+.devices-own-tag { flex: none; }
 
 .devices-sign-out {
   min-height: 44px;
@@ -268,8 +258,8 @@
     min-width: 44px;
   }
 
-  /* No text under 12 px on a phone (C19): the desktop tags are 11.5. */
-  .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .settings-tag {
+  /* No text under 12 px on a phone (C19): every badge in the pane, the desktop ones are 11. */
+  .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .badge {
     font-size: var(--font-size-sm);
   }
 

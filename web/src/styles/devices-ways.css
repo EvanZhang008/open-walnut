@@ -1,7 +1,7 @@
 /* Settings, Phones & Cloud: the tab bar, each tab's intro and how the phone
    reaches Walnut now (components/settings/sections/cloud/PhonesCloudTabs.tsx),
-   and the pairing QR dialog (cloud/PairQrDialog.tsx). Colors through tokens; the
-   tag tints are the ones .settings-tag uses (settings-controls-misc.css). */
+   and the pairing QR dialog (cloud/PairQrDialog.tsx). Colors through tokens; a tab's
+   tag word is the one `.badge`. */
 
 /* The tab bar (the shared TabList and Tab, each with its hint as the detail line): one tab per
    way, and Devices. Scrolls sideways when the pane is narrow. */
@@ -43,22 +43,19 @@
   line-height: 18px;
 }
 .pc-servers-key { color: var(--fg-muted); }
-.pc-servers-list { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.pc-servers-list { display: flex; flex-wrap: wrap; gap: 6px 16px; min-width: 0; }
 .pc-server {
+  /* A server's state: its dot and words, no box (standard.md, "Status labels"). */
   display: inline-flex;
   align-items: center;
   gap: 6px;
   max-width: 100%;
-  padding: 3px 10px;
-  border: 1px solid var(--settings-group-border);
-  border-radius: 999px;
-  background: var(--settings-group-bg);
   color: var(--fg);
   text-decoration: none;
   white-space: nowrap;
 }
 .pc-server .browser-access-dot { margin: 0; }
-a.pc-server:hover { border-color: var(--fg-muted); }
+a.pc-server:hover .pc-server-name { text-decoration: underline; text-underline-offset: 2px; }
 a.pc-server:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .pc-server-name { font-weight: 600; }
 .pc-server-short { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--fg-muted); }
@@ -110,18 +107,7 @@ a.pc-server:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .devices-now-detail { margin-top: 6px; color: var(--fg-muted); font-size: var(--font-size-md); line-height: 18px; }
 
 /* State words and dots, in the tab bar and the intro. */
-.devices-way-tag {
-  flex: 0 0 auto;
-  padding: 0 7px;
-  border-radius: var(--radius-xs);
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  line-height: 18px;
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-}
-.devices-way-tag[data-dot='on'] { background: rgba(52, 199, 89, 0.14); color: var(--settings-tag-success-fg, var(--success)); }
-.devices-way-tag[data-dot='warn'] { background: rgba(255, 149, 0, 0.14); color: var(--priority-important-text); }
+.devices-way-tag { flex: 0 0 auto; }
 .devices-way-dot {
   display: inline-block;
   flex: 0 0 auto;

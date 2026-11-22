@@ -922,7 +922,7 @@ export function DraftSessionPanel({
                   creates none, so it keeps "New Session" beside its "for:" line. */}
               {isFork ? 'Fork Session' : isRepair ? 'Customize Walnut' : isWalnut ? askLabel : isBound ? 'New Session' : 'New task'}
             </span>
-            <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Draft</span>
+            <span className="badge session-panel-badge">Draft</span>
             {isBound && (
               <span className="draft-bound-task" title={`This session will attach to the existing task "${draft.boundTaskTitle}" — no second task is created`}>
                 for: {draft.orgLead && draft.boundTaskTitle ? leadShown(draft.boundTaskTitle) : draft.boundTaskTitle}

@@ -12,6 +12,7 @@ import { taskPath } from '@/utils/task-path';
 import { SettingsNotice, SettingsLoadingRow } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SectionCard } from '../inputs/SectionCard';
+import { NoticeStatus, type NoticeTone } from '@/components/common/NoticeCard';
 import { SegmentedControl } from '../inputs/SegmentedControl';
 import { HealthErrorLog } from './HealthErrorLog';
 import '@/styles/settings-sections-addons.css';
@@ -26,6 +27,8 @@ const FIX_OPTIONS: ReadonlyArray<{ value: FixTasksMode; label: string; testId: s
 ];
 
 const STATE_LABEL: Record<AlarmState, string> = { ALARM: 'Alarm', OK: 'OK', INSUFFICIENT_DATA: 'No data' };
+/** An alarm's state is a dot and a word: red when it fires, green when clear, grey with no data. */
+const STATE_TONE: Record<AlarmState, NoticeTone> = { ALARM: 'error', OK: 'ok', INSUFFICIENT_DATA: 'muted' };
 
 function ago(ms: number, now: number): string {
   const m = Math.max(0, Math.round((now - ms) / 60_000));
@@ -227,7 +230,7 @@ function AlarmRows({ row, now, open, onToggle, onChanged }: { row: AlarmRow; now
       <tr className={`health-row health-row-${row.state}${open ? ' is-open' : ''}`} data-alarm={row.id} onClick={onToggle}
         role="button" tabIndex={0} aria-expanded={open}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}>
-        <td><span className={`health-pill health-pill-${row.state}`}>{STATE_LABEL[row.state]}</span></td>
+        <td><NoticeStatus className="health-pill" tone={STATE_TONE[row.state]}>{STATE_LABEL[row.state]}</NoticeStatus></td>
         <td className="health-name">
           <span className="health-title">{row.title}</span>
           {label && <span className="health-label">{label}</span>}

@@ -77,17 +77,8 @@
   overflow-wrap: anywhere;
 }
 .mail-correct-moves-bold { font-weight: 700; color: var(--fg); }
-.mail-correct-tag {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 0 6px;
-  border-radius: var(--radius-sm);
-  background: var(--accent-subtle);
-  color: var(--accent-text);
-  font-size: var(--font-size-xs);
-  line-height: 16px;
-  vertical-align: 1px;
-}
+/* "From your note": a source, the one neutral `.badge`. */
+.mail-correct-tag { margin-left: 6px; }
 
 /* The model's cell is reserved at two lines (summary + matches) so nothing under it moves (C81). */
 .mail-correct-model-cell { min-height: 44px; display: flex; flex-direction: column; justify-content: flex-start; }

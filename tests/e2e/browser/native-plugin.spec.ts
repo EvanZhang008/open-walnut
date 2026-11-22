@@ -365,12 +365,18 @@ async function contrastAgainstCard(target: Locator): Promise<number> {
       return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b)
     }
     const fg = parse(getComputedStyle(el).color)
+    // A translucent fill (a badge's tint) is laid over what is under it, down to the first opaque one.
+    const layers: Array<{ r: number; g: number; b: number; a: number }> = []
     let node: HTMLElement | null = el as HTMLElement
-    let bg = null
-    while (node && !bg) {
+    while (node && !(layers.length && layers[layers.length - 1].a >= 1)) {
       const c = parse(getComputedStyle(node).backgroundColor)
-      if (c && c.a > 0) bg = c
+      if (c && c.a > 0) layers.push(c)
       node = node.parentElement
+    }
+    let bg = layers.length && layers[layers.length - 1].a >= 1 ? layers.pop()! : null
+    while (bg && layers.length) {
+      const top = layers.pop()!
+      bg = { r: top.r * top.a + bg.r * (1 - top.a), g: top.g * top.a + bg.g * (1 - top.a), b: top.b * top.a + bg.b * (1 - top.a), a: 1 }
     }
     if (!fg || !bg) return 0
     const [l1, l2] = [lum(fg), lum(bg)].sort((a, b) => b - a)
@@ -826,7 +832,7 @@ test.describe('update status', () => {
       const mark = chip.locator('.plugin-update-chip-stale-mark')
       await expect(mark).toBeVisible()
       const [pill, markBox] = await Promise.all([chip.boundingBox(), mark.boundingBox()])
-      expect(markBox!.width).toBeGreaterThanOrEqual(12)
+      expect(markBox!.width).toBeGreaterThanOrEqual(11) // a badge's icon size
       expect(markBox!.x).toBeGreaterThanOrEqual(pill!.x)
       expect(markBox!.x + markBox!.width).toBeLessThanOrEqual(pill!.x + pill!.width + 0.5)
       expect(markBox!.y).toBeGreaterThanOrEqual(pill!.y - 0.5)
@@ -1208,8 +1214,8 @@ test.describe('update status', () => {
         kinds.add(kind)
         // Soft, so every chip in both themes is measured and reported in one run.
         expect.soft(await contrastAgainstCard(chip), `${theme} chip ${i} (${kind}) contrast`).toBeGreaterThanOrEqual(4.5)
-        // Outline chip, never a solid badge: transparent background.
-        expect(await chip.evaluate((el) => getComputedStyle(el).backgroundColor)).toMatch(/rgba\(0, 0, 0, 0\)|transparent/)
+        // The one badge, its tone by what it says: an update is the accent, local changes amber.
+        await expect(chip).toHaveClass(kind === 'available' ? /\bbadge-accent\b/ : /\bbadge-warning\b/)
       }
       expect([...kinds].sort()).toEqual(['available', 'dirty'])
       // The 12px header time reads at 4.5:1 too (N20).

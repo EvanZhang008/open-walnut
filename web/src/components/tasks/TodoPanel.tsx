@@ -195,6 +195,7 @@ import { useTaskIconState } from '@/hooks/useSessionStatus';
 import { TaskStateIcon } from '../common/TaskStateIcon';
 import { openTaskHere } from '@/utils/open-session';
 import { projectDisplayName, projectGroupKey, projectIdentity, taskProjectLabel } from '@/utils/project-display';
+import { badge, priorityTone } from '@/components/common/badge';
 
 type Task = CoreTask & {
   has_description?: boolean;
@@ -1315,13 +1316,13 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           <AwaySyncMark item={task} />
           {/* Info pills + kebab — same line as title, no second row */}
           {startDateLabel && (
-            <span className="todo-item-due-pill todo-item-start-pill" title={`Starts: ${task.start_date}`}>
-              ▶︎ {startDateLabel}
+            <span className="badge todo-item-due-pill todo-item-start-pill" title={`Starts: ${task.start_date}`}>
+              <span>▶︎ {startDateLabel}</span>
             </span>
           )}
           {dueDateLabel && (
-            <span className={`todo-item-due-pill${dueDateOverdue ? ' todo-item-due-overdue' : ''}`} title={task.due_date ? `Due: ${task.due_date}` : undefined}>
-              {dueDateLabel}
+            <span className={`${badge(dueDateOverdue ? 'error' : 'neutral')} todo-item-due-pill`} title={task.due_date ? `Due: ${task.due_date}` : undefined}>
+              <span>{dueDateLabel}</span>
             </span>
           )}
           {/* A usage limit holds it: the Flat view's Limited words, and its reset is the row's time. */}
@@ -1330,15 +1331,15 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           <TaskFallbackTag task={task} />
           {task.phase === 'WAITING' && task.wait_until && !task.user_status?.limit && (
             <span
-              className="todo-item-due-pill todo-item-wait-pill"
+              className="badge todo-item-due-pill todo-item-wait-pill"
               data-testid="task-row-wait-until"
               title={`Waiting until ${new Date(task.wait_until).toLocaleString()}, or until something happens first`}
             >
-              until {formatWaitUntil(task.wait_until)}
+              <span>until {formatWaitUntil(task.wait_until)}</span>
             </span>
           )}
           {!!task.is_blocked && !isDone && (
-            <span className="task-blocked-badge" title="Blocked by dependencies">
+            <span className="badge badge-warning task-blocked-badge" title="Blocked by dependencies">
               blocked
             </span>
           )}
@@ -1380,8 +1381,8 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
         {hasSearchMeta && (
           <div className="todo-search-meta-row">
             {searchTierLabel && pinnedTier && (
-              <span className={`todo-search-tier-pill todo-search-tier-${isBuiltinTier(pinnedTier) ? pinnedTier : 'custom'}`} title={`Pinned in ${searchTierLabel}`}>
-                {searchTierLabel}
+              <span className={`${badge(pinnedTier === 'focus' ? 'accent' : 'neutral')} todo-search-tier-pill todo-search-tier-${isBuiltinTier(pinnedTier) ? pinnedTier : 'custom'}`} title={`Pinned in ${searchTierLabel}`}>
+                <span>{searchTierLabel}</span>
               </span>
             )}
             {searchContext && (
@@ -1415,7 +1416,7 @@ function TaskItemOverlay({ task }: { task: Task }) {
         <span className={`todo-item-title wn-title${task.walnut_agent ? ' walnut-task-title' : ''}`}>{orgDisplayTitle(task)}</span>
       </div>
       {showPriority && (
-        <span className={`badge badge-${task.priority}`}>{task.priority === 'immediate' ? '!!' : task.priority === 'important' ? '!' : task.priority === 'backlog' ? '~' : '--'}</span>
+        <span className={badge(priorityTone(task.priority))}><span>{task.priority === 'immediate' ? '!!' : task.priority === 'important' ? '!' : task.priority === 'backlog' ? '~' : '--'}</span></span>
       )}
     </div>
   );
@@ -1568,7 +1569,7 @@ function ProjectHeaderRow({
                   project label (the same three are plain row spans there); the
                   SPACING deliberately does not, this row's 2px gap is tighter than
                   the tier's 5px because the gap also spaces the chevron and name. */}
-              <span className="project-kind-tag">project</span>
+              <span className="badge project-kind-tag">project</span>
               <ProjectSourceBadge source={source} />
               <span className="todo-group-count text-xs text-muted">{taskCount}</span>
             </div>
@@ -8364,7 +8365,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                 >
                   <span className="todo-pinned-hidden-chip-icon" aria-hidden="true">⊙</span>
                   <span className="todo-pinned-hidden-chip-label">{g.label}</span>
-                  <span className="todo-pinned-hidden-chip-count">{g.count}</span>
+                  <span className="badge badge-count todo-pinned-hidden-chip-count">{g.count}</span>
                 </button>
               ))}
             </div>
@@ -8393,7 +8394,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               <div className="todo-pinned-header" onClick={() => toggleSection('recent')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('recent'); }} style={{ cursor: 'pointer' }}>
                 <span className={`todo-pinned-chevron${chevronCollapsed('recent') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
                 <span className="todo-pinned-label">Recent</span>
-                <span className="todo-pinned-count">{visibleRecentTasks.length}</span>
+                <span className="badge badge-count todo-pinned-count">{visibleRecentTasks.length}</span>
               </div>
               )}
               {!isFolded('recent') && (

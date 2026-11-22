@@ -41,7 +41,7 @@ export function RepoCard({ repo, onClick, onEdit, onDelete }: RepoCardProps) {
         {hostLabels.length > 0 && (
           <div className="repo-card-hosts">
             {hostLabels.map((h) => (
-              <span key={h} className="repo-host-badge">{h}</span>
+              <span key={h} className="badge repo-host-badge"><span>{h}</span></span>
             ))}
           </div>
         )}

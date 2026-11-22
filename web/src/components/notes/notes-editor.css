@@ -218,18 +218,8 @@
 }
 
 /* ── #tag chip ─────────────────────────────────────────────────────────── */
-.notes-tag {
-  display: inline;
-  padding: 1px 6px;
-  margin: 0 1px;
-  border-radius: 999px;
-  background: var(--accent-subtle);
-  color: var(--accent);
-  font-size: 0.88em;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-}
+/* A #tag in the prose: the one `.badge` (tag-node.ts), clickable; only its spacing is here. */
+.notes-tag { margin: 0 1px; }
 .notes-editor .tiptap .notes-tag.ProseMirror-selectednode {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
@@ -427,13 +417,6 @@
 .notes-tag-item.selected,
 .notes-tag-item:hover { background: var(--bg-hover); color: var(--fg); }
 .notes-tag-item-name { font-weight: 500; }
-.notes-tag-item-count {
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  background: var(--bg-secondary);
-  padding: 0 6px;
-  border-radius: 999px;
-}
 .notes-tag-create .notes-tag-item-name { color: var(--accent); }
 
 /* ── Cmd+K command palette (front door — §4.3 / §9.3) ──────────────────── */
@@ -588,24 +571,10 @@ mark.notes-search-mark {
   color: var(--fg-muted);
   font-size: var(--font-size-md);
 }
-/* Hybrid match badge: ● exact / ◐ both / ○ semantic (trust legend §9.2). */
-.notes-cmdk-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex: 0 0 auto;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  padding: 1px 6px;
-  border-radius: 999px;
-}
+/* Hybrid match badge, ● exact / ◐ both / ○ semantic / ▣ attachment (trust legend §9.2): the one
+   `.badge`, accent for a match on the words (CommandPalette.tsx); the glyph tells the four apart. */
+.notes-cmdk-badge { flex: 0 0 auto; }
 .notes-cmdk-badge-glyph { font-size: 9px; }
-.notes-cmdk-badge-exact { color: var(--success); background: rgba(34, 197, 94, 0.14); }
-.notes-cmdk-badge-both { color: var(--accent); background: rgba(99, 102, 241, 0.16); }
-.notes-cmdk-badge-semantic { color: var(--fg-muted); background: var(--bg-secondary); }
-.notes-cmdk-badge-attachment { color: var(--warning); background: rgba(232, 168, 56, 0.14); }
 .notes-cmdk-create .notes-cmdk-create-label {
   font-size: 14px;
   color: var(--accent);

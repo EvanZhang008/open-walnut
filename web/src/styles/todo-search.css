@@ -11,16 +11,9 @@
   flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
   font-size: var(--font-size-xs); line-height: 16px; color: var(--fg-muted);
 }
-/* A long custom tier name stops at 120px so the project still shows. */
-.todo-search-tier-pill {
-  flex: none; max-width: 120px; overflow: hidden; text-overflow: ellipsis; padding: 0 6px; border-radius: var(--radius-sm); font-size: var(--font-size-xs); font-weight: 500; line-height: 16px; white-space: nowrap;
-  --pill-tier: var(--tier-custom);
-  color: var(--pill-tier); background: color-mix(in srgb, var(--pill-tier) 13%, transparent);
-}
-.todo-search-tier-focus { --pill-tier: var(--tier-focus); }
-.todo-search-tier-satellite { --pill-tier: var(--tier-satellite); }
-.todo-search-tier-backlog { --pill-tier: var(--tier-backlog); }
-.todo-search-tier-wait { --pill-tier: var(--tier-wait); }
+/* The pinned tier is a `.badge` (blue for Focus, grey for the rest); a long custom tier name stops
+   at 120px so the project still shows. */
+.todo-search-tier-pill { flex: none; max-width: 120px; }
 
 /* "Completed (N) ›" and "Related (N) ›": hits that wait behind one heading-style row. */
 .todo-search-fold-toggle { margin-top: 4px; }

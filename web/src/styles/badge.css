@@ -1,0 +1,131 @@
+/*
+ * The one label of the console (standard.md, "Status labels"): `.badge` for a count, a tag or a
+ * kind (Worker, Leader, Trigger, Cron, a tag, a source); a state is a dot and a word
+ * (NoticeStatus), never a badge. 2026-11-21, the user, of the pill-shaped controls: "什么鬼东西都要是
+ * 圆形的呀？所有东西都应该统一啊" (why must everything be round? everything should be consistent).
+ * Task rows and search results read as "a list of tags": blue, violet and grey pills, dashed boxes,
+ * a violet "12 workers" beside a red "3 need you", each drawn by its own class.
+ *
+ * One size, one soft-rectangle corner, four tones from tokens. A member keeps its own class for
+ * layout (margin, max-width, order) and its hooks, never for colour, corner, padding or type:
+ * tests/web/ui-standard-ratchet.test.ts counts every `*-badge`, `*-pill`, `*-chip`, `*-tag` and
+ * `*-count` rule that draws a box of its own.
+ *
+ *   .badge                 neutral: a grey tint, --fg-secondary words
+ *   .badge.badge-accent    the one blue: a kind that is "on" or "yours" (Focus, a live link)
+ *   .badge.badge-warning   amber: about to run out, wants a look soon
+ *   .badge.badge-error     red tint: broken, failed, stopped
+ *   .badge.badge-alert     solid red, white figure: the count of what needs the user, and nothing else
+ *   .badge.badge-paused    dashed outline, no fill: a kind that is switched off (every trigger paused)
+ *   .badge.badge-count     a number: centred, a square at one digit, tabular figures
+ *
+ * This file loads after every component stylesheet (global-styles.ts), so a member rule just as
+ * specific never wins over its look; where it sits (flex, margin, max-width) is the member's.
+ */
+:root {
+  --badge-h: 18px;
+}
+
+.badge {
+  --badge-bg: color-mix(in srgb, var(--fg) 7%, transparent);
+  --badge-fg: var(--fg-secondary);
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--badge-h);
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: var(--badge-bg);
+  color: var(--badge-fg);
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  font-style: normal;
+  line-height: var(--badge-h);
+  letter-spacing: normal;
+  text-transform: none;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  box-shadow: none;
+  appearance: none;
+  -webkit-appearance: none;
+}
+/* Where it sits is its member's (flex, margin, max-width): these defaults weigh nothing. */
+:where(.badge) { flex: 0 1 auto; min-width: 0; max-width: 100%; margin: 0; }
+.badge > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.badge > svg { flex: none; width: 11px; height: 11px; }
+
+.badge.badge-accent { --badge-bg: color-mix(in srgb, var(--accent) 12%, transparent); --badge-fg: var(--accent-text); }
+.badge.badge-warning { --badge-bg: color-mix(in srgb, var(--warning) 16%, transparent); --badge-fg: var(--priority-important-text); }
+.badge.badge-error { --badge-bg: color-mix(in srgb, var(--error) 12%, transparent); --badge-fg: var(--error); }
+.badge.badge-alert { --badge-bg: var(--error); --badge-fg: var(--on-accent); font-weight: 600; }
+.badge.badge-paused {
+  --badge-bg: transparent;
+  border: 1px dashed color-mix(in srgb, var(--fg-secondary) 55%, transparent);
+}
+.badge.badge-paused.badge-error { border-color: color-mix(in srgb, var(--error) 55%, transparent); }
+.badge.badge-count {
+  justify-content: center;
+  min-width: var(--badge-h);
+  padding: 0 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* On an icon (a rail item's count), the one exception to the size: 16px tall, so the
+   20px glyph under it still reads, with a ring of the surface around it. Its member places it. */
+.badge.badge-corner { --badge-h: 16px; padding: 0 4px; box-shadow: 0 0 0 2px var(--bg); }
+
+/* A state beside badges (a task's phase in a chat header): its icon and its word, never a box. */
+.state-word { display: inline-flex; align-items: center; gap: 4px; font-size: var(--font-size-xs); font-weight: 500; color: var(--fg-secondary); white-space: nowrap; }
+.state-word > svg { flex: none; width: 12px; height: 12px; }
+
+/* A badge that opens something (a team list, a trigger's jobs, a pull request): the same label,
+   with a hover tint over whatever tone it has. */
+button.badge, a.badge, .badge[role="button"], .badge.badge-clickable { cursor: pointer; }
+button.badge:hover, a.badge:hover, .badge[role="button"]:hover, .badge.badge-clickable:hover,
+button.badge[aria-expanded="true"], .badge[role="button"][aria-expanded="true"], button.badge.open {
+  background-image: linear-gradient(color-mix(in srgb, var(--fg) 7%, transparent), color-mix(in srgb, var(--fg) 7%, transparent));
+  color: var(--badge-fg);
+}
+button.badge:focus-visible, a.badge:focus-visible, .badge[role="button"]:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 1px;
+}
+
+/* On a line of words, a badge reads as one more word: no fill and no box, the line's size, grey
+   unless its tone carries news; a dashed underline where its box would be dashed. The lines: a
+   status card's meta line ("Marina · Leader · 1 · 2 PRs") and a search result's second line, so
+   one task list reads the same in every tab (2026-11-21: search rows were "a list of tags"). */
+:is(.status-card-meta, .todo-search-results .todo-item-content[data-search-meta]) .badge.badge {
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: var(--font-size-xs);
+  line-height: 16px;
+}
+:is(.status-card-meta, .todo-search-results .todo-item-content[data-search-meta]) .badge:not(.badge-accent, .badge-warning, .badge-error, .badge-alert) { --badge-fg: var(--fg-muted); }
+:is(.status-card-meta, .todo-search-results .todo-item-content[data-search-meta]) .badge.badge-paused > :not(svg),
+:is(.status-card-meta, .todo-search-results .todo-item-content[data-search-meta]) .badge.badge-paused::after { text-decoration: underline dashed; text-underline-offset: 2px; }
+
+:is(.status-card-meta, .todo-search-results .todo-item-content[data-search-meta]) button.badge:hover,
+:is(.status-card-meta, .todo-search-results .todo-item-content[data-search-meta]) button.badge[aria-expanded="true"] { background-image: none; text-decoration: underline; text-underline-offset: 2px; }
+/* A search result's words after its project each start with the line's "·", as the meta line's do. */
+.todo-search-results .todo-item-content[data-search-meta] > .todo-item-title-row > :is(.badge, .task-tag-pills, .todo-item-limit-pill)::before,
+.todo-search-results .todo-search-tier-pill + .todo-search-context-pill::before {
+  content: '·';
+  margin-right: 6px;
+  color: var(--fg-muted);
+  font-weight: 400;
+}
+/* After every rule above that draws the "·": inside a badge it sits beside the badge's own 4px gap,
+   so 2px more makes the 6px every other item of the line has after its dot; and it stays first,
+   ahead of a narrow column's letter (the Worker "W" is an `::after` moved to the front). */
+:is(.status-card-meta, .todo-search-results .todo-item-content[data-search-meta]) .badge.badge.badge::before { margin-right: 2px; order: -2; }
+/* A paused badge on a line of words draws its dashes under the text: nothing clips them. */
+:is(.status-card-meta, .todo-search-results .todo-item-content[data-search-meta]) .badge.badge.badge-paused { overflow: visible; }

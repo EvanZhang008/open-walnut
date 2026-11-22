@@ -93,13 +93,13 @@ export function ContextInspectorPanel({ data, loading, error, onRefresh }: Conte
       <div className="context-inspector-header">
         <span className="context-inspector-title">Agent Context Inspector</span>
         <span
-          className="context-token-badge"
+          className="badge context-token-badge"
           title="A chat turn runs in a coding-agent session; this shows that session's launch config."
         >
-          {isClaudeCode ? 'Claude Code engine' : `${data.engine ?? 'unknown'} engine`}
+          <span>{isClaudeCode ? 'Claude Code engine' : `${data.engine ?? 'unknown'} engine`}</span>
         </span>
-        <span className="context-token-badge context-token-badge-total">
-          System prompt: ~{totalTokens.toLocaleString()} tokens
+        <span className="badge badge-accent context-token-badge context-token-badge-total">
+          <span>System prompt: ~{totalTokens.toLocaleString()} tokens</span>
         </span>
         <button
           className="btn btn-sm"

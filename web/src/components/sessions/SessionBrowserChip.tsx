@@ -24,6 +24,7 @@ import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import type { useBrowserView } from './useBrowserView';
 import { SessionBrowserCard } from './SessionBrowserCard';
 import type { BrowserViewTab } from './browser-view-model';
+import { badge, type BadgeTone } from '@/components/common/badge';
 import '@/styles/session-browser-chip.css';
 
 /** A browser window: its title bar and page. */
@@ -37,6 +38,8 @@ const BROWSER_ICON = (
 );
 
 export type BrowserChipTone = 'live' | 'ask' | 'yours' | 'ended';
+/** The pill's label tone (styles/badge.css): a sign-in ask wants a look, the person's own tab is "yours". */
+const BROWSER_BADGE_TONE: Record<BrowserChipTone, BadgeTone> = { live: 'neutral', ask: 'warning', yours: 'accent', ended: 'neutral' };
 
 /** The pill's words and colour, from the task's tabs (null: no pill). */
 export function browserChipLook(tabs: readonly Pick<BrowserViewTab, 'driving' | 'signIn' | 'title' | 'url' | 'tab'>[]): {
@@ -91,7 +94,7 @@ export function SessionBrowserChip({ taskId, view, compact = false }: {
       <button
         ref={chipRef}
         type="button"
-        className={`session-browser-chip is-${tone}${compact ? ' is-compact' : ''}`}
+        className={`${compact ? '' : `${badge(BROWSER_BADGE_TONE[tone])} `}session-browser-chip is-${tone}${compact ? ' is-compact' : ''}`}
         data-testid="session-browser-chip"
         data-header-pill="browser"
         data-short="B"

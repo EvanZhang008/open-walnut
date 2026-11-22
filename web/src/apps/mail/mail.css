@@ -234,34 +234,9 @@
   overflow-wrap: anywhere;
 }
 
-/* The task chip, as the rest of Walnut draws it.
-
-   The shared `.task-link` rules are scoped to `.markdown-body a.task-link` (globals.css), and the
-   mail reader is not a markdown container: inheriting the class alone gave a bare undecorated link,
-   which is the one thing this control must not be, since the whole point is that it reads as a
-   Walnut task. So the chip's own properties are restated here, and the vertical rhythm is matched to
-   the buttons it sits beside so the head does not jump when the button becomes the pill. */
-.mail-task-pill {
-  display: inline-flex;
-  align-items: center;
-  max-width: 240px;
-  padding: 3px 8px;
-  border-radius: var(--radius-xs);
-  background: var(--accent-subtle);
-  color: var(--accent);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  text-decoration: none;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  transition: background 0.15s;
-}
-
-.mail-task-pill:hover {
-  background: var(--accent-subtle-hover);
-  text-decoration: none;
-}
+/* The task link: the one `.badge` in its accent tone (a live link), so it reads as a Walnut task
+   without the `.markdown-body a.task-link` rules, which the mail reader is outside of. */
+.mail-task-pill { max-width: 240px; }
 
 .mail-text-btn:hover { text-decoration: underline; }
 
@@ -329,18 +304,8 @@
   overflow-wrap: anywhere;
 }
 
-.mail-account-state {
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 2px 6px;
-  border-radius: 999px;
-  color: var(--on-accent);
-  background: var(--warning);
-}
-
-.mail-account-state[data-state='disabled'] { background: var(--fg-muted); }
+/* The account's state is a dot and a word (NoticeStatus): amber when it needs a sign-in. */
+.mail-account-state { display: inline-flex; flex: none; }
 
 .mail-account-hint {
   margin: 2px 6px 6px;
@@ -392,32 +357,13 @@
   flex: 1;
 }
 
-/* The badge holds an EXACT count now (1,284, not "99+"), so it has to be able to be wide. It keeps
-   its own width whatever it says (`flex: 0 0 auto`) and never breaks the number over two lines;
-   `.mail-mailbox-name` above is the flex item that gives up the room, and it wraps. */
+/* A mailbox count is the one neutral `.badge.badge-count` (MailAccountFolders.tsx). It holds an EXACT
+   count (1,284, not "99+"), so it keeps its own width (`flex: 0 0 auto`); `.mail-mailbox-name` is the
+   flex item that gives up the room, and it already ellipsizes. */
 .mail-unread-badge {
   flex: 0 0 auto;
-  min-width: 18px;
   /* The row's own gap is the glyph's 4px; the badge keeps the 8px it always had. */
   margin-left: 4px;
-  padding: 1px 5px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-  white-space: nowrap;
-}
-
-/* Archive, Junk and Trash. The number is the same exact unread the header reads; what changes is that it
-   stops competing with the inbox counts, which are the only ones anybody acts on. At real density ten
-   badges were on screen and the loudest two were a Trash 2,609 and an Archive 177. */
-.mail-unread-badge.quiet {
-  background: var(--bg-hover);
-  color: var(--fg-muted);
-  font-weight: 500;
 }
 
 /* The pane's LAST-CHECKED line. One 11.5px line under the pane's head, above `+ Add account`, out of
@@ -602,16 +548,6 @@
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.mail-source-tag {
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  letter-spacing: 0.03em;
 }
 
 /* A size container: an open group's rows stack below a width (mail-groups.css, .mail-kid). */
@@ -1267,20 +1203,12 @@
   color: var(--fg-muted);
 }
 
-/* The mark on a folder lifted out of the tail because mail arrived in it this session. Accent text on
-   the accent's subtle fill, so it reads as new rather than as a second unread badge. */
+/* The mark on a folder lifted out of the tail because mail arrived in it this session: a
+   `badge-accent`, so it reads as new rather than as a second unread count. */
 .mail-mailbox-new {
   flex: 0 0 auto;
   /* The row's own gap is the glyph's 4px; this mark keeps the 8px it always had. */
   margin-left: 4px;
-  padding: 0 5px;
-  border-radius: var(--radius-xs);
-  background: var(--accent-subtle);
-  color: var(--accent);
-  font-size: var(--font-size-xs);
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
 }
 
 /* The drill-down pane is the WHOLE window, and a row that stretches to fill it puts its count 660px from

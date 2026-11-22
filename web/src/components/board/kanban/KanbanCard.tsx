@@ -280,8 +280,8 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
               <TagChip tag={vm.ticket.tag} inline whole valueOnly href={tagDisplay.linkFor(vm.ticket.tag)} />
             </span>
           )}
-          {vm.sev && <span className={`kanban-card-sev kanban-sev-${vm.sev === '1' ? '1' : vm.sev === '2' ? '2' : 'other'}`} data-testid="kanban-card-sev">Sev {vm.sev}</span>}
-          {vm.leaderCount ? <span className="kanban-card-leader-pill" title={`${vm.leaderCount} open subtasks`}>Leader · {vm.leaderCount}</span> : null}
+          {vm.sev && <span className={`badge${vm.sev === '1' ? ' badge-error' : ''} kanban-card-sev kanban-sev-${vm.sev === '1' ? '1' : vm.sev === '2' ? '2' : 'other'}`} data-testid="kanban-card-sev"><span>Sev {vm.sev}</span></span>}
+          {vm.leaderCount ? <span className="badge kanban-card-leader-pill" title={`${vm.leaderCount} open subtasks`}><span>Leader · {vm.leaderCount}</span></span> : null}
           {project && (
             <button
               type="button"

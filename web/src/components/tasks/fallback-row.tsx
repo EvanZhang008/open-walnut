@@ -31,7 +31,7 @@ export function TaskFallbackTag({ task, compact }: { task: Task; compact?: boole
       {compact
         ? <span className="status-card-fallback-mark" role="img" aria-label="Fallback">{MARK}</span>
         : <>
-          <span className="status-card-fallback-tag">Fallback</span>
+          <span className="badge status-card-fallback-tag">Fallback</span>
           {/* Where it runs, as the Limited pill says its reset: readable without the hover. */}
           <span className="status-card-fallback-words">on {runsOn(note)}</span>
         </>}

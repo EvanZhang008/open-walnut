@@ -6,7 +6,7 @@
  * rows folded, a row whose only pill kept "WORKER" or "TRIGGER" still cut its title and
  * the column read as a mix of words and letters. Rules pinned here:
  *   - the TRIGGER pill reads TRIGGER, never a count or PAUSED; it is dashed only when
- *     every trigger on the task is off, solid while any still polls;
+ *     every trigger on the task is off, a plain label while any still polls;
  *   - in a tight column (< 420px) EVERY pill draws W / T / L / C and no Leader count,
  *     a lone one included;
  *   - a roomy column keeps every word (and the Leader count);
@@ -225,12 +225,14 @@ async function runSurface(page: Page, pick: (p: Page, id: string) => Locator, f:
     expect(Math.abs(foldedTitle - wordyTitle), 'metadata labels never squeeze the title').toBeLessThan(2)
   }
 
-  // Dashed only when EVERY trigger is off; solid while any polls; never a count or PAUSED.
+  // Dashed only when EVERY trigger is off; a plain filled label (no dashes) while any polls;
+  // never a count or PAUSED.
   const paused = await pillLook(row(f.allPaused), 'task-trigger-pill')
   expect(paused, 'all-paused TRIGGER').toMatchObject({ text: 'Trigger', borderStyle: 'dashed' })
   await expect(row(f.allPaused).getByTestId('task-trigger-pill')).toHaveAttribute('data-paused', 'true')
   const mixed = await pillLook(row(f.mixedPaused), 'task-trigger-pill')
-  expect(mixed, 'one armed, one paused: solid').toMatchObject({ text: 'Trigger', borderStyle: 'solid' })
+  expect(mixed, 'one armed, one paused: not dashed').toMatchObject({ text: 'Trigger' })
+  expect(mixed.borderStyle, 'one armed, one paused: not dashed').not.toBe('dashed')
   await expect(row(f.mixedPaused).getByTestId('task-trigger-pill')).not.toHaveAttribute('data-paused', 'true')
   await expect(row(f.mixedPaused).getByTestId('task-trigger-pill')).toHaveAttribute('data-trigger-count', '2')
 

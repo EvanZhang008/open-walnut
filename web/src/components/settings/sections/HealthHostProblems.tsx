@@ -12,6 +12,7 @@ import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { openHostSettings } from '@/utils/host-settings-nav';
 import { useDisabledHosts, useProblemHosts, type ProblemHost } from '@/components/common/NotificationProblems';
 import { SettingsButton } from '../inputs/SettingsButton';
+import { NoticeStatus } from '@/components/common/NoticeCard';
 
 /** The hosts Walnut Health holds now (the bell holds the others). */
 export function useHealthProblemHosts(): ProblemHost[] {
@@ -36,7 +37,7 @@ export function HealthHostProblems({ hosts }: { hosts: ProblemHost[] }) {
         {hosts.map(({ alias, row }) => (
           <li key={alias} className="health-errors-row health-errors-open" data-testid="health-host-row" data-host={alias}>
             <div className="health-errors-row-head">
-              <span className="health-pill health-pill-ALARM">Happening</span>
+              <NoticeStatus className="health-pill" tone="error">Happening</NoticeStatus>
               <span className="health-errors-title">{row.headline ?? row.problem?.message ?? `${row.labels.join(', ')} cannot be reached`}</span>
             </div>
             <div className="health-errors-detail">

@@ -62,14 +62,14 @@ function MailTaskPill({ taskId }: { taskId: string }) {
   };
   return (
     <a
-      className="task-link mail-task-pill"
+      className="badge badge-accent task-link mail-task-pill"
       data-testid="mail-task-pill"
       data-task-id={taskId}
       href={taskPath(taskId)}
       title={label?.project ? `${label.project} / ${label.title}` : taskId}
       onClick={open}
     >
-      {label?.title ?? taskId}
+      <span>{label?.title ?? taskId}</span>
     </a>
   );
 }

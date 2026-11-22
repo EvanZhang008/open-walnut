@@ -89,23 +89,17 @@
 .board-status .bs-c-status { width: 104px; }
 .board-status .bs-c-when { width: 64px; color: var(--fg-muted); font-size: var(--font-size-sm); white-space: nowrap; }
 
+/* A row's state is a dot and its word, never a box (standard.md, "Status labels"): the dot wears the
+   same colour as its filter chip above, so a row and its chip agree. */
 .board-status .bs-pill {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 1px 8px;
-  border-radius: 999px;
   font-size: var(--font-size-sm);
-  font-weight: 600;
+  font-weight: 500;
   white-space: nowrap;
-  background: color-mix(in srgb, var(--bs-waiting) 16%, transparent);
-  color: var(--fg);
 }
-
-.board-status .bs-pill-needs { background: color-mix(in srgb, var(--bs-needs) 16%, transparent); color: var(--bs-needs); }
-.board-status .bs-pill-working { background: color-mix(in srgb, var(--bs-working) 14%, transparent); color: var(--bs-working); }
-.board-status .bs-pill-done { background: color-mix(in srgb, var(--bs-done) 14%, transparent); color: var(--bs-done); }
-.board-status .bs-pill-stuck { background: color-mix(in srgb, var(--bs-stuck) 16%, transparent); color: var(--bs-stuck); }
+.board-status .bs-pill-stuck .bs-dot { background: var(--bs-stuck); }
 
 .board-status .bs-title { display: block; font-weight: 600; }
 .board-status .bs-sub { display: block; color: var(--fg-muted); font-size: var(--font-size-sm); }
@@ -171,12 +165,8 @@
   .board-status .bs-c-where, .board-status .bs-c-next { grid-column: 1 / -1; }
 }
 
-/* A result that left things not done (structured-reply.ts): the pill beside the state, the list below. */
-.board-status .bs-pill-partial {
-  margin-left: 4px;
-  background: color-mix(in srgb, #f5b400 22%, transparent);
-  color: var(--fg);
-}
+/* A result that left things not done (structured-reply.ts): a `.badge badge-warning` beside the state, the list below. */
+.board-status .bs-pill-partial { margin-left: 4px; }
 .board-status .bs-partial { margin-top: 2px; font-size: var(--font-size-sm); color: color-mix(in srgb, #b07a00 70%, var(--fg)); }
 /* Past or near its due date (user-status.ts `due`). */
 .board-status .bs-due {

@@ -115,18 +115,8 @@
 .kanban-lane-kind-bar[data-kind="review"], .kanban-kind-radio-dot[data-kind="review"] { background: var(--kc-amber); }
 .kanban-lane-kind-bar[data-kind="done"], .kanban-kind-radio-dot[data-kind="done"] { background: var(--kc-green); }
 .kanban-lane-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
-.kanban-lane-count {
-  flex: 0 0 auto; font-size: var(--font-size-xs); font-weight: 600; color: var(--fg-secondary); background: var(--bg-tertiary);
-  padding: 1px 6px; border-radius: 999px; font-variant-numeric: tabular-nums; white-space: nowrap;
-}
-.kanban-lane-head[data-kind="active"] .kanban-lane-count { background: var(--accent-subtle); }
-.kanban-lane-head[data-kind="wait"] .kanban-lane-count { background: var(--kc-violet-tint); }
-.kanban-lane-head[data-kind="review"] .kanban-lane-count { background: var(--kc-amber-tint); }
-.kanban-lane-head[data-kind="done"] .kanban-lane-count { background: var(--kc-green-tint); }
-.kanban-lane-needs {
-  flex: 0 0 auto; min-width: 16px; height: 16px; padding: 0 4px; border-radius: var(--radius-sm); background: var(--kc-red); color: var(--kc-on-accent);
-  font-size: var(--font-size-xs); font-weight: 700; display: inline-flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums;
-}
+/* The lane's count and its needs-you count are `.badge badge-count` (styles/badge.css): only placement here. */
+.kanban-lane-count, .kanban-lane-needs { flex: 0 0 auto; }
 .kanban-lane-kebab {
   margin-left: auto; flex: 0 0 auto; width: 24px; height: 24px; border: 0; border-radius: 6px; background: none;
   color: var(--fg-secondary); cursor: pointer; font-size: var(--font-size-lg); line-height: 1; padding: 0;

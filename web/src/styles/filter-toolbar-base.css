@@ -52,25 +52,9 @@
 
 /* A narrow toolbar folds the label to the icon: styles/toolbar-fit.css. */
 
-/* Count badge on a toolbar button (Filter: number of chips). Inline after the
-   label (F40): it never sits on the button's border or ring. */
-.tp-badge {
-  position: static;
-  flex: none;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  line-height: 16px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
-  box-sizing: border-box;
-}
+/* The count on a toolbar button (Display: number of active filters) is `.badge badge-accent
+   badge-count` (DisplayMenu.tsx). Inline after the label (F40): it never sits on the button's ring. */
+.tp-badge { position: static; flex: none; pointer-events: none; }
 
 /* Muted words that still read at 4.5:1 on the surface they sit on (--fg-muted alone is 3.6:1 on
    white, and no theme token sits between it and --fg-secondary): property summaries, group titles,

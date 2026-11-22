@@ -237,7 +237,7 @@ export function MailGroupLine({
         <span className="mail-group-title">
           <span className="mail-group-twist" aria-hidden="true"><TwistIcon size={10} /></span>
           <span className="mail-group-name wn-title" data-testid="mail-group-name">{group.label}</span>
-          <span className={`mail-group-pill${unread > 0 ? '' : ' zero'}`} data-testid="mail-group-unread">{formatCount(unread)}</span>
+          <span className="badge badge-count mail-group-pill" data-testid="mail-group-unread">{formatCount(unread)}</span>
           {/* The senders already are the summary line when there is no subject to show. */}
           <span className="mail-group-who wn-meta" data-testid="mail-group-senders" title={senders}>{open || summary === senders ? '' : senders}</span>
           {running ? (

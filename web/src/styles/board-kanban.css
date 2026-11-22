@@ -52,10 +52,6 @@
 
 /* ── The view switch in the bar ── */
 .board-view-toggle { flex: 0 0 auto; }
-.board-view-toggle .board-view-count {
-  min-width: 16px; height: 16px; padding: 0 4px; border-radius: var(--radius-sm); background: var(--error); color: var(--on-accent);
-  font-size: var(--font-size-xs); font-weight: 700; line-height: 16px; text-align: center; font-variant-numeric: tabular-nums;
-}
 
 /* ── The container: header fixed, lanes below ── */
 .board-kanban {
@@ -245,28 +241,14 @@
 .kanban-card-ticket { display: inline-flex; min-width: 0; max-width: 100%; }
 /* The ticket is the card's identity: its whole value, not the 80px inline-chip cap. */
 .kanban-card-ticket .tag-chip-inline { max-width: 100%; }
-/* R3-12: violet means Waiting on this board, so the ticket is a neutral chip like `Sev 2`.
-   R3-13: as a link it says so: an arrow, and a darker chip with the value underlined on hover.
-   The doubled class outranks the generic violet chip in dark (`:root:not([data-theme]) .tag-chip`,
-   globals.css) in whatever order the two stylesheets load (globals.css loads late, at boot). */
-:is(.board-kanban, .kanban-card-detail, .kanban-drag-overlay) .kanban-card-ticket .tag-chip.tag-chip {
-  height: 18px; padding: 0 6px; border-radius: var(--radius-sm); font-size: var(--font-size-xs); font-weight: 600; line-height: 16px;
-  border: 1px solid var(--border-strong); color: var(--fg-secondary); background: transparent;
-}
+/* The ticket is a `.badge` (TagChip): neutral, since violet means Waiting on this board. As a link it
+   says so: an arrow, and the value underlined on hover (badge.css gives the hover tint). Sev and the
+   Leader count are `.badge` too (KanbanCard.tsx), so the card's ids read as one row of labels. */
 :is(.board-kanban, .kanban-card-detail, .kanban-drag-overlay) .kanban-card-ticket a.tag-chip::after {
-  content: "\2197"; margin-left: 2px; font-size: var(--font-size-xs); font-weight: 400; color: var(--kb-muted);
+  content: "\2197"; margin-left: 2px; font-size: var(--font-size-xs); font-weight: 400;
 }
 :is(.board-kanban, .kanban-card-detail) .kanban-card-ticket a.tag-chip:hover,
-:is(.board-kanban, .kanban-card-detail) .kanban-card-ticket a.tag-chip:focus-visible {
-  color: var(--fg); background: var(--bg-tertiary); border-color: var(--fg-muted); text-decoration: underline;
-}
-.kanban-card-sev {
-  display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 9px; font-size: var(--font-size-xs); font-weight: 600;
-  border: 1px solid var(--border-strong); color: var(--fg-secondary); background: transparent; white-space: nowrap;
-}
-.kanban-card-sev.kanban-sev-1 { background: var(--kb-red-tint); border-color: transparent; color: var(--kb-red); }
-.kanban-card-sev.kanban-sev-other { color: var(--fg-muted); border-color: var(--border); }
-.kanban-card-leader-pill { font-size: var(--font-size-xs); color: var(--kb-violet); background: var(--kb-violet-tint); border-radius: var(--radius-sm); padding: 1px 6px; }
+:is(.board-kanban, .kanban-card-detail) .kanban-card-ticket a.tag-chip:focus-visible { text-decoration: underline; }
 /* The card's board project (the Projects view's area of work): a click shows that project's cards only. */
 /* inline-block, not flex: text-overflow ellipsizes a block's own text, never a flex container's anonymous item. */
 .kanban-card-project {

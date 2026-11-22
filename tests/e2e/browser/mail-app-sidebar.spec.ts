@@ -919,7 +919,8 @@ test.describe('an account that stopped syncing', () => {
     // still on its way (MailInboxBadge 'pending'), so the order is read once the badge is there.
     await expect(smartRow(page, 'inbox').getByTestId('mail-smart-unread')).toBeVisible({ timeout: 60_000 })
     const orderInRow = await smartRow(page, 'inbox').evaluate((el) => (
-      Array.from(el.children).map((child) => child.className)
+      // Each child's own class (the count also carries the shared `.badge` classes).
+      Array.from(el.children).map((child) => [...child.classList].find((c) => c.startsWith('mail-')))
     ))
     expect(orderInRow).toEqual(['mail-mailbox-name', 'mail-smart-warn', 'mail-unread-badge'])
     // The account section keeps its own badge and its repair sentence, untouched by this slice.

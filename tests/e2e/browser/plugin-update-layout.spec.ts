@@ -270,7 +270,7 @@ const alphaOf = (value: string): number => cssColorToRgba(value)[3]
 
 const styleOf = (target: Locator) => target.evaluate((el) => {
   const cs = getComputedStyle(el)
-  return { color: cs.color, background: cs.backgroundColor, border: cs.borderTopColor, opacity: cs.opacity }
+  return { color: cs.color, background: cs.backgroundColor, image: cs.backgroundImage, border: cs.borderTopColor, opacity: cs.opacity }
 })
 
 test('(N2-5)(N2-7)(N2-8)(N2-11) disabled Update is dimmed in both themes; hover, ahead tooltip and the busy header read right', async ({ page }) => {
@@ -287,16 +287,16 @@ test('(N2-5)(N2-7)(N2-8)(N2-11) disabled Update is dimmed in both themes; hover,
   await expect(tracker).not.toHaveAttribute('title', /Same as the remote/)
   await backToApps(page)
 
-  // Hover on the quiet chip is visible at a glance (N2-8): full border, a wash behind it.
+  // Hover on the quiet chip is visible at a glance (N2-8): the one badge's hover tint over its fill.
   await openVersion(page, 'walnut-demo')
   const demoChip = page.getByTestId('update-chip-walnut-demo')
   const rest = await styleOf(demoChip)
   await demoChip.hover()
   await page.waitForTimeout(300) // past the 150 ms border transition
   const hover = await styleOf(demoChip)
-  expect(alphaOf(hover.border), `hover border ${hover.border}`).toBeGreaterThanOrEqual(0.95)
-  expect(alphaOf(hover.background), `hover wash ${hover.background}`).toBeGreaterThan(0.05)
-  expect(alphaOf(rest.background), `rest background ${rest.background}`).toBe(0)
+  expect(rest.image, `rest wash ${rest.image}`).toBe('none')
+  expect(hover.image, `hover wash ${hover.image}`).toContain('gradient')
+  expect(alphaOf(rest.background), `rest fill ${rest.background}`).toBeGreaterThan(0)
   await page.mouse.move(5, 5)
   await backToApps(page)
 

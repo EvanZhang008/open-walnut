@@ -15,6 +15,7 @@ import {
 import { fleetRows, usd } from './host-fleet-model';
 import { readFailure, readLabel } from './host-fleet-read-model';
 import { FleetNumber, UNKNOWN_MARK } from './FleetNumber';
+import { badge, type BadgeTone } from '@/components/common/badge';
 
 /** A reason names a command in backticks (the same text an agent reads): shown as code. */
 export function withCode(text: string) {
@@ -59,11 +60,12 @@ export function SparkRow({ s }: { s: Spark }) {
   );
 }
 
-export function Chips({ list, className, testId }: { list: Chip[]; className: string; testId: string }) {
+/** A host's role or capability words: the one `.badge`; roles in accent (what it is to you), a muted one dashed (it cannot act). */
+export function Chips({ list, className, testId, tone = 'neutral' }: { list: Chip[]; className: string; testId: string; tone?: BadgeTone }) {
   if (!list.length) return null;
   return (
     <span className={className} data-testid={testId}>
-      {list.map((c) => <span key={c.key} className="hf-chip" data-chip={c.key} data-tone={c.tone} title={c.title}>{c.text}</span>)}
+      {list.map((c) => <span key={c.key} className={`${badge(tone, { paused: c.tone === 'muted' })} hf-chip`} data-chip={c.key} data-tone={c.tone} title={c.title}><span>{c.text}</span></span>)}
     </span>
   );
 }
@@ -81,7 +83,7 @@ export function FleetVitals({ host, now, system }: { host: FleetHost; now: numbe
       <div className="hf-card-sys-row">
         <p className="hf-card-sys" data-testid="host-fleet-system">
           <span data-testid="host-system-line">{system?.text ?? systemLine(host)}</span>
-          <Chips list={roleChips(host)} className="hf-roles" testId="host-fleet-roles" />
+          <Chips list={roleChips(host)} className="hf-roles" testId="host-fleet-roles" tone="accent" />
         </p>
         {system?.action}
       </div>

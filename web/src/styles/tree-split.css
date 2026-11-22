@@ -127,15 +127,7 @@
   .tree-path-hint span { display: none; }
 }
 .tree-path-bar[data-narrow] .tree-path-seg[data-first]:not([data-shown]) .tree-path-title { max-width: 44px; }
-.tree-path-role {
-  flex: none;
-  padding: 0 4px;
-  border-radius: var(--radius-xs);
-  background: var(--accent);
-  color: var(--on-accent);
-  font: 700 var(--font-size-xs)/15px -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
-}
-.tree-path-role[data-role="only"] { padding: 0 5px; }
+.tree-path-role { flex: none; }
 .tree-path-caret {
   display: inline-grid;
   place-items: center;
@@ -235,14 +227,8 @@
 
 /* A half's row: [L|R] 6.1 Answered ... [Archive] [More] [close] */
 .thread-half-row { gap: 8px; padding-left: 4px; }
-.thread-half-badge {
-  flex: none;
-  padding: 0 5px;
-  border-radius: var(--radius-xs);
-  background: var(--accent);
-  color: var(--on-accent);
-  font: 700 var(--font-size-xs)/16px -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
-}
+/* The side's letter is a square `.badge.badge-count` (styles/badge.css). */
+.thread-half-badge { flex: none; }
 .thread-half-name {
   min-width: 0;
   overflow: hidden;

@@ -111,7 +111,7 @@ export function PermissionAnswerForm({
         const picked = selections[q.question] ?? [];
         return (
           <div key={q.question} className="nfc-answer-q">
-            {q.header && <div className="nfc-chip nfc-answer-chip">{q.header}</div>}
+            {q.header && <div className="badge nfc-chip nfc-answer-chip"><span>{q.header}</span></div>}
             <div className="nfc-answer-text">{q.question}</div>
             {q.options.length > 0 && (
               /* Every option, no cap: a truncated option list is a wrong answer

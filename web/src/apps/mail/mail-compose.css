@@ -42,7 +42,7 @@
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 14px;
-  background: var(--bg-elevated);
+  background: var(--card-bg);
   box-shadow: var(--card-shadow);
 }
 
@@ -495,22 +495,8 @@
 
 .mail-draft-row .mail-row-subject { justify-content: space-between; }
 
-.mail-draft-pill {
-  flex: 0 0 auto;
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  letter-spacing: 0.03em;
-}
-
-.mail-draft-pill.state-pending_approval { background: var(--accent-subtle); color: var(--accent); }
-.mail-draft-pill.state-sending,
-.mail-draft-pill.state-approved { background: var(--accent-subtle); color: var(--accent); }
-.mail-draft-pill.state-failed { background: rgba(255, 59, 48, 0.12); color: var(--error); }
-.mail-draft-pill.state-unknown { background: rgba(255, 149, 0, 0.14); color: var(--warning); }
+/* The state is a dot and a word (NoticeStatus); this wrapper only keeps it at the row's end. */
+.mail-draft-pill { flex: 0 0 auto; display: inline-flex; }
 
 /* ── one pane at a time ──
    The composer lives in the reader's slot, so the narrow rules that hide the reader have to hide it

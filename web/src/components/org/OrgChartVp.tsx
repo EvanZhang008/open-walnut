@@ -124,7 +124,7 @@ export function OrgChartVp({ card: c, line, className, zone, draggable, onDragSt
           <span className="oc-card-main">
             <span className="oc-card-headline">
               <span className="oc-card-title wn-title" data-testid="org-chart-vp-name">{c.name}</span>
-              <span className="oc-role">{VP_LABEL}</span>
+              <span className="badge oc-role"><span>{VP_LABEL}</span></span>
               <span className="oc-now wn-fixed" data-testid="org-chart-vp-now">{line.open} open</span>
             </span>
             {/* What it is doing now: its newest task at work, its title whole (it wraps). */}

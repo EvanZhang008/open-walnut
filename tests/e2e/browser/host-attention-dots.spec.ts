@@ -46,14 +46,17 @@ test.describe('the dots speak on every page', () => {
     await expect(bellDot(page)).toHaveCount(1)
   })
 
-  test('HD-2: a pending ask: the amber number with a corner dot, on Home and on /notes, and the name says both', async ({ page }) => {
+  // One mark on the bell (2026-11-21, the label system, standard.md "Status labels"): beside a count
+  // the hosts' dot goes; the bell's name still says both.
+  test('HD-2: a pending ask: the needs-you number alone, no corner dot, on Home and on /notes, and the name says both', async ({ page }) => {
     await bpSetup(page, { feed: [askRecord(1)] })
     const name = 'Notifications, 1 waiting; remote hosts need attention'
     for (const where of ['home', 'notes'] as const) {
       if (where === 'notes') await goRail(page, 'notes')
       await expect(bellCount(page), where).toHaveText('1', { timeout: 20_000 })
       await expect(bellCount(page), where).toHaveClass(/notification-badge-attention/)
-      await expect(bell(page).locator('.notification-badge-dot.is-corner'), where).toHaveCount(1)
+      await expect(bellCount(page), where).toHaveClass(/badge-alert/)
+      await expect(bell(page).locator('.notification-badge-dot'), where).toHaveCount(0)
       await expect(bell(page), where).toHaveAttribute('aria-label', name)
       await expect(bell(page), where).toHaveAttribute('title', name)
     }
@@ -118,7 +121,7 @@ test.describe('the bell names its reason word for word', () => {
       await step()
       await expect(bell(page)).toHaveAttribute('aria-label', name(label), { timeout: 20_000 })
       await expect(bell(page)).toHaveAttribute('title', name(label))
-      if (count) await expect(bell(page).locator('.notification-badge-dot.is-corner')).toHaveCount(1)
+      if (count) await expect(bell(page).locator('.notification-badge-dot')).toHaveCount(0) // the count is the one mark
       else await expect(bellDot(page)).toHaveCount(1)
     }
   }

@@ -78,7 +78,7 @@ export function DisplayButton(props: DisplayButtonProps) {
       >
         {ICON_SLIDERS}
         <span className="tp-btn-label" data-fit-label="">Display</span>
-        {n > 0 && <span className="tp-badge" data-testid="filter-badge">{badgeText(n)}</span>}
+        {n > 0 && <span className="badge badge-accent badge-count tp-badge" data-testid="filter-badge">{badgeText(n)}</span>}
       </button>
       {open && <PanelMenu filters={filters} display={props} flashOption={flashOption} />}
     </>

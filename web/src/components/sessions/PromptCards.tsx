@@ -203,7 +203,7 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, ans
         const keyed = keysOn && qi === keyQ;
         return (
           <div key={q.question} className={`ask-user-question${keyed && questions.length > 1 ? ' is-key-active' : ''}`}>
-            {q.header && <div className="qp-chip">{q.header}</div>}
+            {q.header && <div className="badge qp-chip"><span>{q.header}</span></div>}
             <div className="qp-question">{q.question}</div>
             {q.options.length > 0 && (
               <div className={`qp-options${phone ? ' qp-options--rows' : ''}`} role={phone ? (q.multiSelect ? 'group' : 'radiogroup') : undefined}>

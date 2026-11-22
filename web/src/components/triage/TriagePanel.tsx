@@ -202,7 +202,7 @@ export function TriagePanel({ onClose, taskId, onSessionClick }: TriagePanelProp
       <div className="triage-panel-header">
         <div className="triage-panel-title-area">
           <span className="triage-panel-title">{headerTitle}</span>
-          <span className="triage-panel-count">{total}</span>
+          <span className="badge badge-count triage-panel-count">{total}</span>
         </div>
         <button
           className="btn btn-sm"

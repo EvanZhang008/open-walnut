@@ -24,6 +24,7 @@ import { toGitStylePatch } from '@/components/sessions/diffPatch';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { timeAgo } from '@/utils/time';
 import { log } from '@/utils/log';
+import { badge, type BadgeTone } from '@/components/common/badge';
 import '@/styles/file-history.css';
 
 export interface FileHistoryPanelProps {
@@ -53,6 +54,9 @@ const WRITER_LABEL: Record<FileHistoryWriter, string> = {
   merge: 'Merged',
   agent: 'Agent',
 };
+
+/** A human's own save is the accent, a live edit wants a look, the rest is automatic. */
+const WRITER_TONE: Partial<Record<FileHistoryWriter, BadgeTone>> = { user: 'accent', live: 'warning' };
 
 function shortSha(sha: string): string {
   return sha.slice(0, 7);
@@ -257,7 +261,7 @@ const FileHistoryRow = memo(function FileHistoryRow({
         onClick={() => onSelect(row)}
         title={row.kind === 'commit' ? `${row.commit.subject} — ${row.commit.author}` : detail}
       >
-        <span className={`fh-pill fh-pill-${row.kind === 'snapshot' ? row.entry.writer : 'commit'}`}>{pill}</span>
+        <span className={`${badge(row.kind === 'snapshot' ? WRITER_TONE[row.entry.writer] : undefined)} fh-pill fh-pill-${row.kind === 'snapshot' ? row.entry.writer : 'commit'}`}><span>{pill}</span></span>
         <span className="fh-when">{agoOf(row.at)}</span>
         <span className="fh-detail">{detail}</span>
         {busy && <span className="fh-row-busy">…</span>}

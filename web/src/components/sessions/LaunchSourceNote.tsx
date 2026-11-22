@@ -4,7 +4,8 @@
  * pick, the global default or the fallback engine (utils/launch-source.ts). Shown
  * at the top of the model picker, on a new task's draft and on a running session.
  */
-import { launchSourceTag, type LaunchSourceRow } from '@/utils/launch-source';
+import { launchSourceTag, type LaunchSourceRow, type LaunchValueSource } from '@/utils/launch-source';
+import { badge, type BadgeTone } from '@/components/common/badge';
 import '@/styles/launch-source.css';
 
 export function LaunchSourceNote({ rows, title = 'Where these come from', project, hint, action }: {
@@ -40,7 +41,10 @@ export function LaunchSourceNote({ rows, title = 'Where these come from', projec
   );
 }
 
+/** A project's default reads in the blue, the fallback engine in amber, the rest grey. */
+const sourceTone = (source: LaunchValueSource): BadgeTone => (source === 'project' ? 'accent' : source === 'fallback' ? 'warning' : 'neutral');
+
 /** The tag alone ("Project"), for a pill's corner. */
 export function LaunchSourceTag({ row }: { row: Pick<LaunchSourceRow, 'source' | 'words'> }) {
-  return <span className={`launch-source-tag is-${row.source}`} title={row.words} aria-label={row.words}>{launchSourceTag(row.source)}</span>;
+  return <span className={`${badge(sourceTone(row.source))} launch-source-tag is-${row.source}`} title={row.words} aria-label={row.words}><span>{launchSourceTag(row.source)}</span></span>;
 }

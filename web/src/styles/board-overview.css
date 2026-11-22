@@ -8,16 +8,3 @@
 /* The switch is the shared SegmentedControl (controls); this file only places it and draws its count. */
 .board-view-toggle { flex: 0 0 auto; }
 
-.board-view-toggle .board-view-count {
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: var(--radius-sm);
-  background: var(--error);
-  color: var(--on-accent);
-  font-size: var(--font-size-xs);
-  font-weight: 700;
-  line-height: 16px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}

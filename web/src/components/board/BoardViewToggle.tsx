@@ -55,7 +55,7 @@ export function BoardViewToggle({ view, hasPage, attention, onPick }: BoardViewT
           <>
             {LABELS[v]}
             {countOn === v && (
-              <span className="board-view-count" data-testid="board-view-attention" aria-label={stateCountLabel('needs', attention)}>
+              <span className="badge badge-count badge-alert board-view-count" data-testid="board-view-attention" aria-label={stateCountLabel('needs', attention)}>
                 {attention > 99 ? '99+' : attention}
               </span>
             )}

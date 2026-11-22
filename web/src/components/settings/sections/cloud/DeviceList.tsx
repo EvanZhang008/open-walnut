@@ -345,7 +345,7 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
         label={
           <span className="settings-addons-inline devices-name">
             <span className="settings-addons-ellipsis" title={d.name}>{shownName}</span>
-            {own && <span className="devices-own-tag" data-testid="devices-own-tag">{caller.touch ? 'This phone' : 'This browser'}</span>}
+            {own && <span className="badge badge-accent devices-own-tag" data-testid="devices-own-tag"><span>{caller.touch ? 'This phone' : 'This browser'}</span></span>}
             {/* On a way's tab the tags name the OTHER ways it uses ("Also:"); on an idle Tailscale tab every way it uses is another. */}
             {tags.map((t) => <SettingsTag key={t}>{scope === 'all' ? t : `Also: ${t}`}</SettingsTag>)}
             {/* A browser's sign-in is the same on every address: said on its row, not guessed per way. */}

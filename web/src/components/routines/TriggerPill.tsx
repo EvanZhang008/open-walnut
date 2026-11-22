@@ -38,6 +38,7 @@ import { AuditRow } from './RoutineAuditRow';
 import { openSessionOnHome } from '@/utils/open-session';
 import '@/styles/routine-description.css';
 import { log } from '@/utils/log';
+import { badge } from '@/components/common/badge';
 
 export interface TriggerPillProps {
   taskId: string | null | undefined;
@@ -310,7 +311,7 @@ export function TriggerPill({ taskId }: TriggerPillProps) {
       <button
         ref={triggerRef}
         type="button"
-        className={`task-trigger-pill task-row-pill${allOff ? ' is-paused' : ''}`}
+        className={`${allOff ? badge(offWord(triggers).toLowerCase() === 'stopped' ? 'error' : 'neutral', { paused: true }) : 'badge'} task-trigger-pill task-row-pill${allOff ? ' is-paused' : ''}`}
         title={triggerPillTitle(triggers)}
         aria-label={`${what}. ${open ? 'Hide' : 'Show'} trigger details`}
         aria-haspopup="dialog"

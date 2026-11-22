@@ -231,7 +231,7 @@ export function SessionViewItems({
   useEffect(() => () => clearTimeout(codeHoverTimer.current), [sessionId]);
   const { tasks: backgroundTasks, running: bgRunning } = useBackgroundRunning(sessionId);
   const inboxCount = attentionCount > 0 ? (
-    <span className={`session-action-chip-count${decisionCount > 0 ? ' session-action-chip-count-warn' : ''}`}
+    <span className={`badge badge-count ${decisionCount > 0 ? 'badge-alert' : 'badge-accent'} session-action-chip-count`}
       title={inboxChipTitle(attentionCount, unreadCount, decisionCount)}>
       {attentionCount > 99 ? '99+' : attentionCount}
     </span>
@@ -327,7 +327,7 @@ export function SessionViewItems({
             </svg>
           </span>
           <span>Background tasks</span>
-          {bgRunning.total > 0 && <span className="session-action-chip-count" title={`${backgroundRunningLabel(bgRunning)} running`}>{bgRunning.total}</span>}
+          {bgRunning.total > 0 && <span className="badge badge-count session-action-chip-count" title={`${backgroundRunningLabel(bgRunning)} running`}>{bgRunning.total}</span>}
         </button>
       )}
 
@@ -365,12 +365,12 @@ export function ViewsBadge({ sessionId, unreadCount, decisionCount, attentionCou
   return (
     <>
       {attentionCount > 0 && (
-        <span className={`session-action-chip-count${decisionCount > 0 ? ' session-action-chip-count-warn' : ''}`}
+        <span className={`badge badge-count ${decisionCount > 0 ? 'badge-alert' : 'badge-accent'} session-action-chip-count`}
           title={inboxChipTitle(attentionCount, unreadCount, decisionCount)}>
           {attentionCount > 99 ? '99+' : attentionCount}
         </span>
       )}
-      {bgRunning.total > 0 && <span className="session-action-chip-count" title={`${backgroundRunningLabel(bgRunning)} running`}>{bgRunning.total}</span>}
+      {bgRunning.total > 0 && <span className="badge badge-count session-action-chip-count" title={`${backgroundRunningLabel(bgRunning)} running`}>{bgRunning.total}</span>}
     </>
   );
 }

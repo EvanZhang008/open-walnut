@@ -29,26 +29,8 @@
 /* The words take the row; the buttons go on the line below them. */
 .usage-limit-banner-body { flex: 1 1 0; min-width: 0; }
 .usage-limit-banner-head { font-weight: 600; }
-.usage-limit-tag {
-  display: inline-block;
-  margin-right: 4px;
-  padding: 0 6px;
-  border-radius: var(--radius-xs);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  line-height: 18px;
-  vertical-align: 1px;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-.usage-limit-banner.is-off .usage-limit-tag {
-  color: var(--fg-secondary);
-  background: color-mix(in srgb, var(--fg) 8%, transparent);
-}
-.usage-limit-banner.is-gave_up .usage-limit-tag {
-  color: var(--warning);
-  background: color-mix(in srgb, var(--warning) 18%, transparent);
-}
+/* The tag is the one `.badge`, its tone by the banner's state (UsageLimitBanner.tsx). */
+.usage-limit-tag { margin-right: 4px; }
 .usage-limit-banner-detail { margin-top: 2px; color: var(--fg-secondary); }
 .usage-limit-banner-failure { margin-top: 4px; color: var(--error); }
 /* Always on their own line under the words, lined up with them (icon 16px + gap 10px), so they

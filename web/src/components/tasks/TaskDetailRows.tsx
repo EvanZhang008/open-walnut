@@ -58,7 +58,7 @@ export function SessionRow({ sessionId, record, processStatus, isPlan, owner, on
     >
       <div className="tdp-row-line">
         <span className="todo-detail-session-dot tdp-dot" style={{ background: processColor(processStatus) }} />
-        {isPlan && <span className="todo-detail-plan-badge">Plan</span>}
+        {isPlan && <span className="badge badge-accent todo-detail-plan-badge">Plan</span>}
         <span className={`tdp-row-title${record ? '' : ' is-loading'}`}>{title}</span>
         {ago && <span className="tdp-row-end">{ago}</span>}
       </div>

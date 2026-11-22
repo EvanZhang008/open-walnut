@@ -2884,8 +2884,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       {!inset && <SessionServersChip servers={webServers} activePort={webShownPort} onOpen={(s) => openWebView(s.url)} />}
       {!inset && !plainChat && session?.taskId && <SessionBrowserChip taskId={session.taskId} view={browserView} />}
       {session?.provider === 'embedded' && (
-        <span className="session-panel-badge session-panel-embedded-badge" data-header-pill="embedded" data-short="E">
-          {ICON_ROBOT}<span className="task-pill-long"> Embedded</span>
+        <span className="badge badge-accent session-panel-badge session-panel-embedded-badge" data-header-pill="embedded" data-short="E">
+          <span>{ICON_ROBOT}</span><span className="task-pill-long"> Embedded</span>
         </span>
       )}
       <CronPill sessionId={sessionId} expanded={cronDetailOpen} onClick={() => setCronDetailOpen((open) => !open)} />
@@ -3358,7 +3358,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                     data-header-id="threads"
                     data-hidden={hid('threads')}
                   >
-                    Threads{threadsShown > 0 && <span className="session-action-chip-count" data-testid="session-threads-chip-count">{threadsShown}</span>}
+                    Threads{threadsShown > 0 && <span className="badge badge-count badge-accent session-action-chip-count" data-testid="session-threads-chip-count">{threadsShown}</span>}
                   </button>
                 )}
                 {/* The App this session opened beside its chat (Drawing): its tab, like Files, from
@@ -3638,7 +3638,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   joins this row: tests/web/session-header-labels-guard.test.ts. */}
               {!loading && !hostHeader && headerPills}
               {!loading && !hostHeader && <SessionHeaderLabels>{headerTags}</SessionHeaderLabels>}
-              {loading && <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Loading...</span>}
+              {loading && <span className="badge session-panel-badge">Loading...</span>}
               {!loading && sessionId && !kebabSlot && !hostHeader && renderSessionKebab()}
               {/* The host's header (headerSlot): the same pills, the folded link tags and the
                   kebab, the kebab led by the view rows the hidden header held. */}

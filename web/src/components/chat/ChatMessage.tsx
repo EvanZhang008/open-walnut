@@ -30,6 +30,7 @@ import { copyRichText, copyTextRobust } from '@/utils/clipboard';
 import { markdownToRichHtml } from '@/utils/markdown';
 import { TaskStateIcon } from '@/components/common/TaskStateIcon';
 import { phaseIconState } from '@/utils/task-icon-state';
+import { badge, priorityTone } from '@/components/common/badge';
 export interface RouteInfo {
   direction: 'sent' | 'received';
   event: string;
@@ -155,13 +156,13 @@ function TaskContextSection({ ctx, onSessionClick }: TaskContextSectionProps) {
         </span>
         <span className="chat-task-context-badges">
           {ctx.phase && (
-            <span className={`badge badge-phase-${ctx.phase.toLowerCase()}`}>
+            <span className="state-word">
               <TaskStateIcon state={phaseIconState(ctx.phase)} decorative /> {PHASE_LABELS[ctx.phase as TaskPhase] ?? ctx.phase}
             </span>
           )}
           {showPriority && ctx.priority && ctx.priority !== 'none' && (
-            <span className="badge" style={{ color: ctx.priority === 'high' ? 'var(--error)' : ctx.priority === 'medium' ? 'var(--warning)' : 'var(--fg-muted)' }}>
-              {ctx.priority === 'high' ? '!!' : ctx.priority === 'medium' ? '!' : '\u2013'} {ctx.priority}
+            <span className={badge(priorityTone(ctx.priority))}>
+              <span>{ctx.priority === 'high' ? '!!' : ctx.priority === 'medium' ? '!' : '\u2013'} {ctx.priority}</span>
             </span>
           )}
           {subtasksTotal > 0 && (
@@ -1139,7 +1140,7 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
         {roleLabel}
         {/* Errors are exempt: the badge means "a developer setting can hide this",
             which is the opposite of true for failures (they now always render). */}
-        {notification && !isErrorNotification && <span className="chat-ui-only-badge">UI Only</span>}
+        {notification && !isErrorNotification && <span className="badge chat-ui-only-badge">UI Only</span>}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden', flex: 1 }}>
         {isCollapsed && collapsedSummary && (
@@ -1286,7 +1287,7 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
               dangerouslySetInnerHTML={bodyProp}
             />
             {queued && (
-              <span className="chat-queued-badge">
+              <span className="badge chat-queued-badge">
                 queued
                 {onCancel && <button className="chat-queued-cancel" onClick={onCancel} type="button" aria-label="Cancel queued message">&times;</button>}
               </span>

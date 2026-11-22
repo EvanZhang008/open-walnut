@@ -25,11 +25,11 @@ export function TaskPill({ taskId, tooltip }: { taskId: string; tooltip?: string
   return (
     <a
       ref={pillRef}
-      className="provenance-chip provenance-chip-task task-link op-card-to-pill"
+      className="badge badge-accent provenance-chip provenance-chip-task task-link op-card-to-pill"
       data-task-id={taskId}
       href={taskPath(taskId)}
       title={tooltip ?? (label?.project ? `${label.project} / ${label.title}` : label?.title)}
-    >{label?.title ?? taskId}</a>
+    ><span>{label?.title ?? taskId}</span></a>
   );
 }
 

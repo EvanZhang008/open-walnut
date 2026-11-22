@@ -1,51 +1,13 @@
-/* "+N" inside the tag pill (TaskTagPills): the last tag and its count read as ONE pill,
-   "thread +3", sharing the tag's tint; the count stays its own click (the header's menu). */
-.tag-pill-group {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 100%;
-  border-radius: var(--radius-sm);
-  background: rgba(175, 82, 222, 0.1);
-  vertical-align: middle;
-}
-:root[data-theme="dark"] .tag-pill-group { background: rgba(175, 82, 222, 0.18); }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .tag-pill-group { background: rgba(175, 82, 222, 0.18); }
-}
-.tag-pill-group > .tag-chip { background: transparent; min-width: 0; }
+/* "+N" inside the tag pill (TaskTagPills): the last tag and its count read as ONE badge,
+   "thread +3"; the count stays its own click (the header's menu). The group is the badge; the two
+   inside lend it their words only. */
+.tag-pill-group.badge { padding: 0; gap: 0; overflow: visible; vertical-align: middle; }
+.tag-pill-group > .badge { --badge-bg: transparent; min-width: 0; }
 .tag-pill-group > .tag-chip:first-child { padding-right: 3px; }
-.tag-pill-group > .tag-chip-overflow {
-  flex: none;
-  padding-left: 3px;
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-  opacity: 0.75;
-}
-.tag-pill-group > .tag-chip-overflow-btn:hover,
-.tag-pill-group > .tag-chip-overflow-btn.open { background: rgba(175, 82, 222, 0.14); opacity: 1; }
-.session-panel-header .session-panel-header-top .tag-pill-group { border-radius: 10px; }
-.session-panel-header .session-panel-header-top .tag-pill-group > .tag-chip:first-child { padding-right: 3px; }
-.session-panel-header .session-panel-header-top .tag-pill-group > .tag-chip-overflow { padding-left: 3px; }
+.tag-pill-group > .tag-chip-overflow { flex: none; padding-left: 3px; }
 
-/* Every pill in a task list is one size: tags, Trigger, Cron, Worker, Leader, the due date and
-   the search row's tier (2026-10-23: they were 16 to 17px with 10, 10.5 and 11px text).
-   `html` + two classes outranks each pill's own rule, whatever order the files load in. */
-html .todo-panel :is(.tag-chip, .task-row-pill, .todo-item-due-pill, .todo-search-tier-pill) {
-  box-sizing: border-box;
-  display: inline-flex;
-  align-items: center;
-  height: 16px;
-  padding-block: 0;
-  padding-inline: 7px;
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  line-height: 12px;
-}
-html .todo-panel .tag-pill-group > .tag-chip:first-child { padding-right: 3px; }
-html .todo-panel .tag-pill-group > .tag-chip-overflow { padding-left: 3px; }
+/* Every label in a task list is the console's one `.badge` (styles/badge.css): tags, Trigger,
+   Cron, Worker, Leader, the dates and the search row's tier. */
 
 /* A search row keeps to two lines: the title owns the first, and the row's pills follow the
    tier and project on the second, never on a third line of their own (2026-10-23). The title
@@ -73,14 +35,16 @@ html .todo-panel .tag-pill-group > .tag-chip-overflow { padding-left: 3px; }
     flex: 1 0 100%;
     width: auto;
   }
-  /* The tier and project keep their own width (cut only when the line is full), then the pills
-     follow. A Worker pill counts as its minimum when the line is laid out and grows into the room
-     left, up to its whole leader name, so it is cut only when the line has no room
-     (2026-11-21: it was cut at 152 px beside empty room). */
+  /* The tier and project come first and the labels follow them as words ("Focus · Marina ·
+     Trigger · Leader · 3"). The project takes what the labels leave (basis 0, never wrapping the
+     line) but no more than its own name (max-content), so the labels sit right after it; it is
+     cut short first (down to a few letters, "Marin…"), so a crowded row still fits its labels on
+     the second line. */
   .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] > .todo-search-meta-row {
     order: 1;
     flex: 0 1 auto;
-    min-width: 0;
+    min-width: min-content;
+    max-width: max-content;
     overflow: hidden;
     padding-left: 0;
   }
@@ -91,5 +55,13 @@ html .todo-panel .tag-pill-group > .tag-chip-overflow { padding-left: 3px; }
   }
   .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] > .todo-item-title-row > :not(.todo-item-title, .task-phase-icon-btn, .task-kebab-wrapper, .task-unread-dot, .task-start-btn) {
     order: 2;
+    margin-left: 0;
+    /* Basis 0, so no label ever starts a third line: the labels share the second line, each up
+       to its own width, and a crowded line cuts its longest ones ("Worker Marin…"). */
+    flex: 1 1 0;
+    min-width: 3ch;
+    max-width: max-content;
   }
+  .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] .todo-search-context-pill { min-width: 4ch; }
+  .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] .todo-search-tier-pill { flex: 0 1 auto; min-width: 5ch; }
 }

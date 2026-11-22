@@ -392,7 +392,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
                   <span className="oc-card-main">
                     <span className="oc-card-headline">
                       <span className="oc-card-title wn-title" data-testid="org-chart-router-name">{r.name}</span>
-                      <span className="oc-role">Router</span>
+                      <span className="badge oc-role">Router</span>
                     </span>
                     <span className="oc-doing wn-title" data-testid="org-chart-router-line">{r.latest}</span>
                   </span>

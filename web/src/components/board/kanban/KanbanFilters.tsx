@@ -127,7 +127,7 @@ export function KanbanFilters({ board, filter, seen, mode, searchRef, onRevealCa
               title={chipTooltip(chip, n, seen.baselineAt)}
               onClick={() => clickChip(chip, n)}
               // N14: every chip's count is the same count, so `Sev 1` + `2` reads as a count.
-              count={loading ? undefined : <span className="kanban-chip-count" data-testid="kanban-chip-count">{n}</span>}
+              count={loading ? undefined : <span className="badge badge-count kanban-chip-count" data-testid="kanban-chip-count">{n}</span>}
             >
               {label}
             </Chip>

@@ -15,6 +15,7 @@ import { log } from '@/utils/log';
 import { operationErrorWords } from '@/utils/operation-error-words';
 import { formatRelative, useNotifications } from '@/contexts/notifications';
 import { taskPath } from '@/utils/task-path';
+import { NoticeStatus } from '@/components/common/NoticeCard';
 import { SectionCard } from '../inputs/SectionCard';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { groupHealthErrors, type HealthErrorGroup, type HealthErrorRow } from './health-error-log-model';
@@ -107,7 +108,7 @@ function ErrorRow({ row, canFix, onClear }: { row: HealthErrorRow; canFix: boole
   return (
     <li className={`health-errors-row health-errors-${row.state}`} data-testid="health-errors-row" data-key={row.dedupKey}>
       <button type="button" className="health-errors-row-head" aria-expanded={open} onClick={() => setOpen(v => !v)}>
-        <span className={`health-pill health-pill-${row.state === 'open' ? 'ALARM' : 'OK'}`}>{STATE_LABEL[row.state]}</span>
+        <NoticeStatus className="health-pill" tone={row.state === 'open' ? 'error' : 'ok'}>{STATE_LABEL[row.state]}</NoticeStatus>
         <span className="health-errors-title">{row.title}</span>
         <span className="health-errors-times">{times(row.times)}</span>
         <span className="health-when">{formatRelative(row.lastSeen)}</span>

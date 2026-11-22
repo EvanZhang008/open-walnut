@@ -127,7 +127,7 @@ export function MailGroupedHeader({ name, unread, explain, ai, unreadOnly, onUnr
  * title (the same value and words as the IMPORTANT head); while off it is the provider's number, as
  * before. Every inbox badge reads the one global switch, so they all change mode in the same frame.
  */
-export function MailInboxBadge({ scope, providerUnread, testId, className = 'mail-unread-badge' }: {
+export function MailInboxBadge({ scope, providerUnread, testId, className = 'badge badge-count mail-unread-badge' }: {
   scope: MailGroupsScope | null;
   providerUnread: number;
   testId: string;

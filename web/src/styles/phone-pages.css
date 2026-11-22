@@ -202,21 +202,11 @@
     position: relative;
   }
 
+  /* The rail's count on an icon (`badge-alert badge-corner`); this only places it. */
   .app-shell-navigation .phone-bell-count {
     position: absolute;
     top: 5px;
     right: 3px;
-    min-width: 18px;
-    height: 18px;
-    padding: 0 5px;
-    box-sizing: border-box;
-    border-radius: 9px;
-    background: var(--warning);
-    color: var(--on-accent);
-    font-size: var(--font-size-sm);
-    font-weight: 700;
-    line-height: 18px;
-    text-align: center;
     pointer-events: none;
   }
 

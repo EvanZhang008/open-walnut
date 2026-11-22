@@ -6,6 +6,7 @@
  * chip, the quick folders and the project chip stood. Under the row, after a folder of a project
  * with a code source, one quiet suggestion offers a fresh workspace instead (DraftWorkInSuggest).
  */
+import { badge } from '@/components/common/badge';
 import { useState, type RefObject } from 'react';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import type { WorkingDirEntry } from '@/api/sessions';
@@ -131,9 +132,9 @@ export function DraftWorkInPill({ draft, ps, work, pillRef, folders, onPickFolde
         {face.kind === 'folder' && <span className="draft-pill-name btn-value">{face.folder}</span>}
         {face.kind !== 'source' && face.tag && (
           // A project Start will create (named after the folder) is drawn as new, as the project chip did.
-          <span className={`draft-work-in-project-tag${tagIsNew ? ' is-new' : ''}`} data-testid="draft-work-in-project-tag"
+          <span className={`${badge('accent', { paused: tagIsNew })} draft-work-in-project-tag${tagIsNew ? ' is-new' : ''}`} data-testid="draft-work-in-project-tag"
             title={tagIsNew ? `Starting creates a new project named ${face.tag}` : `Files under ${projectDisplayName(face.tag)}`}>
-            {projectDisplayName(face.tag)}
+            <span>{projectDisplayName(face.tag)}</span>
           </span>
         )}
         {face.kind === 'empty' && <span className="draft-work-in-detail">{face.tag ? '· choose a folder…' : 'Choose a project or folder…'}</span>}

@@ -27,6 +27,7 @@ import {
 import { createPortal } from 'react-dom'
 import { useInRouterContext, useLocation } from 'react-router-dom'
 import { log } from '@/utils/log'
+import { badge, type BadgeTone } from '@/components/common/badge'
 import { PHONES_CLOUD_PANE, PHONES_CLOUD_TABS } from './settings-way-panes'
 import {
   SettingsPaneTile,
@@ -562,7 +563,11 @@ export function SettingsNotice({
   )
 }
 
-/** Status tag: `Built-in`, `Needs setup`, `Signed in`. */
+const SETTINGS_TAG_TONE: Record<'neutral' | 'warning' | 'success' | 'error', BadgeTone> = {
+  neutral: 'neutral', warning: 'warning', success: 'accent', error: 'error',
+}
+
+/** Status tag: `Built-in`, `Needs setup`, `Signed in`. The one `.badge`; success reads as "on" (accent). */
 export function SettingsTag({
   tone = 'neutral',
   title,
@@ -573,8 +578,8 @@ export function SettingsTag({
   children: ReactNode
 }) {
   return (
-    <span className={`settings-tag settings-tag-${tone}`} title={title}>
-      {children}
+    <span className={`${badge(SETTINGS_TAG_TONE[tone])} settings-tag`} title={title}>
+      <span>{children}</span>
     </span>
   )
 }

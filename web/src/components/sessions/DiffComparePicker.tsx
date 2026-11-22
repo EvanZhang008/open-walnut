@@ -361,8 +361,8 @@ export function DiffComparePicker({ sessionId, compare, resolved, onChange }: {
               <span className="sdc-ref-head">{it.name.slice(0, -REF_TAIL)}</span>
               <span className="sdc-ref-tail">{it.name.slice(-REF_TAIL)}</span>
             </span>
-            {it.isCurrent && <span className="sdc-badge">current</span>}
-            {it.refKind === 'remote' && <span className="sdc-badge sdc-badge-remote">remote</span>}
+            {it.isCurrent && <span className="badge sdc-badge">current</span>}
+            {it.refKind === 'remote' && <span className="badge sdc-badge sdc-badge-remote">remote</span>}
           </span>
           <span className="sdc-time">{unixAgo(it.time)}</span>
         </div>

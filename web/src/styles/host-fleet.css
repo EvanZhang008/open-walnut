@@ -48,18 +48,7 @@
 
 .hf-roles { margin-left: auto; display: flex; gap: 4px; flex: none; }
 
-.hf-chip {
-  display: inline-block;
-  font-size: var(--font-size-xs);
-  line-height: 16px;
-  padding: 0 7px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  color: var(--fg-secondary);
-  white-space: nowrap;
-}
-.hf-chip[data-tone="muted"] { color: var(--settings-help-fg); border-style: dashed; }
-.hf-roles .hf-chip { border-color: transparent; background: var(--accent-subtle); color: var(--accent-text); font-weight: 600; }
+/* Role and capability words are the one `.badge` (HostFleetVitals.tsx Chips). */
 .hf-caps { display: flex; flex-wrap: wrap; gap: 4px; }
 
 .hf-vitals { display: grid; grid-template-columns: repeat(auto-fit, minmax(52px, 1fr)); gap: 8px; justify-items: center; }

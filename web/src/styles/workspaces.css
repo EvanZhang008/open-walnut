@@ -112,11 +112,6 @@
 }
 .workspace-pill-glyph { font-size: var(--font-size-xs); opacity: 0.8; }
 .workspace-pill-text.is-quiet { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-/* Two classes: the shared .todo-item-due-pill (globals.css, loaded later) would grey them out. */
-.workspace-pill.workspace-pill-ok { color: var(--accent); }
-.workspace-pill.workspace-pill-busy { color: var(--fg-muted); }
-.workspace-pill.workspace-pill-warn { color: var(--priority-important-text); }
-.workspace-pill.workspace-pill-error { color: var(--error); }
 .workspace-pill-spin {
   width: 8px;
   height: 8px;
@@ -320,15 +315,6 @@
   white-space: nowrap;
 }
 .project-scripts-roles { display: inline-flex; gap: 4px; }
-.project-scripts-role {
-  padding: 0 6px;
-  border-radius: 999px;
-  background: var(--accent-subtle);
-  color: var(--accent);
-  font-size: var(--font-size-xs);
-  line-height: 1.6;
-  white-space: nowrap;
-}
 .project-scripts-row-actions { display: flex; gap: 2px; flex-shrink: 0; }
 .project-scripts-link {
   padding: 3px 8px;
@@ -439,7 +425,6 @@
 
 .project-scripts-allow-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 
-.project-scripts-role.is-replaced { color: var(--fg-secondary); background: var(--bg-secondary); }
 .workspace-preparing-fix .project-scripts-link { color: var(--accent); }
 .workspace-preparing-fix { margin-top: 10px; font-size: var(--font-size-sm); color: var(--fg-muted); text-align: center; max-width: 420px; }
 

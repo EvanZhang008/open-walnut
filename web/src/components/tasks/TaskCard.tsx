@@ -204,7 +204,7 @@ export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, is
         <div className="task-card-meta">
           {showPriority && <PriorityBadge priority={task.priority} />}
           <TaskSessionPill task={task} />
-          <ImportedPill task={task} className="task-card-imported-pill" />
+          <ImportedPill task={task} />
           <span className="task-card-project text-xs text-muted">{projectDisplayName(task.project)}</span>
           {userTags.length > 0 && (
             <span className="task-card-tags">

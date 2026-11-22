@@ -56,11 +56,15 @@
   /* The UI's text stack (body and every control that sets a font). */
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', 'SFMono-Regular', 'Menlo', 'Cascadia Code', 'Fira Code', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
-  /* Corners: 4 small marks (badges, kbd, checks), 8 controls, 12 inputs and cards, 16 large cards. */
+  /* Corners: 4 small marks (badges, kbd, checks), 8 controls, 12 inputs and small cards, 16 the cards of a list (--ask-card-radius). */
   --radius-xs: 4px;
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
+  /* The cards of one list (the ask card, the thread and review cards, approvals, side questions)
+     share one corner and one padding (standard.md, "Cards"). */
+  --ask-card-radius: var(--radius-lg);
+  --ask-card-pad: 12px 12px 8px;
   /* Type scale (standard.md, Tokens). Nothing in the UI sits between these. */
   --font-size-xs: 11px;  /* labels, badges, counts */
   --font-size-sm: 12px;  /* secondary text, meta lines */
@@ -515,46 +519,17 @@ textarea::placeholder { max-width: 100%; }
   right: 12px;
 }
 
-/* Unread-count badge on the bell — supersedes the plain dot when unread > 0. */
+/* A count on a rail icon (the bell, an app): a `.badge-count` with `badge-corner`'s ring; red
+   (`badge-alert`) for what needs the user, grey for a plugin's status text. This places it. */
 .notification-badge-count {
   position: absolute;
-  top: 2px;
-  right: 4px;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  box-sizing: border-box;
-  border-radius: var(--radius-sm);
-  background: var(--error);
-  border: 2px solid var(--bg);
-  color: var(--on-accent);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  line-height: 12px;
-  text-align: center;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  top: 1px;
+  right: 3px;
 }
 
 .sidebar.collapsed .notification-badge-count {
-  top: 2px;
-  right: 8px;
-}
-
-/* Status flavour (a plugin App's `{ text }` badge: a countdown, a mode): muted,
-   because red means "things to deal with" and a "25" for minutes left is not that. */
-.notification-badge-count.notification-badge-muted {
-  background: var(--bg-tertiary);
-  color: var(--fg-muted);
-  font-variant-numeric: tabular-nums;
-}
-
-/* Bell flavour: amber "needs you" (asks + unread letters), never a red error
-   count. Dark text — white on amber is unreadable at 10px. */
-.notification-badge-count.notification-badge-attention {
-  background: var(--tier-wait);
-  color: #3a2500;
+  top: 1px;
+  right: 7px;
 }
 
 /* Transparent click-away layer — no dimming. A dark backdrop made the sidebar
@@ -1078,20 +1053,6 @@ textarea::placeholder { max-width: 100%; }
   margin-bottom: 6px;
 }
 
-.setup-hero-badge {
-  display: inline-block;
-  font-size: var(--font-size-xs);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--on-accent);
-  background: var(--accent);
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  margin-right: 6px;
-  vertical-align: middle;
-}
-
 .setup-copy-wrap-multiline {
   align-items: flex-start;
 }
@@ -1146,20 +1107,6 @@ textarea::placeholder { max-width: 100%; }
   padding: 1px 4px;
   border-radius: var(--radius-xs);
   background: var(--bg-tertiary);
-}
-
-.setup-usable-badge {
-  display: inline-block;
-  font-size: var(--font-size-xs);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--on-accent);
-  background: var(--success);
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  margin-right: 6px;
-  vertical-align: middle;
 }
 
 /* Divider between "works now" and the main-agent-setup upsell. */
@@ -1239,40 +1186,6 @@ textarea::placeholder { max-width: 100%; }
   box-shadow: var(--card-shadow);
 }
 
-/* ===== Badge ===== */
-
-.badge {
-  display: inline-block;
-  padding: 2px 6px;
-  border-radius: 10px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0;
-}
-
-.badge-immediate { background: rgba(255, 59, 48, 0.12); color: var(--priority-immediate); }
-.badge-important { background: rgba(255, 149, 0, 0.12); color: var(--priority-important); }
-.badge-backlog { background: rgba(52, 199, 89, 0.12); color: var(--priority-backlog); }
-/* Legacy priority badges */
-.badge-high { background: rgba(255, 59, 48, 0.12); color: var(--priority-high); }
-.badge-medium { background: rgba(255, 149, 0, 0.12); color: var(--priority-medium); }
-.badge-low { background: rgba(52, 199, 89, 0.12); color: var(--priority-low); }
-.badge-none { background: var(--bg-tertiary); color: var(--fg-muted); }
-.badge-todo { background: var(--bg-tertiary); color: var(--fg-muted); }
-.badge-done { background: rgba(52, 199, 89, 0.12); color: var(--success); }
-
-/* Phase badge colors */
-.badge-phase-investigation { background: rgba(88, 86, 214, 0.12); color: #5856D6; }
-.badge-phase-todo { background: var(--bg-tertiary); color: var(--fg-muted); }
-.badge-phase-in_progress { background: rgba(0, 122, 255, 0.12); color: var(--accent); }
-.badge-phase-need_action { background: rgba(255, 59, 48, 0.12); color: var(--error); }
-.badge-phase-waiting { background: rgba(139, 92, 246, 0.14); color: var(--phase-waiting, #8b5cf6); }
-.badge-phase-wait { background: rgba(255, 59, 48, 0.12); color: var(--error); }
-.badge-phase-human_verification { background: rgba(255, 107, 0, 0.12); color: #FF6B00; }
-.badge-phase-peer_code_review { background: rgba(175, 82, 222, 0.12); color: #AF52DE; }
-.badge-phase-release_in_pipeline { background: rgba(48, 176, 199, 0.12); color: #30B0C7; }
-.badge-phase-complete { background: rgba(52, 199, 89, 0.12); color: var(--success); }
 
 /* Inline phase icon (before title text) */
 .task-phase-icon-btn {
@@ -1353,22 +1266,6 @@ textarea::placeholder { max-width: 100%; }
 .priority-picker-icon { width: 22px; text-align: center; font-size: var(--font-size-sm); font-weight: 700; }
 .priority-picker-check { margin-left: auto; color: var(--accent); font-size: var(--font-size-sm); }
 
-.badge-clickable {
-  cursor: pointer;
-  transition: opacity 0.15s, transform 0.1s;
-  border: none;
-  font: inherit;
-  line-height: inherit;
-}
-
-.badge-clickable:hover {
-  opacity: 0.8;
-  transform: scale(1.1);
-}
-
-.badge-clickable:active {
-  transform: scale(0.95);
-}
 
 /* ===== Page Header ===== */
 
@@ -1843,14 +1740,6 @@ textarea::placeholder { max-width: 100%; }
   border-radius: var(--radius-xs);
 }
 
-.search-auto-expanded-badge {
-  font-size: 9px;
-  color: var(--fg-muted);
-  background: var(--bg-secondary);
-  padding: 1px 4px;
-  border-radius: var(--radius-xs);
-  opacity: 0.7;
-}
 
 .search-result-body {
   flex: 1;
@@ -1874,24 +1763,6 @@ textarea::placeholder { max-width: 100%; }
 
 /* Session detail & chat history */
 
-.session-detail-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  padding: 3px 10px;
-  border-radius: var(--radius-md);
-  flex-shrink: 0;
-}
-
-.session-detail-badge-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  animation: session-pulse 1.4s ease-in-out infinite;
-}
 
 
 .session-fork-popover {
@@ -2557,15 +2428,6 @@ textarea::placeholder { max-width: 100%; }
   letter-spacing: 0.02em;
 }
 
-.user-messages-summary-count {
-  font-size: var(--font-size-xs);
-  background: var(--bg-tertiary);
-  color: var(--fg-muted);
-  padding: 0 6px;
-  border-radius: var(--radius-sm);
-  line-height: 18px;
-  font-weight: 500;
-}
 
 .user-messages-summary-list {
   min-height: 28px;
@@ -2824,52 +2686,24 @@ textarea::placeholder { max-width: 100%; }
   margin-top: 6px;
 }
 
+/* The task and session links are `.badge.badge-accent` (styles/badge.css); this places them. */
 .provenance-chip {
+  max-width: 260px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+/* The copy button is a control, not a label: it keeps its own small round look. */
+.provenance-chip-copy {
   display: inline-flex;
   align-items: center;
-  max-width: 260px;
   padding: 1px 7px;
   border: none;
   border-radius: 999px;
   font-size: var(--font-size-xs);
   font-family: inherit;
   line-height: 1.6;
-  text-decoration: none;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-}
-
-.provenance-chip-session {
-  background: var(--session-ref-subtle);
-  color: var(--session-ref);
-  font-family: var(--font-mono);
-}
-
-.provenance-chip-session:hover {
-  background: var(--session-ref-subtle-hover);
-}
-
-.provenance-chip-task {
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-
-.provenance-chip-task:hover {
-  background: var(--accent-subtle);
-  text-decoration: underline;
-}
-
-/* Unresolvable / ambiguous short id: still shown, deliberately NOT a link. */
-.provenance-chip-dim {
-  background: var(--bg-tertiary);
-  color: var(--fg-muted);
-  font-family: var(--font-mono);
-  cursor: default;
-}
-
-.provenance-chip-copy {
   background: transparent;
   color: var(--fg-muted);
 }
@@ -3707,13 +3541,6 @@ textarea::placeholder { max-width: 100%; }
   font-weight: 600;
   color: var(--fg);
 }
-.team-card-count {
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
-  background: var(--bg-tertiary);
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
-}
 .team-card-tabs { padding: 0 8px; }
 .team-tab-name {
   max-width: 120px;
@@ -4048,7 +3875,7 @@ textarea::placeholder { max-width: 100%; }
   gap: 5px;
   padding: 8px 10px;
   color: var(--fg);
-  background: var(--bg);
+  background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   font: inherit;
@@ -5179,29 +5006,6 @@ textarea::placeholder { max-width: 100%; }
   opacity: 1;
 }
 
-.agent-tab-new {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-  color: var(--fg-muted);
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
-}
-
-.agent-tab-new:hover {
-  background: var(--accent-subtle);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
 .chat-panel {
   flex: 1;
   overflow-y: auto;
@@ -5346,18 +5150,7 @@ textarea::placeholder { max-width: 100%; }
 
 /* "UI Only" badge — small muted pill next to role label */
 .chat-ui-only-badge {
-  display: inline-block;
-  font-size: 0.65em;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--fg-muted);
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-xs);
-  padding: 1px 5px;
   margin-left: 6px;
-  vertical-align: middle;
-  white-space: nowrap;
 }
 
 /* Collapsed summary text — wraps up to 2 lines, then clamps with ellipsis */
@@ -5462,16 +5255,6 @@ textarea::placeholder { max-width: 100%; }
   color: var(--fg-secondary);
 }
 
-.chat-stats-badge {
-  display: inline-block;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  color: var(--fg-muted);
-  background: var(--bg-tertiary);
-  padding: 1px 8px;
-  border-radius: 10px;
-  vertical-align: middle;
-}
 
 .chat-message-content {
   word-break: break-word;
@@ -6380,23 +6163,8 @@ textarea::placeholder { max-width: 100%; }
 .subagent-block-header {
   gap: 6px;
 }
-.subagent-model-badge {
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  padding: 1px 5px;
-  border-radius: var(--radius-xs);
-  background: var(--accent-subtle);
-  color: var(--accent);
-  flex-shrink: 0;
-}
+.subagent-model-badge,
 .subagent-bg-badge {
-  font-size: 9px;
-  font-weight: 600;
-  text-transform: uppercase;
-  padding: 1px 4px;
-  border-radius: var(--radius-xs);
-  background: var(--warning-subtle);
-  color: var(--warning);
   flex-shrink: 0;
 }
 .subagent-meta {
@@ -6609,26 +6377,7 @@ textarea::placeholder { max-width: 100%; }
 }
 
 .task-group-badge {
-  font-size: var(--font-size-xs);
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  color: var(--fg-muted);
   flex-shrink: 0;
-}
-
-/* Subagent fan-out chip: "⑂ 2+2 agents" — direct spawns + deeper-tree spawns.
-   Always visible (unlike the tool-count badge) so the tree size reads without
-   expanding the box. */
-.task-group-agent-count {
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
-  flex-shrink: 0;
-  white-space: nowrap;
 }
 
 .task-group-streaming-dot {
@@ -7099,8 +6848,6 @@ textarea::placeholder { max-width: 100%; }
   min-width: 0;
 }
 .chat-input-task-pill .badge {
-  font-size: var(--font-size-xs);
-  padding: 0 5px;
   flex-shrink: 0;
 }
 
@@ -7819,13 +7566,6 @@ textarea::placeholder { max-width: 100%; }
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
 }
-.voice-panel-badge {
-  font-size: 9.5px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  color: var(--error);
-}
 .voice-panel-flash {
   font-size: var(--font-size-xs);
   font-weight: 600;
@@ -7994,26 +7734,18 @@ textarea::placeholder { max-width: 100%; }
   margin: 10px 0 8px;
   flex-wrap: wrap;
 }
-.stt-diff-chip {
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  border-radius: var(--radius-xs);
-  padding: 1px 7px;
+/* Each engine's label is a `.badge`; its dot keys it to the merged text's colour below:
+   the primary's words are green and kept, the secondary's are orange and crossed out. */
+.stt-diff-chip-a::before,
+.stt-diff-chip-b::before {
+  content: '';
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
 }
-/* Primary (the engine whose text is the source) — green, kept */
-.stt-diff-chip-a {
-  color: #2f7d4f;
-  background: rgba(56, 142, 92, 0.14);
-  border: 1px solid rgba(56, 142, 92, 0.35);
-}
-/* Secondary — orange, its differing words render crossed out */
-.stt-diff-chip-b {
-  color: #b3562a;
-  background: rgba(217, 108, 50, 0.14);
-  border: 1px solid rgba(217, 108, 50, 0.35);
-}
+.stt-diff-chip-a::before { background: var(--success); }
+.stt-diff-chip-b::before { background: var(--warning); }
 .stt-diff-note {
   font-size: var(--font-size-xs);
   color: var(--fg-muted);
@@ -8297,16 +8029,6 @@ textarea::placeholder { max-width: 100%; }
   overflow-y: auto;
 }
 
-.mic-vocab-tag {
-  display: inline-block;
-  padding: 2px 7px;
-  font-size: var(--font-size-xs);
-  background: var(--accent-subtle);
-  color: var(--accent);
-  border-radius: 10px;
-  white-space: nowrap;
-}
-
 @keyframes mic-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(255, 59, 48, 0.4); }
   50% { box-shadow: 0 0 0 6px rgba(255, 59, 48, 0); }
@@ -8400,36 +8122,7 @@ textarea::placeholder { max-width: 100%; }
 .stt-dropdown-option-name { display: flex; align-items: center; gap: 6px; font-weight: 500; }
 .stt-dropdown-option-desc { font-size: 0.8rem; color: var(--fg-muted); }
 .stt-dropdown-option-features { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
-.stt-feature-tag {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 5px;
-  border-radius: var(--radius-xs);
-  font-size: 0.65rem;
-  color: var(--fg-muted);
-  background: var(--bg-secondary);
-  white-space: nowrap;
-}
 .stt-dropdown-check { color: var(--accent); font-weight: bold; flex-shrink: 0; margin-top: 2px; }
-
-/* ── Badges ── */
-
-.stt-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 6px;
-  border-radius: var(--radius-xs);
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-.stt-badge-local { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
-.stt-badge-cloud { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
-.stt-badge-active { background: color-mix(in srgb, var(--success) 15%, transparent); color: var(--success); }
-.stt-badge-downloaded { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--fg-muted); }
-.stt-badge-missing { background: color-mix(in srgb, var(--error) 12%, transparent); color: var(--error); font-size: 0.65rem; }
-.stt-badge-recommended { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); font-weight: 600; }
 
 /* ── Install Banner ── */
 
@@ -8808,17 +8501,7 @@ img[data-lightbox-src],
 }
 
 .chat-queued-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
   margin-left: 8px;
-  padding: 1px 8px;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  color: var(--fg-muted);
-  background: var(--bg-tertiary);
-  border-radius: 10px;
-  vertical-align: middle;
 }
 
 .chat-queued-cancel {
@@ -9321,14 +9004,8 @@ body.walnut-dragging {
   font-family: inherit;
 }
 
+/* A header's host or kind is a `.badge`, its state a NoticeStatus; this only places them. */
 .session-panel-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  padding: 2px 8px;
-  border-radius: 10px;
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -9840,20 +9517,6 @@ body.walnut-dragging {
 }
 
 /* ── Task Session Badge ("S" pill, same size as source badge) ── */
-.task-session-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 20px;
-  min-width: 20px;
-  padding: 0 5px;
-  border-radius: 10px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  color: var(--on-accent);
-  flex-shrink: 0;
-  cursor: pointer;
-}
 
 @keyframes task-dot-pulse {
   0%, 100% { opacity: 1; }
@@ -9980,12 +9643,8 @@ body.walnut-dragging {
   color: var(--fg); font-weight: 600;
 }
 .vd-rail-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vd-rail-badge {
-  margin-left: auto; flex-shrink: 0; min-width: 16px; height: 16px;
-  display: grid; place-items: center; border-radius: var(--radius-sm);
-  font-size: var(--font-size-xs); font-weight: 600; color: transparent;
-}
-.vd-rail-badge.vd-set { background: var(--accent); color: var(--on-accent); }
+/* A set count is `.badge.badge-accent.badge-count`; an empty one still holds its place. */
+.vd-rail-badge { margin-left: auto; flex-shrink: 0; min-width: var(--badge-h); height: var(--badge-h); }
 .vd-detail { overflow-y: auto; padding: 10px 12px; }
 .vd-none { padding: 24px 0; text-align: center; font-size: var(--font-size-sm); color: var(--fg-muted); }
 /* One muted line under a capped chip grid (Tags) pointing at the panel search. */
@@ -10076,21 +9735,6 @@ body.walnut-dragging {
 
 .filter-toolbar-toggle.has-active {
   color: var(--accent);
-}
-
-.filter-active-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: var(--font-size-xs);
-  font-weight: 700;
-  margin-left: 2px;
-  padding: 0 4px;
 }
 
 .filter-toolbar-actions {
@@ -10365,16 +10009,6 @@ body.walnut-dragging {
   letter-spacing: 0.04em;
 }
 
-.todo-pinned-count {
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  background: var(--bg-secondary);
-  border-radius: var(--radius-sm);
-  padding: 0 5px;
-  min-width: 16px;
-  text-align: center;
-  line-height: 16px;
-}
 
 /* TASKS section bar — standalone sibling of .todo-pinned-wrapper (not inside a
    .todo-pinned-section), so it carries its own padding + separator. */
@@ -11196,15 +10830,6 @@ body.walnut-dragging {
   z-index: 1;
 }
 /* collapse-chevron-spacer removed — chevron is now absolutely positioned in padding area */
-.task-children-badge {
-  font-size: var(--font-size-xs);
-  color: var(--accent);
-  background: rgba(0, 122, 255, 0.08);
-  padding: 1px 5px;
-  border-radius: var(--radius-xs);
-  white-space: nowrap;
-  font-weight: 500;
-}
 
 /* ── Virtual task groups ── */
 /* Members of a group share a tinted left rail so they read as one cluster,
@@ -11291,16 +10916,6 @@ body.walnut-dragging {
    project; hollow icon + indent = folder). */
 .project-kind-tag {
   flex: none;
-  font-size: 8.5px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--fg-muted);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xs);
-  padding: 0 3px;
-  line-height: 1.5;
-  opacity: 0.65;
   user-select: none;
 }
 /* Row counts on BOTH levels: a folder chip's member count and a pinned tier's
@@ -11379,13 +10994,6 @@ body.walnut-dragging {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 160px;
-}
-.todo-pinned-hidden-chip-count {
-  font-size: var(--font-size-xs);
-  opacity: 0.7;
-  padding: 0 4px;
-  border-radius: 6px;
-  background: rgba(120, 120, 128, 0.16);
 }
 /* Folder members — indent + left RAIL (V2 tree look). The rail is a ::before
    pseudo line drawn OUTSIDE the card's box (left: -8px), so it never fights the
@@ -11549,13 +11157,6 @@ body.walnut-dragging {
 }
 
 .task-blocked-badge {
-  font-size: 0.65rem;
-  padding: 1px 5px;
-  border-radius: var(--radius-xs);
-  background: #f59e0b20;
-  color: #f59e0b;
-  font-weight: 500;
-  white-space: nowrap;
   flex-shrink: 0;
 }
 
@@ -11671,35 +11272,8 @@ body.walnut-dragging {
   margin-left: 22px;
 }
 
-.todo-item-due-pill {
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-  white-space: nowrap;
-}
-
-.todo-item-due-overdue {
-  background: rgba(255, 59, 48, 0.12);
-  color: var(--error);
-}
-
-/* Imported pill — the task still belongs to the external-session importer
-   (auto-completes after a week idle; a message adopts it and the pill goes).
-   Neutral grey with a dashed edge: informational, never urgent. */
-.todo-item-imported-pill {
-  background: transparent;
-  color: var(--fg-muted);
-  border: 1px dashed var(--border);
-  padding: 0 5px;
-}
-
-.task-card-imported-pill {
-  font-size: var(--font-size-xs);
-  border-radius: var(--radius-sm);
-}
+/* The row's dates and its imported mark are `.badge`s (styles/badge.css): an overdue date is
+   `badge-error`, an imported session `badge-paused` (shown, never urgent). */
 
 /* A task's own tags on the Homepage row and detail pane. Wider than the /tasks
    card's 80px chip so an id tag ("ticket:V1234567890") reads whole when there is
@@ -11733,7 +11307,6 @@ body.walnut-dragging {
   max-width: max-content;
   min-width: 30px;
   flex: 1 1 30px;
-  padding: 2px 5px;
   gap: 0;
 }
 /* Squeezed, the prefix goes all at once: the chip wraps it onto a second line its
@@ -11745,10 +11318,7 @@ body.walnut-dragging {
   flex-wrap: wrap;
   justify-content: flex-end;
   align-content: flex-start;
-  box-sizing: border-box;
-  height: calc(1.2em + 4px);
-  /* overflow clips at the padding edge: without a gap the hidden line would start inside
-     the bottom padding and show the tops of its letters. */
+  /* The badge's one line; the wrapped prefix goes to a second line its height hides. */
   row-gap: 8px;
 }
 .task-tag-pills .tag-chip-inline:not(.tag-chip-whole) > .tag-chip-value {
@@ -11798,16 +11368,7 @@ body.walnut-dragging {
 .session-panel-title-area > .session-panel-tag-pills {
   max-width: 40%;
 }
-/* "+N" as a button (the session header): opens the rest of the tags as a list. */
-.tag-chip-overflow-btn {
-  border: none;
-  font: inherit;
-  cursor: pointer;
-}
-.tag-chip-overflow-btn:hover,
-.tag-chip-overflow-btn.open {
-  background: rgba(175, 82, 222, 0.2);
-}
+/* "+N" as a button (the session header) opens the rest of the tags as a list. */
 .tag-pills-menu {
   position: fixed;
   z-index: 9500;
@@ -11831,16 +11392,6 @@ body.walnut-dragging {
 }
 .tag-pills-menu-row:hover {
   background: var(--bg-secondary);
-}
-.tag-pills-menu-row .tag-chip {
-  font-size: var(--font-size-xs);
-}
-
-/* Deferred-start pill — future start_date; blue tint to read as "scheduled",
-   not "late" */
-.todo-item-start-pill {
-  background: rgba(0, 122, 255, 0.1);
-  color: var(--accent);
 }
 
 /* Inline title editing (contentEditable — same element, no layout shift) */
@@ -11979,17 +11530,7 @@ body.walnut-dragging {
   line-height: 1.4;
 }
 
-.todo-detail-priority-pill {
-  font-size: var(--font-size-xs);
-  padding: 2px 8px;
-  border-radius: var(--radius-xs);
-  font-weight: 500;
-  line-height: 1.4;
-}
 
-.todo-detail-priority-pill.priority-immediate { background: rgba(255, 59, 48, 0.12); color: var(--error); }
-.todo-detail-priority-pill.priority-important { background: rgba(255, 149, 0, 0.12); color: var(--warning); }
-.todo-detail-priority-pill.priority-backlog { background: var(--bg-tertiary); color: var(--fg-muted); }
 
 /* Sprint picker dropdown (its trigger is the button family) */
 .sprint-picker-dropdown {
@@ -12035,15 +11576,6 @@ body.walnut-dragging {
   border-bottom: 1px solid var(--border);
   border-radius: var(--radius-xs) var(--radius-xs) 0 0;
   margin-bottom: 2px;
-}
-.sprint-picker-current-badge {
-  font-size: 9px;
-  padding: 1px 5px;
-  border-radius: var(--radius-xs);
-  background: rgba(52, 199, 89, 0.12);
-  color: var(--success);
-  font-weight: 500;
-  flex-shrink: 0;
 }
 .sprint-picker-empty {
   padding: 8px 10px;
@@ -12308,14 +11840,7 @@ body.walnut-dragging {
 }
 
 .todo-detail-plan-badge {
-  background: var(--accent);
-  color: var(--on-accent);
-  padding: 1px 5px;
-  border-radius: var(--radius-xs);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
   flex-shrink: 0;
-  line-height: 1.4;
 }
 
 .session-id-mono {
@@ -12989,22 +12514,6 @@ body.walnut-dragging {
   cursor: grabbing;
 }
 
-.todo-panel-tab-source-badge {
-  display: inline-block;
-  font-size: 8px;
-  font-weight: 700;
-  line-height: 1;
-  padding: 1px 3px;
-  margin-left: 4px;
-  border-radius: var(--radius-xs);
-  background: rgba(128, 128, 128, 0.2);
-  color: var(--fg-secondary);
-  vertical-align: middle;
-}
-.todo-panel-tab-active .todo-panel-tab-source-badge {
-  background: rgba(255, 255, 255, 0.25);
-  color: rgba(255, 255, 255, 0.85);
-}
 
 /* ===== Todo Panel Toggle Completed ===== */
 
@@ -13136,19 +12645,6 @@ body.walnut-dragging {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-/* Project detail pane styles */
-.detail-source-badge {
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: var(--radius-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-.detail-source-badge.source-local {
-  background: color-mix(in srgb, var(--fg-muted) 12%, transparent);
-  color: var(--fg-muted);
-}
 
 .detail-section {
   margin-bottom: 12px;
@@ -13354,34 +12850,12 @@ body.walnut-dragging {
   opacity: 1;
 }
 
-/* One-letter provider badge next to a project name (no badge = local).
-   Brand tints via color-mix against the theme background, so they survive
-   the dark theme instead of rendering as bright light-mode rectangles. */
+/* One-letter provider badge next to a project name (no badge = local): a
+   `.badge.badge-count` (styles/badge.css); this only places it. */
 .project-src-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  border-radius: var(--radius-xs);
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 1;
   flex-shrink: 0;
   user-select: none;
   cursor: default;
-}
-.project-src-badge--ms-todo {
-  background: color-mix(in srgb, #2564cf 14%, var(--bg));
-  color: color-mix(in srgb, #2564cf 80%, var(--fg));
-}
-.project-src-badge--jira {
-  background: color-mix(in srgb, #1868db 14%, var(--bg));
-  color: color-mix(in srgb, #1868db 80%, var(--fg));
-}
-.project-src-badge--generic {
-  background: var(--bg-tertiary);
-  color: var(--fg-muted);
 }
 
 /* "＋ New Project" — container creation at the list bottom, visually apart
@@ -13826,114 +13300,6 @@ body.walnut-dragging {
   flex-shrink: 0;
 }
 
-/* Joined segment container — chips inside share borders */
-.filter-segment {
-  display: inline-flex;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-  position: relative;
-}
-
-.filter-segment > :first-child {
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-}
-
-.filter-segment > :last-child {
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-}
-
-.filter-segment > :only-child {
-  border-radius: var(--radius-sm);
-}
-
-.filter-chip {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1px;
-  padding: 4px 10px;
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  border: none;
-  border-right: 1px solid var(--border);
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-  transition: all 0.12s ease;
-  white-space: nowrap;
-  min-width: 34px;
-  position: relative;
-}
-
-.filter-chip:last-child {
-  border-right: none;
-}
-
-.filter-chip:hover {
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-}
-
-.filter-chip.active {
-  background: var(--accent);
-  color: var(--on-accent);
-}
-
-.filter-chip.dimmed {
-  opacity: 0.4;
-}
-
-.filter-chip.dimmed:hover {
-  opacity: 0.7;
-}
-
-.filter-chip-text {
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  line-height: 1.2;
-}
-
-.filter-chip-count {
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 1;
-  opacity: 0.6;
-}
-
-.filter-chip.active .filter-chip-count {
-  opacity: 0.75;
-}
-
-/* Standalone chip — not part of a segment (show completed, collapse) */
-.filter-chip-standalone {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 10px;
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-  transition: all 0.12s ease;
-  white-space: nowrap;
-}
-
-.filter-chip-standalone:hover {
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-}
-
-.filter-chip-standalone.active {
-  background: var(--accent-subtle);
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
 /* Sort toggle — compact segmented control */
 .sort-toggle {
   display: inline-flex;
@@ -14098,31 +13464,9 @@ body.walnut-dragging {
 
 /* ===== Task Source Badge ===== */
 
+/* A `.badge.badge-count` (TaskMenuRows.tsx sourceBadgeClass); this only places it. */
 .task-source-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 20px;
-  min-width: 20px;
-  padding: 0 5px;
-  border-radius: 10px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
   flex-shrink: 0;
-  /* Default color — overridden by inline styles from plugin metadata */
-  background: var(--accent);
-  color: var(--on-accent);
-}
-
-.task-source-badge-unsynced {
-  background: var(--warning);
-  opacity: 0.7;
-}
-
-.task-source-badge-error {
-  background: var(--error);
-  color: var(--on-accent);
-  opacity: 1;
 }
 
 /* ===== Task Subgroup (TaskList page) ===== */
@@ -14208,19 +13552,6 @@ body.walnut-dragging {
 .task-filter-override-row {
   padding-left: 26px; /* align with title text (phase icon 18px + gap 4px + 4px) */
   padding-top: 1px;
-}
-
-.task-filter-override-badge {
-  display: inline-flex;
-  align-items: center;
-  font-size: 9px;
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--warning) 12%, transparent);
-  color: var(--priority-important-text);
-  white-space: nowrap;
-  opacity: 0.85;
-  letter-spacing: 0.2px;
 }
 
 /* Fade-out animation when focus override is removed */
@@ -14791,7 +14122,6 @@ a.task-kebab-info:hover {
 /* Info badges in title row — keep compact */
 .todo-item-title-row .todo-item-due-pill,
 .todo-item-title-row .task-blocked-badge,
-.todo-item-title-row .task-children-badge,
 .todo-item-title-row .task-completed-time {
   flex-shrink: 0;
 }
@@ -14881,19 +14211,7 @@ a.task-kebab-info:hover {
 }
 
 .context-token-badge {
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  color: var(--fg-muted);
-  background: var(--bg-tertiary);
-  padding: 2px 8px;
-  border-radius: 10px;
-  white-space: nowrap;
   flex-shrink: 0;
-}
-
-.context-token-badge-total {
-  color: var(--accent);
-  font-weight: 600;
 }
 
 .context-section-content {
@@ -15299,18 +14617,6 @@ a.task-kebab-info:hover {
   flex-wrap: wrap;
 }
 
-.cron-processor-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 1px 8px;
-  border-radius: 10px;
-  font-size: 0.7rem;
-  font-weight: 500;
-  background: var(--accent);
-  color: var(--on-accent);
-  letter-spacing: 0.02em;
-}
 
 .cron-form-checkbox {
   display: flex;
@@ -15565,74 +14871,9 @@ a.task-kebab-info:hover {
   margin-right: 0;
 }
 
-/* Agent source badges */
+/* Agent kind and source labels are `.badge` (an override `.badge-accent`, AgentCard.tsx). */
 .agent-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  text-transform: lowercase;
-  letter-spacing: 0.3px;
-  white-space: nowrap;
   flex-shrink: 0;
-}
-
-.agent-badge-builtin {
-  background: rgba(142, 142, 147, 0.15);
-  color: var(--fg-muted);
-}
-
-.agent-badge-config {
-  background: rgba(255, 159, 10, 0.12);
-  color: #E68A00;
-}
-
-[data-theme="dark"] .agent-badge-config {
-  color: #FFB340;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .agent-badge-config {
-    color: #FFB340;
-  }
-}
-
-.agent-badge-override {
-  background: rgba(0, 122, 255, 0.12);
-  color: var(--accent);
-}
-
-[data-theme="dark"] .agent-badge-override {
-  color: var(--accent);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .agent-badge-override {
-    color: var(--accent);
-  }
-}
-
-/* Console vs background kind badges (accent/green vs muted grey). */
-.agent-badge-console {
-  background: rgba(52, 199, 89, 0.14);
-  color: #2EA84F;
-}
-
-[data-theme="dark"] .agent-badge-console {
-  color: var(--success);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .agent-badge-console {
-    color: var(--success);
-  }
-}
-
-.agent-badge-background {
-  background: rgba(142, 142, 147, 0.15);
-  color: var(--fg-muted);
 }
 
 /* /agents console-vs-background sections */
@@ -15811,18 +15052,6 @@ a.task-kebab-info:hover {
   gap: 6px;
 }
 
-.model-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  border-radius: 6px;
-  font-size: var(--font-size-sm);
-  font-family: var(--font-mono);
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-  border: 1px solid var(--border);
-}
 
 .model-tag-text {
   max-width: 340px;
@@ -15953,17 +15182,6 @@ a.task-kebab-info:hover {
   white-space: nowrap;
 }
 
-.context-source-auto-badge {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 1px 5px;
-  border-radius: var(--radius-xs);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.5px;
-  background: rgba(0, 122, 255, 0.12);
-  color: var(--accent);
-}
 
 .context-source-budget {
   width: 70px;
@@ -16270,15 +15488,8 @@ a.task-kebab-info:hover {
   gap: 6px;
 }
 
-.command-palette-source {
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  color: var(--fg-muted);
-  background: var(--bg-tertiary);
-  padding: 1px 5px;
-  border-radius: var(--radius-xs);
-  white-space: nowrap;
-}
+/* A command's source is a neutral `.badge`, whatever the source. */
+.command-palette-source { flex: none; }
 
 .command-palette-desc {
   font-size: var(--font-size-sm);
@@ -16313,56 +15524,6 @@ a.task-kebab-info:hover {
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) .command-palette-control .command-palette-desc {
     color: #b59533;
-  }
-}
-
-.command-palette-source-control {
-  color: #92400e;
-  background: #fef3c7;
-}
-[data-theme="dark"] .command-palette-source-control {
-  color: #fbbf24;
-  background: rgba(251, 191, 36, 0.15);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .command-palette-source-control {
-    color: #fbbf24;
-    background: rgba(251, 191, 36, 0.15);
-  }
-}
-
-.command-palette-source-app {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-}
-
-.command-palette-source-built-in {
-  color: #0e7490;
-  background: #cffafe;
-}
-[data-theme="dark"] .command-palette-source-built-in {
-  color: #22d3ee;
-  background: rgba(34, 211, 238, 0.12);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .command-palette-source-built-in {
-    color: #22d3ee;
-    background: rgba(34, 211, 238, 0.12);
-  }
-}
-
-.command-palette-source-skill {
-  color: #6d28d9;
-  background: #ede9fe;
-}
-[data-theme="dark"] .command-palette-source-skill {
-  color: #a78bfa;
-  background: rgba(167, 139, 250, 0.15);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .command-palette-source-skill {
-    color: #a78bfa;
-    background: rgba(167, 139, 250, 0.15);
   }
 }
 
@@ -16701,17 +15862,9 @@ a.task-kebab-info:hover {
   color: var(--accent);
   font-size: var(--font-size-xs);
 }
-/* "new" pill on an AI-invented project name (it will be created on submit). */
+/* "new" badge on an AI-invented project name (it will be created on submit). */
 .qtc-confirm-new {
   margin-left: 4px;
-  padding: 0 4px;
-  border-radius: var(--radius-xs);
-  font-size: 9px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 .qtc-confirm-chips {
   padding: 0;
@@ -16868,13 +16021,8 @@ a.task-kebab-info:hover {
   line-height: 1.4;
 }
 
+/* A `.badge` (a live folder's `.badge-accent`); this keeps its width rule. */
 .sps-path-host-tag {
-  font-size: var(--font-size-xs);
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-  color: var(--fg-muted);
-  white-space: nowrap;
   flex-shrink: 0;
   /* The whole host name; past this width an ellipsis, and the tooltip names it in
      full (host-tag.ts). Never cut in code. */
@@ -16891,21 +16039,6 @@ a.task-kebab-info:hover {
   white-space: nowrap;
   font-size: var(--font-size-xs);
   color: var(--fg-muted);
-}
-
-.sps-tag-live {
-  background: #e8f5e9;
-  color: #2e7d32;
-}
-[data-theme="dark"] .sps-tag-live {
-  background: #1b3a1e;
-  color: #81c784;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .sps-tag-live {
-    background: #1b3a1e;
-    color: #81c784;
-  }
 }
 
 .sps-live .sps-path-cwd { opacity: 0.85; }
@@ -17879,15 +17012,6 @@ a.task-kebab-info:hover {
   color: var(--fg-muted);
   margin: 0;
 }
-.hook-card-badge {
-  font-size: var(--font-size-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding: 2px 6px;
-  border-radius: var(--radius-xs);
-  border: 1px solid var(--border);
-  color: var(--fg-muted);
-}
 .hook-card-badge-config { color: var(--accent); border-color: var(--accent); }
 .hook-card-badge-daemon-policy { color: var(--warning); border-color: var(--warning); }
 .hook-card-readonly {
@@ -17988,24 +17112,6 @@ a.task-kebab-info:hover {
 }
 
 /* Source badge */
-.cmd-source-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-.cmd-source-badge.builtin {
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-.cmd-source-badge.user {
-  background: rgba(52, 199, 89, 0.12);
-  color: var(--success);
-}
-
 /* Content preview */
 .cmd-card-content {
   margin-top: 10px;
@@ -18282,14 +17388,6 @@ a.task-kebab-info:hover {
   background: var(--accent-subtle);
 }
 
-.usage-source-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: var(--radius-xs);
-  background: var(--bg-tertiary);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-}
 
 .usage-parent-source {
   margin-left: 4px;
@@ -18668,46 +17766,12 @@ td.usage-share-col {
 
 /* ===== Task Session Indicators ===== */
 
-.task-session-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  padding: 2px 9px 2px 7px;
-  border-radius: 9999px;
-  white-space: nowrap;
-  line-height: 18px;
-  letter-spacing: 0.01em;
-}
-
-/* in_progress: green — session process is alive and working */
-.task-session-pill-running {
-  color: var(--on-accent);
-  background: var(--success);
-  box-shadow: 0 1px 3px rgba(52, 199, 89, 0.3);
-}
-
-/* agent_complete: red — needs human review/confirm */
-.task-session-pill-agent-complete {
-  color: var(--on-accent);
-  background: var(--error);
-  box-shadow: 0 1px 3px rgba(255, 59, 48, 0.3);
-}
-
-/* error: red — session encountered an error */
-.task-session-pill-error {
-  color: var(--on-accent);
-  background: var(--error);
-  box-shadow: 0 1px 3px rgba(255, 59, 48, 0.3);
-}
+/* The session pill is the one `.badge`, toned by its state (SessionPill.tsx STATE_TONE);
+   its dot takes the words' colour. */
 
 /* waiting: red + pulse — CLI paused on a permission/AskUserQuestion prompt.
    The single most actionable session state; must be unmissable in lists. */
 .task-session-pill-waiting {
-  color: var(--on-accent);
-  background: var(--error);
-  box-shadow: 0 1px 3px rgba(255, 59, 48, 0.3);
   animation: pill-waiting-pulse 1.6s ease-in-out infinite;
 }
 @keyframes pill-waiting-pulse {
@@ -18715,43 +17779,10 @@ td.usage-share-col {
   50% { opacity: 0.55; }
 }
 
-/* completed: blue — work fully completed */
-.task-session-pill-completed {
-  color: var(--on-accent);
-  background: var(--accent);
-  box-shadow: 0 1px 3px rgba(0, 122, 255, 0.3);
-}
-
-/* wait: red — session blocked / errored, needs a look */
-.task-session-pill-wait {
-  color: var(--on-accent);
-  background: var(--error);
-  box-shadow: 0 1px 3px rgba(255, 59, 48, 0.3);
-}
-
-.task-session-pill-history {
-  color: var(--fg-muted);
-  background: var(--bg-secondary);
-  padding-left: 9px;
-  font-weight: 500;
-}
-
-/* Clickable session pill — one-click to open session panel */
-.task-session-pill-clickable {
-  cursor: pointer;
-  transition: filter 0.15s;
-}
-.task-session-pill-clickable:hover {
-  filter: brightness(0.85);
-}
-
-/* Active indicator — session is currently open in a column
-   White inner ring + accent outer ring + soft glow */
+/* Active indicator — session is currently open in a column: an accent ring outside the label. */
 .task-session-pill-active {
-  box-shadow:
-    0 0 0 1.5px rgba(255, 255, 255, 0.85),
-    0 0 0 3px var(--accent),
-    0 0 10px color-mix(in srgb, var(--accent) 35%, transparent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .task-session-dot {
@@ -18760,32 +17791,12 @@ td.usage-share-col {
   height: 6px;
   border-radius: 50%;
   flex-shrink: 0;
+  background: currentColor;
 }
 
-.task-session-dot-running {
-  background: #fff;
-  animation: session-dot-glow 1.5s ease-in-out infinite;
-}
-
-.task-session-dot-agent-complete {
-  background: rgba(255, 255, 255, 0.7);
-}
-
-.task-session-dot-error {
-  background: rgba(255, 255, 255, 0.7);
-}
-
+.task-session-dot-running,
 .task-session-dot-waiting {
-  background: #fff;
   animation: session-dot-glow 1.5s ease-in-out infinite;
-}
-
-.task-session-dot-wait {
-  background: rgba(255, 255, 255, 0.7);
-}
-
-.task-session-dot-completed {
-  background: rgba(255, 255, 255, 0.8);
 }
 
 @keyframes session-dot-glow {
@@ -18924,24 +17935,6 @@ td.usage-share-col {
 /* The draft row's keys (folder, project, sync, clear) are `.btn btn-sm` (buttons.css); an open
    picker says so with aria-pressed. `.session-action-chip` stays on them only as a hook for code
    and specs, and carries no look. */
-/* A count inside a key (Threads 2, Web 1) or a menu row (Inbox 3): one badge everywhere. */
-.session-action-chip-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  color: var(--on-accent);
-  background: var(--accent);
-  border-radius: var(--radius-sm);
-  line-height: 1;
-}
-
 /* Mode bar above session input */
 /* Now lives INSIDE the composer card's controls row (ChatInput controlsSlot),
    between the "+" and the mic/send cluster. `static` so the btw popover
@@ -19028,13 +18021,6 @@ td.usage-share-col {
 /* The clicked file is opened from another host than the session's: name it. */
 .sfe-host-chip {
   flex: none;
-  padding: 1px 7px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg-secondary);
-  color: var(--fg);
-  font-size: var(--font-size-xs);
-  white-space: nowrap;
 }
 
 .sfe-path-edit .sfe-root-path-input {
@@ -19092,11 +18078,6 @@ td.usage-share-col {
 }
 .sfe-root-section + .sfe-root-section .sfe-root-header {
   border-top: 1px solid var(--border);
-}
-.sfe-changed-badge {
-  color: var(--accent);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
 }
 
 .sfe-toolbar-actions {
@@ -19309,14 +18290,10 @@ td.usage-share-col {
   z-index: 6;
   width: fit-content;
   margin: 4px 4px 0 auto;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
-  color: var(--accent);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
   pointer-events: none;
 }
+/* A block-level `.badge`, so its auto margin keeps it at the right edge. */
+.badge.fv-reloading-badge { display: flex; }
 
 /* Session pill status dots */
 .session-pill-status-dot {
@@ -19354,31 +18331,9 @@ td.usage-share-col {
 
 /* ===== Tag Chips & Editor ===== */
 
-.tag-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  font-size: var(--font-size-xs);
-  line-height: 1.2;
-  padding: 2px 7px;
-  border-radius: var(--radius-sm);
-  background: rgba(175, 82, 222, 0.1);
-  color: #8944AB;
-  font-weight: 500;
-  white-space: nowrap;
-  vertical-align: middle;
-}
-
-:root[data-theme="dark"] .tag-chip {
-  background: rgba(175, 82, 222, 0.18);
-  color: #BF5AF2;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .tag-chip {
-    background: rgba(175, 82, 222, 0.18);
-    color: #BF5AF2;
-  }
-}
+/* A tag is a `.badge` (styles/badge.css): neutral, `badge-accent` while picked in a filter,
+   `badge-paused` when the display rules keep it off task rows. */
+.tag-chip { gap: 2px; }
 
 .tag-chip-inline {
   max-width: 80px;
@@ -19386,14 +18341,10 @@ td.usage-share-col {
   text-overflow: ellipsis;
 }
 
-.tag-chip-overflow {
-  font-size: 9px;
-  padding: 2px 5px;
-  opacity: 0.7;
-}
+.tag-chip-overflow { opacity: 0.75; }
 
 .tag-chip-prefix {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .tag-chip-value {
@@ -19410,21 +18361,6 @@ a.tag-chip,
   text-decoration: none;
   cursor: pointer;
 }
-/* The pill's own colour, over the page's `a` and `a:hover`. */
-a.tag-chip,
-a.tag-chip:hover {
-  color: #8944AB;
-}
-:root[data-theme="dark"] a.tag-chip,
-:root[data-theme="dark"] a.tag-chip:hover {
-  color: #BF5AF2;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) a.tag-chip,
-  :root:not([data-theme]) a.tag-chip:hover {
-    color: #BF5AF2;
-  }
-}
 .tag-chip-link {
   display: inline-flex;
   align-items: center;
@@ -19434,48 +18370,9 @@ a.tag-chip:hover .tag-chip-value,
 .tag-chip-link:hover .tag-chip-value {
   text-decoration: underline;
 }
-a.tag-chip:focus-visible,
 .tag-chip-link:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-}
-
-.tag-chip-clickable {
-  cursor: pointer;
-}
-.tag-chip-clickable:hover {
-  background: rgba(175, 82, 222, 0.18);
-}
-:root[data-theme="dark"] .tag-chip-clickable:hover {
-  background: rgba(175, 82, 222, 0.28);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .tag-chip-clickable:hover {
-    background: rgba(175, 82, 222, 0.28);
-  }
-}
-
-.tag-chip-active {
-  background: rgba(175, 82, 222, 0.25);
-  outline: 1.5px solid rgba(175, 82, 222, 0.5);
-}
-:root[data-theme="dark"] .tag-chip-active {
-  background: rgba(175, 82, 222, 0.35);
-  outline-color: rgba(191, 90, 242, 0.5);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .tag-chip-active {
-    background: rgba(175, 82, 222, 0.35);
-    outline-color: rgba(191, 90, 242, 0.5);
-  }
-}
-
-/* A tag the display rules keep off task pills: still listed in the tag editor, muted and dashed. */
-.tag-chip-hidden {
-  background: transparent;
-  color: var(--fg-muted);
-  outline: 1px dashed var(--border-strong);
-  outline-offset: -1px;
 }
 
 .tag-chip-remove {
@@ -19632,14 +18529,6 @@ a.tag-chip:focus-visible,
   white-space: nowrap;
 }
 
-.triage-panel-count {
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  color: var(--fg-muted);
-  background: var(--bg-tertiary);
-  padding: 1px 7px;
-  border-radius: 10px;
-}
 
 .triage-panel-body {
   flex: 1;
@@ -20276,24 +19165,8 @@ a.tag-chip:focus-visible,
   flex-shrink: 0;
 }
 
-.provider-badge {
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  padding: 1px 6px;
-  border-radius: var(--radius-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
 
-.provider-badge.auto {
-  background: rgba(0, 122, 255, 0.1);
-  color: var(--accent);
-}
 
-.provider-badge.configured {
-  background: rgba(52, 199, 89, 0.1);
-  color: var(--success);
-}
 
 .provider-card-body {
   padding: 0 14px 14px 34px;
@@ -20521,13 +19394,6 @@ a.tag-chip:focus-visible,
 }
 
 .qp-chip {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: var(--radius-xs);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
   margin-bottom: 8px;
 }
 
@@ -21318,15 +20184,6 @@ a.tag-chip:focus-visible,
   flex-wrap: wrap;
 }
 
-.repo-host-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: var(--accent-subtle);
-  color: var(--accent);
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-}
 
 /* Repo Detail */
 .repo-detail-toolbar {
@@ -21786,14 +20643,6 @@ a.tag-chip:focus-visible,
 .notes-chat-switcher-group-first { border-top: none; margin-top: 0; padding-top: 4px; }
 /* Trigger badge — explicit "this pane is a Claude Code session" marker. */
 .notes-chat-switcher-badge {
-  font-size: 9.5px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  border-radius: var(--radius-xs);
-  padding: 1.5px 5px;
   flex: 0 0 auto;
 }
 .notes-chat-switcher-close {
@@ -22965,16 +21814,7 @@ a.file-link:hover {
 }
 .ref-panel-current-tag {
   direction: ltr;
-  display: inline-block;
   margin-right: 6px;   /* rtl container: margin-right renders to the tag's left */
-  padding: 0 5px;
-  border-radius: 999px;
-  font-size: 9.5px;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  background: var(--accent);
-  color: var(--on-accent);
-  vertical-align: 1px;
 }
 .ref-panel-row {
   display: flex;
@@ -23528,23 +22368,10 @@ a.file-link:hover {
 }
 
 /* Sentence case as written (terminal-status-label.ts): the pill reads words, not a code. */
-.session-terminal-status {
-  font-size: var(--font-size-xs);
-  padding: 1px 6px;
-  border-radius: var(--radius-xs);
-  flex-shrink: 0;
-  background: color-mix(in srgb, var(--fg-muted) 18%, transparent);
-  color: var(--fg-muted);
-}
-.session-terminal-status-ready { background: color-mix(in srgb, var(--success) 22%, transparent); color: var(--success); }
-.session-terminal-status-connecting,
-.session-terminal-status-ending,
-.session-terminal-status-end_unconfirmed { background: color-mix(in srgb, var(--warning) 22%, transparent); color: var(--warning); }
-.session-terminal-status-error,
-.session-terminal-status-exited,
-.session-terminal-status-ssh_failed { background: color-mix(in srgb, var(--error) 22%, transparent); color: var(--error); }
-/* "Not persistent": same pill as the status, in the warning tone. */
-.session-terminal-plain-badge { background: color-mix(in srgb, var(--warning) 22%, transparent); color: var(--warning); cursor: help; }
+/* The state's tone is the badge's (terminal-status-label.ts); the header row never squeezes it. */
+.session-terminal-status { flex-shrink: 0; }
+/* "Not persistent": a `.badge.badge-warning`; its tooltip says how to install the multiplexer. */
+.session-terminal-plain-badge { cursor: help; }
 
 /* An End the server could not confirm: its reason, quieter than the sentence. */
 .session-terminal-end-reason { color: var(--fg-secondary); }
@@ -24116,15 +22943,6 @@ a.file-link:hover {
 
 /* The btw trigger is the family's quiet small key, as the mode trigger beside it; open, it reads
    on, as every open menu trigger does (buttons.css). */
-.side-question-count {
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  background: var(--accent);
-  color: var(--on-accent);
-  border-radius: 999px;
-  padding: 0 6px;
-  line-height: 15px;
-}
 
 /* Floating popover — detached card above the pill row, spanning the FULL panel
    width (anchored to .session-mode-bar, inset to match its 12px gutters). */
@@ -24177,9 +22995,9 @@ a.file-link:hover {
    Uses --bg (the base surface) so it reads as a tile sitting on the slightly
    darker --bg-elevated popover. */
 .side-question-card {
-  padding: 10px 12px;
+  padding: var(--ask-card-pad);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--ask-card-radius);
   background: var(--bg);
 }
 .side-question-card-q {
@@ -24949,12 +23767,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .sdc-sha { flex: 0 0 auto; font-family: var(--font-mono); font-size: var(--font-size-xs); color: var(--fg-muted); }
 .sdc-badge {
   flex: 0 0 auto;
-  font-size: var(--font-size-xs);
-  line-height: 15px;
-  padding: 0 5px;
-  border-radius: var(--radius-sm);
-  color: var(--fg-muted);
-  border: 1px solid var(--border);
 }
 .sdc-onbranch {
   flex: 0 0 auto;
@@ -25050,14 +23862,10 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 /* Hide whitespace is on: said in every file's header, not only by the toolbar button. */
 .session-diff-ws-tag {
   flex: 0 0 auto;
+}
+/* A `.badge` on the file's monospace header line: it reads in the UI font. */
+.badge.session-diff-ws-tag {
   font-family: var(--font-sans);
-  font-size: var(--font-size-xs);
-  color: var(--accent);
-  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
-  border-radius: 6px;
-  padding: 0 5px;
-  line-height: 16px;
-  white-space: nowrap;
 }
 /* Only whitespace changed (and whitespace is hidden): the row reads as nothing to review. */
 .session-diff-tree-file.is-ws-only .session-diff-tree-name { color: var(--fg-muted); font-style: italic; }
@@ -25365,17 +24173,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   text-overflow: ellipsis;
 }
 .session-diff-tree-dir.is-repo .session-diff-tree-dir-name { font-weight: 700; }
-.session-diff-tree-repokind {
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--fg-muted);
-  background: var(--bg);
-  padding: 0 5px;
-  border-radius: var(--radius-sm);
-  flex: 0 0 auto;
-}
-.session-diff-tree-repokind.kind-cwd { color: var(--accent); }
+.session-diff-tree-repokind { flex: 0 0 auto; } /* "cwd" (accent) or "other": the one `.badge` */
 .session-diff-tree-count { margin-left: auto; color: var(--fg-muted); font-size: var(--font-size-xs); flex: 0 0 auto; padding-left: 6px; }
 
 .session-diff-tree-status {
@@ -26137,14 +24935,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 }
 .session-diff-ghost-tag,
 .session-diff-tree-ghost-tag {
-  font-size: var(--font-size-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding: 1px 6px;
-  border-radius: var(--radius-xs);
-  color: var(--fg-muted);
-  border: 1px solid var(--border);
-  background: var(--bg);
   flex: none;
 }
 .session-diff-ghost-path {
@@ -26438,15 +25228,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   justify-content: flex-end;
 }
 
-.routine-executor-badge {
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: var(--bg-tertiary);
-  font-size: var(--font-size-xs);
-  white-space: nowrap;
-  align-self: center;
-  color: var(--fg-muted);
-}
 
 .routines-view-compact .routine-composer-templates {
   display: none;
@@ -26579,11 +25360,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 }
 
 /* ── walnut-trigger: check script (card line + form section) ── */
-.routine-trigger-badge {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  font-weight: 600;
-}
 
 .routine-check-line {
   display: flex;
@@ -26655,34 +25431,8 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   color: var(--fg-secondary);
 }
 
-/* The Trigger pill on a task row / Focus card / session header. Every status pill
-   (Trigger, Cron, Worker, Leader) takes the session status badge's look ("Running"):
-   a soft tint of its colour, rounded, normal case, the size of a tag pill, so a row
-   reads as tags plus a few states, not two kinds of badge (2026-10-23). The border is
-   transparent so a paused trigger can dash it without changing the size. */
-.task-trigger-pill {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  box-sizing: border-box;
-  height: auto;
-  padding: 1px 7px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  color: var(--accent);
-  font: inherit;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  letter-spacing: normal;
-  line-height: 1.2;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.task-trigger-pill:hover,
-.task-trigger-pill[aria-expanded="true"] {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-}
+/* The Trigger, Cron, Worker, Leader and pull request pills are `.badge`s (styles/badge.css). */
+.task-trigger-pill { flex: 0 0 auto; }
 
 /* The flyout the pill opens: the trigger itself, with its actions. */
 .trigger-jobs-flyout {
@@ -26920,14 +25670,8 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 
 .cloud-provider-detail { font-size: var(--font-size-sm); color: var(--fg-secondary); }
 
-.cloud-pill {
-  padding: 2px 8px; border-radius: 999px; font-size: var(--font-size-xs); font-weight: 600;
-  letter-spacing: 0.02em; white-space: nowrap; flex-shrink: 0;
-}
-.cloud-pill-ready { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
-.cloud-pill-manual { background: var(--bg-secondary); color: var(--fg-secondary); }
-.cloud-pill-token { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
-.cloud-pill-warn { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
+/* Holds the provider's SettingsTag (its readiness); only placement here. */
+.cloud-pill { white-space: nowrap; flex-shrink: 0; }
 
 /* Configure screen. */
 .cloud-configure { display: flex; flex-direction: column; gap: 14px; }
@@ -27035,11 +25779,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   font-weight: 500;
   padding: 2px 4px;
   margin: -2px -4px;
-}
-.focus-tiers-tag {
-  padding: 1px 8px; border-radius: 999px; flex-shrink: 0;
-  font-size: var(--font-size-xs); font-weight: 600; letter-spacing: 0.02em;
-  background: var(--bg-secondary); color: var(--fg-muted);
 }
 
 /* ===== iOS Materials Pass ===== */
@@ -27318,9 +26057,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
    step up to --fg-secondary (and the Quick Start path/label to full --fg).
    Applies in both the glass and the opaque-fallback case: darker chrome text is
    correct either way. */
-.chat-composer-overlay .quick-access-pill {
-  color: var(--fg-secondary);
-}
 .chat-composer-overlay .quick-access-pill-label {
   font-weight: 500;
 }
@@ -29406,26 +28142,12 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 /* .wn-title on the element: a label never cuts, the rail takes its width. */
 .nfc-rail-name { min-width: 0; }
 
+/* A `.badge.badge-count` toned by its section (RailButton): Needs you the solid
+   red alert, Errors red, an unhealthy System amber, the rest grey. */
 .nfc-rail-badge {
   margin-left: auto;
   flex-shrink: 0;
-  min-width: 17px;
-  height: 17px;
-  padding: 0 4px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  background: var(--accent);
-  color: var(--on-accent);
 }
-
-/* Pending permissions block a session — warning-styled, never the calm accent. */
-.nfc-rail-badge.nfc-warn { background: var(--warning); }
-
-/* Live errors — red, one step past warn's amber. */
-.nfc-rail-badge.nfc-danger { background: var(--error); }
 
 /* The System zone has nothing to count — a dot marks "something in here is
    unhealthy" (failing backup, broken index) without inventing a number. */
@@ -29525,29 +28247,15 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 }
 .nfc-card-chips > .nfc-chip { min-width: 0; }
 
+/* A card's context (kind, host, project) is a `.badge`. */
 .nfc-chip {
   max-width: 100%;
-  padding: 1px 6px;
-  border-radius: var(--radius-xs);
-  border: 1px solid var(--border);
-  background: var(--bg-secondary);
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* The error's condition recovered (the plugin re-authenticated, the disk was
-   freed). Green rather than muted: the row is settled GOOD news, and it sits
-   right next to the title where a muted chip would read as another context tag.
-   Same green as .notification-feed-dot--success. */
+   freed): `.badge-accent`, so the settled row does not read as another context tag. */
 .nfc-chip-recovered {
   flex-shrink: 0;
-  border-color: rgba(52, 199, 89, 0.4);
-  background: rgba(52, 199, 89, 0.12);
-  color: var(--success);
-  font-weight: 600;
 }
 
 /* ── Error categories ─────────────────────────────────────────────────────────
@@ -29723,13 +28431,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 /* Occurrence fold: 36 identical failures are one row plus how often. */
 .nfc-count-badge {
   flex-shrink: 0;
-  padding: 0 5px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  color: var(--fg-muted);
 }
 
 /* A permission card is a decision surface, not a link — no hover-navigate. */
@@ -29959,15 +28660,10 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 .nfc-perm-btn:disabled { opacity: 0.5; cursor: default; }
 .nfc-perm-btn:not(:disabled):hover { opacity: 0.9; }
 
-/* A question's header reads as the session card's chip (.qp-chip), not as a grey field. */
+/* A question's header is a `.badge`, as on the session card (.qp-chip). */
 .nfc-answer-q > .nfc-answer-chip {
-  display: inline-block;
   align-self: flex-start;
   width: auto;
-  border: none;
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
-  font-weight: 600;
 }
 
 .nfc-perm-settled {
@@ -31349,13 +30045,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   position: absolute;
   top: 6px;
   right: 6px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--bg-secondary);
-  color: var(--fg-secondary);
-  font-size: var(--font-size-xs);
-  line-height: 16px;
 }
 /* The running block while its preview still lies on top: laid out and running,
    not shown. Opacity rather than visibility, so the engine does not treat the

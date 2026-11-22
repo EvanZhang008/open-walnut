@@ -68,19 +68,6 @@
   font-size: var(--font-size-sm);
   cursor: pointer;
 }
-/* How many servers the list has, chips or not. */
-.session-servers-strip-count {
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-tertiary);
-  color: var(--fg);
-  font-size: var(--font-size-xs);
-  line-height: 16px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
 /* "+2": web pages the chips had no room for, one click from the list that has them. */
 .session-servers-strip-others {
   flex-shrink: 0;
@@ -279,7 +266,6 @@
 }
 .session-server-row + .session-server-row { border-top: 1px solid var(--border); }
 .session-server-row-active { background: var(--accent-subtle); }
-.session-server-chip-open .session-server-tag { margin-left: -2px; }
 .session-server-row-main {
   grid-area: main;
   display: flex;
@@ -312,15 +298,6 @@
   align-items: center;
   gap: 6px;
 }
-.session-server-tag {
-  font-size: var(--font-size-xs);
-  padding: 1px 6px;
-  border-radius: var(--radius-xs);
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-}
-/* After .session-server-tag, which it overrides: the page on screen, in the accent. */
-.session-server-tag.session-server-tag-active { background: var(--accent-subtle); color: var(--accent); }
 
 /* A narrow Web view (a phone, or a small window beside the chat) stacks a row: its buttons go
    under the command, so the name and the command keep the width. */
@@ -384,31 +361,22 @@
   .session-servers-strip-all-host { display: none; }
 }
 
-/* The title row's chip for the session's web servers (SessionServersChip.tsx), sized like the
-   wait's chip beside it, in the green of a running server. */
-.session-web-chip {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 1px 8px;
-  border: 1px solid color-mix(in srgb, var(--success) 35%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--success) 8%, transparent);
-  color: var(--fg-secondary);
-  font: inherit;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  line-height: 18px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.session-web-chip:hover,
-.session-web-chip[aria-expanded="true"] { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--fg); }
-.session-web-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The title row's pill for the session's web servers (SessionServersChip.tsx): a `.badge`
+   (styles/badge.css) beside the wait's, with a green dot for a running server. */
+.session-web-chip { flex: none; cursor: pointer; }
 .session-web-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); flex: none; }
 .session-web-chip-label { font-variant-numeric: tabular-nums; }
 .session-web-chip-icon { display: inline-flex; }
+/* The phone's compact form is a glyph and a count, not a label: no box of its own. */
+.session-web-chip.is-compact {
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
 /* Its card: the session's server list, over the page. */
 .session-web-card {
   position: fixed;

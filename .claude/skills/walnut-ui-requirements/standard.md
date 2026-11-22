@@ -227,9 +227,14 @@ round controls: "什么鬼东西都要是圆形的呀？所有东西都应该统
 - Anything that waits on the user is an `AskCardFrame` card (frosted glass, one decision per page:
   `needs-card-unified-ratchet.test.ts`).
 - A notice is a `NoticeCard` (`wn-glass-frost`).
-- Cards in one list share one corner radius and one padding. Today they differ (thread card 8 px
-  solid, side comment card 12 px, notice 14 px, ask card 18 px); a change that touches one of them
-  moves it to the ask card's look, never to a new one.
+- Cards in one list share one corner radius and one padding: the ask card's, `--ask-card-radius`
+  (`--radius-lg`, 16 px) and `--ask-card-pad` (12 px 12 px 8 px), defined in `globals.css` `:root`. The thread card, the thread
+  review card, the approval card and the side question card read them; a new card in a list does too.
+  (Notices keep their own frosted card, `NoticeCard`.)
+- A card in the flow of a page or a list is filled with `--card-bg` (white in light, #1C1C1E in dark), never the
+  page's `--bg` (black in dark: the card has no edge) nor `--bg-elevated`. `--bg-elevated` is a layer's: a card
+  placed over the page (a popover, a hover card, the thread stack, a note over a document's text) or one on a
+  tinted lane (a board column). Ratchet: the `cardBg` count in `tests/web/ui-standard-ratchet.test.ts`.
 
 ## Toasts
 
@@ -284,8 +289,39 @@ kind.
 
 ## Status labels
 
-- A state is a dot and a word (`NoticeStatus`), or a `.badge` for a count or a tag. Never a new
-  `*-badge`, `*-pill` or `*-chip` class with its own colours.
+Why (2026-11-21, the user, of the pill-shaped controls): "什么鬼东西都要是圆形的呀？所有东西都应该统一啊"
+(why must everything be round? everything should be consistent). Task rows read as a list of tags:
+blue, violet and grey pills, dashed boxes, a violet "12 workers" beside a red "3 need you", each
+drawn by its own class (565 class names, 155 looks).
+
+- A state is a dot and a word (`NoticeStatus`); a task's state icon is `TaskStateIcon`. A count, a
+  tag or a kind (Worker, Leader, Trigger, Cron, a pull request, a source, Beta) is the one `.badge`
+  (`web/src/styles/badge.css`, class list from `badge()` in `web/src/components/common/badge.ts`).
+- One look: 18 px tall, a soft rectangle (`--radius-xs`, 4 px, never a pill), padding 0 6 px, 11 px
+  weight 500, normal case. A member class keeps only its place (flex, margin, max-width), never a
+  fill, words colour, edge, corner, padding or type size.
+- Four tones from tokens: neutral (default, a grey tint, `--fg-secondary`), `badge-accent` (on, yours,
+  Focus, a passing or open pull request), `badge-warning` (soon, running, pending), `badge-error`
+  (failed, stopped, overdue). `badge-alert` (solid `--error`, white figure) is only the count of what
+  needs the user: the Org list's thread count, the bell, a rail app's count. Forms: `badge-count` (a
+  number, square at one digit), `badge-paused` (dashed, no fill: switched off, or shown and never
+  acting: every trigger paused, another person's pull request, an imported session).
+- The one exception to the size: a count on a rail icon (`badge-corner`) is 16 px with 10 px figures
+  and a ring, so the 20 px glyph under it still reads. A dot with no words (a mark on an icon) stays
+  round: it is a dot, not a label.
+- On a line of words (a status card's meta line, "Marina · Leader · 1"), a badge reads as one more
+  word: no box, grey unless its tone carries news (badge.css does this; members do nothing).
+- One mark per place: the bell shows its count, or a dot when there is no count, never both.
+- Reading order on a task row: the title, then where it lives (tier and project, as words), then its
+  kinds (Trigger, Cron, pull request, tags, Worker, Leader), then its state (start, due, until, limit),
+  with the needs-you mark on the row's left (its state icon and dot). Narrow columns fold each kind to
+  its letter (`data-short`, `row-pill-fit.css`).
+- `tests/web/ui-standard-ratchet.test.ts` counts `ownLabel`: a `*-badge`, `*-pill`, `*-chip` or `*-tag`
+  rule that paints its own fill, words colour, edge or corner; a rule that restyles `.badge` for
+  one place; and a `*-count`, `*-state`, `*-role`, `*-kind`, `*-new` or `*-status` rule that draws a
+  box (fill or edge, and a corner short of a circle). Its per-file count only goes down.
+- Text a badge may cut goes in a child element (`<span>`): a flex box draws no ellipsis on bare
+  text (`.badge > *` ellipsizes).
 - **A task's status is drawn by ONE component, `TaskStateIcon`** (`web/src/components/common/
   TaskStateIcon.tsx`), its state from ONE helper (`web/src/utils/task-icon-state.ts`:
   `taskIconState`, `sectionIconState`, `phaseIconState`), its colours and dots from ONE stylesheet
@@ -355,11 +391,11 @@ room; Org names were cut at every tree level while right-edge counts stayed.
 | Kind | Tokens |
 |---|---|
 | Fill | `--bg`, `--bg-secondary`, `--bg-tertiary`, `--bg-elevated`, `--bg-hover`, `--card-bg` |
-| Text | `--fg`, `--fg-secondary`, `--fg-muted`; on a solid accent, success or error fill `--on-accent` |
+| Text | `--fg`, `--fg-secondary`, `--fg-muted`, `--on-accent` (on a solid `--error` or `--accent` fill) |
 | Accent | `--accent`, `--accent-hover`, `--accent-subtle`, `--accent-text` |
 | Lines | `--border`, `--border-strong` |
 | State | `--success`, `--warning`, `--error`; their 10% fills `--success-subtle`, `--warning-subtle`, `--error-subtle` |
-| Corners | `--radius-xs` 4 px (badges, kbd, checks), `--radius-sm` 8 px (controls), `--radius-md` 12 px (inputs, cards), `--radius-lg` 16 px (large cards) |
+| Corners | `--radius-xs` 4 px (labels), `--radius-sm` 8 px (controls), `--radius-md` 12 px (inputs), `--radius-lg` 16 px (cards) |
 | Type | `--font-size-xs` 11 px (labels, badges), `--font-size-sm` 12 px (secondary text), `--font-size-md` 13 px (body, controls), `--font-size-lg` 15 px (card titles), `--font-size-xl` 17 px (section and dialog headings), `--font-size-2xl` 20 px (page titles); families `--font-sans`, `--font-mono` |
 | Depth | on a surface: `--shadow-sm` (a raised chip), `--shadow-md` (a hovered card), `--card-shadow`, `--card-shadow-hover`; floating: the overlay family's `--overlay-shadow`, `--dialog-shadow`; glass: `--glass-frost-*`, `--glass-legible-*` |
 | Layers | the overlay family's `--z-*` (`styles/overlay-family.css`) and its scrim `--overlay-scrim` |

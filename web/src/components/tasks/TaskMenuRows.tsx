@@ -16,7 +16,8 @@
  * to another engine or host, its place in the list, and the service it syncs to. Team
  * (leading and adopting) is not a move and keeps its own row.
  */
-import type { ReactNode, CSSProperties } from 'react';
+import type { ReactNode } from 'react';
+import { badge } from '@/components/common/badge';
 import type { Task } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import * as ICONS from '../common/Icons';
@@ -237,16 +238,13 @@ function sourceFacts(task: SourceTask, integrations: IntegrationList) {
   return {
     badge: local ? 'L' : (sourceMeta?.badge ?? task.source?.charAt(0).toUpperCase()),
     name: local ? 'Local' : (sourceMeta?.name ?? task.source ?? 'external'),
-    badgeColor: sourceMeta?.badgeColor,
     status: task.sync_error ? 'sync error' : synced || local || !task.source ? '' : 'unsynced',
   };
 }
 
-/** The source badge's colours: the integration's own, grey for a local task, none on a sync error. */
-function badgeStyle(task: Task, badgeColor: string | undefined): CSSProperties | undefined {
-  if (task.sync_error) return undefined;
-  if (badgeColor) return { background: badgeColor, color: 'white' };
-  return task.source === 'local' ? { background: '#8E8E93', color: 'white' } : undefined;
+/** The source's one-letter mark is the one `.badge` (a count's square); a sync error reads red. */
+function sourceBadgeClass(task: Task): string {
+  return `${badge(task.sync_error ? 'error' : 'neutral', { count: true })} task-source-badge`;
 }
 
 /** Where the task comes from, inside Move & transfer (its sync trouble is TaskSyncWarning's): "Open in <service> ↗" when it mirrors
@@ -257,7 +255,7 @@ function TaskSourceRow({ task, integrations, afterAction }: { task: SourceTask; 
   if (!task.external_url) {
     return (
       <div className="task-kebab-item task-kebab-info" data-testid="kebab-source-row">
-        <span className="task-source-badge" style={badgeStyle(task, f.badgeColor)}>{task.sync_error ? '!' : f.badge}</span>
+        <span className={sourceBadgeClass(task)}>{task.sync_error ? '!' : f.badge}</span>
         {/* A broken or pending sync says so on its own first-level row (TaskSyncWarning). */}
         <span>{f.name}</span>
       </div>
@@ -272,7 +270,7 @@ function TaskSourceRow({ task, integrations, afterAction }: { task: SourceTask; 
       data-testid="kebab-source-link"
       onClick={(e) => { e.stopPropagation(); afterAction(); }}
     >
-      {task.source && <span className="task-source-badge" style={badgeStyle(task, f.badgeColor)}>{f.badge}</span>}
+      {task.source && <span className={sourceBadgeClass(task)}>{f.badge}</span>}
       <span>Open in {f.name}</span>
       <span className="task-kebab-external-arrow">↗</span>
     </a>
@@ -285,7 +283,7 @@ function TaskSyncWarning({ task, integrations }: { task: SourceTask; integration
   if (!f.status) return null;
   return (
     <div className="task-kebab-item task-kebab-info" data-testid="kebab-sync-warning">
-      <span className="task-source-badge" style={badgeStyle(task, f.badgeColor)}>{task.sync_error ? '!' : f.badge}</span>
+      <span className={sourceBadgeClass(task)}>{task.sync_error ? '!' : f.badge}</span>
       <span>{f.name} ({f.status})</span>
     </div>
   );

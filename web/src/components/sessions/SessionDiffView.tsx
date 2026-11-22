@@ -54,6 +54,7 @@ import { SessionCommitButton } from '@/components/sessions/SessionCommitDialog';
 import { Checkbox, SegmentedControl, type SegmentedOption } from '@/components/controls';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
+import { badge } from '@/components/common/badge';
 
 export type DiffViewType = 'split' | 'unified';
 /** The toolbar layout mode: 'auto' picks per file — split only when some line
@@ -342,7 +343,7 @@ function TreeRow({
         {/* No pill for a submodule: the deep path in the tooltip already says so,
             and the pill only ate width the name needs in a narrow column. */}
         {isRepo && node.repoKind !== 'submodule' && (
-          <span className={`session-diff-tree-repokind kind-${node.repoKind}`}>{node.repoKind}</span>
+          <span className={`${badge(node.repoKind === 'cwd' ? 'accent' : 'neutral')} session-diff-tree-repokind kind-${node.repoKind}`}><span>{node.repoKind}</span></span>
         )}
         <span className="session-diff-tree-count">{node.fileCount}</span>
       </button>
@@ -1348,13 +1349,13 @@ export const FileDiffPane = memo(function FileDiffPane({
           <span className="session-diff-filepane-renamed" title={`Moved from ${change.oldRelPath}`}>{'← '}<code>{change.oldRelPath}</code></span>
         )}
         {change.untracked && (
-          <span className="session-diff-ws-tag" title="A new file git does not track yet (not added)">untracked</span>
+          <span className="badge session-diff-ws-tag" title="A new file git does not track yet (not added)">untracked</span>
         )}
         {ignoreWhitespace && (
-          <span className="session-diff-ws-tag" title="Whitespace changes are hidden (the toolbar's Hide whitespace)">whitespace hidden</span>
+          <span className="badge session-diff-ws-tag" title="Whitespace changes are hidden (the toolbar's Hide whitespace)">whitespace hidden</span>
         )}
         {splitTooNarrow && (
-          <span className="session-diff-ws-tag" title="Split needs a wider pane (hide the chat or widen the window): shown unified until then">unified: too narrow to split</span>
+          <span className="badge session-diff-ws-tag" title="Split needs a wider pane (hide the chat or widen the window): shown unified until then">unified: too narrow to split</span>
         )}
         <span className="session-diff-filepane-stat">
           {adds > 0 && <span className="session-diff-stat-add">+{adds}</span>}
@@ -3167,7 +3168,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
                 {ghost && (
                   <div className="session-diff-tree-ghost" title={ghost.file}>
                     <span className="session-diff-tree-ghost-name">{basename(ghost.file)}</span>
-                    <span className="session-diff-tree-ghost-tag">context</span>
+                    <span className="badge session-diff-tree-ghost-tag">context</span>
                     <button
                       className="session-diff-tree-ghost-close"
                       onClick={closeGhost}
@@ -3191,7 +3192,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
             {ghost ? (
               <div className="session-diff-ghost">
                 <div className="session-diff-ghost-banner">
-                  <span className="session-diff-ghost-tag">context</span>
+                  <span className="badge session-diff-ghost-tag">context</span>
                   <span className="session-diff-ghost-path">{ghost.file}</span>
                   <span className="session-diff-ghost-note">not part of this change — read-only</span>
                   {onOpenFile && (

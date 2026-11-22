@@ -19,23 +19,13 @@
 }
 .draft-work-in-pill.is-empty .draft-work-in-detail { margin-left: 0; }
 .draft-work-in-pill .draft-pill-dot { margin-left: 5px; }
+/* The folder's project is a `.badge` (styles/badge.css): blue where it has source (and on the pill),
+   dashed for a project Start would create. */
 .draft-work-in-project-tag {
   flex: none;
   max-width: 140px;
   margin-left: 6px;
-  padding: 0 6px;
-  border-radius: var(--radius-xs);
-  background: var(--bg-secondary);
-  color: var(--fg);
-  font-size: var(--font-size-xs);
-  line-height: 17px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.draft-work-in-project-tag.has-source,
-.draft-work-in-pill .draft-work-in-project-tag { background: var(--accent-subtle); color: var(--accent); }
-.draft-work-in-pill .draft-work-in-project-tag.is-new { background: none; border: 1px dashed var(--accent); line-height: 15px; }
 
 /* "This is Marina's code. Start in a fresh git worktree instead?": one quiet line under the row. */
 .draft-work-in-suggest {

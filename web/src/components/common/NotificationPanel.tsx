@@ -75,6 +75,7 @@ import {
   type LetterEnvelope,
 } from '@/api/human-inbox';
 import { taskPath } from '@/utils/task-path';
+import { badge } from '@/components/common/badge';
 
 interface NotificationPanelProps {
   open: boolean;
@@ -626,14 +627,15 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
               honest list of buttons does. */}
           <div className="nfc-rail" aria-label="Notification sections">
             <RailButton
-              label="Needs you" count={counts.action + approvals.length} warn
+              label="Needs you" count={counts.action + approvals.length} alert
               active={section === 'action'} onClick={() => pickSection('action')}
             />
             {/* Inbox shows UNREAD letters (not the list length): a letter is read
                 one at a time, so "how many are still unread" is the number that
-                means something here. */}
+                means something here. Unread letters wait on the person, as the bell's
+                count says: the same red needs-you count. */}
             <RailButton
-              label="Inbox" count={counts.inbox}
+              label="Inbox" count={counts.inbox} alert
               active={section === 'inbox'} onClick={() => pickSection('inbox')}
             />
             {/* Every LISTING section carries a badge showing what the tab LISTS
@@ -860,10 +862,12 @@ function RailSubButton({ label, count, active, onClick }: {
   );
 }
 
-function RailButton({ label, count, active, warn, danger, dot, onClick }: {
+function RailButton({ label, count, active, alert, warn, danger, dot, onClick }: {
   label: string;
   count: number;
   active: boolean;
+  /** The count of what needs the user: the one solid red badge. */
+  alert?: boolean;
   warn?: boolean;
   /** Red badge — live errors, one step past warn's amber. */
   danger?: boolean;
@@ -879,7 +883,7 @@ function RailButton({ label, count, active, warn, danger, dot, onClick }: {
     >
       <span className="nfc-rail-name wn-title">{label}</span>
       {count > 0 ? (
-        <span className={`nfc-rail-badge${warn ? ' nfc-warn' : ''}${danger ? ' nfc-danger' : ''}`}>{count > 99 ? '99+' : count}</span>
+        <span className={`${badge(alert ? 'alert' : danger ? 'error' : warn ? 'warning' : 'neutral', { count: true })} nfc-rail-badge${warn ? ' nfc-warn' : ''}${danger ? ' nfc-danger' : ''}`}>{count > 99 ? '99+' : count}</span>
       ) : dot ? (
         <span
           className={`nfc-rail-dot${warn ? ' nfc-warn' : ''}`}
@@ -1119,9 +1123,9 @@ function ContextChips({ n }: { n: Notification }) {
     <div className="nfc-card-chips">
       {/* The session's label is the long one: it gives up its words first (.wn-meta), so a short
           host or project beside it stays whole. */}
-      {label && <span className="nfc-chip wn-meta">{label}</span>}
-      {n.host && <span className="nfc-chip">{hostName}</span>}
-      {n.project && <span className="nfc-chip">{n.project}</span>}
+      {label && <span className="badge nfc-chip wn-meta"><span>{label}</span></span>}
+      {n.host && <span className="badge nfc-chip"><span>{hostName}</span></span>}
+      {n.project && <span className="badge nfc-chip"><span>{n.project}</span></span>}
     </div>
   );
 }
@@ -1258,14 +1262,14 @@ const FeedItem = memo(function FeedItem({
       <FeedItemHead n={n} title={presented.title} onDismiss={onDismiss}>
         {/* All-section only: the Errors rail has category HEADERS, so a chip
             there would repeat the header on every row. */}
-        {category && <span className="nfc-chip nfc-chip-category wn-fixed">{category}</span>}
-        {recovered && <span className="nfc-chip nfc-chip-recovered wn-fixed">{resolvedLabelOf(n)}</span>}
-        {stale && <span className="nfc-chip wn-fixed">{resolvedLabelOf(n)}</span>}
+        {category && <span className="badge nfc-chip nfc-chip-category"><span>{category}</span></span>}
+        {recovered && <span className="badge badge-accent nfc-chip nfc-chip-recovered"><span>{resolvedLabelOf(n)}</span></span>}
+        {stale && <span className="badge nfc-chip"><span>{resolvedLabelOf(n)}</span></span>}
         {/* Occurrence fold: the server collapses repeats into one record so 36
             identical failures are one line, with how often it happened. Clamped
             at 99+ like the rail badge — a 4-digit count would push the row's
             timestamp and dismiss button out of the card. */}
-        {count >= 2 && <span className="nfc-count-badge wn-fixed">&times;{count > 99 ? '99+' : count}</span>}
+        {count >= 2 && <span className="badge badge-count nfc-count-badge wn-fixed">&times;{count > 99 ? '99+' : count}</span>}
       </FeedItemHead>
       {presented.body && (
         <div className="notification-feed-item-body">{presented.body}</div>

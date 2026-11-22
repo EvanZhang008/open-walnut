@@ -431,19 +431,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.tp-proj-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 20px;
-  padding: 0 8px;
-  border-radius: 10px;
-  background: var(--bg-secondary);
-  color: var(--fg-muted);
-  font-size: var(--font-size-xs);
-  max-width: 120px;
-  overflow: hidden;
-}
+/* The project cell is a `.badge` (TasksPageTable.tsx); only its width is here. */
+.tp-proj-pill { max-width: 120px; }
 .tp-proj-pill .tp-proj-name {
   overflow: hidden;
   text-overflow: ellipsis;

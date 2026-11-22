@@ -589,7 +589,7 @@ export function BackgroundTasksChip({ sessionId, agents }: { sessionId: string; 
       {(status || toolUses > 0) && (
         <span className="bg-tasks-chip-meta">
           {status && <span className="bg-tasks-chip-status">{status}</span>}
-          {toolUses > 0 && <span className="task-group-badge">{toolUses} tool{toolUses === 1 ? '' : 's'}</span>}
+          {toolUses > 0 && <span className="badge task-group-badge"><span>{toolUses} tool{toolUses === 1 ? '' : 's'}</span></span>}
         </span>
       )}
     </button>

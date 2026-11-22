@@ -186,15 +186,8 @@
    row so the words after it start on one line. */
 .pending-comments-kind {
   flex: 0 0 auto;
-  display: inline-block;
   min-width: 62px;
-  box-sizing: border-box;
-  text-align: center;
-  padding: 1px 6px;
-  border-radius: var(--radius-xs);
-  background: color-mix(in srgb, var(--fg) 6%, transparent);
-  color: var(--fg-secondary);
-  font-size: var(--font-size-xs);
+  justify-content: center;
 }
 .pending-comments-edit,
 .pending-comments-remove {

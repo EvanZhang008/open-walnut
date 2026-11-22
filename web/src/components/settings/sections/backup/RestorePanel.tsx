@@ -309,9 +309,9 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
                   <span className="backup-restore-when">
                     {whenOf(it.createdAt, listSeconds)}
                     {/* The list is newest first; the newest one says so, not only by its place. */}
-                    {(it.isLatest || i === 0) && <span className="settings-tag settings-tag-neutral backup-restore-latest" data-testid="backup-restore-latest">Latest</span>}
+                    {(it.isLatest || i === 0) && <span className="badge settings-tag backup-restore-latest" data-testid="backup-restore-latest">Latest</span>}
                     {/* Both kinds are kept at one destination: the encrypted ones need their recovery key. */}
-                    {it.encrypted && <span className="settings-tag settings-tag-neutral" data-testid="backup-restore-encrypted">Encrypted</span>}
+                    {it.encrypted && <span className="badge settings-tag" data-testid="backup-restore-encrypted">Encrypted</span>}
                   </span>
                 )}
                 detail={[it.fileCount !== undefined ? `${it.fileCount.toLocaleString()} files` : null,

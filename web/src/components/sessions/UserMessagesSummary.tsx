@@ -53,7 +53,7 @@ export function UserMessagesSummary({ messages, loading, onMessageClick }: UserM
         <span className="user-messages-summary-arrow">{collapsed || !hasMessages ? '\u25B8' : '\u25BE'}</span>
         <span className="user-messages-summary-label">My Messages</span>
         {hasMessages && (
-          <span className="user-messages-summary-count">{userMessages.length}</span>
+          <span className="badge badge-count user-messages-summary-count">{userMessages.length}</span>
         )}
       </button>
       {!collapsed && (

@@ -33,6 +33,7 @@ import {
  *   F7  one cold open issued four `/messages` requests for a single merged page
  *   F9  two rows carried `aria-current` for one mailbox
  *   F10 the smart row's number was the fourth smallest of ten badges, under Archive and Trash counts
+ *       (since the one badge: every mailbox count neutral, only the All Inboxes total accent)
  *   F11 the filter box broke the pane's text column and outweighed the 58 rows it filters
  *   C64 the expanded list's LAST li was a second copy of the control, not the collapse row itself
  */
@@ -363,39 +364,40 @@ test('F9: one mailbox, one current row', async ({ page }) => {
   console.log(`shot: ${await shoot(page.locator(PANE), SHOT_DIR, 'chromium-child-selected')}`)
 })
 
-test('F10: the roles nobody triages carry a quiet badge, the inboxes a loud one', async ({ page }) => {
+test('F10: every mailbox count is the one neutral badge; only the All Inboxes total is accent', async ({ page }) => {
   // The smart badge below is the All mail view's, the mailbox rows' own sum. Grouped (the default)
   // badges an inbox with its Important unread instead (15 here), which mail-grouping.spec.ts grades.
   await showAllMail(page)
   await openMail(page, port)
   await expect(folderRow(page, MARINA, 'inbox')).toBeVisible({ timeout: 90_000 })
   const badges = await page.evaluate(() => {
-    const rows = Array.from(document.querySelectorAll('.mail-accounts-pane .mail-mailbox')) as HTMLElement[]
+    const rows = Array.from(document.querySelectorAll('.mail-accounts-pane .mail-account .mail-mailbox')) as HTMLElement[]
     return rows.flatMap((row) => {
-      const badge = row.querySelector('.mail-unread-badge') as HTMLElement | null
+      const badge = row.querySelector('[data-testid="mail-mailbox-unread"]') as HTMLElement | null
       if (!badge) return []
       return [{
         mailbox: row.getAttribute('data-mailbox-id') ?? '',
         text: badge.textContent ?? '',
-        quiet: badge.getAttribute('data-quiet') === 'true',
+        classes: badge.className,
         background: getComputedStyle(badge).backgroundColor,
       }]
     })
   })
-  const loud = badges.filter((one) => !one.quiet).map((one) => one.background)
-  const quiet = badges.filter((one) => one.quiet)
-  // The fixture really does carry the shape this is about: Archive 177, Junk 37, Trash 2,609. Without this
-  // the loop below would pass over an empty list and prove nothing.
-  expect(quiet.map((one) => one.text).sort(), `quiet badges: ${JSON.stringify(badges)}`)
-    .toEqual(['177', '2,609', '37'])
-  // The unread numbers on Archive, Junk and Trash are exact and still on screen, because unread only
-  // Walnut can see is what this pane must never hide. They just stop being the loudest thing in it.
-  for (const badge of quiet) expect(loud).not.toContain(badge.background)
-  // The number the group exists to answer keeps the alert fill, and it is the mailbox rows' own sum.
+  // The fixture really does carry the shape this is about: Archive 177, Junk 37, Trash 2,609, exact and on
+  // screen. Before the one badge they were solid blue and the loudest numbers in the column.
+  for (const text of ['177', '2,609', '37']) expect(badges.map((one) => one.text), JSON.stringify(badges)).toContain(text)
+  // One look: every mailbox count is the neutral count badge, inboxes and Trash alike.
+  for (const one of badges) {
+    expect(one.classes, JSON.stringify(one)).toContain('badge-count')
+    expect(one.classes, JSON.stringify(one)).not.toContain('badge-accent')
+  }
+  expect(new Set(badges.map((one) => one.background)).size, JSON.stringify(badges)).toBe(1)
+  // The number the group exists to answer is the one accent count, and it is the mailbox rows' own sum.
   const inbox = smartRow(page, 'inbox').getByTestId('mail-smart-unread')
   await expect(inbox).toHaveText('7')
+  await expect(inbox).toHaveClass(/\bbadge-accent\b/)
   const smartFill = await inbox.evaluate((el) => getComputedStyle(el).backgroundColor)
-  expect(loud, 'the smart row is in the loud set').toContain(smartFill)
+  expect(smartFill, 'the All Inboxes total stands apart from the mailbox counts').not.toBe(badges[0].background)
   console.log(`F10 badges: ${JSON.stringify(badges)}`)
 })
 

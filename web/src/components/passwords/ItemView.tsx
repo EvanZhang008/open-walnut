@@ -9,6 +9,7 @@ import { displayHost } from '../../../../src/core/vault/url-match'
 import { passwordStrength } from '../../../../src/core/vault/strength'
 import { ago, siteTile, typeLabel } from './passwords-model'
 import { PasskeyList } from './PasskeyList'
+import { NoticeStatus, type NoticeTone } from '@/components/common/NoticeCard'
 import { CopyIcon, EyeIcon, EyeOffIcon, LinkIcon, StarIcon, EditIcon, TrashIcon, RestoreIcon, CheckIcon, RobotIcon } from './pw-icons'
 
 export const AGENT_ACCESS_TEXT = {
@@ -32,6 +33,15 @@ function useCopy(): [string | null, (key: string, text: string, itemId?: string)
     })
   }
   return [copied, copy]
+}
+
+/** A password's strength is a state: a dot and a word, red when weak, amber when fair, green when strong. */
+const STRENGTH: Record<ReturnType<typeof passwordStrength>['level'], { tone: NoticeTone; word: string }> = {
+  very_weak: { tone: 'error', word: 'Very weak' },
+  weak: { tone: 'error', word: 'Weak' },
+  fair: { tone: 'warn', word: 'Fair' },
+  strong: { tone: 'ok', word: 'Strong' },
+  very_strong: { tone: 'ok', word: 'Very strong' },
 }
 
 function Field({ label, value, secret, mono, copyKey, copied, onCopy, extra }: {
@@ -140,7 +150,7 @@ export function ItemView({ item, onEdit, onChanged }: { item: VaultItem; onEdit:
         {item.username && <Field label="Username" value={item.username} copyKey="username" copied={copied} onCopy={copy} />}
         {item.password && (
           <Field label="Password" value={item.password} secret copyKey="password" copied={copied} onCopy={copy}
-            extra={strength && <div className={`pw-strength-tag pw-strength-${strength.level}`}>{strength.level.replace('_', ' ')}</div>} />
+            extra={strength && <div className="pw-strength" data-level={strength.level}><NoticeStatus tone={STRENGTH[strength.level].tone}>{STRENGTH[strength.level].word}</NoticeStatus></div>} />
         )}
         {item.totp && <TotpField itemId={item.id} copied={copied} onCopy={copy} />}
         {item.type === 'api_key' && item.envName && <Field label="Environment variable" value={item.envName} mono copyKey="env" copied={copied} onCopy={copy} />}
@@ -189,7 +199,7 @@ export function ItemView({ item, onEdit, onChanged }: { item: VaultItem; onEdit:
       <PasskeyList item={item} onChanged={onChanged} />
 
       <div className="pw-meta">
-        {item.tags?.length ? <div className="pw-tags">{item.tags.map((t) => <span key={t} className="pw-tag">{t}</span>)}</div> : null}
+        {item.tags?.length ? <div className="pw-tags">{item.tags.map((t) => <span key={t} className="badge pw-tag"><span>{t}</span></span>)}</div> : null}
         <div>Changed {ago(item.updatedAt)} · Created {new Date(item.createdAt).toLocaleDateString()}{item.usedAt ? ` · Last used ${ago(item.usedAt)}` : ''}</div>
       </div>
 

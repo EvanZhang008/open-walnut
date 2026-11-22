@@ -1,47 +1,25 @@
 /* The task's browser use as one pill in the session header (components/sessions/SessionBrowserChip.tsx),
-   the same shape as the servers' pill (.session-web-chip), and its popover holding the Browser view. */
-.session-browser-chip {
-  flex: none;
+   the same shape as the servers' pill (.session-web-chip), and its popover holding the Browser view.
+   The pill is a `.badge` (styles/badge.css): neutral while the agent uses the tab, amber when it asks
+   the person to sign in, blue when the person has the tab; the dot says the same in its own colour. */
+.session-browser-chip { flex: none; cursor: pointer; --browser-tone: var(--success); }
+/* The agent asks the person to sign in: the one state that needs them. */
+.session-browser-chip.is-ask { --browser-tone: var(--warning); }
+/* The person has the tab (Take over): the agent waits. */
+.session-browser-chip.is-yours { --browser-tone: var(--accent); }
+/* The last tab gone while the view is open: no longer in use. */
+.session-browser-chip.is-ended { --browser-tone: var(--fg-muted); }
+.session-browser-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--browser-tone); flex: none; }
+/* The phone's compact form is an icon, not a label: no box of its own. */
+.session-browser-chip.is-compact {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 1px 8px;
-  border: 1px solid color-mix(in srgb, var(--success) 35%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--success) 8%, transparent);
-  color: var(--fg-secondary);
+  border: 0;
+  background: transparent;
   font: inherit;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  line-height: 18px;
   white-space: nowrap;
-  cursor: pointer;
 }
-.session-browser-chip:hover,
-.session-browser-chip[aria-expanded="true"] { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--fg); }
-.session-browser-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.session-browser-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); flex: none; }
-/* The agent asks the person to sign in: the one state that needs them, in the attention colour. */
-.session-browser-chip.is-ask {
-  border-color: color-mix(in srgb, var(--warning) 55%, transparent);
-  background: color-mix(in srgb, var(--warning) 14%, transparent);
-  color: var(--fg);
-}
-.session-browser-chip.is-ask:hover,
-.session-browser-chip.is-ask[aria-expanded="true"] { background: color-mix(in srgb, var(--warning) 22%, transparent); }
-.session-browser-chip.is-ask .session-browser-chip-dot { background: var(--warning); }
-/* The person has the tab (Take over): the agent waits. */
-.session-browser-chip.is-yours {
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-}
-.session-browser-chip.is-yours .session-browser-chip-dot { background: var(--accent); }
-/* The last tab gone while the view is open: no longer in use. */
-.session-browser-chip.is-ended {
-  border-color: var(--border);
-  background: var(--bg-secondary);
-}
-.session-browser-chip.is-ended .session-browser-chip-dot { background: var(--fg-muted); }
+.session-browser-chip-icon { display: inline-flex; color: var(--browser-tone); }
 
 /* The popover: the servers popover's frame (.session-web-card), so the two read as a pair. */
 .session-browser-popover {
@@ -62,8 +40,8 @@
    larger); the picture is sized to it, so the foot never scrolls away. */
 .session-browser-popover:has(> .session-browser-card--large) { width: min(1040px, calc(100vw - 24px)); }
 
-/* The phone's top bar, beside the kebab: a browser glyph in a 44 px target. Its colour outranks
-   phone-fixes-r2.css's touch rule (a tapped button's stuck :hover takes `color: inherit`). */
+/* The phone's top bar, beside the kebab: a browser glyph in a 44 px target. The glyph carries the
+   colour, so phone-fixes-r2.css's stuck :hover (`color: inherit` on the button) never greys it. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .app-shell-navigation .phone-topbar.phone-topbar .phone-bar-slot .session-browser-chip.is-compact {
     justify-content: center;
@@ -71,15 +49,9 @@
     min-width: 44px;
     height: 44px;
     padding: 0 6px;
-    border-color: transparent;
-    background: transparent;
-    color: var(--success);
     font-size: var(--font-size-sm);
     font-weight: 600;
   }
-  .app-shell-navigation .phone-topbar.phone-topbar .phone-bar-slot .session-browser-chip.is-compact.is-ask { color: var(--warning); }
-  .app-shell-navigation .phone-topbar.phone-topbar .phone-bar-slot .session-browser-chip.is-compact.is-yours { color: var(--accent); }
-  .app-shell-navigation .phone-topbar.phone-topbar .phone-bar-slot .session-browser-chip.is-compact.is-ended { color: var(--fg-muted); }
   .app-shell-navigation .phone-topbar.phone-topbar .phone-bar-slot .session-browser-chip.is-compact .session-browser-chip-dot { display: none; }
   .app-shell-navigation .phone-topbar.phone-topbar .phone-bar-slot .session-browser-chip.is-compact .session-browser-chip-icon svg { width: 16px; height: 16px; }
   /* The title's room beside the pills (the slot's children: the kebab and each pill, whichever

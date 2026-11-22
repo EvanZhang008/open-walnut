@@ -132,7 +132,7 @@ export function WikiEmbedView({ node, editor }: ReactNodeViewProps) {
         <span className="notes-wikiembed-pdf">
           {/* Above the frame, so Open and Download are plain to see, also where the frame stays empty. */}
           <span className="notes-wikiembed-pdf-bar">
-            <span className="notes-wikiembed-pdf-badge" aria-hidden>PDF</span>
+            <span className="badge notes-wikiembed-pdf-badge" aria-hidden>PDF</span>
             <span className="notes-wikiembed-pdf-name">{fileNameOf(target)}</span>
             <a href={url} target="_blank" rel="noreferrer" className="notes-wikiembed-pdf-action notes-wikiembed-open" aria-label={`Open ${fileNameOf(target)}`}>
               Open

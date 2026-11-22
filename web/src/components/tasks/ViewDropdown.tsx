@@ -350,7 +350,7 @@ export function ViewDropdown({
                   {s.badge !== undefined && (
                     // The badge box always renders (empty when 0) so rail labels
                     // don't shift when a count appears.
-                    <span className={`vd-rail-badge${s.badge > 0 ? ' vd-set' : ''}`}>{s.badge > 0 ? s.badge : ''}</span>
+                    <span className={`vd-rail-badge${s.badge > 0 ? ' badge badge-accent badge-count' : ''}`}>{s.badge > 0 ? s.badge : ''}</span>
                   )}
                 </button>
               ))}

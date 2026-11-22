@@ -17,6 +17,7 @@
  */
 import { isValidElement, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ContextMenu } from '@/components/common/ContextMenu';
+import { NoticeStatus } from '@/components/common/NoticeCard';
 import { SettingsRow, SettingsTag } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { focusLanded } from '@/utils/focus-landed';
@@ -171,7 +172,9 @@ export function HostRow({ rowKey, id, alias, name, sub, tag, dot, state, lines, 
             {sub}
             {tag}
             {unsaved && <SettingsTag tone="warning" title="Walnut keeps it on this page until it saves">Not saved</SettingsTag>}
-            {look && <span className="rh-look-tag" data-testid="rh-look-tag" title={settingsLook && warned ? `Also: ${settingsLook}` : undefined}>Needs a look</span>}
+            {look && <span className="rh-look-tag" data-testid="rh-look-tag" title={settingsLook && warned ? `Also: ${settingsLook}` : undefined}>
+              <NoticeStatus tone="warn">Needs a look</NoticeStatus>
+            </span>}
           </span>
         }
         help={<span className="rh-row-state" data-testid="rh-row-state">{state}</span>}

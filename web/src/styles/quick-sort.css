@@ -5,8 +5,8 @@
 .quick-sort-chips-label { color: var(--fg-muted); font-size: var(--font-size-sm); margin-left: 4px; }
 .quick-sort-chips .quick-sort-pick { max-width: 220px; }
 .quick-sort-tags { display: flex; flex-wrap: wrap; gap: 4px 6px; }
-.quick-sort-tag { padding: 1px 7px; border-radius: 6px; background: var(--bg-secondary); color: var(--fg-muted); font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; }
-.quick-sort-tag.is-old { background: color-mix(in srgb, var(--tier-wait) 14%, var(--bg)); color: color-mix(in srgb, var(--tier-wait) 70%, var(--fg)); }
+/* An age is a `.badge` (QuickSortView.tsx), amber once idle a week; only its figures are here. */
+.quick-sort-tag { font-variant-numeric: tabular-nums; }
 .quick-sort-reply { display: flex; flex-direction: column; gap: 6px; margin-top: auto; }
 /* The reply box is the one input box (input-box.css); only its row is set here. */
 .quick-sort-reply-input { flex: 1; min-width: 0; max-height: 140px; padding-left: 0; padding-right: 0; border: 0; outline: none; resize: vertical; background: transparent; color: var(--fg); font: inherit; font-size: var(--font-size-md); }
@@ -20,7 +20,7 @@
 .quick-sort-progress-text { display: flex; justify-content: space-between; margin-top: -4px; color: var(--fg-muted); font-size: var(--font-size-sm); font-variant-numeric: tabular-nums; }
 .quick-sort-error { width: auto; }
 .quick-sort-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; align-items: stretch; }
-.quick-sort-card { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); color: var(--fg); }
+.quick-sort-card { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--card-bg); color: var(--fg); }
 .quick-sort-card.is-current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 6px 18px rgba(0, 122, 255, .14); }
 .quick-sort-card-proj { color: var(--fg-muted); font-size: var(--font-size-sm); overflow-wrap: anywhere; }
 .quick-sort-card-title { padding: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--font-size-lg); font-weight: 600; line-height: 1.4; text-align: left; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }

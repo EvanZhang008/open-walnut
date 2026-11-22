@@ -17,7 +17,7 @@ export function CronPill({ sessionId, onClick, expanded }: CronPillProps) {
   if (!onClick) {
     return (
       <span
-        className="session-cron-pill task-row-pill"
+        className="badge session-cron-pill task-row-pill"
         title={title}
         aria-label="Cron job armed"
         data-cron-presence="active"
@@ -32,7 +32,7 @@ export function CronPill({ sessionId, onClick, expanded }: CronPillProps) {
   return (
     <button
       type="button"
-      className="session-cron-pill task-row-pill"
+      className="badge session-cron-pill task-row-pill"
       title={title}
       aria-label={expanded ? 'Cron job armed. Hide job details' : 'Cron job armed. Show job details'}
       aria-expanded={!!expanded}

@@ -42,11 +42,8 @@
 .xfer-opt:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 1px; }
 .xfer-opt-line { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .xfer-opt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.xfer-opt-tag, .xfer-now {
-  flex: none; font-size: var(--font-size-xs); color: var(--fg-muted); border: 1px solid var(--border);
-  border-radius: 999px; padding: 0 6px; line-height: 16px;
-}
-.xfer-now { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+/* "Now" (accent: the live choice) and a choice's tag are the one `.badge`. */
+.xfer-opt-tag, .xfer-now { flex: none; }
 .xfer-opt-sub { font-size: var(--font-size-sm); color: var(--fg-muted); overflow-wrap: anywhere; }
 .xfer-mono { font-family: var(--font-mono); font-size: var(--font-size-xs); }
 .xfer-path { margin-top: 0; font-family: var(--font-mono); font-size: var(--font-size-md); }

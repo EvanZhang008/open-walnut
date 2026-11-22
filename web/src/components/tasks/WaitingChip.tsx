@@ -160,7 +160,7 @@ export function WaitingChip({ task, compact = false }: { task: Task | null | und
       <button
         ref={chipRef}
         type="button"
-        className={`task-waiting-chip${compact ? ' is-compact' : ''}${reads !== 'waiting' ? ` is-${reads}` : ''}`}
+        className={`${compact ? '' : 'badge '}task-waiting-chip${compact ? ' is-compact' : ''}${reads !== 'waiting' ? ` is-${reads}` : ''}`}
         data-testid="session-waiting-chip"
         aria-label={`${label}. ${lines.join(' ')}`}
         aria-expanded={open}
@@ -181,7 +181,7 @@ export function WaitingChip({ task, compact = false }: { task: Task | null | und
           setOpen(!open);
         }}
       >
-        {compact ? <span className="task-waiting-chip-icon" aria-hidden="true"><TaskStateIcon state={reads} size={16} decorative /></span> : label}
+        {compact ? <span className="task-waiting-chip-icon" aria-hidden="true"><TaskStateIcon state={reads} size={16} decorative /></span> : <span>{label}</span>}
       </button>
       {open && typeof document !== 'undefined'
         ? createPortal(

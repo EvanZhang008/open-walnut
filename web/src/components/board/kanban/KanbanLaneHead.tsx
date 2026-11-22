@@ -101,7 +101,7 @@ export function KanbanLaneHead({ lane: vm, lanes, index, mode, folded, onToggleF
 
   const count = laneCountText(vm.total, shown, vm.openInDone);
   const needs = vm.needs > 0 && (
-    <span className="kanban-lane-needs" data-testid="kanban-lane-needs" aria-label={stateCountLabel('needs', vm.needs)} title={`${vm.needs} ${vm.needs === 1 ? 'card needs' : 'cards need'} you`}>{vm.needs}</span>
+    <span className="kanban-lane-needs badge badge-alert badge-count" data-testid="kanban-lane-needs" aria-label={stateCountLabel('needs', vm.needs)} title={`${vm.needs} ${vm.needs === 1 ? 'card needs' : 'cards need'} you`}>{vm.needs}</span>
   );
   const nameEl = renaming ? (
     <span className="kanban-lane-rename">
@@ -135,7 +135,7 @@ export function KanbanLaneHead({ lane: vm, lanes, index, mode, folded, onToggleF
   // N1: cards headed here that a held lane still draws: the count is what is drawn, this says what comes.
   const countEl = (
     <>
-      <span className="kanban-lane-count" data-testid="kanban-lane-count">{count}</span>
+      <span className="kanban-lane-count badge badge-count" data-testid="kanban-lane-count">{count}</span>
       {vm.incoming ? (
         <span className="kanban-lane-incoming" data-testid="kanban-lane-incoming" title="Arrives when the pointer leaves the lane it is in">
           {vm.incoming} incoming

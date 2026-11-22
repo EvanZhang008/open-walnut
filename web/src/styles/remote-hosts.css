@@ -69,17 +69,8 @@ html body .wn-context-menu.rh-add-menu {
 /* The row whose menu is open is the one marked (2026-11-04 review: a row the map landed on kept its ring). */
 .settings-row.rh-host-row[data-menu-open='true'] { background: var(--accent-subtle); }
 /* A row the header's count counts. */
-.rh-look-tag {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: var(--font-size-sm);
-  line-height: 16px;
-  font-weight: 500;
-  color: var(--priority-important-text);
-}
-.rh-look-tag::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+/* A row the header's count counts: a state, so a dot and a word (NoticeStatus warn). */
+.rh-look-tag { flex: none; display: inline-flex; }
 
 /* ── The header: the one "need a look" count beside Add host (it rides the sticky bar too) ── */
 .rh-header-actions { display: inline-flex; align-items: center; gap: 12px; }

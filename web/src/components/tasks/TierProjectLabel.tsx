@@ -137,7 +137,7 @@ export function TierProjectLabelRow({
             hollow icon + indent, so the two levels never read the same. */}
         <span className="tier-project-label-icon">{ICONS.ICON_FOLDER_SOLID}</span>
         <span className="tier-project-label-name">{projectDisplayName(project)}</span>
-        <span className="project-kind-tag">project</span>
+        <span className="badge project-kind-tag">project</span>
         {/* Same rule as the folder chip's badge: draw it only when there is
             something to count. */}
         {count > 0 && <span className="tier-project-label-count" aria-hidden="true">{count}</span>}

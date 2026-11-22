@@ -199,7 +199,7 @@ export function QuickTaskConfirm({
         <label className="qtc-confirm-field">
           <span className="qtc-confirm-label">
             Project <AiBadge visible={draft.aiFields.has('project')} />
-            {showNewProjectBadge && <span className="qtc-confirm-new" title="This project doesn't exist yet — it will be created">new</span>}
+            {showNewProjectBadge && <span className="badge qtc-confirm-new" title="This project doesn't exist yet — it will be created">new</span>}
           </span>
           <MicInput
             className="qtc-confirm-input qtc-confirm-project"

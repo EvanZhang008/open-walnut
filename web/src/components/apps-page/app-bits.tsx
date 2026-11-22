@@ -32,10 +32,10 @@ export function AppBadge({ app }: { app: RegisteredApp }) {
   const badge = app.badge
   if (badge === 'dot') return <span className="notification-badge-dot apps-card-badge" data-testid={`apps-app-badge-${app.key}`} />
   if (typeof badge === 'number' && badge > 0) {
-    return <span className="notification-badge-count apps-card-badge" data-testid={`apps-app-badge-${app.key}`}>{badge > 99 ? '99+' : badge}</span>
+    return <span className="badge badge-count badge-alert apps-card-badge" data-testid={`apps-app-badge-${app.key}`}>{badge > 99 ? '99+' : badge}</span>
   }
   if (badge && typeof badge === 'object') {
-    return <span className="notification-badge-count notification-badge-muted apps-card-badge" data-testid={`apps-app-badge-${app.key}`}>{badge.text}</span>
+    return <span className="badge badge-count apps-card-badge" data-testid={`apps-app-badge-${app.key}`}>{badge.text}</span>
   }
   return null
 }

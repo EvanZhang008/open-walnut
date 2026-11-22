@@ -327,7 +327,7 @@ function HalfRow({ half, label, title, question, status, rename, children }: {
       {half.side === 'S' ? (
         <WhereTag where={half.where ?? ''} />
       ) : (
-        <span className="thread-half-badge" title={SIDE_NAME[half.side]} aria-hidden="true">{half.side}</span>
+        <span className="badge badge-count thread-half-badge" title={SIDE_NAME[half.side]} aria-hidden="true">{half.side}</span>
       )}
       <span className="tree-sr-only">{SIDE_NAME[half.side]}: </span>
       {rename ?? (

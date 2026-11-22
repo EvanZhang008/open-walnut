@@ -245,7 +245,7 @@ export const TeamCard = memo(function TeamCard({
     <div className="team-card">
       <div className="team-card-header">
         <span className="team-card-title">Team: {teamName}</span>
-        <span className="team-card-count">{doneCount}/{nonLeadMembers.length}</span>
+        <span className="badge badge-count team-card-count">{doneCount}/{nonLeadMembers.length}</span>
       </div>
       <Tabs
         className="team-card-tabs"

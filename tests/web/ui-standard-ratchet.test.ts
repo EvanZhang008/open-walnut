@@ -28,6 +28,13 @@
  *     corner, shadow, outline, height or placeholder colour of its own (2026-11-21 UI audit: the
  *     Home, Display menu, Mail, Apps, Memory and Settings searches and the plain fields beside them
  *     each looked different). A rule that takes a field's look away (`border: 0` inside a box) is fine.
+ *   - cardBg: a `*-card` with a corner, in the flow, filled with `--bg` or `--bg-elevated` instead of
+ *     the one card fill `--card-bg` (standard.md, "Cards"): one list's cards drifted in dark.
+ *   - ownLabel: a `*-badge` / `*-pill` / `*-chip` / `*-tag` class that paints its own fill, words
+ *     colour, edge colour or corner, or a rule that restyles `.badge` for one place, instead of the
+ *     one label in styles/badge.css (standard.md, "Status labels"); and a `*-count` / `*-state` /
+ *     `*-role` / `*kind` / `*-type` / `*-new` / `*-status` class that draws a box of its own (a label under
+ *     another name; plain text and round dots are free).
  * The counts that exist today are in ui-standard-baseline.json and may only go down. A new file or
  * a higher count fails: use the family the standard names. A lower count fails too until the
  * baseline is lowered with `UI_STANDARD_RECORD=1` on this file, so the ratchet stays tight.
@@ -35,7 +42,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { countAll, restylesBtn, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, inputParts, restylesInput, cutsTitle, fieldClasses, restylesField, type Counts } from './ui-standard-scan';
+import { countAll, restylesBtn, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, inputParts, restylesInput, cutsTitle, fieldClasses, restylesField, isOwnLabel, paintsLabel, isBoxedLabelName, drawsBox, LABEL_HOME, isCard, offCardFill, type Counts } from './ui-standard-scan';
 import { tokenBreaks } from './ui-token-scan';
 import type { Decl } from './css-scan';
 
@@ -83,13 +90,13 @@ describe('UI standard: one look per kind of control', () => {
   const recorded = JSON.parse(fs.readFileSync(BASELINE, 'utf8')) as Partial<Counts>;
   const was = Object.fromEntries(Object.keys(now).map((k) => [k, recorded[k as keyof Counts] ?? {}])) as Counts;
 
-  for (const kind of ['restyledBtn', 'ownControl', 'rawAccent', 'bareButton', 'restyledInput', 'restyledField', 'cutTitle', ...TOKEN_KINDS] as const) {
+  for (const kind of ['restyledBtn', 'ownControl', 'rawAccent', 'bareButton', 'restyledInput', 'restyledField', 'ownLabel', 'cardBg', ...TOKEN_KINDS] as const) {
     it(`${kind}: no new second style`, () => {
-      const { grew } = compare(kind, now[kind], was[kind]);
+      const { grew } = compare(kind, now[kind], was[kind] ?? {});
       expect(grew, `A second style of a shared control. Use the family in ${STANDARD} instead:\n${grew.join('\n')}`).toEqual([]);
     });
     it(`${kind}: the baseline follows every fix`, () => {
-      const { fell } = compare(kind, now[kind], was[kind]);
+      const { fell } = compare(kind, now[kind], was[kind] ?? {});
       expect(fell, `Fewer exceptions than recorded: good. Lower the baseline with\nUI_STANDARD_RECORD=1 bun --bun vitest run tests/web/ui-standard-ratchet.test.ts\n${fell.join('\n')}`).toEqual([]);
     });
   }
@@ -115,6 +122,35 @@ describe('UI standard: one look per kind of control', () => {
     expect(cutsTitle('.org-rail-name:hover')).toBe(true);
     expect(cutsTitle('.mail-row .mail-subject-line')).toBe(false);
     expect(cutsTitle('.todo-item-title .task-project-label')).toBe(false);
+    expect(isOwnLabel('.org-badge.is-alert')).toBe(true);
+    expect(isOwnLabel('.row .tag-chip:hover')).toBe(true);
+    expect(isOwnLabel('.badge.my-pill')).toBe(true);
+    expect(isOwnLabel('.status-card-meta .badge')).toBe(true);
+    expect(isOwnLabel('.badge.badge-accent')).toBe(false);
+    expect(isOwnLabel('.org-badge-row')).toBe(false);
+    expect(paintsLabel('background', 'var(--bg-tertiary)')).toBe(true);
+    expect(paintsLabel('background', 'transparent')).toBe(false);
+    expect(paintsLabel('border', '1px dashed var(--border)')).toBe(true);
+    expect(paintsLabel('border', '0')).toBe(false);
+    expect(paintsLabel('border-radius', '999px')).toBe(true);
+    expect(paintsLabel('padding', '0 6px')).toBe(false);
+    expect(isBoxedLabelName('.team-card-count')).toBe(true);
+    expect(isBoxedLabelName('.oc-vp-new')).toBe(true);
+    expect(isBoxedLabelName('.session-diff-tree-repokind')).toBe(true);
+    expect(isBoxedLabelName('.hib-type')).toBe(true);
+    expect(isBoxedLabelName('.team-card-title')).toBe(false);
+    expect(drawsBox([{ prop: 'background', value: 'var(--bg-tertiary)' }, { prop: 'border-radius', value: '8px' }])).toBe(true);
+    expect(drawsBox([{ prop: 'color', value: 'var(--fg-muted)' }])).toBe(false);
+    expect(drawsBox([{ prop: 'background', value: 'var(--accent)' }, { prop: 'border-radius', value: '50%' }])).toBe(false);
+    expect(isCard('.board .kanban-card')).toBe(true);
+    expect(isCard('.thread-card-head')).toBe(false);
+    const r = { prop: 'border-radius', value: 'var(--radius-md)' };
+    expect(offCardFill([{ prop: 'background', value: 'var(--bg-elevated)' }, r])).toBe(true);
+    expect(offCardFill([{ prop: 'background', value: 'var(--bg)' }, r])).toBe(true);
+    expect(offCardFill([{ prop: 'background', value: 'var(--card-bg)' }, r])).toBe(false);
+    expect(offCardFill([{ prop: 'background', value: 'var(--bg-secondary)' }, r])).toBe(false);
+    expect(offCardFill([{ prop: 'background', value: 'var(--bg)' }])).toBe(false);
+    expect(offCardFill([{ prop: 'background', value: 'var(--bg-elevated)' }, r, { prop: 'position', value: 'fixed' }])).toBe(false);
   });
 
   it('finds each value that is not a token', () => {
@@ -187,5 +223,6 @@ describe('UI standard: one look per kind of control', () => {
   const text = fs.readFileSync(path.join(__dirname, '../..', STANDARD), 'utf8');
   expect(text).toContain('tests/web/ui-standard-ratchet.test.ts');
   expect(text).toContain(FAMILY_HOME.replace('components/', 'web/src/components/'));
-});
+    expect(text).toContain(`web/src/${LABEL_HOME}`);
+  });
 });

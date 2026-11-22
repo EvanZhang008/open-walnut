@@ -271,7 +271,7 @@ export function AgentForm({ agent, cloneFrom, onSave, onCancel }: AgentFormProps
                           [def.id]: { ...prev[def.id], enabled: checked },
                         }));
                       }}
-                      label={<>{def.label}{def.auto && <span className="context-source-auto-badge">AUTO</span>}</>}
+                      label={<>{def.label}{def.auto && <span className="badge context-source-auto-badge">AUTO</span>}</>}
                     />
                     {!def.auto && state.enabled && (
                       <input

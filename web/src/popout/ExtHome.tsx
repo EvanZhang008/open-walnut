@@ -270,9 +270,9 @@ export function ExtHome(p: Props) {
   ) : undefined;
   // Docked, the bar holds only the page, as one chip ("This page"): a click on it grows the box.
   const dockChip = page && pageOn ? (
-    <span className="ext-home-dock-chip" data-testid="ext-home-dock-chip" title={`Walnut reads this page with your next message: ${page.title ?? hostOf(page.url)}`}>
+    <span className="badge ext-home-dock-chip" data-testid="ext-home-dock-chip" title={`Walnut reads this page with your next message: ${page.title ?? hostOf(page.url)}`}>
       <span className="ext-chip-fav" aria-hidden="true">{ICON_FILE}</span>
-      {quote ? 'This page + selection' : 'This page'}
+      <span>{quote ? 'This page + selection' : 'This page'}</span>
     </span>
   ) : null;
   const actSwitch = p.canAct ? (

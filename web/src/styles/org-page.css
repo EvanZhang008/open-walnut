@@ -85,15 +85,7 @@
 .org-channel-top { display: flex; flex-wrap: wrap; align-items: flex-start; column-gap: 6px; line-height: 20px; }
 .org-channel-top > .org-channel-name { flex: 1 1 8em; overflow-wrap: break-word; }
 .org-channel-tail { display: flex; align-items: center; gap: 6px; height: 20px; margin-left: auto; }
-.org-channel-led {
-  flex-shrink: 0;
-  padding: 0 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-muted);
-  font-size: var(--font-size-xs);
-  line-height: 16px;
-}
+.org-channel-led { flex-shrink: 0; }
 .org-detail-led { font-size: var(--font-size-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .org-detail-led::before { content: '· '; }
 .org-channel-name {
@@ -115,7 +107,6 @@
   font-size: var(--font-size-sm);
   color: var(--fg-muted);
 }
-.org-channel-latest.is-alert { color: var(--error); }
 .org-channel-pin { display: inline-block; vertical-align: -1px; margin-right: 4px; color: var(--accent); }
 
 /* In the name's tail (.org-channel-tail): level with the name's first line. */
@@ -141,6 +132,8 @@
   background: color-mix(in srgb, var(--success) 16%, transparent);
   color: color-mix(in srgb, var(--success) 70%, var(--fg));
 }
+/* A row's count is a `.badge-count`: solid red (`badge-alert`) for what needs the user, grey else. */
+.org-badge { flex: none; }
 
 .org-avatar {
   position: relative;

@@ -13,6 +13,7 @@ import type { ChangeSnapshot } from '../../../../src/core/changes/model';
 import { timeAgo } from '@/utils/time';
 import { ChangeDeployView } from './ChangeDeployView';
 import { OutIcon } from './ChangeIcons';
+import { badge } from '@/components/common/badge';
 import { REVIEW_TONES, REVIEW_WORDS, changeHeadline, deployIssueWords, reviewFacts } from './change-status';
 
 const ERROR_WORDS: Record<NonNullable<ChangeSnapshot['error']>['code'], string> = {
@@ -41,7 +42,7 @@ export function ChangeCard({ snap, taskId, refreshing, refreshError, onRefresh }
         {snap.title && <div className="change-card-title" data-testid="change-card-title">{snap.title}</div>}
         <div className="change-card-head-line">
           <a className="change-card-label" href={snap.url} target="_blank" rel="noopener noreferrer" title="Open the review">{snap.label}</a>
-          {review && <span className="change-card-state" data-tone={REVIEW_TONES[review.state]} data-testid="change-card-state">{REVIEW_WORDS[review.state]}</span>}
+          {review && <span className={`${badge(REVIEW_TONES[review.state] === 'blocked' ? 'error' : REVIEW_TONES[review.state] === 'waiting' ? 'warning' : 'neutral')} change-card-state`} data-tone={REVIEW_TONES[review.state]} data-testid="change-card-state"><span>{REVIEW_WORDS[review.state]}</span></span>}
           {facts.length > 0 && <span className="change-card-facts" data-testid="change-card-facts">{facts.join(' · ')}</span>}
         </div>
       </header>

@@ -3,7 +3,7 @@
    event half of Start / Snooze until, and the Waiting line above a composer. */
 
 /* Waiting's one hue: the status pill, the until row and the composer line
-   (globals.css .badge-phase-waiting falls back to the same violet). */
+   . */
 :root { --phase-waiting: #7c3aed; }
 :root[data-theme="dark"] { --phase-waiting: #a78bfa; }
 @media (prefers-color-scheme: dark) {
@@ -57,13 +57,20 @@
 .task-status-pill-icon { display: inline-flex; flex: none; }
 .task-status-pill-icon svg { width: 12px; height: 12px; }
 
-/* The detail pane badge becomes a button: same look, plus a caret. */
+/* The detail pane's status: its icon and word (a state is a word, standard.md "Status labels"),
+   a button with a caret; only needs-you, working and done colour the word. */
 button.task-status-badge {
   border: none;
+  border-radius: var(--radius-xs, 4px);
+  background: none;
+  color: var(--fg-secondary);
   font: inherit;
   cursor: pointer;
 }
-button.task-status-badge:hover { filter: brightness(0.96); }
+button.task-status-badge[data-phase="need_action"] { color: var(--error); }
+button.task-status-badge[data-phase="in_progress"] { color: var(--accent-text, var(--accent)); }
+button.task-status-badge[data-phase="complete"] { color: var(--success); }
+button.task-status-badge:hover { background: var(--bg-hover); }
 .task-status-caret { font-size: 9px; opacity: 0.7; margin-left: 2px; }
 
 .task-status-menu { padding: 4px 0; }
@@ -122,28 +129,9 @@ button.task-status-badge:hover { filter: brightness(0.96); }
 /* The event half of Start / Snooze until, under the calendar: one rule apart from it. */
 .task-kebab-date.open > .task-snooze-event { border-top: 1px solid var(--border); }
 
-/* A Waiting task's chip in the session header's title row (WaitingChip): calm
-   violet, so it reads as "set aside", not as an error; never squeezed away, the
-   title gives up its room first. */
-.task-waiting-chip {
-  flex: none;
-  max-width: 45%;
-  padding: 1px 8px;
-  border: 1px solid color-mix(in srgb, var(--phase-waiting) 35%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--phase-waiting) 8%, transparent);
-  color: var(--fg-secondary);
-  font: inherit;
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  line-height: 18px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: default;
-}
-.task-waiting-chip:hover,
-.task-waiting-chip[aria-expanded="true"] { background: color-mix(in srgb, var(--phase-waiting) 14%, transparent); color: var(--fg); }
+/* A Waiting task's chip in the session header's title row (WaitingChip) is a neutral `.badge`
+   ("set aside", not an error); never squeezed away, the title gives up its room first. */
+.task-waiting-chip { flex: none; max-width: 45%; cursor: default; }
 .task-waiting-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .task-waiting-card {
   position: fixed;

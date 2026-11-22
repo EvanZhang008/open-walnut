@@ -283,7 +283,7 @@ function ToLine({ send, resolved, direction, taskIds }: { send: OutboundSend; re
   const isSend = send.op === 'task_send' || send.op === 'session_send';
   const fallback = isSend
     ? (resolved.fullId
-      ? <a className="provenance-chip provenance-chip-session session-link op-card-to-pill" data-session-id={resolved.fullId} href={`/sessions?id=${resolved.fullId}`}>{resolved.title || 'Open session'}</a>
+      ? <a className="badge badge-accent provenance-chip provenance-chip-session session-link op-card-to-pill" data-session-id={resolved.fullId} href={`/sessions?id=${resolved.fullId}`}><span>{resolved.title || 'Open session'}</span></a>
       : <span className="op-card-to-text">{resolved.title || send.to || ((send.refs?.length ?? 0) > 1 ? `${send.refs!.length} tasks` : send.kind === 'reply' ? 'The session that asked' : 'another session')}</span>)
     : (send.fields.to[0] && !send.fields.toLabel ? <span className="op-card-to-text">{send.fields.to[0]}</span> : null);
   return (

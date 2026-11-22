@@ -102,9 +102,9 @@ function fuzzyScore(q: string, text: string): number | null {
 }
 
 /** Plain-language badge + glyph for a hybrid match type (§9.2 trust legend). */
-function matchBadge(t: MatchType | undefined): { glyph: string; label: string; cls: string } | null {
-  if (t === 'exact') return { glyph: '●', label: 'exact match', cls: 'exact' };   // ●
-  if (t === 'both') return { glyph: '◐', label: 'exact + related', cls: 'both' };   // ◐
+function matchBadge(t: MatchType | undefined): { glyph: string; label: string; cls: string; accent?: boolean } | null {
+  if (t === 'exact') return { glyph: '●', label: 'exact match', cls: 'exact', accent: true };   // ●
+  if (t === 'both') return { glyph: '◐', label: 'exact + related', cls: 'both', accent: true };   // ◐
   if (t === 'semantic') return { glyph: '○', label: 'related', cls: 'semantic' };   // ○
   if (t === 'attachment') return { glyph: '▣', label: 'in attachment', cls: 'attachment' };   // ▣ (OCR/PDF text hit)
   return null;
@@ -391,7 +391,7 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
                   <>
                     <div className="notes-cmdk-item-head">
                       {badge && (
-                        <span className={`notes-cmdk-badge notes-cmdk-badge-${badge.cls}`} title={badge.label}>
+                        <span className={`badge${badge.accent ? ' badge-accent' : ''} notes-cmdk-badge`} data-match={badge.cls} title={badge.label}>
                           <span className="notes-cmdk-badge-glyph" aria-hidden>{badge.glyph}</span>
                           <span className="notes-cmdk-badge-label">{badge.label}</span>
                         </span>

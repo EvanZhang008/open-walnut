@@ -1,25 +1,11 @@
 /* A leader's folded team (WorkerFoldTree.tsx): the line under its title, the tree below its row,
-   and the put-back arrow on a worker shown separately. The team colour is the Worker and Leader
-   pills' (subtask-pill.css), light and dark. */
+   and the put-back arrow on a worker shown separately. The team reads in the neutral tone of the
+   Worker and Leader badges (styles/badge.css); only "N need you" is red. */
 :root {
-  --worker-fold-ink: #6a4fd8;
-  --worker-fold-bg: rgba(124, 92, 255, 0.1);
-  --worker-fold-bg-strong: rgba(124, 92, 255, 0.18);
-  --worker-fold-rule: rgba(124, 92, 255, 0.35);
-}
-:root[data-theme="dark"] {
-  --worker-fold-ink: #b9a8ff;
-  --worker-fold-bg: rgba(160, 140, 255, 0.14);
-  --worker-fold-bg-strong: rgba(160, 140, 255, 0.26);
-  --worker-fold-rule: rgba(160, 140, 255, 0.4);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) {
-    --worker-fold-ink: #b9a8ff;
-    --worker-fold-bg: rgba(160, 140, 255, 0.14);
-    --worker-fold-bg-strong: rgba(160, 140, 255, 0.26);
-    --worker-fold-rule: rgba(160, 140, 255, 0.4);
-  }
+  --worker-fold-ink: var(--fg-secondary);
+  --worker-fold-bg: color-mix(in srgb, var(--fg) 7%, transparent);
+  --worker-fold-bg-strong: color-mix(in srgb, var(--fg) 12%, transparent);
+  --worker-fold-rule: var(--border-strong);
 }
 
 .worker-fold-line {

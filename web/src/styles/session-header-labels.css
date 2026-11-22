@@ -29,22 +29,13 @@
   gap: 6px;
 }
 
-/* Every tag one size, the header's (20px, 11px text). */
-.session-header-labels-list .tag-chip {
-  box-sizing: border-box;
-  height: 20px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: var(--font-size-xs);
-  line-height: 16px;
-  max-width: none;
-}
+/* Every tag is the one `.badge`, whole here. */
+.session-header-labels-list .tag-chip { max-width: none; }
 /* The tag group is a one-line box elsewhere; here every tag shows, wrapping. Its pills join
    the list's own flex row so they wrap with the others. */
 .session-header-labels-list > .task-tag-pills { display: contents; }
 .session-header-labels-list > .task-tag-pills .tag-chip-inline {
   flex: none;
-  height: 20px;
   min-width: 0;
   max-width: 100%;
 }
@@ -56,29 +47,11 @@
 
 /* ── The state pills on the row ── */
 
-/* Embedded (a session run in-process): a fact, in the accent colour. */
-:is(.session-panel-title-meta, .org-detail-chat-tools) .session-panel-embedded-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  font-weight: 600;
-}
+/* Embedded (a session run in-process) is a `badge-accent`: a fact, in the accent colour. */
 
 /* The wait says when it ends; it gives way first, so the title keeps its room. */
-.session-panel-title-meta .task-waiting-chip { max-width: 150px; height: 20px; box-sizing: border-box; }
+.session-panel-title-meta .task-waiting-chip { max-width: 150px; }
 
-/* The Org node draws the chat's header in its own (SessionPanel headerSlot): the same
-   20px pills there (session-header-pills.css sizes them inside the panel's header). */
-.org-detail-chat-tools :is(.task-trigger-pill, .task-team-pill, .session-cron-pill) {
-  box-sizing: border-box;
-  height: 20px;
-  padding: 1px 7px;
-  border-radius: 10px;
-  font-size: var(--font-size-xs);
-  line-height: 16px;
-}
 .org-detail-chat-tools .task-waiting-chip { max-width: 180px; }
 
 /* A narrow row (data-header-fit="tight", useTitleRowTight.ts): the labels go to a line

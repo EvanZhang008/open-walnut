@@ -19,8 +19,12 @@ import { useTunnelName } from './tunnel-name';
 import { useDevicesData, useExposeStatus, type DeviceEntry } from './useDevicesData';
 import { WalnutServersStrip } from './WalnutServersStrip';
 import { DEVICES_INTRO, deriveWays, landingWay, type NowLine, type Way, type WayDot } from './ways-model';
+import { badge, type BadgeTone } from '@/components/common/badge';
 import '@/styles/devices-ways.css';
 import '@/styles/notice-card.css';
+
+/** A tab's tag word: the way in use is the accent, one that needs a look amber, a count neutral. */
+const wayTagTone = (dot: WayDot | undefined): BadgeTone => (dot === 'on' ? 'accent' : dot === 'warn' ? 'warning' : 'neutral');
 
 export const PANE_TITLE = 'Phones & Cloud';
 
@@ -174,7 +178,7 @@ export function TabBar({ tabs, current }: { tabs: readonly TabView[]; current: P
           {t.label
             ? <span className="pc-tab-label">{t.label}</span>
             : <span className="pc-tab-label pc-tab-label-pending" role="img" aria-label="Loading" data-testid="pc-tab-label-pending" />}
-          {t.tag && <span className="devices-way-tag" data-dot={t.tag === 'In use' ? 'on' : t.dot}>{t.tag}</span>}
+          {t.tag && <span className={`${badge(wayTagTone(t.tag === 'In use' ? 'on' : t.dot), { count: /^\d+$/.test(t.tag) })} devices-way-tag`} data-dot={t.tag === 'In use' ? 'on' : t.dot}><span>{t.tag}</span></span>}
         </Tab>
       ))}
     </TabList>

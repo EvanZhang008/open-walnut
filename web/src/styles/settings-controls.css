@@ -6,18 +6,7 @@
 
 :root {
   --settings-input-bg: var(--input-fill);
-  --settings-tag-success-fg: #1f7a35;
   --settings-focus-ring: 0 0 0 3px var(--accent-subtle);
-}
-
-:root[data-theme='dark'] {
-  --settings-tag-success-fg: var(--success);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) {
-    --settings-tag-success-fg: var(--success);
-  }
 }
 
 .settings-visually-hidden {
@@ -240,26 +229,7 @@ textarea.settings-input {
   min-width: 0;
 }
 
-/* Settings, Message hints: whose hint a row is. */
-.message-hint-origin-badge {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 0 6px;
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  line-height: 18px;
-  white-space: nowrap;
-  vertical-align: middle;
-  color: var(--fg-muted);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-}
-.message-hint-origin-badge--yours,
-.message-hint-origin-badge--changed {
-  color: var(--fg);
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-}
+/* Settings, Message hints: whose hint a row is, the one `.badge` (accent when it is yours). */
+.message-hint-origin-badge { margin-left: 6px; }
 
 /* Task providers' "Try a task title": the title field and its Ask AI button on one line. */

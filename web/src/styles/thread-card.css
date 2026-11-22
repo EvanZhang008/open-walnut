@@ -24,7 +24,7 @@
   min-height: 0;
   padding: 0;
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
+  border-radius: var(--ask-card-radius);
   background: var(--bg-elevated);
   color: var(--fg);
   /* Off the page in both themes: a darker ring and a deeper shadow. */

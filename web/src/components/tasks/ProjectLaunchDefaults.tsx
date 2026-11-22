@@ -139,7 +139,7 @@ export function ProjectLaunchDefaults({ project, row }: { project: string; row: 
         </select>
         {/* An engine's own default model is no global setting: no tag then, the row keeps its place. */}
         {engine && !model
-          ? <span className="launch-source-tag is-placeholder" aria-hidden="true" />
+          ? <span className="badge launch-source-tag is-placeholder" aria-hidden="true" />
           : <LaunchSourceTag row={{ source: modelFrom, words: launchSourceWords(modelFrom, model ? project : undefined) }} />}
       </div>
 

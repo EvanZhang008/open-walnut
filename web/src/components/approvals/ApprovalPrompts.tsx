@@ -141,8 +141,8 @@ function ApprovalBody({ a, s, now, onOpen, onMinimize, total = 0 }: { a: Approva
         {/* The card names itself in the corner; the dialog has no title of its own: its sentence is the request. */}
         {onOpen ? <NoticeStatus tone="ask" className="approval-kicker">Approve?</NoticeStatus> : <span />}
         {onOpen && total > 1 && (
-          <button type="button" className="approval-count" data-testid="approval-count" title={`See all ${total} approvals waiting`} onClick={onOpen}>
-            {total} waiting
+          <button type="button" className="badge badge-accent approval-count" data-testid="approval-count" title={`See all ${total} approvals waiting`} onClick={onOpen}>
+            <span>{total} waiting</span>
           </button>
         )}
         <span className="approval-head-end">

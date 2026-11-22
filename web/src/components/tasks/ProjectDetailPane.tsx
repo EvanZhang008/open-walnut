@@ -218,9 +218,9 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
         {(() => {
           const meta = getIntegrationMeta(integrations, source);
           return meta ? (
-            <span className="detail-source-badge" style={{ background: `color-mix(in srgb, ${meta.badgeColor} 15%, transparent)`, color: meta.badgeColor }}>{meta.name}</span>
+            <span className="badge detail-source-badge"><span>{meta.name}</span></span>
           ) : (
-            <span className={`detail-source-badge source-${source}`}>{source}</span>
+            <span className="badge detail-source-badge"><span>{source}</span></span>
           );
         })()}
         <button className="todo-detail-close" onClick={onClose} title="Close">&times;</button>
@@ -308,7 +308,7 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
               {list.map((sc) => (
                 <div key={sc.id} className="project-scripts-mini-row" title={sc.command}>
                   <span className="project-scripts-name">{sc.name}</span>
-                  {scriptRoles(sc).map((r) => <span key={r} className="project-scripts-role">{r}</span>)}
+                  {scriptRoles(sc).map((r) => <span key={r} className="badge project-scripts-role"><span>{r}</span></span>)}
                   <code className="project-scripts-command">{sc.command}</code>
                 </div>
               ))}

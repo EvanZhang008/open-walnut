@@ -49,7 +49,7 @@ export const TagNode = Node.create({
   renderHTML({ node, HTMLAttributes }) {
     return [
       'span',
-      mergeAttributes(HTMLAttributes, { class: 'notes-tag' }),
+      mergeAttributes(HTMLAttributes, { class: 'badge badge-clickable notes-tag' }),
       `#${node.attrs.name}`,
     ];
   },

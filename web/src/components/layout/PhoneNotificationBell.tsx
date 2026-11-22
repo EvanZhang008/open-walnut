@@ -34,7 +34,7 @@ export function PhoneNotificationBell({ count, open, onOpen }: { count: number; 
     >
       <BellOutlineIcon size={22} />
       {count > 0 && (
-        <span className="phone-bell-count" aria-hidden="true">{count > 99 ? '99+' : count}</span>
+        <span className="badge badge-count badge-alert badge-corner phone-bell-count" aria-hidden="true">{count > 99 ? '99+' : count}</span>
       )}
     </button>,
     slot,

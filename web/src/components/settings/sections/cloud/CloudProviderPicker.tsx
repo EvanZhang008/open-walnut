@@ -19,15 +19,15 @@ import '@/styles/settings-sections-addons.css';
 
 type Tone = 'neutral' | 'warning' | 'success';
 
-function detectPill(provider: CloudSetupProvider): { text: string; cls: string; tone: Tone } {
+function detectPill(provider: CloudSetupProvider): { text: string; tone: Tone } {
   if (provider.detect.available) {
     return provider.canProvision
-      ? { text: 'Ready', cls: 'cloud-pill-ready', tone: 'success' }
-      : { text: 'Paste a script', cls: 'cloud-pill-manual', tone: 'neutral' };
+      ? { text: 'Ready', tone: 'success' }
+      : { text: 'Paste a script', tone: 'neutral' };
   }
-  if (provider.detect.needs === 'api-token') return { text: 'Needs API token', cls: 'cloud-pill-token', tone: 'warning' };
-  if (provider.detect.needs === 'cli-login') return { text: 'CLI missing or signed out', cls: 'cloud-pill-warn', tone: 'warning' };
-  return { text: 'Not ready', cls: 'cloud-pill-warn', tone: 'warning' };
+  if (provider.detect.needs === 'api-token') return { text: 'Needs API token', tone: 'warning' };
+  if (provider.detect.needs === 'cli-login') return { text: 'CLI missing or signed out', tone: 'warning' };
+  return { text: 'Not ready', tone: 'warning' };
 }
 
 interface Props {
@@ -62,7 +62,7 @@ export function CloudProviderPicker({ providers, selected, onSelect }: Props) {
                 </span>
               </span>
               <span className="settings-row-actions">
-                <span className={`cloud-pill ${pill.cls}`}>
+                <span className="cloud-pill">
                   <SettingsTag tone={pill.tone}>{pill.text}</SettingsTag>
                 </span>
                 <ChevronGlyph size={12} className="cloud-provider-go" />

@@ -59,7 +59,7 @@ export function RepoDetail({ repo, onBack, onEdit, onDelete }: RepoDetailProps) 
         <div className="repo-hosts-list">
           {hostEntries.map(([label, info]) => (
             <div key={label} className="repo-host-item">
-              <span className="repo-host-badge">{label}</span>
+              <span className="badge repo-host-badge"><span>{label}</span></span>
               <code className="repo-host-path">{info.path || '(no path)'}</code>
               {info.ssh_host && <span className="repo-host-ssh">via {info.ssh_host}</span>}
             </div>

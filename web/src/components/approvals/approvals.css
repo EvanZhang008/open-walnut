@@ -15,9 +15,9 @@
   background: var(--card-bg);
   color: var(--fg);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
+  border-radius: var(--ask-card-radius);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08);
-  padding: 12px 14px;
+  padding: var(--ask-card-pad);
   font-size: var(--font-size-md);
 }
 
@@ -46,21 +46,7 @@
 .approval-head-end { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
 
 /* "3 waiting": how many wait, the same count the Needs you line gives; it opens the list of them. */
-.approval-count {
-  margin-left: 8px;
-  padding: 0 6px;
-  border: none;
-  border-radius: 999px;
-  background: var(--accent-subtle);
-  color: var(--accent-text);
-  font: inherit;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  line-height: 18px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.approval-count:hover { text-decoration: underline; }
+.approval-count { margin-left: 8px; }
 
 /* Puts the card down to one line (the phone's form) until a newer request comes. */
 .approval-minimize {
@@ -451,8 +437,8 @@ button.approval-row { width: 100%; font: inherit; font-size: var(--font-size-md)
 .approval-dialog-list .approval-clock { flex: none; font-size: var(--font-size-sm); }
 
 /* A click leaves no mark on the card's small buttons; a keyboard focus still shows its ring. */
-.approval-card :is(.approval-minimize, .approval-count, .approval-line-open):focus:not(:focus-visible) { outline: none; background: none; }
-.approval-card .approval-count:focus:not(:focus-visible) { background: var(--accent-subtle); }
+.approval-card :is(.approval-minimize, .approval-line-open):focus:not(:focus-visible) { outline: none; background: none; }
+.approval-card .approval-count:focus:not(:focus-visible) { outline: none; }
 .approval-card-line.approval-card-tap { cursor: pointer; }
 
 /* The asking task's name: a link to it (ApprovalPrompts AskerLink), drawn as one, ↗ included. */

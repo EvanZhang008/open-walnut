@@ -20,7 +20,7 @@
 .home-board-project h3 { display: flex; align-items: center; gap: 6px; margin: 8px 0; color: var(--fg-muted); font-size: var(--font-size-xs); font-weight: 600; overflow-wrap: anywhere; }
 .home-board-project h3 > span { margin-left: auto; font-weight: 400; }
 .home-board-project + .home-board-project { margin-top: 18px; }
-.home-board-card { padding: 11px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--fg); }
+.home-board-card { padding: 11px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--card-bg); color: var(--fg); }
 .home-board-card[data-draggable="true"] { cursor: grab; -webkit-user-select: none; user-select: none; }
 .home-board-card.is-dragging { opacity: .35; cursor: grabbing; }
 .home-board-card-top { display: flex; align-items: flex-start; gap: 5px; }

@@ -197,7 +197,6 @@
   pointer-events: none;
   display: inline-flex;
   vertical-align: 1px;
-  border: none;
   margin-left: 4px;
 }
 .apps-card-main + .apps-card-badge { margin-left: 6px; }
@@ -412,7 +411,7 @@
 /* A card footer's sidebar switch, named in words (its status beside it speaks of the plugin). */
 .apps-card-switch { display: inline-flex; align-items: center; gap: 6px; }
 .apps-card-switch-label { color: var(--fg-secondary); font-size: var(--font-size-xs); }
-.apps-app-row .apps-card-badge { position: static; display: inline-flex; border: none; }
+.apps-app-row .apps-card-badge { position: static; display: inline-flex; }
 .apps-part + .apps-part { border-top: 1px solid var(--settings-hairline); }
 .apps-part-account { white-space: normal; }
 
@@ -524,11 +523,7 @@
   .apps-make { padding: 18px; }
 }
 
-/* The update chip is the same 18px pill as the tags in the page header (N3-7): its own
-   line height, since the Version row it sits in sets a taller one. */
-.apps-detail .plugin-update-chip { line-height: 14px; }
-
-/* "Check now" beside the update status: the text-safe accent, as on the chip (N3-9). */
+/* "Check now" beside the update status: the text-safe accent, as on an available chip (N3-9). */
 .plugin-store-updates-head .settings-addons-link { color: var(--accent-text); }
 
 /* An Update's result line under the Version row: top-aligned, so opening Details grows it

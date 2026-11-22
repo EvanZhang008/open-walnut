@@ -96,7 +96,7 @@ export function TagAutocomplete({ editor, state, tags, onClose, onSelect }: TagA
           onMouseDown={(e) => { e.preventDefault(); onSelect(t.tag); }}
         >
           <span className="notes-tag-item-name">#{t.tag}</span>
-          {t.count > 0 && <span className="notes-tag-item-count">{t.count}</span>}
+          {t.count > 0 && <span className="badge badge-count notes-tag-item-count">{t.count}</span>}
         </div>
       ))}
       {showCreate && (

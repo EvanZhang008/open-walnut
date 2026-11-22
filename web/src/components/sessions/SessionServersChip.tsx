@@ -95,7 +95,7 @@ export function SessionServersChip({ servers, activePort, onOpen, compact = fals
       <button
         ref={chipRef}
         type="button"
-        className={`session-web-chip${compact ? ' is-compact' : ''}`}
+        className={`${compact ? 'session-web-chip is-compact' : 'badge session-web-chip'}`}
         data-testid="session-web-chip"
         data-header-pill="web"
         aria-label={`${title}: show them, to open or stop`}

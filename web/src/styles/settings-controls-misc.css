@@ -3,33 +3,8 @@
  * block, key/value editor, status indicator, legacy collapsible.
  */
 
-/* ── Status tags ── */
-.settings-tag {
-  box-sizing: border-box;
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  height: 18px;
-  padding: 0 6px;
-  border-radius: var(--radius-xs);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  line-height: 18px;
-  white-space: nowrap;
-  text-transform: none;
-  letter-spacing: 0;
-}
-
-.settings-tag-neutral { background: var(--bg-tertiary); color: var(--fg-secondary); }
-.settings-tag-warning { background: rgba(255, 149, 0, 0.14); color: var(--priority-important-text); }
-.settings-tag-success { background: rgba(52, 199, 89, 0.14); color: var(--settings-tag-success-fg); }
-.settings-tag-error { background: rgba(255, 59, 48, 0.14); color: var(--settings-error-text, var(--error)); }
-
-:root[data-theme='dark'] .settings-tag-neutral { background: rgba(118, 118, 128, 0.24); }
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .settings-tag-neutral { background: rgba(118, 118, 128, 0.24); }
-}
+/* ── Status tags: the one `.badge` (SettingsTag); only its place in a row is here ── */
+.settings-tag { flex: 0 0 auto; }
 
 /* ── Disclosure row: a whole-row button in the group ── */
 .settings-row.settings-disclosure-row {

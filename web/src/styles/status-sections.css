@@ -59,18 +59,8 @@
 .status-section-card:not(.status-card-two-line) > .status-card-reason { flex: 0 2 auto; max-width: 45%; font-size: var(--font-size-xs); margin-left: 6px; min-width: 0; }
 /* A project's fold in a narrow panel: the title keeps a floor, the wait sentence gives way first. */
 .status-section-card.status-card-reason-inline > .todo-pinned-title { min-width: min(10ch, 34%); }
-/* The tags on the meta line read as words, not pills: no fill, the line's own size.
-   `html` + four classes: past subtask-pill.css's dark theme (:root[data-theme] + two). */
-html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill,
-html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hover,
-html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:focus-visible,
-html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill[aria-expanded="true"],
-html .home-navigation-scroll .status-card-meta .todo-item-due-pill.todo-item-due-pill {
-  flex: none; height: auto; margin: 0; padding: 0; border: 0; background: none; box-shadow: none;
-  font-size: var(--font-size-xs); font-weight: 500; line-height: 15px;
-}
-.status-card-meta .todo-item-due-pill.todo-item-due-pill { color: var(--fg-muted); }
-html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hover { text-decoration: underline; }
+/* The badges on the meta line read as words (styles/badge.css, "a line of words"). */
+.status-card-meta > .badge { flex: none; }
 .status-card-meta > :not(.status-card-project):not(.status-card-meta-fill):not(.todo-recent-ago)::before {
   /* static: a phone gives a team pill's ::before an absolute 44 px hit area (phone-fixes.css). */
   content: '·'; position: static; inset: auto; margin-right: 6px; color: var(--fg-muted); font-weight: 400;
@@ -146,19 +136,8 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
 .status-section-card > .task-unread-dot.task-unread-dot-quiet { background: var(--fg-muted); opacity: 0.55; }
 /* A usage limit stopped it (Walnut continues it at the reset): the session banner's tag
    (usage-limit.css), on the row and as a count on the Waiting heading. */
-.status-card-limit-tag {
-  display: inline-block;
-  padding: 0 5px;
-  border-radius: var(--radius-xs);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  line-height: 15px;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-/* Off (the user's choice) and refused again wear their banner's colours (usage-limit.css). */
-.status-card-limit-tag.is-off { color: var(--fg-secondary); background: color-mix(in srgb, var(--fg) 8%, transparent); }
-.status-card-limit-tag.is-refused { color: var(--warning); background: color-mix(in srgb, var(--warning) 18%, transparent); }
+/* The tag is a `.badge` (limit-row.tsx LimitTag), toned as its banner; only its place is here. */
+.status-card-limit-tag { flex: none; }
 /* A count in words beside the heading's own count, not a pill: it filters nothing. */
 .status-section-limited { flex: none; margin-left: 4px; font-size: var(--font-size-sm); font-weight: 500; color: var(--accent); }
 /* Background: a dot after the count while one of its tasks asks the user something (the task stays in Background). */
@@ -192,7 +171,6 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
   display: inline-flex; align-items: center; gap: 4px; flex: 0 1 auto; min-width: 0;
   font-size: var(--font-size-xs); color: var(--fg-secondary); white-space: nowrap;
 }
-.todo-item-limit-pill .status-card-limit-tag { flex: none; }
 .todo-item-limit-pill-words { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 /* Watching's rows drag to the user's own order (StatusSections WatchingRows): the row being moved
    lifts over its neighbours. */

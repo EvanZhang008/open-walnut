@@ -121,7 +121,7 @@
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--bg);
+  background: var(--card-bg);
   color: var(--fg);
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
   font-size: var(--font-size-sm);

@@ -74,7 +74,7 @@ function StatusPill({ row }: { row: StatusRow }) {
   const main = <span className={`bs-pill bs-pill-${state}`} data-state={state}><TaskStateIcon state={iconStateOf(row.status.state, { snoozed: !!row.status.snoozed })} size={12} decorative />{USER_STATE_LABELS[state]}</span>;
   // Its latest result left things not done (structured-reply.ts): "Done" alone would overstate it.
   if (!resultIsPartial(row.task.result_report)) return main;
-  return <>{main}<span className="bs-pill bs-pill-partial" data-testid="board-partial-pill">Partial</span></>;
+  return <>{main}<span className="badge badge-warning bs-pill-partial" data-testid="board-partial-pill">Partial</span></>;
 }
 
 function WhereCell({ row }: { row: StatusRow }) {

@@ -1,12 +1,12 @@
 /**
- * The update chip: an OUTLINE pill next to the version ("is it current?"), deliberately
- * unlike the solid `.badge` run-state pill ("is it running?"). One component for linked,
- * git and npm rows and for the Sources group, so a slug's two chips always agree.
+ * The update chip ("is it current?"): the one `.badge`, its tone from `chipTone`. One component
+ * for linked, git and npm rows and for the Sources group, so a slug's two chips always agree.
  * All wording and state mapping is in plugin-update-view.ts; this file only renders.
  */
 import { type MouseEvent, useCallback } from 'react'
 import type { UpdateState } from './plugin-update-types'
-import { type BusyKind, chipView, plainText } from './plugin-update-view'
+import { type BusyKind, chipTone, chipView, plainText } from './plugin-update-view'
+import { badge } from '@/components/common/badge'
 import { PluginUpdateIcon } from './plugin-update-icons'
 import '@/styles/plugin-updates.css'
 
@@ -42,7 +42,7 @@ export function PluginUpdateChip(props: PluginUpdateChipProps) {
     updateElsewhere,
     ...(isStatic ? { staticNote: staticTitle ?? '' } : {}),
   })
-  const className = ['plugin-update-chip', ...view.modifiers.map((m) => `plugin-update-chip${m}`)].join(' ')
+  const className = [badge(chipTone(view)), 'plugin-update-chip', ...view.modifiers.map((m) => `plugin-update-chip${m}`)].join(' ')
   const label = plainText(view.label)
   const title = plainText(view.title)
   const ariaLabel = view.kind === 'pending'

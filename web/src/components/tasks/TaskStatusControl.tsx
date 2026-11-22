@@ -328,7 +328,8 @@ export function TaskStatusBadge({ task, onSetPhase, onSetWaitUntil, quiet = fals
       <button
         ref={btnRef}
         type="button"
-        className={`badge-phase badge-phase-${task.phase?.toLowerCase()} task-status-badge`}
+        className="badge-phase task-status-badge"
+        data-phase={task.phase?.toLowerCase()}
         aria-haspopup="menu"
         aria-expanded={open}
         title="Change status"

@@ -133,12 +133,6 @@
 .oc-detail-actions { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
 .oc-role {
   flex-shrink: 0;
-  padding: 0 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-muted);
-  font-size: var(--font-size-xs);
-  font-weight: 500;
 }
 .oc-card-line { margin-top: 1px; font-size: var(--font-size-sm); color: var(--fg-muted); }
 .oc-vps {

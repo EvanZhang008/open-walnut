@@ -384,24 +384,24 @@ test('the tab lists only this session letters and the menu badge counts them whi
   await expect(pane.locator('.hib-row').filter({ hasText: mine })).toHaveClass(/hib-unread/)
   const menu = await openMoreActions(panel)
   await expect.poll(() => inboxBadge(menu), { timeout: 20_000, intervals: [300, 500] }).toBe(1)
-  // An unanswered decision is a stronger signal than unread — the badge says so.
-  // The CLASS is not the promise: this stylesheet lands before globals.css in the
-  // bundle, so a single-class rule silently lost the colour tie-break and the
-  // badge stayed accent-blue. Assert the RENDERED colour.
+  // An unanswered decision is a stronger signal than unread — the badge says so:
+  // it is the count of what needs the user, the solid red `badge-alert`.
+  // The CLASS is not the promise: a stylesheet order once silently lost the colour
+  // tie-break and the badge stayed accent-blue. Assert the RENDERED colour.
   const badge = inboxItem(menu).locator('.session-action-chip-count')
-  await expect(badge).toHaveClass(/session-action-chip-count-warn/)
+  await expect(badge).toHaveClass(/badge-alert/)
   const colors = await badge.evaluate((el) => {
     const root = getComputedStyle(document.documentElement)
     const probe = document.createElement('span')
     document.body.appendChild(probe)
-    probe.style.color = root.getPropertyValue('--warning').trim()
-    const warning = getComputedStyle(probe).color
+    probe.style.color = root.getPropertyValue('--error').trim()
+    const alert = getComputedStyle(probe).color
     probe.style.color = root.getPropertyValue('--accent').trim()
     const accent = getComputedStyle(probe).color
     probe.remove()
-    return { bg: getComputedStyle(el).backgroundColor, warning, accent }
+    return { bg: getComputedStyle(el).backgroundColor, alert, accent }
   })
-  expect(colors.bg, 'decision badge must render the warning colour').toBe(colors.warning)
+  expect(colors.bg, 'decision badge must render the alert colour').toBe(colors.alert)
   expect(colors.bg).not.toBe(colors.accent)
   await expect(inboxItem(menu)).toHaveAttribute('title', /waiting on a decision/)
   await closeMoreActions(panel)
@@ -417,7 +417,7 @@ test('the tab lists only this session letters and the menu badge counts them whi
     .not.toHaveClass(/hib-unread/, { timeout: 20_000 })
   await openMoreActions(panel)
   await expect.poll(() => inboxBadge(menu), { timeout: 20_000, intervals: [300, 500] }).toBe(1)
-  await expect(badge).toHaveClass(/session-action-chip-count-warn/)
+  await expect(badge).toHaveClass(/badge-alert/)
 
   // ── The badge is live while the tab is CLOSED (that is the point of it) ──
   // Picking the entry both toggles the tab and closes the menu.

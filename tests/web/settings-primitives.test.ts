@@ -306,7 +306,7 @@ describe('control markup', () => {
 
   it('tag, loading row and mono block', () => {
     expect(renderToStaticMarkup(h(SettingsTag, { tone: 'warning' }, 'Needs setup'))).toBe(
-      '<span class="settings-tag settings-tag-warning">Needs setup</span>',
+      '<span class="badge badge-warning settings-tag"><span>Needs setup</span></span>',
     )
     const loading = renderToStaticMarkup(h(SettingsLoadingRow))
     expect(loading).toContain('Loading...')

@@ -24,8 +24,8 @@ export function CommandCard({ command, onEdit, onDelete }: CommandCardProps) {
         <div className="cmd-card-info">
           <div className="cmd-card-name-row">
             <code className="cmd-card-name">/{command.name}</code>
-            <span className={`cmd-source-badge ${isReadOnly ? 'builtin' : 'user'}`}>
-              {command.source}
+            <span className={`cmd-source-badge ${isReadOnly ? 'badge builtin' : 'badge badge-accent user'}`}>
+              <span>{command.source}</span>
             </span>
           </div>
           {command.description && (

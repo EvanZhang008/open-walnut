@@ -41,8 +41,8 @@ export function SttDiffModal({ rec, onInsert, onClose }: SttDiffModalProps) {
         {/* Merged diff — the actual comparison. Trivial (punctuation-only)
             changes are dimmed so real word differences stand out. */}
         <div className="stt-diff-legend">
-          <span className="stt-diff-chip stt-diff-chip-a">{rec.engine ?? 'primary'} · {fmtLatency(rec.result?.durationMs)}</span>
-          <span className="stt-diff-chip stt-diff-chip-b">{rec.secondary?.engine ?? 'secondary'} · {fmtLatency(rec.secondary?.durationMs)}</span>
+          <span className="badge stt-diff-chip stt-diff-chip-a"><span>{rec.engine ?? 'primary'} · {fmtLatency(rec.result?.durationMs)}</span></span>
+          <span className="badge stt-diff-chip stt-diff-chip-b"><span>{rec.secondary?.engine ?? 'secondary'} · {fmtLatency(rec.secondary?.durationMs)}</span></span>
           <span className="stt-diff-note">
             {identical ? 'identical (ignoring punctuation)' : `differs: ${stats.aOnly + stats.bOnly} chars`}
           </span>
@@ -66,7 +66,7 @@ export function SttDiffModal({ rec, onInsert, onClose }: SttDiffModalProps) {
         <div className="stt-diff-panels">
           <div className="stt-diff-panel">
             <div className="stt-diff-panel-head">
-              <span className="stt-diff-chip stt-diff-chip-a">{rec.engine ?? 'primary'}</span>
+              <span className="badge stt-diff-chip stt-diff-chip-a"><span>{rec.engine ?? 'primary'}</span></span>
               {primaryText && (
                 <button type="button" className="btn btn-sm" onClick={() => onInsert(primaryText)}>Insert</button>
               )}
@@ -75,7 +75,7 @@ export function SttDiffModal({ rec, onInsert, onClose }: SttDiffModalProps) {
           </div>
           <div className="stt-diff-panel">
             <div className="stt-diff-panel-head">
-              <span className="stt-diff-chip stt-diff-chip-b">{rec.secondary?.engine ?? 'secondary'}</span>
+              <span className="badge stt-diff-chip stt-diff-chip-b"><span>{rec.secondary?.engine ?? 'secondary'}</span></span>
               {secondaryText && (
                 <button type="button" className="btn btn-sm" onClick={() => onInsert(secondaryText)}>Insert</button>
               )}

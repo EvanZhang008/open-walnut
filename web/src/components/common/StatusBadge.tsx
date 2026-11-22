@@ -19,13 +19,13 @@ const statusLabels: Record<string, string> = {
 export function StatusBadge({ status, phase, task }: StatusBadgeProps) {
   if (phase) {
     return (
-      <span className={`badge badge-phase-${phase.toLowerCase()}`}>
+      <span className="state-word">
         <TaskStateIcon state={task ? taskIconState(task) : phaseIconState(phase)} decorative /> {task ? taskStatusLabel(task) : (PHASE_LABELS[phase] ?? phase)}
       </span>
     );
   }
   return (
-    <span className={`badge badge-${status}`}>
+    <span className="state-word">
       <TaskStateIcon state={status === 'done' ? 'done' : 'todo'} decorative /> {statusLabels[status] ?? status}
     </span>
   );

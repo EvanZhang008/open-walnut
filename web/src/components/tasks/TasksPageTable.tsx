@@ -253,8 +253,8 @@ function ProjectCell({ task, sourceByName, projectNames, onUpdate }: {
         title="Move to project"
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
       >
-        <span className="tp-proj-pill">
-          {project ? '📁' : '📥'}
+        <span className="badge tp-proj-pill">
+          <span>{project ? '📁' : '📥'}</span>
           <span className="tp-proj-name">{projectDisplayName(project)}</span>
           <ProjectSourceBadge source={project ? sourceByName.get(project.toLowerCase()) : undefined} />
         </span>

@@ -265,11 +265,12 @@ export function MessageHintsGroup() {
                 {h.label} <span aria-hidden="true">{open === h.kind ? '▾' : '▸'}</span>
                 {' '}
                 <span
-                  className={`message-hint-origin-badge message-hint-origin-badge--${hintOrigin(h).kind}`}
+                  className={`badge${hintOrigin(h).kind === 'built-in' ? '' : ' badge-accent'} message-hint-origin-badge`}
+                  data-origin={hintOrigin(h).kind}
                   data-testid={`message-hint-origin-${h.kind}`}
                   title={hintOrigin(h).title}
                 >
-                  {hintOrigin(h).label}
+                  <span>{hintOrigin(h).label}</span>
                 </span>
               </button>
             )}

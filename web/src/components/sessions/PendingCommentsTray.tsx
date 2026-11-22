@@ -43,7 +43,7 @@ export function PendingCommentsTray({ pending, onJump, onEdit, onRemove }: Props
               title="Show where it was left"
             >
               {/* Every row the same shape: what it is, the words it is on, then the comment. */}
-              <span className="pending-comments-kind">{c.comment ? 'Comment' : 'Quote'}</span>
+              <span className="badge pending-comments-kind"><span>{c.comment ? 'Comment' : 'Quote'}</span></span>
               {c.doc && (
                 <span className="pending-comments-doc" title={c.doc.path}>
                   {c.doc.path.slice(c.doc.path.lastIndexOf('/') + 1)}{c.doc.reply ? ' · reply' : ''}

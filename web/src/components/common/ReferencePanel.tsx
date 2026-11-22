@@ -86,7 +86,7 @@ export function ReferencePanel({ result, symbol, currentFile, loading, error, on
         title={g.file}
       >
         {g.rel}
-        {g.file === currentFile && <span className="ref-panel-current-tag">this file</span>}
+        {g.file === currentFile && <span className="badge badge-accent ref-panel-current-tag">this file</span>}
       </div>
       {g.matches.map((m) => (
         <div

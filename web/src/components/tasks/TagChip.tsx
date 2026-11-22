@@ -72,11 +72,11 @@ export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks,
   const hoverRef = (el: HTMLElement | null) => { hover.anchorRef.current = el; if (anchorRef) anchorRef.current = el; };
 
   const className = [
-    'tag-chip',
+    'badge tag-chip',
     inline && 'tag-chip-inline',
-    onClick && 'tag-chip-clickable',
-    active && 'tag-chip-active',
-    hiddenOnTasks && 'tag-chip-hidden',
+    onClick && 'badge-clickable tag-chip-clickable',
+    active && 'badge-accent tag-chip-active',
+    hiddenOnTasks && 'badge-paused tag-chip-hidden',
     whole && 'tag-chip-whole',
     valueOnly && hasPrefix && !isLink && 'tag-chip-value-only',
     (href || openPath) && 'tag-chip-linked',

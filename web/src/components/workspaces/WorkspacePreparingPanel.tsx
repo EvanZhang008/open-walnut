@@ -26,6 +26,7 @@ import { hostName, setupWaitsForYou, workspaceOf, workspaceStateLabel } from './
 import { ScriptRunCard } from './ScriptRunCard';
 import { Breakable } from './Breakable';
 import { ProjectScriptsDialog } from './ProjectScriptsDialog';
+import { NoticeStatus } from '@/components/common/NoticeCard';
 import '@/styles/workspaces.css';
 
 const POLL_MS = 3_000;
@@ -220,11 +221,11 @@ export function WorkspacePreparingPanel({ taskId, initialTask, message, launchEr
           <div className="session-panel-title-area">
             <span className="session-panel-title" title={anchor}>{dirName}</span>
             {ws && ws.host !== '__local__' && (
-              <span className="session-panel-badge" style={{ color: 'var(--fg-muted)', fontSize: '10px' }}>{hostName(ws.host)}</span>
+              <span className="badge session-panel-badge"><span>{hostName(ws.host)}</span></span>
             )}
-            <span className="session-panel-badge" style={{ color: failed ? 'var(--error)' : 'var(--fg-muted)' }}>
+            <NoticeStatus tone={failed ? 'error' : asksOk ? 'ask' : 'live'} className="session-panel-badge">
               {failed ? 'Failed' : asksOk ? 'Waiting for you' : 'Preparing…'}
-            </span>
+            </NoticeStatus>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
             <button className="session-panel-close" onClick={onClose} title="Close panel">&times;</button>

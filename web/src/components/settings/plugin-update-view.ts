@@ -7,6 +7,7 @@
  */
 import type { UpdateState } from './plugin-update-types'
 import { timeAgo } from '@/utils/time'
+import type { BadgeTone } from '@/components/common/badge'
 
 export type IconName =
   | 'check'
@@ -237,6 +238,18 @@ function lastKnownLabel(kind: NonNullable<Extract<UpdateState, { kind: 'unreacha
     case 'unchecked':
       return 'Not checked'
   }
+}
+
+/**
+ * The chip is the one `.badge` (styles/badge.css), its tone by what it says: an update is the
+ * accent (good news, act), local changes / diverged / sign-in are amber (blocked, not urgent),
+ * every other state is neutral. Red never appears on a chip: a failed action says so in the
+ * feedback line.
+ */
+export function chipTone(view: Pick<ChipView, 'modifiers'>): BadgeTone {
+  if (view.modifiers.includes('--available')) return 'accent'
+  if (view.modifiers.some((m) => m === '--dirty' || m === '--diverged' || m === '--auth')) return 'warning'
+  return 'neutral'
 }
 
 const base = (kind: string, label: string, icon: IconName | null, modifiers: string[]): ChipView => ({

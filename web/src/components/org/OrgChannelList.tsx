@@ -77,11 +77,11 @@ function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; select
   // Asks only: a card with only something to read is no ask (isAsk).
   const own = askCount(row.alerts);
   const badge = row.threadsBadge !== undefined
-    ? <span className={`org-badge ${row.threadsBadge ? 'is-alert' : 'is-none'}`} data-testid="org-channel-badge" data-threads={row.threadsBadge} title={threadCountLabel(row.threadsBadge)}>{row.threadsBadge}</span>
+    ? <span className={`badge badge-count${row.threadsBadge ? ' badge-alert' : ''} org-badge ${row.threadsBadge ? 'is-alert' : 'is-none'}`} data-testid="org-channel-badge" data-threads={row.threadsBadge} title={threadCountLabel(row.threadsBadge)}>{row.threadsBadge}</span>
     : own > 0
-    ? <span className="org-badge is-alert" data-testid="org-channel-badge" title={stateCountLabel('needs', own)}>{own}</span>
+    ? <span className="badge badge-count badge-alert org-badge is-alert" data-testid="org-channel-badge" title={stateCountLabel('needs', own)}>{own}</span>
     : row.kind === 'project' && row.counts.running > 0
-      ? <span className="org-badge is-working" data-testid="org-channel-badge" title={stateCountLabel('working', row.counts.running)}>{row.counts.running}</span>
+      ? <span className="badge badge-count org-badge is-working" data-testid="org-channel-badge" title={stateCountLabel('working', row.counts.running)}>{row.counts.running}</span>
       : null;
   return (
     <button
@@ -104,7 +104,7 @@ function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; select
           {/* +N, the time and the count: one group on the name's first line, under it when narrow. */}
           <span className="org-channel-tail wn-fixed">
             {!!row.led?.length && (
-              <span className="org-channel-led" data-testid="org-channel-led" title={`Also leads ${row.led.map((l) => l.name).join(', ')}`}>+{row.led.length}</span>
+              <span className="badge badge-count org-channel-led" data-testid="org-channel-led" title={`Also leads ${row.led.map((l) => l.name).join(', ')}`}>+{row.led.length}</span>
             )}
             {/* The time of the line under it (when that news was written), else of the last move. */}
             <span className="org-channel-time">{shortAgo(row.latestAt || row.lastAt, now)}</span>

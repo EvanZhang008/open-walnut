@@ -214,9 +214,11 @@ function SmartRow({
               aria-label={degraded}
             />
           )}
+          {/* The one accent count of the pane: All Inboxes is the unread total of the primary list.
+              Every other mailbox count, its children's included, is the neutral count badge. */}
           {spec.role === 'inbox'
-            ? <MailInboxBadge scope={{ role: 'inbox' }} providerUnread={unread} testId="mail-smart-unread" />
-            : unread > 0 && <span className="mail-unread-badge" data-testid="mail-smart-unread">{formatCount(unread)}</span>}
+            ? <MailInboxBadge scope={{ role: 'inbox' }} providerUnread={unread} testId="mail-smart-unread" className="badge badge-accent badge-count mail-unread-badge" />
+            : unread > 0 && <span className="badge badge-count mail-unread-badge" data-testid="mail-smart-unread">{formatCount(unread)}</span>}
         </button>
       </div>
       {open && (

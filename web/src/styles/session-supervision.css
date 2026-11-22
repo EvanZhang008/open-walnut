@@ -38,34 +38,8 @@
 .session-supervision[data-state="blocked"],
 .session-supervision[data-state="stop-pending"] { border-color: var(--warning); }
 
-/* Same look as every status pill (.task-trigger-pill in globals.css), in grey. */
-.session-cron-pill {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  box-sizing: border-box;
-  height: auto;
-  padding: 1px 7px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--fg-secondary) 10%, transparent);
-  color: var(--fg-secondary);
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  letter-spacing: normal;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-
-button.session-cron-pill {
-  font-family: inherit;
-  cursor: pointer;
-}
-
-button.session-cron-pill:hover,
-button.session-cron-pill[aria-expanded="true"] {
-  background: color-mix(in srgb, var(--fg-secondary) 18%, transparent);
-}
+/* The Cron pill is a `.badge` (styles/badge.css). */
+.session-cron-pill { flex: 0 0 auto; }
 
 /* The job card the header pill opens. Same footprint as the recovery bar so
    the two stack cleanly when a forced recovery state shows above it. */

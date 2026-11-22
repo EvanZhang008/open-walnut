@@ -218,57 +218,6 @@ span.plugin-store-why {
   user-select: all;
 }
 
-/* A dark settings group is lighter than the old card, so the update chip's blue
-   takes the brighter dark-theme accent there to keep 4.5:1 (native-plugin C34). */
-:root[data-theme='dark'] .settings-group .plugin-update-chip {
-  --plugin-update-chip-available: var(--accent-hover);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .settings-group .plugin-update-chip {
-    --plugin-update-chip-available: var(--accent-hover);
-  }
-}
-
-
-/* ── Plugin update chip inside Settings: the standard sentence-case filled tag
-   (F15). Tone follows the chip's state; clicking still re-checks the row. ── */
-:is(.settings-pane, .apps-plugins) .plugin-update-chip {
-  min-width: 0;
-  height: 18px;
-  padding: 0 6px;
-  border: 0;
-  border-radius: var(--radius-xs);
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  line-height: 18px;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
-:is(.settings-pane, .apps-plugins) .plugin-update-chip:hover,
-:is(.settings-pane, .apps-plugins) button.plugin-update-chip--current:hover {
-  border: 0;
-  background: color-mix(in srgb, var(--fg-secondary) 16%, var(--bg-tertiary));
-}
-
-:is(.settings-pane, .apps-plugins) .plugin-update-chip--current {
-  background: transparent;
-}
-
-:is(.settings-pane, .apps-plugins) .plugin-update-chip--available {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent-text);
-}
-
-:is(.settings-pane, .apps-plugins) .plugin-update-chip--dirty,
-:is(.settings-pane, .apps-plugins) .plugin-update-chip--diverged,
-:is(.settings-pane, .apps-plugins) .plugin-update-chip--auth {
-  background: rgba(255, 149, 0, 0.14);
-  color: var(--priority-important-text);
-}
-
 /* ── Usage & Costs tables (F11): one line per cell, same columns everywhere ── */
 .settings-usage-table {
   width: 100%;

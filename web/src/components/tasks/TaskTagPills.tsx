@@ -82,7 +82,7 @@ function OverflowMenu({ rest, compiled, onOpenPath, links }: { rest: string[]; c
       <button
         ref={btnRef}
         type="button"
-        className={`tag-chip tag-chip-overflow tag-chip-overflow-btn${open ? ' open' : ''}`}
+        className={`badge tag-chip tag-chip-overflow tag-chip-overflow-btn${open ? ' open' : ''}`}
         title={rest.map((tag) => pillText(tag, compiled, links)).join(', ')}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -90,7 +90,7 @@ function OverflowMenu({ rest, compiled, onOpenPath, links }: { rest: string[]; c
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
         onPointerDown={(e) => e.stopPropagation()}
       >
-        +{rest.length}
+        <span>+{rest.length}</span>
       </button>
       {open && createPortal(
         <div
@@ -151,14 +151,14 @@ export function TaskTagPills({ tags, task, max = 1, className, linksFirst, menu,
   const rest = shown.slice(max);
   const more = rest.length > 0 && (menu
     ? <OverflowMenu rest={rest} compiled={compiled} onOpenPath={onOpenPath} links={links} />
-    : <span className="tag-chip tag-chip-overflow" title={rest.map((tag) => pillText(tag, compiled, links)).join(', ')}>+{rest.length}</span>);
+    : <span className="badge tag-chip tag-chip-overflow" title={rest.map((tag) => pillText(tag, compiled, links)).join(', ')}><span>+{rest.length}</span></span>);
   const last = head.at(-1)!;
   return (
     <span className={className ? `task-tag-pills ${className}` : 'task-tag-pills'} data-testid="task-tag-pills">
       {head.slice(0, -1).map((tag) => <Pill key={tag} tag={tag} compiled={compiled} onOpenPath={onOpenPath} links={links} />)}
       {/* "+N" rides inside the last pill ("thread +3"), never as a pill of its own (2026-10-23). */}
       {more
-        ? <span className="tag-pill-group" key={last}><Pill tag={last} compiled={compiled} onOpenPath={onOpenPath} links={links} />{more}</span>
+        ? <span className="badge tag-pill-group" key={last}><Pill tag={last} compiled={compiled} onOpenPath={onOpenPath} links={links} /><span>{more}</span></span>
         : <Pill key={last} tag={last} compiled={compiled} onOpenPath={onOpenPath} links={links} />}
     </span>
   );

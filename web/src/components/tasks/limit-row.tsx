@@ -29,9 +29,11 @@ export function useLimitNow(limit: Limit | undefined): number {
   return now;
 }
 
-/** The tag of a limit row, coloured as its session banner's. */
+/** The tag of a limit row, a `.badge` toned as its session banner: live blue, off (the user's
+ *  choice, nothing acts) dashed, refused again amber. */
+const LIMIT_BADGE: Record<NonNullable<LimitTone> | 'live', string> = { live: 'badge badge-accent', off: 'badge badge-paused', refused: 'badge badge-warning' };
 export function LimitTag({ tag, tone }: { tag: string; tone?: LimitTone }) {
-  return <span className={`status-card-limit-tag${tone ? ` is-${tone}` : ''}`}>{tag}</span>;
+  return <span className={`${LIMIT_BADGE[tone ?? 'live']} status-card-limit-tag${tone ? ` is-${tone}` : ''}`}>{tag}</span>;
 }
 
 /** One task's usage-limit wait as last announced (`gone` once it closed), ahead of its stored

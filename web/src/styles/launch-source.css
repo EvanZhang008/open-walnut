@@ -50,24 +50,9 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.launch-source-tag {
-  font-size: var(--font-size-xs);
-  padding: 0 6px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  color: var(--fg-muted);
-  white-space: nowrap;
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.launch-source-tag.is-project {
-  color: var(--accent-text);
-  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
-  background: var(--accent-subtle);
-}
-.launch-source-tag.is-task { color: var(--fg); }
-.launch-source-tag.is-fallback { color: var(--priority-important-text); }
+/* A value's source is a `.badge` (styles/badge.css; LaunchSourceTag): a project's default in the
+   blue, the fallback engine in amber, every other source grey. */
+.launch-source-tag { max-width: 220px; }
 
 /* The project detail pane's "New tasks start on" rows (components/tasks/ProjectLaunchDefaults.tsx). */
 .project-launch-defaults {

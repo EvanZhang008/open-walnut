@@ -16,6 +16,7 @@ import { LetterOriginBadge } from './LetterOriginBadge';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { copyTextRobust } from '@/utils/clipboard';
 import '@/styles/human-inbox.css';
+import { letterTypeBadge } from '@/components/common/badge';
 
 function PinIcon() {
   return (
@@ -92,17 +93,17 @@ export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
 
       <div className="hib-row-subject-line">
         <button className="hib-subject hib-subject-open wn-title" onClick={(event) => { event.stopPropagation(); onOpen(); }}>{letter.subject || '(no subject)'}</button>
-        <span className={`hib-type hib-type--${letter.type} wn-fixed`}>
+        <span className={`${letterTypeBadge(letter.type)} hib-type hib-type--${letter.type} wn-fixed`}>
           {LETTER_TYPE_LABEL[letter.type] ?? letter.type}
         </span>
       </div>
 
       <div className="hib-row-chips">
         {/* A triage run's project ("Ask Inbox Triage") only repeats its badge. */}
-        {sender.project && letterOriginOf(letter).kind !== 'triage' && <span className="hib-chip">{sender.project}</span>}
-        {sender.host && <span className="hib-chip">{sender.host}</span>}
+        {sender.project && letterOriginOf(letter).kind !== 'triage' && <span className="badge hib-chip"><span>{sender.project}</span></span>}
+        {sender.host && <span className="badge hib-chip"><span>{sender.host}</span></span>}
         {replies > 0 && (
-          <span className="hib-chip hib-chip-thread">{replies} in thread</span>
+          <span className="badge hib-chip hib-chip-thread"><span>{replies} in thread</span></span>
         )}
       </div>
 

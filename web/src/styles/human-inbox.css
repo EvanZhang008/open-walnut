@@ -65,21 +65,7 @@
   color: var(--fg);
 }
 
-.hib-type {
-  flex: 0 0 auto;
-  padding: 1px 6px;
-  border-radius: 6px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-}
-
-.hib-type--action_required { background: rgba(255, 149, 0, 0.16); color: var(--warning); }
-.hib-type--completion { background: rgba(52, 199, 89, 0.16); color: var(--success); }
-.hib-type--review { background: var(--accent-subtle); color: var(--accent); }
+.hib-type { flex: 0 0 auto; } /* a letter's kind: the one `.badge` (letterTypeBadge) */
 
 .hib-time {
   flex: 0 0 auto;
@@ -95,20 +81,8 @@
   gap: 5px;
 }
 
-.hib-chip {
-  padding: 1px 6px;
-  border-radius: var(--radius-xs);
-  background: var(--bg-secondary);
-  color: var(--fg-secondary);
-  font-size: var(--font-size-xs);
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.hib-chip-task { background: var(--accent-subtle); color: var(--accent); }
-.hib-chip-thread { background: var(--bg-tertiary); }
+/* A letter's project, host and thread count are `.badge`s (styles/badge.css). */
+.hib-chip { max-width: 220px; }
 
 /* The whole preview (at most LETTER_PREVIEW_MAX_CHARS): never a clamp (standard.md rule 11). */
 .hib-preview {
@@ -474,17 +448,6 @@
 }
 
 
-/* The Inbox TAB's badge. The badge itself is the existing
-   `.session-action-chip-count` (globals.css); only the "a decision is still
-   waiting" colour is new, and it lives here so the feature owns its own styles.
-
-   BOTH classes in the selector on purpose: this file lands BEFORE globals.css in
-   the bundle (it is imported from a component, globals.css from main.tsx), so a
-   single-class rule loses the `background: var(--accent)` tie-break to the base
-   badge and the warning colour never renders. Two classes on the same element
-   beats it on specificity regardless of order. */
-.session-action-chip-count.session-action-chip-count-warn { background: var(--warning); }
-
 /* ── Session panel Inbox tab ──────────────────────────────────────────────────
    Peer of Changed / Files / Terminal / Code: the pane fills
    `.session-panel-diff-col` and its bar matches the shared split bar height, so
@@ -585,21 +548,9 @@
   color: var(--fg-muted);
 }
 
-.hib-origin-badge {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 1px 6px 1px 2px;
-  border-radius: 6px;
-  background: var(--accent-subtle);
-  color: var(--accent);
-  font-size: var(--font-size-xs);
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  line-height: 16px;
-}
+/* The kind is a `.badge` (styles/badge.css; LetterOriginBadge.tsx): blue for the user's own task or
+   session, grey for Triage, Walnut itself, a plugin and an API caller. */
+.hib-origin-badge { flex: 0 0 auto; }
 
 .hib-origin-mark {
   width: 14px;
@@ -626,23 +577,10 @@ a.hib-origin-name:hover { text-decoration: underline; }
 .hib-origin--plugin .hib-origin-name,
 .hib-origin--script .hib-origin-name { color: var(--fg-secondary); }
 
-/* Each kind its own tint, so the badge tells them apart too: a task or session in the
-   accent, Inbox Triage in green, Walnut itself, a plugin and an API caller in a quiet grey. */
 /* The system green is too light for 10 to 12px text on white (about 2.2:1): mixed with the text
    color it is a deeper green on light and a lighter one on dark, in every theme mode (auto too). */
 .hib-origin--triage { --hib-triage: color-mix(in srgb, var(--success) 55%, var(--fg)); }
-.hib-origin--triage .hib-origin-badge {
-  background: color-mix(in srgb, var(--hib-triage) 13%, transparent);
-  color: var(--hib-triage);
-}
 .hib-origin--triage .hib-origin-name { color: var(--hib-triage); }
-.hib-origin--walnut .hib-origin-badge,
-.hib-origin--plugin .hib-origin-badge,
-.hib-origin--script .hib-origin-badge {
-  background: var(--bg-secondary);
-  color: var(--fg-secondary);
-  box-shadow: inset 0 0 0 1px var(--border);
-}
 
 .hib-row-subject-line {
   display: flex;
@@ -656,4 +594,4 @@ a.hib-origin-name:hover { text-decoration: underline; }
 .hib-reader-title { flex-wrap: wrap; row-gap: 4px; }
 
 /* A badge that is the mark alone (its name is the kind, "Walnut") is a square, not an empty pill. */
-.hib-origin-badge--mark { width: 18px; height: 18px; padding: 0; justify-content: center; box-sizing: border-box; }
+.hib-origin-badge.hib-origin-badge--mark { width: var(--badge-h); padding: 0; justify-content: center; }

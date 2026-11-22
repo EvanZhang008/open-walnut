@@ -256,7 +256,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
       <span className={`status-card-reason${reasonBelow ? ' status-card-wait-line' : ''}`} data-testid="status-card-reason" title={sectionKey === 'waiting' ? waitingHover(task, formatWaitUntil) : reasonText}>
         {/* "Limited" wears the session banner's tag, so a limit stop stands out among the waits. */}
         {limitWaitOwn ? <><LimitTag tag={limitWaitOwn.tag!} tone={limitWaitOwn.tone} /> {limitWaitOwn.text}</>
-          : <><span className="status-card-limit-tag">{reasonText.match(LIMIT_HEAD)![1]}</span>{limitRowWords(reasonText)}</>}
+          : <><LimitTag tag={reasonText.match(LIMIT_HEAD)![1]} />{limitRowWords(reasonText)}</>}
       </span>
     ) : (
       <AgentText compact inline {...taskTextSource(task, 'waiting')} className={`status-card-reason${reasonBelow ? ' status-card-wait-line' : ''}`} testId="status-card-reason" title={sectionKey === 'waiting' ? waitingHover(task, formatWaitUntil) : reasonText} text={reasonText} />
@@ -283,19 +283,19 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
   // A row a usage limit holds says its reset on its own line, so its time slot stays empty (its
   // clock is Walnut's continue, a minute after the reset).
   const wake = snoozedUntil ? (
-    <span className="todo-item-due-pill todo-item-start-pill" title={`Snoozed: starts ${snoozeDate}`}>▶︎ {snoozedUntil}</span>
+    <span className="badge todo-item-due-pill todo-item-start-pill" title={`Snoozed: starts ${snoozeDate}`}><span>▶︎ {snoozedUntil}</span></span>
   ) : task.user_status?.limit && !isDone ? (
     // With the status sentences hidden (Display), the limit still shows: the pill a By project row
     // wears; with them shown, the sentence says it.
     showStatusLines ? null : <TaskLimitPill task={task} />
   ) : task.phase === 'WAITING' && task.wait_until && !isDone ? (
     <span
-      className="todo-item-due-pill todo-item-wait-pill"
+      className="badge todo-item-due-pill todo-item-wait-pill"
       data-testid="task-row-wait-until"
       title={`${!twoLine && reasonText ? `${reasonText}. ` : ''}Waiting until ${new Date(task.wait_until).toLocaleString()}, or until something happens first`}
     >
       {/* One line (a project's folds) is narrow: a time today needs no "Today", the title keeps the room. */}
-      until {twoLine ? formatWaitUntil(task.wait_until) : formatWaitUntil(task.wait_until).replace(/^Today /, '')}
+      <span>until {twoLine ? formatWaitUntil(task.wait_until) : formatWaitUntil(task.wait_until).replace(/^Today /, '')}</span>
     </span>
   ) : null;
   // What it asks, line by line with its answers (ActionNeeded): its Needs you line would say the same.
@@ -523,7 +523,7 @@ export function LimitedSummary({ model, onShow }: { model: StatusSectionsModel; 
     <div className="status-limit-summary" data-testid="status-limit-summary" role="group"
       aria-label={`Limited: ${parts.map((p) => p.words).join(', ')}${next ? `, next reset ${limitTimeWords(next, now)}` : ''}`}
       title={`${n} ${n === 1 ? 'session' : 'sessions'} stopped by a usage limit`}>
-      <span className="status-card-limit-tag">Limited</span>
+      <LimitTag tag="Limited" />
       {/* Two lines, always: the counts, then the next reset, so it reads the same at every width. */}
       <span className="status-limit-summary-text">
         <span className="status-limit-summary-counts">

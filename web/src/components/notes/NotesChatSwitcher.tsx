@@ -91,7 +91,7 @@ export function NotesChatSwitcher({ sessions, agentChats = [], active, onSelect,
         )}
         <span className="notes-chat-switcher-title">{title}</span>
         {/* Group badge — says which KIND of chat this pane is. */}
-        <span className="notes-chat-switcher-badge">{currentSession ? 'Claude Code' : 'Walnut Agent'}</span>
+        <span className="badge notes-chat-switcher-badge"><span>{currentSession ? 'Claude Code' : 'Walnut Agent'}</span></span>
         {currentSession?.pending && <span className="notes-chat-switcher-hint">starting…</span>}
         <span className={`notes-chat-switcher-caret${open ? ' open' : ''}`} aria-hidden>▾</span>
       </button>

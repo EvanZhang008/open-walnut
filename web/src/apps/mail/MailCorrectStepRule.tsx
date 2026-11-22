@@ -63,7 +63,7 @@ function OptionRow(props: StepRuleProps & { option: RuleOption; name: string }) 
         />
         <span className="mail-correct-summary">
           {option.summary}
-          {option.fromNote && <span className="mail-correct-tag" data-testid="mail-correct-from-note">{COPY.fromNote}</span>}
+          {option.fromNote && <span className="badge mail-correct-tag" data-testid="mail-correct-from-note"><span>{COPY.fromNote}</span></span>}
         </span>
       </label>
       <div className="mail-correct-matches" data-testid="mail-correct-matches">

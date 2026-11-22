@@ -236,10 +236,10 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
                     )}
                     {hostLabel && (
                       <span
-                        className={`sps-path-host-tag${isLive ? ' sps-tag-live' : ''}`}
+                        className={`sps-path-host-tag badge${isLive ? ' badge-accent sps-tag-live' : ''}`}
                         title={hostTagTitle(hostLabel, item.host ? rowDots?.get(item.host)?.title : undefined)}
                       >
-                        {hostLabel}
+                        <span>{hostLabel}</span>
                       </span>
                     )}
                     {isLive && item.history && (

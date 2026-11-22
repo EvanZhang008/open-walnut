@@ -130,7 +130,7 @@ export function SubtaskPill({ task, className }: { task: { id?: string; parent_t
       <button
         ref={triggerRef}
         type="button"
-        className={`task-team-pill task-row-pill todo-item-subtask-pill${className ? ` ${className}` : ''}`}
+        className={`badge task-team-pill task-row-pill todo-item-subtask-pill${className ? ` ${className}` : ''}`}
         title={subtaskPillTitle(parentTitle)}
         aria-label="Worker"
         aria-haspopup="dialog"

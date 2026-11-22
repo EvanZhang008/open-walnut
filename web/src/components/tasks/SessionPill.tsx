@@ -22,6 +22,7 @@ import { useCanonicalSessionId, useSessionStatus } from '@/hooks/useSessionStatu
 import { resolveTaskSessionId, taskStatusLabel } from '@/utils/session-status';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { phoneSessionLabel } from '@/utils/phone-session-label';
+import { badge, type BadgeTone } from '@/components/common/badge';
 
 /** Registry label for a mode id that arrives as a loose string off the wire. */
 function modeLabelFor(mode: string | undefined, fallback: string): string {
@@ -101,6 +102,14 @@ function stateClass(status: SessionStatus | undefined, phase: TaskPhase | undefi
   return stateClassFromPhase(phase);
 }
 
+/** The session's state as the one `.badge`'s tone: blocked or broken red, needing review amber, working blue. */
+const STATE_TONE: Record<string, BadgeTone> = {
+  running: 'accent', 'agent-complete': 'warning', waiting: 'error', error: 'error', wait: 'error',
+};
+function pillClass(cls: string, extra: string): string {
+  return `${badge(STATE_TONE[cls] ?? 'neutral')} task-session-pill task-session-pill-${cls}${extra}`;
+}
+
 /** CSS class suffix from two legacy statuses — picks the most important. */
 function stateClassLegacy(plan: SessionStatus | undefined, exec: SessionStatus | undefined, phase: TaskPhase | undefined): string {
   const ps = (s: SessionStatus | undefined) => s?.process_status;
@@ -122,7 +131,7 @@ export function SessionPill({ sessionId, sessionStatus, phase, statusLabel, plan
   const resolvedPlanStatus = storedPlanStatus ?? planStatus;
   const resolvedExecStatus = storedExecStatus ?? execStatus;
   const clickable = !!onClick;
-  const clickClass = clickable ? ' task-session-pill-clickable' : '';
+  const clickClass = clickable ? ' badge-clickable task-session-pill-clickable' : '';
   const activeClass = isActive ? ' task-session-pill-active' : '';
   const handleClick = clickable ? (e: React.MouseEvent) => { e.stopPropagation(); onClick!(e); } : undefined;
 
@@ -154,7 +163,7 @@ export function SessionPill({ sessionId, sessionStatus, phase, statusLabel, plan
         : 'Session';
 
     return (
-      <span className={`task-session-pill task-session-pill-${cls}${clickClass}${activeClass}${phoneClass}`} title={title} onClick={handleClick}>
+      <span className={pillClass(cls, `${clickClass}${activeClass}${phoneClass}`)} title={title} onClick={handleClick}>
         <span className={`task-session-dot task-session-dot-${cls}`} />
         {phone
           ? phoneSessionLabel(isWaiting(status) ? status : status ? { process_status: status.process_status } : null)
@@ -171,7 +180,7 @@ export function SessionPill({ sessionId, sessionStatus, phase, statusLabel, plan
   if (!hasPlan && !hasExec) {
     if (sessionIds && sessionIds.length > 0) {
       return (
-        <span className={`task-session-pill task-session-pill-history${clickClass}${activeClass}`} title={`${sessionIds.length} past session(s)`} onClick={handleClick}>
+        <span className={pillClass('history', `${clickClass}${activeClass}`)} title={`${sessionIds.length} past session(s)`} onClick={handleClick}>
           {sessionIds.length} session{sessionIds.length !== 1 ? 's' : ''}
         </span>
       );
@@ -202,7 +211,7 @@ export function SessionPill({ sessionId, sessionStatus, phase, statusLabel, plan
   const title = titleParts.join('  |  ') || 'Session';
 
   return (
-    <span className={`task-session-pill task-session-pill-${cls}${clickClass}${phoneClass}`} title={title} onClick={handleClick}>
+    <span className={pillClass(cls, `${clickClass}${phoneClass}`)} title={title} onClick={handleClick}>
       <span className={`task-session-dot task-session-dot-${cls}`} />
       {phone
         ? phoneSessionLabel(isWaiting(primary) ? primary : primary ? { process_status: primary.process_status } : null)

@@ -189,11 +189,11 @@ function InboundWho({ envelope, resolved, sender, senderTitle }: {
   const hostName = useHostDisplayLabels();
   const fallback = resolved.fullId ? (
     <a
-      className="provenance-chip provenance-chip-session session-link op-card-to-pill"
+      className="badge badge-accent provenance-chip provenance-chip-session session-link op-card-to-pill"
       data-session-id={resolved.fullId}
       href={`/sessions?id=${resolved.fullId}`}
       title={resolved.title ? `Open ${resolved.title}` : 'Open the session'}
-    >{resolved.title || sender}</a>
+    ><span>{resolved.title || sender}</span></a>
   ) : <span className="op-card-to-text" title={senderTitle ?? sender}>{sender}</span>;
   return (
     <CardWho

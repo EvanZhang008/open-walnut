@@ -34,7 +34,7 @@ const ICON_OUT = <svg {...S}><path d="M14 4h6v6" /><path d="M20 4 10 14" /><path
 
 /** The key with its padlock badge while Passwords is locked. */
 export function KeyGlyph({ locked }: { locked: boolean }) {
-  return <span className="ext-key-glyph">{ICON_KEY}{locked && <span className="ext-key-badge" data-testid="ext-key-locked">{ICON_LOCK}</span>}</span>;
+  return <span className="ext-key-glyph">{ICON_KEY}{locked && <span className="ext-key-lock" data-testid="ext-key-locked">{ICON_LOCK}</span>}</span>;
 }
 
 interface HeaderProps {
@@ -252,7 +252,7 @@ export function ExtAsksDrawer(p: DrawerProps) {
     <>
       {p.keyed && (
         <FootRow testid="ext-drawer-tasks" icon={ICON_TASKS} label="Tasks" onClick={() => { p.onClose(); p.onView('tasks'); }}
-          end={needs > 0 ? <span className="ext-drawer-count" data-testid="ext-drawer-tasks-count" title={p.approvals > 0 ? `${p.approvals === 1 ? '1 approval' : `${p.approvals} approvals`} and ${p.asks.needs} ${p.asks.needs === 1 ? 'task needs' : 'tasks need'} you` : undefined}>{needs}</span> : null} />
+          end={needs > 0 ? <span className="badge badge-count badge-alert ext-drawer-count" data-testid="ext-drawer-tasks-count" title={p.approvals > 0 ? `${p.approvals === 1 ? '1 approval' : `${p.approvals} approvals`} and ${p.asks.needs} ${p.asks.needs === 1 ? 'task needs' : 'tasks need'} you` : undefined}>{needs}</span> : null} />
       )}
       {p.keyed && (
         <FootRow testid="ext-drawer-passwords" icon={<KeyGlyph locked={locked} />} label="Passwords" onClick={() => { p.onClose(); p.onView('passwords'); }}

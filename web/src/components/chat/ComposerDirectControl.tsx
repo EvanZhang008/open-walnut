@@ -51,6 +51,6 @@ export function ComposerDirectControl({ id, handleRef, disabled }: {
     onPointerDown={id === 'note' ? (event) => event.stopPropagation() : undefined}
     onClick={() => handleRef.current?.activate(id)}>
     {id === 'btw' ? 'btw' : 'Note'}
-    {state.count && <span className="side-question-count">{state.count}</span>}
+    {state.count && <span className="badge badge-count side-question-count">{state.count}</span>}
   </button>;
 }

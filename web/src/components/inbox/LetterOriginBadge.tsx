@@ -44,7 +44,7 @@ export function LetterOriginBadge({ letter, variant = 'row', linkTask = false }:
       title={title}
     >
       {variant === 'reader' && <span className="hib-origin-from">From</span>}
-      <span className={`hib-origin-badge${showKind ? '' : ' hib-origin-badge--mark'}`}>
+      <span className={`badge${origin.kind === 'task' || origin.kind === 'session' ? ' badge-accent' : ''} hib-origin-badge${showKind ? '' : ' hib-origin-badge--mark'}`}>
         <img src="/walnut-icon.png" alt="" className="hib-origin-mark" aria-hidden="true" />
         {showKind && <span className="hib-origin-kind">{kindLabel}</span>}
       </span>

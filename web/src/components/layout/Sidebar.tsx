@@ -370,10 +370,10 @@ export function Sidebar({
         {badge === 'dot' ? (
           <span className="notification-badge-dot" />
         ) : typeof badge === 'number' && badge > 0 ? (
-          <span className="notification-badge-count">{badge > 99 ? '99+' : badge}</span>
+          <span className="badge badge-count badge-alert badge-corner notification-badge-count">{badge > 99 ? '99+' : badge}</span>
         ) : badge && typeof badge === 'object' ? (
           // A status, not a count: muted so it never reads as things to deal with.
-          <span className="notification-badge-count notification-badge-muted" data-testid={`sidebar-app-badge-${app.key}`}>{badge.text}</span>
+          <span className="badge badge-count badge-corner notification-badge-count notification-badge-muted" data-testid={`sidebar-app-badge-${app.key}`}>{badge.text}</span>
         ) : null}
       </NavLink>
     );
@@ -486,14 +486,15 @@ export function Sidebar({
           <BellIcon />
           {quietNow && <span className="quiet-moon" aria-hidden="true">☾</span>}
           <span className="sidebar-label">Notifications</span>
-          {/* Amber count = things waiting on the human (asks + unread letters).
-              Errors never badge a number: they read as a diagnosis inside the
-              panel, not a permanent red counter on the bell. */}
+          {/* The count of what waits on the human (asks + unread letters), the console's one
+              needs-you count (`badge-alert`, as on the Org list and the mail icon). Errors never badge
+              a number: they read as a diagnosis inside the panel. */}
           {railAttention > 0 && (
-            <span className="notification-badge-count notification-badge-attention">{railAttention > 99 ? '99+' : railAttention}</span>
+            <span className="badge badge-count badge-alert badge-corner notification-badge-count notification-badge-attention">{railAttention > 99 ? '99+' : railAttention}</span>
           )}
-          {/* A host or Claude Code reason wears the rail Settings entry's warn look; the older system dot keeps its own. */}
-          {(bell.dot || bell.cornerDot) && (
+          {/* A host or Claude Code reason wears the rail Settings entry's warn look; the older system dot keeps its own.
+              One mark on the bell: beside a count the dot goes (its reason is the bell's tooltip and the panel). */}
+          {railAttention === 0 && (bell.dot || bell.cornerDot) && (
             <span className={`notification-badge-dot${bell.cornerDot ? ' is-corner' : ''}${bell.dotKind === 'attention' ? ' is-host-warn' : ''}`} />
           )}
         </button>

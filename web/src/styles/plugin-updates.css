@@ -2,119 +2,25 @@
  * Plugin updates in Apps: update chip, Update button wrapper, feedback line, provenance flyout
  * and the Installed header cluster. Imported by the components that render them.
  *
- * Two pill vocabularies on one row: the solid `.badge` answers "is it running?", this
- * OUTLINE chip answers "is it current?". Same colour on both would fuse the two axes.
- * Colour ladder, quietest first: current has no border and the muted foreground; available
- * is the accent (good news, act); dirty / diverged / auth are amber (blocked, not urgent).
- * Red is reserved for a failed action in the feedback line and never appears on a chip.
+ * The update chip ("is it current?") is the one `.badge` (styles/badge.css); its tone comes
+ * from `chipTone` (plugin-update-view.ts): an update is the accent, local changes / diverged /
+ * sign-in are amber, the rest neutral. Red is reserved for a failed action in the feedback
+ * line and never appears on a chip. Only its place and its marks are here.
  * WebKit constraints: no :has() for layout, transform-only spinner, no animation-timeline.
  */
-
-/*
- * Chip colours are THEME TOKENS, never hex: the quiet chip reads the secondary foreground
- * (muted grey measures 3.3:1 on the light card at 10.5px), available reads `--accent-text`
- * and dirty / diverged / auth read `--priority-important-text`. Those two are globals.css
- * twins of `--accent` / `--priority-important` that clear WCAG's 4.5:1 on the light card
- * (the fill colours measure 3.7:1 and 2.0:1 there) and equal the originals on dark.
- * `native-plugin.spec.ts` measures every chip kind in both themes (C34, C53).
- */
 .plugin-update-chip {
-  --plugin-update-chip-quiet: var(--fg-secondary);
-  --plugin-update-chip-available: var(--accent-text);
-  --plugin-update-chip-amber: var(--priority-important-text);
-}
-
-:root[data-theme='dark'] .plugin-update-chip {
-  --plugin-update-chip-quiet: var(--fg-muted);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .plugin-update-chip {
-    --plugin-update-chip-quiet: var(--fg-muted);
-  }
-}
-
-/*
- * Same box as the `.badge` beside it (N3-7): 11px text on the inherited line height plus
- * 2px of vertical padding on the badge equals 1px padding plus the 1px border here, so the two
- * pills on a title line share one height and their edges align at 2x.
- */
-.plugin-update-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
   position: relative;
-  box-sizing: border-box;
-  min-width: 7.5em;
-  padding: 1px 7px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, currentColor 60%, transparent);
-  background: transparent;
-  color: var(--plugin-update-chip-quiet);
-  font: inherit;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  line-height: inherit;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  cursor: pointer;
-  vertical-align: middle;
-  transition: border-color 0.15s;
-}
-
-.plugin-update-chip:hover {
-  border-color: currentColor;
-}
-
-.plugin-update-chip:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-/* A clickable chip is a button and says so; only the static span and the busy chip do not. */
-button.plugin-update-chip:not([aria-busy='true']) {
-  cursor: pointer;
-}
-
-.plugin-update-chip[data-static='true'],
-.plugin-update-chip[aria-busy='true'] {
-  cursor: default;
 }
 
 .plugin-update-chip .plugin-update-icon {
   flex: none;
 }
 
-/* Quietest state: no border at rest, just icon + words. Hover is the SAME step the other
-   chips take (border to full currentColor) plus a 10% wash, both from the resolved token
-   rather than currentColor mixes, so "Up to date" visibly reads as the click-to-check
-   control it is (N12, N2-8). The wash is not transitioned: it lands with the pointer. */
-.plugin-update-chip--current {
-  border-color: transparent;
-  color: var(--plugin-update-chip-quiet);
-}
-
-button.plugin-update-chip--current:hover {
-  border-color: var(--plugin-update-chip-quiet);
-  background-color: color-mix(in srgb, var(--plugin-update-chip-quiet) 10%, transparent);
-}
-
-.plugin-update-chip--unchecked,
-.plugin-update-chip--unsupported,
-.plugin-update-chip--missing {
-  color: var(--plugin-update-chip-quiet);
-}
-
-.plugin-update-chip--available {
-  color: var(--plugin-update-chip-available);
-}
-
-.plugin-update-chip--dirty,
-.plugin-update-chip--diverged,
-.plugin-update-chip--auth {
-  color: var(--plugin-update-chip-amber);
+/* The static span and the busy chip do nothing on click. */
+.plugin-update-chip[data-static='true'],
+.plugin-update-chip[aria-busy='true'] {
+  cursor: default;
 }
 
 /* Remote unreachable: keep the last known words, mark them as possibly old. Opacity is
@@ -132,14 +38,9 @@ button.plugin-update-chip--current:hover {
   opacity: 0.8;
 }
 
-/* Placeholder before the first GET: same box, no words, no border, no flash of "Not checked". */
+/* Placeholder before the first GET: it keeps its place, unseen, so no "Not checked" flashes. */
 .plugin-update-chip--pending {
-  border-color: transparent;
-  cursor: default;
-}
-
-.plugin-update-chip--busy {
-  color: var(--plugin-update-chip-quiet);
+  opacity: 0;
 }
 
 .plugin-update-chip--busy .plugin-update-icon--spinner {
@@ -213,7 +114,7 @@ button.plugin-update-chip--current:hover {
   flex: none;
   align-self: center;
   margin-right: -4px;
-  color: var(--plugin-update-chip-available, var(--accent-text));
+  color: var(--accent-text, var(--accent));
 }
 
 /* The text span sits in the row copy, whose `span` rule (muted, 11px) outranks a bare class:

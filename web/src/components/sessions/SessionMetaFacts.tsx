@@ -111,7 +111,7 @@ function PinnedWebServers({ sessionId, hid, webOpen, onOpenWeb }: { sessionId: s
         data-testid="session-web-servers-chip"
         title={`${n} web page${n === 1 ? '' : 's'} this session started: open the Web view`}
       >
-        Web <span className="session-action-chip-count">{n}</span>
+        Web <span className="badge badge-count session-action-chip-count">{n}</span>
       </button>
     </span>
   );

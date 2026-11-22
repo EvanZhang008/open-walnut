@@ -64,16 +64,8 @@
   font-size: var(--font-size-md);
 }
 .notes-wikiembed-pdf-bar + .notes-wikiembed-pdf-frame { border-top-left-radius: 0; border-top-right-radius: 0; }
-.notes-wikiembed-pdf-badge {
-  flex: 0 0 auto;
-  padding: 1px 5px;
-  border-radius: var(--radius-xs);
-  background: #d93025;
-  color: var(--on-accent);
-  font-size: var(--font-size-xs);
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
+/* "PDF": a kind, the one neutral `.badge` (WikiEmbedView.tsx). */
+.notes-wikiembed-pdf-badge { flex: 0 0 auto; }
 .notes-wikiembed-pdf-name {
   flex: 1 1 auto;
   min-width: 0;

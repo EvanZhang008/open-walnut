@@ -618,7 +618,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
           {vocabWords.length > 0 && (
             <div className="mic-vocab-tags">
               {vocabWords.map(w => (
-                <span key={w} className="mic-vocab-tag">{w}</span>
+                <span key={w} className="badge mic-vocab-tag"><span>{w}</span></span>
               ))}
             </div>
           )}

@@ -8,6 +8,9 @@
  * older or newer hook) reads "Unknown", never the code.
  */
 
+// Relative, not '@/': a browser spec imports this module outside Vite.
+import { badge, type BadgeTone } from '../components/common/badge';
+
 export const TERMINAL_STATUSES = ['idle', 'connecting', 'ready', 'ssh_failed', 'error', 'exited', 'ending', 'end_unconfirmed'] as const;
 
 export type TerminalStatus = (typeof TERMINAL_STATUSES)[number];
@@ -33,7 +36,12 @@ export function terminalStatusLabel(status: unknown): string {
   return isTerminalStatus(status) ? TERMINAL_STATUS_LABEL[status] : UNKNOWN_TERMINAL_STATUS_LABEL;
 }
 
-/** The pill's colour class: by the code, `unknown` (neutral) for a value no build knows. */
+const TERMINAL_STATUS_TONE: Record<TerminalStatus, BadgeTone> = {
+  idle: 'neutral', connecting: 'warning', ready: 'accent', ssh_failed: 'error', error: 'error', exited: 'error', ending: 'warning', end_unconfirmed: 'warning',
+};
+
+/** The pill's classes: the one badge in the state's tone, plus the code (`unknown`, neutral, for a value no build knows). */
 export function terminalStatusClass(status: unknown): string {
-  return `session-terminal-status session-terminal-status-${isTerminalStatus(status) ? status : 'unknown'}`;
+  const known = isTerminalStatus(status);
+  return `${badge(known ? TERMINAL_STATUS_TONE[status] : 'neutral')} session-terminal-status session-terminal-status-${known ? status : 'unknown'}`;
 }

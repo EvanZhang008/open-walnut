@@ -1,6 +1,7 @@
 /** A task row's workspace pill: preparing / failed / kept / ready. Nothing once removed. */
 import type { TaskWorkspace } from './workspace-text';
 import { workspaceOf, workspacePill } from './workspace-text';
+import { badge } from '@/components/common/badge';
 import '@/styles/workspaces.css';
 
 export function WorkspacePill({ task }: { task: { workspace?: TaskWorkspace } }) {
@@ -8,7 +9,7 @@ export function WorkspacePill({ task }: { task: { workspace?: TaskWorkspace } })
   if (!pill) return null;
   return (
     <span
-      className={`todo-item-due-pill workspace-pill workspace-pill-${pill.tone}`}
+      className={`${badge(pill.tone === 'error' ? 'error' : pill.tone === 'warn' ? 'warning' : 'neutral')} todo-item-due-pill workspace-pill workspace-pill-${pill.tone}`}
       title={pill.title}
       aria-label={pill.text}
       data-testid="workspace-pill"

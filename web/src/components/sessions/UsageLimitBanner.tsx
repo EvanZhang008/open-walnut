@@ -15,6 +15,7 @@ import type { SessionUsageLimit, SessionUsageLimitContinued } from '@open-walnut
 import { usageLimitAction, type UsageLimitAction } from '@/api/sessions';
 import { limitName, limitTimeWords } from '@open-walnut/user-status';
 import { log } from '@/utils/log';
+import { badge } from '@/components/common/badge';
 import '@/styles/usage-limit.css';
 
 /** "3:00 PM", or "Thu 3:00 PM" when it is not today: the task row's words too (limitedLine). */
@@ -51,6 +52,13 @@ export function resetGone(w: SessionUsageLimit, now: number): boolean {
 export function usageLimitTag(w: SessionUsageLimit, now: number): string {
   if (w.state === 'resumed' || !resetGone(w, now)) return 'Limited';
   return w.state === 'waiting' ? 'Continuing' : 'Reset';
+}
+
+/** The tag is the one `.badge`: accent while Walnut will continue it, dashed when auto-continue is off, amber once it gave up. */
+function usageLimitTagClass(state: SessionUsageLimit['state']): string {
+  if (state === 'off') return badge('neutral', { paused: true });
+  if (state === 'gave_up') return badge('warning');
+  return badge('accent');
 }
 
 /** The banner's words, kept pure for the unit test. */
@@ -148,7 +156,7 @@ export function UsageLimitBanner({ sessionId, usageLimit, onChange }: {
         <svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" strokeWidth="1.4" /><path d="M8 4.5V8l2.4 1.6" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
       </span>
       <div className="usage-limit-banner-body">
-        <div className="usage-limit-banner-head"><span className="usage-limit-tag">{usageLimitTag(usageLimit, now)}</span> {head}
+        <div className="usage-limit-banner-head"><span className={`${usageLimitTagClass(usageLimit.state)} usage-limit-tag`}>{usageLimitTag(usageLimit, now)}</span> {head}
           {when && <> · <span className="usage-limit-when">{when}</span></>}</div>
         <div className="usage-limit-banner-detail">{detail}</div>
         {failure && <div className="usage-limit-banner-failure" role="alert">{failure}</div>}

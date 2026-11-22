@@ -11,7 +11,8 @@ import { formatMailTime } from '../mail-format';
 import { draftRowMenuItems } from '../mail-draft-context-items';
 import { openMailDraft } from './compose-actions';
 import { discardMailDraftRow } from './compose-drafts';
-import { DRAFT_STATE_LABEL } from './send-status';
+import { NoticeStatus } from '@/components/common/NoticeCard';
+import { DRAFT_STATE_LABEL, DRAFT_STATE_TONE } from './send-status';
 
 interface Props {
   drafts: MailDraftDto[];
@@ -53,8 +54,8 @@ export function MailDraftsList({ drafts, openDraftId, loading }: Props) {
           </span>
           <span className="mail-row-subject">
             <span className="mail-row-subject-text">{draft.subject || '(no subject)'}</span>
-            <span className={`mail-draft-pill state-${draft.state}`} data-testid="mail-draft-pill">
-              {DRAFT_STATE_LABEL[draft.state]}
+            <span className="mail-draft-pill" data-testid="mail-draft-pill" data-state={draft.state}>
+              <NoticeStatus tone={DRAFT_STATE_TONE[draft.state]}>{DRAFT_STATE_LABEL[draft.state]}</NoticeStatus>
             </span>
           </span>
           <span className="mail-row-snippet">

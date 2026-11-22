@@ -686,7 +686,7 @@ function SideQuestionDrawerBody({
           : 'Side threads — multi-turn questions kept out of the main conversation'}
       >
         <span>btw</span>
-        {badgeCount > 0 && <span className="side-question-count">{badgeCount}</span>}
+        {badgeCount > 0 && <span className="badge badge-count side-question-count">{badgeCount}</span>}
       </button>
 
       {expanded && FullscreenBackdrop}

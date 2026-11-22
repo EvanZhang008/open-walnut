@@ -35,7 +35,7 @@ export function TerminalStatusPill({ status }: { status: TerminalStatus }) {
 
 export function TerminalPlainBadge({ plain }: { plain: TerminalOpenPlain }) {
   return (
-    <span className="session-terminal-status session-terminal-plain-badge" title={plain.installHint} data-testid="terminal-not-persistent">
+    <span className="badge badge-warning session-terminal-status session-terminal-plain-badge" title={plain.installHint} data-testid="terminal-not-persistent">
       Not persistent
     </span>
   );

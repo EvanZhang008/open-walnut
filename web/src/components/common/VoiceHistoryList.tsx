@@ -15,6 +15,7 @@ import { fetchRecordings, retranscribeRecording, type VoiceRecording } from '@/a
 import { insertVoiceText, setVoiceStatus } from '@/utils/voice-status';
 import { visibleInterval } from '@/utils/page-visibility';
 import { log } from '@/utils/log';
+import { NoticeStatus } from '@/components/common/NoticeCard';
 import '@/styles/voice-history.css';
 
 
@@ -147,8 +148,8 @@ export function VoiceHistoryList() {
           >
             <div className="voice-panel-item-head">
               <span className="voice-panel-time">{time}</span>
-              {failed && <span className="voice-panel-badge">failed</span>}
-              {partial && <span className="voice-panel-badge" title={rec.error}>partial</span>}
+              {failed && <NoticeStatus tone="error" className="voice-panel-badge">failed</NoticeStatus>}
+              {partial && <NoticeStatus tone="warn" className="voice-panel-badge" title={rec.error}>partial</NoticeStatus>}
               {flash?.id === rec.id && <span className="voice-panel-flash">{flash.note}</span>}
               <span className="voice-panel-hover-actions" onClick={(e) => e.stopPropagation()}>
                 {text && (

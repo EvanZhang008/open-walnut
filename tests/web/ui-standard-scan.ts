@@ -15,6 +15,11 @@ export { TOKEN_KINDS };
 
 export const WEB_SRC = path.join(__dirname, '../../web/src');
 
+/** The one home of the console's label (standard.md, "Status labels"). */
+export const LABEL_HOME = 'styles/badge.css';
+/** The label and its tones and forms: a compound made only of these is the label itself. */
+export const BADGE_FAMILY = new Set(['badge', 'badge-accent', 'badge-warning', 'badge-error', 'badge-alert', 'badge-paused', 'badge-count', 'badge-corner', 'badge-clickable']);
+
 /**
  * The button family (web/src/styles/buttons.css): a compound made only of these classes is the
  * family itself. The last three are slots inside a key (a compound trigger's value and caret, a
@@ -142,6 +147,66 @@ export function cutsTitle(selector: string): boolean {
 }
 
 const CUTS = (prop: string, value: string) => (prop === 'text-overflow' && /ellipsis/.test(value)) || (/(^|-)line-clamp$/.test(prop) && !/^(none|unset|initial)$/.test(value.trim()));
+/**
+ * `.my-thing-badge { color; border-radius }`: a badge, pill, chip or tag that draws a label of its own
+ * instead of the one `.badge` (styles/badge.css). 2026-11-21: task rows read as "a list of tags" in
+ * blue, violet and grey pills and dashed boxes, 229 such rules in 155 looks. Fill, words colour,
+ * edge colour or corner count; layout (margin, max-width, order) and custom properties do not.
+ */
+export function isOwnLabel(selector: string): boolean {
+  const parts = compounds(selector);
+  const cls = classesOf(parts[parts.length - 1] ?? '');
+  // `.scope .badge`, `.badge.my-pill`: the shared label restyled for one place.
+  if (cls.includes('badge')) return parts.length > 1 || cls.some((c) => !BADGE_FAMILY.has(c));
+  return cls.some((c) => /-(badge|pill|chip|tag)$/.test(c));
+}
+
+/**
+ * A count, state, role, kind, type or "new" mark drawn as a box of its own (`.team-card-count`,
+ * `.oc-role`, `.mail-mailbox-new`, `.session-diff-tree-repokind`, `.hib-type`): a label under another name. Counted only when the rule draws
+ * a box (a fill or an edge, and a corner short of a circle), so plain text and dots stay free.
+ */
+export function isBoxedLabelName(selector: string): boolean {
+  const parts = compounds(selector);
+  return classesOf(parts[parts.length - 1] ?? '').some((c) => /(-count|-state|-role|kind|-new|-status|-type)$/.test(c));
+}
+
+/** The rule draws a label box: a fill or an edge, and a corner that is not a circle. */
+export function drawsBox(decls: { prop: string; value: string }[]): boolean {
+  const v = (re: RegExp) => decls.filter((d) => re.test(d.prop)).map((d) => d.value.replace(/\s*!important$/, '').trim());
+  const fill = v(/^background(-color)?$/).some((x) => !NO_PAINT.test(x));
+  const edge = v(/^border(-(top|right|bottom|left))?$/).some((x) => !/^(none|0|0px)$/.test(x) && !/\btransparent\b/.test(x));
+  const corner = v(/^border-radius$/).some((x) => !/^0(px)?$/.test(x) && !/^50%$/.test(x));
+  return (fill || edge) && corner;
+}
+
+const NO_PAINT = /^(none|transparent|inherit|initial|unset|0|currentColor)$/i;
+
+/**
+ * A card whose fill is the page's (`--bg`) or a floating layer's (`--bg-elevated`) instead of the
+ * one card fill, `--card-bg` (standard.md, "Cards"). 2026-11-21: in the dark theme the cards of one
+ * list drifted between black, #1C1C1E and #2C2C2E, so the question card, the thread card and the
+ * approval card beside each other read as three kinds. A card is a `*-card` class with a corner, in
+ * the flow: one placed `fixed` or `absolute` floats over the page and keeps the layer's fill.
+ */
+export function isCard(selector: string): boolean {
+  const parts = compounds(selector);
+  return classesOf(parts[parts.length - 1] ?? '').some((c) => /(^|-)card$/.test(c));
+}
+export function offCardFill(decls: { prop: string; value: string }[]): boolean {
+  const v = (re: RegExp) => decls.filter((d) => re.test(d.prop)).map((d) => d.value.replace(/\s*!important$/, '').trim());
+  if (v(/^position$/).some((x) => /^(fixed|absolute)$/.test(x))) return false;
+  if (!v(/^border-radius$/).some((x) => !/^0(px)?$/.test(x))) return false;
+  return v(/^background(-color)?$/).some((x) => /^var\(--(bg|bg-elevated)\s*[,)]/.test(x));
+}
+/** A declaration that paints a label: its fill, its words, its edge's colour, or its corner. */
+export function paintsLabel(prop: string, value: string): boolean {
+  const v = value.replace(/\s*!important$/, '').trim();
+  if (prop === 'border-radius') return !/^0(px)?$/.test(v);
+  if (/^(background|background-color|color|border-color)$/.test(prop)) return !NO_PAINT.test(v);
+  if (/^border(-(top|right|bottom|left))?$/.test(prop)) return !/^(none|0|0px)$/.test(v) && !/\btransparent\b/.test(v);
+  return false;
+}
 
 /** The words of a JSX attribute's value in a tag: a plain string or a template's fixed words. */
 function attrWords(tag: string, attr: string): string[] {
@@ -234,6 +299,8 @@ export type Counts = {
   restyledInput: Record<string, number>;
   cutTitle: Record<string, number>;
   restyledField: Record<string, number>;
+  ownLabel: Record<string, number>;
+  cardBg: Record<string, number>;
 } & Record<TokenKind, Record<string, number>>;
 
 /** Roles of a choice control (segmented, tabs, switches, boxes): their own components, not buttons. */
@@ -287,7 +354,7 @@ export function isBareButton(tag: string): boolean {
 
 /** Rules (one per file and selector list) in each file that break each rule of the standard. */
 export function countAll(): Counts {
-  const out =  { restyledBtn: {}, ownControl: {}, rawAccent: {}, ...Object.fromEntries(TOKEN_KINDS.map((k) => [k, {}])), bareButton: {}, restyledInput: {}, cutTitle: {}, restyledField: {} } as Counts;
+  const out =  { restyledBtn: {}, ownControl: {}, rawAccent: {}, ...Object.fromEntries(TOKEN_KINDS.map((k) => [k, {}])), bareButton: {}, restyledInput: {}, cutTitle: {}, restyledField: {}, ownLabel: {}, cardBg: {} } as Counts;
   const bump = (m: Record<string, number>, f: string) => { m[f] = (m[f] ?? 0) + 1; };
   const companions = btnCompanions();
   const parts = inputParts();
@@ -308,6 +375,8 @@ export function countAll(): Counts {
       if (rel !== INPUT_HOME && sels.some((x) => restylesInput(x, decls, parts))) bump(out.restyledInput, rel);
       if (rel !== 'styles/text-fit.css' && decls.some((d) => CUTS(d.prop, d.value)) && sels.some(cutsTitle)) bump(out.cutTitle, rel);
       if (rel !== INPUT_HOME && sels.some((x) => restylesField(x, decls, fields))) bump(out.restyledField, rel);
+      if (sels.some(isCard) && offCardFill(decls)) bump(out.cardBg, rel);
+      if (rel !== LABEL_HOME && ((decls.some((d) => paintsLabel(d.prop, d.value)) && sels.some(isOwnLabel)) || (sels.some(isBoxedLabelName) && drawsBox(decls)))) bump(out.ownLabel, rel);
     }
   }
   for (const file of walk(WEB_SRC, ['.css', '.ts', '.tsx']).sort()) {

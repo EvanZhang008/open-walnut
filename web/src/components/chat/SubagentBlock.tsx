@@ -53,8 +53,8 @@ export const SubagentBlock = memo(function SubagentBlock({ block }: SubagentBloc
       <button className="chat-tool-block-header subagent-block-header" onClick={() => setOpen((p) => !p)}>
         <span className="chat-tool-block-icon">{statusIcon}</span>
         <span className="chat-tool-block-name">subagent_create</span>
-        <span className="subagent-model-badge">{model}</span>
-        {background && <span className="subagent-bg-badge">bg</span>}
+        <span className="badge subagent-model-badge"><span>{model}</span></span>
+        {background && <span className="badge subagent-bg-badge">bg</span>}
         {!open && promptSummary && (
           <span className="chat-tool-block-summary">{promptSummary}</span>
         )}

@@ -47,7 +47,7 @@ async function createTask(title: string, opts: Record<string, unknown>): Promise
 async function expectTriggerShape(pill: Locator): Promise<void> {
   const [mine, trigger] = await pill.evaluate((el) => {
     const probe = document.createElement('button')
-    probe.className = 'task-trigger-pill'
+    probe.className = 'badge task-trigger-pill'
     probe.textContent = 'Probe'
     el.parentElement!.insertBefore(probe, el.nextSibling)
     const pick = (n: Element) => {
@@ -107,15 +107,19 @@ test('a subtask shows Worker on its pinned card and its list row; a top-level ta
   await expect(card(pinnedChild).locator('[data-testid="leader-pill"]')).toHaveCount(0)
   await expect(card(loose).locator('[data-testid="leader-pill"]')).toHaveCount(0)
 
-  // Its own violet, not a grey base pill's: the stylesheet loads before
-  // globals.css, so a selector that only ties another rule loses on order.
-  // The page runs in the light scheme (emulateMedia before load).
-  const paint = await pill.evaluate((el) => {
-    const s = getComputedStyle(el)
-    return { color: s.color, background: s.backgroundColor }
+  // The one neutral label (styles/badge.css, standard.md "Status labels"): no violet of its own
+  // (2026-11-21: task rows read as "a list of tags"). The page runs in the light scheme.
+  const [paint, neutral] = await pill.evaluate((el) => {
+    const probe = document.createElement('span')
+    probe.className = 'badge'
+    probe.textContent = 'Probe'
+    el.parentElement!.insertBefore(probe, el.nextSibling)
+    const pick = (n: Element) => { const s = getComputedStyle(n); return { color: s.color, background: s.backgroundColor } }
+    const out = [pick(el), pick(probe)]
+    probe.remove()
+    return out
   })
-  expect(paint.color).toBe('rgb(106, 79, 216)')
-  expect(paint.background).toBe('rgba(124, 92, 255, 0.1)')
+  expect(paint).toEqual(neutral)
   // Both team pills take the TRIGGER pill's shape.
   await expectTriggerShape(pill)
   await expectTriggerShape(card(parent).locator('[data-testid="leader-pill"]'))

@@ -36,18 +36,9 @@
 :is(.change-card, .tag-chip-change) :is([data-tone="done"], [data-tone="closed"], [data-tone="unknown"], [data-tone="pending"]),
 :is(.change-card, .tag-chip-change):is([data-tone="done"], [data-tone="closed"], [data-tone="unknown"], [data-tone="pending"]) { --change-tone: var(--change-quiet); }
 
-/* ── The pill: a neutral chip, the link's name, then a dot and a few words ── */
-.tag-chip.tag-chip-change {
-  gap: 4px;
-  background: var(--bg-secondary);
-  color: var(--fg);
-  box-shadow: inset 0 0 0 1px var(--border);
-  font-weight: 500;
-}
-.tag-chip.tag-chip-activatable { cursor: pointer; transition: background-color 120ms ease, box-shadow 120ms ease; }
-.tag-chip.tag-chip-activatable:hover { background: var(--bg-tertiary); }
-.tag-chip.tag-chip-activatable:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 1px; }
-.tag-chip.tag-chip-activatable[aria-expanded="true"] { background: var(--bg-tertiary); box-shadow: inset 0 0 0 1px var(--border-strong); }
+/* ── The pill: the neutral `.badge` (TagChip.tsx), the link's name, then a dot and a few words;
+   as a role="button" it takes the badge's own hover, open and focus looks ── */
+.tag-chip.tag-chip-change { gap: 4px; }
 .tag-chip.tag-chip-change .tag-chip-change-status {
   display: inline-flex;
   align-items: center;
@@ -99,8 +90,6 @@
 /* Head: name, state, facts; the title under them */
 .change-card .change-card-head-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex-wrap: wrap; margin-top: 4px; }
 .change-card .change-card-label.change-card-label { font-family: var(--font-mono); font-size: var(--font-size-sm); font-weight: 500; color: var(--fg); }
-.change-card .change-card-state { padding: 0 6px; border-radius: var(--radius-xs); font-size: var(--font-size-xs); line-height: 18px; font-weight: 500; color: var(--fg-secondary); background: color-mix(in srgb, var(--fg) 8%, transparent); }
-.change-card .change-card-state:is([data-tone="blocked"], [data-tone="waiting"]) { color: var(--change-tone); }
 .change-card .change-card-facts { color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 .change-card .change-card-title {
   font-size: var(--font-size-md);

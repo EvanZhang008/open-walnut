@@ -20,6 +20,7 @@ import type {
   MailSendState,
 } from '@/api/mail';
 import { providerIdOf } from '@/api/mail';
+import type { NoticeTone } from '@/components/common/NoticeCard';
 
 /** What the composer pane shows. `composing` means the form, everything else means the card. */
 export type SendPhase = 'composing' | 'waiting' | 'sending' | 'sent' | 'failed' | 'unknown' | 'discarded';
@@ -236,7 +237,7 @@ export function canRetry(status: SendStatus): boolean {
   return status.phase === 'failed' && !!status.sendId;
 }
 
-/** The pill a drafts row shows. One word per state, and a colour per word in the css. */
+/** The state a drafts row shows: one word per state, with the dot tone below. */
 export const DRAFT_STATE_LABEL: Record<MailDraftState, string> = {
   composing: 'Draft',
   pending_approval: 'Waiting',
@@ -246,6 +247,18 @@ export const DRAFT_STATE_LABEL: Record<MailDraftState, string> = {
   failed: 'Failed',
   unknown: 'Unknown',
   discarded: 'Discarded',
+};
+
+/** The dot beside each state word: waiting on the user asks, in flight is live, refused is an error. */
+export const DRAFT_STATE_TONE: Record<MailDraftState, NoticeTone> = {
+  composing: 'muted',
+  pending_approval: 'ask',
+  approved: 'live',
+  sending: 'live',
+  sent: 'ok',
+  failed: 'error',
+  unknown: 'warn',
+  discarded: 'muted',
 };
 
 /** The states the Drafts row counts: everything a human still has to finish. */

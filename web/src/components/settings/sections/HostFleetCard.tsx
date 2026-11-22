@@ -68,7 +68,7 @@ export function HostFleetCard({ host, now, action, onBootStart, onDetails }: {
       <header className="hf-card-head">
         <span className="sps-host-dot hsd" data-kind={statusKind(host)} aria-hidden="true" />
         <span className="hf-card-name">{name}</span>
-        <Chips list={roleChips(host)} className="hf-roles" testId="host-fleet-roles" />
+        <Chips list={roleChips(host)} className="hf-roles" testId="host-fleet-roles" tone="accent" />
       </header>
       <p className="hf-card-sys" data-testid="host-fleet-system">{systemLine(host)}</p>
       <div className="hf-vitals">

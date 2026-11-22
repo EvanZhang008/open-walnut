@@ -117,8 +117,8 @@ function Message({ m, topic, cont }: { m: LocalMessage; topic: Topic; cont: bool
           <span className="topic-msg-head">
             {human ? <span className="topic-sr-only">{name}</span> : <span className="topic-msg-name" data-testid="topic-message-name" title={name}>{shortName(name)}</span>}
             {context && <span className="topic-msg-context">{context}</span>}
-            {!human && who.kind === 'member' && who.member?.role === 'host' && <span className="topic-msg-tag">Host</span>}
-            {m.via === 'mail' && <span className="topic-msg-tag" data-testid="topic-message-mail">Email</span>}
+            {!human && who.kind === 'member' && who.member?.role === 'host' && <span className="badge topic-msg-tag">Host</span>}
+            {m.via === 'mail' && <span className="badge topic-msg-tag" data-testid="topic-message-mail">Email</span>}
             <time className="topic-msg-time" dateTime={m.at}>{clock(m.at)}</time>
           </span>
         )}

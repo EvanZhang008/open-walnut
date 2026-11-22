@@ -16,6 +16,7 @@ import { useEvent } from '../../hooks/useWebSocket';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
 import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
 import { hostDisplayLabel } from '@/utils/host-display-label';
+import { NoticeStatus } from '@/components/common/NoticeCard';
 
 /** Timeout thresholds (ms) */
 const SLOW_THRESHOLD_MS = 20_000;    // 20s → "Taking longer than expected..."
@@ -132,11 +133,11 @@ export function PendingSessionPanel({ cwd, host, hostLabel, label, message, real
             <div className="session-panel-title-area">
               <span className="session-panel-title" title={cwd}>{dirName}</span>
               {host && (
-                <span className="session-panel-badge" style={{ color: 'var(--fg-muted)', fontSize: '10px' }}>
-                  {hostDisplayLabel(host, undefined, hostLabel)}
+                <span className="badge session-panel-badge">
+                  <span>{hostDisplayLabel(host, undefined, hostLabel)}</span>
                 </span>
               )}
-              <span className="session-panel-badge" style={{ color: 'var(--error)' }}>Failed</span>
+              <NoticeStatus tone="error" className="session-panel-badge">Failed</NoticeStatus>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
               <button className="session-panel-close" onClick={onClose} title="Close panel">&times;</button>
@@ -191,13 +192,11 @@ export function PendingSessionPanel({ cwd, host, hostLabel, label, message, real
           <div className="session-panel-title-area">
             <span className="session-panel-title" title={cwd}>{dirName}</span>
             {host && (
-              <span className="session-panel-badge" style={{ color: 'var(--fg-muted)', fontSize: '10px' }}>
-                {hostDisplayLabel(host, undefined, hostLabel)}
+              <span className="badge session-panel-badge">
+                <span>{hostDisplayLabel(host, undefined, hostLabel)}</span>
               </span>
             )}
-            <span className="session-panel-badge" style={{
-              color: phase === 'slow' ? 'var(--warning)' : 'var(--fg-muted)',
-            }}>{headerStatus}</span>
+            <NoticeStatus tone={phase === 'slow' ? 'warn' : 'live'} className="session-panel-badge">{headerStatus}</NoticeStatus>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0 }}>
             <button className="session-panel-close" onClick={onClose} title="Close panel">&times;</button>

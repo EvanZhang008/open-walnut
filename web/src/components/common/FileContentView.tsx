@@ -2470,8 +2470,8 @@ export function FileContentView({
     >
       {docBar(tight ? null : mediaControls)}
       {loading && <div className="file-viewer-loading">{loadingFrom ? `Still loading from ${loadingFrom}…` : 'Loading file...'}</div>}
-      {reloading && <div className="fv-reloading-badge">{loadingFrom ? `Still loading from ${loadingFrom}…` : 'Reloading…'}</div>}
-      {!loading && !reloading && loadingFrom && <div className="fv-reloading-badge">Still loading from {loadingFrom}…</div>}
+      {reloading && <div className="badge badge-accent fv-reloading-badge"><span>{loadingFrom ? `Still loading from ${loadingFrom}…` : 'Reloading…'}</span></div>}
+      {!loading && !reloading && loadingFrom && <div className="badge badge-accent fv-reloading-badge"><span>Still loading from {loadingFrom}…</span></div>}
       {!loading && data?.error && <div className="file-viewer-error">{data.error}</div>}
       {!loading && !raw && data?.binary && (
         <div className="file-viewer-error">

@@ -49,16 +49,16 @@ export const FilterOverrideReasons = memo(function FilterOverrideReasons({ reaso
   if (created) {
     return (
       <div className="task-filter-override-row">
-        <span className="task-filter-outside-pill" data-testid="filter-outside-pill" title={title}>Outside filters</span>
+        <span className="badge task-filter-outside-pill" data-testid="filter-outside-pill" title={title}>Outside filters</span>
       </div>
     );
   }
   return (
     <div className="task-filter-override-row" data-testid="filter-override-reasons" title={title}>
       {reasons.map((r, i) => (
-        <span key={r.dim} className="task-filter-override-badge" data-reason-dim={r.dim}>
+        <span key={r.dim} className="badge badge-warning task-filter-override-badge" data-reason-dim={r.dim}>
           {i > 0 && <span aria-hidden="true">, </span>}
-          {r.text}
+          <span>{r.text}</span>
           <button
             type="button"
             className="task-filter-override-show"

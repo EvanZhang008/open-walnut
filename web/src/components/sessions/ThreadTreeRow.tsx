@@ -78,7 +78,7 @@ function trailing(p: ThreadTreeRowProps): ReactNode {
   if (row.kind === 'hidden') return <TextButton label="Restore" onPress={act('restore')} />;
   if (row.kind !== 'thread' && row.kind !== 'pin') return null;
   const pill = row.openBelow > 0 ? (
-    <span className="thread-tree-pill" data-folded={row.hasChildren && !row.expanded ? 'true' : undefined} title={openBelowTitle(row.openBelow)}>
+    <span className="badge badge-count thread-tree-pill" data-folded={row.hasChildren && !row.expanded ? 'true' : undefined} title={openBelowTitle(row.openBelow)}>
       {row.openBelow}
     </span>
   ) : null;

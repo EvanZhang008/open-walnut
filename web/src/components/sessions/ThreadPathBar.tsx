@@ -94,7 +94,7 @@ export const ThreadPathBar = memo(function ThreadPathBar(p: ThreadPathBarProps) 
                 <span className="tree-path-title">{label}</span>
                 {seg.role && (
                   <>
-                    <span className="tree-path-role" data-role={seg.role} aria-hidden="true">{seg.role}</span>
+                    <span className="badge badge-accent tree-path-role" data-role={seg.role} aria-hidden="true"><span>{seg.role}</span></span>
                     <span className="tree-sr-only">{ROLE_NAME[seg.role]}</span>
                   </>
                 )}

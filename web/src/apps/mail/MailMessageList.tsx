@@ -210,8 +210,8 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
             <>
               {rows.length === 1 ? '1 result' : `${rows.length} results`}
               {search.source && (
-                <span className="mail-source-tag" data-source={search.source}>
-                  {search.source === 'cache' ? 'from cache' : 'from provider'}
+                <span className="badge mail-source-tag" data-source={search.source}>
+                  <span>{search.source === 'cache' ? 'from cache' : 'from provider'}</span>
                 </span>
               )}
             </>

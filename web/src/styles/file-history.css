@@ -123,40 +123,10 @@
   background: var(--accent-subtle);
 }
 
-.fh-pill {
-  flex: 0 0 auto;
-  padding: 1px 6px;
-  border-radius: var(--radius-xs);
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  line-height: 1.6;
-  white-space: nowrap;
-  background: var(--bg-tertiary);
-  color: var(--fg-secondary);
-}
-
-/* One pill per writer. Saves by a human are the accent; everything automatic
-   stays neutral so the eye finds "my own save" first. */
-.fh-pill-user {
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-
-.fh-pill-live {
-  background: color-mix(in srgb, var(--warning) 14%, transparent);
-  color: var(--warning);
-}
-
-.fh-pill-agent,
-.fh-pill-merge {
-  background: var(--session-ref-subtle);
-  color: var(--session-ref);
-}
-
-.fh-pill-commit {
-  font-family: var(--font-mono);
-  font-weight: 500;
-}
+/* One `.badge` per writer (styles/badge.css; FileHistoryPanel.tsx): a human's own save is the accent,
+   a live edit amber, everything automatic neutral, so the eye finds "my own save" first. */
+.fh-pill { flex: 0 0 auto; }
+.fh-pill.fh-pill-commit { font-family: var(--font-mono); }
 
 .fh-when {
   flex: 0 0 auto;

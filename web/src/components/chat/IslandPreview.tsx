@@ -102,7 +102,7 @@ export function IslandPreview({ html, minHeight, maxHeight, onHeight, overlay }:
         onLoad={() => markReady.current()}
       />
       {filled
-        ? <span className="rich-app-live-badge">{'⚙︎'} Building…</span>
+        ? <span className="badge badge-accent rich-app-live-badge"><span>{'⚙︎'} Building…</span></span>
         : <div className="rich-app-building rich-app-live-empty">{'⚙︎'} building interactive block…</div>}
     </div>
   );

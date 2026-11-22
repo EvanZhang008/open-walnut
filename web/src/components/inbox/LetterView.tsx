@@ -54,6 +54,7 @@ import '@/styles/human-inbox.css';
 import { ScrollToBottomButton } from '@/components/common/ScrollToBottomButton';
 import { taskPath } from '@/utils/task-path';
 import { openAgentRef, type AgentRef } from '@/utils/agent-ref-open';
+import { letterTypeBadge } from '@/components/common/badge';
 
 /** Where a file reference in a letter body should open. */
 export interface LetterFileTarget {
@@ -327,9 +328,9 @@ export function LetterView({
         <div className="hib-reader-title">
           <span className="hib-reader-subject">{shown?.subject || 'Letter'}</span>
           {shown && (settledNote ? (
-            <span className="hib-type hib-type--info">Settled</span>
+            <span className="badge hib-type hib-type--info">Settled</span>
           ) : (
-            <span className={`hib-type hib-type--${shown.type}`}>
+            <span className={`${letterTypeBadge(shown.type)} hib-type hib-type--${shown.type}`}>
               {LETTER_TYPE_LABEL[shown.type] ?? shown.type}
             </span>
           ))}
@@ -356,11 +357,11 @@ export function LetterView({
       {shown && (
         <div className="hib-reader-meta">
           {/* The sender leads the head (LetterOriginBadge, above the subject). */}
-          {shown.sender?.project && letterOriginOf(shown).kind !== 'triage' && <span className="hib-chip">{shown.sender.project}</span>}
-          {shown.sender?.host && <span className="hib-chip">{shown.sender.host}</span>}
+          {shown.sender?.project && letterOriginOf(shown).kind !== 'triage' && <span className="badge hib-chip"><span>{shown.sender.project}</span></span>}
+          {shown.sender?.host && <span className="badge hib-chip"><span>{shown.sender.host}</span></span>}
           <span className="hib-time">{formatRelative(shown.createdAt)}</span>
           {shown.archived && shown.archivedReason === 'task_completed' && (
-            <span className="hib-chip" data-testid="letter-archived-reason">Archived: its task was completed</span>
+            <span className="badge hib-chip" data-testid="letter-archived-reason"><span>Archived: its task was completed</span></span>
           )}
 
           {showOpenSession && openSessionHref && (

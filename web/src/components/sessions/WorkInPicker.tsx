@@ -8,6 +8,7 @@
  *             to (detectProjectForFolder); "Browse or type a path…" opens the full folder picker.
  * The tab is a view choice, kept (usePageView). Placed by ProjectStartFlyout (useMenuPlacement).
  */
+import { badge } from '@/components/common/badge';
 import { useRef, useState, type RefObject } from 'react';
 import type { WorkingDirEntry } from '@/api/sessions';
 import { useProjectRegistry, type ProjectRegistryRow } from '@/hooks/useProjectRegistry';
@@ -170,8 +171,8 @@ function WorkInBody({ draft, ps, rows, folders, onPickFolder, onBrowse, onUpdate
                     </span>
                   </span>
                   {detected && (
-                    <span className={`draft-work-in-project-tag${detected.hasSource ? ' has-source' : ''}`} data-testid="work-in-folder-project">
-                      {projectDisplayName(detected.project)}
+                    <span className={`${badge(detected.hasSource ? 'accent' : 'neutral')} draft-work-in-project-tag${detected.hasSource ? ' has-source' : ''}`} data-testid="work-in-folder-project">
+                      <span>{projectDisplayName(detected.project)}</span>
                     </span>
                   )}
                   {isOwn && <WorkInCheckIcon />}

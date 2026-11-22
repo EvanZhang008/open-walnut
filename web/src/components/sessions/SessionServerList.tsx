@@ -311,7 +311,7 @@ export function SessionServerList({
           onClick={onShowAll} aria-expanded={!!showingAll} data-testid="session-servers-show-all"
           title={`${list.length} server${list.length === 1 ? '' : 's'} this session started${hostLabel ? ` on ${hostLabel}` : ''}${others > 0 ? ` (${pages.length} web, ${others} not web)` : ''}, each with its command, uptime and pid, to open or stop`}>
           All servers{hostLabel && <span className="session-servers-strip-all-host"> on {hostLabel}</span>}
-          <span className="session-servers-strip-count" data-testid="session-servers-count">{list.length}</span>
+          <span className="badge badge-count session-servers-strip-count" data-testid="session-servers-count">{list.length}</span>
           <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
         </button>
         <div ref={chipsRef} className="session-servers-strip-chips"
@@ -369,9 +369,9 @@ export function SessionServerList({
                 {s.title
                   ? <><span className="session-server-title">{s.title}</span><span className="session-server-name session-server-program">{serverLabel(s)}</span></>
                   : <span className="session-server-name">{serverLabel(s)}</span>}
-                {s.via === 'terminal' && <span className="session-server-tag">Terminal</span>}
-                {!openable(s) && <span className="session-server-tag">not a web page</span>}
-                {active && <span className="session-server-tag session-server-tag-active">Showing</span>}
+                {s.via === 'terminal' && <span className="badge session-server-tag">Terminal</span>}
+                {!openable(s) && <span className="badge session-server-tag">not a web page</span>}
+                {active && <span className="badge badge-accent session-server-tag">Showing</span>}
               </div>
               <div className="session-server-row-meta">
                 <code className="session-server-command" title={s.command}>{shortCommand(s.command) || s.name}</code>

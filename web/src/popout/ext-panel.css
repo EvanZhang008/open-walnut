@@ -205,7 +205,8 @@
 .ext-ask-icon:focus-visible { outline: 2px solid var(--walnut-accent); outline-offset: 1px; }
 .ext-ask-key.is-pressed { background: var(--hover-bg); color: var(--walnut-accent); }
 .ext-key-glyph { position: relative; display: inline-grid; place-items: center; }
-.ext-key-badge { position: absolute; right: -6px; bottom: -5px; width: 13px; height: 13px; border-radius: 50%; display: grid; place-items: center; background: var(--bg); border: 1px solid var(--border-strong); color: var(--fg-secondary); }
+/* A lock mark on the key glyph (an icon on an icon), not a label. */
+.ext-key-lock { position: absolute; right: -6px; bottom: -5px; width: 13px; height: 13px; border-radius: 50%; display: grid; place-items: center; background: var(--bg); border: 1px solid var(--border-strong); color: var(--fg-secondary); }
 
 /* The composer's chips, in its bottom row after "+" (SessionPanel / DraftSessionPanel `composerBar`). */
 .ext-chips { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 0 1 auto; overflow: hidden; }
@@ -235,7 +236,7 @@
 .ext-drawer-row:hover { background: var(--hover-bg); }
 .ext-drawer-row-ic { flex: none; width: 18px; display: inline-grid; place-items: center; color: var(--fg-secondary); }
 .ext-drawer-row-label { flex: 1; min-width: 0; }
-.ext-drawer-count { flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--error); color: var(--on-accent); font-size: var(--font-size-xs); font-weight: 700; display: grid; place-items: center; }
+.ext-drawer-count { flex: none; }
 .ext-drawer-meta { flex: none; font-size: var(--font-size-sm); color: var(--fg-muted); }
 
 /* The toolbar popup: the asks to continue over the composer. */
@@ -399,9 +400,10 @@ html body .is-plain-chat-pickers .composer-model-pill:hover { color: var(--walnu
 .ext-home-composer.is-docked .ext-home-dock-chip { order: 2; }
 .ext-home-composer.is-docked .chat-send-group { order: 3; }
 .ext-home-composer.is-docked .chat-input-controls > :not(.chat-plus-group):not(.chat-send-group):not(.ext-home-dock-chip) { display: none; }
-.ext-home-dock-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; max-width: 132px; height: 26px; padding: 0 9px 0 5px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: var(--font-size-md); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
-.ext-home-dock-chip .ext-chip-fav { width: 16px; height: 16px; font-size: 9.5px; border-radius: var(--radius-xs); background: none; color: inherit; }
-.ext-home-dock-chip .ext-chip-fav svg { width: 13px; height: 13px; }
+/* "This page": the one neutral `.badge` (ExtHome.tsx); only its place in the bar is here. */
+.ext-home-dock-chip { flex: none; max-width: 132px; }
+.ext-home-dock-chip .ext-chip-fav { width: 12px; height: 12px; background: none; color: inherit; }
+.ext-home-dock-chip .ext-chip-fav svg { width: 11px; height: 11px; }
 /* Grown: the full composer; its controls get room in a 400 px popup (review round 5, Sol #4). */
 .ext-home-composer.is-grown .chat-input-controls { gap: 4px; padding-right: 2px; }
 /* Beside the side bar (the row about 330 px) "Save as todo" is its glyph alone, its words in the
