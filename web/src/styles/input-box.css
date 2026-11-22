@@ -20,6 +20,10 @@
   /* 12 px: rounded, never an oval pill. 2026-11-21 the user called the Threads pill box ugly;
      2026-11-22 he asked why the 8 px corners and square keys replaced the round look he had. */
   --input-radius: var(--radius-md);
+  /* A one-line field's corner, about a third of its height, so no field reads as a pill (review,
+     2026-11-22: 12 px on a 28 px field did): 10 px at 34 px, 8 px small, 12 px on a phone. */
+  --field-radius: 10px;
+  --field-radius-sm: var(--radius-sm);
   --input-line: 34px;                 /* one line, its 1 px edges included: a button's height */
   --input-key: 28px;                  /* the mic and send inside the box */
   --input-key-radius: 50%;            /* the mic, send and clear keys are circles, as before 2026-11-21 */
@@ -45,7 +49,7 @@
    narrower than 768 px gets the phone sizes too. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   /* A phone layer portalled out of the shell (a task's detail) is the phone layout too. */
-  :is(.app-shell-navigation, .is-phone-layer) { --input-line: 46px; --input-key: 44px; --input-line-sm: 46px; --input-key-sm: 44px; }
+  :is(.app-shell-navigation, .is-phone-layer) { --input-line: 46px; --input-key: 44px; --input-line-sm: 46px; --input-key-sm: 44px; --field-radius: var(--radius-md); --field-radius-sm: var(--radius-md); }
 }
 /* What centres one 20 px line, and a key, in a one-line box: worked out on each box, so a box
    whose line is set nearer it (the phone above) gets its own. */
@@ -180,7 +184,7 @@
   color: var(--fg);
   background-color: var(--input-fill);
   border: 1px solid transparent;
-  border-radius: var(--input-radius);
+  border-radius: var(--field-radius);
   padding: 6px 10px;
   line-height: 20px;
   outline: none;
@@ -227,6 +231,7 @@ input[list]::-webkit-list-button { display: none !important; opacity: 0; }
    own settings form too. Weightless (`:where`), so one class of a place (its own padding) wins. */
 :where(input.is-sm, select.is-sm, .settings-input:not(textarea), .settings-select) {
   height: var(--input-line-sm);
+  border-radius: var(--field-radius-sm);
   padding-top: 0;
   padding-bottom: 0;
   padding-left: 8px;
@@ -234,6 +239,7 @@ input[list]::-webkit-list-button { display: none !important; opacity: 0; }
 :where(.settings-plugin-body) :where(input[type='text'], input[type='number'], input[type='password'],
   input[type='url'], input[type='email'], input[type='search'], select) {
   height: var(--input-line-sm);
+  border-radius: var(--field-radius-sm);
   padding-top: 0;
   padding-bottom: 0;
   padding-left: 8px;
@@ -252,7 +258,7 @@ input[list]::-webkit-list-button { display: none !important; opacity: 0; }
   min-height: var(--input-line);
   padding: 0 var(--input-key-inset) 0 10px;
   border: 1px solid transparent;
-  border-radius: var(--input-radius);
+  border-radius: var(--field-radius);
   background-color: var(--input-fill);
   color: var(--fg-muted);
   cursor: text;
@@ -260,7 +266,7 @@ input[list]::-webkit-list-button { display: none !important; opacity: 0; }
 /* A field on a coloured card (the Apps page's banner) sits on the page's own colour: a tint of
    the text colour over a gradient cannot be read. */
 .wn-on-color { --input-fill: var(--bg); }
-.wn-field.is-sm { --input-line: var(--input-line-sm); --input-key: var(--input-key-sm); padding-left: 8px; }
+.wn-field.is-sm { --input-line: var(--input-line-sm); --input-key: var(--input-key-sm); --field-radius: var(--field-radius-sm); padding-left: 8px; }
 .wn-field:focus-within { border-color: var(--input-focus-edge); }
 .wn-field > :is(input, textarea) {
   flex: 1 1 auto;

@@ -12,6 +12,7 @@
  * the bar closes lands in the words kept for the next open, never nowhere.
  */
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { useSpeechToText } from '@/hooks/useSpeechToText';
 import { useBoxDictation } from '@/hooks/useBoxDictation';
 import { useSttStatus, sttBlocksMic } from '@/hooks/useSttStatus';
@@ -466,7 +467,10 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
   // surface, the Mac panel or the in-app bar, may have chosen since).
   const switchTo = quickSwitchTarget(shown, picks, readRecents(), readChosen());
   // Idle, the box says Tab is there: what else the bar does is never a hidden key (2026-11-20).
-  const placeholder = spec ? spec.placeholder : recording ? 'Speak now…' : voiceOff ? 'Type a message, or Tab to see what you can do' : 'Speak or type, or Tab to see what you can do';
+  const phone = usePhoneLayout();
+  // A phone has no Tab key, and the longer hint wrapped and was cut in its one-line bar.
+  const tabHint = phone ? '' : ', or Tab to see what you can do';
+  const placeholder = spec ? spec.placeholder : recording ? 'Speak now…' : voiceOff ? `Type a message${tabHint}` : `Speak or type${tabHint}`;
 
   return (
     <div
