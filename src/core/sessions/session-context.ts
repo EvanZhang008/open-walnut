@@ -213,8 +213,8 @@ export const OWN_READBACK_LINE =
   'At the start of every new conversation and after every compaction, Walnut reads back to you your own MEMORY.md, '
   + 'the index of your skills and your recent work in your Threads (the newest thing you said in each over two days). '
   + 'Keep state and facts in MEMORY.md; a way of working you will follow again (the steps of a kind of work, the exact '
-  + 'op keys) goes into a skill instead, with agent_skill_write (scope "org" when every VP and the main agent should '
-  + 'follow it), and you read one whole with agent_skill_read before such work.\n\n'
+  + 'op keys) goes into a skill, with agent_skill_write (scope "org" when every VP and the main agent should '
+  + 'follow it), and you read one through with agent_skill_read before such work.\n\n'
 
 /** The line, only while the readback is on: the spawn adds the hook to a prompt holding it, and only then. */
 const ownReadbackLine = (): string => (ownReadbackEnabled() ? OWN_READBACK_LINE : '')

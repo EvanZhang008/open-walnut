@@ -50,7 +50,11 @@ export const askedPart = (args: Record<string, unknown>): boolean => typeof args
  * A result already paged goes as it is: a part was asked for, so the handler paged it, for an
  * agent to the cap its answer is held to (the handler's `caller.answer`), else at DOC_PAGE_CHARS.
  */
-export const pageOnce = (result: unknown, page: () => unknown): unknown => (result as { page?: unknown } | null)?.page ? result : page()
+export const pageOnce = (result: unknown, page: () => unknown): unknown => {
+  // Walnut's own page only (pageAnswer's `shown` or `error`): a result's own `page` key is data.
+  const own = (result as { page?: { shown?: unknown; error?: unknown } } | null)?.page
+  return own && typeof own === 'object' && (typeof own.shown === 'string' || typeof own.error === 'string') ? result : page()
+}
 
 /** One page of a document for a caller whose answer has no cap (a person, server code), in characters of JSON. */
 export const DOC_PAGE_CHARS = 17_000
@@ -106,6 +110,8 @@ export interface DocPage {
   next_offset?: number
   /** The document's headings (the top levels), so a caller can ask for one by name. */
   sections?: string[]
+  /** About how many pages follow this one, at this page's size, in the section asked for (a page ends at a line's end). */
+  after: number
 }
 
 /**
@@ -168,10 +174,17 @@ export function pageOf(
     offset: start,
     end,
     total: text.length,
+    after: Math.ceil((to - end) / Math.max(1, end - start)),
     ...(found ? { section: `${'#'.repeat(found.level)} ${found.title}` } : {}),
     ...(end < to ? { next_offset: found ? end - from : end } : {}),
     ...(heads.length ? { sections: sectionList(heads) } : {}),
   }
+}
+
+/** `obj` without a `page` key of its own (the answer's `page` is Walnut's). */
+function withoutPage(obj: Record<string, unknown>): Record<string, unknown> {
+  const { page: _own, ...rest } = obj
+  return rest
 }
 
 /** Set `value` at a dotted `path` of a copy of `root` (only the objects on the path are copied). */
@@ -273,7 +286,7 @@ function pageAnswer(
 ): { answer: unknown; used: number } {
   const asked = typeof args.offset === 'number' || typeof args.section === 'string'
   const page = pageOf(text, { offset: typeof args.offset === 'number' ? args.offset : undefined, section: typeof args.section === 'string' ? args.section : undefined, max, surface, heads })
-  if ('error' in page) return { answer: withAt({ ...partOnly(result, keys).out, page: { error: page.error, sections: page.sections } }, keys, ''), used: 0 }
+  if ('error' in page) return { answer: withAt({ page: { error: page.error, sections: page.sections }, ...withoutPage(partOnly(result, keys).out) }, keys, ''), used: 0 }
   const section = page.section ? { section: page.section } : {}
   const next = page.next_offset !== undefined ? again({ ...section, offset: page.next_offset }) : undefined
   const whole = page.offset === 0 && page.end === page.total
@@ -282,14 +295,27 @@ function pageAnswer(
   const mark = whole ? '' : `\n\n${PAGE_MARK}: ${shown}.${next ? ` Read on: ${next}.` : ''}${change}]\n`
   // A part carries no hash or version: a write that needs one reads the whole first.
   const part = whole ? { out: result, had: false } : partOnly(result, keys)
+  // Walnut's `page` is the one the answer carries, never a result's own key of that name.
+  const rest = withoutPage(part.out)
+  const of = page.section ? ' of that section' : ''
+  // The first page of what was asked: the document's start, or a section's (an offset there counts from it).
+  const first = page.section ? !(typeof args.offset === 'number' && args.offset >= 1) : page.offset === 0
+  const more = `about ${page.after} more part${page.after === 1 ? '' : 's'} follow${page.after === 1 ? 's' : ''}`
+  // `page` comes first, its first line saying this is a part: a reader that stops after the text's
+  // first lines (a shell's head, a skim) still knows there is more and how to read it.
   const answer = withAt({
-    ...part.out,
     page: {
-      ...(part.had ? { hash: 'Left out of a part: a whole write (expectedHash) needs the hash of a whole read ("_full": true).' } : {}),
+      ...(whole ? {} : {
+        part: next
+          ? `${first ? `Part 1 of about ${page.after + 1}${of}` : `A later part${of}, ${more}`}: NOT the whole text. Read on with \`next\`.`
+          : first ? `The whole${of}.` : `The last part${of}.`,
+      }),
       shown: `${shown[0].toUpperCase()}${shown.slice(1)}.`,
       ...(next ? { next } : { next: page.section ? 'This is the end of that section.' : 'This is the end of it.' }),
+      ...(part.had ? { hash: 'Left out of a part: a whole write (expectedHash) needs the hash of a whole read ("_full": true).' } : {}),
       ...(page.sections && !asked ? { sections: page.sections, by_section: again({ section: '<a heading above>' }) } : {}),
     },
+    ...rest,
   }, keys, `${page.text}${mark}`)
   return { answer, used: jsonLength(page.text, surface) }
 }

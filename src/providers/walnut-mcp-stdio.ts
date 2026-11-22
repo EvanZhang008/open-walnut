@@ -20,6 +20,7 @@
  *
  * STDOUT PURITY: stdout carries JSON-RPC frames and nothing else.
  */
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -40,6 +41,29 @@ export const MCP_LIST_TIMEOUT_MS = 15_000
 /** How often a list that came back short (no hub, an older hub) is asked for again. */
 export const MCP_LIST_RETRY_MS = 60_000
 
+/**
+ * How soon a list the hub marked `partial` (its plugins still loading) is asked for again: a boot's
+ * walk takes about 20 s, and the hub itself waits a little for it, so this never spins.
+ */
+export const MCP_PARTIAL_RETRY_MS = 10_000
+
+/**
+ * The longest a first `tools/list` waits for the hub before it answers what there is (the list
+ * kept from an earlier process of this session, else none) and completes it later. A ride over a
+ * daemon restart can take 75 s, and Claude Code neither retries a tools/list that timed out nor
+ * takes its late answer: the session would have no Walnut tools until the list changed.
+ */
+export const MCP_LIST_ANSWER_MS = 20_000
+
+/**
+ * The early answer's wait in this process: MCP_LIST_ANSWER_MS, or 2 s under the client's own
+ * MCP_TIMEOUT (Claude Code's, in ms) when that is shorter.
+ */
+export function mcpListAnswerMs(env: Record<string, string | undefined> = process.env): number {
+  const client = Number(env.MCP_TIMEOUT)
+  return Number.isFinite(client) && client > 0 ? Math.max(1_000, Math.min(MCP_LIST_ANSWER_MS, client - 2_000)) : MCP_LIST_ANSWER_MS
+}
+
 export type GatewayRequestFn = (op: GatewayOp, args: Record<string, unknown>, timeoutMs?: number) => Promise<GatewayResponse>
 
 export interface WalnutMcpDeps {
@@ -53,10 +77,102 @@ export interface WalnutMcpDeps {
   notify?: (method: string) => void
   /** Overrides MCP_LIST_RETRY_MS (tests). */
   listRetryMs?: number
+  /** Overrides MCP_PARTIAL_RETRY_MS (tests). */
+  partialRetryMs?: number
   /** Where an answer too big for one tool result is written (tests); default tool-answer-fit's. */
   answerDir?: string
   /** Overrides MCP_LOST_FOLLOW_MS (tests). */
   lostFollowMs?: number
+  /** The last whole list this session was given, kept across its processes (fileToolListCache). */
+  listCache?: ToolListCache
+  /** Overrides mcpListAnswerMs() (tests). */
+  listAnswerMs?: number
+}
+
+type McpTool = Record<string, unknown>
+
+/** Where a session's last whole tool list is kept, so a process started while the hub is away still lists it. */
+export interface ToolListCache {
+  read(): McpTool[] | null
+  write(tools: McpTool[]): void
+}
+
+/** How long a session's kept list is kept after its last write. */
+const LIST_CACHE_KEEP_MS = 14 * 24 * 3600_000
+
+/** Files of the cache older than this are an unfinished write (`.tmp`) or a list no ref names any more. */
+const LIST_CACHE_STALE_MS = 3600_000
+
+const hash16 = (text: string): string => createHash('sha256').update(text).digest('hex').slice(0, 16)
+
+/**
+ * A ToolListCache in `dir` (owner-only), for session `sid`: `<hash of sid>.ref` names the list by
+ * its content's hash, `<hash>.json` holds it, so the sessions of one role share one file. Every
+ * failure reads as no list and writes nothing: the cache only ever adds tools to an answer.
+ */
+export function fileToolListCache(dir: string, sid: string): ToolListCache {
+  // The id is hashed: a file name never carries a caller's id as it is.
+  const ref = path.join(dir, `${hash16(`session\n${sid}`)}.ref`)
+  // Tool descriptions are what the model is told: only a directory of this user's own, closed to others.
+  const ownDir = (): boolean => {
+    const st = fs.lstatSync(dir)
+    const uid = typeof process.getuid === 'function' ? process.getuid() : -1
+    return st.isDirectory() && (uid < 0 || st.uid === uid) && (st.mode & 0o077) === 0
+  }
+  return {
+    read() {
+      try {
+        if (!ownDir()) return null
+        const hash = fs.readFileSync(ref, 'utf-8').trim()
+        if (!/^[0-9a-f]{16}$/.test(hash)) return null
+        const tools = JSON.parse(fs.readFileSync(path.join(dir, `${hash}.json`), 'utf-8')) as unknown
+        return Array.isArray(tools) && tools.length > 0 && tools.every((t) => !!t && typeof t === 'object' && typeof (t as McpTool).name === 'string')
+          ? tools as McpTool[]
+          : null
+      } catch { return null }
+    },
+    write(tools) {
+      try {
+        const body = JSON.stringify(tools)
+        const hash = hash16(body)
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+        if (!ownDir()) return
+        const list = path.join(dir, `${hash}.json`)
+        const put = (file: string, text: string) => {
+          const tmp = `${file}.${process.pid}.tmp`
+          fs.writeFileSync(tmp, text, { encoding: 'utf-8', mode: 0o600 })
+          fs.renameSync(tmp, file)
+        }
+        // A list already there is touched, so no sweep takes it as one no ref names.
+        if (fs.existsSync(list)) { const now = new Date(); fs.utimesSync(list, now, now) } else put(list, body)
+        put(ref, hash)
+        sweepToolListCache(dir, Date.now())
+      } catch { /* a list not kept costs only the next cold start */ }
+    },
+  }
+}
+
+/**
+ * Refs unwritten for LIST_CACHE_KEEP_MS go, then every list no ref names and every unfinished write,
+ * each once an hour old (so one being written stays).
+ */
+export function sweepToolListCache(dir: string, nowMs: number): void {
+  const names = fs.readdirSync(dir)
+  const named = new Set<string>()
+  for (const name of names) {
+    if (!name.endsWith('.ref')) continue
+    const file = path.join(dir, name)
+    try {
+      if (nowMs - fs.statSync(file).mtimeMs > LIST_CACHE_KEEP_MS) fs.unlinkSync(file)
+      else named.add(fs.readFileSync(file, 'utf-8').trim())
+    } catch { /* gone meanwhile */ }
+  }
+  for (const name of names) {
+    const stale = name.endsWith('.tmp') || (name.endsWith('.json') && !named.has(name.slice(0, -5)))
+    if (!stale) continue
+    const file = path.join(dir, name)
+    try { if (nowMs - fs.statSync(file).mtimeMs > LIST_CACHE_STALE_MS) fs.unlinkSync(file) } catch { /* gone meanwhile */ }
+  }
 }
 
 /**
@@ -127,12 +243,16 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
   })
 
   // The catalog is fetched once and kept. One that came back short (the Mac away,
-  // so a host serves its small offline set; an older hub, so no schemas) is asked
-  // for again until a full one arrives, and the client is told the list changed.
+  // so a host serves its small offline set; an older hub, so no schemas; a hub still
+  // loading its plugins) is asked for again until a full one arrives, and the client
+  // is told the list changed: Claude Code reads a list once and refreshes it only then.
+  // 2026-11-22: sessions started while the Mac was away or Walnut restarted got an empty
+  // or short list and ran turns without their Walnut tools until it came.
   let fullList: Record<string, unknown>[] | null = null
+  const listAnswerMs = deps.listAnswerMs ?? mcpListAnswerMs()
   let retry: ReturnType<typeof setTimeout> | null = null
   let spillSeq = 0
-  const fetchList = async (): Promise<{ tools: Record<string, unknown>[]; full: boolean } | { error: string }> => {
+  const fetchList = async (): Promise<{ tools: McpTool[]; full: boolean; partial: boolean } | { error: string }> => {
     let resp: GatewayResponse
     try {
       // `listing: 'role'`: this server's instructions say how to reach a tool it does not list, so
@@ -144,19 +264,33 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
     }
     if (!resp.ok) return { error: deps.formatError(resp.error).join('\n') }
     const rows = Array.isArray(resp.result.ops) ? resp.result.ops as HubOpRow[] : []
-    return { tools: rows.map(mcpToolOf), full: rows.length > 0 && rows.every((r) => r.inputSchema) }
+    // `partial`: read while the hub's plugins load (capability-router.ts), so their tools are missing.
+    const partial = resp.result.partial === true
+    return { tools: rows.map(mcpToolOf), full: rows.length > 0 && rows.every((r) => r.inputSchema) && !partial, partial }
   }
-  const scheduleRetry = () => {
+  /** A whole list arrived: it is the list from now on, and kept for this session's next process. */
+  const gotFull = (tools: McpTool[]) => {
+    fullList = tools
+    // Whatever whole list this host's hub gave (a follower's may be smaller than the leader's) is kept.
+    deps.listCache?.write(tools)
+  }
+  /** Ask again later: soon for a hub still loading its plugins, else at the slow pace. */
+  const scheduleRetry = (partial = false) => {
     if (retry || !deps.notify) return
     retry = setTimeout(async () => {
       retry = null
-      const got = await fetchList()
-      if ('tools' in got && got.full) {
-        fullList = got.tools
-        deps.notify?.('notifications/tools/list_changed')
-      } else scheduleRetry()
-    }, deps.listRetryMs ?? MCP_LIST_RETRY_MS)
+      if (fullList) return
+      settle(await fetchList())
+    }, partial ? deps.partialRetryMs ?? MCP_PARTIAL_RETRY_MS : deps.listRetryMs ?? MCP_LIST_RETRY_MS)
     retry.unref?.()
+  }
+  /** A list that came after the client was answered: a whole one replaces it (and the client is told), else ask again. */
+  const settle = (got: Awaited<ReturnType<typeof fetchList>>) => {
+    if (fullList) return
+    if ('tools' in got && got.full) {
+      gotFull(got.tools)
+      deps.notify?.('notifications/tools/list_changed')
+    } else scheduleRetry('tools' in got && got.partial)
   }
 
   /** What a call whose answer was lost did, read with op_result until it ended (within
@@ -257,16 +391,30 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
         return replyOk(msg.id, {})
       case 'tools/list': {
         if (fullList) return replyOk(msg.id, { tools: fullList })
-        const got = await fetchList()
-        if ('tools' in got && got.full) {
-          fullList = got.tools
-          return replyOk(msg.id, { tools: fullList })
+        const fetching = fetchList()
+        // No answer within the client's patience: answer now, and take the late list when it lands.
+        const got = await Promise.race([
+          fetching,
+          new Promise<null>((resolve) => { const t = setTimeout(() => resolve(null), listAnswerMs); t.unref?.() }),
+        ])
+        if (got && 'tools' in got && got.full) {
+          gotFull(got.tools)
+          return replyOk(msg.id, { tools: got.tools })
         }
-        // Answer with what there is (an error would leave the session with no server
-        // at all), and complete it later.
-        scheduleRetry()
-        if ('tools' in got) return replyOk(msg.id, { tools: got.tools })
-        if (!deps.notify) return replyErr(msg.id, -32603, got.error)
+        if (got) scheduleRetry('tools' in got && got.partial)
+        else void fetching.then(settle).catch(() => scheduleRetry())
+        // Answer with what there is (an error would leave the session with no server at all),
+        // and complete it later: the list this session was last given (its tools still run, and a
+        // call while the hub is away says so), else the short one, else none.
+        const kept = deps.listCache?.read()
+        // A partial list is current for what it has; the kept one adds the plugins' tools it still lacks.
+        if (kept && got && 'tools' in got && got.partial) {
+          const fresh = new Set(got.tools.map((t) => t.name))
+          return replyOk(msg.id, { tools: [...got.tools, ...kept.filter((t) => !fresh.has(t.name))] })
+        }
+        if (kept && (!got || !('tools' in got) || kept.length >= got.tools.length)) return replyOk(msg.id, { tools: kept })
+        if (got && 'tools' in got) return replyOk(msg.id, { tools: got.tools })
+        if (!deps.notify && got) return replyErr(msg.id, -32603, got.error)
         return replyOk(msg.id, { tools: [] })
       }
       case 'tools/call':

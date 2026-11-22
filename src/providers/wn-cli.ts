@@ -1229,8 +1229,12 @@ async function runMcpServer(argv: string[]): Promise<number> {
     return 6
   }
   const { socketPath, sid } = endpoint
-  const { runWalnutMcpStdio } = await import('./walnut-mcp-stdio.js')
+  const { runWalnutMcpStdio, fileToolListCache } = await import('./walnut-mcp-stdio.js')
   return runWalnutMcpStdio({
+    // Beside the daemon's own socket (its owner-only dir): the list a process of this session started
+    // while the hub was away or loading its plugins answers with, instead of none. Only a session's:
+    // an external caller's sid is shared, or a trigger check's token, which is never kept on disk.
+    ...(endpoint.external ? {} : { listCache: fileToolListCache(path.join(path.dirname(socketPath), 'mcp-tool-lists'), sid) }),
     // A call carries WALNUT_TEST_RUN the way `walnut tools call` does, so a test run through
     // the tools makes test objects too.
     request: (op, args, timeoutMs) => requestRidingRestart(socketPath, {

@@ -1149,19 +1149,27 @@ function agentMemoryPage(result: unknown, args: Record<string, unknown>, fit: An
 const AGENT_SKILL_SCOPE = 'A skill is a way of working you will follow again (the steps of a kind of work, the exact op keys), '
   + 'kept apart from MEMORY.md, which holds state and facts. Your own skills (scope own) are for your task; the org\'s '
   + '(scope org) are read by Main and every VP. Walnut reads the index (name and description) back to Main and the VPs at '
-  + 'every new conversation and after every compaction; read a skill whole before work it covers.'
+  + 'every new conversation and after every compaction; read a skill through before work it covers.'
 
 defineOp({
   name: 'agent_skill_read',
   title: 'Read a task\'s skills',
-  description: `${AGENT_SKILL_SCOPE} With no name: the list (own and org, no text). With name: that skill whole, your own first, `
-    + 'then the org\'s. task defaults to your own task.',
-  answer: { kind: 'content', max: 20_000 },
+  description: `${AGENT_SKILL_SCOPE} With no name: the list (own and org, no text). With name: that skill, your own first, `
+    + 'then the org\'s; a long one comes in pages (`page` says how to read on). task defaults to your own task.',
+  // A skill is a document (doc-page.ts): 8,000 characters of Chinese print 24 KB through the CLI, so it
+  // pages, never meets the generic cut (2026-11-22: a whole skill read cut in the middle on the CLI).
+  answer: {
+    kind: 'content', max: DOC_ANSWER_MAX_CHARS,
+    shape: ({ result, args, max, surface }) => typeof args.name === 'string' && args.name.trim()
+      ? pageOnce(result, () => agentSkillPage(result, args, { max, surface }))
+      : result,
+  },
   input: {
     name: z.string().min(1).max(48).optional().describe('Skill name; omit to list them'),
     task: z.string().min(1).optional().describe('Task id or unique prefix; default: your own task'),
+    ...DOC_PART_INPUT,
   },
-  handler: async (args, call) => {
+  handler: async (args, call, caller) => {
     const id = typeof args.task === 'string' && args.task.trim()
       ? args.task.trim()
       : ((await call('GET', '/me')) as { task?: { id?: string } } | undefined)?.task?.id
@@ -1169,8 +1177,10 @@ defineOp({
     if (typeof args.name === 'string' && args.name.trim()) {
       const body = await call('GET', `/tasks/${encodeURIComponent(id)}/agent-skills/${encodeURIComponent(args.name.trim())}`) as
         { scope?: string; skill?: { name?: string; at?: string; by_name?: string } }
-      return withOutcome(body, `Skill "${body.skill?.name}" (${body.scope}), written ${body.skill?.at}${body.skill?.by_name ? ` by ${body.skill.by_name}` : ''}.`,
+      const read = withOutcome(body, `Skill "${body.skill?.name}" (${body.scope}), written ${body.skill?.at}${body.skill?.by_name ? ` by ${body.skill.by_name}` : ''}.`,
         'Follow it for the work it covers; Walnut\'s rules and the user\'s words come first. Change it with agent_skill_write.')
+      // Asked for a part: every caller gets that part, an agent's built for its cap.
+      return askedPart(args) ? agentSkillPage(read, args, caller?.answer) : read
     }
     const body = await call('GET', `/tasks/${encodeURIComponent(id)}/agent-skills`) as { title?: string; own?: unknown[]; org?: unknown[] }
     const own = body.own?.length ?? 0
@@ -1180,6 +1190,14 @@ defineOp({
   },
   tags: { readonly: true, remote: 'allow' },
 })
+
+/** One skill's text (`skill.text`) in pages (doc-page.ts). */
+function agentSkillPage(result: unknown, args: Record<string, unknown>, fit: AnswerFit | undefined): unknown {
+  const again = (more: Record<string, unknown>) => `agent_skill_read ${JSON.stringify({
+    name: String(args.name).trim(), ...(typeof args.task === 'string' ? { task: args.task } : {}), ...more,
+  })}`
+  return pagedResult(result, 'skill.text', args, again, { fit, changeWith: 'agent_skill_write with edits' })
+}
 
 defineOp({
   name: 'agent_skill_write',

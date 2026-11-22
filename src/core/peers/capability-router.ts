@@ -52,6 +52,25 @@ export interface CapabilityRouterDeps {
    * caller's task.
    */
   listingRole?: (callerSid: string) => Promise<import('../../ops/op-groups.js').ToolListing | undefined>;
+  /** True when the plugins' ops may still be missing from a list read now (pluginsStillLoading); tests inject it. */
+  pluginsLoading?: () => Promise<boolean>;
+}
+
+/** How long a schemas tools.list waits for a plugin walk under way before it answers without the rest. */
+// Short: the host's MCP server waits 15 s for its whole request (a cold daemon's own wait and a slow
+// link come out of it too), and it asks again for a partial list about 10 s later.
+export const TOOLS_LIST_PLUGIN_WAIT_MS = 2_000;
+
+/**
+ * Whether the plugin set is still changing after a short wait: the server answers gateway calls
+ * while its boot walks the plugins (about 20 s on a busy Mac), and a plugin's ops are listed only
+ * once it is loaded. 2026-11-22 09:49: sessions resumed by a restart read their catalog before
+ * Slack, interview practice and notes import were loaded, and lived without those 37 tools.
+ */
+async function pluginsStillLoading(): Promise<boolean> {
+  const { registry } = await import('../integration-registry.js');
+  await registry.waitForPlugins(TOOLS_LIST_PLUGIN_WAIT_MS);
+  return registry.isChanging();
 }
 
 // Shared across all daemon connections — the throttle is per-sender state
@@ -181,6 +200,8 @@ async function handleToolsList(payload: Record<string, unknown>, host: string, c
   // the ops this host's gateway would run, so the model never sees a tool it is
   // refused. An older hub ignores the flag; that server then lists permissive schemas.
   if (payload.schemas === true) {
+    // Read first: a walk that ends within the wait lists its plugins' ops below.
+    const partial = await (deps.pluginsLoading ?? pluginsStillLoading)().catch(() => false);
     const { opInputJsonSchema } = await import('../../ops/registry.js');
     // `listing: 'role'`: a server that tells its session how to reach what it does not list asks
     // for its role's tools only (experiment mcp_tools_by_role, tool-listing-role.ts). An older
@@ -200,6 +221,10 @@ async function handleToolsList(payload: Record<string, unknown>, host: string, c
         ...(o.tags.destructive !== undefined ? { destructive: o.tags.destructive } : {}),
         inputSchema: cachedInputSchema(o, opInputJsonSchema),
       }));
+    // A list read while plugins load says so (`partial`): the MCP server answers it and asks again
+    // until a whole one comes, then tells its client the list changed (walnut-mcp-stdio.ts). It
+    // carries no hash, so no daemon holds it as a caller's catalog; an older server ignores the flag.
+    if (partial) return { ok: true, result: { ops, partial: true } };
     // tools-list-held-v1 (held-catalogs-core.ts): the host's daemon names the catalogs it
     // holds (`have`); when it holds this caller's, only the hash goes back, not ~130 KB.
     // An older daemon sends no `have` and reads past `catalogHash`.

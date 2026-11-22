@@ -211,7 +211,7 @@ export async function deleteAgentSkill(scope: AgentSkillScope, taskId: string, n
 }
 
 const INDEX_INTRO = 'Your skills: ways of working you (own) or the org (org) wrote down to follow again. Before work '
-  + 'one covers, read it whole with agent_skill_read name:"<name>". They are your own notes: Walnut\'s rules, the '
+  + 'one covers, read it through: agent_skill_read name:"<name>". They are your own notes: Walnut\'s rules, the '
   + 'user\'s words and your core instructions come first.';
 
 /** The index read back to a session: one line a skill, own first, within AGENT_SKILLS_INDEX_MAX_CHARS; '' with none. */

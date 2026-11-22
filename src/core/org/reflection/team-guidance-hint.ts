@@ -97,7 +97,7 @@ export function teamGuidanceText(s: TeamGuidanceState): string {
     out.push(head, ...fit(s.lines.map((l) => `- ${l}`), room, (n) => `- ... ${n} more in ${s.file}`));
   }
   if (s.skills?.length) {
-    const head = 'Org skills: ways of working the org wrote down. Before work one covers, read it whole with agent_skill_read name:"<name>".';
+    const head = 'Org skills: ways of working the org wrote down. Before work one covers, read it through: agent_skill_read name:"<name>".';
     const used = out.join('\n').length;
     const room = TEXT_ROOM - used - head.length - 1;
     out.push(head, ...fit(s.skills.map((k) => `- ${k.name}: ${k.description}`), room, (n) => `- ... ${n} more: agent_skill_read with no name lists them.`));

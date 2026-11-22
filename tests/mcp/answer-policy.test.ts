@@ -120,7 +120,7 @@ function markdown(sections: number, cjk = false): string {
 }
 
 /** The keys a document op reads its text from (doc-page.ts pagedResult paths), each as a result. */
-const DOC_PATHS = ['skill.content', 'memory.content', 'content', 'text', 'memory.text', 'answer', 'output']
+const DOC_PATHS = ['skill.content', 'skill.text', 'memory.content', 'content', 'text', 'memory.text', 'answer', 'output']
 function docResult(path: string, text: string): Record<string, unknown> {
   const keys = path.split('.')
   const leaf: Record<string, unknown> = { [keys[keys.length - 1]]: text, id: 'sa-0123abcd', path: 'Projects/Big', contentHash: 'h1', name: 'big' }
@@ -182,47 +182,133 @@ describe('every op answers within what each surface keeps, printed as that surfa
 })
 
 /**
- * A document read through the executor, as a session's MCP tool or its CLI makes it: each page's
- * text, followed by the offset its `next` names, gives back the whole document, no gap, no overlap.
+ * The class: reading your own memory, notes and skills never loses text silently. A node reads its
+ * MEMORY.md back after a compaction (2026-11-22, 15:46 UTC: a 9,012 character MEMORY.md read through
+ * the CLI was saved to a file by the harness). Every op that declares paging (an `offset` and a
+ * `section` argument, doc-page.ts DOC_PART_INPUT) is read through the executor as a session's MCP
+ * tool or its CLI reads it: the document comes whole in one answer, or in pages whose answer says
+ * FIRST that it is a part and names the exact call that reads on, and following those calls gives
+ * back the document exactly. A new paging op fails here until it has a fixture below.
  */
-describe('a document read pages exactly on every surface', () => {
-  const docs: Array<[string, string]> = [['ASCII', markdown(80)], ['non-ASCII', markdown(50, true)]]
-  const reads: Array<{ op: string; args: Record<string, unknown>; body: (text: string) => unknown; text: (r: Record<string, unknown>) => string }> = [
-    { op: 'skill_read', args: { dirName: 'big' }, body: (t) => ({ skill: { dirName: 'big', name: 'big', description: 'd', location: '/s/big/SKILL.md', content: t } }), text: (r) => String((r.skill as { content: string }).content) },
-    { op: 'note_read', args: { path: 'Projects/Big' }, body: (t) => ({ content: t, contentHash: 'h1', updatedAt: '2026-11-22T00:00:00Z' }), text: (r) => String(r.content) },
-    { op: 'memory_read', args: { doc: 'global' }, body: (t) => ({ memory: { content: t, contentHash: 'm1', updatedAt: '2026-11-22T00:00:00Z' } }), text: (r) => String((r.memory as { content: string }).content) },
+describe('reading a stored document never loses text silently, on every surface', () => {
+  const TASK = 't-0123'
+  type Read = { label: string; op: string; args: Record<string, unknown>; routes: (text: string) => Record<string, unknown>; text: (r: Record<string, unknown>) => string }
+  const me = { '/me': { task: { id: TASK } } }
+  const READS: Read[] = [
+    {
+      label: 'own MEMORY.md', op: 'agent_memory_read', args: {},
+      routes: (t) => ({ ...me, [`/tasks/${TASK}/agent-memory`]: { title: 'A lead', memory: { text: t, at: '2026-11-22T15:46:00Z' }, chars: t.length, soft_limit: 12_000, limit: 20_000 }, [`/tasks/${TASK}/memory-files`]: { files: [{ name: 'notes.1a2b3c4d.md', chars: 40 }] } }),
+      text: (r) => String((r.memory as { text: string }).text),
+    },
+    {
+      label: 'memory folder file', op: 'agent_memory_read', args: { file: 'notes.1a2b3c4d.md' },
+      routes: (t) => ({ ...me, [`/tasks/${TASK}/memory-files/notes.1a2b3c4d.md`]: { name: 'notes.1a2b3c4d.md', walnut: false, at: '2026-11-22T15:46:00Z', text: t } }),
+      text: (r) => String(r.text),
+    },
+    {
+      label: 'own skill', op: 'agent_skill_read', args: { name: 'big' },
+      routes: (t) => ({ ...me, [`/tasks/${TASK}/agent-skills/big`]: { task_id: TASK, scope: 'own', skill: { name: 'big', description: 'd', text: t, at: '2026-11-22T00:00:00Z' } } }),
+      text: (r) => String((r.skill as { text: string }).text),
+    },
+    {
+      label: 'skill', op: 'skill_read', args: { dirName: 'big' },
+      routes: (t) => ({ '*': { skill: { dirName: 'big', name: 'big', description: 'd', location: '/s/big/SKILL.md', content: t } } }),
+      text: (r) => String((r.skill as { content: string }).content),
+    },
+    {
+      label: 'note', op: 'note_read', args: { path: 'Projects/Big' },
+      routes: (t) => ({ '*': { content: t, contentHash: 'h1', updatedAt: '2026-11-22T00:00:00Z' } }),
+      text: (r) => String(r.content),
+    },
+    {
+      label: 'global memory', op: 'memory_read', args: { doc: 'global' },
+      routes: (t) => ({ '*': { memory: { content: t, contentHash: 'm1', updatedAt: '2026-11-22T00:00:00Z' } } }),
+      text: (r) => String((r.memory as { content: string }).content),
+    },
+    {
+      label: 'subagent answer', op: 'subagent_read', args: { id: 'sa-0123abcd' },
+      routes: (t) => ({ '*': { id: 'sa-0123abcd', state: 'completed', open: false, answer: t } }),
+      text: (r) => String(r.answer),
+    },
+    {
+      label: 'MCP text answer', op: 'mcp_read', args: { server: 'docs', tool: 'read_doc', arguments: {} },
+      routes: (t) => ({ '*': { isError: false, text: t } }),
+      text: (r) => String(r.text),
+    },
+  ]
+
+  /** A Markdown document of exactly `length` characters (ASCII, or Chinese prose with quotes, escaped). */
+  const doc = (length: number, cjk: boolean): string => {
+    let t = markdown(Math.ceil(length / 800) + 2, cjk)
+    while (t.length < length) t += t
+    return t.slice(0, length)
+  }
+  const DOCS: Array<[string, string]> = [
+    ['9,012 ASCII', doc(9_012, false)], ['9,012 non-ASCII', doc(9_012, true)],
+    ['20,000 ASCII', doc(20_000, false)], ['20,000 non-ASCII', doc(20_000, true)],
   ]
   const pageText = (text: string): string => {
     const at = text.indexOf(`\n\n${PAGE_MARK}`)
     return at < 0 ? text : text.slice(0, at)
   }
 
+  it('every op that declares paging has a fixture here', () => {
+    const paging = listOps({ includeDeprecated: true })
+      .filter((op) => { const input = (op as { input?: Record<string, unknown> }).input ?? {}; return 'offset' in input && 'section' in input })
+      .map((op) => op.name).sort()
+    expect(paging.length).toBeGreaterThanOrEqual(7)
+    expect(paging.filter((name) => !READS.some((r) => r.op === name))).toEqual([])
+  })
+
   for (const surface of ['mcp', 'cli'] as AnswerSurface[]) {
-    for (const [kind, doc] of docs) {
-      for (const read of reads) {
-        it(`${read.op}, ${kind}, on the ${surface} surface`, async () => {
-          const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(read.body(doc)), { status: 200 }))
+    for (const [kind, text] of DOCS) {
+      for (const read of READS) {
+        it(`${read.label} (${read.op}), ${kind}, on the ${surface} surface`, async () => {
+          const routes = read.routes(text)
+          const fetcher = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+            const url = new URL(String(input instanceof Request ? input.url : input))
+            const route = url.pathname.replace(/^\/api(\/v1)?/, '')
+            const body = routes[decodeURIComponent(route)] ?? routes['*']
+            return body === undefined ? new Response('{"error":"not found"}', { status: 404 }) : new Response(JSON.stringify(body), { status: 200 })
+          })
           try {
+            const cap = answerFit(getOp(read.op)!, surface).max
             let joined = ''
             let args: Record<string, unknown> = { ...read.args }
             let pages = 0
-            for (; pages < 200; pages++) {
+            for (; pages < 60; pages++) {
               const r = await executeOp(read.op, args, { origin: LOCAL_ORIGIN, callerSid: 's-1', forAgent: surface })
               expect(r.ok, r.ok ? '' : r.message).toBe(true)
               const answer = r.result as Record<string, unknown>
-              expect(printedSize(answer, surface)).toBeLessThanOrEqual(answerFit(getOp(read.op)!, surface).max)
-              // A page is never cut again after it was built: its text carries no cut mark.
-              expect(read.text(answer)).not.toContain('[Walnut cut:')
+              expect(printedSize(answer, surface)).toBeLessThanOrEqual(cap)
+              // Never the generic cut: no cut mark, no _cut note.
+              expect(JSON.stringify(answer)).not.toContain('[Walnut cut:')
+              expect(answer._cut).toBeUndefined()
+              const page = answer.page as { part?: string; next?: string } | undefined
               joined += pageText(read.text(answer))
-              const next = String((answer.page as { next?: string } | undefined)?.next ?? '')
-              const call = /^\w+ (\{.*\})$/.exec(next)
-              if (!call) break
-              const more = JSON.parse(call[1]) as Record<string, unknown>
-              expect(typeof more.offset).toBe('number')
-              args = { ...read.args, offset: more.offset }
+              if (!page) {
+                expect(pages, 'a whole answer comes only first').toBe(0)
+                break
+              }
+              // The page says so first: the first lines a reader sees are that this is a part, and the next call.
+              expect(Object.keys(answer)[0]).toBe('page')
+              const head = cliAnswerText(answer).split('\n').slice(0, 5).join('\n')
+              const call = /^(\w+) (\{.*\})$/.exec(String(page.next ?? ''))
+              if (!call) {
+                expect(page.part).toBe('The last part.')
+                break
+              }
+              const part = pages === 0 ? /^Part 1 of about \d+: NOT the whole text/ : /^A later part, about \d+ more parts? follows?: NOT the whole text/
+              expect(page.part).toMatch(part)
+              expect(head).toMatch(new RegExp(part.source.replace('^', '"part": "')))
+              expect(head).toContain(`"next": ${JSON.stringify(page.next)}`)
+              expect(call[1]).toBe(read.op)
+              args = { ...read.args, ...JSON.parse(call[2]) as Record<string, unknown> }
             }
-            expect(pages).toBeGreaterThan(surface === 'cli' ? 4 : 1)
-            expect(joined).toBe(doc)
+            expect(joined).toBe(text)
+            // A 9 KB memory is one MCP answer; on the CLI (8,000 bytes) it pages.
+            if (kind.startsWith('9,012') && surface === 'mcp') expect(pages).toBe(0)
+            if (surface === 'cli') expect(pages).toBeGreaterThan(0)
           } finally { fetcher.mockRestore() }
         })
       }

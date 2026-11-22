@@ -14,7 +14,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-import { createWalnutMcpHandler, mcpToolOf, negotiateProtocol, MCP_PROTOCOL_VERSIONS } from '../../src/providers/walnut-mcp-stdio.js'
+import {
+  createWalnutMcpHandler, fileToolListCache, mcpListAnswerMs, mcpToolOf, negotiateProtocol, sweepToolListCache,
+  MCP_LIST_ANSWER_MS, MCP_PROTOCOL_VERSIONS, type ToolListCache,
+} from '../../src/providers/walnut-mcp-stdio.js'
 import { GATEWAY_INLINE_ARGS_MAX_BYTES } from '../../src/providers/tool-args-source.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 
@@ -92,6 +95,205 @@ describe('walnut mcp-server handler', () => {
     expect((second?.result as { tools: Array<{ name: string }> }).tools.map((t) => t.name)).toEqual(['task_get', 'task_list'])
     await handle({ jsonrpc: '2.0', id: 3, method: 'tools/list' })
     expect(calls).toBe(3)
+  })
+
+  /**
+   * The class: a session's Walnut tools survive a restart of the server or the daemon. Claude Code
+   * reads a list once and refreshes it only on list_changed, and takes no late answer to a list that
+   * timed out (2026-11-22, the Mac's debug logs: "Failed to fetch tools: Request timed out", then
+   * our `{"tools":[]}` 0.5 s late; sessions resumed at 09:49:12 by a restart read a list without
+   * the 37 tools of plugins still loading, and kept it for the process's life).
+   */
+  describe('the tool list survives a restart of the server or the daemon', () => {
+    const tool = (name: string) => ({ name, inputSchema: { type: 'object' } })
+    const memCache = (kept: Record<string, unknown>[] | null = null): ToolListCache & { kept: Record<string, unknown>[] | null } => {
+      const c = { kept, read: () => c.kept, write: (t: Record<string, unknown>[]) => { c.kept = t } }
+      return c
+    }
+    const waitFor = async (cond: () => boolean) => {
+      const deadline = Date.now() + 2000
+      while (!cond() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5))
+    }
+    const names = (reply: unknown) => ((reply as { result: { tools: Array<{ name: string }> } }).result.tools).map((t) => t.name)
+
+    it('a list read while the hub loads its plugins (partial) is answered, asked again, and the client told', async () => {
+      let calls = 0
+      const notified: string[] = []
+      const cache = memCache()
+      const handle = createWalnutMcpHandler({
+        formatError, listRetryMs: 60_000, partialRetryMs: 5, notify: (m) => notified.push(m), listCache: cache,
+        request: async () => (++calls === 1
+          ? { ok: true, result: { ops: [tool('task_get')], partial: true } }
+          : { ok: true, result: { ops: [tool('task_get'), tool('slack_search')] } }),
+      })
+      expect(names(await handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' }))).toEqual(['task_get'])
+      // A partial list is never kept as this session's list.
+      expect(cache.kept).toBeNull()
+      await waitFor(() => notified.length > 0)
+      expect(notified).toEqual(['notifications/tools/list_changed'])
+      expect(names(await handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' }))).toEqual(['task_get', 'slack_search'])
+      expect(cache.kept?.map((t) => t.name)).toEqual(['task_get', 'slack_search'])
+    })
+
+    it('a process started while the hub is away lists what this session was last given, then the new list', async () => {
+      let up = false
+      const notified: string[] = []
+      const cache = memCache([tool('task_get'), tool('task_send'), tool('slack_search')])
+      const handle = createWalnutMcpHandler({
+        formatError, listRetryMs: 5, notify: (m) => notified.push(m), listCache: cache,
+        request: async () => (up ? { ok: true, result: { ops: [tool('task_get'), tool('task_send')] } }
+          : { ok: false, error: { code: 'hub_unreachable', message: 'the Walnut server is away' } }),
+      })
+      expect(names(await handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' }))).toEqual(['task_get', 'task_send', 'slack_search'])
+      up = true
+      await waitFor(() => notified.length > 0)
+      expect(notified).toEqual(['notifications/tools/list_changed'])
+      expect(names(await handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' }))).toEqual(['task_get', 'task_send'])
+      expect(cache.kept?.map((t) => t.name)).toEqual(['task_get', 'task_send'])
+    })
+
+    it('a short offline set (rows without a schema) does not replace the kept list', async () => {
+      const cache = memCache([tool('task_get'), tool('task_send'), tool('slack_search')])
+      const handle = createWalnutMcpHandler({
+        formatError, listRetryMs: 60_000, notify: () => {}, listCache: cache,
+        request: async () => ({ ok: true, result: { ops: [{ name: 'task_get', signature: 'id' }, { name: 'task_send', signature: 'to, text' }], offline: true } }),
+      })
+      expect(names(await handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' }))).toEqual(['task_get', 'task_send', 'slack_search'])
+      expect(cache.kept?.map((t) => t.name)).toEqual(['task_get', 'task_send', 'slack_search'])
+    })
+
+    it('a partial list longer than the kept one keeps its fresh rows and gains the kept tools it lacks', async () => {
+      // An upgrade added more core ops than the plugins hold: the partial list is the longer one.
+      const cache = memCache([{ ...tool('task_get'), description: 'old' }, tool('slack_search')])
+      const handle = createWalnutMcpHandler({
+        formatError, listRetryMs: 60_000, partialRetryMs: 60_000, notify: () => {}, listCache: cache,
+        request: async () => ({ ok: true, result: { ops: [{ ...tool('task_get'), description: 'new' }, tool('task_send'), tool('task_list')], partial: true } }),
+      })
+      const reply = await handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+      expect(names(reply)).toEqual(['task_get', 'task_send', 'task_list', 'slack_search'])
+      expect((reply as { result: { tools: Array<{ description: string }> } }).result.tools[0].description).toBe('new')
+    })
+
+    it('a partial answer is asked for again soon, not at the slow pace', async () => {
+      let calls = 0
+      const notified: string[] = []
+      const handle = createWalnutMcpHandler({
+        formatError, listRetryMs: 60_000, partialRetryMs: 5, notify: (m) => notified.push(m),
+        request: async () => (++calls === 1 ? { ok: true, result: { ops: [tool('task_get')], partial: true } } : { ok: true, result: { ops: [tool('task_get'), tool('slack_search')] } }),
+      })
+      await handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+      await waitFor(() => notified.length > 0)
+      expect(notified).toEqual(['notifications/tools/list_changed'])
+    })
+
+    it('with nothing kept, a hub past the early answer gets [] at once, then exactly one list_changed', async () => {
+      let release: (() => void) | undefined
+      const notified: string[] = []
+      const handle = createWalnutMcpHandler({
+        formatError, listAnswerMs: 20, listRetryMs: 5, notify: (m) => notified.push(m),
+        request: () => new Promise((resolve) => { release = () => resolve({ ok: true, result: { ops: [tool('task_get')] } }) }),
+      })
+      expect(names(await handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' }))).toEqual([])
+      release?.()
+      await waitFor(() => notified.length > 0)
+      await new Promise((r) => setTimeout(r, 50))
+      expect(notified).toEqual(['notifications/tools/list_changed'])
+      expect(names(await handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' }))).toEqual(['task_get'])
+    })
+
+    it('a late answer that is partial is asked for again', async () => {
+      let calls = 0
+      let release: (() => void) | undefined
+      const notified: string[] = []
+      const handle = createWalnutMcpHandler({
+        formatError, listAnswerMs: 20, listRetryMs: 60_000, partialRetryMs: 5, notify: (m) => notified.push(m),
+        request: () => (++calls === 1
+          ? new Promise((resolve) => { release = () => resolve({ ok: true, result: { ops: [tool('task_get')], partial: true } }) })
+          : Promise.resolve({ ok: true, result: { ops: [tool('task_get'), tool('slack_search')] } })),
+      })
+      await handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+      release?.()
+      await waitFor(() => notified.length > 0)
+      expect(calls).toBe(2)
+      expect(names(await handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' }))).toEqual(['task_get', 'slack_search'])
+    })
+
+    it('the early answer comes 2 s inside the client\'s own MCP_TIMEOUT when that is shorter', () => {
+      expect(mcpListAnswerMs({})).toBe(MCP_LIST_ANSWER_MS)
+      expect(mcpListAnswerMs({ MCP_TIMEOUT: '60000' })).toBe(MCP_LIST_ANSWER_MS)
+      expect(mcpListAnswerMs({ MCP_TIMEOUT: '10000' })).toBe(8_000)
+      expect(mcpListAnswerMs({ MCP_TIMEOUT: '1500' })).toBe(1_000)
+      expect(mcpListAnswerMs({ MCP_TIMEOUT: 'soon' })).toBe(MCP_LIST_ANSWER_MS)
+    })
+
+    it('a hub slower than the client waits is answered before the client gives up, and its late list still lands', async () => {
+      let release: (() => void) | undefined
+      const notified: string[] = []
+      const handle = createWalnutMcpHandler({
+        formatError, listAnswerMs: 20, listRetryMs: 5, notify: (m) => notified.push(m), listCache: memCache([tool('task_get')]),
+        request: () => new Promise((resolve) => { release = () => resolve({ ok: true, result: { ops: [tool('task_get'), tool('task_list')] } }) }),
+      })
+      const started = Date.now()
+      expect(names(await handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' }))).toEqual(['task_get'])
+      expect(Date.now() - started).toBeLessThan(1_000)
+      release?.()
+      await waitFor(() => notified.length > 0)
+      expect(notified).toEqual(['notifications/tools/list_changed'])
+      expect(names(await handle({ jsonrpc: '2.0', id: 2, method: 'tools/list' }))).toEqual(['task_get', 'task_list'])
+    })
+
+    it('the kept list lives on disk per session, one file per list, and only in an owner-only directory', () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-mcp-lists-'))
+      try {
+        const dir = path.join(root, 'lists')
+        const a = fileToolListCache(dir, 'sess-a')
+        expect(a.read()).toBeNull()
+        a.write([tool('task_get')])
+        fileToolListCache(dir, 'sess-b').write([tool('task_get')])
+        expect(fileToolListCache(dir, 'sess-a').read()).toEqual([tool('task_get')])
+        expect(fs.readdirSync(dir).filter((n) => n.endsWith('.json'))).toHaveLength(1)
+        expect(fs.statSync(dir).mode & 0o777).toBe(0o700)
+        // A directory others can write to is never read: a tool description is what the model is told.
+        fs.chmodSync(dir, 0o777)
+        expect(fileToolListCache(dir, 'sess-a').read()).toBeNull()
+        fs.chmodSync(dir, 0o700)
+        // A file name never carries the session id as it is.
+        expect(fs.readdirSync(dir).some((n) => n.includes('sess-'))).toBe(false)
+        // A broken ref reads as no list, never a crash.
+        const before = new Set(fs.readdirSync(dir))
+        fileToolListCache(dir, 'sess-c').write([tool('task_get')])
+        const ref = fs.readdirSync(dir).find((n) => !before.has(n))!
+        expect(ref).toMatch(/^[0-9a-f]{16}\.ref$/)
+        fs.writeFileSync(path.join(dir, ref), 'not a hash')
+        expect(fileToolListCache(dir, 'sess-c').read()).toBeNull()
+        expect(fileToolListCache(dir, 'sess-a').read()).toEqual([tool('task_get')])
+      } finally { fs.rmSync(root, { recursive: true, force: true }) }
+    })
+
+    it('the sweep takes old refs, unfinished writes and lists no ref names; a list a ref just named is touched', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-mcp-sweep-'))
+      try {
+        const old = (file: string, ms: number) => { const t = new Date(Date.now() - ms); fs.utimesSync(path.join(dir, file), t, t) }
+        fileToolListCache(dir, 'sess-a').write([tool('task_get')])
+        const list = fs.readdirSync(dir).find((n) => n.endsWith('.json'))!
+        // Another session's write of the same list refreshes it, so no sweep takes it as unnamed.
+        old(list, 2 * 3600_000)
+        fileToolListCache(dir, 'sess-b').write([tool('task_get')])
+        expect(Date.now() - fs.statSync(path.join(dir, list)).mtimeMs).toBeLessThan(60_000)
+        fs.writeFileSync(path.join(dir, 'x.json.1.tmp'), '[')
+        fs.writeFileSync(path.join(dir, 'y.json.2.tmp'), '[')
+        fs.writeFileSync(path.join(dir, '0123456789abcdef.json'), '[]')
+        old('x.json.1.tmp', 2 * 3600_000)
+        old('0123456789abcdef.json', 2 * 3600_000)
+        for (const ref of fs.readdirSync(dir).filter((n) => n.endsWith('.ref'))) old(ref, 15 * 24 * 3600_000)
+        sweepToolListCache(dir, Date.now())
+        // Old refs gone, so their list is unnamed now but still fresh: kept until it is an hour old.
+        expect(fs.readdirSync(dir).sort()).toEqual([list, 'y.json.2.tmp'].sort())
+        old(list, 2 * 3600_000)
+        sweepToolListCache(dir, Date.now())
+        expect(fs.readdirSync(dir)).toEqual(['y.json.2.tmp'])
+      } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+    })
   })
 
   it('a line that is not a JSON-RPC object is ignored, never a crash', async () => {

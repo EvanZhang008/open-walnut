@@ -123,6 +123,11 @@ class IntegrationRegistry {
     return this.closing;
   }
 
+  /** The plugin set is changing now (the boot's walk, a reload): a list of their ops read now may lack some. */
+  isChanging(): boolean {
+    return this.changes.size > 0;
+  }
+
   /** Wait at most `timeoutMs` while the plugin set is changing. False when it was not. */
   async waitForPlugins(timeoutMs: number): Promise<boolean> {
     if (this.changes.size === 0) return false;
