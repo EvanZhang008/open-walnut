@@ -66,7 +66,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 4px 10px;
+  gap: 4px 8px;
   margin: 0;
   padding: 0 12px 6px;
   font-size: var(--font-size-sm);
@@ -76,8 +76,6 @@
 
 .mail-list-status-line[data-tone='error'] { color: var(--error); }
 .mail-list-status-text { min-width: 0; }
-.mail-text-btn { min-height: 24px; }
-.mail-list-status-action, .mail-list-status-close { font-size: var(--font-size-sm); }
 
 .mail-grouped-state .mail-list-note { padding-top: 2px; }
 .mail-rules-error, .mail-groups-error { color: var(--fg-secondary); }
@@ -223,8 +221,6 @@
   white-space: nowrap;
 }
 
-.mail-group-stop { font-size: var(--font-size-sm); min-height: 0; }
-
 /* ── an open group: compact one-line rows, then `N more`, then the footer ── */
 
 .mail-group-kids { padding-bottom: 4px; }
@@ -290,13 +286,12 @@
 .mail-group-foot {
   display: flex;
   flex-wrap: wrap;
-  gap: 2px 14px;
+  gap: 2px 8px;
   margin: 0;
-  padding: 2px 12px 6px 29px;
+  /* Its quiet keys' labels line up with the rows above (29 px, less a key's 10 px padding). */
+  padding: 2px 12px 6px 19px;
   font-size: var(--font-size-sm);
 }
-
-.mail-group-foot .mail-text-btn { font-size: var(--font-size-sm); }
 
 /* ── nothing unread ── */
 
@@ -331,7 +326,6 @@
 /* The section's one press, after its unread word (which already took the free space). */
 .mail-not-important-head .mail-mark-all {
   flex: 0 0 auto;
-  font-size: var(--font-size-sm);
   letter-spacing: 0;
   text-transform: none;
 }
@@ -425,7 +419,7 @@
 .mail-unsub-method { flex: 0 1 auto; color: var(--fg-secondary); }
 .mail-unsub-mails { flex: 0 0 auto; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 .mail-unsub-small { padding-left: 24px; color: var(--fg-muted); font-size: var(--font-size-xs); }
-.mail-unsub-deadend { display: inline-flex; flex-wrap: wrap; gap: 4px 10px; padding-left: 24px; }
+.mail-unsub-deadend { display: inline-flex; flex-wrap: wrap; gap: 4px 8px; padding-left: 24px; }
 .mail-unsub-run { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding-left: 24px; color: var(--fg-secondary); }
 .mail-unsub-run[data-status='done'] { color: var(--success); }
 .mail-unsub-run[data-status='failed'] { color: var(--error); }
@@ -449,4 +443,3 @@
 
 .mail-reader-sort-text { min-width: 0; overflow-wrap: anywhere; }
 .mail-reader-sort-sep { opacity: 0.7; }
-.mail-reader-sort-fix { font-size: var(--font-size-sm); min-height: 0; }

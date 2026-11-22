@@ -33,7 +33,7 @@ export function MailSortLine({ open }: { open: MailOpenMessage }) {
       <span className="mail-reader-sort-sep" aria-hidden="true">·</span>
       <button
         type="button"
-        className="mail-text-btn mail-reader-sort-fix"
+        className="btn btn-sm btn-link mail-text-btn mail-reader-sort-fix"
         data-testid="mail-reader-sort-fix"
         onClick={(event) => {
           requestMailCorrect({

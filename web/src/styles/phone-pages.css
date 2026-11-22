@@ -861,8 +861,7 @@
   .app-shell-navigation .mail-app .mail-group-pill,
   .app-shell-navigation .mail-app .mail-row-account,
   .app-shell-navigation .mail-app .mail-row-time,
-  .app-shell-navigation .mail-app .mail-reader-account,
-  .app-shell-navigation .mail-app .mail-reader-details-btn {
+  .app-shell-navigation .mail-app .mail-reader-account {
     font-size: var(--font-size-sm);
   }
 

@@ -23,7 +23,7 @@ function QuickTile({ app, pinned, onOpen }: { app: RegisteredApp; pinned: boolea
       </button>
       <button
         type="button"
-        className={`apps-quick-pin${pinned ? ' is-on' : ''}`}
+        className="btn btn-icon btn-sm btn-ghost apps-quick-pin"
         onClick={() => updateAppPinned(app.key, !pinned)}
         aria-pressed={pinned}
         aria-label={`${action} ${app.title}`}

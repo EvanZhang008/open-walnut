@@ -93,7 +93,7 @@ export function MailReaderBody({ open }: { open: MailOpenMessage }) {
             </span>
             <button
               type="button"
-              className="mail-paper-btn"
+              className="btn btn-sm mail-paper-btn"
               data-testid="mail-load-images"
               onClick={allowRemoteImagesForOpenMessage}
             >

@@ -16,7 +16,7 @@ export function MailListStatus({ viewKey }: { viewKey: string }) {
             <button
               key={action.label}
               type="button"
-              className="mail-text-btn mail-list-status-action"
+              className="btn btn-sm mail-text-btn mail-list-status-action"
               {...(action.testId ? { 'data-testid': action.testId } : {})}
               onClick={() => { action.run(); }}
             >
@@ -26,7 +26,7 @@ export function MailListStatus({ viewKey }: { viewKey: string }) {
           {note.sticky && (
             <button
               type="button"
-              className="mail-text-btn mail-list-status-close"
+              className="btn btn-sm btn-ghost mail-text-btn mail-list-status-close"
               aria-label="Dismiss"
               onClick={() => { dismissMailListStatus(note.id); }}
             >

@@ -397,7 +397,6 @@ describe('one corner for every notice', () => {
       '.mail-add-dialog': 'a centred dialog',
       '.mail-setup-options': 'a list inside that dialog',
       '.mail-group-foot': 'the end of one sender group, a row inside .mail-rows, which takes the room',
-      '.mail-text-btn': 'a button in that row',
       '.mail-unsub-list': 'a list inside the unsubscribe dialog',
       '.tp-cols-popover': 'a popover the person opens, placed by its trigger',
       '.tp-proj-popover': 'a popover the person opens, placed by its trigger',

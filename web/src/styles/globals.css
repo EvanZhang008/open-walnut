@@ -19668,27 +19668,9 @@ a.tag-chip:hover .tag-chip-value,
    positioned: the old `position:absolute; top:9; right:56` floated it over the
    note's own header row. */
 .notes-ai-toggle {
+  /* A quiet family key (btn-sm btn-ghost); open, aria-pressed draws its on look. */
   flex: 0 0 auto;
   align-self: center;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  /* 24 px, centred in the 32 px tab strip. */
-  padding: 3px 8px;
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: var(--bg);
-  color: var(--fg-secondary);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-.notes-ai-toggle:hover { background: var(--bg-hover); color: var(--fg); }
-.notes-ai-toggle.active {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  border-color: var(--accent);
-  color: var(--accent);
 }
 
 /* Divider doubles as the chat pane's drag-resize handle: thin visual line,

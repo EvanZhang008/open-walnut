@@ -275,42 +275,15 @@
 .plugin-store-updates-head {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   margin-left: auto;
   color: var(--fg-secondary);
   font-size: var(--font-size-sm);
   white-space: nowrap;
 }
 
-/* The text-safe accent twin, as on the chip: the fill accent measures 4.02:1 on the light
-   card at 12px, under 4.5:1 (N3-9). */
-.plugin-store-updates-head .btn-link {
-  padding: 2px 4px;
-  border: 0;
-  border-radius: var(--radius-full);
-  background: none;
-  color: var(--accent-text);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-}
+/* Check now (or Retry) is a quiet family key after the time. */
 
-.plugin-store-updates-head .btn-link:hover:not(:disabled) {
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-/* While a check runs the verb is dead and must not read as the tail of the status sentence
-   next to it (N2-11): muted, not the same secondary grey as the text. */
-.plugin-store-updates-head .btn-link:disabled {
-  color: var(--fg-muted);
-  cursor: default;
-}
-
-.plugin-store-updates-head .btn-link:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
 
 /*
  * Row layout (N2-1). The copy column and the actions cluster are the two flex children of

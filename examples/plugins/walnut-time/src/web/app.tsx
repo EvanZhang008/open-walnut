@@ -189,7 +189,7 @@ export function TimeApp({ api, log, useView = useStateView, basePath, subpath, n
             time went. Never mixed into one number.
           </p>
         </div>
-        <button className="wt-refresh" data-testid="time-app-refresh" onClick={load} disabled={loading}>
+        <button type="button" className="btn" data-testid="time-app-refresh" onClick={load} disabled={loading}>
           {loading ? 'Refreshing…' : 'Refresh'}
         </button>
       </header>

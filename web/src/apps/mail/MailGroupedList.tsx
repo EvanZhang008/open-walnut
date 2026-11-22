@@ -68,7 +68,7 @@ export function MailGroupsFallback({ mode }: { mode: GroupedMode }) {
       <span>{groupsErrorText(view.error)}</span>
       <button
         type="button"
-        className="mail-text-btn"
+        className="btn btn-sm mail-text-btn"
         data-testid="mail-groups-retry"
         onClick={() => { void loadGroups(mode.scope, true); }}
       >
@@ -105,7 +105,7 @@ function GroupsStateLines({ view, onOpenRules }: { view: GroupsViewState; onOpen
       {groups.rulesError && (
         <p className="mail-list-note mail-rules-error" data-testid="mail-rules-error">
           <span>{rulesErrorText(groups.rulesError.line)}</span>
-          <button type="button" className="mail-text-btn" data-testid="mail-rules-open" onClick={onOpenRules}>
+          <button type="button" className="btn btn-sm mail-text-btn" data-testid="mail-rules-open" onClick={onOpenRules}>
             Open Mail rules
           </button>
         </p>
@@ -277,7 +277,7 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name, degrad
       {plan?.error && (
         <p className="mail-list-note" data-testid="mail-unsub-plan-error" role="status">
           <span>{plan.error}</span>
-          <button type="button" className="mail-text-btn" onClick={() => setPlan(null)}>Dismiss</button>
+          <button type="button" className="btn btn-sm btn-ghost mail-text-btn" onClick={() => setPlan(null)}>Dismiss</button>
         </p>
       )}
       <div className="mail-rows mail-grouped" ref={rowsRef}>
@@ -299,7 +299,7 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name, degrad
                 {markAll.total > 0 && (
                   <button
                     type="button"
-                    className="mail-text-btn mail-mark-all"
+                    className="btn btn-sm btn-ghost mail-text-btn mail-mark-all"
                     data-testid="mail-not-important-mark-all"
                     disabled={recomputing}
                     title={recomputing ? GROUPS_UPDATING_TITLE : `Mark the ${formatCount(markAll.total)} unread in every group read`}

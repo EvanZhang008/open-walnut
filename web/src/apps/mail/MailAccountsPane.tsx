@@ -509,7 +509,7 @@ export function MailAccountsPane({
 
       <button
         type="button"
-        className="mail-add-account"
+        className="btn btn-sm btn-ghost mail-add-account"
         data-testid="mail-add-account"
         onClick={onAddAccount}
       >

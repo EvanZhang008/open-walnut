@@ -118,13 +118,13 @@ export function MailReaderHead({ open, message, accounts, providers }: Props) {
           {extras.length > 0 && (
             <button
               type="button"
-              className={`mail-reader-details-btn${details ? ' open' : ''}`}
+              className="btn btn-sm btn-ghost mail-reader-details-btn"
               data-testid="mail-reader-details"
               aria-expanded={details}
               onClick={() => setDetails((was) => !was)}
             >
               Details
-              <ChevronIcon />
+              <span className="btn-caret" aria-hidden="true"><ChevronIcon /></span>
             </button>
           )}
         </span>
@@ -343,7 +343,7 @@ function ReaderActions({ open, message, accounts, providers }: Props) {
     <div className="mail-reader-actions">
       <button
         type="button"
-        className="btn btn-icon mail-round-btn"
+        className="btn btn-icon btn-sm btn-ghost mail-round-btn"
         data-testid="mail-reply"
         disabled={!canSend}
         title={sendTitle('Reply to the sender')}
@@ -355,7 +355,7 @@ function ReaderActions({ open, message, accounts, providers }: Props) {
       </button>
       <button
         type="button"
-        className="btn btn-icon mail-round-btn"
+        className="btn btn-icon btn-sm btn-ghost mail-round-btn"
         data-testid="mail-reply-all"
         disabled={!canSend}
         title={sendTitle('Reply to everyone')}
@@ -367,7 +367,7 @@ function ReaderActions({ open, message, accounts, providers }: Props) {
       </button>
       <button
         type="button"
-        className="btn btn-icon mail-round-btn"
+        className="btn btn-icon btn-sm btn-ghost mail-round-btn"
         data-testid="mail-forward"
         disabled={!canSend}
         title={sendTitle('Forward this message')}
@@ -388,7 +388,7 @@ function ReaderActions({ open, message, accounts, providers }: Props) {
       <MailContentActions open={open} />
       <button
         type="button"
-        className="btn btn-icon mail-round-btn"
+        className="btn btn-icon btn-sm btn-ghost mail-round-btn"
         data-testid="mail-mark-read"
         disabled={!canMark}
         title={canMark

@@ -249,21 +249,8 @@
 /* Cannot change (Home, Apps, Settings): a lock and quiet text, nothing that looks pressable. */
 .apps-card-status--fixed { color: var(--fg-muted); }
 .apps-card-lock { flex: none; opacity: 0.8; }
-.apps-card-open {
-  position: relative;
-  z-index: 1;
-  border: 0;
-  border-radius: var(--radius-full);
-  padding: 3px 12px;
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
-  font: inherit;
-  font-weight: 600;
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-}
-.apps-card-open:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
-.apps-card-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* A card's Open is a plain family key, above the card's own click area. */
+.apps-card-open { position: relative; z-index: 1; }
 .apps-card-dim .apps-card-icon { filter: grayscale(1); opacity: 0.55; }
 .apps-card-dim .apps-card-name { color: var(--fg-muted); }
 .apps-card-add {
@@ -507,8 +494,6 @@
   .apps-make { padding: 18px; }
 }
 
-/* "Check now" beside the update status: the text-safe accent, as on an available chip (N3-9). */
-.plugin-store-updates-head .settings-addons-link { color: var(--accent-text); }
 
 /* An Update's result line under the Version row: top-aligned, so opening Details grows it
    downward and the toggle the user pressed stays put (N3-6). */
@@ -553,20 +538,7 @@
 /* .wn-title: the app's name wraps rather than cut; it stays at its words' width so the badge follows it. */
 .apps-quick-name { min-width: 0; font-weight: 500; }
 .apps-quick-open > .apps-quick-name { flex: 0 1 auto; }
-.apps-quick-pin {
-  flex: none;
-  width: 28px;
-  height: 28px;
-  margin-right: 6px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-.apps-quick-pin:hover { color: var(--fg); background: var(--bg-tertiary); }
-.apps-quick-pin.is-on { color: var(--accent); }
+/* The pin is the family's quiet icon key; pinned, aria-pressed draws it on. */
+.apps-quick-pin { flex: none; margin-right: 8px; }
+/* The count belongs to the app: it follows the name in the flow, never floats at the tile's corner. */
+.apps-quick-open > .apps-card-badge { position: static; flex: none; border: none; }

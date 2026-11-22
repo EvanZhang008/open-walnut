@@ -57,14 +57,14 @@ export function TaskTimePage({ page, store, paths, basePath, navigate }: TaskTim
           </p>
         </div>
         <div className="wt-task-actions">
-          <button type="button" className="wt-refresh" onClick={back} data-testid="time-task-back">Back</button>
+          <button type="button" className="btn btn-ghost" onClick={back} data-testid="time-task-back">Back</button>
           {page.kind === 'task' && (
-            <button type="button" className="wt-refresh" onClick={() => navigate(`/tasks/${encodeURIComponent(page.id)}`)}>
+            <button type="button" className="btn" onClick={() => navigate(`/tasks/${encodeURIComponent(page.id)}`)}>
               Open task
             </button>
           )}
           {page.kind === 'task' && (
-            <button type="button" className="wt-refresh" onClick={() => store.refreshTask(page.id)}>Refresh</button>
+            <button type="button" className="btn" onClick={() => store.refreshTask(page.id)}>Refresh</button>
           )}
         </div>
       </header>

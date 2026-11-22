@@ -223,7 +223,7 @@ export function AddAccountDialog({ providers, onClose, onAdded }: Props) {
             {providers.length > 1 && (
               <button
                 type="button"
-                className="mail-text-btn mail-provider-back"
+                className="btn btn-sm btn-ghost mail-text-btn mail-provider-back"
                 onClick={() => { setProviderId(''); setFailure(null); }}
               >
                 {provider.label}: change provider

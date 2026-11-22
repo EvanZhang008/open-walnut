@@ -962,16 +962,18 @@ export const NotesTreePanel = memo(function NotesTreePanel({
         <h3>Notes</h3>
         <div className="notes-tree-actions">
           <button
-            className="btn btn-icon notes-tree-action-btn"
+            className="btn btn-icon btn-sm btn-ghost notes-tree-action-btn"
             onClick={() => handleNewItem(null, 'file')}
             title="New Note"
+            aria-label="New note"
           >
             <PlusFileIcon />
           </button>
           <button
-            className="btn btn-icon notes-tree-action-btn"
+            className="btn btn-icon btn-sm btn-ghost notes-tree-action-btn"
             onClick={() => handleNewItem(null, 'folder')}
             title="New Folder"
+            aria-label="New folder"
           >
             <PlusFolderIcon />
           </button>

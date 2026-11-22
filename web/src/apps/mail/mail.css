@@ -194,14 +194,8 @@
    phone shows each one's name under its icon, phone-fixes-r4.css). */
 .mail-round-btn { flex: 0 0 auto; }
 
-.mail-text-btn {
-  border: none;
-  background: none;
-  padding: 0;
-  color: var(--accent);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-}
+/* .mail-text-btn is every Mail family key that was a bare text link: only the phone's finger size
+   hooks on it (phone-pages.css). */
 
 /* The overflow button's glyph. Three periods rather than an ellipsis character, tightened, so it
    reads as a menu affordance at 26px instead of as clipped text. */
@@ -383,21 +377,15 @@
 .mail-sync-line[data-state='auth-required'],
 .mail-sync-line[data-state='degraded'] { color: var(--warning); }
 
+/* `+ Add account` is a quiet family key under the line (its label lines up with the line's words); the
+   rule under it, which parts the pane's head from its folders, belongs to the scroller below. */
 .mail-add-account {
   flex: 0 0 auto;
-  margin: 0;
-  padding: 8px 12px 10px;
-  border: none;
-  border-bottom: 1px solid var(--border);
-  background: none;
-  color: var(--accent);
-  font-size: var(--font-size-md);
-  font-weight: 500;
-  text-align: left;
-  cursor: pointer;
+  align-self: flex-start;
+  margin: 0 2px 6px;
 }
 
-.mail-add-account:hover { background: var(--bg-hover); }
+.mail-add-account ~ .mail-accounts-scroll { border-top: 1px solid var(--border); }
 
 
 /* ── message list ── */
@@ -1160,7 +1148,8 @@
 .mail-list-note {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 10px;
+  align-items: baseline;
+  gap: 4px 8px;
   margin: 0;
   padding: 0 12px 6px;
   font-size: var(--font-size-xs);

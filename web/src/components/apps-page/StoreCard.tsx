@@ -80,7 +80,7 @@ export function StoreCard({ testId, icon, name, badge, line, note, parts, status
             {open && (
               <button
                 type="button"
-                className="apps-card-open"
+                className="btn btn-sm apps-card-open"
                 onClick={open.onClick}
                 data-testid={open.testId}
                 aria-label={`${open.label} ${name}`}

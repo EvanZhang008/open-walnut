@@ -235,7 +235,7 @@ export function ComposerPanel({ composer, mailboxes, drafts, narrow, canSend, ca
             {showing === 'edit' && composer.draftId && (
               <button
                 type="button"
-                className="mail-text-btn"
+                className="btn btn-sm btn-ghost mail-text-btn"
                 data-testid="mail-composer-show-status"
                 onClick={showMailComposerStatus}
               >
@@ -357,12 +357,12 @@ function ComposerForm({ composer, canSend, cannotSendTitle, senderAddressedBy }:
             trailing={(!composer.showCc || !composer.showBcc) ? (
               <span className="mail-compose-reveals">
                 {!composer.showCc && (
-                  <button type="button" className="mail-text-btn" data-testid="mail-compose-add-cc" onClick={() => toggleMailComposerField('showCc')}>
+                  <button type="button" className="btn btn-sm btn-link mail-text-btn" data-testid="mail-compose-add-cc" onClick={() => toggleMailComposerField('showCc')}>
                     Cc
                   </button>
                 )}
                 {!composer.showBcc && (
-                  <button type="button" className="mail-text-btn" data-testid="mail-compose-add-bcc" onClick={() => toggleMailComposerField('showBcc')}>
+                  <button type="button" className="btn btn-sm btn-link mail-text-btn" data-testid="mail-compose-add-bcc" onClick={() => toggleMailComposerField('showBcc')}>
                     Bcc
                   </button>
                 )}

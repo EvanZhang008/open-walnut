@@ -33,7 +33,7 @@ export function MailContentActions({ open }: { open: MailOpenMessage }) {
         item={mailContentItem(message, bodyQuoteText(open.body))}
         size="compact"
         className="mail-content-actions"
-        buttonClassName="btn btn-icon mail-round-btn"
+        buttonClassName="btn btn-icon btn-sm btn-ghost mail-round-btn"
       />
     </div>
   );

@@ -66,21 +66,6 @@ export const BASE_CSS = `
   text-transform: uppercase;
 }
 
-.wt-refresh {
-  padding: 7px 16px;
-  border: 0;
-  border-radius: var(--radius-sm, 8px);
-  background: var(--accent);
-  color: #fff;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.wt-refresh:hover:not(:disabled) { background: var(--accent-hover); }
-.wt-refresh:disabled { opacity: 0.5; cursor: default; }
-
 /* ── Tabs (the page's own three views) ── */
 
 .wt-tabs {

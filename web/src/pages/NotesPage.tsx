@@ -1075,7 +1075,8 @@ export function NotesPage() {
   // no-tabs strip), so there's a single definition of the button.
   const aiToggleButton = (
     <button
-      className={`notes-ai-toggle${chatOpen ? ' active' : ''}`}
+      type="button"
+      className="btn btn-sm btn-ghost notes-ai-toggle"
       onClick={toggleChat}
       aria-pressed={chatOpen}
       title={chatOpen ? 'Hide Note Agent' : 'Ask the Note Agent'}

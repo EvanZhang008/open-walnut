@@ -709,7 +709,7 @@ test.describe('Mail on a phone', () => {
     const geo = await body.evaluate((el) => {
       const host = document.createElement('div')
       host.innerHTML = '<div class="mail-blocked-images"><span class="mail-blocked-text">2 remote images blocked</span>'
-        + '<button type="button" class="mail-paper-btn">Load images</button></div>'
+        + '<button type="button" class="btn btn-sm mail-paper-btn">Load images</button></div>'
         + '<span class="mail-attachment"><span class="mail-attachment-name">Seed list.pdf</span></span>'
       el.prepend(host)
       const size = (sel: string) => parseFloat(getComputedStyle(host.querySelector(sel)!).fontSize)

@@ -232,22 +232,9 @@
   white-space: nowrap;
 }
 
-.mail-reader-details-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--accent);
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.mail-reader-details-btn svg { transition: transform 0.15s ease; }
-.mail-reader-details-btn.open svg { transform: rotate(180deg); }
-.mail-reader-details-btn:hover { text-decoration: underline; }
+/* Details is a quiet family key; its caret turns while open (.btn-caret). The negative margin lines its
+   label up with the date's end above it. */
+.mail-reader-details-btn { margin-right: -10px; }
 
 /* Fourteen recipients is a real message, so the block is bounded and scrolls itself rather than
    taking the paper's height with it.
@@ -474,27 +461,20 @@
   gap: 8px;
   padding: 7px 14px;
   border-bottom: 1px solid rgba(60, 60, 67, 0.12);
-  background: #f7f7f9;
+  /* The paper is light in both themes, so its colours are the strip's own --bg and --fg, which also
+     tint the family key on it (Load images). */
+  --bg: #f7f7f9;
+  --fg: #4b4b50;
+  background: var(--bg);
   font-size: var(--font-size-sm);
-  color: #4b4b50;
+  color: var(--fg);
 }
 
 .mail-blocked-glyph { display: inline-flex; color: var(--fg-muted); }
 .mail-blocked-text { flex: 1; min-width: 0; }
 
-/* A control ON the paper: the app's accent would be the only theme-aware thing on a white card. */
-.mail-paper-btn {
-  flex: 0 0 auto;
-  padding: 0;
-  border: none;
-  background: none;
-  color: #0a5bd5;
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.mail-paper-btn:hover { text-decoration: underline; }
+/* Load images: a family key on the paper's strip (its colours come from the strip above). */
+.mail-paper-btn { flex: 0 0 auto; }
 
 .mail-html-frame {
   flex: 1 1 auto;

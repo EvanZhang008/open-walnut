@@ -252,7 +252,7 @@ export function MailGroupLine({
               {slot!.phase === 'running' && (
                 <button
                   type="button"
-                  className="mail-text-btn mail-group-stop"
+                  className="btn btn-sm btn-ghost mail-text-btn mail-group-stop"
                   data-testid="mail-bulk-stop"
                   onClick={(event) => { event.stopPropagation(); void stopBulk(slotKey(target)); }}
                 >
@@ -397,7 +397,7 @@ function GroupRows({
         {unread > 0 && (
           <button
             type="button"
-            className="mail-text-btn"
+            className="btn btn-sm btn-ghost mail-text-btn"
             data-testid="mail-group-foot-mark"
             disabled={markBlocked}
             title={markTitle}
@@ -409,7 +409,7 @@ function GroupRows({
         {group.unsubscribable > 0 && (
           <button
             type="button"
-            className="mail-text-btn"
+            className="btn btn-sm btn-ghost mail-text-btn"
             data-testid="mail-group-unsubscribe"
             aria-busy={unsubBusy ? 'true' : undefined}
             disabled={unsubBusy}
