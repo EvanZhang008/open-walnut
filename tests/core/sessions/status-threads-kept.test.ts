@@ -160,6 +160,25 @@ describe('the writes, under the model\'s own checks', () => {
     expect(plan.writes).toEqual([])
   })
 
+  it('he writes in another thread while the question is out: no known mark and no close, the line still goes on (review round 2)', () => {
+    setThreadsKept(true)
+    const f = twoThreads()
+    const { listed } = listForQuestion(f, f.threads)
+    const { refs } = threadQuestionBlock(listed, undefined, { org: true })
+    const fence = f.threads[0]
+    const fenceRef = [...refs].find(([, r]) => r.id === fence.id)![0]
+    const lines = readThreadLines(`FOR_USER_STATE: working\nFOR_USER_THREAD: ${fenceRef} | done | Two metres, posts are set.\nFOR_USER_THREAD_SEEN: ${fenceRef}`, refs)
+    // "wait, the fence gate is broken" lands in the seeds thread before the answer is applied.
+    const seeds = f.threads[1]
+    const now = { ...f, threads: f.threads.map((t) => t.id === seeds.id ? { ...t, messages: [...t.messages, { id: 'tm-late', at: at(7), text: 'wait, the fence gate is broken', via: 'chat' as const }] } : t) }
+    const plan = planThreadWrites(now, lines.threads ?? [], [], { seen: lines.threads_seen })
+    expect(plan.writes.some((w) => w.patch.known || w.patch.close)).toBe(false)
+    const out = apply(now, plan, at(8)).threads.find((t) => t.id === fence.id)!
+    expect(out.closed).toBeUndefined()
+    expect(out.known).toBeUndefined()
+    expect(out).toMatchObject({ state: 'answered', reply: 'Two metres, posts are set.' })
+  })
+
   it('never writes a mark or a title on a thread that now waits on him', () => {
     const f = twoThreads()
     const needs = { ...f, threads: f.threads.map((t) => ({ ...t, state: 'needs' as const, ask: 'Which height?' })) }
@@ -250,8 +269,8 @@ describe('what a thread keeper reads', () => {
     expect(due).not.toBeNull()
     const told = renderDue(due!)
     expect(told).toContain(THREADS_KEPT_RULE.slice(0, 80))
-    // The per-turn sentences are named gone, or the line is told whole in its new words.
-    expect(told.includes('Removed') || told.includes(THREADS_KEPT_RULE)).toBe(true)
+    // A plain line's old wording is not told as gone (review round 2), so the new rule says it replaces the old ones.
+    expect(told).toContain('in place of the earlier rules that had you write each thread\'s summary, state and known mark with thread_update every turn (those no longer apply)')
   })
   it('a running task hears the switch: its Threads block is another version', () => {
     expect(TASK_THREADS_KEPT_LINE.split('\n')[0]).not.toBe(TASK_THREADS_LINE.split('\n')[0])

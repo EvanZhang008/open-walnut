@@ -26,7 +26,7 @@ import { keepsThreads } from '../org/keeps-threads.js';
 import { sortedThreads, THREAD_TITLE_MAX, type OrgThread, type ThreadPatch, type ThreadsFile } from '../org/threads-model.js';
 import type { OwnThreadOpen, OwnThreadWrite } from '../org/threads-store.js';
 import { exchangesOf, hasThreadNews, openNotWaiting } from '../org/thread-view.js';
-import { reactedSince } from '../org/threads-model.js';
+import { lastUserAt, reactedSince } from '../org/threads-model.js';
 import { oneCardNow } from '../org/one-card.js';
 import { threadsKeptNow } from '../org/threads-kept.js';
 
@@ -36,14 +36,17 @@ export type ThreadLineState = 'working' | 'waiting' | 'answered' | 'done';
  * message (its id, '' for none) when the question listed it: a thread he wrote in since is not
  * written from an answer that never saw his new words (planThreadWrites).
  */
-export interface StatusThreadLine { id: string; title: string; state: ThreadLineState; progress?: string; upTo?: string }
+export interface StatusThreadLine { id: string; title: string; state: ThreadLineState; progress?: string; upTo?: string; hisAt?: string }
 /** One FOR_USER_THREAD_NEW line: a subject the task follows that no thread covers. */
 export interface StatusThreadNew { title: string; state: 'working' | 'waiting'; progress?: string }
 /** The open threads the question listed, by ref: `untitled` still under Walnut's stand-in title, `wrote` he wrote since an answer it holds. */
 export type ThreadRefs = ReadonlyMap<string, ThreadRef>;
-export interface ThreadRef { id: string; title: string; untitled?: boolean; wrote?: boolean; upTo?: string }
-/** One thread as the question lists it (threadsKeptNow marks `untitled` and `wrote`; `upTo` its newest message then). */
-export type ListedThread = Pick<OrgThread, 'id' | 'title' | 'state'> & { untitled?: boolean; wrote?: boolean; upTo?: string };
+export interface ThreadRef { id: string; title: string; untitled?: boolean; wrote?: boolean; upTo?: string; hisAt?: string }
+/**
+ * One thread as the question lists it (threadsKeptNow marks `untitled` and `wrote`): `upTo` its
+ * newest message then, `hisAt` his newest message in any thread then (a reaction is judged on it).
+ */
+export type ListedThread = Pick<OrgThread, 'id' | 'title' | 'state'> & { untitled?: boolean; wrote?: boolean; upTo?: string; hisAt?: string };
 /** A message of his newer than an answer he may have reacted to, for the question to quote. */
 export interface HisWords { threadId: string; text: string }
 
@@ -81,7 +84,7 @@ export function threadQuestionBlock(open: readonly ListedThread[], langName?: st
   const listed = open.slice(0, THREAD_LIST_MAX).map((t, i) => {
     const ref = `t${i + 1}`;
     const marks = kept ? { ...(t.untitled ? { untitled: true } : {}), ...(t.wrote ? { wrote: true } : {}) } : {};
-    refs.set(ref, { id: t.id, title: t.title, ...marks, ...(t.upTo !== undefined ? { upTo: t.upTo } : {}) });
+    refs.set(ref, { id: t.id, title: t.title, ...marks, ...(t.upTo !== undefined ? { upTo: t.upTo } : {}), ...(t.hisAt !== undefined ? { hisAt: t.hisAt } : {}) });
     const title = t.title.replace(/\s+/g, ' ').trim();
     const said = [t.state, ...(marks.untitled ? ['untitled'] : []), ...(marks.wrote ? ['he wrote elsewhere since your answer here'] : [])].join(', ');
     return `${ref} "${title.slice(0, cutEnd(title, TITLE_SHOWN_MAX))}" (${said})`;
@@ -135,12 +138,13 @@ export function wroteSinceAnswer(file: ThreadsFile, t: OrgThread): boolean {
 /** The threads as the question lists them, and his messages since the oldest answer he wrote after (newest first). Pure. */
 export function listForQuestion(file: ThreadsFile, open: readonly OrgThread[]): { listed: ListedThread[]; his: HisWords[] } {
   const upTo = (t: OrgThread) => t.messages[t.messages.length - 1]?.id ?? '';
-  if (!threadsKeptNow()) return { listed: open.map((t) => ({ ...t, upTo: upTo(t) })), his: [] };
+  const hisAt = lastUserAt(file) ?? '';
+  if (!threadsKeptNow()) return { listed: open.map((t) => ({ ...t, upTo: upTo(t), hisAt })), his: [] };
   let since = '';
   const listed = open.map((t) => {
     const after = answersHeWroteAfter(file, t);
     for (const at of after) if (!since || at < since) since = at;
-    return { ...t, untitled: !t.titled, wrote: after.length > 0, upTo: upTo(t) };
+    return { ...t, untitled: !t.titled, wrote: after.length > 0, upTo: upTo(t), hisAt };
   });
   const his = since
     ? file.threads.flatMap((t) => t.messages.filter((m) => m.at > since).map((m) => ({ threadId: t.id, text: m.text, at: m.at })))
@@ -202,7 +206,7 @@ export function readThreadLines(answer: string, refs: ThreadRefs): Pick<StatusRe
     const state = stateWord(parts[1] ?? '');
     if (!target || !state || threads.has(target.id)) continue;
     const progress = oneLine(parts.slice(2).join('|'), PROGRESS_MAX);
-    threads.set(target.id, { id: target.id, title: target.title, state, ...(progress ? { progress } : {}), ...(target.upTo !== undefined ? { upTo: target.upTo } : {}) });
+    threads.set(target.id, { id: target.id, title: target.title, state, ...(progress ? { progress } : {}), ...(target.upTo !== undefined ? { upTo: target.upTo } : {}), ...(target.hisAt !== undefined ? { hisAt: target.hisAt } : {}) });
   }
   // A title only for a thread the question named untitled, a reaction only where he wrote since an answer.
   const titles = new Map<string, ThreadMark>();
@@ -224,8 +228,8 @@ export function readThreadLines(answer: string, refs: ThreadRefs): Pick<StatusRe
 }
 
 /** A title or a reaction for one listed thread, with its newest message then. */
-export interface ThreadMark { id: string; upTo?: string; title?: string }
-const markOf = (r: ThreadRef, more: { title?: string } = {}): ThreadMark => ({ id: r.id, ...(r.upTo !== undefined ? { upTo: r.upTo } : {}), ...more });
+export interface ThreadMark { id: string; upTo?: string; hisAt?: string; title?: string }
+const markOf = (r: ThreadRef, more: { title?: string } = {}): ThreadMark => ({ id: r.id, ...(r.upTo !== undefined ? { upTo: r.upTo } : {}), ...(r.hisAt !== undefined ? { hisAt: r.hisAt } : {}), ...more });
 
 /**
  * The refs of a FOR_USER_THREAD_SEEN line, only when the whole line is a list of refs (review round
@@ -324,6 +328,15 @@ function movedSince(t: OrgThread, upTo: string | undefined): boolean {
 }
 
 /**
+ * He wrote anywhere since the question (review round 2: "wait, the login page is broken" filed in
+ * another thread): a reaction the answer read in his earlier words may be taken back by these, so
+ * no known mark and no close from it. Its state and summary lines still go on.
+ */
+function wroteSinceQuestion(file: ThreadsFile, hisAt: string | undefined): boolean {
+  return hisAt !== undefined && (lastUserAt(file) ?? '') !== hisAt;
+}
+
+/**
  * Each line as the write it makes on its thread as it is now (run under the store's lock): first a
  * title it was asked for, then the known mark of an answer he reacted to (Walnut's own check of
  * the timing still holds: threads-model.ts knownThrough), then the line. A done line on his own
@@ -341,12 +354,12 @@ export function planThreadWrites(file: ThreadsFile, lines: readonly StatusThread
     const t = open(m);
     if (t && !t.titled && m.title) writes.push({ id: t.id, patch: { title: m.title } });
   }
-  const seen = new Set((marks.seen ?? []).filter((m) => !!open(m)).map((m) => m.id));
+  const seen = new Set((marks.seen ?? []).filter((m) => !!open(m) && !wroteSinceQuestion(file, m.hisAt)).map((m) => m.id));
   for (const id of seen) writes.push({ id, patch: { known: 'all' } });
   for (const line of lines) {
     const found = file.threads.find((x) => x.id === line.id);
     const t = found && !movedSince(found, line.upTo) ? found : undefined;
-    const own = t && line.state === 'done' && seen.has(t.id) && t.state === 'answered' && !(t.opener && t.opener.by !== 'human');
+    const own = t && line.state === 'done' && seen.has(t.id) && !wroteSinceQuestion(file, line.hisAt) && t.state === 'answered' && !(t.opener && t.opener.by !== 'human');
     const patch = own ? { close: 'acked' as const, ...(line.progress ? { reply: line.progress } : {}) } : t ? patchForLine(t, line) : null;
     if (!t || !patch) continue;
     // A close its thread refuses (he pinned it, he wrote in it and has not reacted): answered.

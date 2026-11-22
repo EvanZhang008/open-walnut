@@ -24,7 +24,9 @@
  * for a write each turn (the summary, its state, the known mark); what a line cannot do stays a call.
  */
 export const THREADS_KEPT_RULE =
-  'Walnut keeps your Threads from your chat: answer him in the chat first and write no thread for each message. At the end of '
+  'Walnut keeps your Threads from your chat, in place of the earlier rules that had you write each thread\'s summary, state and '
+  + 'known mark with thread_update every turn (those no longer apply): answer him in the chat first and write no thread for each '
+  + 'message. At the end of '
   + 'each turn the status question lists your open threads and you answer one line for each: its state (working: you are on it '
   + 'now; waiting: a team or something outside has it; answered: the result he asked for is in; done: finished) and where it '
   + 'stands for him, latest first, with the proof\'s path or URL when there is one. Walnut writes that as the thread\'s state and '
