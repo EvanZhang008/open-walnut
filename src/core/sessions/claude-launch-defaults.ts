@@ -143,7 +143,9 @@ export function observedClaudeDefaultEfforts(
     const model = typeof r.model === 'string' ? r.model.trim() : '';
     // A record from before `engine` was stored names no engine: its model says whether it was Claude.
     if (!effort || !model || !isClaudeModelName(model)) continue;
-    const key = model.toLowerCase().replace(/\[1m\]$/, '');
+    // One row per model, whatever id form its CLI reported ("claude-opus-5-5",
+    // "global.anthropic.claude-opus-5-5", "...-v1:0", "...[1m]").
+    const key = model.toLowerCase().replace(/\[1m\]$/, '').replace(/^.*\banthropic\./, '').replace(/-v\d+(?::\d+)?$/, '');
     const at = r.lastActiveAt ?? '';
     const prev = byModel.get(key);
     if (!prev || at > prev.at) byModel.set(key, { model, effort, at, sessionId: r.claudeSessionId });
