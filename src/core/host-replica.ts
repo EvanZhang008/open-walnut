@@ -44,7 +44,8 @@ import { companionKeepOf } from './replication/companion-keep.js'
 import { noteRefusalEnded, noteRoundFailure, noteRoundReached } from './replication/round-outage.js'
 import { CLOUD_BOX_HOST_ALIAS } from './hosts/cloud-box-host.js'
 import { daemonKeeperAlias, daemonTwinGroups, type NetSwitch, type TwinRows } from './hosts/daemon-twins.js'
-import { HOST_REPLICA_MOVES, mergeMoves, pairMoves, recordMoves, vaultMoveLookups, type MovePair } from './replication/manifest-moves.js'
+import { HOST_REPLICA_MOVES, mergeMoves, moveInTwoSteps, pairMoves, recordMoves, vaultMoveLookups, type MovePair } from './replication/manifest-moves.js'
+import { refusedMost } from './replication/kind.js'
 import { noteMoves } from './notes/note-path-moves.js'
 import { walnutOwnedNote } from './notes/vault-files.js'
 import { artifactsByProject, artifactsDir } from './artifacts/paths.js'
@@ -584,7 +585,7 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
     const { changed, removed } = manifestChanges(last.entries, entries)
     listed = changed.length + removed.length
     reply = await target.send('replica.sync', { ...base, base: last.id, changed, removed, ...(target.moves && removed.length && changeMoves().length ? { renamed: changeMoves() } : {}) })
-    if (reply.ok !== true && reply.errorKind !== 'manifest_removes_most_rows') {
+    if (reply.ok !== true && !refusedMost(reply)) {
       // A host without that base (restarted), a failed request, or one from before
       // changes-only manifests ("bad entries": it found no `entries`, so it changed
       // nothing; only that one gets whole lists for the rest of the connection).
@@ -596,8 +597,51 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
   }
   const whole = reply ? [] : target.moves ? wholeMoves(kind, taken, entries, changeMoves) : []
   reply ??= await target.send('replica.sync', { ...base, entries, ...(whole.length ? { renamed: whole } : {}) })
+  // The bodies a reply asks for, sent in batches; a body changed since the manifest is skipped.
+  const wanted = new Map(entries.map((e) => [e.k, e.h]))
+  const putNeed = async (r: Record<string, unknown>): Promise<{ sent: number; skipped: number }> => {
+    const need = Array.isArray(r.need) ? (r.need as unknown[]).filter((k): k is string => typeof k === 'string') : []
+    let batch: Array<{ k: string; body: string }> = []
+    let batchBytes = 0
+    let sent = 0
+    let skipped = 0
+    const flush = async (): Promise<void> => {
+      if (batch.length === 0) return
+      const res = await target.send('replica.put', { home, kind, files: batch }, PUT_TIMEOUT_MS)
+      if (res.ok !== true) throw new Error(typeof res.error === 'string' ? res.error : 'replica.put refused')
+      sent += typeof res.stored === 'number' ? res.stored : 0
+      batch = []
+      batchBytes = 0
+    }
+    for (const k of need) {
+      const body = bodies ? bodies.get(k) ?? (extras ? await extras.body(k) : null) : await noteBody(k)
+      // Changed since the manifest: the next round sends the new one.
+      if (body === null || sha12(body) !== wanted.get(k)) { skipped++; continue }
+      const bytes = Buffer.byteLength(body)
+      if (batch.length > 0 && batchBytes + bytes > PUT_BATCH_BYTES) await flush()
+      batch.push({ k, body })
+      batchBytes += bytes
+    }
+    await flush()
+    return { sent, skipped }
+  }
+  // A copy that cannot take moves refused a move: it goes in two steps its own half rule judges.
+  let bridgeSent = 0
+  if (reply.ok !== true && refusedMost(reply) && !target.moves) {
+    const say = (level: 'info' | 'warn', message: string, data: Record<string, unknown>) => log.session[level](message, { host: target.hostKey, kind, ...data })
+    reply = await moveInTwoSteps({
+      entries, pairs: wholeMoves(kind, taken, entries, changeMoves), taken: taken?.entries, say,
+      sync: (list, step) => target.send('replica.sync', { ...base, ...(step === 'bridge' ? { manifestId: sha12(JSON.stringify(['bridge', list])) } : {}), entries: list }),
+      // A notes row counts in the copy once its body is there: the new keys' bodies go before step two.
+      between: async (r) => {
+        const p = await putNeed(r)
+        bridgeSent = p.sent
+        if (p.skipped) say('info', 'host replica: bodies changed between the two steps of a move go next round', { skipped: p.skipped })
+      },
+    }) ?? reply
+  }
   if (reply.ok !== true) {
-    if (reply.errorKind === 'manifest_removes_most_rows') await guard.refused(reply)
+    if (refusedMost(reply)) await guard.refused(reply)
     throw new Error(typeof reply.error === 'string' ? reply.error : 'replica.sync refused')
   }
   guard.accepted()
@@ -605,30 +649,9 @@ async function syncKind(target: ReplicaTarget, kind: ReplicaKind, keep: HostKeep
   for (const e of entries) if (!took.has(e.k)) took.set(e.k, e)
   rememberTaken(memoKey, { id: manifestHash, entries: took })
   const held = typeof reply.held === 'number' ? reply.held : 0
-  const need = Array.isArray(reply.need) ? (reply.need as unknown[]).filter((k): k is string => typeof k === 'string') : []
-  const wanted = new Map(entries.map((e) => [e.k, e.h]))
-  let batch: Array<{ k: string; body: string }> = []
-  let batchBytes = 0
-  let sent = 0
-  let skipped = 0
-  const flush = async (): Promise<void> => {
-    if (batch.length === 0) return
-    const r = await target.send('replica.put', { home, kind, files: batch }, PUT_TIMEOUT_MS)
-    if (r.ok !== true) throw new Error(typeof r.error === 'string' ? r.error : 'replica.put refused')
-    sent += typeof r.stored === 'number' ? r.stored : 0
-    batch = []
-    batchBytes = 0
-  }
-  for (const k of need) {
-    const body = bodies ? bodies.get(k) ?? (extras ? await extras.body(k) : null) : await noteBody(k)
-    // Changed since the manifest: the next round sends the new one.
-    if (body === null || sha12(body) !== wanted.get(k)) { skipped++; continue }
-    const bytes = Buffer.byteLength(body)
-    if (batch.length > 0 && batchBytes + bytes > PUT_BATCH_BYTES) await flush()
-    batch.push({ k, body })
-    batchBytes += bytes
-  }
-  await flush()
+  const put = await putNeed(reply)
+  const sent = bridgeSent + put.sent
+  const skipped = put.skipped
   // A body that moved under us leaves the daemon one short: send the manifest again next round.
   // Keys an away write holds there (WP11) are not in the copy yet: the round runs again later.
   if (skipped === 0 && held === 0) lastManifest.set(memoKey, manifestHash)

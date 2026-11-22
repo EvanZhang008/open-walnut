@@ -3,7 +3,7 @@
  * the move's map first, then the note id, then the same body; each key used once.
  */
 import { describe, it, expect } from 'vitest'
-import { mergeMoves, pairMoves, recordMoves, vaultMoveLookups, type MovableEntry } from '../../../src/core/replication/manifest-moves.js'
+import { bridgeEntries, moveInTwoSteps, mergeMoves, pairMoves, recordMoves, vaultMoveLookups, type MovableEntry } from '../../../src/core/replication/manifest-moves.js'
 import type { MoveMap } from '../../../src/core/artifacts/unify/map.js'
 
 const e = (k: string, h: string, extra: Partial<MovableEntry> = {}): MovableEntry => ({ k, h, n: 10, ...extra })
@@ -65,5 +65,75 @@ describe('recordMoves and mergeMoves', () => {
 
   it('merging keeps the first list\'s pair for a key both name', () => {
     expect(mergeMoves([['a', 'x']], [['a', 'y'], ['b', 'x'], ['c', 'z']])).toEqual([['a', 'x'], ['c', 'z']])
+  })
+})
+
+describe('bridgeEntries (a move for a copy that cannot take moves)', () => {
+  it('adds each moved row under its old key, as the copy holds it, else with the new key\'s line', () => {
+    const now = [e('new/a.md', 'h1'), e('new/b.md', 'h2'), e('c.md', 'h3')]
+    const held = byKey([e('old/a.md', 'h0')])
+    expect(bridgeEntries(now, [['old/a.md', 'new/a.md'], ['old/b.md', 'new/b.md']], held)).toEqual([
+      ...now, e('old/a.md', 'h0'), e('old/b.md', 'h2'),
+    ])
+  })
+
+  it('skips a pair whose new key the manifest lacks, whose old key it still holds, or named twice', () => {
+    const now = [e('new/a.md', 'h1'), e('keep.md', 'h2')]
+    expect(bridgeEntries(now, [['old/x.md', 'gone.md'], ['keep.md', 'new/a.md'], ['old/a.md', 'new/a.md'], ['old/a.md', 'new/a.md']])).toEqual([...now, e('old/a.md', 'h1')])
+  })
+
+  it('brings back one old key per new key, whatever the pairs say (step two\'s bound)', () => {
+    const now = [e('new/a.md', 'h1')]
+    expect(bridgeEntries(now, [['old/a.md', 'new/a.md'], ['old/b.md', 'new/a.md']])).toEqual([...now, e('old/a.md', 'h1')])
+  })
+
+  it('is null when no pair applies, or the lines would pass the copy\'s limit', () => {
+    const now = [e('new/a.md', 'h1'), e('new/b.md', 'h2')]
+    expect(bridgeEntries(now, [])).toBeNull()
+    expect(bridgeEntries(now, [['old/x.md', 'gone.md']])).toBeNull()
+    expect(bridgeEntries(now, [['old/a.md', 'new/a.md'], ['old/b.md', 'new/b.md']], undefined, 3)).toBeNull()
+  })
+
+  it('the second step never removes more than half of what the first left: old keys are at most the new ones', () => {
+    // The copy's half rule refuses a manifest that removes more than half of its rows.
+    const now = Array.from({ length: 500 }, (_, i) => e(`new/${i}.md`, `h${i}`))
+    const pairs = now.map((x, i): [string, string] => [`old/${i}.md`, x.k])
+    const bridge = bridgeEntries(now, [...pairs, ...pairs])!
+    const old = bridge.length - now.length
+    expect(old).toBe(500)
+    expect(old * 2 <= bridge.length).toBe(true)
+  })
+})
+
+describe('moveInTwoSteps', () => {
+  const now = [e('new/a.md', 'h1'), e('new/b.md', 'h2')]
+  const pairs: Array<[string, string]> = [['old/a.md', 'new/a.md'], ['old/b.md', 'new/b.md']]
+
+  it('sends the bridge, runs what goes between, then the manifest', async () => {
+    const seen: string[] = []
+    const reply = await moveInTwoSteps({
+      entries: now, pairs, say: () => {},
+      sync: async (list, step) => { seen.push(`${step}:${list.length}`); return { ok: true, step } },
+      between: async (r) => { seen.push(`between:${String(r.step)}`) },
+    })
+    expect(seen).toEqual(['bridge:4', 'between:bridge', 'manifest:2'])
+    expect(reply).toEqual({ ok: true, step: 'manifest' })
+  })
+
+  it('stops at a refused first step and answers with it', async () => {
+    const seen: string[] = []
+    const reply = await moveInTwoSteps({ entries: now, pairs, say: () => {}, sync: async (_l, step) => { seen.push(step); return { ok: false, errorKind: 'manifest_removes_most_rows' } } })
+    expect(seen).toEqual(['bridge'])
+    expect(reply).toMatchObject({ ok: false })
+  })
+
+  it('sends nothing with no pair, and says so when the move is too large for the copy', async () => {
+    const sync = async () => ({ ok: true })
+    expect(await moveInTwoSteps({ entries: now, pairs: [], sync, say: () => {} })).toBeNull()
+    const big = Array.from({ length: 10_001 }, (_, i) => e(`new/${i}.md`, `h${i}`))
+    const said: string[] = []
+    const reply = await moveInTwoSteps({ entries: big, pairs: big.map((x, i): [string, string] => [`old/${i}.md`, x.k]), sync, say: (level, m) => { said.push(`${level}:${m}`) } })
+    expect(reply).toBeNull()
+    expect(said).toEqual(['warn:host replica: a move is too large to send a copy without moves in two steps'])
   })
 })

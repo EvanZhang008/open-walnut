@@ -30,8 +30,8 @@ import { notesRoot } from './notes/note-paths.js'
 import { log } from '../logging/index.js'
 import { MAX_UPLOAD_FRAME_BYTES } from '../providers/ssh-upload-budget.js'
 import { leftOut } from './replication/keep-rule.js'
-import { recordMoves } from './replication/manifest-moves.js'
-import { CONFIRM_AFTER_REFUSALS, manifestKeysHashOf, refusalWarnsNow } from './replication/kind.js'
+import { moveInTwoSteps, recordMoves } from './replication/manifest-moves.js'
+import { CONFIRM_AFTER_REFUSALS, manifestKeysHashOf, refusalWarnsNow, refusedMost } from './replication/kind.js'
 
 const MAX_FILES = 20_000
 const MAX_FILE_BYTES = 50 * 1024 * 1024
@@ -224,9 +224,18 @@ export async function syncAttachments(target: AttachmentTarget, keep: Attachment
       return { action: 'skipped', entries: entries.length }
     }
     // `exclude`: the folders the user left out, so the copy drops them however many files they hold.
-    const reply = await target.send('attachments.sync', { home, entries: manifest, asOf: Date.now(), exclude: keep.exclude, ...(renamed.length ? { renamed } : {}) })
+    const sync = (list: typeof manifest) => target.send('attachments.sync', { home, entries: list, asOf: Date.now(), exclude: keep.exclude, ...(renamed.length ? { renamed } : {}) })
+    let reply = await sync(manifest)
+    // A copy that cannot take moves refused a move: it goes in two steps its own half rule judges
+    // (manifest-moves.ts bridgeEntries); a file kept under both keys is stored once, so none goes again.
+    if (reply.ok !== true && refusedMost(reply) && !target.moves) {
+      reply = await moveInTwoSteps({
+        entries: manifest, pairs: recordMoves(manifest), sync: (list) => sync(list),
+        say: (level, message, data) => log.session[level](message, { host: target.hostKey, kind: 'attachments', ...data }),
+      }) ?? reply
+    }
     if (reply.ok !== true) {
-      if (reply.errorKind === 'manifest_removes_most_rows' || String(reply.error ?? '').startsWith('manifest_removes_most_rows')) {
+      if (refusedMost(reply)) {
         const count = s.refused?.manifest === holdHash ? s.refused.count + 1 : 1
         const hadRefusal = !!s.refused
         s.refused = { manifest: holdHash, count, until: Date.now() + REFUSED_RECHECK_MS }

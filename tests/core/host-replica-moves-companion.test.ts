@@ -2,7 +2,8 @@
  * The cloud companion's copy takes moves when its build says so: its `replica.status` reply
  * names HOST_REPLICA_MOVES in `features` (core/companion-host-replica.ts), the Mac's round
  * (syncCompanionHostReplica) reads it and sends `renamed`. A box whose reply names no such
- * feature (an older build) gets no `renamed` and refuses the move as before. The real
+ * feature (an older build) gets no `renamed` and takes the move in two steps its own half rule
+ * judges (manifest-moves.ts bridgeEntries). The real
  * companion command handler and copy core; only the HTTPS hop is in-process.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -89,15 +90,21 @@ describe('the companion as a target of moves', () => {
     expect(companionHostReplicaCommand('replica.status', {})).toMatchObject({ ok: true, features: [HOST_REPLICA_MOVES] })
   })
 
-  it('a box of an older build (no features) gets no renamed and refuses the move as before', async () => {
+  it('a box of an older build (no features) gets no renamed and takes the move in two steps (2026-11-20)', async () => {
+    // The real companion was held on a build from before moves and refused the one tree's move
+    // every round from 2026-11-20 11:41Z: its copy of the notes stood still at the old paths.
     olderBox = true
     await syncCompanionHostReplica()
     sent.length = 0
     moveIntoTree()
     const [notes] = await syncCompanionHostReplica()
-    expect(notes).toMatchObject({ kind: 'notes', action: 'failed' })
-    expect(notes.error).toMatch(/manifest_removes_most_rows/)
+    expect(notes).toMatchObject({ kind: 'notes', action: 'synced', entries: COUNT, sent: COUNT })
     expect(notesSyncs().every((p) => p.renamed === undefined)).toBe(true)
-    expect(companionHostReplica()!.read(COMPANION_REPLICA_HOME, 'notes', 'acme/day-017.md')?.body).toBe('# Day 17\nShipped build 17.')
+    expect(notesSyncs().slice(-2).map((p) => (p.entries as unknown[]).length)).toEqual([2 * COUNT, COUNT])
+    expect(companionHostReplica()!.read(COMPANION_REPLICA_HOME, 'notes', 'projects/Acme/notes/day-017.md')?.body).toBe('# Day 17\nShipped build 17.')
+    expect(companionHostReplica()!.read(COMPANION_REPLICA_HOME, 'notes', 'acme/day-017.md')).toBeNull()
+    // Taken: the next round has nothing to say.
+    sent.length = 0
+    expect((await syncCompanionHostReplica())[0]).toMatchObject({ kind: 'notes', action: 'unchanged' })
   })
 })

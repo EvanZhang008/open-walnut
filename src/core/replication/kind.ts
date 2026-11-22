@@ -102,6 +102,11 @@ export type ReplicaOp = (typeof OPS)[number]
 export const REST_ERRORS = new Set(['unknown_kind', 'schema_newer', 'unknown_op', 'not_a_replica', 'other_leader'])
 export const REFUSAL_ERROR = 'manifest_removes_most_rows'
 
+/** A copy's reply is its half-rule refusal (an older copy may say so in its error text only). */
+export function refusedMost(reply: { errorKind?: unknown; error?: unknown }): boolean {
+  return reply.errorKind === REFUSAL_ERROR || String(reply.error ?? '').startsWith(REFUSAL_ERROR)
+}
+
 export function sha12(body: string): string {
   return crypto.createHash('sha256').update(body).digest('hex').slice(0, 12)
 }

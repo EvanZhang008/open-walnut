@@ -133,3 +133,73 @@ export function mergeMoves(first: readonly MovePair[], second: readonly MovePair
   }
   return out
 }
+
+/** The most lines a copy takes in one manifest (host-replica-core.ts, attachment-copy-core.ts). */
+export const BRIDGE_MAX_ENTRIES = 20_000
+
+/**
+ * A move for a copy that cannot take `renamed` (a host daemon or the companion on a build from
+ * before 'host-replica-moves-v1'). Its half rule refuses the moved manifest, rightly by its own
+ * count, and nothing it can do changes that until it updates: on 2026-11-20 the one tree moved
+ * every note and the companion, held on an older build, refused every round for days. So the
+ * leader sends the move in two steps the copy's own rule judges:
+ *
+ *   1. these entries: the manifest plus each moved row under its old key (as the copy holds it,
+ *      `held`, else with the new key's line). This step removes only the keys no pair explains,
+ *      so the half rule judges just those, as a copy that takes moves judges them. A row counts
+ *      in the copy once its body is there, so the new keys' bodies (or a picture's stored bytes)
+ *      are in before step two;
+ *   2. the manifest itself, which removes the old keys: one per new key at most, so never more
+ *      than half of what step one left (old keys <= new keys).
+ *
+ * Each old key and each new key is used once, whatever the pairs say: that bound is step two's
+ * whole argument. A leader that lost its store pairs nothing, so step one is refused as before.
+ * Null when no pair names a key the manifest holds, or the lines would pass `max`.
+ */
+export function bridgeEntries<E extends MovableEntry>(entries: readonly E[], pairs: readonly MovePair[], taken?: ReadonlyMap<string, E>, max = BRIDGE_MAX_ENTRIES): E[] | null {
+  const now = new Map<string, E>()
+  for (const e of entries) if (!now.has(e.k)) now.set(e.k, e)
+  const out = [...now.values()]
+  const olds = new Set<string>()
+  const news = new Set<string>()
+  for (const [o, n] of pairs) {
+    const to = now.get(n)
+    if (!to || now.has(o) || olds.has(o) || news.has(n)) continue
+    olds.add(o)
+    news.add(n)
+    out.push(taken?.get(o) ?? { ...to, k: o })
+  }
+  return olds.size > 0 && out.length <= max ? out : null
+}
+
+export interface TwoStepMove<E extends MovableEntry> {
+  entries: readonly E[]
+  pairs: readonly MovePair[]
+  /** The rows the copy took last, by key: an old key goes back as the copy holds it. */
+  taken?: ReadonlyMap<string, E>
+  /** Sends one whole list to the copy: step one's bridge, then the manifest. */
+  sync: (list: E[], step: 'bridge' | 'manifest') => Promise<Record<string, unknown>>
+  /** Between the steps, with step one's reply: what the copy needs before a row counts (the bodies). */
+  between?: (reply: Record<string, unknown>) => Promise<void>
+  say: (level: 'info' | 'warn', message: string, data: Record<string, unknown>) => void
+}
+
+/**
+ * A move to a copy that cannot take moves and refused it, in bridgeEntries' two steps. The
+ * reply of the last step sent (the manifest's, or step one's refusal); null when no pair
+ * applies, so the refusal stands.
+ */
+export async function moveInTwoSteps<E extends MovableEntry>(m: TwoStepMove<E>): Promise<Record<string, unknown> | null> {
+  const bridge = bridgeEntries(m.entries, m.pairs, m.taken, Infinity)
+  if (!bridge) return null
+  const oldKeys = bridge.length - new Set(m.entries.map((e) => e.k)).size
+  if (bridge.length > BRIDGE_MAX_ENTRIES) {
+    m.say('warn', 'host replica: a move is too large to send a copy without moves in two steps', { entries: m.entries.length, oldKeys, max: BRIDGE_MAX_ENTRIES })
+    return null
+  }
+  const step = await m.sync(bridge, 'bridge')
+  if (step.ok !== true) return step
+  m.say('info', 'host replica: a copy without moves takes a move in two steps', { entries: m.entries.length, oldKeys })
+  await m.between?.(step)
+  return m.sync([...m.entries], 'manifest')
+}
