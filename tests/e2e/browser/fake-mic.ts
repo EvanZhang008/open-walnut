@@ -73,6 +73,8 @@ export interface SyntheticMicOptions {
   speech?: { leadMs: number; onMs: number; offMs: number }
   /** Wait this long before answering, as a slow device does. */
   openDelayMs?: number
+  /** Refuse instead, with this DOMException name (e.g. 'NotAllowedError'): one override in every engine. */
+  refuse?: string
 }
 
 /**
@@ -89,6 +91,7 @@ export async function useSyntheticMic(page: Page, opts: SyntheticMicOptions = {}
   await page.addInitScript((o: SyntheticMicOptions) => {
     const fake = async (): Promise<MediaStream> => {
       console.log('[synthetic-mic] getUserMedia called')
+      if (o.refuse) throw new DOMException('denied', o.refuse)
       if (o.openDelayMs) await new Promise((r) => setTimeout(r, o.openDelayMs))
       const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
       const ctx = new Ctx()
