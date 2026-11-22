@@ -2,8 +2,8 @@
  * Two fits of a task list's words that CSS cannot judge on its own (2026-11-22 UI audit at 820 px):
  *
  * - A Worker label's leader title cut to one or two letters ("W H…") reads as initials. A title
- *   that would show fewer than six letters is hidden (`data-title-cut`), so the label is "W" or
- *   "Worker" alone and gives its room back to the row.
+ *   that would show fewer than six letters is hidden (`data-title-cut`), so the label is "Worker"
+ *   alone and gives its room back to the row.
  * - A search row's second line reads as words joined by "·" (styles/badge.css). In a narrow column
  *   the words run onto a third line, and the word that starts it would open with a lone "·". That
  *   word is marked `data-line-start` (its dot is hidden) and every word of a wrapped line gets

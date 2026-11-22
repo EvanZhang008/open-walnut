@@ -19,3 +19,14 @@
 .home-navigation-scroll[data-row-fit="tight"] .task-row-pill[data-short]::after {
   content: attr(data-short);
 }
+
+/* A search result's second line is a line of words that wraps (row-pills.css): its kinds keep
+   their words in a tight column too, "Trigger · Worker · Leader · 3", since a wrapped line costs
+   the title nothing and a lone letter reads as nothing (2026-11-22 UI audit at 1280 px: "T, W, L"
+   on a search row). A pull request pill keeps its own fold (pr-pill.css). */
+.home-navigation-scroll[data-row-fit] .todo-search-results .todo-item-content[data-search-meta] .task-row-pill[data-short]:not(.pr-pill) > .task-pill-long {
+  display: inline;
+}
+.home-navigation-scroll[data-row-fit] .todo-search-results .todo-item-content[data-search-meta] .task-row-pill[data-short]:not(.pr-pill)::after {
+  content: none;
+}

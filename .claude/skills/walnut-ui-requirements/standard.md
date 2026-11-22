@@ -352,7 +352,8 @@ drawn by its own class (565 class names, 155 looks).
 - Reading order on a task row: the title, then where it lives (tier and project, as words), then its
   kinds (Trigger, Cron, pull request, tags, Worker, Leader), then its state (start, due, until, limit),
   with the needs-you mark on the row's left (its state icon and dot). Narrow columns fold each kind to
-  its letter (`data-short`, `row-pill-fit.css`).
+  its letter (`data-short`, `row-pill-fit.css`), except a search result's second line, which wraps
+  and keeps the words.
 - `tests/web/ui-standard-ratchet.test.ts` counts `ownLabel`: a `*-badge`, `*-pill`, `*-chip` or `*-tag`
   rule that paints its own fill, words colour, edge or corner; a rule that restyles `.badge` for
   one place; and a `*-count`, `*-state`, `*-role`, `*-kind`, `*-new` or `*-status` rule that draws a

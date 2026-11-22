@@ -372,11 +372,19 @@ async function slivers(page: Page) {
       const inner = [el, ...el.querySelectorAll<HTMLElement>('*')]
       if (el.getBoundingClientRect().width > 0 && inner.some((x) => x.scrollWidth > x.clientWidth + 1)) cutWords.push(el.textContent ?? '')
     }
-    return { cut, strayDots, offEdge, cutWords, rows: scroller.querySelectorAll('.todo-item-content[data-search-meta]').length }
+    // A kind on this line reads as its word, never its letter ("T, W, L" read as nothing; 2026-11-22
+    // audit at 1280 px): every pill that folds elsewhere (data-short), seeded or not.
+    const letters: string[] = []
+    for (const el of scroller.querySelectorAll<HTMLElement>('.todo-item-content[data-search-meta] .task-row-pill[data-short]:not(.pr-pill)')) {
+      const word = el.querySelector<HTMLElement>(':scope > .task-pill-long')
+      const after = getComputedStyle(el, '::after').content
+      if (!word || getComputedStyle(word).display === 'none' || (after !== 'none' && after !== 'normal')) letters.push(`${el.dataset.short} ${el.textContent}`)
+    }
+    return { cut, strayDots, offEdge, cutWords, letters, rows: scroller.querySelectorAll('.todo-item-content[data-search-meta]').length }
   })
 }
 
-test('a narrow search column cuts only names, never to a sliver, and starts no line with "·"', async ({ page }) => {
+test('a narrow search column cuts only names, never to a sliver, keeps its kinds as words, and starts no line with "·"', async ({ page }) => {
   test.setTimeout(180_000)
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
   const f = await seed(`Pill fit search ${stamp}`, stamp, false)
@@ -396,6 +404,7 @@ test('a narrow search column cuts only names, never to a sliver, and starts no l
     expect(r.strayDots, `lines that start with "·" @${width}`).toEqual([])
     expect(r.offEdge, `wrapped lines off the line above's edge @${width}`).toEqual([])
     expect(r.cutWords, `kinds, tags, states or times cut @${width}`).toEqual([])
+    expect(r.letters, `kinds drawn as letters @${width}`).toEqual([])
     wrappedSeen ||= await page.locator('.todo-search-results [data-line-start]').count() > 0
   }
   // The narrowest widths do wrap a crowded row: the check above judged real wrapped lines.
