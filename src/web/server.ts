@@ -134,6 +134,7 @@ import { repositoriesRouter } from './routes/repositories.js'
 import { audioRouter } from './routes/audio.js'
 import { sttRouter, STT_CLIP_RAW_LIMIT } from './routes/stt.js'
 import { sttMediaHoldRouter } from './routes/stt-media-hold.js'
+import { sttTakesRouter } from './routes/stt-takes.js'
 import { subscriptionLimitsRouter } from './routes/subscription-limits.js'
 import { migrateGlobalNotes } from '../core/notes-migration.js'
 import { authMiddleware } from './middleware/auth.js'
@@ -3017,6 +3018,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   void import('../core/history-remote/service.js').then((m) => m.installServerFetcher()).catch(() => { /* restores read as missing */ })
   // Voice input holds the music off while it listens (core/stt/media-hold.ts).
   app.use('/api/stt/media-hold', sttMediaHoldRouter)
+  app.use('/api/stt', sttTakesRouter)
   app.use('/api/stt', sttRouter)
   app.use('/api/incidents', incidentsRouter)
   app.use('/api/metrics', metricsRouter)

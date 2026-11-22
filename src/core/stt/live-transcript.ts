@@ -30,6 +30,7 @@
 
 import { createHash, type Hash } from 'node:crypto'
 import { log } from '../../logging/index.js'
+import { RecentIds, pcmSha256 } from './take-ledger.js'
 import { cafDataLayout } from './caf-to-wav.js'
 import { SAMPLE_RATE, pcmToWav, segmentBoundaries, joinSegmentTexts } from './wav-segment.js'
 
@@ -53,8 +54,6 @@ const MAX_TAKES = 8
 const IDLE_DROP_MS = 30 * 60_000
 /** The header is in the first few KB; a take that never shows one is not PCM. */
 const MAX_HEADER_BYTES = 64 * 1024
-/** Takes finished or cancelled lately: a late piece must not start one again. */
-const DONE_TTL_MS = 10 * 60_000
 
 export type LiveTranscribe = (wav: Buffer, language?: string) => Promise<string>
 
@@ -90,20 +89,20 @@ interface Take {
 }
 
 const takes = new Map<string, Take>()
-const done = new Map<string, number>()
+/** Takes finished or cancelled lately: a late piece must not start one again. */
+const done = new RecentIds()
 const stats = new Map<string, { livePieces: number; leftSeconds: number }>()
 let sweeper: NodeJS.Timeout | null = null
 
 function sweep(): void {
   const now = Date.now()
   for (const [id, take] of takes) if (now - take.touched > IDLE_DROP_MS) drop(id, take, 'idle')
-  for (const [id, at] of done) if (now - at > DONE_TTL_MS) done.delete(id)
+  done.sweep(now)
   if (takes.size === 0 && done.size === 0 && sweeper) { clearInterval(sweeper); sweeper = null }
 }
 
 function markDone(id: string): void {
-  done.set(id, Date.now())
-  if (done.size > 64) done.delete(done.keys().next().value!)
+  done.mark(id)
 }
 
 /** Forget a take; anything still queued for it is skipped. */
@@ -324,7 +323,7 @@ export async function finishLive(
     log.stt.info(`live transcript ${id} unused: the finished file is shorter than what arrived live`)
     return null
   }
-  const prefix = createHash('sha256').update(finalBytes.subarray(0, take.pcmBytes)).digest('hex')
+  const prefix = await pcmSha256(finalBytes.subarray(0, take.pcmBytes))
   if (prefix !== take.hash.digest('hex')) {
     log.stt.info(`live transcript ${id} unused: the finished file differs from what arrived live`)
     return null

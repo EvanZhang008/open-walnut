@@ -23,6 +23,7 @@ import { DICTATION_AUDIO_CONSTRAINTS } from '@/utils/mic-constraints';
 import { initialMicHealth, micHealthTick, micHealthTrackEnded, byteFrameRms, classifyTake, TAKE_ERRORS, DEAD_STREAM_RMS, SAMPLE_INTERVAL_MS, type MicHealthState } from '@/utils/mic-health';
 import { log } from '@/utils/log';
 import { acquireMediaHold, type MediaHoldHandle } from '@/api/media-hold';
+import { TakeAhead, formatOfMime } from '@/api/stt-take-ahead';
 
 export interface UseSpeechToTextOptions {
   /** Called with transcribed text when transcription completes */
@@ -541,19 +542,24 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       // The take is this page's alone until its whole clip reaches the server:
       // a reload or a page recycle waits for it (dictation-live.ts).
       let releaseTake: () => void = () => {};
+      // The take's clip, uploaded in parts while it records so the server hears it ahead.
+      let ahead: TakeAhead | null = null;
       const handleStop = async () => {
         // Recording is only ever stopped by the user (or unmount) — we never auto-stop.
         const stoppedAt = Date.now();
+        const takeAhead = ahead;
+        const aheadId = takeAhead?.finish();
         const startedAt = recordStartedAtRef.current;
         const firstWordsAt = firstWordsAtRef.current;
         const repeatFactor = takeRepeatRef.current || (recPcmRef.current?.repeatFactor ?? 0);
         // One line per take that the daily voice review reads: how long the
         // live words took to show, and the whole-clip text after the stop.
-        const logTiming = (chars: number, engineMs: number | null) => log.info('stt', 'take timing', {
+        // With a take heard ahead, engineMs is the stop's own engine time and aheadEngineMs the pieces' while it recorded.
+        const logTiming = (chars: number, engineMs: number | null, heardAhead = 0, aheadEngineMs = 0) => log.info('stt', 'take timing', {
           recordMs: startedAt ? stoppedAt - startedAt : null,
           firstWordsMs: firstWordsAt && startedAt ? firstWordsAt - startedAt : null,
           stopToTextMs: Date.now() - stoppedAt,
-          engineMs, chars, repeatFactor, source: liveSourceRef.current ?? 'none',
+          engineMs, aheadEngineMs, chars, repeatFactor, heardAhead, source: liveSourceRef.current ?? 'none',
         });
         const health = analyserAttachedRef.current ? micHealthRef.current : null;
         stopStream();
@@ -596,15 +602,12 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
           // waiting on this recording, so an error would come out of nowhere.
           const failure = TAKE_ERRORS[verdict];
           if (failure && isMountedRef.current && !discarded) setError(failure);
+          takeAhead?.drop();
           return;
         }
 
         // Determine format from mime type (Safari uses audio/mp4)
-        const mime = recorder.mimeType;
-        const format = mime.includes('webm') ? 'webm'
-          : mime.includes('mp4') ? 'mp4'
-          : mime.includes('ogg') ? 'ogg'
-          : 'webm'; // fallback
+        const format = formatOfMime(recorder.mimeType);
 
         // Convert blob to base64 using FileReader (avoids stack overflow on large audio)
         const readBlobBase64 = () => blobToBase64(blob, 'audio blob');
@@ -646,6 +649,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
           const sent = lastDraftRef.current ?? '';
           lastDraftRef.current = null;
           log.info('stt', `recording kept but not delivered — the text was already sent (${sent.length} chars)`);
+          takeAhead?.drop();
           await persistRecording(sent);
           return;
         }
@@ -665,7 +669,11 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
           provisional = draft;
         }
 
-        if (!isMountedRef.current) return;
+        if (!isMountedRef.current) {
+          // Nobody is left to send the clip: the server stops hearing it ahead.
+          takeAhead?.drop();
+          return;
+        }
         setIsTranscribing(true);
         setVoiceStatus({ transcribing: true });
         // Set while the pass runs: a failure stores the clip itself with the
@@ -683,12 +691,12 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
           // /transcribe stores this clip and its text server-side, so history
           // is not written again here.
           // The clip itself, as raw bytes: no length a take reaches is refused.
-          const result = await transcribeAudio(blob, format, languageRef.current);
+          const result = await transcribeAudio(blob, format, languageRef.current, undefined, { take: aheadId });
           unstoredClip = null;
           if (isMountedRef.current && result.debugAudioPath) setLastDebugPath(result.debugAudioPath);
           const finalText = result.text;
           const tookMs = result.durationMs;
-          const via = ', whole clip';
+          const via = result.heardAheadSec ? `, ${result.heardAheadSec}s heard while recording, the rest at the stop` : ', whole clip';
 
           if (finalText) {
             setVoiceStatus({ transcribing: false, lastFailed: false });
@@ -711,13 +719,13 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
             }
             const preview = finalText.length > 50 ? finalText.slice(0, 50) + '...' : finalText;
             log.info('stt', `Transcribed: "${preview}" (${tookMs}ms${via})`);
-            logTiming(finalText.length, tookMs);
+            logTiming(finalText.length, tookMs, result.heardAheadSec ?? 0, result.aheadEngineMs ?? 0);
           } else {
             // An empty transcription used to fail SILENTLY — spinner ends, nothing
             // appears, and the user thinks the recording was eaten. Surface it; the
             // audio is kept in lastAudioRef so Retry can still recover it.
             log.warn('stt', `Transcription returned empty text (${tookMs}ms)`);
-            logTiming(0, tookMs);
+            logTiming(0, tookMs, result.heardAheadSec ?? 0, result.aheadEngineMs ?? 0);
             setVoiceStatus({ transcribing: false, lastFailed: true });
             if (isMountedRef.current) {
               // A preview is not the text: with it still in the box, this is an
@@ -770,6 +778,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       // needs decodable audio-so-far (a from-the-start concat of webm chunks).
       recorder.start(CHUNK_MS);
       releaseTake = holdLiveTake();
+      ahead = new TakeAhead(() => chunksRef.current, () => recorder.mimeType, () => languageRef.current);
       const decode = browserDecoder();
       recPcmRef.current = decode ? new RecorderPcm(decode) : null;
       takeRepeatRef.current = 0;
@@ -791,7 +800,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       // and hand it to the consumer, which writes it straight into its text box.
       // Best-effort — any failure just means no update this tick; the final
       // transcription on stop is untouched by this.
-      const draftFormat = mimeType.includes('webm') ? 'webm' : mimeType.includes('mp4') ? 'mp4' : 'webm';
+      const draftFormat = formatOfMime(recorder.mimeType);
       draftBusyRef.current = false;
       // Read afresh after an await (TypeScript keeps the state it saw before it).
       const recorderStopped = () => recorder.state === 'inactive';

@@ -20,19 +20,20 @@ import { bootPolicy } from '../../core/boot-policy.js';
 import { noteSttVocabWritten, vocabWords } from '../../core/stt/vocab.js';
 import { NeedsLeaderError } from '../../core/replication/needs-leader.js';
 import { COPY_AS_OF_HEADER } from '../../core/replication/kinds/gate.js';
+import { finishTake, hearRest, hearWavIn, noteLiveDraft, TAKE_ID, MAX_TAKE_BYTES, type TakeResult } from '../../core/stt/take-ahead.js';
 import { log } from '../../logging/index.js';
 
 export const sttRouter = Router();
 
-const ALLOWED_FORMATS = new Set(['webm', 'wav', 'mp3', 'ogg', 'mp4', 'm4a', 'flac']);
+export const ALLOWED_FORMATS = new Set(['webm', 'wav', 'mp3', 'ogg', 'mp4', 'm4a', 'flac']);
 
-/** The largest whole clip sent as raw bytes: about two hours of the Mac app recorder (1.7 MB a minute). */
-export const STT_CLIP_RAW_LIMIT = '200mb';
+/** The largest whole clip sent as raw bytes: about two hours of the Mac app recorder (1.7 MB a minute), as a take heard ahead. */
+export const STT_CLIP_RAW_LIMIT = MAX_TAKE_BYTES;
 
 /** The fields of a raw-bytes clip, from its query string (the body is the audio). */
-function fieldsOfRawClip(query: Request['query']): { format?: string; language?: string; model?: string; surface?: string } {
+function fieldsOfRawClip(query: Request['query']): { format?: string; language?: string; model?: string; surface?: string; take?: string } {
   const one = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
-  return { format: one(query.format), language: one(query.language), model: one(query.model), surface: one(query.surface) };
+  return { format: one(query.format), language: one(query.language), model: one(query.model), surface: one(query.surface), take: one(query.take) };
 }
 
 /**
@@ -42,7 +43,11 @@ function fieldsOfRawClip(query: Request['query']): { format?: string; language?:
  *   and surface in the query (the web recorder: no base64, no size cap that a take reaches)
  *   model — optional: ggml model filename to use for a one-shot whisper-cli retry
  *           (bypasses the configured engine, useful for comparing models)
- * Response: { text: string, durationMs: number, debugAudioPath?: string }
+ *   take  — optional (raw bytes only): the id the clip was appended under while it
+ *           recorded (stt-takes.ts). When its pieces were heard ahead and the clip
+ *           is that take, only the rest is heard now; otherwise the whole clip.
+ * Response: { text: string, durationMs: number, debugAudioPath?: string, heardAheadSec?: number, aheadEngineMs?: number }
+ *   (with a take, durationMs is the stop's own engine time and aheadEngineMs the pieces')
  */
 sttRouter.post('/transcribe', express.json({ limit: '35mb' }), async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -88,7 +93,7 @@ sttRouter.post('/transcribe', express.json({ limit: '35mb' }), async (req: Reque
       return null;
     });
 
-    let result: SttResult;
+    let result: SttResult | TakeResult;
 
     if (model && typeof model === 'string') {
       // Retry with a specific model via one-shot whisper-cli (doesn't touch whisper-server daemon)
@@ -118,7 +123,18 @@ sttRouter.post('/transcribe', express.json({ limit: '35mb' }), async (req: Reque
       result = await engine.transcribe(sttReq);
     } else {
       try {
-        result = await transcribeAudio(config, sttReq);
+        // The part heard while it recorded (take-ahead.ts), when the clip is that take.
+        const take = raw && typeof fields.take === 'string' && TAKE_ID.test(fields.take) ? fields.take : null;
+        const current = take ? getOrCreateEngine(config) : null;
+        const ahead = take ? await finishTake(take, raw!, {
+          format, language: effectiveLanguage,
+          engine: current ? { name: current.name, ...(current.model ? { model: current.model } : {}) } : null,
+        }).catch((e: unknown) => {
+          log.stt.warn(`Take ${take}: the part heard ahead could not be used (${e instanceof Error ? e.message : String(e)}); hearing the whole clip`);
+          return null;
+        }) : null;
+        result = (ahead && take && await hearRest(take, ahead, hearWavIn(effectiveLanguage, config)))
+          || await transcribeAudio(config, sttReq);
       } catch (engineErr) {
         // Record the failure next to the saved audio so the recordings list
         // shows WHY this one has no text (and offers re-transcribe).
@@ -199,6 +215,8 @@ sttRouter.post('/draft', express.json({ limit: DRAFT_BODY_LIMIT }), async (req: 
   // the preview in flight). Tell the engine, so the orphan does not take a
   // model turn ahead of the stop's own pass.
   const gone = new AbortController();
+  // A piece of a take heard ahead waits while a draft runs (take-ahead.ts).
+  const drafted = noteLiveDraft();
   res.on('close', () => { if (!res.writableFinished) gone.abort(); });
   try {
     const { audio, format, language } = req.body;
@@ -225,6 +243,8 @@ sttRouter.post('/draft', express.json({ limit: DRAFT_BODY_LIMIT }), async (req: 
     // Nobody is listening for this answer, so there is nothing to report.
     if (gone.signal.aborted) return;
     next(err);
+  } finally {
+    drafted();
   }
 });
 

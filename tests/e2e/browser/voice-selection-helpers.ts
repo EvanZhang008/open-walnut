@@ -39,6 +39,16 @@ export async function stubSttStatus(page: Page): Promise<void> {
     contentType: 'application/json',
     body: JSON.stringify({ engine: 'whisper-cpp', available: true }),
   }))
+  // With the engine stubbed, the parts a take uploads while it records
+  // (web/src/api/stt-take-ahead.ts) are taken here too, never heard by the fixture server.
+  await page.route('**/api/stt/takes/**', (route) => {
+    const req = route.request()
+    const offset = Number(new URL(req.url()).searchParams.get('offset') ?? 0)
+    // WebKit hands a route no body for a Blob upload, so count at least one byte: the
+    // stub takes any part, and the client only needs to see the take grow.
+    const size = req.method() === 'POST' ? offset + Math.max(1, req.postDataBuffer()?.length ?? 0) : 0
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(req.method() === 'POST' ? { size } : { dropped: true }) })
+  })
 }
 
 export async function openSession(page: Page, sid = SESSION_ID, taskId = TASK_ID): Promise<Locator> {

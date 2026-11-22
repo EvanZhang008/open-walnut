@@ -10,6 +10,7 @@ import express from 'express'
 import request from 'supertest'
 import { createMockConstants } from '../helpers/mock-constants.js'
 import { optInToVoice } from '../helpers/voice-opt-in.js'
+import { toneSpeech } from '../helpers/speech-pcm.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('stt-live'))
 const engine = vi.hoisted(() => vi.fn())
@@ -23,14 +24,7 @@ import { voiceArchiveV1Router, runVoiceArchiveAction } from '../../src/web/route
 import { updateConfig } from '../../src/core/config-manager.js'
 
 /** Tone with a silent second at each of `silentAt` (seconds). */
-function speech(seconds: number, silentAt: number[] = [], seed = 1): Int16Array {
-  const pcm = new Int16Array(Math.round(seconds * SAMPLE_RATE))
-  for (let i = 0; i < pcm.length; i++) {
-    const t = i / SAMPLE_RATE
-    pcm[i] = silentAt.some((s) => t >= s && t < s + 1) ? 0 : Math.round(6000 * Math.sin(2 * Math.PI * (200 + seed) * t))
-  }
-  return pcm
-}
+const speech = (seconds: number, silentAt: number[] = [], seed = 1) => toneSpeech(seconds, silentAt, { level: 6000, hz: 200 + seed })
 
 /** Speech with a pause of a second every `every` seconds, the way people talk. */
 function talk(seconds: number, every = 4, seed = 1): Int16Array {

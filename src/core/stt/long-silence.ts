@@ -27,20 +27,45 @@ export interface SilenceCut {
   removedSec: number;
 }
 
-/** `pcm` with every silence over 2 s shortened; null when there is none. */
-export function shortenLongSilences(pcm: Int16Array, sampleRate: number): SilenceCut | null {
-  const block = Math.round(sampleRate / 100);
+/** RMS (on a -1..1 scale) of each whole 10 ms block of `pcm`. */
+function blockRms(pcm: Int16Array, block: number): Float32Array {
   const blocks = Math.floor(pcm.length / block);
-  if (blocks < (LONG_MS / 10) + 2) return null;
   const rms = new Float32Array(blocks);
   for (let b = 0; b < blocks; b++) {
     let e = 0;
     for (let i = b * block; i < (b + 1) * block; i++) e += pcm[i] * pcm[i];
     rms[b] = Math.sqrt(e / block) / 32768;
   }
+  return rms;
+}
+
+/** The level a block must stay under to count as silence: near the clip's own noise floor. */
+function quietLevel(rms: Float32Array): number {
   const sorted = Float32Array.from(rms).sort();
   const noise = sorted[Math.floor(sorted.length * 0.1)];
-  const quiet = Math.min(SILENCE_CEILING, Math.max(SILENCE_FLOOR_MIN, noise * 2));
+  return Math.min(SILENCE_CEILING, Math.max(SILENCE_FLOOR_MIN, noise * 2));
+}
+
+/**
+ * Whether `pcm` holds any 10 ms block that is not silence, by the same measure
+ * as the shortening below. A clip with none would reach the engine as a moment
+ * of silence, which an engine fills with words never said ("Thank you.", its
+ * context read back), so a piece like that is not heard at all (take-ahead.ts).
+ */
+export function hasSound(pcm: Int16Array, sampleRate: number): boolean {
+  const rms = blockRms(pcm, Math.round(sampleRate / 100));
+  if (!rms.length) return false;
+  const quiet = quietLevel(rms);
+  return rms.some((r) => r >= quiet);
+}
+
+/** `pcm` with every silence over 2 s shortened; null when there is none. */
+export function shortenLongSilences(pcm: Int16Array, sampleRate: number): SilenceCut | null {
+  const block = Math.round(sampleRate / 100);
+  const blocks = Math.floor(pcm.length / block);
+  if (blocks < (LONG_MS / 10) + 2) return null;
+  const rms = blockRms(pcm, block);
+  const quiet = quietLevel(rms);
   const longBlocks = LONG_MS / 10;
   const edge = Math.round((EDGE_MS / 1000) * sampleRate);
 

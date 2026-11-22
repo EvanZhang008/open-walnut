@@ -51,22 +51,32 @@ export function segmentBoundaries(pcm: Int16Array, opts: SegmentOptions = DEFAUL
   return cuts;
 }
 
-/** Locate the PCM payload of a 16 kHz mono s16le WAV (walks the chunk list). */
-export function wavPcm(buf: Buffer): Int16Array {
+/**
+ * Where the PCM payload of a 16 kHz mono s16le WAV lies, as byte offsets
+ * [start, end) (walks the chunk list in `head`, the file's first bytes; `end`
+ * is cut to `fileLength` and to whole samples).
+ */
+export function wavDataRange(head: Buffer, fileLength = head.length): { start: number; end: number } {
   let offset = 12;
-  while (offset + 8 <= buf.length) {
-    const id = buf.toString('ascii', offset, offset + 4);
-    const size = buf.readUInt32LE(offset + 4);
+  while (offset + 8 <= head.length) {
+    const id = head.toString('ascii', offset, offset + 4);
+    const size = head.readUInt32LE(offset + 4);
     if (id === 'data') {
-      const end = Math.min(buf.length, offset + 8 + size);
-      const bytes = buf.subarray(offset + 8, end - ((end - offset - 8) % 2));
-      // Copy so the view is 2-byte aligned whatever the buffer's offset.
-      const aligned = Buffer.from(bytes);
-      return new Int16Array(aligned.buffer, aligned.byteOffset, aligned.length / 2);
+      const start = offset + 8;
+      const end = Math.min(fileLength, start + size);
+      return { start, end: end - ((end - start) % 2) };
     }
     offset += 8 + size + (size % 2);
   }
   throw new Error('WAV has no data chunk');
+}
+
+/** Locate the PCM payload of a 16 kHz mono s16le WAV (walks the chunk list). */
+export function wavPcm(buf: Buffer): Int16Array {
+  const { start, end } = wavDataRange(buf);
+  // Copy so the view is 2-byte aligned whatever the buffer's offset.
+  const aligned = Buffer.from(buf.subarray(start, end));
+  return new Int16Array(aligned.buffer, aligned.byteOffset, aligned.length / 2);
 }
 
 /** A 16 kHz mono s16le WAV holding `pcm`. */

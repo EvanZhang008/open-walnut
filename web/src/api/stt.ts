@@ -20,6 +20,10 @@ export interface TranscribeResult {
   debugAudioPath?: string;
   /** Server-side stored recording id — audio survives even if this response is lost */
   recordingId?: string;
+  /** Seconds of the take heard while it recorded (stt-take-ahead.ts); the stop heard only the rest. */
+  heardAheadSec?: number;
+  /** Engine time the parts heard while it recorded took; `durationMs` is the stop's own. */
+  aheadEngineMs?: number;
 }
 
 export interface VoiceRecording {
@@ -150,8 +154,8 @@ export async function transcribeAudio(
   language?: string,
   /** Optional model override — retry with a specific ggml model via whisper-cli */
   model?: string,
-  /** A caller's own cancel, and where it was said when not the page (a plugin: `plugin:<id>`). */
-  opts: { signal?: AbortSignal; surface?: string } = {},
+  /** A caller's own cancel, where it was said when not the page (a plugin: `plugin:<id>`), and the take id it was uploaded under while it recorded. */
+  opts: { signal?: AbortSignal; surface?: string; take?: string } = {},
 ): Promise<TranscribeResult> {
   const deadline = AbortSignal.timeout(finalPassTimeoutMs(typeof audio === 'string' ? audio.length * 0.75 : audio.size));
   // The page it was said on (a session, a plugin's composer), kept with the recording.
@@ -164,7 +168,7 @@ export async function transcribeAudio(
       body: JSON.stringify({ audio, format, language, model, surface }),
       signal,
     })
-    : await sttFetch(`/api/stt/transcribe?${new URLSearchParams({ format, surface, ...(language ? { language } : {}), ...(model ? { model } : {}) })}`, {
+    : await sttFetch(`/api/stt/transcribe?${new URLSearchParams({ format, surface, ...(language ? { language } : {}), ...(model ? { model } : {}), ...(opts.take ? { take: opts.take } : {}) })}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/octet-stream' },
       body: audio,

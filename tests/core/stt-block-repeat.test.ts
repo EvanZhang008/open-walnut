@@ -12,41 +12,10 @@ import { join } from 'node:path';
 import { findBlockRepeat, removeBlockRepeat, blockRepeatLength, type BlockRepeat } from '../../src/lib/audio-block-repeat.js';
 import { shortenLongSilences } from '../../src/core/stt/long-silence.js';
 import { repairWav, repairWavFile } from '../../src/core/stt/wav-repair.js';
+import { speechLike, rng, repeatBlocks as repeated } from '../helpers/speech-pcm.js';
 
 const RATE = 16000;
 const BLOCK = 160;
-
-/** Deterministic noise in -1..1. */
-function rng(seed: number) {
-  let s = seed >>> 0;
-  return () => {
-    s = (s * 1664525 + 1013904223) >>> 0;
-    return s / 0x80000000 - 1;
-  };
-}
-
-/** Speech-like sound: smoothed noise under a syllable-rate envelope. */
-function speechLike(seconds: number, seed = 1): Float32Array {
-  const r = rng(seed);
-  const out = new Float32Array(Math.round(seconds * RATE));
-  let y = 0;
-  for (let i = 0; i < out.length; i++) {
-    y = 0.7 * y + 0.3 * r();
-    const env = 0.25 * (0.6 + 0.4 * Math.sin((2 * Math.PI * 4 * i) / RATE));
-    out[i] = y * env;
-  }
-  return out;
-}
-
-/** `s` as a faulty recorder writes it: `head` samples, then every block `factor` times. */
-function repeated(s: Float32Array, factor: number, head = 0): Float32Array {
-  const out: number[] = Array.from(s.subarray(0, head));
-  for (let at = head; at < s.length; at += BLOCK) {
-    const b = Array.from(s.subarray(at, Math.min(s.length, at + BLOCK)));
-    for (let k = 0; k < factor; k++) out.push(...b);
-  }
-  return Float32Array.from(out);
-}
 
 const tone = (hz: number, seconds: number, level = 0.3) =>
   Float32Array.from({ length: Math.round(seconds * RATE) }, (_, i) => level * Math.sin((2 * Math.PI * hz * i) / RATE));

@@ -13,6 +13,7 @@ import { execFileSync } from 'node:child_process';
 import type { AddressInfo } from 'node:net';
 import { createMockConstants } from '../helpers/mock-constants.js';
 import { optInToVoice } from '../helpers/voice-opt-in.js';
+import { toneSpeech } from '../helpers/speech-pcm.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-test-stt-qwen'));
 
@@ -77,15 +78,7 @@ describe('Qwen3-ASR output', () => {
 });
 
 /** Tone with silent stretches at the given seconds (each 1 s long). */
-function speech(seconds: number, silentAt: number[] = []): Int16Array {
-  const pcm = new Int16Array(seconds * SAMPLE_RATE);
-  for (let i = 0; i < pcm.length; i++) {
-    const t = i / SAMPLE_RATE;
-    const silent = silentAt.some((s) => t >= s && t < s + 1);
-    pcm[i] = silent ? 0 : Math.round(8000 * Math.sin(2 * Math.PI * 220 * t));
-  }
-  return pcm;
-}
+const speech = (seconds: number, silentAt: number[] = []) => toneSpeech(seconds, silentAt, { level: 8000, hz: 220 });
 
 describe('segmenter', () => {
   it('keeps a recording within the limit whole', () => {

@@ -154,6 +154,7 @@ const TMP_ENTRIES: readonly HomeEntry[] = [
   rebuild('tmp.plugins', 'tmp/plugins', 'dir', 'Each plugin\'s scratch area'),
   rebuild('tmp.plugin-updates-cache', 'tmp/plugin-updates-cache.json', 'file', 'Last plugin update check'),
   rebuild('tmp.bin', 'tmp/bin', 'dir', 'Prebuilt helper binaries'),
+  rebuild('tmp.stt-takes', 'tmp/stt-takes', 'dir', 'Voice takes as they upload while recording, heard ahead and removed at their stop'),
   rebuild('tmp.backup-staging', 'tmp/backup-staging', 'dir', 'A backup run\'s staging copy', { match: /^tmp\/backup-staging-repo(\/|$)/ }),
 ]
 

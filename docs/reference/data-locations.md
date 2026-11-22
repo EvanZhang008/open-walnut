@@ -258,6 +258,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/tmp/plugins/` | rebuildable | no | Each plugin's scratch area |
 | `~/.open-walnut/tmp/plugin-updates-cache.json` | rebuildable | no | Last plugin update check |
 | `~/.open-walnut/tmp/bin/` | rebuildable | no | Prebuilt helper binaries |
+| `~/.open-walnut/tmp/stt-takes/` | rebuildable | no | Voice takes as they upload while recording, heard ahead and removed at their stop |
 | `~/.open-walnut/tmp/backup-staging/` (and names matching `^tmp\/backup-staging-repo(\/\|$)`) | rebuildable | no | A backup run's staging copy |
 | `~/.open-walnut/tasks/tasks.sqlite` | leader-data | no | The task database |
 | `~/.open-walnut/org/threads.sqlite` | leader-data | no | The threads database |

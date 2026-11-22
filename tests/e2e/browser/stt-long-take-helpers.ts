@@ -93,6 +93,8 @@ export function registerLongTakeScenarios(): void {
     expect(engine.finals).toHaveLength(1)
     expect(engine.finals[0]!.type).toContain('application/octet-stream')
     expect(engine.finals[0]!.url).toContain('format=')
+    // Its parts went up while it recorded, so the stop names the take (stt-take-ahead.ts).
+    expect(engine.finals[0]!.url).toContain('take=')
     // The whole take is in it, start to end, while draft recorders came and went.
     const clipSeconds = await page.evaluate(async () => {
       const clip = (window as unknown as { __sttFinalClip?: Blob }).__sttFinalClip

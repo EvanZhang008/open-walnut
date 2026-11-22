@@ -5,13 +5,14 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFile, writeFile, unlink } from 'node:fs/promises';
+import { readFile, writeFile, unlink, open } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { sttSpawnEnv } from './spawn-env.js';
 import { cafToWav } from './caf-to-wav.js';
 import { repairWavFile } from './wav-repair.js';
+import { wavDataRange } from './wav-segment.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -133,28 +134,66 @@ export async function audioForUpload(
   }
 }
 
-async function toHeardWav(audioBase64: string, inputFormat: string): Promise<{ path: string; repaired: boolean }> {
-  const inputPath = tempPath(inputFormat);
+/**
+ * `audio` as recorded, decoded to 16 kHz mono PCM from sample `fromSample` on:
+ * no repair (the caller runs the parts of it it needs, wav-repair.ts). A take
+ * heard ahead while it records reads its growing file through this
+ * (take-ahead.ts); only the samples it asks for are read into memory, so a
+ * long take costs each round only its new part on the event loop.
+ */
+export async function decodeToPcm(audio: Buffer, inputFormat: string, fromSample = 0): Promise<Int16Array> {
   const outputPath = tempPath('wav');
+  try {
+    await decodeToWavFile(audio, inputFormat, outputPath);
+    return await readWavPcmFrom(outputPath, fromSample);
+  } finally {
+    await unlink(outputPath).catch(() => {});
+  }
+}
 
-  if (inputFormat === 'wav') {
-    const buf = Buffer.from(audioBase64, 'base64');
-    if (isConformingWav(buf)) {
-      await writeFile(outputPath, buf);
-      return heardOnce(outputPath);
-    }
+async function readWavPcmFrom(path: string, fromSample: number): Promise<Int16Array> {
+  const file = await open(path, 'r');
+  try {
+    const { size } = await file.stat();
+    const head = Buffer.alloc(Math.min(size, 64 * 1024));
+    await readFully(file, head, 0);
+    const { start, end } = wavDataRange(head, size);
+    const from = Math.min(end, start + 2 * Math.max(0, Math.floor(fromSample)));
+    // Not pooled, so the samples start 2-byte aligned.
+    const out = Buffer.alloc(end - from);
+    await readFully(file, out, from);
+    return new Int16Array(out.buffer, out.byteOffset, out.length / 2);
+  } finally {
+    await file.close();
+  }
+}
+
+async function readFully(file: Awaited<ReturnType<typeof open>>, into: Buffer, position: number): Promise<void> {
+  for (let at = 0; at < into.length;) {
+    const { bytesRead } = await file.read(into, at, into.length - at, position + at);
+    if (!bytesRead) throw new Error('WAV ended early');
+    at += bytesRead;
+  }
+}
+
+/** Writes `audio` to `outputPath` as a 16 kHz mono 16-bit WAV, as it was recorded. */
+async function decodeToWavFile(audio: Buffer, inputFormat: string, outputPath: string): Promise<void> {
+  if (inputFormat === 'wav' && isConformingWav(audio)) {
+    await writeFile(outputPath, audio);
+    return;
   }
   // The phone's PCM CAF is rewrapped in-process, so no box needs ffmpeg for it.
   if (inputFormat === 'caf') {
-    const wav = cafToWav(Buffer.from(audioBase64, 'base64'));
+    const wav = cafToWav(audio);
     if (wav) {
       await writeFile(outputPath, wav);
-      return heardOnce(outputPath);
+      return;
     }
   }
 
+  const inputPath = tempPath(inputFormat);
   try {
-    await writeFile(inputPath, Buffer.from(audioBase64, 'base64'));
+    await writeFile(inputPath, audio);
     await execFileAsync('ffmpeg', [
       '-y', '-i', inputPath,
       // 16kHz mono required by sherpa-onnx and whisper.cpp engines
@@ -163,14 +202,19 @@ async function toHeardWav(audioBase64: string, inputFormat: string): Promise<{ p
       '-c:a', 'pcm_s16le', // 16-bit PCM
       outputPath,
     // A take has no time limit: an hour of audio decodes in seconds, and a loaded machine gets room.
-    ], { timeout: convertTimeoutMs(audioBase64.length * 0.75), env: sttSpawnEnv() }).catch((err: NodeJS.ErrnoException) => {
+    ], { timeout: convertTimeoutMs(audio.length), env: sttSpawnEnv() }).catch((err: NodeJS.ErrnoException) => {
       if (err.code === 'ENOENT') throw new Error(`Reading ${inputFormat} audio needs ffmpeg, which is not installed`);
       throw err;
     });
-    return await heardOnce(outputPath);
   } finally {
     await unlink(inputPath).catch(() => {});
   }
+}
+
+async function toHeardWav(audioBase64: string, inputFormat: string): Promise<{ path: string; repaired: boolean }> {
+  const outputPath = tempPath('wav');
+  await decodeToWavFile(Buffer.from(audioBase64, 'base64'), inputFormat, outputPath);
+  return heardOnce(outputPath);
 }
 
 /**
