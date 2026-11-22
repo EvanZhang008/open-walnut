@@ -21,7 +21,7 @@ import { repoStore } from '../../../src/core/backup/repo-mode.js';
 import { parseRecoveryKey } from '../../../src/core/backup/repo/crypto.js';
 import { readRecoveryKey } from '../../../src/core/backup/recovery-key.js';
 import {
-  DRILL_DIR_PREFIX, DRILL_FREE_RESERVE_BYTES, readDrillRecord, readOnlyStore, removeLeftoverDrills, runRestoreDrill, writeDrillRecord,
+  DRILL_DIR_PREFIX, DRILL_FREE_RESERVE_BYTES, freeBytesAt, readDrillRecord, readOnlyStore, removeLeftoverDrills, runRestoreDrill, writeDrillRecord,
   type DrillResult,
 } from '../../../src/core/backup/restore-drill.js';
 import type { BackupConfig } from '../../../src/core/backup/types.js';
@@ -305,15 +305,19 @@ describe('the drill is never what fills the disk', () => {
     reads.length = 0;
 
     // One byte short of the backup's size plus the reserve.
-    const short = await drill(plainCfg, { store: counting, freeBytes: async () => total + DRILL_FREE_RESERVE_BYTES - 1 });
+    let started = 0;
+    const short = await drill(plainCfg, { store: counting, freeBytes: async () => total + DRILL_FREE_RESERVE_BYTES - 1, onStart: () => { started++; } });
     expect(short).toMatchObject({ ok: false, error: expect.stringMatching(/Not enough free disk space/) });
     expect(short.checks).toEqual([]);
     expect(await drillFolders()).toEqual([]);
     // Only the snapshot list and the snapshot were read: far fewer reads than a restore, and no pack.
     expect(reads.length).toBeLessThan(fullReads);
-    // What a restore reads and the refused drill did not: the packs that hold the files.
-    expect(reads.every((k) => fullKeys.has(k))).toBe(true);
-    expect([...fullKeys].filter((k) => !reads.includes(k)).length).toBeGreaterThan(0);
+    // A restore reads packs (the files' bytes); the refused drill read none of them.
+    const isPack = (k: string): boolean => /(^|\/)packs\//.test(k);
+    expect([...fullKeys].some(isPack)).toBe(true);
+    expect(reads.filter(isPack)).toEqual([]);
+    // Nor did it tell the schedule it had started.
+    expect(started).toBe(0);
 
     // Exactly enough: it runs.
     expect((await drill(plainCfg, { freeBytes: async () => total + DRILL_FREE_RESERVE_BYTES })).ok).toBe(true);
@@ -328,6 +332,14 @@ describe('the drill is never what fills the disk', () => {
     // Either it ran, or it refused for room: never an error of another kind, never a leftover folder.
     if (!r.ok) expect(r.error).toMatch(/Not enough free disk space/);
     expect(await drillFolders()).toEqual([]);
+    // What it reads is the space a user can still use (bavail), not the disk's size or root's reserve.
+    const st = await fsp.statfs(tmpRoot);
+    const free = await freeBytesAt(tmpRoot);
+    expect(free).not.toBeNull();
+    expect(free!).toBeLessThan(Number(st.blocks) * Number(st.bsize));
+    // Other writers move the number between the two reads: within 1 GiB of bavail, and never the larger bfree when they differ by more.
+    expect(Math.abs(free! - Number(st.bavail) * Number(st.bsize))).toBeLessThan(1024 ** 3);
+    expect(await freeBytesAt(path.join(tmpRoot, 'no-such-folder'))).toBeNull();
   }, 120_000);
 });
 

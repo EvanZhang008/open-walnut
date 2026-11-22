@@ -37,7 +37,7 @@ export interface DrillRuntimeDeps {
   isOn?: () => Promise<boolean>;
   backupConfig?: () => Promise<BackupConfig | undefined>;
   /** Runs one drill holding the backup lock (it throws BackupLockedError when another process holds it). */
-  run?: (cfg: BackupConfig, dataDir: string) => Promise<DrillResult>;
+  run?: (cfg: BackupConfig, dataDir: string, onStart: () => Promise<void>) => Promise<DrillResult>;
   /** Where drill folders go (removeLeftoverDrills at start); default the OS temp dir. */
   tmpRoot?: string;
   notify: (n: { title: string; body: string; dedupScope: string; recoveryKey: string }) => Promise<boolean>;
@@ -65,9 +65,12 @@ export const DRILL_RECOVERY_KEY = 'backup-drill';
 export const DRILL_INTERRUPTED = 'The drill was cut short before it finished (the server stopped or restarted).';
 
 /** The record a drill leaves while it runs: what stays when it never finishes. */
-function interrupted(at: number): DrillResult {
-  return { version: 1, at: new Date(at).toISOString(), durationMs: 0, ok: false, destination: '', checks: [], notInBackups: [], databases: [], error: DRILL_INTERRUPTED };
+function interrupted(at: number, interruptions: number): DrillResult {
+  return { version: 1, at: new Date(at).toISOString(), durationMs: 0, ok: false, destination: '', checks: [], notInBackups: [], databases: [], error: DRILL_INTERRUPTED, interruptions };
 }
+
+/** Scheduled drills cut short in a row before Walnut Health hears of it. */
+export const DRILL_CUT_SHORT_TELLS = 3;
 
 export function failureSummary(r: DrillResult): string {
   if (r.error) return r.error;
@@ -79,9 +82,11 @@ export function startRestoreDrillRuntime(deps: DrillRuntimeDeps): DrillRuntime {
   const now = deps.now ?? Date.now;
   const isOn = deps.isOn ?? (async () => experimentalEnabled((await getConfig()).experimental, 'restore_drill'));
   const backupConfig = deps.backupConfig ?? (async () => (await getConfig()).backup);
-  const run = deps.run ?? ((cfg: BackupConfig, dir: string) => runRestoreDrillLocked({ cfg, dataDir: dir, ...(deps.tmpRoot ? { tmpRoot: deps.tmpRoot } : {}) }));
+  const run = deps.run ?? ((cfg: BackupConfig, dir: string, onStart: () => Promise<void>) => runRestoreDrillLocked({ cfg, dataDir: dir, onStart, ...(deps.tmpRoot ? { tmpRoot: deps.tmpRoot } : {}) }));
   /** The passing record a recovery was last sent for: a pass from the CLI retires the card too. */
   let recoveredFor: string | null = null;
+  /** The cut-short record the streak notice was last sent for. */
+  let toldCutShortAt: string | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
   let chain: Promise<void> = Promise.resolve();
@@ -106,17 +111,27 @@ export function startRestoreDrillRuntime(deps: DrillRuntimeDeps): DrillRuntime {
       const last = await readDrillRecord(dataDir);
       recoverFrom(last);
       if (last && now() - Date.parse(last.at) < (last.error ? DRILL_RETRY_MS : DRILL_EVERY_MS)) return null;
+      // Cut short several times in a row (a server that restarts more often than a drill takes):
+      // nobody would ever hear that the backup goes unchecked, so say it once per streak.
+      if (last?.error === DRILL_INTERRUPTED && (last.interruptions ?? 1) >= DRILL_CUT_SHORT_TELLS && toldCutShortAt !== last.at) {
+        toldCutShortAt = last.at;
+        await deps.notify({
+          title: 'Restore drill keeps being cut short',
+          body: `The weekly restore drill was stopped ${last.interruptions} times in a row before it finished, each time because Walnut stopped or restarted, so the newest backup is unchecked. It tries again now and then once a day; \`open-walnut backup drill\` in a terminal runs one that a restart does not stop.`,
+          dedupScope: DRILL_NOTICE_SCOPE,
+          recoveryKey: DRILL_RECOVERY_KEY,
+        });
+      }
       // A backup or restore runs (here or in a terminal): its prune must not race the drill's reads.
       if (currentBackupJob() !== null || (await backupLockHeld(dataDir))) return null;
       let result: DrillResult;
       try {
-        result = await runBackupJob('restore', async () => {
-          // Written before the first byte is fetched: a drill the server's stop or a crash cuts
-          // short is then tried again in a day, like any drill that could not run, instead of
-          // downloading the whole backup again at every start of the server.
-          await writeDrillRecord(dataDir, interrupted(now()));
-          return run(cfg, dataDir);
-        });
+        // The record is written once the drill holds the lock and has the room, before the first
+        // byte is fetched: a drill the server's stop or a crash cuts short is then tried again in
+        // a day, like any drill that could not run, instead of downloading the whole backup again
+        // at every start of the server. A drill refused for the lock writes nothing.
+        const cutShortBefore = last?.error === DRILL_INTERRUPTED ? last.interruptions ?? 1 : 0;
+        result = await runBackupJob('restore', () => run(cfg, dataDir, () => writeDrillRecord(dataDir, interrupted(now(), cutShortBefore + 1))));
       } catch (err) {
         if (err instanceof Error && (err.name === 'BackupLockedError' || err.name === 'BackupBusyError')) return null;
         throw err;

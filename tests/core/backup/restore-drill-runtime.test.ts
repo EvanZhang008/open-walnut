@@ -101,16 +101,22 @@ describe('restore drill schedule', () => {
     let now = Date.parse('2026-11-21T10:00:00Z');
     // The first drill never finishes (the process is killed while it restores).
     let seenWhileRunning: DrillResult | null = null;
-    const run = vi.fn(async () => {
+    const run = vi.fn(async (_cfg: BackupConfig, _dir: string, onStart: () => Promise<void>) => {
+      // Nothing is on disk until the drill holds the lock and has the room.
+      expect(await readDrillRecord(home)).toBeNull();
+      await onStart();
       seenWhileRunning = await readDrillRecord(home);
       return new Promise<DrillResult>(() => {});
     });
     const notify = vi.fn(async () => true);
-    const first = startRestoreDrillRuntime({ dataDir: home, isOn: async () => true, backupConfig: async () => cfg, run, notify, now: () => now, subscribe: false, tmpRoot: home });
+    // Its own module instance, as each server process has: the job that never ends stays in it.
+    vi.resetModules();
+    const firstServer = await import('../../../src/core/backup/restore-drill-runtime.js');
+    const first = firstServer.startRestoreDrillRuntime({ dataDir: home, isOn: async () => true, backupConfig: async () => cfg, run, notify, now: () => now, subscribe: false, tmpRoot: home });
     void first.check();
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
     // The record was on disk before the drill fetched anything.
-    expect(seenWhileRunning).toMatchObject({ ok: false, error: DRILL_INTERRUPTED });
+    expect(seenWhileRunning).toMatchObject({ ok: false, error: DRILL_INTERRUPTED, interruptions: 1 });
     first.stop();
 
     // The next server (a new process: its own job slot and lock) finds that record.
@@ -128,6 +134,48 @@ describe('restore drill schedule', () => {
     expect(rerun).toHaveBeenCalledTimes(1);
     // A cut-short drill is nobody's failure to read about.
     expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('a drill refused for the lock leaves the record as it was: no false "cut short" that would block it for a day', async () => {
+    const now = Date.parse('2026-11-21T10:00:00Z');
+    const locked = Object.assign(new Error('Walnut is backing up or restoring in another process'), { name: 'BackupLockedError' });
+    // Another process took the lock between the check and the drill: the drill never started.
+    const run = vi.fn(async () => { throw locked; });
+    runtime = startRestoreDrillRuntime({ dataDir: home, isOn: async () => true, backupConfig: async () => cfg, run, notify: vi.fn(async () => true), now: () => now, subscribe: false, tmpRoot: home });
+    expect(await runtime.check()).toBeNull();
+    expect(await readDrillRecord(home)).toBeNull();
+    // With an older passing record on disk it stays exactly that record.
+    const old = result(true, now - DRILL_EVERY_MS - 1000);
+    await writeDrillRecord(home, old);
+    expect(await runtime.check()).toBeNull();
+    expect(await readDrillRecord(home)).toEqual(old);
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it('cut short three times in a row: Walnut Health hears of it once, and a drill that finishes ends the streak', async () => {
+    let now = Date.parse('2026-11-21T10:00:00Z');
+    const notify = vi.fn(async () => true);
+    const boot = async (run: (c: BackupConfig, d: string, onStart: () => Promise<void>) => Promise<DrillResult>) => {
+      runtime?.stop();
+      vi.resetModules();
+      const mod = await import('../../../src/core/backup/restore-drill-runtime.js');
+      runtime = mod.startRestoreDrillRuntime({ dataDir: home, isOn: async () => true, backupConfig: async () => cfg, run, notify, now: () => now, subscribe: false, tmpRoot: home });
+      return runtime;
+    };
+    const never = async (_c: BackupConfig, _d: string, onStart: () => Promise<void>) => { await onStart(); return new Promise<DrillResult>(() => {}); };
+    for (let i = 1; i <= 3; i++) {
+      void (await boot(never)).check();
+      await vi.waitFor(async () => expect((await readDrillRecord(home))?.interruptions).toBe(i));
+      expect(notify).not.toHaveBeenCalled();
+      now += DRILL_RETRY_MS + 1000;
+    }
+    // The fourth server finds three in a row: it says so, then tries again; a second check of the same record says nothing more.
+    const ok = vi.fn(async (_c: BackupConfig, _d: string, onStart: () => Promise<void>) => { await onStart(); return result(true, now); });
+    expect(await (await boot(ok)).check()).toMatchObject({ ok: true });
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0][0]).toMatchObject({ title: 'Restore drill keeps being cut short', dedupScope: DRILL_NOTICE_SCOPE });
+    expect(audienceOf({ kind: 'operation-error', dedupKey: `error:${notify.mock.calls[0][0].dedupScope}` })).toBe('health');
+    expect((await readDrillRecord(home))?.interruptions).toBeUndefined();
   });
 
   it('a pass from the CLI retires the failure card at the next check, once', async () => {

@@ -261,8 +261,8 @@ export function everyExperimentOn(flags: ExperimentalFlags | undefined): boolean
  * turned every experiment on to try new screens did not ask for that; its own switch does.
  */
 export function keepsOwnSwitch(id: ExperimentalFeatureId): boolean {
-  const feature: { ownSwitchOnly?: boolean } = EXPERIMENTAL_FEATURES.find((f) => f.id === id)!;
-  return feature.ownSwitchOnly === true;
+  const feature = EXPERIMENTAL_FEATURES.find((f) => f.id === id)!;
+  return 'ownSwitchOnly' in feature && feature.ownSwitchOnly === true;
 }
 
 export function experimentalEnabled(flags: ExperimentalFlags | undefined, id: ExperimentalFeatureId): boolean {

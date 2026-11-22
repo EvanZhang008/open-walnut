@@ -57,6 +57,8 @@ export interface DrillResult {
   error?: string;
   /** Folders of earlier drills that were killed, removed before this one. */
   removedLeftovers?: number;
+  /** Scheduled drills in a row that the server's stop cut short, this one included. */
+  interruptions?: number;
 }
 
 export interface DrillOptions {
@@ -77,13 +79,18 @@ export interface DrillOptions {
   onFolder?: (dir: string) => void | Promise<void>;
   /** Tests: the free bytes where the drill's folder goes; default: what the file system says. */
   freeBytes?: (dir: string) => Promise<number | null>;
+  /**
+   * Called once the drill is about to fetch the backup: it holds the lock (runRestoreDrillLocked),
+   * found a backup and has the room. The schedule writes its "cut short" record here.
+   */
+  onStart?: () => void | Promise<void>;
 }
 
 /** Kept free beside the restored copy: the drill must never be what fills the disk. */
 export const DRILL_FREE_RESERVE_BYTES = 10 * 1024 ** 3;
 
 /** Free bytes a non-root user can use where `dir` is; null when the file system does not say. */
-async function freeBytesAt(dir: string): Promise<number | null> {
+export async function freeBytesAt(dir: string): Promise<number | null> {
   try {
     const st = await fs.statfs(dir);
     const free = Number(st.bavail) * Number(st.bsize);
@@ -231,9 +238,10 @@ export async function runRestoreDrill(opts: DrillOptions): Promise<DrillResult> 
   if (free === null || free < needed) {
     result.error = free === null
       ? `The free disk space at ${tmpRoot} could not be read, so the drill did not restore ${gb(snapshot.totalBytes)} there.`
-      : `Not enough free disk space for the drill: the backup is ${gb(snapshot.totalBytes)} and ${gb(DRILL_FREE_RESERVE_BYTES)} must stay free, but ${tmpRoot} has ${gb(free)}.`;
+      : `Not enough free disk space for the drill: the backup is ${gb(snapshot.totalBytes)} and ${gb(DRILL_FREE_RESERVE_BYTES)} must stay free, but ${tmpRoot} has ${gb(free)}. Free some space, or run it with TMPDIR set to a folder on a larger disk.`;
     return finish();
   }
+  await opts.onStart?.();
   const dir = await fs.mkdtemp(path.join(tmpRoot, DRILL_DIR_PREFIX));
   try {
     await fs.chmod(dir, 0o700);

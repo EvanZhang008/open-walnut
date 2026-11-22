@@ -210,8 +210,10 @@ restore drill" (`restore_drill`, off by default) is on. Code: `src/core/backup/r
 
 The restored copy is as large as the backup, so the drill looks at the disk first: when the
 backup's size plus 10 GB does not fit where its folder goes, it fetches nothing and says so (the
-schedule tries again in a day). The schedule writes its record before it starts, so a drill the
-server's stop cut short is also tried again in a day, not at the next start. "Every experiment
+schedule tries again in a day). Once it holds the lock and has the room, the schedule writes its
+record before the first byte is fetched, so a drill the server's stop cut short is also tried
+again in a day, not at the next start; three cut short in a row are told to Walnut Health once
+(a drill run from a terminal is not stopped by a restart of the server). "Every experiment
 on" does not turn the weekly drill on: it downloads all of your data, so it keeps its own switch
 (`keepsOwnSwitch` in `src/core/experimental.ts`; the standby copy is the other one).
 
