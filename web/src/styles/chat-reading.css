@@ -1,10 +1,44 @@
 /* ── How the session chat reads (2026-11-21, the UI audit of the user's own chats) ──────────
-   The timeline and the composer use the panel's width with its plain gutter. There is no
-   centred reading column: the user, 2026-11-22, on a 496 px column with the composer under
-   it, by voice: "why did you make the margins around it so big"; it was never agreed with him. This file keeps the type scale, the reply's line and the scroll stops;
-   the turn line and the cut-row cue live with the rows (step-rows.css).
+   This file holds the chat's side margins, the type scale, the reply's line and the scroll
+   stops; the turn line and the cut-row cue live with the rows (step-rows.css).
    tests/e2e/browser/chat-reading.spec.ts measures it. */
 
+/* ── The side margins: a quarter of what a wide panel has past 496 px, on each side ──
+   A 496 px centred column with the composer under it shipped first; the user, 2026-11-22, by
+   voice: "why did you make the margins around it so big", then "make the margin half". So each
+   side of a wide panel keeps half of that column's margin: (width - 496 px) / 4. A narrower panel
+   (a Home column, a split, a phone) keeps its plain gutter. The timeline, the composer and the
+   panel's notices above the timeline share these edges. A history that needs more room on its
+   left (the question map, a thread page's sliver: thread-map.css, thread-stack-page.css) names it
+   in --history-left, and the margin never comes closer. The review sidebar sets its own right
+   padding, so with it open everything keeps its gutter. Padding in % reads the parent's width, the
+   same parent the composer has (a tree split's half has its own composer and history: left alone). */
+:root {
+  --chat-side: calc((100% - 496px) / 4);
+}
+:root .session-panel-body .session-history:not([data-review-sidebar]) {
+  padding-left: max(var(--history-left, clamp(8px, 4%, 40px)), var(--chat-side));
+  padding-right: max(clamp(8px, 4%, 40px), var(--chat-side));
+}
+:root .session-panel-input:not(.tree-split-input) {
+  padding-left: max(8px, calc(var(--chat-side) - 8px));
+  padding-right: max(8px, calc(var(--chat-side) - 8px));
+}
+:root .session-panel:not(.is-changed-open) > :is(.session-error-banner, .session-action-panel),
+:root .session-panel-body > .session-top {
+  margin-left: max(8px, calc(var(--chat-side) - 8px));
+  margin-right: max(8px, calc(var(--chat-side) - 8px));
+}
+:root .open-walnut-fullscreen:has(.session-history[data-review-sidebar]) .session-panel-input {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+:root .open-walnut-fullscreen:has(.session-history[data-review-sidebar]) > .session-error-banner,
+:root .open-walnut-fullscreen:has(.session-history[data-review-sidebar]) > .session-action-panel,
+:root .open-walnut-fullscreen:has(.session-history[data-review-sidebar]) .session-panel-body > .session-top {
+  margin-left: 8px;
+  margin-right: 8px;
+}
 /* A send that did not go out says so in a quiet caption (--font-size-sm, the standard's secondary size). */
 :root .session-history .session-msg-failed-badge { font-size: var(--font-size-sm); font-weight: 500; color: var(--error); }
 

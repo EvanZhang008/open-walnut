@@ -5,9 +5,10 @@
  * button again above the composer). web/src/styles/chat-reading.css holds the layout.
  *
  * Measured here, on a long reply with every block kind:
- *   - the timeline and the composer fill the panel with its plain gutter: no centred column and
- *     no wide margins around the composer (the user, 2026-11-22); every row, code block, table and
- *     the person's bubble stays inside the history (a long code line scrolls in its block);
+ *   - each side of a wide panel keeps a quarter of what it has past 496 px (half the margin of
+ *     the centred column that shipped first, the user, 2026-11-22), the composer at the same
+ *     edges; every row, code block, table and the person's bubble stays inside the history (a
+ *     long code line scrolls in its block);
  *   - headings follow one scale (15 px titles, 14 px bold), weight 600;
  *   - the turn's line is secondary grey (not muted), its chevron shows, and it fills on hover;
  *   - one condition is one notice: a folder-gone session with a message the server parked
@@ -112,19 +113,22 @@ async function mount(page: Page, width: number, record: Record<string, unknown> 
 }
 
 for (const width of [1280, 1512]) {
-  test(`the chat fills the panel, headings one scale, the turn's line reads as a control (${width}px)`, async ({ page }) => {
+  test(`the chat keeps half margins, headings one scale, the turn's line reads as a control (${width}px)`, async ({ page }) => {
     const { hist } = await mount(page, width);
     const r = await proseReport(hist);
     console.log(`[chat-reading] ${width}px ${JSON.stringify(r)}`);
-    // The chat fills the panel with its plain gutter: no centred column, no wide margins around
-    // the composer (the user, 2026-11-22, by voice: "why did you make the margins around it so big").
-    expect(r.leftGap, `the prose starts at the panel's gutter (${r.leftGap} px in)`).toBeLessThanOrEqual(64);
-    expect(r.rightGap, `the prose ends at the panel's gutter (${r.rightGap} px in)`).toBeLessThanOrEqual(64);
-    expect(r.pre!.width, 'a code block stays in the panel').toBeLessThanOrEqual(r.column + 1);
+    // Each side of a wide panel keeps a quarter of what the panel has past 496 px: half the margin
+    // of the centred column that shipped first (the user, 2026-11-22, by voice: "why did you make
+    // the margins around it so big", then "make the margin half"). The composer shares the edges.
+    const side = Math.max(40, (r.panel - 496) / 4);
+    expect(r.panel, 'the panel is wide enough for the margin to show').toBeGreaterThan(496 + 4 * 40);
+    expect(Math.abs(r.leftGap - side), `the prose's left margin (${r.leftGap} px, want ${side})`).toBeLessThanOrEqual(8);
+    expect(Math.abs(r.rightGap - side), `the prose's right margin (${r.rightGap} px, want ${side})`).toBeLessThanOrEqual(8);
+    expect(r.pre!.width, 'a code block stays in the history').toBeLessThanOrEqual(r.column + 1);
     expect(r.pre!.scrolls, 'a long code line scrolls inside its block').toBe(true);
     expect(r.composer, 'the composer is on screen').not.toBeNull();
-    expect(r.composer!.left - r.panelLeft, 'the composer starts at the panel gutter, not inside a wide margin').toBeLessThanOrEqual(24);
-    expect(r.panelRight - r.composer!.right, 'the composer ends at the panel gutter, not inside a wide margin').toBeLessThanOrEqual(24);
+    expect(Math.abs(r.composer!.left - r.colLeft), 'the composer starts where the prose starts').toBeLessThanOrEqual(16);
+    expect(Math.abs(r.composer!.right - r.colRight), 'the composer ends where the prose ends').toBeLessThanOrEqual(16);
     // The standard's sizes: a title is 15 px, the chat text 14 px; a smaller heading is bold text.
     expect(r.h2!.size).toBe(15);
     expect(r.h3!.size).toBeGreaterThanOrEqual(r.p!.size);
