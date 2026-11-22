@@ -20,7 +20,7 @@
  * "CLI" is /bin/sh cat-ing a prepared file, big files are sparse, and the
  * daemon is SIGKILLed after each test.
  */
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
@@ -132,6 +132,16 @@ async function waitFor(check: () => boolean | Promise<boolean>, ms = 30_000): Pr
   return check()
 }
 
+/**
+ * The daemon's lines with this message once at least `n` of them are on disk. The daemon writes its
+ * log asynchronously (log-appender-core.ts): a reply can reach the test before the line it logged.
+ */
+async function logged(dirs: Dirs, msg: string, n: number, pick: (e: Record<string, unknown>) => boolean = () => true): Promise<Record<string, unknown>[]> {
+  let got: Record<string, unknown>[] = []
+  await vi.waitFor(() => { got = daemonLog(dirs, msg).filter(pick); expect(got.length).toBeGreaterThanOrEqual(n) }, { timeout: 10_000, interval: 25 })
+  return got
+}
+
 /** Every structured line the daemon logged with this message. */
 function daemonLog(dirs: Dirs, msg: string): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = []
@@ -235,7 +245,7 @@ describe.each(TWINS)('bounded reads: $name', (twin) => {
     expect(lines.map((e) => e.line)).toEqual(expected)
     expect(lines[0].v).toBe(resumeAt + Buffer.byteLength(expected[0]) + 1)
     expect(lines[lines.length - 1].v).toBe(currentOffset)
-    expect(daemonLog(dirs, 'addSubscriber: catch-up capped')).toHaveLength(1)
+    expect(await logged(dirs, 'addSubscriber: catch-up capped', 1)).toHaveLength(1)
 
     // A gap under the cap replays exactly, with no marker.
     const tailStart = currentOffset - Buffer.byteLength(expected.slice(-3).join('\n') + '\n')
@@ -311,7 +321,7 @@ describe.each(TWINS)('bounded reads: $name', (twin) => {
     // The head task sits before the newest 32 MB, so the capped scan never sees it.
     expect(Object.keys(tasks)).toEqual(['late-task'])
     expect(tasks['late-task'].status).toBe('completed')
-    const scans = daemonLog(dirs, 'getState: cold rebuild')
+    const scans = await logged(dirs, 'getState: cold rebuild', 1)
     expect(scans).toHaveLength(1)
     expect(scans[0]).toMatchObject({ level: 'warn', capped: true, size: fs.statSync(jsonl).size })
 
@@ -325,7 +335,7 @@ describe.each(TWINS)('bounded reads: $name', (twin) => {
     fs.appendFileSync(jsonl, L({ type: 'system', subtype: 'task_notification', task_id: 'later-task', status: 'failed' }))
     const third = await rpc(client.ws, { cmd: 'getState', sid: 'br-cold' })
     expect(Object.keys((third.taskState as { tasks: object }).tasks).sort()).toEqual(['late-task', 'later-task'])
-    expect(daemonLog(dirs, 'getState: cold rebuild')).toHaveLength(2)
+    expect(await logged(dirs, 'getState: cold rebuild', 2)).toHaveLength(2)
 
     // A small stream is scanned whole, and still only once.
     const small = path.join(dirs.streams, 'br-small.jsonl')
@@ -336,7 +346,7 @@ describe.each(TWINS)('bounded reads: $name', (twin) => {
     // A remembered answer is stamped with the time it is served, like a rebuild.
     expect(withoutStamps(b.taskState)).toEqual(withoutStamps(a.taskState))
     expect(b.snapshot).toEqual(a.snapshot)
-    const smallScans = daemonLog(dirs, 'getState: cold rebuild').filter((e) => e.jsonlPath === small)
+    const smallScans = await logged(dirs, 'getState: cold rebuild', 1, (e) => e.jsonlPath === small)
     expect(smallScans).toHaveLength(1)
     expect(smallScans[0]).toMatchObject({ level: 'info', capped: false, from: 0 })
 
@@ -363,7 +373,7 @@ describe.each(TWINS)('bounded reads: $name', (twin) => {
     const capped = await rpc(client.ws, { cmd: 'read-history', sid: 'br-hist' })
     expect(capped).toMatchObject({ ok: true, truncated: true, size: fs.statSync(big).size })
     expect(capped.main).toBe(lines.slice(1).join(''))
-    expect(daemonLog(dirs, 'read-history: reply capped')).toHaveLength(1)
+    expect(await logged(dirs, 'read-history: reply capped', 1)).toHaveLength(1)
 
     const whole = await rpc(client.ws, { cmd: 'read-history', sid: 'br-hist-small' })
     expect(whole.main).toBe(lines.join(''))
