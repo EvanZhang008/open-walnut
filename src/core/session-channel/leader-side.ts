@@ -63,7 +63,13 @@ export interface LeaderSideDeps {
    * named; `at`: when a fact happened, on this leader's clock (channel.ts AppliedFact.happenedAt).
    */
   emit(name: string, data: unknown, opts: { late: boolean; to?: string[]; at?: number }): void
-  noteLive(sid: string, state: LiveState): void
+  noteLive(sid: string, state: LiveState, hostId: string): void
+  /** A host's born row of `sid` was applied: a start this leader handed on is no longer in flight. */
+  noteBorn?(sid: string): void
+  /** The link to `hostId` has been gone past liveUnknownMs: what its sessions do now is not known here. */
+  onLinkLost?(hostId: string): void
+  /** How long a dropped link may stay down before onLinkLost (default 90 s). */
+  liveUnknownMs?: number
   noteRename(from: string, to: string): void
   noteHostJudged(sid: string, host: string): void
   /** The channel to `hostId` linked (its hello): what waits here for that host goes now (host-judged-send.ts). */
@@ -85,6 +91,8 @@ interface HostState {
   channel: ReturnType<typeof attachLeaderChannel> | null
   /** When each session's whole row was last asked for (resync), so a row the leader keeps refusing is not asked for in a loop. */
   resyncAt: Map<string, number>
+  /** Runs while the link is down: past it, the host's live state reads unknown here (R2-M1). */
+  lostTimer: ReturnType<typeof setTimeout> | null
 }
 
 /** A session's whole row is asked for again at most this often. */
@@ -107,7 +115,7 @@ export function createLeaderSide(deps: LeaderSideDeps) {
   const stateOf = (hostKey: string): HostState => {
     let s = hosts.get(hostKey)
     if (!s) {
-      s = { connected: false, judges: false, socket: null, dialing: false, attempt: 0, timer: null, channel: null, resyncAt: new Map() }
+      s = { connected: false, judges: false, socket: null, dialing: false, attempt: 0, timer: null, channel: null, resyncAt: new Map(), lostTimer: null }
       hosts.set(hostKey, s)
     }
     return s
@@ -150,11 +158,13 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     const renames: HostChannelBatch['renames'][number][] = []
     const drops: string[] = []
     const check = new Set<string>()
+    // A new id a rename of this batch moves a row to: its row is that session's, never a start (R2-H1).
+    const renamedTo = new Set<string>()
     for (const r of recs) {
       const d = (r.data ?? {}) as Record<string, unknown>
       // A `resync` row is the host's whole row again: applied as a born one (its omitted fields cleared, made when missing).
       if (r.name === 'row') rows.push({ sid: r.sid, born: d.born === true || d.resync === true, patch: (d.patch ?? {}) as Record<string, unknown>, seq: r.seq })
-      else if (r.name === 'rename' && typeof d.from === 'string' && typeof d.to === 'string') renames.push({ from: d.from, to: d.to, seq: r.seq })
+      else if (r.name === 'rename' && typeof d.from === 'string' && typeof d.to === 'string') { renames.push({ from: d.from, to: d.to, seq: r.seq }); renamedTo.add(d.to) }
       else if (r.name === 'drop') drops.push(r.sid)
       else check.add(r.sid)
     }
@@ -179,10 +189,15 @@ export function createLeaderSide(deps: LeaderSideDeps) {
         // and so is a whole row the host sends again (`resync`: its boot, the leader's ask).
         // It names no destinations: it goes where a start this leader hands on says it (reemitDestinations).
         const d = (r.data ?? {}) as { born?: unknown; patch?: Record<string, unknown> }
-        if (d.born === true && wrote.has(r.sid)) emitFact(hostId, r, EventNames.SESSION_STARTED, startedOf(hostId, r.sid, d.patch ?? {}), undefined)
+        if (d.born === true && wrote.has(r.sid)) {
+          if (deps.noteBorn) after(hostId, 'noteBorn', r.sid, () => deps.noteBorn!(r.sid))
+          if (!renamedTo.has(r.sid)) emitFact(hostId, r, EventNames.SESSION_STARTED, startedOf(hostId, r.sid, d.patch ?? {}), undefined)
+        }
         continue
       }
-      if (r.name === 'drop' || r.name === 'turn-summary') continue
+      // A dropped session holds nothing live on its host.
+      if (r.name === 'drop') { after(hostId, 'noteLive', r.sid, () => deps.noteLive(r.sid, { gone: true }, hostId)); continue }
+      if (r.name === 'turn-summary') continue
       if (r.name === 'rename') {
         // Only a rename the batch applied: the host renamed a row of its own (the transaction checked `from`).
         const d = r.data as { from?: string; to?: string }
@@ -191,7 +206,7 @@ export function createLeaderSide(deps: LeaderSideDeps) {
       }
       if (!hostsOwn(hostId, r.sid, wrote)) { refused++; continue }
       if (r.name === 'live') {
-        after(hostId, 'noteLive', r.sid, () => deps.noteLive(r.sid, ((r.data as { state?: LiveState } | null)?.state ?? {}) as LiveState))
+        after(hostId, 'noteLive', r.sid, () => deps.noteLive(r.sid, ((r.data as { state?: LiveState } | null)?.state ?? {}) as LiveState, hostId))
         continue
       }
       if (channelClassOf(r.name) !== 'fact') continue
@@ -206,16 +221,17 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     after(hostId, name, r.sid, () => deps.emit(name, data, { late: r.late, at: r.happenedAt, ...(to ? { to } : {}) }))
   }
 
-  async function applyRows(hostId: string, rows: SessionRecord[], next: ChannelCursor): Promise<void> {
+  async function applyRows(hostId: string, rows: SessionRecord[], next: ChannelCursor, frame: { at: number; gone: string[] }): Promise<void> {
     const { written, removed } = await deps.applyBatch({
       hostId,
       rows: rows.map((row) => ({ sid: row.claudeSessionId, born: true, patch: row as unknown as Record<string, unknown> })),
       renames: [],
       cursor: next,
-      // Every row the host owns now: one of its rows here it no longer names is gone (M8).
-      snapshot: { keep: deps.startsInFlight?.() ?? new Set() },
+      // Every row the host owns now, as of record `at`: only a row it names gone is deleted (rows-snapshot.ts).
+      snapshot: { keep: deps.startsInFlight?.() ?? new Set(), at: frame.at, gone: frame.gone },
     })
     for (const sid of written) after(hostId, 'noteHostJudged', sid, () => deps.noteHostJudged(sid, hostId))
+    if (deps.noteBorn) for (const sid of written) after(hostId, 'noteBorn', sid, () => deps.noteBorn!(sid))
     if (removed?.length) deps.log('info', 'session channel: rows the host no longer has were removed here', { hostId, count: removed.length })
   }
 
@@ -226,8 +242,22 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     s.timer.unref?.()
   }
 
+  /** The link went down: past the bound, the host's sessions read unknown here, not running. */
+  function armLost(hostKey: string, s: HostState): void {
+    if (s.lostTimer || stopped) return
+    s.lostTimer = setTimeout(() => {
+      s.lostTimer = null
+      if (s.socket || stopped) return
+      try { deps.onLinkLost?.(hostKey) } catch (err) {
+        deps.log('warn', 'session channel: marking a host\'s live state unknown failed', { host: hostKey, error: err instanceof Error ? err.message : String(err) })
+      }
+    }, deps.liveUnknownMs ?? 90_000)
+    s.lostTimer.unref?.()
+  }
+
   function closeLink(s: HostState, why: string): void {
     if (s.timer) { clearTimeout(s.timer); s.timer = null }
+    if (s.lostTimer) { clearTimeout(s.lostTimer); s.lostTimer = null }
     const sock = s.socket
     s.socket = null
     s.channel?.onClose()
@@ -247,6 +277,7 @@ export function createLeaderSide(deps: LeaderSideDeps) {
       s.dialing = false
       if (!wanted(s)) { try { sock.close('not_wanted') } catch { /* gone */ } return }
       s.socket = sock
+      if (s.lostTimer) { clearTimeout(s.lostTimer); s.lostTimer = null }
       const link: ChannelLink = {
         send: (frame: ChannelFrame) => sock.send(JSON.stringify(frame)),
         close: (why?: string) => sock.close(why),
@@ -283,6 +314,7 @@ export function createLeaderSide(deps: LeaderSideDeps) {
         channel.onClose()
         if (s.channel === channel) s.channel = null
         deps.log('info', 'session channel: the link to the host closed', { host: hostKey })
+        armLost(hostKey, s)
         schedule(hostKey, s)
       })
     }, (err: unknown) => {
@@ -355,10 +387,13 @@ export function createLeaderSide(deps: LeaderSideDeps) {
       flag = await deps.flagOn().catch(() => false)
       if (stopped) return
       const s = stateOf(hostKey)
+      const had = !!s.socket
       s.connected = o.connected
       s.judges = o.judges
       if (!wanted(s)) s.attempt = 0
       ensure(hostKey)
+      // A host that went away with its link open: the link is closed by ensure; its live state ages out.
+      if (had && !s.socket) armLost(hostKey, s)
     },
     /** The switch may have changed (a config write): read it again for the next start. */
     async refreshFlag(): Promise<void> {

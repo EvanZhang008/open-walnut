@@ -356,24 +356,34 @@ export function sessionIdentitiesInStore(): string[] {
  * shared handle.
  */
 /**
- * Own rows this host removed lately (a rename's old id, a drop), sid -> when. The leader's copy
- * may still name one as this host's until it applies the channel's record of it: such a row is
- * never stored again (applySessionCopy). A seed the leader hands this host for a start (its row
- * marked this host's before the host ever had it) is not among them and comes down as usual.
+ * Own rows this host removed (a rename's old id, a drop). The leader's copy may still name one as
+ * this host's until it applies the channel's record of it: such a row is never stored again
+ * (applySessionCopy). A seed the leader hands this host for a start (its row marked this host's
+ * before the host ever had it) is not among them and comes down as usual. A host that runs its
+ * sessions keeps the list on disk next to its fact log (session-channel/gone-rows.ts, installed by
+ * host-boot.ts); without one (tests) it is kept in memory for an hour.
  */
 const ownRowsGone = new Map<string, number>()
 const OWN_GONE_TTL_MS = 60 * 60_000
 const OWN_GONE_MAX = 5_000
+let ownGoneStore: { note(sid: string): void; has(sid: string): boolean } | null = null
+
+/** The persisted list of removed own rows (host-boot.ts), or null. */
+export function setOwnRowsGoneStore(store: { note(sid: string): void; has(sid: string): boolean } | null): void {
+  ownGoneStore = store
+}
 
 /** The host removed its own row `sid` (port onRename / onDrop, session-channel/host-boot.ts). */
 export function noteOwnRowGone(sid: string, now = Date.now()): void {
   if (!sid) return
+  if (ownGoneStore) { ownGoneStore.note(sid); return }
   ownRowsGone.delete(sid)
   if (ownRowsGone.size >= OWN_GONE_MAX) ownRowsGone.delete(ownRowsGone.keys().next().value!)
   ownRowsGone.set(sid, now)
 }
 
 function ownRowGoneLately(sid: string, now = Date.now()): boolean {
+  if (ownGoneStore) return ownGoneStore.has(sid)
   const at = ownRowsGone.get(sid)
   if (at === undefined) return false
   if (now - at > OWN_GONE_TTL_MS) { ownRowsGone.delete(sid); return false }

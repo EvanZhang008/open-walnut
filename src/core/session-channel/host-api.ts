@@ -122,4 +122,8 @@ export interface LiveState {
   turnWaits?: Array<{ reason: string } & Record<string, unknown>>
   turnStops?: Array<{ reason: string } & Record<string, unknown>>
   acp?: { activity?: string; workerLive?: boolean; engineId?: string; sessionControls?: unknown; modelCatalog?: unknown }
+  /** The host holds no live session for it now (it ended, or left the runner): nothing runs. */
+  gone?: true
+  /** Set on the leader, never sent: the host's link is gone past a bound, so what runs there is not known. */
+  unknown?: true
 }

@@ -120,6 +120,10 @@ export interface HostSessionPortOptions {
   api: () => Promise<OwnApi | null>
   /** The session of this host that runs `taskId`, for a task write made on its behalf. */
   sessionOfTask?(taskId: string): string | null
+  /** Before the store renames: the emitter expects it (host-emitter.ts expectRename). */
+  beforeRename?(from: string, to: string): void
+  /** The store did not rename (it answered no, or threw). */
+  renameFailed?(from: string, to: string): void
   onRename?(from: string, to: string): void
   onDrop?(sids: string[]): void
   /** The modules every member falls back to (the leader's port is this host's own modules). */
@@ -159,8 +163,17 @@ export function createHostSessionPort(o: HostSessionPortOptions): SessionPort {
       return t().createSessionRecord(sid, taskId, project, cwd, { ...extra, host: hostKey })
     }) as SessionTrackerPort['createSessionRecord'],
     renameSessionId: (async (from, to, updates) => {
-      const r = await t().renameSessionId(from, to, updates)
+      // Said before the write: the store announces the new id's row before this call returns.
+      o.beforeRename?.(from, to)
+      let r: Awaited<ReturnType<SessionTrackerPort['renameSessionId']>>
+      try {
+        r = await t().renameSessionId(from, to, updates)
+      } catch (err) {
+        o.renameFailed?.(from, to)
+        throw err
+      }
       if (r) o.onRename?.(from, to)
+      else o.renameFailed?.(from, to)
       return r
     }) as SessionTrackerPort['renameSessionId'],
     deleteSessionRecords: (async (ids, reason) => {

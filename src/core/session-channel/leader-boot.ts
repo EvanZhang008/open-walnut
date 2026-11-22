@@ -42,7 +42,7 @@ export function sayHostFact(name: string, data: unknown, opts: { late: boolean; 
 
 export async function startLeaderSessionChannels(): Promise<() => void> {
   if (active) return () => {}
-  const [{ applyHostChannelBatch, loadChannelCursor }, hostServer, { hostLeaderStates }, { getInstanceId }, remote, { saidHereAlready, hostStartsInFlight }] = await Promise.all([
+  const [{ applyHostChannelBatch, loadChannelCursor }, hostServer, { hostLeaderStates }, { getInstanceId }, remote, { saidHereAlready, hostStartsInFlight, noteHostStartBorn }] = await Promise.all([
     import('../session-tracker.js'),
     import('../host-server/index.js'),
     import('../leader/primary-leader.js'),
@@ -70,7 +70,12 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
         ? remote.withLeaderSubagentRows(data as Record<string, unknown>, sid) : data
       sayHostFact(name, said, opts)
     },
-    noteLive: remote.noteLiveState,
+    noteLive: (sid, state, hostId) => remote.noteLiveState(sid, state, hostId),
+    noteBorn: noteHostStartBorn,
+    onLinkLost: (hostId) => {
+      const n = remote.markHostLiveUnknown(hostId)
+      log.session.warn('session channel: the link to a host stayed down; its sessions read unknown here until it links again', { host: hostId, sessions: n })
+    },
     noteRename: (from, to) => {
       remote.renameRemoteJudgedSession(from, to)
       void import('./leader-tasks.js').then((m) => m.noteHostSessionRenamed(from, to))
@@ -110,7 +115,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     if (!Array.isArray(ids)) return
     const sids = ids.filter((x): x is string => typeof x === 'string' && x !== '')
     for (const [host, mine] of leaderDropHosts(sids)) {
-      for (const sid of mine) forgetHostJudged(sid)
+      for (const sid of mine) { forgetHostJudged(sid); remote.forgetRemoteJudgedSession(sid) }
       void side.dropOnHost(host)
     }
   }, { global: true, interest: [EventNames.SESSION_DELETED] })

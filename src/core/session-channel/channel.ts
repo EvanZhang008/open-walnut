@@ -19,7 +19,10 @@
  *                         every record up to `upTo`: for a leader below what the log keeps, `upTo` is
  *                         the last record the log no longer has, and the records after it still come
  *                         as facts (their row patches up to `rowsAt` are already in the rows, so the
- *                         leader skips those); for a listener both are the head
+ *                         leader skips those); for a listener both are the head. `gone`: the
+ *                         rows this host removed (gone-rows.ts), the only rows of this host a
+ *                         leader deletes for not being named (rows-snapshot.ts); `rowsAt` is the
+ *                         frame's position, so a frame of a replaced link is skipped whole
  *   host -> reader  facts {recs, replay?, sentAt} records in seq order; `replay`: read back from the
  *                         log, not live; `now`/`sentAt`: the host's clock, so the leader can tell
  *                         how old a record is on its own clock (late facts, below)
@@ -47,7 +50,7 @@ export type ChannelFrame =
   | { ch: 'sf'; op: 'hello'; walnutId: string; hostId: string; logId: string; floor: number; head: number; now?: number }
   | { ch: 'sf'; op: 'resume'; walnutId: string; hostId: string; permitNumber: number; logId: string; after: number }
   | { ch: 'sf'; op: 'listen'; walnutId: string }
-  | { ch: 'sf'; op: 'rows'; rows: SessionRecord[]; upTo: number; rowsAt: number; logId: string }
+  | { ch: 'sf'; op: 'rows'; rows: SessionRecord[]; upTo: number; rowsAt: number; logId: string; gone?: string[] }
   | { ch: 'sf'; op: 'facts'; recs: FactRecord[]; replay?: true; sentAt?: number }
   | { ch: 'sf'; op: 'flow'; sid: string; name: string; data: unknown; to?: string[] }
   | { ch: 'sf'; op: 'ack'; logId: string; upTo: number }
@@ -77,6 +80,10 @@ export interface HostChannelOptions {
   ownRows(): Promise<SessionRecord[]>
   /** The leader asked for these rows whole again (a `resync` frame): the emitter appends them. */
   onResync?(sids: string[]): void
+  /** The rows this host removed lately (gone-rows.ts), sent with every rows frame. */
+  goneRows?(): string[]
+  /** A leader resumed on a link (each link): what the leader keeps only in memory goes again (host-emitter.ts relive). */
+  onLeaderLinked?(): void
   now?: () => number
   onLog?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 }
@@ -161,6 +168,9 @@ export class HostChannel {
         reader.sentUpTo = after
         await this.replay(reader)
       }
+      if (reader.alive && this.leaderReader === reader) {
+        try { this.o.onLeaderLinked?.() } catch (err) { this.o.onLog?.('warn', 'session channel: resending the live state failed', { error: err instanceof Error ? err.message : String(err) }) }
+      }
     } catch (err) {
       this.fail(reader, err)
     }
@@ -174,7 +184,8 @@ export class HostChannel {
     if (!reader.alive) return
     // A leader still gets every fact the log keeps; a listener starts at the head.
     const upTo = leader ? Math.min(rowsAt, Math.max(0, log.floor - 1)) : rowsAt
-    reader.link.send({ ch: 'sf', op: 'rows', rows, upTo, rowsAt, logId: log.logId })
+    const gone = leader ? (this.o.goneRows?.() ?? []) : []
+    reader.link.send({ ch: 'sf', op: 'rows', rows, upTo, rowsAt, logId: log.logId, ...(gone.length ? { gone } : {}) })
     reader.sentUpTo = upTo
     await this.replay(reader)
   }
@@ -229,8 +240,11 @@ export interface LeaderChannelOptions {
   loadCursor(hostId: string): Promise<ChannelCursor | null>
   /** Apply records in order and keep `next` as the new position, atomically with their effects. */
   apply(hostId: string, recs: AppliedFact[], next: ChannelCursor): Promise<void>
-  /** The host's own rows, standing for every record up to `next.seq`: apply them and keep `next`. */
-  applyRows(hostId: string, rows: SessionRecord[], next: ChannelCursor): Promise<void>
+  /**
+   * The host's own rows as of record `at`, standing for every record up to `next.seq`: apply them
+   * and keep `next`. `gone`: the rows the host says it removed (rows-snapshot.ts).
+   */
+  applyRows(hostId: string, rows: SessionRecord[], next: ChannelCursor, frame: { at: number; gone: string[] }): Promise<void>
   onFlow?(hostId: string, sid: string, name: string, data: unknown, to?: string[]): void
   /** How old a record must be, on this leader's clock, when it is applied to read as late (default 60 s). */
   lateMs?: number
@@ -291,7 +305,8 @@ export function attachLeaderChannel(link: ChannelLink, o: LeaderChannelOptions):
         serial(async () => {
           if (!cursor || frame.logId !== cursor.logId) return
           const next = { logId: cursor.logId, seq: frame.upTo }
-          await o.applyRows(hostId, frame.rows, next)
+          const gone = Array.isArray(frame.gone) ? frame.gone.filter((x): x is string => typeof x === 'string' && x !== '') : []
+          await o.applyRows(hostId, frame.rows, next, { at: Number(frame.rowsAt) || frame.upTo, gone })
           cursor = next
           rowsAt = Math.max(rowsAt, Number(frame.rowsAt) || 0)
           scheduleAck()

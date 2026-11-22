@@ -47,6 +47,8 @@ export class RemoteJudgedSession {
 
   /** The newest `live` state the host sent. */
   noteLive(state: LiveState): void { this.state = state ?? {} }
+  /** The host's link is gone past its bound (or nothing was heard yet): what runs there is not known here. */
+  get liveUnknown(): boolean { return this.state.unknown === true }
   get liveState(): Readonly<LiveState> { return this.state }
   /** The host renamed the session (a resume, a fork): the same object answers to the new id. */
   renameTo(sid: string): void { this.sid = sid }
@@ -232,10 +234,47 @@ export function remoteJudgedSession(sid: string, host: string, kind: 'native' | 
   return made
 }
 
-/** A `live` record the channel applied (session-channel/leader-side.ts). */
-export function noteLiveState(sid: string, state: LiveState): void {
+/** The host each held live state came from (markHostLiveUnknown). */
+const liveHosts = new Map<string, string>()
+
+/**
+ * A `live` record the channel applied (session-channel/leader-side.ts). `{gone: true}`: nothing
+ * of it is live on its host now, so nothing is held here either (its getters read not running).
+ */
+export function noteLiveState(sid: string, state: LiveState, host?: string): void {
+  if (state?.gone === true) {
+    liveStates.delete(sid)
+    liveHosts.delete(sid)
+    proxies.get(sid)?.noteLive({})
+    return
+  }
   liveStates.set(sid, state ?? {})
+  if (host) liveHosts.set(sid, host)
   proxies.get(sid)?.noteLive(state ?? {})
+}
+
+/**
+ * The link to `host` has been down past its bound (session-channel/leader-side.ts onLinkLost): a
+ * state from before may say a turn runs or a prompt waits, and nothing would ever clear it. Each
+ * of its sessions reads unknown (not running, no prompt) until the host links again and sends its
+ * live state anew (host-emitter.ts relive).
+ */
+export function markHostLiveUnknown(host: string): number {
+  let n = 0
+  for (const [sid, h] of [...liveHosts]) {
+    if (h !== host) continue
+    liveStates.set(sid, { unknown: true })
+    n++
+  }
+  for (const p of proxies.values()) if (p.host === host) p.noteLive({ unknown: true })
+  return n
+}
+
+/** A session deleted here: its proxy and its state go (a new row of the same id starts clean). */
+export function forgetRemoteJudgedSession(sid: string): void {
+  proxies.delete(sid)
+  liveStates.delete(sid)
+  liveHosts.delete(sid)
 }
 
 /**
@@ -259,6 +298,9 @@ export function renameRemoteJudgedSession(from: string, to: string): void {
   const state = liveStates.get(from)
   liveStates.delete(from)
   if (state) liveStates.set(to, state)
+  const h = liveHosts.get(from)
+  liveHosts.delete(from)
+  if (h) liveHosts.set(to, h)
   if (!p) return
   proxies.delete(from)
   p.renameTo(to)
@@ -272,5 +314,6 @@ export function isRemoteJudgedSession(v: unknown): v is RemoteJudgedSession {
 export function _resetRemoteJudgedSessionsForTesting(): void {
   proxies.clear()
   liveStates.clear()
+  liveHosts.clear()
   caller = null
 }

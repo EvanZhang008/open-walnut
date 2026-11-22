@@ -217,6 +217,33 @@ describe('the emitter', () => {
     expect(emitter.ownSessionOfTask('task-marina-1')).toBeNull()
   })
 
+  it('R2-M1: a session that leaves the runner says so once ({gone}); each leader link gets every own session\'s live state again', async () => {
+    const IDLE_ROW = '44444444-4444-4444-8444-444444444444'
+    await make({ own: [row(OWN), row(LATE, { process_status: 'running' }), row(IDLE_ROW, { process_status: 'stopped' })], liveMs: 10 })
+    live.set(OWN, { turnGen: 1, processStatus: 'running', pendingPermission: true })
+    bus.emit('session:status-changed', { sessionId: OWN }, ['x'])
+    const lives = async () => (await records()).filter((r) => r.name === 'live').map((r) => [r.sid, (r.data as { state: LiveState }).state])
+    await vi.waitFor(async () => expect(await lives()).toEqual([[OWN, { turnGen: 1, processStatus: 'running', pendingPermission: true }]]))
+    // A leader restarted and linked again: nothing changed here, and it gets the state anew;
+    // a row that reads live with nothing live here is said gone (a leader may hold it from before).
+    emitter.relive()
+    expect(await lives()).toEqual([
+      [OWN, { turnGen: 1, processStatus: 'running', pendingPermission: true }],
+      [OWN, { turnGen: 1, processStatus: 'running', pendingPermission: true }],
+      [LATE, { gone: true }],
+    ])
+    // The session ends here: once, then nothing more.
+    live.delete(OWN)
+    bus.emit('session:status-changed', { sessionId: OWN }, ['x'])
+    await sleep(40)
+    bus.emit('session:status-changed', { sessionId: OWN }, ['x'])
+    await sleep(40)
+    expect((await lives()).slice(3)).toEqual([[OWN, { gone: true }]])
+    // Linked again: already said gone, and a stopped row with no live object says nothing.
+    emitter.relive()
+    expect((await lives()).length).toBe(4)
+  })
+
   it('a drop the leader asked for is answered with a drop record, also for a session this host no longer has', async () => {
     await make({ own: [row(OWN)] })
     emitter.noteDrop(['sid-never-here'])

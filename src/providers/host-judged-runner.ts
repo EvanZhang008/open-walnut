@@ -112,10 +112,30 @@ export function routeHostJudgedEvent(event: BusEvent): Promise<void> | null {
   }
 }
 
-/** Seeded sessions whose start went to their host and has not answered: a rows snapshot keeps them (leader-side.ts). */
-const inFlight = new Set<string>()
+/**
+ * Seeded sessions whose start went to their host and whose born row has not come yet (a start the
+ * host answered, or one whose answer was lost), until then or IN_FLIGHT_MS: a rows snapshot keeps
+ * them untouched (rows-snapshot.ts), even one taken before the host wrote the row.
+ */
+const inFlight = new Map<string, number>()
+const IN_FLIGHT_MS = 15 * 60_000
 export function hostStartsInFlight(): ReadonlySet<string> {
-  return inFlight
+  const now = Date.now()
+  for (const [sid, until] of inFlight) if (until <= now) inFlight.delete(sid)
+  return new Set(inFlight.keys())
+}
+
+/** The host's born row of `sid` was applied here (leader-side.ts): its start is no longer in flight. */
+export function noteHostStartBorn(sid: string): void {
+  inFlight.delete(sid)
+}
+
+/**
+ * The start's answer did not come (the leader's timeout, a link that dropped): the host may run it.
+ * Thrown by the request (never an answer the host gave). Exported for tests.
+ */
+export class HostStartOutcomeUnknown extends Error {
+  readonly why = 'host_start_outcome_unknown'
 }
 
 /** Would `host`'s own service run a start there? */
@@ -197,7 +217,7 @@ export async function startOnJudgingHost<T extends StartData>(data: T, commit: (
   const tracker = await import('../core/session-tracker.js')
   let handed = false
   if (typeof seeded === 'string' && seeded) {
-    inFlight.add(seeded)
+    inFlight.set(seeded, Date.now() + IN_FLIGHT_MS)
     noteHostJudged(seeded, host)
     handed = await tracker.handSeedToHost(seeded, host).catch((err: unknown) => {
       log.session.warn('host start: the seeded row was not handed to its host', { sessionId: seeded, host, error: err instanceof Error ? err.message : String(err) })
@@ -205,16 +225,25 @@ export async function startOnJudgingHost<T extends StartData>(data: T, commit: (
     })
   }
   log.session.info('session routing', { taskId: data.taskId, type: 'host', host })
-  // A start whose answer was lost may still run there: the seed stays the host's, and its channel tells.
   let a: Awaited<ReturnType<typeof side.startOnHost>>
   try {
     a = await side.startOnHost(host, payload)
-  } finally {
-    if (typeof seeded === 'string') inFlight.delete(seeded)
+  } catch (err) {
+    // No answer (the leader's timeout, a link that dropped): the host may have taken it, so it is
+    // the host's (one owner): never failed here as the leader's own, never run here. Its born row
+    // says it started, the host's own row says how it ended (R2-H2).
+    const why = err instanceof Error ? err.message : String(err)
+    if (typeof seeded === 'string' && seeded) {
+      log.session.warn('host start: no answer from the host; the session stays the host\'s and its channel tells what became of it', { sessionId: seeded, host, error: why })
+      void commit(seeded).catch(() => {})
+      return { claudeSessionId: seeded, title: '' }
+    }
+    throw new HostStartOutcomeUnknown(`the host ${host} did not answer the start (${why}); if it took it, its channel brings the session`)
   }
   if (a.ok !== true || typeof a.sessionId !== 'string' || !a.sessionId) {
     // The host said no: the seed is the leader's again, and the start's failure is written on it.
     if (typeof seeded === 'string' && seeded) {
+      inFlight.delete(seeded)
       forgetHostJudged(seeded)
       if (handed) await tracker.takeSeedBack(seeded, host).catch(() => {})
     }
@@ -351,5 +380,6 @@ export function installHostJudgedRouting(proto: object): void {
 
 export function _resetHostJudgedRunnerForTesting(): void {
   kinds.clear()
+  inFlight.clear()
   _resetHostJudgedSendForTesting()
 }

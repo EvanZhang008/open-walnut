@@ -46,6 +46,7 @@ import { NeedsLeaderError } from './replication/needs-leader.js';
 import { foldTurnSpeed } from './sessions/speed-totals.js';
 import { judgedByHost, mergeHostFacts, ownedPartOf, rowOwnedHere, thisHostKey, writingAsHost } from './sessions/session-row-owner.js';
 import { clearLeaderDrops, leaderDroppedIn, noteLeaderDrop } from './session-channel/leader-drops.js';
+import { _resetRowsSnapshotForTesting, noteSnapshotApplied, orphanedRow, planSnapshot, snapshotIsStale } from './session-channel/rows-snapshot.js';
 import { hasOwnRowListener, noteSessionRowWritten } from './session-channel/row-hook.js';
 import { OrgError } from './org/org-store.js';
 import { registerMemoryHolder, sampledStringChars } from './observability/memory-ledger.js';
@@ -242,6 +243,7 @@ export function _resetSessionTrackerForTesting(): void {
   sessionStoreCacheDataVersion = null;
   touchedSessionIds = null;
   for (const key of Object.keys(sessionStoreStats) as (keyof typeof sessionStoreStats)[]) sessionStoreStats[key] = 0;
+  _resetRowsSnapshotForTesting();
 }
 
 const MAX_STATUS_HISTORY = 10;
@@ -3442,11 +3444,12 @@ export interface HostChannelBatch {
   /** Sessions of the batch's other records: answered in `gone` when the leader deleted them. */
   check?: readonly string[];
   /**
-   * A rows frame: `rows` are every row the host owns now, so a row of that host it no longer names
-   * goes (a rename or drop the log compacted away), except the sessions `keep` names (a start in
-   * flight whose born row has not come yet). Its records carry no seq.
+   * A rows frame: `rows` are every row the host owns now, as of record `at` of its log. A frame at
+   * or below what is applied already is skipped whole; a row of that host it no longer names is
+   * deleted only when the host names it in `gone`, else kept (session-channel/rows-snapshot.ts).
+   * `keep`: starts in flight whose born row has not come yet. Its records carry no seq.
    */
-  snapshot?: { keep?: ReadonlySet<string> };
+  snapshot?: { keep?: ReadonlySet<string>; at?: number; gone?: readonly string[] };
 }
 
 /** What one batch did: the rows it wrote, those it left out, and where the stored position stood. */
@@ -3461,8 +3464,12 @@ export interface HostChannelBatchResult {
   after: number;
   /** Sessions whose row the leader could not apply as sent (no base row, a refused write): worth the host's whole row. */
   resync: string[];
-  /** Rows a snapshot no longer named, deleted here. */
+  /** Rows a snapshot no longer named and the host named gone, deleted here. */
   removed: string[];
+  /** Rows a snapshot no longer named, kept and marked stopped (session-channel/rows-snapshot.ts). */
+  orphaned?: string[];
+  /** A rows frame older than what was applied already: nothing of it was applied. */
+  stale?: boolean;
 }
 
 /**
@@ -3484,6 +3491,8 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
   const skipped: string[] = [];
   const resync = new Set<string>();
   const removed: string[] = [];
+  const orphaned: string[] = [];
+  let stale = false;
   let after = 0;
   // Deleted on the leader, its host not done yet: none of its rows comes back, none of its facts is said.
   const gone = new Set<string>();
@@ -3502,6 +3511,8 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
       // link dropped, and the next link resumed below it) is never applied, or said, twice.
       const stored = readChannelCursor(handle, hostId);
       after = stored && stored.logId === batch.cursor.logId ? stored.seq : 0;
+      // A rows frame of a link a newer one replaced: its rows are older than what is applied.
+      if (batch.snapshot && snapshotIsStale(hostId, batch.cursor.logId, batch.snapshot.at ?? batch.cursor.seq, stored)) { stale = true; return; }
       for (const sid of new Set([...batch.rows.map((r) => r.sid), ...batch.renames.map((r) => r.to), ...(batch.check ?? [])])) {
         if (leaderDroppedIn(handle, sid)) gone.add(sid);
       }
@@ -3549,16 +3560,25 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
         });
       }
       if (batch.snapshot) {
-        // The host owns exactly these rows now: one of its rows here it no longer names is gone there.
+        // The host's rows here it no longer names: deleted only on the host's word (rows-snapshot.ts).
         const named = new Set(batch.rows.map((r) => r.sid));
         const keep = batch.snapshot.keep;
         const ids = handle.prepare('SELECT claude_session_id FROM sessions WHERE host = ?').pluck().all(hostId) as string[];
+        const unnamed: SessionRecord[] = [];
         for (const id of ids) {
           if (named.has(id) || keep?.has(id) || leaderDroppedIn(handle, id)) continue;
           const row = read(id);
-          if (!row || !judgedByHost(row)) continue;
-          deleteSessionRowSqlite(handle, id);
-          removed.push(id);
+          if (row && judgedByHost(row)) unnamed.push(row);
+        }
+        const plan = planSnapshot({ unnamed, gone: new Set(batch.snapshot.gone ?? []), logKnown: !!stored && stored.logId === batch.cursor.logId });
+        for (const id of plan.remove) { deleteSessionRowSqlite(handle, id); removed.push(id); }
+        const at = new Date().toISOString();
+        for (const id of plan.orphan) {
+          const before = read(id)!;
+          const next = orphanedRow(before, at);
+          writeSessionRowSqlite(handle, next);
+          orphaned.push(id);
+          announce.push({ record: next, status: true, content: false });
         }
       }
       if (batch.drops?.length) clearLeaderDrops(handle, hostId, batch.drops);
@@ -3566,7 +3586,10 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
       if (!(stored && stored.logId === batch.cursor.logId && stored.seq > batch.cursor.seq)) writeChannelCursor(handle, hostId, batch.cursor);
     }));
     if (lockWait instanceof Promise) await lockWait;
+    if (batch.snapshot && !stale) noteSnapshotApplied(hostId, batch.cursor.logId, batch.snapshot.at ?? batch.cursor.seq);
   });
+  if (stale) log.session.info('host channel: a rows frame older than what is applied was skipped', { hostId, at: batch.snapshot?.at });
+  if (orphaned.length > 0) log.session.warn('host channel: rows the host does not name were kept and marked stopped', { hostId, sessionIds: orphaned.slice(0, 20), count: orphaned.length });
   if (skipped.length > 0) log.session.warn('host channel: changes skipped (not this host\'s rows)', { hostId, sessionIds: skipped.slice(0, 20), count: skipped.length });
   // After the commit: one announcement that throws never stops the others, nor the channel.
   for (const a of announce) {
@@ -3581,7 +3604,7 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
     log.session.warn('host channel: rows the host no longer has were removed', { hostId, sessionIds: removed.slice(0, 20), count: removed.length });
     try { bus.emit(EventNames.SESSION_DELETED, { sessionIds: removed }, ['*'], { source: 'host-channel', urgency: 'normal' }); } catch { /* announced best-effort */ }
   }
-  return { written, skipped, gone: [...gone], after, resync: [...resync], removed };
+  return { written, skipped, gone: [...gone], after, resync: [...resync], removed, orphaned, ...(stale ? { stale } : {}) };
 }
 
 export { loadChannelCursor } from './session-db.js';

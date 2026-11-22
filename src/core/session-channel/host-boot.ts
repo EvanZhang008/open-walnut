@@ -20,6 +20,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { FactLog } from './fact-log.js'
+import { GoneRows } from './gone-rows.js'
 import { HostChannel } from './channel.js'
 import { SESSION_JUDGE_CAP } from './switch.js'
 import { createHostEmitter, type HostEmitter } from './host-emitter.js'
@@ -35,6 +36,7 @@ import type { SessionRecord } from '../types.js'
 
 export interface HostSessions {
   log: FactLog
+  gone: GoneRows
   channel: HostChannel
   emitter: HostEmitter
   routes: HostSessionRoutes
@@ -96,14 +98,20 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   const { stateDir = WALNUT_HOME } = o
   const dir = path.join(stateDir, 'session-channel')
   const log = await FactLog.open({ dir, walnutId: o.walnutId, log: say })
+  // The own rows this host removed, kept on disk next to the log (gone-rows.ts).
+  const gone = await GoneRows.open(dir, o.walnutId)
   // The copy's store is read only here: rows of this host's own sessions go through the own-row writer.
-  const { allowOwnRowWrites, noteOwnRowGone } = await import('../session-db.js')
+  const { allowOwnRowWrites, noteOwnRowGone, setOwnRowsGoneStore } = await import('../session-db.js')
   allowOwnRowWrites(o.hostKey)
+  setOwnRowsGoneStore(gone)
   // The emitter is made just below; the leader's resync asks reach it once it is.
   let emitterRef: HostEmitter | null = null
   const channel = new HostChannel({
     log, walnutId: o.walnutId, hostId: o.hostKey, ownRows: () => ownRows(o.hostKey), onLog: say,
     onResync: (sids) => { void emitterRef?.resync(sids).catch((err: unknown) => say('warn', 'host sessions: a resync failed', { error: err instanceof Error ? err.message : String(err) })) },
+    goneRows: () => gone.list(),
+    // A leader keeps the live state only in memory: each link gets it again.
+    onLeaderLinked: () => emitterRef?.relive(),
   })
   const { sessionRunner } = await import('../../providers/claude-code-session.js')
   const runner = sessionRunner as unknown as LiveRunnerLike & { findSessionByClaudeId(sid: string): { consumedOffset?: number } | undefined }
@@ -115,6 +123,7 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     liveOf: (sid) => liveStateOf(runner, sid, turnOf),
     stamp,
     offsetOf: (sid) => runner.findSessionByClaudeId(sid)?.consumedOffset,
+    onOwnRow: (sid) => gone.forget(sid),
     onLog: say,
   })
   emitterRef = emitter
@@ -122,6 +131,8 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     hostKey: o.hostKey, bundles, api: selfOwnApi,
     sessionOfTask: (taskId) => emitter.ownSessionOfTask(taskId),
     // A row removed here is not taken back from the leader's copy before the leader applied it (session-db.ts noteOwnRowGone).
+    beforeRename: (from, to) => emitter.expectRename(from, to),
+    renameFailed: (from, to) => emitter.cancelRename(from, to),
     onRename: (from, to) => { noteOwnRowGone(from); emitter.noteRename(from, to) },
     onDrop: (sids) => { for (const sid of sids) noteOwnRowGone(sid); emitter.noteDrop(sids) },
     log: say,
@@ -160,7 +171,7 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     },
     log: say,
   })
-  current = { log, channel, emitter, routes, bundles, resend }
+  current = { log, gone, channel, emitter, routes, bundles, resend }
   say('info', 'host sessions: this host runs and judges its sessions', { hostKey: o.hostKey, logId: log.logId, head: log.head })
   return current
 }
@@ -173,7 +184,9 @@ export async function stopHostSessions(): Promise<void> {
   c.resend.stop()
   c.routes.close()
   installSessionPort(null)
-  const { allowOwnRowWrites } = await import('../session-db.js')
+  const { allowOwnRowWrites, setOwnRowsGoneStore } = await import('../session-db.js')
   allowOwnRowWrites(null)
+  setOwnRowsGoneStore(null)
+  await c.gone.flush()
   await c.log.close()
 }

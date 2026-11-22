@@ -13,7 +13,13 @@
  *                         the ones the leader names on its `resync` frame): applied whole, never a start
  *   rename / drop      -> `rename` {from, to} (the new id continues the old id's sseq), `drop` {sid}
  *   any event or row   -> `live` {state}: the mirrored state (host-live.ts), at most every
- *                         `liveMs` per session, and only when it changed
+ *                         `liveMs` per session, and only when it changed; `{gone: true}` once the
+ *                         session holds no live object here any more (it ended, it left the runner)
+ *   each leader link   -> `live` again for every own session (relive): a leader keeps it only in
+ *                         memory, so one that restarted, or a host that restarted, gets it whole
+ *   a rename           -> the port says it before the store writes it (expectRename), so the new
+ *                         id's first row write is a patch after the `rename` record, never a
+ *                         `born` row a leader would read as a new start
  *
  * An event of a session whose row is not known here yet (the CLI's first lines can beat the
  * record) waits up to `pendingMs` for its row: once the row is this host's own the events go after
@@ -61,6 +67,8 @@ export interface HostEmitterOptions {
    * the subscribers that subscribed before this one (the resend family) took it.
    */
   stamp?(name: string, data: unknown): unknown
+  /** An own row was written (the host has `sid` again: gone-rows.ts forgets it). */
+  onOwnRow?(sid: string): void
   liveMs?: number
   pendingMs?: number
   now?: () => number
@@ -70,8 +78,17 @@ export interface HostEmitterOptions {
 export interface HostEmitter {
   start(): Promise<void>
   stop(): void
-  /** The tracker replaced `from` by `to` (resume, fork): the port calls this. */
+  /** The tracker replaced `from` by `to` (resume, fork): the port calls this once the rename is stored. */
   noteRename(from: string, to: string): void
+  /**
+   * The tracker is about to replace `from` by `to`: the port calls this before it writes, so the
+   * new id's row write (which the store announces before the rename call returns) continues the
+   * old row instead of reading as a session born here. `cancelRename` when the store did not.
+   */
+  expectRename(from: string, to: string): void
+  cancelRename(from: string, to: string): void
+  /** A leader linked: every own session's live state goes again (the leader keeps it in memory only). */
+  relive(): void
   /** The tracker removed these rows: the port calls this. */
   /**
    * Own rows this host deleted: one `drop` record each. `answer`: the leader asked for these
@@ -122,6 +139,9 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
   const pending = new Map<string, Pending>()
   const liveTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const lastLive = new Map<string, { key: string; full: string; at: number }>()
+  /** Renames the port announced, new id -> old id, until the store wrote them. */
+  const expected = new Map<string, string>()
+  const GONE_KEY = '{"gone":true}'
   let started = false
   let busRef: EmitterBus | null = null
   let rowListener: ((fn: ((row: SessionRecord) => void) | null) => void) | null = null
@@ -167,7 +187,15 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
   function writeLive(sid: string): void {
     if (!own.has(sid)) return
     const state = o.liveOf?.(sid)
-    if (!state) return
+    if (!state) {
+      // The session left the runner: a leader that held its state says it no longer runs.
+      const last = lastLive.get(sid)
+      if (last && last.full !== GONE_KEY) {
+        lastLive.set(sid, { key: GONE_KEY, full: GONE_KEY, at: now() })
+        append(sid, 'live', { state: { gone: true } })
+      }
+      return
+    }
     const key = withoutRestless(state)
     const full = JSON.stringify(state)
     const last = lastLive.get(sid)
@@ -187,10 +215,28 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
     for (const e of p.events) append(sid, e.name, e.data, { at: e.at, to: e.to })
   }
 
+  function rename(from: string, to: string): void {
+    expected.delete(to)
+    if (!own.has(from) || from === to) return
+    append(to, 'rename', { from, to }, { continueFrom: from })
+    own.delete(from)
+    own.add(to)
+    const row = lastRows.get(from)
+    lastRows.delete(from)
+    if (row) lastRows.set(to, row)
+    const l = lastLive.get(from)
+    lastLive.delete(from)
+    if (l) lastLive.set(to, l)
+  }
+
   function onRow(row: SessionRecord): void {
     const sid = row?.claudeSessionId
     if (!sid) return
     if (!rowOwnedHere(row, o.hostKey)) return
+    try { o.onOwnRow?.(sid) } catch { /* the list logs its own */ }
+    // A rename the port announced: the record first, then this write as the old row's patch.
+    const from = expected.get(sid)
+    if (from !== undefined && !lastRows.has(sid)) rename(from, sid)
     const before = lastRows.get(sid)
     const copy = JSON.parse(JSON.stringify(row)) as SessionRecord
     // The row the leader has is the one the last kept record made: a record the log did not take
@@ -276,17 +322,28 @@ export function createHostEmitter(o: HostEmitterOptions): HostEmitter {
       for (const p of pending.values()) clearTimeout(p.timer)
       pending.clear()
     },
-    noteRename(from, to) {
-      if (!own.has(from) || from === to) return
-      append(to, 'rename', { from, to }, { continueFrom: from })
-      own.delete(from)
-      own.add(to)
-      const row = lastRows.get(from)
-      lastRows.delete(from)
-      if (row) lastRows.set(to, row)
-      const l = lastLive.get(from)
-      lastLive.delete(from)
-      if (l) lastLive.set(to, l)
+    noteRename(from, to) { rename(from, to) },
+    expectRename(from, to) {
+      if (from && to && from !== to && own.has(from)) expected.set(to, from)
+    },
+    cancelRename(from, to) {
+      if (expected.get(to) === from) expected.delete(to)
+    },
+    relive() {
+      for (const sid of own) {
+        const last = lastLive.get(sid)
+        lastLive.delete(sid)
+        const t = liveTimers.get(sid)
+        if (t) { clearTimeout(t); liveTimers.delete(sid) }
+        if (o.liveOf?.(sid)) { writeLive(sid); continue }
+        // Nothing live here: said once to a leader that may still hold it running (its last word
+        // here, or a row that reads live: a leader that kept it from before this host restarted).
+        const status = String(lastRows.get(sid)?.process_status ?? '')
+        if ((last && last.full !== GONE_KEY) || (!last && (status === 'running' || status === 'idle'))) {
+          lastLive.set(sid, { key: GONE_KEY, full: GONE_KEY, at: now() })
+          append(sid, 'live', { state: { gone: true } })
+        } else if (last) lastLive.set(sid, last)
+      }
     },
     noteDrop(sids, opts) {
       for (const sid of sids) {

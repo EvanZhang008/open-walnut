@@ -76,7 +76,7 @@ function leaderStore() {
   return store
 }
 
-function makeSide(port: number, store: ReturnType<typeof leaderStore>, opts: { opened?: string[]; flag?: { on: boolean }; refuse?: string[]; gone?: string[]; drops?: string[]; owned?: string[] } = {}) {
+function makeSide(port: number, store: ReturnType<typeof leaderStore>, opts: { opened?: string[]; flag?: { on: boolean }; refuse?: string[]; gone?: string[]; drops?: string[]; owned?: string[]; extra?: Partial<Parameters<typeof createLeaderSide>[0]> } = {}) {
   return createLeaderSide({
     walnutId: async () => 'w1',
     permitNumber: () => 1,
@@ -103,14 +103,15 @@ function makeSide(port: number, store: ReturnType<typeof leaderStore>, opts: { o
     ownerOf: (sid) => (store.judged.includes(sid) || (opts.owned ?? ['s1', 's1b', 's2']).includes(sid) ? 'devbox' : null),
     backoffMs: () => 20,
     log: () => {},
+    ...(opts.extra ?? {}),
   })
 }
 
-async function hostOf() {
+async function hostOf(o: { gone?: string[]; onLeaderLinked?: () => void } = {}) {
   const log = await FactLog.open({ dir, walnutId: 'w1', flushMs: 1, durable: false })
   logs.push(log)
   const own: SessionRecord[] = [{ claudeSessionId: 's1', taskId: 't', project: 'P', process_status: 'running', mode: 'default', host: 'devbox', judge: 'host' } as SessionRecord]
-  return { log, channel: new HostChannel({ log, walnutId: 'w1', hostId: 'devbox', ownRows: async () => own }) }
+  return { log, channel: new HostChannel({ log, walnutId: 'w1', hostId: 'devbox', ownRows: async () => own, ...(o.gone ? { goneRows: () => o.gone! } : {}), ...(o.onLeaderLinked ? { onLeaderLinked: o.onLeaderLinked } : {}) }) }
 }
 
 const factIs = (store: ReturnType<typeof leaderStore>) => store.emitted.filter((e) => e.name === 'session:tool-use').map((e) => e.i)
@@ -331,6 +332,74 @@ describe('the leader side of a host that runs its sessions', () => {
     for (const sock of sockets) sock.destroy()
     await until(() => calls.filter((c) => c.route === '/host-api/sessions/drop').length === before + 2)
     expect(calls.filter((c) => c.route === '/host-api/sessions/drop').at(-1)!.body).toEqual({ sids: ['gone-1', 'gone-2'] })
+  })
+
+  it('R2-H1: a born row that a rename of the same batch moves a session into is that session\'s, never a start', async () => {
+    const { log, channel } = await hostOf()
+    const port = await hostDoor(channel, [])
+    const store = leaderStore()
+    side = makeSide(port, store, { owned: ['s1', 'old-a'] })
+    await side.noteHost('devbox', { connected: true, judges: true })
+    await until(() => side!.linked('devbox'))
+    // An older host: the new id's row went out as born, then the rename.
+    log.append('new-b', 'row', { born: true, patch: { claudeSessionId: 'new-b', taskId: 'task-done', host: 'devbox', judge: 'host' } })
+    log.append('new-b', 'rename', { from: 'old-a', to: 'new-b' })
+    log.append('new-b', 'session:tool-use', { sessionId: 'new-b', i: 1 })
+    await log.flush()
+    await until(() => factIs(store).length === 1)
+    await side.idle('devbox')
+    expect(store.emitted.filter((e) => e.name === 'session:started')).toEqual([])
+    expect(store.renames).toEqual(['old-a->new-b'])
+  })
+
+  it('R2-H3: a rows frame carries its position and the rows the host removed', async () => {
+    const { log, channel } = await hostOf({ gone: ['renamed-away'] })
+    for (let i = 0; i < 3; i++) log.append('s1', 'session:tool-use', { sessionId: 's1', i })
+    await log.flush()
+    const port = await hostDoor(channel, [])
+    const store = leaderStore()
+    // A leader that knew this host under another log: rows first.
+    store.cursor = { logId: 'an-older-log', seq: 40 }
+    side = makeSide(port, store)
+    await side.noteHost('devbox', { connected: true, judges: true })
+    await until(() => store.batches.some((b) => !!b.snapshot))
+    await side.idle('devbox')
+    const snap = store.batches.find((b) => !!b.snapshot)!
+    expect(snap.snapshot!.at).toBe(log.head)
+    expect(snap.snapshot!.gone).toEqual(['renamed-away'])
+  })
+
+  it('R2-M1: each link asks the host for its live state again; a link down past the bound marks the host\'s sessions unknown, a quick one does not; a drop clears its state', async () => {
+    let linked = 0
+    const { log, channel } = await hostOf({ onLeaderLinked: () => { linked++ } })
+    const port = await hostDoor(channel, [])
+    const store = leaderStore()
+    const lost: string[] = []
+    const gone: string[] = []
+    side = makeSide(port, store, {
+      extra: {
+        liveUnknownMs: 150, onLinkLost: (h) => { lost.push(h) },
+        noteLive: (sid, state) => { if (state.gone) gone.push(sid); else store.live.push({ sid, turnGen: state.turnGen }) },
+      },
+    })
+    await side.noteHost('devbox', { connected: true, judges: true })
+    await until(() => linked === 1)
+    // A quick drop: the link is back before the bound.
+    for (const sk of sockets) sk.destroy()
+    await until(() => linked === 2)
+    await tick(250)
+    expect(lost).toEqual([])
+    // The host goes away and stays away.
+    await side.noteHost('devbox', { connected: false, judges: true })
+    await until(() => lost.length === 1, 3000)
+    expect(lost).toEqual(['devbox'])
+    // Back: linked again, its live state asked for again.
+    await side.noteHost('devbox', { connected: true, judges: true })
+    await until(() => linked === 3)
+    log.append('s1', 'drop', { sid: 's1' })
+    await log.flush()
+    await until(() => gone.length === 1)
+    expect(gone).toEqual(['s1'])
   })
 
   it('reads the capability from a host\'s report', () => {

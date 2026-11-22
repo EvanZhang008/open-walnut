@@ -19,7 +19,7 @@ vi.mock('../../src/providers/cloud-session-link.js', () => ({ CloudSessionLink: 
 
 import { SID, harness, probeSetup, probeTeardown, settle } from '../helpers/runner-probe-harness.js'
 import { SessionRunner } from '../../src/providers/claude-code-session.js'
-import { HOST_JUDGED_RUNNER_METHODS, HostRunsItError, _resetHostJudgedRunnerForTesting, installHostJudgedRouting, saidHereAlready, startAnnouncedHere, startGoesToHost } from '../../src/providers/host-judged-runner.js'
+import { HOST_JUDGED_RUNNER_METHODS, HostRunsItError, _resetHostJudgedRunnerForTesting, hostStartsInFlight, noteHostStartBorn, installHostJudgedRouting, saidHereAlready, startAnnouncedHere, startGoesToHost } from '../../src/providers/host-judged-runner.js'
 import { _resetJudgeOfForTesting, noteHostJudged, setHostJudgeProbe } from '../../src/core/sessions/judge-of.js'
 import { _setActiveLeaderSideForTesting } from '../../src/core/session-channel/leader-boot.js'
 import { _resetHostSessionTasksForTesting, startHostSessionTasks } from '../../src/core/session-channel/leader-tasks.js'
@@ -34,12 +34,13 @@ import { getRegisteredSessionManager } from '../../src/providers/session-manager
 
 const HOST_SID = '50000000-0000-4000-8000-0000000000c1'
 
-function fakeSide(o: { refuse?: boolean } = {}) {
+function fakeSide(o: { refuse?: boolean; lost?: boolean } = {}) {
   const sent: Array<{ op: string; host: string; body: Record<string, unknown> }> = []
   const calls: Array<{ host: string } & HostCallBody> = []
   const side = {
     startOnHost: async (host: string, body: Record<string, unknown>) => {
       sent.push({ op: 'start', host, body })
+      if (o.lost) throw new Error('request timed out after 120000 ms')
       if (o.refuse) return { ok: false, error: 'no claude here' }
       return { ok: true, sessionId: (body.preassignedSessionId as string | undefined) ?? 'started-on-host', title: 'Host title' }
     },
@@ -146,6 +147,27 @@ describe('a host-judged session', () => {
     await expect(h.runner.startSession({ taskId: 'gate-task-c', message: 'go', host: 'devbox', preassignedSessionId: other } as never, 'test')).rejects.toThrow(/no claude here/)
     expect((await getSessionByClaudeId(other))?.judge).toBeUndefined()
     expect(isRemoteJudgedSession(h.runner.findSessionByClaudeId(other))).toBe(false)
+  })
+
+  it('R2-H2: a start whose answer never came stays the host\'s: not failed as the leader\'s, not run here; its born row says it started', async () => {
+    const h = harness()
+    setHostJudgeProbe((host) => host === 'devbox')
+    const { createSessionRecord } = await import('../../src/core/session-tracker.js')
+    const { updateTask } = await import('../../src/core/task-manager.js')
+    await updateTask('gate-task-b', { phase: 'TODO' })
+    const seeded = '50000000-0000-4000-8000-0000000000e1'
+    await createSessionRecord(seeded, 'gate-task-b', 'p', '/w', { host: 'devbox', title: 'Seeded', initialProcessStatus: 'idle', initialStatusReason: 'awaiting_spawn' })
+    fakeSide({ lost: true })
+    const r = await h.runner.startSession({ taskId: 'gate-task-b', message: 'go', host: 'devbox', preassignedSessionId: seeded } as never, 'test')
+    expect(r.claudeSessionId).toBe(seeded)
+    const row = await getSessionByClaudeId(seeded)
+    // The host's, as it was: no failure written on it here, no legacy run of it.
+    expect(row).toMatchObject({ judge: 'host', host: 'devbox', process_status: 'idle', status_reason: 'awaiting_spawn' })
+    expect(isRemoteJudgedSession(h.runner.findSessionByClaudeId(seeded))).toBe(true)
+    // Still in flight until its born row: a rows frame keeps it untouched.
+    expect(hostStartsInFlight().has(seeded)).toBe(true)
+    noteHostStartBorn(seeded)
+    expect(hostStartsInFlight().has(seeded)).toBe(false)
   })
 
   it('its result runs no turn end here: no processNext, no record write; a legacy result still does', async () => {

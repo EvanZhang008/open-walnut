@@ -159,20 +159,73 @@ describe('applyHostChannelBatch across links and repairs', () => {
     expect(r.written).toEqual([])
   })
 
-  it('a rows snapshot is the host\'s every row: one of its rows it no longer names goes, a start in flight and the leader\'s own rows stay', async () => {
+  it('a rows snapshot deletes only a row the host names gone, on the log the leader knew; a start in flight and the leader\'s own rows stay', async () => {
     await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'kept', born: true, patch: born('kept'), seq: 1 }, { sid: 'renamed-away', born: true, patch: born('renamed-away'), seq: 2 }, { sid: 'seed', born: true, patch: born('seed'), seq: 3 }], renames: [], cursor: { logId: 'L1', seq: 3 } })
     await createSessionRecord('legacy-on-host', '', 'p', '/w', { host: HOST, title: 'Legacy' })
     await createSessionRecord('elsewhere', '', 'p', '/w', { host: 'another-box', title: 'Other' })
     events.length = 0
     const r = await applyHostChannelBatch({
-      hostId: HOST, rows: [{ sid: 'kept', born: true, patch: born('kept') }], renames: [], cursor: { logId: 'L2', seq: 0 },
-      snapshot: { keep: new Set(['seed']) },
+      hostId: HOST, rows: [{ sid: 'kept', born: true, patch: born('kept') }], renames: [], cursor: { logId: 'L1', seq: 2 },
+      snapshot: { keep: new Set(['seed']), at: 10, gone: ['renamed-away', 'elsewhere', 'legacy-on-host'] },
     })
     expect(r.removed).toEqual(['renamed-away'])
     expect(await getSessionByClaudeId('renamed-away')).toBeNull()
     for (const sid of ['kept', 'seed', 'legacy-on-host', 'elsewhere']) expect(await getSessionByClaudeId(sid), sid).not.toBeNull()
     const deleted = events.filter((e) => e.name === EventNames.SESSION_DELETED)
     expect(deleted.map((e) => (e.data as { sessionIds: string[] }).sessionIds)).toEqual([['renamed-away']])
+  })
+
+  it('R2-H3a: a rows frame of a replaced link, applied after a newer link moved on, changes nothing', async () => {
+    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'a', born: true, patch: born('a', { messageCount: 1 }), seq: 1 }], renames: [], cursor: { logId: 'L1', seq: 1 } })
+    // The newer link: a row born and a patch, up to record 20.
+    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'b', born: true, patch: born('b'), seq: 15 }, { sid: 'a', patch: { messageCount: 9 }, seq: 20 }], renames: [], cursor: { logId: 'L1', seq: 20 } })
+    events.length = 0
+    // The old link's frame, taken at record 12 (before b was born), names a only, with its old count.
+    const r = await applyHostChannelBatch({
+      hostId: HOST, rows: [{ sid: 'a', born: true, patch: born('a', { messageCount: 1 }) }], renames: [], cursor: { logId: 'L1', seq: 5 },
+      snapshot: { at: 12, gone: ['b'] },
+    })
+    expect(r.stale).toBe(true)
+    expect(r.written).toEqual([])
+    expect((await getSessionByClaudeId('a'))?.messageCount).toBe(9)
+    expect(await getSessionByClaudeId('b')).not.toBeNull()
+    expect(loadChannelCursor(HOST)).toEqual({ logId: 'L1', seq: 20 })
+    expect(events.filter((e) => e.name === EventNames.SESSION_DELETED)).toEqual([])
+  })
+
+  it('R2-H3a: an older frame after a newer frame of the same log, in one process, is skipped too', async () => {
+    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'a', born: true, patch: born('a'), seq: 1 }], renames: [], cursor: { logId: 'L1', seq: 1 } })
+    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'a', born: true, patch: born('a', { messageCount: 7 }) }], renames: [], cursor: { logId: 'L1', seq: 3 }, snapshot: { at: 40 } })
+    const r = await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'a', born: true, patch: born('a', { messageCount: 2 }) }], renames: [], cursor: { logId: 'L1', seq: 3 }, snapshot: { at: 30 } })
+    expect(r.stale).toBe(true)
+    expect((await getSessionByClaudeId('a'))?.messageCount).toBe(7)
+  })
+
+  it('R2-H3b: a seed the frame does not name and that is no longer in flight is kept, never deleted', async () => {
+    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'a', born: true, patch: born('a'), seq: 1 }], renames: [], cursor: { logId: 'L1', seq: 1 } })
+    await createSessionRecord('seed-1', 'task-1', 'p', '/w', { host: HOST, title: 'Seeded', judge: 'host' } as never)
+    events.length = 0
+    const r = await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'a', born: true, patch: born('a') }], renames: [], cursor: { logId: 'L1', seq: 1 }, snapshot: { at: 9 } })
+    expect(r.removed).toEqual([])
+    const seed = await getSessionByClaudeId('seed-1')
+    expect(seed).toMatchObject({ title: 'Seeded', taskId: 'task-1', judge: 'host' })
+    expect(events.filter((e) => e.name === EventNames.SESSION_DELETED)).toEqual([])
+  })
+
+  it('R2-H3c: an empty frame from a host whose store was reset (a new log) deletes nothing; its live rows are kept and marked stopped', async () => {
+    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'live', born: true, patch: born('live', { pid: 4242 }), seq: 1 }, { sid: 'done', born: true, patch: born('done', { process_status: 'stopped' }), seq: 2 }], renames: [], cursor: { logId: 'L1', seq: 2 } })
+    await updateSessionRecord('live', { title: 'Named by a person', human_note: 'keep me' })
+    events.length = 0
+    const r = await applyHostChannelBatch({ hostId: HOST, rows: [], renames: [], cursor: { logId: 'L2-after-reset', seq: 0 }, snapshot: { at: 0, gone: ['live', 'done'] } })
+    expect(r.removed).toEqual([])
+    expect(r.orphaned).toEqual(['live'])
+    expect(await getSessionByClaudeId('live')).toMatchObject({ title: 'Named by a person', human_note: 'keep me', process_status: 'stopped', status_reason: 'orphan_no_pid' })
+    expect((await getSessionByClaudeId('live'))?.pid).toBeUndefined()
+    expect(await getSessionByClaudeId('done')).toMatchObject({ process_status: 'stopped' })
+    expect(events.filter((e) => e.name === EventNames.SESSION_DELETED)).toEqual([])
+    // A born row of it later (the host has it after all) replaces the mark.
+    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'live', born: true, patch: born('live'), seq: 1 }], renames: [], cursor: { logId: 'L2-after-reset', seq: 1 } })
+    expect(await getSessionByClaudeId('live')).toMatchObject({ process_status: 'running', title: 'Named by a person' })
   })
 })
 
