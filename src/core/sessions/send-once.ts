@@ -17,8 +17,7 @@
  * Shared by the chat's `session:send` (src/web/routes/session-chat.ts) and the quick bar's
  * `/api/v1/quick/send` (src/web/routes/quick-input-v1.ts). A send without a uuid runs as always.
  */
-import { getQueue } from '../session-message-queue.js'
-import { withoutWalnutRows } from './session-extras.js'
+import { queuedRowOfUserLine } from '../session-message-queue.js'
 import { log } from '../../logging/index.js'
 
 const sendsInFlight = new Map<string, Promise<unknown>>()
@@ -108,7 +107,7 @@ export async function sameSendSettled(input: {
   autoResend: boolean
 }): Promise<SameSend> {
   const { sessionId, userUuid } = input
-  const twin = userUuid ? (await withoutWalnutRows(await getQueue(sessionId))).find((m) => m.userUuid === userUuid) : undefined
+  const twin = userUuid ? await queuedRowOfUserLine(sessionId, userUuid) : undefined
   if (twin) {
     log.web.info('send: the send is already queued under its user line', { sessionId, messageId: twin.id, source: input.source })
     const { sendQueuedNow } = await import('./send-now.js')

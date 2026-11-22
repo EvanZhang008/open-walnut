@@ -101,10 +101,10 @@ describe('setup banner for this machine\'s Claude Code', () => {
     expect(html).toContain('data-testid="setup-banner-fix"')
     expect(text(html)).toContain('Walnut runs on Claude Code. It is not installed on this computer yet.')
     const doc = parseHTML(html).document
-    // The card family's buttons: one blue main action, then the grey second one, on one row.
+    // The button family's row: one blue main action, then the grey second one, then Fix with agent.
     const row = doc.querySelector('.ask-card-answer')!
     expect([...row.querySelectorAll('button.btn')].map((b) => `${b.className}|${b.textContent}`))
-      .toEqual(['btn btn-sm btn-primary|Install Claude Code', 'btn btn-sm|Open API settings'])
+      .toEqual(['btn btn-sm btn-primary|Install Claude Code', 'btn btn-sm|Open API settings', 'btn btn-sm host-agent-fix-button|Fix with agent'])
     expect(doc.querySelectorAll('button.btn-primary')).toHaveLength(1)
     // The manual command and the credentials words fold into one disclosure, the command whole.
     const more = doc.querySelector('details.setup-other-ways')!

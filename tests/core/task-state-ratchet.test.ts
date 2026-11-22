@@ -209,6 +209,7 @@ const OLD_WORD_OK: Record<string, string> = {
   'web/src/components/sessions/TriggerPickerPopover.tsx': 'an example prompt the user may type, not a state',
   'src/core/user-status.ts': 'its doc names the retired words',
   'web/src/components/org/top-thread-model.ts': 'counts threads waiting on him ("16 threads (1 needs you)"), not tasks',
+  'web/src/components/common/NotificationProblems.tsx': 'counts remote hosts that need him ("2 need you"), not tasks',
 }
 const OWN_MAP_OK: Record<string, string> = {
   'src/core/user-status.ts': 'the names themselves',

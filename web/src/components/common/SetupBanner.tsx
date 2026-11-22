@@ -222,9 +222,6 @@ export function SetupBanner(props: SetupBannerProps) {
   return <div className="setup-banner">{notice.dismiss && <span className="setup-banner-x">{notice.dismiss}</span>}{notice.node}</div>;
 }
 
-/** The button family's row size; in the panel the fix is the one primary action. */
-const btnClass = (panel: boolean, primary = false) => (panel && primary ? 'btn btn-sm btn-primary' : 'btn btn-sm');
-
 // ── Not ready: Claude Code is missing (that is the only thing a default install needs). ──
 function InstallSection({ header, view, pending, error, onFix, onNavigateSettings, onRepairNavigate, firstUse }: {
   header: ReactNode; view: ClaudeBannerView | null; pending: boolean; error: string | null;
@@ -241,7 +238,7 @@ function InstallSection({ header, view, pending, error, onFix, onNavigateSetting
   const alternatives = useDetailsDisclosure('setup-first-use-alternatives');
   const otherWays = useDetailsDisclosure('setup-panel-other-ways');
   const apiSettings = (
-    <button type="button" tabIndex={0} className={btnClass(panel)} onClick={() => onNavigateSettings('#providers')}>Open API settings</button>
+    <button type="button" tabIndex={0} className="btn btn-sm" onClick={() => onNavigateSettings('#providers')}>Open API settings</button>
   );
   // The command is the way on when Walnut cannot run the install itself; else it is one of the other ways.
   const manualIsMain = !install?.fixable && !demo && !install?.failed?.command;
@@ -315,7 +312,7 @@ function ProviderSection({ header, panel, health, onNavigateSettings }: {
       )}
       <div className={panel ? 'ask-card-answer setup-actions' : 'setup-alt ab-local-alt'}>
         <span className="text-sm text-muted">Use another provider instead?</span>
-        <button type="button" tabIndex={0} className={btnClass(panel)} onClick={() => onNavigateSettings('#providers')}>
+        <button type="button" tabIndex={0} className="btn btn-sm" onClick={() => onNavigateSettings('#providers')}>
           Open API settings
         </button>
       </div>
@@ -344,7 +341,8 @@ function FixRow({ view, label, pending, error, onFix, repair, secondary, panel =
       )}
       {manual && <CopyCommand command={manual} />}
       <div className={panel ? 'ask-card-answer setup-actions' : 'setup-alt'}>
-        <button type="button" tabIndex={0} className={btnClass(panel, true)} disabled={pending} onClick={onFix} data-testid="setup-banner-fix">
+        {/* In the panel the fix is the card's one primary action. */}
+        <button type="button" tabIndex={0} className={panel ? 'btn btn-sm btn-primary' : 'btn btn-sm'} disabled={pending} onClick={onFix} data-testid="setup-banner-fix">
           {view.failed ? 'Try again' : label}
         </button>
         {secondary}
@@ -378,7 +376,7 @@ function QuietSection({ header, view, pending, error, onFix, onCheck, onRepairNa
           <ClaudeSignIn command={problem.commands[0] ?? 'claude'} />
           <div className={panel ? 'ask-card-answer setup-actions' : 'setup-alt'}>
             <span className="text-sm text-muted">Walnut checks again every 15 seconds and hides this once you are signed in.</span>
-            <button type="button" tabIndex={0} className={btnClass(panel)} disabled={pending} onClick={onCheck} data-testid="setup-banner-check">Check again</button>
+            <button type="button" tabIndex={0} className="btn btn-sm" disabled={pending} onClick={onCheck} data-testid="setup-banner-check">Check again</button>
             {repair}
             {error && <span className="text-sm text-muted">{error}</span>}
           </div>
