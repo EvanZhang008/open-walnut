@@ -1703,7 +1703,7 @@ struct ComposerBar: View {
                 .foregroundStyle(canSend ? Theme.onTint : Color(.tertiaryLabel))
                 .padding(.horizontal, 10)
                 .frame(height: MessageBox.keySize)
-                .background(canSend ? Theme.tint : Color(.tertiarySystemFill), in: MessageBox.keyShape)
+                .background(canSend ? Theme.tint : Color(.tertiarySystemFill), in: MessageBox.wideKeyShape)
             } else {
                 Image(systemName: queuesInsteadOfSending ? Symbol.queue : Symbol.send)
                     .font(.system(size: queuesInsteadOfSending ? 14 : 17, weight: .semibold))

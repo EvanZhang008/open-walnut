@@ -4,7 +4,7 @@ import SwiftUI
 //
 // The same `VoiceRecorder` the chat composer drives (record to a preserved m4a,
 // upload, the server's engine transcribes mixed Chinese and English), and the
-// same conventions: a mic glyph in a rounded square key beside send, a recording row that
+// same conventions: a mic glyph in a round key beside send, a recording row that
 // REPLACES the input with cancel on the left and stop on the right, the
 // recorder's own sentences for a denied microphone or a failed transcription,
 // and saved takes offered back with Retry and Discard. The keyboard's dictation
@@ -26,9 +26,10 @@ let voiceControlTarget: CGFloat = 44
 /// (web/src/styles/input-box.css): every box a person types a message in (the
 /// chat composer's card, the letter reply, the dictation boxes) takes its
 /// corner and one-line height from here, and every mic, send and stop key in
-/// one draws `keyShape`, a rounded square, never a circle (the user,
-/// 2026-11-21: "why does everything have to be round? Everything should be
-/// unified!"). Send is `Theme.tint` with `Theme.onTint`, a grey fill when there
+/// one draws `keyShape`, a circle, and a key with a word on it (Queue) the
+/// capsule of the same height. The box's corner is rounded, never a capsule:
+/// 2026-11-21 the user called the oval Threads box ugly and asked for one
+/// unified box; 2026-11-22 he asked why the keys had turned square. Send is `Theme.tint` with `Theme.onTint`, a grey fill when there
 /// is nothing to send. Form fields (settings, search, task editors) are not
 /// message boxes and keep their own style.
 enum MessageBox {
@@ -45,6 +46,9 @@ enum MessageBox {
 
     /// Every key (mic, send, stop) is a circle, as on the web.
     static var keyShape: Circle { Circle() }
+
+    /// A key wider than tall (a word on it): the circle stretched to a capsule.
+    static var wideKeyShape: Capsule { Capsule() }
 }
 
 /// A key's glyph seat that grows with the text size, capped at the target size.

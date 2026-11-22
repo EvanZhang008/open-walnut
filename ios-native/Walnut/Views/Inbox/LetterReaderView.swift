@@ -485,7 +485,11 @@ struct LetterReaderView: View {
                     TextField("Add a note with your choice (optional)", text: $decisionNote, axis: .vertical)
                         .lineLimit(1...3)
                         .font(.callout)
-                        .textFieldStyle(.roundedBorder)
+                        // The message box (MessageBox), as the reply box under it.
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .frame(minHeight: MessageBox.lineHeight)
+                        .background(Color(.secondarySystemBackground), in: MessageBox.shape)
                         .focused($decisionNoteFocused)
                         .accessibilityIdentifier("inbox.letter.decisionNote")
                     ReplyPictureButton(
