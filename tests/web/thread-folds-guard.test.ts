@@ -8,6 +8,8 @@
  *    (FOR_HIM_GROUPS: Needs you, Done) or folded (FOLDED_GROUPS), in the view's order;
  *  - the web view draws its groups in another order, brings back a filter row, or keeps an opened
  *    fold through utils/view-memory.ts (an opened fold is plain state, folded again next time);
+ *  - a fold head is not the shared DisclosureButton, or a folded group's head no longer sticks to
+ *    the pane's bottom (three reviews on his data: under the Done cards the folds were out of sight);
  *  - the phone keeps its folds in @AppStorage, or misses a fold for a folded group.
  * The browser flow is tests/e2e/browser/thread-groups-folds.spec.ts.
  */
@@ -35,7 +37,10 @@ describe('every Threads group has its place: open or folded', () => {
   it('the web draws the open groups, then the folded ones, with no filter row', () => {
     const view = read(BY_STATE)
     expect(view).toContain('[...FOR_HIM_GROUPS, ...FOLDED_GROUPS].map(')
-    expect(view).toContain('aria-expanded={open}')
+    // Each fold head is the shared Disclosure, and a folded group's head sticks to the pane's bottom.
+    expect(view).toContain('<DisclosureButton block expanded={open}')
+    expect(view).toContain("'--org-thread-fold-from-end'")
+    expect(read('web/src/styles/org-threads.css')).toMatch(/\.org-thread-group\.is-folded \{[^}]*position: sticky;[^}]*bottom: calc\(var\(--org-thread-fold-from-end/)
     expect(fs.existsSync(path.join(root, 'web/src/components/org/ThreadsFilterBar.tsx'))).toBe(false)
     for (const f of [BY_STATE, THREADS]) {
       const src = read(f)

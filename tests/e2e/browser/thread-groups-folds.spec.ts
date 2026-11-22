@@ -21,6 +21,8 @@
  *     Show opens Waiting / Snoozed and hands the focus to its head. Each line fades by itself.
  *  5. A card that moved while the Threads were away leaves no line when they open again.
  *  6. A long group (25 cards) stays one line until opened.
+ *  7. Under many long Done cards every folded head is in the pane on arrival, stacked along its
+ *     bottom edge (sticky), and one click opens that group.
  * The fixture is shared: this file makes its own project and tasks, and puts the flag back.
  */
 import fs from 'node:fs'
@@ -338,6 +340,56 @@ test('a card that moved while the Threads were away leaves no line when they ope
   await send(request, 'patch', `/api/v1/tasks/${ids.lead}/threads/${away}`, { snooze: new Date(Date.now() + 86_400_000).toISOString() })
   await expect(note(page, away)).toBeVisible({ timeout: 20_000 })
   await expect(note(page, away)).toContainText('Moved to Waiting / Snoozed')
+  expect(pageErrors).toEqual([])
+})
+
+/** Where each folded head sits in the viewport, from the top of the pane that scrolls the Threads. */
+const foldHeads = (page: Page) => page.getByTestId('org-thread-groups').evaluate((root) => {
+  let s: HTMLElement | null = root.parentElement
+  while (s && !/auto|scroll/.test(getComputedStyle(s).overflowY)) s = s.parentElement
+  const port = s!.getBoundingClientRect()
+  return [...root.querySelectorAll<HTMLElement>('section[data-testid="org-thread-group"][data-open="false"]')].map((sec) => {
+    const r = sec.getBoundingClientRect()
+    return { group: sec.dataset.group!, top: Math.round(r.top), bottom: Math.round(r.bottom), inPane: r.top >= port.top - 1 && r.bottom <= port.bottom + 1, portBottom: Math.round(port.bottom), scrolls: s!.scrollHeight > s!.clientHeight + 1 }
+  })
+})
+
+test('with many long Done cards, every folded head is in view on arrival, stacked at the pane bottom, and a click opens it', async ({ page, request }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (err) => pageErrors.push(err.message))
+  // Done long enough to fill several screens: twelve cards, each a long summary.
+  const long = Array.from({ length: 8 }, (_, i) => `Line ${i + 1}: the rows were checked one by one, the broken stakes replaced, the ties loosened where the bark had grown over them.`).join('\n\n')
+  for (let i = 1; i <= 12; i++) {
+    const opened = await send<{ thread: { id: string } }>(request, 'post', `/api/v1/tasks/${ids.lead}/threads/open`, { title: `Bed ${i} is weeded ${STAMP}`, text: long, from: 'node', state: 'answered' }, ids.leadSid)
+    expect(opened.thread.id).toBeTruthy()
+  }
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  await openLead(page)
+  await expect.poll(async () => (await drawn(page)).find((g) => g.group === 'read')?.cards.length ?? 0, { timeout: 20_000 }).toBeGreaterThanOrEqual(12)
+  const folded = (await drawn(page)).filter((g) => !g.open).map((g) => g.group)
+  expect(folded.length).toBeGreaterThanOrEqual(2)
+  // On arrival (no scroll): the pane scrolls, yet every folded head is inside it, in order, stacked
+  // with no gap at its bottom edge (the last folded group lowest).
+  const heads = await foldHeads(page)
+  expect(heads.map((h) => h.group)).toEqual(folded)
+  expect(heads[0].scrolls, 'the Done cards overflow the pane').toBe(true)
+  for (const h of heads) expect(h.inPane, `${h.group} head in the pane: ${JSON.stringify(h)}`).toBe(true)
+  for (let i = 1; i < heads.length; i++) expect(Math.abs(heads[i].top - heads[i - 1].bottom), `${heads[i].group} sits right under ${heads[i - 1].group}`).toBeLessThanOrEqual(1)
+  expect(heads.at(-1)!.portBottom - heads.at(-1)!.bottom).toBeLessThanOrEqual(1)
+  for (const g of folded) await expect(head(page, g)).toBeInViewport()
+  await page.getByTestId('org-rail').screenshot({ path: `${SHOTS}/thread-groups-7-stacked-folds-${test.info().project.name}.png` })
+  // One click on a stacked head opens its group; its head goes to the top, its cards under it.
+  const first = folded[0]
+  await head(page, first).click()
+  await expect(group(page, first)).toHaveAttribute('data-open', 'true')
+  await expect(head(page, first)).toHaveAttribute('aria-expanded', 'true')
+  await expect(group(page, first).getByTestId('org-thread').first()).toBeInViewport({ timeout: 5_000 })
+  // An opened group scrolls with the list; the folds still folded keep their place at the bottom.
+  await expect(group(page, first)).not.toHaveClass(/is-folded/)
+  for (const h of await foldHeads(page)) expect(h.inPane, `${h.group} still in the pane`).toBe(true)
+  await head(page, first).click()
+  await expect(group(page, first)).toHaveAttribute('data-open', 'false')
   expect(pageErrors).toEqual([])
 })
 

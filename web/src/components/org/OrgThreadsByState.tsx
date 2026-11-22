@@ -9,10 +9,17 @@
  * OrgThreads so a thread line or Show can open a fold). A group with no card draws nothing. Each
  * thread is drawn by the same card every Threads surface uses (OrgThreads ThreadItem), passed in.
  *
+ * A folded group's head sticks to the bottom of the pane while the list scrolls above it, the heads
+ * stacked in their order (the last folded group lowest): on arrival the pane shows Needs you, Done
+ * and every fold along its bottom edge, one click from its cards (2026-11-21, three reviews on his
+ * data: the folds sat under every Done card, several screens down, so nobody saw they existed). An
+ * opened group scrolls with the list. Styles: org-threads.css `.org-thread-group.is-folded`.
+ *
  * A card that leaves a group on screen leaves a line in its place for a few seconds (thread-moves.ts).
  */
 import { focusUnlessTyping } from '@/utils/focus-unless-typing';
-import { useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from 'react';
+import { DisclosureButton } from '@/components/controls';
 import type { OrgThread } from '@/api/org-threads';
 import { FOLDED_GROUPS, FOR_HIM_GROUPS, THREAD_GROUPS, THREAD_GROUP_LABELS, type ThreadGroup } from '@open-walnut/thread-groups';
 import { MOVE_NOTE_MS, shownGroups, useThreadMoves, type ThreadMove } from './thread-moves';
@@ -90,6 +97,9 @@ export function OrgThreadsByState({ groups, opened, onOpen, card, name, onShowTh
     onShowThread?.(m.id);
     requestAnimationFrame(() => headOf(rootRef.current, m.to)?.focus({ preventScroll: true }));
   };
+  // The folded groups drawn (each with a card) and still folded, in order: how many come after one.
+  const stuckOrder = FOLDED_GROUPS.filter((g) => groups[g].length > 0 && !shown.has(g));
+  const stuckAfter = (g: ThreadGroup) => stuckOrder.length - 1 - stuckOrder.indexOf(g);
   return (
     <div
       ref={rootRef} className="org-thread-groups" data-testid="org-thread-groups"
@@ -102,29 +112,32 @@ export function OrgThreadsByState({ groups, opened, onOpen, card, name, onShowTh
         const open = shown.has(g);
         const notes = open ? moves.filter((m) => m.from === g) : [];
         if (!list.length && !notes.length) return null;
+        // A folded group's head sticks to the pane's bottom, above the folded groups drawn after it.
+        const stuck = folds && !open;
+        const fromEnd = stuck ? stuckAfter(g) : 0;
         // Each line stands where its card stood, among the cards still there.
         const items: ReactNode[] = open ? list.map(card) : [];
         for (const m of [...notes].sort((a, b) => b.index - a.index)) items.splice(Math.min(m.index, items.length), 0, <MoveNote key={moveKey(m)} m={m} onShow={show} onDone={dismiss} />);
-        const words = (<>
-          <span className="org-thread-group-label">{THREAD_GROUP_LABELS[g]}</span>
-          <span className="org-thread-group-count" data-testid="org-thread-group-count">{list.length}</span>
-        </>);
+        const label = <span className="org-thread-group-label">{THREAD_GROUP_LABELS[g]}</span>;
+        const count = <span className="org-thread-group-count" data-testid="org-thread-group-count">{list.length}</span>;
         return (
-          <section key={g} className="org-thread-group" data-testid="org-thread-group" data-group={g} data-open={open ? 'true' : 'false'}>
+          <section
+            key={g} className={`org-thread-group${stuck ? ' is-folded' : ''}`} data-testid="org-thread-group" data-group={g} data-open={open ? 'true' : 'false'}
+            style={stuck ? { '--org-thread-fold-from-end': fromEnd } as CSSProperties : undefined}
+          >
             {folds
               ? (
-                <button type="button" className="btn btn-block btn-ghost org-thread-group-fold" data-testid="org-thread-group-head" aria-expanded={open} onClick={(e) => {
+                <DisclosureButton block expanded={open} trailing={count} className="org-thread-group-fold" data-testid="org-thread-group-head" onClick={(e) => {
                   onOpen(g, !open);
                   // Opened below the fold of the pane, its cards would start off screen and the click look
                   // like nothing (2026-11-21 review): the head goes to the top, its cards under it.
                   const head = e.currentTarget;
                   if (!open) requestAnimationFrame(() => head.scrollIntoView({ block: 'start', behavior: 'smooth' }));
                 }}>
-                  <span className="org-thread-group-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
-                  {words}
-                </button>
+                  {label}
+                </DisclosureButton>
               )
-              : <h3 className="org-thread-group-head" data-testid="org-thread-group-head" tabIndex={-1}>{words}</h3>}
+              : <h3 className="org-thread-group-head" data-testid="org-thread-group-head" tabIndex={-1}>{label}{count}</h3>}
             {open && <ul className="org-thread-list" data-testid="org-thread-list" data-show={g}>{items}</ul>}
           </section>
         );

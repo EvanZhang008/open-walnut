@@ -22,7 +22,7 @@
     "styles/step-rows.css": 1,
     "styles/thread-stack-chrome.css": 2,
     "styles/thread-stack-page.css": 1,
-    "styles/thread-stack.css": 2,
+    "styles/thread-stack.css": 1,
     "styles/unpaired-notice.css": 1
   },
   "rawAccent": {
@@ -827,7 +827,6 @@
     "components/sessions/TeamCard.tsx": 1,
     "components/sessions/ThreadAskedFromList.tsx": 3,
     "components/sessions/ThreadCommentCard.tsx": 4,
-    "components/sessions/ThreadConfirm.tsx": 2,
     "components/sessions/ThreadMap.tsx": 7,
     "components/sessions/ThreadMapArchive.tsx": 1,
     "components/sessions/ThreadModePill.tsx": 1,

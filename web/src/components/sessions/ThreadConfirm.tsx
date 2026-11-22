@@ -99,10 +99,12 @@ export function ThreadConfirm({ anchorEl, title, body, confirmLabel, cancelLabel
         {/* The default button keeps a ring while it holds focus, however the
             confirm was opened: WebKit never counts a programmatic focus as
             :focus-visible, and Enter must do what the eye predicts (N46). */}
-        <button ref={cancelRef} type="button" className="thread-confirm-btn" data-default="true" onClick={onCancel}>{cancelLabel}</button>
+        {/* The button family (buttons.css): a quiet key, and the action as the main key (red when it
+            removes); neutral leaves both quiet. */}
+        <button ref={cancelRef} type="button" className="btn btn-sm" data-default="true" onClick={onCancel}>{cancelLabel}</button>
         <button
           type="button"
-          className={danger ? 'thread-confirm-btn thread-confirm-btn--danger' : neutral ? 'thread-confirm-btn' : 'thread-confirm-btn thread-confirm-btn--primary'}
+          className={danger ? 'btn btn-sm btn-primary btn-danger' : neutral ? 'btn btn-sm' : 'btn btn-sm btn-primary'}
           onClick={onConfirm}
         >
           {confirmLabel}

@@ -28,9 +28,7 @@
     "components/tasks/ViewDropdown.tsx": 2,
     "pages/NotesPage.tsx": 1
   },
-  "disclose": {
-    "components/org/OrgThreadsByState.tsx": 1
-  },
+  "disclose": {},
   "ownLook": {
     "popout/ext-panel.css": 1,
     "styles/board-kanban-controls.css": 1,

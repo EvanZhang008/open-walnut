@@ -407,7 +407,7 @@ test.describe('Question stack views', () => {
     await openAsked(page, panel, 'Question about reply twenty', 1)
     await pageMenu(page, panel, /Remove question/)
     const confirm = page.locator('.thread-confirm')
-    if (await confirm.count() > 0) await confirm.locator('.thread-confirm-btn--danger').click()
+    if (await confirm.count() > 0) await confirm.locator('.btn-danger').click()
     await expectStackDepth(panel, 0)
     await expect(panel.locator('.thread-asked-row', { hasText: 'Question about reply twenty' })).toHaveCount(0)
     // C14: the anchors stay, the head entry is hidden.

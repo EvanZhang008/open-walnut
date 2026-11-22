@@ -405,7 +405,7 @@ test.describe('Question stack landing', () => {
     await panels[0].locator('.session-panel-body .thread-stack-header .thread-stack-more').click()
     await page.locator('.thread-menu [role="menuitem"]', { hasText: /Remove question/ }).click()
     const confirm = page.locator('.thread-confirm')
-    if (await confirm.count() > 0) await confirm.locator('.thread-confirm-btn--danger').click()
+    if (await confirm.count() > 0) await confirm.locator('.btn-danger').click()
     const toast = page.locator('.thread-toast')
     await expect(toast).toHaveCount(1)
     const t = (await toast.boundingBox())!

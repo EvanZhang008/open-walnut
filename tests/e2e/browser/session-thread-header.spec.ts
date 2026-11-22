@@ -258,7 +258,7 @@ test.describe('stack chrome', () => {
     await expect(confirm.locator('.thread-confirm-body')).toHaveText('Walnut hides them from this view. The session transcript is owned by the CLI and keeps every message; you can still read them in Conversation Mode.')
     // Soft: default focus is ThreadConfirm's (P1) job; the steps after it still run.
     await expect.soft(confirm.getByRole('button', { name: 'Cancel' })).toBeFocused()
-    await expect(confirm.getByRole('button', { name: 'Remove' })).toHaveClass(/thread-confirm-btn--danger/)
+    await expect(confirm.getByRole('button', { name: 'Remove' })).toHaveClass(/\bbtn-danger\b/)
     await confirm.getByRole('button', { name: 'Cancel' }).click()
     await expect(header.locator('.thread-stack-title')).toHaveText('Buffer flush order')
     // Show in tree keeps the drawer open on the current row.
