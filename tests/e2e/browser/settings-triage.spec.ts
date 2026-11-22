@@ -162,6 +162,22 @@ test.describe('Settings → Inbox Triage', () => {
     expect((await routine()).instructions).not.toMatch(/\bmail_[a-z_]+/)
   })
 
+  test('the no-source line shows while triage is off too', async ({ page, request }) => {
+    // It says what a run needs, so it holds in every state (2026-11-22 audit: it was hidden while
+    // the switch was off, and the off page lost that line).
+    const current = await serverTriage(request)
+    try {
+      const put = await request.put('/api/config', { data: { triage: { ...current, enabled: false, sources: [] } } })
+      expect(put.ok()).toBe(true)
+      const section = await openTriageSection(page)
+      await expect(section.locator('#inbox-triage-enabled')).toHaveAttribute('aria-checked', 'false')
+      await expect(section.getByTestId('inbox-triage-sources')).toContainText('With no source ticked, Inbox Triage does not run.')
+    } finally {
+      // The next test expects the state the one before this left: put it back.
+      await request.put('/api/config', { data: { triage: current } })
+    }
+  })
+
   test('a save keeps a sibling triage key the card does not render', async ({ page, request }) => {
     // Seed a key no field renders. updateConfig replaces `triage` whole, so this
     // is exactly what a save without the `...config.triage` spread would eat.

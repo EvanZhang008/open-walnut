@@ -106,10 +106,8 @@ export function TriageSection({ config, onSave }: Props) {
         </ControlGroup>
       </SettingsGroup>
 
-      {/* While triage is off the line under its switch says why; the footer, about a run with no
-          source, would be a second explanation of the same off state. */}
       <ControlGroup id={GOVERNED.sources} off={off} className="settings-rows-contents">
-      <SettingsGroup heading="Sources" className="settings-checklist" footer={off ? undefined : 'With no source ticked, Inbox Triage does not run.'}
+      <SettingsGroup heading="Sources" className="settings-checklist" footer="With no source ticked, Inbox Triage does not run."
         disabled={off} data-testid="inbox-triage-sources">
         {ALL_SOURCES.map((source) => (
           <SettingsCheckbox
