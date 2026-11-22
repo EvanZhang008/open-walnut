@@ -20,7 +20,9 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-companion-package'))
 
 import { WALNUT_HOME } from '../../src/constants.js'
-import { boxRunsPackage, buildCompanionPackage, companionBuildId, companionTarget, EMPTY_DEPS_HASH } from '../../src/core/companion-build/package.js'
+import {
+  boxRunsPackage, buildCompanionPackage, cachedCompanionPackage, cachedCompanionPackages, commitOfBuildId, companionBuildId, companionTarget, EMPTY_DEPS_HASH,
+} from '../../src/core/companion-build/package.js'
 import { COMPANION_SHIM_JS } from '../../src/core/companion-build/shim.js'
 import { buildIdOf, installRequestProblem } from '../../src/core/companion-build/wire.js'
 import { readRunningBuild } from '../../src/core/host-server/package.js'
@@ -188,6 +190,27 @@ describe('the companion package', () => {
     const kept = fs.readdirSync(cacheDir()).filter((n) => n.endsWith('.tgz')).sort()
     expect(kept).toEqual(['0.7.0-aaa0003-companion-linux-arm64.tgz', '0.7.0-aaa0004-companion-linux-arm64.tgz'])
     expect(fs.readdirSync(cacheDir()).filter((n) => n.endsWith('.tgz.json')).sort()).toEqual(kept.map((n) => `${n}.json`))
+  })
+
+  it('keeps the builds it is asked to keep beside the newest two, and lists and reads them back', async () => {
+    const box = { platform: 'linux', arch: 'arm64' }
+    for (const commit of ['bbb0001', 'bbb0002', 'bbb0003', 'bbb0004']) {
+      await buildCompanionPackage(box, { source: fakeSource({ id: `0.7.0-${commit}`, commit, body: `${FAKE_WALNUT}# ${commit}\n` }), keep: ['0.7.0-bbb0001'] })
+      await new Promise((r) => setTimeout(r, 15))
+    }
+    expect((await cachedCompanionPackages(box)).map((c) => c.id)).toEqual(['0.7.0-bbb0004', '0.7.0-bbb0003', '0.7.0-bbb0001'])
+    const back = await cachedCompanionPackage('0.7.0-bbb0001', box)
+    expect(back).toMatchObject({ id: '0.7.0-bbb0001', version: '0.7.0', commit: 'bbb0001', dependencies: {}, companionDepsHash: EMPTY_DEPS_HASH })
+    expect(fs.readFileSync(path.join(await untar(back!.tgz), 'package', 'walnut'), 'utf8')).toContain('# bbb0001')
+    expect(await cachedCompanionPackage('0.7.0-bbb0002', box)).toBeNull()
+    // A package kept by an older build (its facts file holds only the file's sha256) reads too.
+    const meta = path.join(cacheDir(), '0.7.0-bbb0003-companion-linux-arm64.tgz.json')
+    fs.writeFileSync(meta, JSON.stringify({ fileSha256: 'f'.repeat(64) }))
+    expect(await cachedCompanionPackage('0.7.0-bbb0003', box)).toMatchObject({ version: '0.7.0', commit: 'bbb0003', fileSha256: 'f'.repeat(64) })
+    // Another system's packages are not listed; a build of uncommitted changes names no commit.
+    expect(await cachedCompanionPackages({ platform: 'linux', arch: 'x64' })).toEqual([])
+    expect(commitOfBuildId('0.7.0-abc1234-d1a2b3c')).toBeNull()
+    expect(commitOfBuildId('0.7.0-abc1234')).toBe('abc1234')
   })
 
   it('the build id is the walnut file source\'s, and its error says why there is none', async () => {

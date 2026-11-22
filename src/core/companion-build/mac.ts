@@ -23,7 +23,9 @@ import { IS_EPHEMERAL, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { bootPolicy } from '../boot-policy.js'
 import { cloudSessionEndpoint, recoverCloudSessionCredential } from '../cloud-ingest.js'
-import { boxRunsPackage, buildCompanionPackage, companionBuildId, type CompanionPackage } from './package.js'
+import {
+  boxRunsPackage, buildCompanionPackage, cachedCompanionPackage, cachedCompanionPackages, commitOfBuildId, companionBuildId, type CachedPackage, type CompanionPackage,
+} from './package.js'
 import { getCloudBoxState } from '../hosts/cloud-box-host.js'
 import { isLoopbackDomain } from '../hosts/cloud-box-probe.js'
 import {
@@ -192,7 +194,9 @@ function companionBuildChanged(was: string | null, now: string): void {
 
 // --- the gates ----------------------------------------------------------------
 
-type Gate = { open: true; ep: Endpoint; mine: string; autoUpdate: true } | { open: false; state: CompanionBuildState; message?: string; mine: string | null; autoUpdate: boolean }
+type Gate =
+  | { open: true; ep: Endpoint; mine: string; autoUpdate: true; held?: { why: string; passed: string[] } }
+  | { open: false; state: CompanionBuildState; message?: string; mine: string | null; autoUpdate: boolean }
 
 /**
  * A later pipeline stage (cloud_bridge.update_gate_file): the sentence that holds this Mac's build
@@ -201,21 +205,88 @@ type Gate = { open: true; ep: Endpoint; mine: string; autoUpdate: true } | { ope
  * (`<version>-<commit>`). A missing or unreadable file holds it: the gate never opens on a guess.
  */
 export async function updateGateHold(mine: string, file: string | undefined): Promise<string | null> {
-  if (!file?.trim()) return null
-  const where = file.trim()
-  const commit = /-([0-9a-f]{7,40})$/.exec(mine)?.[1]
-  if (!commit) return `Held: updates wait for ${where} to name this build's commit, and this build (${mine}) names none.`
-  let text: string
+  return (await gateHold(mine, file))?.why ?? null
+}
+
+/** The commits the gate file names, in its order (the newest last); null when it cannot be read. */
+async function gateList(where: string): Promise<string[] | null> {
   try {
     const full = where.startsWith('~/') ? path.join(os.homedir(), where.slice(2)) : where
-    text = await fs.promises.readFile(full, 'utf8')
+    const text = await fs.promises.readFile(full, 'utf8')
+    return text.split(/\r?\n/).map((l) => l.trim().toLowerCase()).filter((l) => /^[0-9a-f]{7,40}$/.test(l))
   } catch {
-    return `Held: the companion takes this Mac's build (${commit}) once ${where} names its commit; that file is not there yet.`
+    return null
   }
-  const passed = text.split(/\r?\n/).map((l) => l.trim().toLowerCase()).filter((l) => /^[0-9a-f]{7,40}$/.test(l))
-  if (passed.some((l) => l.startsWith(commit) || commit.startsWith(l))) return null
-  return `Held: the companion takes this Mac's build (${commit}) once ${where} names its commit (a later stage of the pipeline writes it).`
 }
+
+const commitOf = commitOfBuildId
+
+/** Where the gate list names a commit: its last line that matches (a full sha or a prefix), or -1. */
+function passedAt(passed: readonly string[], commit: string | null): number {
+  if (!commit) return -1
+  for (let i = passed.length - 1; i >= 0; i--) if (passed[i]!.startsWith(commit) || commit.startsWith(passed[i]!)) return i
+  return -1
+}
+
+/** updateGateHold, with the list it read: the commits a later stage passed (empty when the file is missing). */
+async function gateHold(mine: string, file: string | undefined): Promise<{ why: string; passed: string[] } | null> {
+  if (!file?.trim()) return null
+  const where = file.trim()
+  const commit = commitOf(mine)
+  if (!commit) return { why: `Held: updates wait for ${where} to name this build's commit, and this build (${mine}) names none.`, passed: [] }
+  const passed = await gateList(where)
+  if (!passed) return { why: `Held: the companion takes this Mac's build (${commit}) once ${where} names its commit; that file is not there yet.`, passed: [] }
+  if (passedAt(passed, commit) >= 0) return null
+  return { why: `Held: the companion takes this Mac's build (${commit}) once ${where} names its commit (a later stage of the pipeline writes it).`, passed }
+}
+
+/** `0.6.37` against `0.6.36`: >0 when a is newer. */
+function versionOrder(a: string, b: string): number {
+  const pa = a.split(/[.-]/).map((x) => Number(x)), pb = b.split(/[.-]/).map((x) => Number(x))
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? 0, y = pb[i] ?? 0
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return 0
+    if (x !== y) return x - y
+  }
+  return 0
+}
+const versionOfId = (id: string): string => id.replace(/-[^-]+$/, '')
+
+/**
+ * While the gate holds this Mac's build: the newest build this Mac kept that the gate list names,
+ * when it is newer there than the one the companion runs (never an older version). A deep test
+ * names a commit after this Mac moved on to the next build (2026-11-21: 4cb2ad15 ran until 17:30
+ * and was named at 17:47), so the build it names is one this Mac ran before, not the one it runs.
+ */
+export function newestPassedPackage(cached: readonly CachedPackage[], passed: readonly string[], theirs: string | null): CachedPackage | null {
+  const theirsAt = theirs ? passedAt(passed, commitOf(theirs)) : -1
+  // A companion build the list does not name is judged by this Mac's own order of builds (cached
+  // newest first) or a newer version; with neither, nothing goes (never a move back by guess).
+  const theirsKept = theirs && theirsAt < 0 ? cached.findIndex((c) => c.id === theirs) : -1
+  const newerThanTheirs = (c: CachedPackage, i: number): boolean => {
+    if (!theirs || theirsAt >= 0) return true
+    if (versionOrder(versionOfId(c.id), versionOfId(theirs)) > 0) return true
+    return theirsKept >= 0 && i < theirsKept
+  }
+  let best: CachedPackage | null = null, bestAt = -1
+  cached.forEach((c, i) => {
+    const at = passedAt(passed, c.commit)
+    if (at > bestAt && at > theirsAt && newerThanTheirs(c, i) && !(theirs && versionOrder(versionOfId(c.id), versionOfId(theirs)) < 0)) { best = c; bestAt = at }
+  })
+  return best
+}
+
+/** Packages kept while the gate holds: the newest builds back to the newest one the list names, at most this many. */
+const KEEP_HELD = 6
+function keptWhileHeld(cached: readonly CachedPackage[], passed: readonly string[], mine: string, theirs: string | null): string[] {
+  const named = cached.findIndex((c) => passedAt(passed, c.commit) >= 0)
+  const recent = cached.slice(0, named >= 0 ? Math.min(named, KEEP_HELD) : KEEP_HELD).map((c) => c.id)
+  // The newest named build always stays (a send of it may have to go again), and so does the companion's.
+  return [...new Set([mine, ...recent, ...(named >= 0 ? [cached[named]!.id] : []), ...(theirs ? [theirs] : [])])]
+}
+
+/** The earlier build the last held flow picked to send: a Retry is for it too. */
+let heldPickId: string | null = null
 
 async function updateGateFile(): Promise<string | undefined> {
   try {
@@ -267,9 +338,8 @@ async function gate(): Promise<Gate> {
     // From source, or a build of uncommitted changes: no walnut file of this build exists (host-file.ts).
     return { open: false, state: 'off', message: myIdWhy ?? 'This Mac has no build to send.', mine, autoUpdate }
   }
-  const held = await updateGateHold(mine, await updateGateFile())
-  if (held) return { open: false, state: 'off', message: held, mine, autoUpdate }
-  return { open: true, ep, mine, autoUpdate: true }
+  const held = await gateHold(mine, await updateGateFile())
+  return { open: true, ep, mine, autoUpdate: true, ...(held ? { held } : {}) }
 }
 
 async function sha256Of(id: string, tgz: Buffer): Promise<string> {
@@ -283,7 +353,14 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 
 // --- the flow -----------------------------------------------------------------
 
-interface Ctx { gen: number; ep: Endpoint; mine: string; theirs: string | null }
+interface Ctx {
+  gen: number; ep: Endpoint
+  /** The build this flow sends: this Mac's own, or (while the gate holds it) an earlier one the gate list names. */
+  mine: string
+  theirs: string | null
+  /** The package of an earlier build, read from this Mac's cache (heldFlow). */
+  pkg?: CompanionPackage
+}
 type End = 'end'
 
 const live = (ctx: Ctx) => ctx.gen === generation
@@ -351,7 +428,7 @@ async function runFlow(reason: string, gen: number): Promise<void> {
   showLastSeenFor(g.ep)
   const userAsked = reason === 'retry' || reason === 'settings'
   if (!userAsked && Date.now() < restUntil) return
-  if (view.mine !== g.mine || view.state === 'off' || view.state === 'no_companion') {
+  if (!g.held && (view.mine !== g.mine || view.state === 'off' || view.state === 'no_companion')) {
     setView(gen, { state: 'checking', mine: g.mine, theirs: view.theirs, autoUpdate: true })
   }
   const ctx: Ctx = { gen, ep: g.ep, mine: g.mine, theirs: view.theirs }
@@ -382,6 +459,8 @@ async function runFlow(reason: string, gen: number): Promise<void> {
     setView(gen, { state: 'current', mine: ctx.mine, theirs: ctx.theirs })
     return
   }
+  if (!g.held) heldPickId = null
+  else if (!(await heldPick(ctx, status, g.held))) return
   const boxGaveUp = boxFailure(status, ctx.mine)
   if (boxGaveUp) { failed(ctx, boxGaveUp.why, true); return }
   const mineGaveUp = (await readGaveUp())[ctx.mine]
@@ -390,6 +469,48 @@ async function runFlow(reason: string, gen: number): Promise<void> {
     return
   }
   await update(ctx, status)
+}
+
+/**
+ * The gate holds this Mac's build: keep its package (the list may name it after this Mac moved on),
+ * then pick the newest kept build the list names that is newer than the companion's. True when the
+ * flow goes on to send it (ctx.mine and ctx.pkg name it); false when it said why nothing goes.
+ */
+async function heldPick(ctx: Ctx, status: BoxBuildStatus, held: { why: string; passed: string[] }): Promise<boolean> {
+  const box = { platform: status.platform, arch: status.arch }
+  const own = ctx.mine
+  const hold = (extra?: string) => {
+    setView(ctx.gen, { state: 'off', mine: own, theirs: ctx.theirs, message: extra ? `${held.why} ${extra}` : held.why })
+    return false
+  }
+  const cannot = boxRunsPackage(status)
+  if (cannot) { failed(ctx, cannot, false); return false }
+  let cached = await cachedCompanionPackages(box).catch(() => [] as CachedPackage[])
+  if (!cached.some((c) => c.id === own)) {
+    try {
+      await buildCompanionPackage(box, { keep: keptWhileHeld(cached, held.passed, own, ctx.theirs) })
+      cached = await cachedCompanionPackages(box)
+    } catch (err) {
+      log.session.info('companion build: could not keep this build\'s package while it is held', { id: own, why: err instanceof Error ? err.message : String(err) })
+    }
+    if (!live(ctx)) return false
+  }
+  const pick = newestPassedPackage(cached, held.passed, ctx.theirs)
+  if (!pick) {
+    heldPickId = null
+    return hold(ctx.theirs && passedAt(held.passed, commitOf(ctx.theirs)) >= 0 ? `The companion runs ${ctx.theirs}, the newest of this Mac's kept builds that file names.` : undefined)
+  }
+  const pkg = await cachedCompanionPackage(pick.id, box)
+  if (!live(ctx)) return false
+  if (!pkg) {
+    log.session.info('companion build: the kept package of a build the gate list names could not be read', { id: pick.id })
+    return hold()
+  }
+  heldPickId = pick.id
+  log.session.info('companion build: this Mac\'s build is held; an earlier one the gate list names goes', { mine: own, sends: pick.id, theirs: ctx.theirs })
+  ctx.mine = pick.id
+  ctx.pkg = pkg
+  return true
 }
 
 async function update(ctx: Ctx, status: BoxBuildStatus): Promise<void> {
@@ -413,7 +534,7 @@ async function update(ctx: Ctx, status: BoxBuildStatus): Promise<void> {
   let pkg: CompanionPackage
   try {
     // Getting the file may take a build in a clone (about a minute): the row says so meanwhile.
-    pkg = await buildCompanionPackage({ platform: status.platform, arch: status.arch }, {
+    pkg = ctx.pkg ?? await buildCompanionPackage({ platform: status.platform, arch: status.arch }, {
       say: (message) => { if (live(ctx)) setView(ctx.gen, { state: 'updating', mine, theirs: ctx.theirs, step: 'uploading', progress: 0, message }) },
     })
   } catch (err) {
@@ -597,9 +718,12 @@ export function tickCompanionBuild(reason: string): Promise<void> {
 /** Retry: forget that this Mac gave up on its own build, then look again now. */
 export async function retryCompanionBuild(): Promise<void> {
   const mine = await learnMyId()
-  if (mine) {
-    if ((await readGaveUp())[mine]) await writeGaveUp((map) => { delete map[mine] })
-    retryBaseline = { id: mine, at: undefined }
+  // While the gate holds this Mac's build, the build being sent is an earlier one (heldPick).
+  const sends = heldPickId ?? mine
+  if (sends) {
+    const gaveUp = await readGaveUp()
+    if (gaveUp[sends] || (mine && gaveUp[mine])) await writeGaveUp((map) => { delete map[sends]; if (mine) delete map[mine] })
+    retryBaseline = { id: sends, at: undefined }
   }
   restUntil = 0
   log.session.info('companion build: retry', { id: mine })
@@ -639,7 +763,8 @@ export async function refreshCompanionBuildView(timeoutMs = 3_000): Promise<Comp
       }
     } else {
       showLastSeenFor(g.ep)
-      if (!inFlight && (view.state === 'off' || view.state === 'no_companion' || view.mine !== g.mine)) {
+      // A held gate (the list does not name this build) opens nothing: the probe's ticks look at it.
+      if (!inFlight && !g.held && (view.state === 'off' || view.state === 'no_companion' || view.mine !== g.mine)) {
         setView(generation, { state: 'checking', mine: g.mine, autoUpdate: true })
         void tickCompanionBuild('settings')
       }
@@ -669,6 +794,7 @@ export async function _resetCompanionBuildForTesting(): Promise<void> {
   myId = undefined
   myIdWhy = null
   retryBaseline = null
+  heldPickId = null
   gaveUpRecord.forget()
   shaCache = null
   shaMismatches = null

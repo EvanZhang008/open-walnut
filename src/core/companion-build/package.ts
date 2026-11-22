@@ -44,8 +44,7 @@ export interface CompanionPackage {
   fileSha256: string
 }
 
-/** Keep the newest few packages. */
-/** The package in use and the one before it: about 60 MB each. */
+/** The package in use and the one before it: about 85 MB each. */
 const KEEP_PACKAGES = 2
 const PACKAGE_FILE = /-companion-[a-z0-9]+-[a-z0-9]+\.tgz$/
 
@@ -111,25 +110,90 @@ function tar(args: string[], cwd: string): Promise<void> {
   })
 }
 
-async function pruneCache(dir: string): Promise<void> {
+async function pruneCache(dir: string, keep: readonly string[] = []): Promise<void> {
   const names = (await fs.promises.readdir(dir)).filter((n) => PACKAGE_FILE.test(n))
   const aged = await Promise.all(names.map(async (n) => {
     try { return { n, t: (await fs.promises.stat(path.join(dir, n))).mtimeMs } } catch { return null }
   }))
   const present = aged.filter((a): a is { n: string; t: number } => a !== null).sort((a, b) => b.t - a.t)
+  const kept = new Set(keep)
   for (const { n } of present.slice(KEEP_PACKAGES)) {
+    if (kept.has(n.replace(PACKAGE_FILE, ''))) continue
     await fs.promises.rm(path.join(dir, n), { force: true })
     await fs.promises.rm(path.join(dir, `${n}.json`), { force: true })
   }
 }
 
 /**
+ * The commit a build id names (`<version>-<commit>`, wire.ts buildIdOf); null for a build of a
+ * tree with uncommitted changes (`-d<hash>` after the commit), which no later stage passes.
+ */
+export function commitOfBuildId(id: string): string | null {
+  if (/-[0-9a-f]{7,40}-d[0-9a-f]{6}$/.test(id)) return null
+  return /-([0-9a-f]{7,40})$/.exec(id)?.[1] ?? null
+}
+
+/** A package this Mac built and kept, for a box of one system: its build id and commit. */
+export interface CachedPackage { id: string; commit: string | null }
+
+/**
+ * The packages kept for a box of `platform`-`arch`, newest first. A later pipeline stage may pass
+ * an older build than the one this Mac runs now (mac.ts: the update gate), so builds this Mac ran
+ * stay here a while (buildCompanionPackage's `keep`).
+ */
+export async function cachedCompanionPackages(box: { platform: string; arch: string }): Promise<CachedPackage[]> {
+  const dir = cacheDir()
+  const tail = `-companion-${box.platform}-${box.arch}.tgz`
+  let names: string[]
+  try { names = (await fs.promises.readdir(dir)).filter((n) => n.endsWith(tail)) } catch { return [] }
+  const found = await Promise.all(names.map(async (n) => {
+    try {
+      // Kept whole: its facts are written last (buildCompanionPackage). Ordered as pruneCache orders.
+      await fs.promises.access(path.join(dir, `${n}.json`))
+      const t = (await fs.promises.stat(path.join(dir, n))).mtimeMs
+      const id = n.slice(0, -tail.length)
+      return { id, commit: commitOfBuildId(id), t }
+    } catch { return null }
+  }))
+  return found.filter((f): f is CachedPackage & { t: number } => f !== null).sort((a, b) => b.t - a.t).map(({ id, commit }) => ({ id, commit }))
+}
+
+/** A kept package (cachedCompanionPackages), read whole; null when it is gone or was never kept whole. */
+export async function cachedCompanionPackage(id: string, box: { platform: string; arch: string }): Promise<CompanionPackage | null> {
+  const cached = path.join(cacheDir(), `${id}-companion-${box.platform}-${box.arch}.tgz`)
+  try {
+    const meta = JSON.parse(await fs.promises.readFile(`${cached}.json`, 'utf8')) as { fileSha256?: string; version?: string; commit?: string | null }
+    if (typeof meta.fileSha256 !== 'string') return null
+    const version = meta.version ?? id.replace(/-[^-]+$/, '')
+    const commit = meta.commit !== undefined ? meta.commit : commitOfBuildId(id)
+    return { ...packageFacts(id, version, commit, meta.fileSha256), tgz: await fs.promises.readFile(cached) }
+  } catch {
+    return null
+  }
+}
+
+function packageFacts(id: string, version: string, commit: string | null, fileSha256: string): Omit<CompanionPackage, 'tgz'> {
+  return {
+    id,
+    version,
+    commit,
+    dependencies: {},
+    optionalDependencies: {},
+    companionDepsHash: EMPTY_DEPS_HASH,
+    appPackageJson: JSON.stringify({ name: 'open-walnut', version, private: true, type: 'module' }, null, 2),
+    fileSha256,
+  }
+}
+
+/**
  * This Mac's build as the companion package for a box of `platform`-`arch`.
  * `say` hears how getting the file goes (a build in a clone takes about a minute).
+ * `keep`: build ids whose packages stay besides the newest two (mac.ts keeps the builds a later
+ * pipeline stage may still pass).
  */
 export async function buildCompanionPackage(
   box: { platform: string; arch: string },
-  opts: { source?: HostFileSource; say?: (message: string) => void } = {},
+  opts: { source?: HostFileSource; say?: (message: string) => void; keep?: readonly string[] } = {},
 ): Promise<CompanionPackage> {
   const { platform, arch } = box
   const target = companionTarget(platform, arch)
@@ -139,19 +203,14 @@ export async function buildCompanionPackage(
   const name = `${file.id}-companion-${platform}-${arch}.tgz`
   const cached = path.join(dir, name)
   const metaFile = `${cached}.json`
-  const facts = {
-    id: file.id,
-    version: file.version,
-    commit: file.commit,
-    dependencies: {},
-    optionalDependencies: {},
-    companionDepsHash: EMPTY_DEPS_HASH,
-    appPackageJson: JSON.stringify({ name: 'open-walnut', version: file.version, private: true, type: 'module' }, null, 2),
-    fileSha256: file.sha256,
-  }
+  const facts = packageFacts(file.id, file.version, file.commit, file.sha256)
   try {
     const meta = JSON.parse(await fs.promises.readFile(metaFile, 'utf8')) as { fileSha256?: string }
-    if (meta.fileSha256 === file.sha256) return { ...facts, tgz: await fs.promises.readFile(cached) }
+    if (meta.fileSha256 === file.sha256) {
+      const tgz = await fs.promises.readFile(cached)
+      if (opts.keep) await pruneCache(dir, opts.keep)
+      return { ...facts, tgz }
+    }
   } catch { /* pack it */ }
 
   await fs.promises.mkdir(dir, { recursive: true })
@@ -169,9 +228,9 @@ export async function buildCompanionPackage(
     const tgz = await fs.promises.readFile(out)
     await fs.promises.writeFile(`${cached}.tmp`, tgz)
     await fs.promises.rename(`${cached}.tmp`, cached)
-    await fs.promises.writeFile(`${metaFile}.tmp`, JSON.stringify({ fileSha256: file.sha256 }))
+    await fs.promises.writeFile(`${metaFile}.tmp`, JSON.stringify({ fileSha256: file.sha256, version: file.version, commit: file.commit }))
     await fs.promises.rename(`${metaFile}.tmp`, metaFile)
-    await pruneCache(dir)
+    await pruneCache(dir, opts.keep)
     return { ...facts, tgz }
   } finally {
     await fs.promises.rm(work, { recursive: true, force: true })

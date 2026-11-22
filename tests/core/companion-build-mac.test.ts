@@ -23,6 +23,8 @@ const h = vi.hoisted(() => ({
   pkgThrows: null as string | null,
   builds: 0,
   tgz: Buffer.alloc(0),
+  /** The packages "kept" (package.ts cache), newest first. */
+  cache: [] as Array<{ id: string; commit: string | null; tgz: Buffer }>,
   recovered: [] as string[],
 }))
 
@@ -31,21 +33,35 @@ vi.mock('../../src/core/cloud-ingest.js', () => ({
   cloudSessionEndpoint: async () => h.endpoint,
   recoverCloudSessionCredential: async (token: string) => { h.recovered.push(token) },
 }))
-vi.mock('../../src/core/companion-build/package.js', async (importOriginal) => ({
-  boxRunsPackage: (await importOriginal<typeof import('../../src/core/companion-build/package.js')>()).boxRunsPackage,
-  companionBuildId: async () => {
-    if (!h.mine) throw new Error(h.mineWhy)
-    return h.mine
-  },
-  buildCompanionPackage: async () => {
-    h.builds++
-    if (h.pkgThrows) throw new Error(h.pkgThrows)
-    return {
-      id: h.mine, version: '0.6.14', commit: '5408d5875', dependencies: {}, optionalDependencies: {},
-      companionDepsHash: 'bbbbbbbbbbbbbbbb', appPackageJson: '{"name":"open-walnut"}', tgz: h.tgz, fileSha256: 'c'.repeat(64),
-    }
-  },
-}))
+vi.mock('../../src/core/companion-build/package.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/core/companion-build/package.js')>()
+  return {
+    boxRunsPackage: actual.boxRunsPackage,
+    commitOfBuildId: actual.commitOfBuildId,
+    companionBuildId: async () => {
+      if (!h.mine) throw new Error(h.mineWhy)
+      return h.mine
+    },
+    buildCompanionPackage: async () => {
+      h.builds++
+      if (h.pkgThrows) throw new Error(h.pkgThrows)
+      const commit = /-([0-9a-f]{7,40})$/.exec(h.mine)?.[1] ?? null
+      if (!h.cache.some((c) => c.id === h.mine)) h.cache.unshift({ id: h.mine, commit, tgz: h.tgz })
+      return {
+        id: h.mine, version: h.mine.replace(/-[^-]+$/, ''), commit, dependencies: {}, optionalDependencies: {},
+        companionDepsHash: 'bbbbbbbbbbbbbbbb', appPackageJson: '{"name":"open-walnut"}', tgz: h.tgz, fileSha256: 'c'.repeat(64),
+      }
+    },
+    cachedCompanionPackages: async () => h.cache.map(({ id, commit }) => ({ id, commit })),
+    cachedCompanionPackage: async (id: string) => {
+      const c = h.cache.find((x) => x.id === id)
+      return c ? {
+        id, version: id.replace(/-[^-]+$/, ''), commit: c.commit, dependencies: {}, optionalDependencies: {},
+        companionDepsHash: 'bbbbbbbbbbbbbbbb', appPackageJson: '{"name":"open-walnut"}', tgz: c.tgz, fileSha256: 'c'.repeat(64),
+      } : null
+    },
+  }
+})
 vi.mock('../../src/core/config-manager.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getConfig: async () => ({ cloud_bridge: { ...(h.autoUpdate === undefined ? {} : { auto_update: h.autoUpdate }), ...(h.gateFile ? { update_gate_file: h.gateFile } : {}) } }),
@@ -238,6 +254,7 @@ beforeEach(async () => {
   h.pkgThrows = null
   h.builds = 0
   h.tgz = crypto.randomBytes(10_000)
+  h.cache = []
   h.recovered = []
   await _resetCompanionBuildForTesting()
   fs.rmSync(gaveUpFile(), { force: true })
@@ -256,18 +273,89 @@ describe('tickCompanionBuild', () => {
     expect(companionBuildView()).toMatchObject({ state: 'off', mine: h.mine })
     expect(companionBuildView().message).toMatch(/once .*deep-green-builds names its commit; that file is not there yet/)
     expect(box.puts).toEqual([])
-    expect(h.builds).toBe(0)
+    // Held, its package is kept (the list may name it after this Mac moved on); nothing is sent.
+    expect(h.cache.map((c) => c.id)).toEqual([h.mine])
     // Another commit passed, not this one: still held.
     fs.mkdirSync(path.dirname(file), { recursive: true })
     fs.writeFileSync(file, 'aaaaaaa1111111111111111111111111111111\n# a comment line\n')
     await tickCompanionBuild('probe')
     expect(companionBuildView().state).toBe('off')
-    expect(h.builds).toBe(0)
+    expect(box.puts).toEqual([])
     // The full sha of this build's commit is written: the update goes.
     fs.appendFileSync(file, '5408d5875' + 'f'.repeat(31) + '\n')
     await tickCompanionBuild('probe')
     expect(companionBuildView()).toMatchObject({ state: 'current', mine: h.mine, theirs: h.mine })
-    expect(h.builds).toBe(1)
+  })
+
+  it('a build the gate list names after this Mac moved on to the next one still goes, and never an older one', async () => {
+    const file = path.join(WALNUT_HOME, 'deep-green-builds')
+    h.gateFile = file
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, '')
+    // This Mac runs build A; the gate holds it, its package is kept.
+    const first = h.tgz
+    await tickCompanionBuild('probe')
+    expect(h.cache.map((c) => c.id)).toEqual(['0.6.14-5408d5875'])
+    // A deploy: this Mac runs build B now (a new server learns its id again), still held.
+    h.mine = '0.6.14-6aaaaaa1'; h.tgz = crypto.randomBytes(9_000)
+    await _resetCompanionBuildForTesting()
+    await tickCompanionBuild('probe')
+    expect(h.cache.map((c) => c.id)).toEqual(['0.6.14-6aaaaaa1', '0.6.14-5408d5875'])
+    expect(box.puts).toEqual([])
+    // The deep test names A, after this Mac moved on: A goes to the companion, not B.
+    fs.appendFileSync(file, '5408d5875' + 'e'.repeat(31) + '\n')
+    await tickCompanionBuild('probe')
+    expect(box.running.id).toBe('0.6.14-5408d5875')
+    expect(Buffer.concat(box.upload?.data ?? [])).toEqual(first)
+    expect(companionBuildView()).toMatchObject({ state: 'current', theirs: '0.6.14-5408d5875' })
+    // The next tick: B is still held, and the companion runs the newest build the list names.
+    await tickCompanionBuild('probe')
+    expect(companionBuildView()).toMatchObject({ state: 'off', mine: '0.6.14-6aaaaaa1', theirs: '0.6.14-5408d5875' })
+    expect(companionBuildView().message).toMatch(/The companion runs 0\.6\.14-5408d5875, the newest of this Mac's kept builds that file names/)
+    // A companion on a newer version than any kept build the list names is never moved back.
+    box.running = { id: '0.6.15-7777777', version: '0.6.15', commit: '7777777', base: false, trial: false }
+    box.current = '0.6.15-7777777'
+    const puts = box.puts.length
+    await tickCompanionBuild('probe')
+    expect(box.puts.length).toBe(puts)
+    expect(box.running.id).toBe('0.6.15-7777777')
+  })
+
+  it('while held, the view a settings page polls shows why and asks the box nothing', async () => {
+    const file = path.join(WALNUT_HOME, 'deep-green-builds')
+    h.gateFile = file
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, 'aaaaaaa1111111111111111111111111111111\n')
+    await tickCompanionBuild('probe')
+    const gets = box.gets
+    for (let i = 0; i < 3; i++) {
+      const v = await refreshCompanionBuildView()
+      expect(v).toMatchObject({ state: 'off', mine: h.mine })
+      expect(v.message).toMatch(/^Held: /)
+    }
+    await _companionBuildChangesForTesting()
+    expect(box.gets).toBe(gets)
+  })
+
+  it('a Retry while held is for the earlier build being sent: its failure no longer stops it', async () => {
+    const file = path.join(WALNUT_HOME, 'deep-green-builds')
+    h.gateFile = file
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, '')
+    await tickCompanionBuild('probe')                       // A is kept
+    h.mine = '0.6.14-6aaaaaa1'
+    await _resetCompanionBuildForTesting()
+    fs.appendFileSync(file, '5408d5875' + 'e'.repeat(31) + '\n')   // A is named after the Mac moved to B
+    box.installFails = 'the disk is read-only'
+    await tickCompanionBuild('probe')
+    expect(companionBuildView()).toMatchObject({ state: 'failed', mine: '0.6.14-5408d5875' })
+    await tickCompanionBuild('probe')
+    expect(companionBuildView().state).toBe('failed')      // remembered: not tried again by itself
+    box.installFails = null
+    await retryCompanionBuild()
+    await _companionBuildChangesForTesting()
+    for (let i = 0; i < 50 && box.running.id !== '0.6.14-5408d5875'; i++) await new Promise((r) => setTimeout(r, 20))
+    expect(box.running.id).toBe('0.6.14-5408d5875')
   })
 
   it('does nothing when the companion runs this build', async () => {
