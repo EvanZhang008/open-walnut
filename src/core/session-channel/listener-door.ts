@@ -26,6 +26,7 @@ import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer, type WebSocket } from '#ws'
 import { selectWsProtocol } from '../../lib/ws-bearer-protocol.js'
+import { closeGoingAway } from '../../lib/ws-going-away.js'
 import { log } from '../../logging/index.js'
 import { isListenerFrame, LISTEN_CLOSE, type ListenerFrame } from './listener-wire.js'
 import { attachHostListener, forgetHostListener } from './companion-listener.js'
@@ -79,6 +80,18 @@ function server(): WebSocketServer {
     }, () => {})
   }
   return wss
+}
+
+/** The server stops: every listener socket closes going away (its host dials again), and the door's server goes. */
+export function closeHostListenerDoor(): number {
+  let n = 0
+  for (const set of live.values()) for (const ws of set) { n++; closeGoingAway(ws) }
+  live.clear()
+  unlisten?.()
+  unlisten = null
+  wss?.close()
+  wss = null
+  return n
 }
 
 /** The `/host-listen` upgrade (src/web/ws/handler.ts): `verify` runs before anything else. */

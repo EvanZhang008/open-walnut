@@ -185,4 +185,17 @@ describe.skipIf(!RUN)('a host dials its leader\'s door, every piece a real proce
     expect(started[0]!.data).toMatchObject({ sessionId: s3, taskId: t.json.task.id, host: HOST_KEY })
     expect(f.seen, `host: ${f.host.join(' ')}\nmac:  ${f.seen.join(' ')}`).toEqual(f.host)
   }, 400_000)
+
+  it('D4: with the host dialed in, the Mac stops promptly on SIGTERM, and the host hears its door go away at once', async () => {
+    await waitFor(async () => (await h.mac(`/side?host=${HOST_KEY}`)).kind === 'host-dialed', 60_000, 'the host-dialed socket as the link')
+    expect((await h.host('/dialer')).linked).toBe(true)
+    const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true } catch { return false } }
+    const at = Date.now()
+    // Before its stop closed the door's sockets, a stopping Mac stayed up until its hosts' sockets closed (minutes).
+    process.kill(h.c.macPid, 'SIGTERM')
+    await waitFor(async () => !alive(h.c.macPid), 20_000, 'the Mac to exit').catch((err) => { throw new Error(say(String(err))) })
+    expect(Date.now() - at).toBeLessThan(15_000)
+    // The door closed going away: the host saw its link end, never waiting out a ping window (15 s, twice).
+    await waitFor(async () => (await h.host('/dialer')).linked === false, 10_000, 'the host to see its door close').catch((err) => { throw new Error(say(String(err))) })
+  }, 120_000)
 })

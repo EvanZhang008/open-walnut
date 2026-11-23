@@ -32,6 +32,7 @@ import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import crypto from 'node:crypto'
 import { WebSocketServer, type WebSocket } from '#ws'
+import { closeGoingAway } from '../../lib/ws-going-away.js'
 import { selectWsProtocol } from '../../lib/ws-bearer-protocol.js'
 import { HostRequestNotSent, type ChannelSocket } from './leader-links.js'
 import { doorKeysOf, hostCredentialName, hostCredentialOf, MACHINE_ID_RE, type DoorKey } from './host-credentials.js'
@@ -367,7 +368,7 @@ export async function startHostDoor(d: HostDoorDeps): Promise<() => void> {
   })
   return () => {
     unlisten()
-    for (const set of [...live.values(), ...pending.values()]) for (const ws of set) closeWs(ws, 1001, 'stopping')
+    for (const set of [...live.values(), ...pending.values()]) for (const ws of set) closeGoingAway(ws)
     live.clear()
     pending.clear()
     linkedSockets.clear()

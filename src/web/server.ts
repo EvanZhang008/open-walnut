@@ -696,6 +696,8 @@ let unsubscribeLocalClaude: (() => void) | null = null
 let unsubscribeAgentWaitResend: (() => void) | null = null
 /** The primary's leader heartbeat, or the companion's takeover loop (core/leader/). */
 let leaderLoopHandle: { stop: () => void } | null = null
+/** The leader side of the session channels (leader-boot.ts startLeaderSessionChannels): its stop, once it started. */
+let leaderChannelsStop: Promise<(() => void) | null> | null = null
 let searchCopyHandle: { stop: () => Promise<void> } | null = null
 /** A host replica's leader door (replica/leader-door.ts), null elsewhere. */
 let hostReplicaDoor: import('../replica/leader-door.js').LeaderDoor | null = null
@@ -2533,9 +2535,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // WALNUT_LEADER_SESSION_CHANNELS=0 runs this leader as one from before the channel (tests of a
     // cluster that mixes versions: tests/e2e/host-judge-mixed-versions-e2e.test.ts).
     if (role() === 'leader' && process.env.WALNUT_LEADER_SESSION_CHANNELS !== '0') {
-      void import('../core/session-channel/leader-boot.js').then(async (m) => {
-        await m.startLeaderSessionChannels()
-      }).catch((err) => log.session.warn('session channels: the leader side did not start', { error: err instanceof Error ? err.message : String(err) }))
+      // Its stop is kept: stopServer closes the door's dialed-in sockets with it, which otherwise
+      // kept a stopping leader alive until its hosts' sockets closed (minutes, 2026-11-23).
+      const starting = import('../core/session-channel/leader-boot.js').then((m) => m.startLeaderSessionChannels())
+      leaderChannelsStop = starting.then((stop) => stop, (err: unknown) => {
+        log.session.warn('session channels: the leader side did not start', { error: err instanceof Error ? err.message : String(err) })
+        return null
+      })
     }
     // ── end of the land 3b leader block ──
     // Messages held for a cold session's next wake go out by their max hold, a restart's included (src/core/sessions/cold-hold.ts).
@@ -7744,6 +7750,14 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   // While every socket still stands: each feature node gets a 1012 close and the connection
   // journal says why this server stops (a deploy, an update, a signal). Bounded under a second.
   await shutdownStep('feature nodes', async () => (await import('./ws/feature-node-runtime.js')).stopFeatureNodes(opts.reason))
+  // The session channels' doors: each host dialed in hears 1001 and dials its next door; the
+  // companion's listener sockets the same. A socket left open kept this process alive after the HTTP close.
+  const channels = leaderChannelsStop
+  leaderChannelsStop = null
+  await shutdownStep('session channel doors', async () => {
+    ;(await channels)?.()
+    ;(await import('../core/session-channel/listener-door.js')).closeHostListenerDoor()
+  }, { budgetMs: 2_000 })
   // Walnut subagents outlive the server: written down and let go (their sessions run on in the daemon), taken up by the next one.
   await shutdownStep('light subagents', async () => (await import('../core/subagents/registry.js')).detachAllLightSubagents('the server stopped'), { budgetMs: 4_000 })
   ;(await import('../core/net/net-mac.js')).stopNet()
