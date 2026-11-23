@@ -152,7 +152,7 @@
   gap: 4px;
   padding: 10px;
   border: 2px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-lg); /* shape: a mode tile is a card of choices, not a key */
   background: var(--bg-elevated);
   color: var(--fg-muted);
   white-space: normal;
@@ -165,7 +165,7 @@
   background: color-mix(in srgb, var(--accent) 13%, var(--bg-elevated));
   color: var(--fg);
 }
-.wn-tabs-tiles > .wn-tab:focus-visible { border-radius: var(--radius-lg); outline: 2px solid var(--accent); outline-offset: 3px; }
+.wn-tabs-tiles > .wn-tab:focus-visible { border-radius: var(--radius-lg); /* shape: the ring follows the tile card */ outline: 2px solid var(--accent); outline-offset: 3px; }
 .wn-tabs-tiles > .wn-tab:focus-visible:not([aria-selected='true']) { box-shadow: none; }
 
 /* A vertical list (TabList aria-orientation="vertical": the model picker's engine rail). No line
@@ -180,7 +180,7 @@
 
 .wn-tabs[aria-orientation='vertical'] > .wn-tab {
   border-bottom: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-md); /* shape: a vertical tab is a row of a side list, not a key */
   color: var(--fg);
 }
 
@@ -199,7 +199,7 @@
 }
 
 .wn-tabs[aria-orientation='vertical'] > .wn-tab:focus-visible {
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-md); /* shape: the ring follows the side list row */
 }
 
 .wn-tab-count {

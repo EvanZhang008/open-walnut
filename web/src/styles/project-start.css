@@ -11,7 +11,7 @@
   max-width: 220px;
   padding: 0 2px 0 8px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--accent-subtle);
   color: var(--fg);
 }
@@ -55,7 +55,7 @@
 .pcs-choice {
   padding: 3px 10px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: none;
   color: var(--fg);
   font: inherit;
@@ -76,7 +76,7 @@
 .pcs-save {
   padding: 3px 12px;
   border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: var(--accent);
   color: var(--on-accent);
   font: inherit;
