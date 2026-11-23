@@ -118,6 +118,7 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   // Only this machine's own daemon.
   'src/commands/demo-server.ts': { calls: 1, kind: 'local', why: 'the Demo\'s stop confirms with its own daemon on this machine over loopback (demo.quiesce)' },
   'src/core/feature-nodes/feature-service.ts': { calls: 1, kind: 'local', why: 'feature request frames over loopback' },
+  'src/core/session-channel/host-boot.ts': { calls: 3, kind: 'local', why: 'a host\'s service asks the runtime in its own process (the own-sessions link) whether a session\'s CLI is alive, under a 3 s deadline; no answer keeps the row the host\'s' },
   'src/core/hosts/host-fixture.ts': { calls: 2, kind: 'local', why: 'a test fixture daemon on a loopback URL' },
   'src/core/hosts/local-readiness.ts': { calls: 2, kind: 'local', why: 'this machine\'s own preflight and fixes' },
   'src/core/hosts/net-link.ts': { calls: 2, kind: 'local', why: 'walnut-net\'s forward and status, in this machine\'s daemon' },

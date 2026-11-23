@@ -65,6 +65,7 @@ const READERS: Record<string, string> = {
   'src/core/human-inbox/item-status.ts': "ok checked: 'unavailable'",
   'src/core/sessions/session-lifecycle.ts': "ok checked: 'no_snapshot', nothing written",
   'src/core/sessions/replaced-session.ts': 'ok checked: no answer (null)',
+  'src/core/session-channel/host-boot.ts': 'statusReplyAlive: an error reply is null, which keeps the row this host\'s (the stranded-row sweep gives back only a row whose CLI the runtime says is dead)',
   'src/core/sessions/auto-recover-env.ts': 'ok checked: no evidence (null)',
   'src/core/sessions/host-work.ts': 'hostWorkFrom: ok checked, an error reply is null (no answer): the silent-target notice waits, never told on it',
   'src/core/sessions/direct-host-send.ts': 'the phone\'s direct send: an error reply (ok false) sends nothing and is a transport failure the phone retries, never session_dead',

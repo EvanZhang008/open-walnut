@@ -151,6 +151,8 @@ const LINKING_FILES = [
   'src/core/sessions/session-rewind.ts',
   'src/core/sessions/side-thread-fork.ts',
   'src/core/sessions/side-thread-promote.ts',
+  // A started session's link (the native and the ACP start): linkSessionSlot, linkSession, addSessionToHistory.
+  'src/core/sessions/start-link.ts',
   'src/core/sessions/task-start.ts',
   'src/core/subagents/on-host.ts',
   'src/providers/acp-session.ts',
