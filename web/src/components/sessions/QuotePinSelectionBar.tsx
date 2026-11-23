@@ -389,25 +389,28 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
     minHeight: askPick ? 96 : 150,
     boundsRef: containerRef,
   });
-  // A menu as wide as the timeline's text column allows (the box it is placed in):
-  // a narrow column gets a narrower menu, never one that spills over the next pane.
+  // The menu's outer width at most: as wide as the timeline's text column allows (the
+  // box it is placed in), so a narrow column gets a narrower menu, never one that
+  // spills over the next pane.
   const menuRoom = (() => {
     const el = menuOpen ? containerRef.current : null;
     if (!el) return undefined;
     const cs = getComputedStyle(el);
     const padL = parseFloat(cs.paddingLeft) || 0;
     const column = el.clientWidth - padL - (parseFloat(cs.paddingRight) || 0);
-    const room = Math.max(column, Math.min(el.clientWidth, 220));
+    const room = Math.max(column, Math.min(el.clientWidth, 220)) - 12;
     // Still a dropdown off its button where the column is narrow: as wide as the
-    // wider side of the button allows (its words wrap), never held at the column's
-    // edge away from its button, down to the narrowest menu that still reads.
+    // wider side of the button allows inside the column's 4px margin (its words wrap),
+    // never held at the column's edge away from its button, down to the narrowest
+    // menu that still reads. The test and the width drawn are the same number: a menu
+    // that fits at its floor is never pushed to the edge by a margin counted twice.
     const btn = askPick ? askGroupRef.current : commentBtnRef.current;
     if (!btn) return room;
     const box = el.getBoundingClientRect();
     const b = btn.getBoundingClientRect();
     const colLeft = box.left + el.clientLeft + padL;
     const side = Math.max(colLeft + column - b.left, b.right - colLeft) - 4;
-    return side >= (askPick ? MENU_MIN_ASK : MENU_MIN_COMMENT) + 12 ? Math.min(room, side) : room;
+    return side >= (askPick ? MENU_MIN_ASK : MENU_MIN_COMMENT) ? Math.min(room, side) : room;
   })();
 
   const reanchor = useCallback((point: HeldPoint) => {
@@ -817,7 +820,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
       className="quote-pin-menu wn-overlay"
       style={{
         ...menuPlacementStyle(menuPlacement),
-        ...(menuRoom ? { '--quote-menu-room': `${menuRoom - 12}px` } : {}),
+        ...(menuRoom ? { '--quote-menu-room': `${menuRoom}px` } : {}),
       } as React.CSSProperties}
       data-testid="quote-pin-menu"
       {...stopPress}

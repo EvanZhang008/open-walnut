@@ -205,6 +205,10 @@ export function useLiveDirs(
       return { key: requestKey, byHost: next };
     });
 
+    // A listing the typed path left behind is cancelled, not only dropped: the page sends one
+    // read of a URL at a time (api/same-read-turn.ts), so typing back to a path would wait
+    // behind its own abandoned read until that timed out.
+    const abandon = new AbortController();
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
       if (epoch !== epochRef.current) return;
@@ -225,7 +229,7 @@ export function useLiveDirs(
         const track = connectingRef.current.get(key);
         // Follow-up polls ask the server for a short wait; see PENDING_POLL_WAIT_MS.
         const waitMs = track ? PENDING_POLL_WAIT_MS : undefined;
-        listDirsCached(activePath, target, { waitMs })
+        listDirsCached(activePath, target, { waitMs, signal: abandon.signal })
           .then(listing => {
             if (epoch !== epochRef.current) return; // stale response — drop
             if (listing.hostError) {
@@ -270,7 +274,7 @@ export function useLiveDirs(
             });
           })
           .catch(err => {
-            if (epoch !== epochRef.current) return;
+            if (epoch !== epochRef.current || abandon.signal.aborted) return;
             connectingRef.current.delete(key);
             update(key, {
               status: 'error', parent: '', exists: true, dirs: [],
@@ -286,6 +290,7 @@ export function useLiveDirs(
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
       clearPollTimers();
+      abandon.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePath, hostFilter, hostsKey, offKey]);

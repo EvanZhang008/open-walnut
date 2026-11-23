@@ -53,7 +53,11 @@
 .dm-seg { flex: 0 0 auto; margin-left: auto; }
 /* The Collapse all slot. */
 .dm-context { --dm-row-h: 32px; min-height: var(--dm-row-h); }
-.dm-row-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tp-muted); font-size: var(--font-size-sm); }
+/* The words that stand in for Sort's and Group's segments (Recent, a search) take the segments'
+   box, so the row is as tall as a segmented row in every view and the rows under it keep their
+   place (C29b). 28px is the shared SegmentedControl's box: a 24px item in a 2px track
+   (choice-controls.css); the menu family's row padding is added around both alike. */
+.dm-row-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tp-muted); font-size: var(--font-size-sm); line-height: 28px; }
 
 /* A switch row (SwitchRow): the row is the shared ToggleSwitch's label. */
 .dm-switch-line { border-radius: 6px; cursor: pointer; }

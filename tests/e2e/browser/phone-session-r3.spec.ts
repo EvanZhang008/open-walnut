@@ -144,13 +144,16 @@ test('N2-06: keyboard up, a Waiting task keeps its header chip, its words are th
   // An hourglass only: the words are its label and the card's head.
   await expect(line).toHaveAttribute('aria-label', /^Wait until /)
   await expect(panel.locator('.task-waiting-line')).toHaveCount(0)
-  // It never covers the title, which stays centred on the bar.
+  // It never covers the title, whose words are centred in the room between the Back key and the
+  // chip (a419ea242d: the title takes the room between the buttons, no longer centred on the bar).
   const chipBox = (await line.boundingBox())!
   const title = page.locator('.phone-topbar .phone-topbar-title')
   const titleBox = (await title.boundingBox())!
   expect(chipBox.x).toBeGreaterThanOrEqual(titleBox.x + titleBox.width - 0.5)
-  const vw = page.viewportSize()!.width
-  expect(Math.abs(titleBox.x + titleBox.width / 2 - vw / 2)).toBeLessThan(2)
+  const backBox = (await page.locator('.phone-topbar .phone-topbar-back').boundingBox())!
+  expect(titleBox.x).toBeGreaterThanOrEqual(backBox.x + backBox.width - 0.5)
+  const wordsBox = (await title.locator('.phone-topbar-title-text').boundingBox())!
+  expect(Math.abs(wordsBox.x + wordsBox.width / 2 - (titleBox.x + titleBox.width / 2))).toBeLessThan(2)
   // A tap shows the details (a phone has no hover).
   await line.tap()
   await expect(page.getByTestId('session-waiting-card')).toContainText(/^Wait until /)

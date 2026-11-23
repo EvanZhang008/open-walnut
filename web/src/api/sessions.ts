@@ -1116,10 +1116,13 @@ export interface ListDirsOpts {
   signal?: AbortSignal;
   /** Server-side wait for a still-connecting host before it answers `pending` (default 3s). */
   waitMs?: number;
+  /** How many levels below the prefix to list (the server's default when unset). */
+  depth?: number;
 }
 
 export async function listDirs(prefix: string, host?: string | null, opts?: ListDirsOpts): Promise<DirListing> {
   const params = new URLSearchParams({ prefix });
+  if (opts?.depth !== undefined) params.set('depth', String(opts.depth));
   if (host) {
     params.set('host', host);
     // A first connect to a fresh host installs the daemon (can take a minute):

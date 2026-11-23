@@ -26,7 +26,7 @@ import {
   Suspense,
 } from 'react';
 import { fetchDirList, type DirEntry } from '@/api/files';
-import { apiGet } from '@/api/client';
+import { listDirs } from '@/api/sessions';
 import { getHostStatus, subscribeHostStatus } from '@/hooks/useHostStatus';
 import { formatSize } from '@/utils/format';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
@@ -205,9 +205,9 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
       let incomplete = false;
       const siblingDir = parentPath(searchDir);
       const roots = [
-        { dir: searchDir, depth: '3' },
+        { dir: searchDir, depth: 3 },
         ...(siblingDir !== '/' && siblingDir !== (searchDir.replace(/\/+$/, '') || '/')
-          ? [{ dir: siblingDir.endsWith('/') ? siblingDir : `${siblingDir}/`, depth: '1' }]
+          ? [{ dir: siblingDir.endsWith('/') ? siblingDir : `${siblingDir}/`, depth: 1 }]
           : []),
       ];
       let pendingRoots = roots;
@@ -218,20 +218,20 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
           && (root.dir === searchDir || !path.slice(root.dir.length).includes('/'))),
       ]));
       const found = new Map<string, string[]>();
+      // A search the query or the popup left behind is cancelled, not only ignored: the page
+      // sends one read of a URL at a time (api/same-read-turn.ts), so a read nobody waits for
+      // would hold the same search, typed again, in its queue until it timed out.
+      const abandon = new AbortController();
       const loadNearby = () => {
         poll = undefined;
         if (inFlight) return;
         inFlight = true;
         Promise.all(pendingRoots.map(async (root) => {
-          const params = new URLSearchParams({ prefix: root.dir, depth: root.depth });
-          if (host) { params.set('host', host); params.set('pending', '1'); params.set('wait', '500'); }
           try {
-            const listing = await apiGet<{ dirs: string[]; exists: boolean; pending?: object; hostError?: object; incomplete?: object }>(
-              `/api/sessions/list-dirs?${params}`,
-            );
+            const listing = await listDirs(root.dir, host, { depth: root.depth, waitMs: 500, signal: abandon.signal });
             return { root, listing };
           } catch (err) {
-            log.error('file-mention', 'failed to search folders', { cwd, host, dir: root.dir, error: String(err) });
+            if (!abandon.signal.aborted) log.error('file-mention', 'failed to search folders', { cwd, host, dir: root.dir, error: String(err) });
             return { root, listing: null };
           }
         })).then((results) => {
@@ -264,6 +264,7 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
       }) : undefined;
       return () => {
         cancelled = true;
+        abandon.abort();
         clearTimeout(timer);
         clearTimeout(poll);
         unsubscribe?.();
