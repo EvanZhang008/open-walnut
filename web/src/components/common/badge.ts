@@ -18,6 +18,16 @@ export function priorityTone(priority: string): BadgeTone {
   return 'neutral';
 }
 
+/** The words' colour of a badge tone (styles/badge.css `--badge-fg`), for a glyph that stands for one
+ *  outside a badge (a draft's priority chip), so the two read the same wherever they sit. */
+export function badgeToneColor(tone: BadgeTone): string {
+  if (tone === 'error') return 'var(--error)';
+  if (tone === 'warning') return 'var(--priority-important-text)';
+  if (tone === 'accent') return 'var(--accent-text)';
+  if (tone === 'alert') return 'var(--on-accent)';
+  return 'var(--fg-secondary)';
+}
+
 /** A letter's kind (human inbox) as a badge: a decision amber, a review blue, the rest grey. */
 export function letterTypeBadge(type: string): string {
   return badge(type === 'action_required' ? 'warning' : type === 'review' ? 'accent' : 'neutral');

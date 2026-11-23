@@ -175,7 +175,7 @@ test('each chip anchors the one popover on itself, a second trigger re-anchors i
   expect(squash(await litTier.textContent() ?? '')).toBe(squash(await chipLabel(draftDecisionChip(panel, 'pinTier'))))
   await expect(menu.locator('.task-kebab-date-label').filter({ hasText: /^Due/ })).toHaveText(`Due: ${dayWords(3)}`)
   expect(await chipLabel(draftDecisionChip(panel, 'dueDate'))).toBe(`Due ${dayWords(3)}`)
-  // The priority glyph wears the menu badge's colour rule (one --priority-<value> token). The
+  // The priority glyph wears the menu badge's colour rule (badge.ts badgeToneColor). The
   // chip sits in a chat composer, where the chat palette (styles/chat-palette.css) greys that
   // token, and the menu sits outside the chat, so the badge's class is read where the glyph is.
   const badgeClass = await litPriority.getAttribute('class') ?? ''

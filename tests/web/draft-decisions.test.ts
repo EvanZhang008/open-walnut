@@ -123,11 +123,13 @@ describe('custom tier chip', () => {
 });
 
 describe('priority chip', () => {
-  const rows = [['immediate', 'Immediate', '!!'], ['important', 'Important', '!'], ['backlog', 'Backlog', '~']] as const;
-  it.each(rows)('%s reads "%s" with the %s icon in its badge color', (value, label, icon) => {
+  // Its colour is the menu badge's words colour for that priority (badge.ts priorityTone), so the
+  // chip and the menu's lit option read the same inside a chat too.
+  const rows = [['immediate', 'Immediate', '!!', 'var(--error)'], ['important', 'Important', '!', 'var(--priority-important-text)'], ['backlog', 'Backlog', '~', 'var(--fg-secondary)']] as const;
+  it.each(rows)('%s reads "%s" with the %s icon in its badge color', (value, label, icon, color) => {
     const c = chip(draft({ priority: value }, { ai: ['priority'] }), 'priority')!;
     expect(c.label).toBe(label);
-    expect(c.glyph).toEqual({ kind: 'priority', value, icon, color: `var(--priority-${value})` });
+    expect(c.glyph).toEqual({ kind: 'priority', value, icon, color });
     expect(c.title).toBe(`Priority: ${label}. Set by Walnut from your text. Click to change.`);
     expect(dec.draftPriorityText(value)).toBe(`${icon} ${label}`);
   });

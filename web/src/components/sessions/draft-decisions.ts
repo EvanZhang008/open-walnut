@@ -22,6 +22,7 @@ import { formatDateTimeDisplay, parseDateLocal } from '@/components/common/DateP
 import { DEFAULT_META, PRIORITY_OPTIONS, TIER_OPTIONS, tierColor } from './task-meta-constants';
 import type { DraftColumn, DraftOwnedField, DraftTaskField } from './draft-column';
 import { isAiOwned } from './draft-ownership';
+import { badgeToneColor, priorityTone } from '@/components/common/badge';
 
 export type DraftDecisionPriority = 'immediate' | 'important' | 'backlog';
 
@@ -198,7 +199,7 @@ function priorityChip(draft: DraftColumn, ctx: DraftDecisionCtx): DraftDecisionC
   if (!draft.fieldOwner?.priority && !isAiOwned(draft, 'priority')) return null;
   const opt = PRIORITY_OPTIONS.find((o) => o.value === value)!;
   return chipOf(draft, 'priority', opt.label,
-    { kind: 'priority', value, icon: opt.icon, color: `var(--priority-${value})` },
+    { kind: 'priority', value, icon: opt.icon, color: badgeToneColor(priorityTone(value)) },
     'Priority', opt.label, undefined, { key: 'Priority:' });
 }
 

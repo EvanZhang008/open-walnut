@@ -219,7 +219,9 @@ test.describe('the model answering', () => {
     await lone.locator('[data-testid="mail-row"]').first().click()
     const line = groupLine(page, single.id)
     await expect(line.getByTestId('mail-group-unread')).toHaveText('0')
-    await expect(line.getByTestId('mail-group-unread')).toHaveClass(/zero/)
+    // A count is the neutral `.badge.badge-count` at any number, never the red alert one.
+    await expect(line.getByTestId('mail-group-unread')).toHaveClass(/\bbadge-count\b/)
+    await expect(line.getByTestId('mail-group-unread')).not.toHaveClass(/\bbadge-alert\b/)
     await expect(lone.locator('[data-testid="mail-row"]')).toHaveCount(1)
     // Nothing to mark at zero: no check button, no footer action, no menu item.
     await line.hover()
