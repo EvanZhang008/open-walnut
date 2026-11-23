@@ -20,6 +20,7 @@ export const leaderSessionPort: SessionPort = {
   tasks: {
     loadTaskManager: () => import('../task-manager.js'),
     loadPhase: () => import('../phase.js'),
+    loadStartLink: () => import('./start-link.js'),
   },
   config: {
     loadConfigManager: () => import('../config-manager.js'),

@@ -13826,33 +13826,7 @@ export class SessionRunner {
     sessionId: string,
     mode: SessionMode | undefined,
   ): Promise<void> {
-    if (!taskId) return
-    const {
-      addSessionToHistory,
-      getTask,
-      linkSession,
-      linkSessionSlot,
-    } = await sessionPort().tasks.loadTaskManager()
-
-    const slot: 'plan' | 'exec' = mode === 'plan' ? 'plan' : 'exec'
-    let task = await getTask(taskId)
-    let changed = false
-    const slotValue = slot === 'plan' ? task.plan_session_id : task.exec_session_id
-    if (slotValue !== sessionId) {
-      task = (await linkSessionSlot(taskId, sessionId, slot)).task
-      changed = true
-    } else if (!task.session_ids?.includes(sessionId)) {
-      task = (await addSessionToHistory(taskId, sessionId)).task
-      changed = true
-    }
-    if (task.session_id !== sessionId) {
-      task = (await linkSession(taskId, sessionId)).task
-      changed = true
-    }
-
-    if (changed) {
-      bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'session-link' })
-    }
+    await (await sessionPort().tasks.loadStartLink()).linkAcpStartedSession(sessionPort(), taskId, sessionId, mode)
   }
 
   /**
@@ -14695,41 +14669,7 @@ export class SessionRunner {
     // Runs after SESSION_STARTED so the UI updates immediately.
     if (taskId) {
       session.sessionReady.then(async (claudeSessionId) => {
-        try {
-          // Archived guard: do NOT write task session slots for archived sessions.
-          // handleStart is also the resume entry point; if the user sends a message to
-          // an archived session (archive is a soft flag), the session spawns and reaches
-          // sessionReady — without this guard we'd re-link the archived sessionId into
-          // task.session_id / plan_session_id / exec_session_id, poisoning the task slots
-          // so every UI entry point opens the archived session instead of the live one.
-          // Safe to query the record here: persistSessionRecord is awaited inside the
-          // handleStreamLine init handler (~line 1720) BEFORE sessionReady is resolved,
-          // so by the time this .then() runs the record is guaranteed to exist.
-          const { getSessionByClaudeId } = await sessionPort().records.loadTracker()
-          const { addSessionToHistory, linkSessionSlot, linkSession } = await sessionPort().tasks.loadTaskManager()
-          const record = await getSessionByClaudeId(claudeSessionId)
-          if (record?.archived) {
-            await addSessionToHistory(taskId, claudeSessionId).catch((err) => {
-              log.session.debug('failed to add archived session to history', {
-                taskId, sessionId: claudeSessionId,
-                error: err instanceof Error ? err.message : String(err),
-              })
-            })
-            log.session.warn('skipping task slot link for archived session', {
-              taskId, sessionId: claudeSessionId, archiveReason: record.archive_reason,
-            })
-            return
-          }
-
-          const slot: 'plan' | 'exec' = mode === 'plan' ? 'plan' : 'exec'
-          await linkSessionSlot(taskId, claudeSessionId, slot)
-          // Use the task from linkSession (has session_id set) so the browser's
-          // React state always receives session_id correctly populated.
-          const { task } = await linkSession(taskId, claudeSessionId)
-          bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'session-link' })
-        } catch (err) {
-          log.session.warn('failed to link session to task', { taskId, error: err instanceof Error ? err.message : String(err) })
-        }
+        await (await sessionPort().tasks.loadStartLink()).linkStartedSession(sessionPort(), taskId, claudeSessionId, mode)
       }).catch((err) => {
         // Session failed to initialize (SSH failure, timeout, etc.)
         // Notify web-ui so the pending session panel can show an error.

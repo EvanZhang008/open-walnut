@@ -58,6 +58,9 @@ export type TaskManagerPort = Pick<TaskManager,
   | 'updateTask'
 >;
 
+/** A started session's link to its task (core/sessions/start-link.ts). */
+export type StartLinkPort = Pick<typeof import('./start-link.js'), 'linkStartedSession' | 'linkAcpStartedSession'>;
+
 /** A task's phase as its session moves it (core/phase.ts). */
 export type PhasePort = Pick<Phase,
   | 'applySessionPhase'
@@ -132,6 +135,11 @@ export interface SessionPort {
   tasks: {
     loadTaskManager(): Promise<TaskManagerPort>;
     loadPhase(): Promise<PhasePort>;
+    /**
+     * A started session's link to its task (start-link.ts). A host that runs its own sessions links
+     * nothing: the leader links the session from its born row.
+     */
+    loadStartLink(): Promise<StartLinkPort>;
   };
   /** The user's config. */
   config: {
@@ -170,7 +178,7 @@ export interface SessionPort {
 /** Every member of SessionPort as `group.member`; the ratchet checks each port against it. */
 export const SESSION_PORT_MEMBERS = [
   'records.tracker', 'records.loadTracker',
-  'tasks.loadTaskManager', 'tasks.loadPhase',
+  'tasks.loadTaskManager', 'tasks.loadPhase', 'tasks.loadStartLink',
   'config.loadConfigManager',
   'launch.loadSessionContext', 'launch.loadLaunchPlace', 'launch.loadTaskDirPlace', 'launch.loadOrgOwnFolder',
   'launch.loadProfiles', 'launch.loadWalnutMcpMount', 'launch.loadHostModelCatalog', 'launch.loadRouterAreas',

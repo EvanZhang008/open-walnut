@@ -282,7 +282,13 @@ export function createHostSessionPort(o: HostSessionPortOptions): SessionPort {
 
   return {
     records: { tracker, loadTracker: async () => tracker },
-    tasks: { loadTaskManager: taskManager, loadPhase: phase },
+    tasks: {
+      loadTaskManager: taskManager,
+      loadPhase: phase,
+      // A started session's link to its task is the leader's, from its born row (leader-tasks.ts):
+      // nothing here asks the task copy, which may not have a task made a moment ago (start-link.ts).
+      loadStartLink: async () => ({ linkStartedSession: async () => {}, linkAcpStartedSession: async () => {} }),
+    },
     config: base.config,
     launch: {
       ...base.launch,
