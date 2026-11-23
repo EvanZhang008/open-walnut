@@ -12,6 +12,11 @@
 #   - nothing goes out sooner than WALNUT_DEPLOY_MIN_GAP_SECS (600) after the last
 #     restart (this queue's own record, dev-prod.sh's success stamp, the served
 #     build's time, whichever is latest) or 125 s after a deploy attempt;
+#   - the build starts WALNUT_DEPLOY_PREBUILD_SECS (420) before the gap ends, and the
+#     stop of the old server waits for the gap's end (dq_hold_gap, dev-prod.sh right
+#     before the stop): the gap still holds restarts apart, and no longer adds a build
+#     on top of it (2026-11-23: a commit waited the gap's 10 minutes, then 8 more for
+#     the build that only began then);
 #   - then it deploys the checkout's HEAD of that moment, which carries every
 #     waiting commit on it (a commit HEAD does not carry goes alone, in turn,
 #     unless that would take production back: a commit a rebase replaced);
@@ -30,6 +35,7 @@
 #   requests/<id>  a waiting commit     results/<id>  ok|failed|refused|held <target> <log> <code>
 #   runner.lock/   the runner's pid     current       the deploy running now
 #   next-at        when it may go       last-restart  its last deploy that served
+#   stop-at        when the running deploy may stop production (its build began before the gap's end)
 #   logs/          one log per deploy   runner.log    the runner's own lines
 #   busy, moving   why next-at waits (a busy Mac, a move production runs)
 # Ratchet: tests/scripts/deploy-queue.test.ts. Needs SERVE_ROOT, JS_RUN and DQ_SCRIPT (the runner;
@@ -37,7 +43,16 @@
 
 DQ_GAP="${WALNUT_DEPLOY_MIN_GAP_SECS:-600}"
 [[ "$DQ_GAP" =~ ^[0-9]+$ ]] || DQ_GAP=600
-DQ_ATTEMPT_GAP=125
+# After any deploy attempt (dev-prod.sh's own 120 s cooldown answers sooner). WALNUT_DEPLOY_ATTEMPT_GAP_SECS
+# for tests, whose stub has no cooldown.
+DQ_ATTEMPT_GAP="${WALNUT_DEPLOY_ATTEMPT_GAP_SECS:-125}"
+[[ "$DQ_ATTEMPT_GAP" =~ ^[0-9]+$ ]] || DQ_ATTEMPT_GAP=125
+# How long before the gap's end the build may start (its stop still waits for the end). At most the
+# gap less the attempt gap: a build never starts inside dev-prod.sh's cooldown after the last
+# restart, where it would be skipped and tried again at once.
+DQ_PREBUILD="${WALNUT_DEPLOY_PREBUILD_SECS:-420}"
+[[ "$DQ_PREBUILD" =~ ^[0-9]+$ ]] || DQ_PREBUILD=420
+(( DQ_PREBUILD <= DQ_GAP - DQ_ATTEMPT_GAP )) || DQ_PREBUILD=$(( DQ_GAP > DQ_ATTEMPT_GAP ? DQ_GAP - DQ_ATTEMPT_GAP : 0 ))
 # A busy Mac stretches the gap (2026-11-09: four deploys an hour, each a full build of the web app
 # and five compiled files, took this Mac's load to 200 to 400 with an iOS build and a test run, and
 # messages to sessions waited on the server's queue lock): once the gap is over, a deploy waits
@@ -130,6 +145,25 @@ dq_hold_moves() {
       dq_log "the move ($moving) still runs at the end of its ${DQ_MOVE_HOLD}s hold: production stops, and the move runs again after the restart"
       return 0
     fi
+  done
+}
+
+# Right before production is stopped (dev-prod.sh, after its build and smoke boot): a build the
+# runner started before its gap ended (DQ_PREBUILD) stops the old server only at the gap's end, the
+# time the runner wrote to stop-at. A time already past, or one further off than a whole gap (a
+# stale file), holds nothing. WALNUT_DEPLOY_GAP_POLL_SECS (5) is how often it looks. Portable to
+# bash 3.2.
+dq_hold_gap() {
+  local at now start=$SECONDS poll="${WALNUT_DEPLOY_GAP_POLL_SECS:-5}"
+  [[ "$poll" =~ ^[0-9]+$ ]] && (( poll > 0 )) || poll=5
+  at="$(dq_num "$(dq_dir)/stop-at")"
+  now="$(date +%s)"
+  (( at > now && at - now <= DQ_GAP )) || return 0
+  dq_log "the build is ready: production stops at $(dq_clock "$at"), once the gap since the last restart is over (at most one restart per $(( DQ_GAP / 60 )) min)"
+  # Never longer than a gap by this shell's own clock, whatever the wall clock does meanwhile.
+  while (( now < at && SECONDS - start < DQ_GAP )); do
+    sleep $(( at - now < poll ? at - now : poll ))
+    now="$(date +%s)"
   done
 }
 
@@ -305,7 +339,7 @@ dq_runner() {
     [[ "$built" =~ ^[0-9]+$ ]] && (( built > last )) && last=$built
     at="$(dq_num "$(dq_devprod_tmp)/open-walnut-dev-prod.last-attempt")"
     now="$(date +%s)"
-    wait=$(( last + DQ_GAP - now ))
+    wait=$(( last + DQ_GAP - DQ_PREBUILD - now ))
     (( at + DQ_ATTEMPT_GAP - now > wait )) && wait=$(( at + DQ_ATTEMPT_GAP - now ))
     if [[ "${WALNUT_DEPLOY_NO_GAP:-0}" != "1" ]] && (( wait > 0 )); then
       dq_put "$q/next-at" "$(( now + wait ))"
@@ -366,13 +400,26 @@ dq_runner() {
       target="$sha"; break
     done
     (( refused == 0 )) || [[ -n "$ceiling" && $carried == 1 ]] || continue
+    # A target whose dev-prod.sh does not hold its stop for the gap (a commit from before
+    # dq_hold_gap) builds only once the gap is over, as before.
+    now="$(date +%s)"
+    if [[ "${WALNUT_DEPLOY_NO_GAP:-0}" != "1" ]] && (( last + DQ_GAP > now )) \
+      && ! git -C "$SERVE_ROOT" grep -q -F dq_hold_gap "$target" -- scripts/dev-prod.sh 2>/dev/null; then
+      dq_put "$q/next-at" "$(( last + DQ_GAP ))"
+      wait=$(( last + DQ_GAP - now )); sleep $(( wait < 10 ? wait : 10 ))
+      continue
+    fi
+    rm -f "$q/next-at"
     log="$q/logs/$(date +%Y%m%dT%H%M%S)-${target:0:12}.log"
+    # The build goes now; the stop waits for the gap's end (dq_hold_gap).
+    rm -f "$q/stop-at"
+    [[ "${WALNUT_DEPLOY_NO_GAP:-0}" == "1" ]] || (( last + DQ_GAP <= $(date +%s) )) || dq_put "$q/stop-at" "$(( last + DQ_GAP ))"
     dq_put "$q/current" "$target $(date +%s) $log"
     dq_log "deploying ${target:0:12} for$pending (log $log)"
     before="$served_sha"
     code=0
     WALNUT_DEPLOY_RUNNER=1 bash "$DQ_SCRIPT" "$target" > "$log" 2>&1 < /dev/null || code=$?
-    rm -f "$q/current"
+    rm -f "$q/current" "$q/stop-at"
     if (( code == 0 )) && grep -q '^Deploy skipped: last deploy' "$log"; then
       # dev-prod.sh's own cooldown answered (a deploy outside this queue): nothing went out, ask again.
       dq_log "deploy of ${target:0:12} met dev-prod.sh's cooldown; trying again"
@@ -487,7 +534,7 @@ dq_request() {
       line="Deploy queued: this Mac is busy ($(cat "$q/busy" 2>/dev/null)); the next deploy goes once it eases, at $(dq_clock "$next") at the latest, with the newest commit then, which includes ${sha:0:12}."
     elif [[ -f "$q/next-at" ]]; then
       next="$(dq_num "$q/next-at")"
-      line="Deploy queued: production restarted recently, and restarts at most once per $(( DQ_GAP / 60 )) min; the next deploy goes at $(dq_clock "$next") with the newest commit then, which includes ${sha:0:12}."
+      line="Deploy queued: production restarted recently, and restarts at most once per $(( DQ_GAP / 60 )) min; the next deploy builds from $(dq_clock "$next") with the newest commit then, which includes ${sha:0:12}, and goes live once that gap is over."
     fi
     if [[ -n "$line" && "$line" != "$said" ]]; then echo "$line"; said="$line"; fi
     now="$(date +%s)"

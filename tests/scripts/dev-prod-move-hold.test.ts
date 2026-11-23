@@ -85,6 +85,34 @@ describe('dev-prod.sh holds the stop for a move that started during the build', 
     expect(r.ms).toBeLessThan(5_000)
   })
 
+  it('the gap hold waits until stop-at; a time past or further off than a gap holds nothing', async () => {
+    const q = path.join(root, `q${++n}`)
+    fs.mkdirSync(q, { recursive: true })
+    const now = Math.floor(Date.now() / 1000)
+    const env = { WALNUT_DEPLOY_QUEUE_DIR: q, WALNUT_DEPLOY_MIN_GAP_SECS: '600', WALNUT_DEPLOY_GAP_POLL_SECS: '1' }
+    fs.writeFileSync(path.join(q, 'stop-at'), String(now + 3))
+    const held = await bash('dq_hold_gap; echo STOPS', env)
+    expect(held.code, held.out).toBe(0)
+    expect(held.ms).toBeGreaterThanOrEqual(1_900)
+    expect(held.out).toMatch(/the build is ready: production stops at .* \(at most one restart per 10 min\)\nSTOPS\n$/)
+    for (const at of [now - 5, now + 3_600]) {
+      fs.writeFileSync(path.join(q, 'stop-at'), String(at))
+      const r = await bash('dq_hold_gap; echo STOPS', env)
+      expect(r.out).toBe('STOPS\n')
+      expect(r.ms).toBeLessThan(5_000)
+    }
+    fs.rmSync(path.join(q, 'stop-at'))
+    expect((await bash('dq_hold_gap; echo STOPS', env)).out).toBe('STOPS\n')
+  }, 60_000)
+
+  it('dev-prod.sh holds for the gap right before the move hold, never forced', () => {
+    const gap = script.indexOf('if [[ "${WALNUT_DEVPROD_FORCE:-0}" != "1" ]]; then dq_hold_gap; fi')
+    expect(gap).toBeGreaterThan(-1)
+    expect(script.match(/dq_hold_gap;/g)).toHaveLength(1)
+    expect(gap).toBeLessThan(script.indexOf('then dq_hold_moves; fi'))
+    expect(gap).toBeGreaterThan(script.indexOf('# ── Pre-kill smoke boot'))
+  })
+
   it('dev-prod.sh waits right before the stop: after the build, smoke boot and plugin check, never forced, never on a dry run', () => {
     const at = (s: string) => { const i = script.indexOf(s); expect(i, s).toBeGreaterThan(-1); return i }
     const hold = at('if [[ "${WALNUT_DEVPROD_FORCE:-0}" != "1" ]]; then dq_hold_moves; fi')

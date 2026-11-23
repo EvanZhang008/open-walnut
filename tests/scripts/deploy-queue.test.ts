@@ -31,6 +31,10 @@ echo "start $sha $(date +%s)" >> "$STUB_DEPLOYS"
 [[ -z "\${WALNUT_DEPLOY_RUNNER:-}" ]] || { echo "WALNUT_DEPLOY_RUNNER reached dev-prod.sh" >&2; exit 9; }
 sleep "\${STUB_SECS:-1}"
 if [[ -f "$STUB_FAIL" ]]; then echo "type-check failed in the stub" >&2; exit 7; fi
+# The stop of the old server, as dev-prod.sh holds it (a build the queue began before its gap ended).
+. "$(dirname "$0")/lib/deploy-queue.sh"
+dq_hold_gap
+echo "stop $sha $(date +%s)" >> "$STUB_DEPLOYS"
 printf '{"build":{"commit":"%s","dirty":false,"builtAt":"%s"}}' "\${sha:0:9}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STUB_CONFIG"
 date +%s > "$TMPDIR/open-walnut-dev-prod.last-success"
 echo "end $sha $(date +%s)" >> "$STUB_DEPLOYS"
@@ -88,7 +92,8 @@ function call(f: Fixture, env: Record<string, string> = {}, args: string[] = [])
     env: {
       ...gitChildEnv(), TMPDIR: f.tmp, WALNUT_DEPLOY_QUEUE_DIR: f.queue, WALNUT_DEPLOY_CONFIG_URL: `file://${f.config}`,
       // The machine's own load never stretches a test's gap (WALNUT_DEPLOY_BUSY_GAP_SECS).
-      WALNUT_DEPLOY_MIN_GAP_SECS: String(GAP), WALNUT_DEPLOY_LOAD_TEST: '0', WALNUT_DEPLOY_MEM_TEST: 'ok', STUB_DEPLOYS: f.deploys, STUB_CONFIG: f.config, STUB_FAIL: f.fail,
+      // The build starts only once the gap is over unless a test says otherwise (WALNUT_DEPLOY_PREBUILD_SECS).
+      WALNUT_DEPLOY_MIN_GAP_SECS: String(GAP), WALNUT_DEPLOY_PREBUILD_SECS: '0', WALNUT_DEPLOY_LOAD_TEST: '0', WALNUT_DEPLOY_GAP_POLL_SECS: '1', WALNUT_DEPLOY_MEM_TEST: 'ok', STUB_DEPLOYS: f.deploys, STUB_CONFIG: f.config, STUB_FAIL: f.fail,
       // The running moves that hold a deploy: the test's own folder, never production's.
       WALNUT_DEPLOY_MOVES_DIR_TEST: path.join(f.root, 'home', 'local', 'running-switches'), ...env,
     },
@@ -156,6 +161,78 @@ describe('the deploy queue', () => {
     expect(rb.stdout).toContain(`Deployed ${second.slice(0, 12)}: production serves it now.`)
     await runnerGone(f)
   }, 60_000)
+
+  const stamp = (f: Fixture) => Number(fs.readFileSync(path.join(f.tmp, 'open-walnut-dev-prod.last-success'), 'utf8'))
+  const logText = (f: Fixture) => fs.readdirSync(path.join(f.queue, 'logs')).map((l) => fs.readFileSync(path.join(f.queue, 'logs', l), 'utf8')).join('\n')
+  const prebuild = (gap: number, pre: number) => ({ WALNUT_DEPLOY_MIN_GAP_SECS: String(gap), WALNUT_DEPLOY_PREBUILD_SECS: String(pre), WALNUT_DEPLOY_ATTEMPT_GAP_SECS: '1', STUB_SECS: '1' })
+
+  it('the build starts before the gap ends, and only its stop waits for the gap (2026-11-23: a build that began at the gap added 8 minutes)', async () => {
+    const f = fixture()
+    stampNow(f) // production just restarted
+    const last = stamp(f)
+    const gap = 20
+    const head = commit(f, 'next')
+    const r = await call(f, prebuild(gap, 15)).done
+    expect(r.code, r.stderr).toBe(0)
+    const start = deploys(f).find((d) => d.kind === 'start')!
+    const stop = deploys(f).find((d) => d.kind === 'stop')!
+    expect(start.sha).toBe(head)
+    // The build began well before the gap's end (15 s ahead, with room for a loaded machine)...
+    expect(start.at).toBeGreaterThanOrEqual(last + gap - 15)
+    expect(start.at).toBeLessThan(last + gap - 5)
+    // ...and the stop still waited for it: restarts stay a gap apart.
+    expect(stop.at).toBeGreaterThanOrEqual(last + gap)
+    expect(logText(f)).toMatch(/the build is ready: production stops at .*, once the gap since the last restart is over/)
+    await runnerGone(f)
+    expect(fs.existsSync(path.join(f.queue, 'stop-at'))).toBe(false)
+  }, 90_000)
+
+  it('two deploys in a row: the second builds during the gap, and its stop is still a gap after the first one\'s', async () => {
+    const f = fixture()
+    const gap = 12
+    commit(f, 'one')
+    expect((await call(f, prebuild(gap, 8)).done).code).toBe(0)
+    const two = commit(f, 'two')
+    expect((await call(f, prebuild(gap, 8)).done).code).toBe(0)
+    const ends = deploys(f).filter((d) => d.kind === 'end')
+    const starts = deploys(f).filter((d) => d.kind === 'start')
+    const stops = deploys(f).filter((d) => d.kind === 'stop')
+    expect(starts.map((d) => d.sha).at(-1)).toBe(two)
+    expect(starts[1].at).toBeLessThan(ends[0].at + gap - 2)
+    expect(stops[1].at).toBeGreaterThanOrEqual(ends[0].at + gap)
+    await runnerGone(f)
+  }, 90_000)
+
+  it('the prebuild never starts inside the attempt gap after a restart, and with no gap left nothing holds the stop', async () => {
+    const f = fixture()
+    stampNow(f)
+    const last = stamp(f)
+    // A prebuild longer than the gap is cut to the gap less the attempt gap (3 s here).
+    const r = await call(f, { ...prebuild(6, 600), WALNUT_DEPLOY_ATTEMPT_GAP_SECS: '3' }).done
+    expect(r.code, r.stderr).toBe(0)
+    expect(deploys(f).find((d) => d.kind === 'start')!.at).toBeGreaterThanOrEqual(last + 3)
+    await runnerGone(f)
+    // No restart for a long time: the build and the stop go at once, with no hold.
+    const g = fixture()
+    expect((await call(g, prebuild(6, 4)).done).code).toBe(0)
+    const [start, stop] = ['start', 'stop'].map((k) => deploys(g).find((d) => d.kind === k)!)
+    expect(stop.at - start.at).toBeLessThanOrEqual(3)
+    expect(logText(g)).not.toContain('the build is ready')
+    await runnerGone(g)
+  }, 90_000)
+
+  it('a target whose dev-prod.sh has no gap hold (a commit from before it) builds only once the gap is over', async () => {
+    const f = fixture()
+    const devprod = path.join(f.repo, 'scripts', 'dev-prod.sh')
+    fs.writeFileSync(devprod, fs.readFileSync(devprod, 'utf8').replace('dq_hold_gap\n', ''))
+    git(f.repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qam', 'old dev-prod')
+    stampNow(f)
+    const last = stamp(f)
+    const r = await call(f, prebuild(8, 6)).done
+    expect(r.code, r.stderr).toBe(0)
+    expect(deploys(f).find((d) => d.kind === 'start')!.at).toBeGreaterThanOrEqual(last + 8)
+    await runnerGone(f)
+  }, 90_000)
 
   it('a busy Mac stretches the gap up to the busy gap, and an easy one does not (2026-11-09: load 200 to 400)', async () => {
     const f = fixture()
@@ -353,10 +430,11 @@ describe('the deploy queue', () => {
     const f = fixture()
     stampNow(f)
     for (const env of [{ WALNUT_DEVPROD_FORCE: '1' }, { WALNUT_DEVPROD_DRY_RUN: '1' }]) {
-      const before = deploys(f).length
+      const startsAndEnds = () => deploys(f).filter((d) => d.kind !== 'stop').length
+      const before = startsAndEnds()
       const r = await call(f, env).done
       expect(r.code, r.stderr).toBe(0)
-      expect(deploys(f).length).toBe(before + 2)
+      expect(startsAndEnds()).toBe(before + 2)
     }
     expect(fs.existsSync(path.join(f.queue, 'requests'))).toBe(false)
   }, 30_000)

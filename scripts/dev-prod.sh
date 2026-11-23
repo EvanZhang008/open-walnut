@@ -1446,6 +1446,9 @@ fi
 # anyway). A forced deploy does not wait; a dry run stopped before the build.
 # shellcheck source=lib/deploy-queue.sh
 . "$REPO_ROOT/scripts/lib/deploy-queue.sh"
+# A build the queue started before its gap ended stops the old server only at the gap's end
+# (dq_hold_gap), so restarts stay a gap apart.
+if [[ "${WALNUT_DEVPROD_FORCE:-0}" != "1" ]]; then dq_hold_gap; fi
 if [[ "${WALNUT_DEVPROD_FORCE:-0}" != "1" ]]; then dq_hold_moves; fi
 
 # ── Only an awake Mac stops its server ───────────────────────────────────────
