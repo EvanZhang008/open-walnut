@@ -98,6 +98,8 @@ const alive = (pid: number): boolean => {
 }
 /** The stub processes running now, by name. */
 const live = (name?: string) => runs(name).filter((r) => alive(r.pid))
+/** A live process's environment (Linux /proc; these tests run on Linux). */
+const envOf = (pid: number): Record<string, string> => Object.fromEntries(fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').filter(Boolean).map((kv) => [kv.slice(0, kv.indexOf('=')), kv.slice(kv.indexOf('=') + 1)]))
 
 async function until(test: () => boolean, ms = 10_000, what = 'condition'): Promise<void> {
   const end = Date.now() + ms
@@ -258,8 +260,8 @@ describe.each(SHELLS)('the service launcher under %s', (_label, bin) => {
     expect(alive(v1pid)).toBe(true)
   })
 
-  it('a switch during a clean probation makes the running version the one a failed switch puts back', async () => {
-    // Deploys come every 10 minutes, the probation is 15: a second update must not fall back two versions.
+  it('a failed switch during a probation puts back the last proven version, and tells that start it is a put-back', async () => {
+    // A version still in its probation is not proven: a second update inside it falls back to the one before.
     const v1 = stub('v1'); const v2 = stub('v2'); const v3 = stub('v3', 'fail')
     launch(writeLauncher(v1))
     await until(() => live('v1').length === 1, 5_000, 'first start')
@@ -268,9 +270,18 @@ describe.each(SHELLS)('the service launcher under %s', (_label, bin) => {
     expect(launcherState()).toMatchObject({ current: v2, good: v1, phase: 'probation' })
     const id3 = request(v3)
     await until(() => result().id === id3 && result().outcome === 'rolledback', 8_000, 'v3 rollback')
-    expect(kv(path.join(L, 'rollback'))).toMatchObject({ from: v3, to: v2 })
-    await until(() => live('v2').length === 1 && live('v1').length === 0, 5_000, 'v2 back')
-    expect(launcherState()).toMatchObject({ current: v2, good: v2, phase: 'committed' })
+    expect(kv(path.join(L, 'rollback'))).toMatchObject({ from: v3, to: v1 })
+    await until(() => live('v1').length === 1 && live('v2').length === 0, 5_000, 'v1 back')
+    expect(launcherState()).toMatchObject({ current: v1, good: v1, phase: 'committed' })
+    // The put-back start, and only it, carries WALNUT_LAUNCHER_PUTBACK; the next switch clears the mark.
+    expect(read(path.join(L, 'putback')).trim()).toBe(v1)
+    const pid = live('v1')[0]!.pid
+    expect(envOf(pid).WALNUT_LAUNCHER_PUTBACK).toBe('1')
+    const v4 = stub('v4')
+    const id4 = request(v4)
+    await until(() => result().id === id4 && result().outcome === 'committed', 8_000, 'v4 commit')
+    expect(fs.existsSync(path.join(L, 'putback'))).toBe(false)
+    expect(envOf(live('v4')[0]!.pid).WALNUT_LAUNCHER_PUTBACK).toBeUndefined()
   })
 
   it('puts the old version back when the new one exits before it is ready', async () => {

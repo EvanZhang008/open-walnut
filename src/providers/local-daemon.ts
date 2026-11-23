@@ -2089,4 +2089,7 @@ export function defaultDaemonPersistence(env: NodeJS.ProcessEnv = process.env): 
   return env.WALNUT_DAEMON_PERSISTENT === '1' ? { persistent: true, envOverrides: { WALNUT_DAEMON_KEEP_SESSIONS: '1' } } : {}
 }
 
-export const localDaemon = new LocalDaemon({ inProcess: inProcessDaemonWanted, ...defaultDaemonPersistence() })
+const defaultPersistence = defaultDaemonPersistence()
+// Read once: a server started from this one (a test server in a session's terminal) never inherits it.
+delete process.env.WALNUT_DAEMON_PERSISTENT
+export const localDaemon = new LocalDaemon({ inProcess: inProcessDaemonWanted, ...defaultPersistence })

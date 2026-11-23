@@ -192,7 +192,10 @@ c_pid=; c_last=; c_own=0; c_at=0; c_adopt=0; c_exe=; c_code=; fails=0; next_star
 l_spawn() {
   # adopts: what the version about to start says it takes over (detached-registry.ts); it writes it anew.
   rm -f "$L/ready" "$L/leaving" "$STATE/detached/adopts"
-  ( unset L_LOCKED; exec "$1" $ARGS ) 9>&- </dev/null >>"$STATE/daemon-service.out.log" 2>>"$STATE/daemon-service.err.log" &
+  # putback: the version a put-back started (until the next switch), told to its start so a run script can
+  # check first that the older version can read the data the newer one wrote (devprod-launcher.sh).
+  lp_back=; [ "$(cat "$L/putback" 2>/dev/null)" = "$1" ] && lp_back=1
+  ( unset L_LOCKED; [ -n "$lp_back" ] && { WALNUT_LAUNCHER_PUTBACK=1; export WALNUT_LAUNCHER_PUTBACK; }; exec "$1" $ARGS ) 9>&- </dev/null >>"$STATE/daemon-service.out.log" 2>>"$STATE/daemon-service.err.log" &
   c_pid=$!; c_own=1; c_at=$(l_now); c_exe=$1; c_code=; c_adopt=1
   printf '%s\n%s\n%s\n' "$c_pid" "$1" "$(l_start_of "$c_pid")" > "$L/service.pid.tmp" && mv -f "$L/service.pid.tmp" "$L/service.pid"
   l_log "started $1 (pid $c_pid, phase $s_phase)"
@@ -251,6 +254,7 @@ l_rollback() {
   printf 'at=%s\nfrom=%s\nto=%s\nbuild=%s\nreason=%s\n' "$lr_n" "$lr_bad" "$s_good" "$s_build" "$lr_why" > "$L/rollback.tmp" && mv -f "$L/rollback.tmp" "$L/rollback"
   [ -n "$s_req" ] && l_result "$s_req" "$([ -n "$lr_keep" ] && echo interrupted || echo rolledback)" "$lr_bad" "$lr_why"
   s_cur=$s_good; s_build=$s_gbuild; s_phase=committed; s_since=$lr_n; s_crash=0; s_req=; l_write
+  printf '%s\n' "$s_cur" > "$L/putback.tmp" && mv -f "$L/putback.tmp" "$L/putback"
   fails=0; next_start=0
 }
 # The service exited (or was ended for a stalled heartbeat) without being asked to.
@@ -301,9 +305,10 @@ l_request() {
     l_log "dropped a switch to $lq_exe that never got ready to start"; rm -f "$L/request"; return 0
   fi
   l_log "switching from $s_cur to $lq_exe"
-  # The version that runs is what a failed switch puts back: a committed one, or one still in its probation
-  # that has not crashed (a second update within the probation must not fall back two versions).
-  if [ "$s_phase" = committed ] || { [ "$s_phase" = probation ] && [ "$s_crash" = 0 ]; }; then s_good=$s_cur; s_gbuild=$s_build; fi
+  # A failed switch puts back the last version that came through its whole probation: one still in its
+  # probation is not proven yet, so a second update within it falls back to the proven one before it.
+  [ "$s_phase" = committed ] && { s_good=$s_cur; s_gbuild=$s_build; }
+  rm -f "$L/putback"
   s_cur=$lq_exe; s_build=$lq_b; s_phase=trial; s_since=$(l_now); s_crash=0; s_req=$lq_id; s_tries=$lq_t; l_write
   rm -f "$L/request"
   l_stop "$K_STOP"
@@ -317,7 +322,8 @@ l_runnable() {
     if [ -n "$lu_e" ] && [ "$lu_e" != "$s_cur" ] && [ -x "$lu_e" ]; then
       l_log "$s_cur is not there any more: running $lu_e"
       [ "$lu_e" = "$s_good" ] && s_build=$s_gbuild || { s_build=; s_good=$lu_e; s_gbuild=; }
-      s_cur=$lu_e; s_phase=committed; s_since=$(l_now); s_crash=0; l_write; return 0
+      s_cur=$lu_e; s_phase=committed; s_since=$(l_now); s_crash=0; l_write
+      printf '%s\n' "$s_cur" > "$L/putback.tmp" && mv -f "$L/putback.tmp" "$L/putback"; return 0
     fi
   done
   return 0

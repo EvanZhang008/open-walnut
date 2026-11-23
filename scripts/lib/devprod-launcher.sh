@@ -165,6 +165,22 @@ svc_write_run() {
       printf '  rm -f %s/run\n' "$(svc_shq "$stage")"
       printf '%s\n' 'fi'
     fi
+    # A put-back (the launcher started an older version: WALNUT_LAUNCHER_PUTBACK) first fills in what the temp
+    # dir took from the stage, then checks, as rollback_to_lkg does, that this version can read the data the
+    # newer one wrote; it never starts on data it cannot read (exit 78, the launcher tries again later).
+    printf '%s\n' 'if [ "${WALNUT_LAUNCHER_PUTBACK:-}" = 1 ]; then'
+    if [[ -n "$clone" ]]; then
+      printf '  cp -Rnc %s/. %s/ 2>/dev/null || cp -Rn %s/. %s/ 2>/dev/null; rm -f %s/run\n' \
+        "$(svc_shq "$clone")" "$(svc_shq "$stage")" "$(svc_shq "$clone")" "$(svc_shq "$stage")" "$(svc_shq "$stage")"
+    fi
+    printf '  if [ -x %s ] && [ -f %s ]; then\n' "$(svc_shq "${BUN_BIN:-}")" "$(svc_shq "$SERVE_ROOT/scripts/lib/rollback-data-check.mjs")"
+    printf '    echo "$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ) run: a put-back: checking that this version can read the data first"\n'
+    printf '    ( cd %s && %s scripts/lib/rollback-data-check.mjs %s %s ) || { echo "$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ) run: this version cannot read the data a newer one wrote: not started"; exit 78; }\n' \
+      "$(svc_shq "$SERVE_ROOT")" "$(svc_shq "${BUN_BIN:-}")" "$(svc_shq "$file")" "$(svc_shq "${REHEARSAL_HOME:-$HOME/.open-walnut}")"
+    printf '%s\n' '  else'
+    printf '%s\n' '    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) run: a put-back, but the data check is not there: starting without it"'
+    printf '%s\n' '  fi'
+    printf '%s\n' 'fi'
     printf 'cd %s || exit 1\n' "$(svc_shq "$SERVE_ROOT")"
     printf '%s\n' 'WALNUT_LAUNCHER_SERVICE_PID=$$; export WALNUT_LAUNCHER_SERVICE_PID'
     printf '%s\n' 'c='
@@ -225,11 +241,16 @@ svc_unmark() { rm -f "$SVC_MARK" 2>/dev/null || true; }
 # A server on :PORT the launcher did not start (the Mac app's own, a stray) is stopped before the
 # switch, as the old deploy stops any listener: else the trial loses the instance lock to it.
 svc_stop_foreign_listener() {
-  local l svc g n
+  local l svc g n cmd
+  # A rehearsal stops only what it started (its port may be someone else's by now): it refuses instead.
+  rehearsal_refuse_foreign_listeners
   svc="$(svc_service_pid)"
   for l in $(listener_pids); do
     g="$(ps -o pgid= -p "$l" 2>/dev/null | tr -d '[:space:]' || true)"
     [[ -n "$svc" && "$g" == "$svc" ]] && continue
+    # No own group (no perl): the launcher's server is still told by the version it runs.
+    cmd="$(ps -o command= -p "$l" 2>/dev/null || true)"
+    svc_keeps_stage "$(echo "$cmd" | sed -nE 's#.* (/[^ ]*)/dist-bin/[^ ]* web --port .*#\1#p')" && continue
     echo "Stopping PID $l on :$PORT, which the service launcher did not start: $(ps -o command= -p "$l" 2>/dev/null | cut -c1-160)" >&2
     kill -15 "$l" 2>/dev/null || true
     n=0; while kill -0 "$l" 2>/dev/null && (( n < ${STOP_GRACE_SECS:-8} * 4 )); do sleep 0.25; n=$(( n + 1 )); done
@@ -388,17 +409,20 @@ svc_argv_for_new() {
   host_prefix=(${preapproved_prefix[@]+"${preapproved_prefix[@]}"})
 }
 
+# A deploy that ends before the switch: the planned-restart mark it wrote names no restart now.
+svc_untouched_exit() { rm -f "$PLANNED_RESTART_FILE" 2>/dev/null || true; exit 1; }
+
 # The deploy with the launcher installed: everything before the stop already ran. Exits.
 svc_deploy() {
   svc_argv_for_new
-  svc_save_version || { echo "Could not keep this version under $SVC_DIR/versions; prod untouched." >&2; exit 1; }
+  svc_save_version || { echo "Could not keep this version under $SVC_DIR/versions; prod untouched." >&2; svc_untouched_exit; }
   [[ -x "$SVC_SEED" ]] || svc_write_seed || true
-  svc_write_launcher || { echo "Could not write the launcher script; prod untouched." >&2; exit 1; }
+  svc_write_launcher || { echo "Could not write the launcher script; prod untouched." >&2; svc_untouched_exit; }
   if [[ -z "$(svc_launcher_pid)" ]]; then
     # Installed but not running (its job was taken out by hand): load it; it starts its current version.
     LAUNCHD_DOMAIN="$(launchd_domain)"
     launchctl bootstrap "$LAUNCHD_DOMAIN" "$SVC_PLIST" >/dev/null 2>&1 || true
-    if ! svc_wait_launcher 30; then echo "The service launcher is not running and could not be loaded; prod untouched." >&2; exit 1; fi
+    if ! svc_wait_launcher 30; then echo "The service launcher is not running and could not be loaded; prod untouched." >&2; svc_untouched_exit; fi
   fi
   svc_mark
   svc_stop_foreign_listener

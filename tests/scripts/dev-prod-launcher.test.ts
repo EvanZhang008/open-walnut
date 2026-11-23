@@ -125,6 +125,34 @@ describe('a version\'s run script', () => {
     expect(alive(Number(serverPid))).toBe(false)
   })
 
+  it('a put-back start checks the data first: refused (exit 78, no server) when the older version cannot read it, else it starts', async () => {
+    const f = fixture()
+    // The serve root's data check and a stub bun that runs it: check.mode = fail makes it fail.
+    fs.mkdirSync(path.join(f.dir, 'scripts', 'lib'), { recursive: true })
+    fs.writeFileSync(path.join(f.dir, 'scripts', 'lib', 'rollback-data-check.mjs'), '// stub\n')
+    const bun = path.join(f.dir, 'bun')
+    fs.writeFileSync(bun, `#!/bin/sh\necho "check $*" >> '${f.dir}/checks'\n[ "$(cat '${f.dir}/check.mode' 2>/dev/null)" = fail ] && exit 1\nexit 0\n`, { mode: 0o755 })
+    const run = path.join(f.dir, 'run')
+    expect(lib(f, `BUN_BIN='${bun}'; HOME='${f.dir}/h'; svc_write_run '${run}'`, { host: false }).status).toBe(0)
+    fs.writeFileSync(path.join(f.dir, 'check.mode'), 'fail\n')
+    const refused = startRun(run, { WALNUT_LAUNCHER_PUTBACK: '1' })
+    await until(() => refused.exitCode !== null, 10_000, 'the refused start', f.log)
+    expect(refused.exitCode).toBe(78)
+    expect(read(path.join(f.dir, 'server.runs'))).toBe('')
+    expect(read(path.join(f.dir, 'checks')).trim()).toBe(`check scripts/lib/rollback-data-check.mjs ${f.file} ${f.dir}/h/.open-walnut`)
+    expect(read(f.log)).toMatch(/cannot read the data a newer one wrote: not started/)
+    fs.writeFileSync(path.join(f.dir, 'check.mode'), 'ok\n')
+    startRun(run, { WALNUT_LAUNCHER_PUTBACK: '1' })
+    await until(() => read(path.join(f.dir, 'server.runs')) !== '', 8_000, 'the checked start', f.log)
+    // An ordinary start (no put-back) runs no check.
+    const before = read(path.join(f.dir, 'checks'))
+    const plain = path.join(f.dir, 'run2')
+    expect(lib(f, `BUN_BIN='${bun}'; svc_write_run '${plain}'`, { host: false }).status).toBe(0)
+    startRun(plain)
+    await until(() => read(path.join(f.dir, 'server.runs')).trim().split('\n').length >= 2, 8_000, 'the plain start', f.log)
+    expect(read(path.join(f.dir, 'checks'))).toBe(before)
+  })
+
   it('runs the file as its own program when the session host refuses it (exit 125)', async () => {
     const f = fixture()
     fs.writeFileSync(path.join(f.dir, 'host.mode'), 'refuse\n')
@@ -258,14 +286,15 @@ describe('the deploy\'s switch through the launcher', () => {
     // A version that dies at once: the launcher puts v2 back; the deploy says so and fails.
     const bad = lib(f, `${prelude}\n${write(v3, `${f.dir}/v3.run`)}\nif svc_switch; then echo SWITCHED; else echo "FAILED $svc_outcome"; fi`, { host: false })
     expect(bad.stdout).toMatch(/FAILED rolledback/)
-    expect(read(path.join(L, 'state'))).toContain(`current=${state}/versions/v2-stage/run`)
-    expect(spawnSync('curl', ['-sf', `http://127.0.0.1:${port}/api/config`], { encoding: 'utf8' }).stdout).toContain(git)
+    // v2 is still in its probation (not proven): the put-back is v1, the last proven version.
+    expect(read(path.join(L, 'state'))).toContain(`current=${state}/versions/v1-stage/run`)
+    await until(() => spawnSync('curl', ['-sf', `http://127.0.0.1:${port}/api/config`], { encoding: 'utf8' }).stdout.includes('aaaaaaa1'), 15_000, 'v1 serves again', f.log)
 
     // A stage the temp dir lost (a reboot) is put back from its clone when the launcher starts it again.
-    fs.rmSync(path.join(f.dir, 'v2-stage'), { recursive: true, force: true })
+    fs.rmSync(path.join(f.dir, 'v1-stage'), { recursive: true, force: true })
     const svc = Number(read(path.join(L, 'service.pid')).split('\n')[0])
     process.kill(-svc, 'SIGKILL')
-    await until(() => fs.existsSync(path.join(f.dir, 'v2-stage', 'dist-bin', 'walnut-stub')) && spawnSync('curl', ['-sf', `http://127.0.0.1:${port}/api/config`]).status === 0, 15_000, 'v2 back from its clone', f.log)
+    await until(() => fs.existsSync(path.join(f.dir, 'v1-stage', 'dist-bin', 'walnut-stub')) && spawnSync('curl', ['-sf', `http://127.0.0.1:${port}/api/config`]).status === 0, 15_000, 'v1 back from its clone', f.log)
     expect(read(f.log)).toMatch(/the stage is gone .*putting it back/)
     fs.writeFileSync(path.join(state, 'daemon-boot.stop'), 'stop\n')
     const now = Number(read(path.join(L, 'service.pid')).split('\n')[0])
