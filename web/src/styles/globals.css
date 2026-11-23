@@ -28428,7 +28428,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   white-space: nowrap;
 }
 
-.quote-pin-popover { max-width: min(360px, 70vw); border-radius: var(--overlay-radius); }
+.quote-pin-popover { max-width: min(360px, 70vw); }
 
 .quote-pin-popover-snippet {
   flex: 1;
