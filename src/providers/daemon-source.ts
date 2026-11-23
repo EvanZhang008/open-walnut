@@ -2483,7 +2483,7 @@ process.on('unhandledRejection', function (reason) { daemonCrash('unhandledRejec
 //
 // watcher: { pollTimer, offset } | null — session-bound file tailer.
 //   Lives exactly as long as the session process. NOT tied to any WebSocket.
-// subscribers: Set<WebSocket> — clients receiving push events for this session.
+// subscribers: Subscribers (a Set<WebSocket> with watchedAt) — clients receiving push events for this session.
 //   Add on cmdAttach / cmdStart, remove on ws.close. watcher is unaffected.
 //
 // Historical (pre-2026-05): watcher was Map<ws, perWsWatcher>. That tied
@@ -2496,6 +2496,18 @@ process.on('unhandledRejection', function (reason) { daemonCrash('unhandledRejec
 // state is authoritative — daemon is the single source of truth for CLI/FIFO
 // lifecycle. See reapSession() below.
 const sessions = new Map();
+
+// A session's subscribers, remembering when someone last watched it (watchedAt): when the set
+// was made (a start or an adoption, before the leader attaches) and whenever its last subscriber
+// left. The idle scan counts idleness from the later of the last output and watchedAt, so a
+// leader that restarts or a link that drops for a moment stops no session (2026-11-23: a Mac
+// deploy dropped the leader's link for 10 s and the next scan stopped 17 sessions idle 2 to 4
+// hours that it was about to subscribe to again). Keep in sync with daemon-standalone.ts.
+class Subscribers extends Set {
+  constructor() { super(); this.watchedAt = Date.now(); }
+  delete(ws) { const had = super.delete(ws); if (had && this.size === 0) this.watchedAt = Date.now(); return had; }
+  clear() { if (this.size > 0) this.watchedAt = Date.now(); super.clear(); }
+}
 
 // ── Per-sid start serialization ──
 // Equivalent of DaemonSessionGate (src/providers/daemon-cron-controller.ts),
@@ -3491,7 +3503,7 @@ async function reconcilePass() {
       // The checkpoint the fold just left (or found): a death right after needs no other.
       foldCheckpointV: folded.checkpointV || undefined,
       watcher: null,
-      subscribers: new Set(),
+      subscribers: new Subscribers(),
       exitCode: null,
       state: 'running',
       exitReason: null,
@@ -8689,7 +8701,7 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
     foldState: resumeFold ? resumeFold.fold : initialFoldState(0),
     foldCheckpointV: resumeFold ? resumeFold.checkpointV : undefined,
     watcher: null,           // session-bound file tailer (see ensureWatcher)
-    subscribers: new Set(),  // ws clients receiving push events
+    subscribers: new Subscribers(),  // ws clients receiving push events
     exitCode: null,
     state: 'running',
     exitReason: null,
@@ -11956,7 +11968,7 @@ async function discoverSessionFromFiles(sid, mode) {
     foldState: discovered.fold,
     foldCheckpointV: discovered.checkpointV,
     watcher: null,
-    subscribers: new Set(),
+    subscribers: new Subscribers(),
     exitCode: alive ? null : 0,
     state: alive ? 'running' : 'dead',
     exitReason: alive ? null : 'attach-discovered-dead',
@@ -17111,7 +17123,8 @@ function scanIdleSessions() {
     let mtimeMs = 0;
     try { mtimeMs = fs.statSync(session.jsonlPath).mtimeMs; } catch { continue; }
 
-    const idleMs = now - mtimeMs;
+    // Idle since the later of its last output and the last time someone watched it (Subscribers).
+    const idleMs = now - Math.max(mtimeMs, session.subscribers.watchedAt || 0);
     // ONE authoritative verdict with a source — see deriveSessionProtection.
     const prot = deriveSessionProtection(session, sid, now);
     if (idleMs < SESSION_IDLE_WARNING_MS) {
@@ -17128,7 +17141,8 @@ function scanIdleSessions() {
         continue;
       }
       const idleMinutes = Math.round(idleMs / 60000);
-      logMsg('warn', 'idle scan: killing idle session (no subscribers, no output)', { sid, pid, idleMinutes, protectedBy: prot.source, thresholdMs: prot.killMs, detail: prot.detail });
+      // idleMinutes counts from the later of the last output and the last subscriber; outputIdleMinutes from the output alone.
+      logMsg('warn', 'idle scan: killing idle session (no subscribers, no output)', { sid, pid, idleMinutes, outputIdleMinutes: Math.round((now - mtimeMs) / 60000), protectedBy: prot.source, thresholdMs: prot.killMs, detail: prot.detail });
       // Record the intent BEFORE signalling: the reap arrives asynchronously
       // (the orphan poll sees ESRCH and reports 'orphan-poll-dead', code -1), so
       // by then nothing remembers that WE asked for this. Without the stamp
@@ -17188,7 +17202,7 @@ function cleanupOrphanedProcessGroups() {
             taskState: rebuildTaskStateFromJsonl(jsonlPath, Date.now()),
             foldState: legacyFold.state,
             watcher: null,
-      subscribers: new Set(),
+      subscribers: new Subscribers(),
             exitCode: null,
             state: 'running',
             exitReason: null,

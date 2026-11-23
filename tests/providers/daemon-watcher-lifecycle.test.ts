@@ -38,18 +38,21 @@ describe('L1 daemon watcher lifecycle: session-bound, not ws-bound', () => {
   const standaloneSrc = readFile(standalonePath)
 
   describe('Data structure — session has ONE watcher + a Set of subscribers', () => {
+    // subscribers is a Subscribers: a Set that remembers when it was last watched (daemon-idle-scan-watched.test.ts).
     it('source: SessionData has session.watcher (object or null) and session.subscribers (Set)', () => {
       // Must NOT have the old Map<ws, watcher> pattern.
       expect(sourceSrc).not.toMatch(/watchers:\s*new\s+Map\(\)/)
       // Must have the new pair.
       expect(sourceSrc).toMatch(/watcher:\s*null/)
-      expect(sourceSrc).toMatch(/subscribers:\s*new\s+Set\(\)/)
+      expect(sourceSrc).toMatch(/subscribers:\s*new\s+Subscribers\(\)/)
+      expect(sourceSrc).toMatch(/class Subscribers extends Set/)
     })
 
     it('standalone: SessionData has session.watcher (object or null) and session.subscribers (Set)', () => {
       expect(standaloneSrc).not.toMatch(/watchers:\s*new\s+Map\(\)/)
       expect(standaloneSrc).toMatch(/watcher:\s*null/)
-      expect(standaloneSrc).toMatch(/subscribers:\s*new\s+Set\(\)/)
+      expect(standaloneSrc).toMatch(/subscribers:\s*new\s+Subscribers\(\)/)
+      expect(standaloneSrc).toMatch(/class Subscribers<T> extends Set<T>/)
     })
   })
 

@@ -905,6 +905,18 @@ interface TaskState {
   recentTransitions: Array<{ taskId: string; status: string; v: number; t: number }>
 }
 
+// A session's subscribers, remembering when someone last watched it (watchedAt): when the set
+// was made (a start or an adoption, before the leader attaches) and whenever its last subscriber
+// left. The idle scan counts idleness from the later of the last output and watchedAt, so a
+// leader that restarts or a link that drops for a moment stops no session (2026-11-23: a Mac
+// deploy dropped the leader's link for 10 s and the next scan stopped 17 sessions idle 2 to 4
+// hours that it was about to subscribe to again). Keep in sync with daemon-source.ts.
+class Subscribers<T> extends Set<T> {
+  watchedAt = Date.now()
+  delete(ws: T): boolean { const had = super.delete(ws); if (had && this.size === 0) this.watchedAt = Date.now(); return had }
+  clear(): void { if (this.size > 0) this.watchedAt = Date.now(); super.clear() }
+}
+
 interface SessionData {
   proc: ChildProcess | null
   pipePath: string
@@ -922,7 +934,7 @@ interface SessionData {
   // remove on ws.close. Watcher is unaffected by subscriber churn — this
   // replaces the old per-ws watcher Map that tied file-tailing to WS
   // lifetime and caused "no watchers after reconnect" streaming loss.
-  subscribers: Set<ServerWebSocket<WsData>>
+  subscribers: Subscribers<ServerWebSocket<WsData>>
   exitCode: number | null
   // Phase B/C additions: daemon is the single source of truth for CLI/FIFO
   // lifecycle. `state` is the authoritative flag; `exitCode !== null` was
@@ -2645,7 +2657,7 @@ const core = createDaemonCore<SessionData>({
       // The checkpoint the fold just left (or found): a death right after needs no other.
       foldCheckpointV: folded.checkpointV || undefined,
       watcher: null,
-      subscribers: new Set(),
+      subscribers: new Subscribers(),
       exitCode: null,
       state: 'running' as const,
       exitReason: null,
@@ -8022,7 +8034,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
     foldState: resumeFold ? resumeFold.fold : initialFoldState(0),
     foldCheckpointV: resumeFold ? resumeFold.checkpointV : undefined,
     watcher: null,
-    subscribers: new Set(),
+    subscribers: new Subscribers(),
     exitCode: null,
     state: 'running',
     exitReason: null,
@@ -10639,7 +10651,7 @@ async function discoverSessionFromFiles(sid: string, mode: string | undefined): 
     foldState: discovered.fold,
     foldCheckpointV: discovered.checkpointV,
     watcher: null,
-    subscribers: new Set(),
+    subscribers: new Subscribers(),
     exitCode: alive ? null : 0,
     state: alive ? 'running' : 'dead',
     exitReason: alive ? null : 'attach-discovered-dead',
@@ -14019,7 +14031,8 @@ function scanIdleSessions() {
       continue  // Can't stat file — skip
     }
 
-    const idleMs = now - mtimeMs
+    // Idle since the later of its last output and the last time someone watched it (Subscribers).
+    const idleMs = now - Math.max(mtimeMs, session.subscribers.watchedAt || 0)
 
     // ONE authoritative verdict with a source — see deriveSessionProtection.
     const prot = deriveSessionProtection(session, sid, now)
@@ -14047,8 +14060,9 @@ function scanIdleSessions() {
         continue
       }
       const idleMinutes = Math.round(idleMs / 60_000)
+      // idleMinutes counts from the later of the last output and the last subscriber; outputIdleMinutes from the output alone.
       logMsg('warn', 'idle scan: killing idle session (no subscribers, no output)', {
-        sid, pid, idleMinutes, protectedBy: prot.source, thresholdMs: prot.killMs, detail: prot.detail,
+        sid, pid, idleMinutes, outputIdleMinutes: Math.round((now - mtimeMs) / 60_000), protectedBy: prot.source, thresholdMs: prot.killMs, detail: prot.detail,
       })
       // Record the intent BEFORE signalling: the reap arrives asynchronously
       // (the orphan poll sees ESRCH and reports 'orphan-poll-dead', code -1),
@@ -14149,7 +14163,7 @@ function cleanupOrphanedProcessGroups() {
             taskState: rebuildTaskStateFromJsonl(jsonlPath, Date.now()),
             foldState: legacyFold.state,
             watcher: null,
-            subscribers: new Set(),
+            subscribers: new Subscribers(),
             exitCode: null,
             state: 'running',
             exitReason: null,
