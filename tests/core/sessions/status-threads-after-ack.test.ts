@@ -258,3 +258,16 @@ describe('the node closes what he acknowledged (2026-11-23, refused not_reacted 
     expect(() => updateThread(told, legacy.id, { close: 'acked' }, NODE, at(40))).toThrow(/Not closed/)
   })
 })
+
+describe('the node places what a line brought back (2026-11-23, place refused on such cards)', () => {
+  it('place goes through on a card a line flipped back after his Acknowledge, and takes it out of his sight', async () => {
+    const { nodePlaced, checkPlace } = await import('../../../src/core/org/thread-ack.js')
+    const [, legacy] = acknowledged()
+    const before = legacy.f.threads[0]
+    const placing = checkPlace(NODE, 'waiting', 'the rollout still runs in the oven task', {})
+    const placed = nodePlaced(before, before, placing, at(40))
+    expect(placed.state).toBe('pending')
+    expect(placed.ackPlaced).toMatchObject({ to: 'waiting', by: 'node' })
+    expect(shownToHim(placed, undefined, Date.parse(at(41)))).toBe(false)
+  })
+})

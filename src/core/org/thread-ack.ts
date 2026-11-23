@@ -21,7 +21,7 @@ import { experimentalEnabled } from '../experimental.js';
 import { ThreadError, updateThread, type OrgThread, type ThreadPatch, type ThreadsFile, type ThreadWriter } from './threads-model.js';
 import { deliverableLine } from '../task-deliverable.js';
 import { ackOutcome, ackWhy, type AckOutcome, type AckReading, type AckTask } from './thread-ack-outcome.js';
-import { ACK_PLACES, isKnown, KNOWN_CLOSE_MS, knownStep, placedSinceAck, type AckPlace, type AckWaits } from './thread-known.js';
+import { ACK_PLACES, ackHoldsResult, isKnown, KNOWN_CLOSE_MS, knownStep, placedSinceAck, type AckPlace, type AckWaits } from './thread-known.js';
 import { hasThreadNews, PLACE_WHY_MAX, sharedAnswers, snoozedNow, watchedNow } from './thread-view.js';
 
 export type { AckWaits } from './thread-known.js';
@@ -101,7 +101,9 @@ export function checkPlace(by: ThreadWriter, place: unknown, why: unknown, rest:
  * `next` as it is. Pure; throws ThreadError for a place on any other thread.
  */
 export function nodePlaced(before: OrgThread | undefined, next: OrgThread, placing: { to: AckPlace; why: string } | null, at: string): OrgThread {
-  const known = !!before && !before.closed && isKnown(before);
+  // Also one a status line brought back to Done after his Acknowledge, before that was refused
+  // (2026-11-23: a node's place was refused on such cards): his Acknowledge still holds (ackHoldsResult).
+  const known = !!before && !before.closed && (isKnown(before) || (before.state === 'answered' && ackHoldsResult(before)));
   if (placing && !known) {
     throw new ThreadError('bad_input', 409, 'place is only for a thread he acknowledged and has not written in since (in Acknowledged, or placed from it); set its state instead.');
   }
@@ -117,7 +119,8 @@ export function nodePlaced(before: OrgThread | undefined, next: OrgThread, placi
  */
 export function ackPlace(t: OrgThread, to: AckPlace, by: 'node' | 'walnut', why: string | undefined, at: string): OrgThread {
   const ackPlaced = { to, by, at, ...(why ? { why } : {}) };
-  if (to !== 'closed') return { ...t, ackPlaced, updatedAt: at, by: 'agent' };
+  // Back in Done by a line after his Acknowledge: placed, it is out of his sight again.
+  if (to !== 'closed') return { ...t, ...(t.state === 'answered' ? { state: 'pending' as const } : {}), ackPlaced, updatedAt: at, by: 'agent' };
   const { options: _o, snoozed: _s, ...rest } = t;
   return { ...rest, ackPlaced, closed: { how: 'acked', at, by: 'agent', reacted: true }, updatedAt: at, by: 'agent' };
 }

@@ -320,7 +320,8 @@ const UPDATE_INPUT = {
   options: z.array(OPTION_ARG).max(ASK_OPTIONS_MAX).optional().describe(OPTIONS_WHY),
   tasks: z.array(z.string().min(1)).max(12).optional().describe('Every task it went to (replaces the list)'),
   add_tasks: z.array(z.string().min(1)).max(12).optional().describe('Tasks to add to it'),
-  known: z.string().regex(/^(tm-[a-f0-9]{6,32}|all)$/).optional().describe('He reacted to your answers through this message (tm-...), or "all": they leave the card. Refused before he reacted'),
+  // `true` reads as "all" (2026-11-23: a node sent known: true and was refused bad_request).
+  known: z.union([z.string().regex(/^(tm-[a-f0-9]{6,32}|all)$/), z.literal(true)]).optional().describe('He reacted to your answers through this message (tm-...), or "all" (true reads as "all"): they leave the card. Refused before he reacted'),
   close: z.enum(['acked', 'dropped']).optional().describe('acked (he reacted to it as finished) or dropped (no longer wanted). Refused before he reacted, unless user_words quotes him'),
   user_words: z.string().max(500).optional().describe('With close: his words asking for it, quoted exactly from his latest message in this thread, which counts only when it came after everything said in the thread (merge the thread holding them in first)'),
   reopen: z.boolean().optional().describe('Open a closed thread again'),
@@ -349,6 +350,7 @@ defineOp({
   handler: async (args, call) => {
     const id = await ownTask(args, call)
     const { task: _t, id: threadId, ...patch } = args as Record<string, unknown>
+    if (patch.known === true) patch.known = 'all'
     const given = Object.keys(patch).filter((k) => patch[k] !== undefined)
     // A merge removes this thread: anything else asked of it would be written and then lost.
     if (typeof patch.merge_into === 'string' && given.length > 1) {
