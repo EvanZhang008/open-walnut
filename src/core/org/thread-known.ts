@@ -17,7 +17,7 @@
  *
  * Pure and web-safe: the web and the server group by the same rule (thread-groups.ts).
  */
-import { hasThreadNews, snoozedNow, watchedNow, type AckPlace, type AckPlaced, type ViewThread } from './thread-view.js';
+import { hasThreadNews, lineWordsSinceAck, snoozedNow, watchedNow, type AckPlace, type AckPlaced, type ViewThread } from './thread-view.js';
 
 /**
  * How long the node has to place a thread he acknowledged before Walnut does, and how long one
@@ -113,22 +113,17 @@ export function knownStep(t: ViewThread & { state: string }, open: boolean, now:
  * rewording a summary he had: "what I acknowledged all stays there"). True when:
  *  - he acknowledged it standing answered or needs (`ackedResult`; an older ack with no record counts
  *    so) and wrote nothing since;
- *  - the node did not place it in Working or Waiting itself since (its result to come is news);
  *  - nothing but a status line wrote it answered since (the node's own thread_update, an answer
- *    given for him, Walnut's own show: news). A line that did is the bug this guards: its summary
- *    is the line's while `lineReplyAt` equals `replyAt` (one written before that mark existed: the
- *    line moved its state after the ack, `lineState`).
+ *    given for him, Walnut's own show: news; a line's words: thread-view.ts lineWordsSinceAck).
+ * Wherever it was placed since: the node placing it in Working or Waiting does not make its next
+ * line news (2026-11-23, a card the node placed Waiting for a pipeline came back every turn with the
+ * line rewording the result he had: "bro ... I already ack, but how it come back"). What finishes
+ * there and is news for him is the node's own thread_update; a done line closes it.
  * Pure.
  */
-export function ackHoldsResult(t: ViewThread & { state: string; lineState?: string; lineReplyAt?: string }): boolean {
+export function ackHoldsResult(t: ViewThread & { state: string }): boolean {
   if (t.closed || !quietSinceAck(t) || t.ackedResult === false) return false;
-  const placed = placedSinceAck(t);
-  if (placed && placed.by === 'node' && placed.to !== 'closed') return false;
-  if (t.state === 'answered' && t.replyAt && t.replyAt > t.ackedAt!) {
-    const byLine = t.lineReplyAt !== undefined ? t.lineReplyAt === t.replyAt : !!t.lineState && t.lineState >= t.ackedAt!;
-    if (!byLine) return false;
-  }
-  return true;
+  return !(t.state === 'answered' && t.replyAt && t.replyAt > t.ackedAt! && !lineWordsSinceAck(t));
 }
 
 /** `lineReplyAt` once the summary is not a status line's own (threads-model.ts updateThread). */
@@ -142,7 +137,7 @@ export const NO_LINE_REPLY = '1970-01-01T00:00:00.000Z';
  * again (his card, or Walnut's own settling after KNOWN_CLOSE_MS: knownStep 'show'). Real news is
  * the node's own thread_update. Any other thread: anything. Pure.
  */
-export function lineMay(t: ViewThread & { state: string; lineState?: string; lineReplyAt?: string }, write: { state?: string; reply?: string; close?: unknown }): boolean {
+export function lineMay(t: ViewThread & { state: string }, write: { state?: string; reply?: string; close?: unknown }): boolean {
   if (!ackHoldsResult(t) || write.close) return true;
   return write.state === undefined && write.reply === undefined;
 }

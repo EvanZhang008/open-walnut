@@ -159,18 +159,36 @@ describe('what still reaches him on a thread he acknowledged', () => {
     expect(shownToHim(again, undefined, Date.parse(at(15)))).toBe(false)
   })
 
-  it('the node placed it in Working or Waiting itself: its result is news again', () => {
+  it('the node placed it in Working or Waiting itself: its lines still bring nothing back, a done line closes it', () => {
+    // 2026-11-23, the user ("bro ... I already ack, but how it come back"): a card the node placed
+    // Waiting for a pipeline came back every turn, each line rewording the result he had.
     const a = answered()
     const f = ackKnown(a.f, a.id, at(20)).file
-    for (const to of ['working', 'waiting'] as const) {
-      const placed = { ...f, threads: [ackPlace(f.threads[0], to, 'node', 'the rollout still runs', at(22))] }
-      expect(ackHoldsResult(placed.threads[0])).toBe(false)
-      const after = apply(placed, planThreadWrites(placed, [line(placed.threads[0], 'answered', 'Rolled out to every oven.')], []), at(30)).threads[0]
-      expect(shownToHim(after, undefined, Date.parse(at(31)))).toBe(true)
+    for (const by of ['node', 'walnut'] as const) {
+      for (const to of ['working', 'waiting'] as const) {
+        const placed = { ...f, threads: [ackPlace(f.threads[0], to, by, 'the rollout still runs', at(22))] }
+        expect(ackHoldsResult(placed.threads[0])).toBe(true)
+        for (const state of THREAD_LINE_STATES.filter((x) => x !== 'done')) {
+          const after = apply(placed, planThreadWrites(placed, [line(placed.threads[0], state, 'Replied to the oven team on your behalf.')], []), at(30)).threads[0]
+          expect(shownToHim(after, undefined, Date.parse(at(31))), `${by} ${to} ${state}`).toBe(false)
+        }
+        const done = apply(placed, planThreadWrites(placed, [line(placed.threads[0], 'done', 'Rolled out to every oven.')], []), at(30)).threads[0]
+        expect(done.closed, `${by} ${to} done`).toBeTruthy()
+      }
     }
-    // Walnut's own placement is its rule, not news: lines still change nothing.
-    const byWalnut = { ...f, threads: [ackPlace(f.threads[0], 'waiting', 'walnut', 'the oven task still works', at(31))] }
-    expect(ackHoldsResult(byWalnut.threads[0])).toBe(true)
+  })
+
+  it('a card a line already flipped back after the node placed it is out of his sight with no write (11-23 case)', () => {
+    const a = answered()
+    let f = ackKnown(a.f, a.id, at(20)).file
+    f = { ...f, threads: [ackPlace(f.threads[0], 'waiting', 'node', 'the fix pipeline runs, auto-merge set', at(22))] }
+    expect(f.threads[0].state).toBe('pending')
+    // What the old rule let each turn do (the line wrote it answered with new words), as it stands on disk.
+    const t = { ...f.threads[0], state: 'answered' as const, reply: 'Replied to the oven team with your account; the answers are in the thread.', replyAt: at(40), lineState: at(30), lineReplyAt: at(40) }
+    expect(t.state).toBe('answered')
+    expect(hasThreadNews(t)).toBe(false)
+    expect(shownToHim(t, undefined, Date.parse(at(41)))).toBe(false)
+    expect(knownStep(t, false, Date.parse(at(41)) + KNOWN_CLOSE_MS + 1)).toBe('none')
   })
 
   it('the node\'s own thread_update with something new still shows it, and then a line is no longer held back', () => {

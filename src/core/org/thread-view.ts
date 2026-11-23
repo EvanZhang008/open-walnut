@@ -98,6 +98,9 @@ export interface ViewThread<M extends ViewMessage = ViewMessage> {
   ackDone?: string;
   /** Where it went from Acknowledged, who placed it and why (thread-known.ts). */
   ackPlaced?: AckPlaced;
+  /** When a status line last moved its state, and wrote its summary (threads-model.ts updateThread `line`). */
+  lineState?: string;
+  lineReplyAt?: string;
 }
 
 /** Where a thread he acknowledged went, who placed it there (the node's AI or Walnut's rule) and why (thread-known.ts). */
@@ -467,7 +470,20 @@ export function threadReactionAt(t: ViewThread): string {
   return t.messages.reduce((last, m) => m.at > last ? m.at : last, t.reactedAt ?? '');
 }
 
-/** Real words after his reaction, not a state, title, task link or move. */
+/**
+ * Its summary is a status line's, written after he acknowledged its result with no word of his since:
+ * the node's routine words of each turn, never news for him, wherever it was placed (2026-11-23, the
+ * user, of a card a line rewrote every turn after the node placed it Waiting: "I already ack, but how
+ * it come back"). The line wrote it while `lineReplyAt` equals `replyAt` (a summary written before that
+ * mark existed: a line moved its state after the ack, `lineState`). Pure.
+ */
+export function lineWordsSinceAck(t: ViewThread): boolean {
+  if (!t.ackedAt || t.ackedResult === false || !t.replyAt || t.replyAt <= t.ackedAt) return false;
+  if (t.messages.some((m) => m.at > t.ackedAt!)) return false;
+  return t.lineReplyAt !== undefined ? t.lineReplyAt === t.replyAt : !!t.lineState && t.lineState >= t.ackedAt;
+}
+
+/** Real words after his reaction, not a state, title, task link or move, nor a line's words on what he acknowledged. */
 export function hasThreadNews(t: ViewThread, shared: ReadonlySet<string> = NONE): boolean {
   const reaction = threadReactionAt(t);
   const summary = summaryAt(t);
@@ -475,7 +491,7 @@ export function hasThreadNews(t: ViewThread, shared: ReadonlySet<string> = NONE)
   // Acknowledge (a human known mark) always does.
   const reacted = summary && t.reply?.trim() && !readAfter({ at: summary, text: t.reply }, reaction) ? '' : reaction;
   const summaryRead = t.known?.by === 'human' && t.known.at && t.known.at > reacted ? t.known.at : reacted;
-  if (t.reply?.trim() && summary && summary > summaryRead && (t.replyAt || !t.known && !t.reactedAt)) return true;
+  if (t.reply?.trim() && summary && summary > summaryRead && (t.replyAt || !t.known && !t.reactedAt) && !lineWordsSinceAck(t)) return true;
   return exchangesOf(t).some((x) => (x.answer || x.opener) && !x.known
     && !x.messages.some((m) => shared.has(m.id)));
 }
