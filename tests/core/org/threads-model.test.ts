@@ -390,7 +390,8 @@ describe('a thread the node opens itself', () => {
     expect(updateThread(f, opened.id, { close: 'dropped' }, 'task:lead-1', at(1)).thread.closed?.how).toBe('dropped')
     f = fileMessage(f, { text: 'wait until Tuesday', via: 'chat', at: at(3) }).file
     const mine = f.threads.find((t) => t.id !== opened.id)!
-    expect(() => mergeThreads(f, opened.id, mine.id, 'task:lead-1', at(4))).toThrow(/merge .* into it instead/)
+    // The refusal names the call that goes through.
+    expect(() => mergeThreads(f, opened.id, mine.id, 'task:lead-1', at(4))).toThrow(`thread_update {"id":"${mine.id}","merge_into":"${opened.id}"}`)
     f = mergeThreads(f, mine.id, opened.id, 'task:lead-1', at(4)).file
     expect(f.threads).toHaveLength(1)
     expect(f.threads[0].messages.map((m) => m.text)).toEqual(['wait until Tuesday'])
@@ -398,6 +399,51 @@ describe('a thread the node opens itself', () => {
     const out = splitThreadMessage(f, opened.id, f.threads[0].messages[0].id, 'human', at(5))
     expect(out.from.messages).toEqual([])
     expect(out.from.opener?.text).toBe('Ship on Monday or wait?')
+  })
+
+  // 2026-11-23: two threads the node opened about one issue were refused both ways and could only be closed.
+  it('two threads it opened about one issue merge: the target keeps its first post, the newer post becomes the summary', () => {
+    let f = openThread(emptyThreads('lead-1'), { title: 'CI is red', text: 'The deploy test fails on main.', from: 'task', state: 'answered' }, 'task:lead-1', at(0)).file
+    const first = f.threads[0]
+    f = openThread(f, { title: 'Main CI red again', text: 'The deploy test fails again after the retry.', from: 'task', state: 'answered' }, 'task:lead-2', at(5), { sid: 'sid-lead-2', host: 'devbox' }).file
+    const second = f.threads.find((t) => t.id !== first.id)!
+    f = fileMessage(f, { text: 'is it the cache again?', via: 'follow-up', threadId: second.id, at: at(6) }).file
+    const { file: merged, thread } = mergeThreads(f, second.id, first.id, 'task:lead-1', at(10))
+    expect(merged.threads.map((t) => t.id)).toEqual([first.id])
+    expect(thread.opener?.text).toBe('The deploy test fails on main.')
+    expect(thread).toMatchObject({ reply: 'The deploy test fails again after the retry.', replyAt: at(5), reply_by: 'task:lead-2', reply_sid: 'sid-lead-2', reply_host: 'devbox' })
+    expect(thread.messages.map((m) => m.text)).toEqual(['is it the cache again?'])
+    // His words came with it: the node's turn again.
+    expect(thread.state).toBe('working')
+    // The other way works too: neither post is the user's.
+    expect(mergeThreads(f, first.id, second.id, 'task:lead-1', at(10)).thread.opener?.text).toBe('The deploy test fails again after the retry.')
+  })
+
+  it('a target summary newer than the other\'s words stays; the other\'s summary counts over its own first post', () => {
+    let f = openThread(emptyThreads('lead-1'), { title: 'CI is red', text: 'The deploy test fails on main.', from: 'task', state: 'answered' }, 'task:lead-1', at(0)).file
+    const first = f.threads[0]
+    f = openThread(f, { title: 'Main CI red again', text: 'It fails again.', from: 'task', state: 'answered' }, 'task:lead-1', at(5)).file
+    const second = f.threads.find((t) => t.id !== first.id)!
+    const fixed = updateThread(f, first.id, { reply: 'Fixed: the retry passes.' }, 'task:lead-1', at(20)).file
+    const kept = mergeThreads(fixed, second.id, first.id, 'task:lead-1', at(21)).thread
+    expect(kept).toMatchObject({ reply: 'Fixed: the retry passes.', replyAt: at(20) })
+    // Only a node's post joined (no message of his): its state stays.
+    expect(kept.state).toBe('answered')
+    const found = updateThread(f, second.id, { reply: 'Root cause: a stale cache key.' }, 'task:lead-1', at(8)).file
+    expect(mergeThreads(found, second.id, first.id, 'task:lead-1', at(9)).thread).toMatchObject({ reply: 'Root cause: a stale cache key.', replyAt: at(8) })
+  })
+
+  // Review 2026-11-23: merging a thread that waits on him under one that does not dropped his decision.
+  it('a thread waiting on his decision never merges under one that does not ask it; the other way works', () => {
+    let f = openThread(emptyThreads('lead-1'), { title: 'Ship on Monday?', text: 'Ship on Monday or wait for the fix?', from: 'task', user_kind: 'user_own', user_kind_why: 'It is his release' }, 'task:lead-1', at(0)).file
+    const ask = f.threads[0]
+    expect(ask.state).toBe('needs')
+    f = openThread(f, { title: 'Release fix status', text: 'The fix is in review.', from: 'task', state: 'answered' }, 'task:lead-1', at(5)).file
+    const status = f.threads.find((t) => t.id !== ask.id)!
+    expect(() => mergeThreads(f, ask.id, status.id, 'task:lead-1', at(6))).toThrow(`thread_update {"id":"${status.id}","merge_into":"${ask.id}"}`)
+    const kept = mergeThreads(f, status.id, ask.id, 'task:lead-1', at(6)).thread
+    expect(kept.state).toBe('needs')
+    expect(kept.opener?.text).toBe('Ship on Monday or wait for the fix?')
   })
 
   it('refuses a blank title or post and an unknown source', () => {

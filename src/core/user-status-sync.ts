@@ -37,7 +37,6 @@ import { resolveDecisionOwner } from './decision-owner.js';
 import { isReportPending, onReportPendingChange } from './sessions/report-pending.js';
 import { isProgramRunTask, type Task } from './types.js';
 import type { ThreadCounts } from './org/thread-view.js';
-import { markHeldItems, type HoldingThread } from './org/thread-holds.js';
 import type { OutlivingSource } from './sessions/outliving-work.js';
 import { snoozedUntil } from './snooze.js';
 import { isQuietTurn } from './sessions/quiet-turn.js';
@@ -189,8 +188,6 @@ export interface StatusFacts {
   undelivered?: Map<string, { reason: string; at: string }>;
   /** Main, a lead or a task with Threads on -> what its Threads hold for the user (org/thread-groups.ts threadCounts). */
   threads?: Map<string, ThreadCounts>;
-  /** Per node that keeps Threads: its own threads that wait on him, for the items they hold (readNodeThreads). */
-  threadHolders?: Map<string, readonly HoldingThread[]>;
 }
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -281,18 +278,12 @@ async function joinedAsks(nodeId: string, rows: NodeThreadRows, all: readonly Ta
   return out;
 }
 
-/**
- * Per node that keeps Threads: their counts, and in `holders` its own threads that wait on him, in his
- * view's order, for the items they hold (org/thread-holds.ts markHeldItems).
- */
-async function readNodeThreads(tasks: readonly Task[], holders?: Map<string, readonly HoldingThread[]>): Promise<Map<string, ThreadCounts>> {
+async function readNodeThreads(tasks: readonly Task[]): Promise<Map<string, ThreadCounts>> {
   const out = new Map<string, ThreadCounts>();
   const nodes = tasks.filter((t) => keepsThreads(t) && t.phase !== 'COMPLETE');
   if (!nodes.length) return out;
   const { readThreads } = await import('./org/threads-store.js');
-  const { threadCounts, threadsForHim } = await import('./org/thread-groups.js');
-  const { orderedForHim } = await import('./org/thread-view.js');
-  const { withHeldAsk } = await import('./org/thread-report-ask.js');
+  const { threadCounts } = await import('./org/thread-groups.js');
   const { poppedIndex, threadsPopUpNow } = await import('./org/thread-popup.js');
   // threads_pop_up: one read of every owner for the whole pass, never one per node (org/thread-popup.ts).
   let below: ReturnType<typeof poppedIndex> | undefined;
@@ -324,8 +315,6 @@ async function readNodeThreads(tasks: readonly Task[], holders?: Map<string, rea
       // The tasks as they are now: one read a pass, shared by every node.
       all ??= await (await import('./task-manager.js')).listTasks();
       const own = await joinedAsks(t.id, threads, all, now);
-      // As he reads them (the one holding its own ask reads needs with it, thread-report-ask.ts withHeldAsk).
-      if (holders) holders.set(t.id, orderedForHim(threadsForHim(withHeldAsk(t, own), now), { needsFirst: true }));
       if (!threadsPopUpNow()) return threadCounts(own, now);
       // What waits on him below counts here too, never as this task's Needs you (thread-groups.ts threadCounts).
       const listed = (await (below ??= poppedIndex({ all }))).byViewer.get(t.id) ?? [];
@@ -656,11 +645,10 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
     for (const sid of t.session_ids ?? []) link(t.id, sid);
   }
   for (const [sid, s] of sessions) if (s.taskId && taskIds.has(s.taskId)) link(s.taskId, sid);
-  const threadHolders = new Map<string, readonly HoldingThread[]>();
-  const threads = await timedRead(took, 'threads', () => readNodeThreads(tasks, threadHolders));
+  const threads = await timedRead(took, 'threads', () => readNodeThreads(tasks));
   const { getConfig } = await import('./config-manager.js');
   const followWorkers = followWorkersChoice ?? experimentalEnabled((await getConfig()).experimental, 'leader_status_follows_workers');
-  return { readMs: took, followWorkers, sessions, letters, letterItems, approvals, reviews, choices, requestsFrom, triggers, schedules, checks, titles, sessionsOf, undelivered, threads, threadHolders };
+  return { readMs: took, followWorkers, sessions, letters, letterItems, approvals, reviews, choices, requestsFrom, triggers, schedules, checks, titles, sessionsOf, undelivered, threads };
 }
 
 /**
@@ -1051,11 +1039,7 @@ function withActions(task: Task, facts: StatusFacts, status: UserStatus, nowMs: 
   // A team the user stopped, or a task he snoozed by its start date (a working one carries no
   // `snoozed` mark): its items ride along and raise nothing until it is resumed or wakes.
   const held = facts.teamStopped?.has(task.id) || !!snoozedUntil(task, facts.tasksById, nowMs);
-  const applied = applyActions(status, actionItemsOf(task, facts), task.action_snoozes, { orgNode: !!task.org_role, held, sessionId: task.session_id, nowMs });
-  // An item one of its listed threads holds says which (a task row draws it as one line to that thread).
-  const holders = facts.threadHolders?.get(task.id);
-  const marked = applied.actions?.length ? markHeldItems(applied.actions, holders ?? []) : undefined;
-  const out = marked && marked !== applied.actions ? { ...applied, actions: [...marked] } : applied;
+  const out = applyActions(status, actionItemsOf(task, facts), task.action_snoozes, { orgNode: !!task.org_role, held, sessionId: task.session_id, nowMs });
   // Its lines (task-lines.ts), only with two or more: one line is what its row already says. Under
   // the experiment task_threads every line is a thread of the task's own (org/line-threads.ts), so
   // one is kept too.

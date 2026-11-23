@@ -32,12 +32,10 @@ describe('an ask card never sits inside a row that is a button', () => {
   // its name alone, so a box to type in or a card's own buttons inside one are lost. Every place that
   // draws the cards on a task's row puts them under the row, in its "...-actions-below" holder.
   it('every row that draws the cards draws them under it', () => {
-    const out = execFileSync('git', ['grep', '-n', '--untracked', '-e', '<ActionNeeded\\b', '-e', '<RowAsks\\b', '--', 'web/src'], { cwd: ROOT, encoding: 'utf8' })
-    // A row's block is RowAsks (actions/RowThreadAsks.tsx, 2026-11-23): the cards it draws are inside
-    // the holder its row puts it in, so its own lines are not rows.
-    const uses = out.split('\n').filter(Boolean).filter((l) => !/variant="strip"/.test(l) && !l.startsWith('web/src/components/actions/RowThreadAsks.tsx:'))
+    const out = execFileSync('git', ['grep', '-n', '--untracked', '<ActionNeeded\\b', '--', 'web/src'], { cwd: ROOT, encoding: 'utf8' })
+    const uses = out.split('\n').filter(Boolean).filter((l) => !/variant="strip"/.test(l))
     expect(uses.length, 'rows that draw the cards').toBeGreaterThan(0)
-    for (const line of uses) expect(line, 'drawn in an "...-actions-below" holder under its row').toMatch(/className="[a-z-]*-actions-below" data-asks-for=\{task\.id\}><(ActionNeeded|RowAsks)\b/)
+    for (const line of uses) expect(line, 'drawn in an "...-actions-below" holder under its row').toMatch(/className="[a-z-]*-actions-below" data-asks-for=\{task\.id\}><ActionNeeded\b/)
   })
 })
 

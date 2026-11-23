@@ -144,7 +144,8 @@ describe('guard: the server records each writer from Walnut\'s own record only',
     }
     walk(path.resolve('src'))
     expect(calls.length).toBeGreaterThanOrEqual(2)
-    for (const c of calls) expect(c, c).toMatch(/,\s*by,\s*source\)$/)
+    // The writer and its verified source, then at most the call's own options (`{ sameSubject: true }`).
+    for (const c of calls) expect(c, c).toMatch(/,\s*by,\s*source(,\s*\{[^{}]*\})?\)$/)
   })
 
   it('an answer\'s writer is the transcript read or the letter turn\'s own sender, never the message\'s sid', () => {

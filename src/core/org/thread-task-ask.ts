@@ -32,6 +32,7 @@ import { answerFor, answersOf, askWords, FOLDABLE_SOURCES, sameAskReworded, same
 import { memoryOf, statusDecision } from '../ask-decision.js';
 import { plainLine, type ThreadAskedIn } from './thread-view.js';
 import type { OrgThread, ThreadAskOwner } from './threads-model.js';
+import { matchIdRef } from '../../lib/id-ref.js';
 
 type AskTask = Pick<Task, 'id' | 'title' | 'phase' | 'status' | 'user_status' | 'router_area_id'>
   & Partial<Pick<Task, 'ask_answered' | 'asks_answered' | 'asks_withdrawn' | 'status_report'>>;
@@ -237,11 +238,36 @@ export function askOwnerKept(before: Pick<OrgThread, 'ask' | 'title'>, next: Pic
 }
 
 /**
+ * The task `ref` (an id or a unique prefix of one) names for ask_owner: one of `around` (the node's
+ * tree, same-ask-tree.ts treeAround), or for a task with Threads on that is no Org node any task
+ * below it (2026-11-23: such a task naming its own subtask was refused). None when nothing or
+ * several match. Pure.
+ */
+export function askOwnerTask<T extends Pick<Task, 'id' | 'parent_task_id'>>(ref: string, node: Pick<Task, 'id' | 'org_role'>, around: readonly T[], all: readonly T[]): T | undefined {
+  const pool = new Map(around.map((t) => [t.id, t] as const));
+  if (!node.org_role) {
+    const byId = new Map(all.map((t) => [t.id, t] as const));
+    for (const t of all) {
+      const seen = new Set<string>();
+      for (let up = t.parent_task_id; up && !seen.has(up); up = byId.get(up)?.parent_task_id) {
+        seen.add(up);
+        if (up === node.id) { pool.set(t.id, t); break; }
+      }
+    }
+  }
+  // The whole id wins over a prefix (src/lib/id-ref.ts); a prefix names a task only when it is unique and 6+ long.
+  const named = matchIdRef(pool.values(), ref);
+  return named.length === 1 && (named[0]!.id === ref || ref.length >= 6) ? named[0] : undefined;
+}
+
+/**
  * The owner as the store keeps it (patch `ask_owner`): that task must ask him something now, in
  * the node's area. Throws a plain message the store turns into a 409. Pure.
  */
 export function askOwnerOf(taskId: string, node: AreaScoped, task: AskTask | undefined, by: ThreadAskOwner['by'], at: string): ThreadAskOwner {
-  if (!task || task.id === node.id || !sameTaskArea(node, task)) throw new Error(`No task ${taskId} in this node's team to point the thread at.`);
+  if (!task || task.id === node.id || !sameTaskArea(node, task)) {
+    throw new Error(`No task ${taskId} in this node's team to point the thread at: name a task above, below or beside yours (its id or a unique prefix), never your own.`);
+  }
   const ask = askOf(task);
   if (!ask) throw new Error(`Task ${taskId} asks the user nothing now: the thread stays his own ask.`);
   const decision = decisionOf(task);

@@ -67,6 +67,7 @@ import crypto from 'node:crypto';
 import { threadsPopUpNow } from './thread-popup-rules.js';
 import { normalizeThreadLetter, type ThreadLetter } from './letter-thread-model.js';
 import { normalizeThreadChoice, type ThreadChoice } from './choice-thread-model.js';
+import { summaryPointsElsewhere, summaryRepeatsHim } from './thread-summary-content.js';
 
 export const THREAD_STATES = ['new', 'working', 'needs', 'answered', 'pending'] as const;
 export type ThreadState = typeof THREAD_STATES[number];
@@ -248,6 +249,8 @@ export interface ThreadMove {
    * the thread where it was handed, however many hands it went through.
    */
   owners?: string;
+  /** Merged there into this thread (thread-tree-merge.ts): a follow-up from an old card goes to it. */
+  merged?: string;
 }
 
 export type ThreadMoveKind = 'work' | 'hand';
@@ -390,7 +393,7 @@ export interface ThreadsFile {
   threads: OrgThread[];
 }
 
-export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted' | 'user_kind' | 'watched_by_user' | 'same_ask' | 'same_node' | 'reply_pending' | 'needs_options' | 'returned_ask' | 'other_open_asks';
+export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted' | 'user_kind' | 'watched_by_user' | 'same_ask' | 'same_node' | 'reply_pending' | 'needs_options' | 'returned_ask' | 'other_open_asks' | 'same_subject';
 
 export class ThreadError extends Error {
   constructor(public code: ThreadErrorCode, public status: number, message: string) {
@@ -455,12 +458,14 @@ function normalizeReplySource(t: OrgThread): void {
 }
 
 /** The summary written: its writer goes with it. Called only when the words change. */
-function setReply(next: OrgThread, text: string | undefined, by: ThreadWriter, source: ThreadTextSource | undefined): void {
+/** `by` null: a word whose writer was never recorded stays unknown (mergeThreads), never guessed. */
+function setReply(next: OrgThread, text: string | undefined, by: ThreadWriter | null, source: ThreadTextSource | undefined): void {
   delete next.reply_by;
   delete next.reply_sid;
   delete next.reply_host;
   if (!text) { delete next.reply; return; }
   next.reply = text;
+  if (by === null) return;
   next.reply_by = by;
   const s = by === 'human' ? undefined : verifiedSource(source);
   if (s) { next.reply_sid = s.sid; if (s.host) next.reply_host = s.host; }
@@ -703,6 +708,33 @@ export function recentConversation(file: ThreadsFile, at: string, within = SAME_
   return isOpen(best.t) ? best.t : undefined;
 }
 
+/** A whole message that only reacts: a word or two of thanks, ok or done, no question (filing only; isAcknowledgement is the looser close check). */
+const PLAIN_REACTION = /^(?:done|ok|okay|k|thanks|thank you|thx|got it|great|nice|good|cool|perfect|sounds good|lgtm|\u597d|\u597d\u7684|\u884c|\u53ef\u4ee5|\u6536\u5230|\u8c22\u8c22|\u77e5\u9053\u4e86|\u660e\u767d|\u6ca1\u95ee\u9898|\u5b8c\u6210|\u641e\u5b9a|\ud83d\udc4d)(?:[\s,.!\uff0c\u3002\uff01~]*(?:thanks|thank you|\u8c22\u8c22|\ud83d\udc4d))?[\s.!\uff01\u3002~]*$/i;
+export function isPlainReaction(text: string): boolean {
+  return PLAIN_REACTION.test(text.trim());
+}
+
+/** Within this, a bare reaction goes to the thread of the node's newest answer. */
+const REACTION_JOINS_MS = 24 * 3_600_000;
+
+/**
+ * The open thread that holds the node's newest word (its opener, an answer or its summary), within a
+ * day, whatever its state: his reaction is about what the node said last (review 2026-11-23: an "ok"
+ * after an answer on a working thread must not go to an older answered one).
+ */
+function latestAnswered(file: ThreadsFile, at: string): OrgThread | undefined {
+  const now = Date.parse(at);
+  let best: { t: OrgThread; ms: number } | undefined;
+  for (const t of file.threads) {
+    if (!isOpen(t)) continue;
+    for (const when of [t.opener?.at, t.replyAt, ...t.messages.map((m) => m.answer?.at)]) {
+      const ms = when ? Date.parse(when) : NaN;
+      if (Number.isFinite(ms) && ms <= now + 60_000 && now - ms <= REACTION_JOINS_MS && (!best || ms > best.ms)) best = { t, ms };
+    }
+  }
+  return best?.t;
+}
+
 /** A thread his view can show for what it holds: open, not snoozed, waiting on him or answered. */
 function inHisSight(t: OrgThread, now: number): boolean {
   const snoozed = !!t.snoozed && Date.parse(t.snoozed.until) > now;
@@ -740,8 +772,17 @@ export function fileMessage(file: ThreadsFile, input: FileMessageInput): FileMes
   const named = input.threadId ? file.threads.find((t) => t.id === input.threadId) : undefined;
   const reopened = !!named && closedByHimJustNow(named, input.at, input.reopenWithin ?? FOLLOW_UP_REOPENS_MS);
   const recent = !input.threadId && input.joinRecent && input.via === 'chat' ? recentConversation(file, input.at, input.joinRecent) : undefined;
-  const target = named ?? recent;
+  // A bare reaction ("Done", "ok, thanks") is about the node's newest answer, never a subject of its own
+  // (2026-11-23: his "Done" became a third thread of one issue).
+  const reaction = !named && !recent && input.joinRecent && input.via === 'chat' && isPlainReaction(text) ? latestAnswered(file, input.at) : undefined;
+  const target = named ?? recent ?? reaction;
   if (target && (isOpen(target) || reopened)) {
+    // A bare reaction moves nothing: it is his "ok" to what the node said, never an answer to a
+    // decision nor a new turn for the node (review 2026-11-23).
+    if (target === reaction) {
+      const next: OrgThread = { ...recordReaction(target, input.at), messages: [...target.messages, message], updatedAt: input.at, by: 'human' };
+      return { file: replace(file, next, input.at), thread: next, message, created: false, duplicate: false, joined: 'recent' };
+    }
     // His own message in a snoozed thread brings it back; one he closed minutes ago opens again.
     // His answer ends its needs, and its options with it (a choice clicked is filed as his words).
     const { snoozed: _s, closed: _c, options: _o, ...rest } = target;
@@ -1045,6 +1086,12 @@ export function patchHandsToUser(cur: Pick<OrgThread, 'state' | 'closed'>, patch
  */
 export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, by: ThreadWriter, at: string, source?: ThreadTextSource, opts: { line?: boolean } = {}): { file: ThreadsFile; thread: OrgThread } {
   checkPatch(patch);
+  // A node's summary must say something on its own: his card shows only it (org/thread-summary-content.ts).
+  // A close needs none, and a status line's words are judged where the line is read (status-threads.ts patchForLine).
+  if (by !== 'human' && !opts.line && patch.close === undefined && isStr(patch.reply)) {
+    const empty = summaryPointsElsewhere(patch.reply) ?? summaryRepeatsHim(patch.reply, find(file, id).messages.map((m) => m.text));
+    if (empty) throw new ThreadError('bad_input', 422, empty);
+  }
   file = stampLegacyReplyAt(file);
   const cur = find(file, id);
   // A thread that moved lives on at the other node: it is changed there, never opened again here.
@@ -1202,9 +1249,18 @@ function watchOnly(file: ThreadsFile, cur: OrgThread, patch: ThreadPatch, by: Th
   return { file: replace(file, next, at), thread: next };
 }
 
+/** A node-opened thread's newest word: its summary when written after its first post, else that post. */
+function newestNodeWord(t: OrgThread): { text: string; at: string; by?: ThreadWriter; sid?: string; host?: string } | null {
+  if (t.reply && t.replyAt && (!t.opener || t.replyAt > t.opener.at)) return { text: t.reply, at: t.replyAt, by: t.reply_by, sid: t.reply_sid, host: t.reply_host };
+  return t.opener ? { text: t.opener.text, at: t.opener.at, by: t.opener.by, sid: t.opener.sid, host: t.opener.host } : null;
+}
+
 /**
  * Put thread `fromId` under `intoId`: its messages join the target in time order, its tasks too,
- * and it is gone. The node does this when a new message is about an open subject.
+ * and it is gone. The node does this when a new message is about an open subject. Two threads the
+ * node opened itself merge too (2026-11-23: two such threads about one issue could only be closed):
+ * the target keeps its first post, and the other's newest word becomes the summary when it is newer
+ * than the target's, so it is not lost.
  */
 export function mergeThreads(file: ThreadsFile, fromId: string, intoId: string, by: ThreadWriter, at: string): { file: ThreadsFile; thread: OrgThread } {
   if (fromId === intoId) throw new ThreadError('same_thread', 400, 'A thread cannot be merged into itself.');
@@ -1218,7 +1274,23 @@ export function mergeThreads(file: ThreadsFile, fromId: string, intoId: string, 
   // A thread the user closed stays closed: merging it would open it again unasked.
   if (!isOpen(from)) throw new ThreadError('thread_closed', 409, `Thread ${fromId} is closed; reopen it first if it belongs under ${intoId}.`);
   // A thread the node opened keeps its first post: his ask goes under it, never the other way.
-  if (from.opener) throw new ThreadError('bad_input', 409, `Thread ${fromId} was opened by you with its own first post; merge ${intoId} into it instead.`);
+  if (from.opener && !into.opener) {
+    throw new ThreadError('bad_input', 409, `Thread ${fromId} opens with your own post and ${intoId} with his ask; his ask goes under your post, so merge the other way: thread_update {"id":"${intoId}","merge_into":"${fromId}"}.`);
+  }
+  // A decision he still has to make stays where he sees it: merging it under a thread that does not
+  // ask it would drop the ask, its options or its letter (review 2026-11-23).
+  const holds = from.state === 'needs' && into.state !== 'needs' ? 'a decision waiting on him (needs)'
+    : from.letter && !into.letter ? `its letter ${from.letter.id}`
+      : from.choice && !into.choice ? 'his pick of a choice' : null;
+  if (holds) {
+    throw new ThreadError('bad_input', 409, `Thread ${fromId} holds ${holds} that ${intoId} does not: merge the other way (thread_update {"id":"${intoId}","merge_into":"${fromId}"}), or settle it first.`);
+  }
+  // Both opened by the node: the other's newest word, when newer than the target's summary (or first
+  // post), is the summary now. An older word of the node (a first post its own summary replaced, or
+  // one older than the target's summary) is not kept: the card shows only the newest, and the node's
+  // chat still holds it. His words are always kept (messages).
+  const carried = from.opener && into.opener ? newestNodeWord(from) : null;
+  const intoWordAt = into.reply ? into.replyAt ?? '' : into.opener?.at ?? '';
   // A watch goes with the messages: the thread he watches is the one they are in now (his watch wins).
   const watched = into.watched?.by === 'human' ? into.watched : from.watched?.by === 'human' ? from.watched : into.watched ?? from.watched;
   const messages = [...into.messages, ...from.messages].sort((a, b) => a.at.localeCompare(b.at));
@@ -1231,8 +1303,14 @@ export function mergeThreads(file: ThreadsFile, fromId: string, intoId: string, 
     ...(needsBuzzedAt ? { needsBuzzedAt } : {}),
     ...(needsAt ? { needsAt } : {}),
     ...(from.tasks?.length || into.tasks?.length ? { tasks: taskList([...(into.tasks ?? []), ...(from.tasks ?? [])]) } : {}),
-    ...(into.state === 'answered' || into.state === 'pending' ? { state: 'working' as ThreadState } : {}),
+    // His words joined it: the node's turn again. A node's own post alone (no message of his) changes no turn.
+    ...(from.messages.length && (into.state === 'answered' || into.state === 'pending') ? { state: 'working' as ThreadState } : {}),
   };
+  if (carried && carried.at > intoWordAt) {
+    // Its writer as recorded with it (none recorded stays unknown, never guessed).
+    setReply(next, clip(carried.text, THREAD_REPLY_MAX), carried.by ?? null, carried.sid ? { sid: carried.sid, ...(carried.host ? { host: carried.host } : {}) } : undefined);
+    next.replyAt = carried.at;
+  }
   return { file: { ...file, threads: file.threads.filter((t) => t.id !== fromId).map((t) => (t.id === intoId ? next : t)) }, thread: next };
 }
 

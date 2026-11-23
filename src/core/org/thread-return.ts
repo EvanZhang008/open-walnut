@@ -83,16 +83,18 @@ export function returnRefusal(cur: OrgThread, patch: ThreadPatch, by: ThreadWrit
   return null;
 }
 
-/** The card's summary when it comes back after his words: his words, what was done since, then the decision. */
+/**
+ * The card's summary when it comes back after his words: the decision first, then what was done
+ * since he wrote. Never his words again (2026-11-23, the user, on a card that opened with his own
+ * voice message quoted: "it repeats my question completely ... my words are sometimes messy, that
+ * is not needed; summarize it, or just say the matter").
+ */
 export function returnedReply(cur: Pick<OrgThread, 'messages'>, since: string, reply: string): string {
   const his = lastHisMessage(cur);
-  const words = his ? his.text.replace(/\s+/g, ' ').trim() : '';
-  const quote = words.length > 60 ? `${words.slice(0, 60)}...` : words;
-  const zh = /[\u4e00-\u9fff]/.test(`${since}${reply}${words}`);
+  const zh = /[\u4e00-\u9fff]/.test(`${since}${reply}${his?.text ?? ''}`);
   const at = his ? his.at.slice(11, 16) : '';
   const head = zh
-    ? `**\u4f60 ${at} \u8bf4\uff1a\u201c${quote}\u201d\u3002\u4e4b\u540e\u6211\u505a\u4e86\uff1a** ${since.trim()}`
-    : `**You wrote at ${at} UTC: "${quote}". Since then:** ${since.trim()}`;
-  const ask = zh ? '**\u73b0\u5728\u8981\u4f60\u51b3\u5b9a\uff1a**' : '**Now you decide:**';
-  return `${head}\n\n${ask} ${reply.trim()}`;
+    ? `**\u4f60 ${at} \u7559\u8a00\u4e4b\u540e\uff1a**`
+    : `**Since your message at ${at} UTC:**`;
+  return `${reply.trim()}\n\n${head} ${since.trim()}`;
 }

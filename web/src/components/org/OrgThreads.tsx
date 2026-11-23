@@ -26,7 +26,7 @@
  * (thread-view.ts threadOverdue; Walnut wakes the node first, thread-recheck.ts). A summary already naming a task keeps no
  * second chip for it, and one reply that covered several threads stays off every card.
  *
- *   a card     state, title, time; the summary; its tasks the summary does not name; the answers
+ *   a card     state, where it came from (thread-origin.ts), time, title; the summary; its tasks the summary does not name; the answers
  *              still news folded behind "N new answers"; Conversation (N messages); Acknowledge, Follow up (a message filed
  *              under it). His own messages still waiting for an answer are not echoed back on the
  *              card (2026-11-01, the user, after a Follow up showed "Not answered yet: <his words>":
@@ -69,6 +69,8 @@ import type { OrgThread, OrgThreadMessage } from '@/api/org-threads';
 import type { OrgThreadsState } from './useOrgThreads';
 import { SnoozedUntil } from './OrgThreadSnooze';
 import { threadBadge } from './thread-badge';
+import { ORIGIN_ALL, fromOrigin, threadOrigin } from './thread-origin';
+import { ThreadOriginFilter, useThreadOrigin } from './ThreadOriginFilter';
 import { ThreadState } from './ThreadState';
 import { PoppedThreadCard } from './PoppedThreadCard';
 import { TopicThreadBadge } from '@/components/topics/TopicThreadBadge';
@@ -224,6 +226,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   const back = backFromKnown(t);
   // Its word and dot are its group's (core/org/thread-groups.ts), the one it is drawn in (thread-badge.ts).
   const badge = threadBadge(t, listed, now);
+  const origin = threadOrigin(t, name);
   // In a bound room a click on its title reads it whole elsewhere (onReadWhole); in a list, it unfolds in place.
   // In Watching, one line that opens the card in place, so a few watched threads never push Needs you down.
   const [copyOpen, setCopyOpen] = useState(false);
@@ -264,8 +267,8 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
               {ICON_EYE_FILLED}<span className="org-thread-watch-who">{t.watched!.by === 'human' ? 'Watching' : `Watched by ${name}`}</span>
             </span>{' \u00b7 '}
           </>)}
-          {t.opener && <span className="org-thread-from" data-testid="org-thread-from" title={`Opened by ${name}`}>Opened by {name}</span>}
-          {t.opener && ' \u00b7 '}
+          {/* Where it came from, on every card: this task's own (his message, or its agent opened it), or a task below (thread-origin.ts). */}
+          <span className="org-thread-from" data-testid="org-thread-from" data-origin={origin.from} title={origin.hover}>{origin.words}</span>{' \u00b7 '}
           {back && <span className="org-thread-back" data-testid="org-thread-back-from-known" title="You acknowledged it while its work ran; it came back with something new">New since you acknowledged{' \u00b7 '}</span>}
           {known
             ? <span className="org-thread-time" data-testid="org-thread-time">You acknowledged {'\u00b7'} {timeAgo(t.ackedAt!, { now })}</span>
@@ -290,14 +293,14 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
           {heldItem && owner
             ? <AskCard task={owner} item={heldItem} threadId={t.id} />
             : <CardWords testId="org-thread-held-question"><AgentText text={held.ask} compact shortLinks {...threadSummarySource(t)} /></CardWords>}
-          {held.reply && <CardWords testId="org-thread-reply"><AgentText text={held.reply} compact shortLinks {...threadSummarySource(t)} /></CardWords>}
+          {held.reply && <CardWords testId="org-thread-reply"><AgentText text={held.reply} compact pictures shortLinks {...threadSummarySource(t)} /></CardWords>}
         </div>
       )}
       {known && !deciding && <KnownBlock t={t} tasks={tasks} name={name} />}
       {!asked && !held && !known && (card.summary.by === 'node'
         ? (<>
           {/* The summary opens on the machine of the session that last wrote it, never the node's current one. */}
-          <CardWords testId="org-thread-reply"><AgentText text={card.summary.text} compact shortLinks {...threadSummarySource(t)} /></CardWords>
+          <CardWords testId="org-thread-reply"><AgentText text={card.summary.text} compact pictures shortLinks {...threadSummarySource(t)} /></CardWords>
           {/* His message came after it: it says so until the node rewrites it (core/org/thread-view.ts summaryBehindHim). */}
           {card.summary.stale && <span className="org-thread-stand-in-note" data-testid="org-thread-summary-stale">Written before your latest message; {name} has not updated it yet</span>}
         </>)
@@ -306,7 +309,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
           <CardWords testId="org-thread-reply" className="is-stand-in" data={{ 'data-by': 'walnut' }}>
             {card.summary.from === 'none'
               ? <p>{name} has not answered yet</p>
-              : <AgentText text={card.summary.text} compact shortLinks {...threadStandInSource(t, card.summary)} />}
+              : <AgentText text={card.summary.text} compact pictures shortLinks {...threadStandInSource(t, card.summary)} />}
           </CardWords>
           {card.summary.from !== 'none' && <span className="org-thread-stand-in-note" data-testid="org-thread-stand-in">{STAND_IN_NOTE[card.summary.from ?? 'answer'](name)}</span>}
         </>))}
@@ -390,7 +393,7 @@ export function ThreadItem({ t, all, shared, tasks, state, onFollowUp, name, now
   copy?: WatchingCopy;
 }) {
   return t.owner && owner
-    ? <PoppedThreadCard node={owner.id} t={t} state={state} now={now} snoozed={snoozed} listed={listed} />
+    ? <PoppedThreadCard node={owner.id} name={name} t={t} state={state} now={now} snoozed={snoozed} listed={listed} />
     : <ThreadCard t={t} all={all} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={now} snoozed={snoozed} owner={owner} focused={focused} listed={listed} {...(onReadWhole ? { onReadWhole } : {})} {...(copy ? { copy } : {})} />;
 }
 
@@ -416,7 +419,7 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
   const all = state.threads;
   const needsFirst = useExperimental('top_thread');
   const shared = useMemo(() => sharedAnswers(all ?? []), [all]);
-  const { open, listedIds, hidden, snoozed, clock } = useMemo(() => {
+  const { open: openAll, listedIds, hidden: hiddenAll, snoozed: snoozedAll, clock } = useMemo(() => {
     // The page's clock ticks once a minute; the re-read at a snooze's end (useOrgThreads) must not wait for it.
     const at = Math.max(now, Date.now());
     const list = all ?? [];
@@ -433,27 +436,36 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
       snoozed: list.filter((t) => snoozedNow(t, at)).sort((a, b) => a.snoozed!.until.localeCompare(b.snoozed!.until)),
     };
   }, [all, now, needsFirst]);
-  const closed = useMemo(() => (all ?? []).filter((t) => !!t.closed), [all]);
+  const closedAll = useMemo(() => (all ?? []).filter((t) => !!t.closed), [all]);
+  // The filter by where they came from (ThreadOriginFilter.tsx), once a task below has a thread here:
+  // every list shows the pick's threads, read after the lists are made, so no card changes its group.
+  const origin = useThreadOrigin(foldNode, all, listedIds);
+  const { open, hidden, snoozed, closed } = useMemo(() => ({
+    open: origin.only(openAll), hidden: origin.only(hiddenAll), snoozed: origin.only(snoozedAll), closed: origin.only(closedAll),
+  }), [origin, openAll, hiddenAll, snoozedAll, closedAll]);
   // Task pills outside the text blocks (an answer's About line) open the task, as they do in the
   // chat. Every block of text opens its own paths from its own writer and keeps the click; a path
   // that still reached the list has no writer to name, so it is refused, never opened on a guess.
   const listFile = useAgentFileOpener(THREAD_LIST_SOURCE);
   const onEntityClick = useEntityClickHandler(undefined, listFile.onFileOpen, listFile.fileHost, listFile.fileSessionId, listFile.refusesAll);
-  const snoozedIds = useMemo(() => new Set(snoozed.map((t) => t.id)), [snoozed]);
+  const snoozedIds = useMemo(() => new Set(snoozedAll.map((t) => t.id)), [snoozedAll]);
   // A chat message's thread line asked for one of these (thread-focus.ts): its section opens, and
   // it is brought into view and marked a moment.
   const rootRef = useRef<HTMLDivElement>(null);
-  const groups = useMemo(() => (byState ? groupThreads(all ?? [], clock) : null), [byState, all, clock]);
+  const allGroups = useMemo(() => (byState ? groupThreads(all ?? [], clock) : null), [byState, all, clock]);
+  const groups = useMemo(() => (allGroups ? origin.onlyGroups(allGroups) : null), [allGroups, origin]);
   const focused = useFocusedThread(owner?.id, all, rootRef, (t) => {
-    if (groups) {
+    // The filter leaves it out: every thread shows again, so the asked one can.
+    if (!fromOrigin(t, origin.pick)) origin.setPick(ORIGIN_ALL);
+    if (allGroups) {
       // In a folded group: it opens, so the card can be brought into view.
-      const g = THREAD_GROUPS.find((x) => groups[x].some((y) => y.id === t.id));
+      const g = THREAD_GROUPS.find((x) => allGroups[x].some((y) => y.id === t.id));
       if (g && FOLDED_GROUPS.includes(g)) openFold(g, true);
       return;
     }
     if (t.closed) setShowClosed(true);
     else if (snoozedIds.has(t.id)) setShowSnoozed(true);
-    else if (hidden.some((x) => x.id === t.id)) setShowHidden(true);
+    else if (hiddenAll.some((x) => x.id === t.id)) setShowHidden(true);
   });
   // Nothing in either view: one empty line (ThreadsEmpty). A new topic starts from the Org list's
   // Topics heading or a task's menu, never here: a topic is not a thread (2026-11-23, the user, on
@@ -462,7 +474,7 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
   const card = (t: OrgThread, copy?: WatchingCopy) => <ThreadItem key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={clock} snoozed={snoozedIds.has(t.id)} owner={owner} focused={focused === t.id && !copy} listed={listedIds.has(t.id)} {...(copy ? { copy } : {})} />;
   // Watching: his watched threads, each also drawn in its own group below (a thread of a task
   // below is watched in that task's own Threads, never from here).
-  const watching = useMemo(() => watchingOf((all ?? []).filter((t) => !t.owner)), [all]);
+  const watching = useMemo(() => watchingOf(origin.only((all ?? []).filter((t) => !t.owner))), [all, origin]);
   const watchingList = all !== null && (
     <OrgThreadsWatching threads={watching} card={(t, copy) => card(t, copy)} onReorder={(writes) => { for (const w of writes) void state.update(w.id, { watch_at: w.watch_at }); }} />
   );
@@ -470,6 +482,7 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
     <div ref={rootRef} className="org-threads" data-testid="org-threads" onClick={onEntityClick}>
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}
       {all === null && !state.error && <LoadingState size="section" title="Loading threads…" />}
+      {origin.choices && <ThreadOriginFilter choices={origin.choices} pick={origin.pick} onPick={origin.setPick} />}
       {groups && all !== null && <OrgThreadsByState watching={watchingList} groups={groups} opened={opened} onOpen={openFold} card={(t) => card(t)} name={name} owner={owner} epoch={state.catchUp ?? 0} {...(owner ? { onShowThread: (id: string) => askThreadFocus(owner.id, id) } : {})} />}
       {!groups && (<>
       {watchingList}

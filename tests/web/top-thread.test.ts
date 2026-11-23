@@ -19,8 +19,7 @@ import { listedForHim, orderedForHim } from '../../src/core/org/thread-view.js'
 import { threadCounts } from '../../src/core/org/thread-groups.js'
 import type { ActionItem } from '../../src/core/action-needed.js'
 import type { OrgThread } from '../../web/src/api/org-threads'
-import { HELD_BY_THREAD, TOP_HIDDEN_VIEW, actionsNotThreads, awakeAt, decisionsElsewhere, hiddenAsk, hiddenLine, holdingThreads, rowAsks, stripItems, topIndex, topThreads } from '../../web/src/components/org/top-thread-model'
-import { markHeldItems } from '../../src/core/org/thread-holds.js'
+import { HELD_BY_THREAD, TOP_HIDDEN_VIEW, actionsNotThreads, awakeAt, decisionsElsewhere, hiddenAsk, hiddenLine, holdingThreads, stripItems, topIndex, topThreads } from '../../web/src/components/org/top-thread-model'
 import { ACTION_KINDS } from '../../src/core/action-needed.js'
 import { isBoolean, shownText, storedView, viewKey, writeView } from '../../web/src/utils/view-memory'
 
@@ -269,61 +268,6 @@ describe('a task row draws a decision a thread holds once, as a line to that thr
     expect(holdingThreads(list, [item('permission', 'req-1')])).toEqual([])
     // The hidden line names the same first thread.
     expect(hiddenAsk(list, items)?.id).toBe(holdingThreads(list, items)[0]!.id)
-  })
-
-  it('the server marks each awake item a listed thread holds, and the row draws one line per thread, the rest as its card', () => {
-    seq = 520
-    const list = topThreads([
-      thread('needs', 60, { heldAsk: { id: 'ask-a', ask: 'Skip it?', was: 'answered' }, askId: 'ask-a' } as Partial<OrgThread>),
-      thread('needs', 61, { letter: { id: 'lt-a', task: 'task-a', options: [] } }),
-    ], NOW)
-    const later = new Date(NOW + 3600_000).toISOString()
-    const items: ActionItem[] = [item('ask', 'ask-a'), item('letter', 'lt-a'), { ...item('letter', 'lt-snoozed'), snoozedUntil: later }, item('permission', 'req-1')]
-    // The snoozed letter's thread holds it too: it keeps its greyed card all the same.
-    const holders = [...list, thread('needs', 62, { letter: { id: 'lt-snoozed', task: 'task-a', options: [] } })]
-    const marked = markHeldItems(items, holders)
-    expect(marked.map((i) => i.thread?.id ?? null)).toEqual([list.find((t) => t.askId === 'ask-a')!.id, list.find((t) => t.letter)!.id, null, null])
-    // Nothing new: the same array, so the status is not written again.
-    expect(markHeldItems(marked, holders)).toBe(marked)
-    // A thread that no longer holds it takes its mark off.
-    expect(markHeldItems(marked, []).every((i) => !i.thread)).toBe(true)
-    const row = rowAsks(marked, NOW)
-    expect(row.lines.map((l) => l.id)).toEqual(marked.slice(0, 2).map((i) => i.thread!.id))
-    expect(marked.filter(row.onCard).map((i) => i.id)).toEqual(['lt-snoozed', 'req-1'])
-    // Two items on one thread: one line.
-    expect(rowAsks([marked[0]!, { ...item('choice', 'ch-1'), thread: marked[0]!.thread }], NOW).lines).toHaveLength(1)
-  })
-
-  it('every task row draws its asks through RowAsks, so no row draws a held decision as a second card', () => {
-    const files = (fs.readdirSync('web/src', { recursive: true }) as string[]).filter((f) => f.endsWith('.tsx')).map((f) => `web/src/${f}`)
-    // Each <ActionNeeded ...> tag, braces balanced (an arrow's ">" inside {} never ends it), without a variant: a row's card.
-    const rowCards = (src: string): number => {
-      let n = 0
-      for (let i = src.indexOf('<ActionNeeded'); i >= 0; i = src.indexOf('<ActionNeeded', i + 1)) {
-        if (/[A-Za-z]/.test(src[i + '<ActionNeeded'.length] ?? '')) continue
-        let depth = 0, j = i
-        for (; j < src.length; j++) {
-          if (src[j] === '{') depth++
-          else if (src[j] === '}') depth--
-          else if (src[j] === '>' && depth === 0) break
-        }
-        if (!/\bvariant=/.test(src.slice(i, j))) n++
-      }
-      return n
-    }
-    const drawn = files.filter((f) => rowCards(fs.readFileSync(f, 'utf8')) > 0).sort()
-    // RowAsks itself, and the folded search line, which opens the full card on purpose.
-    expect(drawn).toEqual(['web/src/components/actions/RowThreadAsks.tsx', 'web/src/components/tasks/SearchAskLine.tsx'])
-    expect(rowCards('<ActionNeeded task={t} accepts={(it) => it.id !== x} />')).toBe(1)
-    expect(rowCards('<ActionNeeded task={t} variant="strip" accepts={(it) => ok(it)} />')).toBe(0)
-    for (const f of ['web/src/components/tasks/TodoPanel.tsx', 'web/src/components/tasks/StatusSections.tsx']) {
-      expect(fs.readFileSync(f, 'utf8'), f).toMatch(/<RowAsks task=\{task\} \/>/)
-    }
-    const rowAsksSrc = fs.readFileSync('web/src/components/actions/RowThreadAsks.tsx', 'utf8')
-    expect(rowAsksSrc).toMatch(/rowAsks\(all, now\)/)
-    expect(rowAsksSrc).toMatch(/useOpenThread\(\)/)
-    // The row reads no Threads of its own: the server marks the items (review 2026-11-23, one read per row).
-    expect(rowAsksSrc).not.toMatch(/useOrgThreads/)
   })
 })
 

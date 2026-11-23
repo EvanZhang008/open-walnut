@@ -96,10 +96,8 @@ describe('Action needed covers every kind of ask', () => {
   })
 
   it('both kinds of task row mount the block', () => {
-    // Through RowAsks (actions/RowThreadAsks.tsx): the block, or one line for a decision a thread holds.
-    expect(read('web/src/components/tasks/StatusSections.tsx')).toMatch(/<RowAsks task=\{task\} \/>/)
-    expect(read('web/src/components/tasks/TodoPanel.tsx')).toMatch(/<RowAsks task=\{task\} \/>/)
-    expect(read('web/src/components/actions/RowThreadAsks.tsx')).toMatch(/<ActionNeeded task=\{task\} \/>/)
+    expect(read('web/src/components/tasks/StatusSections.tsx')).toMatch(/<ActionNeeded task=\{task\} \/>/)
+    expect(read('web/src/components/tasks/TodoPanel.tsx')).toMatch(/<ActionNeeded task=\{task\} \/>/)
     expect(read('ios-native/Walnut/Views/Tasks/TaskBoardRow.swift')).toMatch(/ActionNeededView\(task: task, items: actionItems/)
   })
 })

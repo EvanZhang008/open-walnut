@@ -29,15 +29,6 @@
 }
 .status-card-actions-below, .todo-row-actions-below { padding: 0 8px 4px 34px; }
 
-/* A decision a thread holds, on its task's row (RowThreadAsks.tsx): one quiet list row of the button
-   family (.btn-block.btn-ghost), the folded search line's words (home-navigation.css .search-ask-head),
-   that opens the thread. Its title wraps, never cut. */
-.row-thread-ask { align-items: flex-start; gap: 8px; margin: 2px 0; }
-.row-thread-ask-mark, .row-thread-ask-title, .row-thread-ask-go { line-height: 16px; }
-.row-thread-ask-mark { flex: none; font-size: var(--font-size-xs); font-weight: 600; color: var(--error); }
-.row-thread-ask-title { flex: 1 1 auto; min-width: 0; }
-.row-thread-ask-go { flex: none; color: var(--fg-muted); }
-
 /* The strip under a session's title bar (experiment action_needed_everywhere): the same one card.
    It never scrolls by itself: a box's @ and / lists open over the chat below it, never cut off at
    its edge. */
@@ -47,6 +38,4 @@
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .app-shell-navigation .status-card-also-working { font-size: var(--font-size-sm); }
   .app-shell-navigation .ask-pager { font-size: var(--font-size-md); }
-  .app-shell-navigation .row-thread-ask { min-height: 44px; align-items: center; }
-  .app-shell-navigation .row-thread-ask-mark { font-size: var(--font-size-sm); }
 }

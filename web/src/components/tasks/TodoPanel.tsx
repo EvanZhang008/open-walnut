@@ -148,7 +148,7 @@ import { buildFilterEvalContext, dimPasses, hiddenByReasons, passesChips, type F
 import { useHomeFilters, useArchiveFetch, useCreatedOutsideToast } from './useHomeFilters';
 import { archiveNarrowed, footerScope } from './TodoFilterFooter';
 import { LimitedSummary, StatusSectionGroup, sectionRowsOf, type SectionRowHandlers } from './StatusSections';
-import { RowAsks } from '@/components/actions/RowThreadAsks';
+import { ActionNeeded } from '@/components/actions/ActionNeeded';
 import { SearchAskLine } from './SearchAskLine';
 import { ProjectStatusFolds, useProjectFolds } from './PanelDesignParts';
 import { bottomStatusSections, foldTasksByProject, leftoverFoldProjects, projectFoldKey, usePanelDesign, type ProjectFoldTasks } from './panel-design';
@@ -1408,7 +1408,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
     {/* A search list folds it to one line (SearchAskLine), so the results still scan. */}
     {!isDone && task.user_status?.actions?.length ? (foldAsks
       ? <div className="todo-row-actions-below" data-asks-for={task.id}><SearchAskLine task={task} /></div>
-      : <div className="todo-row-actions-below" data-asks-for={task.id}><RowAsks task={task} /></div>) : null}
+      : <div className="todo-row-actions-below" data-asks-for={task.id}><ActionNeeded task={task} /></div>) : null}
     </>
   );
 });

@@ -41,7 +41,7 @@ export const HANDOFF_ROUTES = [
 ] as const;
 
 /** The task fields the rule reads. */
-export type FollowTask = Pick<Task, 'id' | 'title' | 'org_role' | 'parent_task_id' | 'project' | 'org_leads' | 'phase' | 'status' | 'created_at' | 'org_name'>;
+export type FollowTask = Pick<Task, 'id' | 'title' | 'org_role' | 'parent_task_id' | 'project' | 'org_leads' | 'phase' | 'status' | 'created_at' | 'org_name' | 'threads_on'>;
 
 const openTask = (t: FollowTask | undefined): boolean => !!t && t.phase !== 'COMPLETE' && t.status !== 'done';
 const isNode = (t: FollowTask | undefined): boolean => t?.org_role === 'main' || t?.org_role === 'lead';
@@ -91,6 +91,16 @@ export function ownerNodeOf(task: FollowTask, p: OrgPlaces): FollowTask | undefi
     id = parent.parent_task_id;
   }
   return p.leadOf(top.project) ?? p.main;
+}
+
+/**
+ * Where a thread moved by hand to `target` lands (thread_move): the task itself when it keeps its
+ * own Threads (an Org node, or a task with Threads on: keeps-threads.ts), else the node whose team
+ * does its work. 2026-11-23: a thread moved to a subtask with Threads on landed on its VP, and the
+ * move back was refused as already there.
+ */
+export function moveTargetOf(target: FollowTask, p: OrgPlaces): FollowTask | undefined {
+  return keepsThreads(target) ? target : ownerNodeOf(target, p);
 }
 
 /** The nodes a task reports up through: its owner, the VP leading that owner's project, Main. */
@@ -374,8 +384,9 @@ export function handOffLine(r: HandOffResult | null | undefined): string {
 }
 
 /**
- * Move one thread by hand (thread_move): to the node `to` names (a node's task id, a task whose
- * team's node takes it, a project or a VP's name), from any node.
+ * Move one thread by hand (thread_move): to the node `to` names (a node's task id, a task that
+ * keeps its own Threads, a task whose team's node takes it, a project or a VP's name), from any
+ * task that keeps Threads (moveTargetOf).
  */
 export async function moveThreadTo(input: { from: Task; threadId: string; to: string; by: ThreadWriter; why?: string }): Promise<{ thread: OrgThread; to: MoveEnd }> {
   const { orgTasks, resolveOrgContact } = await import('./org-store.js');
@@ -390,7 +401,7 @@ export async function moveThreadTo(input: { from: Task; threadId: string; to: st
   }
   if (!target) target = (await resolveOrgContact(want).catch(() => null))?.task;
   if (!target) throw new ThreadError('bad_input', 404, `No node, task, project or VP named "${want}". Read org_get for the nodes.`);
-  const to = ownerNodeOf(p.byId.get(target.id) ?? target, p);
+  const to = moveTargetOf(p.byId.get(target.id) ?? target, p);
   if (!to) throw new ThreadError('bad_input', 404, `"${want}" is in no team Walnut can find.`);
   if (to.id === input.from.id) throw new ThreadError('same_node', 409, `Thread ${input.threadId} is already on ${orgDisplayTitle(to as Task)}'s Threads.`);
   if (!openTask(to)) throw new ThreadError('bad_input', 409, `${orgDisplayTitle(to as Task)} is closed: a thread moves only to an open node.`);

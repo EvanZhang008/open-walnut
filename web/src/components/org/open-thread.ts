@@ -1,8 +1,7 @@
 /**
  * Open one thread where it is kept, scrolled to and marked (thread-focus.ts): Main's and a lead's on
  * their node of the Org page, any other task's in its Threads view beside its chat. One way for every
- * link to a thread: a chat message's thread line (sessions/reply-thread-line.tsx) and a task row's
- * "Needs you" line (actions/RowThreadAsks.tsx).
+ * link to a thread: a chat message's thread line (sessions/reply-thread-line.tsx).
  */
 import { useNavigate } from 'react-router-dom';
 import { keepsThreads } from '@open-walnut/keeps-threads';

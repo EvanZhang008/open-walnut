@@ -30,6 +30,7 @@ const WRITERS: Record<string, string> = {
   openNodeThread: 'a new record on the node that opens it',
   patchThread: 'changes the record in place',
   mergeThread: 'folds two records of one node into one',
+  markMergedThere: 'marks the pointer a moved record left behind with the record it was merged into, in place',
   splitThread: 'one message becomes a new record on the same node',
   moveThread: 'under threads_pop_up the record leaves the old node whole (relocateThreadOut)',
   noteClosesTold: 'marks records in place',

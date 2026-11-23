@@ -142,6 +142,7 @@ describe('the switch case, replayed', () => {
     expect(back.ok).toBe(true)
     const t = await thread(fresh.id)
     expect(t.state).toBe('needs')
-    expect(t.reply).toMatch(/^\*\*You wrote at \d\d:\d\d UTC: "Did you not answer me already\?"\. Since then:\*\* Yes: it is a bug[\s\S]*\*\*Now you decide:\*\* Turn the sprinkler back on/)
+    expect(t.reply).toMatch(/^Turn the sprinkler back on[\s\S]*\*\*Since your message at \d\d:\d\d UTC:\*\* Yes: it is a bug/)
+    expect(t.reply).not.toContain('Did you not answer me already')
   })
 })

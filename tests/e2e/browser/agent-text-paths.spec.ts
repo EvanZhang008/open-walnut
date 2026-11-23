@@ -464,7 +464,9 @@ test('thread summary paths and answer captions open without navigating; repeat, 
   const summary = card.getByTestId('org-thread-reply');
   const link = summary.locator(`a.file-link[data-file-path="${picture}"]`);
   await expect(link).toBeVisible();
-  await expect(summary.locator('img')).toHaveCount(0);
+  // The summary draws its picture, as the chat does, and the path stays its caption's link
+  // (2026-11-23, the user: "why picture is not render in the thread?").
+  await expect(summary.locator('img.inline-image[alt="agent-links.png"]')).toHaveCount(1);
   await expect(summary.locator('a.task-link')).toHaveCount(1);
   await expect(summary.locator('a.letter-link')).toHaveCount(1);
   await expect(summary.locator('a[href="https://example.com/design"]')).toHaveCount(1);

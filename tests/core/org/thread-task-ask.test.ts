@@ -6,7 +6,7 @@
  * and the stored state disagree with the projection.
  */
 import { describe, it, expect } from 'vitest'
-import { askOwnerKept, askOwnerOf, askPointerSignature, sameThreadDecision, threadAskedIn, withAskPointers } from '../../../src/core/org/thread-task-ask.js'
+import { askOwnerKept, askOwnerOf, askOwnerTask, askPointerSignature, sameThreadDecision, threadAskedIn, withAskPointers } from '../../../src/core/org/thread-task-ask.js'
 import { askKey } from '../../../src/core/same-ask.js'
 import { shownToHim, threadOverdue, watchingOf } from '../../../src/core/org/thread-view.js'
 import { threadCounts } from '../../../src/core/org/thread-groups.js'
@@ -161,6 +161,20 @@ describe('owner: the node named the task', () => {
     expect(() => askOwnerOf('t-owner', NODE, task('t-owner', { user_status: { state: 'working' } } as Partial<Task>), 'agent', iso(0))).toThrow(/asks the user nothing/)
     expect(() => askOwnerOf('t-owner', NODE, task('t-owner', { router_area_id: 'area-x' }), 'agent', iso(0))).toThrow(/No task/)
     expect(() => askOwnerOf('t-x', NODE, undefined, 'agent', iso(0))).toThrow(/No task/)
+  })
+
+  // 2026-11-23: a task with Threads on naming the decision its own subtask asks was refused.
+  it('askOwnerTask: the tree around the node by id or unique prefix; a task with Threads on also reaches anything below it', () => {
+    const keeper = { id: 'keeper-1111' }
+    const all = [task('keeper-1111'), task('sub-aaaa1111', { parent_task_id: 'keeper-1111' }), task('deep-bbbb2222', { parent_task_id: 'sub-aaaa1111' }), task('sub-aaaa3333', { parent_task_id: 'keeper-1111' }), task('elsewhere-1')]
+    expect(askOwnerTask('deep-bbbb2222', keeper, [], all)?.id).toBe('deep-bbbb2222')
+    expect(askOwnerTask('deep-b', keeper, [], all)?.id).toBe('deep-bbbb2222')
+    // Two below it share the prefix: no guess.
+    expect(askOwnerTask('sub-aaaa', keeper, [], all)).toBeUndefined()
+    expect(askOwnerTask('elsewhere-1', keeper, [], all)).toBeUndefined()
+    // An Org node keeps its team check: only the tree it is handed.
+    expect(askOwnerTask('deep-bbbb2222', { id: 'keeper-1111', org_role: 'lead' }, [], all)).toBeUndefined()
+    expect(askOwnerTask('elsewhere-1', { id: 'lead-1', org_role: 'lead' }, [all[4]], all)?.id).toBe('elsewhere-1')
   })
 })
 

@@ -20,6 +20,14 @@
    A long path or address in it reads short instead (shortLinks), which keeps a long card short.
    Guard: tests/e2e/browser/thread-card-whole-summary.spec.ts. */
 .org-thread .ask-card { gap: 3px; }
+/* Its state line says which task below it came from where a node's own card says it is this
+   task's: at the line's right end, in the meta text's size; the name gives way, never the state
+   (thread-origin.ts; 2026-11-23, the user: own and from a child "must be clear"). */
+.org-thread .ask-card-title:has(> .org-thread-from) { display: flex; align-items: baseline; column-gap: 8px; }
+.ask-card-title > .org-thread-from { margin-left: auto; font-size: var(--font-size-xs); flex: 0 1 auto; max-width: 50%; }
+/* A long task title in the filter gives way with an ellipsis (its full name on hover). */
+.org-threads-origin .wn-chip { max-width: 240px; min-width: 0; }
+.org-threads-origin .wn-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .org-thread :is(.ask-card-question, .ask-card-detail) { display: block; -webkit-line-clamp: unset; line-clamp: none; }
 .org-thread .ask-card-detail { line-height: 1.4; }
 .org-thread .ask-card-detail :is(p, ul, ol) { margin-top: 0; margin-bottom: 2px; }
@@ -100,6 +108,11 @@
 .org-thread-words > :first-child { margin-top: 0; }
 .org-thread-words > :last-child { margin-bottom: 0; }
 .org-thread-words img { max-width: min(100%, 320px); max-height: 160px; border-radius: 6px; }
+/* A picture on a card (its summary, an answer, his words) is a thumbnail, half the chat's height;
+   a click opens it whole (AgentText, Lightbox). 2026-11-23, the user: "why picture is not render in
+   the thread?" The top of a chat keeps its own bound around the card (top-thread.css). */
+.org-thread .markdown-body img.inline-image { max-height: 200px; margin: 4px 0; }
+.org-thread .inline-image-block { margin: 4px 0; }
 .org-thread-split { opacity: 0; transition: opacity 120ms ease-out; }
 .org-thread-message:hover .org-thread-split, .org-thread-split:focus-visible { opacity: 1; }
 @media (hover: none) { .org-thread-split { opacity: 1; } }

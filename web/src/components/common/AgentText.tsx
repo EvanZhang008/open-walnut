@@ -1,4 +1,6 @@
 import { useMemo, useRef, type MouseEvent, type KeyboardEvent } from 'react';
+import { useLightbox } from '@/hooks/useLightbox';
+import { Lightbox } from './Lightbox';
 import type { Task } from '@open-walnut/core';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useStableHtml } from '@/hooks/useStableHtml';
@@ -15,9 +17,13 @@ import { shortLinkLabelsHtml } from '@/utils/short-link-labels';
  * unknown by default. A caller's own
  * `onClick` replaces the click handler whole: it must carry the same source itself. `shortLinks`: a
  * bare URL or path reads as a short label in a card's few lines (utils/short-link-labels.ts).
+ * `pictures`: an image path draws the picture (and its caption link), as the chat does; by default
+ * only a full text does, a `compact` one reads it as a link. A card whose words are its body (a
+ * thread's summary) passes it (2026-11-23, the user: "why picture is not render in the thread?").
  */
-export function AgentText({ text, className, testId, compact = false, inline = false, onClick, title, task, host, sessionId, cwd, unknownSource, taskIds, shortLinks = false }: {
+export function AgentText({ text, className, testId, compact = false, inline = false, pictures, onClick, title, task, host, sessionId, cwd, unknownSource, taskIds, shortLinks = false }: {
   text: string;
+  pictures?: boolean;
   /** How a bare task id renders (renderMarkdownWithRefs `taskIds`); absent = pills, as before. */
   taskIds?: RenderMarkdownOptions['taskIds'];
   shortLinks?: boolean;
@@ -36,18 +42,21 @@ export function AgentText({ text, className, testId, compact = false, inline = f
   const labels = useEntityLabelsVersion();
   const file = useAgentFileOpener({ task, host, sessionId, cwd, unknownSource: unknownSource ?? (!task && host === undefined && !sessionId) });
   const { cwd: renderCwd, host: renderHost, images } = file.render;
+  const drawsPictures = (pictures ?? !compact) && images;
   const html = useMemo(
     () => {
-      const out = renderMarkdownWithRefs(text, renderCwd, renderHost, { inlineImages: !compact && images, inline, ...(taskIds ? { taskIds } : {}) });
+      const out = renderMarkdownWithRefs(text, renderCwd, renderHost, { inlineImages: drawsPictures, inline, ...(taskIds ? { taskIds } : {}) });
       return shortLinks ? shortLinkLabelsHtml(out) : out;
     },
-    [text, compact, inline, labels, renderCwd, renderHost, images, taskIds, shortLinks],
+    [text, drawsPictures, inline, labels, renderCwd, renderHost, taskIds, shortLinks],
   );
+  // A picture it drew opens whole on a click, as the chat's do (common/Lightbox.tsx).
+  const { lightboxSrc, openLightbox, closeLightbox } = useLightbox();
   const inner = useStableHtml(html);
   const onEntityClick = useEntityClickHandler(undefined, file.onFileOpen, file.fileHost, file.fileSessionId, file.refusesAll);
   const press = useRef<{ x: number; y: number; dragged: boolean } | null>(null);
   const Tag = inline ? 'span' : 'div';
-  return <Tag
+  return <><Tag
     className={`markdown-body ${className ?? ''}`}
     title={title}
     data-testid={testId}
@@ -70,6 +79,13 @@ export function AgentText({ text, className, testId, compact = false, inline = f
         e.stopPropagation();
         return;
       }
+      const picture = !onClick && drawsPictures ? (e.target as HTMLElement).closest('img[data-lightbox-src]') : null;
+      if (picture) {
+        e.preventDefault();
+        e.stopPropagation();
+        openLightbox(picture.getAttribute('data-lightbox-src')!);
+        return;
+      }
       (onClick ?? onEntityClick)(e);
       if ((e.target as HTMLElement).closest('a, button, summary, img')) e.stopPropagation();
     }}
@@ -77,5 +93,5 @@ export function AgentText({ text, className, testId, compact = false, inline = f
       if ((e.key === 'Enter' || e.key === ' ') && (e.target as HTMLElement).closest('a, button, summary')) e.stopPropagation();
     }}
     dangerouslySetInnerHTML={inner}
-  />;
+  />{lightboxSrc && <Lightbox src={lightboxSrc} onClose={closeLightbox} />}</>;
 }

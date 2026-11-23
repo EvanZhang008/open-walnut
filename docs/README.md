@@ -87,6 +87,8 @@ must live under one of these top-level categories instead of directly under
   on every surface, how a change is pushed, and how one decision shows once.
 - [Org, Brief, Threads, team charter and inbox](reference/org-and-inbox.md): how Main and the
   leads work for the user, whose word counts, agent parity, and what goes to the inbox.
+- [Threads tracking](reference/threads.md): every thread rule the agents are told and where it
+  lives, what the code enforces, the experiments, and each problem the user hit with its state.
 - [The artifacts folder](reference/artifacts-folder.md): where the skills, memory folders, MEMORY.md
   copies and team guidance agents read are kept, how they moved there, and how to go back.
 - [Session lifecycle rules](reference/session-lifecycle.md): restart recovery, full contexts,

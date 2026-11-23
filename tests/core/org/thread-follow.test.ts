@@ -5,7 +5,7 @@
  * are in tests/e2e/thread-follow.test.ts.
  */
 import { describe, it, expect } from 'vitest'
-import { orgNodesAbove, orgPlaces, ownerNodeOf, ownersKey, planThreadFollows, handOffLine, type FollowTask } from '../../../src/core/org/thread-follow.js'
+import { moveTargetOf, orgNodesAbove, orgPlaces, ownerNodeOf, ownersKey, planThreadFollows, handOffLine, type FollowTask } from '../../../src/core/org/thread-follow.js'
 import { addMovedMessages, emptyThreads, enteredNeeds, fileMessage, movedAway, moveThreadIn, moveThreadOut, normalizeThreads, setAnswers, updateThread, ThreadError, type OrgThread } from '../../../src/core/org/threads-model.js'
 
 const at = (min: number) => new Date(Date.UTC(2026, 10, 8, 4, min)).toISOString()
@@ -35,6 +35,16 @@ describe('the node a task works for', () => {
     expect(ownerNodeOf(p.byId.get('p1')!, p)?.id).toBe(walnut.id)
     expect(ownerNodeOf(p.byId.get('i1')!, p)?.id).toBe(main.id)
     expect(ownerNodeOf(walnut, p)?.id).toBe(walnut.id)
+  })
+
+  // 2026-11-23: a thread moved to a subtask with its own Threads landed on the VP and could not come back.
+  it('thread_move lands on a task that keeps its own Threads, else on the node of its team', () => {
+    const kept = task('k1', { parent_task_id: 'w1', threads_on: true })
+    const q = orgPlaces([main, marina, walnut, task('w1', { parent_task_id: walnut.id, threads_on: true }), kept, task('k2', { parent_task_id: 'k1' })])
+    expect(moveTargetOf(q.byId.get('k1')!, q)?.id).toBe('k1')
+    expect(moveTargetOf(q.byId.get('w1')!, q)?.id).toBe('w1')
+    expect(moveTargetOf(q.byId.get('k2')!, q)?.id).toBe(walnut.id)
+    expect(moveTargetOf(marina, q)?.id).toBe(marina.id)
   })
 })
 

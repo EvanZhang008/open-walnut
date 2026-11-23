@@ -11,7 +11,9 @@
  * so a reload or a redraw keeps them. A failed send keeps his words in the box, with the reason.
  *
  * It reads as the group it is drawn in (thread-badge.ts): its title line starts with the group's dot
- * and word (ThreadState, as the node's own cards), and only in Needs you is its box an "Answer" box;
+ * and word (ThreadState, as the node's own cards) and ends with "From <the task below>", whose name
+ * opens that task (thread-origin.ts; a node's own card says it is this task's there), and only in
+ * Needs you is its box an "Answer" box;
  * anywhere else the box follows the task up. Snoozed, it says until when
  * and offers Unsnooze (OrgThreadSnooze), as the node's own cards do.
  */
@@ -28,13 +30,17 @@ import { threadSummarySource } from './thread-text-source';
 import type { OrgThreadsState } from './useOrgThreads';
 import { OrgThreadSnooze, SnoozedUntil } from './OrgThreadSnooze';
 import { threadBadge } from './thread-badge';
+import { FROM_BELOW, threadOrigin } from './thread-origin';
 import { ThreadState } from './ThreadState';
 import { ThreadLetterAnswer, answersLetter } from './ThreadLetterAnswer';
 import { ThreadOptions } from './OrgInlineAnswer';
 import { ThreadSentWords } from './ThreadSentWords';
 
-export function PoppedThreadCard({ node, t, state, now, snoozed, listed }: {
-  node: string; t: OrgThread; state: OrgThreadsState; now: number;
+export function PoppedThreadCard({ node, name, t, state, now, snoozed, listed }: {
+  node: string;
+  /** The name of the node whose Threads list it (the hover of its origin line). */
+  name: string;
+  t: OrgThread; state: OrgThreadsState; now: number;
   /** It is put aside now: it says until when, with Unsnooze. */
   snoozed: boolean;
   /** His view lists it now (listedForHim): its group. */
@@ -46,6 +52,7 @@ export function PoppedThreadCard({ node, t, state, now, snoozed, listed }: {
   const key = useRef<{ text: string; key: string } | null>(null);
   const owner = t.owner!;
   const badge = threadBadge(t, listed, now);
+  const origin = threadOrigin(t, name);
   const { group } = badge;
   const until = snoozed ? t.snoozed?.until : undefined;
   // A thread holding its task's own ask (core/org/thread-report-ask.ts): its question, then its own summary under it.
@@ -78,11 +85,15 @@ export function PoppedThreadCard({ node, t, state, now, snoozed, listed }: {
         testId="org-thread-popped"
         data={{ 'data-can-answer': t.can_answer_now === false ? 'false' : 'true' }}
         title={(<>
-          <ThreadState badge={badge} />{' \u00b7 '}
-          <button type="button" className="org-thread-link" data-testid="org-thread-owner" onClick={() => openTask(owner.task_id)}>{owner.title}</button>
+          <ThreadState badge={badge} />
+          {/* The task below it came from, by name, which opens it (thread-origin.ts): at the right of
+              the state line, where a node's own card says it is this task's (org-threads.css). */}
+          <span className="org-thread-from" data-testid="org-thread-from" data-origin={origin.from} title={origin.hover}>
+            {FROM_BELOW}{' '}<button type="button" className="org-thread-link" data-testid="org-thread-owner" onClick={() => openTask(owner.task_id)}>{owner.title}</button>
+          </span>
         </>)}
         question={<AgentText compact inline {...threadSummarySource(t)} text={t.heldAsk?.ask || t.ask?.trim() || t.title} shortLinks testId="org-thread-popped-ask" />}
-        detail={detail?.trim() ? <AgentText compact {...threadSummarySource(t)} text={detail} shortLinks testId="org-thread-popped-summary" /> : undefined}
+        detail={detail?.trim() ? <AgentText compact pictures {...threadSummarySource(t)} text={detail} shortLinks testId="org-thread-popped-summary" /> : undefined}
         status={(<>
           {until && <SnoozedUntil until={until} now={now} />}
           {t.can_answer_now === false && <p className="org-thread-stand-in-note" data-testid="org-thread-not-now">{owner.title} is not running now: your reply is kept and goes to it when it is back.</p>}

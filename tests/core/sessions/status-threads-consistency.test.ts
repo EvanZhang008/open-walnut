@@ -157,6 +157,12 @@ describe('the write each line makes', () => {
     expect(patchForLine(own, { id: base.id, title: base.title, state: 'done', progress: 'The fence is up.' })).toEqual({ close: 'dropped', reply: 'The fence is up.' })
     expect(patchForLine({ ...base, state: 'working' }, { id: base.id, title: base.title, state: 'done', progress: 'The fence is up.' })).toEqual({ state: 'answered', reply: 'The fence is up.' })
   })
+  // Review 2026-11-23: a line whose words were dropped moved the card into his sight with its older summary.
+  it('a line whose words are no summary moves nothing, its state included', () => {
+    const working = { ...base, state: 'working' as const, reply: 'Setting the posts.', replyAt: '2026-11-20T11:00:00.000Z' }
+    expect(patchForLine(working, { id: base.id, title: base.title, state: 'answered', progress: 'The summary was given to you in the chat.' })).toBeNull()
+    expect(patchForLine(working, { id: base.id, title: base.title, state: 'answered', progress: 'The posts are set; the wire comes Friday.' })).toEqual({ state: 'answered', reply: 'The posts are set; the wire comes Friday.' })
+  })
   // 2026-11-22: a task set its thread pending four times while its land sat in the queue; each
   // status answer said "working" and the 30-minute overdue clock nagged it five times.
   it('a working line leaves a parked thread parked, its words written quietly; a result still moves it', () => {

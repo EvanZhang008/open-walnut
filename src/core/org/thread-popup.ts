@@ -57,6 +57,21 @@ export function ownersBelow(viewerId: string, all: readonly Task[], places: OrgP
   return pool.filter((t) => t.id !== viewerId && keepsThreads(t) && openTask(t) && viewersOf(t, byId, places).has(viewerId));
 }
 
+/**
+ * The open tasks that keep Threads around `taskId`: those that read its threads (viewersOf, nearest
+ * first), then those whose threads it reads (ownersBelow). The tree a merge_into reaches
+ * (thread-tree-merge.ts); `among`: only these ids (the ones holding threads).
+ */
+export async function threadTreeOf(taskId: string, among?: ReadonlySet<string>): Promise<Task[]> {
+  const c = await context();
+  const self = c.byId.get(taskId);
+  if (!self) return [];
+  const above = [...viewersOf(self, c.byId, c.places)].map((id) => c.byId.get(id))
+    .filter((t): t is Task => !!t && (!among || among.has(t.id)) && keepsThreads(t) && openTask(t));
+  const seen = new Set(above.map((t) => t.id));
+  return [...above, ...ownersBelow(taskId, c.all, c.places, among).filter((t) => !seen.has(t.id))];
+}
+
 async function context(all?: readonly Task[]): Promise<{ all: readonly Task[]; byId: Map<string, Task>; places: OrgPlaces | null }> {
   const tasks = all ?? await (await import('./org-store.js')).orgTasks();
   const { isOrgEnabled } = await import('./org-enabled.js');

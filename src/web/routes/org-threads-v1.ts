@@ -11,7 +11,9 @@
  *   GET   /api/v1/tasks/:id/threads/:thread                { task_id, thread }  (one thread whole, its `shown` as above)
  *   POST  /api/v1/tasks/:id/threads                        { text, images?, thread? } -> file one of his messages
  *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, user_kind?, user_kind_why?, user_kind_words?, user_kind_about?, design_review?, same_ask_reason?, ask_owner?, reply?, options?, tasks?, add_tasks?, known?, close?, user_words?, reopen?, snooze?, watch?, watch_at?, merge_into? }
- *   POST  /api/v1/tasks/:id/threads/open                   { title, text, from, ref?, state?, reply?, options?, user_kind?, user_kind_why?, user_kind_words?, user_kind_about?, design_review?, same_ask_reason?, tasks? } -> the node opens one itself
+ *                                                          (merge_into a thread on a task above or below this one that keeps Threads: this
+ *                                                          thread moves there and is merged there, `merged_on` names that task)
+ *   POST  /api/v1/tasks/:id/threads/open                   { title, text, from, ref?, state?, reply?, options?, user_kind?, user_kind_why?, user_kind_words?, user_kind_about?, design_review?, same_ask_reason?, separate_reason?, tasks? } -> the node opens one itself (409 same_subject while its tree has open threads, unless separate_reason)
  *                                                          (`options`: with needs, the choices he clicks, [{ id?, label, detail?, recommended? }], 2 to 5;
  *                                                          a needs write whose words list A:/B: or 1./2. choices with none answers 409 needs_options)
  *   POST  /api/v1/tasks/:id/threads/:thread/split          { message, keep_open?, merge_into? } -> that message becomes its own thread
@@ -357,7 +359,7 @@ orgThreadsV1Router.post('/tasks/:id/threads/open', route(async (req, res) => {
     ...(str(b, 'same_ask_reason') ? { same_ask_reason: str(b, 'same_ask_reason') } : {}),
     ...(ids(b, 'supersedes') ? { supersedes: ids(b, 'supersedes') } : {}),
     ...(str(b, 'separate_reason') ? { separate_reason: str(b, 'separate_reason') } : {}),
-  }, by, source)
+  }, by, source, { sameSubject: true })
   log.task.info('org thread opened by the node', { taskId: task.id, threadId: thread.id, by, from: thread.opener?.from })
   res.status(201).json({ task_id: task.id, thread: await projected(task.id, thread) })
 }))
@@ -407,13 +409,19 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
     return
   }
   if (Object.keys(patch).length) thread = await patchThread(task.id, id, patch, by, source)
+  let mergedOn: { task: string; title: string } | undefined
   if (mergeInto) {
     if (!THREAD_ID_RE.test(mergeInto)) throw new RouteError(400, 'bad_request', `Not a thread id: ${mergeInto}`)
-    thread = await mergeThread(task.id, id, mergeInto, by)
+    // A target on another task of this task's tree: this thread moves there and is merged there (thread-tree-merge.ts).
+    const { mergeAcrossTree } = await import('../../core/org/thread-tree-merge.js')
+    const across = await mergeAcrossTree({ from: task, threadId: id, intoId: mergeInto, by })
+    if (across) mergedOn = across.on
+    thread = across ? across.thread : await mergeThread(task.id, id, mergeInto, by)
   }
   if (!thread) throw new RouteError(400, 'bad_request', 'Nothing to change: pass title, ask, ask_owner, state, reply, options, tasks, add_tasks, known, close, reopen, snooze, watch, watch_at or merge_into.')
-  log.task.info('org thread updated', { taskId: task.id, threadId: id, by, fields: Object.keys(patch), mergeInto })
-  res.json({ task_id: task.id, thread: await projected(task.id, thread), ...(mergeInto ? { merged: id } : {}) })
+  log.task.info('org thread updated', { taskId: task.id, threadId: id, by, fields: Object.keys(patch), mergeInto, mergedOn: mergedOn?.task })
+  // Additive: `merged_on` names the task holding the merged thread when it is not this one.
+  res.json({ task_id: task.id, thread: await projected(mergedOn?.task ?? task.id, thread), ...(mergeInto ? { merged: id } : {}), ...(mergedOn ? { merged_on: mergedOn } : {}) })
 }))
 
 orgThreadsV1Router.post('/tasks/:id/threads/:thread/split', route(async (req, res) => {

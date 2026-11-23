@@ -2,9 +2,10 @@
  * A node's Threads in their groups (experiment brief_off, core/org/thread-groups.ts): the view that
  * replaces the Brief. Needs you and Done come first and are always open (FOR_HIM_GROUPS); Working,
  * Waiting / Snoozed, Acknowledged, Closed and Archived follow, each folded to one line with its
- * count until he opens it (FOLDED_GROUPS). No row of chips (2026-11-21, the user: "the default is
+ * count until he opens it (FOLDED_GROUPS). No row of chips by state (2026-11-21, the user: "the default is
  * the view you need: Needs you first, then Done, and the rest auto collapsed"; a filter row whose
- * default was All showed every group's cards). What he opens is plain state of the view, never
+ * default was All showed every group's cards). The chips by where a thread came from, above these
+ * groups once a task below has a thread here, are another filter (ThreadOriginFilter.tsx). What he opens is plain state of the view, never
  * remembered: leaving the view and coming back shows every fold folded again (`opened`, kept by
  * OrgThreads so a thread line or Show can open a fold). A group with no card draws nothing. Each
  * thread is drawn by the same card every Threads surface uses (OrgThreads ThreadItem), passed in.

@@ -84,7 +84,7 @@ const ASK_INPUT = {
 }
 /** Every thread op that hands a thread to the user while its task asks him something else (thread-supersede.ts). */
 const SUPERSEDES_ARG = z.array(z.string().regex(/^(th|lt)-[\w-]{4,40}$/)).max(12).optional().describe('After a 409 other_open_asks: the asks (th-..., lt-...) this one replaces')
-const SEPARATE_REASON_ARG = z.string().max(300).optional().describe('After a 409 other_open_asks: why those stay open (10+ characters)')
+const SEPARATE_REASON_ARG = z.string().max(300).optional().describe('After 409 other_open_asks or same_subject: why it is apart (10+)')
 
 const THREAD_ID = z.string().regex(/^th-[a-f0-9]{6,32}$/)
 
@@ -340,7 +340,7 @@ defineOp({
     + 'answer: {"id":"th-...","reply":"<summary>","state":"answered"}; '
     + 'ask him: {"id":"th-...","state":"needs","reply":"<what he decides, what you recommend>","user_kind":"<kind>","user_kind_why":"<why>","options":[{"label":"<pick>","recommended":true},{"label":"<other>"}]}; '
     + 'after he reacted: known "<tm-id>" or "all", or close "acked" or "dropped" (user_words quoting him when he asked for it); '
-    + 'the same subject as another open thread: {"id":"th-...","merge_into":"th-..."} alone (thread_split undoes it). '
+    + 'the same subject as another open thread: {"id":"th-...","merge_into":"th-..."} alone. '
     + `A refusal names the call that goes through. Answers a receipt; thread_get reads the thread. ${RULES_IN_PROMPT} ${THREADS_OPTIONS_RULE} ${WORD_TO_USER_RULE}`,
   // 2026-11-23: names agents sent for these in real use (72 hours of sessions): read as the declared ones.
   retiredInput: ['summary', 'thread_id'],
@@ -356,14 +356,14 @@ defineOp({
       throw new Error(`merge_into goes alone: this thread is gone after the merge, so ${Object.keys(rest).join(', ')} would be lost. `
         + `Two calls: thread_update ${JSON.stringify({ id: threadId, merge_into: patch.merge_into })}, then thread_update ${callArgs({ id: patch.merge_into, ...rest })}.`)
     }
-    let body: { thread: ThreadView; merged?: string }
+    let body: { thread: ThreadView; merged?: string; merged_on?: { task: string; title: string } }
     try {
-      body = await call('PATCH', `/tasks/${encodeURIComponent(id)}/threads/${encodeURIComponent(String(threadId))}`, patch) as { thread: ThreadView; merged?: string }
+      body = await call('PATCH', `/tasks/${encodeURIComponent(id)}/threads/${encodeURIComponent(String(threadId))}`, patch) as { thread: ThreadView; merged?: string; merged_on?: { task: string; title: string } }
     } catch (err) { withCorrectedCall('thread_update', args as Record<string, unknown>, keysOf(UPDATE_INPUT), err) }
     const long = longTextHint(typeof patch.reply === 'string' ? patch.reply : undefined)
     return withOutcome(
       body,
-      body.merged ? `Thread ${body.merged} is now under ${body.thread.id} "${body.thread.title}" (${body.thread.messages?.length ?? 0} messages).`
+      body.merged ? `Thread ${body.merged} is now under ${body.thread.id} "${body.thread.title}"${body.merged_on ? ` on ${body.merged_on.title}'s Threads (${body.merged_on.task}; yours closed as moved)` : ''} (${body.thread.messages?.length ?? 0} messages).`
         : `Thread ${body.thread.id} "${body.thread.title}": ${body.thread.closed ? `closed (${body.thread.closed.how})` : body.thread.state}${body.thread.snoozed && !body.thread.closed && Date.parse(body.thread.snoozed.until) > Date.now() ? `, snoozed until ${body.thread.snoozed.until}` : ''}${body.thread.watched && !body.thread.closed ? `, watched${body.thread.watched.by === 'human' ? ' by the user' : ''}` : ''}${body.thread.askedIn ? `, its decision asked in ${body.thread.askedIn.title} (${body.thread.askedIn.task})` : ''}${body.thread.ackPlaced && !body.thread.closed ? `, placed in ${body.thread.ackPlaced.to}` : ''}.`,
       long ?? 'No further action is required.',
     )
@@ -373,6 +373,7 @@ defineOp({
     shape: ({ result, args }) => threadWriteReceipt(result, {
       changed: Object.keys(args).filter((k) => k !== 'id' && k !== 'task' && args[k] !== undefined),
       ...(objOf(result).merged ? { merged: objOf(result).merged } : {}),
+      ...(objOf(result).merged_on ? { merged_on: objOf(result).merged_on } : {}),
     }),
   },
   tags: { readonly: false, remote: 'allow' },
@@ -531,7 +532,7 @@ defineOp({
     + `${THREADS_MOVE_RULE} On a task with Threads on, naming thread in a handoff only lists that task and Walnut never moves its threads: only thread_move does.`,
   input: {
     id: z.string().regex(/^th-[a-f0-9]{6,32}$/).describe('The thread (th-...)'),
-    to: z.string().min(1).describe('Where it goes: a node\'s task id, a task (its team\'s node takes it), a project name or the name the user gave a VP'),
+    to: z.string().min(1).describe('Where it goes: a node\'s task id, a task (one with Threads keeps it, else its team\'s node), a project name or the name the user gave a VP'),
     why: z.string().max(400).optional().describe('One line both nodes read: why it moves'),
     task: TASK_ARG,
   },

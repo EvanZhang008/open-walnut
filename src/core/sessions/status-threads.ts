@@ -19,6 +19,8 @@
  * never shifts them.
  */
 import { log } from '../../logging/index.js';
+import { summaryPointsElsewhere, summaryRepeatsHim } from '../org/thread-summary-content.js';
+import { newSubjectsOnly } from '../org/thread-same-subject.js';
 import type { Task } from '../types.js';
 import { OUTSIDE_WAIT_KINDS, waitWordsNameUser, type StatusReport } from '../user-status.js';
 import { cutEnd } from '../text-cut.js';
@@ -104,12 +106,12 @@ export function threadQuestionBlock(open: readonly ListedThread[], langName?: st
 /** The block with threads_kept_by_walnut on: the line is what his card says, so it says how to write it. */
 function keptBlock(listed: readonly string[], byRef: ReadonlyMap<string, ThreadRef>, words: string, org: boolean, his: readonly HisWords[]): string {
   const refs = [...byRef.values()];
-  const newLine = `A subject you now follow that no thread covers: FOR_USER_THREAD_NEW: <working | waiting> | <title> | <one line on where it stands> (at most ${THREAD_NEW_MAX}).`;
+  const newLine = `A subject you now follow that none of these threads covers (one subject is one thread: a subject one covers is its line): FOR_USER_THREAD_NEW: <working | waiting> | <title> | <one line on where it stands> (at most ${THREAD_NEW_MAX}).`;
   if (!listed.length) return org ? '' : `\n${newLine.replace(/\.$/, '')}${words}. What needs the user's decision stays on FOR_USER_ASK, never a thread line.`;
   const parts = [
     `\nThis task's open threads (one per subject the user follows here): ${listed.join('; ')}.`,
-    `One line per thread, which Walnut writes as its state and the summary on his card: FOR_USER_THREAD: <ref> | <working | waiting | answered | done> | <where it stands for him, latest first: the result or the question now, then at most one sentence of background; a proof's path or URL when there is one>${words}.`
-      + ' working: you are on it now; waiting: a team or something outside has it (both hidden from him); answered: the result he asked for is in (shown to him); done: finished.',
+    `One line per thread, which Walnut writes as its state and the summary on his card: FOR_USER_THREAD: <ref> | <working | waiting | answered | done> | <where it stands for him, latest first, readable alone by someone who never saw this chat: the result or the question itself (name the task by its title and where it stands, never only that it was given, sent or told), then at most one sentence of background; a proof's path or URL when there is one>${words}.`
+      + ' working: you are on it now; waiting: a team or something outside has it (both hidden from him); answered: the result he asked for is in (shown to him); done: finished, or nothing left for him.',
   ];
   if (refs.some((r) => r.untitled)) parts.push('Each untitled thread gets a short title: FOR_USER_THREAD_TITLE: <ref> | <title>.');
   if (refs.some((r) => r.wrote)) {
@@ -289,7 +291,12 @@ export function patchForLine(t: OrgThread, line: StatusThreadLine): ThreadPatch 
   // A thread waiting on him stays his until he answers or the task settles it with thread_update:
   // no line moves it, whatever it says (it may have moved into needs since the question was asked).
   if (t.closed || t.state === 'needs') return null;
-  const reply = line.progress;
+  // Words that only say the answer was given elsewhere, or say his own message back, are no summary: the card keeps what it had
+  // (org/thread-summary-content.ts; 2026-11-23, a card that read only "the summary was given to you").
+  const reply = line.progress && !summaryPointsElsewhere(line.progress) && !summaryRepeatsHim(line.progress, t.messages.map((m) => m.text)) ? line.progress : undefined;
+  // Words dropped: the state stays too, so a card never moves into his sight with an older summary
+  // (review 2026-11-23); the next question asks for the line again.
+  if (line.progress && !reply) return null;
   if (line.state === 'done') {
     // A subject the task opened itself ends closed; his own request is answered, and he closes it.
     if (t.opener && t.opener.by !== 'human') return { close: 'dropped', ...(reply ? { reply } : {}) };
@@ -376,8 +383,13 @@ export function planThreadWrites(file: ThreadsFile, lines: readonly StatusThread
  * returns the threads changed.
  */
 export async function applyThreadLines(taskId: string, report: Pick<StatusReport, 'threads' | 'threads_new' | 'ask_thread' | 'thread_titles' | 'threads_seen'>, asks?: StatusReport | null): Promise<string[]> {
-  const lines = report.threads ?? [];
-  const opened = report.threads_new ?? [];
+  // One subject is one thread (org/thread-same-subject.ts): a new subject whose title repeats an open
+  // thread of the task is that thread's line; one of another task's opens nothing (that task keeps it).
+  const sorted = report.threads_new?.length ? await newSubjectsOnly(taskId, report.threads_new) : null;
+  const opened = sorted?.fresh ?? [];
+  const named = new Set((report.threads ?? []).map((l) => l.id));
+  const lines = [...(report.threads ?? []), ...(sorted?.own ?? []).filter((o) => !named.has(o.id)).map((o) => ({ id: o.id, title: o.item.title, state: o.item.state, ...(o.item.progress ? { progress: o.item.progress } : {}) }))];
+  if (sorted?.elsewhere.length) log.session.info('status question: new subjects kept elsewhere', { taskId, kept: sorted.elsewhere.map((e) => ({ title: e.item.title, thread: e.id, task: e.taskId })) });
   const marks: ThreadMarks = { ...(report.thread_titles?.length ? { titles: report.thread_titles } : {}), ...(report.threads_seen?.length ? { seen: report.threads_seen } : {}) };
   const marked = !!(marks.titles || marks.seen);
   const { reportAskOf, placeAsk } = await import('../org/thread-report-ask.js');

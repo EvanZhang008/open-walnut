@@ -22,7 +22,7 @@ import {
 } from './threads-model.js';
 import { threadsDbOnNow, useThreadsDb, writeThreadsLeftovers } from './threads-backend.js';
 import { dbDropExpired, dbMutateThreads, dbReadThreads, dbThreadNodes, flushNodeExport, jsonNodes, threadsJsonFile as threadsFile } from './threads-sync.js';
-import { askOwnerKept, askOwnerOf, pointerTaskIds, withAskPointers } from './thread-task-ask.js';
+import { askOwnerKept, askOwnerOf, askOwnerTask, pointerTaskIds, withAskPointers } from './thread-task-ask.js';
 import type { ThreadAskedIn, ThreadHeldAsk } from './thread-view.js';
 import { placeAsk, withHeldAsk, type TaskAsk } from './thread-report-ask.js';
 import { stampAskIds, threadsPopUpNow } from './thread-popup-rules.js';
@@ -197,17 +197,19 @@ export async function fileThreadMessage(taskId: string, input: FileMessageInput,
   // thread where it lives now, never a new thread here (thread-follow.ts). Judged under the lock,
   // on the file as it is then, so a move that lands while this write waits is seen.
   let movedTo: string | undefined;
+  let mergedThere: string | undefined;
   const res = await mutateThreads(taskId, (cur) => {
     const there = input.threadId && hops < 3 ? cur.threads.find((t) => t.id === input.threadId) : undefined;
     if (there && movedAway(there) && there.movedTo!.task !== taskId) {
       movedTo = there.movedTo!.task;
+      mergedThere = there.movedTo!.merged;
       return { file: cur, out: null };
     }
     const r = fileMessage(cur, { ...input, lang });
     return { file: r.file, out: r };
   });
   // Its answer is read in the chat of the node holding it (thread-answers.ts), never this node's.
-  if (movedTo) { const { sid: _sid, ...rest } = input; return fileThreadMessage(movedTo, { ...rest, lang }, hops + 1); }
+  if (movedTo) { const { sid: _sid, ...rest } = input; return fileThreadMessage(movedTo, { ...rest, ...(mergedThere ? { threadId: mergedThere } : {}), lang }, hops + 1); }
   if (!res) throw new ThreadError('bad_input', 500, 'The message was not filed.');
   if (!res.duplicate) emit({ taskId, kind: 'filed', threadId: res.thread.id });
   return { ...res, node: taskId };
@@ -232,7 +234,8 @@ async function refuseSameAskThread(taskId: string, text: string | undefined, by:
  * `source`: the writer's own session, verified by the caller (the route reads it from the caller's
  * session record, never from the body); absent = an unknown writer (or the user, by 'human').
  */
-export async function openNodeThread(taskId: string, input: OpenThreadInput, by: ThreadWriter, source?: ThreadTextSource): Promise<OrgThread> {
+/** `sameSubject`: thread_create's own door asks its one-subject check (thread-same-subject.ts); Walnut's own opens (a letter, a topic) do not. */
+export async function openNodeThread(taskId: string, input: OpenThreadInput, by: ThreadWriter, source?: ThreadTextSource, opts: { sameSubject?: boolean } = {}): Promise<OrgThread> {
   // The needs_options check below reads the switch as it is now (one-card.ts).
   await oneCardOn();
   const needs = !input.quiet_summary?.trim() && (input.state ?? 'needs') === 'needs';
@@ -242,6 +245,17 @@ export async function openNodeThread(taskId: string, input: OpenThreadInput, by:
   // The thread's own refusals come first (a missing kind, an unclear card): a dry run on the file as it is.
   if (needs && by !== 'human') openThread(await readThreads(taskId), input, by, new Date().toISOString(), source);
   const replaced = needs ? await refuseOtherOpenAsks(taskId, by, input) : [];
+  // One subject is one thread, checked after the refusals about one decision (same_ask, other_open_asks), which say more.
+  if (opts.sameSubject) {
+    const { refuseSameSubjectThread } = await import('./thread-same-subject.js');
+    await refuseSameSubjectThread(taskId, input.title, by, input);
+    // Its first post and summary read alone, as a thread_update summary must (thread-summary-content.ts).
+    if (by !== 'human') {
+      const { summaryPointsElsewhere } = await import('./thread-summary-content.js');
+      const empty = [input.reply, input.text].map((x) => (typeof x === 'string' ? summaryPointsElsewhere(x) : null)).find(Boolean);
+      if (empty) throw new ThreadError('bad_input', 422, empty);
+    }
+  }
   const at = new Date().toISOString();
   const thread = await mutateThreads(taskId, (cur) => {
     const r = openThread(cur, input, by, at, source);
@@ -277,8 +291,9 @@ export async function patchThread(taskId: string, id: string, patch: ThreadPatch
       const all = await (await import('../task-manager.js')).listTasks();
       try {
         const { treeAround } = await import('../same-ask-tree.js');
-        const task = treeAround(taskId, all).find((row) => row.task.id === want)?.task;
-        owner = askOwnerOf(want, all.find((t) => t.id === taskId) ?? { id: taskId }, task, by, at);
+        const node = all.find((t) => t.id === taskId) ?? { id: taskId };
+        const task = askOwnerTask(want, node, treeAround(taskId, all).map((row) => row.task), all);
+        owner = askOwnerOf(want, node, task, by, at);
       } catch (err) {
         throw new ThreadError('bad_input', 409, err instanceof Error ? err.message : String(err));
       }
@@ -330,6 +345,15 @@ export async function mergeThread(taskId: string, fromId: string, intoId: string
   });
   emit({ taskId, kind: 'merged', threadId: intoId });
   return thread;
+}
+
+/** The thread that left `taskId` was merged into `intoId` where it went: its pointer here says so (thread-tree-merge.ts). */
+export async function markMergedThere(taskId: string, threadId: string, intoId: string): Promise<void> {
+  await mutateThreads(taskId, (cur) => {
+    const t = cur.threads.find((x) => x.id === threadId);
+    if (!t?.movedTo || t.movedTo.merged === intoId) return { file: cur, out: null };
+    return { file: { ...cur, threads: cur.threads.map((x) => (x === t ? { ...t, movedTo: { ...t.movedTo!, merged: intoId } } : x)) }, out: null };
+  });
 }
 
 export interface SplitThreadOptions {

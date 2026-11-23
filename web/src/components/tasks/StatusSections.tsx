@@ -63,7 +63,7 @@ import { TaskFallbackTag } from './fallback-row';
 import { FoldBackButton, FoldSummaryLine, FoldTree, type WorkerFoldCtl } from './WorkerFoldTree';
 import { stateSectionKey } from './worker-fold';
 import '@/styles/status-sections.css';
-import { RowAsks } from '@/components/actions/RowThreadAsks';
+import { ActionNeeded } from '@/components/actions/ActionNeeded';
 import { ownLineIsItem } from '@open-walnut/user-status';
 import { projectGroupKey } from '@/utils/project-display';
 
@@ -414,7 +414,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
   );
   // The asks go right under the row, never inside it: the row is a button, and a box to type in or
   // its own buttons cannot live in one (a screen reader reads a button's insides as its name only).
-  const below = asks ? <div className="status-card-actions-below" data-asks-for={task.id}><RowAsks task={task} /></div> : null;
+  const below = asks ? <div className="status-card-actions-below" data-asks-for={task.id}><ActionNeeded task={task} /></div> : null;
   if (!team || !fold || !fold.isOpen(task.id)) return below ? <>{card}{below}</> : card;
   return (
     <>

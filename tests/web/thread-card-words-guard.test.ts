@@ -16,6 +16,8 @@
  *  3. One fold where folds exist (the ask card outside threads, a thread's answers and his own
  *     words): common/TextFold.tsx, Show more / Show less; nothing else measures a cut by hand.
  *  4. The ask card inside a thread card (a thread of a task below, a held ask) has no line clamp.
+ *  5. A card's summary (the node's own, a held ask's, a card from below) draws a picture's path as
+ *     the picture, as the chat does (`pictures` on its AgentText; 2026-11-23).
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -95,6 +97,27 @@ describe('thread card words', () => {
         expect(body, `${f}: ${sel.trim()} cuts a card's words`).not.toMatch(/line-clamp:\s*\d|max-height|text-overflow:\s*ellipsis/);
       }
     }
+  });
+
+  // 2026-11-23, the user, on a Done card whose summary ended with three picture paths drawn as links:
+  // "why picture is not render in the thread?". A compact AgentText draws no picture unless told.
+  it("a card's summary draws its pictures, as the chat does", () => {
+    const bodies: string[] = [];
+    const missing: string[] = [];
+    for (const file of cardFiles()) {
+      const src = read(file);
+      for (const t of tags(src, 'AgentText')) {
+        // The summary (CardWords "org-thread-reply", the node's own or a held ask's) and the summary
+        // of a card from below (its detail).
+        const line = src.split('\n')[t.line - 1] ?? '';
+        if (!/testId="org-thread-reply"/.test(line) && !/testId="org-thread-popped-summary"/.test(t.text)) continue;
+        bodies.push(`${path.basename(file)}:${t.line}`);
+        if (!/\bpictures\b/.test(t.text)) missing.push(`${path.basename(file)}:${t.line}`);
+      }
+    }
+    expect(bodies.length, 'the scan found no card summary: the matcher broke').toBeGreaterThanOrEqual(3);
+    expect(missing, "A card's summary draws a picture's path as the picture: pass `pictures` to AgentText").toEqual([]);
+    expect(read(path.join(WEB, 'components/common/AgentText.tsx'))).toMatch(/inlineImages: drawsPictures/);
   });
 
   it('one fold: the shared TextFold, Show more / Show less', () => {

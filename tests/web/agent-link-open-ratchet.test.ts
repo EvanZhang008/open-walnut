@@ -86,6 +86,8 @@ const SURFACES: Record<string, 'hook' | 'fallback' | 'renderer'> = {
   'components/org/OrgTaskRail.tsx': 'renderer',
   // Action needed lines (a task row, a session's strip, a VP's Threads): each place that mounts it is listed.
   'components/actions/ActionNeeded.tsx': 'renderer',
+  // The strip's folded line: its first question through AgentText, opened from its task's session (taskTextSource).
+  'components/actions/SessionActionStrip.tsx': 'renderer',
   'components/org/PoppedThreadCard.tsx': 'renderer', // a thread below, drawn through AgentText
   'components/tasks/AnsweredForLine.tsx': 'renderer',
   'components/board/kanban/KanbanCard.tsx': 'renderer',

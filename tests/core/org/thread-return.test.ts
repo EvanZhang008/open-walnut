@@ -68,13 +68,14 @@ describe('his words take the card off Needs you, and it comes back only from the
     expect(updateThread(after, id, { state: 'answered', reply: 'It is a bug, not a missing way back: the timer gave up after 2 minutes.' }, TASK, at(20, 7)).thread.state).toBe('answered')
   })
 
-  it('the same decision again opens with his words and what was done about them', () => {
+  it('the same decision again opens with the decision and what was done since he wrote, never his words', () => {
     const { file, id } = letterThread()
     const after = fileMessage(file, { text: HIS_QUESTION, via: 'follow-up', threadId: id, at: at(20, 6) }).file
     const t = updateThread(after, id, { state: 'needs', reply: 'Approve running start_sprinkler with the shared garden key? I recommend it.', since_you_wrote: 'It is a bug: the timer gave up after 2 minutes and never retried.', decision: 'same', ...KIND }, TASK, at(20, 7)).thread
     expect(t.state).toBe('needs')
-    expect(t.reply!.split('\n')[0]).toContain(HIS_QUESTION.slice(0, 20))
-    expect(t.reply).toMatch(/the timer gave up after 2 minutes[\s\S]*\n\n\*\*\u73b0\u5728\u8981\u4f60\u51b3\u5b9a\uff1a\*\* Approve running/)
+    expect(t.reply!.split('\n')[0]).toBe('Approve running start_sprinkler with the shared garden key? I recommend it.')
+    expect(t.reply).not.toContain(HIS_QUESTION.slice(0, 20))
+    expect(t.reply).toMatch(/^Approve running[\s\S]*\n\n\*\*\u4f60 \d\d:\d\d \u7559\u8a00\u4e4b\u540e\uff1a\*\* It is a bug: the timer gave up after 2 minutes/)
     expect(t.needsAt).toBe(at(20, 7))
     // Asked again with no new word of his: no since line needed.
     expect(updateThread(t.state === 'needs' ? { ...after, threads: after.threads.map((x) => (x.id === id ? t : x)) } : after, id, { reply: t.reply! + ' ' }, TASK, at(20, 8)).thread.state).toBe('needs')
@@ -100,9 +101,11 @@ describe('his words take the card off Needs you, and it comes back only from the
     expect(updateThread(filed.file, filed.thread.id, { state: 'needs' }, 'human', at(1, 1)).thread.state).toBe('needs')
   })
 
-  it('the card line keeps his words short and in his language', () => {
+  it('the card starts with the decision, then what was done since he wrote, and never repeats his words', () => {
     const cur = { messages: [{ id: 'tm-aaaaaa01', at: at(20, 11), text: 'Did you not answer me? '.repeat(5), via: 'chat' as const }] }
-    expect(returnedReply(cur, 'Answered above: it is a bug.', 'Approve it?')).toMatch(/^\*\*You wrote at 20:11 UTC: "Did you not answer me\? .{30,}\.\.\."\. Since then:\*\* Answered above: it is a bug\.\n\n\*\*Now you decide:\*\* Approve it\?$/)
+    const card = returnedReply(cur, 'Answered above: it is a bug.', 'Approve it?')
+    expect(card).toBe('Approve it?\n\n**Since your message at 20:11 UTC:** Answered above: it is a bug.')
+    expect(card).not.toContain('Did you not answer me')
   })
 })
 
