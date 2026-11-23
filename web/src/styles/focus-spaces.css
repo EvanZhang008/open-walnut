@@ -2,7 +2,8 @@
    cover of a chat column outside the focus. */
 
 /* Settings > Focus: the panel in the settings card, at a reading width. */
-.focus-settings-card { padding: 12px 16px; max-width: 560px; }
+.focus-settings-card { padding: 16px; }
+.focus-settings-card .focus-panel-empty + .focus-actions { border-top: none; padding-top: 0; }
 
 .focus-panel { display: flex; flex-direction: column; gap: 8px; }
 .focus-panel-head { display: flex; flex-direction: column; gap: 4px; }
