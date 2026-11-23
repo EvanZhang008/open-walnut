@@ -210,10 +210,10 @@ describe('the phone\'s cards take the button family (2026-11-21, the user: "2 is
     expect(at('optionButtons')).toBeLessThan(at('\n            keys\n'));
     expect(at('\n            keys\n')).toBeLessThan(at('followUpBox'));
     expect(at('followUpBox')).toBeLessThan(at('\n            tools\n'));
-    // The pin is a tool on the last line, never in the header.
+    // The watch eye is a tool on the last line, never in the header.
     const header = /private var headerButtons: some View \{[\s\S]*?\n {4}\}\n/.exec(card)?.[0] ?? '';
-    expect(header).not.toMatch(/org\.thread\.pin/);
-    expect(card).toMatch(/snoozeMenu\s*\n\s*pinButton/);
+    expect(header).not.toMatch(/org\.thread\.(watch|pin)/);
+    expect(card).toMatch(/snoozeMenu\s*\n\s*watchButton/);
     const line = /\} else \{\s*\/\/ Its options or key first[\s\S]*?tools\(item, index: index, count: count\)/.exec(ask)?.[0] ?? '';
     expect(line.indexOf('answer(item)')).toBeGreaterThan(-1);
     expect(line.indexOf('answer(item)')).toBeLessThan(line.indexOf('wordsBox(item)'));
