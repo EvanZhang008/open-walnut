@@ -2145,7 +2145,11 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   padding: 12px clamp(8px, 4%, 40px);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  /* The row gap is a variable: the sticky overlays at the timeline's end (the jump button, the
+     phone's prompt pill) pull themselves up by their height PLUS this gap, or the gap before them
+     is blank space under the last row (tests/web/timeline-overlay-gap-guard.test.ts). */
+  --timeline-gap: 4px;
+  gap: var(--timeline-gap);
 }
 
 /* The jump-to-latest button: common/ScrollToBottomButton.tsx, styles/scroll-jump.css. */
@@ -17358,7 +17362,8 @@ a.tag-chip:hover .tag-chip-value,
 .dock-task-body .session-history {
   font-size: var(--font-size-xs);
   padding: 8px;
-  gap: 8px;
+  --timeline-gap: 8px;
+  gap: var(--timeline-gap);
 }
 
 /* ── Card send input (compact ChatInput reuse) ── */

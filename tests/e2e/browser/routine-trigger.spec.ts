@@ -289,7 +289,10 @@ test('a task with an armed trigger shows the TRIGGER pill; the pill opens the tr
     await expect(rowSecond).toHaveAttribute('data-state', 'armed')
     await expect(pill).toHaveText('Trigger')
     await expect(pill).not.toHaveAttribute('data-paused', 'true')
-    expect(await pill.evaluate((el) => getComputedStyle(el).borderTopStyle)).toBe('solid')
+    // An armed pill is the plain filled .badge with no border (f92b85044d, one label system);
+    // only .badge-paused draws the dashed outline.
+    await expect(pill).not.toHaveClass(/badge-paused/)
+    expect(await pill.evaluate((el) => getComputedStyle(el).borderTopStyle)).toBe('none')
     await expect.poll(async () => (await getRoutine(second.id))?.enabled).toBe(true)
     // The row itself is still there and untouched.
     await expect(row).toBeVisible()

@@ -160,7 +160,8 @@
     z-index: 11;
     align-self: center;
     height: 44px;
-    margin-top: -44px;
+    /* Its height and the row gap before it (--timeline-gap): it takes no room at the end. */
+    margin-top: calc(-44px - var(--timeline-gap, 0px));
   }
 
   .app-shell-navigation .phone-prompt-pill.is-stacked {

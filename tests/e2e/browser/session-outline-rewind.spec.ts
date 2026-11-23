@@ -177,9 +177,19 @@ test.describe('Session outline, message time, and rewind', () => {
     await hoverRow(page, panel, early)
     await early.locator('.msg-pin-btn').click()
 
-    // Pinned state is visible on the row itself.
-    await expect(early.locator('.msg-pin-btn')).toHaveClass(/is-pinned/)
+    // Pinned state is visible on the row itself: the button family's on look
+    // (.btn[aria-pressed='true'], buttons.css) replaced the .is-pinned class (8c22324753).
     await expect(early.locator('.msg-pin-btn')).toHaveAttribute('aria-pressed', 'true')
+    // Its label is the accent text, under the pointer too (the on rule covers :hover).
+    const accentText = await early.locator('.msg-pin-btn').evaluate((el) => {
+      const probe = document.createElement('span')
+      probe.style.color = 'var(--accent-text)'
+      el.parentElement!.appendChild(probe)
+      const c = getComputedStyle(probe).color
+      probe.remove()
+      return c
+    })
+    await expect.poll(() => early.locator('.msg-pin-btn').evaluate((el) => getComputedStyle(el).color)).toBe(accentText)
 
     // 1. Collapsed rail: one tick per pin, no labels. The rail is what's on screen
     //    (the .session-toc container is a zero-height sticky anchor by design, so it
@@ -258,7 +268,8 @@ test.describe('Session outline, message time, and rewind', () => {
     await openOutline(toc)
     await toc.locator('.session-toc-unpin').first().click()
     await expect(panel.locator('.session-toc')).toHaveCount(0)
-    await expect(row(panel, LATE_ASK).locator('.msg-pin-btn')).not.toHaveClass(/is-pinned/)
+    // Unpinned reads off the button itself (aria-pressed drives its look since 8c22324753).
+    await expect(row(panel, LATE_ASK).locator('.msg-pin-btn')).toHaveAttribute('aria-pressed', 'false')
   })
 
   test('rewind is offered on your own messages only, and its dialog dry-runs first', async ({ page }) => {

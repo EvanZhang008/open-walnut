@@ -8,7 +8,9 @@
    composer (a sticky offset counts from inside the scroller's 12 px bottom padding, so -4 px puts
    it 8 px above the edge, over as little of the last line as it can). It is `position: sticky`
    inside the scroller's own flex column, so it never leaves the
-   area it scrolls; the negative top margin keeps it from pushing the last row down. Shown only while
+   area it scrolls; the negative top margin (its height plus the column's row gap, --timeline-gap)
+   keeps it from pushing the last row down or leaving the gap as blank space under it at the end
+   (2026-11-23: the bare -36 px left the 4 px gap below the last row). Shown only while
    the view is away from its end (`.visible`). The material is the shared frosted glass
    (`wn-glass-frost`, overlay-glass.css): what sits behind it is the scroller's own rows, inside the
    same backdrop root, so the blur always reaches them. Where the glass is off (no blur support,
@@ -25,7 +27,7 @@
   height: 36px;
   min-width: 0;
   min-height: 0;
-  margin: -36px 0 0;
+  margin: calc(-36px - var(--timeline-gap, 0px)) 0 0;
   padding: 0;
   display: flex;
   align-items: center;
@@ -105,7 +107,7 @@ html .scroll-to-bottom-btn.wn-glass-frost {
     height: 44px;
     min-width: 44px;
     min-height: 44px;
-    margin-top: -44px;
+    margin-top: calc(-44px - var(--timeline-gap, 0px));
   }
   .app-shell-navigation .scroll-to-bottom-btn svg {
     width: 20px;

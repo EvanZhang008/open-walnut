@@ -111,15 +111,22 @@ export async function openThreadsSession(
     // cannot use never returns, so toPass neither retried nor said why (CI,
     // 2026-11-15: an 800px window failed with only "Timeout ... waiting on the
     // predicate" and no search ever reached the server).
+    // The panel can also come back by itself after a reload (a full-screen one is kept:
+    // hooks/fullscreen-owner.ts), mounting after networkidle and over the task row; every
+    // pass checks for it first, so the row's click never waits on a sheet that covers it.
     try {
       await expect(async () => {
+        if (await panel.isVisible()) return
         if (await search.inputValue({ timeout: 5_000 }) !== sessionId) await search.fill(sessionId, { timeout: 5_000 })
         await expect(task).toBeVisible({ timeout: 5_000 })
+        if (await panel.isVisible()) return
+        await task.locator('.todo-item-title').click({ timeout: 5_000 })
+        // A click that went through opens it: wait here, never click the row a second time.
+        await expect(panel).toBeVisible({ timeout: 20_000 })
       }).toPass({ timeout: 30_000 })
     } catch (err) {
       throw new Error(`${err instanceof Error ? err.message : String(err)}\n\nThe task search, as the page has it: ${await describeSearchField(page)}`)
     }
-    await task.locator('.todo-item-title').click()
   }
   await expect(panel).toBeVisible({ timeout: 20_000 })
   if (readyText) await expect(panel.locator('.session-history')).toContainText(readyText, { timeout: 30_000 })
