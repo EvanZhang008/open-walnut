@@ -225,9 +225,16 @@ export function sampleMemory(now = Date.now()): void {
 // is over GC_NUDGE_RSS_MB, the health tick asks for a collection, at most every
 // GC_NUDGE_EVERY_MS. Bun.gc(false) asks for it asynchronously: the marking runs beside
 // the event loop, never a synchronous full stop. WALNUT_GC_NUDGE=0 turns it off.
+//
+// A footprint still climbing a gigabyte past the last nudge's reading is asked again at the
+// next tick, without waiting out the interval (2026-11-23: a nudge at 3.4 GB, then 8.0 GB
+// half a minute later and 11.3 GB at the next allowed nudge three minutes on, 12.8 GB at the
+// peak; back to 4.2 GB once the work eased).
 export const GC_NUDGE_RSS_MB = 1536;
 export const GC_NUDGE_EVERY_MS = 3 * 60_000;
+export const GC_NUDGE_RISE_MB = 1024;
 let lastNudgeAt = -Infinity;
+let lastNudgeRssMb = Infinity;
 let nudgedFromMb: number | null = null;
 
 type GcFn = (sync: boolean) => void;
@@ -246,8 +253,10 @@ export function nudgeGcUnderPressure(now = Date.now(), gc: GcFn | null = bunGc()
     log.obs.info('memory gc nudge', { beforeMb: nudgedFromMb, afterMb: rssMb, freedMb: nudgedFromMb - rssMb });
     nudgedFromMb = null;
   }
-  if (rssMb < GC_NUDGE_RSS_MB || now - lastNudgeAt < GC_NUDGE_EVERY_MS) return;
+  if (rssMb < GC_NUDGE_RSS_MB) return;
+  if (now - lastNudgeAt < GC_NUDGE_EVERY_MS && rssMb - lastNudgeRssMb < GC_NUDGE_RISE_MB) return;
   lastNudgeAt = now;
+  lastNudgeRssMb = rssMb;
   nudgedFromMb = rssMb;
   gc(false);
 }
@@ -261,10 +270,17 @@ export function nudgeGcUnderPressure(now = Date.now(), gc: GcFn | null = bunGc()
 // can allocate a lot register a context reader (requests in flight, daemon file reads in
 // flight), and the health tick logs one `memory burst` line with all of them and the
 // process and engine numbers when the footprint rose by BURST_RISE_MB over the lowest
-// reading of the last BURST_WINDOW_MS. At most one line per BURST_EVERY_MS.
+// reading of the last BURST_WINDOW_MS. At most one line per BURST_EVERY_MS, except a new
+// peak BURST_RISE_MB past the last line's reading, which is logged too: 2026-11-23 the line
+// at 00:12 (3.1 GB) held off the climb to 12.8 GB at 00:27, and the peak named nothing.
+// A peak past BURST_HEAP_WALK_MB also says what the heap holds by type (one walk, at most
+// one an hour: a second or two of the loop at that size), so the line tells live objects
+// from memory the allocator keeps.
 export const BURST_RISE_MB = 1024;
 export const BURST_WINDOW_MS = 3 * 60_000;
 export const BURST_EVERY_MS = 15 * 60_000;
+export const BURST_HEAP_WALK_MB = 6144;
+export const BURST_HEAP_WALK_EVERY_MS = 60 * 60_000;
 
 const burstContexts = new Map<string, () => unknown>();
 /** Register what a module has in flight, read only when a burst is logged. Returns its unregister. */
@@ -275,26 +291,42 @@ export function registerBurstContext(name: string, read: () => unknown): () => v
 
 const recentRss: Array<{ at: number; rssMb: number }> = [];
 let lastBurstAt = -Infinity;
+let lastBurstRssMb = Infinity;
+let lastBurstHeapWalkAt = -Infinity;
 
 /** Health-tick hook (every 30 s): log what was in flight when the footprint jumped. */
 export async function watchMemoryBurst(now = Date.now(), rssMb = processMemoryMb().rssMb): Promise<boolean> {
   while (recentRss.length > 0 && now - recentRss[0]!.at > BURST_WINDOW_MS) recentRss.shift();
   const low = recentRss.reduce((m, r) => Math.min(m, r.rssMb), rssMb);
   recentRss.push({ at: now, rssMb });
-  if (rssMb - low < BURST_RISE_MB || now - lastBurstAt < BURST_EVERY_MS) return false;
+  if (rssMb - low < BURST_RISE_MB) return false;
+  const newPeak = now - lastBurstAt < BURST_EVERY_MS;
+  if (newPeak && rssMb - lastBurstRssMb < BURST_RISE_MB) return false;
   lastBurstAt = now;
+  lastBurstRssMb = rssMb;
   const context: Record<string, unknown> = {};
   for (const [name, read] of burstContexts) {
     try { context[name] = read(); } catch (err) { context[name] = `unreadable: ${err instanceof Error ? err.message : String(err)}`; }
   }
-  // No heap walk here: at the peak it would stop the loop for seconds. The engine's own
-  // allocator counters are free; process numbers say strings (external) or buffers.
+  // The engine's own allocator counters are free; process numbers say strings (external) or
+  // buffers. A heap walk stops the loop, so only a big peak takes one, at most once an hour.
   const j = await loadJsc();
   const u = j?.memoryUsage();
+  let heap: { liveMb?: number; extraMb?: number; objects: number; topTypes: Array<[string, number]> } | undefined;
+  if (j && rssMb >= BURST_HEAP_WALK_MB && now - lastBurstHeapWalkAt >= BURST_HEAP_WALK_EVERY_MS) {
+    lastBurstHeapWalkAt = now;
+    lastHeapWalkAt = now;
+    const h = j.heapStats();
+    heap = {
+      liveMb: mb(h.heapSize), extraMb: mb(h.extraMemorySize), objects: h.objectCount,
+      topTypes: Object.entries(h.objectTypeCounts).sort((a, b) => b[1] - a[1]).slice(0, 12),
+    };
+  }
   log.obs.warn('memory burst', {
     ...processMemoryMb(), lowMb: low, riseMb: rssMb - low, uptimeSec: Math.round(process.uptime()),
+    ...(newPeak ? { newPeak: true } : {}),
     holdersMb: Math.round(readMemoryHolders().reduce((n, r) => n + r.bytes, 0) / MB),
-    ...(u ? { engineMb: mb(u.current), engineCommitMb: mb(u.currentCommit) } : {}), context,
+    ...(u ? { engineMb: mb(u.current), engineCommitMb: mb(u.currentCommit) } : {}), ...(heap ? { heap } : {}), context,
   });
   return true;
 }
@@ -354,5 +386,8 @@ export function _resetMemoryLedgerForTesting(): void {
   overWarnedAt.clear();
   lastSnapshotAt = -Infinity;
   lastBurstAt = -Infinity;
+  lastBurstRssMb = Infinity;
+  lastBurstHeapWalkAt = -Infinity;
+  lastNudgeRssMb = Infinity;
   recentRss.length = 0;
 }

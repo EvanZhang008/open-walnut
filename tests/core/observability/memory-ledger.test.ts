@@ -8,9 +8,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   registerMemoryHolder, readMemoryHolders, memoryReport, sampleMemory, stringCharsOf,
-  memoryHolderNames, SAMPLE_EVERY_MS, sampledStringChars, nudgeGcUnderPressure, GC_NUDGE_RSS_MB, GC_NUDGE_EVERY_MS, _resetMemoryLedgerForTesting,
+  memoryHolderNames, SAMPLE_EVERY_MS, sampledStringChars, nudgeGcUnderPressure, GC_NUDGE_RSS_MB, GC_NUDGE_EVERY_MS, GC_NUDGE_RISE_MB, _resetMemoryLedgerForTesting,
   writeHeapSnapshot, SNAPSHOT_EVERY_MS,
-  watchMemoryBurst, registerBurstContext, BURST_RISE_MB, BURST_WINDOW_MS, BURST_EVERY_MS,
+  watchMemoryBurst, BURST_HEAP_WALK_MB, registerBurstContext, BURST_RISE_MB, BURST_WINDOW_MS, BURST_EVERY_MS,
 } from '../../../src/core/observability/memory-ledger.js';
 import { log } from '../../../src/logging/index.js';
 
@@ -106,6 +106,28 @@ describe('nudgeGcUnderPressure', () => {
     } finally { info.mockRestore(); }
   });
 
+  it('asks again inside the interval while the footprint climbs GC_NUDGE_RISE_MB past the last nudge', () => {
+    const info = vi.spyOn(log.obs, 'info').mockImplementation(() => {});
+    const gc = vi.fn();
+    try {
+      const t0 = 9_100_000_000;
+      nudgeGcUnderPressure(t0, gc, 3400);
+      expect(gc).toHaveBeenCalledTimes(1);
+      nudgeGcUnderPressure(t0 + 30_000, gc, 3400 + GC_NUDGE_RISE_MB - 1);
+      expect(gc).toHaveBeenCalledTimes(1);
+      nudgeGcUnderPressure(t0 + 60_000, gc, 8000);
+      expect(gc).toHaveBeenCalledTimes(2);
+      // Measured from the last nudge's reading, not the first one.
+      nudgeGcUnderPressure(t0 + 90_000, gc, 8000 + GC_NUDGE_RISE_MB - 1);
+      expect(gc).toHaveBeenCalledTimes(2);
+      // Falling back leaves the interval in charge.
+      nudgeGcUnderPressure(t0 + 120_000, gc, 4000);
+      expect(gc).toHaveBeenCalledTimes(2);
+      nudgeGcUnderPressure(t0 + 60_000 + GC_NUDGE_EVERY_MS, gc, 4000);
+      expect(gc).toHaveBeenCalledTimes(3);
+    } finally { info.mockRestore(); }
+  });
+
   it('does nothing when turned off', () => {
     const gc = vi.fn();
     process.env.WALNUT_GC_NUDGE = '0';
@@ -125,11 +147,32 @@ describe('watchMemoryBurst', () => {
       expect(await watchMemoryBurst(t + 60_000, 2000 + BURST_RISE_MB + 500)).toBe(true);
       const line = warn.mock.calls.find((c) => c[0] === 'memory burst');
       expect(line?.[1]).toMatchObject({ lowMb: 2000, riseMb: BURST_RISE_MB + 500, context: { 'test-context': [{ route: 'GET /api/example' }] } });
-      // Another rise inside BURST_EVERY_MS logs nothing.
-      expect(await watchMemoryBurst(t + 90_000, 2000 + BURST_RISE_MB * 3)).toBe(false);
+      // Inside BURST_EVERY_MS a climb of less than BURST_RISE_MB past the last line logs nothing...
+      expect(await watchMemoryBurst(t + 90_000, 2000 + BURST_RISE_MB * 2)).toBe(false);
+      // ...and a new peak BURST_RISE_MB past it is logged, marked as one (2026-11-23: the line at
+      // 3.1 GB held off the climb to 12.8 GB, and the peak named nothing).
+      warn.mockClear();
+      expect(await watchMemoryBurst(t + 120_000, 2000 + BURST_RISE_MB * 3)).toBe(true);
+      expect(warn.mock.calls.find((c) => c[0] === 'memory burst')?.[1]).toMatchObject({ newPeak: true, lowMb: 2000 });
+      expect(await watchMemoryBurst(t + 150_000, 2000 + BURST_RISE_MB * 3 + 500)).toBe(false);
       // A rise against a low older than the window does not count.
-      expect(await watchMemoryBurst(t + 90_000 + BURST_EVERY_MS + BURST_WINDOW_MS, 2000 + BURST_RISE_MB * 3)).toBe(false);
+      expect(await watchMemoryBurst(t + 150_000 + BURST_EVERY_MS + BURST_WINDOW_MS, 2000 + BURST_RISE_MB * 3)).toBe(false);
     } finally { off(); warn.mockRestore(); }
+  });
+
+  it.runIf(!!process.versions.bun)('a peak past BURST_HEAP_WALK_MB says what the heap holds by type, once an hour', async () => {
+    const warn = vi.spyOn(log.obs, 'warn').mockImplementation(() => {});
+    try {
+      const t = 20_000_000;
+      await watchMemoryBurst(t, 2000);
+      expect(await watchMemoryBurst(t + 30_000, BURST_HEAP_WALK_MB)).toBe(true);
+      const heap = (warn.mock.calls.find((c) => c[0] === 'memory burst')?.[1] as { heap?: { objects: number; topTypes: Array<[string, number]> } }).heap;
+      expect(heap?.objects).toBeGreaterThan(0);
+      expect(heap?.topTypes.length).toBeGreaterThan(0);
+      warn.mockClear();
+      expect(await watchMemoryBurst(t + 60_000, BURST_HEAP_WALK_MB + BURST_RISE_MB)).toBe(true);
+      expect(warn.mock.calls.find((c) => c[0] === 'memory burst')?.[1]).not.toHaveProperty('heap');
+    } finally { warn.mockRestore(); }
   });
 
   it('a context reader that throws is named, not fatal', async () => {
