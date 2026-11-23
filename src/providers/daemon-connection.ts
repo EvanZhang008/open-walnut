@@ -1707,6 +1707,8 @@ export class DaemonConnection {
 
   /** A service set move holds this host's starts and sends now (hostLinkDown reads it). */
   get serviceSetHeld(): boolean { return this._setHold.on }
+  /** The service set the hello names ('' the default set, or an older host). */
+  get serviceSet(): string { return this._helloServiceSet }
 
   /**
    * This link's part in service sets (service-set-move-link.ts): an SSH or host network link of the

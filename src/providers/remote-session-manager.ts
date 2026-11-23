@@ -950,6 +950,14 @@ export class RemoteSessionManager implements SessionManager {
         let found: Record<string, unknown>
         try { found = await conn!.send('attach', { sid, fromOffset: this.attachFromOffset() }) }
         catch { throw new SendHeldError('Not sent yet: the session host could not rediscover the process') }
+        // A service set's daemon with no stream of the session never ran it: it is one a move stopped on
+        // the shared daemon (service-set-move.ts), and its next message resumes it here (--resume; the
+        // host's cli-owner record still refuses a second CLI). Drill D1: it was held until a restart.
+        if (this.conn === conn && this._sid === sid && !found.ok && conn!.serviceSet
+          && /^attach: session not found\b/.test(String(found.error ?? ''))) {
+          log.session.info('RemoteSessionManager: a service set daemon never ran this session; it resumes there', { host: this.hostKey, sid, set: conn!.serviceSet })
+          return { ok: false, reason: 'session_dead', exitCode: 0 }
+        }
         if (this.conn !== conn || this._sid !== sid || !found.ok || typeof found.alive !== 'boolean') {
           throw new SendHeldError('Not sent yet: the session host could not confirm the process identity')
         }
