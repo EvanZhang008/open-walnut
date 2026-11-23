@@ -311,6 +311,11 @@ export interface OrgThread {
    * from news by it). Absent on summaries written before 2026-11-23.
    */
   lineReplyAt?: string;
+  /**
+   * A title a status line gave this untitled thread that clearly repeats open thread `like`: held, not
+   * written, until the node's next status answer says merge or names it again (sessions/status-thread-title.ts).
+   */
+  titleHeld?: { title: string; like: string; at: string };
   /** Tasks the thread went to: shown with their live status. */
   tasks?: string[];
   messages: ThreadMessage[];
@@ -556,6 +561,8 @@ function normalizeThread(t: unknown): OrgThread | null {
   if (next.askOwner && !(typeof next.askOwner === 'object' && isStr(next.askOwner.task) && next.askOwner.task && isStr(next.askOwner.at))) delete next.askOwner;
   if (next.ackedResult !== undefined && typeof next.ackedResult !== 'boolean') delete next.ackedResult;
   if (next.lineReplyAt !== undefined && !isStr(next.lineReplyAt)) delete next.lineReplyAt;
+  // A titled thread holds nothing (an older build titled it without clearing the hold: review).
+  if (next.titleHeld !== undefined && (next.titled || !(typeof next.titleHeld === 'object' && isStr(next.titleHeld.title) && THREAD_ID_RE.test(String(next.titleHeld.like)) && isStr(next.titleHeld.at)))) delete next.titleHeld;
   for (const k of ['ackedAt', 'ackDone'] as const) if (next[k] !== undefined && !(isStr(next[k]) && Number.isFinite(Date.parse(next[k]!)))) delete next[k];
   if (next.ackPlaced !== undefined && !validAckPlaced(next.ackPlaced)) delete next.ackPlaced;
   const letter = next.letter !== undefined ? normalizeThreadLetter(next.letter) : undefined;
@@ -1179,7 +1186,7 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   }
   if (onlyWatch(patch)) return watchOnly(file, cur, patch, by, at);
   const next: OrgThread = { ...cur, updatedAt: at, by };
-  if (patch.title !== undefined) { next.title = clip(patch.title, THREAD_TITLE_MAX); next.titled = true; }
+  if (patch.title !== undefined) { next.title = clip(patch.title, THREAD_TITLE_MAX); next.titled = true; delete next.titleHeld; }
   if (patch.ask !== undefined) { if (patch.ask.trim()) next.ask = clip(patch.ask, THREAD_ASK_MAX); else delete next.ask; }
   // The summary's writer moves only with its words: the same words sent again (a state move that
   // repeats the reply) keep the writer they had, so a path in them still opens where it was written.

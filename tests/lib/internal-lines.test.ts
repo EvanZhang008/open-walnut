@@ -133,6 +133,8 @@ describe('no text Walnut gives a session tells it to write the report in a reply
     'src/core/sessions/status-threads.ts',
     // Its split line for a message joined only for coming right after his last one (2026-11-23).
     'src/core/sessions/status-thread-split.ts',
+    // Its merge line for a held title that repeats another open thread (2026-11-23).
+    'src/core/sessions/status-thread-title.ts',
     // The status side question asked again about an ask the user could not read (2026-11-21).
     'src/core/sessions/unclear-ask.ts',
     'src/core/ask-decision.ts',

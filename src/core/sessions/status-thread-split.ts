@@ -142,9 +142,10 @@ export function splitJoins(file: ThreadsFile, checked: readonly JoinMark[], spli
       const id = next.thread.id;
       for (const m of run.slice(1)) next = { ...splitMessageInto(next.file, c.id, m, id, by, at, lang, { keepOpen: true }), thread: next.thread };
       const tail = new Set(run.slice(1));
-      // Named by the answer, as a FOR_USER_THREAD_TITLE names an untitled thread; the tail is asked next.
+      // The tail is asked next. Its title is the line's, written as a FOR_USER_THREAD_TITLE is (held when
+      // it repeats another open thread: status-thread-title.ts), so the caller names it (opened[].line.title).
       file = { ...next.file, threads: next.file.threads.map((t) => (t.id !== id ? t : {
-        ...t, title: line.title, titled: true, messages: t.messages.map((m) => (tail.has(m.id) ? { ...m, joined: 'recent' as const } : m)),
+        ...t, messages: t.messages.map((m) => (tail.has(m.id) ? { ...m, joined: 'recent' as const } : m)),
       })) };
       // What is left of what the question saw there: a word of his after it still holds that line (review round 2).
       const ids = new Set(run);

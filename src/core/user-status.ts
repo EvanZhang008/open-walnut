@@ -44,6 +44,7 @@ import { outlivingLine, type OutlivingSource } from './sessions/outliving-work.j
 import type { SameAskFold } from './same-ask.js';
 import type { StatusThreadLine, StatusThreadNew, ThreadMark } from './sessions/status-threads.js';
 import type { JoinMark, StatusThreadSplit } from './sessions/status-thread-split.js';
+import type { MergeMark } from './sessions/status-thread-title.js';
 import { reportDecision, type AskMemory, type StatusDecision } from './ask-decision.js';
 import type { ActionItem } from './action-needed.js';
 // The web reads Action needed through this module's alias (@open-walnut/user-status).
@@ -242,6 +243,10 @@ export interface StatusReport {
   threads_split?: StatusThreadSplit[];
   /** Every join the question asked about, whatever the answer said: its mark comes off, never stored here. */
   joins_checked?: JoinMark[];
+  /** Its threads holding a title that it said repeat the thread they read like (FOR_USER_THREAD_MERGE): merged, never stored here. */
+  threads_merge?: MergeMark[];
+  /** Every thread holding a title the question asked about: merged or titled, never stored here. */
+  merges_checked?: MergeMark[];
   /** Its state came from its thread lines, not FOR_USER_STATE (status-threads.ts settleStateFromThreads). */
   from_threads?: true;
 }
