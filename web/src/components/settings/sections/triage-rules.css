@@ -90,5 +90,6 @@ textarea.settings-input.trr-note-input { width: 100%; height: auto; min-height: 
 .trr-rule-removing .trr-rule-actions { flex: 1 0 100%; justify-content: flex-end; gap: 8px; }
 @media (max-width: 600px) {
   .trr-pick { min-height: 44px; }
-  .trr-inline-btn { display: flex; align-items: center; min-height: 44px; }
+  /* `.btn.`: a finger's 44 px outranks the family's 28 px (tests/web/button-companion-tie.test.ts). */
+  .btn.trr-inline-btn { display: flex; align-items: center; min-height: 44px; }
 }
