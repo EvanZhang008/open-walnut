@@ -10,6 +10,10 @@
  * no `_connecting`: two sockets. The later one became `this.ws`, the abandoned
  * one's close tore the good link down, and connectDirect dialled the URL the
  * caller held even after the daemon had restarted on another port.
+ *
+ * And a disconnect() that comes while a direct dial waits wins: the dial used to set the
+ * instance connected after it, over the socket the disconnect closed, and a destroyed
+ * instance never notices a close, so nothing redialled it.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
@@ -203,5 +207,26 @@ describe('DaemonConnection: one connection, one dial', () => {
     await Promise.all([first, conn.reconnectNow()])
     expect(conn.connected).toBe(true)
     expect(dials).toEqual([daemon.url])
+  })
+
+  it('a disconnect while a direct dial waits for its hello ends that dial: nothing reads connected, and the next dial links', async () => {
+    const daemon = await startDaemon(300, 'replaced')
+    daemons.push(daemon)
+    // A host's direct link, as a test transport pools one (not the local daemon's).
+    const conn = new DaemonConnection('devbox', null)
+    const { dialled } = watchDials()
+    const first = conn.connectDirect(daemon.url)
+    const ended = first.then(() => 'connected', (err: Error) => err.message)
+    await dialled(1)
+    await until(() => daemon.sockets.length > 0)
+    // The pool replaces it mid-dial (getDaemonConnectionOrThrow on another target disconnects it).
+    conn.disconnect()
+    expect(await ended).toMatch(/was closed while it connected/)
+    expect(conn.connected).toBe(false)
+    // Its caller dials it again, and that link is a real one.
+    await conn.connectDirect(daemon.url)
+    expect(conn.connected).toBe(true)
+    await expect(conn.send('ping', {}, 2_000)).resolves.toMatchObject({ ok: true })
+    conn.disconnect()
   })
 })

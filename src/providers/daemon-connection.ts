@@ -2976,7 +2976,12 @@ export class DaemonConnection {
 
   /** Ends an abandoned '__local__' dial: closes only the socket it opened itself after the disconnect. */
   private throwIfLocalDialAbandoned(): void {
-    if (!this.localDialAbandoned()) return
+    this.endDialIf(this.localDialAbandoned())
+  }
+
+  /** Ends a dial a disconnect() came during (`abandoned`): its own socket closed, nothing connected. */
+  private endDialIf(abandoned: boolean): void {
+    if (!abandoned) return
     const ws = this.ws
     this.ws = null
     if (ws) {
@@ -7949,7 +7954,12 @@ export class DaemonConnection {
   private async dialDirect(wsUrl: string): Promise<void> {
     this._dialledDirect = true
     await this.connectWebSocket(wsUrl)
+    // A disconnect() while the dial awaited wins: connected after it, the instance stayed
+    // "connected" over the socket the disconnect closed, and being destroyed, never noticed
+    // its close nor redialled (a pooled direct link replaced at a wake, 2026-11-23).
+    this.endDialIf(this._destroyed)
     const ok = await this.verifyCapabilities()
+    this.endDialIf(this._destroyed)
     if (!ok) {
       log.session.warn('DaemonConnection: direct connect hello failed — proceeding anyway', {
         host: this.hostKey, wsUrl,
