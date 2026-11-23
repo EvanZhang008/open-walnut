@@ -299,7 +299,8 @@ test('C67: nested repeats preview at once; a back-reference or a too-big pattern
     await expect(editor.getByTestId('mail-rule-field-error')).toHaveText(sentence)
     // Off, and looks it, from the moment the error shows: dimmed, without the blue fill.
     await expect(editor.getByTestId('mail-rule-save')).toBeDisabled()
-    await expect(editor.getByTestId('mail-rule-save')).toHaveCSS('opacity', '0.45')
+    // The button family's one disabled look (styles/buttons.css: half strength).
+    await expect(editor.getByTestId('mail-rule-save')).toHaveCSS('opacity', '0.5')
     expect(await fillOf(editor.getByTestId('mail-rule-save'))).not.toBe(liveFill)
     await page.waitForTimeout(900)
     const inBody = JSON.stringify(value).slice(1, -1)

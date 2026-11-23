@@ -664,10 +664,11 @@
   gap: 8px;
 }
 
-/* Cancel and the confirm are family keys sharing the row, each a finger's 44 px tall. */
+/* Cancel and the confirm are family keys sharing the row, each a finger's 44 px tall (`.btn.` so the
+   size outranks the family's 34 px whichever file loads first: tests/web/button-companion-tie.test.ts). */
 .phone-confirm-sheet-btn { flex: 1 1 0; }
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  .phone-confirm-sheet-btn { min-height: 44px; }
+  .btn.phone-confirm-sheet-btn { min-height: 44px; }
 }
 
 /* The home list scrolls its last row clear of the home indicator (C20). */
