@@ -218,16 +218,23 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
       layoutRef.current = phone;
       for (const m of [widths, shortWidths, detailWidths, directWidths]) m.current.clear();
     }
+    const inlineIds = new Set(inline.map((c) => c.id));
     for (const el of bar.querySelectorAll<HTMLElement>(OWN_CONTROL)) {
       const id = el.dataset.controlId!;
+      // A control put into "..." before its short form was ever drawn would be judged on a guess
+      // while it stays there (ASSUMED_SHORT_MODEL_WIDTH kept the model off a row with room for it,
+      // 2026-11-23): draw it for this one read, hidden again before the browser paints.
+      const unmeasured = condensed && inlineIds.has(id) && el.dataset.hidden === 'true' && !shortWidths.current.has(id);
+      if (unmeasured) el.dataset.hidden = 'false';
       const w = el.getBoundingClientRect().width;
+      const detail = condensed ? el.querySelector<HTMLElement>('[data-condensed-detail]') : null;
+      const detailW = detail ? detailCost(detail) : 0;
+      if (unmeasured) el.dataset.hidden = 'true';
       if (w <= 0) continue;
       if (!condensed) { widths.current.set(id, w); continue; }
       // A condensed row shows each control's short form, with or without its
       // detail. Record the two natural widths apart, so the decision below
       // never depends on which of them happens to be on the row right now.
-      const detail = el.querySelector<HTMLElement>('[data-condensed-detail]');
-      const detailW = detail ? detailCost(detail) : 0;
       if (detailW > 0) detailWidths.current.set(id, detailW);
       // No detail while the row is showing details = the control has none any
       // more (the percentage went away); a remembered width would still be
