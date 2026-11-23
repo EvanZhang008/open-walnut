@@ -159,6 +159,7 @@ import { TRIGGERS_DELTA_MAX } from './trigger-check-core.js'
 import { launcherFactsFrom, type LauncherFacts } from './service-launcher-beat.js'
 import { noteLauncherRollback } from '../core/hosts/host-launcher.js'
 import { isMachineId } from './machine-id-core.js'
+import { noteFrameParsed } from './line-parse-count.js'
 
 /** `walnut-boot=<epoch s>` in what a host printed, as `{ boot }` (a `started` record's), else {}. */
 function bootOf(said: string): { boot?: number } {
@@ -8282,6 +8283,7 @@ export class DaemonConnection {
 
   private handleMessage(raw: string): Promise<void> | void {
     let msg: Record<string, unknown>
+    noteFrameParsed('daemon')
     try { msg = JSON.parse(raw) } catch { this._lastFrameAt = Date.now(); return }
     return this.handleFrame(msg)
   }

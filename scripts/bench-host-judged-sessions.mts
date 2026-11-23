@@ -13,7 +13,9 @@
  * process: the Mac probe's /loop), its CPU (user + system from /proc) and RSS (sampled each second),
  * and the host service's CPU for reference. Then every turn ends, and it checks delivery: the
  * session events the Mac's bus got against what each CLI wrote (its result line names it), and the
- * Mac's per-line parse count (src/providers/line-parse-count.ts): about 1 per line off, 0 on.
+ * Mac's per-line parse count (src/providers/line-parse-count.ts): about 1 per line off, 0 on. And
+ * every JSON parse on the Mac in the window per CLI line written in it: daemon frames, session-channel
+ * frames, and line bodies (off: a frame and a body per line; on: frames of merged batches).
  *
  *   walnut-dev run bun scripts/bench-host-judged-sessions.mts [--runs 2] [--modes off,on]
  *     [--sessions 10] [--rate 50] [--warmup 10] [--seconds 60] [--out <dir>] [--profile <dir>]
@@ -127,6 +129,13 @@ async function runOnce(mode: Mode, index: number) {
 
     const pid = h.c.macPid
     const link = (await h.mac(`/side?host=${HOST_KEY}`)).kind as string | null
+    const parsesNow = async () => {
+      const f = (await h.mac('/frames')) as { daemon: number; channel: number }
+      let line = 0
+      for (const sid of sids) line += (await h.mac(`/parses?sid=${sid}`)).parses as number
+      return { ...f, line }
+    }
+    const parses0 = await parsesNow()
     if (PROFILE) await h.mac('/profile?start=1')
     await h.mac('/loop?reset=1')
     const cpu0 = cpuSeconds(pid)
@@ -141,6 +150,7 @@ async function runOnce(mode: Mode, index: number) {
     if (PROFILE) { fs.mkdirSync(PROFILE, { recursive: true }); await h.mac(`/profile?to=${encodeURIComponent(path.join(PROFILE, `run-${index}-${mode}.cpuprofile`))}`) }
     const cpu = cpuSeconds(pid) - cpu0
     const hostCpu = cpuSeconds(hostPid) - hostCpu0
+    const parses1 = await parsesNow()
     // Every turn was still streaming at the window's end (else the window measured less output).
     const endedEarly: string[] = []
     for (const sid of sids) if ((await eventCounts(h, sid))['session:result']) endedEarly.push(sid)
@@ -171,6 +181,11 @@ async function runOnce(mode: Mode, index: number) {
       results: SESSIONS - sum((s) => Math.min(1, s.got.results)),
     }
     const outputLinesInWindow = SESSIONS * RATE * wallS
+    // Every JSON parse of the window on the Mac, per CLI line written in it: its daemon frames, the
+    // session-channel frames, and the line bodies the per-line counter counts.
+    const per = (n: number) => Math.round((n / outputLinesInWindow) * 1000) / 1000
+    const window = { daemonFrames: parses1.daemon - parses0.daemon, channelFrames: parses1.channel - parses0.channel, lineBodies: parses1.line - parses0.line }
+    const parses = { daemonFramesPerLine: per(window.daemonFrames), channelFramesPerLine: per(window.channelFrames), lineBodiesPerLine: per(window.lineBodies), allPerLine: per(window.daemonFrames + window.channelFrames + window.lineBodies), window }
     // A loss keeps what the cluster's logs say of the channel and of the sessions that lost events.
     const lossy = sessions.filter((s) => s.got.deltas !== s.wrote.deltas + 1 || s.got.toolUses !== s.wrote.toolUses || s.got.toolResults !== s.wrote.toolResults || s.got.results < 1).map((s) => s.sid)
     if (lossy.length && OUT) fs.writeFileSync(path.join(OUT, `run-${index}-${mode}.loss.log`), channelLogLines(h.c.base, lossy).join('\n') + '\n')
@@ -181,7 +196,7 @@ async function runOnce(mode: Mode, index: number) {
       cpuMsPer1kLines: Math.round((cpu * 1000 / outputLinesInWindow) * 1000 * 10) / 10,
       rssMaxMb: Math.max(...rss), rssEndMb: rss[rss.length - 1],
       hostCpuSecPerMin: Math.round((hostCpu / wallS) * 60 * 100) / 100,
-      linesWritten: lines, parsesPerLine: Math.round((sum((s) => s.parses) / lines) * 1000) / 1000,
+      linesWritten: lines, parsesPerLine: Math.round((sum((s) => s.parses) / lines) * 1000) / 1000, parses,
       loss, endedEarly, perSession: sessions,
     }
   } catch (err) {
@@ -195,8 +210,9 @@ async function runOnce(mode: Mode, index: number) {
 const median = (xs: number[]) => { const s = [...xs].sort((a, b) => a - b); const m = s.length >> 1; return Math.round((s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2) * 1000) / 1000 }
 const COLUMNS = [
   ['loopMaxMs', 'loop delay max (ms)'], ['loopP99Ms', 'loop delay p99 (ms)'], ['cpuSecPerMin', 'CPU s per min'],
-  ['cpuMsPer1kLines', 'CPU ms per 1k lines'], ['rssMaxMb', 'RSS max (MB)'], ['parsesPerLine', 'parses per line'],
-  ['hostCpuSecPerMin', 'host CPU s per min'],
+  ['cpuMsPer1kLines', 'CPU ms per 1k lines'], ['rssMaxMb', 'RSS max (MB)'], ['parsesPerLine', 'line-body parses per line'],
+  ['hostCpuSecPerMin', 'host CPU s per min'], ['allParsesPerLine', 'JSON parses per line (all)'],
+  ['daemonFramesPerLine', 'daemon frames per line'], ['channelFramesPerLine', 'channel frames per line'],
 ] as const
 
 async function main() {
@@ -215,7 +231,8 @@ async function main() {
   const medians: Record<string, Record<string, number>> = {}
   for (const mode of MODES) {
     const of = runs.filter((r) => r.mode === mode)
-    medians[mode] = Object.fromEntries(COLUMNS.map(([k]) => [k, median(of.map((r) => r[k]))]))
+    const val = (r: any, k: string) => (k === 'allParsesPerLine' ? r.parses.allPerLine : k in r ? r[k] : r.parses[k])
+    medians[mode] = Object.fromEntries(COLUMNS.map(([k]) => [k, median(of.map((r) => val(r, k)))]))
   }
   const summary = {
     at: new Date().toISOString(), host: os.hostname(), cpus: os.cpus().length, commit: execFileSync('git', ['rev-parse', 'HEAD']).toString().trim(),

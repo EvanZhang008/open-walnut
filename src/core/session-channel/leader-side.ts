@@ -29,6 +29,7 @@ import { SESSION_JUDGE_CAP } from './switch.js'
 import { answerOf, dialOverStream, requestOverStream, type ChannelSocket, type HostCallAnswer } from './leader-links.js'
 import type { HostChannelBatch, HostChannelBatchResult } from '../session-tracker.js'
 import type { SessionRecord } from '../types.js'
+import { noteFrameParsed } from '../../providers/line-parse-count.js'
 
 export { HostRequestNotSent, requestNotSent, type ChannelSocket, type HostCallAnswer } from './leader-links.js'
 
@@ -317,6 +318,7 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     s.channel = channel
     sock.onMessage((text) => {
       let frame: unknown
+      noteFrameParsed('channel')
       try { frame = JSON.parse(text) } catch { return }
       if (!isChannelFrame(frame)) return
       if (frame.op === 'hello') {

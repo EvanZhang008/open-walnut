@@ -29,6 +29,7 @@
  *         GET /drops?host=   the deletes of the host's sessions it has not answered yet
  *         GET /acp?sid=      what the Mac's runner answers for an ACP session (findAcpSession)
  *         GET /parses?sid=   how many CLI lines of it this process parsed (line-parse-count.ts)
+ *         GET /frames        how many daemon frames and session-channel frames this process parsed
  *         GET /counts?sid=   its bus events here by `name|source`, counted
  *         GET /loop?reset=   this process's event-loop delay since the last reset (max, p99, p50, mean ms)
  *         GET /profile?start=1, then ?to=<file>   a CPU profile of this process between the two (node:inspector)
@@ -151,6 +152,7 @@ ${SERVE('probeFile')}
 await serveProbe({
   '/events': (q) => eventsOf(q.get('sid')),
   '/parses': (q) => ({ parses: lpc.lineParsesOf(q.get('sid')) }),
+  '/frames': () => lpc.frameParses(),
   '/counts': (q) => counted.get(q.get('sid')) ?? {},
   '/loop': (q) => {
     const ms = (ns) => Math.round(ns / 1e4) / 100
