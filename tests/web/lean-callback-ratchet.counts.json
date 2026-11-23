@@ -50,7 +50,7 @@
   "web/src/components/common/FileMarkdownEditor.tsx": [2, 0],
   "web/src/components/common/FileQuestionRail.tsx": [5, 0],
   "web/src/components/common/FileThreadLayer.tsx": [13, 0],
-  "web/src/components/common/FileViewer.tsx": [3, 0],
+  "web/src/components/common/FileViewer.tsx": [1, 0],
   "web/src/components/common/FoundHostPrompts.tsx": [1, 0],
   "web/src/components/common/InstallButton.tsx": [1, 0],
   "web/src/components/common/MicButton.tsx": [6, 0],
