@@ -154,8 +154,10 @@ describe('computePlacement: the reported bug — tall menu, short window', () =>
 
   it('leaves a menu that genuinely fits uncapped', () => {
     // Sanity guard on the other side: don't start scrolling menus that were fine.
+    // The cap is the room below (880 - 80 - gap - margin), above the menu's own 700px.
     const { out } = place({ naturalHeight: 700, viewportHeight: 880, anchor: { top: 60, bottom: 80, right: 900 } });
-    expect(out.maxHeight).toBe(700);
+    expect(out.maxHeight).toBe(880 - 80 - GAP - MARGIN);
+    expect(out.maxHeight).toBeGreaterThanOrEqual(700);
   });
 
   it('never returns a maxHeight larger than the viewport, even below minHeight room', () => {
@@ -274,6 +276,38 @@ describe('computePlacement: cursor anchor (right-click a task row)', () => {
 
   it('a cursor near the bottom edge still gets a fully visible menu', () => {
     const { input, out } = place({ anchor: { top: 860, bottom: 860, right: 640 }, naturalHeight: 500 });
+    expectOnScreen(input, out);
+  });
+});
+
+describe('computePlacement: the cap is the room, not the height measured at open', () => {
+  // Measured 2026-11-23 in WebKit at 1512x920: a task row's right-click menu mounted at 421px
+  // (+2 border), its "More fields" group arrived 20 ms later and made it 453px. A cap equal to the
+  // first measure hid "Delete" behind a scrollbar with 585px of room below, until a re-measure that
+  // waited on two animation frames (300 to 500 ms there, never on one load).
+  const ROW_MENU = {
+    anchor: { top: 325, bottom: 325, right: 122 }, menuWidth: 326, viewportWidth: 1512, viewportHeight: 920,
+    align: 'left' as const,
+  };
+
+  it('a menu measured before a late row arrives still has room for that row', () => {
+    const { out } = place({ ...ROW_MENU, naturalHeight: 423 });
+    expect(out.maxHeight).toBe(920 - 325 - GAP - MARGIN);
+    expect(out.maxHeight).toBeGreaterThanOrEqual(453);
+  });
+
+  it('the late row changes nothing: same box before and after it arrives', () => {
+    const before = place({ ...ROW_MENU, naturalHeight: 423 }).out;
+    const after = place({ ...ROW_MENU, naturalHeight: 453, forceSide: before.side }).out;
+    expect(after).toEqual(before);
+  });
+
+  it('opening upward, the cap is the room under its top, so growing never runs off the bottom', () => {
+    const { input, out } = place({ anchor: { top: 700, bottom: 700, right: 640 }, naturalHeight: 400, viewportHeight: 900 });
+    expect(out.side).toBe('up');
+    expect(out.top).toBe(700 - GAP - 400);
+    expect(out.maxHeight).toBe(900 - out.top - MARGIN);
+    expect(out.maxHeight).toBeGreaterThan(400);
     expectOnScreen(input, out);
   });
 });

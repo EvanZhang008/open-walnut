@@ -263,17 +263,24 @@ export function computePlacement(input: PlacementInput): MenuPlacement & { side:
   // the margins before giving up the menu.
   const ABSOLUTE_MIN = 48;   // ~1 row + padding: still usable, still scrollable
   const viewportCap = Math.max(viewportHeight - topInset - margin * 2, Math.min(viewportHeight, ABSOLUTE_MIN));
-  // `|| available` carries the pre-mount pass, where naturalHeight is still 0.
-  // Without it that first frame would collapse to maxHeight === minHeight.
-  const wanted = naturalHeight || available;
-  const maxHeight = Math.min(Math.max(Math.min(wanted, available), minHeight), viewportCap);
-  const height = Math.min(wanted || maxHeight, maxHeight);
+  const sideCap = Math.min(Math.max(available, minHeight), viewportCap);
+  // The height the menu renders at, for the clamp and an upward menu's top.
+  const height = Math.min(naturalHeight || sideCap, sideCap);
 
   // Clamp into the viewport so a menu taller than the chosen side (i.e. one that
   // bottomed out at minHeight) still lands fully on screen and scrolls inside.
   let top = openUp ? anchor.top - gap - height : anchor.bottom + gap;
   top = Math.min(top, viewportHeight - height - margin);
   top = Math.max(top, margin + topInset);
+
+  // The cap is the ROOM, never the height measured a moment ago: a menu that fits needs no cap of
+  // its own, and a cap at its measured height clips every row that arrives after the measure until
+  // the next re-measure. Measured 2026-11-23: a task row's menu mounted at 421px, its "More fields"
+  // group arrived 20 ms later (451px), and the 423px cap hid "Delete" behind a scrollbar while 585px
+  // were free below, for 300 to 500 ms in WebKit, whose second animation frame came that late (and
+  // for good on one load). The room is the chosen side's and what lies under `top`, so an upward
+  // menu that grows never runs off the bottom; never below the height it renders at.
+  const maxHeight = Math.min(sideCap, Math.max(height, viewportHeight - top - margin));
 
   // Horizontal: right edge at the anchor (default), left edge for align:'left'
   // (menu opens rightward, keeping the anchor visible — flips back leftward

@@ -234,9 +234,8 @@ export function PanelMenu({ filters: c, display: d, flashOption }: PanelMenuProp
 
   const width = Math.min(PANEL_MENU_WIDTH, window.innerWidth - 16);
   const clamped = clampToPanelLeft({ placement, menuWidth: width, panelLeft: panelLeftOf(c.buttonRef.current), viewportWidth: window.innerWidth });
-  // F34: the cap follows the room below, never a height measured earlier.
-  const roomBelow = clamped ? Math.max(clamped.maxHeight, window.innerHeight - clamped.top - 8) : undefined;
-  const style = { ...menuPlacementStyle(clamped), width, maxHeight: Math.min(roomBelow ?? PANEL_MENU_MAX_HEIGHT, PANEL_MENU_MAX_HEIGHT) };
+  // F34: the placement's cap is the room below, never a height measured earlier (useMenuPlacement).
+  const style = { ...menuPlacementStyle(clamped), width, maxHeight: Math.min(clamped?.maxHeight ?? PANEL_MENU_MAX_HEIGHT, PANEL_MENU_MAX_HEIGHT) };
   const pageKey = page?.kind === 'dim' ? page.dim : page?.kind === 'view' ? 'view' : null;
   const viewsHead = (
     <div className="fb-page-head">

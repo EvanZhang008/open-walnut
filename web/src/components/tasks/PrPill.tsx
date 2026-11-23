@@ -15,7 +15,7 @@
  * stops pointerdown (rows are dnd-kit draggables), and closes on an outside pointerdown or Escape.
  */
 import { useTasksContextSafe } from '@/contexts/TasksContext';
-import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task } from '@open-walnut/core';
 import {
@@ -106,15 +106,6 @@ function StaleGlyph() {
       <circle cx="8" cy="8" r="6.2" /><path d="M8 4.6v4.2" /><path d="M8 11.4v.01" />
     </svg>
   );
-}
-
-/** Opening downward, the card may grow to the window's bottom edge: what a read adds after it was
- *  placed shows at once instead of under a cap measured before (the placement re-measures too). */
-function cardStyle(placement: ReturnType<typeof useMenuPlacement>, trigger: HTMLElement | null): CSSProperties {
-  const style = menuPlacementStyle(placement);
-  if (!placement || !trigger || typeof window === 'undefined') return style;
-  if (placement.top < trigger.getBoundingClientRect().bottom - 1) return style;
-  return { ...style, maxHeight: Math.max(placement.maxHeight, window.innerHeight - placement.top - 8) };
 }
 
 function CheckMark({ status }: { status: PrCheck['status'] }) {
@@ -592,7 +583,7 @@ export function PrPill({ task: given, className, compact = false }: { task: Task
               role="dialog"
               aria-label="Pull request status"
               data-testid="pr-card"
-              style={cardStyle(placement, triggerRef.current)}
+              style={menuPlacementStyle(placement)}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => e.stopPropagation()}
               // A portal still bubbles React events up to the row, whose Enter and Space act on the
