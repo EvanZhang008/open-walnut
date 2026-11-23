@@ -593,14 +593,14 @@ keep its shape (a sheet's grabber, a camera shutter) says why with `// ui-standa
 
 ## What exists today that breaks this (the ratchet counts them)
 
-Counted on 2026-11-22 by `tests/web/ui-standard-ratchet.test.ts` (per file, in
+Counted on 2026-11-23 by `tests/web/ui-standard-ratchet.test.ts` (per file, in
 `tests/web/ui-standard-baseline.json`):
 
 - 1 rule restyles `.btn` outside the family's two homes (`styles/buttons.css`, and the card
   family in `components/actions/ask-card.css`): `styles/inline-answer.css`.
-- 73 rules in 40 files give a `*-btn`, `*-button`, `*-pill` or `*-chip` class its own fill and
+- 41 rules in 21 files give a `*-btn`, `*-button`, `*-pill` or `*-chip` class its own fill and
   corner instead of a `.btn` variant.
-- 1098 `<button>` elements in 417 TSX files carry no `btn` class (choice controls with role tab,
+- 1001 `<button>` elements in 391 TSX files carry no `btn` class (choice controls with role tab,
   radio, switch, checkbox or option aside). A new file starts at 0.
 - 21 raw `#007aff` / `#0a84ff` in 9 files where `var(--accent)` belongs.
 - Values written where a token belongs (per declaration, `tests/web/ui-token-scan.ts`):
