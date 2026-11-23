@@ -82,6 +82,7 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/core/human-inbox-notifications.test.ts", sleep: "await new Promise(r => setTimeout(r, 120));", reason: "negative: a duplicate event must not create a second envelope" },
   { file: "tests/core/human-inbox-notifications.test.ts", sleep: "await new Promise(r => setTimeout(r, 120));", reason: "negative: no envelope is minted for an event with no letter id" },
   { file: "tests/core/human-inbox-notifications.test.ts", sleep: "await new Promise(r => setTimeout(r, 150));", reason: "negative: the legacy sender must not push (fetch not called)" },
+  { file: "tests/core/leader/switch/service-role.test.ts", sleep: "await new Promise((r) => setTimeout(r, 80))", reason: "negative: a launcher's start must not end while the switch claim holds (it looks every 20 ms)" },
   { file: "tests/core/link-adapters.test.ts", sleep: "await new Promise((r) => setTimeout(r, 40))", reason: "negative: a closed link arms no watch, no state events arrive" },
   { file: "tests/core/link-tags-apply.test.ts", sleep: "await new Promise((r) => setTimeout(r, 200))", reason: "negative: automated launches must add no tags (positive tags already awaited with until)" },
   { file: "tests/core/local-readiness.test.ts", sleep: "await new Promise((r) => setTimeout(r, 10))", reason: "negative: a reconnect asks the daemon nothing more" },

@@ -5,7 +5,7 @@
  * install root, through the real start hooks (service-start-hooks.ts runServiceStartHooks): a kill between
  * the record and the mode, healed by the start hook, and the job's resume converges.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -216,8 +216,7 @@ describe('a launcher start during a promotion', () => {
     fs.writeFileSync(path.join(home, 'server.lock.json'), JSON.stringify({ pid: process.pid }))
     expect(promotionSettled(home, env)).toBe(false)
     fs.rmSync(path.join(home, 'server.lock.json'))
-    await new Promise((r) => setTimeout(r, 80))
-    expect(ended).toMatch(/switch S5 settled/)
+    await vi.waitFor(() => expect(ended).toMatch(/switch S5 settled/), { timeout: 2_000 })
     expect(fs.readdirSync(home).sort()).toEqual([...before, 'local'].filter((x, i, a) => a.indexOf(x) === i).sort())
     await w.close()
   })
