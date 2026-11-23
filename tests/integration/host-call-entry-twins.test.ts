@@ -242,7 +242,7 @@ afterAll(async () => {
 
 for (const twin of ['source', 'standalone'] as const) {
   describe.skipIf(twin === 'standalone' && !BUN)(`${twin === 'source' ? `source twin (${SOURCE_TWIN.runtime})` : 'standalone twin'}: the host call entry`, () => {
-    it('a job run gets the entry socket and its own token, its call goes through the entry and back with the socket\'s answer, and a wrong or ended run\'s token runs nothing', async () => {
+    it('a job run gets the entry socket and its own token, its call is handed back by the entry and answered on the socket, and a wrong or ended run\'s token runs nothing', async () => {
       const r = await rig(twin, `${twin.slice(0, 2)}a`)
       try {
         const run = await r.startJob('worker')
@@ -250,8 +250,8 @@ for (const twin of ['source', 'standalone'] as const) {
         expect(fs.statSync(r.callSocket).mode & 0o777).toBe(0o600)
         expect(run.callToken).toMatch(/^[0-9a-f]{64}$/)
         expect(run.socket).toBe(r.d.sock)
-        // Its call went through the entry (not the socket fallback), the gateway's way for a plugin
-        // job (the server of its Walnut), and came back.
+        // Its call went to the entry first, which handed it back unrun (a plugin job's run is vouched for
+        // only on the gateway socket, by the process there), and the socket answered it, once.
         expect(r.entryLines.map((l) => [l.sid, l.args?.name])).toEqual([[run.sid, 'task_list']])
         expect(run.answer).toEqual({ who: 'mac', op: 'task_list' })
         expect(r.macAsked).toHaveLength(1)
@@ -259,11 +259,13 @@ for (const twin of ['source', 'standalone'] as const) {
         // The very same line on the socket: the same answer.
         expect(await socketCall(r.d.sock, run.sid, 'task_list')).toEqual({ ok: true, result: { who: 'mac', op: 'task_list' } })
 
-        // follower.gateway itself: the token of this run only.
+        // follower.gateway itself: the token of this run only, and even its own token runs nothing for
+        // a job (job_on_socket): the door has no socket peer to vouch for the run.
         const line = { v: 1, op: 'tools.call', sid: run.sid, args: { name: 'task_get', args: {} } }
-        const good = await cmd(r.follower, { cmd: 'follower.gateway', request: line, token: run.callToken, openedAt: Date.now() })
-        expect(good).toMatchObject({ ok: true, response: { ok: true, result: { who: 'mac', op: 'task_get' } } })
         const asked = r.macAsked.length
+        const good = await cmd(r.follower, { cmd: 'follower.gateway', request: line, token: run.callToken, openedAt: Date.now() })
+        expect(good).toMatchObject({ ok: false, errorKind: 'job_on_socket' })
+        expect(r.macAsked.length).toBe(asked)
         const other = await cmd(r.follower, { cmd: 'follower.gateway', request: { ...line, sid: 'plugin-job:' + '0'.repeat(64) }, token: run.callToken })
         expect(other).toMatchObject({ ok: false, errorKind: 'bad_token' })
         const none = await cmd(r.follower, { cmd: 'follower.gateway', request: line })

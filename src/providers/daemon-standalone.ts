@@ -5021,6 +5021,12 @@ function cmdFollowerGateway(ws: ServerWebSocket<WsData>, id: number, cmd: Record
     logMsg('warn', 'host call entry: token refused', { home, sid: typeof sid === 'string' ? sid : null })
     return safeSend(ws, JSON.stringify({ id, ok: false, error: 'follower.gateway: this token is not the caller\'s', errorKind: 'bad_token' }))
   }
+  // A plugin job's run is vouched for only by the process on the gateway socket (jobCallerVouched),
+  // and this door has no socket peer: its line goes back, nothing ran, and its client sends the same
+  // line on the socket (the entry answers entry_unavailable). Else every start it makes is capped.
+  if (pluginJobs.isRunSid(sid)) {
+    return safeSend(ws, JSON.stringify({ id, ok: false, error: 'follower.gateway: a plugin job\'s call is vouched for on the daemon socket; use it', errorKind: 'job_on_socket' }))
+  }
   let line: string
   try { line = JSON.stringify(request) } catch { return sendError(ws, id, 'follower.gateway: the request does not serialize') }
   const openedAt = typeof cmd.openedAt === 'number' && Number.isFinite(cmd.openedAt) ? cmd.openedAt : Date.now()

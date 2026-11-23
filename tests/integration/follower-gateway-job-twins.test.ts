@@ -21,6 +21,10 @@
  * twin adds `vouched: true` only when the process on the gateway socket is the run or one of its
  * descendants (the job's own walnut.ops.call, a child it starts); this test process holding the
  * run's id is outside the run, so its call names the job unvouched. The JS twin never vouches.
+ * A job started while the follower names its call entry ('host-call-entry-v1') posts there first;
+ * that door has no socket peer to read, so the standalone twin hands the job's line back and the
+ * job's own call is vouched on the socket all the same (2026-11-23: a job started after the host's
+ * service named its entry had every bypass start refused).
  *
  * Hygiene: every dir is a temp dir (short: socket paths); each daemon is stopped by the pid
  * it wrote into its own dir, the fake host server and the job run by the pids they logged.
@@ -36,11 +40,18 @@ import path from 'node:path'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { testBun } from '../helpers/bun-runtime.js'
+import { createHostCallEntry, listenHostCallEntry, type HostCallListener } from '../../src/replica/host-call-entry.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const HOME = '/fixture/marina-home'
 const WALNUT = 'wmarinahost01'
 const BUN: string | undefined = testBun()
+/**
+ * The standalone twin runs from source under bun; WALNUT_TEST_DAEMON_BINARIES names a build of
+ * scripts/build-daemon.sh to run its binary instead (the program a host really runs).
+ */
+const BINARIES = process.env.WALNUT_TEST_DAEMON_BINARIES?.trim()
+const BINARY = BINARIES ? path.join(BINARIES, `daemon-${process.platform}-${process.arch}`) : undefined
 /** Beats of 400 ms: the gateway passes over a silent Mac after 3 (1.2 s), the keepalive closes it after 8 (3.2 s). */
 const BEAT_MS = 400
 /** Between the two: the follower may write once the Mac has been quiet this long. */
@@ -73,7 +84,7 @@ export const jobs = {
       try { asks = fs.readFileSync(out + '.go', 'utf8').split('\\n').filter(Boolean) } catch {}
       for (const name of asks.slice(done)) {
         done++
-        if (name === 'child') { spawn(process.execPath, [process.env.JOB_CHILD], { env: process.env, stdio: 'ignore' }); continue }
+        if (name === 'child') { spawn(process.env.JOB_NODE || process.execPath, [process.env.JOB_CHILD], { env: process.env, stdio: 'ignore' }); continue }
         walnut.ops.call(name, {}).then(
           (r) => fs.appendFileSync(out, JSON.stringify({ called: name, result: r }) + '\\n'),
           (e) => fs.appendFileSync(out, JSON.stringify({ called: name, error: String(e) }) + '\\n'))
@@ -132,6 +143,8 @@ async function spawnDaemon(name: string, twin: Twin, jobOut: string): Promise<Da
     WALNUT_GATEWAY_TIMEOUT_MS: '20000',
     JOB_OUT: jobOut,
     JOB_CHILD: path.join(base, 'job-child.cjs'),
+    // The child's runtime: a built daemon binary runs the job, and it runs no script of its own.
+    JOB_NODE: process.execPath,
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
   delete env.WALNUT_DAEMON_STATE_DIR
@@ -139,7 +152,9 @@ async function spawnDaemon(name: string, twin: Twin, jobOut: string): Promise<Da
   const stderr = process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'
   let proc: ChildProcess
   if (twin === 'standalone') {
-    proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', stderr], cwd: ROOT })
+    proc = BINARY
+      ? spawn(BINARY, ['--start'], { env, stdio: ['ignore', 'ignore', stderr], cwd: ROOT })
+      : spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', stderr], cwd: ROOT })
   } else {
     const script = path.join(dir, 'daemon.cjs')
     fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
@@ -221,9 +236,19 @@ function rawGatewayCall(sock: string, request: Record<string, unknown>): Promise
 
 const JOB = { kind: 'plugin-job', plugin: 'acme-sync', job: 'worker' }
 
-interface Rig { d: Daemon; mac: WebSocket; follower: WebSocket; macAsked: Array<Record<string, any>>; followerAsked: Array<Record<string, any>>; jobSid: string; jobOut: string; awake: (on: boolean) => void }
+interface Rig {
+  d: Daemon; mac: WebSocket; follower: WebSocket; macAsked: Array<Record<string, any>>; followerAsked: Array<Record<string, any>>
+  jobSid: string; jobOut: string; awake: (on: boolean) => void
+  /** The lines the follower's call entry handed to the daemon (`entry: true`), and its listener. */
+  entryLines: Array<Record<string, any>>; entry?: HostCallListener
+}
 
-async function rig(twin: Twin, name: string): Promise<Rig> {
+/**
+ * `entry`: the follower serves its host call entry (the real replica/host-call-entry.ts on its own
+ * unix socket, each line handed to the daemon over the follower link) and names it in its hello,
+ * before the job starts, so the run is given WALNUT_CALL_SOCKET and WALNUT_CALL_TOKEN.
+ */
+async function rig(twin: Twin, name: string, opts: { entry?: boolean } = {}): Promise<Rig> {
   const jobOut = path.join(base, `${name}-job.jsonl`)
   const d = await spawnDaemon(name, twin, jobOut)
   const mac = await connectWs(d.port, false)
@@ -243,9 +268,23 @@ async function rig(twin: Twin, name: string): Promise<Rig> {
   expect((await cmd(mac, { cmd: 'server.configure', home: HOME, spec })).ok).toBe(true)
   await waitFor(() => lines(fakeOut).length > 0, 30_000, 'the host server token')
   const follower = await connectWs(d.port)
+  const entryLines: Array<Record<string, any>> = []
+  let callEntry: HostCallListener | undefined
+  if (opts.entry) {
+    const served = createHostCallEntry({
+      request: (command, params) => { entryLines.push(params); return cmd(follower, { cmd: command, ...params }) },
+      capabilities: () => ['host-call-entry-v1'],
+      linked: () => true,
+      enabled: () => true,
+      log: () => {},
+    })
+    const socketPath = path.join(d.dir, 'host-call', `${crypto.randomBytes(8).toString('hex')}.sock`)
+    callEntry = (await listenHostCallEntry(served, { socketPath, uid: typeof process.getuid === 'function' ? process.getuid() : null, log: () => {} })) ?? undefined
+    expect(callEntry, 'the call entry listens').toBeTruthy()
+  }
   let hello: Record<string, any> = {}
   for (let attempt = 0; attempt < 40 && hello.ok !== true; attempt++) {
-    hello = await cmd(follower, { cmd: 'follower.hello', walnutId: WALNUT, home: HOME, token: lines(fakeOut).at(-1)!.token, answersLocal: true })
+    hello = await cmd(follower, { cmd: 'follower.hello', walnutId: WALNUT, home: HOME, token: lines(fakeOut).at(-1)!.token, answersLocal: true, ...(callEntry ? { callSocket: callEntry.socketPath } : {}) })
     if (hello.ok !== true) await sleep(250)
   }
   expect(hello.ok, JSON.stringify(hello)).toBe(true)
@@ -259,7 +298,7 @@ async function rig(twin: Twin, name: string): Promise<Rig> {
   expect((await cmd(mac, { cmd: 'jobs.configure', home: HOME, spec: { v: 1, home: HOME, walnutId: WALNUT, jobs } })).ok).toBe(true)
   await waitFor(() => lines(jobOut).some((l) => typeof l.sid === 'string'), 30_000, 'the job run')
   const jobSid = String(lines(jobOut).find((l) => typeof l.sid === 'string')!.sid)
-  return { d, mac, follower, macAsked, followerAsked, jobSid, jobOut, awake }
+  return { d, mac, follower, macAsked, followerAsked, jobSid, jobOut, awake, entryLines, ...(callEntry ? { entry: callEntry } : {}) }
 }
 
 /**
@@ -291,7 +330,7 @@ afterAll(() => {
 })
 
 for (const twin of ['source', 'standalone'] as const) {
-  describe.skipIf(twin === 'standalone' && !BUN)(`${twin} twin: a plugin job's call right after its leader went quiet`, () => {
+  describe.skipIf(twin === 'standalone' && !BUN && !BINARY)(`${twin} twin: a plugin job's call right after its leader went quiet`, () => {
     it('awake: the call goes to the Mac, the follower is asked nothing', async () => {
       const r = await rig(twin, `${twin.slice(0, 2)}a`)
       try {
@@ -346,6 +385,26 @@ for (const twin of ['source', 'standalone'] as const) {
       } finally {
         r.awake(false)
         r.mac.close(); r.follower.close()
+      }
+    }, 120_000)
+
+    it('awake: a job given its host\'s call entry is vouched for its own call as on the socket', async () => {
+      const r = await rig(twin, `${twin.slice(0, 2)}e`, { entry: true })
+      try {
+        // The job's own walnut.ops.call: its harness posts to the entry first (it was given one).
+        fs.appendFileSync(`${r.jobOut}.go`, 'task_create\n')
+        await waitFor(() => lines(r.jobOut).some((l) => l.called === 'task_create'), 30_000, 'the job\'s own call')
+        expect(lines(r.jobOut).find((l) => l.called === 'task_create'), JSON.stringify(lines(r.jobOut))).toMatchObject({ result: { who: 'mac', op: 'task_create' } })
+        // It came in by the entry: the run was given it, and the follower handed its line to the daemon.
+        expect(r.entryLines.map((p) => p.request?.sid)).toEqual([r.jobSid])
+        // Asked once, from inside the run: the standalone twin vouches for it whichever door it came in by.
+        expect(r.macAsked.map((m) => m.payload?.name)).toEqual(['task_create'])
+        expect(r.macAsked[0]!.caller).toEqual(twin === 'standalone' ? { ...JOB, vouched: true } : JOB)
+        expect(r.followerAsked).toEqual([])
+      } finally {
+        r.awake(false)
+        r.mac.close(); r.follower.close()
+        await r.entry?.close()
       }
     }, 120_000)
 

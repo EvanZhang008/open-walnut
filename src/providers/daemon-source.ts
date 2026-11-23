@@ -6275,6 +6275,12 @@ function cmdFollowerGateway(ws, id, cmd) {
     try { ws.send(JSON.stringify({ id: id, ok: false, error: 'follower.gateway: this token is not the caller one', errorKind: 'bad_token' })); } catch (e) {}
     return;
   }
+  // A plugin job's line goes back unrun, as in daemon-standalone.ts: a job's run is vouched for only
+  // by the process on the gateway socket, which this door has no word on. Its client sends it there.
+  if (pluginJobs.isRunSid(sid)) {
+    try { ws.send(JSON.stringify({ id: id, ok: false, error: 'follower.gateway: a plugin job call is vouched for on the daemon socket; use it', errorKind: 'job_on_socket' })); } catch (e) {}
+    return;
+  }
   var line;
   try { line = JSON.stringify(request); } catch (e) { return sendError(ws, id, 'follower.gateway: the request does not serialize'); }
   var respond = function (resp) { sendOk(ws, id, { response: resp }); };

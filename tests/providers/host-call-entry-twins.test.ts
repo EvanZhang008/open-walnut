@@ -73,6 +73,36 @@ describe('host call entry twin wiring', () => {
     expect(gw).not.toContain('peerPid')
   })
 
+  // 2026-11-23: a plugin job started after its host's service named its entry posted every call
+  // there; with no socket peer the bun twin could not vouch for its run, so the leader capped each
+  // bypass start at default. Only the gateway socket's kernel peer vouches for a job's run
+  // (jobCallerVouched), so every other door into handleGatewayLine hands a job's line back first.
+  it('the bun twin hands a plugin job\'s line back from every door that has no gateway socket peer', () => {
+    // Every call, whatever its arguments are named (the definition left out): its third is the peer.
+    const calls = [...standalone.matchAll(/(?<!function )handleGatewayLine\(\s*[^,()]+,\s*[^,()]+,\s*([^,)]+)/g)]
+      .map((m) => Object.assign(m, { 1: m[1].trim() }))
+    // Exactly the doors known today: the gateway socket and the host call entry. A new one fails here
+    // until it is read for this rule and counted.
+    expect(calls.map((c) => c[1]).sort()).toEqual(['null', 'socket.fd'])
+    let doors = 0
+    for (const call of calls) {
+      if (call[1] === 'socket.fd') continue
+      doors++
+      const fnAt = standalone.lastIndexOf('\nfunction ', call.index)
+      const body = standalone.slice(fnAt, call.index)
+      const name = body.slice('\nfunction '.length, body.indexOf('('))
+      const back = body.indexOf('if (pluginJobs.isRunSid(sid)) {')
+      expect(back, `${name} runs a line with no socket peer (${call[1]}): it must hand a plugin job's line back first`).toBeGreaterThan(0)
+      expect(body.slice(back, body.indexOf('\n  }\n', back)), name).toContain("errorKind: 'job_on_socket'")
+    }
+    // The socket's own door, and at least the host call entry's.
+    expect(doors).toBeGreaterThanOrEqual(1)
+    // The entry answers that refusal as `entry_unavailable` (nothing ran), which its client sends on the socket.
+    const entry = read('src/replica/host-call-entry.ts')
+    expect(entry).toContain("typeof reply.errorKind === 'string' ? reply.errorKind : 'refused'")
+    expect(read('src/providers/host-call-client-core.ts')).toContain("parsed.code === 'entry_unavailable'")
+  })
+
   it.each(TWINS)('%s: a new session, an ACP worker and a plugin job get the entry beside the socket, and never an inherited one', (_n, src) => {
     // Native spawn: cleared first, then this run's own, keyed by the Walnut's first home here
     // (a resumed record may still name a home that is now its alias: walnut-scope-core.ts).
