@@ -32,7 +32,7 @@
  * Nothing here runs when the service config is not on disk: there is no service to keep.
  */
 import { DAEMON_BOOT_PID_NAME, DAEMON_BOOT_STOP_NAME } from './daemon-service-boot-script.js'
-import { DAEMON_SERVICE_LABEL, DAEMON_SERVICE_UNIT_NAME } from './daemon-service-config.js'
+import { serviceSetNames } from './service-set.js'
 import { JOB_GONE_BY_MS, launchdSpawnProbeLines } from './daemon-service-launchd.js'
 import { disabledLines, LAUNCHD_DISABLED_WORDS, laterLines, loadedLines, lockLines, servicePreamble, UP_LINE } from './daemon-update-shell.js'
 import { plistWordLines, standInStartLines, UNXML_SED } from './daemon-update-standin.js'
@@ -44,6 +44,8 @@ export interface UpdateTail { outcome: UpdateTailOutcome; words: string }
 
 export interface UpdateTailOptions {
   scope: 'user' | 'cron'
+  /** The service set the update is for (service-set.ts); '' or absent: the default set, every line as before. */
+  set?: string
   /** How long a daemon has to answer, after the update and again after the put-back. */
   waitSeconds?: number
   /** How long the daemon that answered after the update must stay (the same pid) before it counts; 0: one answer counts (a revive). */
@@ -96,8 +98,8 @@ const LOCK_UNTRAP = 'trap - EXIT HUP INT TERM'
  */
 export function updateSnapshotLines(o: UpdateTailOptions): string[] {
   return [
-    ...servicePreamble(o.scope),
-    ...loadedLines(),
+    ...servicePreamble(o.scope, o.set ?? ''),
+    ...loadedLines(o.set ?? ''),
     ...laterLines(),
     ...lockLines(o.lockWaitSeconds),
     ...probationRecordLines(),
@@ -154,20 +156,20 @@ export function dirLines(): string[] {
 export function tailFunctionLines(o: UpdateTailOptions): string[] {
   const gone = o.goneSeconds ?? GONE_SECONDS
   const probe = o.probeSeconds ?? PROBE_SECONDS
-  const job = `"gui/$tu/${DAEMON_SERVICE_LABEL}"`
-  const unit = DAEMON_SERVICE_UNIT_NAME
+  const { label, unit } = serviceSetNames(o.set ?? '')
+  const job = `"gui/$tu/${label}"`
   return [
-    ...servicePreamble(o.scope),
+    ...servicePreamble(o.scope, o.set ?? ''),
     // The daemon dir the config pins: the plist's string after the key, the unit's Environment=, the script's export.
     ...dirLines(),
     UP_LINE,
-    ...loadedLines(),
+    ...loadedLines(o.set ?? ''),
     ...laterLines(),
     ...lockLines(o.lockWaitSeconds),
-    ...disabledLines(),
-    ...launchdSpawnProbeLines(DAEMON_SERVICE_LABEL),
+    ...disabledLines(o.set ?? ''),
+    ...launchdSpawnProbeLines(label),
     ...plistWordLines(),
-    ...standInStartLines(o.standInCheckSeconds ?? 30),
+    ...standInStartLines(o.standInCheckSeconds ?? 30, o.set ?? ''),
     't_start() { case $tk in',
     `  launchd) launchctl bootstrap "gui/$tu" "$tc" >/dev/null 2>&1;;`,
     `  systemd) systemctl --user daemon-reload >/dev/null 2>&1; systemctl --user reset-failed ${unit} >/dev/null 2>&1; systemctl --user start ${unit} >/dev/null 2>&1;;`,
@@ -361,12 +363,12 @@ export function reviveScript(o: UpdateTailOptions & { latest?: string }): string
   return [
     `L=${o.latest ? `'${o.latest}'` : '"/tmp/open-walnut-update-latest-$(id -u)"'}`,
     `d=$(umask 077; mktemp -d /tmp/open-walnut-update.XXXXXXXXXX 2>/dev/null) || { printf 'outcome=down\\nno dir for the check could be made in /tmp\\n'; exit 0; }`,
-    ...servicePreamble(o.scope),
+    ...servicePreamble(o.scope, o.set ?? ''),
     ...laterLines(),
     `if t_later; then rm -rf "$d"; echo ${REVIVE_UPDATING}; exit 0; fi`,
     `if [ -f "$tc" ] && [ ! -d "$tb" ]; then rm -rf "$d"; printf 'outcome=down\\n%s\\n' '${NO_ROOT}'; exit 0; fi`,
     // Turned off by the user: not loaded, not started, not stood in for (outcome stopped: left as it was).
-    ...disabledLines(),
+    ...disabledLines(o.set ?? ''),
     `if [ -f "$tc" ] && t_disabled; then rm -rf "$d"; printf 'outcome=stopped\\n%s\\n' '${LAUNCHD_DISABLED_WORDS}'; exit 0; fi`,
     ...probationRecordLines(),
     ...lockLines(o.lockWaitSeconds),

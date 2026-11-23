@@ -13,6 +13,7 @@ import {
   type BootStart,
 } from './remote-boot-start.js'
 import { installRemoteDaemonService, type RemoteDaemonUpdateIo, type ServiceDaemonSource } from './daemon-service-update.js'
+import type { SetAsk } from './service-set-leader.js'
 
 /**
  * What a check now could do (the Overview's button): 'install' (a setup is due and
@@ -44,6 +45,9 @@ export interface BootStartKeeperIo extends RemoteDaemonUpdateIo {
   hasCapability(cap: string): boolean
   /** The old daemon handed over and exited: drop the link so the reconnect finds the service. */
   reconnect(): void
+  /** Service sets (the experiment host_service_sets): the Walnut the install names (null: no words), and the set the host named. */
+  setAsk?(): Promise<SetAsk | null>
+  named?(set: string | null): Promise<void>
 }
 
 export const BOOT_CHECK_DELAY_MS = 45_000
@@ -155,7 +159,11 @@ export class BootStartKeeper {
     log.session.info('DaemonConnection: setting up the daemon to start after a reboot', { host: this.io.hostKey, expected })
     let result
     try {
-      result = await installRemoteDaemonService(await this.io.daemonSource(), expected, this.io)
+      const walnut = await this.io.setAsk?.().catch(() => null) ?? null
+      result = walnut
+        ? await installRemoteDaemonService(await this.io.daemonSource(), expected, this.io, { walnut })
+        : await installRemoteDaemonService(await this.io.daemonSource(), expected, this.io)
+      if (walnut) await this.io.named?.(result.serviceSet ?? null).catch(() => {})
     } catch (err) {
       result = { ok: false, message: err instanceof Error ? err.message : String(err), uploaded: true }
     }

@@ -57,6 +57,8 @@ const CONNECTION: Record<string, Entry> = {
   proveStarted: { count: 1, kind: 'read', why: 'whether the pid in the dir it replaced in is that dir\'s daemon (kill -0, w_daemon)' },
   settleStartedOnLive: { count: 1, kind: 'read', why: 'daemon.version of the dir it replaced in' },
   readBackUnreadOnce: { count: 1, kind: 'not-for-test-server', why: 'an isolated connection reads no update record (ownUpdateRecord), so it has no update to read back' },
+  serviceSetLink: { count: 1, kind: 'not-for-test-server', why: 'service sets: the link is made only for isolation.mode shared, never IS_EPHEMERAL or a read-only remote; it runs the lines service-set-move-link.ts builds' },
+  provisionServiceSet: { count: 2, kind: 'not-for-test-server', why: 'service sets: reached only through serviceSetLink (shared hosts only); a status line, then an install of this Walnut\'s own set' },
   reviveRemoteService: { count: 1, kind: 'not-for-test-server', why: 'revives the host\'s OS service; IS_EPHEMERAL returns before anything runs' },
   prewarmRemoteFolds: { count: 3, kind: 'own-dir', why: 'daemonDir = the chosen dir, env = dirEnv, bun probe with bunScriptOpts' },
   acpTurnsOpen: { count: 1, kind: 'read', why: 'reads acp-busy.json in the chosen daemon dir' },

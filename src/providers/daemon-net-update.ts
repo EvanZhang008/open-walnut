@@ -52,12 +52,16 @@ import type { DaemonLinkKind } from './daemon-update-paths.js'
 import type { ServesAs, ServiceModeAsk } from './one-service-mode.js'
 import { netDaemonSource, type NetUpdateSource } from './daemon-net-update-source.js'
 import { claimDaemonUpdate, daemonUpdateHeldBy, peerUpdatingWhy } from './daemon-update-claim.js'
+import { serviceSetWords, type LinkStanding, type SetAsk } from './service-set-leader.js'
+import { provisionServiceSet, type SetProvision } from './service-set-provision.js'
 
 export { localDaemonBinary, netDaemonSource, type NetSourceDeps, type NetUpdateSource } from './daemon-net-update-source.js'
 
 export type NetUpdateSkip =
   | 'not-net' | 'local' | 'test-server' | 'follower' | 'no-build-version' | 'current' | 'unmanaged'
   | 'old-daemon' | 'turned-off' | 'held' | 'contested' | 'shared' | 'gave-up' | 'cooldown' | 'recent' | 'platform-unknown' | 'no-binary'
+  // Service sets: the daemon there is another Walnut's while this one has its own set, or the set is not known yet.
+  | 'service-set'
   // The task that asked for it may no longer have it run (its grant was revoked, the host closed).
   | 'refused'
 
@@ -232,6 +236,12 @@ export interface NetUpdaterDeps {
   /** The host's mode (one-service-mode.ts), as DaemonConnection decides it for every link; absent: the host keeps its mode. */
   mode?: NetServiceModeDeps
   update?: typeof updateRemoteDaemonService
+  /**
+   * Service sets (service-set-move-link.ts; the experiment host_service_sets): the Walnut the lines
+   * name (null: no words, as before), where the link stands, the set it is on ('' the default), and
+   * the set a line named. Absent: no words.
+   */
+  sets?: { ask(): Promise<SetAsk | null>; standing(): Promise<LinkStanding>; set(): string; named(set: string | null): Promise<void>; check(): void }
   io?: NetUpdateIoOptions
   settleMs?: number
   recheckMs?: number
@@ -373,6 +383,26 @@ export class NetDaemonUpdater {
     return this.inFlight !== null
   }
 
+  /**
+   * The service set check and first install over this link (service-set-provision.ts), with this
+   * build's daemon for the host's system staged there as an update stages it. Never while an update runs.
+   */
+  async provisionSet(ask: SetAsk): Promise<SetProvision> {
+    const c = this.d.conn
+    const expected = this.d.expectedVersion()
+    const no = (message: string): SetProvision => ({ set: null, installed: false, ok: false, message })
+    if (!expected) return no('this server names no daemon build')
+    if (!c.connected) return no('the host is not connected')
+    if (this.inFlight) return no('a daemon update is running on the host')
+    const io = createNetUpdateIo(c, this.d.io)
+    const target = await (this.d.target ?? probeTarget)((command, ms) => io.run(command, ms)).catch(() => null)
+    if (!target) return no('the host\'s system could not be read')
+    const say = (message: string) => log.session.info('service set: getting the daemon file for a host network machine', { host: c.host, message })
+    const src = await (this.d.source ?? netDaemonSource)(target, expected, say, { walnutFile: false })
+    if ('missing' in src) return no(src.missing)
+    return provisionServiceSet('file' in src ? { binary: src.file, base: c.serviceExecutable } : { binary: null, gz: src.gz, base: c.serviceExecutable }, expected, io, ask)
+  }
+
   private async within(p: Promise<unknown>, ms: number): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined
     await Promise.race([p.then(() => {}, () => {}), new Promise<void>((r) => { timer = setTimeout(r, ms) })])
@@ -447,6 +477,18 @@ export class NetDaemonUpdater {
     }
     const first = decideNetUpdate(facts)
     if (first.go === false) return this.skipped(first, trigger)
+    // Service sets: another Walnut's daemon while this one has its own set there (its sessions move;
+    // the shared one is left as it is), or the set not known yet (the link's first look finds it).
+    const setAsk = this.d.sets ? await this.d.sets.ask() : null
+    const standing = setAsk ? await this.d.sets!.standing() : 'unknown'
+    if (setAsk && (standing === 'shared' || standing === 'unknown')) {
+      this.d.sets!.check()
+      return this.skipped({ go: false, skip: 'service-set', why: standing === 'shared'
+        ? 'the daemon there is another Walnut\'s, and this Walnut moves to its own service there'
+        : 'which service on that machine is this Walnut\'s is not known yet' }, trigger)
+    }
+    const words = serviceSetWords(setAsk)
+    const set = setAsk ? this.d.sets!.set() : ''
     // Its runner may still be in its check; a second update would swap the service under it.
     if (this.launched.unread) return this.postpone('the previous daemon update is still running on the host')
     // Another host name of this daemon is updating it (daemon-update-claim.ts): nothing goes up from here.
@@ -484,7 +526,9 @@ export class NetDaemonUpdater {
     })
     const held = await holds()
     if (held) return this.postpone(held)
-    const scope = scopeFromStatus(await io.run(`${shq(facts.serviceExecutable!)} walnut daemon status 2>/dev/null || true`, 60_000))
+    // The status runs the host's own executable, which may predate sets: it names the Walnut only for
+    // this Walnut's own set (a sets build installed it); the default set's status is today's line.
+    const scope = scopeFromStatus(await io.run(`${shq(facts.serviceExecutable!)} walnut daemon status${set ? words : ''} 2>/dev/null || true`, 60_000))
     if (!('scope' in scope)) return this.skipped({ go: false, skip: 'unmanaged', why: scope.why }, trigger)
     // Only now the lookups: the probe is one more command, and the walnut file may be a download or a build.
     facts.target = await (this.d.target ?? probeTarget)((command, ms) => io.run(command, ms)).catch(() => null)
@@ -528,6 +572,7 @@ export class NetDaemonUpdater {
         // The build's hold before its record (the staging dir) is removed on the host.
         onBuildFailed: (error) => this.buildDidNotStay(expected, error.message.slice(0, 300)),
         ...(serve ? { serve } : {}),
+        ...(setAsk ? { walnut: setAsk, ...(set ? { set } : {}), onServiceSet: (named: string | null) => this.d.sets!.named(named) } : {}),
       })
       claimKept = true
     } catch (err) {

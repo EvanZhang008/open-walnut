@@ -221,9 +221,9 @@ export const PROBING_WORD = 'walnut-probation-at-work'
  * take them, the only way back from a build that fails late): prints PROBING_WORD with the end it
  * waits for (t_busy). Plain sh; `scope` names the service (the install root is the same).
  */
-export function probingCheckScript(scope: 'user' | 'cron'): string {
+export function probingCheckScript(scope: 'user' | 'cron', set = ''): string {
   return [
-    ...servicePreamble(scope),
+    ...servicePreamble(scope, set),
     ...probationRecordLines(),
     `tsb="$tb/${SNAPSHOT_DIR}"`,
     `if t_busy; then echo "${PROBING_WORD} until=$tp_t now=$(date +%s)"; fi`,

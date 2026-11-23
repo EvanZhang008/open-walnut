@@ -49,6 +49,7 @@
  * (the daemon stops the server), the door hold and the copy target.
  */
 
+import { followerPortTaken } from './follower-port.js'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -254,7 +255,8 @@ export function createHostServerManager(deps: ManagerDeps) {
     const candidates = Array.from({ length: 8 }, () => PORT_BASE + crypto.randomInt(PORT_SPAN))
     const free = [...parseFreePorts(await host.runRemoteScript(freePortsScript(program, candidates), 20_000))]
     if (free.length < 1) throw new Error('could not find a free port on the host')
-    const rec: HostRecord = { publicPort: free[0]! }
+    // A port forgotten after a collision (follower-port.ts) keeps the rest of the record.
+    const rec: HostRecord = { ...kept, publicPort: free[0]! }
     all[host.hostKey] = rec
     writeState(all)
     return rec
@@ -717,6 +719,12 @@ export function createHostServerManager(deps: ManagerDeps) {
       if (err instanceof StoppingHere) return
       const message = err instanceof Error ? err.message : String(err)
       log.session.warn('host server: setup failed', { host: hostKey, error: message })
+      // Two Walnuts' followers on one machine (the experiment host_service_sets): a port the other one
+      // took meanwhile is chosen again, free, at the next try (portsFor), never kept for good.
+      if (followerPortTaken(message) && await (await import('../../providers/service-set-leader.js')).hostServiceSetsWanted()) {
+        updateRecord(hostKey, (r) => { delete (r as { publicPort?: number }).publicPort })
+        log.session.info('host server: the follower\'s port was taken on the host; the next try picks another', { host: hostKey })
+      }
       const refused = err instanceof Error && err.name === 'SshLoginRefusedError'
       if (everyHost) failedNow.set(hostKey, { message, triesAgain: !(err instanceof UntilRetry) })
       if (err instanceof UntilRetry) {

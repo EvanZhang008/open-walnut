@@ -413,6 +413,30 @@ permission prompts still name Walnut.
 - **Not yet.** The watcher that ends a session's turn stays in the daemon until step C. A prompt that asks
   the person for an approval goes through the old socket.
 
+## Two Walnuts on one machine (as built, behind `host_service_sets`)
+
+"One service per machine" means one per Walnut. When two Walnuts use one machine under one OS account
+(a person's own leader and another person's Walnut using the machine as a host), each has its own
+service with a whole set of places; neither lists, adopts or stops the other's sessions.
+
+- **Who keeps the default places.** The Walnut already on them (or the machine's own leader). A machine
+  with one Walnut moves nothing. A later Walnut uses `~/.open-walnut-host/walnuts/<id16>/`: install
+  root, versions, launcher, boot item name, runtime dir, registry, streams, ports, sockets. The choice
+  is the host's (`walnut daemon ... --walnut`), taken once with an atomic claim, and sticky.
+- **That set is production.** Its sessions survive a restart like the default one's.
+- **Shared, and only these three:** the machine id; the cli-owner records; the machine's network
+  address (one walnut-net, one key, members routed to their own Walnut's service).
+- **The move off a shared daemon carries no live CLI over.** The leader waits, at most a bounded time,
+  for a moment when none of its sessions there runs a turn; holds new work; stops them the normal way
+  and confirms each exited; flips its route; resumes them in its own service on their next message.
+  Each moved session reads its context once. A move that cannot finish (the wait runs out, the new
+  service does not answer) is put back and reported; a running turn is never stopped. Sessions started
+  after the flip go only to the new service. The shared daemon, its launcher and boot item are left as
+  they are, for the other Walnut, which updates them by itself once the shared window passes.
+- **Leaving a machine** removes only that Walnut's set, boot item and network members.
+- This separates running, not permissions: the same OS account reads both. Separate permissions need two
+  accounts.
+
 ## Compatibility
 
 - A host still on a separate daemon keeps working with a new leader, through today's daemon protocol. The

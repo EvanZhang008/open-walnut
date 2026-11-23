@@ -70,6 +70,10 @@ import { reviveServes, reviveServiceOn } from './local-daemon-service.js'
 import { daemonLinkKind, daemonUpdateHowSentence, type DaemonLinkKind } from './daemon-update-paths.js'
 import { NetDaemonUpdater, type NetUpdateState } from './daemon-net-update.js'
 import { claimDaemonUpdate, daemonUpdateHeldBy, peerUpdatingWhy, type UpdateClaim } from './daemon-update-claim.js'
+import { helloServiceSet, setServiceConfigPaths, type SetAsk } from './service-set-leader.js'
+import { ServiceSetLink } from './service-set-move-link.js'
+import { provisionServiceSet, type SetProvision } from './service-set-provision.js'
+import { createNetUpdateIo } from './daemon-net-update-io.js'
 import type { DaemonUpdateView } from './daemon-net-update-record.js'
 import { daemonBusyRefusal, execRunsHold } from './exec-runs-hold.js'
 import { daemonUpdateOverdue, OVERDUE_GATE_WAIT_MS } from './daemon-update-behind.js'
@@ -91,7 +95,6 @@ import type { SshTarget } from './session-io.js'
 import {
   localDaemon,
   classifyServiceTakeover,
-  daemonServiceConfigPaths,
   serviceTakeoverEvidence,
   type ServiceProbeState,
   type ServiceTakeover,
@@ -526,32 +529,27 @@ export const REVIVE_EVERY_MS = 5 * 60_000
  * The scope a revive runs in: a LaunchAgent or a user unit ('user', the script picks by uname),
  * the cron supervisor ('cron'); never a system unit, never two kinds at once.
  */
-export function reviveScopeOf(present: string[]): 'user' | 'cron' | null {
-  const [user, system, cron] = daemonServiceConfigPaths('linux', '$HOME')
-  const [agent] = daemonServiceConfigPaths('darwin', '$HOME')
+export function reviveScopeOf(present: string[], set = ''): 'user' | 'cron' | null {
+  const { linux: [user, system, cron], darwin: [agent] } = setServiceConfigPaths(set)
   const has = (file: string) => present.includes(file)
   if (has(system) || [user, agent, cron].filter(has).length !== 1) return null
   return has(cron) ? 'cron' : 'user'
 }
 
 /** SSH deployment carries Linux artifacts; remote Macs use their host-network update path. */
-export function managedUpdateScope(present: string[]): 'user' | 'cron' | null {
-  const [user, system, cron] = daemonServiceConfigPaths('linux', '$HOME')
-  const [agent] = daemonServiceConfigPaths('darwin', '$HOME')
+export function managedUpdateScope(present: string[], set = ''): 'user' | 'cron' | null {
+  const { linux: [user, system, cron], darwin: [agent] } = setServiceConfigPaths(set)
   const has = (file: string) => present.includes(file)
   if (has(system) || has(agent) || has(user) === has(cron)) return null
   return has(user) ? 'user' : 'cron'
 }
 
-/** Marker files the probe below classifies, in the order it reports them. */
-export function remoteServiceProbePaths(runtimeDir = '/tmp/open-walnut'): string[] {
+/** Marker files the probe below classifies, in the order it reports them; of service set `set` ('' the default). */
+export function remoteServiceProbePaths(runtimeDir = '/tmp/open-walnut', set = ''): string[] {
   // Both platforms' config paths are probed: the remote could be a Mac, and one
   // extra `[ -e ]` per path is far cheaper than a wrong "not installed".
-  return [
-    path.posix.join(runtimeDir, 'daemon.service'),
-    ...daemonServiceConfigPaths('linux', '$HOME'),
-    ...daemonServiceConfigPaths('darwin', '$HOME'),
-  ]
+  const { linux, darwin } = setServiceConfigPaths(set)
+  return [path.posix.join(runtimeDir, 'daemon.service'), ...linux, ...darwin]
 }
 
 const REMOTE_SERVICE_PROBE_SENTINEL = 'walnut-service-probe-done'
@@ -893,6 +891,13 @@ export class DaemonConnection {
   private _serviceRoles: ServiceRole[] = []
   /** What the hello says runs there (one-service-mode.ts): the daemon, or a host's one Walnut service and whose. */
   private _servesAs: { serves: ServesAs; serviceHome: string | null } = { serves: 'daemon', serviceHome: null }
+  /** The service set the hello names (service-set.ts; '' none: the default set, or an older host). */
+  private _helloServiceSet = ''
+  /** SSH: the set whose runtime dir `_remoteDir` is ('' the default's dirs): its service config is probed and updated. */
+  private _remoteSet = ''
+  /** A service set move holds this host's starts and sends (service-set-move.ts): they wait as for a host that is away. */
+  private _setHold = false
+  private _serviceSetLink: ServiceSetLink | null = null
   /** The home the host keeps this Walnut under after a declared move (leader.configure's homeHere), this connection. */
   private _homeHere: string | null = null
   /** This build's walnut file could not go to the host for the service: no offer with this build. */
@@ -1561,6 +1566,14 @@ export class DaemonConnection {
         asked: (ask) => this.recordModeAsked(ask),
         unfit: (expected, why) => { this._serveUnfit = { expected, why }; void this.serviceModeWant() },
       },
+      // Service sets (service-set-move-link.ts): the same link object the SSH path uses.
+      sets: {
+        ask: async () => (await this.serviceSetLink?.setAsk()) ?? null,
+        standing: async () => (await this.serviceSetLink?.standingFor().catch(() => null))?.standing ?? 'unknown',
+        set: () => this._helloServiceSet,
+        named: async (named) => { await this.serviceSetLink?.named(named) },
+        check: () => { void this.serviceSetLink?.check() },
+      },
     })
     return this._netUpdaterInstance
   }
@@ -1685,6 +1698,77 @@ export class DaemonConnection {
   get bootStart(): BootStartView | null { return this._bootStart?.state ?? null }
   /** Probe the host's boot start now, and set it up when due (the Overview's Set up button). */
   checkBootStart(): Promise<void> { return this._bootStart?.check() ?? Promise.resolve() }
+  /** The links a service set is for: an SSH host, or a host network host; none for any other kind. */
+  private get setLinkKind(): 'ssh' | 'net' | null {
+    return this.isNetHost ? 'net' : this.linkKind === 'ssh' && !this.noSsh ? 'ssh' : null
+  }
+
+  /** A service set move holds this host's starts and sends now (hostLinkDown reads it). */
+  get serviceSetHeld(): boolean { return this._setHold }
+
+  /**
+   * This link's part in service sets (service-set-move-link.ts): an SSH or host network link of the
+   * real server only; null for this machine, a test server, the cloud box. It does nothing while the
+   * experiment host_service_sets is off.
+   */
+  private get serviceSetLink(): ServiceSetLink | null {
+    if (this.hostKey === '__local__' || this.isReadOnlyRemote || IS_EPHEMERAL || this.isolation.mode !== 'shared') return null
+    if (!this.setLinkKind) return null
+    const conn = this
+    this._serviceSetLink ??= new ServiceSetLink({
+      hostKey: this.hostKey,
+      kind: () => this.setLinkKind,
+      get connected() { return conn._connected && !conn._destroyed },
+      helloSet: () => this._helloServiceSet,
+      send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs) as Promise<Record<string, unknown>>,
+      run: (command, timeoutMs) => (this.setLinkKind === 'net' ? createNetUpdateIo(this, {}).run(command, timeoutMs) : this.sshExec(command, timeoutMs)),
+      provision: (ask) => this.provisionServiceSet(ask),
+      relink: (boundMs) => this.relinkForServiceSet(boundMs),
+      setHold: (on) => { this._setHold = on },
+      redeliver: () => { if (this._connected && !this._destroyed) notifyHostConnected(this.hostKey, this) },
+      home: WALNUT_HOME,
+      walnutId: async () => (await import('../core/device-auth.js')).getInstanceId(),
+      notice: (key, text) => { void serviceSetNotice(this.hostKey, key, text) },
+    }, {}, () => this.getExpectedDaemonVersion())
+    return this._serviceSetLink
+  }
+
+  /** The update line's part for service sets: the Walnut named, the set's tail, and the set the host names kept. */
+  private async serviceSetUpdateWords(set: string): Promise<{ walnut?: SetAsk; set?: string; onServiceSet?: (named: string | null) => Promise<void> }> {
+    const link = this.serviceSetLink
+    const walnut = link ? await link.setAsk() : null
+    if (!link || !walnut) return {}
+    return { walnut, ...(set ? { set } : {}), onServiceSet: (named) => link.named(named) }
+  }
+
+  /** The first look at the host for its service set, with this build's executable there (an upload when needed). */
+  private async provisionServiceSet(ask: SetAsk): Promise<SetProvision> {
+    const expected = this.getExpectedDaemonVersion()
+    if (!expected) return { set: null, installed: false, ok: false, message: 'this server names no daemon build' }
+    if (this.setLinkKind === 'net') {
+      const updater = this.netUpdater
+      return updater ? updater.provisionSet(ask) : { set: null, installed: false, ok: false, message: 'no host network update path' }
+    }
+    if (!(await this.hasDaemonBinary())) return { set: null, installed: false, ok: false, message: 'the daemon artifact is not available' }
+    return provisionServiceSet(await this.serviceDaemonSource(false), expected, {
+      run: (command, timeout) => this.sshExec(command, timeout),
+      chunk: (data, directory, index) => this.pipeChunk(data, directory, index),
+    }, ask)
+  }
+
+  /** A service set move: drop the link and dial again (its dir or route changed); the set the new hello names, or null. */
+  private async relinkForServiceSet(boundMs: number): Promise<string | null> {
+    if (this._destroyed) return null
+    this.closeTransport()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const bound = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), boundMs); timer.unref?.() })
+    try {
+      const done = await Promise.race([this.reconnectNow().then(() => 'ok' as const, () => 'failed' as const), bound])
+      if (done !== 'ok' || !this._connected) return null
+      return this._helloServiceSet
+    } finally { clearTimeout(timer) }
+  }
+
   private _bootStartKeeper: BootStartKeeper | null = null
   private get _bootStart(): BootStartKeeper | null {
     if (this.hostKey === '__local__' || this.noSsh || this.isReadOnlyRemote || IS_EPHEMERAL || bootStartOff()) return null
@@ -1719,6 +1803,8 @@ export class DaemonConnection {
       daemonSource: () => this.serviceDaemonSource(),
       hasCapability: (cap) => this.hasCapability(cap),
       reconnect: () => { if (this._connected && !this._destroyed) this.handleConnectionLost() },
+      setAsk: async () => (await this.serviceSetLink?.setAsk()) ?? null,
+      named: async (set) => { await this.serviceSetLink?.named(set) },
     })
     return this._bootStartKeeper
   }
@@ -1831,6 +1917,7 @@ export class DaemonConnection {
     if (!value) { this._helloConfirmed = false; this.bulkOwnLink = false; this.releaseBulkWaiters() }
     if (changed && value) this._bootStart?.schedule()
     if (changed && value) this.netUpdater?.schedule()
+    if (changed && value) this.serviceSetLink?.schedule()
     if (value) {
       // Attached during a service's swap (attachDuringSwap): the handover stays until the update
       // answers, so a drop before then (a rollback, a build that answers and exits) is the swap's.
@@ -3049,6 +3136,11 @@ export class DaemonConnection {
     // A replica's own-sessions link does no leader work (ownSessionsOnly): a leader's command on it
     // is refused before it leaves, whichever path asked for it.
     if (this.ownSessionsOnly && LEADER_ONLY_COMMANDS.has(cmd)) throw new Error(`${cmd}: a host replica's own-sessions link sends no leader command`)
+    // A service set move holds new starts and sends (service-set-move.ts): refused in the words of a
+    // link that is down, so the runner keeps them pending and sends them once the move releases them.
+    if (this._setHold && (cmd === 'start' || cmd === 'send')) {
+      throw new Error(`DaemonConnection not connected to ${this.hostKey}: its sessions are moving to this Walnut's own service there; the message is kept and goes out once they are`)
+    }
     // The connect's declared home move goes first: the host then keys what follows by the Walnut's first home.
     if (this.homeMoveGate && cmd !== 'leader.configure' && cmd !== 'ping') await this.homeMoveGate
     const traced = typeof params.traceId === 'string' && params.traceId ? params : { ...params, traceId: crypto.randomBytes(4).toString('hex') }
@@ -4447,6 +4539,7 @@ export class DaemonConnection {
     if (this._directDial) { this._abandonedDial = this._directDial; this._directDial = null }
     this._bootStartKeeper?.stop()
     this._netUpdaterInstance?.stop()
+    this._serviceSetLink?.stop()
     this.setConnected(false)
     this.stopAwakeTick()
     this._connecting = false
@@ -4789,7 +4882,10 @@ export class DaemonConnection {
     if (os && os.toLowerCase() !== 'linux') throw new Error(notLinuxSentence(this.hostKey, os))
     if (probe.arch) this._remoteArch = probe.arch.trim() === 'aarch64' ? 'arm64' : 'x64'
     if (probe.home) this._remoteHome = probe.home
-    const choice: DaemonDirChoice = chooseDaemonDir(probe)
+    // This Walnut's own service set there, once its sessions moved (service-set-move.ts): its runtime dir.
+    const own = this.isolation.mode === 'shared' ? await this.serviceSetLink?.sshDir().catch(() => null) : null
+    const choice: DaemonDirChoice = own ? { path: own.dir, fallback: false } : chooseDaemonDir(probe)
+    this._remoteSet = own?.set ?? ''
     if (choice.path !== this._remoteDir || choice.fallback !== this._dirChoice?.fallback) {
       const logFn = choice.fallback || choice.unusable ? log.session.warn : log.session.info
       logFn.call(log.session, 'DaemonConnection: daemon dir chosen', {
@@ -4870,7 +4966,7 @@ export class DaemonConnection {
     // A test server's isolated daemon is never an OS service's: the host's service (its
     // fixed $HOME unit paths) is the production daemon, which this server never touches.
     if (this.isolation.mode === 'isolated') return { managed: false, present: [], unknown: [], dir }
-    const paths = remoteServiceProbePaths(dir)
+    const paths = remoteServiceProbePaths(dir, this._remoteSet)
     let reason = 'no answer'
     for (let attempt = 0; attempt < SERVICE_PROBE_TIMEOUTS_MS.length; attempt++) {
       const timeoutMs = SERVICE_PROBE_TIMEOUTS_MS[attempt]
@@ -5903,9 +5999,17 @@ export class DaemonConnection {
   ): Promise<boolean | 'held'> {
     // An ephemeral server never updates a box's service daemon, a lifted host's included.
     if (this.isReadOnlyRemote || IS_EPHEMERAL) return false
+    // Service sets (the experiment host_service_sets): the daemon this link reaches is another Walnut's
+    // while this one has its own set there ('shared': its sessions move, the shared one is left as it is),
+    // or the set is not known yet (the link's first look finds it). Neither is updated from here.
+    const sets = this.serviceSetLink ? await this.serviceSetLink.standingFor().catch(() => null) : null
+    if (sets && (sets.standing === 'shared' || sets.standing === 'unknown') && await this.serviceSetLink!.setAsk()) {
+      void this.serviceSetLink!.check()
+      return false
+    }
+    const set = this._remoteSet
     // Known unsupported or conflicting services remain off limits even if another path is unreadable.
-    const [user, system, cron] = daemonServiceConfigPaths('linux', '$HOME')
-    const [agent] = daemonServiceConfigPaths('darwin', '$HOME')
+    const { linux: [user, system, cron], darwin: [agent] } = setServiceConfigPaths(set)
     const present = (file: string) => takeover.present.includes(file)
     if (present(system) || present(agent) || (present(user) && present(cron))) return false
     if (takeover.unknown.length) {
@@ -5913,7 +6017,7 @@ export class DaemonConnection {
         { delayMs: DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS })
       return 'held'
     }
-    const scope = managedUpdateScope(takeover.present)
+    const scope = managedUpdateScope(takeover.present, set)
     if (!scope) return false
     // An earlier update whose answer did not come in time left its record on the host: judged
     // first, so a build it says did not stay serving is held the day before it is tried again.
@@ -5946,7 +6050,7 @@ export class DaemonConnection {
     // its copies are the way back from a build that fails late, and this update's snapshot would
     // take them. Nothing is uploaded; asked again after its end (2026-11-05 review 6: an update
     // inside it ended the watch, and the build before it crash looped with no way back).
-    const probing = parseProbing(await this.sshExec(probingCheckScript(scope), 15_000).catch(() => ''))
+    const probing = parseProbing(await this.sshExec(probingCheckScript(scope, set), 15_000).catch(() => ''))
     if (probing !== null) {
       this.postponeUpgrade('the last daemon update\'s probation still watches the new daemon on the host', expected, remoteVersion,
         probing > 0 ? { delayMs: probing * 1000 + 5_000 } : { steady: true })
@@ -5999,6 +6103,8 @@ export class DaemonConnection {
         // A build that failed holds its day before the staging dir (its record) is removed.
         onBuildFailed: (error) => this.recordRealDirFail({ expected, at: Date.now(), reason: error.message.slice(0, 300) }),
         ...(serve ? { serve } : {}),
+        // Service sets: the line names this Walnut, the tail watches the set's service, and the set the host names is kept.
+        ...(await this.serviceSetUpdateWords(set)),
         // The upload may have taken minutes: work that started meanwhile holds the swap.
         onStaged: async () => {
           if (await this.holdUpgrade(gate, expected, remoteVersion)) return false
@@ -6321,6 +6427,7 @@ export class DaemonConnection {
       this._serviceRoles = serviceRolesFrom(res.serviceRoles)
       if (this._launcher?.rollback) void noteLauncherRollback(this.hostKey, this._launcher)
       this._servesAs = servesFromHello(res)
+      this._helloServiceSet = helloServiceSet(res)
       // Said again by this connection's leader.configure.
       this._homeHere = null
       const missing = REQUIRED_DAEMON_CAPABILITIES.filter(c => !caps.includes(c))
@@ -6984,11 +7091,14 @@ export class DaemonConnection {
    */
   private async reviveRemoteService(service: RemoteServiceTakeover): Promise<string | null> {
     if (this.isReadOnlyRemote || IS_EPHEMERAL || this.noSsh || service.unknown.length) return null
-    const scope = reviveScopeOf(service.present)
+    // Another Walnut's service while this one has its own set there: never revived from here.
+    if (this.serviceSetLink && (await this.serviceSetLink.standingFor().catch(() => null))?.standing === 'shared') return null
+    const set = this._remoteSet
+    const scope = reviveScopeOf(service.present, set)
     if (!scope) return null
     if (this._revivedAt !== null && Date.now() - this._revivedAt < REVIVE_EVERY_MS) return null
     this._revivedAt = Date.now()
-    const answer = await reviveServiceOn((command, timeoutMs) => this.sshExec(command, timeoutMs), scope)
+    const answer = await reviveServiceOn((command, timeoutMs) => this.sshExec(command, timeoutMs), scope, set ? { set } : {})
     log.session.warn('DaemonConnection: the service on the host had no daemon running; revived it the way an update tail does', {
       host: this.hostKey, scope, outcome: answer === 'updating' ? 'updating' : answer.outcome, words: answer === 'updating' ? undefined : answer.words,
     })
@@ -10503,6 +10613,17 @@ export function setOnDaemonStatusChange(cb: () => void | Promise<void>): void {
   onPoolStatusChange = cb
 }
 
+/** A service set's host notice (Walnut Health): raised with `text`, recovered with null. */
+async function serviceSetNotice(hostKey: string, key: string, text: string | null): Promise<void> {
+  const { hostLabel, raiseHealthItem, recoverHealthItems } = await import('../core/notifications/health-items.js')
+  if (text === null) { await recoverHealthItems([key], 'service-set'); return }
+  await raiseHealthItem({
+    kind: 'operation-error', severity: 'warning', category: 'Sessions', host: hostKey,
+    title: `This Walnut's own service on ${await hostLabel(hostKey)} is not in use yet`,
+    body: text, detail: text, dedupKey: key, recoveryKey: key,
+  }, 'service-set')
+}
+
 // ── Pool-level reconnect callback (event-driven message redelivery) ──
 
 let onHostConnected: ((hostKey: string, connection: DaemonConnection) => void | Promise<void>) | null = null
@@ -11369,6 +11490,8 @@ export function isDaemonConnected(hostKey: string): boolean {
 export function hostLinkDown(hostKey: string): boolean {
   if (!hostKey || hostKey === '__local__') return false
   const conn = connectionPool.get(hostKey)
+  // Held by a service set move: its rows wait as for a host that is away (service-set-move.ts).
+  if (conn?.serviceSetHeld) return true
   if (conn?.connected || conn?.handoverPending) return false
   // A link that was up and dropped, through every dial of its reconnect loop (a dial in flight
   // has no cause recorded yet, and its phase reads as connecting).

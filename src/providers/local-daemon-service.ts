@@ -147,6 +147,8 @@ export interface ReviveOptions {
   latestMarker?: string
   lockWaitSeconds?: number
   standInCheckSeconds?: number
+  /** The service set to revive (service-set.ts); absent: the default set. */
+  set?: string
 }
 
 /**
@@ -165,7 +167,7 @@ export async function reviveServiceOn(
   run: (command: string, timeoutMs: number) => Promise<string>, scope: 'user' | 'cron', opts: Omit<ReviveOptions, 'env'> = {},
 ): Promise<UpdateTail | 'updating'> {
   const wait = opts.waitSeconds ?? REVIVE_WAIT_SECONDS
-  const script = reviveScript({ scope, waitSeconds: wait, lockWaitSeconds: opts.lockWaitSeconds, standInCheckSeconds: opts.standInCheckSeconds, latest: opts.latestMarker })
+  const script = reviveScript({ scope, waitSeconds: wait, lockWaitSeconds: opts.lockWaitSeconds, standInCheckSeconds: opts.standInCheckSeconds, latest: opts.latestMarker, ...(opts.set ? { set: opts.set } : {}) })
   // Its longest path: two lock waits (dropping stale copies, then the check), the wait, the stay, a
   // put-back's bootout (launchd's ExitTimeOut), the wait and the stay again. Cut short, a put-back
   // could stop between its bootout and its load (2026-11-04 review 7: the budget had one lock wait).

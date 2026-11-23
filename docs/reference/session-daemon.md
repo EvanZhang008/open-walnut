@@ -527,6 +527,28 @@ carries `serviceRoles` and, for the launcher's good version, `goodRoles`, which 
 Tests: `tests/binary/service-role.test.ts`, `tests/binary/service-start.test.ts`,
 `tests/providers/service-roles.test.ts`, `tests/providers/one-service-lead-e2e.test.ts`.
 
+**Two Walnuts on one machine: one service each** (experiment `host_service_sets`, off by default).
+A service belongs to one Walnut. The Walnut that already holds the default places keeps them; a later
+Walnut on the same OS account gets its own set under `~/.open-walnut-host/walnuts/<id16>/`
+(`src/providers/service-set.ts`): install root `daemon/`, runtime `rt/` (or
+`/tmp/open-walnut-set-<uid>-<id16>` when its sockets would not fit), its own boot item
+(`open-walnut-daemon-<id16>.service`, `dev.openwalnut.session-daemon.<id16>`, cron tag
+`# open-walnut-daemon <id16>`), registry, streams and ports. The host's CLI chooses
+(`walnut daemon install|update --walnut <id> --walnut-home <home>`, `src/providers/service-set-choice.ts`:
+a set already installed, then the claim file `set-owner.json`, then the default's mode owner, then
+another Walnut in `daemon.serves.json`) and prints `service set: default|<id16>`. A set's runtime keeps
+its sessions like the default one (`WALNUT_SERVICE_SET`, `KEEPS_SESSIONS`); the machine's single copies
+(the user PATH shim, `~/.open-walnut/tmp`) stay with the default set. Shared on purpose, and only:
+the machine id, the cli-owner records (one CLI per session on the host, whichever service asks) and
+walnut-net (one address and key; each member's streams go to its own Walnut's `daemonPortFile`;
+the service holding `ctl.sock` runs it and another takes over on the same key; a Walnut that leaves
+removes only its own members). A port stream never reaches another set's daemon door. Moving off a
+shared daemon does not carry live CLIs over (`src/providers/service-set-move.ts`): the leader waits
+(bounded) for a moment when none of its sessions there is in a turn, holds new work, stops them the
+normal way, flips the route (`walnut daemon net-route`, put back by itself unless confirmed) and resumes
+them in its own service on their next message; a move that cannot finish is put back and reported.
+The shared daemon, its launcher and boot item stay as they are, the other Walnut's.
+
 **The follower calls the runtime directly.** In the service the follower link is
 `createDirectFollowerLink` (`src/core/link/follower-link-direct.ts`): it calls the runtime's
 `follower` seat (`DaemonRuntime.follower`, a `FollowerSeat`), the same `FollowerEntry` functions

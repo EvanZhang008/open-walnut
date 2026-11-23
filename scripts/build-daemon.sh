@@ -153,6 +153,8 @@ SOURCES=(
   src/providers/net-core.ts
   src/providers/net-binary.ts
   src/providers/net-config-core.ts
+  src/providers/net-route-record.ts
+  src/providers/net-route.ts
   src/providers/machine-id-core.ts
   src/providers/host-mcp-core.ts
   src/providers/host-http-core.ts

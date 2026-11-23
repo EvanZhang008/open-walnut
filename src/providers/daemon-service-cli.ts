@@ -9,6 +9,7 @@ import { performance } from 'node:perf_hooks'
 import { readDaemonServiceExecutable } from './daemon-service-config.js'
 import { serviceSet, serviceSetIdOf, serviceSetLine, type ServiceSet } from './service-set.js'
 import { chooseServiceSet } from './service-set-choice.js'
+import { NET_ROUTE_ACTION, runNetRouteArgs } from './net-route.js'
 import { accountInfo } from '../lib/account.js'
 import { readDaemonInstanceOwner } from './daemon-instance-lock.js'
 import { createDaemonServiceManager, daemonServiceConfigPath, DaemonServiceHandoverPendingError, DaemonServiceUpdateRefusedError, type DaemonServiceCommandResult, type DaemonServiceScope } from './daemon-service-manager.js'
@@ -56,6 +57,11 @@ export interface DaemonServiceCliOptions {
    * which picks its service set on this host (service-set-choice.ts). Unset: the default set, as before.
    */
   walnut?: string
+  /**
+   * install, update, status: the data dir of the Walnut `walnut` names, for the set choice alone (its key in the
+   * default daemon's serves file, service-set-choice.ts step 4). Unlike `serve` it changes no mode; `serve`'s home wins.
+   */
+  walnutHome?: string
 }
 
 export function runDaemonServiceCommand(program: string, args: string[], input?: string, timeoutMs?: number): Promise<DaemonServiceCommandResult> {
@@ -348,9 +354,13 @@ export const SERVE_FLAG = '--serve'
 export const NO_SERVE_FLAG = '--no-serve'
 /** The Walnut a service is for: its own set when another Walnut holds the default (the experiment host_service_sets). */
 export const WALNUT_FLAG = '--walnut'
+/** The data dir of that Walnut, for the set choice only (no mode word): the leader sends it with --walnut. */
+export const WALNUT_HOME_FLAG = '--walnut-home'
 
 
 export async function runDaemonServiceArgs(args: string[]): Promise<number> {
+  // `net-route` has words of its own and changes walnut-net's config, never the service (net-route.ts).
+  if (args[0] === NET_ROUTE_ACTION) return runNetRouteArgs(args.slice(1))
   const { action, options } = parseDaemonServiceArgs(args)
   return runDaemonServiceCli(action, options)
 }
@@ -377,6 +387,12 @@ export function parseDaemonServiceArgs(args: string[]): { action: string; option
       options.walnut = id
       i++
     }
+    else if (args[i] === WALNUT_HOME_FLAG) {
+      const home = args[i + 1]
+      if (!home || !path.isAbsolute(home)) throw new Error(`${WALNUT_HOME_FLAG} requires the absolute data dir of the Walnut it is for`)
+      options.walnutHome = home
+      i++
+    }
     else if (args[i] === '--scope') {
       if (!args[i + 1]) throw new Error('--scope requires user, system or cron')
       options.scope = args[++i] as DaemonServiceScope
@@ -390,7 +406,7 @@ export function parseDaemonServiceArgs(args: string[]): { action: string; option
 }
 
 export async function runDaemonServiceCli(action: string, options: DaemonServiceCliOptions): Promise<number> {
-  if (!['status', 'install', 'update', 'uninstall', 'restart', 'handback'].includes(action)) throw new Error('Expected daemon status, install, update, uninstall, restart, or handback')
+  if (!['status', 'install', 'update', 'uninstall', 'restart', 'handback'].includes(action)) throw new Error('Expected daemon status, install, update, uninstall, restart, handback, or net-route')
   if (process.platform !== 'linux' && process.platform !== 'darwin') throw new Error('Daemon services require Linux or macOS')
   if (action !== 'status' && !options.yes) throw new Error('This changes the host service. Repeat with --yes to confirm; running CLI sessions are not terminated.')
   if (options.scope && !['user', 'system', 'cron'].includes(options.scope)) throw new Error('Scope must be user, system or cron')
@@ -409,7 +425,7 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
   // Which set the action is for: the default, or this Walnut's own beside another's (service-set.ts).
   const set: ServiceSet = options.walnut
     ? (await chooseServiceSet({
-        platform: process.platform, home, walnutId: options.walnut, serveHome: options.serve?.home,
+        platform: process.platform, home, walnutId: options.walnut, serveHome: options.serve?.home ?? options.walnutHome,
         defaultRuntimeDir, uid: user.uid, claim: action === 'install' || action === 'update',
       })).set
     : serviceSet(process.platform, home, '', { runtimeDir: defaultRuntimeDir })

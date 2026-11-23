@@ -33,6 +33,7 @@ import net from 'node:net'
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import { fetchNetBinary } from './net-binary.js'
 import { withFileLock } from '../utils/file-lock.js'
+import { confirmLeaderNetRoutes } from './net-route-record.js'
 import { ID_RE, netConfigText, netConfigWithout, netRequestOf, netSetId, parseNetConfig, previousNetBinary, pruneNetBinaries, type NetConfigureRequest } from './net-config-core.js'
 
 export { NET_CONFIG_VERSION, netStateDir, parseNetConfig, resolveNetBinary, type NetConfigureRequest, type NetMember } from './net-config-core.js'
@@ -712,6 +713,22 @@ export function createNetSupervisor(deps: NetDeps) {
     },
 
     stopChild,
+
+    /**
+     * A leader of Walnut `walnutId` reached this daemon: when this service is that Walnut's set,
+     * its pending walnut-net routes here are confirmed (net-route-record.ts), so their put-back
+     * does not fire. Best effort, async: never throws, never holds the caller.
+     */
+    confirmRoutes(walnutId: unknown): Promise<string[]> {
+      if (!setId || typeof walnutId !== 'string' || walnutId.slice(0, 16) !== setId) return Promise.resolve([])
+      return confirmLeaderNetRoutes(stateDir, setId, walnutId, now()).then((members) => {
+        if (members.length > 0) log('info', 'walnut-net: routes to this service set confirmed', { setId, members })
+        return members
+      }, (err: Error) => {
+        log('warn', 'walnut-net: could not confirm the routes to this service set', { setId, error: err.message })
+        return []
+      })
+    },
 
     /** Daemon shutdown. */
     async stop(): Promise<void> {

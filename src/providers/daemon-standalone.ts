@@ -4772,6 +4772,8 @@ function cmdLeaderConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record
   try {
     const rec = leaderBook.configure({ home: cmd.home as string, walnutId: cmd.walnutId as string, backup: cmd.backup === true, drains: cmd.drains })
     bindGatewayClientHome(ws, rec.home)
+    // This set's own Walnut reached it: its pending walnut-net routes here stay (net-route.ts). Twin of daemon-source.ts.
+    if (SET_ID !== '') void netSupervisor.confirmRoutes(cmd.walnutId)
     const notTaken = moveNotTaken.get(cmd)
     // A home a declared move made an alias: the server hears the home this host keeps its Walnut
     // under, the one its words to this host's service name (one-service-mode.ts serviceModeAsk).

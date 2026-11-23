@@ -15,12 +15,18 @@ import { MKTEMP_STAGING, STAGING, STAGING_PREFIX } from './daemon-update-staging
 import { DELTA_BLOCK_BYTES, deltaAssemblyLines, planDeltaAgainst } from './walnut-file-delta.js'
 import { remoteSha256Command } from './upload-resume.js'
 import { serviceLauncherWanted } from './service-launcher-flag.js'
+import { serviceSetWords, type SetAsk } from './service-set-leader.js'
+import { parseServiceSetLine } from './service-set.js'
 
 // Judged and read in daemon-update-readback.ts, which tests do not replace with a double.
 export { judgeServiceUpdate, sshUpdateHost }
 
 /** One service update: the line to run, its dir, the executable, the scope, and the build it installs. */
-export interface ServiceUpdateSpec { command: string; directory: string | null; executable: string; scope: 'user' | 'cron'; build?: string }
+export interface ServiceUpdateSpec {
+  command: string; directory: string | null; executable: string; scope: 'user' | 'cron'; build?: string
+  /** The service set the update is for, when the leader knows it (service-set-leader.ts): the tail watches that set's service. */
+  set?: string
+}
 
 export interface RemoteDaemonUpdateIo {
   run(command: string, timeoutMs?: number): Promise<string>
@@ -32,7 +38,7 @@ export interface RemoteDaemonUpdateIo {
    * `run`. The host network's io (daemon-net-update-io.ts) writes and reads with the
    * daemon's own file commands.
    */
-  serviceUpdate?(update: ServiceUpdateSpec): Promise<{ output: string; tail: UpdateTail | null }>
+  serviceUpdate?(update: ServiceUpdateSpec): Promise<{ output: string; tail: UpdateTail | null; head?: string }>
   /** The detached runner's clocks for the SSH path; tests shorten them. */
   detached?: NetUpdateIoOptions
 }
@@ -359,6 +365,25 @@ async function serviceExecutable(
   throw new Error(`the daemon file on the host is not this build (${expectedVersion}), and this Walnut has no other copy to send`)
 }
 
+/**
+ * Run `fn` with this build's executable on the host (the one there when it is this build, else an
+ * upload), its staging removed afterwards: a `walnut daemon` line that is no update (the service set
+ * check and install, service-set-provision.ts).
+ */
+export async function withServiceExecutable<T>(
+  source: ServiceDaemonSource, expectedVersion: string, io: RemoteDaemonUpdateIo, fn: (executable: string) => Promise<T>,
+): Promise<T> {
+  if (!VERSION.test(expectedVersion)) throw new Error('Invalid daemon build version')
+  const { executable, directory, chunks } = await serviceExecutable(source, expectedVersion, io)
+  try {
+    const out = await fn(executable)
+    if (chunks) await removeVersionChunks(io, expectedVersion)
+    return out
+  } finally {
+    if (directory) await removeStaging(io, directory)
+  }
+}
+
 /** The new daemon did not get onto the host: the installed service and the running daemon are untouched. */
 export class DaemonUpdateStageError extends Error {
   constructor(message: string) {
@@ -385,6 +410,15 @@ export async function updateRemoteDaemonService(
      * the host keeps its mode.
      */
     serve?: { home: string; on: boolean }
+    /**
+     * The Walnut the service is for (the experiment host_service_sets): `--walnut <id> --walnut-home <home>`,
+     * so the host's CLI picks its set. Unset: no word, as before.
+     */
+    walnut?: SetAsk | null
+    /** The set this leader knows the host runs this Walnut's service on (its tail watches that one). */
+    set?: string
+    /** The set the CLI named (`service set: …`), '' the default, null when it named none; told before the verdict. */
+    onServiceSet?: (set: string | null) => void | Promise<void>
   } = {},
 ): Promise<'applied' | 'held'> {
   if (!VERSION.test(expectedVersion)) throw new Error('Invalid daemon build version')
@@ -398,12 +432,13 @@ export async function updateRemoteDaemonService(
     if (opts.onStaged && !(await opts.onStaged())) return 'held'
     // An overdue update goes over the daemon's own work (daemon-update-behind.ts); the launcher when its experiment is on.
     const launcher = await serviceLauncherWanted()
-    const command = `${executable} walnut daemon update --yes --scope ${scope} --executable ${executable}${opts.overBusy ? ` ${OVER_BUSY_FLAG}` : ''}${launcher ? ' --launcher' : ''}${serveWords(opts.serve, launcher)}`
+    const command = `${executable} walnut daemon update --yes --scope ${scope} --executable ${executable}${opts.overBusy ? ` ${OVER_BUSY_FLAG}` : ''}${launcher ? ' --launcher' : ''}${serveWords(opts.serve, launcher)}${serviceSetWords(opts.walnut)}`
     const update = io.serviceUpdate ? io.serviceUpdate.bind(io) : (u: ServiceUpdateSpec) => updateOverSsh(io, u)
-    const answer = await update({ command, directory, executable, scope, build: expectedVersion }).catch((error: unknown) => {
+    const answer = await update({ command, directory, executable, scope, build: expectedVersion, ...(opts.set ? { set: opts.set } : {}) }).catch((error: unknown) => {
       keep = (error as { keepStaging?: unknown } | null)?.keepStaging === true
       throw error
     })
+    if (opts.onServiceSet) await opts.onServiceSet(parseServiceSetLine(answer.head ?? answer.output))
     const verdict = judgeServiceUpdate(answer.output, answer.tail)
     applied = true
     return verdict
@@ -434,7 +469,7 @@ function serveWords(serve: { home: string; on: boolean } | undefined, launcher: 
  */
 async function updateOverSsh(
   io: RemoteDaemonUpdateIo, update: ServiceUpdateSpec,
-): Promise<{ output: string; tail: UpdateTail | null }> {
+): Promise<{ output: string; tail: UpdateTail | null; head?: string }> {
   const own = !update.directory
   const directory = update.directory ?? (await io.run(MKTEMP_STAGING).catch(() => '')).trim()
   if (!STAGING.test(directory)) throw new Error('the update could not make a dir of its own on the host, so nothing was changed')
@@ -461,6 +496,8 @@ export interface RemoteInstallResult {
   scope?: string
   startup?: string
   uploaded: boolean
+  /** The set the host's CLI named (`service set: …`, only with `walnut`): '' the default; null or absent: none. */
+  serviceSet?: string | null
 }
 
 /**
@@ -473,38 +510,53 @@ export interface RemoteInstallResult {
  */
 export async function installRemoteDaemonService(
   source: ServiceDaemonSource, expectedVersion: string, io: RemoteDaemonUpdateIo,
+  opts: { walnut?: SetAsk | null } = {},
 ): Promise<RemoteInstallResult> {
   if (!VERSION.test(expectedVersion)) throw new Error('Invalid daemon build version')
   const { executable, directory, chunks } = await serviceExecutable(source, expectedVersion, io)
-  const uploaded = directory !== null
-  // `|| true`: a refusal exits 1 with its JSON on stdout, which is the answer to keep.
-  const cli = async (args: string, timeoutMs: number): Promise<ServiceReply | null> => {
-    const output = (await io.run(`${executable} walnut daemon ${args} 2>/dev/null || true`, timeoutMs)).trim()
-    try { return JSON.parse(output.slice(output.indexOf('{'))) as ServiceReply } catch { return null }
-  }
-  const install = `install --yes --executable ${executable}${await serviceLauncherWanted() ? ' --launcher' : ''}`
   try {
-    let reply = await cli(install, 600_000)
-    // The old daemon may have exited after handing over: a second install finishes that handover.
-    if (reply && reply.ok !== true && (reply.failure?.code === 'handoverPending' || /retry install/i.test(reply.failure?.rollback ?? ''))) {
-      reply = await cli(install, 600_000)
-    }
-    if (reply?.ok === true) {
-      if (chunks) await removeVersionChunks(io, expectedVersion)
-      return { ok: true, scope: reply.status?.scope, startup: reply.status?.startup, uploaded }
-    }
-    // Never leave a config with no daemon behind it: the server will not start one beside a service.
-    const left = await cli('status', 60_000).catch(() => null)
-    let removed = ''
-    if (left && (left as DaemonStatusReply).installed === true) {
-      const scope = (left as DaemonStatusReply).scope
-      const gone = await cli(`uninstall --yes${scope === 'user' || scope === 'cron' ? ` --scope ${scope}` : ''}`, 120_000).catch(() => null)
-      removed = gone?.ok === true ? 'the half-made service was removed, so Walnut runs the daemon the usual way' : 'the half-made service could not be removed'
-    }
-    if (!reply) return { ok: false, message: ['the install gave no answer Walnut could read', removed].filter(Boolean).join('; '), uploaded }
-    const f = reply.failure ?? {}
-    return { ok: false, code: f.code, message: [f.message, f.rollback, removed].filter(Boolean).join('; ') || 'the install failed', uploaded }
+    const result = await runServiceInstall(executable, io, opts.walnut)
+    if (result.ok && chunks) await removeVersionChunks(io, expectedVersion)
+    return { ...result, uploaded: directory !== null }
   } finally {
     if (directory) await removeStaging(io, directory)
   }
+}
+
+/**
+ * `walnut daemon install` with an executable already on the host (installRemoteDaemonService, and
+ * a service set's first install, service-set-provision.ts); a half-made service is removed again.
+ * With `walnut` (the experiment host_service_sets) every line names the Walnut, and the set the
+ * host's CLI named comes back.
+ */
+export async function runServiceInstall(
+  executable: string, io: Pick<RemoteDaemonUpdateIo, 'run'>, walnut?: SetAsk | null,
+): Promise<Omit<RemoteInstallResult, 'uploaded'>> {
+  const words = serviceSetWords(walnut)
+  let serviceSet: string | null = null
+  // `|| true`: a refusal exits 1 with its JSON on stdout, which is the answer to keep.
+  const cli = async (args: string, timeoutMs: number): Promise<ServiceReply | null> => {
+    const output = (await io.run(`${executable} walnut daemon ${args}${words} 2>/dev/null || true`, timeoutMs)).trim()
+    if (words) serviceSet = parseServiceSetLine(output) ?? serviceSet
+    try { return JSON.parse(output.slice(output.indexOf('{'))) as ServiceReply } catch { return null }
+  }
+  const named = (): { serviceSet?: string | null } => (words ? { serviceSet } : {})
+  const install = `install --yes --executable ${executable}${await serviceLauncherWanted() ? ' --launcher' : ''}`
+  let reply = await cli(install, 600_000)
+  // The old daemon may have exited after handing over: a second install finishes that handover.
+  if (reply && reply.ok !== true && (reply.failure?.code === 'handoverPending' || /retry install/i.test(reply.failure?.rollback ?? ''))) {
+    reply = await cli(install, 600_000)
+  }
+  if (reply?.ok === true) return { ok: true, scope: reply.status?.scope, startup: reply.status?.startup, ...named() }
+  // Never leave a config with no daemon behind it: the server will not start one beside a service.
+  const left = await cli('status', 60_000).catch(() => null)
+  let removed = ''
+  if (left && (left as DaemonStatusReply).installed === true) {
+    const scope = (left as DaemonStatusReply).scope
+    const gone = await cli(`uninstall --yes${scope === 'user' || scope === 'cron' ? ` --scope ${scope}` : ''}`, 120_000).catch(() => null)
+    removed = gone?.ok === true ? 'the half-made service was removed, so Walnut runs the daemon the usual way' : 'the half-made service could not be removed'
+  }
+  if (!reply) return { ok: false, message: ['the install gave no answer Walnut could read', removed].filter(Boolean).join('; '), ...named() }
+  const f = reply.failure ?? {}
+  return { ok: false, code: f.code, message: [f.message, f.rollback, removed].filter(Boolean).join('; ') || 'the install failed', ...named() }
 }

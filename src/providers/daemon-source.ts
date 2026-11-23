@@ -6021,6 +6021,8 @@ function cmdLeaderConfigure(ws, id, cmd) {
   try {
     var rec = leaderBook.configure({ home: cmd.home, walnutId: cmd.walnutId, backup: cmd.backup === true, drains: cmd.drains });
     bindGatewayClientHome(ws, rec.home);
+    // This set's own Walnut reached it: its pending walnut-net routes here stay (net-route.ts). Twin of daemon-standalone.ts.
+    if (SET_ID !== '' && netSupervisor && typeof netSupervisor.confirmRoutes === 'function') void netSupervisor.confirmRoutes(cmd.walnutId);
     var notTaken = moveNotTaken.get(cmd);
     // A home a declared move made an alias: the server hears the home this host keeps its Walnut under. Twin of daemon-standalone.ts.
     var aliased = homeNamedAs.has(cmd);

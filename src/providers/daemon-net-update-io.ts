@@ -161,7 +161,7 @@ export function runnerScript(o: {
     'while [ ! -e "$d/update.go" ]; do k=$((k+1)); [ -e "$d/update.nogo" ] || [ ! -d "$d" ] || [ "$k" -gt 100 ] && exit 0; sleep 0.1; done',
     `sleep ${o.settleSeconds ?? 2}`,
     ...(o.tail ? [
-      ...servicePreamble(o.tail.scope),
+      ...servicePreamble(o.tail.scope, o.tail.set ?? ''),
       // The build a probation here failed within its day: nothing is run, the answer says so.
       `if [ -n "$tvb" ] && [ "$(sed -n 1p "$tb/${PROBATION_FAILED_NAME}" 2>/dev/null)" = "$tvb" ]; then tpa=$(sed -n 2p "$tb/${PROBATION_FAILED_NAME}" 2>/dev/null); case "$tpa" in ""|*[!0-9]*) tpa=0;; esac`,
       `  if [ $(( $(date +%s) - tpa )) -lt ${PROBATION_REFUSE_SECONDS} ]; then printf '%s\\n' ${shq(refused)} > "$d/update.out"; : > "$d/update.err"`,
@@ -338,9 +338,9 @@ export interface DetachedUpdateHost {
  */
 export async function runDetachedUpdate(
   host: DetachedUpdateHost,
-  { command, directory, executable, scope, build }: { command: string; directory: string | null; executable: string; scope: 'user' | 'cron'; build?: string },
+  { command, directory, executable, scope, build, set }: { command: string; directory: string | null; executable: string; scope: 'user' | 'cron'; build?: string; set?: string },
   opts: NetUpdateIoOptions = {},
-): Promise<{ output: string; tail: UpdateTail | null }> {
+): Promise<{ output: string; tail: UpdateTail | null; head?: string }> {
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => { const t = setTimeout(r, ms); t.unref?.() }))
   // Monotonic: the server's Mac sleeping through the wait is not the host's update taking that long.
   // Monotonic: the waits below are this process's own; the host's runner keeps its own clock.
@@ -349,7 +349,7 @@ export async function runDetachedUpdate(
   if (!directory || !STAGING.test(directory)) throw new Error('the update runs from a staging dir of its own')
   const script = runnerScript({
     directory, command, executable, tries: opts.tries, pauseSeconds: opts.pauseSeconds, settleSeconds: opts.settleSeconds, latest: opts.latestMarker,
-    tail: { scope, ...opts.tail }, build,
+    tail: { scope, ...(set ? { set } : {}), ...opts.tail }, build,
   })
   if (!(await writeFile(`${directory}/update.sh`, Buffer.from(script)))) throw new Error('the update script could not be put on the host')
   // The upload is on the host: a short hold (a file write, a dropped link) is waited out, not paid for with another upload.
@@ -390,7 +390,7 @@ export async function readNetUpdateRecord(read: (path: string) => Promise<string
 }
 
 /** The update's answer from the record, for judgeServiceUpdate (daemon-service-update.ts). */
-export function answerOfRecord(record: NetUpdateRecord): { output: string; tail: UpdateTail | null } {
+export function answerOfRecord(record: NetUpdateRecord): { output: string; tail: UpdateTail | null; head?: string } {
   if (record.done.includes(SUPERSEDED)) throw new Error('a later update on the host took over before this one ran')
   // Nothing changed (the last update's probation was at work): a hold, asked again later.
   if (record.done.includes(PROBING_RC)) throw new NetUpdateHeldError(PROBATION_BUSY)
@@ -405,7 +405,8 @@ export function answerOfRecord(record: NetUpdateRecord): { output: string; tail:
     const said = [record.out.trim(), (record.err ?? '').trim()].filter(Boolean).join(' / ').slice(-300)
     throw new Error(`the update gave no answer Walnut could read (${record.done.trim()}): ${said}${after}`)
   }
-  return { output: record.out.slice(at), tail: record.tail }
+  // What the CLI printed before its answer (`service set: …` with --walnut, service-set.ts), for the caller to read.
+  return { output: record.out.slice(at), tail: record.tail, ...(at > 0 ? { head: record.out.slice(0, at) } : {}) }
 }
 
 /**

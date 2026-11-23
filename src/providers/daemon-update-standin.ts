@@ -17,7 +17,7 @@
  * dir; the loop ends when the service config is gone.
  */
 import { launchdSpawnProbeLines } from './daemon-service-launchd.js'
-import { DAEMON_SERVICE_LABEL } from './daemon-service-config.js'
+import { serviceSetNames } from './service-set.js'
 import { DETACH_LINE, disabledLines, laterLines, lockLines, servicePreamble, UP_LINE } from './daemon-update-shell.js'
 
 export const STANDIN_SCRIPT_NAME = 'daemon-standin.sh'
@@ -40,21 +40,21 @@ export function plistWordLines(): string[] {
 }
 
 /** The stand-in's own script (static: everything it needs comes from the plist and its arguments). */
-export function standInScript(everySeconds: number): string {
+export function standInScript(everySeconds: number, set = ''): string {
   return [
     '#!/bin/sh',
     '# Walnut stand-in daemon loop (src/providers/daemon-update-standin.ts), started detached by an update tail.',
     // $1 the runtime dir; $2 the program the config named when the tail began (a second CLI for the handback).
     // $3 the runners' latest marker the tail used (tests point it elsewhere).
     'tr=$1; tsx0=${2:-}; L=${3:-"/tmp/open-walnut-update-latest-$(id -u)"}; d=',
-    ...servicePreamble('user'),
+    ...servicePreamble('user', set),
     '[ "$tk" = launchd ] && [ -f "$tc" ] && [ -d "$tr" ] || exit 0',
     UP_LINE,
     ...laterLines(),
     ...lockLines(),
     ...plistWordLines(),
-    ...launchdSpawnProbeLines(DAEMON_SERVICE_LABEL),
-    ...disabledLines(),
+    ...launchdSpawnProbeLines(serviceSetNames(set).label),
+    ...disabledLines(set),
     't_sgone() { [ -n "${sp:-}" ] && kill -0 "$sp" 2>/dev/null || return 0; case "$(ps -o stat= -p "$sp" 2>/dev/null)" in Z*) return 0;; esac; return 1; }',
     // As launchd starts it: the account's own few vars, then the plist's env, then its program. Not
     // a child of this loop (a subshell starts it and exits): the handback waits for the stand-in to
@@ -74,7 +74,8 @@ export function standInScript(everySeconds: number): string {
     // One CLI's handback: 0 handed back, 1 refused (a real answer: no other CLI is asked), 2 no
     // answer (no such file, or a build without the action: no JSON).
     't_hb1() { [ -n "$1" ] && [ -x "$1" ] || return 2',
-    '  tho=$("$1" walnut daemon handback --yes --scope user 2>>"$tr/daemon-standin.log")',
+    // A set's stand-in names its set (its id16 is a walnut id's head: the host's CLI picks the same set).
+    `  tho=$("$1" walnut daemon handback --yes --scope user${set ? ` --walnut ${set}` : ''} 2>>"$tr/daemon-standin.log")`,
     `  case "$tho" in *'"ok": true'*|*'"ok":true'*) return 0;; *'"ok"'*) return 1;; esac; return 2; }`,
     // The service's own CLI hands back: the config's program, the one the tail began with, then the
     // builds staged in the install root, newest first. After a rollback the first two are the
@@ -128,8 +129,8 @@ export function standInScript(everySeconds: number): string {
 }
 
 /** t_standin: write the stand-in's script into the install root and start it out of this shell's session. Needs $tb, $tr, $tsx0, $L. */
-export function standInStartLines(everySeconds: number): string[] {
-  const script = standInScript(everySeconds)
+export function standInStartLines(everySeconds: number, set = ''): string[] {
+  const script = standInScript(everySeconds, set)
   if (script.split('\n').includes(EOF)) throw new Error('the stand-in script holds its own heredoc end')
   return [
     DETACH_LINE,

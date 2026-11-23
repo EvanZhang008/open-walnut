@@ -203,6 +203,10 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/net-core.ts',
   'src/providers/net-binary.ts',
   'src/providers/net-config-core.ts',
+  // The record of the walnut-net route of a leader to its own service set (bundled into the daemon, net-core.cjs and
+  // daemon-service-cli.cjs), and `walnut daemon net-route` (daemon-service-cli.cjs).
+  'src/providers/net-route-record.ts',
+  'src/providers/net-route.ts',
   // The stable id of this machine, sent in hello (imported by the binary, inlined by the source twin).
   'src/providers/machine-id-core.ts',
   // A task on another host calling the MCP servers and web services of this host
