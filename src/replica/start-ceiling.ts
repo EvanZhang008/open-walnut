@@ -54,8 +54,8 @@ export async function awayStartCaller(req: IncomingMessage, actor: WriteActor, d
  * leader's refusal of a looser mode the caller asked for, a 403 that is final (nothing started,
  * never handed back to the daemon's own away answer).
  */
-export async function capAwayStart(caller: StartCaller, requested: string | undefined): Promise<{ mode: SessionMode | undefined } | { refused: PortAnswer }> {
-  const verdict = startModeVerdict(caller, requested || undefined)
+export async function capAwayStart(caller: StartCaller, requested: string | undefined, opts: { unproven?: boolean } = {}): Promise<{ mode: SessionMode | undefined } | { refused: PortAnswer }> {
+  const verdict = startModeVerdict(caller, requested || undefined, { unproven: opts.unproven })
   if (!('refused' in verdict)) return verdict
   const { launchErrorCode } = await import('../core/sessions/mobile-launch.js')
   return { refused: { answered: false, status: 403, body: { error: { code: launchErrorCode(403), message: verdict.refused } } } }

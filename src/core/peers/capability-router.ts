@@ -401,7 +401,7 @@ async function handleToolsCall(
   // anonymous gateway caller daemon-connection.ts kept it for: the start routes read who it is.
   // Only for a job the daemon vouched for (`vouched === true`, its process tree checked) and an op that
   // can start a task (opStartsTask): an unvouched job's call keeps its labels below and stays capped.
-  const { holdRelayJob, opStartsTask } = await import('../plugin-jobs/job-caller.js');
+  const { holdRelayJob, opStartsTask, releaseRelayJob } = await import('../plugin-jobs/job-caller.js');
   const jobToken = meta.pluginJob?.vouched === true && isExternalCallerSid(callerSid) && opStartsTask(op) ? holdRelayJob(meta.pluginJob, host) : undefined;
   // The call's id, chosen by the caller's client (src/lib/op-call-id.ts): a resend of the
   // same call runs it at most once, and op_result reads what it did.
@@ -417,6 +417,7 @@ async function handleToolsCall(
   // provenance, and the start-mode ceiling of every self-call reads the caller as anonymous.
   const { relayedCallerUnproven } = await import('../../lib/caller-unproven.js');
   const unproven = relayedCallerUnproven(payload);
+  // The job's token ends with the call: its place in the hold goes back (job-caller.ts releaseRelayJob).
   const r = await withTestRun(testRun, () => executeOp(name, (args ?? {}) as Record<string, unknown>, {
 callerSid, callerHost: host, origin: hostOrigin(host), ...(proofToken ? { callerProof: proofToken } : {}), ...(triggerToken ? { callerTrigger: triggerToken } : {}), ...(callId ? { callId } : {}),
 ...(meta.pluginJob ? { callerPluginId: meta.pluginJob.plugin, callerPluginJob: meta.pluginJob.job } : {}),
@@ -425,7 +426,7 @@ callerSid, callerHost: host, origin: hostOrigin(host), ...(proofToken ? { caller
   // A session reads a receipt or capped content (ops/answer.ts); a check script or a plugin job reads the result as it is.
   // A call no session made (a person's terminal on that host, an outside script) reads the result as it is too.
   ...(surface && !payload.triggerCaller && !meta.pluginJob && !!callerSid && !isExternalCallerSid(callerSid) ? { forAgent: surface } : {}),
-}));
+})).finally(() => releaseRelayJob(jobToken));
   // Real use (core/usage-watch): the call's outcome and its answer's size as its client prints it.
   // A test run's calls stay out of it.
   if (!testRun) {

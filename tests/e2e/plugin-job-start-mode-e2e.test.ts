@@ -40,7 +40,7 @@ import { createSessionRecord, getSessionsForTask, updateSessionRecord } from '..
 import { setProjectMetadata, updateTask } from '../../src/core/task-manager.js'
 import { handleGatewayCapability } from '../../src/core/peers/capability-router.js'
 import { executeOp } from '../../src/ops/index.js'
-import { holdRelayJob } from '../../src/core/plugin-jobs/job-caller.js'
+import { _heldRelayJobsForTesting, holdRelayJob } from '../../src/core/plugin-jobs/job-caller.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 const REFUSAL = 'A default session cannot start a task in bypass mode. Change the caller\'s mode first.'
@@ -217,4 +217,32 @@ describe('everyone else stays under the ceiling', () => {
     expect(r.ok).toBe(false)
     expect(r.ok ? '' : r.message).toContain(REFUSAL)
   }, 60_000)
+})
+
+describe('task_start_check says what the start itself does, through the same relay', () => {
+  const check = (pluginJob?: { plugin: string; job: string; vouched?: true }) =>
+    relay('task_start_check', { mode: 'bypass' }, pluginJob).then((r) => (r.ok ? r.result : r.error) as Record<string, unknown>)
+
+  it('a vouched job is allowed and starts; an unvouched one is refused with the start\'s own words, and is refused', async () => {
+    expect(await check(VOUCHED)).toMatchObject({ allowed: true, mode: 'bypass', caller: 'plugin-job' })
+    const started = await relay('task_create', { title: 'Checked then started', project: 'Tickets', mode: 'bypass', cwd: WALNUT_HOME, message: 'look' }, VOUCHED)
+    expect(started.ok, textOf(started)).toBe(true)
+    const unvouched = await check(JOB)
+    expect(unvouched).toMatchObject({ allowed: false, mode: 'bypass', caller: 'external' })
+    expect(String(unvouched.reason)).toContain(REFUSAL)
+    const refused = await relay('task_create', { title: 'Checked then refused', project: 'Tickets', mode: 'bypass', cwd: WALNUT_HOME, message: 'look' }, JOB)
+    expect(refused.ok).toBe(false)
+    expect(textOf(refused)).toContain(String(unvouched.reason))
+  }, 90_000)
+
+  it('a job that checks often never takes its starts\' place in the hold: each call\'s token goes back when it ends', async () => {
+    // More checks than the hold keeps (500 a minute): were the tokens kept, the checks past 500 and
+    // the start below would read as an outside caller. (An earlier test holds a token by hand.)
+    const before = _heldRelayJobsForTesting()
+    for (let i = 0; i < 520; i++) expect((await check(VOUCHED)).allowed, `check ${i}`).toBe(true)
+    expect(_heldRelayJobsForTesting()).toBe(before)
+    const started = await relay('task_create', { title: 'Started after many checks', project: 'Tickets', mode: 'bypass', cwd: WALNUT_HOME, message: 'look' }, VOUCHED)
+    expect(started.ok, textOf(started)).toBe(true)
+    expect(_heldRelayJobsForTesting()).toBe(before)
+  }, 180_000)
 })

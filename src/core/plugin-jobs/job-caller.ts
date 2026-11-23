@@ -119,4 +119,16 @@ export function storedVouchedJob(raw: unknown): VouchedJob | null {
   return plugin && job && host ? { plugin, job, host } : null
 }
 
+/**
+ * The relayed call a token was held for has ended (capability-router.ts, after its op): its place
+ * goes back. A job that checks its start mode often (task_start_check) would otherwise fill the
+ * hold for a minute at a time and leave its real starts with no token, capped as an outside caller.
+ */
+export function releaseRelayJob(token: string | undefined): void {
+  if (token) holds.release(token)
+}
+
+/** How many tokens the hold keeps now (tests). */
+export function _heldRelayJobsForTesting(now = Date.now()): number { return holds.size(now) }
+
 export function _clearRelayJobsForTesting(): void { holds.clear() }

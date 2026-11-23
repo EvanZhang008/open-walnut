@@ -17,6 +17,7 @@
  *
  * Real: the server, the relay, the op executor, the route, the ceiling. Mocked: constants.
  */
+import { isTaskCopyWrite } from '../../src/web/v1-forward/policy.js'
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import type { Server as HttpServer } from 'node:http'
@@ -166,5 +167,12 @@ describe('the start check has no side effect', () => {
     expect(await tasksNow()).toBe(before.tasks)
     expect(await sessionsNow()).toBe(before.sessions)
     expect((await listSessions()).map((s) => s.claudeSessionId).sort()).toEqual([DEFAULT_SID, BYPASS_SID].sort())
+  })
+})
+
+describe('the companion forwards the start check as the read it is', () => {
+  it('sends its task copy no round for it, as it does for a task write', () => {
+    expect(isTaskCopyWrite('POST', '/tasks/start-check')).toBe(false)
+    expect(isTaskCopyWrite('POST', '/tasks/t1/start')).toBe(true)
   })
 })

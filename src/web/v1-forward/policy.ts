@@ -132,6 +132,8 @@ export function isTaskCopyWrite(method: string, rel: string): boolean {
   rel = ruleKey(rel)
   const m = method.toUpperCase()
   if (m === 'GET' || m === 'HEAD') return false
+  // The start check (task_start_check) is a POST that writes nothing: no copy round for it.
+  if (rel === '/tasks/start-check') return false
   return /^\/(tasks|focus)(\/|$)/.test(rel) && !/^\/tasks\/[^/]+\/board(\/|$)/.test(rel)
 }
 

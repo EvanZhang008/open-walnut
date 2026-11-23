@@ -19,7 +19,7 @@ import { awayStarts, startSessionId, type AwayStartsDeps } from '../../src/repli
 import type { ReplicaWrite, ReplicaWriteResult } from '../../src/replica/dispatch.js'
 import type { PortAnswer, WriteActor, WritePort } from '../../src/replica/write-port.js'
 import { awayStartCaller, replicaStartCaller, type StartCallerDeps } from '../../src/replica/start-ceiling.js'
-import { applyStartModeCeiling } from '../../src/core/sessions/delegated-mode.js'
+import { UNPROVEN_NOTE, applyStartModeCeiling } from '../../src/core/sessions/delegated-mode.js'
 import { holdRelayJob, _clearRelayJobsForTesting } from '../../src/core/plugin-jobs/job-caller.js'
 import { getSelfCallToken, setSelfApiRoot } from '../../src/lib/self-api-root.js'
 import { hostOrigin } from '../../src/lib/caller-origin.js'
@@ -319,7 +319,8 @@ describe('away starts', () => {
     it('a call marked unproven is an outside caller, even naming a bypass session\'s sid or a vouched job', async () => {
       const UNPROVEN = { 'x-walnut-caller-unproven': '1' }
       const h = harness(asSession('sess-bypass'))
-      expect(await h.post('/v1/tasks/t1/start', { message: 'go', mode: 'bypass' }, 'op-1', UNPROVEN)).toEqual({ status: 403, body: { error: { code: 'bad_request', message: REFUSED } } })
+      // The leader's words, its note on the unproven caller included (delegated-mode.ts capStartMode).
+      expect(await h.post('/v1/tasks/t1/start', { message: 'go', mode: 'bypass' }, 'op-1', UNPROVEN)).toEqual({ status: 403, body: { error: { code: 'bad_request', message: `${REFUSED} ${UNPROVEN_NOTE}` } } })
       expect(h.calls).toEqual([])
       const none = harness({ ...asSession('sess-bypass'), freshStart: async () => ({ mode: 'bypass', modeNamed: true, context: 'ctx' }) })
       expect((await none.post('/v1/tasks/t1/start', { message: 'go' }, 'op-1', UNPROVEN)).status).toBe(200)

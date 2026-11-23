@@ -38,6 +38,7 @@ import { defaultCwdOnHost } from '../core/sessions/launch-place.js'
 import { sessionExistsWords } from '../core/sessions/one-session-per-task.js'
 import type { SessionMode } from '../core/types.js'
 import { awayStartCaller, capAwayStart, replicaStartCaller, type StartCallerDeps } from './start-ceiling.js'
+import { callerUnprovenOf } from '../lib/caller-unproven.js'
 
 /** The daemon capability a task start here needs (follower.start `run: 'task'`). */
 export const TASK_START_CAP = 'follower-gateway-v1'
@@ -129,7 +130,7 @@ export function awayStarts(deps: AwayStartsDeps): RequestHandler {
 
   async function start(req: Request, w: ReplicaWrite, actor: WriteActor, taskId: string): Promise<PortAnswer> {
     // The Mac's ceiling first, as its task start caps the mode before anything else (task-start.ts).
-    const capped = await capAwayStart(await awayStartCaller(req, actor, deps.startCaller), str(bodyOf(req).mode))
+    const capped = await capAwayStart(await awayStartCaller(req, actor, deps.startCaller), str(bodyOf(req).mode), { unproven: !!callerUnprovenOf(req) })
     if ('refused' in capped) {
       deps.log('warn', 'replica: a task start asked for a mode looser than its caller may start', { taskId, opId: w.opId })
       return capped.refused

@@ -43,6 +43,7 @@ import { askProjectFor } from '../core/sessions/ask-list.js'
 import { migrateFocusTier } from '../core/types.js'
 import { needsLeaderAnswer, refusalAnswer, type PortAnswer, type WriteActor, type WritePort } from './write-port.js'
 import { awayStartCaller, capAwayStart, type StartCallerDeps } from './start-ceiling.js'
+import { callerUnprovenOf } from '../lib/caller-unproven.js'
 
 /** The daemon capability a new ask on the host needs. */
 export const REPLICA_START_CAP = 'replica-start-v1'
@@ -403,7 +404,7 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
     const model = typeof b.model === 'string' && b.model && b.model !== 'default' ? b.model : persona.launchModel
     const effort = typeof b.effort === 'string' && b.effort ? b.effort : persona.launchEffort ?? persona.effort
     // The Mac's ceiling, as its quick start caps the mode (quick-start.ts): a looser one asked for is refused.
-    const capped = await capAwayStart(await awayStartCaller(req, actor, deps.startCaller), typeof b.mode === 'string' ? b.mode : undefined)
+    const capped = await capAwayStart(await awayStartCaller(req, actor, deps.startCaller), typeof b.mode === 'string' ? b.mode : undefined, { unproven: !!callerUnprovenOf(req) })
     if ('refused' in capped) return capped.refused
     const mode = capped.mode
     const contextFor = (task: Record<string, unknown>) => deps.sessionContext({ ...task, title, project, walnut_agent: true } as unknown as Task).catch(() => '')

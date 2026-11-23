@@ -19,6 +19,10 @@ export interface RelayHold<T> {
   hold(value: T, now?: number): string | undefined
   /** The value a header's token names while it is held, else undefined. */
   get(token: unknown, now?: number): T | undefined
+  /** Drop a token whose call has ended: its self-calls are over, so it holds no place any more. */
+  release(token: string): void
+  /** The tokens held and still live. */
+  size(now?: number): number
   clear(): void
 }
 
@@ -43,6 +47,8 @@ export function createRelayHold<T>(opts: { ttlMs: number; max: number }): RelayH
       const h = held.get(raw.trim())
       return h && h.until > now ? h.value : undefined
     },
+    release(token) { held.delete(token) },
+    size(now = Date.now()) { let n = 0; for (const v of held.values()) if (v.until > now) n++; return n },
     clear() { held.clear() },
   }
 }
