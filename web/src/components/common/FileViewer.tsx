@@ -106,7 +106,9 @@ export function FileViewer({ path: filePath, line, endLine, host: askedHost, sou
             <div className="file-viewer-missing">
               <div className="sfe-notice" data-testid="file-viewer-missing">{missingPathLine(filePath, target.missing.checked, everywhere, target.missing.unreachable)}</div>
               {everywhere && !!target.missing.unreachable?.length && (
-                <button type="button" className="btn btn-sm" data-testid="file-viewer-try-again" onClick={() => setAttempt((n) => n + 1)}>Try again</button>
+                <div className="file-viewer-missing-actions">
+                  <button type="button" className="btn btn-sm" data-testid="file-viewer-try-again" onClick={() => setAttempt((n) => n + 1)}>Try again</button>
+                </div>
               )}
             </div>
           ) : (

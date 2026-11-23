@@ -60,12 +60,13 @@ export function OpenAgentRefPage() {
     <h1>{opened ? 'Opened in Walnut' : 'Open in Walnut'}</h1>
     {!parsed ? <p>This reference is not valid.</p> : <>
       <p>{parsed.ref.kind === 'file' ? parsed.ref.path : parsed.ref.id}</p>
-      {!opened && (expiredFile
-        ? (waitedLong
-          ? <><p role="status">The source document did not answer. Open looks for this file on every machine.</p>
-            <button type="button" onClick={openAnywhere}>Open</button></>
-          : <p role="status">Opening in Walnut…</p>)
-        : <button type="button" onClick={() => setConfirmed(true)}>Open</button>)}
+      {!opened && expiredFile && <p role="status">{waitedLong
+        ? 'The source document did not answer. Open looks for this file on every machine.'
+        : 'Opening in Walnut…'}</p>}
+      {/* One Open: confirms a plain reference, or, once the source document did not answer, looks the file up everywhere. */}
+      {!opened && (!expiredFile || waitedLong) && (
+        <button type="button" onClick={expiredFile ? openAnywhere : () => setConfirmed(true)}>Open</button>
+      )}
     </>}
   </main>;
 }

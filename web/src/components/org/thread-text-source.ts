@@ -30,10 +30,13 @@ export const THREAD_WORDS_SOURCE: AgentTextSource = PRIMARY;
 /** Where a thread's summary came from: its recorded writer only. */
 export function threadSummarySource(t: Pick<OrgThread, 'reply_by' | 'reply_sid' | 'reply_host'>): AgentTextSource {
   if (t.reply_by === 'human') return PRIMARY;
-  const src = bySession(t.reply_sid, t.reply_host);
-  // A summary a task wrote with no session recorded (a turn-end status line): its task's machines
-  // are asked first, then every other (2026-11-23: a VP's Done card asked Evan to pick a machine).
-  const task = t.reply_by?.startsWith('task:') ? t.reply_by.slice(5) : '';
+  return withWriterTask(bySession(t.reply_sid, t.reply_host), t.reply_by);
+}
+
+/** Words a task wrote with no session recorded (a turn-end status line): its task's machines are
+ *  asked first, then every other (2026-11-23: a VP's Done card asked Evan to pick a machine). */
+function withWriterTask(src: AgentTextSource, by: string | undefined): AgentTextSource {
+  const task = by?.startsWith('task:') ? by.slice(5) : '';
   return src.unknownSource && task ? { ...src, taskId: task } : src;
 }
 
@@ -45,7 +48,7 @@ export function threadAnswerSource(a: NonNullable<OrgThreadMessage['answer']>): 
 /** Where the first post of a thread the node opened came from. */
 export function threadOpenerSource(o: NonNullable<OrgThread['opener']>): AgentTextSource {
   if (o.by === 'human') return PRIMARY;
-  return bySession(o.sid, o.host);
+  return withWriterTask(bySession(o.sid, o.host), o.by);
 }
 
 /** A click that reached the thread list outside every block: no writer to name. */

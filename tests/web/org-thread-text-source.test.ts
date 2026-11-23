@@ -31,7 +31,9 @@ describe('each block names the writer the server recorded', () => {
     expect(threadSummarySource({ reply_by: 'task:lead', reply_sid: 'sid-a', reply_host: 'devbox' })).toEqual({ sessionId: 'sid-a', host: 'devbox' })
     expect(threadSummarySource({ reply_by: 'task:lead', reply_sid: 'sid-a' })).toEqual({ sessionId: 'sid-a' })
     // Written before the writer was recorded, or by a caller Walnut could not place: unknown.
-    for (const t of [{}, { reply_by: 'agent' }, { reply_by: 'task:lead' }]) expect(threadSummarySource(t)).toEqual({ unknownSource: true })
+    for (const t of [{}, { reply_by: 'agent' }]) expect(threadSummarySource(t)).toEqual({ unknownSource: true })
+    // A task's words with no session kept still name the task: its machines are asked first.
+    expect(threadSummarySource({ reply_by: 'task:lead' })).toEqual({ unknownSource: true, taskId: 'lead' })
   })
 
   it('an answer: the session it was read from, else unknown (never the message\'s sid)', () => {
@@ -47,7 +49,7 @@ describe('each block names the writer the server recorded', () => {
   it('a first post: the user\'s is the primary, else its recorded session, else unknown', () => {
     expect(threadOpenerSource({ text: 'a', at: 'x', from: 'mail', by: 'human' })).toEqual({ host: '__local__' })
     expect(threadOpenerSource({ text: 'a', at: 'x', from: 'mail', by: 'task:lead', sid: 'sid-o', host: 'devbox' })).toEqual({ sessionId: 'sid-o', host: 'devbox' })
-    expect(threadOpenerSource({ text: 'a', at: 'x', from: 'mail', by: 'task:lead' })).toEqual({ unknownSource: true })
+    expect(threadOpenerSource({ text: 'a', at: 'x', from: 'mail', by: 'task:lead' })).toEqual({ unknownSource: true, taskId: 'lead' })
   })
 
   it('his words are the primary\'s, and a picture in them loads here; an unknown block loads none', () => {
