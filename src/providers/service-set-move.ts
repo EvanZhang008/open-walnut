@@ -103,8 +103,8 @@ export type StopResult = { ok: true } | { ok: false; why: string; busy?: boolean
 
 export type MoveOutcome =
   | { result: 'moved'; stopped: string[] }
-  | { result: 'gave_up'; why: string; stopped: string[]; failures?: number; final?: boolean }
-  | { result: 'reverted'; why: string; stopped: string[]; failures?: number; final?: boolean }
+  | { result: 'gave_up'; why: string; stopped: string[]; failures?: number; final?: boolean; nextTryAt?: number }
+  | { result: 'reverted'; why: string; stopped: string[]; failures?: number; final?: boolean; nextTryAt?: number }
   | { result: 'not_due'; why: string }
 
 export interface MoveDeps {
@@ -191,7 +191,7 @@ export async function runMove(d: MoveDeps): Promise<MoveOutcome> {
     const final = n >= MOVE_MAX_TRIES
     const nextTryAt = final ? undefined : d.now() + Math.min(retryMs * 2 ** (n - 1), RETRY_CAP_MS)
     await save({ phase: outcome.result, why: outcome.why, failures: n, nextTryAt }).catch(() => {})
-    const out = { ...outcome, failures: n, ...(final ? { final: true } : {}) }
+    const out = { ...outcome, failures: n, ...(final ? { final: true } : { nextTryAt }) }
     d.report(out)
     return out
   }

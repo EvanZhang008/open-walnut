@@ -257,6 +257,21 @@ describe('ServiceSetLink', () => {
     expect(t.link.looked).toBe(true)
   })
 
+  it('drill D2: a move that gave up looks again by itself at its next try, while the link stays up', async () => {
+    const t = conn('ssh', { set: SET, installed: true, ok: true, runtimeDir: `/home/u/.open-walnut-host/walnuts/${SET}/rt` })
+    const later: number[] = []
+    const schedule = t.link.schedule.bind(t.link)
+    t.link.schedule = (ms?: number) => { later.push(ms ?? -1); schedule(10 ** 9) }
+    ;(t.link as unknown as { d: { sessions: () => Promise<unknown[]> } }).d.sessions = async () => [{ id: 'acp', blocks: 'session acp: an ACP session' }]
+    await t.link.check()
+    expect(await serviceSetMoves.read('ssh:h')).toMatchObject({ phase: 'gave_up' })
+    // The first retry is two hours out (moveRetryMs), plus a second of slack.
+    expect(later).toHaveLength(1)
+    expect(later[0]).toBeGreaterThan(2 * 3600_000)
+    expect(later[0]).toBeLessThanOrEqual(2 * 3600_000 + 1_000)
+    t.link.stop()
+  })
+
   it('flag off: nothing runs at all', async () => {
     process.env.WALNUT_HOST_SERVICE_SETS = '0'
     const t = conn('ssh', { set: SET, installed: true, ok: true })

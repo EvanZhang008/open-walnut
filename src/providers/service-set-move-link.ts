@@ -313,6 +313,8 @@ export class ServiceSetLink {
     const again = o.final
       ? `It failed ${o.failures} times in a row, so Walnut stops trying by itself; the next update of this host tries again.`
       : 'Walnut tries again later.'
+    // The next try comes by itself at its time while the link stays up (drill D2: only a new connect looked again).
+    if (!o.final && typeof o.nextTryAt === 'number') this.schedule(Math.max(0, o.nextTryAt - this.now()) + 1_000)
     this.c.notice(this.noticeKey, `This Walnut's sessions on ${host} stay on the service another Walnut runs there for now (${o.why}). ${again}`)
   }
 }
