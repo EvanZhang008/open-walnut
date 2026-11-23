@@ -35,7 +35,7 @@ export function useOrgTopicRows(query: string): OrgTopicRows {
 export function topicHover(t: TopicSummary, now: number): string {
   const at = t.last?.at ?? t.updatedAt;
   const moved = at ? timeAgo(at, { now }) : '';
-  return [`${t.title}${moved ? `, moved ${moved}` : ''}`, t.last ? `${shortName(t.last.author)}: ${t.last.text}` : 'No messages yet'].join('\n');
+  return [`${t.title}${moved ? `, moved ${moved}` : ''}`, t.last ? `${shortName(t.last.author)}: ${t.last.text}` : 'No messages yet'].join('\n'); // empty-state-ok: a row's hover text
 }
 
 export function OrgTopicsSection({ topics, selectedKey, now, onSelect }: {
