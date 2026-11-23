@@ -149,6 +149,7 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/core/search-v2-wiring.test.ts", sleep: "await new Promise((r) => setTimeout(r, 100));", reason: "already a poll: interval of the file's own waitFor helper (8 s deadline)" },
   { file: "tests/core/self-update/background-install.test.ts", sleep: "await new Promise((r) => setTimeout(r, 300))", reason: "negative: no record written for a gone pid" },
   { file: "tests/core/send-queue-drain-r3.test.ts", sleep: "await sleep(300)", reason: "negative: an announcement for another host must send nothing" },
+  { file: "tests/core/sessions/quiet-notes-due.test.ts", sleep: "await new Promise((r) => setTimeout(r, 50));", reason: "negative: the quiet turn's end listener must not send the row again once it is on its way" },
   { file: "tests/core/stt-compare-sent-text.test.ts", sleep: "await new Promise((r) => setTimeout(r, 150))", reason: "negative: the same words sent again without ids are never guessed onto the other take" },
   { file: "tests/core/tts/tts-local-voice.test.ts", sleep: "await new Promise((r) => setTimeout(r, 300))", reason: "time under test: the fallback takes longer than the local voice's budget and must still not be cut by it" },
   { file: "tests/providers/remote-judged-session.test.ts", sleep: "await new Promise((r) => setTimeout(r, 10))", reason: "negative: after the ACP proxy's two calls reached its ACP object, no native lookup of the host follows them" },

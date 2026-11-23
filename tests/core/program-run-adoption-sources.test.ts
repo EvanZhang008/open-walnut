@@ -28,7 +28,7 @@ const SIDE: Record<string, Side> = {
   // Walnut by itself: notices, kicks that re-deliver a row whose own send already counted, recovery,
   // compaction, waits and triggers, routines, the router's reopen, a start's first line.
   'walnut-notify': 'not', 'auto-recover': 'not', 'auto-continue': 'not', restart: 'not', retry: 'not', 'web-ui-retry': 'not',
-  'cold-hold': 'not', 'delivery-retry': 'not', 'lane-redeliver': 'not', 'folder-moved': 'not', 'engine-switch': 'not', 'queue-transit': 'not', 'queue-spool': 'not', 'agent-ready': 'not',
+  'cold-hold': 'not', 'held-notes': 'not', 'delivery-retry': 'not', 'lane-redeliver': 'not', 'folder-moved': 'not', 'engine-switch': 'not', 'queue-transit': 'not', 'queue-spool': 'not', 'agent-ready': 'not',
   'session-runner': 'not', 'idle-compact': 'not', 'context-compact': 'not', 'context-recovery': 'not', 'safeguard-switch': 'not', 'usage-limit-wait': 'not', 'cloud-fallback': 'not',
   'wait-until': 'not', 'trigger-host-delivery': 'not', 'routine-trigger': 'not', 'routine-watcher': 'not',
   'router-delivery': 'not', 'router-runtime': 'not', 'start-queue': 'not', 'task-description': 'not', 'session-start': 'not',
