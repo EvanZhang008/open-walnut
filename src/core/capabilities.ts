@@ -94,17 +94,12 @@ export function defaultCapabilities(where: Placement): ReadonlySet<Capability> {
  */
 export function resolveCapabilities(raw: string | undefined, companion: boolean, hostReplica = false): CapabilityFacts {
   const text = (raw ?? '').trim()
-  if (!companion && hostReplica && text) {
-    const names = text.split(/[\s,]+/).filter(Boolean)
-    const own = names.filter((n): n is Capability => HOST_REPLICA_TAKES.has(n as Capability))
-    const rest = names.filter((n) => !HOST_REPLICA_TAKES.has(n as Capability))
-    return { capabilities: own.length ? new Set(own) : NONE, ignored: rest.length ? rest.join(',') : null }
-  }
   if (!companion) {
-    // A leader (the Mac, a dev box) or the handed-over standby that replaces it: only the capabilities of any server.
+    // A host replica, a leader (the Mac, a dev box) or the handed-over standby that replaces it.
+    const takes = hostReplica ? HOST_REPLICA_TAKES : ANY_SERVER_CAPS
     const names = text.split(/[\s,]+/).filter(Boolean)
-    const own = names.filter((n): n is Capability => ANY_SERVER_CAPS.has(n as Capability))
-    const rest = names.filter((n) => !ANY_SERVER_CAPS.has(n as Capability))
+    const own = names.filter((n): n is Capability => takes.has(n as Capability))
+    const rest = names.filter((n) => !takes.has(n as Capability))
     return { capabilities: own.length ? new Set(own) : NONE, ignored: rest.length ? rest.join(',') : null }
   }
   if (!text) return { capabilities: COMPANION_DEFAULT, ignored: null }
