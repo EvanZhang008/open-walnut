@@ -12,7 +12,8 @@
  * A header rather than `res.locals` so the same contract holds through a proxy or a bridge
  * relay, and so a test can read it off the response.
  */
-import type { Response } from 'express'
+import type { Request, Response } from 'express'
+import { noteFinalAnswer } from '../../core/hosts/repeat-answers.js'
 
 export const HANDLED_FAILURE_HEADER = 'x-walnut-handled-failure'
 
@@ -47,4 +48,22 @@ export function isRepeatAnswer(res: Pick<Response, 'getHeader'>): boolean {
 /** Mark the response as a repeat when the answer's data counts earlier ones (core/hosts/repeat-answers.ts). */
 export function markRepeatAnswerIf(res: Response, data: Record<string, unknown>): void {
   if (typeof data.repeats === 'number' && data.repeats > 0) markRepeatAnswer(res)
+}
+
+/**
+ * The mark for a host route's refusal (host_exec, host_mcp_call, host_http, host_copy): a repeat
+ * the answer's data counts (above), or a 429 "no slot free, nothing ran" for an op call that was
+ * already refused that way. A busy call is asked again under its own op id (`x-walnut-op-id`):
+ * the host's gateway resends it every few seconds until its time runs out (gateway-core.ts
+ * busyRelayAgainMs), and each resend waits about 4 s for a slot first. 2026-11-23: the land link
+ * relay's runs on clouddev filled its task's four places for ten minutes, and eight waiting calls
+ * logged 92 warn lines, about twelve each, until the log-spike alarm rang. The first refusal of a
+ * call is the signal (warn); its resends log at info, so a call that stays stuck reads as one warn
+ * until an hour passes with no resend. A call with no op id stays a warn each.
+ */
+export function markHostRefusalRepeat(req: Pick<Request, 'method' | 'path' | 'headers'>, res: Response, err: { code: string; data: Record<string, unknown> }): void {
+  markRepeatAnswerIf(res, err.data)
+  const opId = req.headers['x-walnut-op-id']
+  if (err.code !== 'busy' || typeof opId !== 'string' || !opId) return
+  if (noteFinalAnswer(`busy\u0000${req.method} ${req.path}\u0000${opId.slice(0, 80)}`) > 0) markRepeatAnswer(res)
 }

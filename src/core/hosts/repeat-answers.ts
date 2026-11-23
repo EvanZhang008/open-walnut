@@ -5,7 +5,8 @@
  * read a job that never reached the Mac every 10 s for 40 minutes, a 404 warn line each, until the
  * log-spike alarm rang. The answer carries `repeats` (the reads of it before this one, absent on the
  * first), and its route marks a repeat (markRepeatAnswerIf, web/middleware/handled-failure.ts) so it
- * logs at info: one stale id is one warn line, not one per poll.
+ * logs at info: one stale id is one warn line, not one per poll. A busy refusal of an op call the
+ * host's gateway asks again counts here too (markHostRefusalRepeat, keyed by the call's op id).
  */
 const seen = new Map<string, { n: number; at: number }>()
 /** A repeat counts within this long of the last answer. */

@@ -16,7 +16,7 @@ import type { Request, Response } from 'express'
 import { EventEmitter } from 'node:events'
 import { noteFinalAnswer, resetFinalAnswersForTest } from '../../../src/core/hosts/repeat-answers.js'
 import { requestLogger } from '../../../src/web/middleware/request-logger.js'
-import { markRepeatAnswerIf } from '../../../src/web/middleware/handled-failure.js'
+import { markRepeatAnswerIf, markHostRefusalRepeat } from '../../../src/web/middleware/handled-failure.js'
 import { log } from '../../../src/logging/index.js'
 import { lostRunLines } from '../../../src/providers/host-exec-run-id.js'
 
@@ -65,6 +65,59 @@ describe('request log: a repeated final answer', () => {
   })
 })
 
+describe('request log: a busy call asked again under its op id', () => {
+  // 2026-11-23: eight host_exec calls the land link relay sent to clouddev waited for a slot, each
+  // asked again by the gateway under its own op id about every 5 s: 92 warn lines in ten minutes.
+  function fire(status: number, opId: string | undefined, url = '/api/v1/hosts/clouddev/exec', code = status === 429 ? 'busy' : 'exec_grant_required'): { warn: number; info: number } {
+    const warn = vi.spyOn(log.web, 'warn')
+    const info = vi.spyOn(log.web, 'info')
+    const res = new EventEmitter() as unknown as Response & EventEmitter
+    ;(res as unknown as { statusCode: number }).statusCode = status
+    const sent: Record<string, string> = {}
+    ;(res as unknown as Record<string, unknown>).setHeader = (name: string, value: string) => { sent[name.toLowerCase()] = value; return res }
+    ;(res as unknown as Record<string, unknown>).getHeader = (name: string) => sent[name.toLowerCase()]
+    const headers: Record<string, string> = opId ? { 'x-walnut-op-id': opId } : {}
+    const req = { method: 'POST', originalUrl: url, path: url, query: {}, headers } as unknown as Request
+    requestLogger(req, res, () => {})
+    markHostRefusalRepeat(req, res, { code, data: {} })
+    res.emit('finish')
+    const mine = (calls: unknown[][]) => calls.filter(([m]) => String(m).startsWith(`POST ${url} `)).length
+    const out = { warn: mine(warn.mock.calls), info: mine(info.mock.calls) }
+    vi.restoreAllMocks()   // each call counts only its own lines
+    return out
+  }
+
+  it('the first refusal of a call is a warn line, each resend of it is info', () => {
+    expect(fire(429, 'oc-a-0')).toEqual({ warn: 1, info: 0 })
+    for (let i = 0; i < 11; i++) expect(fire(429, 'oc-a-0')).toEqual({ warn: 0, info: 1 })
+    // Another call is its own signal, and so is the same op id on another route.
+    expect(fire(429, 'oc-b-0')).toEqual({ warn: 1, info: 0 })
+    expect(fire(429, 'oc-a-0', '/api/v1/hosts/clouddev/http')).toEqual({ warn: 1, info: 0 })
+  })
+
+  it('a call with no op id, and a refusal that is not busy, stay a warn each', () => {
+    expect(fire(429, undefined)).toEqual({ warn: 1, info: 0 })
+    expect(fire(429, undefined)).toEqual({ warn: 1, info: 0 })
+    expect(fire(403, 'oc-c-0')).toEqual({ warn: 1, info: 0 })
+    expect(fire(403, 'oc-c-0')).toEqual({ warn: 1, info: 0 })
+    // A 429 of another kind is no busy resend: a warn each.
+    expect(fire(429, 'oc-d-0', undefined, 'throttled')).toEqual({ warn: 1, info: 0 })
+    expect(fire(429, 'oc-d-0', undefined, 'throttled')).toEqual({ warn: 1, info: 0 })
+  })
+
+  it('every 429 a host call throws in src/core/hosts is a busy refusal (the kind a resend repeats)', () => {
+    const dir = path.join(ROOT, 'src/core/hosts')
+    const sites: string[] = []
+    for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.ts'))) {
+      const text = fs.readFileSync(path.join(dir, f), 'utf8')
+      for (const m of text.matchAll(/new HostExecError\([^\n]*?,\s*429\s*,\s*'([a-z_]+)'/g)) { sites.push(f); expect(m[1], f).toBe('busy') }
+      // A status table that maps a host's code to 429 maps only busy.
+      for (const m of text.matchAll(/(\w+):\s*429\b/g)) expect(m[1], f).toBe('busy')
+    }
+    expect(new Set(sites)).toEqual(new Set(['host-copy.ts', 'host-exec.ts', 'host-http.ts', 'host-mcp.ts']))
+  })
+})
+
 describe('the class: answers about an id with no run', () => {
   it('every 404 a host call throws in src/core/hosts counts its repeats (noteFinalAnswer)', () => {
     const dir = path.join(ROOT, 'src/core/hosts')
@@ -110,7 +163,7 @@ describe('the class: answers about an id with no run', () => {
     const dir = path.join(ROOT, 'src/web/routes')
     const routes = fs.readdirSync(dir).filter((n) => n.endsWith('.ts') && /instanceof HostExecError/.test(fs.readFileSync(path.join(dir, n), 'utf8')))
     expect(routes.length).toBeGreaterThan(0)
-    for (const r of routes) expect(fs.readFileSync(path.join(dir, r), 'utf8'), r).toMatch(/markRepeatAnswerIf\(res, err\.data\)/)
+    for (const r of routes) expect(fs.readFileSync(path.join(dir, r), 'utf8'), r).toMatch(/markHostRefusalRepeat\(req, res, err\)/)
   })
 
   it('a lost answer\'s hint says unknown_job is final and names the call that converges, in both twins', () => {
