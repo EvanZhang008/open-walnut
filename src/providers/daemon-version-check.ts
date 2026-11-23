@@ -333,6 +333,7 @@ export const DAEMON_SOURCE_FILES = [
   // The service sets of a host (their names, dirs and the choice of set), bundled into the daemon and daemon-service-cli.cjs.
   'src/providers/service-set.ts',
   'src/providers/service-set-choice.ts',
+  'src/providers/service-set-remove.ts',
   'src/providers/daemon-shared.ts',
   // The account lookup daemon-service-cli.ts refuses a faked home with, bundled into its .cjs.
   'src/lib/account.ts',

@@ -554,7 +554,12 @@ net-route`, put back by itself unless confirmed) and resumes them in its own ser
 message; a move that cannot finish gives back what it took and is reported, and failures in a row back
 off and end after four tries. A host whose move is done stays this Walnut's set whatever the experiment
 says later (its lines keep `--walnut`, SSH keeps dialling the set's runtime dir).
-The shared daemon, its launcher and boot item stay as they are, the other Walnut's.
+The shared daemon, its launcher and boot item stay as they are, the other Walnut's. Leaving a host
+(`leaveServiceSet`) stops this Walnut's follower there, revokes its walnut-net members, then runs
+`walnut daemon uninstall --yes --walnut <id>`: the set's boot item goes, and its whole dir
+(`walnuts/<id16>/`, the staged versions included) goes too once its daemon, every CLI in its registry
+and its follower are gone (`src/providers/service-set-remove.ts`); otherwise the answer's `setDir`
+says what still runs.
 
 **The follower calls the runtime directly.** In the service the follower link is
 `createDirectFollowerLink` (`src/core/link/follower-link-direct.ts`): it calls the runtime's

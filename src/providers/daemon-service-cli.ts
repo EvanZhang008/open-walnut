@@ -9,6 +9,7 @@ import { performance } from 'node:perf_hooks'
 import { readDaemonServiceExecutable } from './daemon-service-config.js'
 import { serviceSet, serviceSetIdOf, serviceSetLine, type ServiceSet } from './service-set.js'
 import { chooseServiceSet } from './service-set-choice.js'
+import { removeServiceSetDir } from './service-set-remove.js'
 import { NET_ROUTE_ACTION, runNetRouteArgs } from './net-route.js'
 import { accountInfo } from '../lib/account.js'
 import { readDaemonInstanceOwner } from './daemon-instance-lock.js'
@@ -412,6 +413,8 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
   if (options.scope && !['user', 'system', 'cron'].includes(options.scope)) throw new Error('Scope must be user, system or cron')
   if (options.scope === 'cron' && process.platform !== 'linux') throw new Error('The cron scope is for Linux; macOS starts the daemon as a login agent')
   if (options.sudo && (process.platform !== 'linux' || options.scope !== 'system')) throw new Error('--sudo requires --scope system on Linux')
+  // A service set is the account's own (user unit, LaunchAgent, cron): refused before any sudo preflight (review round 1, low 2).
+  if (options.walnut && options.scope === 'system' && action !== 'status') throw new Error('A Walnut\'s own service set runs as a user service: --walnut takes --scope user or cron, never system')
   const home = os.homedir()
   const user = accountInfo()
   if (action !== 'status' && user.uid === 0) throw new Error('Run as the original non-root account with --scope system --sudo --yes, not as root')
@@ -573,6 +576,13 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
     if (result.ok && action === 'uninstall') {
       // Tells the server not to set it up again (remote-boot-start.ts BOOT_SETUP_MARKER); a later install wins.
       await fs.writeFile(path.join(root, 'boot-setup'), `v=uninstall at=${Date.now()} result=removed\n`, { mode: 0o600 }).catch(() => {})
+    }
+    if (result.ok && action === 'uninstall' && set.id) {
+      // A set's own dir goes once nothing of it runs (service-set-remove.ts); else it says why it stays.
+      const gone = await removeServiceSetDir(home, set, user.uid).catch((error: unknown) => ({ removed: false as const, dir: root, why: String(error) }))
+      process.stderr.write(gone.removed ? `walnut daemon: removed the service set's dir ${gone.dir}\n` : `walnut daemon: kept the service set's dir ${gone.dir}: ${gone.why}\n`)
+      process.stdout.write(JSON.stringify({ ...result, setDir: gone }, null, 2) + '\n')
+      return 0
     }
     process.stdout.write(JSON.stringify(result, null, 2) + '\n')
     return result.ok ? 0 : 1

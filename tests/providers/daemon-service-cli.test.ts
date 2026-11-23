@@ -27,6 +27,8 @@ describe('daemon service CLI mutation boundary', () => {
     await expect(runDaemonServiceArgs(['install', '--administrator'])).rejects.toThrow('Unknown daemon option')
     await expect(runDaemonServiceArgs(['install', '--sudo', '--yes'])).rejects.toThrow('--sudo requires')
     await expect(runDaemonServiceCli('install', { yes: true, scope: 'global' as never })).rejects.toThrow('Scope must')
+    // Review round 1, low 2: a set with the system scope is refused before the sudo preflight runs anything.
+    if (process.platform === 'linux') await expect(runDaemonServiceCli('install', { yes: true, scope: 'system', sudo: true, walnut: '0123456789abcdef0123456789abcdef' })).rejects.toThrow('never system')
     expect(run).not.toHaveBeenCalled()
   })
 

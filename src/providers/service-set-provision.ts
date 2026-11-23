@@ -74,9 +74,13 @@ export interface LeaveDeps {
 
 /**
  * Leave a host (the leader drops it): wait, bounded, until none of this Walnut's sessions there is in
- * a turn; revoke this set's walnut-net members (`net.configure {enabled:false}`: the set's service
- * removes only its own, net-core.ts leave); then `walnut daemon uninstall --yes --walnut <id>`,
- * which removes only this set (its root, runtime, boot item). The answer must name the same set.
+ * a turn; stop this Walnut's follower on the set's daemon (`server.configure {home, spec:null}`, best
+ * effort as the move's stopFollower: an uninstall under a running follower would leave its process
+ * to the service stop alone); revoke this set's walnut-net members (`net.configure {enabled:false}`:
+ * the set's service removes only its own, net-core.ts leave); then `walnut daemon uninstall --yes --walnut <id>`,
+ * which removes only this set: its boot item, then its own dir (root, runtime) once nothing of the set
+ * runs there (service-set-remove.ts; a CLI of it still running keeps the dir, and the answer says so).
+ * The answer must name the same set.
  */
 export async function leaveServiceSet(d: LeaveDeps): Promise<{ ok: boolean; why: string }> {
   if (!isServiceSetId(d.set)) return { ok: false, why: 'not a set of this Walnut\'s own: nothing is removed' }
@@ -87,11 +91,14 @@ export async function leaveServiceSet(d: LeaveDeps): Promise<{ ok: boolean; why:
     if (d.now() >= until) return { ok: false, why: 'a turn of this Walnut\'s sessions there ran the whole wait; nothing was removed' }
     await d.sleep(15_000)
   }
+  await d.send('server.configure', { home: d.ask.home, spec: null }, 15_000).catch(() => undefined)
   await d.send('net.configure', { enabled: false }, 30_000).catch(() => undefined)
   const said = await d.runSetCli(`uninstall --yes${words}`, 120_000)
   const named = parseServiceSetLine(said)
   if (named !== d.set) return { ok: false, why: `the host named ${named === null ? 'no set' : `set ${named || 'default'}`}, not this Walnut's own (${d.set})` }
-  let ok = false
-  try { ok = (JSON.parse(said.slice(said.indexOf('{'))) as { ok?: unknown }).ok === true } catch { /* no answer */ }
-  return { ok, why: ok ? 'this Walnut\'s own service set was removed from the host' : `the uninstall did not go through: ${said.trim().slice(-300)}` }
+  let answer: { ok?: unknown; setDir?: { removed?: unknown; why?: unknown } } = {}
+  try { answer = JSON.parse(said.slice(said.indexOf('{'))) } catch { /* no answer */ }
+  const ok = answer.ok === true
+  const kept = answer.setDir && answer.setDir.removed === false ? `; its dir stays (${String(answer.setDir.why ?? 'no reason')})` : ''
+  return { ok, why: ok ? `this Walnut's own service set was removed from the host${kept}` : `the uninstall did not go through: ${said.trim().slice(-300)}` }
 }
