@@ -9231,8 +9231,10 @@ export class ClaudeCodeSession {
         //   For remote sessions, trust _hasPipe — it's cleared when the daemon
         //   sends an 'exit' event or when the FIFO write fails (ENXIO/EAGAIN).
         let processStillAlive = false
-        if (this._transport?.isRemote) {
-          // Remote: process.kill can't reach remote PID. Trust hasPipe instead.
+        if (this._transport?.isRemote || (this._transport && processActionsRefused())) {
+          // Remote: process.kill can't reach remote PID. Trust hasPipe instead. So on a host
+          // replica, which never probes a pid: the daemon that owns the CLI tells its pipe, and a
+          // probe refused there read every turn's end as the process's (land 5b).
           processStillAlive = this._transport.hasPipe
         } else if (this.pid !== null && !processActionsRefused()) {
           // (A host replica runs no session of its own: it never probes a pid.)

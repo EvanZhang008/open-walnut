@@ -21,7 +21,8 @@
  * person with AskUserQuestion (which the daemon never answers by itself, in any
  * mode): "echo: answered <their answer>" once the answer comes, else "echo: not answered".
  * "please hold until <absolute path>" keeps the turn running until that file exists (a
- * test reads the running turn, then releases it): "echo: released <path>".
+ * test reads the running turn, then releases it): "echo: released <path>". An interrupt
+ * control request (Walnut's Stop) ends such a held turn at once: "echo: interrupted".
  *
  * Copied into the cluster's own bin dir, so its command line names that dir.
  */
@@ -95,6 +96,8 @@ out({ type: 'system', subtype: 'init', cwd: process.cwd(), model: 'mock-model', 
 
 const queue = []
 let busy = false
+/** Turns ended so far: the result's cost is cumulative, as the real CLI's is (an unchanged cost reads as a stale result). */
+let turnsDone = 0
 function runNext() {
   if (busy || queue.length === 0) return
   busy = true
@@ -132,8 +135,10 @@ function runNext() {
     const gate = setInterval(() => {
       if (!fs.existsSync(hold[1])) return
       clearInterval(gate)
+      stopHeld = null
       finish(`echo: released ${hold[1]}`)
     }, 50)
+    stopHeld = () => { clearInterval(gate); stopHeld = null; finish('echo: interrupted') }
     return
   }
   setTimeout(() => finish(`echo: ${words}`), THINK_MS)
@@ -146,7 +151,7 @@ function runNext() {
     const answerUuid = crypto.randomUUID()
     file({ type: 'assistant', uuid: answerUuid, parentUuid: parent, message })
     parent = answerUuid
-    out({ type: 'result', subtype: 'success', is_error: false, result: reply, duration_ms: THINK_MS, num_turns: 1, total_cost_usd: 0, usage: { input_tokens: 1, output_tokens: 1 } })
+    out({ type: 'result', subtype: 'success', is_error: false, result: reply, duration_ms: THINK_MS, num_turns: 1, total_cost_usd: (turnsDone += 1) / 1000, usage: { input_tokens: 1, output_tokens: 1 } })
     if (msg.uuid) out({ type: 'command_lifecycle', command_uuid: msg.uuid, state: 'completed' })
     out({ type: 'system', subtype: 'session_state_changed', state: 'idle' })
     busy = false
@@ -155,6 +160,8 @@ function runNext() {
 }
 /** Prompts this CLI asked and waits on (request id -> its answer). */
 const waiting = new Map()
+/** Ends the held turn running now (an interrupt), or null. */
+let stopHeld = null
 
 let buf = ''
 process.stdin.on('error', () => {})
@@ -166,7 +173,20 @@ process.stdin.on('data', (chunk) => {
     buf = buf.slice(nl + 1)
     let msg
     try { msg = JSON.parse(line) } catch { continue }
-    if (msg.type === 'control_request') { out({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id } }); continue }
+    if (msg.type === 'control_request') {
+      if (msg.request && msg.request.subtype === 'interrupt') {
+        // As the real CLI answers (interrupt receipt): cancel_queued drops the lines not yet
+        // started and names them; none survive. Without the receipt Walnut counts every line it
+        // queued as surviving and stops the process instead of the turn.
+        const cancelled = msg.request.cancel_queued ? queue.splice(0).map((m) => m.uuid).filter((u) => typeof u === 'string' && u) : []
+        for (const uuid of cancelled) out({ type: 'command_lifecycle', command_uuid: uuid, state: 'cancelled' })
+        out({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id, response: { still_queued: queue.map((m) => m.uuid).filter(Boolean), cancelled } } })
+        if (stopHeld) stopHeld()
+        continue
+      }
+      out({ type: 'control_response', response: { subtype: 'success', request_id: msg.request_id } })
+      continue
+    }
     if (msg.type === 'control_response') {
       const r = msg.response || {}
       const answer = waiting.get(r.request_id)

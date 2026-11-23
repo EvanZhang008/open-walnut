@@ -111,6 +111,32 @@ describe('the replica cluster\'s mock CLI', () => {
 })
 
 describe('the mock CLI asks before a tool (WP10 W9)', () => {
+  it('an interrupt ends a held turn at once; the next line runs after it', async () => {
+    const m = start()
+    await m.until((ls) => ls.some((l) => l.o.subtype === 'init'))
+    m.send(user('u-h', `please hold until ${path.join(home, 'never-made')}`))
+    await m.until((ls) => ls.some((l) => l.o.state === 'running'))
+    m.send(user('u-n', 'next one'))
+    m.send({ type: 'control_request', request_id: 'c-int', request: { subtype: 'interrupt' } })
+    await m.until((ls) => idles(ls).length === 2)
+    const results = m.lines.filter((l) => l.o.type === 'result').map((l) => l.o.result)
+    expect(results).toEqual(['echo: interrupted', 'echo: next one'])
+    expect(m.lines.find((l) => l.o.type === 'control_response')!.o.response.response).toEqual({ still_queued: ['u-n'], cancelled: [] })
+  })
+
+  it('an interrupt with cancel_queued (Walnut\'s Stop) drops the queued line and names it in its receipt', async () => {
+    const m = start()
+    await m.until((ls) => ls.some((l) => l.o.subtype === 'init'))
+    m.send(user('u-h', `please hold until ${path.join(home, 'never-made')}`))
+    await m.until((ls) => ls.some((l) => l.o.state === 'running'))
+    m.send(user('u-n', 'next one'))
+    m.send({ type: 'control_request', request_id: 'c-int', request: { subtype: 'interrupt', cancel_queued: true } })
+    await m.until((ls) => idles(ls).length === 1)
+    expect(m.lines.find((l) => l.o.type === 'control_response')!.o.response.response).toEqual({ still_queued: [], cancelled: ['u-n'] })
+    expect(m.lines.some((l) => l.o.type === 'command_lifecycle' && l.o.command_uuid === 'u-n' && l.o.state === 'cancelled')).toBe(true)
+    expect(m.lines.filter((l) => l.o.type === 'result').map((l) => l.o.result)).toEqual(['echo: interrupted'])
+  })
+
   it('"please run <command>" raises a can_use_tool prompt and answers by the control_response', async () => {
     const m = start({ MOCK_THINK_MS: '50' })
     m.send(user('aaaaaaaa-0000-4000-8000-00000000000a', 'please run ls -la'))
