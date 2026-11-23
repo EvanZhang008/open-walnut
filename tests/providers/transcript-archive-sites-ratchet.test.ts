@@ -57,6 +57,7 @@ const SITES: Record<string, string> = {
   'src/providers/external-session-scan-core.ts': 'import lists only recent sessions; an archived one is older than its window',
   // Not Claude Code transcripts.
   'src/core/health-monitor/store.ts': 'not a transcript (health log)',
+  'src/core/leader/switch/home-paths.ts': 'not a transcript (the kind of a data-home file the path scan reads; transcripts are not in the data home)',
   'src/core/home-manifest/home-nested-entries.ts': 'not a transcript (data-location patterns of time-tracking and browser replay logs)',
   'src/core/observability/bundle.ts': 'not a transcript (stream capture tail, debug log)',
   'src/core/session-reaper.ts': 'not a transcript (session archive log, stream captures)',

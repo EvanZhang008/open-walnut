@@ -256,6 +256,7 @@ const NOT_ON_LEDGER: readonly string[] = [
   'src/core/host-replica.ts',
   'src/core/hosts/fleet.ts',
   'src/core/hosts/placement.ts',
+  'src/core/leader/switch/home-paths.ts', // compiled globs of the path-rule table: one per glob in the static rules
   'src/core/link-tags.ts',
   'src/core/memory-safety.ts',
   'src/core/mention-sources/run.ts',

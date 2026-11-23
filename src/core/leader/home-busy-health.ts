@@ -122,7 +122,7 @@ export function switchHeldItem(switchId: string): NewNotification {
     kind: 'operation-error',
     severity: 'warning',
     title: 'Hosts wait for the leader switch to be confirmed',
-    body: `This Walnut became the leader by switch ${switchId}, but a majority of its witnesses has not confirmed it yet. Until they do, no host is connected to it, so its hosts keep the earlier leader's triggers, jobs and sessions as they were and nothing of them is lost. It connects again on its own once the witnesses answer.`,
+    body: `This Walnut became the leader by switch ${switchId}, but its witnesses have not confirmed it by a majority yet. Until a majority does, no host is connected to it, so its hosts keep the earlier leader's triggers, jobs and sessions as they were and nothing of them is lost. It connects again on its own once the witnesses answer.`,
     detail: `leader switch ${switchId}: commit not confirmed; host connections held (home-move.ts HomeMoveHeld)`,
     dedupKey: SWITCH_HELD_KEY,
     recoveryKey: SWITCH_HELD_KEY,
