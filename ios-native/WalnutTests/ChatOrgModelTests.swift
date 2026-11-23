@@ -335,11 +335,12 @@ final class ChatOrgModelTests: XCTestCase {
         XCTAssertNil(none.currentSessionId)
     }
 
-    /// A load the drawer's opening cancelled is not an error to show.
+    /// A load the drawer's opening cancelled is not an error to show (`OrgTreeStore.load` judges
+    /// it with the one cancellation rule the session stores use).
     func testACancelledLoadIsNotAnError() {
-        XCTAssertTrue(ChatDrawer.isCancellation(CancellationError()))
-        XCTAssertTrue(ChatDrawer.isCancellation(APIError.cancelled))
-        XCTAssertFalse(ChatDrawer.isCancellation(APIError.badResponse))
+        XCTAssertTrue(SessionConversationStore.isCancellation(CancellationError()))
+        XCTAssertTrue(SessionConversationStore.isCancellation(APIError.cancelled))
+        XCTAssertFalse(SessionConversationStore.isCancellation(APIError.badResponse))
     }
 
     func testACompanionRefusalSaysTheMacIsNeeded() {

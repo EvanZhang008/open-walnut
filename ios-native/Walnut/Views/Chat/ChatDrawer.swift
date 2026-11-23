@@ -51,15 +51,15 @@ struct ChatDrawer: View {
 
     /// Org (the default) or Chats; the user's pick is kept.
     @AppStorage(ChatDrawerView.storageKey, store: AppPrefs.defaults) private var viewPick = ChatDrawerView.org.rawValue
-    /// The org as last read (`GET /org`), reloaded each time the drawer comes out.
-    @State private var orgTree: OrgTreeWire?
+    /// The org as last read (`GET /org`), one copy for every surface (`OrgTreeStore`): read each
+    /// time the drawer comes out, and live while it is out.
+    @State private var org = OrgTreeStore.shared
+    @State private var followsOrg = false
+    private var orgTree: OrgTreeWire? { org.tree }
     /// false: this server has no org (an older one), so the drawer is only its list.
-    @State private var orgAvailable = true
-    @State private var orgLoading = false
-    @State private var orgError: String?
-    /// Bumped by every load: only the newest one writes, so a load the drawer's opening cancelled
-    /// can neither block the next one nor leave its error behind.
-    @State private var orgLoadGen = 0
+    private var orgAvailable: Bool { org.available }
+    /// A failed reload keeps what was shown; only an empty view says so.
+    private var orgError: String? { org.tree == nil ? org.failure : nil }
     /// The rows' order, taken while the drawer is shut (and at the first load). A load while it is
     /// out recolors rows in place and never moves one under a finger that is about to tap it.
     @State private var orgOrder: [String] = []
@@ -240,7 +240,7 @@ struct ChatDrawer: View {
                 if orgAvailable { viewSwitch }
                 if showsOrg {
                     ChatDrawerOrgList(
-                        rows: orgRows, loadError: orgError, loading: orgLoading,
+                        rows: orgRows, loadError: orgError, loading: org.loading,
                         retry: { Task { await loadOrg() } },
                         open: { row in
                             guard !suppressTaps else { return }
@@ -290,6 +290,9 @@ struct ChatDrawer: View {
             else { orgOrder = currentOrgOrder() }
             if isOpen || orgTree == nil { await loadOrg() }
         }
+        // Out, its counts follow the feed (a status that moved, a node's threads); shut, not.
+        .onChange(of: isOpen, initial: true) { _, open in followOrg(open) }
+        .onDisappear { followOrg(false) }
         // While shut (and for a moment after it comes out), the order follows the data: the task
         // list often lands after the org, and a status may move just before the drawer opens.
         .onChange(of: currentOrgOrder()) { _, order in
@@ -333,29 +336,17 @@ struct ChatDrawer: View {
         return ChatOrgModel.rows(tree: orgTree, tasks: tasks?.tasks ?? []).map(\.id)
     }
 
+    /// This drawer counts as one surface showing the org while it is out.
+    private func followOrg(_ on: Bool) {
+        guard on != followsOrg else { return }
+        followsOrg = on
+        if on { org.viewerAppeared() } else { org.viewerLeft() }
+    }
+
     private func loadOrg() async {
         Task { await directors.refresh() }
-        orgLoadGen &+= 1
-        let gen = orgLoadGen
-        orgLoading = true
-        defer { if gen == orgLoadGen { orgLoading = false } }
-        do {
-            let tree = try await WalnutAPI().orgTree()
-            guard gen == orgLoadGen else { return }
-            guard let tree else {
-                orgAvailable = false
-                return
-            }
-            orgAvailable = true
-            orgTree = tree
-            orgError = nil
-            if orgOrderFollowsData || orgOrder.isEmpty { orgOrder = currentOrgOrder() }
-        } catch {
-            guard gen == orgLoadGen, !Self.isCancellation(error) else { return }
-            // A failed reload keeps what was shown; only an empty view says so.
-            if orgTree == nil { orgError = error.localizedDescription }
-            AppLog.info("chat", "org load failed", ["error": error.localizedDescription])
-        }
+        await org.load()
+        if orgTree != nil, orgOrderFollowsData || orgOrder.isEmpty { orgOrder = currentOrgOrder() }
     }
 
     // MARK: - Directors
@@ -371,7 +362,7 @@ struct ChatDrawer: View {
 
     /// Remove from Directors: gone from the list at once, then the server's tree.
     private func removeDirector(_ d: ChatDirectorsModel.Director) {
-        if let orgTree { self.orgTree = ChatDirectorsModel.marking(orgTree, id: d.id, director: false) }
+        org.predict { ChatDirectorsModel.marking($0, id: d.id, director: false) }
         Task {
             do {
                 tasks?.adoptRow(try await WalnutAPI().setDirector(taskId: d.id, .no))

@@ -80,7 +80,8 @@ struct OrgThread: Codable, Equatable, Identifiable {
     /// The closed thread this one asks again about.
     var follows: String? = nil
     let createdAt: String
-    let updatedAt: String
+    /// Moved by an action of his before the server answers (`OrgThreadModel.optimistic`).
+    var updatedAt: String
     var closed: Closed? = nil
     var known: Known? = nil
     var opener: Opener? = nil

@@ -199,6 +199,7 @@ const SURFACES: Record<string, string> = {
   'web/src/components/org/useOrgThreads.ts': 'predicts user_status.threads after a write (statusWithThreads, threadCounts)',
   'web/src/hooks/status-prediction.ts': 'statusWithThreads: threadCounts of the list as drawn',
   'ios-native/Walnut/API/WalnutAPIThreads.swift': 'decodes shown_count and each thread\'s counted flag',
+  'ios-native/Walnut/Stores/TasksStoreStatusPrediction.swift': 'a predicted phase status carries the row\'s user_status.threads unchanged (the web\'s status-prediction.ts); counts nothing',
   'ios-native/Walnut/Views/Chat/ChatOrgModel.swift': 'the drawer row\'s dot and spoken line: user_status.threads',
   'ios-native/Walnut/Views/Chat/ChatDrawerOrg.swift': 'the drawer row\'s red dot (hasDot, threadsBadge) and its spoken count',
   'ios-native/Walnut/Views/Org/OrgNodePage.swift': 'the Threads tab: the listed ones the server counted (counted), else shown_count',

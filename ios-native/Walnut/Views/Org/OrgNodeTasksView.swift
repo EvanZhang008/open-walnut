@@ -14,9 +14,11 @@ struct OrgNodeTasksView: View {
 
     @Environment(TasksStore.self) private var tasks
     @AppStorage("org.node.tasksMode", store: AppPrefs.defaults) private var modeRaw = OrgNodeTasksModel.Mode.status.rawValue
-    @State private var tree: OrgTreeWire?
-    @State private var loaded = false
-    @State private var error: String?
+    /// The org's one copy (`OrgTreeStore`): the drawer's Org list reads the same one.
+    @State private var org = OrgTreeStore.shared
+    private var tree: OrgTreeWire? { givenTree ?? org.tree }
+    private var loaded: Bool { givenTree != nil || org.tree != nil || org.answered }
+    private var error: String? { givenTree != nil || org.failure == nil ? nil : "Couldn't load this team's work. Pull to try again." }
     /// Sections the user opened or closed, kept per node ("nodeId/section" keys); the rest
     /// follow their default. A new key since Working folds by default (2026-11-23): a flip kept
     /// against the old default would now open Working, so every node starts from the new one.
@@ -82,8 +84,11 @@ struct OrgNodeTasksView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
-        .refreshable { await load() }
-        .task(id: nodeId) { await load() }
+        .refreshable { if givenTree == nil { await org.load() } }
+        .task(id: nodeId) { if givenTree == nil { await org.load() } }
+        // On screen, the work's statuses follow the feed.
+        .onAppear { org.viewerAppeared() }
+        .onDisappear { org.viewerLeft() }
         .accessibilityIdentifier("org.tasks")
     }
 
@@ -129,21 +134,6 @@ struct OrgNodeTasksView: View {
         }
     }
 
-    private func load() async {
-        if let givenTree {
-            tree = givenTree
-            loaded = true
-            return
-        }
-        do {
-            tree = try await WalnutAPI().orgTree()
-            error = nil
-        } catch {
-            if let api = error as? APIError, api.isCancelled { return }
-            self.error = "Couldn't load this team's work. Pull to try again."
-        }
-        loaded = true
-    }
 }
 
 /// One task of a node's work, as a Home row (`TaskRow`): its status circle and its name, nothing

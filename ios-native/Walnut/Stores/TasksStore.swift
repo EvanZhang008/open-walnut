@@ -203,6 +203,17 @@ final class TasksStore {
 
     @ObservationIgnored private var userTouchedIds: Set<String> = []
 
+    /// Statuses the phone predicted for a hand's change, until the server derives each again
+    /// (`TasksStoreStatusPrediction.swift`). Internal for that file.
+    @ObservationIgnored var statusPredictions: [String: StatusPrediction] = [:]
+    @ObservationIgnored var predictionSeq = 0
+    /// Where the feed's other news goes (`FeedSignals`); nil = the app's one. A test passes its own,
+    /// so a hosted test's feed never makes the app's stores read their paired server.
+    @ObservationIgnored var feedSignals: FeedSignals?
+    /// The app's store tells the app's hub; a test's store only the hub it is given.
+    @ObservationIgnored private let postsToAppSignals: Bool
+    var signalHub: FeedSignals? { feedSignals ?? (postsToAppSignals ? FeedSignals.shared : nil) }
+
     /// Record a user-initiated mutation on a task id.
     func noteUserTouched(_ id: String) { userTouchedIds.insert(id) }
 
@@ -408,6 +419,7 @@ final class TasksStore {
     /// WalnutTests pass a scripted mock to drive the real mutation paths.
     init(transport: WalnutTaskTransport? = nil) {
         self.transport = transport ?? api
+        postsToAppSignals = transport == nil
         LifecycleHub.shared.register(self)
         Self.shared = self
     }
@@ -509,11 +521,14 @@ final class TasksStore {
         var sessionsChanged = false
         var activityChanged = false
         var focusChanged = false
+        // What else moved, told once the rows are in (`FeedSignals`), in arrival order.
+        var signals: [FeedSignals.Signal] = []
         for mutation in batch {
             switch mutation {
             case .snapshot(let snapTasks, let snapSessions):
-                nextTasks = mergePending(into: snapTasks)
+                nextTasks = overPredictions(mergePending(into: snapTasks))
                 nextSessions = snapSessions
+                signals.append(.resynced)
                 tasksChanged = true
                 sessionsChanged = true
                 notSyncedYet = false
@@ -527,7 +542,18 @@ final class TasksStore {
                 // A PATCH is in flight for this id: the server row may predate
                 // the edit (emitted for an unrelated reason) — replay the edit
                 // on top so the optimistic value never visibly flashes back.
-                let effective = inFlightEdits[row.id].map { Self.applyEdit($0, to: row) } ?? row
+                // The status the server gave before this row: a move of it is news for the
+                // stores that count by it (an Org node's threads, the org's counts).
+                let before = nextTasks.first(where: { $0.id == row.id }).map(serverStatus(of:))
+                if let before, Self.countedStatusMoved(before, row.userStatus) {
+                    signals.append(.statusChanged(taskId: row.id))
+                    // An ask that lives in a letter moved: the letter did (an older server sends
+                    // no `inbox-changed`).
+                    if before?.source == "letter" || row.userStatus?.source == "letter" { signals.append(.inboxChanged) }
+                }
+                let replayed = inFlightEdits[row.id].map { Self.applyEdit($0, to: row) } ?? row
+                // A status the phone predicted stays over a row the server has not derived again.
+                let effective = overPrediction(replayed)
                 let result = EventsFeedReducer.upsertTask(nextTasks, effective)
                 nextTasks = result.rows
                 tasksChanged = tasksChanged || result.changed
@@ -553,6 +579,10 @@ final class TasksStore {
                 activityChanged = activityChanged || result.changed
             case .focusChanged:
                 focusChanged = true
+            case .threadsChanged(let id):
+                signals.append(.threadsChanged(taskId: id))
+            case .inboxChanged:
+                signals.append(.inboxChanged)
             }
         }
         // One read of the focus spaces per batch, however many frames said so.
@@ -573,6 +603,9 @@ final class TasksStore {
         }
         if tasksChanged || sessionsChanged {
             connection?.reportReachability(true, source: "events-sse")
+        }
+        if let hub = signalHub {
+            for signal in signals { hub.post(signal) }
         }
     }
 
@@ -720,6 +753,8 @@ final class TasksStore {
         let seq = taskLoadSeq
         loading = true
         defer { loading = false }
+        // A prediction made after this read left is newer than its answer (`overPrediction`).
+        let readStartedAt = Date()
         do {
             // Through `transport`, not `api`: in production they are the same object
             // (`transport ?? api`), but a hosted test runs INSIDE the app whose
@@ -733,8 +768,11 @@ final class TasksStore {
             // Replay in-flight optimistic edits on top (same rule as the feed
             // upsert path): the fetched projection can predate a PATCH that is
             // still running, and adopting it verbatim flashes the old value.
+            // The statuses the server gave before this read: a poll (the feed down) moves the
+            // counts too, so it tells the same news a feed upsert would.
+            let before = Dictionary(tasks.map { ($0.id, serverStatus(of: $0)) }, uniquingKeysWith: { a, _ in a })
             MainWork.track("tasks.load", count: response.tasks.count) {
-                var merged = mergePending(into: response.tasks)
+                var merged = overPredictions(mergePending(into: response.tasks), readStartedAt: readStartedAt)
                 if !inFlightEdits.isEmpty {
                     merged = merged.map { row in
                         inFlightEdits[row.id].map { Self.applyEdit($0, to: row) } ?? row
@@ -742,6 +780,8 @@ final class TasksStore {
                 }
                 tasks = merged
             }
+            dropUnansweredPredictions(readStartedAt: readStartedAt)
+            postStatusMoves(from: before, to: response.tasks)
             syncedAt = WalnutTask.parseISO(response.syncedAt)
             notSyncedYet = false
             errorMessage = nil
@@ -964,7 +1004,9 @@ final class TasksStore {
             id: task.id,
             title: edit.title ?? task.title,
             status: edit.status ?? task.status,
-            phase: task.phase,
+            // The phase the server moves it to for that status (`phaseFromStatus`), so a reopened
+            // task stops reading Done at once.
+            phase: edit.status.flatMap { phase(for: $0, from: task.phase) } ?? task.phase,
             priority: edit.priority ?? task.priority,
             project: edit.project ?? task.project,
             dueDate: edit.dueDate.map { $0.isEmpty ? nil : $0 } ?? task.dueDate,
@@ -1042,30 +1084,42 @@ final class TasksStore {
             return try await patchTask(id: id, edit: edit)
         }
         let original = tasks[idx]
+        inFlightEdits[id] = edit
+        // The status the new phase reads as, on the dot and every count, until the server derives
+        // it: held while this write is out (`live`), so an event about an earlier change cannot
+        // flip it back. Made before the optimistic row, which already carries the new phase.
+        let unpredict = edit.status.map { status in
+            predictPhase(id, status: status) { [weak self] in self?.inFlightEdits[id] != nil }
+        } ?? {}
         // Store the exact optimistic row we wrote: applyEdit stamps a fresh
         // `updatedAt` (and possibly `completedAt`) on every call, so a second
         // applyEdit in the catch below would NEVER equal it — the rollback
         // guard must compare against this instance, not a recomputation.
-        let optimistic = Self.applyEdit(edit, to: original)
+        let optimistic = Self.applyEdit(edit, to: tasks[idx])
         tasks[idx] = optimistic
-        inFlightEdits[id] = edit
         defer { inFlightEdits[id] = nil }
         do {
             let updated = try await patchTask(id: id, edit: edit)
             guard isActive else { return updated }
-            // Adopt the authoritative row (index may have shifted meanwhile).
+            // Adopt the authoritative row (index may have shifted meanwhile). Its status may not
+            // be derived again yet: the prediction stays over it until the server's own arrives.
+            inFlightEdits[id] = nil
             if let now = tasks.firstIndex(where: { $0.id == id }) {
-                tasks[now] = updated
+                tasks[now] = overPrediction(updated)
             }
             DiskCache.save(tasks, key: "tasks-list")
             return updated
         } catch {
             // Roll back — unless a feed upsert already replaced our optimistic
             // row with newer server truth (never clobber authority with a memory).
+            // A feed upsert while the PATCH was out replays this edit on the server's row, stamping
+            // a new `updatedAt`: that row is still ours, judged by the fields an edit sets.
             if let now = tasks.firstIndex(where: { $0.id == id }),
-               tasks[now] == optimistic {
+               tasks[now] == optimistic || Self.sameEditedFields(tasks[now], optimistic) {
                 tasks[now] = original
             }
+            // The server's last status comes back too (on a row a feed upsert replaced as well).
+            unpredict()
             throw error
         }
     }
@@ -1074,7 +1128,7 @@ final class TasksStore {
     /// it replaces the list's copy, as an edit's answer does.
     func adoptRow(_ updated: WalnutTask) {
         guard let idx = tasks.firstIndex(where: { $0.id == updated.id }) else { return }
-        tasks[idx] = updated
+        tasks[idx] = overPrediction(updated)
         DiskCache.save(tasks, key: "tasks-list")
     }
 
@@ -1178,18 +1232,23 @@ final class TasksStore {
         for id in taskIds { noteUserTouched(id) }
         // Optimistic apply, remembering originals for rollback.
         var originals: [String: WalnutTask] = [:]
+        var unpredicts: [String: () -> Void] = [:]
         let edit = TaskEdit(status: done ? "done" : "todo")
         for id in taskIds {
             if let idx = tasks.firstIndex(where: { $0.id == id }) {
                 originals[id] = tasks[idx]
-                let optimistic = Self.applyEdit(edit, to: tasks[idx])
-                tasks[idx] = optimistic
                 inFlightEdits[id] = edit
+                // A reopened row reads its new status at once (a done one reads Done by itself).
+                unpredicts[id] = predictPhase(id, status: edit.status ?? "todo") { [weak self] in
+                    self?.inFlightEdits[id] != nil
+                }
+                tasks[idx] = Self.applyEdit(edit, to: tasks[idx])
             }
         }
         defer { for id in taskIds { inFlightEdits[id] = nil } }
         let rollback = { (ids: any Sequence<String>) in
             for id in ids {
+                unpredicts[id]?()
                 if let original = originals[id],
                    let idx = self.tasks.firstIndex(where: { $0.id == id }) {
                     self.tasks[idx] = original
@@ -1686,6 +1745,8 @@ extension TasksStore {
         pendingCreated = []
         userTouchedIds = []
         inFlightEdits = [:]
+        for p in statusPredictions.values { p.expiry?.cancel() }
+        statusPredictions = [:]
         tasks = []
         sessions = []
         focusSpaceScope = nil

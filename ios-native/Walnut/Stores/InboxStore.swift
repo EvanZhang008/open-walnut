@@ -4,11 +4,13 @@ import Observation
 /// Human Inbox state — the letters agents wrote for the human, plus the read /
 /// pinned / archived state that belongs to the reader rather than to the work.
 ///
-/// Refresh model, deliberately poll-free: the v1 events feed carries tasks and
-/// sessions only, so the inbox refreshes on foreground (`resumeForForeground`),
-/// on pull-to-refresh, and when a letter push arrives (`LetterDeepLink` calls
-/// `refreshFromPush`). A letter is an async artifact — nothing here needs to be
-/// live to the second, and a timer would cost battery for no gain.
+/// Refresh model, poll-free: the list is read again on foreground
+/// (`resumeForForeground`), on pull-to-refresh, when a letter push arrives
+/// (`LetterDeepLink` calls `refreshFromPush`), and when the live feed says the
+/// inbox changed (`FeedSignals`: the `inbox-changed` frame of a newer server, a
+/// letter's ask on a task that moved, a reconnect), coalesced into one read. So a
+/// letter read or answered on the Mac drops the badge here within a second. No
+/// timer: it would cost battery for no gain.
 ///
 /// Read state follows the console's rules (see `InboxFilter.swift`), and a read
 /// the server did not take is never shown as taken: see "Read writes" below.
@@ -95,11 +97,42 @@ final class InboxStore {
 
     /// `transport` nil (production) = a WalnutAPI instance. WalnutTests pass a
     /// scripted transport and their own defaults suite.
-    init(transport: InboxTransport? = nil, defaults: UserDefaults = .standard) {
+    /// `signals`: the feed news it follows. The app's store (no transport given) follows the app's
+    /// feed; a test's store only the hub it is given, so a hosted test never reads a paired server
+    /// because of another test's signal.
+    init(transport: InboxTransport? = nil, defaults: UserDefaults = .standard, signals: FeedSignals? = nil) {
         self.api = transport ?? WalnutAPI()
         self.storedDefaults = defaults
         self.filter = InboxFilter(stored: AppPrefs.resolve(defaults).string(forKey: InboxFilter.storageKey))
         LifecycleHub.shared.register(self)
+        liveRefresh = CoalescedRefetch { [weak self] in await self?.refreshUnlessWriting() }
+        if let hub = signals ?? (transport == nil ? FeedSignals.shared : nil) {
+            signalToken = hub.listen { [weak self] signal in self?.heard(signal) }
+        }
+    }
+
+    @ObservationIgnored private var liveRefresh: CoalescedRefetch?
+    @ObservationIgnored private var signalToken: Int?
+    @ObservationIgnored private var lastRefreshAt = Date.distantPast
+    /// Pin and archive writes on their way: a list read now predates them and would put their
+    /// rows back, so a live read waits for them (read writes have their own overlay).
+    @ObservationIgnored private var flagWritesOut = 0
+
+    private func refreshUnlessWriting() async {
+        guard flagWritesOut == 0 else { liveRefresh?.ask(); return }
+        await refresh()
+    }
+
+    /// The inbox changed somewhere (or may have, after a reconnect): read it again, once for a burst.
+    /// A reconnect right after a refresh of its own (a foreground) costs no second read.
+    func heard(_ signal: FeedSignals.Signal) {
+        switch signal {
+        case .inboxChanged: break
+        case .resynced: guard Date().timeIntervalSince(lastRefreshAt) > 2 else { return }
+        case .threadsChanged, .statusChanged: return
+        }
+        guard isActive else { return }
+        liveRefresh?.ask()
     }
 
     // MARK: - Derived
@@ -147,6 +180,7 @@ final class InboxStore {
 
     func refresh() async {
         guard isActive else { return }
+        lastRefreshAt = Date()
         loading = true
         defer { loading = false }
         let asked = stamp()
@@ -473,6 +507,8 @@ final class InboxStore {
     /// Archive/unarchive moves the row between the two lists immediately; the
     /// server answer is adopted afterwards, and a failure puts it back.
     func setArchived(id: String, archived: Bool) async {
+        flagWritesOut += 1
+        defer { flagWritesOut -= 1 }
         let before = (letters, archivedLetters)
         if archived {
             if let idx = letters.firstIndex(where: { $0.id == id }) {
@@ -544,6 +580,8 @@ final class InboxStore {
         apply: (inout Letter) -> Void,
         call: () async throws -> Letter
     ) async {
+        flagWritesOut += 1
+        defer { flagWritesOut -= 1 }
         let before = letter(id: id)
         if var row = before {
             apply(&row)

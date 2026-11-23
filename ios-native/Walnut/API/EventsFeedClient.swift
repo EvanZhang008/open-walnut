@@ -12,6 +12,10 @@ enum EventsFeedMutation: Equatable {
     /// `focus-changed` (data `{}`): the person's focus space or the saved spaces changed; read
     /// `GET /focus-spaces` again (FocusSpacesStore).
     case focusChanged
+    /// `threads-changed` {task_id}: that node's Threads changed; read them again (additive, 2026-11-19).
+    case threadsChanged(taskId: String)
+    /// `inbox-changed` {}: a letter arrived, was answered, read, pinned or archived (additive, 2026-11-19).
+    case inboxChanged
 }
 
 /// Pure list-merge logic for the events feed — kept out of the store so the
@@ -327,6 +331,10 @@ final class EventsFeedClient: @unchecked Sendable {
         let activity: WalnutLiveActivity?
         enum CodingKeys: String, CodingKey { case taskId = "task_id", activity }
     }
+    private struct ThreadsFrame: Decodable {
+        let taskId: String
+        enum CodingKeys: String, CodingKey { case taskId = "task_id" }
+    }
 
     private func handleFrame(event: String, data: String, generation gen: UInt64) {
         let mutation = Self.mutation(event: event, data: data)
@@ -361,6 +369,10 @@ final class EventsFeedClient: @unchecked Sendable {
         case "focus-changed":
             // No payload worth reading: the frame only says "read again".
             return .focusChanged
+        case "threads-changed":
+            return (try? decoder.decode(ThreadsFrame.self, from: payload)).map { .threadsChanged(taskId: $0.taskId) }
+        case "inbox-changed":
+            return .inboxChanged
         default:
             return nil
         }

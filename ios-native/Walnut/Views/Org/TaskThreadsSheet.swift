@@ -25,7 +25,8 @@ struct TaskThreadsSheet: View {
         self.name = name
         self.sessionId = sessionId
         self.turnOff = turnOff
-        _store = State(initialValue: OrgThreadsStore(taskId: taskId))
+        // The task's one store: its Org page, if it has one, reads the same one.
+        _store = State(initialValue: OrgThreadsStore.forNode(taskId))
     }
 
     var body: some View {
@@ -67,6 +68,8 @@ struct TaskThreadsSheet: View {
             await store.hydrate()
             await store.load()
         }
+        .onAppear { store.viewerAppeared() }
+        .onDisappear { store.viewerLeft() }
         // A failed read is tried again while the sheet is up, as the Org page does.
         .task(id: store.lastRead?.failed == true) {
             while store.lastRead?.failed == true, !Task.isCancelled {

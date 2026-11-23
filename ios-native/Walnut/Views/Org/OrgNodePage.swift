@@ -208,7 +208,8 @@ struct OrgNodePage: View {
         self.link = link ?? .shared
         _page = State(initialValue: OrgNodePageFocusModel.initial(route))
         _cover = State(initialValue: cover)
-        _threads = State(initialValue: OrgThreadsStore(taskId: route.nodeId))
+        // The node's one store: a Threads sheet of the same task reads the same one.
+        _threads = State(initialValue: OrgThreadsStore.forNode(route.nodeId))
     }
 
     private var node: WalnutTask? { tasks.tasks.first { $0.id == route.nodeId } }
@@ -254,6 +255,9 @@ struct OrgNodePage: View {
             guard let key = orgPagePlace.keyId(route.nodeId) else { return }
             ViewMemory.write(picked, "org", "page", id: key)
         }
+        // While the page is up, a change of its threads made elsewhere is read again at once.
+        .onAppear { threads.viewerAppeared() }
+        .onDisappear { threads.viewerLeft() }
         .onAppear {
             noteOpenedForRequest()
             takeLinkRequest()
@@ -293,8 +297,6 @@ struct OrgNodePage: View {
         // one tapped again, a push while Tasks or Brief is in front): the page takes it from the
         // mailbox it observes, its view comes forward and its thread is read afresh, then shown.
         .onChange(of: link.pending) { takeLinkRequest() }
-        // The node's own row moves when its threads change (its status carries their counts).
-        .onChange(of: node?.userStatus?.threads) { Task { await threads.load() } }
         .sheet(item: $cover) { cover in
             coverView(cover)
                 .presentationDetents([.large])

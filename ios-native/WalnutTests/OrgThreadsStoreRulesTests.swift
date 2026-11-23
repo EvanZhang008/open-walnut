@@ -59,7 +59,7 @@ final class OrgThreadsStoreRulesTests: XCTestCase {
 
         let code = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Walnut/Views/Org/OrgThreadsStore.swift"), encoding: .utf8)
-        XCTAssertTrue(code.contains("threads = Self.afterFound(thread, threads: threads)"), "a read by id goes through this rule")
+        XCTAssertTrue(code.contains("readThreads = Self.afterFound(thread, threads: readThreads)"), "a read by id goes through this rule")
     }
 
     func testARevealOfACopyReadByIdAsksAgainFirst() throws {

@@ -18,6 +18,8 @@ struct OrgBriefView: View {
     @State private var replyFor: String?
     @State private var error: String?
     @State private var loaded = false
+    /// The feed's word that the node moved (`FeedSignals`): the letter is read again while shown.
+    @State private var signals = FeedSignals.shared
 
     var body: some View {
         ScrollView {
@@ -51,9 +53,20 @@ struct OrgBriefView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .refreshable { await load() }
-        .task(id: taskId) { await load() }
+        // The node opened: read at once. The node's threads or status moved since (a turn of its
+        // ended, a thread acted on), or the feed reconnected: read again, a moment later so a
+        // burst of moves costs one read.
+        .task(id: LiveKey(taskId: taskId, generation: signals.generation(of: taskId))) {
+            if replyFor == taskId {
+                try? await Task.sleep(for: .milliseconds(400))
+                guard !Task.isCancelled else { return }
+            }
+            await load()
+        }
         .accessibilityIdentifier("org.brief")
     }
+
+    private struct LiveKey: Hashable { let taskId: String; let generation: Int }
 
     private func head(letter: OrgBriefReply.Letter, fresh: OrgBriefReply.Fresh?) -> some View {
         TimelineView(.periodic(from: .now, by: 60)) { ctx in

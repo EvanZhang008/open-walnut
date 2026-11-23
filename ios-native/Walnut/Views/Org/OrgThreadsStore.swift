@@ -1,15 +1,32 @@
 import Foundation
 import Observation
 
-/// One Org node's Threads as the phone holds them: read from the server, and written one action
-/// at a time (Acknowledge, Snooze, Pin, Reopen, Follow up), each followed by a fresh read so the
-/// page shows what the server keeps.
+/// One Org node's Threads as the phone holds them: ONE store per node (`forNode`), read by every
+/// surface that shows them (the Org page, a task's Threads sheet), so a thread acted on in one is
+/// already changed in the other.
+///
+/// An action (Acknowledge, Snooze, Pin, Reopen, Follow up) shows on the tap: the card moves, and
+/// the node's count (its row in the Org list, the Threads switch, the bar under its chat) moves
+/// with it through a status prediction on the node's task (`TasksStore.predictStatus`). A read or
+/// a live event that lands while the write is out keeps the change laid over it; a refused write
+/// takes it back and says so. Every change is read again from the server after, and a change made
+/// elsewhere comes in live (`FeedSignals`) while a surface shows the node.
 @Observable
 @MainActor
 final class OrgThreadsStore {
     let taskId: String
+    /// What every surface draws: the last read with his changes still on their way laid over it.
     /// nil until the first read answers.
     private(set) var threads: [OrgThread]?
+    /// The server's list as last read (plus the threads read by id), under his pending changes.
+    @ObservationIgnored private var readThreads: [OrgThread]?
+    /// His changes on their way, per thread, with the moment he made each (its stamp).
+    @ObservationIgnored private var pending: [String: (change: OrgThreadChange, at: Date, token: Int)] = [:]
+    @ObservationIgnored private var pendingSeq = 0
+    /// When the last write was answered: the server's statuses for it may still be on their way.
+    @ObservationIgnored private var settledAt = Date.distantPast
+    /// The server counts this node's threads into its status (seen once on its row).
+    @ObservationIgnored private var counted = false
     private(set) var error: String?
     /// How many threads his view shows by the server's count in the last read (nil: an older
     /// server that sends none).
@@ -22,8 +39,9 @@ final class OrgThreadsStore {
     /// When a Follow up of his went out, per thread: the card says so at once, whatever the reload shows.
     private(set) var followUpSentAt: [String: Date] = [:]
     /// Where the last action moved its thread ("Moved to Working"), shown for a moment as a
-    /// passing notice (`NoticeCenter`).
-    struct Notice: Equatable { let text: String; let id = UUID() }
+    /// passing notice (`NoticeCenter`); `threadId` so a restore of that thread (a refused write)
+    /// takes its notice back.
+    struct Notice: Equatable { let text: String; var threadId: String? = nil; let id = UUID() }
     var notice: Notice? {
         didSet {
             guard let notice else { return }
@@ -48,17 +66,153 @@ final class OrgThreadsStore {
     @ObservationIgnored private var probing: Set<String> = []
     @ObservationIgnored private var generation = 0
 
+    /// `write` and `tasks` are seams for WalnutTests: the server's PATCH, and the store whose node
+    /// row carries the predicted count (the app's own `TasksStore` by default).
     init(taskId: String, threads: [OrgThread]? = nil, cache: OrgThreadsCache? = .shared,
-         read: (() async throws -> OrgThreadsRead)? = nil) {
+         read: (() async throws -> OrgThreadsRead)? = nil,
+         write: ((String, OrgThreadEdit) async throws -> Void)? = nil,
+         tasks: (@MainActor () -> TasksStore?)? = nil, signals: FeedSignals? = nil) {
         self.taskId = taskId
+        self.signals = signals
+        self.readThreads = threads
         self.threads = threads
         self.cache = cache
         self.read = read ?? { try await WalnutAPI().orgThreads(taskId: taskId) }
+        self.write = write ?? { threadId, edit in
+            try await WalnutAPI().editOrgThread(taskId: taskId, threadId: threadId, edit)
+        }
+        self.tasksStore = tasks ?? { TasksStore.shared }
         if threads == nil, let entry = cache?.cached(taskId) { take(entry) }
+        refetch = CoalescedRefetch { [weak self] in await self?.load() }
     }
 
-    private let cache: OrgThreadsCache?
-    private let read: () async throws -> OrgThreadsRead
+    @ObservationIgnored private let cache: OrgThreadsCache?
+    @ObservationIgnored private let read: () async throws -> OrgThreadsRead
+    @ObservationIgnored private let write: (String, OrgThreadEdit) async throws -> Void
+    @ObservationIgnored private let tasksStore: @MainActor () -> TasksStore?
+    /// nil: the app's feed (`FeedSignals.shared`).
+    @ObservationIgnored private let signals: FeedSignals?
+
+    // MARK: - One store per node
+
+    private static var nodes: [String: OrgThreadsStore] = [:]
+
+    /// The node's store, made on first use: every surface of the node reads this one.
+    static func forNode(_ taskId: String) -> OrgThreadsStore {
+        if let store = nodes[taskId] { return store }
+        let store = OrgThreadsStore(taskId: taskId)
+        nodes[taskId] = store
+        return store
+    }
+
+    /// A disconnect: no node's threads outlive the pairing (`LocalDataReset`).
+    static func eraseAll() {
+        for store in nodes.values { store.stopFollowing() }
+        nodes = [:]
+    }
+
+    // MARK: - Live while shown
+
+    /// Surfaces showing this node now: while any does, a change the feed reports is read again.
+    @ObservationIgnored private var viewers = 0
+    @ObservationIgnored private var signalToken: Int?
+    @ObservationIgnored private var refetch: CoalescedRefetch?
+
+    func viewerAppeared() {
+        viewers += 1
+        guard signalToken == nil else { return }
+        signalToken = (signals ?? .shared).listen { [weak self] signal in self?.heard(signal) }
+    }
+
+    func viewerLeft() {
+        viewers = max(0, viewers - 1)
+        if viewers == 0 { stopFollowing() }
+    }
+
+    private func stopFollowing() {
+        if let signalToken { (signals ?? .shared).stopListening(signalToken) }
+        signalToken = nil
+        refetch?.cancel()
+    }
+
+    /// `threads-changed` for this node (a newer server), a move of the node's status (every server:
+    /// its counts are its threads), or a reconnect.
+    func heard(_ signal: FeedSignals.Signal) {
+        // Shown nowhere: the next surface to open it reads it anyway.
+        guard signalToken != nil else { return }
+        switch signal {
+        case .threadsChanged(let id), .statusChanged(let id):
+            guard id == taskId else { return }
+        case .resynced:
+            break
+        case .inboxChanged:
+            return
+        }
+        refetch?.ask()
+    }
+
+    /// Recompute what the surfaces draw from the read and the changes on their way.
+    private func redraw() {
+        guard let read = readThreads else {
+            if threads != nil { threads = nil }
+            return
+        }
+        let drawn = pending.isEmpty ? read : read.map { t in
+            pending[t.id].map { OrgThreadModel.optimistic(t, $0.change, now: $0.at) } ?? t
+        }
+        if drawn != threads { threads = drawn }
+    }
+
+    /// The node's row reads its counts off the task's status: predicted from the list as drawn
+    /// now, and made again from it each time the server speaks while writes are out or just
+    /// answered (the status the server derived for the first of two acts is not the last word).
+    private func predictNode() -> () -> Void {
+        guard readThreads != nil, let tasks = tasksStore() else { return {} }
+        // A read that brought none of the threads the counts name cannot be counted from.
+        if readThreads?.isEmpty == true, (shownCount ?? 0) > 0 { return {} }
+        return tasks.predictStatus(taskId, live: { [weak self] in self?.writesOut ?? false }) { [weak self] row in
+            guard let self else { return row.userStatus }
+            // Once its status carried counts, the server counts this node: a prediction of none
+            // left (no `threads` at all) must still be counted up again.
+            if row.userStatus?.threads != nil { self.counted = true }
+            return OrgThreadModel.status(row.userStatus, withThreadsOf: self.threads ?? [], counted: self.counted,
+                                         now: AppClock.now())
+        }
+    }
+
+    private var writesOut: Bool {
+        !pending.isEmpty || Date().timeIntervalSince(settledAt) < Self.settleSeconds
+    }
+
+    /// How long after a write's answer the server's derived status for an EARLIER write may still land.
+    nonisolated static let settleSeconds: Double = 3
+
+    /// One change of his on its way.
+    struct Change { let threadId: String; let change: OrgThreadChange; let at: Date; let token: Int }
+
+    /// His change shows now.
+    private func begin(_ threadId: String, _ change: OrgThreadChange) -> Change {
+        pendingSeq += 1
+        let c = Change(threadId: threadId, change: change, at: AppClock.now(), token: pendingSeq)
+        pending[threadId] = (change, c.at, c.token)
+        redraw()
+        return c
+    }
+
+    /// The write was answered. Saved: the change is part of the list now, so nothing draws back
+    /// while the read after it is out, also when a newer tap on the same thread is still on its
+    /// way (that one stays laid over it). Only the change this token made leaves `pending`.
+    private func settle(_ c: Change, saved: Bool) {
+        settledAt = Date()
+        // A read that left before this answer is older than the change, but every write is read
+        // again after its answer, and that newer read supersedes it (`generation`).
+        if saved, var list = readThreads, let i = list.firstIndex(where: { $0.id == c.threadId }) {
+            list[i] = OrgThreadModel.optimistic(list[i], c.change, now: c.at)
+            readThreads = list
+        }
+        if pending[c.threadId]?.token == c.token { pending[c.threadId] = nil }
+        redraw()
+    }
 
     /// How often a page whose read failed asks again while it is on screen (`OrgNodePage`).
     nonisolated static let retrySeconds: Double = 5
@@ -68,7 +222,8 @@ final class OrgThreadsStore {
     var byIdOnly: Set<String> { Set(foundById.keys).subtracting(listIds) }
 
     private func take(_ entry: OrgThreadsCache.Entry) {
-        threads = entry.threads
+        readThreads = entry.threads
+        redraw()
         listIds = Set(entry.threads.map(\.id))
         shownCount = entry.shownCount
         closedCount = entry.closedCount
@@ -103,7 +258,8 @@ final class OrgThreadsStore {
             }
             guard gen == generation else { return }
             listIds = Set(read.threads.map(\.id))
-            threads = Self.merged(read.threads, keeping: foundById)
+            readThreads = Self.merged(read.threads, keeping: foundById)
+            redraw()
             // A failed read by id is asked again now that the list could be read.
             probes = probes.filter { $0.value.result != .failed }
             shownCount = read.shownCount
@@ -217,12 +373,14 @@ final class OrgThreadsStore {
         do {
             let thread = try await WalnutAPI().orgThread(taskId: taskId, threadId: threadId)
             foundById[threadId] = thread
-            threads = Self.afterFound(thread, threads: threads)
+            readThreads = Self.afterFound(thread, threads: readThreads)
+            redraw()
             probes[threadId] = .init(startedAt: started, result: .found)
         } catch APIError.server(let status, _, _, _, _) where status == 404 {
-            let after = Self.afterGone(threadId, threads: threads, found: foundById, listIds: listIds)
+            let after = Self.afterGone(threadId, threads: readThreads, found: foundById, listIds: listIds)
             foundById = after.found
-            threads = after.threads
+            readThreads = after.threads
+            redraw()
             if !listIds.contains(threadId) { cache?.drop(threadId, from: taskId) }
             probes[threadId] = .init(startedAt: started, result: .notFound)
         } catch {
@@ -239,32 +397,48 @@ final class OrgThreadsStore {
         guard let whole = try? await WalnutAPI().orgThread(taskId: taskId, threadId: threadId),
               // A list read that started meanwhile is newer than this copy: keep it.
               gen == generation,
-              var list = threads, let i = list.firstIndex(where: { $0.id == threadId }),
+              var list = readThreads, let i = list.firstIndex(where: { $0.id == threadId }),
               whole.updatedAt >= list[i].updatedAt else { return }
         list[i] = whole
-        threads = list
+        readThreads = list
+        redraw()
     }
 
-    /// One action on a thread. A failure leaves the thread as it was and says so.
+    /// One action on a thread: the card and the node's count change on the tap, the write goes,
+    /// and the threads are read again. A refusal puts the thread and the count back and says so.
     func edit(_ threadId: String, _ edit: OrgThreadEdit) async {
-        busyThreadId = threadId
-        defer { busyThreadId = nil }
+        let change = begin(threadId, .edit(edit))
+        let unpredict = predictNode()
+        if OrgThreadModel.tellsWhereItWent(after: edit) { tellWhereItWent(threadId) }
         do {
-            try await WalnutAPI().editOrgThread(taskId: taskId, threadId: threadId, edit)
+            try await write(threadId, edit)
+            settle(change, saved: true)
             error = nil
+            await load()
         } catch {
-            self.error = "Couldn't update the thread. Try again."
+            settle(change, saved: false)
+            refused(unpredict, threadId: threadId)
             AppLog.warn("org", "thread edit failed", ["taskId": taskId, "threadId": threadId, "error": error.localizedDescription])
             await load()
-            return
+            // Said after the read, which clears a read's own error: the refusal stays on the page.
+            self.error = Self.refusedWords
         }
-        await load()
-        if OrgThreadModel.tellsWhereItWent(after: edit) { tellWhereItWent(threadId) }
+    }
+
+    /// What a refused change says, short: the card is back where it was.
+    nonisolated static let refusedWords = "Couldn't update the thread. It is back as it was. Try again."
+
+    /// A refused write: the count goes back, and is made again from the list as drawn now if
+    /// another change of this node is still on its way. The notice about it goes too.
+    private func refused(_ unpredict: () -> Void, threadId: String) {
+        unpredict()
+        _ = predictNode()
+        if notice?.threadId == threadId { notice = nil }
     }
 
     private func tellWhereItWent(_ threadId: String) {
-        if let text = OrgThreadModel.movedNotice(threadId, threads: threads ?? [], now: Date().addingTimeInterval(AppClock.demoOffset)) {
-            notice = Notice(text: text)
+        if let text = OrgThreadModel.movedNotice(threadId, threads: threads ?? [], now: AppClock.now()) {
+            notice = Notice(text: text, threadId: threadId)
         }
     }
 
@@ -274,6 +448,9 @@ final class OrgThreadsStore {
         guard !words.isEmpty || !images.isEmpty else { return false }
         busyThreadId = threadId
         defer { busyThreadId = nil }
+        // His reply makes it the node's move: out of his view at once, the node's count with it.
+        let change = begin(threadId, .followUp)
+        let unpredict = predictNode()
         let messageId = SendRetryPolicy.newMessageId()
         let receipt: SessionSendReceipt
         do {
@@ -290,14 +467,19 @@ final class OrgThreadsStore {
                 sessionId: sessionId, threadId: threadId, text: words, images: payloads,
                 messageId: messageId)
         } catch {
+            settle(change, saved: false)
+            refused(unpredict, threadId: threadId)
             AppLog.warn("org", "thread follow-up failed", ["taskId": taskId, "threadId": threadId, "error": error.localizedDescription])
             return false
         }
         followUpSentAt[threadId] = Date()
-        // His reply makes it the node's move: out of his view at once, as the server's next read says.
-        // A send the companion holds has not reached the Mac yet, so the next read still shows it.
-        if !receipt.queued, let i = threads?.firstIndex(where: { $0.id == threadId }), let t = threads?[i] {
-            threads?[i] = OrgThreadModel.afterHisFollowUp(t)
+        // A send the companion holds has not reached the Mac yet, so the next read still shows it:
+        // the card goes back to what the server keeps, and says the follow-up went.
+        if receipt.queued {
+            settle(change, saved: false)
+            refused(unpredict, threadId: threadId)
+        } else {
+            settle(change, saved: true)
         }
         await load()
         tellWhereItWent(threadId)

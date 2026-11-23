@@ -164,6 +164,8 @@ enum LocalDataReset {
         filePreview?.closeDocked()
         ComposerDrafts.shared.clearAll()
         OrgThreadsCache.shared.eraseAll()
+        OrgThreadsStore.eraseAll()
+        OrgTreeStore.shared.eraseLocalState()
         OrgNodeLink.shared.forgetPreviews()
         LetterReplyStore.shared.eraseAll()
         InboxItemStore.shared.eraseAll()
