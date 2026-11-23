@@ -48,7 +48,8 @@ export function ackKnown(file: ThreadsFile, id: string, at: string): { file: Thr
   // Acknowledged: out of his sight like a close, so no snooze of his holds it; a placement of an
   // earlier ack is gone. His watch stays: he follows the subject on, whatever group it is in.
   const { snoozed: _snooze, ackDone: _done, ackPlaced: _placed, ...rest } = r.thread;
-  const thread: OrgThread = { ...rest, reactedAt: at, ackedAt: at };
+  // Acknowledged with its result on it (answered, needs): that result is his, and no status line shows it again (thread-known.ts ackHoldsResult).
+  const thread: OrgThread = { ...rest, reactedAt: at, ackedAt: at, ackedResult: !!cur && (cur.state === 'answered' || cur.state === 'needs') };
   return { file: { ...r.file, threads: r.file.threads.map((t) => (t.id === id ? thread : t)) }, thread };
 }
 
@@ -124,7 +125,7 @@ export function ackPlace(t: OrgThread, to: AckPlace, by: 'node' | 'walnut', why:
 /** What the node hears once when nothing is open any more on a thread he acknowledged. */
 export function ackDoneLine(t: Pick<OrgThread, 'id' | 'title'>): string {
   return `- Thread ${t.id} ${q(t.title)}, which he acknowledged while its work ran: nothing on it is open now. If the outcome holds something `
-    + `he has not seen, set it answered with it once; otherwise close it. Left as it is, Walnut closes it in ${CLOSE_MIN} minutes.`;
+    + `he has not seen, write it with thread_update (state answered and the outcome) once; otherwise close it. Left as it is, Walnut closes it in ${CLOSE_MIN} minutes.`;
 }
 
 export async function ackMeansKnownOn(): Promise<boolean> {

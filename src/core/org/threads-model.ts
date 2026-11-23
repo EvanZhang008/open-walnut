@@ -68,6 +68,7 @@ import { threadsPopUpNow } from './thread-popup-rules.js';
 import { normalizeThreadLetter, type ThreadLetter } from './letter-thread-model.js';
 import { normalizeThreadChoice, type ThreadChoice } from './choice-thread-model.js';
 import { summaryPointsElsewhere, summaryRepeatsHim } from './thread-summary-content.js';
+import { ackHoldsResult, lineMay, NO_LINE_REPLY } from './thread-known.js';
 
 export const THREAD_STATES = ['new', 'working', 'needs', 'answered', 'pending'] as const;
 export type ThreadState = typeof THREAD_STATES[number];
@@ -298,6 +299,12 @@ export interface OrgThread {
    * Acknowledge, Walnut's own park) is kept: a status line never moves it back to working.
    */
   lineState?: string;
+  /**
+   * When a status line last wrote the summary: equal to `replyAt` while the summary is a line's,
+   * NO_LINE_REPLY once anyone else wrote it (thread-known.ts ackHoldsResult tells a line's rewording
+   * from news by it). Absent on summaries written before 2026-11-23.
+   */
+  lineReplyAt?: string;
   /** Tasks the thread went to: shown with their live status. */
   tasks?: string[];
   messages: ThreadMessage[];
@@ -342,6 +349,12 @@ export interface OrgThread {
    * older build keeps it unread.
    */
   ackedAt?: string;
+  /**
+   * Whether what he acknowledged held its result (thread-known.ts ackHoldsResult): true when it
+   * stood answered or needs then, and no status line writes it again; false when he acknowledged it
+   * before its result was in. Absent on older acks: read as true.
+   */
+  ackedResult?: boolean;
   /** When nothing was open any more on that acknowledged thread (the node was told then): once per ack; Walnut settles it KNOWN_CLOSE_MS later. */
   ackDone?: string;
   /** Where it went from Acknowledged (the node's `place`, or Walnut's rule after KNOWN_CLOSE_MS), with why (thread-known.ts). */
@@ -396,7 +409,7 @@ export interface ThreadsFile {
   threads: OrgThread[];
 }
 
-export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted' | 'user_kind' | 'watched_by_user' | 'same_ask' | 'same_node' | 'reply_pending' | 'needs_options' | 'returned_ask' | 'other_open_asks' | 'same_subject';
+export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted' | 'user_kind' | 'watched_by_user' | 'same_ask' | 'same_node' | 'reply_pending' | 'needs_options' | 'returned_ask' | 'other_open_asks' | 'same_subject' | 'he_has_it';
 
 export class ThreadError extends Error {
   constructor(public code: ThreadErrorCode, public status: number, message: string) {
@@ -534,6 +547,8 @@ function normalizeThread(t: unknown): OrgThread | null {
   if (!validMove(next.movedTo)) delete next.movedTo;
   if (!validMove(next.movedFrom)) delete next.movedFrom;
   if (next.askOwner && !(typeof next.askOwner === 'object' && isStr(next.askOwner.task) && next.askOwner.task && isStr(next.askOwner.at))) delete next.askOwner;
+  if (next.ackedResult !== undefined && typeof next.ackedResult !== 'boolean') delete next.ackedResult;
+  if (next.lineReplyAt !== undefined && !isStr(next.lineReplyAt)) delete next.lineReplyAt;
   for (const k of ['ackedAt', 'ackDone'] as const) if (next[k] !== undefined && !(isStr(next[k]) && Number.isFinite(Date.parse(next[k]!)))) delete next[k];
   if (next.ackPlaced !== undefined && !validAckPlaced(next.ackPlaced)) delete next.ackPlaced;
   const letter = next.letter !== undefined ? normalizeThreadLetter(next.letter) : undefined;
@@ -1105,6 +1120,10 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   }
   file = stampLegacyReplyAt(file);
   const cur = find(file, id);
+  // A status line never shows him again what he already has (thread-known.ts lineMay): every line path goes through here.
+  if (opts.line && !lineMay(cur, patch)) {
+    throw new ThreadError('he_has_it', 409, `Thread ${id}: he acknowledged its result. A status line only closes it (done); something new for him is your thread_update.`);
+  }
   // A thread that moved lives on at the other node: it is changed there, never opened again here.
   if (movedAway(cur) && (patch.reopen || patch.watch)) {
     throw new ThreadError('thread_closed', 409, `Thread ${id} moved to ${cur.movedTo!.title} (${cur.movedTo!.task}) with its work: it is open there.`);
@@ -1162,6 +1181,8 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
       if (cur.reply && !cur.replyAt) next.replyAt = legacySummaryAt(cur);
       setReply(next, text, by, source);
       if (text) next.replyAt = at; else delete next.replyAt;
+      // Whose words the summary is now: a line's, or anyone else's (thread-known.ts ackHoldsResult).
+      next.lineReplyAt = opts.line && text ? at : NO_LINE_REPLY;
     } else if (text && !next.replyAt) next.replyAt = legacySummaryAt(cur);
   }
   if (patch.state !== undefined) next.state = patch.state;
@@ -1212,7 +1233,9 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   if (patch.close && (!(cur.closed && cur.closed.how === patch.close) || by === 'human' && cur.closed.reacted)) {
     // A thread the node opened that he never answered may be dropped by it: he was never asked yet.
     const ownUnseen = patch.close === 'dropped' && !!cur.opener && !cur.messages.length && by === cur.opener.by;
-    if (!ownUnseen) checkClose(file, cur, by, patch.user_words);
+    // A done line on what he acknowledged with its result: his Acknowledge was his reaction (thread-known.ts ackHoldsResult).
+    const ackCovers = opts.line && ackHoldsResult(cur);
+    if (!ownUnseen && !ackCovers) checkClose(file, cur, by, patch.user_words);
     next.closed = { how: patch.close, at, by };
     delete next.snoozed;
   }

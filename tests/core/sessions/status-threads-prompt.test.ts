@@ -63,7 +63,8 @@ describe('the status question lists the task\'s threads', () => {
     for (const t of open) {
       const ref = [...refs.entries()].find(([, v]) => v.id === t.id)?.[0]
       expect(ref, `${t.id} is listed`).toBeDefined()
-      expect(block).toContain(`${ref} "${t.title}" (${t.state})`)
+      // Its state first; one he already has says so after it (status-threads-after-ack.test.ts).
+      expect(block).toContain(`${ref} "${t.title}" (${t.state}`)
     }
     expect(block).not.toContain('Orchard subject 7')
     expect(block).toContain('FOR_USER_THREAD: <ref> | <working | waiting | answered | done>')

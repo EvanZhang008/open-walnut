@@ -106,3 +106,43 @@ export function knownStep(t: ViewThread & { state: string }, open: boolean, now:
   if (now - Date.parse(t.ackDone) < KNOWN_CLOSE_MS || watchedNow(t) || snoozedNow(t, now)) return 'wait';
   return hasThreadNews(t, shared) ? 'show' : 'close';
 }
+
+/**
+ * He acknowledged its result and nothing has reached him on it since (2026-11-23, the user, of
+ * cards that came back "New since you acknowledged" after each Acknowledge, every turn's line
+ * rewording a summary he had: "what I acknowledged all stays there"). True when:
+ *  - he acknowledged it standing answered or needs (`ackedResult`; an older ack with no record counts
+ *    so) and wrote nothing since;
+ *  - the node did not place it in Working or Waiting itself since (its result to come is news);
+ *  - nothing but a status line wrote it answered since (the node's own thread_update, an answer
+ *    given for him, Walnut's own show: news). A line that did is the bug this guards: its summary
+ *    is the line's while `lineReplyAt` equals `replyAt` (one written before that mark existed: the
+ *    line moved its state after the ack, `lineState`).
+ * Pure.
+ */
+export function ackHoldsResult(t: ViewThread & { state: string; lineState?: string; lineReplyAt?: string }): boolean {
+  if (t.closed || !quietSinceAck(t) || t.ackedResult === false) return false;
+  const placed = placedSinceAck(t);
+  if (placed && placed.by === 'node' && placed.to !== 'closed') return false;
+  if (t.state === 'answered' && t.replyAt && t.replyAt > t.ackedAt!) {
+    const byLine = t.lineReplyAt !== undefined ? t.lineReplyAt === t.replyAt : !!t.lineState && t.lineState >= t.ackedAt!;
+    if (!byLine) return false;
+  }
+  return true;
+}
+
+/** `lineReplyAt` once the summary is not a status line's own (threads-model.ts updateThread). */
+export const NO_LINE_REPLY = '1970-01-01T00:00:00.000Z';
+
+/**
+ * Whether a status line's write may go on `t` (status-threads.ts patchForLine; threads-model.ts
+ * updateThread refuses any other line write). On a thread whose result he acknowledged
+ * (ackHoldsResult) a line is the node's routine answer every turn, never news: it may close it
+ * (done), and a title or a known mark goes on; no state and no words, which would read as news
+ * again (his card, or Walnut's own settling after KNOWN_CLOSE_MS: knownStep 'show'). Real news is
+ * the node's own thread_update. Any other thread: anything. Pure.
+ */
+export function lineMay(t: ViewThread & { state: string; lineState?: string; lineReplyAt?: string }, write: { state?: string; reply?: string; close?: unknown }): boolean {
+  if (!ackHoldsResult(t) || write.close) return true;
+  return write.state === undefined && write.reply === undefined;
+}

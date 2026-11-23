@@ -9,7 +9,8 @@
  * askStatus), and answers one FOR_USER_THREAD line per thread, plus FOR_USER_THREAD_NEW for a
  * subject it now follows that no thread covers. Walnut then:
  *  - writes each thread by the task itself (applyThreadLines): working, pending (waiting), answered,
- *    or closed when done and the task opened it (his own request is answered; he closes it);
+ *    or closed when done and the task opened it (his own request is answered; he closes it); one whose
+ *    result he acknowledged only closes on done, and no other line writes it (org/thread-known.ts lineMay);
  *  - sets the task's state from them when FOR_USER_STATE said needs with no ask, or done while a
  *    subject still runs (settleStateFromThreads). A real ask always wins.
  * No line ever moves a thread into needs: what needs the user's decision is FOR_USER_ASK. That ask
@@ -28,11 +29,14 @@ import { keepsThreads } from '../org/keeps-threads.js';
 import { sortedThreads, THREAD_TITLE_MAX, type OrgThread, type ThreadPatch, type ThreadsFile } from '../org/threads-model.js';
 import type { OwnThreadOpen, OwnThreadWrite } from '../org/threads-store.js';
 import { exchangesOf, hasThreadNews, openNotWaiting } from '../org/thread-view.js';
+import { ackHoldsResult, lineMay } from '../org/thread-known.js';
 import { lastUserAt, reactedSince } from '../org/threads-model.js';
 import { oneCardNow } from '../org/one-card.js';
 import { threadsKeptNow } from '../org/threads-kept.js';
 
-export type ThreadLineState = 'working' | 'waiting' | 'answered' | 'done';
+/** The states a FOR_USER_THREAD line names (stateWord reads them). */
+export const THREAD_LINE_STATES = ['working', 'waiting', 'answered', 'done'] as const;
+export type ThreadLineState = typeof THREAD_LINE_STATES[number];
 /**
  * One FOR_USER_THREAD line, its ref resolved to the thread it names. `upTo`: the thread's newest
  * message (its id, '' for none) when the question listed it: a thread he wrote in since is not
@@ -48,9 +52,12 @@ export interface ThreadRef { id: string; title: string; untitled?: boolean; wrot
  * One thread as the question lists it (threadsKeptNow marks `untitled` and `wrote`): `upTo` its
  * newest message then, `hisAt` his newest message in any thread then (a reaction is judged on it).
  */
-export type ListedThread = Pick<OrgThread, 'id' | 'title' | 'state'> & { untitled?: boolean; wrote?: boolean; upTo?: string; hisAt?: string };
+export type ListedThread = Pick<OrgThread, 'id' | 'title' | 'state'> & { untitled?: boolean; wrote?: boolean; upTo?: string; hisAt?: string; acked?: boolean };
 /** A message of his newer than an answer he may have reacted to, for the question to quote. */
 export interface HisWords { threadId: string; text: string }
+
+/** What the question says of a thread whose result he acknowledged (org/thread-known.ts lineMay): what a line still does there. */
+const ACKED_WORDS = 'he acknowledged its result: a line only closes it (done); news for him is your thread_update';
 
 /** Threads listed at most (newest change first): the block costs every status question. */
 export const THREAD_LIST_MAX = 12;
@@ -88,7 +95,7 @@ export function threadQuestionBlock(open: readonly ListedThread[], langName?: st
     const marks = kept ? { ...(t.untitled ? { untitled: true } : {}), ...(t.wrote ? { wrote: true } : {}) } : {};
     refs.set(ref, { id: t.id, title: t.title, ...marks, ...(t.upTo !== undefined ? { upTo: t.upTo } : {}), ...(t.hisAt !== undefined ? { hisAt: t.hisAt } : {}) });
     const title = t.title.replace(/\s+/g, ' ').trim();
-    const said = [t.state, ...(marks.untitled ? ['untitled'] : []), ...(marks.wrote ? ['he wrote elsewhere since your answer here'] : [])].join(', ');
+    const said = [t.state, ...(t.acked ? [ACKED_WORDS] : []), ...(marks.untitled ? ['untitled'] : []), ...(marks.wrote ? ['he wrote elsewhere since your answer here'] : [])].join(', ');
     return `${ref} "${title.slice(0, cutEnd(title, TITLE_SHOWN_MAX))}" (${said})`;
   });
   const words = langName ? ` (titles and progress in ${langName})` : '';
@@ -141,12 +148,13 @@ export function wroteSinceAnswer(file: ThreadsFile, t: OrgThread): boolean {
 export function listForQuestion(file: ThreadsFile, open: readonly OrgThread[]): { listed: ListedThread[]; his: HisWords[] } {
   const upTo = (t: OrgThread) => t.messages[t.messages.length - 1]?.id ?? '';
   const hisAt = lastUserAt(file) ?? '';
-  if (!threadsKeptNow()) return { listed: open.map((t) => ({ ...t, upTo: upTo(t), hisAt })), his: [] };
+  const hasOf = (t: OrgThread) => (ackHoldsResult(t) ? { acked: true } : {});
+  if (!threadsKeptNow()) return { listed: open.map((t) => ({ ...t, ...hasOf(t), upTo: upTo(t), hisAt })), his: [] };
   let since = '';
   const listed = open.map((t) => {
     const after = answersHeWroteAfter(file, t);
     for (const at of after) if (!since || at < since) since = at;
-    return { ...t, untitled: !t.titled, wrote: after.length > 0, upTo: upTo(t), hisAt };
+    return { ...t, ...hasOf(t), untitled: !t.titled, wrote: after.length > 0, upTo: upTo(t), hisAt };
   });
   const his = since
     ? file.threads.flatMap((t) => t.messages.filter((m) => m.at > since).map((m) => ({ threadId: t.id, text: m.text, at: m.at })))
@@ -283,6 +291,9 @@ function asState(report: StatusReport, state: 'working' | 'waiting'): StatusRepo
   return { ...rest, state, from_threads: true };
 }
 
+/** A subject the task opened itself, not his request. */
+const nodeOpened = (t: OrgThread): boolean => !!t.opener && t.opener.by !== 'human';
+
 /** The thread state each line writes; done is a close, or answered (patchForLine). */
 const TARGET: Record<Exclude<ThreadLineState, 'done'>, OrgThread['state']> = { working: 'working', waiting: 'pending', answered: 'answered' };
 
@@ -294,12 +305,16 @@ export function patchForLine(t: OrgThread, line: StatusThreadLine): ThreadPatch 
   // Words that only say the answer was given elsewhere, or say his own message back, are no summary: the card keeps what it had
   // (org/thread-summary-content.ts; 2026-11-23, a card that read only "the summary was given to you").
   const reply = line.progress && !summaryPointsElsewhere(line.progress) && !summaryRepeatsHim(line.progress, t.messages.map((m) => m.text)) ? line.progress : undefined;
+  // He acknowledged its result (org/thread-known.ts ackHoldsResult; 2026-11-23, cards back "New
+  // since you acknowledged" every turn): a done line closes it, his Acknowledge covering it, its
+  // words on the closed card; any other line writes nothing (real news is the node's thread_update).
+  if (ackHoldsResult(t)) return line.state === 'done' ? { close: 'acked', ...(reply ? { reply } : {}) } : null;
   // Words dropped: the state stays too, so a card never moves into his sight with an older summary
   // (review 2026-11-23); the next question asks for the line again.
   if (line.progress && !reply) return null;
   if (line.state === 'done') {
     // A subject the task opened itself ends closed; his own request is answered, and he closes it.
-    if (t.opener && t.opener.by !== 'human') return { close: 'dropped', ...(reply ? { reply } : {}) };
+    if (nodeOpened(t)) return { close: 'dropped', ...(reply ? { reply } : {}) };
     return same(t, 'answered', reply) ? null : { state: 'answered', ...(reply ? { reply } : {}) };
   }
   let state = TARGET[line.state];
@@ -314,7 +329,9 @@ export function patchForLine(t: OrgThread, line: StatusThreadLine): ThreadPatch 
   // thread_update moves it. A pending an earlier answer set moves as the answer says (the task took
   // the subject up again). Its words still go on, quietly, as pending.
   if (state === 'working' && t.state === 'pending' && !t.lineState) state = 'pending';
-  return same(t, state, reply) ? null : { state, ...(reply ? { reply } : {}) };
+  if (same(t, state, reply)) return null;
+  const patch = { state, ...(reply ? { reply } : {}) };
+  return lineMay(t, patch) ? patch : null;
 }
 
 /** Nothing new: the same state and words again never move its clock or its place in the list. */
@@ -351,8 +368,10 @@ function wroteSinceQuestion(file: ThreadsFile, hisAt: string | undefined): boole
  * Nothing is written to a thread that waits on him, is closed, or has words of his newer than the
  * question. Pure.
  */
-export function planThreadWrites(file: ThreadsFile, lines: readonly StatusThreadLine[], opened: readonly StatusThreadNew[], marks: ThreadMarks = {}): { writes: OwnThreadWrite[]; opens: OwnThreadOpen[] } {
+export function planThreadWrites(file: ThreadsFile, lines: readonly StatusThreadLine[], opened: readonly StatusThreadNew[], marks: ThreadMarks = {}): { writes: OwnThreadWrite[]; opens: OwnThreadOpen[]; held: string[] } {
   const writes: OwnThreadWrite[] = [];
+  // Lines that wrote nothing on a thread whose result he acknowledged (logged by applyThreadLines).
+  const held: string[] = [];
   const open = (m: ThreadMark) => {
     const t = file.threads.find((x) => x.id === m.id);
     return t && !t.closed && t.state !== 'needs' && !movedSince(t, m.upTo) ? t : undefined;
@@ -366,15 +385,18 @@ export function planThreadWrites(file: ThreadsFile, lines: readonly StatusThread
   for (const line of lines) {
     const found = file.threads.find((x) => x.id === line.id);
     const t = found && !movedSince(found, line.upTo) ? found : undefined;
-    const own = t && line.state === 'done' && seen.has(t.id) && !wroteSinceQuestion(file, line.hisAt) && t.state === 'answered' && !(t.opener && t.opener.by !== 'human');
+    const own = t && line.state === 'done' && !ackHoldsResult(t) && seen.has(t.id) && !wroteSinceQuestion(file, line.hisAt) && t.state === 'answered' && !nodeOpened(t);
     const patch = own ? { close: 'acked' as const, ...(line.progress ? { reply: line.progress } : {}) } : t ? patchForLine(t, line) : null;
+    if (t && !patch && ackHoldsResult(t)) held.push(t.id);
     if (!t || !patch) continue;
     // A close its thread refuses (he pinned it, he wrote in it and has not reacted): answered.
-    const fallback = patch.close && !same(t, 'answered', line.progress) ? { state: 'answered' as const, ...(line.progress ? { reply: line.progress } : {}) } : undefined;
+    // One whose result he acknowledged keeps what he has (lineMay).
+    const back = { state: 'answered' as const, ...(line.progress ? { reply: line.progress } : {}) };
+    const fallback = patch.close && !same(t, 'answered', line.progress) && lineMay(t, back) ? back : undefined;
     writes.push({ id: t.id, patch, ...(fallback ? { fallback } : {}) });
   }
   const opens = opened.map((n) => ({ title: n.title, text: n.progress ?? n.title, state: TARGET[n.state] }));
-  return { writes, opens };
+  return { writes, opens, held };
 }
 
 /**
@@ -403,9 +425,11 @@ export async function applyThreadLines(taskId: string, report: Pick<StatusReport
       const cur = await readThreads(taskId);
       if (placeAsk(cur, ask ?? null, new Date().toISOString(), report.ask_thread) === cur) return [];
     }
-    const changed = await writeOwnThreads(taskId, (cur) => planThreadWrites(cur, lines, opened, marks), `task:${taskId}`,
+    let held: string[] = [];
+    const changed = await writeOwnThreads(taskId, (cur) => { const p = planThreadWrites(cur, lines, opened, marks); held = p.held; return p; }, `task:${taskId}`,
       ask !== undefined ? { ask, ...(report.ask_thread ? { named: report.ask_thread } : {}) } : undefined);
     if (changed.length) log.session.info('status question: threads kept current', { taskId, changed });
+    if (held.length) log.session.info('status question: lines left out on threads whose result he acknowledged', { taskId, held });
     return changed;
   } catch (err) {
     log.session.warn('status question: thread lines not applied', { taskId, error: err instanceof Error ? err.message : String(err) });

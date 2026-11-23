@@ -138,7 +138,7 @@ describe('what the node hears', () => {
     expect(line).toContain(`Walnut places it there in ${KNOWN_CLOSE_MS / 60_000} minutes.`)
     expect(ackLine({ id: 'th-cccccccccccc', title: 'Oven timer' }, { outcome: 'closed', waits: null })).toContain('Walnut reads it as closed: nothing on it is still open, so it closes;')
     const done = ackDoneLine({ id: 'th-cccccccccccc', title: 'Oven timer' })
-    expect(done).toContain('nothing on it is open now. If the outcome holds something he has not seen, set it answered with it once; otherwise close it.')
+    expect(done).toContain('nothing on it is open now. If the outcome holds something he has not seen, write it with thread_update (state answered and the outcome) once; otherwise close it.')
     expect(done).toContain(`Walnut closes it in ${KNOWN_CLOSE_MS / 60_000} minutes`)
   })
 

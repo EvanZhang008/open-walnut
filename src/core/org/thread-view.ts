@@ -93,6 +93,8 @@ export interface ViewThread<M extends ViewMessage = ViewMessage> {
   heldAsk?: ThreadHeldAsk;
   /** He acknowledged it while its work ran, and when that work ended (thread-known.ts). */
   ackedAt?: string;
+  /** Whether what he acknowledged held its result (thread-known.ts ackHoldsResult): false when he acknowledged it before its result was in. */
+  ackedResult?: boolean;
   ackDone?: string;
   /** Where it went from Acknowledged, who placed it and why (thread-known.ts). */
   ackPlaced?: AckPlaced;
