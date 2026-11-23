@@ -30,6 +30,7 @@ const TEXT_TAGS = new Set(['span', 'strong', 'em', 'b', 'i', 'small', 'code', 'k
 /** Words read from data that are the toggle's own words, by `file#expression`, and why. */
 const OWN_WORDS: Record<string, string> = {
   'components/settings/sections/PluginConfigCards.tsx#label': 'a plugin settings field: the field\'s own title from its schema',
+  'components/settings/sections/VoiceAccuracyEngines.tsx#words': 'an engine\'s upload consent checkbox: its own sentence (what is sent and where), fixed text from consentWords in voice-accuracy-model.ts',
   'components/settings/sections/HooksSection.tsx#s.label': 'a hook\'s boolean setting: the setting\'s own title from the hook',
   'components/settings/sections/ExperimentalSection.tsx#label': 'an experiment\'s switch: its own name from the fixed registry in src/core/experimental.ts, or the fixed "Every experiment on"',
   'components/settings/sections/ReplicaCopyRows.tsx#row.label': 'what the companion keeps a copy of ("Notes"): the switch\'s own words',

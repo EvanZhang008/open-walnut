@@ -1,7 +1,10 @@
 /**
- * One recording, opened: the app's modal dialog (`app-modal`, useModalOverlay: Escape and a click
- * outside close it, the page behind stops scrolling) in the shared frosted glass, portalled to
- * <body>, with its close key always in view at the top. Everything the recording has lives in it
+ * One recording, opened: a dialog of the overlay family (`wn-dialog` over a `wn-scrim`, standard.md
+ * "Overlays"; useModalOverlay: Escape and a click outside close it, the page behind stops scrolling)
+ * in the legible glass (`wn-glass`), portalled to <body>, on the dialog layer (`--z-modal`, from the
+ * scrim) above the phone's top bar, with its one close key always in view at the top (2026-11-22:
+ * its scrim had no layer, so on a phone the top bar sat over the Close and took its clicks).
+ * Everything the recording has lives in it
  * (VoiceAccuracyTakeDetail): Play recording, Recalculate estimated errors, the engine switch, the
  * engine's text with its differences from the AI's guess marked, the legend, and what was probably
  * sent. Texts show in full; only the dialog's body scrolls, never sideways. On a phone it is a
@@ -12,6 +15,7 @@ import { createPortal } from 'react-dom';
 import type { CompareEngineRow, CompareTake } from '@/api/stt-compare';
 import { ModalOverlayOwner, useModalOverlay } from '@/hooks/useModalOverlay';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { ICON_CLOSE } from '@/components/common/Icons';
 import { usageTime } from './UsageTables';
 import { showEngineRow } from './VoiceAccuracyEngines';
 import { VoiceAccuracyTakeDetail } from './VoiceAccuracyTakeDetail';
@@ -48,9 +52,9 @@ export function VoiceAccuracyTakeDialog({ take, engines, judge, version, retryEr
   const titleId = `va-take-dialog-title-${take.id}`;
   return createPortal(
     <ModalOverlayOwner.Provider value={owner}>
-      <div className="app-modal-overlay va-take-overlay" data-sheet={sheet ? 'true' : undefined} onMouseDown={() => onClose()}>
+      <div className="app-modal-overlay va-take-overlay wn-scrim" data-sheet={sheet ? 'true' : undefined} onMouseDown={() => onClose()}>
         <div
-          className="app-modal va-take-dialog wn-glass"
+          className="app-modal va-take-dialog wn-dialog wn-glass"
           role="dialog"
           aria-modal="true"
           aria-labelledby={titleId}
@@ -62,11 +66,9 @@ export function VoiceAccuracyTakeDialog({ take, engines, judge, version, retryEr
           onMouseDown={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <header className="va-take-dialog-head" data-fit-header>
+          <header className="va-take-dialog-head wn-dialog-head" data-fit-header>
             <h2 className="va-take-dialog-title" id={titleId} data-fit-title>{`Recording of ${whenOf(take)}`}</h2>
-            <button type="button" className="btn btn-ghost btn-icon" aria-label="Close" title="Close" data-testid="va-take-dialog-close" onClick={() => onClose()}>
-              <span aria-hidden="true">&times;</span>
-            </button>
+            <button type="button" className="btn btn-icon wn-dialog-close" aria-label="Close" title="Close" data-testid="va-take-dialog-close" onClick={() => onClose()}>{ICON_CLOSE}</button>
           </header>
           <div className="va-take-dialog-body">
             <VoiceAccuracyTakeDetail

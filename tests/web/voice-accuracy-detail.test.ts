@@ -298,9 +298,8 @@ describe('Voice Accuracy: the matrix', () => {
     details('rec-2').focus = focus
     await act(async () => {
       document.dispatchEvent(Object.assign(new win.Event('keydown', { bubbles: true, cancelable: true }), { key: 'Escape' }))
-      await new Promise((r) => setTimeout(r, 20))
     })
-    expect(dialog()).toBeNull()
+    await vi.waitFor(() => expect(dialog()).toBeNull())
     expect(focus).toHaveBeenCalled()
   })
 

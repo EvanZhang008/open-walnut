@@ -190,7 +190,9 @@
 
 /* A recording's dialog: the app's modal (app-modal, globals.css) in the shared legible glass
    (wn-glass: frosted, but opaque enough that the table behind never shows through long text). Its head with the close key
-   stays put; only its body scrolls, up and down. */
+   stays put; only its body scrolls, up and down. The family (overlay-family.css) draws the frame:
+   wn-scrim the layer and the dimming, wn-dialog the corner, wn-glass the material, wn-dialog-head the
+   header row. Only size, padding and layout here. */
 .app-modal.va-take-dialog {
   display: flex;
   flex-direction: column;
@@ -199,24 +201,18 @@
   max-height: calc(100dvh - 48px);
   padding: 0;
   overflow: hidden;
-  background: var(--bg-elevated);
-  border-radius: var(--radius-lg);
 }
 
 .app-modal.va-take-dialog:focus { outline: none; }
 
 .va-take-dialog-head {
   flex: none;
-  display: flex;
-  align-items: center;
   gap: 12px;
   padding: 12px 12px 12px 20px;
   border-bottom: 1px solid var(--border);
 }
 
 .va-take-dialog-title {
-  flex: 1 1 auto;
-  min-width: 0;
   margin: 0;
   font-size: var(--font-size-lg);
   font-weight: 600;
@@ -242,6 +238,10 @@
   width: 100%;
   height: 100%;
   max-height: none;
+}
+
+/* A sheet has square corners: the override convention over the family (`html body`). */
+html body .va-take-dialog[data-sheet='true'] {
   border-radius: 0;
 }
 
