@@ -85,7 +85,8 @@ export function truncatingClasses(webSrc: string): Set<string> {
           if (!/text-overflow\s*:\s*ellipsis|line-clamp\s*:\s*\d/.test(m[2])) continue;
           // Only the subject of the selector (its last compound) is the element that cuts.
           for (const sel of m[1].split(',')) {
-            const last = sel.trim().split(/[\s>+~]+/).pop() ?? '';
+            // A class inside :not(...) names what the rule leaves out, never what it cuts.
+            const last = (sel.replace(/:not\([^()]*\)/g, '').trim().split(/[\s>+~]+/).pop()) ?? '';
             for (const c of last.matchAll(/\.([A-Za-z0-9_-]+)/g)) out.add(c[1]);
           }
         }
