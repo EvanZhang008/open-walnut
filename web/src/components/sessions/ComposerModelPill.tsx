@@ -394,6 +394,8 @@ export function ComposerModelPill({
       type="button"
       className={`btn btn-sm btn-ghost${fit.condensed ? ' btn-tight' : ''} composer-model-pill`}
       ref={setPillEl}
+      aria-haspopup="dialog"
+      aria-expanded={pickerOpen}
       title={`Switch ${engineUi.displayName} model${extraTitle}`}
       aria-label={condensedName(acpLabel)}
       onClick={(e) => { pillRef.current = e.currentTarget; togglePicker(); }}
@@ -418,6 +420,8 @@ export function ComposerModelPill({
       type="button"
       className={`btn btn-sm btn-ghost${fit.condensed ? ' btn-tight' : ''} composer-model-pill`}
       ref={setPillEl}
+      aria-haspopup="dialog"
+      aria-expanded={pickerOpen}
       title={`${rawModel || (autoResolved ? `Auto — CLI default resolves to ${autoResolved} on this host` : 'Model not reported yet (Auto)')} — click to switch model / effort${extraTitle}`}
       aria-label={condensedName(cliLabel)}
       onClick={(e) => { pillRef.current = e.currentTarget; togglePicker(); }}

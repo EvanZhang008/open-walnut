@@ -25,6 +25,7 @@ import {
 } from 'react';
 import { typedUserText } from '@open-walnut/history-injected-banner';
 import type { SessionHistoryMessage } from '@/types/session';
+import { ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import type { ThreadMarkState } from '@/utils/thread-mark-state';
 import { hasWords, questionBodyOf } from '@/utils/thread-card';
 import { displayTitleOf, type ThreadMetaIndex } from '@/utils/thread-meta';
@@ -607,7 +608,7 @@ export const ThreadReviewBar = memo(function ThreadReviewBar(p: ThreadReviewBarP
         onClick={onClick}
         onKeyDown={onKeyDown}
       >
-        <span className="thread-review-bar-chevron" aria-hidden="true">{p.collapsed ? '‹' : '›'}</span>
+        <span className="thread-review-bar-chevron" aria-hidden="true">{p.collapsed ? ICON_CHEVRON_LEFT : ICON_CHEVRON_RIGHT}</span>
         {p.collapsed && <span className="thread-review-bar-count" aria-hidden="true">{p.count}</span>}
       </button>
       {resizable && (

@@ -13,7 +13,8 @@ import type { ChangeBlocker, ChangeDeploy, ChangeStage, ChangeStageDetail } from
 import { apiGet } from '@/api/client';
 import { log } from '@/utils/log';
 import { BLOCKER_WORDS, STAGE_WORDS, deployCounts, foldOf, stageRows, stageTime, trackGroups, untilWords } from './change-status';
-import { Chevron, OutIcon, StatusIcon } from './ChangeIcons';
+import { OutIcon, StatusIcon } from './ChangeIcons';
+import { DisclosureChevron } from '@/components/controls';
 
 type DetailState =
   | { kind: 'loading' }
@@ -217,7 +218,7 @@ export function ChangeDeployView({ deploy, taskId, url, stale, focus, now }: {
                   data-testid="change-stage-hide"
                   onClick={() => setOpenedFolds((prev) => { const next = new Set(prev); next.delete(deploy.stages[row.from]!.name); return next; })}
                 >
-                  <Chevron up /> Hide {row.size} {row.status === 'done' ? 'deployed' : 'not reached'}
+                  <DisclosureChevron open /> Hide {row.size} {row.status === 'done' ? 'deployed' : 'not reached'}
                 </button>
               </li>
             )
@@ -246,7 +247,7 @@ export function ChangeDeployView({ deploy, taskId, url, stale, focus, now }: {
                     <span className="change-card-stage-name">{row.stages.length} {row.status === 'done' ? 'deployed' : 'not reached'}</span>
                     <span className="change-card-stage-target">{row.stages[0]!.name} to {row.stages.at(-1)!.name}</span>
                   </span>
-                  <span className="change-card-fold-more">Show <Chevron down /></span>
+                  <span className="change-card-fold-more">Show <DisclosureChevron /></span>
                 </button>
               </li>
             ))}

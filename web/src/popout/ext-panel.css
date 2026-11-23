@@ -287,6 +287,8 @@
 /* A task opened from the first page: Back, its title, its state and project. */
 .ext-taskpage-back { flex: none; display: inline-flex; align-items: center; gap: 1px; height: 30px; padding: 0 8px 0 4px; border: 0; border-radius: var(--radius-full); background: none; color: var(--walnut-accent); font: inherit; font-size: var(--font-size-md); font-weight: 600; cursor: pointer; }
 .ext-taskpage-back:hover { background: var(--hover-bg); }
+.ext-taskpage-back-icon { display: inline-flex; }
+.ext-taskpage-back-icon svg { width: 15px; height: 15px; }
 .ext-taskpage-back:focus-visible { outline: 2px solid var(--walnut-accent); outline-offset: 1px; }
 .ext-taskpage-line { font-size: var(--font-size-sm); color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ext-taskpage-state { font-weight: 600; }

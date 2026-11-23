@@ -37,7 +37,7 @@ import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { useDraftValue } from '@/hooks/useDraft';
 import { draftHash, draftKey } from '@/utils/drafts';
 import { SettingsButton } from '../inputs/SettingsButton';
-import { Checkbox, DisclosureButton } from '@/components/controls';
+import { Checkbox, DisclosureButton, MenuCaret } from '@/components/controls';
 import { MicField, type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import '@/styles/settings-mic.css';
@@ -119,7 +119,7 @@ export function MailRulesPicker({ value, options, onChange, ariaLabel, testId, d
         aria-controls={open ? listId : undefined} aria-label={`${ariaLabel}: ${current?.label ?? value}`}
         data-testid={testId} data-value={value} disabled={disabled} onClick={() => setOpen((was) => !was)}>
         <span className="mail-rules-picker-label">{current?.label ?? value}</span>
-        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" focusable="false"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth="1.5" /></svg>
+        <MenuCaret />
       </button>
       {open && createPortal(
         <div ref={list} id={listId} role="listbox" aria-label={ariaLabel} className="mail-rules-picker-list wn-overlay wn-menu"

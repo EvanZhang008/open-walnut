@@ -21,7 +21,7 @@ import { boardMoveIds, buildHomeBoard, homeBoardTier, pinBoardColumns, type Boar
 import { projectDisplayName } from '@/utils/project-display';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import '@/styles/home-board.css';
-import { DisclosureButton, SegmentedControl } from '@/components/controls';
+import { DisclosureButton, SegmentedControl, MenuCaret } from '@/components/controls';
 import { MicInput } from '@/components/common/BoxMic';
 import { useFocusView } from '@/focus-spaces/useFocusView';
 import '@/styles/header-fit.css';
@@ -51,9 +51,9 @@ function BoardTask({ family, mode, onOpen, onMove, onSnooze, onDone, depth = 0, 
     <div className="home-board-meta"><span className={`home-board-state home-board-state-${state}`}><i />{taskStatusLabel(task)}</span>{mode === 'status' && <span>{tierLabel(task)}</span>}
       {until && <span className="home-board-snoozed" data-board-snoozed>{/^snoozed/i.test(taskStatusLabel(task)) ? `until ${until}` : `Snoozed until ${until}`}</span>}
       {open && <span className="home-board-actions">
-        <button type="button" data-board-snooze aria-haspopup="dialog" aria-label={`Snooze ${orgDisplayTitle(task)}`} onClick={e => onSnooze(task, e.currentTarget)}>Snooze</button>
+        <button type="button" data-board-snooze aria-haspopup="dialog" aria-label={`Snooze ${orgDisplayTitle(task)}`} onClick={e => onSnooze(task, e.currentTarget)}>Snooze<MenuCaret /></button>
         <button type="button" data-board-done-button aria-label={`Mark ${orgDisplayTitle(task)} done`} onClick={() => onDone(task)}>Done</button>
-        {mode === 'pin' && <button type="button" data-board-move disabled={moving} aria-label={`Move ${orgDisplayTitle(task)} to pin tier`} onClick={e => onMove(task, e.currentTarget)}>Move</button>}
+        {mode === 'pin' && <button type="button" data-board-move disabled={moving} aria-haspopup="menu" aria-label={`Move ${orgDisplayTitle(task)} to pin tier`} onClick={e => onMove(task, e.currentTarget)}>Move<MenuCaret /></button>}
       </span>}
     </div>
     {!depth && parent && <div className="home-board-parent" title={orgDisplayTitle(parent)}>Under {orgDisplayTitle(parent)}</div>}

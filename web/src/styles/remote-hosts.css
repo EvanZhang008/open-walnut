@@ -247,7 +247,6 @@ html body .wn-context-menu.rh-add-menu {
 }
 
 /* The Kind picker's button (HostProfileDisclosure.tsx): its chevron points down, at the words. */
-.rh-kind-chevron { margin-left: 4px; transform: rotate(90deg); vertical-align: -1px; }
 
 /* ── 700 px with a mouse: a row's buttons stay 28 px (2026-11-05 review: every row button grew
    to a 44 px box and the rows read heavy), and so do the Overview's (Refresh, a card's Set up, a

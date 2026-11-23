@@ -1,7 +1,6 @@
 /* Icon slots that replaced old text glyphs (check, times, circle, chevrons) on the
-   /tasks filter panel (ViewDropdown), its chips and toolbar, and the tab bar's menu
-   button. Icons come from Icons.tsx at 12 to 14px; these rules size them to the text
-   they sit in. Existing tokens only. */
+   /tasks filter panel (ViewDropdown), its chips and toolbar. Icons come from Icons.tsx at
+   12 to 14px; these rules size them to the text they sit in. Existing tokens only. */
 .vd-cat-icon { display: inline-flex; align-items: center; }
 .vd-cat-icon { margin-right: 4px; flex-shrink: 0; }
 .vd-cat-icon svg { width: 11px; height: 11px; }
@@ -12,8 +11,5 @@
 .task-filter-chips .usage-chip-x svg { width: 9px; height: 9px; }
 .tp-chip-icon { display: inline-flex; align-items: center; }
 .tp-chip-icon svg { width: 11px; height: 11px; }
-/* The tab bar's own menu button (TodoSectionTabs): the shared chevron at the old 10px. */
-.todo-section-tabs-menu-icon { display: inline-flex; align-items: center; }
-.todo-section-tabs-menu-icon svg { width: 10px; height: 10px; }
 /* The tab bar menu's section names are the shared .wn-menu-heading (overlay-family.css), which
    took the Display menu's sentence case (F31) for every menu. */

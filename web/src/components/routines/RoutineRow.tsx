@@ -11,7 +11,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Routine } from '@/api/routines';
-import { DisclosureButton, ToggleSwitch } from '@/components/controls';
+import { DisclosureButton, DisclosureChevron, ToggleSwitch } from '@/components/controls';
 import { AuditRow } from './RoutineAuditRow';
 import {
   auditHistory, clockHostTitle, describeAgo, describeCheck, describeClockHost, describeClockWait,
@@ -160,7 +160,7 @@ export function RoutineRow({
               {rowTiming(routine).replace(/ (AM|PM)\b/g, '\u00a0$1')}
             </span>
           </span>
-          <Chevron open={open} />
+          <DisclosureChevron open={open} className="routine-row-chevron" />
         </button>
         <span className="routine-row-toggle-slot" title={switchWord}>
           <ToggleSwitch
@@ -343,15 +343,6 @@ export function RoutineRow({
         </div>
       )}
     </li>
-  );
-}
-
-/** The row and fold mark: one drawn shape, the same size pointing right or down. */
-export function Chevron({ open }: { open: boolean }) {
-  return (
-    <svg className={`routine-row-chevron${open ? ' open' : ''}`} viewBox="0 0 16 16" aria-hidden="true">
-      <path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
   );
 }
 

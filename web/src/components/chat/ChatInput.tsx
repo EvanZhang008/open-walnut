@@ -51,7 +51,7 @@ import { useFocusRequest } from '@/utils/focus-when-shown';
 import { caretBackOnMount } from '@/utils/composer-caret-keep';
 import { caretOnEdgeLine, noteSentPrompt, recallPrompts, stepRecall, type RecallPos } from './prompt-recall';
 import { composerDrawing, type DrawingPlace } from './drawing-place';
-import { ToggleSwitch } from '@/components/controls';
+import { MenuCaret, ToggleSwitch } from '@/components/controls';
 import { SESSION_NOTE_LABEL, SIDE_CHAT_LABEL } from './composer-words';
 
 // Picture types, limit, read and paste rule are shared with every answer box (image-attachments.ts).
@@ -2488,9 +2488,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                 aria-expanded={sendMenuOpen}
                 title="More send options"
               >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="6 9 12 15 18 9" />
-                </svg>
+                <MenuCaret />
               </button>
               {sendMenuOpen && (
                 <div ref={sendMenuRef} className="chat-send-menu wn-overlay wn-menu" role="menu" onPointerDown={(event) => event.stopPropagation()} style={menuPlacementStyle(sendPlacement)}>

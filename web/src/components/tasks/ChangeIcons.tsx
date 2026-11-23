@@ -44,12 +44,3 @@ export function OutIcon() {
     </svg>
   );
 }
-
-/** A chevron: sideways, down for what opens in place, up for what folds it again. */
-export function Chevron({ down, up }: { down?: boolean; up?: boolean }) {
-  return (
-    <svg className="change-icon-chevron" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d={down ? 'M3 4.5l3 3 3-3' : up ? 'M3 7.5l3-3 3 3' : 'M4.5 3l3 3-3 3'} />
-    </svg>
-  );
-}

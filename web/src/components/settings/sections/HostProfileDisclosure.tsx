@@ -19,7 +19,7 @@ import { AgentText } from '@/components/common/AgentText';
 import { log } from '@/utils/log';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SettingsRow } from '../SettingsSection';
-import { ChevronGlyph } from '../settings-glyphs';
+import { MenuCaret } from '@/components/controls';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation } from '@/hooks/useSendAfterDictation';
 import { focusLanded } from '@/utils/focus-landed';
@@ -213,7 +213,7 @@ export function HostProfileDisclosure({ hp, alias, name }: { hp: HostProfileStat
                     }}
                   >
                     {hostKindLabel(profile.kind)}{profile.kindSetByUser ? '' : ' (automatic)'}
-                    <ChevronGlyph size={10} className="rh-kind-chevron" />
+                    <MenuCaret />
                   </SettingsButton>
                   </span>
                 }

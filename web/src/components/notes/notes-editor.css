@@ -713,11 +713,6 @@ mark.notes-search-mark {
   color: var(--fg-secondary);
 }
 .notes-bookmarks-header:hover { background: var(--bg-hover); }
-.notes-bookmarks-header .notes-tree-arrow {
-  display: inline-flex;
-  transition: transform 0.12s ease;
-}
-.notes-bookmarks-header .notes-tree-arrow.expanded { transform: rotate(90deg); }
 .notes-bookmarks-count {
   margin-left: auto;
   font-size: var(--font-size-xs);

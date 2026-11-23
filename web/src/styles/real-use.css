@@ -96,8 +96,7 @@
   cursor: pointer;
 }
 .ru-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.ru-chev { display: inline-flex; flex: none; margin-top: 2px; color: var(--fg-muted); transition: transform 120ms ease-out; }
-.ru-row.is-open .ru-chev { transform: rotate(90deg); }
+.ru-chev { margin-top: 2px; }
 .ru-kind { min-width: 0; overflow-wrap: anywhere; }
 
 .ru-spark-cell { display: block; }

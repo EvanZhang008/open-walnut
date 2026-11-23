@@ -77,6 +77,7 @@ import { useSessionCommentsApi } from '@/contexts/SessionCommentsContext';
 import { useSessionThreadsApi } from '@/contexts/SessionThreadsContext';
 import { fitsAsComment, passageGist } from '@/utils/passage-comments';
 import { ICON_PIN } from './MessageActionIcons';
+import { MenuCaret } from '@/components/controls';
 import { passageExtent, rangePoint, sameBoundaries, sameHeldPoint, useHeldPassage, type HeldPoint } from './useHeldPassage';
 import { log } from '@/utils/log';
 import { ASK_MODE_HINT, ASK_MODE_LABEL, ASK_MODES, type AskMode } from '@/utils/ask-mode';
@@ -940,7 +941,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, as
             onClick={() => { if (askPick) { setAskPick(false); return; } hold(); setCommentOpen(false); setAskPick(true); }}
             title="Choose how to ask: inline or in Tree"
           >
-            <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            <MenuCaret />
           </button>
         </span>
       )}

@@ -6,6 +6,7 @@ import { useShowPriority } from '@/hooks/useShowPriority';
 import { SyncChoiceField } from './SyncChoice';
 import { MicInput, type BoxMicHandle } from '@/components/common/BoxMic';
 import { projectGroupKey } from '@/utils/project-display';
+import { MenuCaret } from '@/components/controls';
 import {
   PRIORITY_CYCLE,
   PRIORITY_OPTIONS,
@@ -132,25 +133,34 @@ export function QuickTaskConfirm({
             type="button"
             className="btn btn-sm qtc-field"
             disabled={submitting}
+            aria-haspopup="dialog"
+            aria-expanded={startPickerOpen}
             onClick={() => { setDatePickerOpen(false); setEndPickerOpen(false); setStartPickerOpen((open) => !open); }}
           >
             {draft.start ? `Start ${formatDateTimeDisplay(draft.start)}` : 'No start'}{/* empty-state-ok: button label */} <AiBadge visible={draft.aiFields.has('start')} />
+            <MenuCaret />
           </button>
           <button
             type="button"
             className={`btn btn-sm qtc-field${!draft.end ? ' btn-ghost' : ''}`}
             disabled={submitting}
+            aria-haspopup="dialog"
+            aria-expanded={endPickerOpen}
             onClick={() => { setDatePickerOpen(false); setStartPickerOpen(false); setEndPickerOpen((open) => !open); }}
           >
             {draft.end ? `End ${formatDateTimeDisplay(draft.end)}` : '+ End'} <AiBadge visible={draft.aiFields.has('end')} />
+            <MenuCaret />
           </button>
           <button
             type="button"
             className={`btn btn-sm qtc-field${!draft.due ? ' btn-ghost' : ''}`}
             disabled={submitting}
+            aria-haspopup="dialog"
+            aria-expanded={datePickerOpen}
             onClick={() => { setStartPickerOpen(false); setEndPickerOpen(false); setDatePickerOpen((open) => !open); }}
           >
             {draft.due ? `Due ${formatDateTimeDisplay(draft.due)}` : '+ Due'} <AiBadge visible={draft.aiFields.has('due')} />
+            <MenuCaret />
           </button>
           {showPriority && (
             <button

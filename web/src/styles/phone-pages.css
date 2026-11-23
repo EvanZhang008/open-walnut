@@ -500,6 +500,10 @@
   .phone-detail-row-value {
     color: var(--fg-secondary);
   }
+
+  .phone-detail-row .wn-menu-caret {
+    color: var(--fg-muted);
+  }
 }
 
 /* The phase list sheet (outside the query: it only ever opens on a phone). */

@@ -109,17 +109,10 @@ export function NavigationHeading({ id, label, className = '', collapsed, icon, 
         <span className="navigation-label">{label}</span>
         {(divider ? divider.count : count) !== undefined && <span className="navigation-heading-count">{divider ? divider.count : count}</span>}
         {divider && <span className="navigation-heading-rule" aria-hidden="true" />}
-        {collapsed !== undefined && <NavigationChevron collapsed={collapsed} />}
+        {collapsed !== undefined && <DisclosureChevron open={!collapsed} className="navigation-chevron" />}
       </button>
       <button type="button" className="navigation-more" aria-label={`${label} menu`} aria-haspopup="menu" onClick={event => openMenu(event)} onPointerDown={event => event.stopPropagation()}>···</button>
     </div>
     {menu && <ContextMenu point={menu} items={items} onClose={() => setMenu(null)} returnFocus={menu.origin} ariaLabel={`${label} actions`} />}
   </>;
-}
-
-/** Trails the name, Claude-sidebar style: `⌄` open, `›` folded. */
-/** A heading's open state is the shared Disclosure chevron (right when shut, down when open),
- *  never a fill: the heading button carries aria-expanded. */
-export function NavigationChevron({ collapsed }: { collapsed: boolean }) {
-  return <DisclosureChevron open={!collapsed} className="navigation-chevron" />;
 }

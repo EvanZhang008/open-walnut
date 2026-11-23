@@ -4,6 +4,7 @@
  * same-page `#<parent>` link: SettingsPage turns it into a hash replace, so it
  * works the same on a phone, where the pane layer stays open on the parent.
  */
+import { ICON_CHEVRON_LEFT } from '@/components/common/Icons'
 import { parentPane } from './settings-routing'
 import type { SettingsPaneMeta } from './settings-pane-context'
 
@@ -29,7 +30,7 @@ export function SettingsPaneBack({ paneId, metaFor }: { paneId: string; metaFor:
       // Enter on the link: the pane it leaves unmounts, so focus moves to the parent's title.
       onClick={(e) => { if (e.detail === 0) focusTitleSoon(parent) }}
     >
-      <span className="settings-pane-back-chevron" aria-hidden="true">‹</span>
+      <span className="settings-pane-back-chevron" aria-hidden="true">{ICON_CHEVRON_LEFT}</span>
       {label}
     </a>
   )

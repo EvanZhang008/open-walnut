@@ -147,7 +147,7 @@
 }
 .thread-asked-inline-btn:hover { background: var(--accent-subtle); }
 .thread-asked-inline-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.thread-asked-chevron { flex: none; color: var(--fg-muted); }
+.thread-asked-chevron { flex: none; display: inline-flex; color: var(--fg-muted); }
 
 /* The page's quote head already shows the passage: the head row hides the quote
    block its text starts with (display only; the transcript is unchanged). */

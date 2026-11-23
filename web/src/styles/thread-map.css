@@ -89,8 +89,6 @@
   cursor: pointer;
 }
 .thread-map-icon:hover { background: var(--thread-row-hover); color: var(--fg); }
-/* The chevron points right by default: hiding folds the map to the left. */
-.thread-map-hide .thread-icon { transform: rotate(180deg); }
 
 .thread-map-rows {
   display: flex;
@@ -185,8 +183,6 @@
 }
 .thread-map-pin { color: var(--fg-muted); }
 .thread-map-fold { display: inline-grid; place-items: center; color: var(--fg-muted); }
-.thread-map-fold .thread-icon { fill: currentColor; transition: transform 120ms ease; }
-.thread-map-fold[data-open="true"] .thread-icon { transform: rotate(90deg); }
 .thread-map-label {
   flex: 1 1 auto;
   min-width: 0;
@@ -345,7 +341,6 @@
   from { opacity: 0; transform: translateY(-2px); }
   to { opacity: 1; transform: none; }
 }
-.thread-map-keep .thread-icon { transform: none; }
 
 .thread-map-icon:focus-visible,
 .thread-map-archive:focus-visible,
@@ -359,6 +354,5 @@
 .thread-map-rail[data-kb-focus="true"]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .thread-map-fold .thread-icon { transition: none; }
   .thread-map-overlay { animation: none; }
 }

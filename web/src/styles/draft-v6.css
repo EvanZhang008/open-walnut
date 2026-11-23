@@ -132,7 +132,7 @@
 /* "detected" on the key line: the name under it keeps the field's whole width. */
 .draft-v6-key-note { margin-left: 6px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--accent); }
 .draft-v6-project-name.is-empty { color: var(--fg-muted); font-weight: 500; }
-.draft-v6-caret { flex: none; display: inline-flex; color: var(--fg-muted); margin-left: auto; }
+.draft-v6-caret { color: var(--fg-muted); margin-left: auto; }
 .draft-v6-host .draft-v6-caret { margin-left: 2px; }
 .draft-v6-project-icon {
   flex: none;

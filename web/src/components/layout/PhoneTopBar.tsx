@@ -9,7 +9,8 @@
 import { useCallback, useSyncExternalStore, type Ref } from 'react';
 import { usePhoneOverlayTop } from '@/hooks/usePhoneOverlayHistory';
 import { useResyncState } from '@/hooks/usePhoneResync';
-import { ChevronLeftIcon, MenuLinesIcon } from '../common/PhoneIcons';
+import { MenuLinesIcon } from '../common/PhoneIcons';
+import { ICON_CHEVRON_LEFT } from '../common/Icons';
 import { PhoneStatusRow } from './PhoneStatusRow';
 import '@/styles/header-fit.css';
 
@@ -80,7 +81,7 @@ export function PhoneTopBar({ pageTitle, menuRef, menuExpanded, onMenu }: PhoneT
           onClick={top.close}
           aria-label="Back"
         >
-          <ChevronLeftIcon size={24} />
+          {ICON_CHEVRON_LEFT}
         </button>
       ) : (
         <button

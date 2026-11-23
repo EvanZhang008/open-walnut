@@ -4,7 +4,7 @@ import { PHONE_SHOW_SECTION_EVENT } from './PhoneTierEmpty';
 import * as ICONS from '../common/Icons';
 import '@/styles/view-menu-choices.css';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
-import { Tab, TabList } from '@/components/controls';
+import { MenuCaret, Tab, TabList } from '@/components/controls';
 import type { CustomTierDef } from '@/api/focus';
 import {
   TAB_BAR_HIDDEN_TABS_KEY, TAB_BAR_HIDE_EMPTY_KEY, TASK_SHORTCUTS_KEY,
@@ -169,7 +169,7 @@ export const TodoSectionTabs = memo(function TodoSectionTabs({ active, onChange,
         onPointerDown={(event) => event.stopPropagation()}
       >
         {wide && <span className="todo-section-tabs-menu-label">More</span>}
-        <span className="todo-section-tabs-menu-icon" aria-hidden="true">{ICONS.ICON_CHEVRON_DOWN}</span>
+        <MenuCaret />
       </button>
       {menu && <ContextMenu point={menu} items={items} onClose={() => setMenu(null)} returnFocus={menu.origin} ariaLabel="Tab bar options" className="todo-section-tabs-ctx" />}
     </div>

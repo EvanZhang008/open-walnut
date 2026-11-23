@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Routine, RoutineAuditEntry } from '@/api/routines';
 import { auditClock, describeAuditEntry } from '@/utils/routine-format';
 import { EmptyState } from '@/components/common/EmptyState';
+import { DisclosureChevron } from '@/components/controls';
 import '@/styles/trigger-state.css';
 
 /**
@@ -44,7 +45,7 @@ export function AuditRow({ entry, check, onOpenSession, nameTask, repeat = 1 }: 
         <span className="trigger-audit-clock">{auditClock(entry.atMs)}</span>
         <span className="trigger-audit-what">{nameTask ? nameTask(describeAuditEntry(entry, check)) : describeAuditEntry(entry, check)}</span>
         {repeat > 1 && <span className="trigger-audit-repeat" title={`The same ${repeat} times in a row`}>×{repeat}</span>}
-        {canOpen && <span className={`trigger-audit-chevron${open ? ' open' : ''}`}>›</span>}
+        {canOpen && <DisclosureChevron open={open} />}
       </button>
       {open && (
         <div className="trigger-audit-detail">

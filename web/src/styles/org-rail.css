@@ -60,9 +60,6 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 }
 .org-task-section-head:hover { background: var(--bg-secondary); }
 .org-task-section-head i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; }
-/* The chevron is drawn, so the heading's text is its name and count alone. */
-.org-task-section-head::before { content: '›' / ''; flex: none; width: 10px; color: var(--fg-muted); transition: transform 0.12s; }
-.org-task-section-head[aria-expanded="true"]::before { transform: rotate(90deg); }
 .org-task-section-icon { flex: none; display: inline-flex; color: var(--fg-muted); }
 .org-task-section-icon svg { width: 12px; height: 12px; }
 .org-task-section-count { color: var(--fg-muted); font-weight: 400; }

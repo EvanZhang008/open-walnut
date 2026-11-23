@@ -39,7 +39,7 @@ import {
   unsubscribeStatusLine,
 } from './mail-unsubscribe-state';
 import { SparklesIcon } from '@/components/icons/SparklesIcon';
-import { MenuCaret } from '@/components/controls';
+import { DisclosureChevron } from '@/components/controls';
 import {
   ArchiveBoxIcon,
   DocumentIcon,
@@ -127,8 +127,9 @@ export function MailReaderHead({ open, message, accounts, providers }: Props) {
                 aria-expanded={details}
                 onClick={() => setDetails((was) => !was)}
               >
+                {/* A fold: the rows it shows open under the head, so it takes the fold's chevron. */}
+                <DisclosureChevron open={details} />
                 Details
-                <MenuCaret size={12} />
               </button>
             )}
           </span>

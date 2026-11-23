@@ -116,7 +116,7 @@
 }
 .settings-group .cloud-pill { background: none; padding: 0; border: 0; }
 /* The go chevron of a provider card (a step forward, never a disclosure). */
-.cloud-provider-go { flex: none; color: var(--fg-muted); }
+.cloud-provider-go { flex: none; display: inline-flex; color: var(--fg-muted); }
 
 /* Wizard buttons under the last group, right-aligned with the group edge. */
 .settings-addons-actions {

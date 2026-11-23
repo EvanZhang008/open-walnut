@@ -36,6 +36,7 @@ import { RECENT_SHOWN, chipStateOf, taskbarView, type ChipState, type TaskbarSet
 import { fetchSessionHistory } from '@/api/sessions';
 import { taskOfSession, taskStatusLabel } from '@/utils/session-status';
 import { ICON_CLOSE } from '@/components/common/Icons';
+import { MenuCaret } from '@/components/controls';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { AgentText } from '@/components/common/AgentText';
 import { taskTextSource } from '@/utils/agent-text-source';
@@ -196,7 +197,7 @@ function RecentMore({ ids, tasks, onRestore, onClose }: { ids: readonly string[]
         aria-expanded={open}
         aria-label={`${ids.length} more recent`}
         onClick={() => setOpen(!open)}
-      >{ids.length} more</button>
+      >{ids.length} more<MenuCaret /></button>
       {open && createPortal(
         <div
           ref={menuRef}
@@ -297,9 +298,10 @@ function TaskbarChip({ sessionId, task, dragging, onRestore, onClose, onDragStar
         className="session-taskbar-peek"
         onClick={() => { clearTimer(); setPeek((p) => (p === 'pinned' ? 'none' : 'pinned')); }}
         aria-label={`Peek at ${title}`}
+        aria-haspopup="dialog"
         aria-expanded={peek !== 'none'}
       >
-        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><polyline points="2,6.5 5,3.5 8,6.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+        <MenuCaret />
       </button>
       <button
         type="button"

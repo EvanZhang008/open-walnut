@@ -73,6 +73,7 @@ import {
 } from '@/utils/engines';
 import { DraftFallbackNotice, draftFallbackPill, useDraftFallback } from './DraftFallbackNotice';
 import { ModelPicker, shortAcpModelName } from './ModelPicker';
+import { MenuCaret } from '@/components/controls';
 import { useAcpModelName } from './engine-default-model';
 import { LaunchSourceNote } from './LaunchSourceNote';
 import { effortName as effortLabel } from '@/components/settings/sections/claude-launch-defaults-select';
@@ -302,6 +303,7 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
       <button
         type="button"
         className="btn btn-sm btn-ghost composer-model-pill draft-model-select"
+        aria-haspopup="dialog" aria-expanded={open}
         title={fallbackLabel
           ? `${fallbackLabel}: the default engine is out of usage here, so this task starts on the fallback. Pick a model or provider to choose for yourself.`
           : acpModels
@@ -321,6 +323,7 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
             {' · '}{SESSION_EFFORTS.find((e) => e.id === pickedEffort)?.label ?? pickedEffort}
           </span>
         )}
+        <MenuCaret />
       </button>
       {open && (
         <ModelPicker

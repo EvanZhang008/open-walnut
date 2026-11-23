@@ -24,7 +24,9 @@ import { useEffect, useRef, useState, type MouseEvent, type PointerEvent as Reac
 import { useSubtitleIndent } from '@/hooks/useSubtitleIndent';
 import type { ThreadStackHeaderProps } from '@/components/sessions/thread-ui-contract';
 import { ThreadConfirm } from '@/components/sessions/ThreadConfirm';
-import { ThreadArchiveIcon, ThreadChevronIcon, ThreadCloseIcon, ThreadReopenIcon } from '@/components/sessions/ThreadIcons';
+import { ThreadArchiveIcon, ThreadCloseIcon, ThreadReopenIcon } from '@/components/sessions/ThreadIcons';
+import { ICON_CHEVRON_LEFT } from '@/components/common/Icons';
+import { MenuCaret } from '@/components/controls';
 import { ThreadInlineRename } from '@/components/sessions/ThreadInlineRename';
 import { ThreadPathMenu, pathItems } from '@/components/sessions/ThreadStackCrumbs';
 import { ThreadStatusWord } from '@/components/sessions/ThreadStatusWord';
@@ -128,7 +130,7 @@ export function ThreadStackHeader(p: ThreadStackHeaderProps) {
         <button ref={caretRef} type="button" data-choice-exempt="split button caret that opens the archive menu" className="thread-stack-done-caret" aria-haspopup="menu"
           aria-expanded={menu?.kind === 'done'} aria-label="Archive, back to start" title="Archive, back to start"
           onClick={() => setMenu(menu?.kind === 'done' ? null : { kind: 'done' })}>
-          <ThreadChevronIcon size={10} className="thread-icon--down" />
+          <MenuCaret />
         </button>
       )}
     </span>
@@ -230,7 +232,7 @@ export function ThreadStackHeader(p: ThreadStackHeaderProps) {
           onContextMenu={onBackContext}
           onClick={onBackClick}
         >
-          <ThreadChevronIcon size={12} className="thread-icon--back" />
+          {ICON_CHEVRON_LEFT}
           {!backIconOnly && <span className="thread-stack-back-text">{backText}</span>}
         </button>
         <div ref={titleRef} className="thread-stack-title-block" title={question}>

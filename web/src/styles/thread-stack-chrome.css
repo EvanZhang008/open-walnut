@@ -109,10 +109,8 @@
   display: inline-grid; place-items: center; flex: none; width: 14px; height: 14px; border-radius: var(--radius-xs);
   color: var(--fg-secondary);
 }
-.thread-tree-disclosure svg { fill: currentColor; }
+.thread-tree-disclosure .wn-disclosure-chevron { color: inherit; }
 .thread-tree-row:hover .thread-tree-disclosure { color: var(--fg); }
-.thread-tree-disclosure svg { transition: transform 120ms ease; }
-.thread-tree-disclosure[data-open="true"] svg { transform: rotate(90deg); }
 /* Under a filter or a search the tree cannot fold, but its triangles still say
    where a question has follow-ups: dimmed, never below 3:1 (N26). */
 .thread-tree-disclosure[data-disabled="true"] { opacity: 0.75; cursor: default; }
@@ -206,8 +204,7 @@
 /* Narrow: a short iOS style back label (N7), never wider than 28% or 110px. */
 .thread-stack-back[data-narrow="true"] { max-width: min(28%, 110px); padding: 0 5px 0 3px; }
 .thread-stack-back-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.thread-icon--back { transform: rotate(180deg); flex: none; }
-.thread-icon--down { transform: rotate(90deg); }
+.thread-stack-back > svg { flex: none; }
 .thread-stack-title-block { flex: 1 1 0; min-width: min(34%, 200px); }
 .thread-stack-title-line { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
 .thread-stack-title {
@@ -298,7 +295,6 @@
   .thread-drawer { animation: thread-drawer-fade-in 120ms linear; }
   .thread-drawer[data-state="closing"] { animation: thread-drawer-fade-out 120ms linear forwards; }
   .thread-tree-row[data-pulse="true"], .thread-tree-skeleton { animation: none; }
-  .thread-tree-disclosure svg { transition: none; }
 }
 @keyframes thread-drawer-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes thread-drawer-fade-out { from { opacity: 1; } to { opacity: 0; } }

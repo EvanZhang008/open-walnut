@@ -43,8 +43,9 @@ import { FileTreeEditRow } from './FileTreeEditRow';
 import { useFileTreeMutations, judgeRestoredSelection } from './useFileTreeMutations';
 import { parentPath, revealAncestors } from './reveal-ancestors';
 import {
-  ICON_REFRESH, ICON_CLOSE, ICON_PANEL_LEFT, ICON_PANEL_LEFT_FILLED, ICON_ARROW_UP, ICON_EYE, ICON_CHEVRON_RIGHT, ICON_CHEVRON_DOWN, ICON_CHEVRON_LEFT, ICON_FOLDER, ICON_FILE,
+  ICON_REFRESH, ICON_CLOSE, ICON_PANEL_LEFT, ICON_PANEL_LEFT_FILLED, ICON_ARROW_UP, ICON_EYE, ICON_CHEVRON_RIGHT, ICON_CHEVRON_LEFT, ICON_FOLDER, ICON_FILE,
 } from '@/components/common/Icons';
+import { DisclosureChevron } from '@/components/controls';
 import type { ContextMenuItem } from '@/components/common/ContextMenu';
 import { formatSize } from '@/utils/format';
 import { getRecentFolders, fuzzyMatchRecents, type RecentFolder } from '@/utils/recentFolders';
@@ -1812,7 +1813,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                   title={section.path}
                 >
                   <span className="sfe-arrow" data-state={isRootLoading ? 'loading' : isOpen ? 'open' : 'closed'}>
-                    {isRootLoading ? '…' : isOpen ? ICON_CHEVRON_DOWN : ICON_CHEVRON_RIGHT}
+                    {isRootLoading ? '…' : <DisclosureChevron open={isOpen} />}
                   </span>
                   <span className="sfe-icon" data-kind="dir">{ICON_FOLDER}</span>
                   <span className={`sfe-name wn-title${section.prefix ? ' sfe-name-ctx' : ''}`}>
@@ -1868,7 +1869,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                           className="sfe-arrow"
                           data-state={node.type !== 'dir' ? undefined : isLoading ? 'loading' : isExpanded ? 'open' : 'closed'}
                         >
-                          {node.type === 'dir' ? (isLoading ? '…' : isExpanded ? ICON_CHEVRON_DOWN : ICON_CHEVRON_RIGHT) : null}
+                          {node.type === 'dir' ? (isLoading ? '…' : <DisclosureChevron open={isExpanded} />) : null}
                         </span>
                         <span className="sfe-icon" data-kind={node.type}>{node.type === 'dir' ? ICON_FOLDER : ICON_FILE}</span>
                         <span className="sfe-name wn-title">{node.name}</span>

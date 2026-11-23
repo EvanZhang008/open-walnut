@@ -388,7 +388,6 @@
 
 /* ── Explorer: tree glyphs (line icons, one colour, not emoji) ────────────── */
 .session-file-explorer-node .sfe-arrow { display: inline-flex; align-items: center; justify-content: center; }
-.session-file-explorer-node .sfe-arrow svg { width: 10px; height: 10px; }
 .session-file-explorer-node .sfe-icon { display: inline-flex; align-items: center; color: var(--fg-muted); }
 .session-file-explorer-node .sfe-icon svg { width: 14px; height: 14px; }
 .session-file-explorer-node .sfe-icon[data-kind='dir'] { color: var(--accent-text); }

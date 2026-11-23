@@ -20,7 +20,7 @@ import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import { KEEP_SELECTION_ATTR } from '@/utils/selection-guard';
 import { notifyDictationActivity, type DictationControl } from '@/hooks/useSendAfterDictation';
-import { DisclosureChevron } from '@/components/controls';
+import { DisclosureChevron, MenuCaret } from '@/components/controls';
 
 /** How long the mic may take to send its first sound before the button says so in words. */
 const SLOW_START_HINT_MS = 700;
@@ -587,11 +587,11 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
           onClick={handleChevronClick}
           role="button"
           tabIndex={0}
+          aria-haspopup="menu"
+          aria-expanded={dropdownOpen}
           title="Retry, vocabulary, or copy audio"
         >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="6 9 12 15 18 9" />
-          </svg>
+          <MenuCaret size={8} />
         </span>
       )}
 

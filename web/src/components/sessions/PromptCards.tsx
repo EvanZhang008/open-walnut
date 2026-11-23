@@ -18,7 +18,8 @@ import { usePhoneLayerWithBar } from './phone-session-layer';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { useArmAfterAppear, useHoldSettled } from '@/hooks/useArmAfterAppear';
 import { foldLongCommand } from './tool-call-grouping';
-import { ChevronRightIcon, QuestionCircleIcon } from '@/components/common/PhoneIcons';
+import { QuestionCircleIcon } from '@/components/common/PhoneIcons';
+import { DisclosureChevron } from '@/components/controls';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { PermissionNoteBox } from './PermissionNoteBox';
 import { useImageAttachments, type ImageAttachments } from '@/components/common/image-attachments';
@@ -527,7 +528,7 @@ export function PermissionRequestCard({ sessionId, requestId, toolName, input, r
       {inputPreview && (
         <div className="permission-request-input">
           <button className="permission-request-input-toggle" onClick={() => setInputExpanded(p => !p)}>
-            <span className={`permission-request-input-chevron${inputExpanded ? ' is-open' : ''}`} aria-hidden="true"><ChevronRightIcon size={10} /></span> Input
+            <DisclosureChevron open={inputExpanded} size={10} /> Input
           </button>
           {inputExpanded && <pre className="permission-request-input-preview">{inputPreview}</pre>}
         </div>

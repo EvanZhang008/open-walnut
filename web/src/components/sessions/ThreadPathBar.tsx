@@ -22,7 +22,7 @@ import { memo, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { EmptyState } from '@/components/common/EmptyState';
 import { createPortal } from 'react-dom';
 import { THREAD_OVERLAY_ATTR, THREAD_OVERLAY_SELECTOR } from '@/components/sessions/ThreadConfirm';
-import { ThreadChevronIcon } from '@/components/sessions/ThreadIcons';
+import { MenuCaret } from '@/components/controls';
 import { ThreadStatusDot } from '@/components/sessions/ThreadStatusDot';
 import { ThreadStatusWord } from '@/components/sessions/ThreadStatusWord';
 import { isMacPlatform } from '@/hooks/usePanelKeyRouter';
@@ -113,7 +113,7 @@ export const ThreadPathBar = memo(function ThreadPathBar(p: ThreadPathBarProps) 
                 title="Questions at this level"
                 onClick={() => setOpen((o) => (o === j ? null : j))}
               >
-                <ThreadChevronIcon size={10} className="thread-icon--down" />
+                <MenuCaret />
               </button>
             </li>
           );

@@ -18,6 +18,7 @@
   all: unset; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center;
   width: 24px; height: 28px; border-radius: var(--radius-full); color: var(--fg-muted); cursor: pointer;
 }
+.ask-pager-btn svg { width: 14px; height: 14px; }
 .ask-pager-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
 .ask-pager-btn:disabled { opacity: 0.35; cursor: default; }
 .ask-pager-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

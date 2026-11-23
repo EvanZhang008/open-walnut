@@ -354,7 +354,7 @@ export function ThinkingSection({ block }: { block: ThinkingBlock }) {
     <div className="tool-run-row">
       <button className="tool-run-toggle" onClick={() => setOpen((p) => !p)}>
         <span className="tool-run-label">Thinking</span>
-        <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'\u203A'}</span>
+        <DisclosureChevron open={open} className="tool-run-chevron" />
       </button>
       {open && (
         <div className="tool-run-body">

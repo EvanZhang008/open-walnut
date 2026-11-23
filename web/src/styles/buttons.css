@@ -235,6 +235,10 @@
   transition: transform 0.12s;
 }
 .btn[aria-expanded='true'] .btn-caret { transform: rotate(180deg); }
+/* On a filled key the muted grey would sink into the fill: the caret takes the label's colour. */
+.btn-primary .btn-caret { color: inherit; }
+/* In a SettingsButton's label (a line of text, not the key's flex row) it sits on the words' middle. */
+.btn-label .btn-caret { vertical-align: middle; }
 
 /* A label that must not change the key's width (Refresh / Refreshing...): the widest of the labels
    it may show (data-r1, data-r2) sits hidden in the same grid cell (SettingsButton's `reserve`). */

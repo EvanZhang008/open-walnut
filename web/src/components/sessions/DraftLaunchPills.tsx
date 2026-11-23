@@ -23,6 +23,7 @@ import type { DraftDecisionMenu } from './DraftDecisionRow';
 import { DRAFT_MENU_OWNER_ATTR, menuTriggerProps } from './DraftDecisionRow';
 import type { DraftProjectChipModel } from './draft-project-chip';
 import '@/styles/draft-launch-pills.css';
+import { MenuCaret } from '@/components/controls';
 
 function AiBadge({ on }: { on: boolean }) {
   return on ? <span className="draft-ai-badge" aria-label="AI suggested">✦</span> : null;
@@ -72,6 +73,8 @@ export function DraftFolderPill({ draft, pillRef, pickerOpen, ai, onOpenPicker, 
       className={cls}
       onClick={isFork ? undefined : onOpenPicker}
       disabled={isFork}
+      aria-haspopup={isFork ? undefined : 'dialog'}
+      aria-expanded={isFork ? undefined : pickerOpen}
       title={title}
       aria-label={draft.cwd ? `Folder and host: ${draft.cwd} on ${hostName}. Change` : emptyFolder ? `Folder: ${emptyFolder}. Choose folder and host` : 'Choose folder and host'}
     >
@@ -90,6 +93,7 @@ export function DraftFolderPill({ draft, pillRef, pickerOpen, ai, onOpenPicker, 
         </>
       ) : 'Choose folder and host…'}
       <AiBadge on={ai} />
+      {!isFork && <MenuCaret />}
     </button>
   );
 }
@@ -158,6 +162,7 @@ export function DraftProjectChip({ chip, menu, project, onPick }: {
         <span className="draft-pill-key">{chip.key}</span>{' '}
         <span className="draft-pill-name btn-value">{chip.name}</span>
         <AiBadge on={chip.ai} />
+        {chip.action !== 'none' && <MenuCaret />}
       </button>
       {flyoutOpen && (
         <ProjectPickerFlyout

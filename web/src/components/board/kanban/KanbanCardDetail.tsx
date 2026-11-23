@@ -27,6 +27,7 @@ import { KanbanCardPrompt } from './KanbanCardPrompt';
 // The one ask card's frame (actions/AskCard.tsx): a prompt here reads as it does everywhere.
 import { OneCardFrame } from '@/components/actions/AskCard';
 import { KanbanDetailTask } from './KanbanDetailTask';
+import { MenuCaret } from '@/components/controls';
 
 /** The host's real session chat for a card opened in place (SessionPanel's inset mode). */
 export type KanbanRenderSession = (sessionId: string, opts: { onClose(): void }) => ReactNode;
@@ -118,7 +119,7 @@ export function KanbanCardDetail({ card, laneName, readOnly, onBack, onOpenSessi
           )}
           {ctx && (
             <button ref={moreRef} type="button" className="btn btn-sm" data-testid="kanban-detail-more" aria-haspopup="menu" aria-expanded={menu}
-              title="Move to lane, edit summary, more" onClick={() => setMenu((v) => !v)}>More</button>
+              title="Move to lane, edit summary, more" onClick={() => setMenu((v) => !v)}>More<MenuCaret /></button>
           )}
         </div>
       </div>

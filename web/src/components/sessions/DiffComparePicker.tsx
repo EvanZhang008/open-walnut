@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { MenuCaret } from '@/components/controls';
 import { createPortal } from 'react-dom';
 import {
   fetchSessionGitRefs,
@@ -389,7 +390,7 @@ export function DiffComparePicker({ sessionId, compare, resolved, onChange }: {
       >
         <span className="session-diff-base-label">Compare:</span>
         <span className="session-diff-compare-value">{label}</span>
-        <svg className="session-diff-compare-caret" width="10" height="10" viewBox="0 0 10 10" aria-hidden><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        <MenuCaret className="session-diff-compare-caret" />
       </button>
       {open && pos && createPortal(
         <div

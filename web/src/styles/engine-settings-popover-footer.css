@@ -178,16 +178,6 @@
 
 .engine-settings-popover .engine-settings-files > summary::-webkit-details-marker { display: none; }
 
-/* A 12px chevron says the line unfolds; it points down while the list is open. */
-.engine-settings-files-chevron {
-  flex: 0 0 auto;
-  transition: transform 120ms ease;
-}
-
-.engine-settings-popover .engine-settings-files[open] > summary .engine-settings-files-chevron {
-  transform: rotate(90deg);
-}
-
 .engine-settings-popover .engine-settings-files > summary:hover { color: var(--fg); }
 
 /* The list shows its entries (four paths, two lines each at most) and

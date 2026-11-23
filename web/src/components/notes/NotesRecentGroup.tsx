@@ -14,6 +14,7 @@
  */
 
 import { readRecents } from './CommandPalette';
+import { DisclosureChevron } from '@/components/controls';
 
 /** Sentinel "path" used in the expanded-folders set to track this group's collapse state. */
 export const RECENT_GROUP_KEY = '__recent__';
@@ -53,7 +54,7 @@ export function NotesRecentGroup({ existingPaths, selectedPath, onSelect, expand
     <div className="notes-bookmarks-group notes-recent-group">
       <div className="notes-tree-item notes-bookmarks-header" onClick={onToggle}>
         <span className={`notes-tree-arrow ${expanded ? 'expanded' : ''}`}>
-          <ChevronIcon />
+          <DisclosureChevron open={expanded} />
         </span>
         <ClockGlyph />
         <span className="notes-tree-name wn-title">Recent</span>
@@ -76,14 +77,6 @@ export function NotesRecentGroup({ existingPaths, selectedPath, onSelect, expand
         </div>
       )}
     </div>
-  );
-}
-
-function ChevronIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14">
-      <polyline points="9 18 15 12 9 6" />
-    </svg>
   );
 }
 

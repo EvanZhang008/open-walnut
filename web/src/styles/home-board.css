@@ -33,7 +33,7 @@
 .home-board-state-needs i { background: var(--error); }
 .home-board-state-working i { background: var(--success); }
 .home-board-actions { display: inline-flex; gap: 10px; margin-left: auto; }
-.home-board-actions > button { padding: 0 2px; border: 0; background: transparent; color: var(--fg-muted); font: inherit; font-size: var(--font-size-xs); }
+.home-board-actions > button { display: inline-flex; align-items: center; gap: 4px; padding: 0 2px; border: 0; background: transparent; color: var(--fg-muted); font: inherit; font-size: var(--font-size-xs); }
 .home-board-actions > button:hover { color: var(--accent); }
 .home-board-actions > button[data-board-done-button]:hover { color: var(--success); }
 .home-board-done-note { display: flex; align-items: center; gap: 12px; }

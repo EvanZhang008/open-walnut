@@ -10,7 +10,7 @@ import { Link } from 'react-router-dom';
 import type { UsageKind, UsageRange, UsageRow } from '@/api/usage-watch';
 import { NoticeStatus } from '@/components/common/NoticeCard';
 import { SearchField } from '@/components/common/SearchField';
-import { ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
+import { DisclosureChevron } from '@/components/controls';
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import { SegmentedControl } from '../inputs/SegmentedControl';
 import { sparkPaths } from './host-fleet-dashboard-model';
@@ -178,7 +178,7 @@ function UsageRowView({ row, cols, open, span, range, now, onToggle }: { row: Us
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}>
         <td className="ru-name">
           <span className="ru-open">
-            <span className="ru-chev" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>
+            <DisclosureChevron open={open} className="ru-chev" />
             {row.kind === 'page' ? <span className="ru-kind"><PageKind name={row.name} /></span> : <code className="ru-mono">{row.name}</code>}
           </span>
         </td>

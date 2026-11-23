@@ -1,7 +1,8 @@
 /**
  * Line glyphs for the settings page. Inline SVG, stroke = currentColor, always
  * aria-hidden: the text next to a glyph carries the meaning, so the page never
- * needs a Unicode symbol (chevrons, check marks, crosses) in its visible text.
+ * needs a Unicode symbol (check marks, crosses) in its visible text. A chevron is
+ * the shared DisclosureChevron or MenuCaret (components/controls), or a direction icon of Icons.tsx.
  */
 import type { ReactNode, SVGProps } from 'react'
 
@@ -28,15 +29,6 @@ function Glyph({ size = 12, children, className, ...rest }: GlyphProps & { child
     >
       {children}
     </svg>
-  )
-}
-
-/** Points right; a disclosure rotates it 90deg when open. */
-export function ChevronGlyph(props: GlyphProps) {
-  return (
-    <Glyph {...props}>
-      <path d="M6 3.5 10.5 8 6 12.5" />
-    </Glyph>
   )
 }
 

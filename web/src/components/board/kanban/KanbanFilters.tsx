@@ -17,7 +17,7 @@ import { KanbanChanges } from './KanbanChanges';
 import { KANBAN_PANE_SELECTOR } from './kanban-toasts';
 import { pageShortcutBlocked } from '@/utils/page-shortcut';
 import { SearchField } from '@/components/common/SearchField';
-import { Chip, ChipGroup } from '@/components/controls';
+import { Chip, ChipGroup, MenuCaret } from '@/components/controls';
 
 export interface KanbanFiltersProps {
   board: KanbanBoardVM;
@@ -187,7 +187,7 @@ export function KanbanFilters({ board, filter, seen, mode, searchRef, onRevealCa
             aria-haspopup="menu"
             aria-expanded={changesOpen}
             onClick={() => setChangesOpen((v) => !v)}
-          >What changed</button>
+          >What changed<MenuCaret /></button>
           <KanbanChanges open={changesOpen} anchorRef={changesBtn} changes={board.changes} onPick={onRevealCard} onClose={closeChanges} />
         </div>
       )}

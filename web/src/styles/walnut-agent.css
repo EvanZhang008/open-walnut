@@ -280,16 +280,7 @@
 .ask-walnut-agent-picker.is-open {
   background: color-mix(in srgb, var(--walnut-accent) 10%, transparent);
 }
-.ask-walnut-agent-caret {
-  flex: none;
-  display: inline-flex;
-  opacity: 0.85;
-  transition: transform 0.15s;
-}
-.ask-walnut-agent-caret.is-open { transform: rotate(180deg); }
-@media (prefers-reduced-motion: reduce) {
-  .ask-walnut-agent-caret { transition: none; }
-}
+.ask-walnut-agent-caret { opacity: 0.85; }
 /* The agent list: an accordion under the title, above the search, so the
    drawer's own scroll area stays the ask list. */
 .ask-walnut-agent-list {

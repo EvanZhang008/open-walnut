@@ -93,18 +93,9 @@
 
 .mail-compose-account.pick:hover { background: var(--bg-hover); color: var(--fg); }
 
-/* Drawn, not typed: a glyph in the button's text would join the identity's own name in `textContent`. */
-.mail-compose-account.pick::after {
-  content: '';
-  flex: 0 0 auto;
-  width: 8px;
-  height: 8px;
-  background: currentColor;
-  -webkit-mask: var(--wn-chevron) center / contain no-repeat;
-  mask: var(--wn-chevron) center / contain no-repeat;
-  transform: rotate(90deg);
-  opacity: 0.6;
-}
+/* The name gives way to the caret: it is cut, the caret stays. */
+.mail-compose-account-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mail-compose-account.pick .wn-menu-caret { opacity: 0.6; }
 
 .mail-compose-drafts-chip { flex: 0 0 auto; }
 

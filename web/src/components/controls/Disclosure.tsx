@@ -25,13 +25,15 @@ export function DisclosureChevron({ open, size = 12, className, inline }: { open
 }
 
 /**
- * The caret of a key that opens a menu. `className` replaces `btn-caret` (a site's own caret slot).
- * The chevron fills its box's width, so the 6 px caret takes the room the old typed one did and a
- * row that fits its keys by width (the composer's, measured to the pixel) keeps its break points.
+ * The caret of a key that opens a menu. `className` replaces `btn-caret` (a site's own caret slot);
+ * `wn-menu-caret` stays, so the caret flips while its key's aria-expanded is true on any key, a
+ * `.btn` or not (choice-controls.css). The chevron fills its box's width, so the 6 px caret takes
+ * the room the old typed one did and a row that fits its keys by width (the composer's, measured
+ * to the pixel) keeps its break points.
  */
 export function MenuCaret({ size = 6, className }: { size?: number; className?: string }) {
   return (
-    <span className={className ?? 'btn-caret'} aria-hidden="true">
+    <span className={`wn-menu-caret ${className ?? 'btn-caret'}`} aria-hidden="true">
       <svg width={size} height={size} viewBox="1 1 14 14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
         <polyline points="1.5 5 8 11.5 14.5 5" />
       </svg>

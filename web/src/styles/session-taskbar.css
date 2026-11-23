@@ -175,6 +175,9 @@
 /* "N more": the older Recent sessions behind one button, in a menu above the bar. */
 .session-taskbar-more {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   height: 22px;
   padding: 0 9px;
   border: 1px dashed var(--border);

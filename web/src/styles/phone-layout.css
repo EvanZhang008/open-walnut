@@ -240,6 +240,7 @@
     color: var(--accent);
     font-size: var(--font-size-lg);
   }
+  .app-shell-navigation .notes-phone-back > svg { width: 16px; height: 16px; }
 
   /* Calendar: the page fits the area under the bar (100vh is the TALL viewport
      on iOS, so the old height ran under the toolbar), the toolbar wraps onto

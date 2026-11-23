@@ -5,21 +5,16 @@
  * line (ActionNeeded.tsx), which stays while the pages change under it.
  */
 import { useRef, type KeyboardEvent, type PointerEvent } from 'react';
-
-const Chevron = ({ back }: { back?: boolean }) => (
-  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <path d={back ? 'M10 3.5 5.5 8l4.5 4.5' : 'M6 3.5 10.5 8 6 12.5'} />
-  </svg>
-);
+import { ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 
 /** `unsent`: pages he left whose send failed; the place says so until he goes back to them. */
 export function AskPager({ index, count, unsent = 0, onGo }: { index: number; count: number; unsent?: number; onGo: (delta: number, from: 'prev' | 'next') => void }) {
   return (
     <span className="ask-pager" data-testid="action-pager">
-      <button type="button" className="ask-pager-btn" data-testid="action-page-prev" aria-label="Previous decision" disabled={index <= 0} onClick={() => onGo(-1, 'prev')}><Chevron back /></button>
+      <button type="button" className="ask-pager-btn" data-testid="action-page-prev" aria-label="Previous decision" disabled={index <= 0} onClick={() => onGo(-1, 'prev')}>{ICON_CHEVRON_LEFT}</button>
       <span className="ask-pager-at" data-testid="action-page-at" aria-hidden="true">{index + 1}/{count}</span>
       {unsent > 0 && <span className="ask-pager-unsent" data-testid="action-page-unsent" aria-hidden="true">· {unsent} not sent</span>}
-      <button type="button" className="ask-pager-btn" data-testid="action-page-next" aria-label="Next decision" disabled={index >= count - 1} onClick={() => onGo(1, 'next')}><Chevron /></button>
+      <button type="button" className="ask-pager-btn" data-testid="action-page-next" aria-label="Next decision" disabled={index >= count - 1} onClick={() => onGo(1, 'next')}>{ICON_CHEVRON_RIGHT}</button>
     </span>
   );
 }

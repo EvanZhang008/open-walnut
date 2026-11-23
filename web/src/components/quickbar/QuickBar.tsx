@@ -33,6 +33,7 @@ import { AttachPictureButton, PictureStrip, usePictureInput } from '@/components
 import { useImageAttachments } from '@/components/common/image-attachments';
 import '@/styles/quickbar.css';
 import { taskPath } from '@/utils/task-path';
+import { MenuCaret } from '@/components/controls';
 
 /** How long the count runs after a take ends before the words go. */
 export const SEND_COUNTDOWN_MS = 2_000;
@@ -505,11 +506,12 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
           onClick={() => { stopCount(); setPicking((v) => !v); }}
           aria-label={`To ${shown?.title ?? 'CEO'}. Change`}
           title={switchTo === undefined ? 'Change who gets it (Tab)' : `Change who gets it (Tab). Shift-Tab: ${switchTo?.title ?? 'CEO'}`}
+          aria-haspopup="dialog"
           aria-expanded={picking}
         >
           {shown && <PersonAvatar person={shown} size={20} />}
           <span className="qb-to-name">{shown?.title ?? 'CEO'}</span>
-          <span className="qb-to-caret" aria-hidden="true" />
+          <MenuCaret className="qb-to-caret" />
         </button>
       )}
       <textarea

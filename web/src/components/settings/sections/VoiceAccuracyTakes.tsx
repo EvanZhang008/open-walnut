@@ -16,7 +16,7 @@ import { useElementWidth } from '@/hooks/useElementWidth';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { usePageView } from '@/utils/view-memory';
 import { SettingsGroup, SettingsRow, SettingsTag } from '../SettingsSection';
-import { ChevronGlyph } from '../settings-glyphs';
+import { ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import { SegmentedControl } from '../inputs/SegmentedControl';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { VoiceAccuracyTakeDialog, whenOf } from './VoiceAccuracyTakeDialog';
@@ -129,7 +129,7 @@ function TakeRow({ take, engines, layout, open, error, onOpen }: {
       data-take={take.id}
       onClick={(e) => { e.stopPropagation(); onOpen(); }}
     >
-      <ChevronGlyph size={12} />
+      {ICON_CHEVRON_RIGHT}
     </button>
   );
   return (

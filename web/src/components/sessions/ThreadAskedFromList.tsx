@@ -7,7 +7,7 @@
  */
 import { memo, type KeyboardEvent } from 'react';
 import { ThreadStatusDot } from '@/components/sessions/ThreadStatusDot';
-import { ThreadChevronIcon } from '@/components/sessions/ThreadIcons';
+import { ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import { DRAFT_ROW_LABEL, type AskedFromRow } from '@/utils/thread-stack-state';
 
 export type { AskedFromRow };
@@ -102,7 +102,7 @@ export const ThreadAskedFromList = memo(function ThreadAskedFromList({ rows, onO
               )}
             </span>
             {!row.draft && <StatusLabel row={row} onRetry={onRetry} onMarkDone={onMarkDone} onNotYet={onNotYet} />}
-            <ThreadChevronIcon size={12} className="thread-asked-chevron" />
+            <span className="thread-asked-chevron" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>
           </div>
         );
       })}

@@ -16,7 +16,7 @@ import { serverKey } from '@/hooks/useSessionServers';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { CopyButton } from '@/components/common/CopyButton';
-import { Chip } from '@/components/controls';
+import { Chip, MenuCaret } from '@/components/controls';
 import { formatAge, serverAge, openable, serverLabel, shortCommand } from './session-server-label';
 
 export interface SessionServerListProps {
@@ -308,11 +308,11 @@ export function SessionServerList({
     return (
       <div className="session-servers-strip" data-testid="session-servers-strip" aria-label="Servers this session started">
         <button type="button" className={`session-servers-strip-all${showingAll ? ' session-servers-strip-all-open' : ''}`}
-          onClick={onShowAll} aria-expanded={!!showingAll} data-testid="session-servers-show-all"
+          onClick={onShowAll} aria-haspopup="dialog" aria-expanded={!!showingAll} data-testid="session-servers-show-all"
           title={`${list.length} server${list.length === 1 ? '' : 's'} this session started${hostLabel ? ` on ${hostLabel}` : ''}${others > 0 ? ` (${pages.length} web, ${others} not web)` : ''}, each with its command, uptime and pid, to open or stop`}>
           All servers{hostLabel && <span className="session-servers-strip-all-host"> on {hostLabel}</span>}
           <span className="badge badge-count session-servers-strip-count" data-testid="session-servers-count">{list.length}</span>
-          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
+          <MenuCaret />
         </button>
         <div ref={chipsRef} className="session-servers-strip-chips"
           style={fit.cut ? { '--session-server-chip-cut': `${fit.cut}px` } as CSSProperties : undefined}>

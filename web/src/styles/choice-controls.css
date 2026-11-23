@@ -808,6 +808,17 @@ fieldset:disabled .settings-checkbox-row .settings-checkbox-label {
   transform: rotate(90deg);
 }
 
+/* MenuCaret (a key that opens a menu): its box at zero specificity, so a site's own slot class wins,
+   and its flip while the key it sits in is open, on any key (`.btn[aria-expanded] .btn-caret` in
+   buttons.css also reaches one nested deeper in a .btn). */
+:where(.wn-menu-caret) {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  transition: transform 0.12s;
+}
+[aria-expanded='true'] > .wn-menu-caret { transform: rotate(180deg); }
+
 .wn-disclosure-chevron.is-inline {
   vertical-align: -0.2em;
   margin-inline-end: 0.35em;
@@ -827,6 +838,7 @@ fieldset:disabled .settings-checkbox-row .settings-checkbox-label {
   .wn-chip,
   .wn-check,
   .wn-disclosure-chevron,
+  .wn-menu-caret,
   .toggle-switch.settings-switch,
   .toggle-switch.settings-switch .toggle-thumb {
     transition: none;

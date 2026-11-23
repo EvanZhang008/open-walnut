@@ -58,6 +58,7 @@ import {
 import { askMailOnPhone, discardMailComposerDraft, sendMailNow } from './compose-send';
 import { hasInvalidAddress } from './mail-address';
 import { canSendFrom, isOpenDraft } from './send-status';
+import { MenuCaret } from '@/components/controls';
 
 interface Props {
   composer: MailComposer;
@@ -185,7 +186,7 @@ export function ComposerPanel({ composer, mailboxes, drafts, narrow, canSend, ca
                 aria-haspopup="menu"
                 /* The ADDRESS, as the plain chip carries it: two display names sharing a prefix are told
                    apart by nothing else. What the click does is in the accessible name and in the
-                   chevron, which is drawn in CSS so the identity's own text stays exactly the name. */
+                   caret, an SVG, so the identity's own text stays exactly the name. */
                 title={account.address}
                 aria-label={`Sending as ${account.displayName || account.address}. Change the account.`}
                 onClick={(event) => {
@@ -193,7 +194,8 @@ export function ComposerPanel({ composer, mailboxes, drafts, narrow, canSend, ca
                   setIdentityPoint({ x: box.left, y: box.bottom });
                 }}
               >
-                {account.displayName || account.address}
+                <span className="mail-compose-account-name">{account.displayName || account.address}</span>
+                <MenuCaret />
               </button>
             ) : (
               <span

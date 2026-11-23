@@ -14,7 +14,7 @@
 
 import type { CloudSetupProvider } from '@/api/cloud-setup';
 import { SettingsGroup, SettingsTag } from '../../SettingsSection';
-import { ChevronGlyph } from '../../settings-glyphs';
+import { ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import '@/styles/settings-sections-addons.css';
 
 type Tone = 'neutral' | 'warning' | 'success';
@@ -65,7 +65,7 @@ export function CloudProviderPicker({ providers, selected, onSelect }: Props) {
                 <span className="cloud-pill">
                   <SettingsTag tone={pill.tone}>{pill.text}</SettingsTag>
                 </span>
-                <ChevronGlyph size={12} className="cloud-provider-go" />
+                <span className="cloud-provider-go" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span>
               </span>
             </button>
           );

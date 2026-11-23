@@ -74,12 +74,11 @@ html.walnut-col-resizing * { cursor: col-resize !important; user-select: none !i
 .thread-review-bar-chevron {
   position: relative;
   z-index: 1;
+  display: inline-flex;
   /* Plain text on the line's own background: no ring, no fill (2026-10-31, the
      user: the bar read as heavy; a slim band is enough). */
   padding: 2px 0;
   background: var(--bg);
-  font-size: var(--font-size-sm);
-  line-height: 1;
   opacity: 0.6;
   transition: opacity 120ms ease;
 }

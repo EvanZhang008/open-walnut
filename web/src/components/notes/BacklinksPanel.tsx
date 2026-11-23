@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useBacklinks } from '@/hooks/useBacklinks';
+import { DisclosureChevron } from '@/components/controls';
 
 interface BacklinksPanelProps {
   notePath: string;
@@ -26,9 +27,7 @@ export function BacklinksPanel({ notePath, onNavigate }: BacklinksPanelProps) {
         onClick={() => setExpanded(!expanded)}
       >
         <span className={`notes-backlinks-arrow ${expanded ? 'expanded' : ''}`}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14">
-            <polyline points="9 18 15 12 9 6" />
-          </svg>
+          <DisclosureChevron open={expanded} />
         </span>
         <span className="notes-backlinks-count">{backlinks.length} backlink{backlinks.length !== 1 ? 's' : ''}</span>
       </button>

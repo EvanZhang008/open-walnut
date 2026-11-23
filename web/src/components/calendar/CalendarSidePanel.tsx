@@ -7,6 +7,7 @@
  * DndContext and merging them risks its tuned drag setup).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import { DndContext } from '@dnd-kit/core';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTasksContext } from '@/contexts/TasksContext';
@@ -157,7 +158,7 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
         {/* Three groups of the same quiet buttons: the day, the time scale, the panel. */}
         <div className="cal-side-tools" role="group" aria-label="Day">
           <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => step(-1)} aria-label="Previous day" title="Previous day">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
+            {ICON_CHEVRON_LEFT}
           </button>
           {!isToday && (
             <button type="button" className="btn btn-ghost btn-sm cal-side-today" onClick={() => setDay(formatDateOnly(new Date()))}>
@@ -165,7 +166,7 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
             </button>
           )}
           <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => step(1)} aria-label="Next day" title="Next day">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6" /></svg>
+            {ICON_CHEVRON_RIGHT}
           </button>
         </div>
         <CalendarGridControls />

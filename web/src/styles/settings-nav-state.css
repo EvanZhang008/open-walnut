@@ -57,4 +57,5 @@
 }
 .settings-container .settings-pane-back:hover { background: var(--bg-hover); }
 .settings-container .settings-pane-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.settings-container .settings-pane-back-chevron { font-size: var(--font-size-xl); line-height: 1; }
+.settings-container .settings-pane-back-chevron { display: inline-flex; }
+.settings-container .settings-pane-back-chevron svg { width: 14px; height: 14px; }

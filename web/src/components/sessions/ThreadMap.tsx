@@ -28,7 +28,9 @@ import {
   type RefObject,
 } from 'react';
 import { ThreadStatusWord } from '@/components/sessions/ThreadStatusWord';
-import { ThreadChevronIcon, ThreadListIcon, ThreadPinIcon } from '@/components/sessions/ThreadIcons';
+import { ThreadListIcon, ThreadPinIcon } from '@/components/sessions/ThreadIcons';
+import { ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
+import { DisclosureChevron } from '@/components/controls';
 import { answeredAgo } from '@/components/sessions/ThreadTreeRows';
 import { MapArchiveButton, useMapArchive, type MapArchiveApi } from '@/components/sessions/ThreadMapArchive';
 import { mapOverlayWidth, mapStep, onPathIds, railMarks, type ThreadMapShape } from '@/utils/thread-map';
@@ -154,7 +156,7 @@ const Lead = memo(function Lead({ kind, number, expanded }: {
 }) {
   if (kind === 'pin') return <ThreadPinIcon size={11} className="thread-map-pin" />;
   if (kind === 'done-group') {
-    return <span className="thread-map-fold" data-open={expanded ? 'true' : undefined}><ThreadChevronIcon size={9} /></span>;
+    return <span className="thread-map-fold" data-open={expanded ? 'true' : undefined}><DisclosureChevron open={expanded} /></span>;
   }
   if (kind === 'root') return <span className="thread-map-root-dot" aria-hidden="true" />;
   // A question being asked has no number yet: a plus in the badge's place (an
@@ -442,13 +444,13 @@ function MapList(p: ListProps) {
             <button type="button" className="thread-map-icon thread-map-keep" title="Keep the map open" aria-label="Keep the map open"
               data-map-stop={STOP_TOGGLE} {...entryOf(STOP_TOGGLE)} tabIndex={tabIndexOf(STOP_TOGGLE)} onFocus={() => setCursor(STOP_TOGGLE)}
               onClick={(e) => p.onToggleShape(false, byKeyboard(e))}>
-              <ThreadChevronIcon size={10} />
+              {ICON_CHEVRON_RIGHT}
             </button>
           ) : (
             <button type="button" className="thread-map-icon thread-map-hide" title="Hide the map" aria-label="Hide the map"
               data-map-stop={STOP_TOGGLE} {...entryOf(STOP_TOGGLE)} tabIndex={tabIndexOf(STOP_TOGGLE)} onFocus={() => setCursor(STOP_TOGGLE)}
               onClick={(e) => p.onToggleShape(true, byKeyboard(e))}>
-              <ThreadChevronIcon size={10} />
+              {ICON_CHEVRON_LEFT}
             </button>
           ))}
         </span>

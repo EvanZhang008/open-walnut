@@ -121,11 +121,7 @@
 }
 
 .qb-to-caret {
-  width: 0;
-  height: 0;
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-top: 5px solid var(--qb-muted);
+  color: var(--qb-muted);
   margin-left: 1px;
 }
 

@@ -59,11 +59,6 @@ export function ThreadPinIcon(p: ThreadIconProps) {
   return <Svg {...p} name="pin"><path d="M6 2.5h4l-.6 4 2.3 2.2v1H4.3v-1l2.3-2.2zM8 9.7v3.8" /></Svg>;
 }
 
-/** Points right; rotate with CSS for down/left. */
-export function ThreadChevronIcon(p: ThreadIconProps) {
-  return <Svg {...p} name="chevron"><path d="M6 3.5L10.5 8 6 12.5" /></Svg>;
-}
-
 export function ThreadMoreIcon(p: ThreadIconProps) {
   return (
     <Svg {...p} name="more" fill="currentColor">

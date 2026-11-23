@@ -183,6 +183,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
                   type="button"
                   className="leader-sub-row"
                   data-testid="leader-adopt"
+                  aria-haspopup="dialog"
                   title={`Make another open task a worker of "${orgDisplayTitle(task)}"`}
                   onClick={() => { close(false); setAdoptOpen(true); }}
                 >

@@ -32,14 +32,6 @@ function Svg({ size = 20, className, children, fill = 'none' }: PhoneIconProps &
   );
 }
 
-export function ChevronLeftIcon(p: PhoneIconProps) {
-  return <Svg {...p}><path d="M15 5l-7 7 7 7" /></Svg>;
-}
-
-export function ChevronRightIcon(p: PhoneIconProps) {
-  return <Svg {...p}><path d="M9 5l7 7-7 7" /></Svg>;
-}
-
 export function KebabVerticalIcon(p: PhoneIconProps) {
   return (
     <Svg {...p} fill="currentColor">

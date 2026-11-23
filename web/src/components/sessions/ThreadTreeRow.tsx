@@ -11,8 +11,9 @@
 import { memo, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
 import { ThreadStatusDot } from '@/components/sessions/ThreadStatusDot';
 import {
-  ThreadArchiveIcon, ThreadChevronIcon, ThreadNotYetIcon, ThreadPinIcon, ThreadReopenIcon, ThreadTrashIcon,
+  ThreadArchiveIcon, ThreadNotYetIcon, ThreadPinIcon, ThreadReopenIcon, ThreadTrashIcon,
 } from '@/components/sessions/ThreadIcons';
+import { DisclosureChevron } from '@/components/controls';
 import { ThreadInlineRename } from '@/components/sessions/ThreadInlineRename';
 import { openBelowTitle, segmentsOf, type MatchRange, type TreeRow } from '@/utils/thread-tree-rows';
 import { TITLE_MAX } from '@/utils/thread-meta';
@@ -182,7 +183,7 @@ function ThreadTreeRowImpl(p: ThreadTreeRowProps) {
         onMouseDown={(e) => { if (row.hasChildren) e.preventDefault(); }}
         onClick={(e) => { if (!row.hasChildren) return; e.stopPropagation(); if (!row.disclosureDisabled) p.onToggle(row); }}
       >
-        {row.hasChildren && <ThreadChevronIcon size={10} />}
+        {row.hasChildren && <DisclosureChevron open={row.expanded} />}
       </span>
       {row.kind === 'pin' ? <ThreadPinIcon size={12} className="thread-tree-pin-icon" />
         : row.kind === 'root' || row.kind === 'done-group' ? null

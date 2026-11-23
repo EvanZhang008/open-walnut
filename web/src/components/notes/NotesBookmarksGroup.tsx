@@ -8,6 +8,7 @@
 
 import { useState, useEffect } from 'react';
 import { ICON_CLOSE } from '@/components/common/Icons';
+import { DisclosureChevron } from '@/components/controls';
 
 const LS_BOOKMARKS_KEY = 'open-walnut-notes-bookmarks-expanded';
 
@@ -49,7 +50,7 @@ export function NotesBookmarksGroup({ favoriteNotes, selectedPath, onSelect, onT
     <div className="notes-bookmarks-group">
       <div className="notes-tree-item notes-bookmarks-header" onClick={() => setExpanded((v) => !v)}>
         <span className={`notes-tree-arrow ${expanded ? 'expanded' : ''}`}>
-          <ChevronIcon />
+          <DisclosureChevron open={expanded} />
         </span>
         <BookmarkGlyph />
         <span className="notes-tree-name wn-title">Bookmarks</span>
@@ -80,14 +81,6 @@ export function NotesBookmarksGroup({ favoriteNotes, selectedPath, onSelect, onT
         </div>
       )}
     </div>
-  );
-}
-
-function ChevronIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14">
-      <polyline points="9 18 15 12 9 6" />
-    </svg>
   );
 }
 

@@ -16,7 +16,7 @@ import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { draftKey } from '@/utils/drafts';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
-import { Checkbox } from '@/components/controls';
+import { Checkbox, MenuCaret } from '@/components/controls';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { DatePicker } from '@/components/common/DatePicker';
@@ -334,9 +334,7 @@ function CalendarPicker({ calendars, value, onChange }: { calendars: CalendarInf
       >
         <span className="cal-cal-dot" style={{ background: current?.color ?? 'var(--fg-muted)' }} />
         <span className="cal-cal-name">{label}</span>
-        <svg className="cal-cal-chevrons" viewBox="0 0 10 14" aria-hidden="true">
-          <path d="M2 5l3-3 3 3M2 9l3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
+        <MenuCaret className="cal-cal-chevrons" />
       </button>
       {open && createPortal(
         <>

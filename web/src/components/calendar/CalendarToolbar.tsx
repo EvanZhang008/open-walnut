@@ -2,6 +2,7 @@ import { memo } from 'react';
 import { addDays, formatDateOnly, weekRange } from '@/utils/calendar-date';
 import { CalendarGridControls } from './CalendarGridControls';
 import { SegmentedControl, type SegmentedOption } from '@/components/controls';
+import { ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import '@/styles/header-fit.css';
 
 export type CalendarViewKind = 'day' | 'week' | 'month';
@@ -77,10 +78,10 @@ export const CalendarToolbar = memo(function CalendarToolbar({
         </button>
         <div className="cal-nav-btns">
           <button onClick={() => step(-1)} aria-label="Previous" title="Previous">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
+            {ICON_CHEVRON_LEFT}
           </button>
           <button onClick={() => step(1)} aria-label="Next" title="Next">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+            {ICON_CHEVRON_RIGHT}
           </button>
         </div>
         <h2 className="cal-title" data-fit-title="">{title(view, anchor)}</h2>

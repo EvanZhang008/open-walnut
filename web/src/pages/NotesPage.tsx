@@ -17,7 +17,7 @@ import { useConversations } from '@/hooks/useConversations';
 import { NotesSessionChat } from '@/components/notes/NotesSessionChat';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { CommandPalette, pushRecent } from '@/components/notes/CommandPalette';
-import { ICON_EXPAND, ICON_NOTE } from '@/components/common/Icons';
+import { ICON_CHEVRON_LEFT, ICON_EXPAND, ICON_NOTE } from '@/components/common/Icons';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import { openPopout } from '@/popout/openPopout';
 import { createNote, moveNote, treeFilePaths, fetchNoteContent, type NoteTreeNode } from '@/api/notes-v2';
@@ -1096,9 +1096,7 @@ export function NotesPage() {
       aria-label="All notes"
       title="All notes"
     >
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <polyline points="10 3 5 8 10 13" />
-      </svg>
+      {ICON_CHEVRON_LEFT}
       <span>Notes</span>
     </button>
   );

@@ -15,6 +15,7 @@
  */
 import { useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import * as ICONS from '@/components/common/Icons';
+import { MenuCaret } from '@/components/controls';
 import { projectDisplayName } from '@/utils/project-display';
 import { badge } from '@/components/common/badge';
 import { knownHomeOf, pathCrumbItems, shownFolderName, tildePath, type PathCrumb } from '@/utils/home-folder';
@@ -113,7 +114,7 @@ function ProjectField({ draft, where, fieldRef, open, onOpen }: {
       <span className="draft-v6-field-value">
         <span className={`draft-v6-project-icon is-${kind}`}><WhereIcon kind={kind} size={14} /></span>
         <span className={`draft-v6-project-name wn-meta${name ? '' : ' is-empty'}`} data-testid="draft-v6-project-name">{name ? projectDisplayName(name) : 'No project'}</span>{/* empty-state-ok: a field's value */}
-        <span className="draft-v6-caret" aria-hidden="true">{ICONS.ICON_CHEVRON_DOWN}</span>
+        <MenuCaret className="draft-v6-caret" />
       </span>
     </div>
   );
@@ -142,7 +143,7 @@ function HostCrumb({ where, hostRef, onClick, open }: { where: DraftWhere; hostR
       aria-haspopup="dialog" aria-expanded={open} title={`Runs on ${name}. Pick another host`}
       onMouseDown={(e) => e.preventDefault()} onClick={(e) => { e.stopPropagation(); onClick(); }}>
       {content}
-      <span className="draft-v6-caret" aria-hidden="true">{ICONS.ICON_CHEVRON_DOWN}</span>
+      <MenuCaret className="draft-v6-caret" />
     </button>
   );
 }

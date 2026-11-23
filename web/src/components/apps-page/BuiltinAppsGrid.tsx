@@ -11,6 +11,7 @@
  * close it.
  */
 import { useMemo, useSyncExternalStore, type ComponentType } from 'react'
+import { ICON_CHEVRON_LEFT } from '@/components/common/Icons'
 import { useNavigate } from 'react-router-dom'
 import { useSidebarDefault } from '@/apps/hooks'
 import { activePluginKey, appRegistry } from '@/apps/registry'
@@ -266,7 +267,7 @@ export function BuiltinDetail({ entryKey, onBack }: { entryKey: string; onBack: 
   const entry = useBuiltinEntries().find((candidate) => candidate.key === entryKey || candidate.parts.some((part) => part.key === entryKey))
   const back = (
     <button type="button" className="apps-back" onClick={onBack} data-testid="plugin-detail-back">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
+      {ICON_CHEVRON_LEFT}
       Apps
     </button>
   )

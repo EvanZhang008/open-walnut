@@ -276,6 +276,7 @@ export function OrgChartSheet({ main, rows, routers = [], tasks, onClose, onPick
       data-testid={card ? 'org-chart-vp-menu' : 'org-chart-ceo-menu'}
       aria-label={label}
       title={label}
+      aria-haspopup="menu"
       onClick={(e) => { e.stopPropagation(); openNodeMenu(card, e.currentTarget); }}
     >⋯</button>
   );

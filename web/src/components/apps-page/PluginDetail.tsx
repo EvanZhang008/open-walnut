@@ -9,6 +9,7 @@
  * its parent's Parts, and says whose part it is.
  */
 import { useEffect, type ReactNode } from 'react'
+import { ICON_CHEVRON_LEFT } from '@/components/common/Icons'
 import { useNavigate } from 'react-router-dom'
 import type { Config } from '@open-walnut/core'
 import { useAppCatalog, useAppPagePins } from '@/apps/hooks'
@@ -60,7 +61,7 @@ export function PluginDetail({ store, pluginId, config, onSave, onBack, onOpen, 
   const row = store.rows.find((entry) => entry.id === pluginId)
   const back = (
     <button type="button" className="apps-back" onClick={onBack} data-testid="plugin-detail-back">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
+      {ICON_CHEVRON_LEFT}
       Apps
     </button>
   )

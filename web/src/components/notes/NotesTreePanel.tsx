@@ -15,6 +15,7 @@ import { SearchField } from '@/components/common/SearchField';
 import '@/styles/header-fit.css';
 import { folderNoteOf, visibleFolderChildren, folderOfFolderNote, folderRowClickAction, isAttachmentFolder } from './folder-note';
 import { EmptyState } from '@/components/common/EmptyState';
+import { DisclosureChevron } from '@/components/controls';
 
 /**
  * Folder expand/collapse persistence (Feature 3). The expanded-folders set is
@@ -849,7 +850,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
               onClick={folderNote ? (e) => { e.stopPropagation(); toggleFolder(node.path); } : undefined}
               aria-label={folderNote ? (isExpanded ? `Collapse ${node.name}` : `Expand ${node.name}`) : undefined}
             >
-              <ChevronIcon />
+              <DisclosureChevron open={isExpanded} />
             </span>
             {folderNote ? <FolderNoteIcon /> : <FolderIcon />}
             {isRenamingFolderNote ? (
@@ -1205,14 +1206,6 @@ export const NotesTreePanel = memo(function NotesTreePanel({
 });
 
 // ─── Inline SVG Icons ────────────────────────────────────────────────────
-
-function ChevronIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14">
-      <polyline points="9 18 15 12 9 6" />
-    </svg>
-  );
-}
 
 function FolderIcon() {
   return (

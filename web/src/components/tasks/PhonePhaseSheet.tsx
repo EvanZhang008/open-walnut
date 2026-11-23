@@ -14,10 +14,10 @@ import type { Task } from '@open-walnut/core';
 import { usePhoneOverlay } from '@/hooks/usePhoneOverlayHistory';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { PhoneConfirmSheet } from '@/components/common/PhoneConfirmSheet';
-import { ChevronRightIcon } from '@/components/common/PhoneIcons';
 import { PHASE_LABELS, phasePickerChoices, resolveTaskSessionId, taskStatusLabel, taskStatusPhase } from '@/utils/session-status';
 import type { TaskPhase } from '@/types/session';
 import { log } from '@/utils/log';
+import { MenuCaret } from '@/components/controls';
 
 export function phaseLabelOf(phase: string | undefined): string {
   return PHASE_LABELS[(phase ?? 'TODO') as TaskPhase] ?? phase ?? PHASE_LABELS.TODO;
@@ -88,7 +88,8 @@ export function PhonePhaseSheet({ task, onSetPhase }: PhonePhaseSheetProps) {
         <span className="phone-detail-row-label">Status</span>
         {/* The task's own status words; the sheet below still sets its phase. */}
         <span className="phone-detail-row-value">{taskStatusLabel(task)}</span>
-        <ChevronRightIcon size={18} />
+        {/* It opens a pick of the status, not a page: the picker key's caret, not a go-to arrow. */}
+        <MenuCaret size={10} />
       </button>
       {listOpen && createPortal(
         <div className="phone-confirm-sheet-root phone-phase-sheet-root" data-testid="phone-phase-sheet">

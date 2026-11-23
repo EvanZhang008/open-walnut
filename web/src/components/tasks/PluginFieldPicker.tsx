@@ -24,7 +24,7 @@ import { setPluginFieldValue } from '@/api/tasks';
 import { useStoreTask, useTasksContextSafe } from '@/contexts/TasksContext';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
-import { DisclosureChevron } from '@/components/controls';
+import { DisclosureChevron, MenuCaret } from '@/components/controls';
 import { ICON_NOTE } from '@/components/common/Icons';
 
 // ── Types + declared-fields cache (module-level, same pattern as useIntegrations) ──
@@ -300,7 +300,7 @@ export function PluginFieldPill({ task, field }: {
         title={current ? `${field.label}: ${current}` : `Set ${field.label.toLowerCase()}`}
         onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
       >
-        {current || `+ ${field.label}`}
+        {current || `+ ${field.label}`}<MenuCaret />
       </button>
       <PluginFieldFlyout
         open={open}

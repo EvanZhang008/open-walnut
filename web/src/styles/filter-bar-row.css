@@ -71,8 +71,7 @@
   font-weight: 500;
 }
 .fb-chip-val.is-missing { font-style: italic; color: var(--tp-muted); font-weight: 400; }
-.fb-chip-caret { display: inline-flex; flex: none; color: var(--fg-muted); }
-.fb-chip-caret svg { width: 10px; height: 10px; }
+.fb-chip-caret { color: var(--fg-muted); }
 /* Hover fills the chip one shade (F19); an open chip menu keeps that shade plus
    an accent edge, so hover never looks like "opened". */
 .fb-chip-body:hover { background: var(--bg-hover); }

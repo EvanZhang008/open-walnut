@@ -56,6 +56,8 @@
   cursor: pointer;
 }
 
+.trigger-picker-back > svg { width: 14px; height: 14px; }
+
 .trigger-picker-back:hover,
 .trigger-picker-close:hover {
   background: var(--bg-hover);

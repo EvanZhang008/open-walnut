@@ -31,7 +31,8 @@ import { forwardRef, useEffect, useMemo, useRef, useState, type ReactNode, type 
 import type { Task } from '@open-walnut/core';
 import { holdOrder, matchesAskQuery, nextHeldOrder, type HeldOrder, askProjectDisplay, } from '@open-walnut/ask-list';
 import { isPhoneLayout } from '@/hooks/usePhoneLayout';
-import { ICON_CHEVRON_DOWN, ICON_SEARCH, ICON_SLIDERS } from '@/components/common/Icons';
+import { ICON_SEARCH, ICON_SLIDERS } from '@/components/common/Icons';
+import { MenuCaret } from '@/components/controls';
 import { GENERAL_AGENT_ID, type AskAgent } from './ask-walnut-slot-model';
 import { DrawerItem, heldRowView, TaskDot } from './AskWalnutDrawerItem';
 import { MicInput } from '@/components/common/BoxMic';
@@ -272,8 +273,8 @@ export function AskWalnutDrawer({
             >
               {/* The words cut inside the picker (the header rule); the caret stays whole. */}
               <span data-fit-cut="">{shown}</span>
-              {/* A menu opener: a down caret that turns over while the list is open, not a disclosure's chevron. */}
-              <span className={`ask-walnut-agent-caret${agentsOpen ? ' is-open' : ''}`} aria-hidden="true">{ICON_CHEVRON_DOWN}</span>
+              {/* A picker's key: the menu caret, which turns over while the list is open (aria-expanded). */}
+              <MenuCaret size={8} className="ask-walnut-agent-caret" />
             </button>
           ) : (
             <span className="ask-walnut-drawer-title" data-fit-title="">{shown}</span>

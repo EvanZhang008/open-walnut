@@ -2387,12 +2387,17 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 
 .provenance-details > summary::-webkit-details-marker { display: none; }
 
-/* Same chevron idiom as the collapsed tool-run rows, so a fold reads the same
-   everywhere in the timeline. */
+/* The shared fold chevron, drawn by CSS on a <summary> (--wn-chevron, choice-controls.css). */
 .provenance-details > summary::before {
-  content: '›';
+  content: '';
   display: inline-block;
+  width: 12px;
+  height: 12px;
   margin-right: 5px;
+  vertical-align: -0.15em;
+  background: currentColor;
+  -webkit-mask: var(--wn-chevron) center / contain no-repeat;
+  mask: var(--wn-chevron) center / contain no-repeat;
   transition: transform 0.15s ease;
 }
 
@@ -2982,8 +2987,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   line-clamp: 2;
   overflow: hidden;
 }
-.permission-request-input-chevron { display: inline-flex; transition: transform 0.15s; }
-.permission-request-input-chevron.is-open { transform: rotate(90deg); }
 /* A question's options read as the permission rows beside them: one full-width row each. */
 .ask-user-question-card .qp-options:not(.qp-options--rows) { flex-direction: column; align-items: stretch; }
 .ask-user-question-card .qp-options:not(.qp-options--rows) > .qp-option { width: 100%; text-align: left; box-sizing: border-box; }
@@ -15935,7 +15938,6 @@ a.task-kebab-info:hover {
 }
 
 .usage-daterange-caret {
-  flex: none;
   margin-left: 2px;
   color: var(--fg-muted);
 }
@@ -19106,11 +19108,6 @@ a.tag-chip:hover .tag-chip-value,
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  transition: transform 0.15s;
-}
-
-.notes-tree-arrow.expanded {
-  transform: rotate(90deg);
 }
 
 /* Folder note row (`X/X.md`): nothing left to unfold, but the chevron keeps its
@@ -19422,11 +19419,6 @@ a.tag-chip:hover .tag-chip-value,
 .notes-backlinks-arrow {
   display: flex;
   align-items: center;
-  transition: transform 0.15s;
-}
-
-.notes-backlinks-arrow.expanded {
-  transform: rotate(90deg);
 }
 
 .notes-backlinks-list {
@@ -21702,10 +21694,9 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 }
 .session-diff-compare-trigger .session-diff-base-label { color: var(--fg-muted); flex: 0 0 auto; }
 .session-diff-compare-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 auto; text-align: left; }
-.session-diff-compare-caret { flex: 0 0 auto; color: var(--fg-muted); transition: transform 0.12s ease; }
+.session-diff-compare-caret { color: var(--fg-muted); }
 .session-diff-compare-trigger:hover,
 .session-diff-compare-trigger.is-open { border-color: var(--accent); }
-.session-diff-compare-trigger.is-open .session-diff-compare-caret { transform: rotate(180deg); }
 .session-diff-compare-trigger:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 1px; }
 
 .session-diff-compare-pop {
@@ -23516,9 +23507,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .trigger-jobs-fold { margin-top: 2px; }
 /* No check recorded yet: a plain line, no chevron (there is nothing to open). */
 
-.trigger-audit-chevron { transition: transform 0.12s ease; }
-.trigger-audit-chevron.open { transform: rotate(90deg); }
-
 .trigger-audit-list {
   list-style: none;
   margin: 4px 0 0;
@@ -25224,8 +25212,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 .cal-cal-chevrons {
   width: 8px;
-  height: 12px;
-  flex-shrink: 0;
+  justify-content: center;
   color: var(--fg-muted);
 }
 

@@ -235,10 +235,6 @@
 .engine-settings-popover-group > summary::-webkit-details-marker { display: none; }
 .engine-settings-popover-group > summary:hover { color: var(--fg); }
 
-.engine-settings-popover-group[open] > summary .engine-settings-files-chevron {
-  transform: rotate(90deg);
-}
-
 .engine-settings-popover-group[open] {
   display: flex;
   flex-direction: column;

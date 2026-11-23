@@ -8,8 +8,8 @@
  * (the vault's token never enters a Walnut page), so a press sends the button's place up.
  */
 import { forwardRef, type ReactNode, type RefObject } from 'react';
-import { ICON_FILE } from '@/components/common/Icons';
-import { Chip } from '@/components/controls';
+import { ICON_CHEVRON_LEFT, ICON_FILE } from '@/components/common/Icons';
+import { Chip, MenuCaret } from '@/components/controls';
 import { timeAgo } from '@/utils/time';
 import { askActivityAt, askProjectDisplay } from '@open-walnut/ask-list';
 import { AskWalnutDrawer, AskWalnutMenuButton, type DrawerRow } from '@/components/chat/AskWalnutDrawer';
@@ -26,11 +26,9 @@ const ICON_KEY = <svg {...S}><circle cx="8" cy="15" r="4" /><path d="M10.85 12.1
 const ICON_LOCK = <svg {...S} width={9} height={9} strokeWidth={2.6}><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>;
 const ICON_COMPOSE = <svg {...S}><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>;
 const ICON_SIDE = <svg {...S}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /></svg>;
-const ICON_CARET = <svg {...S} width={11} height={11}><path d="m6 9 6 6 6-6" /></svg>;
 const ICON_POINTER = <svg {...S} width={13} height={13}><path d="m4 4 7 17 2.5-7.5L21 11z" /></svg>;
 const ICON_TASKS = <svg {...S}><rect x="4" y="4" width="16" height="16" rx="3" /><path d="m8.5 12 2.5 2.5 4.5-5" /></svg>;
 const ICON_GEAR = <svg {...S}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>;
-const ICON_BACK = <svg {...S} width={15} height={15}><path d="m15 18-6-6 6-6" /></svg>;
 const ICON_OUT = <svg {...S}><path d="M14 4h6v6" /><path d="M20 4 10 14" /><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" /></svg>;
 
 /** The key with its padlock badge while Passwords is locked. */
@@ -62,8 +60,8 @@ interface HeaderProps {
 export function ExtAskHeader(p: HeaderProps) {
   const shown = askProjectDisplay(p.agent.project);
   const agentSwitch = p.canSwitch ? (
-    <button type="button" className="ext-ask-agent" data-testid="ext-ask-agent" onClick={p.onAgents} title="Switch agent">
-      <span data-fit-cut="">{shown}</span><span aria-hidden="true">{ICON_CARET}</span>
+    <button type="button" className="ext-ask-agent" data-testid="ext-ask-agent" aria-haspopup="dialog" onClick={p.onAgents} title="Switch agent">
+      <span data-fit-cut="">{shown}</span><MenuCaret size={8} />
     </button>
   ) : <span className="ext-ask-agent is-plain">{shown}</span>;
   return (
@@ -152,7 +150,7 @@ export function ExtTaskHeader({ title, state, label, meta, onBack, keyed, vault,
   return (
     <header className="ext-ask-head ext-taskpage-head" data-fit-header="" data-testid="ext-task-head">
       <button type="button" className="ext-taskpage-back" data-testid="ext-task-back" onClick={onBack} aria-label="Back to the tasks" title="Back to the tasks">
-        <span aria-hidden="true">{ICON_BACK}</span>Back
+        <span className="ext-taskpage-back-icon" aria-hidden="true">{ICON_CHEVRON_LEFT}</span>Back
       </button>
       <div className="ext-ask-titles">
         <span className="ext-ask-title wn-title" data-fit-title="" data-testid="ext-task-title">{title}</span>

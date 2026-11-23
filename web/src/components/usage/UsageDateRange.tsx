@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
-import { Chip } from '@/components/controls';
+import { Chip, MenuCaret } from '@/components/controls';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 
 interface Props {
@@ -60,9 +60,7 @@ export function UsageDateRange({ active, start, end, bounds, onApply }: Props) {
       <Chip
         pressed={active}
         trailing={(
-          <svg className="usage-daterange-caret" width="10" height="10" viewBox="0 0 16 16" aria-hidden="true">
-            <polyline points="3.5 6 8 10.5 12.5 6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
+          <MenuCaret className="usage-daterange-caret" />
         )}
         data-testid="usage-period-custom"
         aria-haspopup="dialog"

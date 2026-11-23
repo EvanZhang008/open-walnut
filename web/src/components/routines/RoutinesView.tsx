@@ -6,6 +6,7 @@ import { RoutineForm } from './RoutineForm';
 import { RoutineRow } from './RoutineRow';
 import { changedSince, editKey, groupKeyOf, groupRoutines, keepShownOrder, routineHealth } from './routine-groups';
 import { EmptyState, LoadingState } from '@/components/common/EmptyState';
+import { DisclosureChevron } from '@/components/controls';
 import { discardDraft, draftKey, readDraft } from '@/utils/drafts';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { getRoutinesSnapshot, loadRoutines } from '@/stores/routines-store';
@@ -280,9 +281,7 @@ export function RoutinesView({ compact = false }: { compact?: boolean }) {
                     onClick={() => toggleGroup(group.key)}
                     title={group.global ? 'Routines that belong to no project' : `Routines of tasks in ${group.name}`}
                   >
-                    <svg className={`routine-row-chevron routine-group-chevron${folded ? '' : ' open'}`} viewBox="0 0 16 16" aria-hidden="true">
-                      <path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
+                    <DisclosureChevron open={!folded} className="routine-group-chevron" />
                     <span className="routine-group-name wn-title">{group.name}</span>
                     <span className="routine-group-count">{group.routines.length}</span>
                     {group.failing > 0 && <span className="routine-group-failing">{group.failing} failing</span>}

@@ -22,6 +22,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { ICON_PIN, tierIcon } from '@/components/common/Icons';
 import type { DraftDecisionChip } from './draft-decisions';
 import type { DraftMenuCloseReason } from './DraftTaskMenu';
+import { MenuCaret } from '@/components/controls';
 
 type OpenMode = 'mouse' | 'keyboard';
 
@@ -257,6 +258,7 @@ export function DraftDecisionChips({ chips, menu }: { chips: readonly DraftDecis
             <ChipGlyph chip={c} />
             <span className={labelCls}>{c.label}</span>
             {c.ai && <span className="draft-ai-badge" aria-hidden="true">✦</span>}
+            <MenuCaret />
           </button>
         );
       })}
@@ -304,7 +306,7 @@ export function DraftMoreButton({ menu, moreRef, priorityVisible, withProject = 
       title={title}
       {...menuTriggerProps(menu)}
     >
-      Task settings
+      Task settings<MenuCaret />
     </button>
   );
 }

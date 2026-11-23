@@ -104,6 +104,7 @@ function ModeSwitch({ mode, modes, onPick }: { mode: OrgTaskMode; modes: readonl
 function SectionHead({ tab, count, open, onFlip }: { tab: OrgRailTab; count: number; open: boolean; onFlip: () => void }) {
   return (
     <button type="button" className="org-task-section-head" data-testid="org-task-section-head" data-tab={tab} aria-expanded={open} onClick={onFlip}>
+      <DisclosureChevron open={open} />
       {tab === 'watching' ? <span className="org-task-section-icon" aria-hidden="true">{ICONS.ICON_EYE}</span>
         : tab === 'notstarted' ? <span className="org-task-section-icon" aria-hidden="true">{ICONS.ICON_NOT_STARTED}</span>
         : <i style={{ background: TAB_DOT[tab] }} />}

@@ -211,19 +211,6 @@
   white-space: pre;
 }
 
-.routine-row-chevron {
-  flex: 0 0 auto;
-  display: inline-block;
-  color: var(--fg-muted);
-  font-size: var(--font-size-lg);
-  line-height: 1;
-  transition: transform 120ms ease-out;
-}
-
-.routine-row-chevron.open {
-  transform: rotate(90deg);
-}
-
 .routine-row-toggle-slot {
   flex: 0 0 auto;
   display: inline-flex;
@@ -578,10 +565,7 @@
 
 /* The group's fold mark: one fixed box, the same folded or open, a step darker
    than the row chevrons so it reads as the group's. */
-.routine-row-chevron.routine-group-chevron {
-  display: block;
-  width: 14px;
-  height: 14px;
+.wn-disclosure-chevron.routine-group-chevron {
   color: var(--fg-secondary);
 }
 
@@ -714,11 +698,6 @@ button.routines-summary-failing:focus-visible {
     align-self: center;
     margin-top: 0;
   }
-}
-
-svg.routine-row-chevron {
-  width: 14px;
-  height: 14px;
 }
 
 /* On a phone the Run with choices sit close: each is a 44 px target already. */

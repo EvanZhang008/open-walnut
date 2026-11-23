@@ -7,7 +7,8 @@
  */
 import { useRef, type KeyboardEvent, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { ICON_CHEVRON_DOWN, ICON_CLOSE } from '../common/Icons';
+import { ICON_CLOSE } from '../common/Icons';
+import { MenuCaret } from '@/components/controls';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer, type OverlayCloseReason } from '@/hooks/useOverlayLayer';
 import { MISSING_VALUE_TITLE } from './filter-bar-model';
@@ -57,7 +58,7 @@ export function FilterChipView({ chip, menuOpen, onOpenMenu, onRemove }: FilterC
       >
         {chipShowsDim(chip.dim) && <span className="fb-chip-dim">{`${chip.label}: `}</span>}
         <span className={`fb-chip-val${chip.missing ? ' is-missing' : ''}`} title={chip.title}>{chip.value}</span>
-        <span className="fb-chip-caret" aria-hidden="true">{ICON_CHEVRON_DOWN}</span>
+        <MenuCaret className="fb-chip-caret" />
       </button>
       <button
         type="button"

@@ -10,6 +10,7 @@
  * the row's wrapper so the shared component stays untouched.
  */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { DisclosureChevron } from '@/components/controls';
 import { EmptyState, UnavailableState } from '@/components/common/EmptyState';
 import type { EngineSettingView, EngineSettingsView, EngineSettingsWriteScope } from '@/api/engine-settings';
 import type { EngineSettingsHook, EngineSettingsLastWrite } from '@/hooks/useEngineSettings';
@@ -261,9 +262,7 @@ function OtherGroup({ id, title, help, count, filtering, children }: {
       }}
     >
       <summary>
-        <svg className="engine-settings-files-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-          <path d="M6 3l5 5-5 5" />
-        </svg>
+        <DisclosureChevron open={shown} className="engine-settings-files-chevron" />
         <span>{title} ({count})</span>
       </summary>
       {help && <p className="engine-settings-popover-group-help">{help}</p>}
@@ -443,9 +442,7 @@ export function EngineSettingsFooter(props: FooterProps) {
           <details className="engine-settings-files" data-testid="engine-settings-files" open={filesOpen} onToggle={(e) => setFilesOpen(e.currentTarget.open)}>
             {/* A chevron says the line unfolds, and points down while it is open. */}
             <summary>
-              <svg className="engine-settings-files-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <path d="M6 3l5 5-5 5" />
-              </svg>
+              <DisclosureChevron open={filesOpen} className="engine-settings-files-chevron" />
               <span className="engine-settings-files-summary-text">Files ({files.length})</span>
             </summary>
             {/* The list shows its entries in full (the rows lend the room

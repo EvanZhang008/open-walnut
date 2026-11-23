@@ -14,6 +14,7 @@ import { ContextMenu } from '@/components/common/ContextMenu';
 import { useMenuButton } from './useMenuButton';
 import { useFocusAcrossRemount } from '@/utils/focus-across-remount';
 import { SettingsButton } from '../inputs/SettingsButton';
+import { MenuCaret } from '@/components/controls';
 
 function Item({ title, sub }: { title: string; sub: string }) {
   return (
@@ -36,7 +37,7 @@ export function AddHostButton({ onJoin, onSsh, onPick }: { onJoin: () => void; o
   return (
     <span ref={anchor} className="rh-add-anchor">
       <SettingsButton variant="primary" data-testid="remote-hosts-add" {...buttonProps}>
-        Add host
+        Add host <MenuCaret />
       </SettingsButton>
       {menu && (
         <ContextMenu

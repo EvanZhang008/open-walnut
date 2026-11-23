@@ -22,8 +22,8 @@ import { taskNeedsAction, taskUserState } from '@/utils/session-status';
 import { timeAgo } from '@/utils/time';
 import * as ICONS from '../common/Icons';
 import { AgentText } from '../common/AgentText';
+import { DisclosureChevron } from '@/components/controls';
 import { taskTextSource } from '@/utils/agent-text-source';
-import { NavigationChevron } from './NavigationSections';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskStartButton } from './TaskStartButton';
 import { useInlineTitleEdit } from './useInlineTitleEdit';
@@ -118,7 +118,7 @@ export function StatusSectionHeading({ sectionKey, count, open, onToggle, more, 
           </span>
         )}
         <span className="navigation-heading-rule" aria-hidden="true" />
-        <NavigationChevron collapsed={!open} />
+        <DisclosureChevron open={open} className="navigation-chevron" />
       </button>
     </div>
   );

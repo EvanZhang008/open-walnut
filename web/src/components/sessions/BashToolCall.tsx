@@ -153,6 +153,7 @@ export function BashToolCall({ tool, status: statusProp = 'done', result: result
           tabIndex={0}
           title="Expand command & output"
           aria-label="Expand command and output to popup"
+          aria-haspopup="dialog"
           onClick={(e) => { e.stopPropagation(); setPopupOpen(true); }}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); setPopupOpen(true); } }}
         >

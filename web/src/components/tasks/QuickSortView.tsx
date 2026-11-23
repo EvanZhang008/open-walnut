@@ -341,7 +341,7 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
                 {tierKeyed(tierChoices(item.tier)).map(({ id, key }) => <button key={id} type="button" className="btn quick-sort-btn" data-sort-tier={id} data-sort-key={key} onClick={() => taskTier(item, id)}>{label(id)}{key && <small>{key}</small>}</button>)}
                 </div><div className="quick-sort-moves">
                 <button type="button" className="btn quick-sort-btn" data-sort-action="reply" onClick={() => { setCursor(i); setReplying(item.task.id); }}>Reply<small>R</small></button>
-                <button type="button" className="btn quick-sort-btn" data-sort-action="snooze" aria-haspopup="dialog" onClick={e => openSnooze({ kind: 'task', item }, e.currentTarget)}>Snooze<small>S</small></button>
+                <button type="button" className="btn quick-sort-btn" data-sort-action="snooze" aria-haspopup="dialog" onClick={e => openSnooze({ kind: 'task', item }, e.currentTarget)}><span className="quick-sort-btn-line">Snooze<MenuCaret /></span><small>S</small></button>
                 <button type="button" className="btn quick-sort-btn" data-sort-action="done" onClick={() => taskDone(item)}>Done<small>D</small></button>
                 <button type="button" className="btn btn-ghost quick-sort-btn" data-sort-action="skip" onClick={() => taskSkip(item)}>Skip<small>X</small></button>
               </div></div>}

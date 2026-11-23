@@ -28,6 +28,7 @@ import '@/styles/header-fit.css';
 import '@/styles/trigger-picker.css';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import { SegmentedControl } from '@/components/controls';
+import { ICON_CHEVRON_LEFT } from '@/components/common/Icons';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 
 export type TriggerPickerCloseReason = 'escape' | 'close' | 'outside' | 'prefill' | 'anchor-lost';
@@ -122,9 +123,7 @@ export function TriggerPickerPopover(props: TriggerPickerPopoverProps) {
       <header className="trigger-picker-header" data-fit-header="">
         {picked ? (
           <button type="button" className="trigger-picker-back" aria-label="Back to all triggers" onClick={() => setPicked(null)}>
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <path d="M10 3L5 8l5 5" />
-            </svg>
+            {ICON_CHEVRON_LEFT}
           </button>
         ) : null}
         <h2 className="trigger-picker-title wn-title" data-fit-title="">{picked ? `${picked.pluginName}: ${picked.title}` : 'Add a trigger'}</h2>
