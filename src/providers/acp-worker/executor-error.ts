@@ -30,9 +30,9 @@ export interface TurnTextFailure {
 /** The adapter's error line: at a line start, the warning sign, then the mark. */
 const EXECUTOR_ERROR_LINE = /(?:^|\n)[ \t]*\u26a0\ufe0f?[ \t]*agent executor error:/g
 /** How much of a turn's text the worker keeps: the error line is the turn's last words. */
-export const TURN_TAIL_CHARS = 4096
+export const TURN_TAIL_CHARS = 16_384
 /** The most an error line runs past its mark (its Details list included). */
-const ERROR_LINE_MAX = 3000
+const ERROR_LINE_MAX = 16_000
 const WORDS_MAX = 400
 
 /** The last `max` characters of a turn's agent text. */
@@ -48,16 +48,18 @@ export class TurnTextTail {
 
 /**
  * The failure an executor-error line in `text` names, or undefined when the text holds
- * none. The line must start a line with the warning sign and be the text's end (at most
- * ERROR_LINE_MAX characters follow the mark): a model that merely quotes such a line in
- * its answer, with more answer after it, ends no turn as failed. Only the LAST one counts.
+ * none. The line must start a line with the warning sign and be the text's last line (at
+ * most ERROR_LINE_MAX characters, no line break after the mark): a model that merely quotes
+ * such a line in its answer, with more answer after it, ends no turn as failed. Only the
+ * LAST one counts.
  */
 export function readExecutorError(text: string, nowMs: number): TurnTextFailure | undefined {
   let at = -1
   for (const m of text.matchAll(EXECUTOR_ERROR_LINE)) at = m.index + m[0].length
   if (at < 0) return undefined
   const line = text.slice(at)
-  if (line.trim().length > ERROR_LINE_MAX) return undefined
+  // One line, the text's last: anything after it (a model quoting the line, then explaining) is an answer.
+  if (line.trim().length > ERROR_LINE_MAX || line.trim().includes('\n')) return undefined
   const words = line.trim().replace(/\s+/g, ' ').slice(0, WORDS_MAX)
 
   // "Error 400, Message: ..., Status: INVALID_ARGUMENT" and "RESOURCE_EXHAUSTED (code 429): ...".
@@ -129,6 +131,11 @@ export function parseGoDuration(text: string): number | undefined {
  * own identity (initialize's agentInfo.name), never on a Walnut engine id.
  */
 export function refusalMeansUsageLimit(initializeResponse: unknown): boolean {
+  return isAntigravityAdapter(initializeResponse)
+}
+
+/** The adapter is Antigravity's (initialize's agentInfo.name), the one that writes these lines. */
+export function isAntigravityAdapter(initializeResponse: unknown): boolean {
   const info = initializeResponse && typeof initializeResponse === 'object'
     ? (initializeResponse as { agentInfo?: { name?: unknown } }).agentInfo
     : undefined
@@ -137,8 +144,7 @@ export function refusalMeansUsageLimit(initializeResponse: unknown): boolean {
 
 /**
  * How a turn that the provider answered (not rejected) failed, or undefined when it ran:
- * an executor-error line at its end, else a refusal from an adapter whose refusal is its
- * quota.
+ * on Antigravity's adapter, an executor-error line at its end, else a refusal (its quota).
  */
 export function turnEndFailure(o: {
   tail: string
@@ -146,6 +152,8 @@ export function turnEndFailure(o: {
   initializeResponse: unknown
   nowMs: number
 }): TurnTextFailure | undefined {
+  // Only the adapter that writes these lines: on any other engine such a line is the model's own text.
+  if (!isAntigravityAdapter(o.initializeResponse)) return undefined
   const fromText = readExecutorError(o.tail, o.nowMs)
   if (o.stopReason === 'refusal' && refusalMeansUsageLimit(o.initializeResponse)) {
     return fromText?.kind === 'usage_limit' ? fromText : { kind: 'usage_limit', words: 'refusal stop (quota)' }

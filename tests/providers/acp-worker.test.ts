@@ -1248,6 +1248,8 @@ describe('signing in after initialize (the descriptor auth plan)', () => {
 })
 
 describe('a turn the provider answered but that failed', () => {
+  // Only Antigravity's adapter writes the executor-error line (executor-error.ts isAntigravityAdapter).
+  const AGY = { MOCK_ACP_AGENT_NAME: 'Antigravity ACP Server' }
   const turnMetas = async (text: string, env?: Record<string, string>) => {
     worker = await initWorker(env)
     await op(worker, 'newSession', { cwd: tmpDir })
@@ -1257,7 +1259,7 @@ describe('a turn the provider answered but that failed', () => {
   const types = (events: Array<{ type: string }>) => events.map((e) => e.type).filter((t) => t === 'error' || t === 'turn-ended')
 
   it('an executor-error line for a bad key journals auth_required ahead of turn-ended, in Walnut words', async () => {
-    const events = await turnMetas('executor-bad-key')
+    const events = await turnMetas('executor-bad-key', AGY)
     expect(types(events)).toEqual(['error', 'turn-ended'])
     expect(events.find((e) => e.type === 'error')).toEqual({
       type: 'error', errorKind: 'auth_required', message: 'ACP provider authentication is required', commandId: 'acp-prompt:qm-executor-bad-key',
@@ -1269,7 +1271,7 @@ describe('a turn the provider answered but that failed', () => {
 
   it('a quota line journals usage_limit with the reset its delay names', async () => {
     const before = Date.now()
-    const events = await turnMetas('executor-quota-out')
+    const events = await turnMetas('executor-quota-out', AGY)
     const err = events.find((e) => e.type === 'error') as { errorKind: string; resetsAt?: number }
     expect(err.errorKind).toBe('usage_limit')
     expect(err.resetsAt).toBeGreaterThanOrEqual(before + 90 * 60_000)

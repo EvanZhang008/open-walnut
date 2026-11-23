@@ -22,12 +22,14 @@ export function effortControlOf(controls: readonly AcpConfigOption[]): AcpConfig
 
 /**
  * The control value for a named effort, or undefined when the control offers none that
- * fits (a name off the scale it does not offer). "max" on low..xhigh is "xhigh"; "xhigh"
+ * fits (a name off the scale it does not offer; with `exact`, any name it does not offer). "max" on low..xhigh is "xhigh"; "xhigh"
  * on low..high is "high"; "minimal" on low..high is "low".
  */
-export function effortValueFor(wanted: string, control: Pick<AcpConfigOption, 'options'>): string | undefined {
+export function effortValueFor(wanted: string, control: Pick<AcpConfigOption, 'options'>, exact = false): string | undefined {
   const offered = control.options.map((o) => o.value)
   if (offered.includes(wanted)) return wanted
+  // Codex keeps its own rule: an effort the model does not offer is not applied (it never was).
+  if (exact) return undefined
   const rank = (v: string) => (EFFORT_SCALE as readonly string[]).indexOf(v.toLowerCase())
   const want = rank(wanted)
   if (want < 0) return offered.find((v) => v.toLowerCase() === wanted.toLowerCase())

@@ -94,6 +94,25 @@ describe('turnEndFailure and the refusal rule', () => {
     expect(turnEndFailure({ tail: '', stopReason: 'end_turn', initializeResponse: antigravity, nowMs: NOW })).toBeUndefined()
   })
 
+  it('reads an executor-error line only on that adapter: elsewhere it is the model\'s own text', () => {
+    const tail = line('Error 429, Message: q, Status: RESOURCE_EXHAUSTED')
+    expect(turnEndFailure({ tail, stopReason: 'end_turn', initializeResponse: antigravity, nowMs: NOW })?.kind).toBe('usage_limit')
+    expect(turnEndFailure({ tail, stopReason: 'end_turn', initializeResponse: { agentInfo: { name: 'codex-acp' } }, nowMs: NOW })).toBeUndefined()
+    expect(turnEndFailure({ tail, stopReason: 'end_turn', initializeResponse: null, nowMs: NOW })).toBeUndefined()
+  })
+
+  it('a quoted line with an explanation after it is no failure, even a short one', () => {
+    const quoted = `Here is the log:\n\u26a0 agent executor error: Error 429, Message: q, Status: RESOURCE_EXHAUSTED\nThis means the quota ran out; retry later.`
+    expect(turnEndFailure({ tail: quoted, stopReason: 'end_turn', initializeResponse: antigravity, nowMs: NOW })).toBeUndefined()
+  })
+
+  it('a real-length error line (long Details) is still read', () => {
+    const details = 'map[@type:type.googleapis.com/google.rpc.QuotaFailure violations:[' + 'map[quotaMetric:generativelanguage.googleapis.com/generate_content quotaId:PerDay]'.repeat(60) + ']]'
+    const tail = line(`Error 429, Message: Quota exceeded, Status: RESOURCE_EXHAUSTED, Details: [${details} map[retryDelay:20s]]`)
+    expect(tail.length).toBeGreaterThan(5000)
+    expect(turnEndFailure({ tail, stopReason: 'end_turn', initializeResponse: antigravity, nowMs: NOW })).toMatchObject({ kind: 'usage_limit', resetsAt: NOW + 20_000 })
+  })
+
   it('a refusal with a quota line keeps the reset the line names', () => {
     const tail = line('Error 429, Message: q, Status: RESOURCE_EXHAUSTED, Details: [map[retryDelay:10s]]')
     expect(turnEndFailure({ tail, stopReason: 'refusal', initializeResponse: antigravity, nowMs: NOW })).toMatchObject({ kind: 'usage_limit', resetsAt: NOW + 10_000 })
@@ -146,6 +165,9 @@ describe('effort onto the adapter effort control', () => {
     const four = control('thought_level', ['low', 'medium', 'high', 'xhigh'])
     expect(effortValueFor('high', four)).toBe('high')
     expect(effortValueFor('max', four)).toBe('xhigh')
+    // Codex keeps its exact rule: an effort the model does not offer is not applied.
+    expect(effortValueFor('max', four, true)).toBeUndefined()
+    expect(effortValueFor('high', four, true)).toBe('high')
     expect(effortValueFor('minimal', four)).toBe('low')
     const three = control('thought_level', ['low', 'medium', 'high'])
     expect(effortValueFor('max', three)).toBe('high')

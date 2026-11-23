@@ -2159,7 +2159,7 @@ export class AcpSession {
   private replayTarget(key: string, value: string): { configId: string; value: string } | undefined {
     if (key === EFFORT_PICK_KEY) {
       const control = effortControlOf(this._configOptions)
-      const mapped = control ? effortValueFor(value, control) : undefined
+      const mapped = control ? effortValueFor(value, control, this.engineId === 'codex') : undefined
       return control && mapped && control.currentValue !== mapped ? { configId: control.id, value: mapped } : undefined
     }
     const control = this._configOptions.find((c) => c.id === key)
@@ -2598,7 +2598,7 @@ export class AcpSession {
     if (effort) {
       // Read after the model: an adapter's effort choices can depend on it (acp-effort.ts).
       const control = effortControlOf(this._configOptions)
-      const value = control ? effortValueFor(effort, control) : effort
+      const value = control ? effortValueFor(effort, control, this.engineId === 'codex') : effort
       if (!value || !await this.setConfigOption(control?.id ?? EFFORT_PICK_KEY, value)) {
         log.session.warn('acp: model applied but its effort rejected', {
           sessionId: this.trackingId(), modelId, effort, control: control?.id,
