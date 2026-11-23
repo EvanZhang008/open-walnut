@@ -40,7 +40,7 @@ export function isListenerFrame(v: unknown): v is ListenerFrame {
 }
 
 /** Close codes of the listener door (4000s, as the bridge's and the leader door's). */
-export const LISTEN_CLOSE = { mismatch: 4001, revoked: 4003, replaced: 4000 } as const
+export const LISTEN_CLOSE = { mismatch: 4001, revoked: 4003, replaced: 4000, shut: 4004 } as const
 
 /** A loopback host name or address (plain ws:// is allowed only there: the token is a bearer). */
 function loopbackHost(hostname: string): boolean {

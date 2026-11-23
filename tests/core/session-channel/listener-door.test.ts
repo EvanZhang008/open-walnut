@@ -107,14 +107,41 @@ describe('the listener door', () => {
     expect(listenedRow('s1')).toMatchObject({ alias: 'devbox', row: { claudeSessionId: 's1' } })
   })
 
+  it('refuses a token in the URL before anything reads it (review L1)', async () => {
+    const url = await door()
+    let verified = 0
+    server!.removeAllListeners('upgrade')
+    server!.on('upgrade', (req, socket, head) => { void handleHostListenUpgrade(req, socket, head, { verify: async () => { verified++; return cred }, walnut: async () => walnut }) })
+    expect((await dial(`${url}?token=${'z'.repeat(40)}`, {})).status).toBe(400)
+    expect(verified).toBe(0)
+  })
+
+  it('closes a link once the door shut at its recheck (the switch off on the Mac, review L3)', async () => {
+    const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' })
+    await new Promise<void>((r) => wss.once('listening', () => r()))
+    let open: string | null = WALNUT
+    wss.on('connection', (ws) => attachListenerSocket(ws, { alias: 'devbox', walnutId: WALNUT, name: 'bridge-devbox', stillValid: async () => true, doorWalnut: async () => open, recheckMs: 50 }))
+    const port = (wss.address() as { port: number }).port
+    const r = dial(`ws://127.0.0.1:${port}`, {}, () => { open = null })
+    expect((await r).code).toBe(4004)
+    await new Promise<void>((res) => wss.close(() => res()))
+  })
+
   it('closes a socket whose token no longer stands at its recheck', async () => {
     const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' })
     await new Promise<void>((r) => wss.once('listening', () => r()))
     let valid = true
     wss.on('connection', (ws) => attachListenerSocket(ws, { alias: 'devbox', walnutId: WALNUT, name: 'bridge-devbox', stillValid: async () => valid, recheckMs: 50 }))
     const port = (wss.address() as { port: number }).port
-    const r = dial(`ws://127.0.0.1:${port}`, {}, () => { valid = false })
+    const row = { claudeSessionId: 's1', taskId: 't1', judge: 'host', host: 'devbox', process_status: 'idle', startedAt: '', lastActiveAt: '' }
+    const r = dial(`ws://127.0.0.1:${port}`, {}, (ws, frames) => {
+      const last = frames[frames.length - 1]
+      if (last.op === 'welcome') ws.send(JSON.stringify({ ch: 'sf', op: 'hello', walnutId: WALNUT, hostId: 'devbox', logId: 'L', floor: 1, head: 1 }))
+      if (last.op === 'listen') { ws.send(JSON.stringify({ ch: 'sf', op: 'rows', rows: [row], upTo: 1, rowsAt: 1, logId: 'L' })); setTimeout(() => { valid = false }, 30) }
+    })
     expect((await r).code).toBe(4003)
+    // What the revoked host told goes with it (review L2).
+    expect(listenedRow('s1')).toBeNull()
     await new Promise<void>((res) => wss.close(() => res()))
   })
 })
