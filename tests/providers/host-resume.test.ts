@@ -32,6 +32,7 @@ import { hostStartedSaid } from '../../src/core/session-channel/leader-tasks.js'
 import { ClaudeCodeSession } from '../../src/providers/claude-code-session.js'
 import { _resetJudgeOfForTesting, judgingHostOf, setHostJudgeProbe } from '../../src/core/sessions/judge-of.js'
 import { _setActiveLeaderSideForTesting, _setHostResumesForTesting } from '../../src/core/session-channel/leader-boot.js'
+import { _setHostSwitchForTesting } from '../../src/core/session-channel/resume-hosts.js'
 import { _resetHostSessionTasksForTesting } from '../../src/core/session-channel/leader-tasks.js'
 import { _resetRemoteJudgedSessionsForTesting } from '../../src/providers/remote-judged-session.js'
 import { HostRequestNotSent, type LeaderSide } from '../../src/core/session-channel/leader-side.js'
@@ -116,6 +117,7 @@ beforeEach(async () => {
   probe.calls = 0
   probe.gate = null
   setHostJudgeProbe((host) => host === 'devbox')
+  _setHostSwitchForTesting((host) => host === 'devbox')
   _setHostResumesForTesting('devbox', true)
 })
 afterEach(async () => {
@@ -208,7 +210,8 @@ describe('a send to a legacy session at rest on a host that judges', () => {
 
 describe('a session that is not at rest, or a host that does not judge, stays legacy', () => {
   it.each<[string, () => void]>([
-    ['the switch is off for its host', () => setHostJudgeProbe(() => false)],
+    ['the switch is off for its host', () => { setHostJudgeProbe(() => false); _setHostSwitchForTesting(() => false) }],
+    ['its host\'s service is not linked or does not judge', () => setHostJudgeProbe(() => false)],
     ['its host takes no resume (an older service)', () => _setHostResumesForTesting('devbox', false)],
     ['its CLI runs on the host', () => { probe.answer = { alive: true } }],
     ['the host\'s runtime gives no answer', () => { probe.answer = null }],
@@ -224,6 +227,7 @@ describe('a session that is not at rest, or a host that does not judge, stays le
 
   it('the switch off asks the host\'s runtime nothing', async () => {
     setHostJudgeProbe(() => false)
+    _setHostSwitchForTesting(() => false)
     const h = await legacyAtRest()
     fakeSide()
     kick()

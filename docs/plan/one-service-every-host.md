@@ -440,7 +440,10 @@ permission prompts still name Walnut.
   CLI session id from the same row, through the same claim, in-flight and lost-start rules as a start, and
   the session is the host's from then on; refused or never sent, it resumes here as before, once. A session
   with a live CLI is never handed over, ACP engines stay the leader's, and a host that does not name
-  `session-resume-v1` is never asked. One a host runs stays that host's after the switch goes off (tests:
+  `session-resume-v1` is never asked (a host turned on before its service has a build that names it keeps
+  its sessions legacy). With the switch on for the host, each such delivery logs one line saying which way it
+  went and why (`host resume: ...`, `why`: held legacy, the host takes no resume, not judging, or a reason it is
+  not at rest); off, it is quiet. One a host runs stays that host's after the switch goes off (tests:
   L1 in `tests/e2e/host-judged-session-lifecycle-e2e.test.ts`, S6 in `host-judged-session-cluster-e2e.test.ts`,
   L1 to L7 in `host-judge-legacy-resume-e2e.test.ts`). So no session changes its judge while it runs.
 - **A hand-over whose answer is lost** (a start or a resume, `src/providers/host-handover.ts`) is neither the

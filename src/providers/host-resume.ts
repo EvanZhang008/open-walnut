@@ -31,8 +31,10 @@
  *              says so in Walnut Health. Never both. A leader restart in the window arms the check
  *              again (rearmHandOversAtBoot).
  *
- * With no host taking a resume (the switch off) resumeHostOf answers null without a row read, and
- * the delivery runs exactly as before.
+ * With the switch off for every host resumeHostOf answers null without a row read, and the
+ * delivery runs exactly as before; off for the row's host, null with no line. On for it, the
+ * decision logs one line whichever way it goes: resumeHostOf when the host is not asked
+ * (NoResumeHost), else resumeAtRestOnHost (stays legacy and why, or handed).
  */
 import { log } from '../logging/index.js'
 import { sessionJudgeInStore } from '../core/session-db.js'
@@ -41,7 +43,7 @@ import type { SessionRecord } from '../core/types.js'
 import type { StartBody } from '../core/session-channel/host-api.js'
 import { isAcpEngine } from '../core/agents/engine-registry.js'
 import { claimHostStarted, unclaimHostStarted } from '../core/session-channel/leader-tasks.js'
-import { anyHostResumesSessions } from '../core/session-channel/resume-hosts.js'
+import { anyHostSwitchOn, hostResumesSessions, hostSwitchOnFor } from '../core/session-channel/resume-hosts.js'
 import { isHandedHold } from '../core/sessions/handed-holds.js'
 import { startGoesToHost } from './host-judged-runner.js'
 import { armLostStartCheck, cliOnHost, handOverAnswered, handStartToHost, hostVerdict, rearmHandOvers, startLostHooks, takeStartBack, type LostHooks } from './host-handover.js'
@@ -126,21 +128,40 @@ function holdLegacy(sid: string): void {
 }
 
 /**
- * The host a delivery to the legacy session `sid` may hand it to, or null. Sync, so a delivery that
- * stays legacy waits on nothing; while no host takes a resume (every one with the switch off) it
- * reads no row either.
+ * Why a delivery to a legacy session whose host has the switch on does not ask that host at all:
+ *   held_legacy           a hand-over of it failed a short while ago (holdLegacy)
+ *   host_takes_no_resume  the host's running service does not name SESSION_RESUME_CAP (an older build)
+ *   host_not_judging      the host's service is not linked, or does not name SESSION_JUDGE_CAP
  */
-export function resumeHostOf(sid: string): string | null {
-  if (!sid || !anyHostResumesSessions()) return null
+export type NoResumeHost = 'held_legacy' | 'host_takes_no_resume' | 'host_not_judging'
+
+function noResumeHostReason(sid: string, host: string): NoResumeHost | null {
   const until = heldLegacy.get(sid)
   if (until !== undefined) {
-    if (until > Date.now()) return null
+    if (until > Date.now()) return 'held_legacy'
     heldLegacy.delete(sid)
   }
+  if (!hostResumesSessions(host)) return 'host_takes_no_resume'
+  if (!startGoesToHost(host)) return 'host_not_judging'
+  return null
+}
+
+/**
+ * The host a delivery to the legacy session `sid` may hand it to, or null. Sync, so a delivery that
+ * stays legacy waits on nothing; while the switch is off for every host it reads no row either.
+ */
+export function resumeHostOf(sid: string): string | null {
+  if (!sid || !anyHostSwitchOn()) return null
   let row: ReturnType<typeof sessionJudgeInStore>
   try { row = sessionJudgeInStore(sid) } catch { return null }
-  if (!row || row.judgedByHost || !row.host || row.host === '__local__') return null
-  return startGoesToHost(row.host) ? row.host : null
+  // Not a legacy session of a host (a host-judged one goes to its host by its own route), or the switch off for it: quiet.
+  if (!row || row.judgedByHost || !row.host || row.host === '__local__' || !hostSwitchOnFor(row.host)) return null
+  const why = noResumeHostReason(sid, row.host)
+  if (why) {
+    log.session.info('host resume: the session stays legacy, its host is not asked', { sessionId: sid, host: row.host, why })
+    return null
+  }
+  return row.host
 }
 
 function runnerFacts(sid: string, r: RunnerRest): RunnerFacts {
@@ -148,9 +169,8 @@ function runnerFacts(sid: string, r: RunnerRest): RunnerFacts {
 }
 
 async function restFacts(sid: string, r: RunnerRest): Promise<{ facts: RestFacts; row: SessionRecord | null; transferRunning: () => boolean }> {
-  const [{ getSessionByClaudeId }, { getQueue }, { hostResumesSessions }, { runningTransferFor }] = await Promise.all([
-    import('../core/session-tracker.js'), import('../core/session-message-queue.js'),
-    import('../core/session-channel/resume-hosts.js'), import('../core/transfer/transfer-jobs.js'),
+  const [{ getSessionByClaudeId }, { getQueue }, { runningTransferFor }] = await Promise.all([
+    import('../core/session-tracker.js'), import('../core/session-message-queue.js'), import('../core/transfer/transfer-jobs.js'),
   ])
   const row = await getSessionByClaudeId(sid)
   const queue: QueuedMessage[] = row ? await getQueue(sid) : []
@@ -279,4 +299,9 @@ export interface BootRunner {
 
 export function _resetHostResumeForTesting(): void {
   heldLegacy.clear()
+}
+
+/** Tests: a hand-over of `sid` just failed (it is held legacy for a while). */
+export function _holdLegacyForTesting(sid: string): void {
+  holdLegacy(sid)
 }

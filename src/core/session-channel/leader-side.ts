@@ -407,6 +407,10 @@ export function createLeaderSide(deps: LeaderSideDeps) {
       if (stopped) return
       await readSwitch()
     },
+    /** Is the switch on for `hostKey` now (whether or not its service is linked and judges)? */
+    switchOn(hostKey: string): boolean {
+      return !stopped && onFor(hostKey)
+    },
     /** judge-of.ts's start probe: would a start on `hostKey` go to its service now? */
     hostJudges(hostKey: string): boolean {
       const s = hosts.get(hostKey)

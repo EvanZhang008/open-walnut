@@ -172,6 +172,10 @@ describe('the leader side of a host that runs its sessions', () => {
     await side.refreshFlag()
     expect(side.hostJudges('devbox')).toBe(false)
     expect(side.hostJudges('devbox-b')).toBe(true)
+    // The switch itself, whatever the link says (host-resume.ts logs its decision only for a host it is on for).
+    expect(side.switchOn('devbox')).toBe(false)
+    expect(side.switchOn('devbox-b')).toBe(true)
+    expect(side.switchOn('devbox-never-linked')).toBe(true)
     await tick(60)
     expect(side.linked('devbox')).toBe(true)
   })

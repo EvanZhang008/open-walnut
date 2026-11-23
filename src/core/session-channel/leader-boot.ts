@@ -17,7 +17,7 @@ import { hostRunsSessionsAnyNow, hostSwitchNow } from './switch.js'
 import { reemitDestinations } from './event-classes.js'
 import { forgetHostJudged, judgingHostOf, noteHostJudged, setHostJudgeProbe } from '../sessions/judge-of.js'
 import { leaderDropHosts, leaderDropsOf } from './leader-drops.js'
-import { forgetHostResumes, noteHostResumes } from './resume-hosts.js'
+import { forgetHostResumes, noteHostResumes, noteSwitchAnyHost, setHostSwitchProbe } from './resume-hosts.js'
 import { NOT_OWN_SESSION } from './host-api.js'
 import type { PermitPair } from './channel.js'
 import { leaderPermitNumberForHosts, runningLeaderPermit } from './leader-permit.js'
@@ -213,6 +213,8 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   const syncDoor = async (): Promise<void> => {
     const on = !isFollower() && await hostRunsSessionsAnyNow().catch(() => false)
     setLeaderDoorOpen('/host-door', on)
+    // A delivery to a legacy session reads it sync (host-resume.ts resumeHostOf): off reads no row.
+    noteSwitchAnyHost(on)
   }
   await syncDoor()
   pushDoors = async (doors) => {
@@ -222,6 +224,9 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     return { dialed, routed: told, failed }
   }
   setHostJudgeProbe((host) => side.hostJudges(host))
+  setHostSwitchProbe((host) => side.switchOn(host))
+  // The per-host switch is read now, not only at a host's first view or a config write.
+  await side.refreshFlag()
   // A runner call the host refuses because it does not own the session: the same recovery as a send's.
   remote.setRemoteJudgedCaller((host, body) => side.callHost(host, body).catch((err: unknown) => {
     if (err instanceof Error && err.message.endsWith(`: ${NOT_OWN_SESSION}`)) void import('../../providers/host-judged-send.js').then((m) => m.confirmHostDisowns(body.sid, host)).catch(() => {})
