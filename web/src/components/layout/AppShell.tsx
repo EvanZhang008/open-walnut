@@ -47,6 +47,7 @@ import '@/styles/phone-pages-r3.css';
 import '@/styles/phone-fixes-r4.css';
 import { installInputModality } from '@/utils/input-modality';
 import { contentAreaStyle } from './content-area-style';
+import { isHomePath } from '@/utils/home-path';
 
 installInputModality();
 
@@ -108,8 +109,11 @@ function AppShellInner({ children }: AppShellProps) {
   );
   const location = useLocation();
   const apps = useAppCatalog();
-  const isMainPage = location.pathname === '/';
-  const activeApp = apps.findByPath(location.pathname);
+  // Home is drawn on its redirect paths too (`/sessions?id=`, `/tasks/:id`: home-path.ts), so it is
+  // the app there, full bleed from the first frame: a deep link drew Home inside the page padding
+  // until the router reached `/`, then everything on it jumped 24 px up and left.
+  const isMainPage = isHomePath(location.pathname);
+  const activeApp = apps.findByPath(isMainPage ? '/' : location.pathname);
   // Experiment apps_stay_open: the app on screen stays on the Sidebar until it is closed.
   useTrackOpenedApp(activeApp);
   const isFullBleed = activeApp?.fullBleed ?? location.pathname.startsWith('/apps/');

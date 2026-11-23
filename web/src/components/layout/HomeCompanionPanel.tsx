@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
+import { isHomePath } from '@/utils/home-path';
 import { CalendarSidePanel } from '@/components/calendar/CalendarSidePanel';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import { useScratchpadSlot } from './ScratchpadHost';
@@ -23,7 +24,8 @@ interface Props {
  * from the rail's Home group. With both on they sit side by side, the scratchpad on the right.
  */
 export function HomeCompanionPanel({ calendarOpen, scratchpadOpen, overlayLeft, ...rest }: Props) {
-  const home = useLocation().pathname === '/';
+  // Shown wherever Home is drawn, its redirect paths included (home-path.ts).
+  const home = isHomePath(useLocation().pathname);
   return (
     <CompanionColumn
       {...rest}

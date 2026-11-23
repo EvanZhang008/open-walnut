@@ -42,4 +42,34 @@ describe('the paths that show Home', () => {
     expect(isHomePath('/tasks')).toBe(false);
     expect(isHomePath('/sessions/extra')).toBe(false);
   });
+
+  it('what draws Home reads isHomePath, never `pathname === \'/\'` (the shell, the side bars)', () => {
+    // 2026-11-23: a `/sessions?id=` deep link drew Home inside the page padding (the shell asked for
+    // the app at `/sessions`, none), then jumped 24 px when the router reached `/`. A new
+    // `pathname === '/'` reads Home as hidden where App.tsx draws it; list it here only with why.
+    const allowed: Record<string, string> = {
+      'web/src/utils/home-path.ts': 'the definition itself',
+      'web/src/utils/demo-generation.ts': 'a bare `/` URL with no query, not whether Home is drawn',
+      'web/src/popout/ExtControl.tsx': "a URL's path written as text",
+      'web/src/components/layout/Sidebar.tsx': 'dispatches to a Home already at `/`, else navigates there first',
+      'web/src/keyboard/KeyboardCommandsHost.tsx': 'New task navigates to `/` first when elsewhere',
+    };
+    const root = path.join(__dirname, '../..');
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (/\.tsx?$/.test(e.name)) files.push(p);
+      }
+    };
+    walk(path.join(root, 'web/src'));
+    const hits = files
+      .filter((f) => /pathname\s*===\s*'\/'/.test(fs.readFileSync(f, 'utf8')))
+      .map((f) => path.relative(root, f).split(path.sep).join('/'));
+    expect(hits.filter((f) => !(f in allowed))).toEqual([]);
+    const shell = fs.readFileSync(path.join(root, 'web/src/components/layout/AppShell.tsx'), 'utf8');
+    expect(shell).toMatch(/const isMainPage = isHomePath\(location\.pathname\)/);
+    expect(shell).toMatch(/apps\.findByPath\(isMainPage \? '\/' : location\.pathname\)/);
+  });
 });
