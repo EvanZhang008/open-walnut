@@ -118,7 +118,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/host-servers.json` | machine | no | Host servers this server started, with their ports |
 | `~/.open-walnut/host-expose.json` | machine | no | A host server's own public port state |
 | `~/.open-walnut/session-channel/` | machine | no | A host that runs its own sessions: the fact log per Walnut it serves (facts-<id>.ndjson, its .state.json) and spilled start prompts; its sequence numbers and acks belong to this host |
-| `~/.open-walnut/distributed-skills/` | rebuildable | no | Skills the leader sends to this host's daemon, sent again on connect |
+| `~/.open-walnut/distributed-skills/` | rebuildable (daemon state) | no | Skills the leader sends to this host's daemon, sent again on connect |
 | `~/.open-walnut/cloud-setup-job.json` | machine | yes | An in-flight cloud setup run, with its pairing code |
 | `~/.open-walnut/code-server/` | machine | no | The in-app editor: its data and the instance running here |
 | `~/.open-walnut/time-tracking/` | leader-data | no | Time records: work hours, calls, app and site samples |

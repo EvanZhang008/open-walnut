@@ -51,10 +51,11 @@ function daemonHomePaths(src: string): Set<string> {
   for (const m of src.matchAll(/(?:const|var) (\w+) = path\.join\(HOME_DIR, '\.open-walnut', 'tmp'\)/g)) roots.add(m[1]!)
   for (const r of [...roots]) for (const m of src.matchAll(new RegExp(`(?:const|var) (\\w+) = [^\\n]*\\b${r}\\b`, 'g'))) roots.add(m[1]!)
   for (const r of roots) for (const m of src.matchAll(new RegExp(`path\\.join\\(${r},\\s*'([^']+)'`, 'g'))) out.add(`tmp/${m[1]}`)
-  // A sibling of a constant whose installed value is a tmp/ place (BUDGET_DIR beside RESUME_RECORD_DIR).
+  // A sibling of a constant whose installed value is a data home place (BUDGET_DIR beside
+  // RESUME_RECORD_DIR in tmp/, the CLI-owner records beside SPAWN_JOURNAL in local/).
   for (const m of src.matchAll(/path\.join\(path\.dirname\((\w+)\),\s*'([^']+)'\)/g)) {
-    const at = /'\.open-walnut', 'tmp', '[^']+'/.exec(definition(src, m[1]!))
-    if (at) out.add(`tmp/${m[2]}`)
+    const at = /'\.open-walnut'((?:\s*,\s*'[^']*')+)/.exec(definition(src, m[1]!))
+    if (at) out.add([...segments(at[1]!).slice(0, -1), m[2]!].join('/'))
   }
   return out
 }
@@ -78,7 +79,7 @@ describe('the daemon\'s places in the data home', () => {
 
   it('finds the places an installed daemon keeps (the extractor sees literal joins and the tmp/ constants)', () => {
     for (const set of found) {
-      for (const p of ['tmp/streams', 'tmp/offline-host', 'tmp/leader', 'tmp/usage-budgets', 'tmp/host-vitals', 'local/spawn-journal.jsonl', 'tmp/host-server']) expect(set, p).toContain(p)
+      for (const p of ['tmp/streams', 'tmp/offline-host', 'tmp/leader', 'tmp/usage-budgets', 'tmp/host-vitals', 'local/spawn-journal.jsonl', 'local/cli-owners', 'distributed-skills', 'tmp/host-server']) expect(set, p).toContain(p)
     }
   })
 

@@ -9,7 +9,8 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import YAML from 'yaml'
 import Database from '../../src/lib/sqlite.js'
-import { makeWorld, REPO, treeHash, type Machine, type World } from './world.js'
+import { compareKept, describeKept, snapshotHome } from '../../src/core/home-manifest/home-kept.js'
+import { makeWorld, REPO, type Machine, type World } from './world.js'
 import { consoleDirOfAccount } from '../../src/core/handed-over-console.js'
 import { standbyStatus } from '../../src/core/standby/index.js'
 import { experimentalEnabled } from '../../src/core/experimental.js'
@@ -201,10 +202,11 @@ export function cronDoorCalls(home: string): MayActLine[] {
 /**
  * A handed-over home started by hand runs as a standby (src/core/leader/switch/handed-over.ts):
  * it starts and stays up, names the machine that leads, answers a write `handed_over`, reaches
- * no outward door through a routine's period, and leaves its home byte for byte as it was.
+ * no outward door through a routine's period, and leaves its home as it was by the manifest's
+ * classes (home-kept.ts: leader data and machine data to the byte).
  */
 export async function checkStandby(c: Checks, w: World, m: Machine, leader: string, label: string): Promise<void> {
-  const before = treeHash(m.home)
+  const before = await snapshotHome(m.home)
   const t0 = Date.now()
   const s = await w.byHand(m, label.replace(/[^a-z0-9]+/gi, '-').toLowerCase())
   try {
@@ -223,8 +225,8 @@ export async function checkStandby(c: Checks, w: World, m: Machine, leader: stri
   } finally {
     await s.stop()
   }
-  const after = treeHash(m.home)
-  c.add(`${label}: its home is byte for byte as before (a hash of every path and its content)`, before === after, `${before.slice(0, 12)} -> ${after.slice(0, 12)}`)
+  const kept = compareKept(before, await snapshotHome(m.home))
+  c.add(`${label}: its home is as before (no path of the leader's data or this machine's data changed, by the manifest's classes)`, kept.ok, describeKept(kept))
 }
 
 /** The main scenario: switch under load, every check, the classic mistake, switch back. */
@@ -302,16 +304,16 @@ export async function rehearseSwitchAndBack(root: string, print: (c: Check) => v
     const saved = fs.readFileSync(markerPath)
     fs.rmSync(markerPath)
     for (const x of w.witnesses) fs.renameSync(x.dir, `${x.dir}.off`)
-    const hashBefore = treeHash(w.a.home)
+    const keptBefore = await snapshotHome(w.a.home)
     const unmarked = await w.byHand(w.a, 'control-unmarked')
     const unmarkedStatus = unmarked.ok ? await status(w, w.a) : null
     await unmarked.stop()
-    const hashAfter = treeHash(w.a.home)
+    const booted = compareKept(keptBefore, await snapshotHome(w.a.home))
     for (const x of w.witnesses) fs.renameSync(`${x.dir}.off`, x.dir)
     fs.writeFileSync(markerPath, saved)
     c.add('control: without the marker, A offline boots but acts on nothing (doors closed, waiting)', unmarked.ok && unmarkedStatus?.mayAct === false && unmarkedStatus?.state === 'waiting', JSON.stringify(unmarkedStatus))
-    // ...and the home's hash notices a real server's boot (its lock file, databases, door log): the standby checks above are not blind.
-    c.add('control: the home hash changes when a real server boots on it', hashBefore !== hashAfter, `${hashBefore.slice(0, 12)} -> ${hashAfter.slice(0, 12)}`)
+    // ...and the kept-home check notices a real server's boot (its lock file, databases, door log): the standby checks above are not blind.
+    c.add('control: the kept-home check fails when a real server boots on the home', !booted.ok, describeKept(booted))
     if (opts.noBack) return { checks: c, downtimeMs: st?.downtimeMs }
     // A's standby is left running for the switch back: the switch stops it and A leads again.
     const standbyA = await w.byHand(w.a, 'before-back')

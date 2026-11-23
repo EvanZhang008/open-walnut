@@ -6,7 +6,7 @@
  * (tests/core/home-manifest/home-manifest-sources.test.ts) fails on a path the code
  * writes that no entry names.
  */
-import { lead, mach, rebuild } from './build.js'
+import { DAEMON, lead, mach, rebuild } from './build.js'
 import type { HomeEntry } from './types.js'
 
 export const TOP_LEVEL_ENTRIES: readonly HomeEntry[] = [
@@ -99,7 +99,7 @@ export const TOP_LEVEL_ENTRIES: readonly HomeEntry[] = [
   mach('host-servers', 'host-servers.json', 'file', 'Host servers this server started, with their ports'),
   mach('host-expose', 'host-expose.json', 'file', 'A host server\'s own public port state'),
   mach('session-channel', 'session-channel', 'dir', 'A host that runs its own sessions: the fact log per Walnut it serves (facts-<id>.ndjson, its .state.json) and spilled start prompts; its sequence numbers and acks belong to this host'),
-  rebuild('distributed-skills', 'distributed-skills', 'dir', 'Skills the leader sends to this host\'s daemon, sent again on connect'),
+  rebuild('distributed-skills', 'distributed-skills', 'dir', 'Skills the leader sends to this host\'s daemon, sent again on connect', DAEMON),
   mach('cloud-setup-job', 'cloud-setup-job.json', 'file', 'An in-flight cloud setup run, with its pairing code', { sensitive: true }),
   mach('code-server', 'code-server', 'dir', 'The in-app editor: its data and the instance running here'),
   mach('diagnostics', 'diagnostics', 'dir', 'Heap snapshots at their first place (they go to the runtime dir now): they hold whatever the process held', { sensitive: true, legacy: true }),

@@ -21,6 +21,9 @@ function homeAt(cls: DataClass) {
   })
 }
 
+/** Written by this machine's daemon as it runs (HomeEntry.daemonState). */
+export const DAEMON = { daemonState: true } as const
+
 /** Moves with the leader. */
 export const lead = homeAt('leader-data')
 /** Stays on this machine. */

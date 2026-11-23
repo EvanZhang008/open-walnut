@@ -7,7 +7,6 @@
  * Nothing here reads or writes outside `root`: no ~/.open-walnut, no :3456.
  */
 import { spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -39,27 +38,6 @@ export interface World {
 }
 
 export interface ByHand { ok: boolean; pid?: number; log: string; logText(): string; stop(): Promise<void> }
-
-/**
- * Every path under `dir` with its kind and its bytes (sha256), sorted: equal hashes mean nothing
- * in the folder was created, removed or changed. Modes and times are not counted.
- */
-export function treeHash(dir: string): string {
-  const h = createHash('sha256')
-  const walk = (rel: string) => {
-    const abs = path.join(dir, rel)
-    const entries = fs.readdirSync(abs, { withFileTypes: true }).sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0))
-    for (const e of entries) {
-      const p = path.join(rel, e.name)
-      if (e.isDirectory()) { h.update(`d ${p}\n`); walk(p) }
-      else if (e.isSymbolicLink()) h.update(`l ${p} ${fs.readlinkSync(path.join(dir, p))}\n`)
-      else if (e.isFile()) h.update(`f ${p} ${createHash('sha256').update(fs.readFileSync(path.join(dir, p))).digest('hex')}\n`)
-      else h.update(`o ${p}\n`)
-    }
-  }
-  walk('')
-  return h.digest('hex')
-}
 
 function machine(root: string, name: string, port: number, homeName = 'home', at?: string): Machine {
   const dir = at ?? path.join(root, name)

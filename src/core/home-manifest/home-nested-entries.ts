@@ -3,11 +3,8 @@
  * and every child of the mixed dirs (cache/, local/, sync/, tmp/), whose children each
  * need an entry of their own. Plus the few families of files that can sit at any depth.
  */
-import { lead, mach, rebuild } from './build.js'
+import { DAEMON, lead, mach, rebuild } from './build.js'
 import type { HomeEntry } from './types.js'
-
-/** Written by this machine's daemon as it runs (HomeEntry.daemonState). */
-const DAEMON = { daemonState: true } as const
 
 /** cache/: rebuildable unless listed otherwise here. */
 const CACHE_ENTRIES: readonly HomeEntry[] = [
@@ -108,7 +105,7 @@ const LOCAL_ENTRIES: readonly HomeEntry[] = [
   mach('local.planned-restart', 'local/planned-restart.json', 'file', 'A restart this server planned'),
   mach('local.last-planned-stop', 'local/last-planned-stop.json', 'file', 'Why the last server stopped, for the next boot'),
   mach('local.spawn-journal', 'local/spawn-journal.jsonl', 'file', 'Sessions this host\'s daemon started', DAEMON),
-  mach('local.cli-owners', 'local/cli-owners', 'dir', 'Which daemon owns each running CLI of this host, beside the spawn journal'),
+  mach('local.cli-owners', 'local/cli-owners', 'dir', 'Which daemon owns each running CLI of this host, beside the spawn journal', DAEMON),
   mach('local.host-mcp', 'local/host-mcp.json', 'file', 'MCP servers this host offers'),
   mach('local.expose-handover', 'local/expose-handover.json', 'file', 'Port handover between server generations'),
   mach('local.fleet-cache', 'local/fleet-cache.json', 'file', 'Last known host fleet facts'),

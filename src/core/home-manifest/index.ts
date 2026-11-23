@@ -110,19 +110,11 @@ export function isAppendOnlyHomePath(relPath: string): boolean {
  * `<home>/local`, the skills a leader sends it in `<home>/distributed-skills`):
  * they belong to the machine, so a leader switch never moves them with the home it swaps
  * (src/core/leader/switch/promote.ts), and the daemon never loses a file it is writing.
- *
- * TODO(B3, task mwsfdtpv-38a7): a stand-in naming today's daemon-written paths; replace the id
- * list with the manifest's own "this machine's daemon runtime state" flag when it lands.
+ * The manifest marks each one (HomeEntry.daemonState); tests/core/home-manifest/daemon-state.test.ts
+ * holds the marks to what both daemon twins write.
  */
-const MACHINE_RUNTIME_IDS: ReadonlySet<string> = new Set([
-  'tmp.offline-host', 'tmp.leader-book', 'tmp.host-vitals', 'tmp.streams', 'tmp.spawned-sessions', 'tmp.resume-records',
-  'tmp.trigger-state', 'tmp.usage-budgets', 'tmp.host-exec', 'tmp.host-replica', 'tmp.host-server', 'tmp.plugin-jobs',
-  'local.spawn-journal', 'local.cli-owners', 'distributed-skills',
-])
-
-/** The one predicate: an entry is this machine's daemon runtime state (see MACHINE_RUNTIME_IDS). */
 export function isMachineRuntimeEntry(entry: HomeEntry): boolean {
-  return MACHINE_RUNTIME_IDS.has(entry.id)
+  return entry.daemonState === true
 }
 
 const RUNTIME_PATHS = HOME_ENTRIES.filter(isMachineRuntimeEntry).map((e) => e.path)
