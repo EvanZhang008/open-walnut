@@ -2884,7 +2884,7 @@ export const SESSION_ENGINE_IDS = ['claude', 'codex', 'antigravity', 'gemini', '
 export type SessionEngine = (typeof SESSION_ENGINE_IDS)[number];
 /** The engines the model picker's engine rail shows when `session.picker_engines` names none.
  *  The rest are turned on in Settings, Sessions; the engine a session runs on always shows. */
-export const DEFAULT_PICKER_ENGINES: readonly SessionEngine[] = ['claude', 'codex', 'opencode', 'pi'];
+export const DEFAULT_PICKER_ENGINES: readonly SessionEngine[] = ['claude', 'codex', 'antigravity', 'opencode', 'pi'];
 export type SessionType = 'interactive' | 'triage' | 'hook' | 'cron' | 'subagent';
 
 /**

@@ -69,14 +69,14 @@ afterEach(() => {
 })
 
 describe('GET /api/engines', () => {
-  it('marks the engines the model picker shows: the default four, or session.picker_engines', async () => {
+  it('marks the engines the model picker shows: the default five, or session.picker_engines', async () => {
     seedAll()
     const res = await request(createApp()).get('/api/engines')
     const shown = (res.body.engines as Array<EngineEntry & { inPicker: boolean }>).filter((e) => e.inPicker).map((e) => e.id)
-    expect(shown).toEqual(['claude', 'codex', 'opencode', 'pi'])
+    expect(shown).toEqual(['claude', 'codex', 'antigravity', 'opencode', 'pi'])
     expect([...pickerEngineSet({ session: { picker_engines: ['claude', 'gemini'] } })]).toEqual(['claude', 'gemini'])
     expect([...pickerEngineSet({ session: { picker_engines: [] } })]).toEqual([])
-    expect([...pickerEngineSet(null)]).toEqual(['claude', 'codex', 'opencode', 'pi'])
+    expect([...pickerEngineSet(null)]).toEqual(['claude', 'codex', 'antigravity', 'opencode', 'pi'])
   })
 
   it('lists every registered engine in presentation order with capability answers', async () => {
