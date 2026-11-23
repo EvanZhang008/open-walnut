@@ -15,6 +15,11 @@
  *      standing rule (updateHostCredentialDoors), and answers the leader's call frames on allowed
  *      prefixes only (door-calls.ts).
  *
+ * A linked door is pinged every pingMs (DOOR_PING_MS); one that answered no ping by the next is
+ * closed and dialed again, so a leader that went silent (a lid closed, a frozen process, a network
+ * that drops without a reset) never keeps this host on a socket nothing reads: the next door of
+ * the list (a standby that took over) gets the host.
+ *
  * Doors: anything but a link (an HTTP refusal such as 429 or 503, a timeout, a failed handshake)
  * moves on to the next door of the list, round and round with the backoff (1 s doubling to 60 s,
  * with jitter). Only the door's own close DOOR_CLOSE.unknown means it keeps no credential for this
@@ -49,6 +54,8 @@ export interface HostDialerOptions {
   idleRecheckMs?: number
   /** How long a door that keeps no credential for this machine waits before it is tried again (DEAD_DOOR_RETRY_MS). */
   deadDoorRetryMs?: number
+  /** How often a linked door is pinged; no pong by the next ping closes it (DOOR_PING_MS). */
+  pingMs?: number
   log?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 }
 
@@ -69,6 +76,9 @@ type Outcome = 'welcomed' | 'unknown' | 'failed'
 
 /** A door that said it keeps no credential for this machine is tried again with the same key this often. */
 export const DEAD_DOOR_RETRY_MS = 10 * 60_000
+
+/** A linked door is pinged this often, and closed when it answered no ping by the next one. */
+export const DOOR_PING_MS = 15_000
 
 export function startHostDialer(o: HostDialerOptions): HostDialer {
   const say = o.log ?? (() => {})
@@ -137,6 +147,9 @@ export function startHostDialer(o: HostDialerOptions): HostDialer {
       let welcomePair: PermitPair | null = null
       let linkedAt = 0
       let handlers: ReturnType<HostChannel['attach']> | null = null
+      let pinger: ReturnType<typeof setInterval> | null = null
+      let pongDue = false
+      ws.on('pong', () => { pongDue = false })
       const welcomeTimer = setTimeout(() => { if (!linked) { say('warn', 'host door: no welcome in time', { door: url }); close('no_welcome') } }, o.welcomeTimeoutMs ?? 15_000)
       welcomeTimer.unref?.()
       ws.on('unexpected-response', (_req, res) => {
@@ -176,6 +189,16 @@ export function startHostDialer(o: HostDialerOptions): HostDialer {
           clearTimeout(welcomeTimer)
           up = true
           say('info', 'host door: linked to the leader\'s door', { door: url, holder })
+          pinger = setInterval(() => {
+            if (pongDue) {
+              say('warn', 'host door: the leader\'s door answered no ping; closed, to dial again', { door: url })
+              try { ws.terminate() } catch { /* gone */ }
+              return
+            }
+            pongDue = true
+            try { ws.ping() } catch { /* closing */ }
+          }, o.pingMs ?? DOOR_PING_MS)
+          pinger.unref?.()
           handlers = channel.attach({
             send: (f) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(f)) },
             close: (why) => close(why ?? 'closed'),
@@ -189,6 +212,7 @@ export function startHostDialer(o: HostDialerOptions): HostDialer {
       })
       ws.on('close', (code) => {
         clearTimeout(welcomeTimer)
+        if (pinger) clearInterval(pinger)
         handlers?.onClose()
         current = null
         if (linked) {

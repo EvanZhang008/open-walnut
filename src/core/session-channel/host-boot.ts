@@ -191,6 +191,8 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     channel: () => current?.channel ?? null,
     routes: () => current?.routes ?? null,
     seenPermit: () => log.permitPair,
+    // Tests: a shorter ping, so a leader that went silent is left in seconds (host-dialer.ts DOOR_PING_MS).
+    ...(Number(process.env.WALNUT_HOST_DOOR_PING_MS) > 0 ? { pingMs: Number(process.env.WALNUT_HOST_DOOR_PING_MS) } : {}),
     log: say,
   })
   dialerRef = dialer

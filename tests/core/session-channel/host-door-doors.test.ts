@@ -8,6 +8,8 @@
  *     way; a lower standing changes nothing
  *   - a door that answers anything but 101 (a 429, a 409, a 503) is passed over for the next one,
  *     and the list is tried round and round with the backoff; `holder` is never checked
+ *   - a linked door that answers no ping (a leader gone silent with its socket still open) is closed
+ *     and the next door of the list gets the host
  *   - call frames reach only an allowed prefix (door-calls.ts); the credential and doors routes
  *     never, whatever is registered
  */
@@ -18,6 +20,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { createMockConstants } from '../../helpers/mock-constants.js'
+import { startSilentLinkProxy, type SilentLinkProxy } from '../../helpers/silent-link-proxy.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-host-door-doors'))
 
@@ -44,6 +47,7 @@ let dialer: HostDialer | null = null
 let adopted: ChannelSocket[] = []
 let standing: PermitPair = { permitNumber: 0, epoch: 3 }
 let leaderDoors: string[] = []
+let proxy: SilentLinkProxy | null = null
 
 beforeEach(async () => {
   _resetDeviceAuthForTesting()
@@ -59,6 +63,7 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   dialer?.stop(); dialer = null
+  await proxy?.close(); proxy = null
   stopDoor?.(); stopDoor = null
   for (const s of servers.splice(0)) { s.closeAllConnections?.(); await new Promise<void>((r) => s.close(() => r())) }
   _resetDoorCallPrefixesForTesting()
@@ -108,11 +113,12 @@ async function hostHolds(doors: string[], permit: PermitPair = { permitNumber: 0
 
 const channel = { attach: () => ({ onFrame: () => {}, onClose: () => {} }) } as unknown as HostChannel
 
-function dial(o: { seen?: PermitPair; backoffMs?: number } = {}): HostDialer {
+function dial(o: { seen?: PermitPair; backoffMs?: number; pingMs?: number; welcomeTimeoutMs?: number } = {}): HostDialer {
   return startHostDialer({
     walnutId: WALNUT, machineId: async () => MACHINE, enabled: async () => true,
     channel: () => channel, routes: () => null, seenPermit: () => o.seen ?? { permitNumber: 0, epoch: 0 },
     backoffMs: () => o.backoffMs ?? 30, idleRecheckMs: 60_000,
+    ...(o.pingMs ? { pingMs: o.pingMs } : {}), ...(o.welcomeTimeoutMs ? { welcomeTimeoutMs: o.welcomeTimeoutMs } : {}),
   })
 }
 
@@ -171,6 +177,22 @@ describe('the host\'s dialer and its doors', () => {
     expect(busy.dials()).toBeGreaterThanOrEqual(3)
     expect(broken.dials()).toBeGreaterThanOrEqual(3)
     expect(dialer.linked()).toBe(false)
+  })
+})
+
+describe('a linked door that goes silent', () => {
+  it('answers no ping, so the host closes it and the next door of the list gets the host', async () => {
+    const url = await leaderDoor()
+    const port = Number(new URL(url).port)
+    proxy = await startSilentLinkProxy(port)
+    const viaProxy = `ws://127.0.0.1:${proxy.port}/host-door`
+    await hostHolds([viaProxy, url])
+    dialer = dial({ pingMs: 100, welcomeTimeoutMs: 500 })
+    await vi.waitFor(() => expect(adopted).toHaveLength(1))
+    // The first door went silent with its socket open (a leader whose lid closed): no pong comes.
+    proxy.setMode('blackhole')
+    await vi.waitFor(() => expect(adopted).toHaveLength(2), { timeout: 10_000 })
+    await vi.waitFor(() => expect(dialer!.linked()).toBe(true))
   })
 })
 
