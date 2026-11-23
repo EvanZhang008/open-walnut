@@ -56,12 +56,15 @@ function onListKey(e: KeyboardEvent<HTMLElement>) {
   tabs[next].click()
 }
 
-export function TabList({ className, flush, tiles, children, onKeyDown, ...rest }: HTMLAttributes<HTMLDivElement> & { flush?: boolean; tiles?: boolean; 'aria-label'?: string; ref?: Ref<HTMLDivElement> }) {
+/** `wrap`: wider than a phone, the tabs wrap into a grid of columns instead of scrolling sideways
+ *  (tabs with a detail line under the label read in one or two lines that way); a phone keeps
+ *  the one scrolling row. */
+export function TabList({ className, flush, tiles, wrap, children, onKeyDown, ...rest }: HTMLAttributes<HTMLDivElement> & { flush?: boolean; tiles?: boolean; wrap?: boolean; 'aria-label'?: string; ref?: Ref<HTMLDivElement> }) {
   return (
     <div
       role="tablist"
       {...rest}
-      className={`wn-tabs${flush || tiles ? ' wn-tabs-flush' : ''}${tiles ? ' wn-tabs-tiles' : ''}${className ? ` ${className}` : ''}`}
+      className={`wn-tabs${flush || tiles ? ' wn-tabs-flush' : ''}${tiles ? ' wn-tabs-tiles' : ''}${wrap ? ' wn-tabs-wrap' : ''}${className ? ` ${className}` : ''}`}
       onKeyDown={(e) => { onKeyDown?.(e); if (!e.defaultPrevented) onListKey(e) }}
     >
       {children}

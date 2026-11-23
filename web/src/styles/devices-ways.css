@@ -20,28 +20,8 @@
   -webkit-mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
   mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent);
 }
-/* Wider than a phone, the bar wraps into a grid instead of scrolling: each tab takes a column of
-   the row (about 200px), so its hint reads in one or two lines, never three under a 9em cap
-   (2026-11-22 audit). Each tab carries its own base line, so a second row reads as tabs too.
-   A phone keeps the one sideways-scrolling row above (TabBar brings the open tab into view). */
-@media (min-width: 561px) {
-  .wn-tabs.pc-tabs {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    column-gap: 12px;
-    row-gap: 4px;
-    overflow: visible;
-    box-shadow: none;
-  }
-  .wn-tabs.pc-tabs > .pc-tab {
-    width: 100%;
-    min-width: 0;
-    justify-content: flex-start;
-    box-shadow: inset 0 -1px 0 var(--border);
-  }
-  .pc-tab .wn-tab-text { flex: 1 1 auto; }
-  .pc-tab .wn-tab-detail { max-width: none; }
-}
+/* Wider than a phone the bar wraps into columns (TabList `wrap`, choice-controls.css), so each
+   tab's hint reads in one or two lines; a phone keeps the one scrolling row (2026-11-22 audit). */
 
 /* A tab whose name is not known yet (the tunnel's, before its first answer): a blank of about its
    width, never a name that changes a moment later (cloud/tunnel-name.ts). */

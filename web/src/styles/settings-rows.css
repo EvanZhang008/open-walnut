@@ -178,6 +178,11 @@
 .settings-row-help > .settings-row-more { margin-left: 4px; vertical-align: baseline; color: var(--accent-text); }
 .settings-row-more-body { white-space: pre-line; }
 .settings-row-more-line { display: block; }
+/* On a phone the More takes a finger: its box is 44 px tall, and the negative margins keep the
+   help line at its own 16 px (the line counts the margin box), so nothing below moves. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .settings-row-help > .settings-row-more { position: relative; z-index: 1; min-height: 44px; margin-top: -14px; margin-bottom: -14px; }
+}
 
 .settings-row-help code {
   font-family: var(--font-mono);

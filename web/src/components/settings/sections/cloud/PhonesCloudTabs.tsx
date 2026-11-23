@@ -161,7 +161,7 @@ export function TabBar({ tabs, current }: { tabs: readonly TabView[]; current: P
     return () => { bar.removeEventListener('scroll', read); ro?.disconnect(); };
   }, [shape]);
   return (
-    <TabList ref={barRef} className="pc-tabs" aria-label={PANE_TITLE} data-testid="pc-tabs" data-more={more || undefined}>
+    <TabList ref={barRef} className="pc-tabs" wrap aria-label={PANE_TITLE} data-testid="pc-tabs" data-more={more || undefined}>
       {tabs.map((t, i) => (
         // Each tab is its own pane at its own hash: picked, the address is replaced, as a nav click does.
         // Always, even for the tab this bar calls current: a router navigation renders in a transition,

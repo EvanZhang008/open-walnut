@@ -95,6 +95,29 @@
   box-shadow: none;
 }
 
+/* TabList `wrap`: wider than a phone the strip wraps into a grid instead of scrolling. Each tab
+   takes a column of about 200px, so a detail line reads in one or two lines, and carries its own
+   base line, so a second row still reads as tabs (2026-11-22 audit, the Phones & Cloud ways). */
+@media (min-width: 561px) {
+  .wn-tabs.wn-tabs-wrap {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    column-gap: 12px;
+    row-gap: 4px;
+    overflow: visible;
+    box-shadow: none;
+  }
+  .wn-tabs.wn-tabs-wrap > .wn-tab {
+    width: 100%;
+    min-width: 0;
+    justify-content: flex-start;
+    box-shadow: inset 0 -1px 0 var(--border);
+  }
+  .wn-tabs.wn-tabs-wrap > .wn-tab:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+  .wn-tabs-wrap > .wn-tab .wn-tab-text { flex: 1 1 auto; }
+  .wn-tabs-wrap > .wn-tab .wn-tab-detail { max-width: none; }
+}
+
 .wn-tab {
   -webkit-appearance: none;
   appearance: none;
