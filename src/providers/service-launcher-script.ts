@@ -192,7 +192,7 @@ c_pid=; c_last=; c_own=0; c_at=0; c_adopt=0; c_exe=; c_code=; fails=0; next_star
 l_spawn() {
   # adopts: what the version about to start says it takes over (detached-registry.ts); it writes it anew.
   rm -f "$L/ready" "$L/leaving" "$STATE/detached/adopts"
-  # putback: the version a put-back started (until the next switch), told to its start so a run script can
+  # putback: the version a put-back started (until it is ready or the next switch), told to its start so a run script can
   # check first that the older version can read the data the newer one wrote (devprod-launcher.sh).
   lp_back=; [ "$(cat "$L/putback" 2>/dev/null)" = "$1" ] && lp_back=1
   ( unset L_LOCKED; [ -n "$lp_back" ] && { WALNUT_LAUNCHER_PUTBACK=1; export WALNUT_LAUNCHER_PUTBACK; }; exec "$1" $ARGS ) 9>&- </dev/null >>"$STATE/daemon-service.out.log" 2>>"$STATE/daemon-service.err.log" &
@@ -425,6 +425,10 @@ while :; do
         l_log "$c_exe takes over no detached work (no detached/adopts): ending the work in the registry"
         l_bounded ${STOP_DETACHED_SECONDS} /bin/sh "$STATE/detached/stop-detached.sh" "$STATE/detached"
       fi
+    fi
+    # A put-back that came up ready checked the data once: its later starts (a crash, a kill) are plain ones.
+    if [ -f "$L/putback" ] && [ "$(l_get "$L/ready" pid)" = "$c_pid" ]; then
+      rm -f "$L/putback"; l_log "the put-back version $s_cur is ready: a later start of it is a plain start"
     fi
     if [ -f "$L/heartbeat" ]; then
       hb_t=; hb_b=; hb_p=; read -r hb_t hb_b hb_p < "$L/heartbeat" 2>/dev/null

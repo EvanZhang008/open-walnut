@@ -255,6 +255,7 @@ rehearsal_refuse_foreign_listeners() {
       echo "Rehearsal refused: :$PORT is served by PID $lpid, which this rehearsal did not start:" >&2
       echo "  $(ps -o command= -p "$lpid" 2>/dev/null || echo '(gone)')" >&2
       echo "Pick a free port." >&2
+      rm -f "${PLANNED_RESTART_FILE:-}" 2>/dev/null || true
       exit 1
     fi
   done

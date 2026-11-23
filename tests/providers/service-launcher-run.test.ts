@@ -273,14 +273,18 @@ describe.each(SHELLS)('the service launcher under %s', (_label, bin) => {
     expect(kv(path.join(L, 'rollback'))).toMatchObject({ from: v3, to: v1 })
     await until(() => live('v1').length === 1 && live('v2').length === 0, 5_000, 'v1 back')
     expect(launcherState()).toMatchObject({ current: v1, good: v1, phase: 'committed' })
-    // The put-back start, and only it, carries WALNUT_LAUNCHER_PUTBACK; the next switch clears the mark.
-    expect(read(path.join(L, 'putback')).trim()).toBe(v1)
+    // The put-back start, and only it, carries WALNUT_LAUNCHER_PUTBACK: once it is ready the mark is gone,
+    // so a later start of the same version (a crash, a kill) is a plain one and checks nothing again.
     const pid = live('v1')[0]!.pid
     expect(envOf(pid).WALNUT_LAUNCHER_PUTBACK).toBe('1')
+    await until(() => !fs.existsSync(path.join(L, 'putback')), 5_000, 'the put-back mark cleared at ready')
+    expect(read(path.join(L, 'launcher.log'))).toMatch(/the put-back version .*v1 is ready/)
+    process.kill(pid, 'SIGKILL')
+    await until(() => live('v1').length === 1 && live('v1')[0]!.pid !== pid, 15_000, 'v1 started again')
+    expect(envOf(live('v1')[0]!.pid).WALNUT_LAUNCHER_PUTBACK).toBeUndefined()
     const v4 = stub('v4')
     const id4 = request(v4)
     await until(() => result().id === id4 && result().outcome === 'committed', 8_000, 'v4 commit')
-    expect(fs.existsSync(path.join(L, 'putback'))).toBe(false)
     expect(envOf(live('v4')[0]!.pid).WALNUT_LAUNCHER_PUTBACK).toBeUndefined()
   })
 

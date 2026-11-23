@@ -16,6 +16,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { serveLauncherScript } from '../../src/providers/serve-launcher-script-cli.js'
+import { guardedPath } from '../setup/exec-guard-core.js'
 
 const REPO = path.join(import.meta.dirname, '..', '..')
 const LIB = path.join(REPO, 'scripts', 'lib', 'devprod-launcher.sh')
@@ -69,6 +70,7 @@ function fixture() {
     '#!/bin/sh',
     `d='${dir}'`,
     'echo "$$ $(ps -o pgid= -p $$ | tr -d " ") $PPID ${WALNUT_LAUNCHER_SERVICE_PID:-none} $WALNUT_RUNTIME_DIR $*" >> "$d/server.runs"',
+    'echo "WALNUT_LAUNCHER_PUTBACK=${WALNUT_LAUNCHER_PUTBACK:-}" >> "$d/server.env"',
     'trap \'echo "$$ term" >> "$d/server.events"; exit 0\' TERM',
     'p=${WALNUT_LAUNCHER_SERVICE_PID:-$$}',
     'if [ -n "${WALNUT_LAUNCHER_DIR:-}" ]; then printf "pid=%s\\n" "$p" > "$WALNUT_LAUNCHER_DIR/ready"; fi',
@@ -96,7 +98,7 @@ function lib(f: ReturnType<typeof fixture>, body: string, opts: { host?: boolean
 }
 
 function startRun(run: string, env: Record<string, string> = {}): ChildProcess {
-  const c = spawn('/bin/sh', [run], { stdio: 'ignore', detached: true, env: { PATH: '/usr/bin:/bin', HOME: os.tmpdir(), ...env } })
+  const c = spawn('/bin/sh', [run], { stdio: 'ignore', detached: true, env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: os.tmpdir(), ...env } })
   kids.push(c)
   return c
 }
@@ -125,32 +127,52 @@ describe('a version\'s run script', () => {
     expect(alive(Number(serverPid))).toBe(false)
   })
 
-  it('a put-back start checks the data first: refused (exit 78, no server) when the older version cannot read it, else it starts', async () => {
+  it('a put-back start checks the data first: refused (exit 78, no server) only on the check\'s schema refusal; a check that fails otherwise, or passes, starts it', async () => {
     const f = fixture()
-    // The serve root's data check and a stub bun that runs it: check.mode = fail makes it fail.
+    // The serve root's data check and a stub bun that runs it: check.mode = refuse prints the check's schema
+    // refusal and fails, broken fails with some other error, anything else passes.
     fs.mkdirSync(path.join(f.dir, 'scripts', 'lib'), { recursive: true })
     fs.writeFileSync(path.join(f.dir, 'scripts', 'lib', 'rollback-data-check.mjs'), '// stub\n')
     const bun = path.join(f.dir, 'bun')
-    fs.writeFileSync(bun, `#!/bin/sh\necho "check $*" >> '${f.dir}/checks'\n[ "$(cat '${f.dir}/check.mode' 2>/dev/null)" = fail ] && exit 1\nexit 0\n`, { mode: 0o755 })
+    fs.writeFileSync(bun, `#!/bin/sh\necho "check $*" >> '${f.dir}/checks'\nm=$(cat '${f.dir}/check.mode' 2>/dev/null)\n[ "$m" = refuse ] && { echo "Rollback refused: Task database schema 16 is newer than supported schema 15; use a newer Walnut build." >&2; exit 1; }\n[ "$m" = broken ] && { echo "error: Cannot find module better-sqlite3" >&2; exit 1; }\nexit 0\n`, { mode: 0o755 })
     const run = path.join(f.dir, 'run')
     expect(lib(f, `BUN_BIN='${bun}'; HOME='${f.dir}/h'; svc_write_run '${run}'`, { host: false }).status).toBe(0)
-    fs.writeFileSync(path.join(f.dir, 'check.mode'), 'fail\n')
+    fs.writeFileSync(path.join(f.dir, 'check.mode'), 'refuse\n')
     const refused = startRun(run, { WALNUT_LAUNCHER_PUTBACK: '1' })
     await until(() => refused.exitCode !== null, 10_000, 'the refused start', f.log)
     expect(refused.exitCode).toBe(78)
     expect(read(path.join(f.dir, 'server.runs'))).toBe('')
     expect(read(path.join(f.dir, 'checks')).trim()).toBe(`check scripts/lib/rollback-data-check.mjs ${f.file} ${f.dir}/h/.open-walnut`)
     expect(read(f.log)).toMatch(/cannot read the data a newer one wrote: not started/)
+    // A check that breaks for another reason never keeps the Mac dark: it says so and starts.
+    fs.writeFileSync(path.join(f.dir, 'check.mode'), 'broken\n')
+    const broken = startRun(run, { WALNUT_LAUNCHER_PUTBACK: '1' })
+    await until(() => read(path.join(f.dir, 'server.runs')) !== '', 8_000, 'the start after a broken check', f.log)
+    expect(read(f.log)).toMatch(/the data check did not finish \(exit 1\): starting this version anyway/)
+    // The put-back mark is not passed on to the server itself.
+    expect(read(path.join(f.dir, 'server.env')).trim()).toBe('WALNUT_LAUNCHER_PUTBACK=')
+    process.kill(broken.pid!, 'SIGTERM')
+    await until(() => broken.exitCode !== null, 8_000, 'the broken-check run to end')
     fs.writeFileSync(path.join(f.dir, 'check.mode'), 'ok\n')
     startRun(run, { WALNUT_LAUNCHER_PUTBACK: '1' })
-    await until(() => read(path.join(f.dir, 'server.runs')) !== '', 8_000, 'the checked start', f.log)
+    await until(() => read(path.join(f.dir, 'server.runs')).trim().split('\n').length >= 2, 8_000, 'the checked start', f.log)
     // An ordinary start (no put-back) runs no check.
     const before = read(path.join(f.dir, 'checks'))
     const plain = path.join(f.dir, 'run2')
     expect(lib(f, `BUN_BIN='${bun}'; svc_write_run '${plain}'`, { host: false }).status).toBe(0)
     startRun(plain)
-    await until(() => read(path.join(f.dir, 'server.runs')).trim().split('\n').length >= 2, 8_000, 'the plain start', f.log)
+    await until(() => read(path.join(f.dir, 'server.runs')).trim().split('\n').length >= 3, 8_000, 'the plain start', f.log)
     expect(read(path.join(f.dir, 'checks'))).toBe(before)
+  })
+
+  it('tells the stage of a server from its command line, whether the file runs itself or under a runtime', () => {
+    const f = fixture()
+    const out = lib(f, [
+      `svc_stage_of_cmd '/var/t/stage.1/dist-bin/walnut-darwin-arm64 web --port 3456'`,
+      `svc_stage_of_cmd '/opt/homebrew/bin/node /var/t/stage.2/dist-bin/cli.js web --port 3456'`,
+      `svc_stage_of_cmd '/usr/bin/python3 -m http.server 3456'`,
+    ].join('; '), { host: false })
+    expect(out.stdout.trim().split('\n')).toEqual(['/var/t/stage.1', '/var/t/stage.2'])
   })
 
   it('runs the file as its own program when the session host refuses it (exit 125)', async () => {
@@ -190,9 +212,9 @@ describe('the launcher keeps a server under the session host', () => {
     for (const v of [v1, v2]) fs.mkdirSync(v)
     expect(lib(f, `svc_write_run '${v1}/run'; svc_write_run '${v2}/run'`).status).toBe(0)
     const script = path.join(state, 'walnut-launcher.sh')
-    const text = serveLauncherScript(['--state', state, '--seed', `${v1}/run`, '--self', script, '--trial', '10'], { HOME: f.dir, PATH: '/usr/bin:/bin' })
+    const text = serveLauncherScript(['--state', state, '--seed', `${v1}/run`, '--self', script, '--trial', '10'], { HOME: f.dir, PATH: guardedPath([], '/usr/bin:/bin') })
     fs.writeFileSync(script, text, { mode: 0o700 })
-    const launcher = spawn('/bin/sh', [script], { stdio: 'ignore', detached: true, env: { PATH: '/usr/bin:/bin', HOME: f.dir } })
+    const launcher = spawn('/bin/sh', [script], { stdio: 'ignore', detached: true, env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: f.dir } })
     kids.push(launcher)
     const L = path.join(state, 'launcher')
     await until(() => read(path.join(L, 'state')).includes('phase=committed') && read(path.join(f.dir, 'server.runs')) !== '', 8_000, 'v1 up', path.join(L, 'launcher.log'))

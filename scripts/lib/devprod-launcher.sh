@@ -167,16 +167,25 @@ svc_write_run() {
     fi
     # A put-back (the launcher started an older version: WALNUT_LAUNCHER_PUTBACK) first fills in what the temp
     # dir took from the stage, then checks, as rollback_to_lkg does, that this version can read the data the
-    # newer one wrote; it never starts on data it cannot read (exit 78, the launcher tries again later).
+    # newer one wrote. Only the check's own refusal (a schema newer than this version knows) keeps it from
+    # starting (exit 78, the launcher tries again later); a check that cannot run says so and starts it, since
+    # a dark Mac is worse. The launcher clears the put-back mark once the version is ready.
     printf '%s\n' 'if [ "${WALNUT_LAUNCHER_PUTBACK:-}" = 1 ]; then'
     if [[ -n "$clone" ]]; then
       printf '  cp -Rnc %s/. %s/ 2>/dev/null || cp -Rn %s/. %s/ 2>/dev/null; rm -f %s/run\n' \
         "$(svc_shq "$clone")" "$(svc_shq "$stage")" "$(svc_shq "$clone")" "$(svc_shq "$stage")" "$(svc_shq "$stage")"
     fi
     printf '  if [ -x %s ] && [ -f %s ]; then\n' "$(svc_shq "${BUN_BIN:-}")" "$(svc_shq "$SERVE_ROOT/scripts/lib/rollback-data-check.mjs")"
-    printf '    echo "$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ) run: a put-back: checking that this version can read the data first"\n'
-    printf '    ( cd %s && %s scripts/lib/rollback-data-check.mjs %s %s ) || { echo "$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ) run: this version cannot read the data a newer one wrote: not started"; exit 78; }\n' \
+    printf '%s\n' '    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) run: a put-back: checking that this version can read the data first"'
+    printf '    chk=$( cd %s && %s scripts/lib/rollback-data-check.mjs %s %s 2>&1 ); chk_rc=$?\n' \
       "$(svc_shq "$SERVE_ROOT")" "$(svc_shq "${BUN_BIN:-}")" "$(svc_shq "$file")" "$(svc_shq "${REHEARSAL_HOME:-$HOME/.open-walnut}")"
+    printf '%s\n' '    printf "%s\n" "$chk"'
+    printf '%s\n' '    if [ "$chk_rc" != 0 ]; then'
+    printf '%s\n' '      case "$chk" in *"is newer than supported schema"*)'
+    printf '%s\n' '        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) run: this version cannot read the data a newer one wrote: not started"; exit 78;;'
+    printf '%s\n' '      esac'
+    printf '%s\n' '      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) run: the data check did not finish (exit $chk_rc): starting this version anyway"'
+    printf '%s\n' '    fi'
     printf '%s\n' '  else'
     printf '%s\n' '    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) run: a put-back, but the data check is not there: starting without it"'
     printf '%s\n' '  fi'
@@ -184,7 +193,7 @@ svc_write_run() {
     printf 'cd %s || exit 1\n' "$(svc_shq "$SERVE_ROOT")"
     printf '%s\n' 'WALNUT_LAUNCHER_SERVICE_PID=$$; export WALNUT_LAUNCHER_SERVICE_PID'
     printf '%s\n' 'c='
-    printf 'run() { /usr/bin/env -u OPEN_WALNUT_EPHEMERAL -u OPEN_WALNUT_HOME -u WALNUT_DAEMON_DIR -u WALNUT_DAEMON_STATE_DIR -u WALNUT_DAEMON_SUPERVISOR -u VITEST -u WALNUT_RUNTIME_DIR -u BUN_BE_BUN -u WALNUT_LAUNCHER -u WALNUT_LAUNCHD_LABEL -u L_LOCKED PATH=%s%s "$@" %s web --port %s </dev/null & c=$!; }\n' \
+    printf 'run() { /usr/bin/env -u OPEN_WALNUT_EPHEMERAL -u OPEN_WALNUT_HOME -u WALNUT_DAEMON_DIR -u WALNUT_DAEMON_STATE_DIR -u WALNUT_DAEMON_SUPERVISOR -u VITEST -u WALNUT_RUNTIME_DIR -u BUN_BE_BUN -u WALNUT_LAUNCHER -u WALNUT_LAUNCHD_LABEL -u WALNUT_LAUNCHER_PUTBACK -u L_LOCKED PATH=%s%s "$@" %s web --port %s </dev/null & c=$!; }\n' \
       "$(svc_shq "$PATH")" "$envs" "$(svc_shq "$file")" "$(svc_shq "$PORT")"
     printf '%s\n' 'term=0'
     printf '%s\n' 'trap '"'"'term=1; [ -n "$c" ] && kill -TERM "$c" 2>/dev/null'"'"' TERM INT HUP'
@@ -238,6 +247,10 @@ svc_mark() {
 }
 svc_unmark() { rm -f "$SVC_MARK" 2>/dev/null || true; }
 
+# The stage a server's command line runs from: the file itself (`<stage>/dist-bin/walnut web`) or a runtime
+# running it (`node <stage>/dist-bin/cli.js web`).
+svc_stage_of_cmd() { printf '%s\n' "$1" | sed -nE 's#^(.* )?(/[^ ]*)/dist-bin/[^ ]* web --port .*#\2#p'; }
+
 # A server on :PORT the launcher did not start (the Mac app's own, a stray) is stopped before the
 # switch, as the old deploy stops any listener: else the trial loses the instance lock to it.
 svc_stop_foreign_listener() {
@@ -250,7 +263,7 @@ svc_stop_foreign_listener() {
     [[ -n "$svc" && "$g" == "$svc" ]] && continue
     # No own group (no perl): the launcher's server is still told by the version it runs.
     cmd="$(ps -o command= -p "$l" 2>/dev/null || true)"
-    svc_keeps_stage "$(echo "$cmd" | sed -nE 's#.* (/[^ ]*)/dist-bin/[^ ]* web --port .*#\1#p')" && continue
+    svc_keeps_stage "$(svc_stage_of_cmd "$cmd")" && continue
     echo "Stopping PID $l on :$PORT, which the service launcher did not start: $(ps -o command= -p "$l" 2>/dev/null | cut -c1-160)" >&2
     kill -15 "$l" 2>/dev/null || true
     n=0; while kill -0 "$l" 2>/dev/null && (( n < ${STOP_GRACE_SECS:-8} * 4 )); do sleep 0.25; n=$(( n + 1 )); done
@@ -377,6 +390,18 @@ svc_write_seed() {
   return "$rc"
 }
 
+# After a failed switch: say whether the put-back version answers :PORT, never assume it.
+svc_report_putback() {
+  local n=0
+  while (( n < 120 )); do
+    curl --connect-timeout 1 --max-time 2 -sf "http://localhost:$PORT/api/config" >/dev/null 2>&1 && {
+      echo "The good version answers :$PORT again." >&2; return 0; }
+    sleep 0.5; n=$(( n + 1 ))
+  done
+  echo "Nothing answers :$PORT 60 s after the put-back: the service launcher keeps trying; its log is $SVC_L/launcher.log." >&2
+  return 0
+}
+
 # Ask for the switch to this deploy's run and judge it. 0 when the new version serves and passed the
 # checks; else 1, with the launcher back on its good version (a put-back it made or one asked here).
 svc_switch() {
@@ -389,8 +414,9 @@ svc_switch() {
   svc_wait_result $(( 60 * 2 + 900 + 30 ))
   echo "Switch: :$PORT answered nothing for ${svc_dark:-under 0.2} s."
   if [[ "$svc_outcome" != committed ]]; then
-    echo "The service launcher did not take the new version ($svc_outcome${svc_reason:+: $svc_reason}); it serves the good one." >&2
+    echo "The service launcher did not take the new version ($svc_outcome${svc_reason:+: $svc_reason}); it puts the good one back." >&2
     if [[ "$svc_outcome" == timeout ]]; then svc_request rollback "$run" "the deploy gave up waiting for it"; svc_wait_result 120; fi
+    svc_report_putback
     return 1
   fi
   if ! svc_check_served; then
@@ -398,6 +424,7 @@ svc_switch() {
     svc_request rollback "$run" "the deploy's checks after the switch failed"
     svc_wait_result 300
     echo "Rollback: $svc_outcome${svc_reason:+ ($svc_reason)}." >&2
+    svc_report_putback
     return 1
   fi
   return 0
