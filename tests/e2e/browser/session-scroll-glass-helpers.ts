@@ -27,6 +27,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { expectArrowAboveComposer, expectPaletteStacksAboveTranscript, geometry as flowGeometry, maxGapOverFrames, mockFlowSession, openFlowSession, type Geometry } from './composer-in-flow-helpers';
 import { openThreadsSession, expectStackDepth, REWRITTEN_SESSION } from './threads-helpers';
 import { discoverBrowserFixture } from './codex-test-audit';
+import { withCssColor } from './css-color';
 
 /**
  * The experiment chat_glass_edges on for this page only (its GET /api/config answers with the switch
@@ -105,19 +106,12 @@ export async function thumbSpan(page: Page, panel: Locator): Promise<{ top: numb
 
 /** A pseudo layer's material: its background alpha and whether a backdrop blur is set. */
 async function material(el: Locator): Promise<{ alpha: number; blur: boolean }> {
-  return el.evaluate((node) => {
+  return el.evaluate(withCssColor((toRgba) => (node: Element) => {
     const cs = getComputedStyle(node, '::before');
-    const bg = cs.backgroundColor;
-    const m = bg.match(/rgba?\(([^)]+)\)/) ?? bg.match(/color\(srgb ([^)]+)\)/);
-    let alpha = 1;
-    if (bg === 'transparent') alpha = 0;
-    else if (m) {
-      const parts = m[1]!.split(/[\s,/]+/).filter(Boolean);
-      alpha = parts.length >= 4 ? Number(parts[3]) : 1;
-    }
+    const alpha = toRgba(cs.backgroundColor)[3];
     const filter = cs.getPropertyValue('backdrop-filter') || cs.getPropertyValue('-webkit-backdrop-filter');
     return { alpha, blur: /blur\(/.test(filter) };
-  });
+  }));
 }
 
 async function wheelAt(page: Page, panel: Locator, dy: number): Promise<void> {
