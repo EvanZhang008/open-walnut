@@ -197,8 +197,12 @@ test('completing from the header fades the column where it stands, then the neig
   expect(fade.drift[SID('a')]).toBeLessThan(2)
   expect(fade.drift[SID('c')]).toBeLessThan(2)
   await expect.poll(async () => (await order(page)).join()).toBe([SID('a'), SID('c')].join())
-  await expect.poll(async () => (await widths(page))[SID('a')], { timeout: 10_000 }).toBeGreaterThan(before[SID('a')] + 100)
+  // The neighbours take the closed column's width: each grows by a clear share of it (a column
+  // has a 280 px floor, so three columns may already overflow the row and the share is less than
+  // half of the closed one), and they share it evenly.
+  await expect.poll(async () => (await widths(page))[SID('a')], { timeout: 10_000 }).toBeGreaterThan(before[SID('a')] + 50)
   const after = await widths(page)
+  expect(after[SID('c')]).toBeGreaterThan(before[SID('c')] + 50)
   expect(Math.abs(after[SID('a')] - after[SID('c')])).toBeLessThan(3)
   await page.screenshot({ path: `${SHOTS}/${engine}-2-closed.png` })
   expect(await phase(page, 'b')).toBe('COMPLETE')

@@ -227,7 +227,15 @@ test('C86: anywhere in the done lane is its top: the line is drawn there, the ca
   const done = await laneIds(pane, 'resolved')
   const src = (await laneIds(pane, 'waiting-cr'))[0]
   let lineBefore = ''
-  await drag(page, card(pane, src), await pointOn(card(pane, done[2]), 'bottom'), async () => {
+  // Well down the lane, past its top card. The cards grow with their whole titles and summaries,
+  // so the third card's lower half can sit below what the lanes show: aim no lower than the part
+  // of the lanes a person can point at (their scroll box above its own scroll bar, in the window).
+  const aim = await pointOn(card(pane, done[2]), 'bottom')
+  const top = (await card(pane, done[0]).boundingBox())!
+  const shownBottom = await pane.getByTestId('kanban-lanes').evaluate((el) => el.getBoundingClientRect().top + el.clientTop + el.clientHeight)
+  const target = { x: aim.x, y: Math.min(aim.y, shownBottom - 16, page.viewportSize()!.height - 16) }
+  expect(target.y).toBeGreaterThan(top.y + top.height)
+  await drag(page, card(pane, src), target, async () => {
     lineBefore = await laneBody(pane, 'resolved').locator('[data-testid="kanban-drop-line"] + [data-testid="kanban-card"]').getAttribute('data-task-id') ?? ''
   })
   expect(lineBefore).toBe(done[0])
