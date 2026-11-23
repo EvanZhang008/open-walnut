@@ -78,8 +78,11 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   await expect(page.locator('.app-topbar')).toHaveCount(0);
   await expect(page.locator('.todo-section-tabs, .task-view-row')).toHaveCount(0);
   await expect(page.getByTestId('tier-view-bar')).toHaveCount(0);
-  expect(await homeToolbar(page).evaluate(bar => [...bar.children].map(child => child.className.split(' ')[0])))
+  // What the toolbar shows: its More (the header rule's ⋮, components/common/HeaderFit.tsx) is in the
+  // row but shown only once a button no longer fits, which it does at this width.
+  expect(await homeToolbar(page).evaluate(bar => [...bar.children].filter(child => child.getClientRects().length > 0).map(child => child.className.split(' ')[0])))
     .toEqual(['todo-search-bar', 'new-launcher-btn', 'tp-btn', 'todo-panel-board', 'todo-panel-hide']);
+  await expect(homeToolbar(page).locator(':scope > [data-fit-more]')).toBeHidden();
   // One menu button, Display, named by its aria-label (it holds the filters too).
   expect(await homeToolbar(page).locator(':scope > .tp-btn').evaluateAll(els => els.map(el => el.getAttribute('aria-label')))).toEqual(['Display']);
   await expect(homeToolbar(page).locator('.todo-search-input')).toBeVisible();
