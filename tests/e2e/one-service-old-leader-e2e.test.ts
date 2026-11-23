@@ -1,6 +1,6 @@
 /**
  * An old leader drives a host that runs as its one Walnut service (direction A of the pair; a new
- * leader in front of an old host is the simulated-hello tests). The leader is the 1fe1fd194 build
+ * leader in front of an old host is tests/e2e/one-service-new-leader-old-host-e2e.test.ts). The leader is the 1fe1fd194 build
  * (tests/helpers/v1-daemon-sources.ts), which knows nothing of the one service: its own
  * DaemonConnection (getDirectDaemonConnection, the hello and its capability check, send, and
  * probeDaemonSession), its leader description (configureHostLeader, core/leader/primary-leader.ts)
