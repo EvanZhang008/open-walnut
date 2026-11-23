@@ -2253,12 +2253,24 @@ function ensureOwnerOnlyStorage() {
     fs.chmodSync(entryPath, stat.mode & 0o111 ? 0o700 : 0o600);
   }
 
+  // A root already ours, owner-only and swept once before (its .owner-only-swept mark) skips the deep sweep
+  // (mirror daemon-standalone.ts ensureOwnerOnlyStorage).
+  function sweptBefore(root) {
+    try {
+      const st = fs.statSync(root);
+      return (st.mode & 0o777) === 0o700 && (typeof process.getuid !== 'function' || st.uid === process.getuid())
+        && fs.existsSync(path.join(root, '.owner-only-swept'));
+    } catch { return false; }
+  }
   fs.mkdirSync(DAEMON_DIR, { recursive: true, mode: 0o700 });
   fs.mkdirSync(STREAMS_DIR, { recursive: true, mode: 0o700 });
+  const skip = new Set([DAEMON_DIR, STREAMS_DIR].filter(sweptBefore));
   fs.chmodSync(DAEMON_DIR, 0o700);
   fs.chmodSync(STREAMS_DIR, 0o700);
   for (const root of [DAEMON_DIR, STREAMS_DIR]) {
+    if (skip.has(root)) continue;
     for (const name of fs.readdirSync(root)) repair(path.join(root, name));
+    try { fs.writeFileSync(path.join(root, '.owner-only-swept'), '', { mode: 0o600 }); } catch { /* the next start sweeps again */ }
   }
 }
 

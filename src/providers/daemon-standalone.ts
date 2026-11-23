@@ -710,14 +710,32 @@ function ensureOwnerOnlyStorage(): void {
     fs.chmodSync(entryPath, stat.mode & 0o111 ? 0o700 : 0o600)
   }
 
+  // A root that is already ours and owner-only, swept once before (its OWNER_ONLY_SWEPT mark), keeps
+  // everything below it from other users: the deep sweep is skipped. On the Mac the daemon dir is also the
+  // server's scratch dir (tens of thousands of images), and an in-process daemon starts at every deploy:
+  // a full sweep there held the server's start for 3.4 s (2026-11-23). Each live FIFO is made write-only
+  // again where it is adopted (lockLiveFifo; an ACP worker does its own).
+  const sweptBefore = (root: string): boolean => {
+    try {
+      const st = fs.statSync(root)
+      return (st.mode & 0o777) === 0o700 && (typeof process.getuid !== 'function' || st.uid === process.getuid())
+        && fs.existsSync(path.join(root, OWNER_ONLY_SWEPT))
+    } catch { return false }
+  }
   fs.mkdirSync(DAEMON_DIR, { recursive: true, mode: 0o700 })
   fs.mkdirSync(STREAMS_DIR, { recursive: true, mode: 0o700 })
+  const skip = new Set([DAEMON_DIR, STREAMS_DIR].filter(sweptBefore))
   fs.chmodSync(DAEMON_DIR, 0o700)
   fs.chmodSync(STREAMS_DIR, 0o700)
   for (const root of [DAEMON_DIR, STREAMS_DIR]) {
+    if (skip.has(root)) continue
     for (const name of fs.readdirSync(root)) repair(path.join(root, name))
+    try { fs.writeFileSync(path.join(root, OWNER_ONLY_SWEPT), '', { mode: 0o600 }) } catch { /* the next start sweeps again */ }
   }
 }
+/** The mark of a root whose entries were all made owner-only once (ensureOwnerOnlyStorage). Mirror daemon-source.ts. */
+const OWNER_ONLY_SWEPT = '.owner-only-swept'
+
 
 // ── Legacy streams migration (/tmp/open-walnut-streams → HOME) ─────────────
 // One-way, loss-averse, idempotent. Runs at startup BEFORE reconcileRegistry

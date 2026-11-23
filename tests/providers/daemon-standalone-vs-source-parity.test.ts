@@ -457,6 +457,9 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
       expect(src).toMatch(/chmodSync\(DAEMON_DIR,\s*0o700\)/)
       expect(src).toMatch(/chmodSync\(STREAMS_DIR,\s*0o700\)/)
       expect(src).toMatch(/stat\.mode\s*&\s*0o111\s*\?\s*0o700\s*:\s*0o600/)
+      // A root already owner-only and swept once skips the deep sweep (it held each deploy's start 3.4 s).
+      expect(src).toContain('.owner-only-swept')
+      expect(src).toMatch(/if \(skip\.has\(root\)\) continue/)
     }
   })
 
