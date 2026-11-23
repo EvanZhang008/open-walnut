@@ -196,6 +196,10 @@ on the host.
   last step of the ladder (60 minutes) Walnut stops trying by itself until a newer build, a reconnect or
   Retry. A host on by default that waits for its host or a newer daemon, or is not eligible, is not listed
   as a problem in Settings nor as a replica.
+- **On a machine that handed the leader over**, the follower also serves that machine's console at the
+  address its leader served (a second listener, `src/replica/console-door.ts`), the console being a device
+  of the new leader. Nothing in the daemon changes for it: the follower reads a console file beside the
+  machine id. Detail: [The old leader's console](./leader-switch-console.md).
 
 ## Topology, files, CLI lifecycle and delivery paths
 

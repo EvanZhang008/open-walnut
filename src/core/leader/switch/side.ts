@@ -17,6 +17,7 @@ import type { MachinePlace } from './settings.js'
 import { switchDir } from './records.js'
 import { confirmStandby, readStandbyServer, type StandbyServer } from './handed-over.js'
 import { alive, serverCommand, stopPid, tail } from '../../trial-start/process.js'
+import { waitForConsolePort } from './console-port.js'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -75,6 +76,9 @@ export class LocalSide implements SwitchSide {
     const m = this.machine
     // A standby of this home holds the port the server is to listen on.
     await this.stopStandby(30_000)
+    // So may this machine's console replica, until it sees the home it served is gone (a switch back).
+    const port = await waitForConsolePort(m.home, m.port)
+    if (!port.ok) return { ok: false, why: port.why }
     const cmd = m.start ?? serverCommand(['web', '--port', String(m.port)])
     fs.mkdirSync(switchDir(m.home), { recursive: true, mode: 0o700 })
     const logFile = path.join(switchDir(m.home), `server-${mode}.log`)

@@ -7,6 +7,7 @@ export interface EntryOptions {
   listsChildren?: true
   legacy?: true
   appendOnly?: true
+  daemonState?: true
 }
 
 function homeAt(cls: DataClass) {
@@ -16,6 +17,7 @@ function homeAt(cls: DataClass) {
     ...(o.listsChildren ? { listsChildren: true as const } : {}),
     ...(o.legacy ? { legacy: true as const } : {}),
     ...(o.appendOnly ? { appendOnly: true as const } : {}),
+    ...(o.daemonState ? { daemonState: true as const } : {}),
   })
 }
 

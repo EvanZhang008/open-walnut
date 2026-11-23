@@ -231,7 +231,23 @@ export async function runWeb(options: {
     void shutdown('parent_gone')
   })
 
-  await startServer({ port, dev: !!options.dev })
+  try {
+    await startServer({ port, dev: !!options.dev })
+  } catch (err) {
+    // A handed-over home whose console this machine's replica serves (core/leader/switch/handed-over.ts):
+    // the console listens at this address already; this start has nothing to do.
+    const { ConsoleServedByReplica } = await import('../core/leader/switch/handed-over.js')
+    if (!(err instanceof ConsoleServedByReplica)) throw err
+    console.log(err.line)
+    process.exitCode = 0
+    process.exit(0)
+  }
+  // The standby of a handed-over home gives its port up once this machine's console replica wants it.
+  const { standbyYielded } = await import('../web/server.js')
+  void standbyYielded()?.then((line) => {
+    console.log(line)
+    void shutdown('console_replica')
+  })
   // Its own login session and cwd, checked now and every minute; GET /api/config
   // reports it, and the Mac app replaces a server whose session ended.
   ;(await import('../core/login-session.js')).startLoginSessionMonitor()

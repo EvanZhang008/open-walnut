@@ -6,6 +6,9 @@
 import { lead, mach, rebuild } from './build.js'
 import type { HomeEntry } from './types.js'
 
+/** Written by this machine's daemon as it runs (HomeEntry.daemonState). */
+const DAEMON = { daemonState: true } as const
+
 /** cache/: rebuildable unless listed otherwise here. */
 const CACHE_ENTRIES: readonly HomeEntry[] = [
   // Ledgers and queue state that sit in cache/ only so git sync leaves them out: no other copy exists.
@@ -103,7 +106,7 @@ const LOCAL_ENTRIES: readonly HomeEntry[] = [
   mach('local.running-switches', 'local/running-switches', 'dir', 'Engine switches this server is running'),
   mach('local.planned-restart', 'local/planned-restart.json', 'file', 'A restart this server planned'),
   mach('local.last-planned-stop', 'local/last-planned-stop.json', 'file', 'Why the last server stopped, for the next boot'),
-  mach('local.spawn-journal', 'local/spawn-journal.jsonl', 'file', 'Sessions this host\'s daemon started'),
+  mach('local.spawn-journal', 'local/spawn-journal.jsonl', 'file', 'Sessions this host\'s daemon started', DAEMON),
   mach('local.host-mcp', 'local/host-mcp.json', 'file', 'MCP servers this host offers'),
   mach('local.expose-handover', 'local/expose-handover.json', 'file', 'Port handover between server generations'),
   mach('local.fleet-cache', 'local/fleet-cache.json', 'file', 'Last known host fleet facts'),
@@ -141,15 +144,15 @@ const TMP_ENTRIES: readonly HomeEntry[] = [
   lead('tmp.recordings', 'tmp/recordings', 'dir', 'Audio capture chunks and their transcripts'),
   // What this machine runs.
   mach('tmp.recording-state', 'tmp/recording-state.json', 'file', 'What this machine is recording, to resume after a restart'),
-  mach('tmp.streams', 'tmp/streams', 'dir', 'Live session output streams of this machine\'s daemon'),
-  mach('tmp.spawned-sessions', 'tmp/spawned-sessions', 'dir', 'Sessions this machine\'s daemon started (older ledger)'),
-  mach('tmp.resume-records', 'tmp/resume-records', 'dir', 'Resume records of this machine\'s daemon'),
-  mach('tmp.trigger-state', 'tmp/trigger-state', 'dir', 'What each trigger on this machine\'s daemon already saw and reported'),
-  mach('tmp.offline-host', 'tmp/offline-host', 'dir', 'This machine\'s daemon\'s offline journal: what it took while the leader was away'),
-  mach('tmp.leader-book', 'tmp/leader', 'dir', 'This machine\'s daemon\'s leader book'),
-  mach('tmp.usage-budgets', 'tmp/usage-budgets', 'dir', 'Usage budgets as this machine\'s daemon holds them'),
-  mach('tmp.host-exec', 'tmp/host-exec', 'dir', 'Commands run on this machine and their output'),
-  mach('tmp.host-vitals', 'tmp/host-vitals', 'dir', 'This machine\'s load and memory samples'),
+  mach('tmp.streams', 'tmp/streams', 'dir', 'Live session output streams of this machine\'s daemon', DAEMON),
+  mach('tmp.spawned-sessions', 'tmp/spawned-sessions', 'dir', 'Sessions this machine\'s daemon started (older ledger)', DAEMON),
+  mach('tmp.resume-records', 'tmp/resume-records', 'dir', 'Resume records of this machine\'s daemon', DAEMON),
+  mach('tmp.trigger-state', 'tmp/trigger-state', 'dir', 'What each trigger on this machine\'s daemon already saw and reported', DAEMON),
+  mach('tmp.offline-host', 'tmp/offline-host', 'dir', 'This machine\'s daemon\'s offline journal: what it took while the leader was away', DAEMON),
+  mach('tmp.leader-book', 'tmp/leader', 'dir', 'This machine\'s daemon\'s leader book', DAEMON),
+  mach('tmp.usage-budgets', 'tmp/usage-budgets', 'dir', 'Usage budgets as this machine\'s daemon holds them', DAEMON),
+  mach('tmp.host-exec', 'tmp/host-exec', 'dir', 'Commands run on this machine and their output', DAEMON),
+  mach('tmp.host-vitals', 'tmp/host-vitals', 'dir', 'This machine\'s load and memory samples', DAEMON),
   mach('tmp.standby-staging', 'tmp/standby-staging', 'dir', 'A standby batch being staged on this machine, emptied after each batch; one a killed process left is removed by the next batch'),
   mach('tmp.ephemeral-slots', 'tmp/ephemeral-slots', 'dir', 'Slots of the throwaway servers running here'),
   mach('tmp.ephemeral-registry', 'tmp/ephemeral-registry.json', 'file', 'The throwaway servers running here'),

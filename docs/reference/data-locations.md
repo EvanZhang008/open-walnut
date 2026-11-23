@@ -26,6 +26,14 @@ writes has its own row. Lock files count as `machine` only by Walnut's own lock 
 a lockfile of a project or a plugin (`bun.lock`, `Cargo.lock`) stays with its folder.
 **Sensitive** marks credentials, tokens, keys and the password vault.
 
+**Daemon state.** `machine (daemon state)` marks the places this machine's daemon writes as it
+runs, whichever home leads: an installed daemon keeps its state in the data home's `tmp/` and
+`local/`. A home that handed the leader over keeps every other `leader-data` and `machine` path
+byte for byte (`src/core/home-manifest/home-kept.ts` checks it and says which paths it skipped);
+these go on changing. The mark changes nothing else: backups and the standby copy treat them as
+before. A ratchet (`tests/core/home-manifest/daemon-state.test.ts`) reads both daemon twins and
+fails on a data home path the daemon writes that is neither marked nor `rebuildable`.
+
 **Older places.** The places only older releases wrote stay in the manifest with a class,
 so data an upgrade left there is still copied or skipped right, but they have no row here.
 
@@ -220,7 +228,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/local/running-switches/` | machine | no | Engine switches this server is running |
 | `~/.open-walnut/local/planned-restart.json` | machine | no | A restart this server planned |
 | `~/.open-walnut/local/last-planned-stop.json` | machine | no | Why the last server stopped, for the next boot |
-| `~/.open-walnut/local/spawn-journal.jsonl` | machine | no | Sessions this host's daemon started |
+| `~/.open-walnut/local/spawn-journal.jsonl` | machine (daemon state) | no | Sessions this host's daemon started |
 | `~/.open-walnut/local/host-mcp.json` | machine | no | MCP servers this host offers |
 | `~/.open-walnut/local/expose-handover.json` | machine | no | Port handover between server generations |
 | `~/.open-walnut/local/fleet-cache.json` | machine | no | Last known host fleet facts |
@@ -248,15 +256,15 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/tmp/stt-recordings/` | leader-data | no | Voice input audio and its text, so a lost answer can be put back |
 | `~/.open-walnut/tmp/recordings/` | leader-data | no | Audio capture chunks and their transcripts |
 | `~/.open-walnut/tmp/recording-state.json` | machine | no | What this machine is recording, to resume after a restart |
-| `~/.open-walnut/tmp/streams/` | machine | no | Live session output streams of this machine's daemon |
-| `~/.open-walnut/tmp/spawned-sessions/` | machine | no | Sessions this machine's daemon started (older ledger) |
-| `~/.open-walnut/tmp/resume-records/` | machine | no | Resume records of this machine's daemon |
-| `~/.open-walnut/tmp/trigger-state/` | machine | no | What each trigger on this machine's daemon already saw and reported |
-| `~/.open-walnut/tmp/offline-host/` | machine | no | This machine's daemon's offline journal: what it took while the leader was away |
-| `~/.open-walnut/tmp/leader/` | machine | no | This machine's daemon's leader book |
-| `~/.open-walnut/tmp/usage-budgets/` | machine | no | Usage budgets as this machine's daemon holds them |
-| `~/.open-walnut/tmp/host-exec/` | machine | no | Commands run on this machine and their output |
-| `~/.open-walnut/tmp/host-vitals/` | machine | no | This machine's load and memory samples |
+| `~/.open-walnut/tmp/streams/` | machine (daemon state) | no | Live session output streams of this machine's daemon |
+| `~/.open-walnut/tmp/spawned-sessions/` | machine (daemon state) | no | Sessions this machine's daemon started (older ledger) |
+| `~/.open-walnut/tmp/resume-records/` | machine (daemon state) | no | Resume records of this machine's daemon |
+| `~/.open-walnut/tmp/trigger-state/` | machine (daemon state) | no | What each trigger on this machine's daemon already saw and reported |
+| `~/.open-walnut/tmp/offline-host/` | machine (daemon state) | no | This machine's daemon's offline journal: what it took while the leader was away |
+| `~/.open-walnut/tmp/leader/` | machine (daemon state) | no | This machine's daemon's leader book |
+| `~/.open-walnut/tmp/usage-budgets/` | machine (daemon state) | no | Usage budgets as this machine's daemon holds them |
+| `~/.open-walnut/tmp/host-exec/` | machine (daemon state) | no | Commands run on this machine and their output |
+| `~/.open-walnut/tmp/host-vitals/` | machine (daemon state) | no | This machine's load and memory samples |
 | `~/.open-walnut/tmp/standby-staging/` | machine | no | A standby batch being staged on this machine, emptied after each batch; one a killed process left is removed by the next batch |
 | `~/.open-walnut/tmp/ephemeral-slots/` | machine | no | Slots of the throwaway servers running here |
 | `~/.open-walnut/tmp/ephemeral-registry.json` | machine | no | The throwaway servers running here |
@@ -305,6 +313,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `$XDG_STATE_HOME/open-walnut/leader-instance/` | machine | no | The instance lock of a switchable leader: one leader server per machine id holds the write permission |
 | `$XDG_STATE_HOME/open-walnut/approvals/` | machine | yes | Wait tokens of approval asks made from this machine's shell |
 | `$XDG_STATE_HOME/open-walnut/net/` | machine | yes | This machine's host network identity (always under ~/.local/state) |
+| `$XDG_STATE_HOME/open-walnut/console/` | machine | yes | The console of this machine after it handed the leader over (always under ~/.local/state): the address its leader served, the switch and the console device's token, written at the handover; and which replica holds that address now |
 | `$XDG_STATE_HOME/open-walnut/machine-id` | machine | no | This machine's stable id (always under ~/.local/state): sent in the daemon's hello, and the holder id of a switchable leader's write permission |
 | `$XDG_STATE_HOME/open-walnut/net-members.json` | machine | no | The companion's list of machines allowed on the host network |
 | `$XDG_STATE_HOME/open-walnut/clone-identity/` | machine | no | Pending clone identity marks of this machine's sessions |
@@ -334,5 +343,6 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/Library/Application Support/Open Walnut/` | machine | no | How the Mac app launches the session host |
 | `~/.config/systemd/user/` | machine | no | The daemon's login service unit on Linux |
 | `~/Library/LaunchAgents/` | machine | no | The daemon's login service on macOS |
+| `~/.open-walnut-host/` | machine | no | This machine's replicas of a Walnut led by another machine (walnuts/<id>/data, run, logs): the copies its leader sends and the program it runs. A machine that handed the leader over serves its console from here, never from the handed-over home |
 
 <!-- data-locations:end -->

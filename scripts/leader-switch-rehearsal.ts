@@ -3,17 +3,22 @@
  * "Rehearsal"): real servers on synthetic homes, three local witnesses, the real
  * `walnut leader switch` command. Prints one line per check; exits 1 when one fails.
  *
- *   bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--trials] [--flag-off (also: on with no witnesses)] [--restarts] [--all] [--keep]
+ *   bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--trials] [--flag-off (also: on with no witnesses)] [--restarts] [--console [--as-installed] [--away-seconds N]] [--all] [--keep]
  *
  * Without a scenario flag it runs the main one: A leads, a standby copy to B, load through
  * A's API, the switch to B, every check, A started again by hand (online and offline), writes
  * on B, the switch back. `--gb N` puts N GB of filler in A's home first (the downtime of a
  * real-sized home; the first standby batch of 20 GB takes about 20 minutes). `--kills` kills
- * the command at each step and resumes it (`--no-back`: no switch back, for a large home on a full disk); `--trials` breaks the copy three ways. Everything
+ * the command at each step and resumes it (`--no-back`: no switch back, for a large home on a full disk); `--trials` breaks the copy three ways.
+ * `--console` runs the old leader's console after the switch (leader-switch/console-rehearsal.ts):
+ * the Mac app's handling replayed the whole time, B cut off for `--away-seconds` (default 60),
+ * A's home checked by its manifest classes; `--as-installed` keeps A's daemon state where an
+ * installed one does (inside the home). It needs the built app (`bun run build`). Everything
  * stays inside <work dir>; nothing reads ~/.open-walnut or uses :3456.
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { rehearseConsole } from './leader-switch/console-rehearsal.js'
 import { KILL_POINTS, TRIAL_FAILURES, rehearseCancel, rehearseCancelAfterCommit, rehearseFlagOff, rehearseNoWitnesses, rehearseRestart, rehearseLedgerControl, rehearseKill, rehearseSwitchAndBack, rehearseTrialFailure, type Check } from './leader-switch/rehearsal.js'
 
 const args = process.argv.slice(2)
@@ -40,7 +45,7 @@ const baseAt = args.indexOf('--port-base')
 let port = baseAt >= 0 ? Number(args[baseAt + 1]) : 4800
 const ports = () => { port += 2; return { portA: port, portB: port + 1 } }
 
-const main = !has('--kills') && !has('--trials') && !has('--flag-off') && !has('--restarts')
+const main = !has('--kills') && !has('--trials') && !has('--flag-off') && !has('--restarts') && !has('--console')
 if (main || all) {
   await rehearseLedgerControl(path.join(work, 'ledger-control'), print, ports())
   const r = await rehearseSwitchAndBack(path.join(work, 'main'), print, { ...ports(), fillerGb: gb, noBack: has('--no-back'), log })
@@ -56,6 +61,11 @@ if (has('--restarts') || all) {
   const r = await rehearseRestart(path.join(work, 'restarts'), print, ports())
   console.log(`DOORS CLOSED  planned restart ${r.plannedMs !== undefined ? (r.plannedMs / 1000).toFixed(1) : '?'} s, crash ${r.crashMs !== undefined ? (r.crashMs / 1000).toFixed(1) : '?'} s`)
 }
+if (has('--console') || all) {
+  const awayAt = args.indexOf('--away-seconds')
+  const dir = path.join(work, has('--as-installed') ? 'console-as-installed' : 'console')
+  await rehearseConsole(dir, print, { ...ports(), asInstalled: has('--as-installed'), awaySeconds: awayAt >= 0 ? Number(args[awayAt + 1]) : 60, log, ...(await consoleExtras(dir)) })
+}
 if (has('--flag-off') || all) {
   await rehearseFlagOff(path.join(work, 'flag-off'), print, ports())
   await rehearseNoWitnesses(path.join(work, 'no-witnesses'), print, ports())
@@ -67,6 +77,45 @@ makeWritable(work)
 if (!failed && !has('--keep')) fs.rmSync(work, { recursive: true, force: true })
 console.log(failed ? `${failed} check(s) FAILED; evidence in ${work} (writable, remove it with rm -rf)` : `all checks passed; ${has('--keep') ? `evidence in ${work}` : `work dir ${work} removed (--keep keeps it)`}`)
 process.exit(failed ? 1 : 0)
+
+/**
+ * `--browser`: a person's browser on A's console the whole time (console-browser.ts), recorded;
+ * `--scale`: A's home at a real density first, and the worst load of `/` and of a session page,
+ * five times each at the console and at the leader (console-scale.ts).
+ */
+async function consoleExtras(dir: string): Promise<Partial<Parameters<typeof rehearseConsole>[2]>> {
+  if (!has('--browser') && !has('--scale')) return {}
+  const { ConsoleBrowser, makeWalkData } = await import('./leader-switch/console-browser.js')
+  const { SCALE, measureLoads, seedLargeHome } = await import('./leader-switch/console-scale.js')
+  let b: InstanceType<typeof ConsoleBrowser> | null = null
+  let data: Awaited<ReturnType<typeof makeWalkData>> | null = null
+  let kept: string | null = null
+  return {
+    ...(has('--scale') ? { seedHome: (home: string, env: Record<string, string>) => seedLargeHome(home, env, dir) } : {}),
+    online: async (cw, c) => {
+      data = await makeWalkData(cw)
+      if (has('--scale')) {
+        for (const r of await measureLoads(cw, { id: data.board.id, answer: 'echo: hello from the leader' }, path.join(dir, 'loads'))) {
+          console.log(`LOAD  ${r.where}, ${r.page}: worst ${r.worst} ms of ${r.ms.join(', ')} (home: ${SCALE.tasks} tasks, ${SCALE.sessions} sessions, ${SCALE.notes} notes)`)
+          c.add(`load at scale: ${r.where}, ${r.page}, ${r.ms.length} of 5 loads`, !r.error && r.ms.length === 5, r.error ?? `worst ${r.worst} ms`)
+        }
+      }
+      if (!has('--browser')) return
+      b = new ConsoleBrowser(cw, path.join(dir, 'browser'), data)
+      await b.open()
+      await b.checkOnLeader(c, await b.walkOnline(c))
+    },
+    away: async (_cw, c) => { if (b) kept = (await b.walkAway(c)).keptTitle },
+    back: async (_cw, c) => {
+      if (!b) return
+      await b.afterBack(c, kept)
+      const errors = b.errors.filter((e) => !/ResizeObserver/.test(e))
+      c.add('browser: no page error the whole time', errors.length === 0, errors.slice(0, 3).join(' | '))
+      const video = await b.close()
+      console.log(`VIDEO  ${video ?? 'none'}`)
+    },
+  }
+}
 
 function makeWritable(dir: string): void {
   try { fs.chmodSync(dir, fs.statSync(dir).mode | 0o700) } catch { return }

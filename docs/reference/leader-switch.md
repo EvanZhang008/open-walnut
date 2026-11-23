@@ -101,8 +101,10 @@ in the old home before it runs and is safe to repeat; `--resume` continues after
    server runs on the new home. Any failure refuses with the reasons; nothing changed.
 2. **handover**: the marker `handed-over.json` (state `switching`) goes into the old home
    first, then the old leader's server writes its `handover` record to a majority of the
-   witnesses and acts no more (asked through `POST /api/leader/handover`). While it runs it
-   may still cancel it.
+   witnesses and acts no more (asked through `POST /api/leader/handover`). Before that record
+   it makes what must ride the final batch (`before-handover.ts`: today this machine's console
+   device, [The old leader's console](./leader-switch-console.md)); one that fails refuses the
+   handover. While it runs it may still cancel it.
 3. **stop-source**: a planned stop (SIGTERM, SIGKILL after 30 s). Sessions and detached work
    keep running under the existing restart rules. The downtime starts here.
 4. **final-batch**: one standby batch of the stopped home (a batch voided by an outside writer
@@ -327,8 +329,13 @@ leader on that path. A start the switch makes that comes up as a standby (anothe
 leads) fails at once with the standby's message instead of waiting for a server that never
 comes. Under a launcher that restarts what it sees stop, a stopped standby can be started
 again between that stop and the switch's start (the port is then taken, or a standby runs on
-the promoted path); stopping it through the launcher is the next phase's. Becoming the new leader's replica (taking its data while on standby) is the
-cross-machine phase's work.
+the promoted path); stopping it through the launcher is the next phase's.
+
+**The old leader's console.** Once the new leader runs a replica on the old machine (that
+machine as one of its hosts), the replica serves the old machine's console at the address its
+leader served, and the standby gives the port up to it: the Mac app, a browser and `walnut web`
+on that machine keep working, as a device of the new leader. The handover makes what it needs
+(a console device and a file outside the home). See [The old leader's console](./leader-switch-console.md).
 
 ### `--back`
 
@@ -476,7 +483,7 @@ make the downtime long.
 
 ## Rehearsal
 
-`bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--trials] [--flag-off] [--restarts] [--all] [--keep]`
+`bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--trials] [--flag-off] [--restarts] [--console] [--all] [--keep]`
 runs on any Linux dev box (in a Walnut dev container: `walnut-dev run bun ...`). It builds two
 machines and three witnesses in `<work dir>`, starts A on a synthetic home with tasks, notes,
 a plugin's files and a routine, keeps a standby copy at B, drives writes through A's API, runs
@@ -489,7 +496,8 @@ and leaves its home's hash unchanged, B's writes come back with `--back` and A l
 step (after the handover, during the final batch, during and after the promotion, during the trial,
 between the commit's majority and its marker, after the commit) and resumes it; `--trials`
 breaks the copy (a corrupt database, a missing note, an old program) and expects a rollback;
-`--flag-off` checks that nothing of it runs with the experiment off. Its test is
+`--flag-off` checks that nothing of it runs with the experiment off; `--console` runs the old
+leader's console ([its rehearsal](./leader-switch-console.md#rehearsal)). Its test is
 `tests/e2e/leader-switch-real.test.ts`. The standby copies and promoted homes are read-only, so at
 the end the run makes `<work dir>` writable again and removes it when every check passed (`--keep`
 keeps it); a failed run keeps it, writable, as evidence.
@@ -518,8 +526,10 @@ keeps it); a failed run keeps it, writable, as evidence.
   launcher that restarts it during the switch gets a standby on the port, which a rollback's
   start of the old leader (`side.ts`) stops first, and the launcher may then start another.
   Stopping it through the launcher is the next phase's.
-- **The standby takes no data**: it answers who leads and nothing else; becoming the new
-  leader's replica is the cross-machine phase's.
+- **The standby takes no data**: it answers who leads and nothing else. The old machine's
+  console is served by its host replica of the new leader instead
+  ([The old leader's console](./leader-switch-console.md), whose own list of what is not built
+  yet starts with the new leader taking the old machine as a host by itself).
 - **A switch back with a launcher** (known risk, left for the cross-machine phase): the switch
   stops the old home's standby right before the promotion, and a launcher that restarts what it
   sees stop can start the standby again in that gap. It then holds the port the trial and the

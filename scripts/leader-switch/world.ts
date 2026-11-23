@@ -61,12 +61,12 @@ export function treeHash(dir: string): string {
   return h.digest('hex')
 }
 
-function machine(root: string, name: string, port: number): Machine {
+function machine(root: string, name: string, port: number, homeName = 'home'): Machine {
   const dir = path.join(root, name)
   const idFile = path.join(dir, 'machine-id')
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   fs.writeFileSync(idFile, `machine-${name}\n`)
-  const home = path.join(dir, 'home')
+  const home = path.join(dir, homeName)
   return {
     id: `machine-${name}`,
     dir,
@@ -88,9 +88,10 @@ export function switchConfig(w: { a: Machine; b: Machine; witnesses: WitnessPlac
   }
 }
 
-export function makeWorld(root: string, opts: { portA: number; portB: number; intervalSeconds?: number }): World {
+/** `homeA`: A's data home's name in its folder (`.open-walnut`: where an install keeps it, in HOME). */
+export function makeWorld(root: string, opts: { portA: number; portB: number; intervalSeconds?: number; homeA?: string }): World {
   fs.mkdirSync(root, { recursive: true, mode: 0o700 })
-  const a = machine(root, 'a', opts.portA)
+  const a = machine(root, 'a', opts.portA, opts.homeA)
   const b = machine(root, 'b', opts.portB)
   const witnesses = ['w1', 'w2', 'w3'].map((id) => ({ id, dir: path.join(root, 'witnesses', id) }))
   fs.mkdirSync(a.home, { recursive: true, mode: 0o700 })

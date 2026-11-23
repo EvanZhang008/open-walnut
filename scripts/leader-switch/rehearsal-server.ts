@@ -63,7 +63,12 @@ armGracefulSignalExit()
 try {
   await startServer({ port, dev: true })
   console.log(`REHEARSAL_SERVER_READY ${JSON.stringify({ pid: process.pid, port, home: process.env.OPEN_WALNUT_HOME })}`)
+  // As `walnut web` does: a standby that gave its port up to this machine's console replica stops.
+  const { standbyYielded } = await import('../../src/web/server.js')
+  void standbyYielded()?.then((line) => { console.log(line); void stop() })
 } catch (err) {
+  const { ConsoleServedByReplica } = await import('../../src/core/leader/switch/handed-over.js')
+  if (err instanceof ConsoleServedByReplica) { console.log(err.line); process.exit(0) }
   console.error(`rehearsal-server: ${err instanceof Error ? err.message : String(err)}`)
   process.exit(1)
 }

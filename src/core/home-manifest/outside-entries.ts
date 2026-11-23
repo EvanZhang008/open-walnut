@@ -18,6 +18,7 @@ export const OUTSIDE_ENTRIES: readonly OutsideEntry[] = [
   outside('machine', 'xdg-state', 'state.leader-instance', 'open-walnut/leader-instance', 'dir', 'The instance lock of a switchable leader: one leader server per machine id holds the write permission'),
   outside('machine', 'xdg-state', 'state.approvals', 'open-walnut/approvals', 'dir', 'Wait tokens of approval asks made from this machine\'s shell', { sensitive: true }),
   outside('machine', 'xdg-state', 'state.net', 'open-walnut/net', 'dir', 'This machine\'s host network identity (always under ~/.local/state)', { sensitive: true }),
+  outside('machine', 'xdg-state', 'state.console', 'open-walnut/console', 'dir', 'The console of this machine after it handed the leader over (always under ~/.local/state): the address its leader served, the switch and the console device\'s token, written at the handover; and which replica holds that address now', { sensitive: true }),
   outside('machine', 'xdg-state', 'state.machine-id', 'open-walnut/machine-id', 'file', 'This machine\'s stable id (always under ~/.local/state): sent in the daemon\'s hello, and the holder id of a switchable leader\'s write permission'),
   outside('machine', 'xdg-state', 'state.net-members', 'open-walnut/net-members.json', 'file', 'The companion\'s list of machines allowed on the host network'),
   outside('machine', 'xdg-state', 'state.clone-identity', 'open-walnut/clone-identity', 'dir', 'Pending clone identity marks of this machine\'s sessions'),
@@ -51,4 +52,5 @@ export const OUTSIDE_ENTRIES: readonly OutsideEntry[] = [
   outside('machine', 'user-home', 'home.session-host-launch', 'Library/Application Support/Open Walnut', 'dir', 'How the Mac app launches the session host'),
   outside('machine', 'user-home', 'home.systemd-unit', '.config/systemd/user', 'dir', 'The daemon\'s login service unit on Linux'),
   outside('machine', 'user-home', 'home.launch-agents', 'Library/LaunchAgents', 'dir', 'The daemon\'s login service on macOS'),
+  outside('machine', 'user-home', 'home.host-replica', '.open-walnut-host', 'dir', 'This machine\'s replicas of a Walnut led by another machine (walnuts/<id>/data, run, logs): the copies its leader sends and the program it runs. A machine that handed the leader over serves its console from here, never from the handed-over home'),
 ]

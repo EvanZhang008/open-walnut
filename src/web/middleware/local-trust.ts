@@ -141,6 +141,16 @@ const PROXY_HEADERS = ['x-forwarded-for', 'forwarded', 'x-real-ip', 'x-forwarded
 export function classifyLocalRequest(req: RequestLike): LocalTrust {
   if (!isLoopbackAddress(req.socket?.remoteAddress)) return { trusted: false, reason: 'not-loopback' }
   if (isTunnelPort(req.socket?.localPort)) return { trusted: false, reason: 'tunnel-port' }
+  return classifyLoopbackClient(req)
+}
+
+/**
+ * The same rule without the tunnel-port step, for a listener that is never a tunnel's by
+ * construction: a host replica's console door on the address its machine's leader served
+ * (replica/console-door.ts), while every other port of that replica stays a tunnel port.
+ */
+export function classifyLoopbackClient(req: RequestLike): LocalTrust {
+  if (!isLoopbackAddress(req.socket?.remoteAddress)) return { trusted: false, reason: 'not-loopback' }
   const h = req.headers
   if (PROXY_HEADERS.some((name) => h[name] !== undefined)) return { trusted: false, reason: 'proxied' }
   // A browser always sends Host; a missing one is a raw local client.

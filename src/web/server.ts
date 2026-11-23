@@ -705,8 +705,19 @@ let hostSessionsCaps: (() => string[]) | null = null
 let hostReplicaFront: import('../replica/front.js').ReplicaFront | null = null
 /** The away writes of a host replica (WP10): its overlay timer, copy watcher and RPC answer, stopped with the server. */
 let hostReplicaAway: { stop(): void } | null = null
+/** A host replica's console door (replica/console-door.ts): the handed-over leader's address on its machine. Null elsewhere. */
+let hostConsoleDoor: import('../replica/console-door.js').ConsoleDoor | null = null
 export function getHostReplicaFront(): import('../replica/front.js').ReplicaFront | null {
   return hostReplicaFront
+}
+/** A host replica's console door, or null (replica/console-door.ts). */
+export function getHostConsoleDoor(): import('../replica/console-door.js').ConsoleDoor | null {
+  return hostConsoleDoor
+}
+/** Where this server listens (its bound port and address), or null before it listens. */
+export function listeningAddress(): { port: number; host: string } | null {
+  const a = httpServer?.address()
+  return a && typeof a === 'object' ? { port: a.port, host: a.address } : null
 }
 /** The express app of the running server (tests: the replica's route-table ratchet walks it). */
 let currentApp: import('express').Express | null = null
@@ -763,7 +774,7 @@ let standbyHandle: { stop: () => void } | null = null
 /** The write permission of a switchable leader (core/leader/switch/boot.ts); null with the experiment off. */
 let leaderPermitHandle: { stop: () => Promise<void>; decision: { kind: string } } | null = null
 /** A home that handed the leader over runs this instead of the server (core/leader/switch/handed-over.ts). */
-let handedOverServer: { server: HttpServer; close: () => Promise<void> } | null = null
+let handedOverServer: { server: HttpServer; close: () => Promise<void>; yielded: Promise<string> } | null = null
 let threadFollowHandle: { stop: () => void } | null = null
 let threadRepliesHandle: { stop: () => void } | null = null
 let letterThreadsHandle: { stop: () => void } | null = null
@@ -1242,15 +1253,30 @@ function assertNotTestHomeOnProductionPort(port: number, dev: boolean): void {
  */
 async function serveHandedOverHome(standby: import('../core/leader/switch/handed-over.js').HandedOverStandby, port: number, options: ServerOptions): Promise<HttpServer> {
   assertNotTestHomeOnProductionPort(port, options.dev ?? false)
-  const { serveHandedOver } = await import('../core/leader/switch/handed-over.js')
+  const { serveHandedOver, yieldToConsoleAtStart } = await import('../core/leader/switch/handed-over.js')
+  // This machine's replica of the new leader serves this home's console at its address: nothing
+  // to listen for here (throws ConsoleServedByReplica with the line `walnut web` prints).
+  await yieldToConsoleAtStart(standby.home)
   log.web.warn('leader switch: this home handed the leader over; running as a standby that leads nothing', { leader: standby.leader, switchId: standby.switchId, why: standby.why })
   // Also on stdout: the one line a person who started it by hand reads.
   console.log(`Walnut runs as a standby: ${standby.message}`)
   // Loopback unless the server's own bind setting names an address (bind-address.ts): it serves
   // only this machine's launcher, app and switch command.
   handedOverServer = await serveHandedOver(standby, { port, host: serverBindAddress({ replica: false, requested: options.bindAddress }) ?? '127.0.0.1' })
+  const bound = handedOverServer.server.address()
+  // The line the Mac app waits for before it loads the page (desktop/main.swift: it stops a
+  // started server that never says it, after 180 s).
+  console.log(`Walnut standby listening on http://localhost:${bound && typeof bound === 'object' ? bound.port : port}`)
   bootCompleted = true
   return handedOverServer.server
+}
+
+/**
+ * The standby of a handed-over home gave its port up to this machine's console replica
+ * (handed-over.ts): settles with the line to print, then `walnut web` stops. Null when no standby runs.
+ */
+export function standbyYielded(): Promise<string> | null {
+  return handedOverServer?.yielded ?? null
 }
 
 export async function startServer(options: ServerOptions = {}): Promise<HttpServer> {
@@ -1361,6 +1387,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       ...(serviceRuntime() ? { seat: () => inProcessDaemonRuntime()?.follower ?? null } : {}),
       // A host that runs and judges its sessions says so (core/session-channel/host-boot.ts).
       capabilities: () => hostSessionsCaps?.() ?? [],
+      consoleServed: () => hostConsoleDoor?.status().state === 'serving',
     })
     const front = hostReplicaFront
     if (hasCapability('host-local-calls')) {
@@ -3465,6 +3492,18 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       setSelfApiRoot(selfRoot, { credential: bootPolicy('self-api-credential') })
       process.env.OPEN_WALNUT_API_URL = selfRoot
     }
+  }
+  // A host replica on a machine that handed the leader over serves that machine's console too, at
+  // the address its leader served (replica/console-door.ts): opened once that console stands.
+  if (isHostReplica()) {
+    const bound = httpServer.address()
+    const { startConsoleDoor } = await import('../replica/console-door.js')
+    hostConsoleDoor = startConsoleDoor({
+      walnutId: (process.env.WALNUT_WALNUT_ID ?? '').trim(),
+      publicPort: bound && typeof bound === 'object' ? bound.port : port,
+      app, mainServer: httpServer,
+      log: (level, msg, data) => log.web[level](msg, data),
+    })
   }
   // Under a launcher (`walnut serve` kept by service-launcher-script.ts), its marks are the server's own.
   {
@@ -7694,6 +7733,9 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
     hostSessionsCaps = null
     await shutdownStep('host sessions', async () => (await import('../core/session-channel/host-boot.js')).stopHostSessions())
   }
+  const consoleDoor = hostConsoleDoor
+  hostConsoleDoor = null
+  await shutdownStep('host replica console door', () => consoleDoor?.stop())
   const replicaDoor = hostReplicaDoor
   await shutdownStep('host replica door', () => replicaDoor?.close())
   hostReplicaDoor = null

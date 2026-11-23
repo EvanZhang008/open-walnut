@@ -50,6 +50,15 @@ export interface HomeEntry extends EntryBase {
    * (src/core/standby/append-only.ts). Set only after reading every writer of it.
    */
   appendOnly?: true
+  /**
+   * This machine's daemon writes here as it runs, whichever home leads (an installed daemon keeps
+   * its state in the data home's tmp/ and local/, daemon-standalone.ts and daemon-source.ts). Only
+   * on `machine` entries. A home that handed the leader over keeps every other path of its leader
+   * data and machine data byte for byte; these go on changing (home-kept.ts skips them and says
+   * so). Nothing else reads it: backups and the standby copy decide by their own rules and by the
+   * class, as before (tests/core/home-manifest/daemon-state.test.ts).
+   */
+  daemonState?: true
 }
 
 /**

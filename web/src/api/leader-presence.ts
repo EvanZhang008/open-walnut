@@ -36,6 +36,8 @@ export interface LeaderPresenceState {
   hostKey: string | null
   /** Why the Mac does not answer (the replica's word), or null. */
   why: string | null
+  /** This replica serves the console of a machine that handed the leader over: its leader is another machine, not the Mac. */
+  console: boolean
   /** Where the latest word came from (logs, tests). */
   source: 'none' | 'ws' | 'http' | 'close' | 'config'
 }
@@ -50,7 +52,7 @@ export const WS_LEADER_AWAY = 4001
 /** The Mac answers again: the next socket reaches it. */
 export const WS_LEADER_BACK = 4002
 
-const INITIAL: LeaderPresenceState = { answers: true, asOf: null, host: null, hostKey: null, why: null, source: 'none' }
+const INITIAL: LeaderPresenceState = { answers: true, asOf: null, host: null, hostKey: null, why: null, console: false, source: 'none' }
 
 let state: LeaderPresenceState = INITIAL
 const listeners = new Set<() => void>()
@@ -83,7 +85,7 @@ export function subscribeLeaderPresence(cb: () => void): () => void {
 function set(patch: Partial<LeaderPresenceState>): void {
   const next = { ...state, ...patch }
   if (next.answers === state.answers && next.asOf === state.asOf && next.host === state.host
-    && next.hostKey === state.hostKey && next.why === state.why) {
+    && next.hostKey === state.hostKey && next.why === state.why && next.console === state.console) {
     // Same facts: no render, but keep the latest source for the logs.
     state = { ...state, source: next.source }
     return
@@ -144,6 +146,7 @@ export function notePresenceEvent(data: unknown): void {
     host: str(d.host) ?? state.host,
     hostKey: str(d.hostKey) ?? state.hostKey,
     why: d.answers ? null : str(d.why),
+    console: d.console === true,
     source: 'ws',
   })
 }
@@ -232,10 +235,12 @@ export function awayLineText(p: LeaderPresenceState, now: number): { line: strin
   if (p.answers) return null
   const host = p.host ?? 'this host'
   const ago = agoText(p.asOf, now)
+  // The console of a machine that handed the leader over: the leader is another machine.
+  const away = p.console ? "Walnut's leader is away." : 'Your Mac is away.'
   return {
     line: ago === null
-      ? `Your Mac is away. This is the copy on ${host}; its age is not known.`
-      : `Your Mac is away. This is the copy on ${host} from ${ago}.`,
+      ? `${away} This is the copy on ${host}; its age is not known.`
+      : `${away} This is the copy on ${host} from ${ago}.`,
     prompts: `Prompts on ${host} are not pushed to your phone.`,
   }
 }

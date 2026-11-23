@@ -61,6 +61,11 @@ must live under one of these top-level categories instead of directly under
 - [The leader's write permission](reference/leader-write-permission.md): one numbered record kept
   by a fixed majority of witnesses, leases counted on each machine's own clock, handover and
   cancel that cannot both stand (core only, not wired yet).
+- [The manual leader switch](reference/leader-switch.md): moving the leader to another machine
+  by hand with nothing lost or sent twice, the standby the old home becomes, and the way back.
+- [The old leader's console](reference/leader-switch-console.md): after a switch the old
+  machine's console at its old address, served by its replica of the new leader; what works
+  there, what does not, and the Mac app at each moment.
 - [Releasing](reference/releasing.md): the stable and nightly channels, `bun run release`,
   the GitHub Actions publish through npm trusted publishing, and how installs learn about and
   apply updates.

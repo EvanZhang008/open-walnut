@@ -91,6 +91,8 @@ export interface PresenceEvent {
   why: string
   seq: number
   boot: string
+  /** This replica serves the console of a machine that handed the leader over (console-door.ts): its leader is not "your Mac". */
+  console?: true
 }
 
 const REPORT_MS = 5_000
@@ -102,6 +104,8 @@ const OPEN_TIMEOUT_MS = 4_000
 const PRESENCE_TICK_MS = 1_000
 
 export interface ReplicaFrontOptions {
+  /** This replica serves its machine's console now (console-door.ts): told in its presence event. */
+  consoleServed?: () => boolean
   env: HostServerEnv
   devices: DeviceCopy
   /** Where a stream the Mac opened to this server goes (the leader door). */
@@ -364,7 +368,7 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
   }) : null
 
   function presenceEventOf(t: ToldPresence): PresenceEvent {
-    return { answers: t.answers, asOf: copiesAsOf(), host: env.label, hostKey: opts.hostKey?.trim() || null, why: t.why, seq: t.seq, boot }
+    return { answers: t.answers, asOf: copiesAsOf(), host: env.label, hostKey: opts.hostKey?.trim() || null, why: t.why, seq: t.seq, boot, ...(opts.consoleServed?.() ? { console: true as const } : {}) }
   }
 
   function status(): Record<string, unknown> {

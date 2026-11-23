@@ -26,7 +26,8 @@ function where(base: string, entry: DataEntry): string {
 }
 
 function row(base: string, entry: DataEntry): string {
-  return `| ${where(base, entry)} | ${entry.class} | ${entry.sensitive ? 'yes' : 'no'} | ${cell(entry.what)} |`
+  const cls = 'daemonState' in entry && entry.daemonState ? `${entry.class} (daemon state)` : entry.class
+  return `| ${where(base, entry)} | ${cls} | ${entry.sensitive ? 'yes' : 'no'} | ${cell(entry.what)} |`
 }
 
 const HEADER = ['| Where | Class | Sensitive | What |', '| --- | --- | --- | --- |']

@@ -277,7 +277,7 @@ export function writeStubBin(bin: string): void {
  * <app>/dist is this tree's real build (a link to ROOT/dist; bun runs it from
  * there, so it finds its own web/static), and the command line still names <app>.
  */
-function writeAppDir(app: string, mode: ClusterApp): void {
+export function writeAppDir(app: string, mode: ClusterApp): void {
   if (mode === 'built') {
     fs.mkdirSync(app, { recursive: true })
     fs.symlinkSync(path.join(ROOT, 'dist'), path.join(app, 'dist'))
@@ -400,7 +400,7 @@ function pidsRunning(prefix: string): number[] {
 /** The signal guards, for tests/replica/cluster-signal-safety.test.ts and tests/e2e/replica-old-mac-e2e.test.ts only. */
 export const _signalSafetyForTesting = { pin, stillPinned, signalPinned, signalChild, pidsRunning, readPid } as const
 
-const windowEnv = (): Record<string, string> => ({
+export const windowEnv = (): Record<string, string> => ({
   WALNUT_LEADER_QUIET_MS: String(WINDOWS.quietMs),
   WALNUT_TRUSTED_CLIENT_BEAT_MS: String(WINDOWS.beatMs),
   WALNUT_LEADER_TAKEOVER_MS: String(WINDOWS.takeoverMs),
@@ -410,13 +410,16 @@ const windowEnv = (): Record<string, string> => ({
  * The host daemon: a minimal env of its own (no variable of the runner leaks into it, or into the replica it starts).
  * Also tests/e2e/replica-old-mac-e2e.test.ts (an old Mac in front of the same daemon).
  */
-export async function startHostDaemon(twin: Twin, dir: string, home: string, bin: string, built = false): Promise<{ proc: ChildProcess; pid: number; port: number }> {
+export async function startHostDaemon(twin: Twin, dir: string, home: string, bin: string, built = false, opts: { asInstalled?: boolean } = {}): Promise<{ proc: ChildProcess; pid: number; port: number }> {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   const env: Record<string, string> = {
     PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`, HOME: home, TMPDIR: os.tmpdir(),
     ...(process.env.LANG ? { LANG: process.env.LANG } : {}),
     ...(process.env.BUN_INSTALL ? { BUN_INSTALL: process.env.BUN_INSTALL } : {}),
-    WALNUT_DAEMON_DIR: dir, WALNUT_STREAMS_DIR: path.join(dir, 'streams'), WALNUT_SPAWN_JOURNAL: path.join(dir, 'spawn-journal.jsonl'),
+    WALNUT_DAEMON_DIR: dir,
+    // `asInstalled`: the streams and the spawn journal where an installed daemon keeps them (with
+    // `dir` <home>/.cache/open-walnut, its own default, they are inside <home>/.open-walnut).
+    ...(opts.asInstalled ? {} : { WALNUT_STREAMS_DIR: path.join(dir, 'streams'), WALNUT_SPAWN_JOURNAL: path.join(dir, 'spawn-journal.jsonl') }),
     ...windowEnv(),
   }
   let proc: ChildProcess
