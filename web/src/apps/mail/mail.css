@@ -975,7 +975,7 @@
   height: 24px;
   padding: 0 0 0 4px;
   border: none;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-full); /* shape: a small fold key, not a row: its chevron sits at the start of its own box */
   background: none;
   color: var(--fg-muted);
   cursor: pointer;

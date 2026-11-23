@@ -5,7 +5,7 @@
 
 /* Home owns its panel toggles; they sit under the Home icon so the rail says whose they are.
    A toggle whose panel is open wears the rail's active colour, like the page it belongs to. */
-.sidebar-home-panels { margin: -2px 0 4px 21px; padding-left: 6px; border-left: 1px solid var(--border); }
+.sidebar-home-panels { margin: 2px 0 4px 21px; padding-left: 6px; border-left: 1px solid var(--border); }
 .sidebar-home-panels .sidebar-link { padding: 6px 10px 6px 12px; font-size: var(--font-size-md); margin-bottom: 1px; }
 .sidebar-home-panels .sidebar-link svg { width: 16px; height: 16px; }
 .sidebar.collapsed .sidebar-home-group { border: 1px solid var(--border); border-radius: var(--radius-full); padding: 2px; margin: 0 -3px 4px; }
@@ -104,7 +104,7 @@
 .home-navigation-scroll .todo-recent-ago { order: 3; }
 
 /* One heading grammar for every group: name first, chevron trailing, actions on hover. */
-.navigation-heading { display: flex; align-items: center; min-height: 26px; padding: 0; flex-shrink: 0; border-radius: 6px; }
+.navigation-heading { display: flex; align-items: center; min-height: 26px; padding: 0; flex-shrink: 0; border-radius: var(--radius-sm); }
 .navigation-heading:hover { background: var(--bg-hover); }
 .navigation-heading-open, .navigation-more {
   color: var(--fg-secondary); background: transparent; border: 0; border-radius: var(--radius-sm); /* shape: a section heading of the task list, a row not a key */ font: inherit; cursor: pointer;

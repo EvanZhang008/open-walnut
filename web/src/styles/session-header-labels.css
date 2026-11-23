@@ -61,7 +61,7 @@
   /* The row's space-between would spread the labels' line edge to edge; they sit
      together from the start (the title area grows, so the kebab still ends line one). */
   justify-content: flex-start;
-  column-gap: 4px;
+  column-gap: 6px;
   row-gap: 4px;
 }
 .session-panel-header-top[data-header-fit="tight"] .session-panel-title-area { flex: 1 1 0; }

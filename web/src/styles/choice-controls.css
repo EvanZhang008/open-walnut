@@ -708,7 +708,7 @@ fieldset:disabled .settings-checkbox-row .settings-checkbox-label {
   margin: 0 0 0 -4px;
   padding: 2px 8px 2px 4px;
   border: 0;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-full); /* shape: an inline disclosure is a small key; the block one is a row (below) */
   background: transparent;
   color: var(--fg-secondary);
   font: inherit;

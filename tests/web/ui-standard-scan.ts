@@ -193,7 +193,7 @@ const NO_PAINT = /^(none|transparent|inherit|initial|unset|0|currentColor)$/i;
  * soft corner of their container, so a name ending in one of those is not a key.
  */
 const KEY_NAME = /-(btn|button|pill|chip|toggle|tab|badge|tag|count)$/;
-const NOT_A_KEY = /(-(row|rows|card|block|rail|bar|head|header|item|cell|aside|drop|panel|menu|list|option|opt|seg|segs|entry|tile|line|section|preview|thumb|frame|daynum|title|result|link|caption|value|marker|text|checkbox|dir|file|attach)|^wn-(field|notice|overlay|dialog|input))$/;
+const NOT_A_KEY = /(-(row|rows|card|block|rail|bar|head|header|item|cell|aside|drop|panel|menu|list|option|opt|seg|segs|entry|tile|line|section|preview|thumb|frame|daynum|title|result|link|caption|value|marker|text|checkbox|dir|file)|^wn-(field|notice|overlay|dialog|input))$/;
 /** A corner that is round, flat or the parent's: everything else on a key is a square key. */
 const ROUND_CORNER = /^(var\(--radius-full\)|50%|inherit|0|0px|none|initial|unset)$/; // a literal 999px is the token's job (pillRadius)
 /** `border-radius: 8px; /* shape: <why, 10+ characters> *\/`: a class named like a key that is not one (a row's highlight). */
@@ -216,6 +216,22 @@ export function pressableClasses(): Set<string> {
   }
   return out;
 }
+/**
+ * The classes of a selector's last compound, those listed in its `:is()` / `:where()` too
+ * (`.pr-card :is(.pr-card-refresh, .pr-card-complete)` names two keys), never those under `:not()`.
+ */
+export function lastCompoundClasses(selector: string): string[] {
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < selector.length; i++) {
+    const c = selector[i];
+    if (c === '(' || c === '[') depth++;
+    else if (c === ')' || c === ']') depth--;
+    else if (depth === 0 && /[\s>+~]/.test(c)) start = i + 1;
+  }
+  const last = selector.slice(start).replace(/\[[^\]]*\]/g, '').replace(/:not\((?:[^()]|\([^()]*\))*\)/g, '').replace(/::?[A-Za-z-]+(?!\()/g, '');
+  return [...last.matchAll(/\.([A-Za-z0-9_-]+)/g)].map((m) => m[1]);
+}
 /** `.my-key { border-radius: 6px }`: a key, chip, tab or label drawn with a corner short of round. */
 export function isSquareKey(selector: string, radius: string, pressables: Set<string>): boolean {
   const v = radius.replace(/\s*!important$/, '').trim();
@@ -224,8 +240,7 @@ export function isSquareKey(selector: string, radius: string, pressables: Set<st
   if (/(input-key|input-radius|choice-radius-box)/.test(v)) return false; // the input box's own keys and the tab's focus ring
   if (/\[aria-orientation=['"]?vertical/.test(selector)) return false; // a vertical tab list is a list of rows
   if (selector.includes('::')) return false; // a mark drawn inside the key (a tick, a ring), not the key
-  const parts = compounds(selector);
-  const cls = classesOf(parts[parts.length - 1] ?? '');
+  const cls = lastCompoundClasses(selector);
   if (cls.some((c) => NOT_A_KEY.test(c))) return false;
   const isKey = cls.some((c) => c === 'btn' || c === 'badge' || pressables.has(c) || KEY_NAME.test(c));
   // The label corner is a label's: a key that writes it is a square key in a label's name.
@@ -235,12 +250,12 @@ export function isSquareKey(selector: string, radius: string, pressables: Set<st
 
 /**
  * A row drawn round (2026-11-22 review: menu rows, tree rows and option rows that became
- * stadiums): one rule gives `--radius-full` to something laid out as a row, its text at the left
- * across the whole line or in a column. A key centres its label; a row keeps its container's corner.
+ * stadiums): one rule gives `--radius-full` to something laid out as a row, its words at the left
+ * or spread to both ends. A key centres its label; a row keeps its container's corner.
  */
 export function isRoundRow(decls: { prop: string; value: string }[]): boolean {
   const has = (p: string, re: RegExp) => decls.some((d) => d.prop === p && re.test(d.value.replace(/\s*!important$/, '').trim()));
-  return has('border-radius', /var\(--radius-full\)/) && has('text-align', /^(left|start)$/) && (has('width', /^100%$/) || has('display', /^block$/) || has('flex-direction', /column/));
+  return has('border-radius', /var\(--radius-full\)/) && (has('text-align', /^(left|start)$/) || has('justify-content', /^(flex-start|start|space-between)$/));
 }
 
 /**
@@ -443,7 +458,7 @@ export function countAll(): Counts {
       if (rel !== 'styles/text-fit.css' && decls.some((d) => CUTS(d.prop, d.value) && !META_MARK.test(lines[d.line - 1] ?? '')) && sels.some(cutsTitle)) bump(out.cutTitle, rel);
       if (rel !== INPUT_HOME && sels.some((x) => restylesField(x, decls, fields))) bump(out.restyledField, rel);
       if (sels.some(isCard) && offCardFill(decls)) bump(out.cardBg, rel);
-      if (isRoundRow(decls)) bump(out.roundRow, rel);
+      if (isRoundRow(decls) && !decls.some((d) => d.prop === 'border-radius' && SHAPE_MARK.test(lines[d.line - 1] ?? ''))) bump(out.roundRow, rel);
       if (rel !== LABEL_HOME && ((decls.some((d) => paintsLabel(d.prop, d.value)) && sels.some(isOwnLabel)) || (sels.some(isBoxedLabelName) && drawsBox(decls)))) bump(out.ownLabel, rel);
     }
   }

@@ -226,7 +226,7 @@
   font-size: var(--font-size-xs);
   padding: 2px 10px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-full);
   background: var(--bg-secondary);
   color: var(--fg);
   cursor: pointer;

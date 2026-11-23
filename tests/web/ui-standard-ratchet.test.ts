@@ -113,6 +113,7 @@ describe('UI standard: one look per kind of control', () => {
     const d = (prop: string, value: string) => ({ prop, value });
     expect(isRoundRow([d('border-radius', 'var(--radius-full)'), d('width', '100%'), d('text-align', 'left')])).toBe(true);
     expect(isRoundRow([d('border-radius', 'var(--radius-full)'), d('width', '100%'), d('justify-content', 'center')])).toBe(false);
+    expect(isRoundRow([d('border-radius', 'var(--radius-full)'), d('justify-content', 'space-between')])).toBe(true);
     expect(isRoundRow([d('border-radius', 'var(--radius-sm)'), d('width', '100%'), d('text-align', 'left')])).toBe(false);
   });
 
@@ -134,6 +135,9 @@ describe('UI standard: one look per kind of control', () => {
     expect(isSquareKey('.wn-input > .box-mic .mic-btn', 'var(--input-key-radius)', keys)).toBe(false);
     expect(isSquareKey(".wn-tabs[aria-orientation='vertical'] > .wn-tab", 'var(--radius-md)', keys)).toBe(false);
     expect(isSquareKey('.page-title', '8px', keys)).toBe(false);
+    // A key listed in :is() is still a key; one under :not() is not the element styled.
+    expect(isSquareKey('.pr-card :is(.pr-card-refresh, .org-ask-tool)', '6px', keys)).toBe(true);
+    expect(isSquareKey('.panel:not(.org-ask-tool) .page-title', '6px', keys)).toBe(false);
   });
 
   it('finds each shape of a second style', () => {
