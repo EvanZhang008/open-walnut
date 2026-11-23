@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { SessionChangesPrewarmer } from '../../src/core/session-changes-prewarm.js';
+import {
+  SessionChangesPrewarmer,
+  noteSessionChangesViewed,
+  _resetSessionChangesViewsForTest,
+  VIEW_WINDOW_MS,
+} from '../../src/core/session-changes-prewarm.js';
+import { bus, EventNames } from '../../src/core/event-bus.js';
 import {
   applyPressureReading,
   _resetMemoryPressureForTest,
@@ -40,6 +46,7 @@ describe('SessionChangesPrewarmer', () => {
       concurrent--;
     });
     const p = new SessionChangesPrewarmer({
+        isViewed: () => true,
       startupDelayMs: 10, sweepIntervalMs: 1_000_000, paceMs: 500,
       listCandidates: async () => [candidate('s1'), candidate('s2'), candidate('s3')],
       compute, hasInflight: () => false,
@@ -56,6 +63,7 @@ describe('SessionChangesPrewarmer', () => {
   it('skips sessions outside the active window and respects the sweep cap', async () => {
     const compute = vi.fn(async () => {});
     const p = new SessionChangesPrewarmer({
+        isViewed: () => true,
       startupDelayMs: 10, sweepIntervalMs: 1_000_000, paceMs: 1, sweepCap: 2,
       activeWindowMs: 3_600_000, // 1h
       listCandidates: async () => [
@@ -79,6 +87,7 @@ describe('SessionChangesPrewarmer', () => {
     const compute = vi.fn(async () => {});
     const list = async () => [candidate('s1')];
     const p = new SessionChangesPrewarmer({
+        isViewed: () => true,
       startupDelayMs: 10, sweepIntervalMs: 100, paceMs: 1, cooldownMs: 60_000,
       listCandidates: list, compute, hasInflight: () => false,
     });
@@ -93,6 +102,7 @@ describe('SessionChangesPrewarmer', () => {
   it('skips a session whose compute is already in flight (user-triggered)', async () => {
     const compute = vi.fn(async () => {});
     const p = new SessionChangesPrewarmer({
+        isViewed: () => true,
       startupDelayMs: 10, sweepIntervalMs: 1_000_000, paceMs: 1,
       listCandidates: async () => [candidate('busy'), candidate('free')],
       compute,
@@ -114,6 +124,7 @@ describe('SessionChangesPrewarmer', () => {
       if (sid === 's1') throw new Error('read failed');
     });
     const p = new SessionChangesPrewarmer({
+        isViewed: () => true,
       startupDelayMs: 10, sweepIntervalMs: 1_000_000, paceMs: 1,
       listCandidates: async () => [candidate('s1'), candidate('s2')],
       compute, hasInflight: () => false,
@@ -129,6 +140,7 @@ describe('SessionChangesPrewarmer', () => {
   it('stop() halts the drain mid-queue', async () => {
     const compute = vi.fn(async () => { await new Promise((r) => setTimeout(r, 1000)); });
     const p = new SessionChangesPrewarmer({
+        isViewed: () => true,
       startupDelayMs: 10, sweepIntervalMs: 1_000_000, paceMs: 500,
       listCandidates: async () => [candidate('s1'), candidate('s2'), candidate('s3')],
       compute, hasInflight: () => false,
@@ -154,6 +166,7 @@ describe('SessionChangesPrewarmer', () => {
         await new Promise((r) => setTimeout(r, 1000));
       });
       const p = new SessionChangesPrewarmer({
+        isViewed: () => true,
         // Sweeps far enough apart that none lands mid-compute (a sweep then
         // re-queues the session being computed, which is not what this tests).
         startupDelayMs: 10, sweepIntervalMs: 5_000, paceMs: 500,
@@ -189,6 +202,7 @@ describe('SessionChangesPrewarmer', () => {
       const listCandidates = vi.fn(async () => [candidate('s1')]);
       const compute = vi.fn(async (_sessionId: string) => {});
       const p = new SessionChangesPrewarmer({
+        isViewed: () => true,
         startupDelayMs: 10, sweepIntervalMs: 1_000, paceMs: 1,
         listCandidates, compute, hasInflight: () => false,
       });
@@ -205,6 +219,76 @@ describe('SessionChangesPrewarmer', () => {
     } finally {
       _resetMemoryPressureForTest();
       vi.restoreAllMocks();
+    }
+  });
+});
+
+describe('SessionChangesPrewarmer warms only what someone looks at', () => {
+  // 2026-11-23: warming every recent session at start reparsed whole
+  // transcripts nobody opened (2 GB read, the Mac's one service at 6.5 GB).
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    _resetSessionChangesViewsForTest();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    _resetSessionChangesViewsForTest();
+  });
+
+  it('a start with no view computes nothing, however many recent sessions there are', async () => {
+    const compute = vi.fn(async () => {});
+    const p = new SessionChangesPrewarmer({
+      startupDelayMs: 10, sweepIntervalMs: 1_000, paceMs: 1,
+      listCandidates: async () => Array.from({ length: 30 }, (_, i) => candidate(`s${i}`)),
+      compute, hasInflight: () => false,
+    });
+    p.start();
+    await vi.advanceTimersByTimeAsync(10_000); // the first sweep and nine more
+    p.stop();
+    expect(compute).not.toHaveBeenCalled();
+  });
+
+  it('a viewed session is kept warm, on its own host only, until its view is old', async () => {
+    const compute = vi.fn(async () => {});
+    noteSessionChangesViewed('seen', 'clouddev');
+    noteSessionChangesViewed('local-seen');
+    const p = new SessionChangesPrewarmer({
+      startupDelayMs: 10, sweepIntervalMs: 60_000, paceMs: 1, cooldownMs: 1,
+      listCandidates: async () => [
+        candidate('seen', { host: 'clouddev' }), candidate('local-seen'),
+        candidate('seen-elsewhere', { host: 'clouddev' }), candidate('never'),
+      ],
+      compute, hasInflight: () => false,
+    });
+    p.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(compute.mock.calls.map((c) => c[0]).sort()).toEqual(['local-seen', 'seen']);
+    await vi.advanceTimersByTimeAsync(VIEW_WINDOW_MS);
+    compute.mockClear();
+    await vi.advanceTimersByTimeAsync(3 * 60_000); // three more sweeps, the views now old
+    p.stop();
+    expect(compute).not.toHaveBeenCalled();
+  });
+
+  it('a turn that ends warms its session only when someone viewed it', async () => {
+    const compute = vi.fn(async () => {});
+    const p = new SessionChangesPrewarmer({
+      startupDelayMs: 1_000_000, sweepIntervalMs: 1_000_000, paceMs: 1, turnDebounceMs: 10,
+      listCandidates: async () => [], compute, hasInflight: () => false,
+      lookupSession: async (sid) => candidate(sid),
+    });
+    try {
+      p.start();
+      bus.emit(EventNames.SESSION_RESULT, { sessionId: 'quiet' }, ['test']);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(compute).not.toHaveBeenCalled();
+      noteSessionChangesViewed('watched');
+      bus.emit(EventNames.SESSION_RESULT, { sessionId: 'watched' }, ['test']);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(compute.mock.calls.map((c) => c[0])).toEqual(['watched']);
+    } finally {
+      p.stop();
     }
   });
 });

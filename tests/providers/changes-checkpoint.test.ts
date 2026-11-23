@@ -3,7 +3,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { execFileSync } from 'node:child_process'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { computeHostLocalChanges, encodeProjectPathCore } from '../../src/providers/session-changes-core.js'
+import { CHANGES_PARSER_VERSION, computeHostLocalChanges, encodeProjectPathCore } from '../../src/providers/session-changes-core.js'
 import { CHANGES_CHECKPOINT_MAX_BYTES, loadChangesCheckpoint, saveChangesCheckpoint } from '../../src/providers/changes-checkpoint.js'
 
 let root: string
@@ -63,10 +63,10 @@ describe('disposable Changed parse checkpoints', () => {
     const file = path.join(checkpointDir, (await fs.readdir(checkpointDir))[0]!)
     const original = await fs.readFile(transcript, 'utf8')
     await fs.writeFile(file, 'broken checkpoint')
-    expect(await loadChangesCheckpoint(checkpointDir, transcript, 'changes-parser-1')).toBeUndefined()
+    expect(await loadChangesCheckpoint(checkpointDir, transcript, CHANGES_PARSER_VERSION)).toBeUndefined()
     expect((await compute())?.parseStats.resumed).toBe(false)
     const handle = await fs.open(file, 'w'); await handle.truncate(CHANGES_CHECKPOINT_MAX_BYTES + 1); await handle.close()
-    expect(await loadChangesCheckpoint(checkpointDir, transcript, 'changes-parser-1')).toBeUndefined()
+    expect(await loadChangesCheckpoint(checkpointDir, transcript, CHANGES_PARSER_VERSION)).toBeUndefined()
     expect((await compute())?.parseStats.resumed).toBe(false)
     expect(await fs.readFile(transcript, 'utf8')).toBe(original)
   })
@@ -131,7 +131,7 @@ describe('disposable Changed parse checkpoints', () => {
     await fs.writeFile(path.join(repo, 'c.ts'), 'partial\n')
     const diskOnly = () => computeHostLocalChanges({ sessionId: 'checkpoint-sid', cwd: repo, claudeHome, checkpointDir })
     const first = await diskOnly()
-    const saved = await loadChangesCheckpoint(checkpointDir, transcript, 'changes-parser-1')
+    const saved = await loadChangesCheckpoint(checkpointDir, transcript, CHANGES_PARSER_VERSION)
     expect([...saved!.fileMap.keys()]).toEqual([path.join(repo, 'a.ts')])
     expect(first?.fileMap.get(path.join(repo, 'b.ts'))?.ops).toHaveLength(1)
     await fs.appendFile(transcript, '\n')

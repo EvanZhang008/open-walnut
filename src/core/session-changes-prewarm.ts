@@ -7,12 +7,18 @@
  * first open after a server restart always shows a stale/light snapshot until
  * the on-demand recompute lands.
  *
- * This pre-warmer moves that work off the user's click entirely: it computes
- * every recent session's changes in the background, continuously —
- *   - on startup (delayed, after the server settles),
+ * This pre-warmer keeps the sessions someone LOOKS AT warm in the background:
  *   - after every turn completion (SESSION_RESULT, debounced),
  *   - and on a periodic sweep (mtime fast-path makes unchanged sessions cost
  *     ONE fs.stat each).
+ * Only a session whose changes a person opened in this server's life, within
+ * VIEW_WINDOW_MS, is warmed (noteSessionChangesViewed). Right after a start
+ * nothing is: that first open paints the disk snapshot and recomputes behind
+ * it (computeSessionChangesSwr). Warming every recent session instead made a
+ * start reparse whole transcripts nobody opened (2026-11-23, one service on
+ * the Mac: four of them, 2 GB read in the first four minutes, the server's
+ * footprint 2.4 to 6.5 GB, where a separate daemon program had kept its
+ * parse states across server deploys).
  *
  * Design constraints (the whole point):
  *   - STRICTLY SERIAL: one compute at a time, globally. Never two whale parses
@@ -22,8 +28,8 @@
  *   - Deferential: if a compute for that session is already in flight
  *     (user-triggered), skip — computeSessionChanges dedups anyway, but we
  *     must not QUEUE behind it either.
- *   - Bounded: only listable sessions active in the last ACTIVE_WINDOW_MS,
- *     capped per sweep; per-session cooldown between warms.
+ *   - Bounded: only viewed sessions, capped per sweep; per-session cooldown
+ *     between warms.
  * All work runs through computeSessionChanges, so results land in the same
  * cache + disk snapshot the tab reads. Failures are logged and skipped.
  */
@@ -31,6 +37,27 @@
 import { bus, EventNames } from './event-bus.js';
 import { log } from '../logging/index.js';
 import { memoryPressureShedding } from './memory-pressure.js';
+
+/** A view keeps its session warm this long; the daemon then releases its parse state. */
+export const VIEW_WINDOW_MS = 30 * 60_000;
+const viewedAt = new Map<string, number>();
+const viewKey = (sessionId: string, host?: string): string =>
+  `${host && host !== '__local__' ? host : '__local__'}\u0000${sessionId}`;
+
+/** A person opened this session's changes (the Changed tab): keep it warm for a while. */
+export function noteSessionChangesViewed(sessionId: string, host?: string, now = Date.now()): void {
+  viewedAt.set(viewKey(sessionId, host), now);
+  if (viewedAt.size > 500) {
+    for (const [k, at] of viewedAt) if (now - at > VIEW_WINDOW_MS) viewedAt.delete(k);
+  }
+}
+
+function viewedRecently(sessionId: string, host?: string): boolean {
+  const at = viewedAt.get(viewKey(sessionId, host));
+  return at !== undefined && Date.now() - at <= VIEW_WINDOW_MS;
+}
+
+export function _resetSessionChangesViewsForTest(): void { viewedAt.clear(); }
 
 interface PrewarmCandidate {
   claudeSessionId: string;
@@ -61,6 +88,10 @@ export interface PrewarmOptions {
   compute?: (sessionId: string, cwd?: string, host?: string, outputFile?: string) => Promise<unknown>;
   /** Injectable for tests: is a compute for this key already in flight? */
   hasInflight?: (sessionId: string, host?: string) => boolean;
+  /** Injectable for tests: did a person open this session's changes lately? */
+  isViewed?: (sessionId: string, host?: string) => boolean;
+  /** Injectable for tests: one session's record (turn-completion path). */
+  lookupSession?: (sessionId: string) => Promise<PrewarmCandidate | null>;
 }
 
 const DEFAULTS = {
@@ -85,6 +116,12 @@ async function defaultListCandidates(): Promise<PrewarmCandidate[]> {
   }));
 }
 
+async function defaultLookupSession(sessionId: string): Promise<PrewarmCandidate | null> {
+  const { getSessionByClaudeId } = await import('./session-tracker.js');
+  const r = await getSessionByClaudeId(sessionId);
+  return r ? { claudeSessionId: r.claudeSessionId, cwd: r.cwd, host: r.host, outputFile: r.outputFile, lastActiveAt: r.lastActiveAt } : null;
+}
+
 async function defaultCompute(sessionId: string, cwd?: string, host?: string, outputFile?: string): Promise<unknown> {
   const { computeSessionChanges } = await import('./session-changes.js');
   return computeSessionChanges(sessionId, cwd, host, outputFile);
@@ -99,10 +136,12 @@ function defaultHasInflight(sessionId: string, host?: string): boolean {
 let inflightProbe: ((sessionId: string, host?: string) => boolean) | null = null;
 
 export class SessionChangesPrewarmer {
-  private opts: Required<Omit<PrewarmOptions, 'listCandidates' | 'compute' | 'hasInflight'>>;
+  private opts: Required<Omit<PrewarmOptions, 'listCandidates' | 'compute' | 'hasInflight' | 'isViewed' | 'lookupSession'>>;
   private listCandidates: () => Promise<PrewarmCandidate[]>;
   private compute: (sessionId: string, cwd?: string, host?: string, outputFile?: string) => Promise<unknown>;
   private hasInflight: (sessionId: string, host?: string) => boolean;
+  private isViewed: (sessionId: string, host?: string) => boolean;
+  private lookupSession: (sessionId: string) => Promise<PrewarmCandidate | null>;
 
   private queue: PrewarmCandidate[] = [];
   private queued = new Set<string>();       // claudeSessionId currently in queue
@@ -118,6 +157,8 @@ export class SessionChangesPrewarmer {
     this.listCandidates = options.listCandidates ?? defaultListCandidates;
     this.compute = options.compute ?? defaultCompute;
     this.hasInflight = options.hasInflight ?? defaultHasInflight;
+    this.isViewed = options.isViewed ?? viewedRecently;
+    this.lookupSession = options.lookupSession ?? defaultLookupSession;
   }
 
   start(): void {
@@ -143,7 +184,7 @@ export class SessionChangesPrewarmer {
     }, { global: true, interest: [EventNames.SESSION_RESULT] });
     this.busUnsub = () => bus.unsubscribe('session-changes-prewarm');
 
-    // Startup sweep (delayed) + periodic sweeps.
+    // First sweep (delayed) + periodic sweeps; each warms only viewed sessions.
     const startT = setTimeout(() => {
       this.timers.delete(startT);
       void this.sweep();
@@ -166,7 +207,7 @@ export class SessionChangesPrewarmer {
     this.queued.clear();
   }
 
-  /** One sweep: enqueue recent, listable, in-window sessions (recent first). */
+  /** One sweep: enqueue the viewed, listable, in-window sessions (recent first). */
   async sweep(): Promise<void> {
     if (this.stopped) return;
     // Under memory pressure, proactive warms wait: a cold whale parse grows the
@@ -189,6 +230,7 @@ export class SessionChangesPrewarmer {
       if (added >= this.opts.sweepCap) break;
       const active = Date.parse(c.lastActiveAt);
       if (Number.isFinite(active) && active < cutoff) continue;
+      if (!this.isViewed(c.claudeSessionId, c.host)) continue;
       if (this.pushCandidate(c)) added++;
     }
     if (added > 0) this.kick();
@@ -198,14 +240,9 @@ export class SessionChangesPrewarmer {
   private async enqueueSession(sessionId: string): Promise<void> {
     if (this.stopped || memoryPressureShedding()) return;
     try {
-      const { getSessionByClaudeId } = await import('./session-tracker.js');
-      const record = await getSessionByClaudeId(sessionId);
-      if (!record) return;
-      if (this.pushCandidate({
-        claudeSessionId: record.claudeSessionId,
-        cwd: record.cwd, host: record.host, outputFile: record.outputFile,
-        lastActiveAt: record.lastActiveAt,
-      })) this.kick();
+      const record = await this.lookupSession(sessionId);
+      if (!record || !this.isViewed(record.claudeSessionId, record.host)) return;
+      if (this.pushCandidate(record)) this.kick();
     } catch { /* record lookup failed — next sweep catches it */ }
   }
 

@@ -1718,6 +1718,11 @@ export async function getSessionChanges(
   const noCache = input.refresh === true;
   const compare = await compareInput(base, input);
 
+  if (!GIT_BASES.has(base)) {
+    // Someone looks at these edits: the prewarmer keeps them warm from now on.
+    const { noteSessionChangesViewed } = await import('../session-changes-prewarm.js');
+    noteSessionChangesViewed(sessionId, record.host);
+  }
   let result: Record<string, unknown>;
   try {
     if (GIT_BASES.has(base)) {

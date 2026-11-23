@@ -12940,7 +12940,8 @@ async function computeChangesCached(sid: string, cwd: string | undefined, refres
         gitRootByDir: memo.gitRootByDir,
         mainParse: memo.mainParse,
         checkpointDir: path.join(SERVICE_MODE && DAEMON_STATE_DIR ? DAEMON_STATE_DIR : DAEMON_DIR, 'changes-checkpoints'),
-        checkpointVersion: DAEMON_VERSION,
+        // Fenced by the parser's own version (CHANGES_PARSER_VERSION), never
+        // DAEMON_VERSION: a deploy keeps them. Keep in sync with the twin.
         reparse: refresh,
         // Files whose ops, stat and HEAD content are unchanged reuse their last
         // reconstruction; it lives and dies with the cached output. Keep in sync

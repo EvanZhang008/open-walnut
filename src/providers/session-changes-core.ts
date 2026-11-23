@@ -29,6 +29,15 @@ import { parseBashFileOps } from '../core/bash-file-ops.js';
 import { restoreArchivedAt } from './transcript-archive.js';
 import { loadChangesCheckpoint, saveChangesCheckpoint } from './changes-checkpoint.js';
 
+/**
+ * Version of what a saved parse state means: the ops collectOpsFromJsonl and
+ * its helpers fold from transcript lines (this file up to mergeFileMapInto,
+ * streamParseHostLocal, bash-file-ops.ts). Bump it whenever they change what
+ * they produce; tests/providers/changes-parser-version.test.ts pins their
+ * source so a change without a bump fails.
+ */
+export const CHANGES_PARSER_VERSION = 'changes-parser-2';
+
 // ── Public result types (the wire + frontend shape) ──
 
 /** A single file the session changed, with reconstructed before/after content. */
@@ -505,7 +514,10 @@ export interface HostLocalComputeOptions {
   mainParse?: { state?: MainParseState };
   /** Host-owned disposable checkpoints, to resume a parse across daemon restarts. */
   checkpointDir?: string;
-  /** Deploy fingerprint fences checkpoints when the parser or its dependencies change. */
+  /** Fences checkpoints by what they hold; defaults to CHANGES_PARSER_VERSION.
+   *  Never a build id: every deploy would throw every checkpoint away and the
+   *  first compute after it would reparse whole transcripts (2026-11-23: four
+   *  of them, 2 GB read, right after one deploy). */
   checkpointVersion?: string;
   /** An explicit Refresh reparses authoritative records, never a saved checkpoint. */
   reparse?: boolean;
@@ -979,7 +991,7 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
   try { st = await fsp.stat(jsonlPath); } catch { return null; }
 
   // 1. Main JSONL ops (streamed, continuing from the caller's MainParseState).
-  const parserVersion = opts.checkpointVersion ?? 'changes-parser-1';
+  const parserVersion = opts.checkpointVersion ?? CHANGES_PARSER_VERSION;
   const disk = !opts.reparse && !opts.mainParse?.state && opts.checkpointDir
     ? await loadChangesCheckpoint(opts.checkpointDir, jsonlPath, parserVersion) : undefined;
   const resume = opts.reparse ? undefined : opts.mainParse?.state ?? disk;
