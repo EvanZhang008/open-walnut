@@ -64,13 +64,14 @@ html[data-glass="solid"] { --sp-glass-bg: var(--bg); --sp-glass-blur: none; --sp
   padding-bottom: calc(12px + var(--sp-composer-h));
   scroll-padding-bottom: calc(8px + var(--sp-composer-h));
 }
-.session-panel.is-glass-chat .session-panel-body .session-history-empty { padding-bottom: var(--sp-composer-h); }
+/* An empty or loading chat centres its state in the part above the composer. */
+.session-panel.is-glass-chat .session-panel-body:has(> .session-history-empty) { padding-bottom: var(--sp-composer-h); }
 .session-panel.is-glass-chat .session-panel-body .session-history::-webkit-scrollbar-track {
   margin-top: calc(var(--sp-cover, var(--sp-header-h, 76px)) + var(--sp-top-h, 0px));
   margin-bottom: var(--sp-composer-h);
 }
 /* The band around the card: glass that fades in from its top edge, never a cut. */
-.session-panel.is-glass-chat .session-panel-body + .session-panel-input::before {
+.session-panel.is-glass-chat .session-panel-body + .session-panel-input:not(.tree-split-input)::before {
   content: '';
   position: absolute;
   inset: 0;
@@ -143,10 +144,10 @@ html[data-glass="solid"] { --sp-glass-bg: var(--bg); --sp-glass-blur: none; --sp
   /* The composer's card lets the band's one pane of glass through (below): a glass card of its
      own over the band's glass stacked two tints, and in the Mac app's web view the rows under the
      card left no trace at all, the card reading as the solid slab it was. Its frame stays. */
-  :root .session-panel.is-glass-chat .session-panel-input .chat-input-box {
+  :root .session-panel.is-glass-chat .session-panel-input:not(.tree-split-input) .chat-input-box {
     background: transparent;
   }
-  :root .session-panel.is-glass-chat .session-panel-input .chat-input-box::before {
+  :root .session-panel.is-glass-chat .session-panel-input:not(.tree-split-input) .chat-input-box::before {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
