@@ -10,7 +10,7 @@
  */
 import '@/styles/truncation-peek.css';
 import { collapseRow, expandRow, growsDown, within, type RowMarks } from './truncation-peek-row';
-import { CONTROL, cutTextsIn, findCutText, onTextOf, optedOut, PEEK_ROW_SELECTOR, peekAllowed, peekTargetOf, rowControl } from './truncation-peek-find';
+import { CONTROL, cutTextsIn, findCutText, onTextOf, optedOut, overlayShowing, PEEK_ROW_SELECTOR, peekAllowed, peekTargetOf, rowControl } from './truncation-peek-find';
 
 export { cutTextsIn, findCutText, headerOf, isCut, peekAllowed, PEEK_ZONE_SELECTOR, PEEK_ROW_SELECTOR, peekTargetOf } from './truncation-peek-find';
 
@@ -242,7 +242,8 @@ function activate(key: Element, hosts: HTMLElement[], target: Element, keyboard 
   state.timer = setTimeout(() => {
     if (active !== state) return;
     state.timer = null;
-    if (key.matches(':hover') || (keyboard && key.contains(document.activeElement))) renderAll(state, !keyboard);
+    if (overlayShowing()) close();
+    else if (key.matches(':hover') || (keyboard && key.contains(document.activeElement))) renderAll(state, !keyboard);
     else close();
   }, keyboard ? 0 : ROW_OPEN_MS);
 }
@@ -310,6 +311,8 @@ function onOver(e: PointerEvent): void {
 /** What `target` peeks, now that the pointer is on it. */
 function over(target: Element | null): void {
   if (pressed) return;
+  // A menu or dialog shows: nothing opens over it (the peek's top layer would cover it).
+  if (overlayShowing()) { close(); return; }
   // Still on the row that peeks, off its own buttons: nothing to scan again.
   // A card that grows downward opens only from its text, so its other parts are scanned again.
   const sameRow = active && target && active.key.matches(PEEK_ROW_SELECTOR) && !growsDown(active.key) && target.closest(PEEK_ROW_SELECTOR) === active.key && !rowControl(target);
@@ -464,6 +467,8 @@ export function installTruncationPeek(): void {
   document.addEventListener('pointercancel', onUp, { capture: true, passive: true });
   // Anything that starts an action ends the peek at once, before the action's own handlers.
   document.addEventListener('dragstart', hidePeek, { capture: true, passive: true });
+  // A right-click opens a menu where the pointer is: an open peek would sit over it.
+  document.addEventListener('contextmenu', hidePeek, { capture: true, passive: true });
   // React resolves the real control first; restore afterwards so a new menu is not hidden
   // underneath the top layer. Capture would change its geometry before its own click handler.
   // A card that grows downward has no top layer to hide a menu under: a click in it (its box,

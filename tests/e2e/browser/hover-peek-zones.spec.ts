@@ -107,3 +107,49 @@ test('the real pages: hovering every cut text outside the task panel opens nothi
   hovered += await hoverEveryCutText('Org page, its list at 200 px and its detail head at 220 px')
   expect(hovered, 'some real text was cut and hovered').toBeGreaterThan(0)
 })
+
+// 2026-11-23, a recording at 1280: with a task's right-click menu open, a cut task title beside it
+// opened its peek in the top layer, over the menu's Pin to. While any menu, popover or dialog shows,
+// nothing peeks (utils/truncation-peek-find.ts overlayShowing); once it closes the same line peeks.
+test('in the task panel nothing peeks while a menu or a popover is open over it', async ({ page }) => {
+  await isolateUiPrefs(page)
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await loadHome(page)
+  await probe(page, 'probe-zone-row', 'probe-line', '.todo-panel', 160)
+  const line = page.locator('#probe-zone-row .probe-text')
+  const openers: Array<{ name: string; open: () => Promise<void>; menu: string }> = [
+    { name: 'a row menu (right-click)', menu: '.task-kebab-menu, .wn-context-menu', open: async () => {
+      // A row low in the list (a task, or a project's head when its tasks are folded), so the menu
+      // opens below the probe line and the line stays in reach. Both menus are the same portal.
+      const rows = page.locator('.todo-panel :is(.todo-panel-item[data-task-id], .todo-pinned-card[data-task-id], .status-section-card[data-task-id], .todo-group-project-header)')
+      await expect(rows.first()).toBeVisible({ timeout: 30_000 })
+      const tops = await rows.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().top))
+      const pick = Math.max(0, tops.findIndex((t) => t > 300))
+      await rows.nth(pick).click({ button: 'right', position: { x: 60, y: 10 } })
+    } },
+    { name: 'the Display popover', menu: '.wn-overlay:visible', open: async () => { await page.locator('.dm-display-btn').first().click() } },
+  ]
+  for (const o of openers) {
+    await o.open()
+    const menu = page.locator(o.menu).first()
+    await expect(menu, `${o.name} opens`).toBeVisible()
+    await line.hover()
+    await page.waitForTimeout(600)
+    expect(await peekOpen(page), `${o.name}: nothing peeks over it`).toBe(0)
+    await expect(menu, `${o.name} still shows`).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(menu).toBeHidden()
+    await page.mouse.move(1, 1)
+    await line.hover()
+    await expect.poll(() => peekOpen(page), `${o.name} closed: the line peeks again`).toBeGreaterThan(0)
+    await page.mouse.move(1, 1)
+    await expect.poll(() => peekOpen(page)).toBe(0)
+  }
+  // A peek already open closes at a right-click: the menu opens where the pointer is.
+  await line.hover()
+  await expect.poll(() => peekOpen(page)).toBeGreaterThan(0)
+  await page.mouse.click(30, 165, { button: 'right' })
+  await expect.poll(() => peekOpen(page), 'a right-click closes the peek').toBe(0)
+  await page.keyboard.press('Escape')
+  await page.evaluate(() => document.querySelectorAll('[id^="probe-"]').forEach((el) => el.remove()))
+})

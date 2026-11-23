@@ -125,6 +125,21 @@ export function peekAllowed(el: Element): boolean {
   return !!el.closest(PEEK_ZONE_SELECTOR) && !headerOf(el);
 }
 
+/**
+ * A menu, a popover, a list of choices or a dialog showing now: the overlay family
+ * (styles/overlay-family.css, which every floating layer takes) and the ARIA roles of one. A peek
+ * opens in the top layer, above every portal, so it never opens while one shows (2026-11-23: at
+ * 1280 a cut task title opened over the row menu's Pin to, beside it). A tooltip (wn-tip) is none.
+ */
+export const OVERLAY_SELECTOR = '.wn-overlay, .wn-dialog, .wn-scrim, [role="menu"], [role="listbox"], [role="dialog"], [role="alertdialog"], dialog[open]';
+
+export function overlayShowing(): boolean {
+  for (const el of document.querySelectorAll(OVERLAY_SELECTOR)) {
+    if (el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden') return true;
+  }
+  return false;
+}
+
 /** A task row (or any list row) that expands as a whole: the pointer anywhere on it shows every cut-off text in it. */
 export const PEEK_ROW_SELECTOR = '[data-peek-row]';
 /** A row's own buttons (its ⋮ menu, Start, Close): over one the row keeps quiet, so the button shows. */
