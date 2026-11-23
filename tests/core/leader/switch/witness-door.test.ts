@@ -14,7 +14,7 @@ import path from 'node:path'
 import { DEFAULT_PERMIT_PARAMS } from '../../../../src/core/leader/permit/index.js'
 import { openPermitClient, proposeAndWait, readStanding } from '../../../../src/core/leader/switch/permit-ops.js'
 import { createWitnessDoorRouter } from '../../../../src/web/routes/witness-door.js'
-import { machineWitnessDoor, doorRequest } from '../../../../src/core/leader/switch/witness-door.js'
+import { MAX_NONCES_PER_CALLER, MAX_NONCES_PER_WITNESS, MAX_OPEN_NONCES, machineWitnessDoor, doorRequest } from '../../../../src/core/leader/switch/witness-door.js'
 import { directWitnessCall, BAD_WITNESS_PROOF, type DoorPost } from '../../../../src/core/leader/switch/witness-direct.js'
 import { setUpMachineWitness, witnessDir } from '../../../../src/core/leader/switch/witness-route.js'
 import { doorCallerProofText, WITNESS_DOOR_PATH, WITNESS_REQUEST_PATH, type WitnessCall } from '../../../../src/core/leader/switch/witness-wire.js'
@@ -106,14 +106,20 @@ describe('a permit client over three direct doors on loopback https', () => {
 
 describe('the door refuses, and a refusal never reaches the record', () => {
   /** A request as an attacker would build it: a valid call body for `witness`, its proof under `key`. */
+  /** The caller's own nonce of the challenge in flight (each challenge below has its own). */
+  const cnonces = new Map<string, string>()
   async function challenge(url: string, call: WitnessCall): Promise<string> {
-    const r = await postOnce(post, `${url}/challenge`, { v: 1, walnutId: call.walnutId, witness: call.witness, digest: sha256Hex(JSON.stringify(call)) })
+    const cnonce = proofSecret()
+    const r = await postOnce(post, `${url}/challenge`, { v: 1, walnutId: call.walnutId, witness: call.witness, digest: sha256Hex(JSON.stringify(call)), cnonce })
     expect(r?.status).toBe(200)
-    return (r!.json as { nonce: string }).nonce
+    const nonce = (r!.json as { nonce: string }).nonce
+    cnonces.set(nonce, cnonce)
+    return nonce
   }
   function signed(call: WitnessCall, nonce: string, key: string, digestOf: WitnessCall = call) {
     const text = JSON.stringify(call)
-    return { v: 1, nonce, call: text, proof: hmacProof(key, doorCallerProofText({ walnutId: digestOf.walnutId, witness: digestOf.witness, nonce, digest: sha256Hex(JSON.stringify(digestOf)) })) }
+    const cnonce = cnonces.get(nonce) ?? proofSecret()
+    return { v: 1, nonce, call: text, proof: hmacProof(key, doorCallerProofText({ walnutId: digestOf.walnutId, witness: digestOf.witness, nonce, cnonce, digest: sha256Hex(JSON.stringify(digestOf)) })) }
   }
   const grab = () => LIST.map((id) => fs.readFileSync(recordOf(id), 'utf8'))
 
@@ -148,8 +154,8 @@ describe('the door refuses, and a refusal never reaches the record', () => {
 
     // 3. The wrong Walnut: no challenge is given for a Walnut this door keeps no witness of...
     const other: WitnessCall = { ...call, walnutId: 'another-walnut' }
-    const noChallenge = await postOnce(post, `${url}/challenge`, { v: 1, walnutId: other.walnutId, witness: 'w1', digest: sha256Hex(JSON.stringify(other)) })
-    expect(noChallenge).toEqual({ status: 404, json: { ok: false, error: 'not_a_witness' } })
+    const noChallenge = await postOnce(post, `${url}/challenge`, { v: 1, walnutId: other.walnutId, witness: 'w1', digest: sha256Hex(JSON.stringify(other)), cnonce: proofSecret() })
+    expect(noChallenge).toEqual({ status: 404, json: { ok: false, error: 'no_witness_here' } })
     // ...and a nonce for this Walnut does not carry a call for another.
     const n2 = await challenge(url, call)
     const crossWalnut = await postOnce(post, `${url}/request`, { ...signed(other, n2, keys.w1!), call: JSON.stringify(other) })
@@ -177,26 +183,36 @@ describe('the door refuses, and a refusal never reaches the record', () => {
     let t = 0
     const door = machineWitnessDoor({ root: rootOf('w2'), now: () => t, nonceTtlMs: 10_000 })
     const call: WitnessCall = { v: 1, walnutId: WALNUT, witness: 'w2', request: { type: 'read' } }
-    const ch = door.challenge({ v: 1, walnutId: WALNUT, witness: 'w2', digest: sha256Hex(JSON.stringify(call)) })
+    const cnonce = proofSecret()
+    const ch = door.challenge({ v: 1, walnutId: WALNUT, witness: 'w2', digest: sha256Hex(JSON.stringify(call)), cnonce })
     expect(ch.status).toBe(200)
     const nonce = (ch.body as { nonce: string }).nonce
     const before = fs.readFileSync(recordOf('w2'), 'utf8')
     t = 10_001
-    const r = await doorRequest(door, { v: 1, nonce, call: JSON.stringify(call), proof: hmacProof(keys.w2!, doorCallerProofText({ walnutId: WALNUT, witness: 'w2', nonce, digest: sha256Hex(JSON.stringify(call)) })) })
+    const r = await doorRequest(door, { v: 1, nonce, call: JSON.stringify(call), proof: hmacProof(keys.w2!, doorCallerProofText({ walnutId: WALNUT, witness: 'w2', nonce, cnonce, digest: sha256Hex(JSON.stringify(call)) })) })
     expect(r).toEqual({ status: 403, body: { ok: false, error: 'expired_nonce' } })
     expect(fs.readFileSync(recordOf('w2'), 'utf8')).toBe(before)
     // Control: the same, in time, is answered.
     t = 0
-    const ch2 = door.challenge({ v: 1, walnutId: WALNUT, witness: 'w2', digest: sha256Hex(JSON.stringify(call)) })
+    const ch2 = door.challenge({ v: 1, walnutId: WALNUT, witness: 'w2', digest: sha256Hex(JSON.stringify(call)), cnonce })
     const n2 = (ch2.body as { nonce: string }).nonce
-    const r2 = await doorRequest(door, { v: 1, nonce: n2, call: JSON.stringify(call), proof: hmacProof(keys.w2!, doorCallerProofText({ walnutId: WALNUT, witness: 'w2', nonce: n2, digest: sha256Hex(JSON.stringify(call)) })) })
+    const r2 = await doorRequest(door, { v: 1, nonce: n2, call: JSON.stringify(call), proof: hmacProof(keys.w2!, doorCallerProofText({ walnutId: WALNUT, witness: 'w2', nonce: n2, cnonce, digest: sha256Hex(JSON.stringify(call)) })) })
     expect(r2.status).toBe(200)
   })
 
-  it('a flood of challenges never grows the door past its cap', () => {
+  it('a flood of challenges from one caller is refused past its share, and never crowds out another caller (m1)', () => {
     const door = machineWitnessDoor({ root: rootOf('w3') })
-    for (let i = 0; i < 3_000; i++) door.challenge({ v: 1, walnutId: WALNUT, witness: 'w3', digest: sha256Hex(String(i)) })
-    expect(door.openNonces()).toBeLessThanOrEqual(1024)
+    const ask = (i: number, from: string) => door.challenge({ v: 1, walnutId: WALNUT, witness: 'w3', digest: sha256Hex(String(i)), cnonce: proofSecret() }, from)
+    const flood = Array.from({ length: 3_000 }, (_, i) => ask(i, '203.0.113.7').status)
+    expect(flood.filter((s) => s === 200)).toHaveLength(MAX_NONCES_PER_CALLER)
+    expect(flood.filter((s) => s === 429)).toHaveLength(3_000 - MAX_NONCES_PER_CALLER)
+    expect(ask(0, '203.0.113.7')).toEqual({ status: 429, body: { ok: false, error: 'too_many_challenges' } })
+    // The honest caller, from its own address, still gets its nonce in the middle of the flood.
+    expect(ask(1, '198.51.100.2').status).toBe(200)
+    // Many addresses at one witness stop at the witness's share; the door as a whole at its cap.
+    for (let i = 0; i < 2_000; i++) ask(i, `10.0.${i >> 8}.${i & 255}`)
+    expect(door.openNonces()).toBeLessThanOrEqual(MAX_NONCES_PER_WITNESS)
+    expect(door.openNonces()).toBeLessThanOrEqual(MAX_OPEN_NONCES)
   })
 
   it('a witness set up without a key refuses every caller (no nonce at all)', async () => {
@@ -205,11 +221,63 @@ describe('the door refuses, and a refusal never reaches the record', () => {
     const setup9 = { v: 1 as const, walnutId: WALNUT, witness: 'w9', list: list9, evidence: blankEvidence(list9, 'w9') }
     expect((await setUpMachineWitness(root, setup9)).status).toBe(200)
     const door = machineWitnessDoor({ root })
-    expect(door.challenge({ v: 1, walnutId: WALNUT, witness: 'w9', digest: sha256Hex('x') })).toEqual({ status: 404, body: { ok: false, error: 'not_a_witness' } })
+    expect(door.challenge({ v: 1, walnutId: WALNUT, witness: 'w9', digest: sha256Hex('x'), cnonce: proofSecret() })).toEqual({ status: 404, body: { ok: false, error: 'not_a_witness' } })
     // A setup never replaces a key; it may add one to a witness set up before keys.
     expect((await setUpMachineWitness(root, { ...setup9, key: keys.w1! })).status).toBe(200)
     expect(await setUpMachineWitness(root, { ...setup9, key: keys.w2! })).toEqual({ status: 409, body: { ok: false, error: 'key_differs' } })
-    expect(door.challenge({ v: 1, walnutId: WALNUT, witness: 'w9', digest: sha256Hex('x') }).status).toBe(200)
+    expect(door.challenge({ v: 1, walnutId: WALNUT, witness: 'w9', digest: sha256Hex('x'), cnonce: proofSecret() }).status).toBe(200)
     expect(fs.statSync(path.join(witnessDir(root, WALNUT, 'w9'), 'witness-key')).mode & 0o777).toBe(0o600)
+  })
+})
+
+describe('only a witness that looked and holds nothing counts as absent (M1 of review r1)', () => {
+  /** A door at a fresh https front over `app`; its url as a place. */
+  async function doorAt(app: express.Express, id: string): Promise<RemoteWitnessPlace> {
+    const server = http.createServer(app)
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
+    servers.push(server)
+    const port = (server.address() as net.AddressInfo).port
+    const front = await startTlsFront(cert, () => port)
+    fronts.push(front)
+    return { id, url: `https://127.0.0.1:${front.port}${WITNESS_DOOR_PATH}`, key: proofSecret() }
+  }
+  const doorApp = (root: string) => { const app = express(); app.use(WITNESS_DOOR_PATH, createWitnessDoorRouter({ root })); return app }
+  const seen = async (ps: RemoteWitnessPlace[]) => {
+    const h = openPermitClient('E', ps, DEFAULT_PERMIT_PARAMS, undefined, { direct: directWitnessCall({ post }), walnutId: WALNUT, ways: ['direct'] })
+    return readStanding(h, 3_000)
+  }
+
+  it('an empty door is absent; a record without its key and a service with the capability off are unreached', async () => {
+    const list = ['e1', 'e2', 'e3']
+    // e1: a door over a root that holds nothing of e1.
+    const empty = await doorAt(doorApp(path.join(base, 'm1-empty', 'leader-witness')), 'e1')
+    // e2: a door over a record set up without a key (its key file lost, say): it holds a record, so never absent.
+    const keyless = path.join(base, 'm1-keyless', 'leader-witness')
+    expect((await setUpMachineWitness(keyless, { v: 1, walnutId: WALNUT, witness: 'e2', list, evidence: blankEvidence(list, 'e2') })).status).toBe(200)
+    const kept = await doorAt(doorApp(keyless), 'e2')
+    // e3: the same service with the capability off: no door mounted, express's own 404.
+    const off = await doorAt(express(), 'e3')
+    const r = await seen([empty, kept, off])
+    expect(r.answered).toBe(0)
+    expect(r.absent).toEqual(['e1'])
+    // Red control: the old rule (any 404 is absent) would have called all three absent, and a genesis would be made beside e2's record.
+    const anyNotFound = new Set<string>()
+    const h = openPermitClient('E2', [empty, kept, off], DEFAULT_PERMIT_PARAMS, undefined, {
+      direct: directWitnessCall({ post }), walnutId: WALNUT, ways: ['direct'], onDrop: (_why, d) => { if (d.status === 404) anyNotFound.add(d.witness) },
+    })
+    await readStanding(h, 3_000)
+    expect([...anyNotFound].sort()).toEqual(['e1', 'e2', 'e3'])
+  }, 30_000)
+
+  it('a door that replays a recorded exchange (old nonce, old reply, old proof) is no answer: the caller\'s new nonce is in the proof (m2)', async () => {
+    const recorded: Record<string, { status: number; json: unknown } | null> = {}
+    const recorder: DoorPost = (url, body, done) => post(url, body, (r) => { recorded[url.endsWith('/challenge') ? 'challenge' : 'request'] = r; done(r) })
+    const read = { v: 1 as const, walnutId: WALNUT, witness: 'w1', request: { type: 'read' as const } }
+    const first = await new Promise((resolve) => { directWitnessCall({ post: recorder })(places[0]!, WITNESS_REQUEST_PATH, read, resolve) })
+    expect(first).toMatchObject({ status: 200 })
+    // The same call again, through a door that answers both posts with the recorded ones.
+    const replayer: DoorPost = (url, _body, done) => done(recorded[url.endsWith('/challenge') ? 'challenge' : 'request']!)
+    const again = await new Promise((resolve) => { directWitnessCall({ post: replayer })(places[0]!, WITNESS_REQUEST_PATH, read, resolve) })
+    expect(again).toEqual({ status: 502, body: { ok: false, error: BAD_WITNESS_PROOF } })
   })
 })

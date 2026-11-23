@@ -44,6 +44,12 @@ export interface WitnessCall {
  * A setup is allowed only when every other witness is 'absent' or 'blank'.
  */
 export type WitnessSeen = 'absent' | 'unreached' | 'blank' | 'record'
+/**
+ * The one answer that is evidence `absent`: a 404 with this code, sent by a witness's route or door only
+ * after it looked at its own directory and found neither a record nor a key. Every other 404 (a path the
+ * service does not have, a capability off, a record with no key) and every other non-200 is `unreached`.
+ */
+export const NO_WITNESS_HERE_CODE = 'no_witness_here'
 const SEEN: ReadonlySet<string> = new Set<WitnessSeen>(['absent', 'unreached', 'blank', 'record'])
 export interface WitnessEvidence { witness: string; seen: WitnessSeen }
 
@@ -57,6 +63,12 @@ export interface WitnessSetup {
   evidence: WitnessEvidence[]
   /** The witness's own key (64 hex), minted by `walnut leader witnesses init`: what its direct door checks. */
   key?: string
+  /**
+   * Set up as a JOINING witness from this generation (permit/store.ts prepareJoiningWitness): it takes nothing
+   * until a list change from that generation or later names it, so it is safe beside records. Only the leader
+   * sends one, with the generation it read from the witnesses (generationToJoin), then adds it by a list change.
+   */
+  join?: number
 }
 
 export type WitnessAnswer =
@@ -143,7 +155,8 @@ export function parseWitnessSetup(raw: unknown): WitnessSetup | null {
     evidence.push({ witness: e.witness, seen: e.seen as WitnessSeen })
   }
   if (raw.key !== undefined && !(typeof raw.key === 'string' && PROOF_SECRET_RE.test(raw.key))) return null
-  return { v: 1, walnutId: raw.walnutId, witness: raw.witness, list: raw.list as string[], evidence, ...(typeof raw.key === 'string' ? { key: raw.key } : {}) }
+  if (raw.join !== undefined && !isInt(raw.join)) return null
+  return { v: 1, walnutId: raw.walnutId, witness: raw.witness, list: raw.list as string[], evidence, ...(typeof raw.key === 'string' ? { key: raw.key } : {}), ...(raw.join !== undefined ? { join: raw.join as number } : {}) }
 }
 
 /**
@@ -156,6 +169,8 @@ export function setupAllowed(setup: WitnessSetup): { ok: true } | { ok: false; e
   const others = setup.list.filter((w) => w !== setup.witness)
   const named = setup.evidence.map((e) => e.witness)
   if (new Set(named).size !== named.length || named.length !== others.length || !others.every((w) => named.includes(w))) return { ok: false, error: 'evidence_incomplete' }
+  // A joining witness takes nothing until a list change names it: safe whatever the others hold.
+  if (setup.join !== undefined) return { ok: true }
   if (setup.evidence.some((e) => e.seen === 'record')) return { ok: false, error: 'witnesses_hold_records' }
   if (setup.evidence.some((e) => e.seen !== 'absent' && e.seen !== 'blank')) return { ok: false, error: 'witnesses_unreached' }
   return { ok: true }
@@ -190,7 +205,7 @@ export function acceptReply(body: unknown, asked: string, req: PermitRequest, ro
 // `witness-door`), independent of any leader link. The caller proves the witness's key; the
 // witness proves the same key over its reply. Two POSTs per request:
 //
-//   POST <url>/challenge  {v:1, walnutId, witness, digest}           digest = sha256(call text)
+//   POST <url>/challenge  {v:1, walnutId, witness, digest, cnonce}   digest = sha256(call text), cnonce = the caller's own nonce
 //                         -> {ok:true, nonce, ttlMs}                  a nonce for THIS call only, used once
 //   POST <url>/request    {v:1, nonce, proof, call}                   call = the WitnessCall's JSON text,
 //                                                                     proof = HMAC(key, doorCallerProofText)
@@ -206,7 +221,8 @@ export const WITNESS_DOOR_REQUEST = '/request'
 /** The largest call text the door takes (a list change carries every op entry). */
 export const WITNESS_DOOR_MAX_CALL = 4 * 1024 * 1024
 
-export interface DoorChallenge { v: 1; walnutId: string; witness: string; digest: string }
+/** `cnonce`: the caller's own fresh nonce, in both proofs, so no recorded reply passes for a new one. */
+export interface DoorChallenge { v: 1; walnutId: string; witness: string; digest: string; cnonce: string }
 export interface DoorRequest { v: 1; nonce: string; proof: string; call: string }
 export type DoorAnswer =
   | { ok: true; nonce: string; ttlMs: number }
@@ -216,7 +232,8 @@ export type DoorAnswer =
 export function parseDoorChallenge(raw: unknown): DoorChallenge | null {
   if (!isObj(raw) || raw.v !== 1 || !isWitnessName(raw.walnutId) || !isWitnessName(raw.witness)) return null
   if (typeof raw.digest !== 'string' || !PROOF_SECRET_RE.test(raw.digest)) return null
-  return { v: 1, walnutId: raw.walnutId, witness: raw.witness, digest: raw.digest }
+  if (typeof raw.cnonce !== 'string' || !PROOF_SECRET_RE.test(raw.cnonce)) return null
+  return { v: 1, walnutId: raw.walnutId, witness: raw.witness, digest: raw.digest, cnonce: raw.cnonce }
 }
 
 export function parseDoorRequest(raw: unknown): DoorRequest | null {
@@ -226,14 +243,14 @@ export function parseDoorRequest(raw: unknown): DoorRequest | null {
   return { v: 1, nonce: raw.nonce, proof: raw.proof, call: raw.call }
 }
 
-interface DoorProofFields { walnutId: string; witness: string; nonce: string; digest: string }
+interface DoorProofFields { walnutId: string; witness: string; nonce: string; cnonce: string; digest: string }
 
-/** What the caller's proof is the HMAC of: the witness asked, the nonce it issued, the call's digest. */
+/** What the caller's proof is the HMAC of: the witness asked, the nonce it issued, the caller's nonce, the call's digest. */
 export function doorCallerProofText(f: DoorProofFields): string {
-  return proofText(['walnut-witness-door-v1', 'caller', f.walnutId, f.witness, f.nonce, f.digest])
+  return proofText(['walnut-witness-door-v1', 'caller', f.walnutId, f.witness, f.nonce, f.cnonce, f.digest])
 }
 
 /** What the witness's proof of its reply is the HMAC of: the same, and the reply's digest (its own tag). */
 export function doorWitnessProofText(f: DoorProofFields & { replyDigest: string }): string {
-  return proofText(['walnut-witness-door-v1', 'witness', f.walnutId, f.witness, f.nonce, f.digest, f.replyDigest])
+  return proofText(['walnut-witness-door-v1', 'witness', f.walnutId, f.witness, f.nonce, f.cnonce, f.digest, f.replyDigest])
 }

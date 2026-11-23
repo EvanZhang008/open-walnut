@@ -66,11 +66,15 @@ leaderSwitchRouter.post('/cancel', thisMachineOnly, async (_req, res) => {
   res.status(r.ok ? 200 : 409).json(r)
 })
 
+/** How long init's read of the witnesses waits for one that has not answered yet. */
+const SETUP_READ_WAIT_MS = 10_000
+
 leaderSwitchRouter.post('/witnesses/init', thisMachineOnly, async (_req, res) => {
   const p = currentLeaderPermit()
-  // Before it leads a server opens no link that describes this Walnut to a host as its leader: its setups go only
-  // where that needs none (a registered reach, the companion's lane), and after the first lead any record makes a
-  // setup refused, so the list is set up before then (docs/reference/leader-switch.md, "Setup only from nothing").
+  // Before it leads a server opens no link that describes this Walnut to a host as its leader: its first setups go
+  // only where that needs none (its own machine's witness, a registered reach, a direct door's companion lane).
+  // Once it leads, records exist: a witness still missing is added through the permit core's list change, over
+  // its link (docs/reference/leader-switch.md, "Setup only from nothing" and "A witness that joins later").
   if (!p || p.trial) { res.status(409).json({ ok: false, why: 'this server is not running the write permission (start it as the leader with the experiment and leader_switch set)' }); return }
   const [{ readHomeSwitchConfig, isRemoteWitness }, { setUpRemoteWitnesses }, { hostLinkCall, thisWalnutId }, { setUpCompanionWitness }, { witnessRoot }, { WALNUT_HOME }] = await Promise.all([
     import('../../core/leader/switch/settings.js'), import('../../core/leader/switch/witness-setup.js'), import('../../core/leader/switch/witness-transport.js'),
@@ -80,14 +84,22 @@ leaderSwitchRouter.post('/witnesses/init', thisMachineOnly, async (_req, res) =>
   if (!cfg.settings) { res.status(409).json({ ok: false, why: cfg.problem ?? 'no leader_switch section' }); return }
   const list = cfg.settings.witnesses.map((w) => w.id)
   const walnutId = await thisWalnutId()
-  // The ways and keys init just wrote, for this server's own permit client (the same fixed list).
-  p.runtime.setWitnessPlaces(cfg.settings.witnesses)
-  const seen = await p.runtime.readWitnesses()
-  const leading = p.runtime.status().state === 'leading'
+  // The ways and keys init just wrote, for this server's own permit client: only the same fixed list (ids and order).
+  if (!p.runtime.setWitnessPlaces(cfg.settings.witnesses)) {
+    res.status(409).json({ ok: false, why: 'leader_switch.witnesses names other witnesses than this server started with: restart the leader server, then run this again' })
+    return
+  }
+  // The setup's evidence: a witness not heard from in time counts as unreached and stops a first setup, so this read
+  // waits longer than a status read (a first TLS handshake to a door, a busy link); it ends once every witness answered.
+  const seen = await p.runtime.readWitnesses(SETUP_READ_WAIT_MS)
+  const runtime = p.runtime
+  // Read live at each call: a link opens only while this server leads.
+  const leading = () => runtime.status().state === 'leading'
   const results = await setUpRemoteWitnesses({
     places: cfg.settings.witnesses.filter(isRemoteWitness), list, walnutId, sightings: seen.sightings, here: { machineId: p.machine, root: witnessRoot() },
     call: hostLinkCall({ daemonLink: leading }),
-    companion: (w, evidence) => setUpCompanionWitness(w, list, walnutId, evidence),
+    companion: (w, evidence, join) => setUpCompanionWitness(w, list, walnutId, evidence, undefined, join),
+    ...(leading() ? { join: { current: () => runtime.witnessList(), change: (next: string[]) => runtime.changeWitnessList(next), generation: () => runtime.joinGeneration() } } : {}),
   })
   res.json({ ok: results.every((r) => r.ok), results })
 })

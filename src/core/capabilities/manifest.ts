@@ -48,6 +48,11 @@ export interface CapabilityManifest<N extends string = string> {
    * sets that when it starts the replica), and a companion naming it stops its boot.
    */
   hostReplica?: true
+  /**
+   * A companion capability a host replica may take too, when its env names it (its server mounts the
+   * same routes); off on both until named.
+   */
+  alsoHostReplica?: true
   /** The boot policy rows it turns on for a replica, in the table's order. */
   jobs: readonly BootJob[]
   /** The socket (WebSocket upgrade) doors it opens on this server. */

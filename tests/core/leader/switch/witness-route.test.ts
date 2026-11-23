@@ -70,11 +70,17 @@ describe('the witness route of a machine', () => {
     expect((await read('w1'))?.status).toBe(503)
   })
 
-  it('a machine that was never set up is no witness: the very answer of a path it never had, and a request never makes a record', async () => {
+  it('a machine that was never set up is no witness: it says it holds nothing, and a request never makes a record', async () => {
     const r = await read('w1')
-    expect(r).toEqual(await post('m1', '/host-api/never-had-this', {}))
-    expect(r).toEqual({ status: 404, body: { ok: false, error: 'not_found' } })
+    expect(r).toEqual({ status: 404, body: { ok: false, error: 'no_witness_here' } })
     expect(fs.existsSync(path.join(root, WALNUT))).toBe(false)
+  })
+
+  it('a witness directory with a key and no record says nothing of the kind: the plain 404, which is not reached, never absent (M1)', async () => {
+    const dir = witnessDir(root, WALNUT, 'w1')
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+    fs.writeFileSync(path.join(dir, 'witness-key'), `${'a'.repeat(64)}\n`, { mode: 0o600 })
+    expect(await read('w1')).toEqual({ status: 404, body: { ok: false, error: 'not_found' } })
   })
 
   it('a read answers with the round it carried, and a propose with none', async () => {

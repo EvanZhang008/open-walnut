@@ -164,7 +164,7 @@ export class World {
   /** What the transport threw away, by reason. */
   drops: Record<string, number> = {}
   /** How machines reach the witnesses: over a link (way c) or by each witness's direct door (way b). Set before addMachine. */
-  way: 'link' | 'direct' = 'link'
+  way: 'link' | 'direct' | 'mixed' = 'link'
   /** Each witness's direct door (way b), made at its first call; its nonces outlive a witness restart only as a real door's would not (a restart forgets them: see startWitness). */
   private doors = new Map<string, WitnessDoor>()
 
@@ -259,9 +259,9 @@ export class World {
     return new PermitClient({
       id: node.id, list, clock, params: this.params, ...(nonce ? { testNonce: nonce } : {}), ...(cfg ? { cfg } : {}), ...(epoch !== undefined ? { epoch } : {}),
       transport: createWitnessTransport({
-        placeOf: (id) => (this.way === 'direct' ? { id, url: `https://sim/${id}`, key: simWitnessKey(id) } : { id, host: id }), params: this.params, walnutId: 'sim',
+        placeOf: (id) => (this.way === 'direct' ? { id, url: `https://sim/${id}`, key: simWitnessKey(id) } : this.way === 'mixed' ? { id, host: id, url: `https://sim/${id}`, key: simWitnessKey(id) } : { id, host: id }), params: this.params, walnutId: 'sim',
         deliver: this.wrapDeliver ? this.wrapDeliver(node.key, (reply) => this.deliverToMachine(node.key, reply)) : (reply) => this.deliverToMachine(node.key, reply),
-        remote: this.makeLink ? this.makeLink(node.key, this.simLink(node.key)) : this.simLink(node.key),
+        remote: this.makeLink ? this.makeLink(node.key, this.simLink(node.key)) : this.way === 'mixed' ? this.simMixed(node.key) : this.simLink(node.key),
         direct: this.makeLink ? this.makeLink(node.key, this.simDirect(node.key)) : this.simDirect(node.key),
         timeoutMs: this.transportTimeoutMs, ...(this.transportMaxInFlight !== undefined ? { maxInFlight: this.transportMaxInFlight } : {}),
         defer: (fn) => this.after(0, fn),
@@ -358,6 +358,16 @@ export class World {
       const round = (body as WitnessCall).round
       this.transmit(from, to, req, () => this.deliverToWitness(from, to, req, done, round))
     }
+  }
+
+  /**
+   * Both ways at once (`way = 'mixed'`): each request to a witness goes by its link or by its door, at random,
+   * besides the transport's own turn to the next way after one that did not answer. One record, two doors.
+   */
+  simMixed(from: string): RemoteCall {
+    const link = this.simLink(from)
+    const direct = this.simDirect(from)
+    return (place, path, body, done) => (this.rand() < 0.5 ? link : direct)(place, path, body, done)
   }
 
   /**

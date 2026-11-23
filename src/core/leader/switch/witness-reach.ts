@@ -10,6 +10,7 @@
  */
 import { majorityOf, type PermitParams, type PermitRecord } from '../permit/types.js'
 import { openPermitClient, readStanding } from './permit-ops.js'
+import { NO_WITNESS_HERE_CODE } from './witness-wire.js'
 import { isRemoteWitness, type WitnessPlace } from './settings.js'
 import { waysOf, type HereMachine, type RemoteCall, type WitnessDrop, type WitnessWay } from './witness-transport.js'
 
@@ -83,8 +84,7 @@ function whyNot(p: WitnessPlace, here: HereMachine, drop: { why: WitnessDrop; wa
   if (!drop) return `${describe(p, ways[0]!)} did not answer`
   const where = describe(p, drop.way ?? ways[0]!)
   switch (drop.why) {
-    case 'no-record-here': return `${where} holds no record of it`
-    case 'bad-status': return `${where} refused (${drop.status}${drop.error ? ` ${drop.error}` : ''})`
+    case 'bad-status': return drop.error === NO_WITNESS_HERE_CODE ? `${where} holds no witness (not set up)` : `${where} refused (${drop.status}${drop.error ? ` ${drop.error}` : ''})`
     case 'invalid-reply': return `${where} answered something that is not its reply`
     default: return `${where} did not answer`
   }

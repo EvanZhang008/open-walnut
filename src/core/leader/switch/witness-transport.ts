@@ -32,11 +32,11 @@
  * carries witness calls (the C5a door: allowDoorCallPrefix(WITNESS_PREFIX)), tried before the daemon link.
  */
 import { DEFAULT_PERMIT_PARAMS, type PermitParams, type PermitReply, type PermitRequest, type PermitTransport } from '../permit/types.js'
-import { serveLocalWitness } from './local-witnesses.js'
+import { serveLocalWitness, witnessDirEmpty } from './local-witnesses.js'
 import { isRemoteWitness, type RemoteWitnessPlace, type WitnessPlace } from './settings.js'
 import { witnessDir } from './witness-route.js'
 import {
-  WITNESS_REQUEST_PATH, WITNESS_SETUP_PATH, acceptReply, type WitnessCall, type WitnessEvidence, type WitnessSetup,
+  NO_WITNESS_HERE_CODE, WITNESS_REQUEST_PATH, WITNESS_SETUP_PATH, acceptReply, type WitnessCall, type WitnessEvidence, type WitnessSetup,
 } from './witness-wire.js'
 
 /**
@@ -104,7 +104,7 @@ export interface WitnessTransportOptions {
   onAnswer?: (witness: string, way: WitnessWay) => void
 }
 
-export type WitnessDrop = 'invalid-reply' | 'late-reply' | 'too-many-open' | 'no-way' | 'no-answer' | 'bad-status' | 'no-record-here'
+export type WitnessDrop = 'invalid-reply' | 'late-reply' | 'too-many-open' | 'no-way' | 'no-answer' | 'bad-status'
 
 /**
  * The ways to `place` this transport has, in the order tried: here (no network at all), then the
@@ -141,19 +141,6 @@ export function createWitnessTransport(opts: WitnessTransportOptions): PermitTra
   const turn = new Map<string, number>()
   const deliver = (reply: PermitReply): void => { defer(() => opts.deliver(reply)) }
   const missed = (id: string, way: number): void => { if ((turn.get(id) ?? 0) === way) turn.set(id, way + 1) }
-
-  function sendHere(place: RemoteWitnessPlace, req: PermitRequest, at: number, here: HereMachine): void {
-    defer(() => {
-      void Promise.resolve(here.walnutId())
-        .then((walnutId) => (walnutId ? serveLocalWitness({ id: place.id, dir: witnessDir(here.root, walnutId, place.id) }, req, opts.params) : null))
-        .catch(() => null)
-        .then((reply) => {
-          if (reply) { opts.onAnswer?.(place.id, 'here'); opts.deliver(reply); return }
-          missed(place.id, at)
-          opts.onDrop?.('no-record-here', { witness: place.id, way: 'here' })
-        })
-    })
-  }
 
   function sendCall(call: RemoteCall, way: WitnessWay, place: RemoteWitnessPlace, req: PermitRequest, at: number): void {
     const slot = `${place.id}:${req.type}`
@@ -198,8 +185,7 @@ export function createWitnessTransport(opts: WitnessTransportOptions): PermitTra
     const at = (turn.get(place.id) ?? 0) % ways.length
     turn.set(place.id, at)
     const way = ways[at]!
-    if (way === 'here') sendHere(place, req, at, opts.here!)
-    else sendCall(way === 'direct' ? opts.direct! : opts.remote!, way, place, req, at)
+    sendCall(way === 'here' ? hereCall(opts.here!, opts.params) : way === 'direct' ? opts.direct! : opts.remote!, way, place, req, at)
   }
 
   return {
@@ -212,6 +198,29 @@ export function createWitnessTransport(opts: WitnessTransportOptions): PermitTra
         void serveLocalWitness(place, req, opts.params).catch(() => null).then((reply) => { if (reply) opts.deliver(reply) })
       })
     },
+  }
+}
+
+/**
+ * Way a as a call: the witness's record opened in this machine's witness root, under its lock, answered as
+ * its machine's route would answer (the same round, the same caps and drops as the other ways). No record:
+ * NO_WITNESS_HERE_CODE only when the directory holds nothing of a witness, else a plain 404 (not reached).
+ */
+function hereCall(here: HereMachine, params: PermitParams): RemoteCall {
+  return (place, _path, body, done) => {
+    let gone = false
+    void Promise.resolve(here.walnutId())
+      .then(async (walnutId) => {
+        if (!walnutId) return null
+        const dir = witnessDir(here.root, walnutId, place.id)
+        const reply = await serveLocalWitness({ id: place.id, dir }, (body as WitnessCall).request, params)
+        const round = (body as WitnessCall).round
+        if (reply) return { status: 200, body: { ok: true, reply, ...(round !== undefined ? { round } : {}) } }
+        return { status: 404, body: { ok: false, error: witnessDirEmpty(dir) ? NO_WITNESS_HERE_CODE : 'not_found' } }
+      })
+      .catch(() => null)
+      .then((r) => { if (!gone) done(r) })
+    return () => { gone = true }
   }
 }
 
@@ -329,11 +338,11 @@ export function hostLinkCall(o: { timeoutMs?: number; daemonLink?: boolean | (()
  * `evidence`: what the caller saw at each OTHER witness of the list; the witness refuses a setup unless
  * none of them held a record (a witness that lost its disk never starts over beside records that still exist).
  */
-export function setUpRemoteWitness(place: RemoteWitnessPlace, list: string[], walnutId: string | null, evidence: WitnessEvidence[], call: RemoteCall = hostLinkCall({ daemonLink: true }), timeoutMs = 30_000): Promise<{ ok: true; made: boolean } | { ok: false; error: string }> {
+export function setUpRemoteWitness(place: RemoteWitnessPlace, list: string[], walnutId: string | null, evidence: WitnessEvidence[], call: RemoteCall = hostLinkCall({ daemonLink: true }), timeoutMs = 30_000, join?: number): Promise<{ ok: true; made: boolean } | { ok: false; error: string }> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve({ ok: false, error: 'no answer' }), timeoutMs)
     timer.unref?.()
-    const setup: WitnessSetup = { v: 1, walnutId: walnutId ?? '', witness: place.id, list, evidence, ...(place.key ? { key: place.key } : {}) }
+    const setup: WitnessSetup = { v: 1, walnutId: walnutId ?? '', witness: place.id, list, evidence, ...(place.key ? { key: place.key } : {}), ...(join !== undefined ? { join } : {}) }
     call(place, WITNESS_SETUP_PATH, setup, (r) => {
       clearTimeout(timer)
       const b = r?.body as { ok?: boolean; made?: boolean; error?: string } | null | undefined

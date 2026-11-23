@@ -155,7 +155,7 @@ describe('a server that has led reaches its witnesses over the link of each host
     const { setUpRemoteWitnesses } = await import('../../../../src/core/leader/switch/witness-setup.js')
     const input = { places: PLACES, list: LIST, walnutId: WALNUT, sightings: LIST.map((witness) => ({ witness, held: false, epoch: null, absent: true as const })), call: hostLinkCall({ daemonLink: false }), resolveHost: async (h: string) => h }
     // No reach: nothing goes out, and no link is opened.
-    expect((await setUpRemoteWitnesses(input)).map((r) => [r.witness, r.ok, r.error])).toEqual(LIST.map((w) => [w, false, 'no answer']))
+    expect((await setUpRemoteWitnesses(input)).map((r) => [r.witness, r.ok, r.error])).toEqual(LIST.map((w) => [w, false, expect.stringMatching(/^no answer from \S+ \(before this server leads it opens no link to a host/)]))
     expect(spy.links).toEqual([])
     // A reach (the host-dialed door's seam): the setups go over it (already set up here, so made: false), still no link.
     reachToDoors()

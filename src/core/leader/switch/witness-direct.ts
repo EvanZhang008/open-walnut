@@ -10,7 +10,7 @@
  *
  * Callback style, so the model check runs it on its simulated network (tests/core/leader/permit/sim.ts).
  */
-import { hmacProof, proofsEqual, sha256Hex, PROOF_SECRET_RE } from '../../../utils/hmac-proof.js'
+import { hmacProof, proofSecret, proofsEqual, sha256Hex, PROOF_SECRET_RE } from '../../../utils/hmac-proof.js'
 import type { RemoteCall, RemoteCallResult } from './witness-transport.js'
 import {
   WITNESS_DOOR_CHALLENGE, WITNESS_DOOR_REQUEST, WITNESS_REQUEST_PATH, doorCallerProofText, doorWitnessProofText,
@@ -61,13 +61,15 @@ export function directWitnessCall(o: { post?: DoorPost; timeoutMs?: number; waln
       const text = JSON.stringify(call)
       const digest = sha256Hex(text)
       let challenged = false
-      abandon = post(`${url}${WITNESS_DOOR_CHALLENGE}`, { v: 1, walnutId, witness: place.id, digest }, (ch) => {
+      // The caller's own nonce, in both proofs: a reply recorded for an earlier call never passes for this one.
+      const cnonce = proofSecret()
+      abandon = post(`${url}${WITNESS_DOOR_CHALLENGE}`, { v: 1, walnutId, witness: place.id, digest, cnonce }, (ch) => {
         // One request per call: a second answer to the challenge (a network that repeats) is dropped.
         if (gone || challenged) return
         challenged = true
         const nonce = isObj(ch?.json) ? ch.json.nonce : undefined
         if (!ch || ch.status !== 200 || typeof nonce !== 'string' || !PROOF_SECRET_RE.test(nonce)) { finish(ch ? { status: ch.status === 200 ? 502 : ch.status, body: ch.json } : null); return }
-        const fields = { walnutId, witness: place.id, nonce, digest }
+        const fields = { walnutId, witness: place.id, nonce, cnonce, digest }
         abandon = post(`${url}${WITNESS_DOOR_REQUEST}`, { v: 1, nonce, proof: hmacProof(key, doorCallerProofText(fields)), call: text }, (r) => {
           if (gone) return
           if (!r) { finish(null); return }
@@ -104,6 +106,7 @@ export type CompanionLane = () => Promise<{ url: string; token: string } | null>
 export async function setUpCompanionWitness(
   place: { id: string; url?: string; key?: string }, list: string[], walnutId: string, evidence: WitnessEvidence[],
   lane: CompanionLane = async () => (await import('../../cloud-ingest.js')).cloudSessionEndpoint(),
+  join?: number,
 ): Promise<{ ok: true; made: boolean } | { ok: false; error: string }> {
   if (!place.url || !place.key) return { ok: false, error: 'no url and key (run walnut leader witnesses init on the leader to mint the key)' }
   const ep = await lane().catch(() => null)
@@ -116,7 +119,7 @@ export async function setUpCompanionWitness(
     const res = await fetch(`${origin}${BRIDGE_WITNESS_SETUP_PATH}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${ep.token}` },
-      body: JSON.stringify({ v: 1, walnutId, witness: place.id, list, evidence, key: place.key } satisfies WitnessSetup),
+      body: JSON.stringify({ v: 1, walnutId, witness: place.id, list, evidence, key: place.key, ...(join !== undefined ? { join } : {}) } satisfies WitnessSetup),
       signal: AbortSignal.timeout(30_000),
     })
     const b = await res.json().catch(() => null) as { ok?: boolean; made?: boolean; error?: string } | null

@@ -67,11 +67,12 @@ describe('a host service with the experiment off', () => {
     expect(setup).toEqual(never)
     expect(loaded).toEqual([])
     expect(fs.readdirSync(root)).toEqual([])
-    // Flag on: the same call reaches the route, which is loaded now. Never set up, it answers with the very bytes
-    // of a path the service never had.
+    // Flag on: the same call reaches the route, which is loaded now. Never set up, it tells a caller of this Walnut
+    // that it looked and holds nothing (the one 404 a setup's evidence counts as absent), and writes nothing.
     enabled = true
     const on = await post(WITNESS_REQUEST_PATH, { v: 1, walnutId: WALNUT, witness: 'w1', request: { type: 'read' } })
-    expect(on).toEqual(never)
+    expect(on).toEqual({ status: 404, body: { ok: false, error: 'no_witness_here' } })
+    expect(fs.readdirSync(root)).toEqual([])
     expect(loaded).toContain('witness-route')
   })
 

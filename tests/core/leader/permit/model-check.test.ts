@@ -5,7 +5,7 @@
  * so the invariant check is known to bite.
  */
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_PERMIT_PARAMS, type PermitParams, type PermitReply } from '../../../../src/core/leader/permit/index.js'
+import { DEFAULT_PERMIT_PARAMS, generationToJoin, prepareJoiningWitness, type PermitParams, type PermitReply } from '../../../../src/core/leader/permit/index.js'
 import { SimStore, World, actUntilReleaseStood, pilot, releaseOnAnyLive, takeOnMinorityRelease } from './sim.js'
 
 const W = ['w1', 'w2', 'w3']
@@ -71,6 +71,14 @@ interface Variant {
   wrongWitnessId?: boolean
   /** Every witness is reached by its direct door (way b): a challenge, the keyed call, the keyed reply. */
   direct?: boolean
+  /** Each request to a witness goes by its link or its door at random (one record behind both). */
+  mixedWays?: boolean
+  /**
+   * w3 is not set up at the start (no file: the list leads on w1 and w2); after the first lead the
+   * holder drops it from the list, it is set up as a joining witness from the generation the
+   * witnesses report, and the holder adds it back (witness-setup.ts, the init of a witness missing beside records).
+   */
+  joinThird?: boolean
 }
 
 function schedule(seed: number, v: Variant = {}): { world: World; totalMs: number } {
@@ -81,6 +89,7 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
   }, seed)
   const r = world.rand
   if (v.direct) world.way = 'direct'
+  if (v.mixedWays) world.way = 'mixed'
   if (v.transportTimeoutMs !== undefined) world.transportTimeoutMs = v.transportTimeoutMs
   // With the real 15 s timeout the real in-flight caps apply too (lost messages free their slot then).
   if (v.transportTimeoutMs === 15_000) world.transportMaxInFlight = undefined
@@ -92,6 +101,7 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
   const pool = [...W, ...extra]
   for (const id of extra) world.addWitness(id, { drift: drift(1), joinFrom: 0 })
   for (const id of W) {
+    if (v.joinThird && id === 'w3') { world.addWitness(id, { drift: drift(1) }); continue }
     const n = world.addWitness(id, { drift: drift(1), store: new SimStore(v.lazyStore ? 'lazy' : 'durable'), bootstrap: W })
     if (v.lazyStore) {
       const flush = () => { n.store.flush(); world.after(20_000, flush) }
@@ -126,6 +136,7 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
         // About one manual switch per machine-held 3 minutes, whatever the tick. (A change
         // left between its two steps is finished first: the pilot's repairChange.)
         if (m.c.jointList()) return
+        if (v.joinThird && m.c.mayAct() && joinThird(world, m.c)) return
         if (v.members && r() < (v.tickMs ?? 5_000) / (v.pool5 ? 60_000 : 240_000)) {
           const list = m.c.witnessList()
           const out = list[Math.floor(r() * list.length)]
@@ -287,6 +298,30 @@ function dropLedger(c: object): void {
 }
 
 /** Op ids sent by more than one process. */
+/**
+ * The leader's steps for a witness missing beside records, as init takes them: drop w3 from the list, set
+ * it up as joining from the generation the witnesses report (permit/store.ts generationToJoin), add it
+ * back. Each step is one list change the holder writes; true while a step was taken this tick.
+ */
+function joinThird(world: World, c: import('../../../../src/core/leader/permit/index.js').PermitClient): boolean {
+  const w3 = world.witnesses.get('w3')!
+  const list = c.witnessList()
+  // One change at a time: its proposal is open until a majority of both lists took it.
+  if (c.pendingRecord()?.kind === 'members') return true
+  const prepared = w3.store.load() !== null
+  if (!prepared && list.includes('w3')) { c.changeWitnesses(list.filter((x) => x !== 'w3')); return true }
+  if (!prepared && !list.includes('w3')) {
+    const gen = generationToJoin(c.readBack())
+    if (gen === null || gen < c.config().epoch) return false
+    prepareJoiningWitness(w3.store, gen)
+    w3.store.flush()
+    world.startWitness(w3)
+    return true
+  }
+  if (prepared && !list.includes('w3')) { c.changeWitnesses([...list, 'w3']); return true }
+  return false
+}
+
 function doubleSends(world: World): string[] {
   return [...world.sends.entries()].filter(([, s]) => s.length > 1).map(([id]) => id)
 }
@@ -504,6 +539,28 @@ describe('write permission: random schedules', () => {
     expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
     expect(r.sent, 'ops were sent').toBeGreaterThan(0)
   }, 120_000)
+
+  it('never lets two machines act at once when each witness is reached by its link or its door at random (200 seeds)', async () => {
+    const r = await sweep(200, { mixedWays: true })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    expect(r.activeShare).toBeGreaterThan(0.3)
+  }, 120_000)
+
+  it('never lets two processes act at once when the third witness joins after the first lead, through two list changes (100 seeds, faults, ops, restarts)', async () => {
+    let joined = 0
+    let firstBad: number | null = null
+    for (let seed = 1; seed <= 100; seed++) {
+      await new Promise((res) => setImmediate(res))
+      const { world } = schedule(seed, { joinThird: true, ops: true, restarts: true, tickMs: 1_000 })
+      if (world.violations.length > 0 || doubleSends(world).length > 0) { firstBad ??= seed; break }
+      // It joined: some machine runs on all three, and w3 took a record after it.
+      const lists = [...world.machines.values()].map((m) => m.c.witnessList())
+      if (lists.some((l) => l.includes('w3')) && world.witnesses.get('w3')!.store.load()?.list?.includes('w3')) joined++
+    }
+    expect(firstBad, `first violating seed ${firstBad}`).toBeNull()
+    // Not vacuous: the seeds are fixed, and 67 of 100 join (the rest end first, or keep a change open under the faults).
+    expect(joined, 'w3 joined in most runs').toBeGreaterThan(50)
+  }, 180_000)
 
   it('never lets two machines act at once through the direct doors when old replies arrive again (100 seeds)', async () => {
     const r = await sweep(100, { direct: true, replayOldReplies: true })

@@ -87,6 +87,23 @@ export async function runLeaderWitnessesInit(options: Record<string, unknown>): 
     let cfg = m.readHomeSwitchConfig(home)
     if (!cfg.flag) return fail('the experiment switchable_leader is off')
     if (!cfg.settings) return fail(cfg.problem ?? 'no leader_switch section')
+    const me = m.permitHolderId()
+    const elsewhere = cfg.settings.witnesses.filter(m.isRemoteWitness)
+    const self = m.machineById(cfg.settings, me ?? '') ?? m.machineByHome(cfg.settings, home)
+    const api = (method: string, urlPath: string) => (self
+      ? fetch(`http://127.0.0.1:${self.port}${urlPath}`, { method, headers: { 'content-type': 'application/json' }, ...(method === 'POST' ? { body: '{}' } : {}), signal: AbortSignal.timeout(180_000) })
+        .then(async (r) => ({ status: r.status, json: await r.json().catch(() => null) as Record<string, unknown> | null })).catch(() => null)
+      : Promise.resolve(null))
+    if (elsewhere.length) {
+      // Keys are minted only on the leader: its server runs the permission here (waiting for its first lead, or leading).
+      // A home that is a copy (a standby, a handed-over home) never mints: a key minted there would differ from the
+      // leader's, and a witness never takes another key.
+      const st = await api('GET', '/api/leader/status')
+      const permit = st?.json?.permit as { state?: string } | null | undefined
+      if (!permit || st?.json?.trial || (permit.state !== 'leading' && permit.state !== 'waiting')) {
+        return fail(`run this on the leader, with its server running the permission (here: ${!st ? 'no server answers' : !permit ? 'the server runs no permission' : st.json?.trial ? 'a trial start' : `the permission is ${permit.state}`})`)
+      }
+    }
     // Each witness kept by a machine gets its own key, once: in the leader data (config.yaml, sensitive)
     // and, by its setup below, beside its record on its machine. Never printed.
     const { mintWitnessKeys } = await import('../core/leader/switch/witness-keys.js')
@@ -101,18 +118,16 @@ export async function runLeaderWitnessesInit(options: Record<string, unknown>): 
     console.log(`Witnesses set up: ${r.made.join(', ') || 'none'}; already set up: ${r.kept.join(', ') || 'none'}`)
     // A witness kept by a machine is set up by this machine's leader server: one this machine keeps in its own
     // state dir, one on a host over the server's link (or registered reach before it leads), one with only a door on
-    // the companion's lane. The server reads them all first: the setup's evidence.
-    const me = m.permitHolderId()
-    const elsewhere = cfg.settings.witnesses.filter(m.isRemoteWitness)
+    // the companion's lane; once the server leads, a missing one joins through a list change. The server reads them
+    // all first: the setup's evidence.
     if (elsewhere.length) {
-      const self = m.machineById(cfg.settings, me ?? '') ?? m.machineByHome(cfg.settings, home)
-      const res = self ? await fetch(`http://127.0.0.1:${self.port}/api/leader/witnesses/init`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(120_000) }).catch(() => null) : null
-      const body = res ? await res.json().catch(() => null) as { results?: Array<{ witness: string; at: string; ok: boolean; made?: boolean; error?: string }>; why?: string } | null : null
+      const res = await api('POST', '/api/leader/witnesses/init')
+      const body = res?.json as { results?: Array<{ witness: string; at: string; ok: boolean; made?: boolean; joined?: boolean; error?: string }>; why?: string } | null | undefined
       if (!body?.results) {
         console.log(`Witnesses ${elsewhere.map((w) => w.id).join(', ')} not set up: ${body?.why ?? 'this machine\'s leader server did not answer'}. Start the leader server and run this again.`)
         process.exitCode = 1
       } else {
-        for (const x of body.results) console.log(`Witness ${x.witness} on ${x.at}: ${x.ok ? (x.made ? 'set up' : 'already set up') : `not set up (${x.error})`}`)
+        for (const x of body.results) console.log(`Witness ${x.witness} on ${x.at}: ${x.ok ? (x.joined ? 'joined (set up as joining, added by a list change)' : x.made ? 'set up' : 'already set up') : `not set up (${x.error})`}`)
         if (body.results.some((x) => !x.ok)) process.exitCode = 1
       }
     }

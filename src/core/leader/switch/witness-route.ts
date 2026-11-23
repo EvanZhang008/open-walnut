@@ -25,9 +25,9 @@ import path from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { DEFAULT_PERMIT_PARAMS, type PermitParams } from '../permit/types.js'
 import { withFileLock } from '../../../utils/file-lock.js'
-import { serveLocalWitness, setUpLocalWitnesses } from './local-witnesses.js'
+import { prepareLocalJoiningWitness, serveLocalWitness, setUpLocalWitnesses, WITNESS_KEY_FILE, witnessDirEmpty } from './local-witnesses.js'
 import {
-  WITNESS_REQUEST_PATH, WITNESS_SETUP_PATH, parseWitnessCall, parseWitnessSetup, setupAllowed, type WitnessAnswer, type WitnessSetup,
+  NO_WITNESS_HERE_CODE, WITNESS_REQUEST_PATH, WITNESS_SETUP_PATH, parseWitnessCall, parseWitnessSetup, setupAllowed, type WitnessAnswer, type WitnessSetup,
 } from './witness-wire.js'
 import { PROOF_SECRET_RE, proofsEqual } from '../../../utils/hmac-proof.js'
 
@@ -75,13 +75,15 @@ export interface WitnessRouteDeps {
 export interface WitnessResponse { status: number; body: WitnessAnswer }
 
 const NOT_FOUND: WitnessResponse = { status: 404, body: { ok: false, error: 'not_found' } }
+/** The witness looked at its own directory and holds nothing (no record, no key): what a setup's evidence calls `absent`. */
+const NO_WITNESS_HERE: WitnessResponse = { status: 404, body: { ok: false, error: NO_WITNESS_HERE_CODE } }
 
 export function witnessDir(root: string, walnutId: string, witness: string): string {
   return path.join(root, walnutId, witness)
 }
 
 /** The witness's own key beside its record (0600 in its 0700 dir): what its direct door checks (witness-door.ts). */
-const KEY_FILE = 'witness-key'
+const KEY_FILE = WITNESS_KEY_FILE
 
 /** The key kept for a witness here, or null: none set up (a witness set up before keys existed has none). */
 export function readWitnessKey(dir: string): string | null {
@@ -94,8 +96,9 @@ export function readWitnessKey(dir: string): string | null {
 /**
  * Set a witness of this machine up, once (THE setup, whichever way it came: the leader door's route,
  * the companion's setup route, `walnut leader witnesses init` on this machine itself): its record with
- * the first list, and its key when one is given.
- *   - Only from nothing: the setup carries what the caller saw at every OTHER witness, and is refused
+ * the first list, and its key when one is given; or, with `join`, as a joining witness (it takes nothing until
+ * the leader's list change names it).
+ *   - Only from nothing (a first setup, not a join): the setup carries what the caller saw at every OTHER witness, and is refused
  *     (409) unless none held a record (witness-wire.ts setupAllowed; a witness that lost its disk never
  *     starts over beside records that still exist).
  *   - One witness id per Walnut per machine (409 another_witness_here), checked and made under one
@@ -116,10 +119,12 @@ export async function setUpMachineWitness(root: string, setup: WitnessSetup, log
       const dir = witnessDir(root, setup.walnutId, setup.witness)
       const held = readWitnessKey(dir)
       if (setup.key && held && !proofsEqual(held, setup.key)) return { status: 409, body: { ok: false, error: 'key_differs' } }
-      const made = setUpLocalWitnesses([{ id: setup.witness, dir }], setup.list)
+      const made = setup.join !== undefined
+        ? prepareLocalJoiningWitness({ id: setup.witness, dir }, setup.join).made
+        : setUpLocalWitnesses([{ id: setup.witness, dir }], setup.list).made.length > 0
       if (setup.key && !held) writeKeyFile(dir, setup.key)
-      log?.('info', 'witness route: set up', { witness: setup.witness, made: made.made.length > 0, keyed: !!(setup.key || held) })
-      return { status: 200, body: { ok: true, made: made.made.length > 0 } }
+      log?.('info', 'witness route: set up', { witness: setup.witness, made, joining: setup.join !== undefined, keyed: !!(setup.key || held) })
+      return { status: 200, body: { ok: true, made } }
     }, { timeoutMs: 5_000 })
   } catch (err) {
     log?.('warn', 'witness route: a setup could not be done', { witness: setup.witness, error: err instanceof Error ? err.message : String(err) })
@@ -142,12 +147,14 @@ export async function serveWitnessCall(pathname: string, body: unknown, caller: 
     if (!call) return { status: 400, body: { ok: false, error: 'bad_request' } }
     const auth = authorizeWitnessCaller(caller(call.walnutId), deps.walnutId())
     if (!auth.ok) return { status: auth.status, body: { ok: false, error: auth.error } }
-    // A directory that is not there is a witness that was never set up here (or one whose disk was lost): the
-    // answer is the one of a path this service does not have, as with the experiment off.
+    // No record here: NO_WITNESS_HERE only when the directory holds nothing of a witness (no record, no key), the
+    // one answer a setup's evidence may count as `absent`; a key with no record is a 404 like a path this service
+    // does not have, which counts as not reached.
     const place = { id: call.witness, dir: witnessDir(deps.root, call.walnutId, call.witness) }
     try {
       const reply = await serveLocalWitness(place, call.request, deps.params ?? DEFAULT_PERMIT_PARAMS)
-      return reply ? { status: 200, body: { ok: true, reply, ...(call.round !== undefined ? { round: call.round } : {}) } } : NOT_FOUND
+      if (!reply) return witnessDirEmpty(place.dir) ? NO_WITNESS_HERE : NOT_FOUND
+      return { status: 200, body: { ok: true, reply, ...(call.round !== undefined ? { round: call.round } : {}) } }
     } catch (err) {
       deps.log?.('warn', 'witness route: a request could not be served', { witness: call.witness, error: err instanceof Error ? err.message : String(err) })
       return { status: 503, body: { ok: false, error: 'busy' } }

@@ -8,8 +8,9 @@ import { PermitClient } from '../permit/client.js'
 import type { PermitParams, PermitRecord, PermitReply } from '../permit/types.js'
 import { createWitnessTransport, hostLinkCall, placesOf, thisWalnutId, type HereMachine, type WitnessTransportOptions } from './witness-transport.js'
 import { directWitnessCall } from './witness-direct.js'
+import { NO_WITNESS_HERE_CODE } from './witness-wire.js'
 import { permitHolderId, witnessRoot } from './machine-id.js'
-import { isRemoteWitness, type WitnessPlace } from './settings.js'
+import type { WitnessPlace } from './settings.js'
 
 export interface PermitHandle {
   client: PermitClient
@@ -19,13 +20,20 @@ export interface PermitHandle {
    * the ids must be the same list in the same order (the list is FIXED; a change is a members record).
    */
   setPlaces(places: WitnessPlace[]): boolean
-  /** The witnesses that, since `t` (Date.now()), were reached and said no witness is there (404, or no record on that machine). */
+  /** The witnesses that, since `t` (Date.now()), were reached and said they hold nothing of a witness (NO_WITNESS_HERE_CODE). */
   absentSince(t: number): string[]
 }
 
 /** This process's own machine for way a: its id, its witness root, the Walnut's id (machine-id.ts, device-auth.ts). */
 export function thisMachine(env: NodeJS.ProcessEnv = process.env, walnutId?: string): HereMachine {
   return { machineId: permitHolderId(env), root: witnessRoot(env), walnutId: walnutId ? () => walnutId : thisWalnutId }
+}
+
+/** thisMachine(), read at its first use. */
+function lazyMachine(): HereMachine {
+  let m: HereMachine | null = null
+  const get = (): HereMachine => (m ??= thisMachine())
+  return { get machineId() { return get().machineId }, get root() { return get().root }, walnutId: () => get().walnutId() }
 }
 
 /**
@@ -40,16 +48,17 @@ export function openPermitClient(id: string, places: WitnessPlace[], params: Per
   const { daemonLink, ...transportOpts } = net
   let client: PermitClient | null = null
   let lookup = placesOf(places)
-  const remote = places.some(isRemoteWitness)
   const absentAt = new Map<string, number>()
   const transport = createWitnessTransport({
     placeOf: (wid) => lookup(wid), params, deliver: (reply: PermitReply) => client?.receive(reply),
-    ...(remote ? { remote: hostLinkCall({ daemonLink }), direct: directWitnessCall({ walnutId: thisWalnutId }) } : {}),
-    // This machine's identity is read only when some witness names the machine that keeps it.
-    ...(places.some((p) => isRemoteWitness(p) && !!p.machine) ? { here: thisMachine() } : {}),
+    // Every way is there; which one a request takes is chosen per request from the place as it is then (waysOf), so
+    // new places (setPlaces: a key, a url, a machine) open their ways at once. Each call is inert for a place
+    // without its field, and this machine's identity is read only when a witness names a machine.
+    remote: hostLinkCall({ daemonLink }), direct: directWitnessCall({ walnutId: thisWalnutId }), here: lazyMachine(),
     ...transportOpts,
     onDrop: (why, d) => {
-      if (why === 'no-record-here' || (why === 'bad-status' && d.status === 404)) absentAt.set(d.witness, Date.now())
+      // Only the witness's own "nothing here" (it looked at its directory) is absent; any other 404 is not reached.
+      if (why === 'bad-status' && d.status === 404 && d.error === NO_WITNESS_HERE_CODE) absentAt.set(d.witness, Date.now())
       transportOpts.onDrop?.(why, d)
     },
   })
@@ -115,4 +124,39 @@ export async function proposeAndWait(h: PermitHandle, make: (c: PermitClient) =>
   const pending = h.client.pendingRecord()
   if (!pending || pending.number !== record.number) return { outcome: 'chosen', record }
   return { outcome: h.client.outcome() === 'short' ? 'short' : 'open', record }
+}
+
+/**
+ * Change the witness list as the holder, both steps (permit/client.ts changeWitnesses: the pair step,
+ * then the final one the client sends once the pair stood); ok once the final step stood and the
+ * client runs on `next`. A step that did not stand in time is reported, never taken as done.
+ */
+export async function changeListAndWait(h: PermitHandle, next: string[], waitMs = 15_000): Promise<{ ok: true } | { ok: false; why: string }> {
+  const target = [...next].sort()
+  const done = () => !h.client.jointList() && h.client.witnessList().length === target.length && h.client.witnessList().every((w) => target.includes(w))
+  const deadline = Date.now() + waitMs
+  // The final step the client sent by itself once the pair stood: wait for it, never send a step over it (a new pair
+  // step from the old list, sent while the witnesses already take the final one, is refused there and stands nowhere).
+  const settle = async (): Promise<void> => {
+    let last = Date.now()
+    while (Date.now() < deadline) {
+      const p = h.client.pendingRecord()
+      if (!p || p.kind !== 'members' || h.client.outcome() !== 'open') return
+      if (Date.now() - last > 300) { h.client.retransmit(); last = Date.now() }
+      await tick(20)
+    }
+  }
+  for (let step = 0; step < 4; step++) {
+    await settle()
+    if (done()) return { ok: true }
+    const left = deadline - Date.now()
+    if (left <= 0) break
+    let r: ProposeResult | null
+    try { r = await proposeAndWait(h, (c) => c.changeWitnesses(target), left) } catch (err) { return { ok: false, why: (err as Error).message } }
+    if (!r) return { ok: false, why: 'nothing was sent' }
+    if (r.outcome !== 'chosen') return { ok: false, why: `its ${r.record.stage ?? r.record.kind} step is ${r.outcome}` }
+    await tick(20)
+  }
+  await settle()
+  return done() ? { ok: true } : { ok: false, why: 'it did not finish in time' }
 }

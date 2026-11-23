@@ -1,17 +1,20 @@
 import { defineCapability } from './manifest.js'
 
 /**
- * The box is one witness of a switchable leader's write permission (docs/reference/leader-switch.md,
- * "How a witness is reached"): the one witness a candidate machine reaches with no leader link, by
- * its direct door. Off by default; on, the box keeps the witness's record and key in its machine
- * state dir (never in its data dir) and answers only a caller that proves that key. No job, no
- * socket door: two HTTP routes (web/routes/witness-door.ts, the door's code in
- * core/leader/switch/witness-door.ts), mounted only while the box has it.
+ * The server is one witness of a switchable leader's write permission (docs/reference/leader-switch.md,
+ * "How a witness is reached"): a witness a candidate machine reaches with no leader link, by its
+ * direct door. The companion, or a host's service (`alsoHostReplica`: a dev box's `walnut web --replica`,
+ * the same module), opens it when its env names it; off by default on both. On, the server keeps the
+ * witness's record and key in its machine state dir (never in a data dir) and answers only a caller
+ * that proves that key. No job, no socket door: HTTP routes (web/routes/witness-door.ts, the door's code
+ * in core/leader/switch/witness-door.ts). The setup route is the companion's only: a host's witness is
+ * set up over the leader's own link to it (the leader door's witness route), never a new credential.
  */
 export const witnessDoor = defineCapability({
   name: 'witness-door',
   summary: "The box keeps one witness of a switchable leader's write permission and answers it on a direct door, proven with that witness's own key.",
   companionDefault: false,
+  alsoHostReplica: true,
   jobs: [],
   doors: [],
   routes: [
@@ -23,7 +26,7 @@ export const witnessDoor = defineCapability({
     },
     {
       path: '/bridge/witness-setup',
-      opensWith: "only the paired Mac's own machine token (bridge-local), checked before the body is read, as every write the Mac makes to this box; it sets a witness up once (its record, its first list, its key) and never replaces a key; a device token or another machine's token gets 403, failures are rate limited per address",
+      opensWith: "on the companion only (a host's service does not mount it): only the paired Mac's own machine token (bridge-local), checked before the body is read, as every write the Mac makes to this box; it sets a witness up once (its record, its first list, its key) and never replaces a key; a device token or another machine's token gets 403, failures are rate limited per address",
       verifiedIn: 'src/web/routes/bridge-ingest.ts',
       check: "cred.kind !== 'machine' || cred.name !== PRIMARY_MACHINE_DEVICE",
     },

@@ -31,12 +31,12 @@ function run(): Promise<Record<string, any>> {
 }
 
 describe.skipIf(!BUN || process.platform === 'win32')('a witness call through a real host daemon to the leader door of the host service', () => {
-  it('is relayed to the door: off and not set up are the 404 of a path never had, set up it takes a grant, and a setup beside records is refused', async () => {
+  it('is relayed to the door: off is the 404 of a path never had, on and not set up says it holds nothing, set up it takes a grant, and a setup beside records is refused', async () => {
     const r = await run()
     const gone = { status: 404, body: { ok: false, error: 'not_found' } }
     expect(r.neverHad).toEqual(gone)
     expect(r.offRead).toEqual(gone)
-    expect(r.onNotSetUp).toEqual(gone)
+    expect(r.onNotSetUp).toEqual({ status: 404, body: { ok: false, error: 'no_witness_here' } })
     expect(r.setup).toEqual({ status: 200, body: { ok: true, made: true } })
     expect(r.setupAgainWithRecords).toEqual({ status: 409, body: { ok: false, error: 'witnesses_hold_records' } })
     expect(r.readAfterSetup.status).toBe(200)

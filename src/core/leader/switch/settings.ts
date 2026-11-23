@@ -84,6 +84,12 @@ const str = (v: unknown): v is string => typeof v === 'string' && v.length > 0
 /** A witness key: 32 random bytes, hex (hmac-proof.ts PROOF_SECRET_RE). */
 const KEY_RE = /^[0-9a-f]{64}$/
 
+/** A door URL as it is stored and compared: the URL's own normal form (scheme and host lower case, default port dropped), no trailing slash. */
+export function normalWitnessUrl(raw: string): string {
+  const u = new URL(raw.trim())
+  return `${u.protocol}//${u.host}${u.pathname.replace(/\/+$/, '')}`
+}
+
 /**
  * Why `raw` is no direct witness door URL, or null when it is one: https://, or http:// to a
  * loopback address only (an ssh tunnel, a test), no credentials, no query or fragment.
@@ -118,7 +124,7 @@ function parseWitness(x: Record<string, unknown> | undefined): WitnessPlace | st
     id: x.id,
     ...(str(x.machine) ? { machine: x.machine.trim() } : {}),
     ...(str(x.host) ? { host: x.host.trim() } : {}),
-    ...(str(x.url) ? { url: x.url.trim().replace(/\/+$/, '') } : {}),
+    ...(str(x.url) ? { url: normalWitnessUrl(x.url) } : {}),
     ...(typeof x.key === 'string' ? { key: x.key } : {}),
   }
 }

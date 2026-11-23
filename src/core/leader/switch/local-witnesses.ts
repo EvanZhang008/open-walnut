@@ -21,7 +21,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { withFileLock } from '../../../utils/file-lock.js'
 import { createWitnessClock } from '../permit/clock.js'
-import { bootstrapWitnessStore, createFilePermitStore } from '../permit/store.js'
+import { bootstrapWitnessStore, createFilePermitStore, prepareJoiningWitness } from '../permit/store.js'
 import { PermitWitness } from '../permit/witness.js'
 import type { PermitParams, PermitReply, PermitRequest } from '../permit/types.js'
 import type { LocalWitnessPlace } from './settings.js'
@@ -29,6 +29,8 @@ import type { LocalWitnessPlace } from './settings.js'
 import { registerMemoryHolder } from '../../observability/memory-ledger.js'
 
 const RECORD = 'permit-record.json'
+/** The witness's own key beside its record (witness-route.ts writes it at the setup). */
+export const WITNESS_KEY_FILE = 'witness-key'
 
 export function witnessRecordFile(place: LocalWitnessPlace): string {
   return path.join(place.dir, RECORD)
@@ -48,13 +50,22 @@ function readText(file: string): string {
 }
 
 /**
- * Serve one request at a local witness; null when its directory is missing (no answer). The lock
+ * Whether a witness directory holds nothing of a witness: no record and no key (witness-route.ts). Only
+ * then may an answer say "no witness here" (a setup's evidence `absent`): a key with no record, or a record
+ * this process cannot read, is a witness that may hold something, so it is no such answer.
+ */
+export function witnessDirEmpty(dir: string): boolean {
+  return !fs.existsSync(path.join(dir, RECORD)) && !fs.existsSync(path.join(dir, WITNESS_KEY_FILE))
+}
+
+/**
+ * Serve one request at a local witness; null when its directory or its record is missing (no answer). The lock
  * is the async one (a server's event loop never waits on it), held a short while: a witness whose
  * lock is busy that long gives no answer, as a slow one on a network would.
  */
 export function serveLocalWitness(place: LocalWitnessPlace, req: PermitRequest, params: PermitParams): Promise<PermitReply | null> {
-  if (!fs.existsSync(place.dir)) return Promise.resolve(null)
   const file = witnessRecordFile(place)
+  if (!fs.existsSync(file)) return Promise.resolve(null)
   return withFileLock(file, async () => {
     const text = readText(file)
     let c = cache.get(place.dir)
@@ -90,4 +101,15 @@ export function setUpLocalWitnesses(places: LocalWitnessPlace[], list: string[] 
     made.push(p.id)
   }
   return { made, kept }
+}
+
+/**
+ * Set up a witness that joins a Walnut already running (permit/store.ts prepareJoiningWitness): it takes
+ * nothing until a list change from generation `epoch` or later names it. Kept when a record is there.
+ */
+export function prepareLocalJoiningWitness(place: LocalWitnessPlace, epoch: number): { made: boolean } {
+  fs.mkdirSync(place.dir, { recursive: true, mode: 0o700 })
+  if (fs.existsSync(witnessRecordFile(place))) return { made: false }
+  prepareJoiningWitness(createFilePermitStore(witnessRecordFile(place)), epoch)
+  return { made: true }
 }

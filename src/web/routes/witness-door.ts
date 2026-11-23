@@ -1,7 +1,8 @@
 /**
- * The companion's witness of a switchable leader (capability `witness-door`, off by default:
- * src/core/capabilities/witness-door.ts). Two routes outside /api, mounted only while the box has
- * the capability, so without it both paths answer exactly what a path the server never had does:
+ * One witness of a switchable leader on the companion or a dev box's service (capability `witness-door`,
+ * off by default on both: src/core/capabilities/witness-door.ts). Routes outside /api, mounted only while
+ * the server has the capability (the setup route on the companion only: a dev box's witness is set up
+ * over the leader's own link to it), so without it each path answers exactly what a path the server never had does:
  *
  *   POST /leader-witness/challenge, /leader-witness/request
  *       the witness's direct door (core/leader/switch/witness-door.ts): a caller proves the witness's
@@ -39,7 +40,7 @@ export function createWitnessDoorRouter(o: { root?: string } = {}): Router {
   })())
   const send = (res: Response, r: { status: number; body: unknown }) => { res.status(r.status).set('cache-control', 'no-store').json(r.body) }
   router.post('/challenge', express.json({ limit: '64kb' }), (req: Request, res: Response, next) => {
-    void theDoor().then((d) => send(res, d.challenge(req.body))).catch(next)
+    void theDoor().then((d) => send(res, d.challenge(req.body, req.ip ?? req.socket.remoteAddress ?? 'unknown'))).catch(next)
   })
   router.post('/request', express.json({ limit: BODY_LIMIT }), (req: Request, res: Response, next) => {
     void (async () => {

@@ -645,26 +645,45 @@ is made, and that function is the only place that changes.
 **When it answers.** A machine serves a witness only when the experiment `switchable_leader` is on (a host's
 config is a copy of the leader's) AND an operator set the witness up (`walnut leader witnesses init`): a
 witness that lost its record never starts over by itself, so a request alone never makes one. Otherwise
-the answer is **404 `not_found`**, byte for byte the answer of a path the service never had (also for a witness that is
-not set up, and when the config cannot be read): nothing tells a caller from today's service, and with the experiment off the door
-loads none of the permit or switch code (it checks the flag first). 404 rather than 503 because 503 would say "a witness is
-here", and a caller gets nothing more from it (any answer but 200 is no answer to the permit client). One witness id per Walnut
-per machine: a second `setup` with another id is refused with 409, and a request for an id this machine does not hold is 404.
+the answer is **404 `not_found`**, byte for byte the answer of a path the service never had (with the experiment off, when the
+config cannot be read, and for a witness directory that holds a key but no record): nothing tells a caller from today's service,
+and with the experiment off the door loads none of the permit or switch code (it checks the flag first). 404 rather than 503
+because 503 would say "a witness is here", and a caller gets nothing more from it (any answer but 200 is no answer to the permit
+client). One answer says more: **404 `no_witness_here`**, given only by a service that runs the experiment, follows this Walnut,
+and looked in that witness's directory and found neither a record nor a key. It is the one answer a setup's evidence counts as
+`absent` (below). One witness id per Walnut per machine: a second `setup` with another id is refused with 409.
 A body is stored only when it is exactly a permit record (every field checked, unknown fields refused, 400 otherwise).
 
 **Setup only from nothing.** A setup makes a witness record from nothing, so it is refused while any other witness of the list
 may still hold records: a witness that lost its disk must not come back as a fresh one beside witnesses that still hold the
 lease (it would say yes to a second machine, and that machine plus a witness with only an old record would be a majority while the
 first still leads). Every setup therefore carries what the caller saw at each OTHER witness of the list: `absent` (reached, and it
-answered that no witness is there: a 404, or no record on that machine), `unreached` (no answer in time: it may hold a record),
+answered `no_witness_here`, by any way: its directory holds nothing), `unreached` (no answer in time, or any other answer: a plain
+404, a 403, a 502; it may hold a record),
 `blank` (no record, generation 0) or `record`; the witness refuses (409) one that is missing or incomplete, shows a record
 (`witnesses_hold_records`) or a witness not reached (`witnesses_unreached`), so a slow link never passes for an empty witness, and
-`walnut leader witnesses init` does not send one it knows will be refused. While a leader leads, records exist, so init never makes
-a missing witness again. A lost witness rejoins through a list change (permit/store.ts), which is not built for the
-switch yet; until then it stays unset and the list runs on its other two. The setup is for the first time a list is made, so
-`init` runs against the leader server while it still waits for its first lead: that server opens no link then, and sets each
-witness up the way it reaches it with none (one its own machine keeps in its state dir, a host over a registered reach, the
-companion on its lane; `daemonLink` only once it leads, when records exist and a setup is refused anyway).
+`walnut leader witnesses init` does not send one it knows will be refused. The setup from nothing is for the first time a list is
+made, so `init` runs against the leader server while it still waits for its first lead: that server opens no link then, and sets
+each witness up the way it reaches it with none (one its own machine keeps in its state dir, a host over a registered reach, the
+companion on its lane). `init` runs only against the leader's own running server (it refuses on a standby, a trial start or a
+machine whose server runs no permission): only the leader mints a key, so a key never comes from a copy.
+
+**A witness that joins later.** Once records exist, a witness that is missing (never set up, or its disk lost) is added through
+the permit core's own way of adding a member, and only while this server leads: `init` again, on the leader. The leader takes it
+out of the running list (a list change it writes as the holder, both steps), sets it up as a JOINING witness from the generation the
+witnesses report (`prepareJoiningWitness`, `generationToJoin`: it takes nothing until a change names it), then adds it back by a
+second list change; `init` prints `joined`. The setup goes the way the witness is reached: its own machine directly, a host over
+the leader's link (now open), the companion on its lane; it carries the key from the leader's config, and a witness that holds
+another key answers `key_differs`, which `init` reports by name (a key is never replaced). A witness that answered with a record
+of another list, or did not answer, is left alone and reported. The model check runs it (a third witness joins after the first
+lead, under restarts and a lossy network: `tests/core/leader/permit/model-check.test.ts`).
+
+**The first lead needs two witnesses set up from nothing.** A first leader must reach a majority by ways a and b before it leads,
+and see every other witness `absent`: a witness reached only by a `host` answers nothing before the first lead (no link yet), so it
+must also have a direct door (or wait for the host-dialed door) to be seen absent, and it joins after the first lead. With the
+layout below a dev machine is the first leader: it keeps one witness, sets the companion's up on its lane and sees the other dev
+machine's door answer `no_witness_here`; that third one joins once it leads. The Mac as the first leader keeps no witness and
+reaches the dev machines' witnesses only over links, so it waits for 5a's host-dialed door.
 
 **The transport.** `src/core/leader/switch/witness-transport.ts` is the `PermitTransport` for both kinds of
 witness. A remote request is one HTTP request on a stream the host daemon relays (the leader server's link: `link(host)`,
@@ -750,29 +769,42 @@ read one record format, which `permit/store.ts` already versions.
 **Way b: the direct door.** A witness's own door on a service others can reach, independent of any leader link:
 
 ```
-POST <url>/challenge  {v:1, walnutId, witness, digest}        digest = sha256 of the call's JSON text
+POST <url>/challenge  {v:1, walnutId, witness, digest, cnonce} digest = sha256 of the call's JSON text; cnonce: the caller's own
                       -> {ok, nonce, ttlMs}                    a nonce for THIS call only, once, 10 s
 POST <url>/request    {v:1, nonce, proof, call}               proof = HMAC-SHA256 under the witness's key of the caller text
                       -> {ok, reply, proof}                    proof = HMAC-SHA256 under the same key of the witness text
 ```
 
-The caller text is the lines `walnut-witness-door-v1`, `caller`, the Walnut id, the witness id, the nonce and the call's digest; the
-witness text is the same with `witness` in place of `caller` and the reply's digest added (`witness-wire.ts` `doorCallerProofText`,
-`doorWitnessProofText`).
+The caller text is the lines `walnut-witness-door-v1`, `caller`, the Walnut id, the witness id, the nonce, the caller's nonce and the
+call's digest; the witness text is the same with `witness` in place of `caller` and the reply's digest added (`witness-wire.ts`
+`doorCallerProofText`, `doorWitnessProofText`). The caller's nonce is fresh per call, so a door that replays a recorded exchange (an
+old nonce, its reply and proof) never passes for the answer to a new call.
 
 A replayed request finds its nonce used, a nonce issued for another call finds another digest, a late one an expired nonce, a
 wrong key no proof that holds, a wrong Walnut no witness to give a nonce for: each is refused (403, 404) before the record is read,
 so no refusal changes the witness's number. The caller counts a reply only when the witness proved the same key over it: a door
-that does not hold the key cannot pass for the witness. Every refusal is a fixed code, never a key or a record. The nonces
-are kept in the door's memory, at most 1024 (a flood pushes out the oldest). No rate limit: a 256-bit key is not guessed, and a
-limit per address would let one caller behind a shared address lock the leader out. Only `https://` (plain `http://` only to a
-loopback address); the proofs are in `src/utils/hmac-proof.ts`, the one module of this crypto (5a's door proofs are to use it too).
+that does not hold the key cannot pass for the witness. Every refusal is a fixed code, never a key or a record. A door gives no
+nonce for a witness it keeps no key of: `no_witness_here` when the directory holds nothing, `not_a_witness` otherwise (a record
+without its key), which a setup counts as not reached. The nonces are kept in the door's memory and limited: at most 32 open per
+caller address (above the 20 calls one permit client keeps open to a witness), 256 per witness, 1024 in all; past a limit a challenge is refused (429 `too_many_challenges`, not logged) and no
+open nonce is ever pushed out, so a flood from one address never takes another caller's nonce. A call holds its nonce for one
+round trip, so an honest caller needs one or two. (On the companion `trust proxy: loopback` makes the address the client's behind
+its front.) Only `https://` (plain `http://` only to a loopback address); the proofs are in `src/utils/hmac-proof.ts`, the one
+module of this crypto (5a's door proofs are to use it too).
 
-The cloud companion opens it as its capability `witness-door` (`src/core/capabilities/witness-door.ts`, off by default:
-`WALNUT_CAPABILITIES` names it): `POST /leader-witness/challenge|request`, and its one-time setup `POST /bridge/witness-setup`, which
-takes only the paired Mac's own machine token (the gate of every write the Mac makes to the box), sets the witness up once and
-never replaces a key. Off, neither path is mounted and each answers what a path the server never had answers. Any other service
-others can reach opens the same door with the same module (`createWitnessDoorRouter`, `machineWitnessDoor`).
+The cloud companion and a dev machine's service open it as the capability `witness-door` (`src/core/capabilities/witness-door.ts`,
+off on both by default: `WALNUT_CAPABILITIES` names it; a host replica takes it because its manifest says `alsoHostReplica`): the
+same module on both (`createWitnessDoorRouter`, `machineWitnessDoor`), `POST /leader-witness/challenge|request` over that machine's
+witness root. The setup differs, and neither adds a kind of credential:
+
+- on the companion, `POST /bridge/witness-setup`, which takes only the paired Mac's own machine token (the gate of every write the
+  Mac makes to the box);
+- on a dev machine, no setup route on the door: the setup comes only over the leader's own link to that machine's service (way c's
+  `POST /host-api/witness/setup` on its leader door, `authorizeWitnessCaller`: the host daemon's relayed stream from the leader of
+  the Walnut the service follows).
+
+Either sets the witness up once and never replaces a key. Off, nothing is mounted and each path answers what a path the server never
+had answers.
 
 **Way c** is step 1's, unchanged: `POST /host-api/witness/request` on a host's leader door, the caller authorized by the link it
 came on (`authorizeWitnessCaller`). Its setup now carries the witness's key, kept beside the record.
@@ -826,10 +858,11 @@ Three always-on places: **the services of the two always-on dev machines, and th
 
 - **A dev machine as the candidate** reaches itself (way a) and the companion (way b): two of three, with no leader link.
 - **A switch back to the Mac** (not a witness) asks all three over its links, as the leader does today; as a candidate it has no link
-  (above), so by the rule it needs direct doors to two of them: the companion's and one dev machine service's. A dev machine's
-  service has no direct door yet (it would open one the same way, `createWitnessDoorRouter`), so today the candidate-side preflight
-  refuses a switch back to the Mac and names the two it cannot reach; 5a's host-dialed door does not change that (hosts dial the
-  leader, and the Mac is not the leader before its commit).
+  (above), so by the rule it needs direct doors to two of them: the companion's and a dev machine service's (`witness-door` on that
+  service). The end-to-end test runs this layout: a dev machine leads, the other dev machine's witness joins after the first lead,
+  and a candidate with no witness and no link switches in with that other dev machine down
+  (`tests/e2e/leader-switch-no-link-e2e.test.ts`). 5a's host-dialed door does not change this (hosts dial the leader, and the Mac is
+  not the leader before its commit).
 - **A new leader on a dev machine with the companion out of reach and no host dialed in** holds itself (way a) and nothing else:
   one of three. Its permit runs out (58 s after its last renew that a majority took), its doors close and it stops all outward work:
   safe, but not available, until the companion answers or a host's link carries the third witness.
@@ -851,12 +884,12 @@ witness, above).
   [done](#witnesses-on-other-machines), with a candidate's own ways to the witnesses (a and b).
 - **Waiting on 5a** (the host-dialed door): its call frames as way c (`allowDoorCallPrefix('/host-api/witness/')` registering an
   `addWitnessReach`), and moving its proofs onto `src/utils/hmac-proof.ts`. Until then a witness reached only by a `host` cannot
-  be set up or read by a server that has not led: a list is set up before its first lead, so such a witness needs the door, or a
-  direct door of its own. Tests: a real host daemon runtime relays the leader's `follower`/`replica` stream to a real leader door
+  be set up or read by a server that has not led: it joins after the first lead (above), and the Mac as a first leader (no witness
+  of its own, the others only over links) waits for the door. Tests: a real host daemon runtime relays the leader's `follower`/`replica` stream to a real leader door
   with the route on it (`tests/core/leader/switch/witness-twin.test.ts`), and a spy on the link module shows no link before the
   first lead, none for a refused or trial start, and the link of each host after it (`witness-link-gate.test.ts`).
-- **A direct door on a dev machine's service** (the switch back to the Mac needs two), and setting the companion witness up
-  through `init` on a leader paired with it: built and tested against the real companion route, not yet run end to end from `init`.
+- **The candidate's own probe on another machine**: `reachWitnesses` runs in the switch command's process with the candidate's identity
+  (`LocalSide`); a remote side running it on the candidate's machine is part of the remote `SwitchSide` above.
 - **Hosts following the new leader** is built ([Hosts follow the new leader](#hosts-follow-the-new-leader)):
   no daemon runs in the rehearsal yet, so that runs only in the real-daemon test.
 - **Operation ids registered at the witnesses before an outward send**: the permit core has

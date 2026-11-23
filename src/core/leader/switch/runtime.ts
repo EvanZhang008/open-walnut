@@ -32,12 +32,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { appendMayAct, markerRefusal, readMarker, readOpOutcomes, recordOpOutcomes, summarize, writeUnresolvedOps } from './records.js'
-import { openPermitClient, proposeAndWait, readStanding, type PermitHandle } from './permit-ops.js'
+import { changeListAndWait, openPermitClient, proposeAndWait, readStanding, type PermitHandle } from './permit-ops.js'
 import { sightingsOf, type WitnessSighting } from './witness-setup.js'
 import { DEFERRED_DOOR_WORK_FILE, notifyOutwardDoorsOpened, setOutwardDoorChecker, setOutwardSender, type OutwardDoorKind } from './doors.js'
 import type { LeaderSwitchSettings, WitnessPlace } from './settings.js'
 import type { PermitRecord } from '../permit/types.js'
 import { PermitNotHeld } from '../permit/client.js'
+import { generationToJoin } from '../permit/store.js'
 import { acquireInstanceLock, type InstanceLock } from '../permit/instance-lock.js'
 
 export type BootDecision =
@@ -59,9 +60,18 @@ export interface PermitRuntime {
    * the one way a command reads remote witnesses (witness-reader.ts). `standing` is the record a majority
    * holds (null: none ever), `agreed` false when no record has a majority among the answers.
    */
-  readWitnesses(): Promise<{ standing: PermitRecord | null; agreed: boolean; answered: number; of: number; sightings: WitnessSighting[] }>
+  /** `waitMs`: how long to wait for the witnesses that have not answered (the read ends once each answered or said it holds nothing). */
+  readWitnesses(waitMs?: number): Promise<{ standing: PermitRecord | null; agreed: boolean; answered: number; of: number; sightings: WitnessSighting[] }>
   /** New ways to the same fixed list (keys `walnut leader witnesses init` minted): false when the list itself differs. */
   setWitnessPlaces(places: WitnessPlace[]): boolean
+  /** Whether this server has held the permission at least once (its daemon links may open from then on). */
+  hasLed(): boolean
+  /** The witness list the permission runs on now (it differs from the config's only in the middle of adding a witness). */
+  witnessList(): string[]
+  /** Change that list as the holder (both steps), only while leading: how a missing witness is added back (witness-setup.ts). */
+  changeWitnessList(next: string[]): Promise<{ ok: true } | { ok: false; why: string }>
+  /** The generation a joining witness starts from, read from the witnesses now (permit/store.ts generationToJoin). */
+  joinGeneration(): Promise<number | null>
   /** The switch's handover, written by this process (the only one the witnesses take it from). */
   handover(to: string): Promise<{ ok: boolean; record?: PermitRecord; why?: string }>
   /** Take back a handover this process wrote (the switch rolled back while this server runs). */
@@ -469,11 +479,20 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
     status: () => ({ state, mayAct: h.client.mayAct(), remainingMs: h.client.remainingMs(), record: summarize(lastRecord), ...(why ? { why } : {}), ...(handoverRecord ? { handover: handoverRecord.number } : {}) }),
     handover,
     cancel,
-    readWitnesses: async () => {
-      const r = await readStanding(h)
+    readWitnesses: async (waitMs) => {
+      const r = await readStanding(h, waitMs)
       return { standing: r.standing ?? null, agreed: r.standing !== undefined, answered: r.answered, of: h.places.length, sightings: sightingsOf(r.replies, r.absent) }
     },
     setWitnessPlaces: (places) => h.setPlaces(places),
+    hasLed: () => everLed,
+    witnessList: () => h.client.witnessList(),
+    changeWitnessList: (next) => serial(async () => {
+      if (state !== 'leading' || !h.client.mayAct()) return { ok: false as const, why: 'this server does not hold the permission' }
+      const r = await changeListAndWait(h, next)
+      log(r.ok ? 'info' : 'warn', r.ok ? 'leader permit: the witness list changed' : 'leader permit: a witness list change did not stand', { list: next, ...(r.ok ? {} : { why: r.why }) })
+      return r
+    }),
+    joinGeneration: async () => generationToJoin((await readStanding(h)).replies),
     stop: async () => {
       if (stopped) return
       const wasLeading = state === 'leading' && h.client.mayAct()

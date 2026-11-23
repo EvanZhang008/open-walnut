@@ -71,6 +71,8 @@ export interface CapabilityFacts {
 const COMPANION_DEFAULT: ReadonlySet<Capability> = new Set(MANIFESTS.filter((m) => m.companionDefault).map((m) => m.name))
 /** The capabilities a host replica applies when its env names them (manifest `hostReplica`). */
 const HOST_REPLICA_CAPS: ReadonlySet<Capability> = new Set(MANIFESTS.filter((m) => 'hostReplica' in m && m.hostReplica === true).map((m) => m.name))
+/** What a host replica takes from its env: its own, and the companion's that say `alsoHostReplica`. */
+const HOST_REPLICA_TAKES: ReadonlySet<Capability> = new Set([...HOST_REPLICA_CAPS, ...MANIFESTS.filter((m) => 'alsoHostReplica' in m && m.alsoHostReplica === true).map((m) => m.name)])
 const NONE: ReadonlySet<Capability> = new Set()
 
 export function isCapability(name: string): name is Capability {
@@ -91,8 +93,8 @@ export function resolveCapabilities(raw: string | undefined, companion: boolean,
   const text = (raw ?? '').trim()
   if (!companion && hostReplica && text) {
     const names = text.split(/[\s,]+/).filter(Boolean)
-    const own = names.filter((n): n is Capability => HOST_REPLICA_CAPS.has(n as Capability))
-    const rest = names.filter((n) => !HOST_REPLICA_CAPS.has(n as Capability))
+    const own = names.filter((n): n is Capability => HOST_REPLICA_TAKES.has(n as Capability))
+    const rest = names.filter((n) => !HOST_REPLICA_TAKES.has(n as Capability))
     return { capabilities: own.length ? new Set(own) : NONE, ignored: rest.length ? rest.join(',') : null }
   }
   if (!companion) return { capabilities: NONE, ignored: text || null }

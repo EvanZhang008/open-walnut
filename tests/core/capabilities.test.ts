@@ -72,6 +72,16 @@ describe('resolveCapabilities', () => {
     expect(CAPABILITIES).toContain('host-local-calls')
   })
 
+  it('a dev box service opens the same witness door as the companion when its env names it, and only then', () => {
+    expect(resolveCapabilities('witness-door', false, true)).toEqual({ capabilities: new Set(['witness-door']), ignored: null })
+    expect(resolveCapabilities('host-local-calls,witness-door', false, true).capabilities).toEqual(new Set(['host-local-calls', 'witness-door']))
+    expect(resolveCapabilities(undefined, false, true).capabilities.has('witness-door')).toBe(false)
+    expect(resolveCapabilities('witness-door', true).capabilities.has('witness-door')).toBe(true)
+    // The Mac: never.
+    expect(resolveCapabilities('witness-door', false, false).capabilities.size).toBe(0)
+    expect(defaultCapabilities('host').has('witness-door')).toBe(false)
+  })
+
   it('defaults per placement: the companion all four, the Mac and a host none', () => {
     expect(list(defaultCapabilities('cloud'))).toEqual([...FOUR].sort())
     expect(defaultCapabilities('mac').size).toBe(0)

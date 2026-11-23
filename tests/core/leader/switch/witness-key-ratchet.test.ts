@@ -150,6 +150,7 @@ describe('a witness key goes nowhere but where it belongs', () => {
       'src/core/leader/switch/witness-reach.ts': 'names a door that has no key yet',
       'src/core/leader/switch/witness-wire.ts': 'the setup body carries it',
       'src/core/leader/switch/witness-setup.ts': 'sets a witness of this machine up with its key',
+      'src/core/leader/switch/local-witnesses.ts': 'names the key file, to tell a directory that holds nothing',
       'src/commands/leader.ts': 'init mints the keys',
       'src/core/config-redact.ts': 'masks it in every client view',
       'src/web/routes/witness-door.ts': 'refuses a companion setup that carries none',

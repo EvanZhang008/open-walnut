@@ -30,7 +30,7 @@ const post = async (port: number, p: string, body: unknown, token?: string) => {
   const r = await fetch(`http://127.0.0.1:${port}${p}`, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) })
   return { status: r.status, text: await r.text() }
 }
-const challenge = { v: 1, walnutId: WALNUT, witness: 'w-k', digest: sha256Hex('x') }
+const challenge = { v: 1, walnutId: WALNUT, witness: 'w-k', digest: sha256Hex('x'), cnonce: proofSecret() }
 
 describe('the companion\'s witness door', () => {
   it('off: neither path exists, each answers what a path the server never had answers', async () => {
@@ -49,10 +49,10 @@ describe('the companion\'s witness door', () => {
   it('on: refuses every caller until set up, takes its setup from the paired Mac only, and then answers only the key', async () => {
     const box = await startCloudBoxReplica(path.join(root, 'on'), undefined, { env: { WALNUT_CAPABILITIES: 'witness-door' } })
     boxes.push(box)
-    // No key configured: no nonce for anyone.
+    // No key configured: no nonce for anyone, and the witness says it holds nothing (a setup's evidence `absent`).
     const none = await post(box.port, '/leader-witness/challenge', challenge)
     expect(none.status).toBe(404)
-    expect(JSON.parse(none.text)).toEqual({ ok: false, error: 'not_a_witness' })
+    expect(JSON.parse(none.text)).toEqual({ ok: false, error: 'no_witness_here' })
     const key = proofSecret()
     const evidence: WitnessEvidence[] = [{ witness: 'w-b', seen: 'absent' }, { witness: 'w-c', seen: 'blank' }]
     const setup = { v: 1, walnutId: WALNUT, witness: 'w-k', list: LIST, evidence, key }
