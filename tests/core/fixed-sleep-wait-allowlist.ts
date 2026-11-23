@@ -149,6 +149,7 @@ export const FIXED_SLEEP_ALLOWLIST: readonly FixedSleepAllowed[] = [
   { file: "tests/core/search-v2-wiring.test.ts", sleep: "await new Promise((r) => setTimeout(r, 100));", reason: "already a poll: interval of the file's own waitFor helper (8 s deadline)" },
   { file: "tests/core/self-update/background-install.test.ts", sleep: "await new Promise((r) => setTimeout(r, 300))", reason: "negative: no record written for a gone pid" },
   { file: "tests/core/send-queue-drain-r3.test.ts", sleep: "await sleep(300)", reason: "negative: an announcement for another host must send nothing" },
+  { file: "tests/core/tts/tts-local-voice.test.ts", sleep: "await new Promise((r) => setTimeout(r, 300))", reason: "time under test: the fallback takes longer than the local voice's budget and must still not be cut by it" },
   { file: "tests/providers/remote-judged-session.test.ts", sleep: "await new Promise((r) => setTimeout(r, 10))", reason: "negative: after the ACP proxy's two calls reached its ACP object, no native lookup of the host follows them" },
   { file: "tests/providers/host-judged-runner.test.ts", sleep: "await new Promise((r) => setTimeout(r, 120))", reason: "negative: a start whose born row came is never taken back once its lost-answer wait (60 ms) ran out" },
   { file: "tests/core/session-channel/host-emitter.test.ts", sleep: "await sleep(40)", reason: "negative: an ended session says gone once and nothing more after two more changes, each past the live debounce (the emitter writes at most every few ms)" },

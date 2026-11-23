@@ -6,7 +6,7 @@
  * it binds, its refusals, and that a cancel or a deadline stops a generation
  * between chunks. Only bytes are written and read: nothing is played.
  */
-import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdir, mkdtemp, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -188,7 +188,8 @@ describe('local voice daemon script', () => {
     const { port } = await startDaemon();
     const t0 = Date.now();
     const long = speak(port, { text: 'LONG', id: 'r1' });
-    await new Promise((r) => setTimeout(r, 300));
+    // The cancel goes once the model has the piece (its fake records the call), not after a guess.
+    await vi.waitFor(async () => { expect((await calls()).some((c) => c.text === 'LONG')).toBe(true); }, { timeout: 10_000, interval: 25 });
     await fetch(`http://127.0.0.1:${port}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'r1' }) });
     const stopped = await long;
     expect(stopped.status).toBe(408);

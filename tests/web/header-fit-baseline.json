@@ -66,7 +66,6 @@
   "components/sessions/ThreadPathBar.tsx": 1,
   "components/sessions/ThreadStackHeader.tsx": 1,
   "components/sessions/TriggerPickerPopover.tsx": 1,
-  "components/sessions/VoiceConversationBar.tsx": 1,
   "components/sessions/WorkflowProgress.tsx": 1,
   "components/sessions/WorkflowTranscriptModal.tsx": 1,
   "components/settings/SettingsFoldGroup.tsx": 1,
