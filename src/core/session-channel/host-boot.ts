@@ -41,7 +41,8 @@ import { createHostSessionPort, selfOwnApi, StartBundles } from './host-port.js'
 import { createHostSessionRoutes, type HostSessionRoutes } from './host-routes.js'
 import { liveStateOf, type LiveRunnerLike } from './host-live.js'
 import { startHostResendFamily, turnEndStamp, turnOfOwnSession, type HostResendFamily } from './host-resend.js'
-import { startOldLeaderWatch, type OldLeaderWatch } from './old-leader-watch.js'
+import { LEADER_CHANNEL_CAP, startOldLeaderWatch, type OldLeaderWatch, type SessionSideState } from './old-leader-watch.js'
+import { createStandDownHeld } from './stand-down-held.js'
 import { installSessionPort } from '../sessions/session-port.js'
 import { heldOnThisHost, startStrandedSweep, type StrandedSweep } from '../sessions/stranded-own-rows.js'
 import { rowOwnedHere } from '../sessions/session-row-owner.js'
@@ -65,6 +66,8 @@ export interface HostSessions {
 
 let current: HostSessions | null = null
 
+const STAND_DOWN_HELD_SUBSCRIBER = 'host-stand-down-held'
+
 /** The routes the leader door serves, or null when this host does not run its sessions. */
 export function hostSessionRoutes(): HostSessionRoutes | null {
   return current?.routes ?? null
@@ -73,6 +76,15 @@ export function hostSessionRoutes(): HostSessionRoutes | null {
 /** What this host's service adds to the capabilities its report names. */
 export function hostSessionCapabilities(): string[] {
   return current ? [SESSION_JUDGE_CAP, HOST_DOOR_CAP] : []
+}
+
+/**
+ * What this host's status report says of its session side (replica/front.ts `sessionSide`), or null
+ * when it does not run its sessions: judging, waiting on a channel its leader says it has, or
+ * stood down for an older leader (old-leader-watch.ts). The leader's Walnut Health shows the last two.
+ */
+export function hostSessionSideReport(): { state: SessionSideState; since: number | null } | null {
+  return current ? current.oldLeader.state() : null
 }
 
 export function hostSessionsRunning(): HostSessions | null {
@@ -125,12 +137,14 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   setOwnRowsGoneStore(gone)
   // The emitter is made just below; the leader's resync asks reach it once it is.
   let emitterRef: HostEmitter | null = null
+  // The old-leader watch, made below: a leader's link makes it look at once.
+  let watchRef: OldLeaderWatch | null = null
   const channel = new HostChannel({
     log, walnutId: o.walnutId, hostId: o.hostKey, ownRows: () => ownRows(o.hostKey), onLog: say,
     onResync: (sids) => { void emitterRef?.resync(sids).catch((err: unknown) => say('warn', 'host sessions: a resync failed', { error: err instanceof Error ? err.message : String(err) })) },
     goneRows: () => gone.list(),
     // A leader keeps the live state only in memory: each link gets it again.
-    onLeaderLinked: () => emitterRef?.relive(),
+    onLeaderLinked: () => { emitterRef?.relive(); void watchRef?.tick() },
   })
   const { sessionRunner } = await import('../../providers/claude-code-session.js')
   const runner = sessionRunner as unknown as LiveRunnerLike & { findSessionByClaudeId(sid: string): { consumedOffset?: number } | undefined }
@@ -224,16 +238,31 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     routes: () => current?.routes ?? null,
     log: say,
   })
-  const [{ leaderPresence }, { setHostStandsDown }] = await Promise.all([import('../server-role.js'), import('../sessions/judge-of.js')])
+  const [{ leaderPresence }, { setHostStandsDown, hostStandsDown }, { getConfig }] = await Promise.all([import('../server-role.js'), import('../sessions/judge-of.js'), import('../config-manager.js')])
+  // The turn ends the family skipped while standing down, for its stand-up (stand-down-held.ts).
+  const held = createStandDownHeld({ standingDown: hostStandsDown, owns: (sid) => emitter.owns(sid) })
+  bus.subscribe(STAND_DOWN_HELD_SUBSCRIBER, (event) => held.note(event), { global: true, interest: ['session:'] })
   const oldLeader = startOldLeaderWatch({
     leaderAnswers: () => leaderPresence().answers,
     channelLinked: () => channel.leaderLive() || dialer.linked(),
+    // The leader's own word in its config copy: one that speaks the channel never makes this host stand down on the timeout.
+    leaderSaysChannel: async () => {
+      const caps = (await getConfig().catch(() => null))?.leader_capabilities
+      return Array.isArray(caps) && caps.includes(LEADER_CHANNEL_CAP)
+    },
     // Every member of the resend family acts only on what judgedHere names (none, standing down); the
     // family stays subscribed in its order before the emitter. The CLIs, routes, log and emitter go on.
     standDown: () => setHostStandsDown(true),
-    standUp: () => setHostStandsDown(false),
+    standUp: () => {
+      setHostStandsDown(false)
+      const ends = held.take()
+      if (ends.length === 0) return
+      say('info', 'host sessions: handing the turn ends of the stand-down to the resend family', { count: ends.length, sessionIds: ends.slice(0, 20).map((e) => (e.data as { sessionId?: string }).sessionId) })
+      resend.replay(ends)
+    },
     log: say,
   })
+  watchRef = oldLeader
   current = { log, gone, channel, emitter, routes, bundles, resend, dialer, companion, stranded, oldLeader }
   // The session runner may reach the runtime in this process from now on (the own-sessions link).
   ;(await import('../../providers/daemon-connection.js')).setOwnSessionsLink(true)
@@ -282,6 +311,7 @@ export async function stopHostSessions(): Promise<void> {
   if (!c) return
   ;(await import('../../providers/daemon-connection.js')).setOwnSessionsLink(false)
   c.oldLeader.stop()
+  ;(await import('../event-bus.js')).bus.unsubscribe(STAND_DOWN_HELD_SUBSCRIBER)
   ;(await import('../sessions/judge-of.js')).setHostStandsDown(false)
   c.dialer.stop()
   c.companion.stop()

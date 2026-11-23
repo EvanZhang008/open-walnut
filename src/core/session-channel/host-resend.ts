@@ -76,15 +76,18 @@ export function leaderPromptRunner<R extends RespawnRunner>(runner: R, wait: typ
 
 /**
  * What the emitter keeps of a turn end of an own session: its data with `hostTakenBy`, the retrier
- * of this host that took it (turn-run.ts turnEndTakenByNow), read in the event's own tick.
+ * of this host that took it (turn-run.ts turnEndTakenByNow), read in the event's own tick. While
+ * this host stands down for an older leader (old-leader-watch.ts) no retrier here acts, so none took
+ * it: `hostTakenBy: null`.
  */
 export async function turnEndStamp(): Promise<(name: string, data: unknown) => unknown> {
-  const { turnEndTakenByNow } = await import('../sessions/turn-run.js')
+  const [{ turnEndTakenByNow }, { hostStandsDown }] = await Promise.all([import('../sessions/turn-run.js'), import('../sessions/judge-of.js')])
   return (name, data) => {
     if (name !== 'session:result' && name !== 'session:error') return data
     const d = (data ?? {}) as Record<string, unknown>
     const sessionId = typeof d.sessionId === 'string' ? d.sessionId : ''
     if (!sessionId) return data
+    if (hostStandsDown()) return { ...d, hostTakenBy: null }
     const isError = name === 'session:error' ? true : d.isError === true
     const result = name === 'session:error' ? (typeof d.error === 'string' ? d.error : null) : (typeof d.result === 'string' ? d.result : null)
     const hostTakenBy = turnEndTakenByNow({ ...(d as object), event: name === 'session:error' ? 'error' : 'result', sessionId, isError, result } as Parameters<typeof turnEndTakenByNow>[0])
@@ -103,12 +106,20 @@ export async function turnOfOwnSession(): Promise<(sid: string) => { waits: unkn
   }
 }
 
-export interface HostResendFamily { stop(): void }
+export interface HostResendFamily {
+  /** The bus subscribers the family registered (a replay goes to these only). */
+  readonly names: readonly string[]
+  /** Hand these events to the family's subscribers only, as if said now (stand-down-held.ts). */
+  replay(events: ReadonlyArray<{ name: string; data: unknown; source?: string; timestamp?: number }>): void
+  stop(): void
+}
 
 /** Start every member here, for this host's own rows. A member that fails to start is logged; the rest run. */
 export async function startHostResendFamily(o: { say?: Say } = {}): Promise<HostResendFamily> {
   const say: Say = o.say ?? (() => {})
   const stops: Array<() => void> = []
+  const { bus } = await import('../event-bus.js')
+  const before = new Set(bus.subscriberNames())
   const step = async (name: string, fn: () => Promise<(() => void) | void>): Promise<void> => {
     try {
       const stop = await fn()
@@ -176,8 +187,13 @@ export async function startHostResendFamily(o: { say?: Say } = {}): Promise<Host
     repair.start()
     return repair.stop
   })
+  const names = bus.subscriberNames().filter((n) => !before.has(n))
   say('info', 'host sessions: the resend family runs here for this host\'s own sessions', { members: stops.length })
   return {
+    names,
+    replay(events) {
+      for (const e of events) bus.deliverTo(names, e.name, e.data, { ...(e.source ? { source: e.source } : {}), ...(typeof e.timestamp === 'number' ? { timestamp: e.timestamp } : {}) })
+    },
     stop() {
       for (const s of stops.splice(0).reverse()) { try { s() } catch { /* stopping */ } }
     },

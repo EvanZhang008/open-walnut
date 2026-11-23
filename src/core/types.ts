@@ -1842,6 +1842,10 @@ export interface Config {
    *  true in the leader's config (replication/config-allowlist.ts derives it), so a host's service
    *  reads "on for any host" without `hosts.*.runs_sessions`, which the copy leaves out. */
   hosts_run_sessions?: string[];
+  /** Only in a host replica's config copy, never in config.yaml: what the leader's build speaks that
+   *  a host must know before it acts (`session-channel-v1`: the session channel, so a host never takes
+   *  this leader for an older one; session-channel/old-leader-watch.ts). Said while the switch is on. */
+  leader_capabilities?: string[];
   /** Startup warmup of every explicitly configured host's session daemon.
    *  On by default: without it the FIRST folder-picker open on a host pays the
    *  whole first-connect cost (runtime install + daemon upload, minutes).

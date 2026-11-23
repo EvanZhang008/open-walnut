@@ -139,6 +139,12 @@ export interface ReplicaFrontOptions {
    * core/session-channel/host-boot.ts). Absent or empty: the report has no such field.
    */
   capabilities?: () => readonly string[]
+  /**
+   * This host's session side now (core/session-channel/host-boot.ts hostSessionSideReport): judging,
+   * waiting on a channel its leader says it has, or stood down for an older leader. Null or absent:
+   * the report has no such field.
+   */
+  sessionSide?: () => Record<string, unknown> | null
 }
 
 export interface ReplicaFront {
@@ -396,7 +402,13 @@ export function startReplicaFront(opts: ReplicaFrontOptions): ReplicaFront {
       ...(opts.localCalls ? { answersOnline: callEntryOn } : {}),
       ...(opts.localCalls ? { callSocket: callSocket(), offlineAnswers: view?.view.offlineAnswers ?? null } : {}),
       ...capabilitiesField(),
+      ...sessionSideField(),
     }
+  }
+
+  function sessionSideField(): { sessionSide?: Record<string, unknown> } {
+    const side = opts.sessionSide?.() ?? null
+    return side ? { sessionSide: side } : {}
   }
 
   function capabilitiesField(): { capabilities?: string[] } {

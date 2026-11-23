@@ -21,7 +21,8 @@
 import { isMaskedSecret, holdsEditedMask, isSecretKey } from '../config-secret-shape.js'
 import { SECRET_FIELDS } from '../config-redact.js'
 import { redactSensitiveText } from '../../logging/redact.js'
-import { hostsTurnedOn } from '../session-channel/switch.js'
+import { hostRunsSessionsAny, hostsTurnedOn } from '../session-channel/switch.js'
+import { LEADER_CHANNEL_CAP } from '../session-channel/old-leader-watch.js'
 import type { Config } from '../types.js'
 
 /**
@@ -68,6 +69,8 @@ const ALLOW: Record<string, AllowSpec> = {
   // a host's service reads "on for any host" from it (session-channel/switch.ts). A row of its own,
   // so an older replica refuses only this row, never the hosts row.
   hosts_run_sessions: true,
+  // Copy-only too: what this leader's build speaks (session-channel/old-leader-watch.ts LEADER_CHANNEL_CAP).
+  leader_capabilities: true,
   session_limits: { '*': true },
   session: {
     cron_policy: true, output_mode: true, acp_walnut_mcp: true, acp_walnut_tools: true, idle_timeout_minutes: true, max_idle: true,
@@ -371,9 +374,13 @@ export function configCopyRows(leaderConfig: Readonly<Record<string, unknown>>):
  * key is never copied: only the hosts map decides it.
  */
 function withHostsRunSessions(config: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
-  const { hosts_run_sessions: _ignored, ...rest } = config
+  const { hosts_run_sessions: _ignored, leader_capabilities: _ignoredToo, ...rest } = config
   const on = hostsTurnedOn(Array.isArray(config.hosts) ? null : config.hosts as Config['hosts'])
-  return on.length > 0 ? { ...rest, hosts_run_sessions: on } : rest
+  const withOn = on.length > 0 ? { ...rest, hosts_run_sessions: on } : rest
+  // While the switch is on for any host (so an older replica, which refuses this row, sees nothing
+  // new while it is off), and only from a leader that runs the session channel.
+  const speaks = process.env.WALNUT_LEADER_SESSION_CHANNELS !== '0' && hostRunsSessionsAny(config as Partial<Config>)
+  return speaks ? { ...withOn, leader_capabilities: [LEADER_CHANNEL_CAP] } : withOn
 }
 
 /**

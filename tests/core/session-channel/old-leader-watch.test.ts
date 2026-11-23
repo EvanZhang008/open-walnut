@@ -14,12 +14,13 @@ import { oldLeaderMs, startOldLeaderWatch } from '../../../src/core/session-chan
 import { _resetJudgeOfForTesting, hostStandsDown, judgedHere, judgedHereRecords, setHostStandsDown } from '../../../src/core/sessions/judge-of.js'
 import { _resetServerRoleForTesting } from '../../../src/core/server-role.js'
 
-function harness(o: { answers: boolean; linked: boolean }) {
+function harness(o: { answers: boolean; linked: boolean; says?: boolean }) {
   let t = 1_000_000
   const calls: string[] = []
   const w = startOldLeaderWatch({
     leaderAnswers: () => o.answers,
     channelLinked: () => o.linked,
+    ...(o.says !== undefined ? { leaderSaysChannel: async () => !!o.says } : {}),
     standDown: () => { calls.push('down') },
     standUp: () => { calls.push('up') },
     afterMs: 60_000,
@@ -80,6 +81,57 @@ describe('the old-leader watch', () => {
     s.answers = false
     await advance(600_000)
     expect(w.standingDown()).toBe(true)
+  })
+
+  it('S2: a leader that says it speaks the channel never makes the host stand down on the timeout; the state says it waits', async () => {
+    const s = { answers: true, linked: false, says: true }
+    const { w, calls, advance } = harness(s)
+    await advance(24 * 3_600_000, 600_000)
+    expect(w.standingDown()).toBe(false)
+    expect(calls).toEqual([])
+    expect(w.state().state).toBe('waiting')
+    s.linked = true
+    await advance(10_000)
+    expect(w.state()).toEqual({ state: 'judging', since: null })
+  })
+
+  it('S2: a leader whose copy stops saying it (a downgrade) falls back to the timeout; the state says stood-down', async () => {
+    const s = { answers: true, linked: false, says: true }
+    const { w, calls, advance } = harness(s)
+    await advance(70_000)
+    expect(w.state().state).toBe('waiting')
+    s.says = false
+    await advance(10_000)
+    expect(calls).toEqual(['down'])
+    expect(w.state().state).toBe('stood-down')
+  })
+
+  it('S3: a look asked for while one runs runs right after it (a link event during a tick is never lost)', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const s = { answers: true, linked: false }
+    let t = 0
+    const calls: string[] = []
+    const w = startOldLeaderWatch({
+      leaderAnswers: () => s.answers, channelLinked: () => s.linked,
+      standDown: async () => { calls.push('down'); await gate }, standUp: () => { calls.push('up') },
+      afterMs: 1000, now: () => t,
+    }, { timer: false })
+    await w.tick(); t = 2000
+    const first = w.tick()
+    // The channel links while the stand-down still runs; its look must not be dropped.
+    s.linked = true
+    void w.tick()
+    release(); await first
+    await new Promise((r) => setTimeout(r, 0))
+    expect(calls).toEqual(['down', 'up'])
+    expect(w.standingDown()).toBe(false)
+  })
+
+  it('S3: the host looks at once when a leader links (host-boot.ts onLeaderLinked ticks the watch)', async () => {
+    const fsp = await import('node:fs/promises')
+    const src = await fsp.readFile(new URL('../../../src/core/session-channel/host-boot.ts', import.meta.url), 'utf8')
+    expect(src).toMatch(/onLeaderLinked: \(\) => \{[^}]*watchRef\?\.tick\(\)/)
   })
 
   it('the bound is minutes by default, settable for one process', () => {

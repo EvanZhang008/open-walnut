@@ -12,6 +12,7 @@
 import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../event-bus.js'
 import { createLeaderSide, reportJudges, type LeaderSide } from './leader-side.js'
+import { noteHostSessionSide } from './host-side-health.js'
 import { hostRunsSessionsAnyNow, hostSwitchNow } from './switch.js'
 import { reemitDestinations } from './event-classes.js'
 import { forgetHostJudged, judgingHostOf, noteHostJudged, setHostJudgeProbe } from '../sessions/judge-of.js'
@@ -215,10 +216,12 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   }
   setHostJudgeProbe((host) => side.hostJudges(host))
   remote.setRemoteJudgedCaller((host, body) => side.callHost(host, body))
-  const look = (view: { hostKey: string; phase: string; server?: { capabilities?: unknown } | null }) => {
+  const look = (view: { hostKey: string; phase: string; server?: { capabilities?: unknown; sessionSide?: { state?: unknown } | null } | null }) => {
     const connected = hostServer.hostServerLink(view.hostKey) !== null
     void side.noteHost(view.hostKey, { connected, judges: view.phase === 'running' && reportJudges(view.server) })
     lookIssue(view)
+    // A host that stood down, or waits on a channel this leader has not opened: Walnut Health (host-side-health.ts).
+    noteHostSessionSide(view.hostKey, view.phase === 'running' ? view.server?.sessionSide?.state : null)
   }
   const lookIssue = (view: { hostKey: string; phase: string; server?: { capabilities?: unknown } | null }) => {
     issuer.noteHost(view.hostKey, { connected: hostServer.hostServerLink(view.hostKey) !== null, dials: view.phase === 'running' && issue.reportDials(view.server) })

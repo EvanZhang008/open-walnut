@@ -65,6 +65,7 @@ export function fullConfigFixture(): Record<string, unknown> {
     },
     // Copy-only: config.yaml never holds it; the copy derives it from hosts.*.runs_sessions.
     hosts_run_sessions: ['gpu-box'],
+    leader_capabilities: ['session-channel-v1'],
     hosts_warmup: { enabled: true },
     hosts_found: { asking_since: '2026-11-02T09:00:00.000Z' },
     first_run: { at: '2026-11-02T09:00:00.000Z', steps: ['hosts'], answered: { hosts: '2026-11-02T09:05:00.000Z' } },

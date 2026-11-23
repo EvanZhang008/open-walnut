@@ -704,6 +704,7 @@ let hostReplicaDoor: import('../replica/leader-door.js').LeaderDoor | null = nul
 /** A host replica that runs its sessions: its routes and capabilities (core/session-channel/host-boot.ts). */
 let hostSessionsRoutes: (() => import('../core/session-channel/host-routes.js').HostSessionRoutes | null) | null = null
 let hostSessionsCaps: (() => string[]) | null = null
+let hostSessionsSide: (() => Record<string, unknown> | null) | null = null
 let stopHostSwitchFollow: (() => void) | null = null
 /** A host replica's front (replica/front.ts): follower link, presence, dispatcher. Null elsewhere. */
 let hostReplicaFront: import('../replica/front.js').ReplicaFront | null = null
@@ -1392,6 +1393,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       ...(serviceRuntime() ? { seat: () => inProcessDaemonRuntime()?.follower ?? null } : {}),
       // A host that runs and judges its sessions says so (core/session-channel/host-boot.ts).
       capabilities: () => hostSessionsCaps?.() ?? [],
+      // Whether it judges them now, or stood down for an older leader (old-leader-watch.ts): the leader's Walnut Health reads it.
+      sessionSide: () => hostSessionsSide?.() ?? null,
       consoleServed: () => hostConsoleDoor?.status().state === 'serving',
     })
     const front = hostReplicaFront
@@ -4811,6 +4814,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (boot.hostCanRunSessions()) {
       hostSessionsRoutes = boot.hostSessionRoutes
       hostSessionsCaps = boot.hostSessionCapabilities
+      hostSessionsSide = boot.hostSessionSideReport
       stopHostSwitchFollow = await boot.followHostSwitch({
         walnutId: (process.env.WALNUT_WALNUT_ID ?? '').trim(),
         hostKey: (process.env.WALNUT_HOST_KEY ?? '').trim(),
@@ -7787,6 +7791,7 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   if (hostSessionsRoutes) {
     hostSessionsRoutes = null
     hostSessionsCaps = null
+    hostSessionsSide = null
     await shutdownStep('host sessions', async () => (await import('../core/session-channel/host-boot.js')).stopHostSessions())
   }
   const consoleDoor = hostConsoleDoor

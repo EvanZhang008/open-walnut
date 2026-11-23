@@ -516,6 +516,34 @@ export class EventBus {
     }
   }
 
+  /**
+   * Hand one event to the named subscribers only, global or not (a replay to a known set: a host's
+   * resend family after it stood down, session-channel/stand-down-held.ts). Each one's interest and
+   * filter still apply; it is not recorded in the history and no other subscriber sees it.
+   */
+  deliverTo(names: readonly string[], name: string, data: unknown, options?: Pick<EmitOptions, 'source' | 'timestamp'>): void {
+    const event: BusEvent = {
+      name, data, destinations: [...names], urgency: 'normal',
+      timestamp: options?.timestamp ?? Date.now(), source: options?.source ?? 'unknown', traceId: randomBytes(4).toString('hex'),
+    };
+    for (const n of names) {
+      const subscriber = this.subscribers.get(n);
+      if (!subscriber) continue;
+      if (subscriber.interest && !subscriber.interest.some(p => name.startsWith(p))) continue;
+      if (subscriber.filter && !subscriber.filter(event)) continue;
+      try {
+        const result = subscriber.handler(event);
+        if (result && typeof result.then === 'function') {
+          result.then(undefined, (err: unknown) => {
+            log.bus.error(`subscriber "${subscriber.name}" threw on a replayed "${name}" (async)`, { eventName: name, traceId: event.traceId, error: err instanceof Error ? err.message : String(err) });
+          });
+        }
+      } catch (err) {
+        log.bus.error(`subscriber "${subscriber.name}" threw on a replayed "${name}"`, { eventName: name, traceId: event.traceId, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  }
+
   /** The names of the subscribers registered now (a host's `'*'` is expanded against them: session-channel/event-classes.ts). */
   subscriberNames(): string[] {
     return [...this.subscribers.keys()];

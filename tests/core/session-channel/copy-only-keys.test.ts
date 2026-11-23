@@ -45,10 +45,30 @@ describe('the leader never honours a copy-only key in its own config', () => {
   })
 
   it('the copy still says the hosts turned on, from the hosts map only', () => {
-    expect(COPY_ONLY_CONFIG_KEYS).toEqual(['hosts_run_sessions'])
+    expect(COPY_ONLY_CONFIG_KEYS).toEqual(['hosts_run_sessions', 'leader_capabilities'])
     const off = configCopyRows({ version: 1, hosts_run_sessions: ['devbox-a'] })
     expect(off.rows.find((r) => r.key === 'hosts_run_sessions')).toBeUndefined()
     const on = configCopyRows({ version: 1, hosts: { 'devbox-a': { hostname: 'devbox-a.example', runs_sessions: true } } })
     expect(on.rows.find((r) => r.key === 'hosts_run_sessions')?.value).toEqual(['devbox-a'])
+  })
+})
+
+describe('S2: the leader says it speaks the session channel in its copy (leader_capabilities)', () => {
+  const savedChannels = process.env.WALNUT_LEADER_SESSION_CHANNELS
+  afterEach(() => { if (savedChannels === undefined) delete process.env.WALNUT_LEADER_SESSION_CHANNELS; else process.env.WALNUT_LEADER_SESSION_CHANNELS = savedChannels })
+  const capsOf = (config: Record<string, unknown>) => configCopyRows(config).rows.find((r) => r.key === 'leader_capabilities')?.value
+
+  it('while the switch is on for any host; never while it is off (an older replica, which refuses the row, sees nothing new)', () => {
+    delete process.env.WALNUT_LEADER_SESSION_CHANNELS
+    expect(capsOf({ version: 1, hosts: { 'devbox-a': { hostname: 'devbox-a.example', runs_sessions: true } } })).toEqual(['session-channel-v1'])
+    expect(capsOf({ version: 1, experimental: { host_runs_sessions: true } })).toEqual(['session-channel-v1'])
+    expect(capsOf({ version: 1, hosts: { 'devbox-a': { hostname: 'devbox-a.example' } } })).toBeUndefined()
+    // A value in config.yaml itself is never copied.
+    expect(capsOf({ version: 1, leader_capabilities: ['session-channel-v1'] })).toBeUndefined()
+  })
+
+  it('a leader run as one from before the channel says nothing', () => {
+    process.env.WALNUT_LEADER_SESSION_CHANNELS = '0'
+    expect(capsOf({ version: 1, experimental: { host_runs_sessions: true } })).toBeUndefined()
   })
 })

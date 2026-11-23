@@ -456,9 +456,16 @@ permission prompts still name Walnut.
   its leader answers (the daemon's follower view) and no leader opens the session channel for 3
   minutes (`WALNUT_HOST_OLD_LEADER_MS`; any leader with the channel opens it within seconds of linking,
   whatever its switch says), `judgedHere` is false for every row of the host, the one gate its resend
-  family acts through, and only the older leader judges. The CLIs, routes and fact log go on; a leader
-  that opens the channel again ends it. A leader merely away (the lid closed) does not answer, so it
-  never counts: the host keeps judging, which is the point. What the user sees: for up to 3 minutes
+  family acts through, and only the older leader judges; the host stamps no turn end as taken by its
+  retriers meanwhile. The CLIs, routes and fact log go on; a leader that opens the channel ends it at
+  once (the watch looks on the link), and the turn ends the family skipped meanwhile go to it then
+  (`stand-down-held.ts`), so a stand-down that misjudged a newer leader leaves no turn end to no one.
+  A leader that speaks the channel says so in its config copy (`leader_capabilities:
+  [session-channel-v1]`, while the switch is on), and a host whose leader says it never stands down
+  on the timeout: it keeps judging and reports `waiting`; either state shows in the leader's Walnut
+  Health (`host-side-health.ts`). The build before that row (land 5) still gets the timeout. A leader
+  merely away (the lid closed) does not answer, so it never counts: the host keeps judging, which is
+  the point. What the user sees: for up to 3 minutes
   after the downgrade a turn end can be continued twice (both judges), then the sessions behave as
   legacy ones; the host's facts of that time reach no leader until a newer one comes back
   (`tests/e2e/host-judge-old-leader-e2e.test.ts`). A refusal (the task store's schema gate, say) was
