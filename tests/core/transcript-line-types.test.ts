@@ -30,6 +30,8 @@ const REAL_TRANSCRIPT_TYPES = [
   'mode', 'atis-latch', 'permission-mode', 'ai-title', 'agent-name',
   'file-history-snapshot', 'file-history-delta', 'pr-link', 'cost-state',
   'api-request-blob', 'api-request-shape',
+  // CLI 2.1.322 (2026-11-23): each request's parameters, and the tool names a turn used.
+  'api-request', 'tools-used',
 ];
 /** stream-json stdout line types (daemon stream files, CLI 2.1.284). */
 const REAL_STREAM_TYPES = [

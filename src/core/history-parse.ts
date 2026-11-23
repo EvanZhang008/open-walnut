@@ -603,12 +603,29 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
   return withLegacyHintCutoff(opts.legacyHintCutoffMs, () => parseSessionMessagesWith(content, opts));
 }
 
+/**
+ * A line Claude Code writes as a copy of one request message it sent the model
+ * (`api-request-blob`: instruction files and memory merged in). It is never a row (the type check
+ * in the row loop below drops it), and no pass reads more than its type: it carries no uuid, no
+ * parent, no version. So it is not JSON-parsed: its first bytes, which the CLI writes as the type
+ * key, name it, and a stub with only the type takes its place, so every pass that counts lines
+ * (PATTERN_A_LOOKAHEAD and the windows near a queue remove) counts it as before. A copy written with
+ * another key order is parsed as before and dropped by the same type check. 2026-11-23: in a long
+ * session these lines were three quarters of the bytes a history read parsed (the 1 GB transcript's
+ * last 30 MB: 24 MB of them), and their parse was most of the garbage behind the server's memory
+ * peaks. tests/core/history-parse-request-copies.test.ts.
+ */
+export function isRequestCopyLine(line: string): boolean {
+  return line.startsWith('{"type":"api-request-blob"');
+}
+
 function parseSessionMessagesWith(content: string, opts?: ParseSessionMessagesOptions): SessionHistoryMessage[] {
   const lines = content.split('\n').filter(Boolean);
 
   // Parse all lines
   let rawMessages: RawJsonlLine[] = [];
   for (const line of lines) {
+    if (isRequestCopyLine(line)) { rawMessages.push({ type: 'api-request-blob' }); continue; }
     try {
       rawMessages.push(JSON.parse(line));
     } catch (err) {

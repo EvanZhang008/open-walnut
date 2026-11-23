@@ -43,8 +43,10 @@ export const KNOWN_TRANSCRIPT_LINE_TYPES: ReadonlySet<string> = new Set([
   'pr-link',
   'cost-state',
   'atis-latch',
-  'api-request-blob',
+  'api-request-blob', // never JSON-parsed: history-parse.ts isRequestCopyLine
   'api-request-shape',
+  'api-request', // the request's parameters and digests: plumbing
+  'tools-used', // the tool names a turn used: plumbing
   // Stream-json stdout (daemon stream files)
   'result',
   'stream_event',
