@@ -27,7 +27,7 @@ const DEFAULT_REPO_URL = 'https://github.com/EvanZhang008/open-walnut.git'
  * the main suite (tests/scripts/cloud-ensure-harness.test.ts) keeps it equal to
  * SESSION_ENGINE_IDS.
  */
-export const HARNESS_ENGINE_IDS = ['claude', 'codex', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'] as const
+export const HARNESS_ENGINE_IDS = ['claude', 'codex', 'antigravity', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'] as const
 /** Same shape rule as ensure-harness.sh and user-data.ts (us-west-2, eu-central-1). */
 const BEDROCK_REGION_RE = /^[a-z]{2}(-[a-z]+)+-\d{1,2}$/
 

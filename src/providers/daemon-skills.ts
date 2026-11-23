@@ -42,9 +42,9 @@ export function createDaemonSkills<W>(deps: DaemonSkillsDeps) {
   // spirit as the user-PATH shims: production daemon only, and never clobber a
   // path we do not own (the marker string is the ownership proof). Each engine
   // dir is linked only when that engine's home exists: ~/.agents for codex or
-  // goose, ~/.gemini/skills for gemini. Also migrates earlier layouts: the v1
-  // real file in ~/.claude/skills, the v1 fenced ~/.codex/AGENTS.md section,
-  // and the short-lived v2.0 canonical inside ~/.open-walnut/skills/ (all three
+  // goose, ~/.gemini/skills for gemini, ~/.gemini/config/skills for antigravity.
+  // Also migrates earlier layouts: the v1 real file in ~/.claude/skills, the v1
+  // fenced ~/.codex/AGENTS.md section, and the short-lived v2.0 canonical inside ~/.open-walnut/skills/ (all three
   // only ever held `walnut`, so they run once, not per entry).
   const SKILL_SYNC_MARKER = 'walnut-managed v1'
 
@@ -228,6 +228,8 @@ export function createDaemonSkills<W>(deps: DaemonSkillsDeps) {
     // gemini is the only engine with its own dir: it discovers ONLY
     // ~/.gemini/skills and <project>/.gemini/skills, never ~/.agents or ~/.claude.
     if (fs.existsSync(path.join(HOME_DIR, '.gemini'))) ensureLink(path.join(HOME_DIR, '.gemini', 'skills'))
+    // antigravity (agy) reads ~/.gemini/config/skills: linked once its CLI or its home is there.
+    if (fs.existsSync(path.join(HOME_DIR, '.local', 'bin', 'agy')) || fs.existsSync(path.join(HOME_DIR, '.gemini', 'antigravity-cli')) || fs.existsSync(path.join(HOME_DIR, '.gemini', 'config'))) ensureLink(path.join(HOME_DIR, '.gemini', 'config', 'skills'))
     }
     for (const entry of entries) syncSkill(entry.name, entry.body)
     if (!probeHeld) {

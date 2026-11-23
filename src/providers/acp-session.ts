@@ -95,7 +95,8 @@ const updateSessionRecord = recordFn('updateSessionRecord')
 const updateSessionRecordConditionally = recordFn('updateSessionRecordConditionally')
 const migrateSessionQueue = queueFn('migrateSessionQueue')
 const rollbackSessionQueueMigration = queueFn('rollbackSessionQueueMigration')
-import { BudgetCheckingError, BudgetPausedError } from './delivery-failure.js'
+import { BudgetCheckingError, BudgetPausedError, EngineSignInRequiredError } from './delivery-failure.js'
+import { engineSignInSpec, notSignedInWords, signInHostName } from '../core/agents/engine-sign-in.js'
 import { piNodeFor } from './pi-adapter-node.js'
 import { acpLaunchArtifacts, configuredEngineEnv, type AcpLaunchArtifacts } from './acp-launch.js'
 import {
@@ -1101,11 +1102,18 @@ export class AcpSession {
     // The turn's error is a usage limit: the facts ride its session:error to the usage-limit wait.
     const usageLimit = record.kind === 'meta' && record.event.type === 'error' && v > this._committedV
       ? this.usageLimitOf(record.event as { errorKind?: string; resetsAt?: number }) : undefined
+    // The turn's error is the CLI's missing sign-in: the engine and host ride its session:error (the chat offers Settings).
+    const signIn = record.kind === 'meta' && record.event.type === 'error' && (record.event as { errorKind?: string }).errorKind === 'auth_required'
+      ? this.signInFacts() : null
     for (const { name, payload } of this.normalizer.normalize(record)) {
       const full: Record<string, unknown> = { ...payload, sessionId: this.trackingId(), taskId: this.taskId }
       if (name === 'session:error' && usageLimit) {
         full.usageLimit = usageLimit
         this._turnLimitText = usageLimit.text ?? null
+      }
+      if (name === 'session:error' && signIn) {
+        full.signIn = { engine: signIn.engine, host: signIn.host, hostName: signIn.hostName }
+        full.error = signIn.words
       }
       // Its own command runs on (or ended, and its wake is on the way): the turn ended, the work did
       // not, so the task stays in progress (server.ts session-result, as for a Claude background command).
@@ -1251,6 +1259,17 @@ export class AcpSession {
    * 'usage_limit', with the reset it read on the host), or an older worker's protocol error whose
    * turn ended on the provider's limit words (codex-acp streams them as the turn's last text).
    */
+  /**
+   * For an engine with its own sign-in (core/agents/engine-sign-in.ts): who and where, and the
+   * words a person reads. `config` names the host's label; without it (the synchronous journal
+   * reader) the host reads as its alias.
+   */
+  private signInFacts(config?: { hosts?: Record<string, unknown> }): { engine: string; host: string; hostName: string; words: string } | null {
+    if (!engineSignInSpec(this.engineId)) return null
+    const hostName = signInHostName(this.host, config)
+    return { engine: this.engineId, host: this.host, hostName, words: notSignedInWords(this.engineId, hostName) }
+  }
+
   private usageLimitOf(event: { errorKind?: string; resetsAt?: number }): UsageLimitFacts | undefined {
     // Only the provider's limit words: the answer so far may hold the model's own text before them.
     const words = usageLimitSentence(this.normalizer.answerSoFar())
@@ -1919,6 +1938,12 @@ export class AcpSession {
           throw new BudgetCheckingError()
         } else if ((startResp as { errorKind?: string }).errorKind === 'worker_adopting') {
           throw new WorkerAdoptingError(String(startResp.error))
+        } else if ((startResp as { errorKind?: string }).errorKind === 'auth_required' && this.signInFacts()) {
+          // The CLI on that host is not signed in: said in words, with the host, so the chat offers Settings' sign-in.
+          const { getConfig } = await sessionPort().config.loadConfigManager()
+          const facts = this.signInFacts(await getConfig().catch(() => undefined) as { hosts?: Record<string, unknown> } | undefined)!
+          log.session.info('acp: start refused for want of a sign-in', { sessionId: this.trackingId(), engine: this.engineId, host: this.host, error: startResp.error })
+          throw new EngineSignInRequiredError(facts.words, facts.engine, facts.host, facts.hostName)
         } else {
           throw new Error('acpStart failed: ' + startResp.error)
         }

@@ -127,7 +127,7 @@ import { isWakeupArmed } from './daemon-fold.js'
 import { resumesEndedCall } from './bg-task-resume.js'
 import { outlivingOf, type OutlivingSource } from '../core/sessions/outliving-work.js'
 import { noteSuppressedErrorReason } from '../core/session-snapshot-gate.js'
-import { BudgetCheckingError, BudgetPausedError, ClaudeRuntimeMissingError, classifyDeliveryFailure, isDaemonCommandOutcomeUnknown, isHostLinkFailure, isPermanentDeliveryFailure, isSlowHostFailure, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
+import { BudgetCheckingError, BudgetPausedError, ClaudeRuntimeMissingError, classifyDeliveryFailure, EngineSignInRequiredError, isDaemonCommandOutcomeUnknown, isHostLinkFailure, isPermanentDeliveryFailure, isSlowHostFailure, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
 import { linkFailureKind } from './link-failure.js'
 import { describeClaudeLaunchFailure } from './host-runtime-core.js'
 import { hostLinkReason, isHostWaitReason, slowHostReason } from './host-wait-words.js'
@@ -14369,6 +14369,14 @@ export class SessionRunner {
         this.cancelBudgetRetry(deliverySessionId)
         await parkMessages(rows, classifyDeliveryFailure(err)).catch(() => {})
         reportBatchFailed(deliverySessionId, rows.map((m) => m.id), classifyDeliveryFailure(err).reason, configRefused ? {} : undefined)
+      } else if (err instanceof EngineSignInRequiredError) {
+        // The engine's CLI on that host is not signed in: no retry can sign it in, so the turn
+        // waits for the user's Retry, and the chat offers the sign-in in Settings for that host.
+        await parkMessages(rows, classifyDeliveryFailure(err)).catch(() => {})
+        reportBatchFailed(deliverySessionId, rows.map((m) => m.id), err.message)
+        bus.emit(EventNames.SESSION_ERROR, {
+          sessionId: deliverySessionId, error: err.message, errorKind: 'delivery_failed' as const, parked: true, signIn: err.signIn,
+        }, ['main-ai'], { source: 'session-runner' })
       } else if (goneCwd) {
         await parkOnGoneFolder(deliverySessionId, rows, `Working directory no longer exists: ${goneCwd}`, { cwd: goneCwd })
       } else {

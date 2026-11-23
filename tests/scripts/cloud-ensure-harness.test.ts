@@ -77,6 +77,14 @@ printf '#!/bin/sh\\necho "1.9.0"\\n' > "$GOOSE_BIN_DIR/goose"
 chmod +x "$GOOSE_BIN_DIR/goose"
 EOF
     ;;
+  https://antigravity.google/cli/install.sh)
+    cat <<'EOF'
+echo "antigravity-installer user=$(id -un) home=$HOME" >> "$STUB_LOG"
+mkdir -p "$HOME/.local/bin"
+printf '#!/bin/sh\\necho "1.5.14"\\n' > "$HOME/.local/bin/agy"
+chmod +x "$HOME/.local/bin/agy"
+EOF
+    ;;
   *) exit 22 ;;
 esac
 `,
@@ -838,6 +846,20 @@ describe('the default engine', () => {
     // A file the service user can rewrite never gets a link on root's PATH.
     expect(fs.existsSync(sb.link('goose'))).toBe(false)
     expect(readConfig(sb).defaults).toEqual({ engine: 'goose' })
+  })
+
+  it('antigravity uses its official script, its CLI is agy, found through ~/.local/bin (no root link)', async () => {
+    const sb = makeSandbox()
+    const res = await run(sb, ['--engine', 'antigravity'])
+    expect(res.status, res.stdout + res.stderr).toBe(0)
+    const agy = path.join(sb.home, '.local', 'bin', 'agy')
+    expect(calls(sb)).toContain('curl -fsSL --connect-timeout 20 --retry 2 https://antigravity.google/cli/install.sh')
+    expect(calls(sb)).not.toContain('npm install -g')
+    expect(row(res.stdout, 'engine:antigravity')).toMatchObject({ status: 'installed' })
+    expect(row(res.stdout, 'engine:antigravity')?.detail).toContain(`1.5.14 at ${agy} (found through ~/.local/bin)`)
+    expect(row(res.stdout, 'engine-auth')?.detail).toContain('acp --login')
+    expect(fs.existsSync(sb.link('agy'))).toBe(false)
+    expect(readConfig(sb).defaults).toEqual({ engine: 'antigravity' })
   })
 
   it('custom installs nothing and is never seeded as the default', async () => {

@@ -329,6 +329,12 @@ export interface SessionErrorEvent {
   sessionId?: string;
   /** An ACP engine's turn the subscription's usage limit stopped (sessions/usage-limit-wait.ts). */
   usageLimit?: import('./sessions/usage-limit-model.js').UsageLimitFacts;
+  /**
+   * The engine's CLI on the session's host is not signed in (core/agents/engine-sign-in.ts): the
+   * chat says "<Engine> is not signed in on <host>" and links to its sign-in in Settings.
+   * `host` is the host key ('__local__' for this machine), `hostName` how a person knows it.
+   */
+  signIn?: { engine: string; host: string; hostName: string };
   fromPlanSessionId?: string;
   /**
    * Structured error kind — lets downstream consumers (agent tools, UI) react

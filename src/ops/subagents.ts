@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
+import { SESSION_ENGINE_IDS } from '../core/types.js';
 import { withOutcome } from './outcome.js';
 import { OWN_WAIT_TURN_END } from '../lib/turn-end-marker.js';
 import { DOC_ANSWER_MAX_CHARS, DOC_PART_INPUT, askedPart, clipText, pageOnce, pagedResult } from './doc-page.js';
@@ -17,15 +18,13 @@ const ANSWERED: OpAnswer = {
   shape: ({ result, max, surface }) => pageOnce(result, () => pagedResult(result, 'answer', {}, answerAgain((result as { id?: unknown }).id), { fit: { max, surface } })),
 };
 
-const ENGINES = ['codex', 'opencode', 'goose', 'pi', 'gemini', 'dsh', 'custom', 'claude'] as const;
-
 defineOp({
   name: 'subagent_run',
   title: 'Run a subagent on another host or another engine',
   description: [
     'USE YOUR OWN Agent TOOL FOR MOST SUBAGENTS. Use subagent_run only for a step that must run on ANOTHER HOST (`host`: an alias '
       + 'from host_list or a selector like "@ios" or "@browser"; never task_move for one step) or on ANOTHER ENGINE (`engine`: codex '
-      + 'for GPT models, opencode, goose, pi, gemini, dsh, custom). Default: Claude Code with its own default model.',
+      + 'for GPT models, antigravity for Gemini models, opencode, goose, pi, gemini, dsh, custom). Default: Claude Code with its own default model.',
     'Like your Agent tool: one prompt (it sees nothing else of your conversation, so write everything it needs into it), and its '
       + 'answer comes back to you. It is a hidden Walnut session started the way a task\'s session starts on that host, with the '
       + 'same tools, skills and permissions, and its `walnut` calls act as you; the user sees it in your Background tasks panel.',
@@ -40,7 +39,7 @@ defineOp({
       + 'timeout_min (default 30, at most 120).',
   ].join('\n\n'),
   input: {
-    engine: z.enum(ENGINES).optional().describe('The engine: claude (default), codex (GPT, e.g. Sol/Astra), opencode, goose, pi, gemini, dsh, or custom'),
+    engine: z.enum(SESSION_ENGINE_IDS).optional().describe('The engine: claude (default), codex (GPT, e.g. Sol/Astra), antigravity (Gemini, e.g. Gemini 4 Neon), opencode, goose, pi, gemini, dsh, or custom'),
     host: z.string().min(1).max(120).optional().describe('Run on this other host, in a copy of your work there: an alias (host_list) or a selector like "@ios"; omit for your own host'),
     cwd: z.string().min(1).max(4096).optional().describe('The folder it runs in, an absolute path on your host (with `host`: the folder whose work is copied there); omit for your session\'s working directory. Name it when your work is in another folder than the one your session started in (a clone in your task directory)'),
     prompt: z.string().min(1).describe('The whole task for the subagent: it sees nothing else of your conversation'),

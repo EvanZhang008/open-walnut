@@ -324,7 +324,7 @@ runs_without_claude() {
   cfg="${OPEN_WALNUT_HOME:-$HOME/.open-walnut}/config.yaml"
   [ -f "$cfg" ] || return 1
   case "$(config_value "$cfg" defaults engine)" in
-    codex | gemini | opencode | goose | pi | dsh | custom) ;;
+    codex | antigravity | gemini | opencode | goose | pi | dsh | custom) ;;
     *) return 1 ;;
   esac
   [ "$(config_value "$cfg" agent main_provider)" != claude_cli ]

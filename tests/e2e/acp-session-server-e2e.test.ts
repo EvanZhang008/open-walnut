@@ -1187,7 +1187,7 @@ rl.on('line', line => {
 // and that suite's findRuntimeId() asserts a single journal file in streamsDir.
 describe.runIf(HAVE_BIN)('ACP engine conformance through the real server', () => {
   it('covers every ACP engine in the registry', () => {
-    expect(acpEngineIds()).toEqual(['codex', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'])
+    expect(acpEngineIds()).toEqual(['codex', 'antigravity', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'])
   })
 
   describe.each(acpEngineIds())('engine=%s', (engine) => {

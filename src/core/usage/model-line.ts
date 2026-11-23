@@ -8,7 +8,7 @@
 export type ModelFamily = 'Claude' | 'GPT' | 'Gemini' | 'Other';
 
 /** The model family an engine runs when nothing says otherwise. */
-export const ENGINE_FAMILY: Record<string, ModelFamily> = { claude: 'Claude', codex: 'GPT', gemini: 'Gemini' };
+export const ENGINE_FAMILY: Record<string, ModelFamily> = { claude: 'Claude', codex: 'GPT', antigravity: 'Gemini', gemini: 'Gemini' };
 
 /** Model ids that name no model (the usage scanner's placeholders): no evidence of a family. */
 const NO_MODEL = /^(?:unknown|<synthetic>|synthetic|none|default|null|undefined)$/i;

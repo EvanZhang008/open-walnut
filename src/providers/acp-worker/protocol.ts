@@ -410,9 +410,17 @@ export function snapshotAcpModels(response: unknown): AcpModelCatalog {
         }]
       })
     : []
+  const hyphenQualified = modelOption && options.some((option) => option.category === 'thought_level')
+  if (hyphenQualified) {
+    // Antigravity qualifies effort with a hyphen ("gemini-4-neon-high") while its model select takes
+    // the base id and the effort is its thought_level select: read those ids as Codex's "base[effort]",
+    // so the picker lists one row per model with its efforts and a pick splits back into both selects.
+    for (const model of availableModels) model.modelId = bracketHyphenEffort(model.modelId, modelOption.options)
+  }
   // The extension can carry effort-qualified variants that the model select omits.
   if (availableModels.length > 0) {
     let currentModelId = typeof models.currentModelId === 'string' ? models.currentModelId : undefined
+    if (hyphenQualified && currentModelId) currentModelId = bracketHyphenEffort(currentModelId, modelOption.options)
     if (modelOption) {
       const effort = options.find((option) => option.category === 'thought_level')?.currentValue
       const qualified = `${modelOption.currentValue}[${effort}]`
@@ -425,6 +433,25 @@ export function snapshotAcpModels(response: unknown): AcpModelCatalog {
     currentModelId: modelOption.currentValue,
     availableModels: modelOption.options.map(({ value, ...choice }) => ({ modelId: value, ...choice })),
   } : { availableModels: [] }
+}
+
+/** Effort words a hyphen-qualified model id may end in (acp-effort.ts's scale, plus Codex's "ultra"). */
+const HYPHEN_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
+
+/**
+ * "gemini-4-neon-high" → "gemini-4-neon[high]" when "gemini-4-neon" is a value of the model
+ * select and "high" an effort word; any other id unchanged (a model whose own name ends in
+ * an effort word stays whole when the select lists it as it is).
+ */
+export function bracketHyphenEffort(modelId: string, baseChoices: readonly AcpConfigOptionChoice[]): string {
+  if (baseChoices.some((choice) => choice.value === modelId)) return modelId
+  const cut = modelId.lastIndexOf('-')
+  if (cut <= 0) return modelId
+  const base = modelId.slice(0, cut)
+  const effort = modelId.slice(cut + 1)
+  return HYPHEN_EFFORTS.has(effort.toLowerCase()) && baseChoices.some((choice) => choice.value === base)
+    ? `${base}[${effort}]`
+    : modelId
 }
 
 /** Normalize ACP select config options while dropping malformed/provider-specific entries. */
@@ -578,6 +605,20 @@ export type JournalMetaEvent =
   | { type: 'background-work'; running: BackgroundTerminal[]; finished: FinishedTerminal[] }
 
 /**
+ * The adapter env key carrying variables to set only where the spawning host has none
+ * (JSON object; adapter-env.ts descriptorAdapterEnv writes it). A worker or daemon that
+ * predates it passes it through unread, and the adapter then runs without those defaults.
+ */
+export const ACP_ENV_DEFAULTS_KEY = 'WALNUT_ACP_ENV_DEFAULTS'
+
+function parseEnvDefaults(raw: string | undefined): Record<string, string> {
+  if (!raw) return {}
+  let value: unknown
+  try { value = JSON.parse(raw) } catch { return {} }
+  return Object.fromEntries(Object.entries(asRecord(value)).filter((e): e is [string, string] => typeof e[1] === 'string' && e[1] !== ''))
+}
+
+/**
  * Spawn env for the worker (daemon side) and the adapter (worker side): base
  * process env overlaid with the session's adapter env. An EMPTY-STRING overlay
  * value means "unset the inherited variable" — the server maps
@@ -592,6 +633,11 @@ export function mergeAcpSpawnEnv(
   overlay: Record<string, string> | undefined,
 ): NodeJS.ProcessEnv {
   const merged: NodeJS.ProcessEnv = { ...base }
+  // The engine descriptor's defaults (engine-registry.ts envDefaults): only where this
+  // host's env has none, and before the overlay, so an operator's '' still unsets one.
+  for (const [key, value] of Object.entries(parseEnvDefaults(overlay?.[ACP_ENV_DEFAULTS_KEY]))) {
+    if (!merged[key]) merged[key] = value
+  }
   for (const [key, value] of Object.entries(overlay ?? {})) {
     if (value === '') delete merged[key]
     else merged[key] = value

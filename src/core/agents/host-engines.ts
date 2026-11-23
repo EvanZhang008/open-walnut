@@ -30,6 +30,9 @@ const inFlight = new Map<string, Promise<HostAnswer>>();
 /** Test seam. */
 export function _resetHostEngineCache(): void { cache.clear(); inFlight.clear(); }
 
+/** Forget what `host` said (an engine was just installed there): the next ask asks it again. */
+export function forgetHostEngines(host: string): void { cache.delete(normalizeHost(host)); }
+
 export interface HostEnginesOpts {
   /** false = only a connection already open (the picker: opening it never dials or deploys). Default true. */
   dial?: boolean;
@@ -69,9 +72,19 @@ async function askRemote(host: string, dial: boolean): Promise<HostAnswer | null
     const rule = engineHostBlocker(id, host);
     if (rule) { out[id] = { installed: false, version: null, reason: rule }; continue; }
     const row = engines[id];
-    if (row) out[id] = { installed: row.installed === true, version: row.version ?? null, reason: row.reason ?? null };
+    if (row) out[id] = { installed: row.installed === true, version: row.version ?? null, reason: withInstallHint(id, row.reason ?? null) };
   }
   return out;
+}
+
+/**
+ * The host daemon's "<binary> is not installed" with the engine's own one-line installer
+ * after it (engine-registry.ts `install`), so the picker says how to get it there.
+ */
+export function withInstallHint(engine: SessionEngine, reason: string | null): string | null {
+  const adapter = ENGINE_REGISTRY.get(engine)?.acpAdapter;
+  if (!reason || !adapter?.install || !adapter.binary || reason !== `${adapter.binary} is not installed`) return reason;
+  return `${reason}: install it with \`${adapter.install}\``;
 }
 
 /**

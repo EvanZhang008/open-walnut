@@ -93,6 +93,11 @@ const inFlight = new Map<SessionEngine, Promise<EngineAvailability>>();
  *  cosmetic `--version` spawn — so a batch caller never waits on that spawn. */
 const presenceInFlight = new Map<SessionEngine, Promise<EngineAvailability>>();
 
+/** Forget one engine's cached answer (it was just installed or signed in): the next ask probes it again. */
+export function forgetEngineProbe(engineId: SessionEngine): void {
+  cache.delete(engineId);
+}
+
 /** Test hook: forget every cached/in-flight probe. */
 export function _resetEngineProbeCache(): void {
   cache.clear();
@@ -400,7 +405,10 @@ async function runProbe(caps: EngineCapabilities, options: EngineProbeOptions): 
     binary = verdict.executable;
   } else {
     binary = findEngineBinary(binaryName, { ...options, env });
-    if (!binary) return { availability: unavailable(`${caps.displayName} CLI not found: install \`${binaryName}\` on PATH or set ${overrideVar}`) };
+    if (!binary) {
+      const how = adapter.install ? `install it with \`${adapter.install}\`` : `install \`${binaryName}\` on PATH`;
+      return { availability: unavailable(`${caps.displayName} CLI not found: ${how} or set ${overrideVar}`) };
+    }
   }
 
   // 'bundled' engines need BOTH the provider CLI (auth + model access) and the

@@ -160,7 +160,8 @@ function firstLine(s: string): string | null {
   return line ? line.slice(0, 200) : null
 }
 
-function runVersion(binary: string, args: readonly string[], env: NodeJS.ProcessEnv, ms: number, run: typeof execFile = execFile): Promise<string | null> {
+/** The first line `<binary> <args>` prints within `ms`, in a private TMPDIR; null when it says nothing. */
+export function runVersion(binary: string, args: readonly string[], env: NodeJS.ProcessEnv, ms: number, run: typeof execFile = execFile): Promise<string | null> {
   return withPrivateTmp(env, (runEnv) => new Promise((resolve) => {
     try {
       run(binary, [...args], { env: runEnv, timeout: ms, killSignal: 'SIGKILL', maxBuffer: 256 * 1024 }, (err, stdout, stderr) => {
@@ -172,7 +173,7 @@ function runVersion(binary: string, args: readonly string[], env: NodeJS.Process
 }
 
 const PROBE_TTL_MS = 60_000
-const VERSION_MS = 5_000
+export const VERSION_MS = 5_000
 
 /** Which engines this host can run (cached a minute), and why not. */
 export function createHostEngineProbe(deps: AcpHostResolveDeps = {}) {
@@ -194,6 +195,8 @@ export function createHostEngineProbe(deps: AcpHostResolveDeps = {}) {
     return value
   }
   return {
+    /** Drop every cached answer (an engine was just installed here). */
+    forget(): void { cache.clear() },
     async probe(specs: readonly AcpHostAdapterSpec[]): Promise<Record<string, HostEngineAvailability>> {
       const out: Record<string, HostEngineAvailability> = {}
       await Promise.all(specs.map(async (spec) => { out[spec.engine] = await one(spec) }))

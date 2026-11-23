@@ -85,7 +85,7 @@ final class ProjectLaunchDefaultsTests: XCTestCase {
 
     func testEveryEngineHasItsName() {
         // The server's engine registry (src/core/agents/engine-registry.ts), by id.
-        let names = ["claude": "Claude Code", "codex": "Codex", "gemini": "Gemini", "opencode": "OpenCode",
+        let names = ["claude": "Claude Code", "codex": "Codex", "antigravity": "Antigravity", "gemini": "Gemini", "opencode": "OpenCode",
                      "goose": "Goose", "pi": "Pi", "dsh": "DeepSeek Harness", "custom": "Custom (ACP)"]
         for (id, name) in names { XCTAssertEqual(DraftLaunchDefaults.engineName(id), name) }
     }

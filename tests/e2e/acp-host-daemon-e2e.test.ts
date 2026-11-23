@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url'
 import { hostAdapterSpec } from '../../src/core/agents/host-adapter-spec.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
+import { FAKE_AGY } from '../helpers/fake-agy.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(__dirname, '../..')
@@ -104,6 +105,26 @@ describe.runIf(HAVE_FILE)('ACP on a host other than the primary (the compiled wa
   it('says it runs ACP engines itself', async () => {
     const hello = await rpc(rig, 'hello')
     expect(hello.capabilities as string[]).toContain('acp-host-v1')
+  })
+
+  it('signs Antigravity in on this host: the link, then the pasted code (engine-sign-in-v1)', async () => {
+    const hello = await rpc(rig, 'hello')
+    expect(hello.capabilities as string[]).toContain('engine-sign-in-v1')
+    // The fake CLI (tests/fixtures/antigravity/fake-agy.mjs) as the host's agy, on its PATH.
+    fs.writeFileSync(path.join(rig.root, 'bin', 'agy'), `#!/bin/sh\nexec "${process.execPath}" "${FAKE_AGY}" "$@"\n`, { mode: 0o755 })
+    const ask = async (params: Record<string, unknown>) => {
+      const resp = await rpc(rig, 'engine.signIn', { engine: 'antigravity', env: { AGY_ACP_FORCE_FILE_STORAGE: '1' }, ...params })
+      expect(resp.ok, JSON.stringify(resp)).toBe(true)
+      return resp.result as Record<string, unknown>
+    }
+    expect(await ask({ op: 'status' })).toMatchObject({ ok: true, installed: true, account: { signedIn: false } })
+    const started = await ask({ op: 'start' })
+    expect(started).toMatchObject({ ok: true, phase: 'waiting_code' })
+    expect(String(started.link)).toMatch(/^https:\/\/accounts\.google\.com\/o\/oauth2\//)
+    expect(await ask({ op: 'finish', signInId: started.id, code: 'good' })).toEqual({ ok: true, signedIn: true })
+    expect(await ask({ op: 'status' })).toMatchObject({ installed: true, account: { signedIn: true } })
+    expect(await ask({ op: 'install' })).toMatchObject({ ok: false, code: 'installed' })
+    expect(await ask({ op: 'logout' })).toEqual({ ok: true })
   })
 
   it('reports the engines this host can run, and why not', async () => {

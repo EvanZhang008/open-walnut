@@ -1,9 +1,8 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
+import { SESSION_ENGINE_IDS } from '../core/types.js';
 import { withOutcome } from './outcome.js';
 import { TASK_RECEIPT } from './task-answers.js';
-
-const ENGINES = ['claude', 'codex', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'] as const;
 
 defineOp({
   name: 'task_transfer',
@@ -24,7 +23,7 @@ defineOp({
     'Engines other than Claude run on the primary machine only. Only transfer when the user asked for it.',
   input: {
     id: z.string().min(1).describe('Task id or unique prefix of the task to move'),
-    engine: z.enum(ENGINES).optional().describe('Target coding engine; omit to keep the current one'),
+    engine: z.enum(SESSION_ENGINE_IDS).optional().describe('Target coding engine; omit to keep the current one'),
     host: z.string().min(1).optional().describe('Target host alias ("__local__" = the primary machine); omit to keep the current one'),
     cwd: z.string().min(1).optional().describe('Absolute directory on the target host, or "auto" to let Walnut choose (the default on a host change)'),
     mode: z.enum(['carry', 'brief']).optional().describe('carry (default): bring the conversation; brief: start from a handoff brief'),

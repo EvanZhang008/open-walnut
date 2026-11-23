@@ -61,7 +61,7 @@ const INPUT = stays('input to a session already running there (a message, a mode
 const AIM = stays('the reads this leader runs there and the answers it brings back (files, git, logs, ports, usage, its task directories and jobs)',
   'only an answer comes back, and the host cannot begin one (its own sessions\' calls are refused at the gateway)')
 /** A process there, or this Walnut's data handed to it: only a person's own call (core/session-channel/person-call.ts), checked at the command gate. */
-const PERSON = refused('a process there or this Walnut\'s data handed to it (exec, a file written or moved, a commit, an HTTP call, MCP, a trigger\'s run, a terminal, a service update), and a tool allowed there, unless a person\'s own call: never a session\'s, a routine\'s, a trigger\'s or a peer\'s',
+const PERSON = refused('a process there or this Walnut\'s data handed to it (exec, a file written or moved, a commit, an HTTP call, MCP, a trigger\'s run, a terminal, a service update, an engine\'s sign-in or install), and a tool allowed there, unless a person\'s own call: never a session\'s, a routine\'s, a trigger\'s or a peer\'s',
   'src/providers/ephemeral-session-gate.ts', 'export function gateSessionCommand(')
 const LINE_FILES = stays('the pictures and files of a line handed out to a session there', 'the queue hands out only a person\'s lines there (send), so they go as that person\'s')
 const STREAM = stays('the frames of a stream already open there',
@@ -145,7 +145,7 @@ export const REVOKED_REACH: Readonly<Record<string, Reach>> = {
   ...rows(PERSON, words(`exec.run exec.script fs.write fs.writePart fs.copy fs.mkdir fs.rename fs.rm git.commitStart
     http.request mcp.call mcp.tools triggers.test triggers.run transfer.apply transfer.fetch
     workspace.create workspace.runScript turns.restore vscode.ensure stream.open taskdir.ensure
-    service.update`), 'cmd:'),
+    service.update engine.signIn`), 'cmd:'),
   ...rows(INPUT, words(`send sendRaw appendUserMarker setMode acpSend acpSteer acpRespond acpCancel acpSetConfigOption
     acpSubscribe acpState acpStop agent.send agent.steer agent.respond agent.cancel agent.setOption
     agent.subscribe agent.state agent.stop subscribe-agent unsubscribe-agent attach detach getState

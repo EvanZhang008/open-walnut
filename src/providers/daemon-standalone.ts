@@ -1916,6 +1916,11 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       return acp.hostEngines(cmd.specs)
         .then((engines) => sendOk(ws, id as number, { engines }), (error) => sendError(ws, id as number, error.message))
     }
+    // 'engine-sign-in-v1' (acp-engine-sign-in.ts): sign an engine's CLI in on this host, or
+    // install it; only Walnut's own fixed argv runs. NOT bridge- or follower-reachable: only the
+    // trusted walnut socket asks.
+    case 'engine.signIn': return acp.engineSignIn.handle(cmd)
+      .then((result) => sendOk(ws, id as number, { result }), (error) => sendError(ws, id as number, 'engine.signIn failed: ' + (error as Error).message))
     case 'acpStart': return cmdAcpStart(ws, id as number, cmd)
     case 'acpSend': return cmdAcpOp(ws, id as number, cmd, 'prompt')
     case 'acpSteer': return cmdAcpOp(ws, id as number, cmd, 'steer')

@@ -54,6 +54,8 @@ const HOST_SIDE: Record<string, string> = {
   'src/providers/daemon-source.ts': 'the daemon twin (Node)',
   'src/providers/daemon-standalone.ts': 'the daemon twin (Bun)',
   'src/providers/acp-daemon.ts': 'the ACP half of the daemon',
+  'src/providers/acp-engine-sign-in.ts': 'the daemon\'s engine sign-in (compiled into acp-daemon.ts)',
+  'src/providers/acp-engine-install.ts': 'the daemon\'s engine installer (compiled into acp-daemon.ts)',
   'src/providers/workspace-core.ts': 'the daemon\'s workspace commands (the server imports only its types)',
   'src/providers/wn-cli.ts': 'the on-host `walnut` CLI',
   'src/providers/daemon-service-cli.ts': 'the `walnut net` service CLI',
@@ -67,6 +69,8 @@ const HOST_DIRS = ['src/providers/acp-worker/']
 const AREA_MODULES = new Set(daemonAreaModules())
 
 const CLASSIFIED: Record<string, Record<string, Class>> = {
+  // Each engine.signIn ask waits under its own deadline, cleared when the answer comes.
+  'src/core/agents/engine-sign-in.ts': { 'withDeadline timer': 'call' },
   'src/core/daemon-file-reader.ts': { 'readSessionCost dial': 'link', 'readCodexOutside dial': 'link' },
   'src/core/hosts/host-copy.ts': { 'dropStaging timer': 'call', 'runCopy timer': 'call', 'waitFor timer': 'call' },
   'src/core/hosts/host-exec.ts': { 'slotFreed timer': 'call', 'dial timer': 'call' },

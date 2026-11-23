@@ -18,6 +18,7 @@
  * no price is counted and named, never priced as zero.
  */
 import { projectOrInbox } from '../inbox-project.js';
+import { ENGINE_FULL_NAMES } from '../agents/engine-names.js';
 import { currentPriceSnapshot, ensurePriceBook, priceBookInfo, priceThresholds, resolvePrice, type UserPriceRates } from './price-book.js';
 import { DEFAULT_PRICING } from './pricing.js';
 import { priceBucket } from './session-cost-pricing.js';
@@ -104,7 +105,6 @@ const FEATURE: Record<string, string> = {
   drawing: 'Drawing diagrams', reflection: 'Org reflection', avatar: 'Org avatars',
   'voice-accuracy': 'Voice Accuracy judge and clean-up',
 };
-const ENGINE: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', goose: 'Goose' };
 /** An engine name as a query may carry it (the rollup's own values are lowercase words). */
 export const ENGINE_KEY = /^[a-z][a-z0-9-]{0,31}$/;
 /** A task this small in the period is a test or a one-off: it is folded into one line. */
@@ -116,7 +116,8 @@ export function featureLabel(source: string, agent?: string | null): string {
   return FEATURE[source] ?? source;
 }
 
-export function engineLabel(engine: string): string { return ENGINE[engine] ?? engine; }
+/** A known engine by its full name (agents/engine-names.ts); any other rollup key as it is. */
+export function engineLabel(engine: string): string { return Object.hasOwn(ENGINE_FULL_NAMES, engine) ? (ENGINE_FULL_NAMES as Record<string, string>)[engine] : engine; }
 
 /** Version of a `claude-<family>-<n>[-<n>...]` name, or null for anything else (a dated id included). */
 function familyVersion(name: string, family: string): number[] | null {

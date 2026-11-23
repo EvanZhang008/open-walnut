@@ -2860,7 +2860,7 @@ export interface EngineProviderEntry {
  * All registered coding-agent engines. Order = presentation preference.
  * Capabilities per engine live in src/core/agents/engine-registry.ts.
  */
-export const SESSION_ENGINE_IDS = ['claude', 'codex', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'] as const;
+export const SESSION_ENGINE_IDS = ['claude', 'codex', 'antigravity', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'] as const;
 /** Which coding-agent CLI binary backs a 'cli' session (claude-code vs codex vs future engines). */
 export type SessionEngine = (typeof SESSION_ENGINE_IDS)[number];
 /** The engines the model picker's engine rail shows when `session.picker_engines` names none.

@@ -16,7 +16,7 @@ test.describe.configure({ mode: 'serial' })
 test.setTimeout(120_000)
 
 const DEFAULT_FOUR = ['claude', 'codex', 'opencode', 'pi']
-const ALL = ['claude', 'codex', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom']
+const ALL = ['claude', 'codex', 'antigravity', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom']
 
 test.beforeEach(async ({ page }) => { await isolateUiPrefs(page) })
 
@@ -60,7 +60,7 @@ test('the rail shows the default four engines and widens with their names on hov
   const rail = picker.getByTestId('provider-rail')
   await expect(rail.locator('.provider-rail-item[data-provider]')).toHaveCount(4)
   expect(await rail.locator('.provider-rail-item[data-provider]').evaluateAll((els) => els.map((e) => e.getAttribute('data-provider')))).toEqual(DEFAULT_FOUR)
-  for (const hidden of ['gemini', 'goose', 'dsh', 'custom']) await expect(rail.locator(`[data-provider="${hidden}"]`)).toHaveCount(0)
+  for (const hidden of ['antigravity', 'gemini', 'goose', 'dsh', 'custom']) await expect(rail.locator(`[data-provider="${hidden}"]`)).toHaveCount(0)
 
   // Narrow: icons only, the names hidden; the model pane beside it keeps its place.
   const pane = picker.locator('.model-picker-pane')

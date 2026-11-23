@@ -46,8 +46,16 @@ export interface EngineAcpAdapter {
    * operator's `engines.<id>.env` overlay, which wins (acp-worker/adapter-env.ts).
    */
   readonly env?: Readonly<Record<string, string>>;
+  /**
+   * Variables set only where the adapter's host has none of its own (a real SSH_CONNECTION
+   * stays as it is); the operator's overlay still wins, '' unsetting one (protocol.ts
+   * mergeAcpSpawnEnv applies them on the host that spawns the adapter).
+   */
+  readonly envDefaults?: Readonly<Record<string, string>>;
   /** How the worker signs the adapter in after `initialize` (ACP `authenticate`); absent = it never does. */
   readonly auth?: EngineAcpAuthPlan;
+  /** The engine's own one-line installer, named when its CLI is missing (engine-probe.ts, host-engines.ts). */
+  readonly install?: string;
 }
 
 /**
@@ -232,6 +240,33 @@ const CODEX: EngineCapabilities = {
 // share every capability axis with it; what differs is the label, how the
 // adapter argv is obtained, and whether walnut can import/skill-sync them.
 
+/**
+ * Google's Antigravity CLI (`agy acp`, its own ACP server; Gemini models). It must be signed
+ * in before session/new answers, so the worker calls ACP authenticate with the method its env
+ * selects (an API key, a Cloud project, else the account sign-in agy keeps on disk). With
+ * SSH_CONNECTION (or AGY_ACP_FORCE_FILE_STORAGE) set, agy keeps that sign-in in a file rather
+ * than the OS keyring and never opens a browser, so the one Walnut makes is the one its
+ * sessions read. Its catalog qualifies effort into model ids ("gemini-4-neon-high"); the
+ * snapshot regroups them as base[effort] (acp-worker/protocol.ts snapshotAcpModels).
+ */
+const ANTIGRAVITY: EngineCapabilities = {
+  ...ACP_BASE,
+  id: 'antigravity',
+  displayName: 'Antigravity',
+  acpAdapter: {
+    source: 'cli',
+    binary: 'agy',
+    args: ['acp'],
+    versionArgs: ['--version'],
+    env: { AGY_ACP_FORCE_FILE_STORAGE: '1' },
+    envDefaults: { SSH_CONNECTION: '127.0.0.1 0 127.0.0.1 0' },
+    auth: { byEnv: [['GEMINI_API_KEY', 'gemini-api-key'], ['GOOGLE_CLOUD_PROJECT', 'agent-platform']], otherwise: 'oauth-personal' },
+    install: 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
+  },
+  externalImport: false,
+  skillSync: true,
+};
+
 const GEMINI: EngineCapabilities = {
   ...ACP_BASE,
   id: 'gemini',
@@ -298,6 +333,7 @@ const CUSTOM: EngineCapabilities = {
 const DESCRIPTORS: Record<SessionEngine, EngineCapabilities> = {
   claude: CLAUDE,
   codex: CODEX,
+  antigravity: ANTIGRAVITY,
   gemini: GEMINI,
   opencode: OPENCODE,
   goose: GOOSE,

@@ -67,7 +67,7 @@ const NOT_SESSION: Record<string, string> = {
     workspace.runScript workspace.scriptsFile workspace.status usage.budget.get usage.budget.list usage.codexOutside
     usage.costState usage.scan usage.sessionCost turns.diff turns.guard turns.list turns.restore
     jobs.http jobs.logs jobs.status triggers.ack triggers.claim triggers.run triggers.state.seed triggers.state.snapshot
-    triggers.test acpHostEngines acpModelCatalog oneshot.cancel oneshot.prewarm oneshot.run stt stt-result caller.check
+    triggers.test acpHostEngines acpModelCatalog engine.signIn oneshot.cancel oneshot.prewarm oneshot.run stt stt-result caller.check
     sessions.describeExternal sessions.discoverExternal write-inbox`,
   // Transcript and history reads (Done when 2's scope: another change moves them to the host).
   'transcript-read': 'read-history markers.find history.readyKeys history.readyView transcript.archive transcript.restore transcript.rewindProbe',

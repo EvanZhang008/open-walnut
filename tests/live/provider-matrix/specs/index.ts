@@ -1,5 +1,6 @@
 import type { ProviderSpec } from '../provider-spec.js'
 import { codexSpec } from './codex.js'
+import { antigravitySpec } from './antigravity.js'
 import { claudeSpec } from './claude.js'
 import { geminiSpec } from './gemini.js'
 import { opencodeSpec } from './opencode.js'
@@ -11,6 +12,7 @@ import { dshSpec } from './dsh.js'
 export const PROVIDER_SPECS: ProviderSpec[] = [
   codexSpec,
   claudeSpec,
+  antigravitySpec,
   geminiSpec,
   opencodeSpec,
   gooseSpec,

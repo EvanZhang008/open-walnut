@@ -5,16 +5,13 @@
  */
 import { SESSION_MODEL_FAMILIES, SESSION_MODELS, type EngineFallbackNote } from '../types.js';
 import { limitName, limitTimeWords } from '../sessions/usage-limit-model.js';
-
-const ENGINE_NAMES: Record<string, string> = {
-  claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini', opencode: 'OpenCode', goose: 'Goose', pi: 'Pi',
-  dsh: 'DeepSeek Harness', custom: 'the custom engine',
-};
+import { engineFullName } from './engine-names.js';
 
 /** "Claude Code", "Codex": an engine is named in full wherever it is named. */
 export function fallbackEngineName(engine: string | undefined): string {
   if (!engine) return 'Claude Code';
-  return ENGINE_NAMES[engine] ?? `${engine.charAt(0).toUpperCase()}${engine.slice(1)}`;
+  // The banner's sentences read "started on the custom engine", not on "Custom (ACP)".
+  return engine === 'custom' ? 'the custom engine' : engineFullName(engine);
 }
 
 /**

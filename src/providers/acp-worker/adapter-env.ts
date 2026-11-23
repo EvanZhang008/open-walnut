@@ -11,6 +11,7 @@
  * Pure: no IO, the env and the initialize answer are arguments.
  */
 import type { EngineAcpAdapter, EngineAcpAuthPlan } from '../../core/agents/engine-registry.js'
+import { ACP_ENV_DEFAULTS_KEY } from './protocol.js'
 
 /** The adapter env key carrying the descriptor's auth plan (JSON). */
 export const ACP_AUTH_ENV = 'WALNUT_ACP_AUTH'
@@ -20,10 +21,13 @@ export const ACP_AUTH_ENV = 'WALNUT_ACP_AUTH'
  * neither. Callers merge it UNDER the operator's engines.<id>.env overlay, so the
  * operator can override (or unset with null) any of it.
  */
-export function descriptorAdapterEnv(adapter: Pick<EngineAcpAdapter, 'env' | 'auth'> | undefined): Record<string, string> | undefined {
-  if (!adapter || (!adapter.env && !adapter.auth)) return undefined
+export function descriptorAdapterEnv(adapter: Pick<EngineAcpAdapter, 'env' | 'envDefaults' | 'auth'> | undefined): Record<string, string> | undefined {
+  if (!adapter || (!adapter.env && !adapter.envDefaults && !adapter.auth)) return undefined
   return {
     ...(adapter.env ?? {}),
+    // Defaults ride as one variable the spawn site applies against ITS host's env
+    // (mergeAcpSpawnEnv), so a remote host's own value is kept, not this machine's guess.
+    ...(adapter.envDefaults ? { [ACP_ENV_DEFAULTS_KEY]: JSON.stringify(adapter.envDefaults) } : {}),
     ...(adapter.auth ? { [ACP_AUTH_ENV]: JSON.stringify(adapter.auth) } : {}),
   }
 }

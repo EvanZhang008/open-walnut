@@ -213,7 +213,7 @@ await fs.writeFile(
   JSON.stringify({
     version: 1,
     // Every engine on the model picker's rail (the default shows four): the engine specs pick each one there.
-    session: { history_remote: remoteHistorySetting(fixtureS3), picker_engines: ['claude', 'codex', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'] },
+    session: { history_remote: remoteHistorySetting(fixtureS3), picker_engines: ['claude', 'codex', 'antigravity', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'] },
     defaults: { priority: 'none', platform: 'local' },
     hosts: {
       'fixture-remote': {

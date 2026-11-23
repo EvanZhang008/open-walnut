@@ -94,13 +94,20 @@ describe('engine registry', () => {
       .filter((caps) => caps.runtimeKind === 'acp')
       .map((caps) => caps.id);
     expect(acpEngineIds()).toEqual(fromRegistry);
-    expect(acpEngineIds()).toEqual(['codex', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom']);
+    expect(acpEngineIds()).toEqual(['codex', 'antigravity', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom']);
     expect(acpEngineIds()).not.toContain('claude');
   });
 
   it('the acp engines advertise the verified adapter argv', () => {
     expect(engineCaps('codex').acpAdapter).toEqual({
       source: 'bundled', binary: 'codex', args: null, versionArgs: ['--version'],
+    });
+    expect(engineCaps('antigravity').acpAdapter).toEqual({
+      source: 'cli', binary: 'agy', args: ['acp'], versionArgs: ['--version'],
+      env: { AGY_ACP_FORCE_FILE_STORAGE: '1' },
+      envDefaults: { SSH_CONNECTION: '127.0.0.1 0 127.0.0.1 0' },
+      auth: { byEnv: [['GEMINI_API_KEY', 'gemini-api-key'], ['GOOGLE_CLOUD_PROJECT', 'agent-platform']], otherwise: 'oauth-personal' },
+      install: 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
     });
     expect(engineCaps('gemini').acpAdapter).toEqual({
       source: 'cli', binary: 'gemini', args: ['--experimental-acp'], versionArgs: ['--version'],

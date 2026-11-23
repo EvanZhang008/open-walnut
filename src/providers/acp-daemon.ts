@@ -35,7 +35,8 @@ import type { ChildProcessUse } from './daemon-child-spawn.js'
 import { probeCodexModels } from './codex-model-probe.js'
 import { findThreadToRestore } from './acp-thread-restore.js'
 import { CODEX_TRANSPORT_ENV, codexHomeOf, planCodexResume } from './codex-thread-provider.js'
-import { createHostEngineProbe, resolveHostAcpArtifacts, type AcpHostAdapterSpec } from './acp-host-artifacts.js'
+import { VERSION_MS, createHostEngineProbe, findHostBinary, resolveHostAcpArtifacts, runVersion, type AcpHostAdapterSpec } from './acp-host-artifacts.js'
+import { createEngineSignIn } from './acp-engine-sign-in.js'
 import { firstRpcId, openSurviveChannel, prepareSurviveFiles, readSavedPos, removeSurviveFiles, survivePaths, type SurviveChannel } from './acp-survive.js'
 import { ROLLBACK_NOTE, installStopScript, processStart as psStart, registerRun, registryFile, unregisterRun } from './detached-registry.js'
 
@@ -1396,7 +1397,20 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
   }
 
   const hostProbe = createHostEngineProbe({ artifactDir: deps.artifactDir, artifactNames: deps.artifactNames, env: use.env, execFile: use.execFile })
+  // Signing an engine's CLI in here, and installing it ('engine-sign-in-v1', acp-engine-sign-in.ts).
+  const engineSignIn = createEngineSignIn({
+    spawn: use.spawn ?? spawn,
+    env: baseEnv,
+    findBinary: (spec, env) => findHostBinary(spec, { env }),
+    version: (binary, env) => runVersion(binary, ['--version'], env, VERSION_MS, use.execFile),
+    mergeEnv: mergeAcpSpawnEnv,
+    stateDir: daemonDir,
+    onInstalled: () => hostProbe.forget(),
+    log,
+  })
   return {
+    /** `engine.signIn` ('engine-sign-in-v1'): the engine sign-in and install ops of this host. */
+    engineSignIn,
     /** Which engines this host can run (acp-host-artifacts.ts); only a daemon with `artifactDir` answers. */
     hostEngines: deps.artifactDir ? (specs: AcpHostAdapterSpec[]) => hostProbe.probe(specs) : undefined,
     modelCatalog: (binary: string, options: { cwd?: string; env?: Record<string, string> }) =>

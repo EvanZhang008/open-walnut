@@ -63,13 +63,15 @@
 set -euo pipefail
 
 # Must match SESSION_ENGINE_IDS in src/core/types.ts (a test compares them).
-ENGINE_IDS="claude codex gemini opencode goose pi dsh custom"
+ENGINE_IDS="claude codex antigravity gemini opencode goose pi dsh custom"
 # Walnut drives current models through flags that need at least this CLI.
 CLAUDE_MIN_VERSION=2.1.280
 DEFAULT_BEDROCK_REGION=us-west-2
 CLAUDE_INSTALL_URL=https://claude.ai/install.sh
 CLAUDE_NPM_PACKAGE=@anthropic-ai/claude-code
 GOOSE_INSTALL_URL=https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh
+# Antigravity's official installer: puts `agy` in ~/.local/bin.
+ANTIGRAVITY_INSTALL_URL=https://antigravity.google/cli/install.sh
 IMDS_URL=http://169.254.169.254
 REGION_RE='^[a-z]{2}(-[a-z]+)+-[0-9]{1,2}$'
 
@@ -576,7 +578,13 @@ if [ -z "$ENGINE" ]; then
 fi
 step "Default engine: $ENGINE (from $engine_source)"
 
-engine_binary() { if [ "$1" = custom ]; then return 0; fi; echo "$1"; }
+engine_binary() {
+  case "$1" in
+    custom) return 0 ;;
+    antigravity) echo agy ;;
+    *) echo "$1" ;;
+  esac
+}
 engine_npm_package() {
   case "$1" in
     codex) echo @openai/codex ;;
@@ -589,6 +597,7 @@ engine_npm_package() {
 engine_min_version() { if [ "$1" = pi ]; then echo 0.80.4; fi; }
 engine_install_hint() {
   if [ "$1" = goose ]; then echo "curl -fsSL $GOOSE_INSTALL_URL | CONFIGURE=false bash (as $WALNUT_USER)"; return 0; fi
+  if [ "$1" = antigravity ]; then echo "curl -fsSL $ANTIGRAVITY_INSTALL_URL | bash (as $WALNUT_USER)"; return 0; fi
   echo "npm install -g $(engine_npm_package "$1")"
 }
 
@@ -610,6 +619,12 @@ find_engine_cli() {
 }
 
 install_engine_cli() {
+  if [ "$1" = antigravity ]; then
+    # The official installer, as the service user: it installs into that user's ~/.local/bin.
+    as_walnut ${INSTALL_TIMEOUT[@]+"${INSTALL_TIMEOUT[@]}"} bash -c \
+      "set -o pipefail; curl $CURL_OPTS '$ANTIGRAVITY_INSTALL_URL' | bash" </dev/null
+    return
+  fi
   if [ "$1" = goose ]; then
     # The release asset is a .tar.bz2; a minimal image may lack bzip2.
     if ! command -v bzip2 >/dev/null 2>&1; then
@@ -688,6 +703,9 @@ if [ "$ENGINE" = claude ]; then
   fi
 elif [ "$ENGINE" = custom ]; then
   record engine-auth skipped "out of scope: configure engines.custom (its adapter command and auth) on the box yourself"
+elif [ "$ENGINE" = antigravity ]; then
+  # Walnut's agy processes keep the sign-in in a file (AGY_ACP_FORCE_FILE_STORAGE), so sign in the same way.
+  record engine-auth skipped "out of scope: sign Antigravity in on the box yourself (sudo -u $WALNUT_USER -H env AGY_ACP_FORCE_FILE_STORAGE=1 ${ENGINE_CLI:-agy} acp --login), or set GEMINI_API_KEY in engines.antigravity.env"
 else
   record engine-auth skipped "out of scope: sign $ENGINE in on the box yourself (sudo -u $WALNUT_USER -H ${ENGINE_CLI:-$ENGINE})"
 fi

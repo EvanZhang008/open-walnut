@@ -108,6 +108,8 @@ SOURCES=(
   src/providers/acp-thread-restore.ts
   src/providers/codex-thread-provider.ts
   src/providers/acp-host-artifacts.ts
+  src/providers/acp-engine-sign-in.ts
+  src/providers/acp-engine-install.ts
   src/lib/cli-private-tmp.ts
   src/lib/single-file.ts
   node_modules/@agentclientprotocol/codex-acp/package.json

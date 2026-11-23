@@ -150,7 +150,8 @@ const ENGINE_SETTINGS_DEADLINE_MS = 20_000
 
 const LOCAL_HOST = '__local__'
 
-async function resolveHostParam(raw: unknown): Promise<string | null> {
+/** The host a request names (`__local__` when none), or null for one config.yaml does not list. */
+export async function resolveHostParam(raw: unknown): Promise<string | null> {
   const host = typeof raw === 'string' && raw.trim() ? raw.trim() : LOCAL_HOST
   if (host === LOCAL_HOST) return host
   const config = await getConfig()

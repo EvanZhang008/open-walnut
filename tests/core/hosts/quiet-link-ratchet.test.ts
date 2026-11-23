@@ -52,6 +52,7 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   'src/core/routines/run-placement.ts': { calls: 1, kind: 'checks', why: 'reads whether a host\'s link is up, its capabilities and home; the one send (the run\'s folder, through ensureCwd) follows hostLinkAnswers' },
 
   // Sends without asking; the wake recheck and the ping loop find a dead link.
+  'src/core/agents/engine-sign-in.ts': { calls: 2, kind: 'wake-recheck', why: 'an engine CLI\'s sign-in, install or status a person asks for in Settings, each under its own deadline (a lost one answers 504, status unknown, and the person asks again); and the hosts list, which only looks up a link already open and dials none' },
   'src/core/agents/host-engines.ts': { calls: 3, kind: 'wake-recheck', why: 'a read under its own 4 s deadline; a lost one answers from its cache; and a synchronous look at an open link\'s capabilities that sends nothing' },
   'src/core/subagent-ready-view.ts': { calls: 2, kind: 'wake-recheck', why: 'read-only view of one subagent; each ask is bounded by its budget and the host-read deadline, and a lost read answers unavailable' },
   'src/core/history-ready-view.ts': { calls: 2, kind: 'wake-recheck', why: 'read-only view request; the first paint has a 900 ms deadline and a lost read falls back to the preview' },

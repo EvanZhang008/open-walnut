@@ -193,6 +193,7 @@ export const RETRY_SHAPE_MATCHERS: Record<RetryShape, (update: Record<string, un
 export const ACP_RETRY_SHAPES: Record<string, { shapes: readonly RetryShape[]; basis: string }> = {
   codex: { shapes: ['codex-meta'], basis: 'codex-acp 1.4.0 (node_modules/@agentclientprotocol/codex-acp) and codex-app-server/events.ts: an app-server `error` with willRetry becomes _meta.codex.error.willRetry' },
   pi: { shapes: ['pi-text'], basis: "pi-acp 0.0.33 (node_modules/pi-acp) sends Pi's auto_retry_start as a text chunk; Pi itself stops after retry.maxRetries (3 by default)" },
+  antigravity: { shapes: [], basis: 'Antigravity (agy) is a compiled binary whose source is not on the build host (2026-11-24), and its recorded ACP answers (tests/fixtures/antigravity) hold no retry frame: only the silence bound holds' },
   gemini: { shapes: [], basis: 'Gemini CLI source not available on the build host (2026-11-24): no retry frame is known, so only the silence bound holds' },
   opencode: { shapes: [], basis: 'OpenCode is a compiled binary whose source is not on the build host (2026-11-24): no retry frame is known, so only the silence bound holds' },
   goose: { shapes: [], basis: 'Goose source not available on the build host (2026-11-24): no retry frame is known, so only the silence bound holds' },

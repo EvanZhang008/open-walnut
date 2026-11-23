@@ -112,7 +112,7 @@ export interface ReturnedFile { from: string; to: string; bytes: number }
 
 export type LightRunner = (spec: LightRunSpec) => Promise<LightRunResult>
 
-export const LIGHT_SUBAGENT_ENGINES: readonly SessionEngine[] = ['codex', 'opencode', 'goose', 'pi', 'gemini', 'dsh', 'custom', 'claude']
+export const LIGHT_SUBAGENT_ENGINES: readonly SessionEngine[] = ['codex', 'antigravity', 'opencode', 'goose', 'pi', 'gemini', 'dsh', 'custom', 'claude']
 
 /** What a turn a restart cut off is asked again, once its session is idle and its own end was not seen. */
 export const RESUME_PROMPT = '[Walnut] Walnut\'s server restarted while you were answering, so the answer you were working on was not received. '

@@ -203,6 +203,16 @@ describe('the daemon\'s cmdSkillsSync (v2: canonical copy + engine symlinks)', (
     expect(fs.existsSync(path.join(tmp, '.agents'))).toBe(false)
   })
 
+  it('with agy in ~/.local/bin, links ~/.gemini/config/skills/walnut (antigravity\'s dir), not the gemini CLI\'s', () => {
+    fs.mkdirSync(path.join(tmp, '.local', 'bin'), { recursive: true })
+    fs.writeFileSync(path.join(tmp, '.local', 'bin', 'agy'), '')
+    const r = run()
+    expect(r.ok).toBe(true)
+    const link = path.join(tmp, '.gemini', 'config', 'skills', 'walnut')
+    expect(fs.realpathSync(link)).toBe(fs.realpathSync(canonicalDir()))
+    expect(fs.existsSync(geminiLink())).toBe(false)
+  })
+
   it('a host running codex + goose + gemini gets ONE ~/.agents link plus the gemini one', () => {
     fs.mkdirSync(path.join(tmp, '.codex'), { recursive: true })
     fs.mkdirSync(path.join(tmp, '.config', 'goose'), { recursive: true })
@@ -481,6 +491,9 @@ describe('the daemon wiring', () => {
     expect(mod).toContain("fs.existsSync(path.join(HOME_DIR, '.config', 'goose')) || fs.existsSync(path.join(HOME_DIR, '.local', 'share', 'goose'))")
     // gemini: the one engine with a private skills dir.
     expect(mod).toContain("if (fs.existsSync(path.join(HOME_DIR, '.gemini'))) ensureLink(path.join(HOME_DIR, '.gemini', 'skills'))")
+    // antigravity: its own dir under ~/.gemini, linked when its CLI or home is there.
+    expect(mod).toContain("fs.existsSync(path.join(HOME_DIR, '.local', 'bin', 'agy')) || fs.existsSync(path.join(HOME_DIR, '.gemini', 'antigravity-cli'))")
+    expect(mod).toContain("ensureLink(path.join(HOME_DIR, '.gemini', 'config', 'skills'))")
     expect(mod).toContain('fs.symlinkSync(canonicalDir, link)')
     expect(mod).toMatch(/skills\.sync[\s\S]{0,2600}if \(!KEEPS_SESSIONS\) \{\s*\n\s*return ok\(\{ applied: true, changed: false, skipped: 'non-prod' \}\)/)
   })

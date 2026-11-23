@@ -17,6 +17,8 @@ import {
   acpFilterMatch,
   acpEffortLadder,
 } from '../../web/src/components/sessions/acp-model-id';
+import { readFileSync } from 'node:fs';
+import { snapshotAcpModels } from '../../src/providers/acp-worker/protocol';
 
 describe('parseAcpModelId', () => {
   it('splits the codex bracket form', () => {
@@ -245,5 +247,31 @@ describe('acpEffortLadder', () => {
     const [family] = groupAcpModels([{ modelId: 'openai.gpt-6.1-sol[ultra]', name: 'GPT-6.1-Sol (ultra)' }])[0]!.families;
     expect(family!.label).toBe('GPT-6.1-Sol');
     expect(shortAcpModelName('openai.gpt-6.1-sol[ultra]')).toMatch(/· Ultra$/);
+  });
+});
+
+describe('the Antigravity catalog (agy 1.5.14, as the server snapshots it)', () => {
+  // The server reads agy's "gemini-4-neon-high" ids as "gemini-4-neon[high]" (protocol.ts
+  // snapshotAcpModels); this is the picker's half: one row per model, its efforts beside it.
+  const answers = JSON.parse(readFileSync(new URL('../fixtures/antigravity/acp-answers.json', import.meta.url), 'utf-8'));
+  const catalog = snapshotAcpModels(answers.sessionNew);
+
+  it('lists one row per base model with agy\'s own names', () => {
+    const groups = groupAcpModels(catalog.availableModels);
+    expect(groups).toHaveLength(1);
+    const families = groups[0]!.families;
+    expect(families.map((f) => f.familyId).sort()).toEqual([
+      'gemini-3.1-pro', 'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.8-flash',
+      'gemini-4-argon', 'gemini-4-carbon', 'gemini-4-hydrogen', 'gemini-4-neon',
+    ]);
+    const neon = families.find((f) => f.familyId === 'gemini-4-neon')!;
+    expect(neon.label).toBe('Gemini 4 Neon');
+    expect([...neon.byEffort.keys()].sort()).toEqual(['high', 'low', 'medium', 'xhigh']);
+    expect(acpEffortLadder(families).map((e) => e.id)).toEqual(['low', 'medium', 'high', 'xhigh']);
+  });
+
+  it('the pill names a pick by model and effort', () => {
+    expect(acpModelDisplayName('gemini-4-neon[high]', 'Gemini 4 Neon (High)')).toBe('Gemini 4 Neon (High)');
+    expect(shortAcpModelName('gemini-4-neon[high]')).toBe('Gemini 4 Neon · High');
   });
 });

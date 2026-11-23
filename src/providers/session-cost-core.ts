@@ -104,6 +104,7 @@ interface UsageRow {
 
 const NO_USAGE_REASON: Record<string, string> = {
   goose: 'Goose keeps only session totals, without the cache detail a price needs.',
+  antigravity: 'Antigravity usage is not read yet.',
   gemini: 'Gemini usage is not read yet.',
   pi: 'Pi usage is not read yet.',
 };

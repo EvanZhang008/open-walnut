@@ -339,7 +339,8 @@ export async function renderCarriedContext(
   return { text, carriedTurns: kept.length, trimmedTurns, tokens: estimateTokens(text), budgetTokens };
 }
 
-const DEFAULT_WINDOWS: Record<string, number> = { codex: 258_000, gemini: 1_000_000 };
+// Antigravity runs Gemini 4 (a 1,048,576-token window).
+const DEFAULT_WINDOWS: Record<string, number> = { codex: 258_000, antigravity: 1_048_576, gemini: 1_000_000 };
 const CLAUDE_DEFAULT_WINDOW = 200_000;
 const OTHER_DEFAULT_WINDOW = 128_000;
 

@@ -48,6 +48,7 @@ export const FACT_KEYS: Readonly<Record<string, readonly [FactKeyClass, string]>
   title: TEXT, message: TEXT, messages: TEXT, queuedText: TEXT, rowText: TEXT, result: TEXT, error: TEXT, cliError: TEXT,
   question: TEXT, answer: TEXT, reason: TEXT, heldReason: TEXT, detail: TEXT, snippet: TEXT, delta: TEXT, input: TEXT,
   planContent: TEXT, toolName: TEXT, eventType: TEXT, scope: TEXT, variant: TEXT, progress: TEXT, scriptSource: TEXT,
+  signIn: own('the engine its CLI is not signed in on, and that host as words (engine-sign-in.ts): shown with a link to its sign-in in Settings, never resolved to a leader object'),
   project: own('the project the session runs in, as the host says it: shown only, the leader links by its own task'),
   provider: NUM, model: NUM, models: NUM, requestedEffort: NUM, effectiveEffort: NUM, errorKind: NUM, source: NUM, sentBy: NUM,
   activity: NUM, taskActivity: NUM, phase: NUM, phases: NUM, card: NUM, events: NUM, usage: NUM, usageLimit: NUM, speed: NUM,

@@ -106,6 +106,16 @@ function GeminiMark() {
   );
 }
 
+/** An arrow rising over an arc: a neutral mark for Antigravity (not Google's own logo). */
+function AntigravityMark() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M4 19.5c2.2-2.6 4.9-3.9 8-3.9s5.8 1.3 8 3.9" />
+      <path d="M12 13V4.5M8.6 7.9 12 4.5l3.4 3.4" />
+    </svg>
+  );
+}
+
 /** Terminal frame with a solid block cursor — OpenCode's block-cursor motif. */
 function OpenCodeMark() {
   return (
@@ -173,6 +183,7 @@ function GenericEngineMark() {
 const PROVIDER_ICONS: Partial<Record<string, React.FC>> = {
   claude: ClaudeMark,
   codex: CodexMark,
+  antigravity: AntigravityMark,
   gemini: GeminiMark,
   opencode: OpenCodeMark,
   goose: GooseMark,

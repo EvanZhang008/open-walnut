@@ -40,6 +40,7 @@ const APPROVAL_RULES: Record<string, { markers: number; rule: string }> = {
   'src/web/routes/host-servers.ts': { markers: 2, rule: 'permissions: setting up a Walnut server on a host' },
   'src/web/routes/companion-build.ts': { markers: 2, rule: 'permissions: how the cloud companion installs new builds' },
   'src/web/routes/replicas-status.ts': { markers: 2, rule: 'deleting data: confirming a replica\'s removal of most of its rows' },
+  'src/web/routes/engine-sign-in.ts': { markers: 2, rule: 'credentials: an engine CLI\'s API key (setting or removing it) and signing its account out on a host are the user\'s own; an agent may still start or finish a sign-in, since only the person has the code it needs' },
   'src/web/routes/secrets-v1.ts': { markers: 2, rule: 'credentials: adding, rotating, sharing or deleting a secret (core/secrets/fleet-secrets.ts)' },
   'src/web/routes/host-exec-v1.ts': { markers: 3, rule: 'permissions: granting or revoking a task\'s commands on another host, and a host\'s hard stop (a task\'s own Allow on its grant letter is ignored too, core/hosts/exec-grants.ts); a daemon update refuses only a caller that is neither a session (which goes under its host_exec grant) nor the person at this computer' },
   'src/integrations/calendar/routes.ts': { markers: 3, rule: 'outward: changing a calendar event Walnut did not make (others see it) needs the user\'s yes on the Mac' },

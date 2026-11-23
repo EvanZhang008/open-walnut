@@ -3,6 +3,7 @@
  * when it continues, and its words. No IO; the clock is an argument.
  */
 import type { SessionUsageLimit } from '../types.js'
+import { engineFullName } from '../agents/engine-names.js'
 
 export type { SessionUsageLimit }
 
@@ -82,11 +83,10 @@ export function limitDueAt(
   return fromMs + t.backoffMs[Math.min(Math.max(0, tries - 1), t.backoffMs.length - 1)]
 }
 
-const ENGINE_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode', goose: 'Goose', gemini: 'Gemini' }
-
+/** "Codex", "Antigravity"; Claude Code's limit is its Claude subscription's, so "Claude". */
 export function limitEngineWords(engine: string | undefined): string {
   if (!engine) return 'The'
-  return ENGINE_NAMES[engine] ?? `${engine.charAt(0).toUpperCase()}${engine.slice(1)}`
+  return engine === 'claude' ? 'Claude' : engineFullName(engine)
 }
 
 const WINDOW_NAMES: Record<string, string> = {

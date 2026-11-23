@@ -86,7 +86,7 @@ export const REVOKED_REFUSES_COMMANDS: ReadonlySet<string> = new Set(['start', '
 export const REVOKED_PERSON_ONLY_COMMANDS: ReadonlySet<string> = new Set([
   'exec.run', 'exec.script', 'fs.write', 'fs.writePart', 'fs.copy', 'fs.mkdir', 'fs.rename', 'fs.rm', 'git.commitStart', 'http.request',
   'mcp.call', 'mcp.tools', 'triggers.test', 'triggers.run', 'transfer.apply', 'transfer.fetch', 'workspace.create', 'workspace.runScript',
-  'turns.restore', 'vscode.ensure', 'stream.open', 'taskdir.ensure', 'service.update',
+  'turns.restore', 'vscode.ensure', 'stream.open', 'taskdir.ensure', 'service.update', 'engine.signIn',
 ])
 /** A raw line that allows a tool call (a permission answer written as sendRaw). */
 const allowsTool = (cmd: string, params: Record<string, unknown>) => cmd === 'sendRaw' && typeof params.raw === 'string' && /"behavior"\s*:\s*"allow"/.test(params.raw)

@@ -321,12 +321,14 @@ and converges the box to:
 - **The default engine's CLI**, when that engine is not claude. codex, gemini,
   opencode, pi and dsh come from `npm install -g` (`@openai/codex`,
   `@google/gemini-cli`, `opencode-ai`, `@earendil-works/pi-coding-agent`,
-  `@deepseek-ai/dsh`); goose comes from its official download script into
-  `~/.local/bin`. `custom` has nothing to install. When the box's node is
+  `@deepseek-ai/dsh`); goose and antigravity (`agy`) come from their official
+  install scripts into `~/.local/bin`. `custom` has nothing to install. When the box's node is
   older than the package's own floor (pi needs 22.19 or newer), the CLI is not
   installed and not made the default; the summary says so, and node is never
   upgraded for you. The engine's own login or API key is not set up for you:
-  sign it in on the box (`sudo -u walnut -H <cli>`).
+  sign it in on the box (`sudo -u walnut -H <cli>`; antigravity:
+  `sudo -u walnut -H env AGY_ACP_FORCE_FILE_STORAGE=1 agy acp --login`, or
+  `GEMINI_API_KEY` in `engines.antigravity.env`).
 - **A systemd drop-in**, `walnut.service.d/harness.conf`, with
   `SHELL=/bin/bash` and `KillMode=process`. The service user keeps its nologin
   shell; the daemon spawns the CLI through `$SHELL`, so the unit needs a real

@@ -20,6 +20,7 @@ const ALLOWED: Record<string, string> = {
   'tests/e2e/acp-session-server-e2e.test.ts': 'runs the built daemon binary with its bundle; skips with both',
   'tests/e2e/acp-codex.live.test.ts': 'live layer: the shipped artifacts against the real engine',
   'tests/live/provider-matrix/specs/codex.ts': 'live layer: the shipped artifacts against the real engine',
+  'tests/live/provider-matrix/specs/antigravity.ts': 'live layer: the shipped artifacts against the real engine',
   'tests/live/provider-matrix/specs/gemini.ts': 'live layer: the shipped artifacts against the real engine',
   'tests/live/provider-matrix/specs/goose.ts': 'live layer: the shipped artifacts against the real engine',
   'tests/live/provider-matrix/specs/opencode.ts': 'live layer: the shipped artifacts against the real engine',

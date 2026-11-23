@@ -1,9 +1,8 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
+import { SESSION_ENGINE_IDS } from '../core/types.js';
 import { withOutcome } from './outcome.js';
 import { TASK_RECEIPT } from './task-answers.js';
-
-const ENGINES = ['claude', 'codex', 'gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'] as const;
 
 defineOp({
   name: 'task_switch_engine',
@@ -23,7 +22,7 @@ defineOp({
     + 'task_transfer (a NEW task) is only for when the user asks for a new task.',
   input: {
     id: z.string().min(1).describe('Task id or unique prefix'),
-    engine: z.enum(ENGINES).describe('The engine to switch to'),
+    engine: z.enum(SESSION_ENGINE_IDS).describe('The engine to switch to'),
     text: z.string().optional().describe('The message the new session starts with (what to do next); omit to start it with the carried context alone'),
     when: z.enum(['now', 'turn_end']).optional().describe('now: stop a running turn and switch at once; turn_end (an agent\'s default): wait for the turn to end'),
     model: z.string().min(1).optional().describe('Model for the new session; omit for the engine default'),
@@ -92,7 +91,7 @@ defineOp({
     id: z.string().min(1).describe('Task id or unique prefix'),
     host: z.string().min(1).describe('Where it goes: a host alias, or "local" for this Mac'),
     text: z.string().optional().describe('The message the new session starts with; default: check the work is set up, then carry on'),
-    engine: z.enum(ENGINES).optional().describe('Engine on the new host; default the task\'s own'),
+    engine: z.enum(SESSION_ENGINE_IDS).optional().describe('Engine on the new host; default the task\'s own'),
     model: z.string().min(1).optional().describe('Model for the new session; default the engine\'s'),
     team: z.boolean().optional().describe('Move every open task under this one too'),
     user_request: z.string().optional().describe('The user\'s words asking for the move, quoted (recorded with it)'),

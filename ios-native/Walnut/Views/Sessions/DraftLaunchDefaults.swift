@@ -58,6 +58,7 @@ struct DraftLaunchDefaults: Equatable {
         switch id {
         case "claude": return "Claude Code"
         case "codex": return "Codex"
+        case "antigravity": return "Antigravity"
         case "opencode": return "OpenCode"
         case "pi": return "Pi"
         case "gemini": return "Gemini"

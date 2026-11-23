@@ -30,7 +30,7 @@ export type DeliveryFailureKind = 'permanent' | 'transient';
 export interface DeliveryFailureVerdict {
   kind: DeliveryFailureKind;
   /** Stable label for logs/tests. Absent for transient failures. */
-  code?: 'cwd_missing' | 'session_missing' | 'session_stopped' | 'budget_paused' | 'inherited_session' | 'session_live' | 'too_large' | 'acp_session' | 'claude_missing' | 'history_unavailable' | 'host_revoked' | typeof ENGINE_CONFIG_CODE;
+  code?: 'cwd_missing' | 'session_missing' | 'session_stopped' | 'budget_paused' | 'inherited_session' | 'session_live' | 'too_large' | 'acp_session' | 'claude_missing' | 'history_unavailable' | 'host_revoked' | typeof ENGINE_CONFIG_CODE | 'sign_in_required';
   /** Human-readable cause, stored on the parked row and shown in the UI. */
   reason: string;
   /**
@@ -79,6 +79,9 @@ export function classifyDeliveryFailure(err: unknown): DeliveryFailureVerdict {
   if (isSessionStopSuperseded(err)) return { kind: 'permanent', code: 'session_stopped', reason };
   // Claude Code cannot run on the host yet: every retry fails the same way until the
   // user installs it, so the message waits, said plainly, for their Retry.
+  // An engine's CLI on the host is not signed in: every retry is refused the same way until the
+  // user signs it in (Settings), so the message waits, said plainly, for their Retry.
+  if (err instanceof EngineSignInRequiredError) return { kind: 'permanent', code: 'sign_in_required', reason: err.message };
   if (err instanceof ClaudeRuntimeMissingError) return { kind: 'permanent', code: 'claude_missing', reason: err.waitingReason, waitsFor: err.errorKind };
   // A test server refusing a session it did not start: retrying changes nothing.
   if (err instanceof InheritedSessionRefusedError || isInheritedSessionText(message)) return { kind: 'permanent', code: 'inherited_session', reason: reason.replace(/^inherited_session:\s*/, '') };
@@ -242,6 +245,20 @@ export function holderPidOf(text: unknown): number | undefined {
  * (not installed, or the npm build with no Node). Nothing was spawned. The message
  * is the readiness sentence every surface shows (host-readiness.ts spawnGateSentence).
  */
+/**
+ * An engine's CLI on a host refused the start for want of a sign-in (its ACP authenticate or
+ * session/new answered auth_required; core/agents/engine-sign-in.ts signs it in). `signIn` names
+ * the engine and host, so the chat can offer the sign-in in Settings for that host.
+ */
+export class EngineSignInRequiredError extends Error {
+  readonly code = 'ENGINE_SIGN_IN';
+  constructor(message: string, readonly engine: string, readonly host: string, readonly hostName: string) {
+    super(message);
+    this.name = 'EngineSignInRequiredError';
+  }
+  get signIn(): { engine: string; host: string; hostName: string } { return { engine: this.engine, host: this.host, hostName: this.hostName }; }
+}
+
 export class ClaudeRuntimeMissingError extends Error {
   readonly code = 'CLAUDE_RUNTIME';
   constructor(message: string, readonly errorKind: 'claude_missing' | 'claude_needs_node' | 'claude_error') {

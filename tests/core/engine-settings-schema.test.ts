@@ -28,7 +28,7 @@ describe('engine settings schema: registry data', () => {
     expect(ENGINE_REGISTRY.get('claude')?.settings).toBe(CLAUDE_SETTINGS)
     expect(ENGINE_REGISTRY.get('codex')?.settings).toBe(CODEX_SETTINGS)
     expect(ENGINE_REGISTRY.get('pi')?.settings).toBe(PI_SETTINGS)
-    for (const id of ['gemini', 'opencode', 'goose', 'dsh', 'custom'] as const) {
+    for (const id of ['antigravity', 'gemini', 'opencode', 'goose', 'dsh', 'custom'] as const) {
       expect(ENGINE_REGISTRY.get(id)?.settings, id).toBeUndefined()
     }
   })

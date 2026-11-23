@@ -51,6 +51,8 @@ const SHELL_SHAPES: Record<string, (command: string) => Record<string, unknown>>
     toolCall: { kind: 'execute', rawInput: { command: codexShown(command), cwd: '/work' } },
     _meta: { codex: { params: { command: `/bin/zsh -lc ${shQuote(command)}`, cwd: '/work' } } },
   }),
+  // agy acp: assumed the Gemini family's shape (no signed-in run has shown its own yet).
+  antigravity: (command) => ({ kind: 'execute', title: command, rawInput: { command } }),
   gemini: (command) => ({ kind: 'execute', title: command, rawInput: { command, description: 'Run it' } }),
   opencode: (command) => ({ kind: 'execute', title: 'bash', rawInput: { command, description: 'Run it' } }),
   goose: (command) => ({ kind: 'execute', title: 'developer__shell', rawInput: { command } }),

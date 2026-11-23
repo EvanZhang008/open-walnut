@@ -818,6 +818,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // update. Optional: a server only asks for it on a daemon that says it, and a worker started
   // without it runs on pipes as before.
   'acp-survive-v1',
+  // 'engine-sign-in-v1': `engine.signIn {op, engine, env, ...}` signs an engine's CLI in on this
+  // host (`agy acp --login`: start answers the sign-in link, finish writes the pasted code to its
+  // stdin, cancel ends it; a sign-in is named by `signInId`, never `id`, the frame's own), checks
+  // the stored sign-in, signs out, and runs the engine's official installer
+  // (acp-engine-sign-in.ts; only Walnut's own fixed argv). Optional: Settings says the host's
+  // daemon must update first.
+  'engine-sign-in-v1',
   // 'acp-host-v1' is NOT listed here: the daemon says it only inside the compiled walnut
   // file, whose runtime tree holds the ACP files under their dist names
   // (daemon-standalone.ts ACP_ARTIFACT_DIR). acpStart then takes `hostAdapter` instead of the
