@@ -225,7 +225,7 @@ struct MarkdownTableView: View {
         }
         .onChange(of: dynamicTypeSize) { relayout() }
         .background(Color(.secondarySystemBackground).opacity(0.6),
-                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    in: Theme.Radius.shape(Theme.Radius.sm))
     }
 
     private func relayout() {

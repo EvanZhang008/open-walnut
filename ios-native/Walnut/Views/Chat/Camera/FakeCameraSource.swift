@@ -102,9 +102,9 @@ enum FakeWhiteboard {
         cg.fill(CGRect(origin: .zero, size: size))
         let board = CGRect(x: 40, y: 150, width: w - 80, height: h - 330)
         UIColor(white: 0.97, alpha: 1).setFill()
-        UIBezierPath(roundedRect: board, cornerRadius: 10).fill()
+        UIBezierPath(roundedRect: board, cornerRadius: 10).fill() // ui-standard-ok: synthetic camera frame
         UIColor(white: 0.7, alpha: 1).setStroke()
-        let frame = UIBezierPath(roundedRect: board, cornerRadius: 10)
+        let frame = UIBezierPath(roundedRect: board, cornerRadius: 10) // ui-standard-ok: synthetic camera frame
         frame.lineWidth = 8
         frame.stroke()
         let ink = UIColor(red: 0.1, green: 0.2, blue: 0.55, alpha: 1)
@@ -116,7 +116,7 @@ enum FakeWhiteboard {
             let rect = CGRect(x: i % 2 == 0 ? board.minX + 50 : board.maxX - 50 - boxW,
                               y: board.minY + 150 + CGFloat(i) * 190, width: boxW, height: boxH)
             ink.setStroke()
-            let box = UIBezierPath(roundedRect: rect, cornerRadius: 14)
+            let box = UIBezierPath(roundedRect: rect, cornerRadius: 14) // ui-standard-ok: synthetic camera frame
             box.lineWidth = 6
             box.stroke()
             text(name, at: CGPoint(x: rect.minX + 30, y: rect.minY + 34), size: 44, color: ink)

@@ -316,8 +316,8 @@ private struct VoiceRecordingSeat: View {
         Button(action: onStop) {
             // Sized from the key, not from the text size, so the time always
             // fits inside it: as large as the key holds "0:00" (11.5pt in
-            // the 32pt key), shrinking only for a tenth minute. onTint on
-            // tint reads 5.84:1 light and 7.02:1 dark (white on the red, 3.55:1).
+            // the 32pt key), shrinking only for a tenth minute. White on the
+            // accent reads 4.8:1 light and 5.0:1 dark (white on the red, 3.55:1).
             VStack(spacing: 0) {
                 Image(systemName: "checkmark")
                     .font(.system(size: inner * 0.28, weight: .bold))
@@ -329,7 +329,7 @@ private struct VoiceRecordingSeat: View {
             }
             .foregroundStyle(Theme.onTint)
             .frame(width: inner, height: inner)
-            .background(Theme.tint, in: MessageBox.keyShape)
+            .background(Theme.accent, in: MessageBox.keyShape)
             .padding(3)
             .overlay {
                 Circle()

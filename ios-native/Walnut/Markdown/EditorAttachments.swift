@@ -37,9 +37,12 @@ final class CheckboxAttachment: NSTextAttachment {
     private func updateImage() {
         let config = UIImage.SymbolConfiguration(pointSize: 21, weight: .light)
         let name = checked ? "checkmark.circle.fill" : "circle"
-        // Fixed mid-tone colors legible in both light and dark mode — attachment
-        // images are baked, dynamic colors don't re-resolve on trait change.
-        let tint = checked ? UIColor(red: 0.66, green: 0.45, blue: 0.25, alpha: 1) : UIColor(white: 0.68, alpha: 1)
+        // Fixed mid-tone colors legible in both light and dark mode: attachment images
+        // are baked, so dynamic colors don't re-resolve on trait change. Checked is the
+        // tint's mid blue (its dark-mode value), unchecked the system grey (one value in both).
+        let tint = checked
+            ? Theme.tintColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
+            : UIColor.systemGray
         let symbol = UIImage(systemName: name, withConfiguration: config)?
             .withTintColor(tint, renderingMode: .alwaysOriginal)
         let size = CGSize(width: Self.canvasWidth, height: 24)
@@ -135,7 +138,7 @@ final class RemoteImageAttachment: NSTextAttachment {
         let renderer = UIGraphicsImageRenderer(size: size)
         return renderer.image { ctx in
             UIColor.secondarySystemBackground.setFill()
-            UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: 12).fill()
+            UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: Theme.Radius.md).fill()
             let config = UIImage.SymbolConfiguration(pointSize: 28, weight: .light)
             if let photo = UIImage(systemName: "photo", withConfiguration: config)?
                 .withTintColor(.tertiaryLabel, renderingMode: .alwaysOriginal) {

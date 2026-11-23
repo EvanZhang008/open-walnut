@@ -29,7 +29,7 @@ struct SessionRowView: View {
                     if session.forkDepth > 0 {
                         HStack(spacing: 2) {
                             Image(systemName: "arrow.triangle.branch")
-                                .font(.system(size: 9, weight: .semibold))
+                                .font(Theme.Glyph.xs.font(.semibold))
                             if session.forkDepth > 1 {
                                 Text("\(session.forkDepth)")
                                     .font(.caption2.weight(.semibold))
@@ -38,7 +38,8 @@ struct SessionRowView: View {
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
-                        .background(Color(.tertiarySystemFill), in: Capsule())
+                        // A tag is round (it can be a glyph with no words, so not a WalnutBadge).
+                        .background(Color(.tertiarySystemFill), in: Capsule(style: .continuous))
                     }
                 }
                 HStack(spacing: 6) {
@@ -75,17 +76,9 @@ struct SessionRowView: View {
         }
     }
 
+    /// The host and model tags: the family badge, neutral.
     private func chip(_ text: String, icon: String?) -> some View {
-        HStack(spacing: 3) {
-            if let icon {
-                Image(systemName: icon).font(.system(size: 9))
-            }
-            Text(text).font(.caption2)
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(Color(.tertiarySystemFill), in: Capsule())
-        .foregroundStyle(.secondary)
+        WalnutBadge(text: text, systemImage: icon)
     }
 
 }

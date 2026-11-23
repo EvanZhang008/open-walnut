@@ -155,7 +155,7 @@ struct ChatOrgRowView: View {
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(ceo ? Theme.onTint : .white)
             .frame(width: 34, height: 34)
-            .background(ceo ? Theme.tint : Self.color(ChatOrgModel.avatarColor(row.name)), in: Circle())
+            .background(ceo ? Theme.accent : Self.color(ChatOrgModel.avatarColor(row.name)), in: Circle())
             .overlay(alignment: .bottomTrailing) {
                 Circle()
                     .fill(row.state == .waiting ? Color(.systemGray) : UserStatePill.color(row.state))

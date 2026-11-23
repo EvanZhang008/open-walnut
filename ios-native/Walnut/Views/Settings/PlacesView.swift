@@ -215,7 +215,7 @@ struct PlacesView: View {
                 Text("Walnut removes every visit it keeps on your Mac and on this iPhone, and turns Places off.")
             }
             if let message = store.errorMessage {
-                Text(message).font(.footnote).foregroundStyle(.red)
+                Text(message).font(.footnote).foregroundStyle(Theme.dangerText)
             }
         } footer: {
             Text("Turning Places off stops recording, and this iPhone forgets the visits your Mac already has. The visits on your Mac stay until you delete them.")

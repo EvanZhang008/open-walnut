@@ -259,15 +259,9 @@ struct LetterFollowsNewestStatus: ViewModifier {
                             }
                         } label: {
                             Label("New reply", systemImage: "arrow.down")
-                                .font(.footnote.weight(.semibold))
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 8)
-                                .frame(minHeight: 44)
-                                .contentShape(Capsule())
                         }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(Theme.onTint)
-                        .background(Theme.tint, in: Capsule())
+                        // The family's small primary: 32pt drawn, a 44pt touch.
+                        .buttonStyle(.walnut(.primary, size: .small))
                         .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
                         .padding(.bottom, 10)
                         .transition(.opacity)

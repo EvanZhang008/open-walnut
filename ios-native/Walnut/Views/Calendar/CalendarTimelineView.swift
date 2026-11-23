@@ -291,7 +291,9 @@ struct CalendarTimelineView: View {
                     // truncates inside the gutter, and Apple's bubble is the
                     // bare clock time too.
                     Text(nowBubbleText)
-                        .font(.system(size: 9, weight: .bold))
+                        .font(Theme.TextSize.xs.weight(.bold))
+                        // Capped so the bubble stays inside the gutter.
+                        .dynamicTypeSize(...DynamicTypeSize.xLarge)
                         .foregroundStyle(.white)
                         .fixedSize()
                         .padding(.horizontal, 4)

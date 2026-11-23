@@ -171,12 +171,9 @@ struct SessionPlanSheet: View {
                     MarkdownView(blocks: MarkdownParser.parse(plan.content), linkSource: plan.linkSource(requestedSessionID: sessionId), lazy: true)
                         .padding(16)
                 } else if let emptyText {
-                    ContentUnavailableView {
-                        Label("No plan", systemImage: "list.bullet.clipboard")
-                    } description: {
-                        Text(emptyText)
-                    }
-                    .padding(.top, 40)
+                    WalnutEmptyState(title: "No plan", hint: emptyText,
+                                     systemImage: "list.bullet.clipboard", size: .pane)
+                        .padding(.top, 40)
                 } else if let loadError {
                     retryBlock(loadError) { Task { await load() } }
                         .padding(.top, 40)
@@ -379,8 +376,7 @@ fileprivate func retryBlock(_ message: String, retry: @escaping () -> Void) -> s
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
         Button("Retry", action: retry)
-            .buttonStyle(.borderedProminent)
-            .tint(Theme.tint)
+            .buttonStyle(.walnut(.primary, size: .small))
     }
     .frame(maxWidth: .infinity)
     .padding(.vertical, 8)

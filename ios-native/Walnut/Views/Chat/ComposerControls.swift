@@ -142,7 +142,6 @@ struct PillChip: View {
     /// The glyph grows with the text: a fixed 8pt chevron sat cramped and tiny
     /// against an XXXL label.
     @ScaledMetric(relativeTo: .caption) private var glyphSize: CGFloat = 8
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         HStack(spacing: 4) {
@@ -171,7 +170,7 @@ struct PillChip: View {
         .padding(.vertical, 5)
         .background(
             Color(uiColor: ComposerPillInk.capsule),
-            in: PillChipShape(oneLineHeight: PillChipText.oneLineHeight(dynamicTypeSize) + 10)
+            in: PillChipShape()
         )
         // The pressed look a SwiftUI Button gives, which the transparent UIKit
         // button on top can't draw itself.
@@ -272,25 +271,14 @@ enum PillChipText {
         guard wraps else { return 1 }
         return rawID ? 2 : nil
     }
-
-    /// The height of one line of the pill's font at a text size.
-    static func oneLineHeight(_ size: DynamicTypeSize) -> CGFloat {
-        let traits = UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(size))
-        return UIFont.preferredFont(forTextStyle: .caption1, compatibleWith: traits).lineHeight
-    }
 }
 
-/// A capsule while the pill is one line; once its text wraps, a rounded
-/// rectangle with a fixed radius. A capsule around five lines was a 262x266pt
-/// circle with the text spilling past its edge (gate r3 P2-3).
+/// The pill's shape: the family's soft rectangle (`Theme.Radius.sm`) at every size, one line
+/// or wrapped, like every control. It was a capsule on one line and a 14 pt corner once wrapped
+/// (a capsule around five lines was a 262x266pt circle with the text spilling past its edge,
+/// gate r3 P2-3).
 struct PillChipShape: Shape {
-    /// The pill's height with one line of text; taller than about 1.5 times that
-    /// means the text wrapped.
-    var oneLineHeight: CGFloat
-    static let wrappedCornerRadius: CGFloat = 14
-
     func path(in rect: CGRect) -> Path {
-        if rect.height <= oneLineHeight * 1.5 { return Capsule().path(in: rect) }
-        return RoundedRectangle(cornerRadius: Self.wrappedCornerRadius, style: .continuous).path(in: rect)
+        Theme.Radius.shape(Theme.Radius.sm).path(in: rect)
     }
 }

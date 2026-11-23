@@ -451,39 +451,31 @@ struct PermissionRequestCard: View {
         } else if list.count > 2 {
             VStack(spacing: 6) {
                 ForEach(list) { choice in
-                    choiceButton(choice)
+                    choiceButton(choice, main: choice.id == list.first(where: \.allow)?.id)
                 }
             }
         } else {
             HStack(spacing: 10) {
                 ForEach(list) { choice in
-                    choiceButton(choice)
+                    choiceButton(choice, main: choice.id == list.first(where: \.allow)?.id)
                 }
             }
         }
     }
 
-    /// A button like the plain pair's: Allow filled with the tint, Deny in the
-    /// danger color on a quiet fill.
-    private func choiceButton(_ choice: PermissionChoice) -> some View {
+    /// One of the family's buttons: the first Allow is the card's one main action (solid blue),
+    /// any other Allow the grey secondary, Deny the destructive one (standard.md, iOS column).
+    private func choiceButton(_ choice: PermissionChoice, main: Bool) -> some View {
         Button {
             tap(choice)
         } label: {
             choiceTitle(choice)
-                .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .background(
-                    choice.allow ? Theme.tint : Color(.tertiarySystemFill),
-                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                )
-                .foregroundStyle(choice.allow ? Color.white : Theme.danger)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.walnut(main ? .primary : (choice.allow ? .secondary : .destructive), size: .small, fullWidth: true))
+        // The family draws the disabled state; a second fade on top read as invisible.
         .disabled(isOff(choice))
-        .opacity(isOff(choice) ? 0.45 : 1)
         .accessibilityIdentifier(choice.accessibilityID)
     }
 
@@ -497,7 +489,7 @@ struct PermissionRequestCard: View {
             VStack(alignment: .leading, spacing: 2) {
                 choiceTitle(choice)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(choice.allow ? Theme.tint : Theme.danger)
+                    .foregroundStyle(choice.allow ? Color.primary : Theme.dangerText)
                     .fixedSize(horizontal: false, vertical: true)
                 if armed == choice.id, let savedTo = choice.savedTo {
                     // Tapped once: what the second tap does, where the file line was.
@@ -516,22 +508,15 @@ struct PermissionRequestCard: View {
                 }
             }
             .multilineTextAlignment(.leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(
-                choice.allow ? Theme.tint.opacity(0.14) : Color(.tertiarySystemFill),
-                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Theme.tint, lineWidth: armed == choice.id ? 1.5 : 0)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
-        .buttonStyle(.plain)
+        // A choice of the question: the family's option row (round, hairline); armed once, a
+        // blue ring says the next tap saves it.
+        .buttonStyle(.walnut(.option(recommended: false)))
+        .overlay(
+            Capsule(style: .continuous)
+                .strokeBorder(Theme.tint, lineWidth: armed == choice.id ? 1.5 : 0)
+        )
         .disabled(isOff(choice))
-        .opacity(isOff(choice) ? 0.45 : 1)
         .accessibilityIdentifier(choice.accessibilityID)
     }
 
@@ -787,9 +772,10 @@ struct AskUserQuestionCard: View {
             )
         } label: {
             HStack(alignment: .top, spacing: 8) {
+                // Round marks as the row is round: a filled check for a picked one of several.
                 Image(systemName: picked
-                      ? (question.multiSelect ? "checkmark.square.fill" : "largecircle.fill.circle")
-                      : (question.multiSelect ? "square" : "circle"))
+                      ? (question.multiSelect ? "checkmark.circle.fill" : "largecircle.fill.circle")
+                      : "circle")
                     .font(.body)
                     .foregroundStyle(picked ? Theme.tint : Color.secondary)
                 VStack(alignment: .leading, spacing: 2) {
@@ -806,17 +792,14 @@ struct AskUserQuestionCard: View {
                 Spacer(minLength: 0)
             }
             .multilineTextAlignment(.leading)
-            .padding(10)
-            .background(
-                picked ? Theme.tint.opacity(0.14) : Color(.secondarySystemBackground),
-                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(picked ? Theme.tint.opacity(0.5) : Color.clear, lineWidth: 1)
-            }
         }
-        .buttonStyle(.plain)
+        // The family's round option row, as on the permission card and the thread card; a picked
+        // one wears the blue ring.
+        .buttonStyle(.walnut(.option(recommended: false)))
+        .overlay {
+            Capsule(style: .continuous)
+                .strokeBorder(Theme.tint, lineWidth: picked ? 1.5 : 0)
+        }
         .disabled(answering)
         .accessibilityIdentifier("session.askQuestion.option")
     }
@@ -833,33 +816,20 @@ struct AskUserQuestionCard: View {
                 }
             } label: {
                 DictationSendLabel(gate: sendGate, title: "Submit")
-                    .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(
-                        submittable ? Theme.tint : Color(.tertiarySystemFill),
-                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    )
-                    .foregroundStyle(submittable ? .white : Color.secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.walnut(.primary, size: .small, fullWidth: true))
             .disabled(answering || !submittable)
             .accessibilityIdentifier("session.askQuestion.submit")
             Button {
                 onDismiss()
             } label: {
                 Text("Dismiss")
-                    .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .foregroundStyle(Theme.danger)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.walnut(.destructive, size: .small, fullWidth: true))
             .disabled(answering)
             .accessibilityIdentifier("session.askQuestion.dismiss")
         }

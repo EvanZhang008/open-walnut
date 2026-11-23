@@ -1,16 +1,5 @@
 import SwiftUI
 
-struct InboxItemPrimaryButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var enabled
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .padding(.horizontal, 16).padding(.vertical, 8).frame(minHeight: 44)
-            .foregroundStyle(enabled ? Theme.onTint : Color(.secondaryLabel))
-            .background(enabled ? Theme.tint : Color(.tertiarySystemFill), in: Capsule())
-            .opacity(enabled && configuration.isPressed ? 0.85 : 1)
-    }
-}
-
 struct InboxItemConfirmation: View {
     let key: InboxItemStore.Key
     let item: InboxEmailItem
@@ -40,7 +29,7 @@ struct InboxItemConfirmation: View {
                 let enabled = !state.busy.contains("task") && state.preparedInput == store.draft(key).input && !state.submittedPlans.contains(plan.id) && voiceIdle
                 Button(state.busy.contains("task") ? (action.intent == "create_task" && !retry ? "Creating…" : "Attaching…") : action.intent == "create_task" || retry ? "Confirm and start" : "Confirm attachment") {
                     confirm(plan)
-                }.buttonStyle(InboxItemPrimaryButtonStyle()).frame(maxWidth: .infinity, minHeight: 44)
+                }.buttonStyle(.walnut(.primary, fullWidth: true))
                     .disabled(!enabled)
                     .accessibilityLabel("Confirm \(title) for \(item.subject)")
                     .accessibilityHint(plan.consequence)
@@ -52,7 +41,7 @@ struct InboxItemConfirmation: View {
                 if state.plan?.isExpired() == true { Text("This plan expired. Review the action again.").font(.caption).foregroundStyle(Theme.warning) }
                 let enabled = !state.busy.contains("prepare") && canReview(state) && voiceIdle
                 Button("Review action") { Task { await prepare() } }
-                    .buttonStyle(InboxItemPrimaryButtonStyle()).frame(maxWidth: .infinity, minHeight: 44)
+                    .buttonStyle(.walnut(.primary, fullWidth: true))
                     .disabled(!enabled)
                     .accessibilityIdentifier("inbox.item.confirm.prepare")
             }
@@ -113,7 +102,7 @@ struct InboxItemConfirmation: View {
                                     text: field(\.title), surface: "inbox-title:\(key.letter):\(key.item)",
                                     box: "inbox-title", recorder: titleVoice, refocus: { titleFocused = true }
                                 ) {
-                                    TextField("Task title", text: field(\.title)).textFieldStyle(.roundedBorder)
+                                    TextField("Task title", text: field(\.title)).textFieldStyle(.walnut)
                                         .focused($titleFocused)
                                         .accessibilityIdentifier("inbox.item.confirm.title")
                                 }
@@ -152,7 +141,7 @@ struct InboxItemConfirmation: View {
                                         .frame(height: min(160, max(0, viewport.size.height - 32)))
                                         .focused($goalFocused)
                                         .accessibilityLabel("Work goal for \(item.subject)")
-                                        .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Color(.separator)) }
+                                        .overlay { Theme.Radius.shape(Theme.Radius.sm).strokeBorder(Color(.separator)) }
                                         .accessibilityIdentifier("inbox.item.confirm.goal")
                                 }
                                 .id(goalAnchor)

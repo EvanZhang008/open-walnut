@@ -128,8 +128,8 @@ extension BoardFilterChoice {
 /// are chips you can see and tap. This is the phone's copy of the desktop's own
 /// `tier-view-bar` (`TodoPanel.tsx`): exactly two chips, each showing the ACTIVE value,
 /// each cycling on tap, no menu and no submenu. Structure and affordance ported; nothing
-/// about the desktop's CSS is (the capsule is the same tinted control the band headings'
-/// `show done` already uses, so the board has one control language).
+/// about the desktop's CSS is (they are the family's chip, so the board has one control
+/// language).
 ///
 /// # Where it sits, and why not inside the band bar
 ///
@@ -225,9 +225,9 @@ struct BoardViewBar: View {
         .accessibilityIdentifier("board.viewBar")
     }
 
-    /// One toggle chip: tinted label in a soft tinted capsule — the same treatment the
-    /// band headings' `show done` control carries, so the board has one word for "this is
-    /// a control you can tap" instead of a new one per row.
+    /// One toggle: the family's chip (`.walnutChip`), its glyph and the ACTIVE value's word, so
+    /// it reads as a control you can tap. A tap cycles the value at once, so it opens no menu
+    /// and carries no chevron.
     private func chip(
         _ spec: BoardViewChipSpec, identifier: String, iconOnly: Bool = false,
         cycle: @escaping () -> Void
@@ -237,27 +237,21 @@ struct BoardViewBar: View {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             cycle()
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: Theme.Space.xs) {
                 Image(systemName: spec.symbol)
-                    .font(iconOnly ? .footnote.weight(.bold) : .caption2.weight(.bold))
+                    .font(iconOnly ? Theme.TextSize.md.weight(.bold) : Theme.TextSize.xs.weight(.bold))
                 if !iconOnly {
                     Text(spec.label)
-                        .font(.footnote.weight(.semibold))
+                        .font(Theme.TextSize.md.weight(.semibold))
                         .lineLimit(1)
                 }
             }
-            .foregroundStyle(Theme.tint)
-            // With the padding, an icon chip is at least 36pt wide.
+            // With the style's padding, an icon chip is at least 36pt wide.
             .frame(minWidth: iconOnly ? 16 : nil)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(Theme.tintSoft, in: Capsule())
-            // MIN height, not a fixed one: the label scales up to the cap, and a hard
-            // height would clip it there (the `show done` control learned this first).
-            .frame(minHeight: 28)
-            .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        // A chip draws 32pt (it fits the 36pt row) and keeps a 44pt touch; its MIN height
+        // lets the label scale up to the type cap without clipping.
+        .buttonStyle(.walnutChip(selected: false))
         .accessibilityIdentifier(identifier)
         // The visible word stays the accessibility LABEL (a flow, or a person, matching
         // "By project" has to find this chip); what a tap will do is the HINT.

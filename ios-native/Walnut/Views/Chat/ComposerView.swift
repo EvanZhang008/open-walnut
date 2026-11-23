@@ -1311,7 +1311,7 @@ struct ComposerBar: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Theme.onTint)
                     .frame(width: MessageBox.keySize, height: MessageBox.keySize)
-                    .background(Theme.tint, in: MessageBox.keyShape)
+                    .background(Theme.accent, in: MessageBox.keyShape)
             }
             .accessibilityLabel(quickAction.autoSendArmed ? "Send" : "Stop Recording")
             .accessibilityIdentifier("chat.voiceStop")
@@ -1327,7 +1327,7 @@ struct ComposerBar: View {
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(live ? Theme.onTint : Color(.tertiaryLabel))
                         .frame(width: MessageBox.keySize, height: MessageBox.keySize)
-                        .background(live ? Theme.tint : Color(.tertiarySystemFill), in: MessageBox.keyShape)
+                        .background(live ? Theme.accent : Color(.tertiarySystemFill), in: MessageBox.keyShape)
                 }
                 .disabled(!live)
                 .accessibilityLabel("Stop and send")
@@ -1559,7 +1559,7 @@ struct ComposerBar: View {
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Theme.onTint)
                 .frame(width: MessageBox.keySize, height: MessageBox.keySize)
-                .background(Theme.tint, in: MessageBox.keyShape)
+                .background(Theme.accent, in: MessageBox.keyShape)
                 .opacity(seatSettling ? 0.4 : 1)
         }
         .disabled(disabled)
@@ -1694,7 +1694,7 @@ struct ComposerBar: View {
                     .controlSize(.small)
                     .tint(Theme.onTint)
                     .frame(width: MessageBox.keySize, height: MessageBox.keySize)
-                    .background(Theme.tint, in: MessageBox.keyShape)
+                    .background(Theme.accent, in: MessageBox.keyShape)
             } else if queuesInsteadOfSending && !dynamicTypeSize.isAccessibilitySize {
                 // Its whole name: this send puts the words in the queue, the others act now.
                 Text("Queue")
@@ -1703,13 +1703,13 @@ struct ComposerBar: View {
                 .foregroundStyle(canSend ? Theme.onTint : Color(.tertiaryLabel))
                 .padding(.horizontal, 10)
                 .frame(height: MessageBox.keySize)
-                .background(canSend ? Theme.tint : Color(.tertiarySystemFill), in: MessageBox.wideKeyShape)
+                .background(canSend ? Theme.accent : Color(.tertiarySystemFill), in: MessageBox.wideKeyShape)
             } else {
                 Image(systemName: queuesInsteadOfSending ? Symbol.queue : Symbol.send)
                     .font(.system(size: queuesInsteadOfSending ? 14 : 17, weight: .semibold))
                     .foregroundStyle(canSend ? Theme.onTint : Color(.tertiaryLabel))
                     .frame(width: MessageBox.keySize, height: MessageBox.keySize)
-                    .background(canSend ? Theme.tint : Color(.tertiarySystemFill), in: MessageBox.keyShape)
+                    .background(canSend ? Theme.accent : Color(.tertiarySystemFill), in: MessageBox.keyShape)
             }
         }
         .disabled(!canSend && !sendGate.isWaiting)

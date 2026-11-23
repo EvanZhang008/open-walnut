@@ -310,8 +310,7 @@ struct SessionFileDiffView: View {
                 .lineLimit(1)
                 .fixedSize()
         }
-        .buttonStyle(.borderedProminent)
-        .tint(Theme.tint)
+        .buttonStyle(.walnut(.primary, size: .small))
         .accessibilityIdentifier("diff.comment")
     }
 
@@ -321,32 +320,25 @@ struct SessionFileDiffView: View {
     private var content: some View {
         if let render, let shown = shownFile {
             if let empty = DiffEmptyState.of(shown, diff: render.diff) {
-                ContentUnavailableView {
-                    Label(empty.title, systemImage: empty.symbol)
-                } description: {
-                    Text(empty.detail)
-                } actions: {
-                    if empty.offersUncommitted, model.compare != .uncommitted {
-                        Button("Show It Against the Last Commit", action: showUncommitted)
-                            .buttonStyle(.bordered)
-                            .accessibilityIdentifier("diff.showUncommitted")
-                    }
-                }
-                .accessibilityIdentifier("diff.empty")
+                WalnutEmptyState(
+                    title: empty.title, hint: empty.detail, systemImage: empty.symbol, size: .pane,
+                    actionTitle: empty.offersUncommitted && model.compare != .uncommitted
+                        ? "Show It Against the Last Commit" : nil,
+                    actionIdentifier: "diff.showUncommitted", action: showUncommitted)
+                    .frame(maxHeight: .infinity)
+                    .accessibilityIdentifier("diff.empty")
             } else {
                 GeometryReader { geo in
                     canvas(render, viewport: geo.size.width, height: geo.size.height)
                 }
             }
         } else if let loadError {
-            ContentUnavailableView {
-                Label("Could not read this diff", systemImage: "exclamationmark.triangle")
-            } description: {
-                Text(loadError)
-            } actions: {
-                Button("Try Again") { reloadToken += 1 }.buttonStyle(.bordered)
-            }
-            .accessibilityIdentifier("diff.error")
+            WalnutEmptyState(
+                title: "Could not read this diff", hint: loadError, systemImage: "exclamationmark.triangle",
+                size: .pane, actionTitle: "Try Again", actionIdentifier: "diff.retry",
+                action: { reloadToken += 1 })
+                .frame(maxHeight: .infinity)
+                .accessibilityIdentifier("diff.error")
         } else {
             ProgressView("Reading the diff\u{2026}")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -892,8 +884,8 @@ struct DiffCommentCard: View {
             .accessibilityIdentifier("diff.comment.remove")
         }
         .padding(10)
-        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.tint.opacity(0.35), lineWidth: 1))
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: Theme.Radius.shape(Theme.Radius.md))
+        .overlay(Theme.Radius.shape(Theme.Radius.md).stroke(Theme.tint.opacity(0.35), lineWidth: 1))
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .accessibilityElement(children: .contain)

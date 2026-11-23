@@ -85,7 +85,7 @@ private struct FocusSpaceGlyph: View {
             .font(.body.weight(on ? .semibold : .regular))
             .foregroundStyle(on ? Color.white : Theme.tint)
             .frame(width: 28, height: 28)
-            .background(Circle().fill(on ? Theme.tint : Color.clear))
+            .background(Circle().fill(on ? Theme.accent : Color.clear))
     }
 }
 
@@ -158,13 +158,13 @@ struct FocusSpaceBanner: View {
             .accessibilityLabel(text)
             .accessibilityIdentifier("tasks.focus.banner.text")
             Spacer(minLength: 4)
-            // Borderless: inside a List row only the button takes the tap, not the whole row.
+            // A styled button: inside a List row only the button takes the tap, not the whole
+            // row. The family's quiet tool, small: it draws 28pt and keeps a 44pt touch.
             Button("Leave") {
                 guard drawer?.suppressTaps != true else { return }
                 Task { await FocusSpacesStore.shared.leave() }
             }
-            .buttonStyle(.borderless)
-            .font(.footnote.weight(.semibold))
+            .buttonStyle(.walnut(.tool, size: .small))
             .accessibilityIdentifier("tasks.focus.banner.leave")
         }
         .font(.footnote)

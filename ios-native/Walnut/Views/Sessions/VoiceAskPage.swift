@@ -37,7 +37,7 @@ struct VoiceAskPage: View {
         VStack(spacing: 12) {
             Spacer()
             Image(systemName: "waveform")
-                .font(.system(size: 44, weight: .semibold))
+                .font(Theme.Glyph.hero.font(.semibold))
                 .foregroundStyle(Theme.tint)
                 .accessibilityHidden(true)
             Text("Talk to \(agentName)")

@@ -169,12 +169,10 @@ struct TalkTryRow: View {
                         .symbolEffect(.variableColor.iterative, options: .repeating)
                     Spacer()
                     Button("Cancel") { Task { await talk.cancel(source: "settings-cancel") } }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.walnut(.secondary))
                         .accessibilityIdentifier(id("cancel"))
-                    Button { Task { await talk.finishNow(source: "settings-send") } } label: {
-                        Text(copy ? "Done" : "Send").foregroundStyle(TalkTone.onProminent)
-                    }
-                        .buttonStyle(.borderedProminent)
+                    Button(copy ? "Done" : "Send") { Task { await talk.finishNow(source: "settings-send") } }
+                        .buttonStyle(.walnut(.primary))
                         .accessibilityIdentifier(id(copy ? "done" : "send"))
                 }
             case .starting, .transcribing, .sending:
@@ -201,11 +199,11 @@ struct TalkTryRow: View {
                         Text(copy ? "Try Dictation" : "Try It Now")
                     }
                     .multilineTextAlignment(.center)
-                    .foregroundStyle(TalkTone.onProminent)
-                    .frame(maxWidth: .infinity)
+                    .lineLimit(3)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                // One main action on the page: Try It Now; Dictate's try is the quieter one,
+                // and so is a try that waits for the other row's take.
+                .buttonStyle(.walnut(copy || (!mine && talk.isBusy) ? .secondary : .primary, fullWidth: true))
                 // The other row's take is on screen: one take at a time.
                 .disabled(!mine && talk.isBusy)
                 .accessibilityIdentifier(id("try"))
@@ -348,11 +346,8 @@ struct TalkUnsentRows: View {
             confirmingDelete = entry.id
         } label: {
             Text("Delete")
-                .foregroundStyle(TalkTone.red)
-                .frame(maxWidth: wide ? .infinity : nil)
         }
-        // Plain words: the send button stays the stronger one in the row.
-        .buttonStyle(.borderless)
+        .buttonStyle(.walnut(.destructive, size: wide ? .regular : .small, fullWidth: wide))
         .modifier(TalkBusyButton(busy: busy))
         .accessibilityIdentifier("talk.unsent.delete")
     }
@@ -364,22 +359,16 @@ struct TalkUnsentRows: View {
         // A dictation waits for the person's Send or Copy: both, as on its page.
         if entry.copy == true {
             if wide {
-                resendCore(entry, wide: true, title: "Send to CEO", onFill: true, send: true)
-                    .buttonStyle(.borderedProminent)
-                resendCore(entry, wide: true, title: "Copy", onFill: false)
-                    .buttonStyle(.bordered)
+                resendCore(entry, wide: true, title: "Send to CEO", role: .primary, send: true)
+                resendCore(entry, wide: true, title: "Copy", role: .secondary)
             } else {
-                resendCore(entry, wide: false, title: "Copy", onFill: false)
-                    .buttonStyle(.bordered)
-                resendCore(entry, wide: false, title: "Send to CEO", onFill: true, send: true)
-                    .buttonStyle(.borderedProminent)
+                resendCore(entry, wide: false, title: "Copy", role: .secondary)
+                resendCore(entry, wide: false, title: "Send to CEO", role: .primary, send: true)
             }
         } else if TalkSession.waits(entry) {
-            resendCore(entry, wide: wide, title: "Send Now", onFill: false)
-                .buttonStyle(.bordered)
+            resendCore(entry, wide: wide, title: "Send Now", role: .secondary)
         } else {
-            resendCore(entry, wide: wide, title: "Resend", onFill: true)
-                .buttonStyle(.borderedProminent)
+            resendCore(entry, wide: wide, title: "Resend", role: .primary)
         }
     }
 
@@ -393,15 +382,14 @@ struct TalkUnsentRows: View {
                 UINotificationFeedbackGenerator().notificationOccurred(done ? .success : .error)
             } label: {
                 Text(copiedWords == entry.id ? "Copied" : "Copy")
-                    .foregroundStyle(Color.accentColor)
-                    .frame(maxWidth: wide ? .infinity : nil)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.walnut(.secondary, size: wide ? .regular : .small, fullWidth: wide))
             .accessibilityIdentifier("talk.unsent.copyWords")
         }
     }
 
-    private func resendCore(_ entry: TalkOutbox.Entry, wide: Bool, title: String, onFill: Bool, send: Bool = false) -> some View {
+    private func resendCore(_ entry: TalkOutbox.Entry, wide: Bool, title: String,
+                            role: WalnutButtonStyle.Role, send: Bool = false) -> some View {
         let busy = talk.resending.contains(entry.id)
         return Button {
             // VoiceOver can still reach a dimmed button: a second Resend is a no-op.
@@ -413,9 +401,8 @@ struct TalkUnsentRows: View {
             }
         } label: {
             Text(title)
-                .foregroundStyle(onFill ? TalkTone.onProminent : Color.accentColor)
-                .frame(maxWidth: wide ? .infinity : nil)
         }
+        .buttonStyle(.walnut(role, size: wide ? .regular : .small, fullWidth: wide))
         .modifier(TalkBusyButton(busy: busy))
         // A dictation's Copy keeps the row's one Resend id; its Send has its own.
         .accessibilityIdentifier(send ? "talk.unsent.send" : "talk.unsent.resend")
@@ -432,8 +419,12 @@ struct TalkUnsentRows: View {
                 } label: {
                     Image(systemName: playing ? "stop.circle.fill" : "play.circle.fill")
                         .font(.title)
+                        .foregroundStyle(Theme.tint)
+                        .frame(minWidth: Theme.Control.target, minHeight: Theme.Control.target)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.borderless)
+                // An icon-only round key: plain, so the list row itself stays untappable.
+                .buttonStyle(.plain)
                 .accessibilityLabel(playing ? "Stop" : "Play recording")
                 .accessibilityIdentifier("talk.unsent.play")
             }
@@ -464,7 +455,7 @@ private struct TalkStepRow: View {
         Label {
             Text(text)
         } icon: {
-            Image(systemName: "\(number).circle.fill").foregroundStyle(.orange)
+            Image(systemName: "\(number).circle.fill").foregroundStyle(Theme.tint)
         }
     }
 }
@@ -550,7 +541,11 @@ struct TalkUnsentList: View {
                     .foregroundStyle(TalkTone.green)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
-                    .background(Capsule().fill(Color(uiColor: .secondarySystemGroupedBackground)).shadow(radius: 6, y: 2))
+                    .background(
+                        Theme.Radius.shape(Theme.Radius.md)
+                            .fill(Color(uiColor: .secondarySystemGroupedBackground))
+                            .shadow(radius: 6, y: 2) // ui-standard-ok: a shadow's blur, not a corner
+                    )
                     .padding(.horizontal, 20)
                     .padding(.bottom, 12)
                     .accessibilityIdentifier("talk.unsent.sent")
@@ -659,22 +654,15 @@ extension View {
     func talkUnsentSheet() -> some View { modifier(TalkUnsentSheetModifier()) }
 }
 
-/// Talk to Walnut's status colours, dark enough on white and light enough on
-/// black for small text (4.5:1 or better), unlike the system orange and green.
+/// Talk to Walnut's status colours: the design system's word colours, dark enough on white and
+/// light enough on black for small text (4.5:1 or better), unlike the system orange and green.
 enum TalkTone {
-    static let red = adaptive(light: (0.68, 0.07, 0.07), dark: (1.0, 0.56, 0.53))
-    static let green = adaptive(light: (0.10, 0.48, 0.20), dark: (0.40, 0.86, 0.50))
-    static let orange = adaptive(light: (0.70, 0.31, 0.0), dark: (1.0, 0.64, 0.30))
+    static let red = Theme.dangerText
+    static let green = Theme.doneText
+    static let orange = Theme.needsText
     /// Text on a prominent (accent-filled) button: white on the dark light-mode
     /// accent, black on the light dark-mode one.
     static let onProminent = Color(uiColor: .systemBackground)
-
-    private static func adaptive(light: (CGFloat, CGFloat, CGFloat), dark: (CGFloat, CGFloat, CGFloat)) -> Color {
-        Color(uiColor: UIColor { traits in
-            let c = traits.userInterfaceStyle == .dark ? dark : light
-            return UIColor(red: c.0, green: c.1, blue: c.2, alpha: 1)
-        })
-    }
 }
 
 /// A row button while its take is being resent: drawn as it was, dimmed, and

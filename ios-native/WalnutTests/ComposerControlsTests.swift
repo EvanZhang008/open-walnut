@@ -186,17 +186,15 @@ final class ComposerControlsTests: XCTestCase {
         XCTAssertEqual(PillChipText.lineLimit(wraps: false, rawID: true), 1)
     }
 
-    /// One line: a capsule. Wrapped: a fixed 14pt radius, not a circle.
-    func testAWrappedPillIsARoundedRectangleNotACircle() {
-        let shape = PillChipShape(oneLineHeight: 61)
-        let oneLine = shape.path(in: CGRect(x: 0, y: 0, width: 283, height: 61))
-        XCTAssertFalse(oneLine.contains(CGPoint(x: 6, y: 6)), "one line is a capsule")
-        XCTAssertTrue(oneLine.contains(CGPoint(x: 30, y: 30)))
-        let twoLines = shape.path(in: CGRect(x: 0, y: 0, width: 262, height: 118))
-        XCTAssertTrue(twoLines.contains(CGPoint(x: 6, y: 6)), "a wrapped pill keeps its corners")
-        XCTAssertFalse(twoLines.contains(CGPoint(x: 1, y: 1)))
-        XCTAssertTrue(twoLines.contains(CGPoint(x: 6, y: 112)))
-        XCTAssertGreaterThan(PillChipText.oneLineHeight(.accessibility5), PillChipText.oneLineHeight(.large) * 2)
+    /// One shape at every size: the family's 8 pt corner, never a capsule and never a circle.
+    func testThePillIsOneRoundedRectangleAtEverySize() {
+        let shape = PillChipShape()
+        for rect in [CGRect(x: 0, y: 0, width: 283, height: 61), CGRect(x: 0, y: 0, width: 262, height: 118)] {
+            let path = shape.path(in: rect)
+            XCTAssertTrue(path.contains(CGPoint(x: 6, y: 6)), "\(rect.size): the pill keeps its corners (no capsule)")
+            XCTAssertFalse(path.contains(CGPoint(x: 1, y: 1)), "\(rect.size): the corner is rounded")
+            XCTAssertTrue(path.contains(CGPoint(x: 6, y: rect.height - 6)))
+        }
     }
 
     /// A model with an effort axis but no level reported yet still offers the

@@ -294,7 +294,7 @@ struct TalkPanelView: View {
                 Button { Task { await talk.cancel(source: "panel-cancel"); close() } } label: {
                     Text("Cancel").font(.headline).frame(maxWidth: .infinity, minHeight: 56)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.walnut(.secondary))
                 // Label-coloured words on the grey fill: secondary grey read as disabled.
                 .tint(.primary)
                 .accessibilityIdentifier("talk.panel.cancel")
@@ -302,10 +302,10 @@ struct TalkPanelView: View {
                     Text(dictating ? "Done" : "Send").font(.headline).foregroundStyle(TalkTone.onProminent)
                         .frame(maxWidth: .infinity, minHeight: 56)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.walnut(.primary))
+                .tint(Theme.accent)
                 .accessibilityIdentifier("talk.panel.send")
             }
-            .buttonBorderShape(.roundedRectangle(radius: 16))
         } else if busy || closesItself {
             // The symbol above already moves while it works, and a confirmation goes by
             // itself: no second spinner, no Close to tap.
@@ -314,9 +314,8 @@ struct TalkPanelView: View {
             Button(action: close) {
                 Text("Close").font(.headline).frame(maxWidth: .infinity, minHeight: 56)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.walnut(.secondary))
             .tint(.primary)
-            .buttonBorderShape(.roundedRectangle(radius: 16))
             .accessibilityIdentifier("talk.panel.close")
         }
     }
@@ -489,8 +488,7 @@ struct TalkReviewPage: View {
                 .font(.headline)
                 .frame(maxWidth: .infinity, minHeight: 56)
         }
-        .buttonStyle(.bordered)
-        .buttonBorderShape(.roundedRectangle(radius: 16))
+        .buttonStyle(.walnut(.secondary))
         .disabled(noWords)
         // One label, no separate one for the icon.
         .accessibilityLabel("Copy")
@@ -536,8 +534,8 @@ struct TalkReviewPage: View {
                 .foregroundStyle(noWords ? Color.secondary : TalkTone.onProminent)
                 .frame(maxWidth: .infinity, minHeight: 56)
         }
-        .buttonStyle(.borderedProminent)
-        .buttonBorderShape(.roundedRectangle(radius: 16))
+        .buttonStyle(.walnut(.primary))
+        .tint(Theme.accent)
         .disabled(noWords)
         .accessibilityLabel("Send to CEO")
         .accessibilityIdentifier("talk.review.send")

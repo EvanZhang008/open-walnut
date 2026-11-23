@@ -675,15 +675,15 @@ final class RichHTMLSegmentsTests: XCTestCase {
         }
     }
 
-    /// The accent is the phone's own walnut tint, not the web's iOS blue, so an
-    /// accented border inside a card matches the chrome around it.
-    func testPaletteAccentIsTheWalnutTint() {
-        XCTAssertEqual(RichHTMLPalette.light.accent, "#8B5A2B")
-        XCTAssertEqual(RichHTMLPalette.dark.accent, "#C99659")
+    /// The accent is the app's own (Theme.tintColor, the web's blue), so an accented
+    /// border inside a card matches the chrome around it.
+    func testPaletteAccentIsTheAppTint() {
+        XCTAssertEqual(RichHTMLPalette.light.accent, "#006BE0")
+        XCTAssertEqual(RichHTMLPalette.dark.accent, "#0A84FF")
         XCTAssertFalse(RichHTMLPalette.light.dark)
         XCTAssertTrue(RichHTMLPalette.dark.dark)
-        XCTAssertTrue(RichHTMLDocument.page(body: "", palette: .light, kind: .content).contains("--accent: #8B5A2B"))
-        XCTAssertTrue(RichHTMLDocument.page(body: "", palette: .dark, kind: .content).contains("--accent: #C99659"))
+        XCTAssertTrue(RichHTMLDocument.page(body: "", palette: .light, kind: .content).contains("--accent: #006BE0"))
+        XCTAssertTrue(RichHTMLDocument.page(body: "", palette: .dark, kind: .content).contains("--accent: #0A84FF"))
     }
 
     // MARK: - Keys

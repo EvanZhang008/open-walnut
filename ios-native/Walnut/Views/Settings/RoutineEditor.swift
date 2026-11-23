@@ -408,7 +408,7 @@ struct RoutineEditorSheet: View {
                     DispatchQueue.main.async { searchFocused = true }
                 } label: {
                     Text("Change task")
-                        .foregroundStyle(RoutinesView.actionText)
+                        .foregroundStyle(Theme.tint)
                         .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
                         .contentShape(Rectangle())
                 }
@@ -588,7 +588,9 @@ struct RoutineEditorSheet: View {
                         .multilineTextAlignment(.center)
                         .frame(minWidth: 44, maxWidth: 80)
                         .padding(.vertical, 4)
-                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6))
+                        // The fill, not walnutFieldBox's: inside a Form cell its secondary
+                        // background is the cell's own colour in dark mode.
+                        .background(Color(.tertiarySystemFill), in: Theme.Radius.shape(Theme.Radius.md))
                         .accessibilityLabel(draft.repeatKind == .minutes ? "Minutes" : "Hours")
                         .accessibilityIdentifier("routines.editor.interval")
                     Text(draft.repeatKind == .minutes ? (draft.interval == 1 ? "minute" : "minutes") : (draft.interval == 1 ? "hour" : "hours"))

@@ -136,7 +136,7 @@ struct VoiceRecordingBar: View {
                     .font(.system(size: size.glyphSize, weight: .semibold))
                     .foregroundStyle(Theme.onTint)
                     .frame(width: size.diameter, height: size.diameter)
-                    .background(Theme.tint, in: MessageBox.keyShape)
+                    .background(Theme.accent, in: MessageBox.keyShape)
                     .frame(width: size.target, height: size.target)
                     .contentShape(Rectangle())
             }
@@ -150,7 +150,7 @@ struct VoiceRecordingBar: View {
                         .font(.system(size: size.glyphSize * 1.1, weight: .semibold))
                         .foregroundStyle(Theme.onTint)
                         .frame(width: size.diameter, height: size.diameter)
-                        .background(Theme.tint, in: MessageBox.keyShape)
+                        .background(Theme.accent, in: MessageBox.keyShape)
                         .frame(width: size.target, height: size.target)
                         .contentShape(Rectangle())
                 }
@@ -660,7 +660,7 @@ struct ActionCapsuleLabel: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
             .foregroundStyle(prominent ? Theme.onTint : Theme.tint)
-            .background(prominent ? Theme.tint : Theme.tintSoft, in: Capsule())
+            .background(prominent ? Theme.accent : Theme.tintSoft, in: Capsule())
     }
 }
 

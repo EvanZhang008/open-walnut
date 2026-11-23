@@ -421,14 +421,17 @@ struct LetterReaderView: View {
             }
             .foregroundStyle(.secondary)
             line {
-                Text(letter.hostLabel)
-                if let when = letter.createdDate {
-                    let date = when.formatted(date: .abbreviated, time: .shortened)
-                    Text(stacked ? date : "· \(date)")
+                let date = letter.createdDate?.formatted(date: .abbreviated, time: .shortened)
+                if stacked {
+                    Text(letter.hostLabel)
+                    if let date { Text(date) }
+                } else {
+                    // One string, so the separator keeps one space on each side.
+                    Text(date.map { "\(letter.hostLabel) \u{00B7} \($0)" } ?? letter.hostLabel)
                 }
             }
             .font(.caption2)
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(Theme.secondaryOnCard)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -463,12 +466,9 @@ struct LetterReaderView: View {
                         Spacer(minLength: 4)
                         if busyActionId == action.id { ProgressView().controlSize(.small) }
                     }
-                    .padding(.vertical, 9)
-                    .padding(.horizontal, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Theme.tintSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
-                .buttonStyle(.plain)
+                // A choice of the letter's question: the family's round option row.
+                .buttonStyle(.walnut(.option(recommended: false)))
                 // While the note is being spoken, a choice would go without its words.
                 .disabled(busyActionId != nil || decisionVoice.state != .idle)
                 .accessibilityIdentifier("inbox.letter.action.\(action.id)")
@@ -536,7 +536,7 @@ struct LetterReaderView: View {
             }
             if let when = answer.date {
                 Text(when.formatted(date: .abbreviated, time: .shortened))
-                    .font(.caption2).foregroundStyle(.tertiary)
+                    .font(.caption2).foregroundStyle(Theme.secondaryOnCard)
             }
         }
         .padding(12)
@@ -587,7 +587,7 @@ struct LetterReaderView: View {
         if letter.bodyWasClipped {
             Text("Only the first \(Letter.phoneBodyCap / 1000)K characters are shown here. Open this letter in the web console for the whole document.")
                 .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Theme.secondaryOnCard)
         }
     }
 
@@ -607,13 +607,9 @@ struct LetterReaderView: View {
                             Image(systemName: "chevron.right").font(.caption2)
                         }
                         .multilineTextAlignment(.leading)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .frame(minHeight: 44)
-                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12))
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    // A key that opens the task: round, as every key.
+                    .buttonStyle(.walnut(.secondary, size: .small))
                     .foregroundStyle(Theme.tint)
                     .accessibilityHint("Opens task details")
                     .accessibilityIdentifier("inbox.letter.taskRef.\(ref)")
@@ -1385,7 +1381,7 @@ private struct LetterSendButton: View {
                 .animation(nil) { glyph in
                     glyph
                         .foregroundStyle(enabled ? Theme.onTint : Color(.tertiaryLabel))
-                        .background(enabled ? Theme.tint : Color(.tertiarySystemFill), in: MessageBox.keyShape)
+                        .background(enabled ? Theme.accent : Color(.tertiarySystemFill), in: MessageBox.keyShape)
                 }
                 .frame(width: size.target, height: size.target)
                 .contentShape(Rectangle())

@@ -145,6 +145,6 @@ struct PinSwipeButton: View {
                 systemImage: notes.isPinned(path) ? "pin.slash.fill" : "pin.fill"
             )
         }
-        .tint(.orange)
+        .tint(Theme.warning)
     }
 }

@@ -53,10 +53,10 @@ struct NoticeCard: View {
                 HStack(spacing: 8) {
                     ForEach(item.actions) { action in
                         Button(role: action.role) { action.run() } label: {
-                            Text(action.title).font(.footnote.weight(.semibold))
+                            Text(action.title)
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+                        // The family's round key; a destructive action keeps its red words.
+                        .buttonStyle(.walnut(action.role == .destructive ? .destructive : .secondary, size: .small))
                     }
                 }
                 .padding(.leading, avatarSide + 10)

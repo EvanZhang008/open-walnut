@@ -92,7 +92,7 @@ struct SavedLoginsSection: View {
         .padding(.leading, 14)
         .padding(.trailing, 4)
         .padding(.vertical, 6)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Color(.secondarySystemBackground), in: Theme.Radius.shape(Theme.Radius.md))
     }
 
     private func subtitle(_ login: SavedLogin) -> String {

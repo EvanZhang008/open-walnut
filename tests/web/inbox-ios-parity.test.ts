@@ -91,16 +91,14 @@ describe('Inbox native item parity and execution boundaries', () => {
     // One page here: the task it opens is TaskSessionSheet, which draws its own.
     expect(preview.match(/\.barPage\(Color\(uiColor: \.systemBackground\)\)/g)).toHaveLength(1)
   })
-  it('primary item actions use adaptive enabled ink and readable disabled system ink', () => {
+  it('primary item actions take the family primary button, which dims when disabled', () => {
     const confirmation = swift('Walnut/Views/Inbox/InboxItemConfirmation.swift')
     const selector = swift('Walnut/Views/Inbox/InboxItemTaskSelector.swift')
-    const style = '.buttonStyle(InboxItemPrimaryButtonStyle())'
+    // The design system's primary (WalnutButtonStyle), never a button style of the inbox's own.
+    const style = '.buttonStyle(.walnut(.primary, fullWidth: true))'
     expect(confirmation.split(style)).toHaveLength(3)
     expect(selector).toContain(style)
-    expect(confirmation).toContain('@Environment(\\.isEnabled) private var enabled')
-    expect(confirmation).toContain('.foregroundStyle(enabled ? Theme.onTint : Color(.secondaryLabel))')
-    expect(confirmation).toContain('.background(enabled ? Theme.tint : Color(.tertiarySystemFill), in: Capsule())')
-    expect(confirmation).toContain('.opacity(enabled && configuration.isPressed ? 0.85 : 1)')
+    expect(confirmation + selector).not.toContain('InboxItemPrimaryButtonStyle')
     expect(confirmation).not.toContain('.buttonStyle(.borderedProminent)')
     expect(selector).not.toContain('.buttonStyle(.borderedProminent)')
     expect(confirmation).toContain('let enabled = !state.busy.contains("task") && state.preparedInput == store.draft(key).input && !state.submittedPlans.contains(plan.id)')

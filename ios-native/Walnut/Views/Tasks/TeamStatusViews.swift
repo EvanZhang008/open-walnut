@@ -29,7 +29,7 @@ struct TaskStatusCard: View {
                         .font(.caption2.weight(.semibold))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
-                        .background(Theme.warning.opacity(0.22), in: RoundedRectangle(cornerRadius: 4))
+                        .background(Theme.warning.opacity(0.22), in: Capsule(style: .continuous))
                 }
             }
             // What it needs from the user, its category word first ("Decide: ...", "Can close:

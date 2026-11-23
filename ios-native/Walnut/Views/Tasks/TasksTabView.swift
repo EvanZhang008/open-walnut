@@ -337,8 +337,8 @@ struct TasksNoSessionPage: View {
             Text("Pick a task from Pins to open its session, or start a new one.")
         } actions: {
             Button("Open Pins", action: openBoard)
-                .buttonStyle(.borderedProminent)
-                .tint(Theme.tint)
+                .buttonStyle(.walnut(.primary))
+                .tint(Theme.accent)
                 .accessibilityIdentifier("tasks.empty.openBoard")
             Button("New Session", action: newSession)
                 .accessibilityIdentifier("tasks.empty.newSession")

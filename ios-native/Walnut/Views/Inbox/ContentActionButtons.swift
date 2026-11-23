@@ -47,10 +47,10 @@ struct ContentActionButtons: View {
 
     private func button(_ label: String, id: String, hint: String, busy: Bool, run: @escaping () -> Void) -> some View {
         Button(action: run) {
-            Text(label).font(.body).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            Text(label).frame(maxWidth: .infinity, alignment: .leading)
         }
-        .buttonStyle(.bordered)
-        .tint(Theme.tint)
+        // Two equal actions on the content: the family's secondary button, 44pt.
+        .buttonStyle(.walnut(.secondary))
         .disabled(busy)
         .accessibilityLabel("\(label) for \(item.title)")
         .accessibilityHint(hint)

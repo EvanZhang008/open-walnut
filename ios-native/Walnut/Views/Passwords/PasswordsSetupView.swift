@@ -25,7 +25,7 @@ struct PasswordsSetupView: View {
                 VStack(spacing: 14) {
                     ZStack {
                         Circle().fill(Theme.tintSoft).frame(width: 76, height: 76)
-                        Image(systemName: "key.fill").font(.system(size: 30, weight: .semibold)).foregroundStyle(Theme.tint)
+                        Image(systemName: "key.fill").font(Theme.Glyph.hero.font(.semibold)).foregroundStyle(Theme.tint)
                     }
                     .accessibilityHidden(true)
                     Text("Passwords on This iPhone").font(.title2.bold()).multilineTextAlignment(.center)
@@ -123,22 +123,19 @@ struct PasswordsSetupView: View {
                 Text("Your Mac sends the Secret Key over this private connection, so the master password is all you need.").foregroundStyle(Theme.secondaryOnCard)
             }
         }
+        // The main action sits in a footer, not a row: a list row clips its content to the
+        // grouped cell's own large corner, which drew this button rounder than every other one.
         Section {
+            EmptyView()
+        } footer: {
             Button {
                 Task { await setUp() }
             } label: {
-                HStack {
-                    Spacer()
-                    if working { ProgressView().tint(.white) } else { Text("Unlock and Set Up").font(.headline) }
-                    Spacer()
-                }
-                .frame(minHeight: 36)
+                if working { ProgressView().tint(Theme.onTint) } else { Text("Unlock and Set Up") }
             }
             .disabled(password.isEmpty || (needsSecretKey && secretKey.isEmpty) || working || privateLink == nil)
-            .buttonStyle(.borderedProminent)
-            .tint(Theme.tint)
-            .listRowInsets(EdgeInsets())
-            .listRowBackground(Color.clear)
+            .buttonStyle(.walnut(.primary, fullWidth: true))
+            .textCase(nil)
             .accessibilityIdentifier("passwords.setup.submit")
             .id("passwords.setup.submit")
         }

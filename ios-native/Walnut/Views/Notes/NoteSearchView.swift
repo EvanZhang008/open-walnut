@@ -22,7 +22,9 @@ struct NoteSearchView: View {
                         .foregroundStyle(.secondary)
                 }
             } else if results.isEmpty && searchedQuery == query {
-                ContentUnavailableView.search(text: query)
+                WalnutEmptyState(title: "No results for \u{201C}\(query)\u{201D}",
+                                 hint: "Check the spelling or try a new search.",
+                                 systemImage: "magnifyingglass", size: .pane)
                     .listRowBackground(Color.clear)
             }
             ForEach(results) { result in

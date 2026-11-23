@@ -246,7 +246,7 @@ struct TimelineFileChipView: View {
     private func chipButton(_ symbol: String, label: String, id: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 15, weight: .semibold))
+                .font(Theme.Glyph.md.font(.semibold))
                 .foregroundStyle(Theme.tint)
                 .frame(width: Self.buttonSide, height: Self.buttonSide)
                 .contentShape(Rectangle())
@@ -264,7 +264,7 @@ struct TimelineFileChipView: View {
                     .foregroundStyle(failed ? Theme.danger : Theme.tint)
                     .frame(width: TimelineFileChip.iconSide, height: TimelineFileChip.iconSide)
                     .background(failed ? Theme.danger.opacity(0.12) : Theme.tintSoft,
-                                in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                in: Theme.Radius.shape(Theme.Radius.sm))
                 VStack(alignment: .leading, spacing: TimelineFileChip.lineGap) {
                     // Wrapped, never cut to one line: at the large text sizes a one-line
                     // name read "depl…6.log" and a failure lost its reason (gate r6).
@@ -303,9 +303,9 @@ struct TimelineFileChipView: View {
         .padding(.horizontal, TimelineFileChip.cardHPad)
         .padding(.vertical, TimelineFileChip.cardVPad)
         .frame(maxWidth: TimelineFileChip.maxWidth, alignment: .leading)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+        .background(Color(.secondarySystemBackground), in: Theme.Radius.shape(Theme.Radius.md))
+        .overlay(Theme.Radius.shape(Theme.Radius.md)
             .strokeBorder(failed ? Theme.danger.opacity(0.5) : Color(.separator).opacity(0.4)))
-        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .contentShape(Theme.Radius.shape(Theme.Radius.md))
     }
 }

@@ -32,18 +32,11 @@ import SwiftUI
 /// (black on white / white on near-black), which is 3-4× further from the paper again.
 enum FieldPlaceholder {
 
-    /// The dynamic ink. Four values, because `accessibilityContrast == .high` is a
-    /// request for exactly this and answering it costs two lines.
-    static let inkColor = UIColor { traits in
-        let dark = traits.userInterfaceStyle == .dark
-        let boosted = traits.accessibilityContrast == .high
-        switch (dark, boosted) {
-        case (false, false): return UIColor(red: 110 / 255, green: 110 / 255, blue: 118 / 255, alpha: 1)
-        case (false, true):  return UIColor(red: 90 / 255, green: 90 / 255, blue: 98 / 255, alpha: 1)
-        case (true, false):  return UIColor(red: 152 / 255, green: 152 / 255, blue: 158 / 255, alpha: 1)
-        case (true, true):   return UIColor(red: 178 / 255, green: 178 / 255, blue: 184 / 255, alpha: 1)
-        }
-    }
+    /// The dynamic ink, kept with the other colours in `Theme.placeholderInkColor`. Four
+    /// values, because `accessibilityContrast == .high` is a request for exactly this and
+    /// answering it costs two lines: light (110,110,118), boosted (90,90,98); dark
+    /// (152,152,158), boosted (178,178,184).
+    static let inkColor = Theme.placeholderInkColor
 
     /// `inkColor` as a SwiftUI colour.
     static let ink = Color(inkColor)

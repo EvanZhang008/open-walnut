@@ -87,11 +87,11 @@ struct CameraCaptureView: View {
         HStack(spacing: 8) {
             roundButton("xmark", label: "Close camera", id: "camera.close") { model.close() }
             if model.stage == .recording {
-                pill(dot: .red, text: CameraCaptureModel.timerLabel(elapsed: model.elapsed), id: "camera.timer")
+                pill(dot: Theme.danger, text: CameraCaptureModel.timerLabel(elapsed: model.elapsed), id: "camera.timer")
                 pill(symbol: model.recordingHasSound ? "mic.fill" : "mic.slash.fill",
                      text: model.recordingHasSound ? "Sound on" : "Sound off", id: "camera.sound")
             } else {
-                pill(dot: .green, text: "Camera on", id: "camera.on")
+                pill(dot: Theme.success, text: "Camera on", id: "camera.on")
                 if model.mode == .video {
                     Button { model.soundOn.toggle() } label: {
                         pill(symbol: model.soundOn ? "mic.fill" : "mic.slash.fill",
@@ -119,7 +119,7 @@ struct CameraCaptureView: View {
                             Task { await model.photoWhileRecording() }
                         } label: {
                             VStack(spacing: 3) {
-                                Image(systemName: "camera.fill").font(.system(size: 20, weight: .semibold))
+                                Image(systemName: "camera.fill").font(Theme.Glyph.xl.font(.semibold))
                                 Text("Photo").font(.caption.weight(.semibold))
                             }
                             .foregroundStyle(.white)
@@ -154,19 +154,13 @@ struct CameraCaptureView: View {
     private var modeSwitch: some View {
         HStack(spacing: 4) {
             ForEach(CameraCaptureModel.Mode.allCases, id: \.self) { mode in
-                Button { model.mode = mode } label: {
-                    Text(mode == .photo ? "Photo" : "Video")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(model.mode == mode ? .black : .white)
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 8)
-                        .background(model.mode == mode ? Color.white : Color.clear, in: Capsule())
-                }
+                Button(mode == .photo ? "Photo" : "Video") { model.mode = mode }
+                    .buttonStyle(.walnutChip(selected: model.mode == mode))
                 .accessibilityIdentifier("camera.mode.\(mode.rawValue)")
                 .accessibilityAddTraits(model.mode == mode ? .isSelected : [])
             }
         }
-        .padding(4)
+        .padding(Theme.Space.xs)
         .background(.black.opacity(0.45), in: Capsule())
     }
 
@@ -179,9 +173,9 @@ struct CameraCaptureView: View {
             ZStack {
                 Circle().strokeBorder(.white, lineWidth: 5).frame(width: 80, height: 80)
                 if recording {
-                    RoundedRectangle(cornerRadius: 7).fill(.red).frame(width: 32, height: 32)
+                    Theme.Radius.shape(Theme.Radius.sm).fill(Theme.danger).frame(width: 32, height: 32)
                 } else {
-                    Circle().fill(model.mode == .video ? Color.red : Color.white).frame(width: 64, height: 64)
+                    Circle().fill(model.mode == .video ? Theme.danger : Color.white).frame(width: 64, height: 64)
                 }
             }
         }
@@ -229,7 +223,7 @@ struct CameraCaptureView: View {
 
     private var deniedPage: some View {
         VStack(spacing: 16) {
-            Image(systemName: "lock.slash").font(.system(size: 44)).foregroundStyle(.white.opacity(0.85))
+            Image(systemName: "lock.slash").font(Theme.Glyph.hero.font()).foregroundStyle(.white.opacity(0.85))
             Text("Camera access is off")
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.white)
@@ -240,16 +234,14 @@ struct CameraCaptureView: View {
             Button {
                 if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
             } label: {
-                Text("Open Settings").frame(maxWidth: .infinity)
+                Text("Open Settings")
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
+            .buttonStyle(.walnut(.primary, fullWidth: true))
             .accessibilityIdentifier("camera.openSettings")
             Button { model.actions.pickFile() } label: {
-                Text("Pick a file instead").frame(maxWidth: .infinity)
+                Text("Pick a file instead")
             }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
+            .buttonStyle(.walnut(.secondary, fullWidth: true))
             .accessibilityIdentifier("camera.pickFile")
             Button("Close") { model.close() }
                 .foregroundStyle(.white)
@@ -263,7 +255,7 @@ struct CameraCaptureView: View {
             Text(title).font(.title3.weight(.semibold)).foregroundStyle(.white)
             Text(detail).font(.callout).foregroundStyle(.white.opacity(0.8)).multilineTextAlignment(.center)
             Button("Close") { model.close() }
-                .buttonStyle(.bordered)
+                .buttonStyle(.walnut(.secondary))
                 .accessibilityIdentifier("camera.close")
         }
         .padding(28)
@@ -312,14 +304,11 @@ struct CameraCaptureView: View {
     private func rowButton(_ title: String, id: String, prominent: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.body.weight(.semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-                .frame(maxWidth: .infinity, minHeight: 50)
-                .foregroundStyle(.white)
-                .background(prominent ? Color.accentColor : Color.white.opacity(0.18),
-                            in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
+        // Send is the look's one main action; Retake and Add another are the others.
+        .buttonStyle(.walnut(prominent ? .primary : .secondary, fullWidth: true))
         .accessibilityIdentifier(id)
     }
 }

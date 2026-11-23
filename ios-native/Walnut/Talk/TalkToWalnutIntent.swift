@@ -237,5 +237,5 @@ struct WalnutShortcuts: AppShortcutsProvider {
         )
     }
 
-    static let shortcutTileColor: ShortcutTileColor = .orange
+    static let shortcutTileColor: ShortcutTileColor = .orange // ui-standard-ok: a Shortcuts tile, an AppIntents enum case
 }

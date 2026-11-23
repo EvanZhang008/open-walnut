@@ -43,12 +43,28 @@ final class DemoPolishTests: XCTestCase {
         return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
     }
 
+    /// `tint` at `alpha` laid over `page`, opaque, in one scheme.
+    private func wash(_ tint: UIColor, _ alpha: CGFloat, over page: UIColor, dark: Bool) -> UIColor {
+        let traits = UITraitCollection(userInterfaceStyle: dark ? .dark : .light)
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        var pr: CGFloat = 0, pg: CGFloat = 0, pb: CGFloat = 0, pa: CGFloat = 0
+        tint.resolvedColor(with: traits).getRed(&r, green: &g, blue: &b, alpha: &a)
+        page.resolvedColor(with: traits).getRed(&pr, green: &pg, blue: &pb, alpha: &pa)
+        return UIColor(red: r * alpha + pr * (1 - alpha), green: g * alpha + pg * (1 - alpha),
+                       blue: b * alpha + pb * (1 - alpha), alpha: 1)
+    }
+
     func testTheSampleDataLabelClearsTheTextBarInBothSchemes() throws {
+        // The label is the family's badge in its accent tone (WalnutBadge): workingText on the
+        // tint at 12% over the page, on a plain page and a grouped one.
+        XCTAssertEqual(DemoBanner.tone, .accent)
         for dark in [false, true] {
-            let ink = luminance(DemoBanner.inkColor, dark: dark)
-            let fill = luminance(DemoBanner.fillColor, dark: dark)
-            let ratio = (max(ink, fill) + 0.05) / (min(ink, fill) + 0.05)
-            XCTAssertGreaterThanOrEqual(ratio, 4.5, "dark=\(dark): the label measured \(ratio)")
+            for page in [UIColor.systemBackground, .systemGroupedBackground] {
+                let ink = luminance(Theme.workingTextColor, dark: dark)
+                let fill = luminance(wash(Theme.tintColor, 0.12, over: page, dark: dark), dark: dark)
+                let ratio = (max(ink, fill) + 0.05) / (min(ink, fill) + 0.05)
+                XCTAssertGreaterThanOrEqual(ratio, 4.5, "dark=\(dark): the label measured \(ratio)")
+            }
         }
         // Both words draw in that ink: a secondary style on either one is what
         // measured 2.0:1 light and 2.5:1 dark.
@@ -64,6 +80,7 @@ final class DemoPolishTests: XCTestCase {
         for faded in [".secondary", ".tertiary", ".opacity("] {
             XCTAssertFalse(banner.contains(faded), "the Demo label draws text in \(faded)")
         }
+        XCTAssertTrue(banner.contains("WalnutBadge("), "the Demo label is no longer the family's badge")
     }
 
     // MARK: - The voice reply

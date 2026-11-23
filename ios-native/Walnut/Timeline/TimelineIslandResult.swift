@@ -161,7 +161,7 @@ final class IslandResultStripView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .secondarySystemBackground
-        layer.cornerRadius = 12
+        layer.cornerRadius = Theme.Radius.md
         layer.cornerCurve = .continuous
         accessibilityIdentifier = "chat.islandResult"
         titleLabel.numberOfLines = 1
@@ -169,12 +169,16 @@ final class IslandResultStripView: UIView {
         previewLabel.numberOfLines = IslandResultStrip.previewLines
         previewLabel.lineBreakMode = .byTruncatingTail
         previewLabel.textColor = .secondaryLabel
-        var config = UIButton.Configuration.tinted()
-        config.cornerStyle = .capsule
+        // The family's main action: solid accent, white words, the soft corner (never the
+        // system's capsule, and not a tinted fill whose tint words read at 3.7:1).
+        var config = UIButton.Configuration.filled()
+        config.baseBackgroundColor = Theme.accentColor
+        config.baseForegroundColor = .white
+        config.cornerStyle = .fixed
+        config.background.cornerRadius = Theme.Radius.sm
         config.contentInsets = IslandResultStrip.buttonInsets
         config.titleLineBreakMode = .byWordWrapping
         button.configuration = config
-        button.tintColor = Theme.tintColor
         button.accessibilityIdentifier = "chat.islandResult.review"
         button.addAction(UIAction { [weak self] _ in self?.onReview?() }, for: .touchUpInside)
         addSubview(titleLabel)
@@ -256,7 +260,7 @@ struct IslandResultSheet: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(12)
                         .background(Color(uiColor: .secondarySystemBackground),
-                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    in: Theme.Radius.shape(Theme.Radius.sm))
                         .accessibilityIdentifier("islandResult.text")
                     if result.sent {
                         Label("Sent to the AI", systemImage: "checkmark.circle")
@@ -270,19 +274,19 @@ struct IslandResultSheet: View {
                     if tooLong {
                         Text("Too long to send (\(result.text.utf16.count.formatted()) of \(IslandRuntime.resultMax.formatted()) characters).")
                             .font(.footnote)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Theme.dangerText)
                             .accessibilityIdentifier("islandResult.tooLong")
                     }
                     if command {
                         Text("Starts with \u{201C}/\u{201D}, so it would run as a command. Not sendable.")
                             .font(.footnote)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Theme.dangerText)
                             .accessibilityIdentifier("islandResult.command")
                     }
                     if state == .failed {
                         Text("Not sent. Try again.")
                             .font(.footnote)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Theme.dangerText)
                             .accessibilityIdentifier("islandResult.failed")
                     }
                     if !result.sent {
@@ -290,10 +294,8 @@ struct IslandResultSheet: View {
                             Task { await sendNow() }
                         } label: {
                             Text(state == .sending ? "Sending\u{2026}" : "Send to AI")
-                                .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
+                        .buttonStyle(.walnut(.primary, fullWidth: true))
                         .disabled(tooLong || empty || command || state == .sending)
                         .accessibilityIdentifier("islandResult.send")
                     }
@@ -302,17 +304,17 @@ struct IslandResultSheet: View {
                             UIPasteboard.general.string = result.text
                             copied = true
                         } label: {
-                            Text(copied ? "Copied" : "Copy").frame(maxWidth: .infinity)
+                            Text(copied ? "Copied" : "Copy")
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.walnut(.secondary, fullWidth: true))
                         .accessibilityIdentifier("islandResult.copy")
                         Button(role: .destructive) {
                             IslandStateStore.shared.dismissResult(key: storeKey)
                             close()
                         } label: {
-                            Text("Dismiss result").frame(maxWidth: .infinity)
+                            Text("Dismiss result")
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.walnut(.destructive, fullWidth: true))
                         .disabled(state == .sending)
                         .accessibilityIdentifier("islandResult.dismiss")
                     }

@@ -73,7 +73,7 @@ struct AppleHealthView: View {
             .disabled(store.busy != nil)
             .accessibilityIdentifier("health.turnOn")
             if let message = store.errorMessage {
-                Text(message).font(.footnote).foregroundStyle(.red)
+                Text(message).font(.footnote).foregroundStyle(Theme.dangerText)
             }
         } footer: {
             Text(store.isDemo
@@ -107,7 +107,7 @@ struct AppleHealthView: View {
                     .foregroundStyle(.secondary)
             }
             if let message = store.errorMessage {
-                Text(message).font(.footnote).foregroundStyle(.red)
+                Text(message).font(.footnote).foregroundStyle(Theme.dangerText)
             }
             Button {
                 store.syncNow()

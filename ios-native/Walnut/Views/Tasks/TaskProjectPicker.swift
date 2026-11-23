@@ -35,8 +35,8 @@ struct TaskProjectPicker: View {
                             .accessibilityIdentifier("task.project.search")
                     }
                 }
-                .padding(12)
-                .background(.background, in: RoundedRectangle(cornerRadius: 12))
+                // The family's field box: grey fill, the control corner, a 44pt line.
+                .walnutFieldBox()
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
                 .background(.bar)

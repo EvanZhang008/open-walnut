@@ -12,20 +12,16 @@ import UIKit
 /// at 1.70:1 light and 2.48:1 dark. Subordinate is a job for SIZE and WEIGHT;
 /// spending contrast on it is how a label becomes decoration.
 ///
-/// The values are plain greys rather than tinted ones so they read as text in
-/// both appearances, and they clear 4.5:1 on all three surfaces these rows sit
-/// on (`systemBackground`, `secondarySystemBackground`, a `tertiarySystemFill`
-/// capsule) in both light and dark. `ReadableTextContrastTests` pins that.
+/// The colour is the design system's readable grey (`Theme.secondaryOnCard`), so a
+/// quiet line reads the same everywhere; it clears 4.5:1 on all three surfaces these
+/// rows sit on (`systemBackground`, `secondarySystemBackground`, a `tertiarySystemFill`
+/// chip) in both light and dark. `ReadableTextContrastTests` pins that.
 enum ReadableText {
-    /// The quiet-but-readable text colour. Measured ≥5.3:1 everywhere it is used.
-    static let secondary = Color(uiColor: secondaryUIColor)
+    /// The quiet-but-readable text colour.
+    static let secondary = Theme.secondaryOnCard
 
     /// Same colour as UIKit, for the tests and for attributed-string call sites.
-    static let secondaryUIColor = UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(white: 0.66, alpha: 1)
-            : UIColor(white: 0.38, alpha: 1)
-    }
+    static let secondaryUIColor = Theme.secondaryOnCardColor
 
     /// Dim end of a "still working" shimmer.
     ///

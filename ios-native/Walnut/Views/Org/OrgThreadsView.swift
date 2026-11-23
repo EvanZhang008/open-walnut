@@ -546,7 +546,7 @@ struct OrgThreadsView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             Button("Try Again") { Task { await store.load() } }
-                .buttonStyle(.bordered)
+                .buttonStyle(.walnut(.secondary))
                 .accessibilityIdentifier("org.threads.retry")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -959,18 +959,9 @@ struct OrgThreadCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(choices) { o in
                     Button { pickedKey = choicesKey; onPick(o.label) } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(o.recommended == true ? "\(o.label) \u{00B7} Recommended" : o.label)
-                                .multilineTextAlignment(.leading)
-                            if let d = o.detail, !d.isEmpty {
-                                Text(d).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.leading)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        WalnutOptionLabel(label: o.label, detail: o.detail, recommended: o.recommended == true)
                     }
-                    .buttonStyle(.bordered)
-                    .tint(o.recommended == true ? Theme.tint : nil)
-                    .controlSize(.small)
+                    .buttonStyle(.walnut(.option(recommended: o.recommended == true)))
                     .disabled(busy || pickedKey == choicesKey)
                     .accessibilityIdentifier("org.thread.option.\(o.id)")
                 }
@@ -988,7 +979,7 @@ struct OrgThreadCard: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Reopen") { onEdit(.reopen) }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.walnut(.secondary, size: .small))
                     .controlSize(.small)
                     .disabled(busy)
                     .accessibilityIdentifier("org.thread.reopen")
@@ -1034,13 +1025,13 @@ struct OrgThreadCard: View {
         // Acknowledged already: the AI places it (server thread-known.ts), no second button.
         if !known && !waitsOnHim {
             Button { onEdit(.acknowledge) } label: { actionLabel("Acknowledge", fullWidth: fullWidth) }
-                .buttonStyle(.borderedProminent)
-                .tint(Theme.tint)
+                .buttonStyle(.walnut(.primary, size: .small))
+                .tint(Theme.accent)
                 .accessibilityIdentifier("org.thread.ack")
         }
         if canFollowUp {
             Button { onFollowUpOpen() } label: { actionLabel("Follow up", fullWidth: fullWidth) }
-                .buttonStyle(.bordered)
+                .buttonStyle(.walnut(.secondary, size: .small))
                 .accessibilityIdentifier("org.thread.followUp")
         }
         snoozeMenu(fullWidth: fullWidth)
@@ -1056,7 +1047,7 @@ struct OrgThreadCard: View {
         } label: {
             actionLabel(snoozed ? "Snoozed" : "Snooze", fullWidth: fullWidth)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.walnut(.secondary, size: .small))
         .accessibilityIdentifier("org.thread.snooze")
     }
 

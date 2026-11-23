@@ -285,7 +285,7 @@ struct SessionChangesPage: View {
                 Text("Could not read the changes").font(.headline)
                 Text(error).font(.footnote).foregroundStyle(.secondary)
                 Button("Try Again") { Task { await model.load() } }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.walnut(.secondary, size: .small))
             }
             .padding(.vertical, 4)
             .accessibilityIdentifier("changes.error")
@@ -405,19 +405,14 @@ struct ChangedFileRow: View {
     }
 }
 
-/// A / M / D / R in a small colored square.
+/// A / M / D / R as the family's badge, its tone by meaning: added reads as success, deleted as
+/// danger, modified as accent (a change, not a problem), renamed as neutral. One least width, so
+/// the file names after them line up.
 struct ChangeStatusMark: View {
     let status: String
 
     var body: some View {
-        Text(verbatim: letter)
-            .font(.caption2.weight(.bold).monospaced())
-            .foregroundStyle(color)
-            // 20 points square at the default size; past it, always round its letter.
-            .padding(.horizontal, 4)
-            .padding(.vertical, 2)
-            .frame(minWidth: 20, minHeight: 20)
-            .background(color.opacity(0.14), in: RoundedRectangle(cornerRadius: 5))
+        WalnutBadge(text: letter, tone: tone, minWidth: 24)
             // A mark, not text to read: it stops growing at the first accessibility size.
             .dynamicTypeSize(...DynamicTypeSize.accessibility1)
             .accessibilityLabel(status)
@@ -432,12 +427,12 @@ struct ChangeStatusMark: View {
         }
     }
 
-    private var color: Color {
+    private var tone: WalnutBadge.Tone {
         switch status {
-        case "added": return DiffColors.addedText
-        case "deleted": return DiffColors.removedText
-        case "renamed": return Theme.workingText
-        default: return Theme.reviewText
+        case "added": return .success
+        case "deleted": return .danger
+        case "renamed": return .neutral
+        default: return .accent
         }
     }
 }
@@ -481,28 +476,24 @@ struct ReviewBar: View {
     private var button: some View {
         Button("Review", action: open)
             .fixedSize()
-            .buttonStyle(.borderedProminent)
-            .tint(Theme.tint)
+            .buttonStyle(.walnut(.primary, size: .small))
             .accessibilityIdentifier("changes.review")
     }
 }
 
-/// Diff colors, light and dark.
+/// Diff colors, light and dark: a diff's own palette (data, like the code highlighter's colours),
+/// GitHub's added and removed greens and reds, which no Theme colour stands for.
 enum DiffColors {
     /// A color for light mode and one for dark (0xRRGGBB each).
     private static func pair(_ light: Int, _ dark: Int) -> Color {
-        func rgb(_ v: Int) -> UIColor {
-            UIColor(red: CGFloat((v >> 16) & 0xFF) / 255, green: CGFloat((v >> 8) & 0xFF) / 255,
-                    blue: CGFloat(v & 0xFF) / 255, alpha: 1)
-        }
-        return Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? rgb(dark) : rgb(light) })
+        Color(dynamic: UIColor(light: light, dark: dark))
     }
 
-    static let addedText = pair(0x1A7F37, 0x3FB950)
-    static let removedText = pair(0xCF222E, 0xF85149)
-    static let addedBackground = pair(0xE6FFEC, 0x12261E)
-    static let removedBackground = pair(0xFFEBE9, 0x2D1517)
-    static let addedGutter = pair(0xCCFFD8, 0x1B4721)
-    static let removedGutter = pair(0xFFD7D5, 0x5C1E21)
-    static let foldBackground = pair(0xEEF3FA, 0x1B2230)
+    static let addedText = pair(0x1A7F37, 0x3FB950) // ui-standard-ok: diff palette (data)
+    static let removedText = pair(0xCF222E, 0xF85149) // ui-standard-ok: diff palette (data)
+    static let addedBackground = pair(0xE6FFEC, 0x12261E) // ui-standard-ok: diff palette (data)
+    static let removedBackground = pair(0xFFEBE9, 0x2D1517) // ui-standard-ok: diff palette (data)
+    static let addedGutter = pair(0xCCFFD8, 0x1B4721) // ui-standard-ok: diff palette (data)
+    static let removedGutter = pair(0xFFD7D5, 0x5C1E21) // ui-standard-ok: diff palette (data)
+    static let foldBackground = pair(0xEEF3FA, 0x1B2230) // ui-standard-ok: diff palette (data)
 }

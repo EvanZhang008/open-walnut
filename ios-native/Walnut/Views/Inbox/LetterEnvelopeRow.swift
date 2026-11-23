@@ -75,12 +75,18 @@ struct LetterEnvelopeRow: View {
                         .handlingFilePathLinks(source: letter.linkSource)
                 }
 
-                HStack(spacing: 6) {
-                    if Self.showsTypeBadge(letter) { typeBadge }
-                    chip(letter.hostLabel, icon: letter.hostLabel == "Mac" ? "laptopcomputer"
-                         : letter.hostLabel == Letter.unknownHostLabel ? "questionmark.circle" : "server.rack")
+                // Round tags (standard.md "Shapes"): the kind (amber while it waits on a decision),
+                // the answer, the host. "Unknown host" on almost every letter told nothing, so an
+                // unknown host shows no tag. At an accessibility size the tags stack: side by side
+                // they ran past the screen.
+                (timeUnderSubject ? AnyLayout(VStackLayout(alignment: .leading, spacing: Theme.Space.xs))
+                                  : AnyLayout(HStackLayout(spacing: Theme.Space.s))) {
+                    if Self.showsTypeBadge(letter) { typeLabel }
                     if let answer = letter.answered {
-                        chip(answer.by.map { "Answered by \($0.displayName)" } ?? "Answered", icon: "checkmark")
+                        WalnutBadge(text: answer.by.map { "Answered by \($0.displayName)" } ?? "Answered", tone: .success, systemImage: "checkmark")
+                    }
+                    if Self.showsHost(letter) {
+                        WalnutBadge(text: letter.hostLabel, systemImage: letter.hostLabel == "Mac" ? "laptopcomputer" : "server.rack")
                     }
                 }
             }
@@ -95,7 +101,7 @@ struct LetterEnvelopeRow: View {
         if let when = letter.createdDate {
             Text(AppClock.relativeNamed(when))
                 .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Theme.secondaryOnCard)
         }
     }
 
@@ -121,34 +127,17 @@ struct LetterEnvelopeRow: View {
         !(letter.kind == .actionRequired && letter.answered != nil)
     }
 
-    private var typeBadge: some View {
-        HStack(spacing: 3) {
-            Image(systemName: letter.kind.symbol).font(.system(size: 9))
-            Text(letter.kind.label).font(.caption2.weight(.medium))
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(badgeTint.opacity(0.15), in: Capsule())
-        .foregroundStyle(badgeTint)
+    /// The host is worth a word only when it is known.
+    static func showsHost(_ letter: Letter) -> Bool {
+        letter.hostLabel != Letter.unknownHostLabel && !letter.hostLabel.isEmpty
     }
 
-    /// An unanswered decision is the only letter type that is *blocking*, so it
-    /// is the only one that gets a warning colour.
-    private var badgeTint: Color {
-        letter.isAwaitingDecision ? Theme.warning : Color.secondary
+    /// An unanswered decision is the only letter type that is *blocking*, so it is the only
+    /// one with a coloured dot; every other kind is a quiet word.
+    @ViewBuilder
+    private var typeLabel: some View {
+        WalnutBadge(text: letter.kind.label, tone: letter.isAwaitingDecision ? .warning : .neutral,
+                    systemImage: letter.kind.symbol)
     }
 
-    private func chip(_ text: String, icon: String?) -> some View {
-        HStack(spacing: 3) {
-            if let icon {
-                Image(systemName: icon).font(.system(size: 9))
-            }
-            // One line (two at accessibility sizes): a task's name may run to 200 characters.
-            Text(text).font(.caption2).lineLimit(timeUnderSubject ? 2 : 1).truncationMode(.tail)
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(Color(.tertiarySystemFill), in: Capsule())
-        .foregroundStyle(.secondary)
-    }
 }

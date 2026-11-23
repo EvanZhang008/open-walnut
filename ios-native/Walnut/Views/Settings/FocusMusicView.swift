@@ -44,7 +44,7 @@ struct FocusMusicView: View {
                 } label: {
                     // A fixed size: the glyph must stay inside its fixed circle at every text size.
                     Image(systemName: player.isOn ? "stop.fill" : "play.fill")
-                        .font(.system(size: 22, weight: .regular))
+                        .font(Theme.Glyph.xl.font(.regular))
                         .frame(width: 52, height: 52)
                         .background(Circle().fill(player.isOn ? Color(uiColor: .secondarySystemFill) : Color.accentColor))
                         .foregroundStyle(player.isOn ? Color.accentColor : Color.white)
@@ -77,7 +77,7 @@ struct FocusMusicView: View {
             .pickerStyle(.segmented)
             .accessibilityIdentifier("focusMusic.order")
             if let error = player.error {
-                Text(error).font(.footnote).foregroundStyle(.red).accessibilityIdentifier("focusMusic.error")
+                Text(error).font(.footnote).foregroundStyle(Theme.dangerText).accessibilityIdentifier("focusMusic.error")
             }
         } footer: {
             Text("Keeps playing with the screen locked or in another app. Stop it here, or from the Lock Screen.")
@@ -130,7 +130,7 @@ struct FocusMusicView: View {
                 if retryFailed {
                     Text("Still no answer from your Walnut. Check that the Mac is on and reachable.")
                         .font(.footnote)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Theme.dangerText)
                         .accessibilityIdentifier("focusMusic.focusRetryFailed")
                 }
             } else {
@@ -211,7 +211,7 @@ struct FocusMusicView: View {
     private var tracksSection: some View {
         Section {
             if let loadError = player.loadError, player.listing == nil {
-                Text(loadError).foregroundStyle(.red).accessibilityIdentifier("focusMusic.loadError")
+                Text(loadError).foregroundStyle(Theme.dangerText).accessibilityIdentifier("focusMusic.loadError")
             } else if let listing = player.listing, listing.tracks.isEmpty {
                 Text(listing.error ?? "No music in the folder yet. Add m4a, mp3 or wav files on the Mac, then pull to refresh.")
                     .foregroundStyle(.secondary)

@@ -394,7 +394,7 @@ struct ChatDrawer: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             isActive ? Theme.tintSoft : Color.clear,
-            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            in: Theme.Radius.shape(Theme.Radius.sm)
         )
         .padding(.horizontal, 8)
         .contentShape(Rectangle())
@@ -518,7 +518,7 @@ struct ChatDrawer: View {
                 .lineLimit(2)
             Text(verbatim: RelativeTime.short(ask.activityAt))
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Theme.secondaryOnCard)
                 .lineLimit(1)
         }
         .padding(.horizontal, 12)
@@ -526,7 +526,7 @@ struct ChatDrawer: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             isActive ? Theme.tintSoft : Color.clear,
-            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            in: Theme.Radius.shape(Theme.Radius.sm)
         )
         .padding(.horizontal, 8)
         .contentShape(Rectangle())
@@ -631,7 +631,7 @@ struct ChatDrawer: View {
                 .lineLimit(2)
             Text(verbatim: RelativeTime.short(conversation.updatedAt))
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Theme.secondaryOnCard)
                 .lineLimit(1)
         }
         .padding(.horizontal, 12)
@@ -639,7 +639,7 @@ struct ChatDrawer: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             isActive ? Theme.tintSoft : Color.clear,
-            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            in: Theme.Radius.shape(Theme.Radius.sm)
         )
         .padding(.horizontal, 8)
         .contentShape(Rectangle())
@@ -689,21 +689,13 @@ struct ChatDrawer: View {
             showChat()
             close()
         } label: {
+            // The drawer's one main action: the family's primary button, whose 44 pt
+            // height is stated by the style, so a text metric cannot shave points off it.
             Label("New quick question", systemImage: "plus")
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
                 .minimumScaleFactor(0.8)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 12)
-                // Padding alone came out 41pt on the phone (subheadline's line box
-                // plus 24), so the floor is stated rather than arrived at: the
-                // capsule is the tap target, and a text metric must not be able to
-                // shave points off it.
                 .frame(minHeight: Self.minimumTapHeight)
-                .foregroundStyle(Theme.onTint)
-                .background(Theme.tint, in: Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.walnut(.primary))
         .accessibilityIdentifier("chat.drawer.newChat")
     }
 }

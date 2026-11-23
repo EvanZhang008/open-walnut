@@ -217,7 +217,8 @@ final class RichHTMLContrastTests: XCTestCase {
     func testAQuoteAndALinkInsideARepaintedCardAreReadable() {
         let card = "background:#fff5f5"
         XCTAssertLessThan(ratio("#fff5f5", RichHTMLPalette.dark.fgSecondary), 1.6)
-        XCTAssertLessThan(ratio("#fff5f5", RichHTMLPalette.dark.accent), 3.0)
+        // The dark accent (the web's #0A84FF) is still no body ink on a light card.
+        XCTAssertLessThan(ratio("#fff5f5", RichHTMLPalette.dark.accent), bodyMinimum)
 
         let body = "<div style=\"\(card)\"><blockquote>refused</blockquote>"
             + "<p>see <a href=\"https://example.com\">the runbook</a></p></div>"

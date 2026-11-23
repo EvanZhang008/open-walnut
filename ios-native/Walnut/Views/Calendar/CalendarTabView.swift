@@ -316,13 +316,16 @@ struct CalendarTabView: View {
             withAnimation(.snappy(duration: 0.25)) { selectedDay = outcome.selectedDay }
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         } label: {
+            // A button floating over the grid keeps its frosted fill; shape, size and words are
+            // the family's (round, a 44 pt touch, the control font).
             Text("Today")
-                .font(.subheadline.weight(.semibold))
+                .font(Theme.TextSize.control)
                 .foregroundStyle(Theme.tint)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
+                .padding(.horizontal, Theme.Space.md)
+                .frame(minHeight: Theme.Control.smallHeight)
                 .background(.regularMaterial, in: Capsule())
-                .overlay(Capsule().strokeBorder(Theme.tint.opacity(0.25), lineWidth: 0.5))
+                .overlay(Capsule().strokeBorder(Color(uiColor: .separator), lineWidth: 0.5))
+                .contentShape(Rectangle().inset(by: -(Theme.Control.target - Theme.Control.smallHeight) / 2))
         }
         .buttonStyle(.plain)
         .padding(.leading, 16)

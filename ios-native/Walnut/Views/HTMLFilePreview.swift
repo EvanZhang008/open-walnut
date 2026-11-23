@@ -104,11 +104,10 @@ struct HTMLFilePreview: View {
     var body: some View {
         ZStack {
             if WalnutAPI.rawFileContentURL(path: path, host: host) == nil {
-                ContentUnavailableView {
-                    Label("Not connected", systemImage: "wifi.slash")
-                } description: {
-                    Text("Pair with your Walnut server to preview files.")
-                }
+                WalnutEmptyState(title: "Not connected",
+                                 hint: "Pair with your Walnut server to preview files.",
+                                 systemImage: "wifi.slash", size: .pane)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let loader {
                 HTMLPreviewHostView(loader: loader)
                 if loader.phase == .loading {
@@ -120,17 +119,12 @@ struct HTMLFilePreview: View {
                     // failure. The old fixed "Can't preview file" blamed the
                     // FILE for whatever went wrong, including the cases where
                     // the file was fine and the network was not.
-                    ContentUnavailableView {
-                        Label(failure.title, systemImage: failure.icon)
-                    } description: {
-                        Text(failure.message)
-                    } actions: {
-                        if failure.isRetryable {
-                            Button("Try Again") { loader.reload(token: AppConfig.token) }
-                                .buttonStyle(.borderedProminent)
-                                .accessibilityIdentifier("file.preview.retry")
-                        }
-                    }
+                    // Try Again only when the failure can be retried.
+                    WalnutEmptyState(title: failure.title, hint: failure.message,
+                                     systemImage: failure.icon, size: .pane,
+                                     actionTitle: failure.isRetryable ? "Try Again" : nil,
+                                     actionIdentifier: "file.preview.retry",
+                                     action: { loader.reload(token: AppConfig.token) })
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color(.systemBackground))
                 }

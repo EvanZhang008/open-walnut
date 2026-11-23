@@ -9,12 +9,10 @@ final class FormatDrawerView: UIView {
     private unowned let textView: UITextView
     private let onDismiss: () -> Void
 
-    /// Walnut walnut-brown tint (mirrors Theme.tint: light #8B5A2B / dark #C99659).
-    private static let tint = UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0xC9 / 255, green: 0x96 / 255, blue: 0x59 / 255, alpha: 1)
-            : UIColor(red: 0x8B / 255, green: 0x5A / 255, blue: 0x2B / 255, alpha: 1)
-    }
+    /// The app's accent (Theme.tintColor), never a copy of its value: selected words and glyphs.
+    private static let tint = Theme.tintColor
+    /// A selected segment's solid fill behind its white glyph (Theme.accentColor).
+    private static let selectedFill = Theme.accentColor
 
     private enum ParagraphTag { case title, heading, subheading, body, monostyled }
     private struct ParagraphSpec {
@@ -48,7 +46,7 @@ final class FormatDrawerView: UIView {
         // Floating rounded card, inset from the edges like Apple Notes.
         let card = UIView()
         card.backgroundColor = .secondarySystemBackground
-        card.layer.cornerRadius = 24
+        card.layer.cornerRadius = Theme.Radius.lg
         card.layer.cornerCurve = .continuous
         card.translatesAutoresizingMaskIntoConstraints = false
         addSubview(card)
@@ -264,7 +262,7 @@ final class FormatDrawerView: UIView {
     private func segmentedPill(_ segments: [UIView], separators: Bool) -> UIView {
         let container = UIView()
         container.backgroundColor = .tertiarySystemFill
-        container.layer.cornerRadius = 14
+        container.layer.cornerRadius = Theme.Radius.sm
         container.layer.cornerCurve = .continuous
         let stack = UIStackView(arrangedSubviews: segments)
         stack.axis = .horizontal
@@ -315,7 +313,7 @@ final class FormatDrawerView: UIView {
         }
         let activeList = listTag(for: kind)
         for (tag, segment) in listSegments {
-            segment.setSelected(tag == activeList, tint: Self.tint)
+            segment.setSelected(tag == activeList, tint: Self.selectedFill)
         }
     }
 
@@ -387,7 +385,7 @@ final class ToggleSegment: UIControl {
         super.init(frame: .zero)
 
         selectionBackground.backgroundColor = .clear
-        selectionBackground.layer.cornerRadius = 9
+        selectionBackground.layer.cornerRadius = Theme.Radius.xs
         selectionBackground.layer.cornerCurve = .continuous
         selectionBackground.isUserInteractionEnabled = false
         selectionBackground.translatesAutoresizingMaskIntoConstraints = false
@@ -417,6 +415,7 @@ final class ToggleSegment: UIControl {
 
     func setSelected(_ selected: Bool, tint: UIColor) {
         selectionBackground.backgroundColor = selected ? tint : .clear
+        // White on the accent fill, as Theme.onTint (a UIKit view, so its UIColor).
         icon.tintColor = selected ? .white : .label
     }
 }

@@ -176,4 +176,30 @@ final class ReadableTextContrastTests: XCTestCase {
             }
         }
     }
+
+    /// The design system's colour pairs (Theme.swift, standard.md's iOS column), at 4.5:1 in
+    /// both appearances. Before them the main action was brown: white words on #C99659 measured
+    /// 2.2:1 to 2.4:1 in dark (an Org thread's Acknowledge, a permission card's Allow).
+    func testTheDesignSystemsWordsReadOnTheirFills() {
+        let pairs: [(String, UIColor, UIColor)] = [
+            ("white words on the main action's fill", .white, Theme.accentColor),
+            ("tint words on the page", Theme.tintColor, .systemBackground),
+            ("tint words on a grouped card", Theme.tintColor, .secondarySystemGroupedBackground),
+            ("primary words on the selected chip", .label, Theme.chipSelectedColor),
+            ("primary words on the soft tint", .label, Theme.tintSoftColor),
+            ("tint words on the soft tint (a tag, a selected row)", Theme.tintColor, Theme.tintSoftColor),
+            ("readable grey on the control grey (a chip, a disabled main action)", Theme.secondaryOnCardColor, Theme.controlFillColor),
+            ("primary words on the control grey (a secondary button)", .label, Theme.controlFillColor),
+            ("primary words on the pressed control grey", .label, Theme.controlFillPressedColor),
+            ("danger words on the control grey", Theme.dangerTextColor, Theme.controlFillColor),
+            ("accent badge words on the soft tint", Theme.workingTextColor, Theme.tintSoftColor),
+        ]
+        for dark in [false, true] {
+            for (name, ink, paper) in pairs {
+                let ratio = contrast(ink, over: paper, dark: dark)
+                XCTAssertGreaterThanOrEqual(ratio, textMinimum,
+                                            "\(name), \(dark ? "dark" : "light"): \(String(format: "%.2f", ratio)):1")
+            }
+        }
+    }
 }

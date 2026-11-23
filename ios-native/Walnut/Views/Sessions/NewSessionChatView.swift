@@ -143,10 +143,11 @@ struct NewSessionChatView: View {
                             }
                             HStack(spacing: 12) {
                                 Button("Retry") { Task { _ = await runLaunch(fromComposer: false) } }
-                                    .buttonStyle(.borderedProminent)
+                                    .buttonStyle(.walnut(.primary))
+                                    .tint(Theme.accent)
                                     .accessibilityIdentifier("newSessionChat.retryLaunch")
                                 Button("Edit message") { editFailedLaunch() }
-                                    .buttonStyle(.bordered)
+                                    .buttonStyle(.walnut(.secondary))
                                     .accessibilityIdentifier("newSessionChat.editLaunch")
                             }
                             .padding(.horizontal, 16)
@@ -290,7 +291,7 @@ struct NewSessionChatView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Button("Retry") { Task { await loadOptions() } }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.walnut(.secondary))
                         .accessibilityIdentifier("newSessionChat.retry")
                     Text("You can still type an absolute path in the folder picker and start.")
                         .font(.caption)

@@ -98,28 +98,10 @@ struct TaskDetailExtras: View {
         Button {
             confirmDelete = true
         } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "trash")
-                    .font(.body)
-                Text("Delete Task")
-                    .font(.body)
-                Spacer()
-            }
-            .foregroundStyle(Theme.danger)
-            .padding(.horizontal, 16)
-            .frame(minHeight: 44)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                Color(.secondarySystemGroupedBackground),
-                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(Theme.danger.opacity(0.35), lineWidth: 0.5)
-            )
-            .contentShape(Rectangle())
+            Label("Delete Task", systemImage: "trash")
         }
-        .buttonStyle(.plain)
+        // A key like every other: the family's round destructive kind.
+        .buttonStyle(.walnut(.destructive, fullWidth: true))
         .disabled(controller.acting)
         .accessibilityIdentifier("task.delete")
     }

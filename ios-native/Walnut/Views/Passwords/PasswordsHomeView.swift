@@ -188,8 +188,8 @@ struct PasswordsHomeView: View {
                     }
                     Spacer(minLength: 8)
                     Button("Turn On") { Task { await store.turnOnAutofill() } }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Theme.tint)
+                        .buttonStyle(.walnut(.primary))
+                        .tint(Theme.accent)
                         .accessibilityIdentifier("passwords.turnOnAutofill")
                 }
             }

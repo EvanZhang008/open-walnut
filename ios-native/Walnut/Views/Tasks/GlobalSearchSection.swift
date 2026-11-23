@@ -274,6 +274,11 @@ struct GlobalSearchSection: View {
             .foregroundStyle(.secondary)
             .accessibilityIdentifier("search.status"))
         }
+        // Nothing more to show: the family's empty line (a row of a list).
+        func emptyLine(_ title: String) -> AnyView {
+            AnyView(WalnutEmptyState(title: title, size: .row)
+                .accessibilityIdentifier("search.status"))
+        }
         if let unavailableNotice = search.unavailableNotice {
             return caption(unavailableNotice, systemImage: "icloud.slash")
         }
@@ -295,10 +300,10 @@ struct GlobalSearchSection: View {
             return caption("Your Mac is away: keyword matches only.", systemImage: "icloud.slash")
         }
         if arrangement.allOnScreen {
-            return caption("Every match is already listed above.")
+            return emptyLine("Every match is already listed above.")
         }
         if arrangement.isEmpty {
-            return caption("No more matches.")
+            return emptyLine("No more matches.")
         }
         return nil
     }
@@ -490,8 +495,8 @@ struct GlobalSearchSection: View {
     static func color(for type: String) -> Color {
         switch type {
         case "task": return Theme.tint
-        case "session": return .indigo
-        case "memory": return .purple
+        case "session": return Theme.workingText
+        case "memory": return Theme.secondaryOnCard
         default: return .secondary
         }
     }

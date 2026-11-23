@@ -119,7 +119,8 @@ struct VoiceHistoryView: View {
                 }
             }
             if model.entries.isEmpty && !model.loading {
-                ContentUnavailableView("No Recordings Yet", systemImage: "waveform", description: Text("Your voice input will appear here."))
+                WalnutEmptyState(title: "No Recordings Yet", hint: "Your voice input will appear here.",
+                                 systemImage: "waveform", size: .section)
             }
             Section {
                 ForEach(model.entries) { entry in

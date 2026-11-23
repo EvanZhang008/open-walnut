@@ -66,7 +66,7 @@ struct DebugSwapPhaseMarker: View {
 
     var body: some View {
         Text("Swap")
-            .font(.system(size: 1))
+            .font(.system(size: 1)) // ui-standard-ok: an invisible DEBUG marker, 1 pt so it takes no room
             .foregroundStyle(.clear)
             .frame(width: 1, height: 1)
             .allowsHitTesting(false)
@@ -85,7 +85,7 @@ struct DebugRevealMarker: View {
 
     var body: some View {
         Text("Revealed")
-            .font(.system(size: 1))
+            .font(.system(size: 1)) // ui-standard-ok: an invisible DEBUG marker, 1 pt so it takes no room
             .foregroundStyle(.clear)
             .frame(width: 1, height: 1)
             .allowsHitTesting(false)
@@ -131,7 +131,7 @@ final class DebugRevealRecord {
 
         var body: some View {
             Text("Last reveal")
-                .font(.system(size: 1))
+                .font(.system(size: 1)) // ui-standard-ok: an invisible DEBUG marker, 1 pt so it takes no room
                 .foregroundStyle(.clear)
                 .frame(width: 1, height: 1)
                 .allowsHitTesting(false)

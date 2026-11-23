@@ -82,53 +82,50 @@ final class BoardChromeR30Tests: XCTestCase {
         )
     }
 
-    // MARK: - P2: the chip capsule is one colour in both copies
+    // MARK: - P2: the chips draw the same in both copies
 
     /// The pinned copy and the inline copy drew the SAME chips with different pixels:
-    /// (209,209,209) inline against (222,…) pinned, because `.quaternary` is a material and
+    /// (209,209,209) inline against (222,...) pinned, because `.quaternary` is a material and
     /// a material is a function of whatever is behind it. Third time on this bar (the card's
-    /// `.bar` material, R27; the row tint inside a card, R29), hence a concrete colour.
-    func testTheUnselectedChipCapsuleIsOneOpaqueColour() {
+    /// `.bar` material, R27; the row tint inside a card, R29). The chips now take the family
+    /// chip style (`WalnutChipStyle`, 2026-11-22: one look per kind of control), whose fills
+    /// are fixed colours over the card's opaque base, so the two copies match by construction.
+    /// A material back on the chips is the regression.
+    func testTheUnselectedChipFillIsOneOpaqueColour() {
         for dark in [false, true] {
-            let resolved = BoardBandBar.unselectedChipFillColor.resolvedColor(
+            let resolved = Theme.controlFillColor.resolvedColor(
                 with: UITraitCollection(userInterfaceStyle: dark ? .dark : .light))
             var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
             XCTAssertTrue(resolved.getRed(&r, green: &g, blue: &b, alpha: &a),
-                "dark=\(dark): the capsule must be a plain RGB colour, not a pattern or a material")
+                "dark=\(dark): the chip fill must be a plain RGB colour, not a pattern or a material")
             XCTAssertEqual(Double(a), 1, accuracy: 0.001,
                 "dark=\(dark): a translucent fill is a fill that depends on its backdrop")
         }
     }
 
-    /// And it reads as a capsule ON the card in both schemes — the other half of the same
-    /// defect, since an opaque colour that matches the card is a chip nobody can see.
-    ///
-    /// Measured on the simulator with these constants: 209 on a 255 card in light, 60 on a 28
-    /// card in dark. The floor is well under both so the test fails on a real regression
-    /// rather than on a taste change.
-    func testTheChipCapsuleStepsAwayFromTheCardInBothSchemes() {
+    /// And it reads as a chip ON the card in both schemes: an opaque colour that matches the
+    /// card is a chip nobody can see (the system's translucent fill was 16 levels from a white
+    /// card). Measured: 229 on a 255 card in light, 52 on a 28 card in dark.
+    func testTheChipFillStepsAwayFromTheCardInBothSchemes() {
         for dark in [false, true] {
-            let capsule = grey(BoardBandBar.unselectedChipFillColor, dark: dark)
+            let chip = grey(Theme.controlFillColor, dark: dark)
             let card = grey(BoardBandBar.cardBaseColor, dark: dark)
             XCTAssertGreaterThan(
-                abs(capsule - card), 20,
-                "dark=\(dark): capsule \(capsule) against card \(card) — the chips dissolve into the card"
+                abs(chip - card), 20,
+                "dark=\(dark): chip \(chip) against card \(card): the chips dissolve into the card"
             )
         }
     }
 
-    /// Both copies read the SAME symbol, which is what makes "same pixels at the flip" a
-    /// property of the code. The bar has exactly one chip background expression and it names
-    /// this colour; a material there is the regression.
-    func testTheChipBackgroundNamesTheColourAndNotAMaterial() throws {
+    func testTheChipsTakeTheFamilyChipStyleAndNotAMaterial() throws {
         let source = code(in: try source("Walnut/Views/Tasks/BoardBandBar.swift"))
         XCTAssertTrue(
-            source.contains("AnyShapeStyle(Self.unselectedChipFill)"),
-            "the chip capsule stopped filling with the explicit colour"
+            source.contains(".buttonStyle(.walnutChip(selected: isSelected))"),
+            "the band chips stopped taking the family chip style"
         )
         XCTAssertFalse(
             source.contains("AnyShapeStyle(.quaternary)"),
-            "`.quaternary` is back on this bar — it resolves against the backdrop, so the two copies differ"
+            "`.quaternary` is back on this bar: it resolves against the backdrop, so the two copies differ"
         )
     }
 

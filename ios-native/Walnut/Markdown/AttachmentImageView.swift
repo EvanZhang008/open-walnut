@@ -468,7 +468,7 @@ struct AttachmentImageView: View {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .clipShape(Theme.Radius.shape(Theme.Radius.md))
                     .onTapGesture { showViewer = true }
                     .fullScreenCover(isPresented: $showViewer) {
                         ImageViewer(image: image)
@@ -483,9 +483,9 @@ struct AttachmentImageView: View {
                 .foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 24)
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+                .background(Color(.secondarySystemBackground), in: Theme.Radius.shape(Theme.Radius.md))
             } else {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                Theme.Radius.shape(Theme.Radius.md)
                     .fill(Color(.secondarySystemBackground))
                     .frame(height: 180)
                     .overlay { ProgressView() }
@@ -543,12 +543,11 @@ struct SourceFileImageView: View {
                     .accessibilityLabel((path as NSString).lastPathComponent)
                     .accessibilityIdentifier("session.files.viewer.image")
             } else if failedKey == key {
-                ContentUnavailableView {
-                    Label("Can't Show the Image", systemImage: "photo.badge.exclamationmark")
-                } description: {
-                    Text("\((path as NSString).lastPathComponent) couldn't be read as a picture.")
-                }
-                .accessibilityIdentifier("session.files.viewer.imageFailed")
+                WalnutEmptyState(title: "Can't Show the Image",
+                                 hint: "\((path as NSString).lastPathComponent) couldn't be read as a picture.",
+                                 systemImage: "photo.badge.exclamationmark", size: .pane)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityIdentifier("session.files.viewer.imageFailed")
             } else {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

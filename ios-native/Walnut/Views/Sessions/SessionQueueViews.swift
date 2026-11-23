@@ -477,7 +477,7 @@ struct SessionQueuedMessageSheet: View {
                                     .font(.body.weight(.semibold))
                                     .frame(maxWidth: .infinity, minHeight: 44)
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.walnut(.secondary))
                             .tint(Theme.tint)
                             .foregroundStyle(Theme.tint)
                             .disabled(saving || queue.busyIds.contains(row.id)
@@ -496,7 +496,7 @@ struct SessionQueuedMessageSheet: View {
                                 Label("Withdraw", systemImage: "trash")
                                     .frame(maxWidth: .infinity, minHeight: 44)
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.walnut(.destructive))
                             .tint(Theme.danger)
                             .foregroundStyle(Theme.dangerText)
                             .disabled(saving || queue.busyIds.contains(row.id))
@@ -612,8 +612,8 @@ struct SessionQueuedMessageSheet: View {
                     .font(.body.weight(.semibold))
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(Theme.tint)
+            .buttonStyle(.walnut(.primary))
+            .tint(Theme.accent)
             .accessibilityIdentifier("session.queue.stranded.keep")
             Button(role: .destructive) {
                 dismiss()
@@ -621,7 +621,7 @@ struct SessionQueuedMessageSheet: View {
                 Text("Discard them")
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.walnut(.secondary))
             .accessibilityIdentifier("session.queue.stranded.discard")
             Spacer(minLength: 0)
         }

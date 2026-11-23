@@ -332,8 +332,7 @@ struct NewSessionSheet: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                 Button("Retry") { Task { await loadOptions() } }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Theme.tint)
+                    .buttonStyle(.walnut(.primary, size: .small))
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 12)

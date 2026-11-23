@@ -69,11 +69,10 @@ struct NoteDetailView: View {
     var body: some View {
         Group {
             if loadFailed {
-                ContentUnavailableView(
-                    "Couldn't load this note",
-                    systemImage: "exclamationmark.triangle",
-                    description: Text("Check the connection and try again.")
-                )
+                WalnutEmptyState(title: "Couldn't load this note",
+                                 hint: "Check the connection and try again.",
+                                 systemImage: "exclamationmark.triangle", size: .pane)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if !loaded {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -244,7 +243,7 @@ struct NoteDetailView: View {
                 ProgressView()
             } else if dirty {
                 Image(systemName: "circle.fill")
-                    .font(.system(size: 8))
+                    .font(Theme.Glyph.xs.font())
                     .foregroundStyle(Theme.warning)
                     .accessibilityLabel("Unsaved changes")
             }

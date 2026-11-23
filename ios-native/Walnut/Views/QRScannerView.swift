@@ -19,11 +19,11 @@ struct QRScannerSheet: View {
                     }
                     .ignoresSafeArea()
                 } else {
-                    ContentUnavailableView(
-                        "Camera unavailable",
-                        systemImage: "qrcode.viewfinder",
-                        description: Text("Scanning isn't available on this device. Copy the wn://pair link and use \"Paste pairing link\" instead.")
-                    )
+                    WalnutEmptyState(
+                        title: "Camera unavailable",
+                        hint: "Scanning isn't available on this device. Copy the wn://pair link and use \"Paste pairing link\" instead.",
+                        systemImage: "qrcode.viewfinder", size: .pane)
+                        .frame(maxHeight: .infinity)
                 }
             }
             .navigationTitle("Scan pairing code")

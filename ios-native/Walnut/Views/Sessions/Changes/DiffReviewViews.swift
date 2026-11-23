@@ -154,7 +154,7 @@ struct DiffCommentComposer: View {
             if sending { ProgressView() } else { DictationSendLabel(gate: sendGate, title: "Send Now") }
         }
         // A plain grey button beside the primary one, not a faded tint.
-        .buttonStyle(.bordered)
+        .buttonStyle(.walnut(.secondary))
         .tint(Color(uiColor: .systemGray))
         .foregroundStyle(Color(uiColor: .label))
         .disabled(noWords || sending)
@@ -170,8 +170,8 @@ struct DiffCommentComposer: View {
         } label: {
             DictationSendLabel(gate: sendGate, title: "Add to Review", systemImage: "plus.bubble")
         }
-        .buttonStyle(.borderedProminent)
-        .tint(Theme.tint)
+        .buttonStyle(.walnut(.primary))
+        .tint(Theme.accent)
         .disabled(noWords || sending)
         .accessibilityIdentifier("diff.comment.add")
     }
@@ -309,8 +309,8 @@ struct DiffReviewSheet: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
         }
-        .buttonStyle(.borderedProminent)
-        .tint(Theme.tint)
+        .buttonStyle(.walnut(.primary))
+        .tint(Theme.accent)
         .disabled(review.unsent.isEmpty || review.sending)
         .padding(16)
         .background(.bar)
@@ -512,7 +512,7 @@ struct DiffComparePickerView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Could not read the branches").font(.headline)
                     Text(error).font(.footnote).foregroundStyle(.secondary)
-                    Button("Try Again") { Task { await model.loadRefs() } }.buttonStyle(.bordered)
+                    Button("Try Again") { Task { await model.loadRefs() } }.buttonStyle(.walnut(.secondary))
                 }
             } else {
                 HStack { Spacer(); ProgressView(); Spacer() }

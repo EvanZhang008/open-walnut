@@ -160,20 +160,20 @@ struct ActionNeededView: View {
         switch ActionNeededModel.answer(item) {
         case .approvalSheet:
             Button("Review") { Task { await ApprovalCenter.shared.open(id: item.id) } }
-                .buttonStyle(.borderedProminent).controlSize(.mini)
+                .buttonStyle(.walnut(.primary, size: .small)).controlSize(.mini).tint(Theme.accent)
         case .letterOptions:
             ForEach(item.options ?? []) { o in
                 Button(o.label) { Task { await answerLetter(item, o) } }
-                    .buttonStyle(.bordered).controlSize(.mini)
+                    .buttonStyle(.walnut(.secondary, size: .small)).controlSize(.mini)
             }
         case .promptOptions:
             ForEach(item.options ?? []) { o in
                 Button(o.label) { Task { await answerQuestion(item, o) } }
-                    .buttonStyle(.bordered).controlSize(.mini)
+                    .buttonStyle(.walnut(.secondary, size: .small)).controlSize(.mini)
             }
         case .openSession:
             Button("Open") { onOpenSession() }
-                .buttonStyle(.bordered).controlSize(.mini)
+                .buttonStyle(.walnut(.secondary, size: .small)).controlSize(.mini)
         }
     }
 

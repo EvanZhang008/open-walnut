@@ -89,8 +89,8 @@ struct TaskTagPills: View {
         .padding(.horizontal, 10)
         .padding(.vertical, typeSize.isAccessibilitySize ? 4 : 0)
         .frame(minHeight: 30)
-        .background(muted ? Color(.quaternarySystemFill) : Theme.tintSoft, in: RoundedRectangle(cornerRadius: 15))
-        .contentShape(RoundedRectangle(cornerRadius: 15))
+        .background(muted ? Color(.quaternarySystemFill) : Theme.tintSoft, in: Capsule(style: .continuous))
+        .contentShape(Capsule(style: .continuous))
         .dynamicTypeSize(...DynamicTypeSize.accessibility3)
         .contextMenu {
             Button {
@@ -205,9 +205,9 @@ struct TaskTagPills: View {
             .frame(minHeight: 30)
             .background(
                 pill.url != nil ? Theme.tintSoft : muted ? Color(.quaternarySystemFill) : Color(.tertiarySystemFill),
-                in: RoundedRectangle(cornerRadius: 15)
+                in: Capsule(style: .continuous)
             )
-            .contentShape(RoundedRectangle(cornerRadius: 15))
+            .contentShape(Capsule(style: .continuous))
             // A ten-digit id plus its arrow is wider than the card at the two largest
             // sizes; the third accessibility size still reads it on one line.
             .dynamicTypeSize(...DynamicTypeSize.accessibility3)

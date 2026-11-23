@@ -199,11 +199,8 @@ struct RoutinesView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
-                        Button { Task { await load() } } label: {
-                            Text("Retry").foregroundStyle(Theme.onTint)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Theme.tint)
+                        Button("Retry") { Task { await load() } }
+                            .buttonStyle(.walnut(.primary))
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
@@ -353,7 +350,7 @@ struct RoutinesView: View {
                 .accessibilityIdentifier("routines.refreshError")
             Spacer(minLength: 0)
             Button { Task { await load() } } label: {
-                Text("Retry").font(.footnote.weight(.semibold)).foregroundStyle(Self.actionText)
+                Text("Retry").font(.footnote.weight(.semibold)).foregroundStyle(Theme.tint)
                     .frame(minWidth: 44, minHeight: 44)
             }
             .buttonStyle(.plain)
@@ -361,34 +358,10 @@ struct RoutinesView: View {
         }
         .padding(.leading, 14)
         .padding(.trailing, 6)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .background(.regularMaterial, in: Theme.Radius.shape(Theme.Radius.md))
         .padding(.horizontal, 16)
         .padding(.bottom, 6)
     }
-
-    /// The buttons' words: the tint, a step darker (lighter in dark mode), on their own
-    /// fill: 6:1 light, 8.8:1 dark (dark was 7:1 and still read dim, 2026-11-05 review).
-    static let actionText = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0xF0 / 255, green: 0xCC / 255, blue: 0x9C / 255, alpha: 1)
-            : UIColor(red: 0x7A / 255, green: 0x4A / 255, blue: 0x1F / 255, alpha: 1)
-    })
-
-    /// Delete's word on its red wash: the danger text, lighter in dark mode, where the
-    /// danger text read 4.32:1 on the button's fill (QA); 8.8:1 dark, 5.8:1 light.
-    static let deleteText = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0xFF / 255, green: 0xB8 / 255, blue: 0xB3 / 255, alpha: 1)
-            : UIColor(red: 0xB0 / 255, green: 0x12 / 255, blue: 0x18 / 255, alpha: 1)
-    })
-
-    /// A switch that is on: the tint, deeper in dark mode, where the white knob on the
-    /// light tint read 2.6:1; 4.7:1 there (3.6:1 against the card), 5.8:1 light.
-    static let switchTint = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0x9A / 255, green: 0x6A / 255, blue: 0x35 / 255, alpha: 1)
-            : UIColor(red: 0x8B / 255, green: 0x5A / 255, blue: 0x2B / 255, alpha: 1)
-    })
 
     /// How far a group header's button reaches past the header's margins on each side.
     private static let headerReach: CGFloat = 16
@@ -610,7 +583,7 @@ struct RoutinesView: View {
             set: { _ in Task { await toggle(job) } }
         ))
         .labelsHidden()
-        .tint(Self.switchTint)
+        .tint(Theme.accent)
         .disabled(busyIds.contains(job.id))
         .accessibilityLabel(job.enabled ? "Pause \(job.name)" : "Resume \(job.name)")
         .accessibilityIdentifier("routines.toggle.\(job.id)")
@@ -659,7 +632,7 @@ struct RoutinesView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+                        .background(Color(.tertiarySystemFill), in: Theme.Radius.shape(Theme.Radius.sm))
                         .accessibilityIdentifier("routines.sends.\(job.id)")
                 }
             }
@@ -763,7 +736,7 @@ struct RoutinesView: View {
                     // The accent, underlined: it reads as a link, not as more of the red text.
                     Text(full ? "Show less" : "Show full error")
                         .font(.footnote.weight(.semibold))
-                        .foregroundStyle(Self.actionText)
+                        .foregroundStyle(Theme.tint)
                         .underline()
                         .frame(minHeight: 44)
                         .contentShape(Rectangle())
@@ -776,7 +749,7 @@ struct RoutinesView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(error.past ? Color(.tertiarySystemFill) : Theme.dangerSoft, in: RoundedRectangle(cornerRadius: 8))
+        .background(error.past ? Color(.tertiarySystemFill) : Theme.dangerSoft, in: Theme.Radius.shape(Theme.Radius.sm))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("routines.errorBox.\(job.id)")
     }
@@ -847,27 +820,25 @@ struct RoutinesView: View {
     /// never cut to "Del…", and each is drawn once, so the delete question can
     /// point at its own button.
     private func actions(_ job: RoutineJob) -> some View {
-        // Small capsules close together: the four fit on one line at 390pt (Delete sat alone
-        // on a second line and read as a heavier step, 2026-11-04 review).
+        // Small buttons of the family close together (Delete sat alone on a second line and
+        // read as a heavier step, 2026-11-04 review; RowOrColumn keeps two to a line).
         RowOrColumn(spacing: 6) {
             // A paused trigger is disarmed on its daemon; Resume is the way to check it
             // again, and a stopped one offers it here (its State says why it stopped).
             if job.enabled || job.check == nil {
                 runButton(job)
             } else if RoutineGroups.isStopped(job) {
-                Button { Task { await toggle(job) } } label: {
-                    Text("Resume").foregroundStyle(Self.actionText)
-                }
-                    .buttonStyle(RowActionStyle())
+                Button("Resume") { Task { await toggle(job) } }
+                    .buttonStyle(.walnut(.secondary, size: .small))
                     .disabled(busyIds.contains(job.id))
                     .accessibilityIdentifier("routines.resume.\(job.id)")
             }
             Button {
                 editing = .edit(job)
             } label: {
-                Text("Edit").foregroundStyle(Self.actionText)
+                Text("Edit")
             }
-            .buttonStyle(RowActionStyle())
+            .buttonStyle(.walnut(.secondary, size: .small))
             .disabled(busyIds.contains(job.id))
             .accessibilityIdentifier("routines.edit.\(job.id)")
             // The task it runs in, opened the way a task link opens one (the console's
@@ -876,18 +847,17 @@ struct RoutinesView: View {
                 Button {
                     openedTask = TaskOpenTarget(id: task, title: job.owner?.taskId == task ? job.owner?.title : nil)
                 } label: {
-                    Text("Open task").foregroundStyle(Self.actionText)
+                    Text("Open task")
                 }
-                .buttonStyle(RowActionStyle())
+                .buttonStyle(.walnut(.secondary, size: .small))
                 .accessibilityIdentifier("routines.openTask.\(job.id)")
             }
             Button(role: .destructive) {
                 pendingDelete = job
             } label: {
-                // The app's tint would draw it brown: the destructive role keeps it red.
-                Text("Delete").foregroundStyle(Self.deleteText)
+                Text("Delete")
             }
-            .buttonStyle(RowActionStyle(danger: true))
+            .buttonStyle(.walnut(.destructive, size: .small))
             .disabled(busyIds.contains(job.id))
             .accessibilityIdentifier("routines.delete.\(job.id)")
             .confirmationDialog(
@@ -906,7 +876,6 @@ struct RoutinesView: View {
                 Text("The schedule is removed permanently. This can't be undone.")
             }
         }
-        .font(.footnote.weight(.semibold))
     }
 
     /// Run now keeps one width while it starts (the buttons beside it never move); what
@@ -919,10 +888,10 @@ struct RoutinesView: View {
         } label: {
             ZStack {
                 Text(idle).hidden()
-                if running { ProgressView().controlSize(.small) } else { Text(idle).foregroundStyle(Self.actionText) }
+                if running { ProgressView().controlSize(.small) } else { Text(idle) }
             }
         }
-        .buttonStyle(RowActionStyle())
+        .buttonStyle(.walnut(.secondary, size: .small))
         .disabled(running || busyIds.contains(job.id))
         .accessibilityLabel(running ? "Starting" : idle)
         .accessibilityIdentifier("routines.run.\(job.id)")
@@ -1158,25 +1127,6 @@ struct RoutinesView: View {
         default:
             return apiError.localizedDescription
         }
-    }
-}
-
-/// The opened row's buttons: a small capsule of the tint (red for Delete) around the
-/// words, one line, and a 44pt tall target around it. Smaller than `.bordered` so the four
-/// fit on one line at 390pt.
-struct RowActionStyle: ButtonStyle {
-    var danger = false
-    @Environment(\.isEnabled) private var isEnabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .lineLimit(1)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 7)
-            .background(Capsule().fill((danger ? Theme.danger : Theme.tint).opacity(configuration.isPressed ? 0.28 : 0.15)))
-            .frame(minHeight: 44)
-            .contentShape(Rectangle())
-            .opacity(isEnabled ? 1 : 0.45)
     }
 }
 

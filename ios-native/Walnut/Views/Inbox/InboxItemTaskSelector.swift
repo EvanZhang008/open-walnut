@@ -44,7 +44,7 @@ struct InboxItemTaskSelector: View {
                 }
             } label: {
                 DictationSendLabel(gate: sendGate, title: "Continue")
-            }.buttonStyle(InboxItemPrimaryButtonStyle()).frame(minHeight: 44)
+            }.buttonStyle(.walnut(.primary, fullWidth: true))
                 .disabled(!enabled)
                 .accessibilityIdentifier("inbox.item.tasks.continue")
         }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.bar)
@@ -79,7 +79,7 @@ struct InboxItemTaskSelector: View {
                     refocus: { searchFocused = true }
                 ) {
                     TextField("Search by title, project, or full task ID", text: query)
-                        .textFieldStyle(.roundedBorder).focused($searchFocused)
+                        .textFieldStyle(.walnut).focused($searchFocused)
                         .accessibilityIdentifier("inbox.item.tasks.search")
                 }
                 if loading { Text("Loading tasks…").font(.caption) }
@@ -92,6 +92,7 @@ struct InboxItemTaskSelector: View {
                         LazyVStack(alignment: .leading, spacing: 12) {
                             ForEach(candidates) { candidate in
                                 VStack(alignment: .leading, spacing: 4) {
+                                    // A choice among the candidates: the family's option row.
                                     Button {
                                         var draft = store.draft(key); draft.selected = candidate
                                         draft.input.selectedTaskId = candidate.id; draft.listAnchor = candidate.id
@@ -101,8 +102,8 @@ struct InboxItemTaskSelector: View {
                                             Text(InboxEmailItem.safe(candidate.title)).font(.body)
                                             Text("\(candidate.projectLabel) · \(candidate.phaseLabel)").font(.caption)
                                             Text(store.draft(key).selected?.id == candidate.id ? "Selected task" : "Select task").font(.caption)
-                                        }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                                    }.buttonStyle(.bordered).accessibilityIdentifier("inbox.item.tasks.select.\(candidate.id)")
+                                        }.frame(maxWidth: .infinity, alignment: .leading)
+                                    }.buttonStyle(.walnut(.option(recommended: store.draft(key).selected?.id == candidate.id))).accessibilityIdentifier("inbox.item.tasks.select.\(candidate.id)")
                                     Button("Preview task") {
                                         var draft = store.draft(key); draft.listAnchor = candidate.id
                                         store.setDraft(draft, key: key); preview = candidate

@@ -86,7 +86,7 @@ struct MarkdownView: View {
         case .taskItem(let indent, let checked, let text, let sourceLine):
             HStack(alignment: .firstTextBaseline, spacing: 9) {
                 Image(systemName: checked ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 20))
+                    .font(Theme.Glyph.xl.font())
                     .foregroundStyle(checked ? Theme.tint : Color(.tertiaryLabel))
                     .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 7 }
                 Text(text)
@@ -110,7 +110,7 @@ struct MarkdownView: View {
 
         case .quote(let lines):
             HStack(spacing: 0) {
-                RoundedRectangle(cornerRadius: 2)
+                Theme.Radius.shape(Theme.Radius.xs)
                     .fill(Theme.tint.opacity(0.6))
                     .frame(width: 3)
                 VStack(alignment: .leading, spacing: 4) {
@@ -261,7 +261,7 @@ struct MarkdownCodeBlockView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 2) {
                 Text(fence.label)
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .font(Theme.TextSize.sm.weight(.medium).monospaced())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -269,14 +269,12 @@ struct MarkdownCodeBlockView: View {
                 Button {
                     wrap = CodeWrapMemory.shared.toggle(wrapKey, scope: Self.wrapScope)
                 } label: {
+                    // On reads in the selection's colour.
                     Label("Wrap", systemImage: "arrow.turn.down.left")
-                        .font(.system(size: 13, weight: .medium))
                         .labelStyle(.titleAndIcon)
-                        .padding(.horizontal, 8)
-                        .frame(height: 32)
-                        .background(wrap ? Color.primary.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 7))
-                        .foregroundStyle(wrap ? Color.primary : Color.secondary)
+                        .foregroundStyle(wrap ? Theme.tint : Theme.secondaryOnCard)
                 }
+                .buttonStyle(.walnut(.tool, size: .small))
                 .accessibilityLabel(wrap ? "Stop wrapping long lines" : "Wrap long lines")
                 .accessibilityAddTraits(wrap ? .isSelected : [])
                 Button {
@@ -286,15 +284,12 @@ struct MarkdownCodeBlockView: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { copied = false }
                 } label: {
                     Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 13, weight: .medium))
                         .labelStyle(.titleAndIcon)
-                        .padding(.horizontal, 8)
-                        .frame(height: 32)
-                        .foregroundStyle(copied ? Color.green : Color.secondary)
+                        .foregroundStyle(copied ? Theme.doneText : Theme.secondaryOnCard)
                 }
+                .buttonStyle(.walnut(.tool, size: .small))
                 .accessibilityLabel(copied ? "Copied" : "Copy code")
             }
-            .buttonStyle(.plain)
             .padding(.leading, 12)
             .padding(.trailing, 4)
             .frame(height: 36)
@@ -312,7 +307,7 @@ struct MarkdownCodeBlockView: View {
                 }
             }
         }
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(Color(.secondarySystemBackground), in: Theme.Radius.shape(Theme.Radius.sm))
         // The same view handed another block keeps that block's own state.
         .onChange(of: wrapKey) { _, key in wrap = CodeWrapMemory.shared.isWrapped(key, scope: Self.wrapScope) }
     }

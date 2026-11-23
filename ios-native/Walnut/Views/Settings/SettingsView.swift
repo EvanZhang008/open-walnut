@@ -315,7 +315,7 @@ struct SettingsView: View {
                     let saved = talkOutbox.unsent.filter(TalkSession.awaitsChoice).count
                     let failed = talkOutbox.unsent.count - saved
                     if failed > 0 {
-                        Text("\(failed) not sent").foregroundStyle(.red)
+                        Text("\(failed) not sent").foregroundStyle(Theme.dangerText)
                     } else if saved > 0 {
                         Text("\(saved) saved").foregroundStyle(.secondary)
                     }

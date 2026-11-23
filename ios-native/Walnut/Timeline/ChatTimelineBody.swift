@@ -218,14 +218,15 @@ struct ChatTimelineSkeleton: View {
     }
 
     private var chipRow: some View {
-        Capsule()
+        // A chip's stand-in: the chip's own shape.
+        Capsule(style: .continuous)
             .fill(Color(.tertiarySystemFill))
             .frame(width: 130, height: 21)
     }
 
     private func bar(_ fraction: CGFloat) -> some View {
         GeometryReader { geo in
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
+            Theme.Radius.shape(Theme.Radius.xs)
                 .fill(Color(.tertiarySystemFill))
                 .frame(width: geo.size.width * fraction, height: 12)
         }
@@ -237,7 +238,7 @@ struct ChatTimelineEmptyState: View {
     var body: some View {
         VStack(spacing: 10) {
             Image(systemName: "bubble.left.and.text.bubble.right")
-                .font(.system(size: 40))
+                .font(Theme.Glyph.hero.font())
                 .foregroundStyle(.tertiary)
             Text("Your Personal AI is listening")
                 .font(.headline)

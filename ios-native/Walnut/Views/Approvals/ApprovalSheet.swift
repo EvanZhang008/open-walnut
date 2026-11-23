@@ -22,7 +22,7 @@ struct ApprovalSheet: View {
                     header
                     // An answer that failed says why right here, above everything that can be long.
                     if let error {
-                        Text(error).font(.footnote).foregroundStyle(.red)
+                        Text(error).font(.footnote).foregroundStyle(Theme.dangerText)
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityIdentifier("approval.error")
                     }
@@ -41,7 +41,7 @@ struct ApprovalSheet: View {
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(12)
-                                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                                .background(Color(.secondarySystemBackground), in: Theme.Radius.shape(Theme.Radius.sm))
                                 .accessibilityIdentifier("approval.detail")
                         } label: {
                             // On the label, not the group: a group's identifier is given to its content too,
@@ -157,10 +157,9 @@ struct ApprovalSheet: View {
                         .accessibilityIdentifier("approval.result")
                 }
                 .font(.headline)
-                .foregroundStyle(status == "approved" ? .green : status == "denied" ? .red : .secondary)
-                Button { center.close(approval) } label: { Text("Done").frame(maxWidth: .infinity) }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
+                .foregroundStyle(status == "approved" ? Theme.doneText : status == "denied" ? Theme.dangerText : Theme.secondaryOnCard)
+                Button { center.close(approval) } label: { Text("Done") }
+                    .buttonStyle(.walnut(.secondary, fullWidth: true))
                     .accessibilityIdentifier("approval.done")
             }
             .transition(.opacity)
@@ -171,10 +170,9 @@ struct ApprovalSheet: View {
         Button { run("approve") } label: {
             Text(working == "approve" ? "Approving\u{2026}" : "Approve")
                 .lineLimit(1)
-                .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
+        // The sheet's one main action.
+        .buttonStyle(.walnut(.primary, fullWidth: true))
         .accessibilityIdentifier("approval.approve")
     }
 
@@ -196,10 +194,9 @@ struct ApprovalSheet: View {
 
     private var denyButton: some View {
         Button(role: .destructive) { run("deny") } label: {
-            Text(working == "deny" ? "Denying…" : "Deny").frame(maxWidth: .infinity)
+            Text(working == "deny" ? "Denying…" : "Deny")
         }
-        .buttonStyle(.bordered)
-        .controlSize(.large)
+        .buttonStyle(.walnut(.destructive, fullWidth: true))
         .accessibilityIdentifier("approval.deny")
     }
 

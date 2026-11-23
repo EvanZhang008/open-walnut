@@ -128,10 +128,9 @@ struct BoardBandRailGeometry: Hashable {
     var contentLeadingInset: CGFloat = 10
     /// Gap between chips.
     var chipSpacing: CGFloat = 5
-    /// A chip's horizontal padding.
-    var chipPaddingH: CGFloat = 8
-    /// A chip's vertical padding.
-    var chipPaddingV: CGFloat = 6
+    /// A chip's horizontal padding: the family chip style's own (`WalnutChipStyle`), so the
+    /// width estimate counts what the chip really draws.
+    var chipPaddingH: CGFloat = Theme.Space.m
     /// Space between a chip's dot, label and count.
     var chipInnerSpacing: CGFloat = 4
     /// The band-colour dot on a band chip (the `All` chip has none).
@@ -604,63 +603,6 @@ struct BoardBandBar: View {
         }
     }
 
-    // MARK: - Chip ink (contrast)
-
-    /// Alpha of an unselected chip's label over the capsule's own fill
-    /// (`unselectedChipFillColor`).
-    ///
-    /// `Color.secondary` measured (112,114,110) on (202,203,202) — 3.0:1, below the
-    /// 4.5:1 a body-size label owes anyone reading it in daylight, and the count then
-    /// took a further 0.7 opacity on top. Alpha on the label colour rather than a
-    /// hand-picked grey, so the same number works in dark mode.
-    static let chipLabelOpacity: Double = 0.78
-
-    /// The count is quieter than the label but still legible.
-    static let chipCountOpacity: Double = 0.70
-
-    static var unselectedChipLabel: Color { Color(.label).opacity(chipLabelOpacity) }
-    static var unselectedChipCount: Color { Color(.label).opacity(chipCountOpacity) }
-
-    /// Ink strength of an UNSELECTED chip's capsule over the card, per scheme — the two
-    /// numbers behind `unselectedChipFillColor`.
-    ///
-    /// Light is `label` (near-black) over the card's white, dark is `label` (near-white)
-    /// over the card's near-black, so the same alpha does not mean the same step: 0.18 over
-    /// white lands at 209 grey, while 0.18 over 28 lands at 69 — a far bigger PERCEIVED
-    /// jump on a dark card. Dark takes 0.14 so both schemes read as "a quiet capsule on the
-    /// card" rather than as one quiet and one bright.
-    static let chipFillAlpha: (light: CGFloat, dark: CGFloat) = (0.18, 0.14)
-
-    /// The unselected chip capsule's fill: ONE opaque colour, and the third fix of this
-    /// exact defect class on this exact bar.
-    ///
-    /// It was `.quaternary`, a MATERIAL, and a material's rendered value depends on what is
-    /// behind it — so the same chip measured (209,209,209) in the inline copy and
-    /// (222,222,222) in the pinned overlay, i.e. the capsules visibly changed weight at the
-    /// pin flip. That is the same defect the card's `.bar` material had (R27: 43.5 vs 17.1
-    /// lum of capsule contrast) and the same one the row tint had inside a card (R29), which
-    /// is why this one is not fixed with a different material: `.quaternary` →
-    /// `.tertiary` → `.fill` are all values that resolve against a backdrop, so any of them
-    /// would ship the same bug with a different number.
-    ///
-    /// An OPAQUE colour cannot: `label` at `chipFillAlpha` flattened onto the card
-    /// (`BoardBandCard.flatten`) is one RGB value per scheme, identical in both copies by
-    /// construction, and `TasksBoardChipRowTests` resolves it and asserts exactly that.
-    /// It is composited off the CARD's colour rather than hand-picked, so when the card
-    /// moves (it did, R29) the capsule follows instead of drifting.
-    static let unselectedChipFillColor = UIColor { traits in
-        BoardBandCard.flatten(
-            UIColor.label.withAlphaComponent(
-                traits.userInterfaceStyle == .dark ? chipFillAlpha.dark : chipFillAlpha.light
-            ),
-            over: cardBaseColor,
-            traits: traits
-        )
-    }
-
-    /// `unselectedChipFillColor` as the colour the capsule fills with.
-    static let unselectedChipFill = Color(unselectedChipFillColor)
-
     // MARK: - The card's surface
 
     /// The OPAQUE base the card paints under its material, per colour scheme.
@@ -1052,31 +994,24 @@ struct BoardBandBar: View {
                         .frame(width: Self.rail.chipDotDiameter, height: Self.rail.chipDotDiameter)
                 }
                 Text(chip.label)
-                    .font(.footnote.weight(.semibold))
                     .lineLimit(1)
                     // A capped chip loses its tail, never its head.
                     .truncationMode(.tail)
                 Text(chip.count.formatted(.number))
-                    .font(.caption2.weight(.semibold))
+                    .font(Theme.TextSize.xs.weight(.semibold))
                     .monospacedDigit()
-                    .foregroundStyle(isSelected ? Theme.onTint : Self.unselectedChipCount)
             }
-            .padding(.horizontal, Self.rail.chipPaddingH)
-            .padding(.vertical, Self.rail.chipPaddingV)
             // No chip may hog the rail, and the cap also guarantees the NEXT chip a
-            // readable peek (`minimumReadablePeek`).
-            .frame(maxWidth: maxWidth, alignment: .leading)
-            .foregroundStyle(isSelected ? Theme.onTint : Self.unselectedChipLabel)
-            // Both fills are CONCRETE colours: the lit chip's tint, and one opaque grey
-            // for the rest (`unselectedChipFillColor` — never a material, see its header).
-            .background(
-                isSelected ? AnyShapeStyle(Theme.tint) : AnyShapeStyle(Self.unselectedChipFill),
-                in: Capsule()
-            )
-            .contentShape(Capsule())
+            // readable peek (`minimumReadablePeek`). The chip style adds its own padding
+            // around this, so the cap leaves room for it.
+            .frame(maxWidth: max(0, maxWidth - 2 * Self.rail.chipPaddingH), alignment: .leading)
         }
-        .buttonStyle(.plain)
-        // Deliver the tap near the capsule's LEADING edge; see `chipActivationX`.
+        // The family chip (`WalnutChipStyle`): one look for every filter and view switch,
+        // the lit one in the soft blue with its hairline. Its fills are fixed colours over
+        // the card's opaque base, never a material, so both copies of the bar draw the same
+        // pixels at the pin flip.
+        .buttonStyle(.walnutChip(selected: isSelected))
+        // Deliver the tap near the chip's LEADING edge; see `chipActivationX`.
         .accessibilityActivationPoint(UnitPoint(x: Self.rail.chipActivationX, y: 0.5))
         .accessibilityIdentifier(TaskBoardList.chipId(chip.bandId))
         // A HINT, not a label: a label REPLACES the visible text for matchers, and a

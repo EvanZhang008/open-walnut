@@ -198,7 +198,7 @@ enum ChatOrgModel {
 
     /// The web's avatar palette, picked by the same name hash, so a VP wears one color everywhere.
     static let palette: [Int] = [
-        0x5B8DEF, 0xE8833A, 0x3BAA75, 0xA35CDB, 0xD9534F, 0x2AA7B8, 0xC69214, 0x6C7A89, 0xE05297, 0x4F6BD8,
+        0x5B8DEF, 0xE8833A, 0x3BAA75, 0xA35CDB, 0xD9534F, 0x2AA7B8, 0xC69214, 0x6C7A89, 0xE05297, 0x4F6BD8, // ui-standard-ok: the web's avatar palette (data)
     ]
 
     static func avatarColor(_ name: String) -> Int {

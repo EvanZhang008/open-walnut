@@ -400,7 +400,7 @@ struct OrgNodeBar: View {
                         }
                     }
                     .frame(maxWidth: .infinity, minHeight: compact ? 44 : 36)
-                    .background(Color(uiColor: .tertiarySystemFill).opacity(0.6), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .background(Color(uiColor: .tertiarySystemFill).opacity(0.6), in: Capsule(style: .continuous))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -468,7 +468,7 @@ struct OrgNodeViewPicker: View, Equatable {
                 .font(.body.weight(.medium))
                 .padding(.horizontal, 12)
                 .frame(maxWidth: .infinity, minHeight: 44)
-                .background(Color(uiColor: .tertiarySystemFill).opacity(0.6), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .background(Color(uiColor: .tertiarySystemFill).opacity(0.6), in: Capsule(style: .continuous))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)

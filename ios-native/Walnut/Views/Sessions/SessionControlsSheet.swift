@@ -119,8 +119,7 @@ struct SessionControlsSheet: View {
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                     Button("Retry") { Task { await loadOptions() } }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Theme.tint)
+                        .buttonStyle(.walnut(.primary, size: .small))
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
@@ -184,16 +183,10 @@ struct SessionControlsSheet: View {
                             Task { await switchEffort(level) }
                         } label: {
                             Text(level.capitalized)
-                                .font(.subheadline.weight(selected ? .semibold : .regular))
                                 .frame(maxWidth: .infinity)
-                                .padding(.vertical, 8)
-                                .background(
-                                    selected ? Theme.tint.opacity(0.15) : Color(.tertiarySystemFill),
-                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                )
-                                .foregroundStyle(selected ? Theme.tint : .primary)
                         }
-                        .buttonStyle(.plain)
+                        // A choice among a few: the family's chip, selected in its soft blue.
+                        .buttonStyle(.walnutChip(selected: selected))
                         .disabled(applying)
                         .accessibilityIdentifier("session.effort.\(level)")
                     }

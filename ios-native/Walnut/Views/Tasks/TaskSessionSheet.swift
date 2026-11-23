@@ -86,14 +86,10 @@ struct TaskSessionSheet: View {
     @ViewBuilder
     private var placeholder: some View {
         if case .failed(let message) = phase {
-            ContentUnavailableView {
-                Label("Can't open this task", systemImage: "checklist")
-            } description: {
-                Text(message)
-            } actions: {
-                Button("Try Again") { attempt += 1 }
-                    .accessibilityIdentifier("inbox.task.retry")
-            }
+            WalnutEmptyState(
+                title: "Can't open this task", hint: message, systemImage: "checklist", size: .pane,
+                actionTitle: "Try Again", actionIdentifier: "inbox.task.retry", action: { attempt += 1 })
+                .frame(maxHeight: .infinity)
         } else {
             ProgressView("Opening…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -123,7 +123,7 @@ struct LetterThreadView: View {
     private func rowBackground(_ item: LetterThreadItem, lifted: Bool) -> some View {
         let edge = Self.rowSpacing / 2
         if lifted {
-            let card = RoundedRectangle(cornerRadius: 12 + edge, style: .continuous)
+            let card = RoundedRectangle(cornerRadius: Theme.Radius.md + edge, style: .continuous)
             card.fill(Color(.systemBackground))
                 .overlay { card.strokeBorder(Color(.separator), lineWidth: 1) }
                 .padding(-edge)
@@ -135,7 +135,7 @@ struct LetterThreadView: View {
     /// `by`: the task that wrote a human turn in the user's place, named instead of "You".
     @ViewBuilder
     private func header(isHuman: Bool, date: Date?, by: LetterAnsweredBy? = nil) -> some View {
-        let icon = Image(systemName: isHuman && by == nil ? "person.fill" : "sparkles").font(.system(size: 9))
+        let icon = Image(systemName: isHuman && by == nil ? "person.fill" : "sparkles").font(Theme.Glyph.xs.font())
         let name = Text(isHuman ? (by.map { $0.label(or: "A task") } ?? "You") : "Agent").font(.caption2.weight(.semibold))
         let when = date.map { Text($0.formatted(date: .abbreviated, time: .shortened)).font(.caption2) }
         // Name and date side by side while both fit whole; else the date goes under the name, so a
@@ -145,7 +145,7 @@ struct LetterThreadView: View {
                 icon
                 name.lineLimit(2).truncationMode(.tail)
             }
-            if let when { when.foregroundStyle(.tertiary) }
+            if let when { when.foregroundStyle(Theme.secondaryOnCard) }
         }
         .foregroundStyle(.secondary)
     }
@@ -191,7 +191,7 @@ struct LetterThreadView: View {
                 // rather than rendering an empty card.
                 Text("This reply's body is no longer on disk.")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.secondaryOnCard)
             }
             if entry.isHuman {
                 SentPictures(
@@ -204,7 +204,7 @@ struct LetterThreadView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             entry.isHuman ? Color(.secondarySystemBackground) : Theme.tintSoft,
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            in: Theme.Radius.shape(Theme.Radius.md)
         )
     }
 
@@ -228,7 +228,7 @@ struct LetterThreadView: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Color(.secondarySystemBackground), in: Theme.Radius.shape(Theme.Radius.md))
     }
 }
 
@@ -338,9 +338,9 @@ enum LetterThreadItem: Identifiable, Equatable {
 /// targets, apart from the line.
 ///
 /// Text colours clear 4.5:1 on the page in light and dark: the system label
-/// colour for a reply that went (secondaryLabel measured 3.44:1), and darker
-/// shades of the red and amber for the lines that need a look (system red
-/// measured 3.55:1). Measured values are in `StatusInk`.
+/// colour for a reply that went (secondaryLabel measured 3.44:1), and the theme's
+/// text inks for the lines that need a look (`Theme.dangerText`, and the amber
+/// `Theme.stuckText`; system red measured 3.55:1).
 struct LetterReplyStatusLine: View {
     let status: LetterReplyStatus
     let onOpenSession: (String) -> Void
@@ -393,10 +393,17 @@ struct LetterReplyStatusLine: View {
     private var buttons: some View {
         HStack(spacing: 8) {
             if status.offersRetry {
-                ActionCapsuleButton(title: "Retry", identifier: "inbox.letter.replyRetry", action: onRetry)
+                // The line's one main action. A small family button draws 32pt and keeps a 44pt touch.
+                Button("Retry", action: onRetry)
+                    .buttonStyle(.walnut(.primary, size: .small))
+                    .fixedSize()
+                    .accessibilityIdentifier("inbox.letter.replyRetry")
             }
             if status.offersEdit {
-                ActionCapsuleButton(title: "Edit", prominent: false, identifier: "inbox.letter.replyEdit", action: onEdit)
+                Button("Edit", action: onEdit)
+                    .buttonStyle(.walnut(.secondary, size: .small))
+                    .fixedSize()
+                    .accessibilityIdentifier("inbox.letter.replyEdit")
             }
         }
     }
@@ -447,35 +454,18 @@ struct LetterReplyStatusLine: View {
     private var textColor: Color {
         switch status.tone {
         case .settled, .waiting: return Color(.label)
-        case .held, .unconfirmed: return StatusInk.amber
-        case .problem: return StatusInk.red
+        case .held, .unconfirmed: return Theme.stuckText
+        case .problem: return Theme.dangerText
         }
     }
 
     private var iconColor: Color {
         switch status.tone {
         case .settled, .waiting: return .secondary
-        case .held, .unconfirmed: return StatusInk.amber
-        case .problem: return StatusInk.red
+        case .held, .unconfirmed: return Theme.stuckText
+        case .problem: return Theme.dangerText
         }
     }
-}
-
-/// Text colours for the status lines that need a look, dark enough for small
-/// text. Contrast against the page (white / black), WCAG 2 relative luminance:
-///   red    light #C4221A 5.9:1, dark #FF6B61 7.5:1
-///   amber  light #8A5A00 5.9:1, dark #FFB340 11.8:1
-enum StatusInk {
-    static let red = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 1, green: 0x6B / 255, blue: 0x61 / 255, alpha: 1)
-            : UIColor(red: 0xC4 / 255, green: 0x22 / 255, blue: 0x1A / 255, alpha: 1)
-    })
-    static let amber = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 1, green: 0xB3 / 255, blue: 0x40 / 255, alpha: 1)
-            : UIColor(red: 0x8A / 255, green: 0x5A / 255, blue: 0, alpha: 1)
-    })
 }
 
 /// The pictures that went with a human turn: their thumbnails while this phone
@@ -495,7 +485,7 @@ struct SentPictures: View {
                         .resizable()
                         .scaledToFill()
                         .frame(width: 64, height: 64)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .clipShape(Theme.Radius.shape(Theme.Radius.sm))
                 }
             }
             .frame(minHeight: 64, alignment: .leading)

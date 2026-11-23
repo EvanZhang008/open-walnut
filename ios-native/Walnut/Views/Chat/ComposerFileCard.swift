@@ -48,7 +48,7 @@ struct ComposerFileCard: View {
                     }
                 }
                 .frame(width: iconSide, height: iconSide)
-                .background(Theme.tintSoft, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .background(Theme.tintSoft, in: Theme.Radius.shape(Theme.Radius.sm))
                 VStack(alignment: .leading, spacing: 1) {
                     Text(file?.name ?? (importingCount == 1 ? "Adding file…" : "Adding \(importingCount) files…"))
                         .font(.footnote.weight(.medium))
@@ -73,15 +73,15 @@ struct ComposerFileCard: View {
             .frame(width: dynamicTypeSize.isAccessibilitySize ? Self.accessibilityWidth : Self.width,
                    height: dynamicTypeSize.isAccessibilitySize ? nil : Self.height)
             .frame(minHeight: dynamicTypeSize.isAccessibilitySize ? Self.accessibilityMinHeight : nil)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Color(.secondarySystemBackground), in: Theme.Radius.shape(Theme.Radius.md))
             // The composer is the same grey in dark mode: the outline keeps the card a card.
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color(.separator).opacity(0.6)))
+            .overlay(Theme.Radius.shape(Theme.Radius.md).strokeBorder(Color(.separator).opacity(0.6)))
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier(file == nil ? "chat.fileImporting" : "chat.fileCard")
             if file != nil {
                 Button(action: onRemove) {
                     Image(systemName: ComposerBar.Symbol.removeImage)
-                        .font(.system(size: 18))
+                        .font(Theme.Glyph.lg.font())
                         .symbolRenderingMode(.palette)
                         .foregroundStyle(.white, .black.opacity(0.55))
                         .padding(3)

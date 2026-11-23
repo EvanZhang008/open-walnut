@@ -68,7 +68,7 @@ struct CalendarWeekStrip: View {
                         }
                     }
                 Circle()
-                    .fill(hasContent(day.dayKey) ? Theme.tint : Color.clear)
+                    .fill(hasContent(day.dayKey) ? Theme.accent : Color.clear)
                     .frame(width: 4, height: 4)
             }
             .frame(maxWidth: .infinity)

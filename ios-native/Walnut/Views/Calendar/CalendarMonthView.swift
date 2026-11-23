@@ -306,7 +306,7 @@ struct CalendarAccessDeniedHint: View {
             .font(.caption.weight(.semibold))
         }
         .padding(10)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10))
+        .background(Color(.secondarySystemGroupedBackground), in: Theme.Radius.shape(Theme.Radius.md))
         .accessibilityIdentifier("calendar.deniedHint")
     }
 }

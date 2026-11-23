@@ -23,16 +23,10 @@ struct DemoEntryButton: View {
                     } else {
                         Image(systemName: "play.circle")
                     }
-                    Text("Try the demo").fontWeight(.semibold)
+                    Text("Try the demo")
                 }
-                .frame(maxWidth: .infinity, minHeight: 48)
-                .contentShape(Rectangle())
             }
-            .foregroundStyle(Theme.tint)
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(Theme.tint.opacity(0.35), lineWidth: 1)
-            )
+            .buttonStyle(.walnut(.secondary, fullWidth: true))
             .disabled(disabled || entering)
             .accessibilityIdentifier("setup.tryDemo")
 
@@ -70,33 +64,19 @@ struct DemoEntryButton: View {
 struct DemoBanner: View {
     /// The band reserved for it under the status bar.
     static let bandHeight: CGFloat = 24
-    /// Both words are drawn in the tint over the soft tint, which clears the 4.5:1
-    /// text bar in both schemes (about 5.0 light, 5.8 dark). "Sample data" used to
-    /// be `.secondary`, which measured 2.0 light and 2.5 dark on this fill; the
-    /// step down from "Demo" is now carried by weight alone.
-    static let inkColor = Theme.tintColor
-    static let fillColor = Theme.tintSoftColor
+    /// The family's badge in its accent tone: blue words on the soft blue wash, which clear
+    /// the 4.5:1 text bar in both schemes (`DemoPolishTests`). "Sample data" used to be
+    /// `.secondary`, which measured 2.0 light and 2.5 dark on its fill.
+    static let tone: WalnutBadge.Tone = .accent
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "sparkles")
-                .imageScale(.small)
-            Text("Demo")
-                .fontWeight(.semibold)
-            Text("Sample data")
-        }
-        .font(.caption)
-        .lineLimit(1)
-        .minimumScaleFactor(0.8)
-        .foregroundStyle(Color(uiColor: Self.inkColor))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 3)
-        .background(Capsule().fill(Color(uiColor: Self.fillColor)))
-        // The band has a fixed height, so the label stops growing at a size that fits it.
-        .dynamicTypeSize(...DynamicTypeSize.xLarge)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Demo, sample data")
-        .accessibilityIdentifier("demo.banner")
+        WalnutBadge(text: "Demo \u{00B7} Sample data", tone: Self.tone, systemImage: "sparkles")
+            .minimumScaleFactor(0.8)
+            // The band has a fixed height, so the label stops growing at a size that fits it.
+            .dynamicTypeSize(...DynamicTypeSize.xLarge)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Demo, sample data")
+            .accessibilityIdentifier("demo.banner")
     }
 }
 

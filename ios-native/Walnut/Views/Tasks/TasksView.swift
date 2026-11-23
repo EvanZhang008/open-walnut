@@ -1164,8 +1164,8 @@ struct TasksView: View {
             Text("This companion hasn't received its first task sync. Check back in a moment.")
         } actions: {
             Button("Retry") { Task { await tasks.loadTasks() } }
-                .buttonStyle(.borderedProminent)
-                .tint(Theme.tint)
+                .buttonStyle(.walnut(.primary))
+                .tint(Theme.accent)
         }
     }
 }

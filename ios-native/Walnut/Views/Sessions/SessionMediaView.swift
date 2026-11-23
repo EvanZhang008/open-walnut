@@ -253,11 +253,10 @@ struct SessionMediaView: View {
     var body: some View {
         ZStack {
             if SessionMediaKind.forPath(path) == .unsupported {
-                ContentUnavailableView {
-                    Label("Unsupported media format", systemImage: "play.slash")
-                } description: {
-                    Text("WebM and Ogg aren't supported on this phone. Use MP4, M4V, MOV, MP3, M4A or WAV with an Apple-compatible codec.")
-                }
+                WalnutEmptyState(
+                    title: "Unsupported media format",
+                    hint: "WebM and Ogg aren't supported on this phone. Use MP4, M4V, MOV, MP3, M4A or WAV with an Apple-compatible codec.",
+                    systemImage: "play.slash", size: .pane)
             } else if let failure = playback.failure {
                 unavailable(failure, retryable: true)
             } else {
@@ -352,21 +351,16 @@ struct SessionMediaView: View {
     }
 
     private func unavailable(_ failure: FileReadFailure, retryable: Bool) -> some View {
-        ContentUnavailableView {
-            Label(failure.title, systemImage: failure.icon)
-        } description: {
+        VStack(spacing: Theme.Space.sm) {
             healedNotice
-            if playback.failure != nil {
-                Text("This media couldn't be played. Its codec may not be supported, or the file may be incomplete. Try downloading it again or use an Apple-compatible codec.")
-            } else {
-                Text(failure.message)
-            }
-        } actions: {
-            if retryable {
-                Button("Try Again", action: start)
-                    .buttonStyle(.borderedProminent)
-                    .accessibilityIdentifier("session.media.retry")
-            }
+            WalnutEmptyState(
+                title: failure.title,
+                hint: playback.failure != nil
+                    ? "This media couldn't be played. Its codec may not be supported, or the file may be incomplete. Try downloading it again or use an Apple-compatible codec."
+                    : failure.message,
+                systemImage: failure.icon, size: .pane,
+                actionTitle: retryable ? "Try Again" : nil,
+                actionIdentifier: "session.media.retry", action: { start() })
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

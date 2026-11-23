@@ -2,29 +2,46 @@ import SwiftUI
 
 /// The Inbox filter row: All, Unread (count), Action needed (count), then one
 /// chip per remaining letter type. A horizontal rail so every chip keeps its
-/// full label at the largest text size instead of squeezing; the selected chip
-/// is scrolled into view on appear, so a filter remembered from last launch is
-/// never hidden off the edge.
+/// full label at the largest text size instead of squeezing. The rail fades at
+/// the edge it continues past, so a chip cut at the screen's edge reads as "more
+/// this way", and the selected chip is scrolled into view on appear and on every
+/// pick, so a filter remembered from last launch is never hidden off the edge.
 ///
-/// Same visual language as the Tasks board's band chips (lit chip = tint fill,
-/// the rest one opaque grey), so the app has one look for "filter this list".
+/// Chips are the app's one chip (`WalnutChipStyle`): round, the picked one in the
+/// light blue with a hairline.
 struct InboxFilterBar: View {
     let selection: InboxFilter
     let count: (InboxFilter) -> Int?
     let onSelect: (InboxFilter) -> Void
 
+    /// How far the rail has scrolled from its leading edge, and how much is left past its
+    /// trailing edge: each side fades only while there is more that way.
+    @State private var overflow = RailOverflow()
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
+                HStack(spacing: Theme.Space.sm) {
                     ForEach(InboxFilter.allCases) { filter in
                         chip(filter).id(filter)
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
+                .padding(.horizontal, Theme.Space.lg)
+                .padding(.vertical, Theme.Space.sm)
             }
+            .onScrollGeometryChange(for: RailOverflow.self) { geometry in
+                RailOverflow(
+                    leading: geometry.contentOffset.x + geometry.contentInsets.leading > 1,
+                    trailing: geometry.contentSize.width - geometry.contentOffset.x - geometry.containerSize.width > 1
+                )
+            } action: { _, now in
+                overflow = now
+            }
+            .mask(RailFade(overflow: overflow))
             .onAppear { proxy.scrollTo(selection, anchor: .center) }
+            .onChange(of: selection) { _, now in
+                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(now, anchor: .center) }
+            }
         }
         .background(.bar)
         // An explicit hairline, not Divider(): as a List section header the
@@ -44,34 +61,77 @@ struct InboxFilterBar: View {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             onSelect(filter)
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: Theme.Space.xs) {
                 Text(filter.title)
-                    .font(.footnote.weight(.semibold))
-                    .lineLimit(1)
                 if let value {
                     Text(value.formatted(.number))
-                        .font(.caption2.weight(.semibold))
+                        .font(Theme.TextSize.xs.weight(.semibold))
                         .monospacedDigit()
-                        .foregroundStyle(isSelected ? Theme.onTint : BoardBandBar.unselectedChipCount)
+                        .foregroundStyle(Theme.secondaryOnCard)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .frame(minHeight: 30)
-            .foregroundStyle(isSelected ? Theme.onTint : BoardBandBar.unselectedChipLabel)
-            .background(
-                isSelected ? AnyShapeStyle(Theme.tint) : AnyShapeStyle(BoardBandBar.unselectedChipFill),
-                in: Capsule()
-            )
-            .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.walnutChip(selected: isSelected))
         .accessibilityIdentifier("inbox.filter.\(filter.rawValue)")
         // The visible words stay the label (a matcher or a person looking for
         // "Unread" must find it); the count rides as the value.
         .accessibilityLabel(filter.title)
         .accessibilityValue(value.map { "\($0)" } ?? "")
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : [.isButton])
+    }
+}
+
+/// Whether a sideways rail has more past each edge.
+struct RailOverflow: Equatable {
+    var leading = false
+    var trailing = false
+}
+
+/// A rail's mask: opaque, fading over its last 24 pt on each side that has more.
+struct RailFade: View {
+    let overflow: RailOverflow
+    static let width: CGFloat = 24
+
+    var body: some View {
+        HStack(spacing: 0) {
+            LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
+                .frame(width: overflow.leading ? Self.width : 0)
+            Rectangle().fill(.black)
+            LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                .frame(width: overflow.trailing ? Self.width : 0)
+        }
+    }
+}
+
+/// The line under the filter row while a filter other than All is on (a pick
+/// remembered from last launch included): which filter hides letters, how many
+/// letters there are in all, and the way back, so the list never silently shows
+/// less than the inbox holds.
+struct InboxFilterOnNotice: View {
+    let filter: InboxFilter
+    let total: Int
+    let showAll: () -> Void
+
+    static func text(filter: InboxFilter, total: Int) -> String {
+        "Showing \(filter.title) only (\(total) \(total == 1 ? "letter" : "letters") in all)"
+    }
+
+    var body: some View {
+        HStack(spacing: Theme.Space.sm) {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .foregroundStyle(Theme.secondaryOnCard)
+                .accessibilityHidden(true)
+            Text(Self.text(filter: filter, total: total))
+                .font(Theme.TextSize.md)
+                .foregroundStyle(Theme.secondaryOnCard)
+                .lineLimit(2)
+            Spacer(minLength: Theme.Space.sm)
+            Button("Show all", action: showAll)
+                .buttonStyle(.walnut(.secondary, size: .small))
+                .accessibilityIdentifier("inbox.filterOn.showAll")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("inbox.filterOn")
     }
 }
 

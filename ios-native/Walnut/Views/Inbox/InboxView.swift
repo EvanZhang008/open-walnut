@@ -125,28 +125,32 @@ struct InboxView: View {
     private var content: some View {
         if rows.isEmpty {
             if showArchived {
-                ContentUnavailableView(
-                    "Nothing archived",
-                    systemImage: "archivebox",
-                    description: Text("Letters you archive land here.")
+                WalnutEmptyState(
+                    title: "Nothing archived",
+                    hint: "Letters you archive land here.",
+                    systemImage: "archivebox"
                 )
+                .frame(maxHeight: .infinity)
             } else if inbox.loading && inbox.letters.isEmpty {
                 ProgressView().controlSize(.large)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let message = inbox.errorMessage, inbox.letters.isEmpty {
-                ContentUnavailableView {
-                    Label("Can't load your inbox", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(message)
-                } actions: {
-                    Button("Try Again") { Task { await inbox.refresh() } }
-                }
-            } else if inbox.letters.isEmpty {
-                ContentUnavailableView(
-                    "No letters yet",
-                    systemImage: "envelope",
-                    description: Text("When an agent finishes something worth reading, or needs a decision, its letter shows up here.")
+                WalnutEmptyState(
+                    title: "Can't load your inbox",
+                    hint: message,
+                    systemImage: "exclamationmark.triangle",
+                    actionTitle: "Try Again",
+                    actionIdentifier: "inbox.loadFailed.retry",
+                    action: { Task { await inbox.refresh() } }
                 )
+                .frame(maxHeight: .infinity)
+            } else if inbox.letters.isEmpty {
+                WalnutEmptyState(
+                    title: "No letters yet",
+                    hint: "When an agent finishes something worth reading, or needs a decision, its letter shows up here.",
+                    systemImage: "envelope"
+                )
+                .frame(maxHeight: .infinity)
             } else {
                 // Letters exist, none under this filter: the list stays, so the
                 // filter row stays with it and says which filter is empty.
@@ -179,20 +183,20 @@ struct InboxView: View {
     /// offer the way back to everything.
     private var filteredEmptyState: some View {
         let copy = InboxEmptyCopy(filter: inbox.filter)
-        return ContentUnavailableView {
-            Label(copy.title, systemImage: copy.symbol)
-                // On the title, not the whole view: an identifier on a container
-                // is handed to every child, the button below included.
-                .accessibilityIdentifier("inbox.empty.\(inbox.filter.rawValue)")
-        } description: {
-            Text(copy.detail)
-        } actions: {
-            Button("Show All Letters") {
+        // The identifier rides the title, not the whole view: an identifier on a
+        // container is handed to every child, the button included.
+        return WalnutEmptyState(
+            title: copy.title,
+            hint: copy.detail,
+            systemImage: copy.symbol,
+            titleIdentifier: "inbox.empty.\(inbox.filter.rawValue)",
+            actionTitle: "Show All Letters",
+            actionIdentifier: "inbox.empty.showAll",
+            action: {
                 inbox.filter = .all
                 graceNowMs = InboxListing.nowMs()
             }
-            .accessibilityIdentifier("inbox.empty.showAll")
-        }
+        )
     }
 
     /// `List(selection:)` is what gives the rows Mail's checkmarks AND the
@@ -233,6 +237,14 @@ struct InboxView: View {
             InboxReadRetryNotice(count: inbox.readRetryIds.count)
                 .listRowSeparator(.hidden)
                 .selectionDisabled()
+        }
+        if !showArchived, inbox.filter != .all, !rows.isEmpty {
+            InboxFilterOnNotice(filter: inbox.filter, total: inbox.letters.count) {
+                inbox.filter = .all
+                graceNowMs = InboxListing.nowMs()
+            }
+            .listRowSeparator(.hidden)
+            .selectionDisabled()
         }
         if rows.isEmpty, !showArchived {
             filteredEmptyState

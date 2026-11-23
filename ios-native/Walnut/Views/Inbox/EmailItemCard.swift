@@ -66,8 +66,9 @@ struct EmailItemCard: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
-        .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(Color(.separator), lineWidth: 1) }
+        // An email card: the family's card corner for files and emails.
+        .background(Color(.secondarySystemBackground), in: Theme.Radius.shape(Theme.Radius.md))
+        .overlay { Theme.Radius.shape(Theme.Radius.md).strokeBorder(Color(.separator), lineWidth: 1) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("inbox.item.\(item.id)")
         .modifier(InboxItemExecutionWatch(key: key))
@@ -115,10 +116,10 @@ struct EmailItemCard: View {
             else { quickAction(action) }
         } label: {
             Text(busy ? (lane == "read" ? "Marking read…" : "Submitting…") : locked ? (lane == "read" ? "Marked read" : taskBound ? "Task linked" : receipt?.label ?? "Delivery unavailable") : readAgain ? "Mark read again" : action.buttonLabel)
-                .font(.body).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .buttonStyle(.bordered)
-        .tint(Theme.tint)
+        // None of an email's actions is THE main one: each is the family's secondary button.
+        .buttonStyle(.walnut(.secondary))
         .disabled(!store.canBegin(key, action: action) || locked || quickBusy.contains(lane))
         .accessibilityLabel("\(action.buttonLabel) for \(item.subject)")
         .accessibilityHint(lane == "read" ? "Mark only this email as read. It stays in the mailbox." : action.kind == "reply_ai" ? "No email or task operation runs." : "Review the exact task and work goal before confirming.")

@@ -85,12 +85,12 @@ struct SetupView: View {
 
     private var hero: some View {
         VStack(spacing: 12) {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
+            Theme.Radius.shape(Theme.Radius.lg)
                 .fill(Theme.tintSoft)
                 .frame(width: 76, height: 76)
                 .overlay {
                     Image(systemName: "sparkles")
-                        .font(.system(size: 34))
+                        .font(Theme.Glyph.hero.font())
                         .foregroundStyle(Theme.tint)
                 }
             Text("Walnut")
@@ -110,7 +110,7 @@ struct SetupView: View {
             // Text(verbatim:) prompt — a plain string placeholder is treated as
             // LocalizedStringKey markdown, which renders the URL as a blue link.
             TextField(text: $serverURL, prompt: Text(verbatim: "https://wn.example.com")) { EmptyView() }
-                .textFieldStyle(.setup)
+                .textFieldStyle(.walnut)
                 .keyboardType(.URL)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -118,43 +118,37 @@ struct SetupView: View {
 
             fieldLabel("DEVICE TOKEN")
             SecureField("From \"walnut device add\"", text: $token)
-                .textFieldStyle(.setup)
+                .textFieldStyle(.walnut)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .accessibilityIdentifier("setup.token")
 
             fieldLabel("DEVICE NAME")
             TextField("e.g. iPhone", text: $deviceName)
-                .textFieldStyle(.setup)
+                .textFieldStyle(.walnut)
                 .autocorrectionDisabled()
                 .accessibilityIdentifier("setup.deviceName")
 
             testResultRow
 
+            // The page's one main action; Connect is the other way, so it is quiet.
             Button {
                 showScanner = true
             } label: {
                 Label("Scan QR from your console", systemImage: "qrcode.viewfinder")
-                    .fontWeight(.semibold)
-                    .frame(maxWidth: .infinity, minHeight: 48)
             }
-            .background(Theme.tint, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .foregroundStyle(Theme.onTint)
+            .buttonStyle(.walnut(.primary, fullWidth: true))
             .disabled(busy)
             .accessibilityIdentifier("setup.scan")
 
             Button(action: connect) {
-                Group {
-                    if busy {
-                        ProgressView().tint(Theme.tint)
-                    } else {
-                        Text("Connect").fontWeight(.semibold)
-                    }
+                if busy {
+                    ProgressView()
+                } else {
+                    Text("Connect")
                 }
-                .frame(maxWidth: .infinity, minHeight: 48)
             }
-            .background(Theme.tintSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .foregroundStyle(Theme.tint)
+            .buttonStyle(.walnut(.secondary, fullWidth: true))
             .disabled(busy)
             .accessibilityIdentifier("setup.connect")
 
@@ -306,16 +300,3 @@ struct SetupView: View {
     }
 }
 
-/// Rounded, filled text-field style shared by the setup form.
-private struct SetupFieldStyle: TextFieldStyle {
-    func _body(configuration: TextField<Self._Label>) -> some View {
-        configuration
-            .padding(.horizontal, 14)
-            .frame(height: 46)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-}
-
-private extension TextFieldStyle where Self == SetupFieldStyle {
-    static var setup: SetupFieldStyle { SetupFieldStyle() }
-}

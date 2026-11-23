@@ -99,13 +99,12 @@ struct VoiceModeBar: View {
                 .multilineTextAlignment(.center)
             HStack(spacing: 12) {
                 Button("Send again") { Task { await voice.retryUnsent() } }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.walnut(.primary, size: .small))
                     .accessibilityIdentifier("voiceMode.sendAgain")
                 Button("Discard", role: .destructive) { voice.discardUnsent() }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.walnut(.destructive, size: .small))
                     .accessibilityIdentifier("voiceMode.discardUnsent")
             }
-            .controlSize(.small)
         }
         .padding(.horizontal, 12)
     }
@@ -166,7 +165,7 @@ struct VoiceModeBar: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 18, weight: .semibold))
+                .font(Theme.Glyph.lg.font(.semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 44, height: 44)
                 .background(Color(.tertiarySystemFill), in: Circle())

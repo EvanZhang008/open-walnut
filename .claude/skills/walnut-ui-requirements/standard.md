@@ -465,6 +465,43 @@ Nothing sits between two sizes of the scale: a 12.5 px or 14 px label is a decis
 scale, not for one view. A token written with a fallback (`var(--fg, #1d1d1f)`) is a second
 colour for the dark theme; write `var(--fg)`.
 
+## The phone (iOS column)
+
+The phone app (`ios-native/`, SwiftUI) follows the same standard with its own components. Tokens are
+in `ios-native/Walnut/Core/ThemeTokens.swift` (`Theme.Radius`, `Theme.Space`, `Theme.TextSize`,
+`Theme.Glyph`, `Theme.Control`) and colours in `Core/Theme.swift`; the shared controls are in
+`ios-native/Walnut/Views/Shared/DesignSystem/`. A view never writes its own corner, colour, text size
+or button shape.
+
+| Kind | Web | iOS |
+|---|---|---|
+| Accent | `--accent` blue | `Theme.tint` (#006BE0 / #0A84FF) for links, selection and quiet actions; `Theme.accent` (#006BE0 / #0A6CE0) for a solid fill behind white words (4.5:1 in both appearances). The walnut brown `Theme.brand` is the brand only (icon, logo), never a control |
+| Main action | `.btn-primary` | `.buttonStyle(.walnut(.primary))`: round, solid `Theme.accent`, white words, at most one per card or page |
+| Action | `.btn` | `.walnut(.secondary)`: `tertiarySystemFill`, primary words |
+| Tool | `.ask-card-tools .btn` | `.walnut(.tool)`: no fill, `Theme.secondaryOnCard`; a menu's label is `WalnutMenuLabel` ("Snooze ▾") |
+| Destructive | `.btn-danger` | `.walnut(.destructive)`: the grey fill, `Theme.dangerText` words |
+| Option | `AskOptions` row | `.walnut(.option(recommended:))` with `WalnutOptionLabel`: full width, hairline, the recommended one solid blue with "Recommended" at its right |
+| Chip, filter | none | `.walnutChip(selected:)`: round, 32 pt drawn, 44 pt touch; selected is `Theme.chipSelected` (a step stronger than `tintSoft`) with a blue hairline and primary words. A chip row that can be wider than the screen scrolls sideways, and a filter that is on says so in the list |
+| Badge | `.badge` | `WalnutBadge` (round, `Theme.TextSize.xs` semibold, one tone); a state is `WalnutStatusLabel` (dot and word) |
+| Card | `AskCardFrame`, `NoticeCard` | `.walnutCard()` (grouped fill, `Theme.Radius.card` 16, hairline); `frosted: true` for a card that asks; a notice is the shared notice card (`Theme.Radius.notice` 14, as on the web and the Mac) |
+| Reply box | `AnswerBox`, `wn-input` | the one message box (`MessageBox` / `ReplyBox`): its own box corner, round keys |
+| Plain field | global `input` rules | `.textFieldStyle(.walnut)` or `.walnutFieldBox()`; inside a `Form` the system row |
+| Empty state | `EmptyState` | `WalnutEmptyState` (`pane`, `section`, `row`), never `ContentUnavailableView` |
+| Toast | `NoticeCard` stack, toast rule | the shared notice center only, under the toast rule above; no view draws a toast of its own |
+
+Sizes: controls are 44 pt (a finger), a small one draws 32 pt and keeps a 44 pt touch, a tool 28 pt.
+Corners of surfaces `Theme.Radius.xs/sm/md/lg/card/notice` = 4 / 8 / 12 / 16 / 16 / 14 (a list row 8, a single-line field 12, a card 16). Text sizes are iOS text styles at the
+web's scale (`Theme.TextSize.xs...xxl` = caption2 11, caption 12, footnote 13, subheadline 15, body 17,
+title3 20), so they grow with Dynamic Type; a glyph of fixed size is `Theme.Glyph`. Spacing is the web's
+2 pt grid (`Theme.Space`). Shapes as on the web ("Shapes"): what you press and every tag is round (a capsule; a square one a circle),
+what you type or read in is a rounded rectangle from `Theme.Radius`, and no corner in between on a key. No system `.bordered` / `.borderedProminent`: the OS
+picks their shape (a capsule on iOS 26).
+
+`tests/web/ios-ui-standard-ratchet.test.ts` counts, per Swift file, each view that still draws its own
+(literalColour, literalFont, radiusLiteral, systemButtonStyle, ownButtonStyle, ownReplyBox,
+ownEmptyState; `tests/web/ios-ui-standard-baseline.json`), and the counts only go down. A line that must
+keep its shape (a sheet's grabber, a camera shutter) says why with `// ui-standard-ok: <why>`.
+
 ## What exists today that breaks this (the ratchet counts them)
 
 Counted on 2026-11-22 by `tests/web/ui-standard-ratchet.test.ts` (per file, in

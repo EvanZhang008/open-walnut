@@ -49,7 +49,7 @@ struct ReplyPictureButton: View {
             Image(systemName: "photo.badge.plus")
                 // The menu's own label is read from this image, not the menu: name it too.
                 .accessibilityLabel(images.isEmpty ? "Add a picture" : "Add a picture, \(images.count) attached")
-                .font(.system(size: 19))
+                .font(Theme.Glyph.lg.font())
                 .frame(width: 40, height: 44)
                 .contentShape(Rectangle())
         }
@@ -143,7 +143,7 @@ struct ReplyPictureStrip: View {
                                         .resizable()
                                         .scaledToFill()
                                         .frame(width: size, height: size)
-                                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                        .clipShape(Theme.Radius.shape(Theme.Radius.md))
                                         .accessibilityLabel("Attached picture")
                                         .accessibilityIdentifier("\(idPrefix).picture")
                                     Button {
@@ -151,7 +151,7 @@ struct ReplyPictureStrip: View {
                                         notice = nil
                                     } label: {
                                         Image(systemName: ComposerBar.Symbol.removeImage)
-                                            .font(.system(size: 18))
+                                            .font(Theme.Glyph.lg.font())
                                             .symbolRenderingMode(.palette)
                                             .foregroundStyle(.white, .black.opacity(0.55))
                                             .padding(3)

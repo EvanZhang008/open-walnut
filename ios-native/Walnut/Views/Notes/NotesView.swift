@@ -85,11 +85,10 @@ struct FolderContentView: View {
             if children.isEmpty && notes.loadingTree {
                 skeleton
             } else if folders.isEmpty && files.isEmpty {
-                ContentUnavailableView(
-                    "No notes yet",
-                    systemImage: "doc.text",
-                    description: Text("Tap the compose button to write your first note.")
-                )
+                WalnutEmptyState(title: "No notes yet",
+                                 hint: "Tap the compose button to write your first note.",
+                                 systemImage: "doc.text", size: .pane)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 list
             }

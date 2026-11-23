@@ -297,7 +297,7 @@ struct FilePreviewDockBar: View {
             Button(action: onOpen) {
                 HStack(spacing: 10) {
                     Image(systemName: "doc.richtext")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(Theme.Glyph.md.font(.semibold))
                         .foregroundStyle(Theme.tint)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(target.displayName)
@@ -318,7 +318,7 @@ struct FilePreviewDockBar: View {
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .bold))
+                    .font(Theme.Glyph.sm.font(.bold))
                     .foregroundStyle(.secondary)
                     .frame(width: 30, height: 30)
                     .contentShape(Rectangle())
@@ -330,6 +330,7 @@ struct FilePreviewDockBar: View {
         .padding(.leading, 14)
         .padding(.trailing, 4)
         .padding(.vertical, 6)
+        // A floating glass bar of keys: round, as every control (standard.md "Shapes").
         .background(.regularMaterial, in: Capsule(style: .continuous))
         .overlay(
             Capsule(style: .continuous)

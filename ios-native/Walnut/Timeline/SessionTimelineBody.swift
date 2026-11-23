@@ -276,7 +276,7 @@ struct SessionTimelineUnreadableState: View {
     var body: some View {
         VStack(spacing: 10) {
             Image(systemName: "exclamationmark.icloud")
-                .font(.system(size: 40))
+                .font(Theme.Glyph.hero.font())
                 .foregroundStyle(.tertiary)
             Text("Can't load this conversation")
                 .font(.headline)
@@ -293,7 +293,7 @@ struct SessionTimelineUnreadableState: View {
                 } label: {
                     if retrying { ProgressView() } else { Text("Try Again") }
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.walnut(.secondary, size: .small))
                 .disabled(retrying)
                 .accessibilityIdentifier("session.transcript.retry")
                 if let triedAgain {
@@ -317,7 +317,7 @@ struct SessionTimelineEmptyState: View {
     var body: some View {
         VStack(spacing: 10) {
             Image(systemName: "terminal")
-                .font(.system(size: 40))
+                .font(Theme.Glyph.hero.font())
                 .foregroundStyle(.tertiary)
             Text("No transcript yet")
                 .font(.headline)

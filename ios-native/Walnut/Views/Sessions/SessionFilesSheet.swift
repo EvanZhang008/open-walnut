@@ -22,11 +22,11 @@ struct SessionFilesSheet: View {
                         title: displayName(of: cwd)
                     )
                 } else {
-                    ContentUnavailableView {
-                        Label("No working directory", systemImage: "folder.badge.questionmark")
-                    } description: {
-                        Text("This session has no recorded working directory to browse.")
-                    }
+                    WalnutEmptyState(
+                        title: "No working directory",
+                        hint: "This session has no recorded working directory to browse.",
+                        systemImage: "folder.badge.questionmark", size: .pane)
+                        .frame(maxHeight: .infinity)
                 }
             }
             .toolbar {
@@ -151,8 +151,7 @@ struct SessionDirectoryList: View {
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                     Button("Retry") { Task { await load() } }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Theme.tint)
+                        .buttonStyle(.walnut(.primary, size: .small))
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
@@ -414,7 +413,9 @@ struct SessionFileViewer: View {
                 }
                 VStack(spacing: 0) {
                     if let missingNote = shown.missing {
-                        ContentUnavailableView {
+                        // Kept: its hint carries its own identifier and its actions the machine
+                        // picker, which WalnutEmptyState has no slot for.
+                        ContentUnavailableView { // ui-standard-ok: custom hint identifier and picker actions
                             // Before any pick the machine is a question to answer, not a missing file.
                             if shown.unknownSource && picked?.inputKey != inputKey {
                                 Label("Choose a machine", systemImage: "desktopcomputer")
@@ -522,9 +523,9 @@ struct SessionFileViewer: View {
                         if picking == machine.alias { ProgressView() }
                         Text(machine.label)
                     }
-                    .frame(minWidth: 160, minHeight: 32)
+                    .frame(minWidth: 160)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.walnut(.secondary))
                 .disabled(picking != nil)
                 .accessibilityIdentifier("session.files.viewer.pick.\(machine.alias.isEmpty ? "local" : machine.alias)")
             }
@@ -619,18 +620,11 @@ struct SessionFileViewer: View {
     }
 
     private func unavailable(_ failure: FileReadFailure) -> some View {
-        ContentUnavailableView {
-            Label(failure.title, systemImage: failure.icon)
-        } description: {
-            Text(failure.message)
-        } actions: {
-            if failure.isRetryable {
-                Button("Try Again") { retry() }
-                    .buttonStyle(.borderedProminent)
-                    .accessibilityIdentifier("session.files.viewer.retry")
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        WalnutEmptyState(
+            title: failure.title, hint: failure.message, systemImage: failure.icon, size: .pane,
+            actionTitle: failure.isRetryable ? "Try Again" : nil,
+            actionIdentifier: "session.files.viewer.retry", action: { retry() })
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// Re-issue the same read from scratch. `load()` is guarded on `loaded`, so
