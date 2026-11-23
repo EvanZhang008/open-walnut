@@ -218,6 +218,11 @@ test('a narrow node keeps only the kebab and the side bar\'s switch at its right
     await expect(flyout).toBeVisible()
     await expect(flyout.getByTestId('leader-sub-row')).toContainText(`Side kid ${STAMP}`)
     await expect(menu).toBeVisible()
+    // Beside the menu, never over its rows, and inside the window.
+    await expect.poll(async () => {
+      const f = (await flyout.boundingBox())!, m = (await menu.boundingBox())!
+      return (f.x + f.width <= m.x + 1 || f.x >= m.x + m.width - 1) && f.x >= 0 && f.x + f.width <= 960
+    }).toBe(true)
     await shot(page, 'narrow-pills-in-kebab')
     // Escape closes the pill's list first, then the menu.
     await page.keyboard.press('Escape')

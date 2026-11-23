@@ -315,6 +315,30 @@ export function computePlacement(input: PlacementInput): MenuPlacement & { side:
 }
 
 /**
+ * Where a flyout goes beside its host (`[data-flyouts-beside]`): its right edge at the host's left,
+ * else its left edge at the host's right, its top at the trigger's top; neither with the room, the
+ * roomier side, slid into the window. Null before the flyout is measured.
+ */
+export function flyoutBesideHost(
+  host: { left: number; right: number },
+  trigger: { top: number },
+  menuWidth: number,
+  viewportWidth: number,
+  gap: number,
+  margin: number,
+): { anchor: { top: number; bottom: number; right: number; left: number }; align: 'right' | 'left' } | null {
+  if (menuWidth <= 0) return null;
+  const at = { top: trigger.top - gap, bottom: trigger.top - gap };
+  if (host.left - gap - menuWidth >= margin) return { anchor: { ...at, left: host.left - gap, right: host.left - gap }, align: 'right' };
+  if (host.right + gap + menuWidth <= viewportWidth - margin) return { anchor: { ...at, left: host.right + gap, right: host.right + gap }, align: 'left' };
+  // Neither side has its whole width: the roomier side, slid only as far as the window needs
+  // (edgeOverflow 'clamp'), so it covers as little of the host as it can.
+  return host.left >= viewportWidth - host.right
+    ? { anchor: { ...at, left: host.left - gap, right: host.left - gap }, align: 'right' }
+    : { anchor: { ...at, left: host.right + gap, right: host.right + gap }, align: 'left' };
+}
+
+/**
  * @param open      Whether the menu is rendered.
  * @param triggerRef The button the menu is anchored to.
  * @param menuRef   The menu element (measured for its natural height/width).
@@ -457,8 +481,15 @@ export function useMenuPlacement(
             viewportHeight: vp.height, topInset: vp.top, gap, margin,
           })
         : null;
+      // A trigger inside a host that lays its flyouts beside it (a pill in the session menu's first
+      // row, SessionMenuOpen headerPills) opens next to that host, never over the rows under it.
+      const besideRow = !anchorPoint && !beside ? trigger?.closest<HTMLElement>('[data-flyouts-beside]') : null;
+      const hostEl = besideRow ? besideRow.closest<HTMLElement>('.wn-menu, [role="menu"], .task-kebab-menu') ?? besideRow : null;
+      const sideOfHost = hostEl && triggerRect
+        ? flyoutBesideHost(hostEl.getBoundingClientRect(), triggerRect, menuWidth, window.innerWidth, gap, margin)
+        : null;
       const stacked = besideAt ? null : computePlacement({
-        anchor: { top: r.top, bottom: r.bottom, right: r.right, ...('left' in r ? { left: r.left } : {}) },
+        anchor: sideOfHost?.anchor ?? { top: r.top, bottom: r.bottom, right: r.right, ...('left' in r ? { left: r.left } : {}) },
         naturalHeight,
         menuWidth,
         viewportWidth: window.innerWidth,
@@ -482,7 +513,7 @@ export function useMenuPlacement(
             ? (() => { const b = visualBounds(); return { viewportHeight: b.height, topInset: b.top }; })()
             : { viewportHeight: window.innerHeight }),
         gap, margin, minHeight: bounds === 'visual' ? Math.min(minHeight, 132) : minHeight,
-        align: beside ? 'center' : align, preferSide, edgeOverflow,
+        align: beside ? 'center' : sideOfHost?.align ?? align, preferSide, edgeOverflow: sideOfHost ? 'clamp' : edgeOverflow,
         forceSide: sideRef.current,
       });
       const next: MenuPlacement = besideAt

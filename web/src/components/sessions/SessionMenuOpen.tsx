@@ -171,8 +171,9 @@ export function SessionMenuOpen(p: SessionMenuOpenProps) {
   ].filter(Boolean) : [];
   return (
     <>
-      {/* A pill that draws nothing leaves the row empty, and CSS hides it and its divider. */}
-      {p.headerPills && <><div className="session-menu-pills" data-testid="session-menu-pills">{p.headerPills}</div><div className="task-kebab-divider" /></>}
+      {/* A pill that draws nothing leaves the row empty, and CSS hides it and its divider. Each pill's
+          list opens beside the menu (data-flyouts-beside, useMenuPlacement), not over its rows. */}
+      {p.headerPills && <><div className="session-menu-pills" data-testid="session-menu-pills" data-flyouts-beside="">{p.headerPills}</div><div className="task-kebab-divider" /></>}
       {keyRows.length > 0 && <>{keyRows}<div className="task-kebab-divider" /></>}
       {/* Locate and Watch are on the header itself (2026-11-19: the crosshair among the window
           buttons, the eye on the label row), or the rows above (headerKeys); Open in new tab lives

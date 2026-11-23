@@ -17,7 +17,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { computePlacement, type PlacementInput } from '../../web/src/hooks/useMenuPlacement';
+import { computePlacement, flyoutBesideHost, type PlacementInput } from '../../web/src/hooks/useMenuPlacement';
 
 const GAP = 2;
 const MARGIN = 8;
@@ -390,5 +390,34 @@ describe('computePlacement: horizontal boxes (the selection bar over its timelin
   it('no boxes: the viewport, as before', () => {
     const { out } = place({ anchor: { top: 100, bottom: 120, left: 510, right: 520 }, align: 'center' });
     expect(leftOf(out)).toBe(515 - 130);
+  });
+});
+
+// A pill in the session menu's first row (SessionMenuOpen headerPills, data-flyouts-beside) opens its
+// list beside the menu, never over the menu's rows (2026-11-23 review of the Org node's narrow header).
+describe('flyoutBesideHost', () => {
+  const host = { left: 500, right: 860 };
+  const trigger = { top: 60 };
+  it('left of the host when it fits there: right edge at the host, top at the trigger', () => {
+    const at = flyoutBesideHost(host, trigger, 300, 1280, 2, 8)!;
+    expect(at.align).toBe('right');
+    const out = computePlacement({ anchor: at.anchor, naturalHeight: 200, menuWidth: 300, viewportWidth: 1280, viewportHeight: 900, gap: 2, margin: 8, minHeight: 120, align: at.align });
+    expect(1280 - out.right).toBe(498);
+    expect(out.top).toBe(60);
+  });
+  it('right of the host when the left has no room', () => {
+    const at = flyoutBesideHost({ left: 100, right: 460 }, trigger, 300, 1280, 2, 8)!;
+    expect(at.align).toBe('left');
+    const out = computePlacement({ anchor: at.anchor, naturalHeight: 200, menuWidth: 300, viewportWidth: 1280, viewportHeight: 900, gap: 2, margin: 8, minHeight: 120, align: at.align });
+    expect(1280 - out.right - 300).toBe(462);
+  });
+  it('neither side has the room: the roomier one, slid into the window, covering the host least', () => {
+    const at = flyoutBesideHost({ left: 390, right: 748 }, trigger, 460, 800, 2, 8)!;
+    expect(at.align).toBe('right');
+    const out = computePlacement({ anchor: at.anchor, naturalHeight: 200, menuWidth: 460, viewportWidth: 800, viewportHeight: 900, gap: 2, margin: 8, minHeight: 120, align: at.align, edgeOverflow: 'clamp' });
+    expect(800 - out.right).toBe(8 + 460);
+  });
+  it('not measured yet: no override', () => {
+    expect(flyoutBesideHost(host, trigger, 0, 1280, 2, 8)).toBeNull();
   });
 });
