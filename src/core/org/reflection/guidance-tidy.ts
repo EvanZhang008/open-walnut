@@ -41,11 +41,18 @@ export async function askTidy(node: Task, nodeName: string, deps: TidyDeps, nowM
   const state = await readReflectionState(node.id, nowMs);
   if (state.tidyAsked === date) return false;
   const lines = await readGuidance(node.id);
-  const room = guidanceRoomLeft(nodeName, lines.map((l) => l.text));
-  if (room >= TIDY_ROOM_MIN) return false;
-  const done = new Set([...(state.backfilled ?? []), ...state.removed, ...(state.mergedLessons ?? []).map((m) => m.lesson)]);
+  const texts = lines.map((l) => l.text);
+  const room = guidanceRoomLeft(nodeName, texts);
+  // Placed (added, merged) or deleted by someone: no longer waiting. A lesson the backfill gave up on still waits.
+  // State from before backfillGaveUp kept no such list: there a backfilled lesson neither written nor merged was given up.
+  const merged = new Set((state.mergedLessons ?? []).map((m) => m.lesson));
+  const gaveUp = new Set(state.backfillGaveUp ?? (state.backfilled ?? []).filter((k) => !state.written.includes(k) && !merged.has(k)));
+  const done = new Set([...(state.backfilled ?? []).filter((k) => !gaveUp.has(k)), ...state.removed, ...merged]);
   const waiting = (await droppedLessons(node.id, nowMs)).filter((l) => !done.has(normalizeForQuote(l.text))).map((l) => l.text);
   if (!waiting.length) return false;
+  // Asked when little room is left, or when none of the waiting lessons fits in what is left
+  // (2026-11-23: 276 characters left, every waiting lesson longer, and the node was never asked).
+  if (room >= TIDY_ROOM_MIN && waiting.some((w) => guidanceRoomLeft(nodeName, [...texts, w]) >= 0)) return false;
   const sessionId = await sessionNowOf(node, deps);
   if (deps.confirmSend && !['ok', 'session_changed', true].includes(await deps.confirmSend(node, node, sessionId).catch(() => false))) return false;
   // Marked first: a send that fails is not repeated today.

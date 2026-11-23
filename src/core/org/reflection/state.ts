@@ -37,6 +37,8 @@ export interface ReflectionState {
   /** The pain registry's part of the last nightly note that carried one (a hash): an unchanged part is not sent again. */
   painsNote?: string;
   /** Lessons a full day or file once dropped that were taken up again (guidance-merge.ts), normalized: each once. */
+  /** Of `backfilled`, the lessons its tries gave up on: never placed, so they wait for the node's tidy. */
+  backfillGaveUp?: string[];
   backfilled?: string[];
   /** Today's merge calls (guidance-merge.ts): at most MERGE_CALLS_PER_DAY_MAX. */
   merges?: { date: string; count: number };
@@ -109,6 +111,7 @@ function normalize(raw: unknown, nowMs: number): ReflectionState {
     ...(typeof r.nightly === 'string' ? { nightly: r.nightly } : {}),
     ...(typeof r.painsNote === 'string' ? { painsNote: r.painsNote } : {}),
     ...(Array.isArray(r.backfilled) ? { backfilled: r.backfilled.filter((s): s is string => typeof s === 'string').slice(-500) } : {}),
+    ...(Array.isArray(r.backfillGaveUp) ? { backfillGaveUp: r.backfillGaveUp.filter((s): s is string => typeof s === 'string').slice(-500) } : {}),
     ...(r.merges?.date === today && Number.isFinite(r.merges.count) ? { merges: r.merges } : {}),
     ...(Array.isArray(r.mergedLessons) ? { mergedLessons: r.mergedLessons.filter((m): m is { lesson: string; line: string } => !!m && typeof m.lesson === 'string' && typeof m.line === 'string').slice(-500) } : {}),
     ...(r.aligned && Array.isArray(r.aligned.rules) ? { aligned: { rules: r.aligned.rules.filter((k): k is string => typeof k === 'string').slice(0, 1000), ...(Number.isFinite(r.aligned.short) ? { short: r.aligned.short } : {}) } } : {}),

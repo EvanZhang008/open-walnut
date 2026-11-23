@@ -241,6 +241,8 @@ export async function backfillDropped(node: Task, nodeName: string, deps: MergeD
       if (settled) {
         delete t[key];
         s.backfilled = [...(s.backfilled ?? []), key].slice(-500);
+        // Given up, not placed: it still waits for room, and the node's tidy names it (guidance-tidy.ts).
+        if (merged?.kind === 'failed') s.backfillGaveUp = [...(s.backfillGaveUp ?? []), key].slice(-500);
       } else t[key] = tries;
       s.backfillTries = t;
     }, nowMs);

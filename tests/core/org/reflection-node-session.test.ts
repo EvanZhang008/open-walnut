@@ -29,6 +29,8 @@ import { confirmSendCheck, reflectForNode, type ReflectDeps } from '../../../src
 import { appendDayEntry, appendDayNote, guidanceFileOf, readDayEntries, reflectionDayJsonOf, renderGuidance } from '../../../src/core/org/reflection/records.js'
 import { localDate, readReflectionState, updateReflectionState } from '../../../src/core/org/reflection/state.js'
 import { askTidy } from '../../../src/core/org/reflection/guidance-tidy.js'
+import { guidanceRoomLeft } from '../../../src/core/org/reflection/team-guidance-hint.js'
+import { normalizeForQuote as normalizeKey } from '../../../src/core/org/reflection/judge.js'
 import { currentSessionOfTask, sessionOfTaskAt } from '../../../src/core/sessions/session-send-core.js'
 
 const NOW = Date.parse('2026-11-23T20:00:00Z')
@@ -135,6 +137,44 @@ describe('a task with no slot fields', () => {
     expect(await askTidy(vp, 'Marina VP', d, NOW)).toBe(true)
     expect(sent.map((s) => s.task)).toEqual([vp.id])
     expect((await readReflectionState(vp.id, NOW)).tidyAsked).toBe(localDate(NOW))
+  })
+})
+
+describe('the ask to tidy a full guidance', () => {
+  const long = (i: number, n = 240) => `Rule number ${i}: ${'keep every point of the old line and its condition '.repeat(8)}`.slice(0, n)
+  const waitingEntry = (text: string) => ({
+    at: iso(10), signal: 'frustration' as const, task: { id: worker.id, title: worker.title },
+    finding: { kind: 'unclear_ask' as const, session_quote: 'q', user_quote: 'u', rule_quote: '', what_went_wrong: 'w', correct_action: 'c', already_fixed: false, correction: '', guidance: text, same_as: 0, skill: null },
+    corrected: 'already_fixed' as const, rule: { kind: 'none' as const, text: `not added (day_full; not merged: x): ${text}` },
+  })
+  const write = async (lines: string[]) => {
+    await fs.mkdir(path.dirname(guidanceFileOf(vp.id)), { recursive: true })
+    await fs.writeFile(guidanceFileOf(vp.id), renderGuidance('Marina VP', lines.map((text) => ({ text, from: 'a task', date: '2026-11-20' }))))
+  }
+
+  it('names a lesson the backfill gave up on: it was never placed', async () => {
+    await write(Array.from({ length: 16 }, (_, i) => long(i)))
+    const lesson = 'Name the thread a card asks him to answer in.'
+    await appendDayEntry(vp.id, 'Marina VP', localDate(NOW), waitingEntry(lesson))
+    await updateReflectionState(vp.id, (s) => { s.backfilled = [normalizeKey(lesson)]; s.backfillGaveUp = [normalizeKey(lesson)] }, NOW)
+    const { d, sent } = deps()
+    expect(await askTidy(vp, 'Marina VP', d, NOW)).toBe(true)
+    expect(sent[0].text).toContain(lesson)
+  })
+
+  it('asks when there is room left but no waiting lesson fits in it', async () => {
+    // Lines of 240 filling the hint to just past the cut-off, and a waiting lesson longer than what is left.
+    const lines: string[] = []
+    while (guidanceRoomLeft('Marina VP', [...lines, long(lines.length)]) >= 220) lines.push(long(lines.length))
+    await write(lines)
+    const room = guidanceRoomLeft('Marina VP', lines)
+    expect(room).toBeGreaterThanOrEqual(200)
+    const lesson = long(99, Math.min(300, room + 40))
+    await appendDayEntry(vp.id, 'Marina VP', localDate(NOW), waitingEntry(lesson))
+    const { d, sent } = deps()
+    expect(guidanceRoomLeft('Marina VP', [...lines, lesson])).toBeLessThan(0)
+    expect(await askTidy(vp, 'Marina VP', d, NOW)).toBe(true)
+    expect(sent).toHaveLength(1)
   })
 })
 
