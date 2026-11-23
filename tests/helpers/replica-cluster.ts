@@ -547,7 +547,7 @@ function pluginConfig(p: ClusterPlugin | undefined): string[] {
 }
 
 /** `extra`: more top-level lines of the Mac's config.yaml (e.g. an `experimental:` block); its copy rides the config kind. */
-function macConfig(plugin?: ClusterPlugin, extra: readonly string[] = []): string {
+function macConfig(plugin?: ClusterPlugin, extra: readonly string[] = [], hostExtra: readonly string[] = []): string {
   return [
     'version: 1',
     'user:', `  name: ${MAC_USER_NAME}`,
@@ -561,6 +561,7 @@ function macConfig(plugin?: ClusterPlugin, extra: readonly string[] = []): strin
     '    server_program: replica',
     '    server:',
     '      enabled: true',
+    ...hostExtra,
     'favorites:',
     '  projects:', ...MAC_FAVORITES.projects.map((x) => `    - ${JSON.stringify(x)}`),
     '  notes:', ...MAC_FAVORITES.notes.map((x) => `    - ${JSON.stringify(x)}`),
@@ -752,7 +753,7 @@ export type SeedMac = (o: { base: string; macData: string; env: Record<string, s
  * the Mac's boot script runs after its server started, before it reports its port. `macEnv`: more
  * of the Mac's env (a timing knob of a feature under test).
  */
-export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; daemonBuilt?: boolean; seedMac?: SeedMac; plugin?: ClusterPlugin; macConfigExtra?: readonly string[]; linkProxy?: boolean; hostService?: HostServiceOptions; macBootExtra?: string; macEnv?: Record<string, string> }): Promise<ReplicaCluster> {
+export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; daemonBuilt?: boolean; seedMac?: SeedMac; plugin?: ClusterPlugin; macConfigExtra?: readonly string[]; macHostExtra?: readonly string[]; linkProxy?: boolean; hostService?: HostServiceOptions; macBootExtra?: string; macEnv?: Record<string, string> }): Promise<ReplicaCluster> {
   assertWindows(WINDOWS)
   if (opts.hostService && (opts.twin !== 'standalone' || opts.daemonBuilt)) throw new Error('replica-cluster: a host service runs the standalone twin from source')
   const app: ClusterApp = opts.app ?? 'source'
@@ -777,7 +778,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
   const mockCli = path.join(d.bin, MOCK_CLI_NAME)
   writeStubBin(d.bin)
   writeAppDir(d.app, app)
-  fs.writeFileSync(path.join(d.macData, 'config.yaml'), macConfig(opts.plugin, opts.macConfigExtra))
+  fs.writeFileSync(path.join(d.macData, 'config.yaml'), macConfig(opts.plugin, opts.macConfigExtra, opts.macHostExtra))
   if (opts.plugin) {
     for (const [rel, text] of Object.entries(opts.plugin.files)) {
       const file = path.join(d.macData, 'plugins', opts.plugin.id, rel)

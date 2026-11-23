@@ -1,17 +1,18 @@
 /**
  * The leader's boot wiring of the hosts that run and judge their sessions (leader-side.ts): real
  * data, the host-server manager's views and links, this server's bus. Started by the web server on
- * every leader: it links only to hosts that name session-judge-v1, and with the switch off every
- * new start is 'legacy' (judge-of.ts), while the sessions a host already runs keep reporting.
+ * every leader: it links only to hosts that name session-judge-v1, and with the switch off for a
+ * host every new start there is 'legacy' (judge-of.ts), while the sessions it already runs keep
+ * reporting. The start decision is per host (switch.ts hostRunsSessionsFor).
  *
- * With the switch on it also serves the door hosts dial into (host-door.ts, `/host-door`) and
+ * With the switch on for any host it also serves the door hosts dial into (host-door.ts, `/host-door`) and
  * issues each host that names host-door-v1 its door credential (leader-issue.ts); off, the door is
  * shut and nothing is issued.
  */
 import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../event-bus.js'
 import { createLeaderSide, reportJudges, type LeaderSide } from './leader-side.js'
-import { hostRunsSessionsNow } from './switch.js'
+import { hostRunsSessionsAnyNow, hostSwitchNow } from './switch.js'
 import { reemitDestinations } from './event-classes.js'
 import { forgetHostJudged, judgingHostOf, noteHostJudged, setHostJudgeProbe } from '../sessions/judge-of.js'
 import { leaderDropHosts, leaderDropsOf } from './leader-drops.js'
@@ -97,7 +98,8 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   const side = createLeaderSide({
     walnutId: async () => getInstanceId(),
     permit: (hostId) => standingNow(hostId).pair,
-    flagOn: hostRunsSessionsNow,
+    // The start decision is per host (hosts.<name>.runs_sessions, else the experiment).
+    switchNow: hostSwitchNow,
     openStream: async (hostKey, purpose) => {
       const link = hostServer.hostServerLink(hostKey)
       if (!link) throw new Error(`the host ${hostKey} is not connected`)
@@ -172,7 +174,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   issue.setRevokeStandbySync(syncStandby)
   const issuer = issue.startCredentialIssuer({
     walnutId: async () => getInstanceId(),
-    flagOn: hostRunsSessionsNow,
+    flagOn: hostRunsSessionsAnyNow,
     doorUrls,
     // The machine id the host's daemon link said in its hello (the link the manager holds, else the pooled one).
     machineIdOf: (hostKey) => hostServer.hostServerLink(hostKey)?.helloMachineId ?? pooledMachineIdOf(hostKey),
@@ -188,13 +190,13 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   })
   // Open only on the leader (never a replica: the companion's own door is /host-listen) while the switch is on.
   const syncDoor = async (): Promise<void> => {
-    const on = !isFollower() && await hostRunsSessionsNow().catch(() => false)
+    const on = !isFollower() && await hostRunsSessionsAnyNow().catch(() => false)
     setLeaderDoorOpen('/host-door', on)
   }
   await syncDoor()
   pushDoors = async (doors) => {
     const clean = cleanDoorUrls(doors)
-    const dialed = clean.length > 0 && await hostRunsSessionsNow().catch(() => false) ? pushDoorsToDialed(clean) : []
+    const dialed = clean.length > 0 && await hostRunsSessionsAnyNow().catch(() => false) ? pushDoorsToDialed(clean) : []
     const { told, failed } = await issuer.pushDoors(clean, new Set(dialed))
     return { dialed, routed: told, failed }
   }

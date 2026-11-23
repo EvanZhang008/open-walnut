@@ -80,7 +80,7 @@ function makeSide(port: number, store: ReturnType<typeof leaderStore>, opts: { o
   return createLeaderSide({
     walnutId: async () => 'w1',
     permit: () => ({ permitNumber: 0, epoch: 1 }),
-    flagOn: async () => opts.flag?.on ?? true,
+    switchNow: async () => { const on = opts.flag?.on ?? true; return () => on },
     openStream: async (_host, purpose) => { opts.opened?.push(purpose); return net.connect(port, '127.0.0.1') },
     applyBatch: async (b) => {
       store.batches.push(b)
@@ -151,6 +151,29 @@ describe('the leader side of a host that runs its sessions', () => {
     flag.on = true
     await side.refreshFlag()
     expect(side.hostJudges('devbox')).toBe(true)
+  })
+
+  it('the start decision is per host: a host turned off keeps its link and sessions, another host still takes starts', async () => {
+    const { channel } = await hostOf()
+    const port = await hostDoor(channel, [])
+    const store = leaderStore()
+    const off = new Set<string>()
+    side = makeSide(port, store, { extra: {
+      switchNow: async () => { const now = new Set(off); return (h) => !now.has(h) },
+      // Only devbox is reachable; devbox-b's dials fail and retry, which a start decision does not wait for.
+      openStream: async (host) => { if (host !== 'devbox') throw new Error('not connected'); return net.connect(port, '127.0.0.1') },
+    } })
+    await side.noteHost('devbox', { connected: true, judges: true })
+    await side.noteHost('devbox-b', { connected: true, judges: true })
+    await until(() => side!.linked('devbox'))
+    expect(side.hostJudges('devbox')).toBe(true)
+    expect(side.hostJudges('devbox-b')).toBe(true)
+    off.add('devbox')
+    await side.refreshFlag()
+    expect(side.hostJudges('devbox')).toBe(false)
+    expect(side.hostJudges('devbox-b')).toBe(true)
+    await tick(60)
+    expect(side.linked('devbox')).toBe(true)
   })
 
   it('applies every record once, in order, across a drop and a dial again; rows, renames, live and facts each go their way', async () => {
@@ -276,7 +299,7 @@ describe('the leader side of a host that runs its sessions', () => {
     const store = leaderStore()
     let throws = 1
     side = createLeaderSide({
-      walnutId: async () => 'w1', permit: () => ({ permitNumber: 0, epoch: 1 }), flagOn: async () => true,
+      walnutId: async () => 'w1', permit: () => ({ permitNumber: 0, epoch: 1 }), switchNow: async () => () => true,
       openStream: async () => net.connect(port, '127.0.0.1'),
       // The store had applied up to seq 2 already (a link before this one): the transaction says so.
       applyBatch: async (b) => { store.cursor = b.cursor; return { written: [], skipped: [], after: 2 } },

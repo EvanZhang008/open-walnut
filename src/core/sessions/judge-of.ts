@@ -8,9 +8,9 @@
  *             resend, respawn, recovery, snapshot repair or turn-end queue drain.
  *   'legacy'  everything else: today's path, the leader runs it.
  *
- * For a start (no session yet): 'host' when the switch is on (session-channel/switch.ts) and the
- * target host's service names SESSION_JUDGE_CAP; the leader side (session-channel/leader-side.ts)
- * installs that probe. With nothing installed, and on every server whose store never applied a
+ * For a start (no session yet): 'host' when the switch is on for that host (session-channel/switch.ts
+ * hostRunsSessionsFor) and its service names SESSION_JUDGE_CAP; the leader side
+ * (session-channel/leader-side.ts) installs that probe. With nothing installed, and on every server whose store never applied a
  * host's channel, every answer is 'legacy' at the cost of one small query once.
  */
 import { anyChannelCursor, sessionJudgeInStore } from '../session-db.js'

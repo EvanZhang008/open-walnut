@@ -166,11 +166,11 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   // Before the emitter subscribes: at a turn end each retrier takes it first, then the emitter stamps it.
   const resend = await startHostResendFamily({ say })
   await emitter.start()
-  const [{ hostRunsSessionsNow }, { bus }, { readMachineId }] = await Promise.all([import('./switch.js'), import('../event-bus.js'), import('../machine-id.js')])
+  const [{ hostRunsSessionsAnyNow }, { bus }, { readMachineId }] = await Promise.all([import('./switch.js'), import('../event-bus.js'), import('../machine-id.js')])
   // Made just below; a credential the leader issues pokes it.
   let dialerRef: HostDialer | null = null
   const routes = createHostSessionRoutes({
-    enabled: hostRunsSessionsNow,
+    enabled: hostRunsSessionsAnyNow,
     runner: async () => sessionRunner as never,
     bundles,
     channel: () => current?.channel ?? null,
@@ -203,7 +203,7 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     log: say,
   })
   const dialer = startHostDialer({
-    walnutId: o.walnutId, machineId: readMachineId, enabled: hostRunsSessionsNow,
+    walnutId: o.walnutId, machineId: readMachineId, enabled: hostRunsSessionsAnyNow,
     channel: () => current?.channel ?? null,
     routes: () => current?.routes ?? null,
     seenPermit: () => log.permitPair,
@@ -213,7 +213,7 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   })
   dialerRef = dialer
   const companion = startCompanionDialer({
-    walnutId: o.walnutId, enabled: hostRunsSessionsNow,
+    walnutId: o.walnutId, enabled: hostRunsSessionsAnyNow,
     channel: () => current?.channel ?? null,
     routes: () => current?.routes ?? null,
     log: say,

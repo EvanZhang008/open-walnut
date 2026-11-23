@@ -37,8 +37,8 @@ export interface LeaderSideDeps {
   walnutId(): Promise<string>
   /** This leader's standing on the host (channel.ts PermitPair): the permit's number and its claim epoch there. */
   permit(hostId: string): PermitPair
-  /** Is the switch on now? */
-  flagOn(): Promise<boolean>
+  /** The switch for each host now (switch.ts hostSwitchNow): would a new start on that host go to its service? */
+  switchNow(): Promise<(hostKey: string) => boolean>
   /** A byte stream to the server on `hostKey`, through its daemon; throws when it is not connected. */
   openStream(hostKey: string, purpose: string): Promise<Duplex>
   /** The channel's link to `hostKey` (default: a WebSocket over openStream). */
@@ -108,9 +108,14 @@ function startedOf(hostId: string, sid: string, row: Record<string, unknown>): R
 
 export function createLeaderSide(deps: LeaderSideDeps) {
   const hosts = new Map<string, HostState>()
-  let flag = false
+  let onFor: (hostKey: string) => boolean = () => false
   let stopped = false
   let walnutId: string | null = null
+
+  const readSwitch = async (): Promise<void> => {
+    const next = await deps.switchNow().catch(() => () => false)
+    if (!stopped) onFor = next
+  }
 
   const stateOf = (hostKey: string): HostState => {
     let s = hosts.get(hostKey)
@@ -372,7 +377,7 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     /** A host's state changed: connected, and whether its service names SESSION_JUDGE_CAP. */
     async noteHost(hostKey: string, o: { connected: boolean; judges: boolean }): Promise<void> {
       if (stopped) return
-      flag = await deps.flagOn().catch(() => false)
+      await readSwitch()
       if (stopped) return
       const s = stateOf(hostKey)
       const had = !!s.socket
@@ -386,12 +391,12 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     /** The switch may have changed (a config write): read it again for the next start. */
     async refreshFlag(): Promise<void> {
       if (stopped) return
-      flag = await deps.flagOn().catch(() => false)
+      await readSwitch()
     },
     /** judge-of.ts's start probe: would a start on `hostKey` go to its service now? */
     hostJudges(hostKey: string): boolean {
       const s = hosts.get(hostKey)
-      return flag && !!s && wanted(s)
+      return !!s && wanted(s) && onFor(hostKey)
     },
     /** Is the channel to `hostKey` linked now? */
     linked(hostKey: string): boolean { return !!hosts.get(hostKey)?.socket },
@@ -408,7 +413,7 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     adopt(hostKey: string, sock: ChannelSocket): boolean {
       if (stopped) { try { sock.close('stopping') } catch { /* gone */ } return false }
       // The door is open only while the switch is on: read it again for the next start.
-      void deps.flagOn().then((on) => { if (!stopped) flag = on }, () => {})
+      void readSwitch()
       const s = stateOf(hostKey)
       if (s.timer) { clearTimeout(s.timer); s.timer = null }
       if (s.socket) {

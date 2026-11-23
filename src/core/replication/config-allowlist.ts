@@ -21,6 +21,8 @@
 import { isMaskedSecret, holdsEditedMask, isSecretKey } from '../config-secret-shape.js'
 import { SECRET_FIELDS } from '../config-redact.js'
 import { redactSensitiveText } from '../../logging/redact.js'
+import { hostsTurnedOn } from '../session-channel/switch.js'
+import type { Config } from '../types.js'
 
 /**
  * `true`: the whole value, only for a value that cannot grow a field (a scalar,
@@ -62,6 +64,10 @@ const ALLOW: Record<string, AllowSpec> = {
   },
   // The host list the Routines executors and the Remote Hosts view name: no server settings, no build env.
   hosts: { '*': { label: true, hostname: true, user: true, port: true, enabled: true, discovered: true } },
+  // Copy-only (derived from hosts.*.runs_sessions in configCopyRows, never read from config.yaml):
+  // a host's service reads "on for any host" from it (session-channel/switch.ts). A row of its own,
+  // so an older replica refuses only this row, never the hosts row.
+  hosts_run_sessions: true,
   session_limits: { '*': true },
   session: {
     cron_policy: true, output_mode: true, acp_walnut_mcp: true, acp_walnut_tools: true, idle_timeout_minutes: true, max_idle: true,
@@ -201,6 +207,7 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
     connect: 'the person\'s answer about a found host, read where hosts are dialled, on the Mac (a found host without the yes is stored off, so the copy reads it off; named in the copy, an older replica would refuse the whole hosts row)',
     connect_by: 'who gave that answer, read only where the Mac warms its hosts',
     not_offered: 'why the Mac no longer offers a found host (it is stored off, so the copy reads it off; named in the copy, an older replica would refuse the whole hosts row)',
+    runs_sessions: 'the leader decides where a start goes; the copy says the hosts turned on as its own row hosts_run_sessions (named in the hosts row, an older replica would refuse the whole row)',
   },
   stt: {
     sherpa_model_dir: 'a model path on the Mac', sherpa_model_type: 'a model of the Mac',
@@ -331,7 +338,8 @@ export interface ConfigCopyRows {
 }
 
 /** The config copy's rows: allowlisted top-level keys, each through its spec, each with no secret in it. */
-export function configCopyRows(config: Readonly<Record<string, unknown>>): ConfigCopyRows {
+export function configCopyRows(leaderConfig: Readonly<Record<string, unknown>>): ConfigCopyRows {
+  const config = withHostsRunSessions(leaderConfig)
   const rows: ConfigCopyRow[] = []
   const refused: ConfigCopyRows['refused'] = []
   const unknown: string[] = []
@@ -355,6 +363,17 @@ export function configCopyRows(config: Readonly<Record<string, unknown>>): Confi
   // set no provider, rather than guessing from a missing row (codex-engine-source.ts).
   if (!rows.some((r) => r.key === 'engines')) rows.push({ key: 'engines', value: {} })
   return { rows: rows.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)), refused, unknown }
+}
+
+/**
+ * The copy-only `hosts_run_sessions` row: the hosts the leader's config turns on by themselves
+ * (`hosts.<name>.runs_sessions: true`), none when no host is. Whatever config.yaml says under that
+ * key is never copied: only the hosts map decides it.
+ */
+function withHostsRunSessions(config: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  const { hosts_run_sessions: _ignored, ...rest } = config
+  const on = hostsTurnedOn(Array.isArray(config.hosts) ? null : config.hosts as Config['hosts'])
+  return on.length > 0 ? { ...rest, hosts_run_sessions: on } : rest
 }
 
 /**

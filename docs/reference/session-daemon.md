@@ -574,6 +574,37 @@ Tests: `tests/binary/service-entry.test.ts`, `tests/providers/one-service-host-e
 `tests/providers/one-service-mode.test.ts`, `tests/providers/one-service-switch-chain.test.ts`,
 `tests/replica/follower-link-both.test.ts`.
 
+## A session run and judged by its host: the switch, per host
+
+A service on a host can run and judge the sessions started there itself (phase 2 of
+`docs/plan/one-service-every-host.md`, `src/core/session-channel/`). Two levels decide it, read in one
+place (`src/core/session-channel/switch.ts`):
+
+- the experiment `host_runs_sessions` (Settings, off by default): on for every host;
+- `hosts.<name>.runs_sessions` in the leader's config.yaml (config only, no Settings control): `true` turns that one host on even with the experiment off,
+  `false` keeps it off even with the experiment on, absent follows the experiment. So one host is
+  turned on at a time, and default-on later needs no entry per host.
+
+Only the leader's start decision reads it per host (`hostRunsSessionsFor`, the start probe of
+`judge-of.ts`): a new start on a host goes to its service when the switch is on for that host and the
+service names `session-judge-v1`. Every other reader asks "on for any host" (`hostRunsSessionsAny`):
+the host's session routes and its dialers, the leader's door and credential issuer, the companion's
+listener door and the heartbeat. `tests/core/session-channel/switch-readers.test.ts` lists every
+caller of each and fails on a new one. A config write takes effect without a restart on the leader
+(it reads the switch again at every write). A host's service starts its session side at its boot, so
+a host turned on for the first time runs it from its next restart.
+
+A host reads the leader's config through the config copy, which never names `hosts.*.runs_sessions`
+(an older replica refuses a whole row that names a field it does not know): the leader's copy says the
+hosts turned on in a row of its own, `hosts_run_sessions` (`config-allowlist.ts`), which an older
+replica refuses alone. An older leader keeps the field (config reads and writes keep host fields
+they do not know) and ignores it.
+
+Turning a host off (`runs_sessions: false`): its new starts take today's path at once; the sessions it
+already runs keep running and reporting through the channel until they end, as with the experiment.
+The full rollback order, and what a straight downgrade does, are in "A session a host runs" of
+`docs/plan/one-service-every-host.md`.
+
 ## Keep the twins in sync, and auto-deploy
 
 **Keep in sync:** `daemon-standalone.ts` (bun binary) + `daemon-source.ts` (JS fallback). Build: `bash scripts/build-daemon.sh`.

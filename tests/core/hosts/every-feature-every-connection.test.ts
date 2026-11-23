@@ -291,7 +291,7 @@ describe('every kind of session channel link carries the channel and the host ca
       const opened: string[] = []
       const framed: string[] = []
       const side = createLeaderSide({
-        walnutId: async () => 'w1', permit: () => ({ permitNumber: 0, epoch: 1 }), flagOn: async () => true,
+        walnutId: async () => 'w1', permit: () => ({ permitNumber: 0, epoch: 1 }), switchNow: async () => () => true,
         openStream: async (_h, purpose) => { opened.push(purpose); throw new Error('no daemon link in this test') },
         ...(kind === 'leader-dialed' ? { dial: async () => fakeSocket() } : {}),
         applyBatch: async () => ({ written: [], skipped: [] }), loadCursor: async () => null,

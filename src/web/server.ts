@@ -4807,7 +4807,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const [sw, boot] = await Promise.all([import('../core/session-channel/switch.js'), import('../core/session-channel/host-boot.js')])
     // On with the switch, and on again after a restart while this host has a fact log, so the
     // sessions it ran keep reporting and taking sends after the switch went off.
-    const switchOn = sw.hostRunsSessions(await (await import('../core/config-manager.js')).getConfig().catch(() => null))
+    const switchOn = sw.hostRunsSessionsAny(await (await import('../core/config-manager.js')).getConfig().catch(() => null))
     if ((switchOn || boot.hostRanSessions((process.env.WALNUT_WALNUT_ID ?? '').trim())) && boot.hostCanRunSessions()) {
       hostSessionsRoutes = boot.hostSessionRoutes
       hostSessionsCaps = boot.hostSessionCapabilities

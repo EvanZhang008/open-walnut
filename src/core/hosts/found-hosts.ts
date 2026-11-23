@@ -278,7 +278,7 @@ export function foundHostEdited(row: FoundHostRow, scanned: DiscoveredHost | und
     if (typeof v === 'object' && !Array.isArray(v) && Object.keys(v as object).length === 0) continue
     return true
   }
-  if (row.autofix === false || row.place === false) return true
+  if (row.autofix === false || row.place === false || typeof row.runs_sessions === 'boolean') return true
   if (!scanned) return false
   return text(row.hostname).toLowerCase() !== scanned.hostname.toLowerCase()
     || text(row.user) !== text(scanned.user)

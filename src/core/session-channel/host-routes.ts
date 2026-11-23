@@ -69,7 +69,7 @@ export interface HostRunnerLike {
 }
 
 export interface HostRoutesOptions {
-  /** hostRunsSessionsNow (switch.ts); asked per request. */
+  /** hostRunsSessionsAnyNow (switch.ts); asked per request. */
   enabled(): Promise<boolean>
   runner(): Promise<HostRunnerLike>
   bundles: StartBundles

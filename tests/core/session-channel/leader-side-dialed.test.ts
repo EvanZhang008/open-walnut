@@ -93,7 +93,7 @@ function makeSide(port: number, opened: string[]) {
   const s = createLeaderSide({
     walnutId: async () => 'w1',
     permit: () => ({ permitNumber: 0, epoch: 1 }),
-    flagOn: async () => true,
+    switchNow: async () => () => true,
     openStream: async (_host, purpose) => { opened.push(purpose); return net.connect(port, '127.0.0.1') },
     applyBatch: async (b) => { cursor = b.cursor; return { written: b.rows.map((r) => r.sid), skipped: [] } },
     loadCursor: async () => cursor,

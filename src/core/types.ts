@@ -1831,7 +1831,17 @@ export interface Config {
      *  host's replica (docs/plan/walnut-replica-servers-impl.md) where the host's
      *  daemon can; unset or 'host-server' keeps the plain host server. */
     server_program?: 'replica' | 'host-server';
+    /** Does this host's own service run and judge the sessions started on it
+     *  (session-channel/switch.ts)? true: new starts there go to its service (when it names
+     *  session-judge-v1) even with the experiment `host_runs_sessions` off; false: never, even with
+     *  it on; absent: the experiment decides. Sessions a host already runs keep reporting either way.
+     *  Config only (no Settings control). An older Walnut reads past it. */
+    runs_sessions?: boolean;
   }>;
+  /** Only in a host replica's config copy, never in config.yaml: the hosts whose `runs_sessions` is
+   *  true in the leader's config (replication/config-allowlist.ts derives it), so a host's service
+   *  reads "on for any host" without `hosts.*.runs_sessions`, which the copy leaves out. */
+  hosts_run_sessions?: string[];
   /** Startup warmup of every explicitly configured host's session daemon.
    *  On by default: without it the FIRST folder-picker open on a host pays the
    *  whole first-connect cost (runtime install + daemon upload, minutes).

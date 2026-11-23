@@ -47,10 +47,10 @@ export function aliasOfBridgeToken(name: string): string | null {
 
 /** Is the door open now, and for which Walnut: the leader's heartbeat (or this box's switch) and its Walnut id. */
 export async function listenerDoorWalnut(): Promise<string | null> {
-  const [{ getBackupLeader }, { hostRunsSessionsNow }] = await Promise.all([import('../leader/backup-leader.js'), import('./switch.js')])
+  const [{ getBackupLeader }, { hostRunsSessionsAnyNow }] = await Promise.all([import('../leader/backup-leader.js'), import('./switch.js')])
   const status = (await getBackupLeader())?.status() ?? null
   if (!status?.walnutId) return null
-  return status.hostRunsSessions || await hostRunsSessionsNow() ? status.walnutId : null
+  return status.hostRunsSessions || await hostRunsSessionsAnyNow() ? status.walnutId : null
 }
 
 let wss: WebSocketServer | null = null

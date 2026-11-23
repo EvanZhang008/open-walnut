@@ -49,12 +49,12 @@ async function walnutId(): Promise<string> {
 }
 
 async function heartbeatFrame(restartingMs?: number): Promise<LeaderHeartbeatFrame> {
-  const { hostRunsSessionsNow } = await import('../session-channel/switch.js')
+  const { hostRunsSessionsAnyNow } = await import('../session-channel/switch.js')
   return {
     walnutId: await walnutId(),
     backup: await backupLeaderAllowed(),
     ...(restartingMs ? { restartingMs } : {}),
-    ...(await hostRunsSessionsNow() ? { hostRunsSessions: true as const } : {}),
+    ...(await hostRunsSessionsAnyNow() ? { hostRunsSessions: true as const } : {}),
   }
 }
 

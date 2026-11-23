@@ -2,11 +2,27 @@
  * The switch of phase 2 (docs/plan/one-service-every-host.md): a session on a host whose own
  * service can run it is assembled, run and judged there, and its leader keeps a copy.
  *
- * The experiment `host_runs_sessions` (core/experimental.ts). It keeps its own switch: "every
- * experiment on" never turns it on. The leader's config is copied to its hosts with the experiment
- * map, so both read the same choice: the leader before it hands a start to a host, the host before
- * it answers a session route. `WALNUT_HOST_RUNS_SESSIONS=1|0` overrides it for one process (tests,
- * an isolated service).
+ * Two levels, read in ONE place (this file):
+ *
+ *   the experiment `host_runs_sessions` (core/experimental.ts). It keeps its own switch: "every
+ *     experiment on" never turns it on.
+ *   `hosts.<name>.runs_sessions` in the leader's config: true turns that one host on even with the
+ *     experiment off, false keeps it off even with the experiment on, absent follows the experiment.
+ *
+ * Two questions, and every caller asks exactly one of them (tests/core/session-channel/switch-readers.test.ts):
+ *
+ *   hostRunsSessionsFor(config, host)  the leader's start decision for one host (judge-of.ts's
+ *                                       start probe, through leader-side.ts hostJudges)
+ *   hostRunsSessionsAny(config)         everything else, on any server: the host answering session
+ *                                       routes and dialing the door, the door being open, the
+ *                                       credential issuer, the companion's listener, the heartbeat.
+ *                                       On while the experiment is on or some host is turned on.
+ *
+ * A host replica reads the leader's config through the config copy, which never carries
+ * `hosts.*.runs_sessions` (an older replica would refuse the whole hosts row): the leader's copy
+ * says the hosts turned on as the copy-only row `hosts_run_sessions` (replication/config-allowlist.ts).
+ *
+ * `WALNUT_HOST_RUNS_SESSIONS=1|0` overrides both questions for one process (tests, an isolated service).
  */
 import type { Config } from '../types.js'
 import { experimentalEnabled } from '../experimental.js'
@@ -14,19 +30,59 @@ import { experimentalEnabled } from '../experimental.js'
 /** Capability a host's service names when it runs and judges sessions itself. */
 export const SESSION_JUDGE_CAP = 'session-judge-v1'
 
-export function hostRunsSessions(config: Pick<Config, 'experimental'> | null | undefined): boolean {
-  const forced = process.env.WALNUT_HOST_RUNS_SESSIONS
-  if (forced === '1' || forced === '0') return forced === '1'
+type SwitchConfig = Pick<Config, 'experimental' | 'hosts' | 'hosts_run_sessions'>
+
+function forced(): boolean | null {
+  const v = process.env.WALNUT_HOST_RUNS_SESSIONS
+  return v === '1' ? true : v === '0' ? false : null
+}
+
+/** The host keys whose own `runs_sessions` is true (the leader's config), sorted. */
+export function hostsTurnedOn(hosts: SwitchConfig['hosts'] | null | undefined): string[] {
+  if (!hosts || typeof hosts !== 'object') return []
+  return Object.entries(hosts).filter(([, h]) => !!h && (h as { runs_sessions?: unknown }).runs_sessions === true).map(([k]) => k).sort()
+}
+
+/** Would a new start on `hostKey` go to its service (given it names SESSION_JUDGE_CAP)? The leader's start decision. */
+export function hostRunsSessionsFor(config: Partial<SwitchConfig> | null | undefined, hostKey: string): boolean {
+  const f = forced()
+  if (f !== null) return f
+  const own = (config?.hosts?.[hostKey] as { runs_sessions?: unknown } | undefined)?.runs_sessions
+  if (typeof own === 'boolean') return own
   return experimentalEnabled(config?.experimental, 'host_runs_sessions')
 }
 
-export async function hostRunsSessionsNow(): Promise<boolean> {
-  const forced = process.env.WALNUT_HOST_RUNS_SESSIONS
-  if (forced === '1' || forced === '0') return forced === '1'
+/** Is the switch on for any host: the experiment, or a host turned on by itself (on a replica, the copy's row). */
+export function hostRunsSessionsAny(config: Partial<SwitchConfig> | null | undefined): boolean {
+  const f = forced()
+  if (f !== null) return f
+  if (experimentalEnabled(config?.experimental, 'host_runs_sessions')) return true
+  if (hostsTurnedOn(config?.hosts).length > 0) return true
+  const copied = config?.hosts_run_sessions
+  return Array.isArray(copied) && copied.some((k) => typeof k === 'string' && k !== '')
+}
+
+async function configNow(): Promise<Config | null> {
   try {
     const { getConfig } = await import('../config-manager.js')
-    return hostRunsSessions(await getConfig())
+    return await getConfig()
   } catch {
-    return false
+    return null
   }
+}
+
+/** hostRunsSessionsAny on this server's config now (false when it cannot be read). */
+export async function hostRunsSessionsAnyNow(): Promise<boolean> {
+  const f = forced()
+  if (f !== null) return f
+  const config = await configNow()
+  return config ? hostRunsSessionsAny(config) : false
+}
+
+/** The leader's start decision per host, on its config now: one read, asked per host (off for every host when unreadable). */
+export async function hostSwitchNow(): Promise<(hostKey: string) => boolean> {
+  const f = forced()
+  if (f !== null) return () => f
+  const config = await configNow()
+  return config ? (hostKey) => hostRunsSessionsFor(config, hostKey) : () => false
 }

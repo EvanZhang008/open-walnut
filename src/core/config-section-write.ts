@@ -73,6 +73,8 @@ export const CONFIG_SECTION_WRITE: { readonly [K in keyof Required<Config>]: Con
   ssh_login_hint: 'replace',
   ssh_cert_letter: 'replace',
   host_service_offer: 'replace',
+  // Copy-only (a host replica's config copy, never written on the leader): a list, written whole.
+  hosts_run_sessions: 'replace',
   api_keys: 'replace',
   push_tokens: 'replace',
 

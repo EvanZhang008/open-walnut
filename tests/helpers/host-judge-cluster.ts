@@ -386,6 +386,8 @@ export interface HostJudgeClusterOptions {
   macRecord?: 'full' | 'count'
   /** More of the Mac's config.yaml lines, and code its boot script runs after the probe. */
   macConfigExtra?: readonly string[]
+  /** More lines of the host's own entry in the Mac's config.yaml (indented four spaces: `    runs_sessions: true`). */
+  macHostExtra?: readonly string[]
   macBootExtra?: string
   /** Called before the Mac boots, with its data dir (and the cluster's base). */
   seedMac?: (o: { base: string; macData: string }) => void | Promise<void>
@@ -403,6 +405,7 @@ export async function startHostJudgeCluster(o: HostJudgeClusterOptions = {}): Pr
       ...(o.companion ? ['cloud_bridge:', '  backup_leader: false'] : []),
       ...(o.macConfigExtra ?? []),
     ],
+    ...(o.macHostExtra ? { macHostExtra: o.macHostExtra } : {}),
     macEnv: { ...(o.companion ? { WALNUT_LEADER_HEARTBEAT_MS: '1000' } : {}), ...(o.macEnv ?? {}) },
     seedMac: async ({ base, macData }: { base: string; macData: string }) => {
       if (o.companion) companion = await pairCompanion(base, macData)

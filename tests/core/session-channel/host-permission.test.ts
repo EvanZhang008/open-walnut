@@ -141,7 +141,7 @@ beforeEach(async () => {
   side = createLeaderSide({
     walnutId: async () => 'w1',
     permit: () => ({ permitNumber: 0, epoch: 1 }),
-    flagOn: async () => true,
+    switchNow: async () => () => true,
     openStream: async () => net.connect(port, '127.0.0.1'),
     applyBatch: async (b) => ({ written: b.rows.map((r) => r.sid), skipped: [] }),
     loadCursor: async () => null,
