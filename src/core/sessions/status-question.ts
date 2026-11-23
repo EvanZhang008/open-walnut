@@ -74,9 +74,23 @@ export function buildStatusPrompt(forUserPrompt: string, title: string, uiLangua
   return `Walnut asks where this task${title ? ` ("${title.replace(/\s+/g, ' ').slice(0, 120)}")` : ''} stands now, for the user's board. Do not use any tool and do not continue the work. ${lines}${lang}`;
 }
 
+/**
+ * True when `stored` was written after what this answer knew (`basisMs`: the turn end it answers,
+ * or the moment a mid-turn question was asked): a person's or a lead's report put after that turn
+ * ended, or the answer of a later turn. Such a report is newer and the answer never replaces it
+ * (2026-11-23: a person's needs report put 2 s after a fixture turn ended was overwritten 3 s later
+ * by that turn's "done" answer, so the ask left the taskbar card). A status answer stores its
+ * turn's end as turn_ended_at, so the answer of the same turn asked again is no newer. Pure.
+ */
+export function storedIsNewer(stored: Pick<StatusReport, 'at' | 'turn_ended_at'> | null | undefined, basisMs: number): boolean {
+  if (!stored || !Number.isFinite(basisMs)) return false;
+  const about = Date.parse(stored.turn_ended_at ?? stored.at ?? '');
+  return Number.isFinite(about) && about > basisMs;
+}
+
 /** The task's own words on where it stands: stored, and moving its phase as its report. */
 export async function applyStatusAnswer(
-  taskId: string, sessionId: string, report: StatusReport, turnEndedMs: number, opts: { midTurn?: boolean } = {},
+  taskId: string, sessionId: string, report: StatusReport, turnEndedMs: number, opts: { midTurn?: boolean; askedAtMs?: number } = {},
 ): Promise<boolean> {
   if (report.same_as) {
     const { WALNUT_HOME } = await import('../../constants.js');
@@ -86,13 +100,19 @@ export async function applyStatusAnswer(
 }
 
 async function saveStatusAnswer(
-  taskId: string, sessionId: string, report: StatusReport, turnEndedMs: number, opts: { midTurn?: boolean },
+  taskId: string, sessionId: string, report: StatusReport, turnEndedMs: number, opts: { midTurn?: boolean; askedAtMs?: number },
 ): Promise<boolean> {
   const { getTask, updateTaskRaw } = await import('../task-manager.js');
   // A finished task reads Done whatever its session said, and a write to a COMPLETE row would
   // announce it as completed again (updateTaskRaw names the event by phase).
   const current = await getTask(taskId).catch(() => null);
   if (!current || current.phase === 'COMPLETE' || current.status === 'done') return false;
+  // What the answer knew: its turn's end, or for a mid-turn question when it was asked (none: no check).
+  const basisMs = opts.midTurn ? (opts.askedAtMs ?? NaN) : turnEndedMs;
+  if (storedIsNewer(current.status_report, basisMs)) {
+    log.session.info('status answer kept out: the stored report is newer', { taskId, sessionId, storedAt: current.status_report?.turn_ended_at ?? current.status_report?.at, basis: new Date(basisMs).toISOString() });
+    return false;
+  }
   // Its thread lines set its state when its own words did not (status-threads.ts), and go to its
   // threads once the report is stored: they are never part of it.
   const { settleStateFromThreads, applyThreadLines, placesAskOnThread } = await import('./status-threads.js');
@@ -141,9 +161,17 @@ async function saveStatusAnswer(
       report = local;
     }
   }
+  let newerMeanwhile = false;
   await updateTaskRaw(taskId, { status_report: report }, {
-    emitEvent: true, source: 'status-report', shouldUpdate: (cur) => cur.phase !== 'COMPLETE' && cur.status !== 'done',
+    emitEvent: true, source: 'status-report',
+    // Checked again inside the write: a report put while the answer was being stored wins too.
+    shouldUpdate: (cur) => {
+      newerMeanwhile = storedIsNewer(cur.status_report, basisMs);
+      return cur.phase !== 'COMPLETE' && cur.status !== 'done' && !newerMeanwhile;
+    },
   });
+  // Nothing stored: its thread lines and phase move nothing either.
+  if (newerMeanwhile) return false;
   // Only a task that is no Org node places its ask on a thread (status-threads.ts placesAskOnThread).
   await applyThreadLines(taskId, { threads: threadLines, threads_new: threadsNew, ...(askThread ? { ask_thread: askThread } : {}), ...(titles ? { thread_titles: titles } : {}), ...(seen ? { threads_seen: seen } : {}) }, taskLike ? report : null);
   const { applyReportPhase } = await import('./report-phase.js');
@@ -247,7 +275,7 @@ export async function askStatus(taskId: string, sessionId: string, turnEndedMs: 
       log.session.warn('status question: no status in the answer', { sessionId, taskId, why, head: answer.slice(0, 200) });
       return false;
     }
-    stored = await applyStatusAnswer(taskId, sessionId, report, turnEndedMs, { midTurn: why === 'watch' && sessionRunner.isTurnRunning(sessionId) });
+    stored = await applyStatusAnswer(taskId, sessionId, report, turnEndedMs, { midTurn: why === 'watch' && sessionRunner.isTurnRunning(sessionId), askedAtMs: askedAt });
     log.session.info('status question answered', { sessionId, taskId, why, state: report.state, elapsedMs: Date.now() - askedAt });
     return stored;
   } catch (err) {
