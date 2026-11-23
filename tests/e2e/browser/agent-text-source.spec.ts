@@ -20,6 +20,7 @@ import {
 import { discoverBrowserFixture } from './codex-test-audit'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { REAL_PANEL, draftComposer, leaveFullscreen } from './draft-helpers'
+import { LOCAL_HOST_LABEL } from '../../../web/src/utils/host-display-label'
 
 const REMOTE = 'fixture-remote'
 const REMOTE_SID = 'pw-limits-remote-session'
@@ -599,7 +600,8 @@ test('a Board page path opens on its writer\'s machine and a post\'s path on the
     await fs.unlink(doc)
     try {
       await click(page, pageLink)
-      await expect(page.getByTestId('file-viewer-missing')).toContainText('on Local')
+      // This machine's name as every surface shows it (was "Local" until main's plain words pass).
+      await expect(page.getByTestId('file-viewer-missing')).toContainText(`on ${LOCAL_HOST_LABEL}`)
       await expect(page.locator('.file-viewer-overlay .cm-content')).toHaveCount(0)
       expect(remoteReads(), 'a missing primary source is never replaced with the remote copy').toEqual([])
       await closeFile(page)
