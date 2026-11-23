@@ -791,6 +791,7 @@
     "components/sessions/WorkflowGraph.tsx": 2,
     "components/sessions/WorkflowProgress.tsx": 2,
     "components/sessions/WorkflowStageGraph.tsx": 1,
+    "components/sessions/message-about.tsx": 1,
     "components/sessions/reply-thread-line.tsx": 2,
     "components/settings/BuildPluginCard.tsx": 1,
     "components/settings/PluginProvenanceFlyout.tsx": 2,
