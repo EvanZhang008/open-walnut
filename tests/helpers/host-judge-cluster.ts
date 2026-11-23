@@ -44,6 +44,8 @@
  *         GET /live          is a leader linked and caught up
  *         GET /dialer        is the host's door dialer linked, and does it hold a door credential (never its token)
  *         GET /companion     is the host's link to its companion's listener door up
+ *         GET /judging?sid=  does the host stand down (its leader older, old-leader-watch.ts), its read of
+ *                            the leader's presence, is a leader on its channel, and does it judge `sid`
  *         GET /slow-start?ms= the host's next start answers its leader `ms` late, its session up
  *                            and its born row written (a loaded host's order): the probe's one write
  *
@@ -228,6 +230,13 @@ await serveProbe({
     return { linked: !!boot.hostSessionsRunning()?.dialer.linked(), holds: !!held, doors: held ? held.doors : [] }
   },
   '/companion': () => ({ linked: !!boot.hostSessionsRunning()?.companion.linked() }),
+  // Does this host judge its own sessions now (session-channel/old-leader-watch.ts), what it reads of
+  // its leader, and (with sid) whether it judges that one.
+  '/judging': async (q) => {
+    const [j, role] = await Promise.all([import(${url('src/core/sessions/judge-of.ts')}), import(${url('src/core/server-role.ts')})])
+    const sid = q.get('sid')
+    return { standsDown: j.hostStandsDown(), watch: !!boot.hostSessionsRunning()?.oldLeader.standingDown(), presence: role.leaderPresence().why, live: !!boot.hostSessionsRunning()?.channel.leaderLive(), ...(sid ? { judgedHere: j.judgedHere(sid) } : {}) }
+  },
   // The next start the host's runner makes answers 'ms' late, its session already up (its born row
   // already written): the order a loaded host can take. The probe's one write to the host.
   '/slow-start': (q) => {

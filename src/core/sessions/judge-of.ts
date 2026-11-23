@@ -28,6 +28,8 @@ const LEGACY_MEMO_MAX = 20_000
 const ownHere = new Set<string>()
 /** Did this store ever apply a host's channel? null: not asked yet. */
 let anyCursor: boolean | null = null
+/** A host replica whose leader is an older Walnut without the session channel judges none of its own rows (session-channel/old-leader-watch.ts). */
+let standsDown = false
 
 type StartProbe = (host: string) => boolean
 let startProbe: StartProbe | null = null
@@ -117,13 +119,28 @@ export function judgeOfRecord(rec: Pick<SessionRecord, 'judge' | 'host'> | null 
  * and recovery family asks this on both sides, so each session has exactly one of them acting.
  */
 export function judgedHere(sid: string): boolean {
-  return thisHostKey() ? taskSideOnLeader(sid) : judgeOf(sid) === 'legacy'
+  return thisHostKey() ? !standsDown && taskSideOnLeader(sid) : judgeOf(sid) === 'legacy'
 }
 
 /** The records this server runs and judges itself (a boot scan): judgedHere, from the record alone. */
 export function judgedHereRecords<R extends Pick<SessionRecord, 'judge' | 'host'>>(recs: readonly R[]): R[] {
   const here = thisHostKey()
-  return here ? recs.filter((r) => rowOwnedHere(r, here)) : recs.filter((r) => judgeOfRecord(r) === 'legacy')
+  if (here) return standsDown ? [] : recs.filter((r) => rowOwnedHere(r, here))
+  return recs.filter((r) => judgeOfRecord(r) === 'legacy')
+}
+
+/**
+ * A host replica stands down (true) or judges its own rows again (false): its leader is an older
+ * Walnut that judges every session itself (session-channel/old-leader-watch.ts). Its rows stay its
+ * own (taskSideOnLeader is unchanged: their task side is still never written here); only judging them
+ * stops. Nothing on a leader, which has no host key.
+ */
+export function setHostStandsDown(on: boolean): void {
+  standsDown = on
+}
+
+export function hostStandsDown(): boolean {
+  return standsDown
 }
 
 /** The session a bus event is about (its data's sessionId), if any. */
@@ -158,4 +175,5 @@ export function _resetJudgeOfForTesting(): void {
   ownHere.clear()
   anyCursor = null
   startProbe = null
+  standsDown = false
 }

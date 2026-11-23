@@ -438,13 +438,32 @@ permission prompts still name Walnut.
   `tests/e2e/host-judged-session-lifecycle-e2e.test.ts`, S6 in `host-judged-session-cluster-e2e.test.ts`).
   So no session changes its judge while it runs. A hand-off is needed only when old sessions must move,
   which is phase 4 (the legacy path is deleted), not now.
-- **Rolling back.** Turn the switch off first: new starts take today's path at once, and the sessions hosts
-  already run keep reporting through the channel until they end (S6). Install an older release only after
-  those have ended or been stopped. An older leader put in ahead of that order loses no session: it reads a
-  host-run row as an ordinary row of that host and reaches the CLI through the host's daemon as today, and
-  the daemon keeps one CLI per session (cli-owner), so its send or resume goes on with the same
-  conversation. It does not hear the host's facts, so until those CLIs end both sides judge their turns and
-  the host's judgement goes unheard. Not tested against a real older release.
+- **Rolling back, in order.** Each step can stop there; each later one is safe without the earlier.
+  1. One host: `hosts.<name>.runs_sessions: false` in the leader's config (no restart). New starts on
+     that host take today's path at once; the sessions it already runs keep running and reporting
+     through the channel until they end (`tests/e2e/host-judge-per-host-e2e.test.ts` P2).
+  2. Every host: the experiment `host_runs_sessions` off (and no host entry set to true). The same, for
+     all hosts (S6).
+  3. An older release, once those sessions ended or were stopped.
+- **A straight downgrade** (an older release put on the leader while a host still runs a session it
+  judges). The older leader loses no session: it reads a host-run row as an ordinary row of that host
+  and reaches the CLI through the host's daemon as today, and the daemon keeps one CLI per session
+  (cli-owner), so its send or resume goes on with the same conversation. It judges every turn itself,
+  from the transcript. The host would judge the same turns too (auto-continue, the retriers, the
+  turn-end queue) until its service is replaced by the older build, which the leader's daemon update
+  does minutes after it links (a fresh daemon waits out 20 minutes, an open host_exec run or ACP turn
+  holds it, every hold gives way after 3 hours). So the host stands down (`old-leader-watch.ts`): when
+  its leader answers (the daemon's follower view) and no leader opens the session channel for 3
+  minutes (`WALNUT_HOST_OLD_LEADER_MS`; any leader with the channel opens it within seconds of linking,
+  whatever its switch says), `judgedHere` is false for every row of the host, the one gate its resend
+  family acts through, and only the older leader judges. The CLIs, routes and fact log go on; a leader
+  that opens the channel again ends it. A leader merely away (the lid closed) does not answer, so it
+  never counts: the host keeps judging, which is the point. What the user sees: for up to 3 minutes
+  after the downgrade a turn end can be continued twice (both judges), then the sessions behave as
+  legacy ones; the host's facts of that time reach no leader until a newer one comes back
+  (`tests/e2e/host-judge-old-leader-e2e.test.ts`). A refusal (the task store's schema gate, say) was
+  not chosen: it would block the rollback exactly when the new release is the broken one. Not tested
+  against a real older release (the older leader is the new code with its channel off).
 - **A leader that stops between a batch and its facts (M3).** The channel applies a host's records
   in one transaction and says their facts after it, where the turn-end handlers move the task's
   phase. A stop in between (a crash, a deploy's restart while the handler waits on its git pull) would

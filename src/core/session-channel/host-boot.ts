@@ -16,6 +16,9 @@
  *   the listener link  the cloud companion's listener door, with the bridge link's own token
  *                   (companion-dialer.ts): the phone sees and operates these sessions there while
  *                   the leader is away
+ *   the old-leader watch  a leader that answers but never opens the channel is an older Walnut that
+ *                   judges every session itself: this host judges none of its rows (its resend family
+ *                   acts on none) until a leader opens the channel again (old-leader-watch.ts)
  *
  * "Can run sessions": this is a host's one Walnut service (src/binary/service-entry.ts), which holds
  * the host's session runtime in its own process (server-role.ts hasLocalDaemon). While its sessions
@@ -37,6 +40,7 @@ import { createHostSessionPort, selfOwnApi, StartBundles } from './host-port.js'
 import { createHostSessionRoutes, type HostSessionRoutes } from './host-routes.js'
 import { liveStateOf, type LiveRunnerLike } from './host-live.js'
 import { startHostResendFamily, turnEndStamp, turnOfOwnSession, type HostResendFamily } from './host-resend.js'
+import { startOldLeaderWatch, type OldLeaderWatch } from './old-leader-watch.js'
 import { installSessionPort } from '../sessions/session-port.js'
 import { heldOnThisHost, startStrandedSweep, type StrandedSweep } from '../sessions/stranded-own-rows.js'
 import { rowOwnedHere } from '../sessions/session-row-owner.js'
@@ -55,6 +59,7 @@ export interface HostSessions {
   dialer: HostDialer
   companion: CompanionDialer
   stranded: StrandedSweep
+  oldLeader: OldLeaderWatch
 }
 
 let current: HostSessions | null = null
@@ -218,7 +223,17 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
     routes: () => current?.routes ?? null,
     log: say,
   })
-  current = { log, gone, channel, emitter, routes, bundles, resend, dialer, companion, stranded }
+  const [{ leaderPresence }, { setHostStandsDown }] = await Promise.all([import('../server-role.js'), import('../sessions/judge-of.js')])
+  const oldLeader = startOldLeaderWatch({
+    leaderAnswers: () => leaderPresence().answers,
+    channelLinked: () => channel.leaderLive() || dialer.linked(),
+    // Every member of the resend family acts only on what judgedHere names (none, standing down); the
+    // family stays subscribed in its order before the emitter. The CLIs, routes, log and emitter go on.
+    standDown: () => setHostStandsDown(true),
+    standUp: () => setHostStandsDown(false),
+    log: say,
+  })
+  current = { log, gone, channel, emitter, routes, bundles, resend, dialer, companion, stranded, oldLeader }
   // The session runner may reach the runtime in this process from now on (the own-sessions link).
   ;(await import('../../providers/daemon-connection.js')).setOwnSessionsLink(true)
   // The boot pass: a row a start claimed before this service stopped (its claim was in memory only).
@@ -232,6 +247,8 @@ export async function stopHostSessions(): Promise<void> {
   current = null
   if (!c) return
   ;(await import('../../providers/daemon-connection.js')).setOwnSessionsLink(false)
+  c.oldLeader.stop()
+  ;(await import('../sessions/judge-of.js')).setHostStandsDown(false)
   c.dialer.stop()
   c.companion.stop()
   c.stranded.stop()
