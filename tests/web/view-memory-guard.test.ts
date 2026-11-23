@@ -106,7 +106,6 @@ const PASSING: Record<string, string> = {
   'components/board/kanban/useKanbanLayout.ts#mode': 'derived from the board\'s width',
   'components/sessions/UserMessagesSummary.tsx#collapsed': 'one summary folded',
   'apps/mail/MailCorrectPopover.tsx#expanded': 'rows expanded in a popover',
-  'components/apps-page/PluginStoreGrid.tsx#addOpen': 'the add-a-plugin dialog',
   'components/board/kanban/KanbanCard.tsx#promptOpen': 'a card\'s prompt, a popover',
   'components/board/kanban/KanbanFilters.tsx#changesOpen': 'the changes list of the filter bar, a popover',
   'components/board/kanban/KanbanToasts.tsx#expanded': 'a toast stack expanded',

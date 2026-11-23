@@ -8,7 +8,7 @@
  * A plugin that is a part of another (`slack-mcp` of Slack) has a page too, reached from
  * its parent's Parts, and says whose part it is.
  */
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Config } from '@open-walnut/core'
 import { useAppCatalog, useAppPagePins } from '@/apps/hooks'
@@ -32,10 +32,10 @@ import { firstSentence, needsSetupHelp, rowTags } from '@/components/settings/se
 import { RESTART_PENDING_STATE } from '@/components/settings/plugin-update-types'
 import { plainText } from '@/components/settings/plugin-update-view'
 import { AppBadge, AppGlyph, SidebarSwitch } from './app-bits'
-import { appsOfPlugin, StoreNotices } from './PluginStoreGrid'
+import { StoreNotices } from './PluginAddFlows'
 import { AppPartsGroup, EntryIcon, entryHoldingPlugin, useBuiltinEntries } from './BuiltinAppsGrid'
 import { PartsSection, SourceSection, VersionSection } from './plugin-detail-sections'
-import { isRunning, originKind, partParents, type RegistryRow } from './plugin-store-model'
+import { appsOfPlugin, isRemovable, isRunning, originKind, partParents, type RegistryRow } from './plugin-store-model'
 import type { PluginStore } from './usePluginStore'
 import { ExposeGuide } from './ExposeGuide'
 import { TaskProviderRulesGroup } from '@/components/settings/sections/TaskProviderRulesGroup'
@@ -119,6 +119,16 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
   const settingsApp = row.settingsIn === 'app' ? apps[0] : undefined
   // The panels the plugin draws itself (`walnut.ui.settings`): registered while its web part runs.
   const panels = usePluginSettingsPanels(row.id)
+  // The home screen's Remove... opens this page at its Remove row (`?panel=remove`), lit once.
+  useEffect(() => {
+    if (focusPanel !== 'remove') return
+    const el = document.querySelector<HTMLElement>(`[data-testid="plugin-remove-group-${CSS.escape(row.id)}"]`)
+    if (!el) return
+    el.scrollIntoView?.({ block: 'center' })
+    el.classList.add('settings-anchor-flash-strong')
+    const t = window.setTimeout(() => el.classList.remove('settings-anchor-flash-strong'), 3100)
+    return () => window.clearTimeout(t)
+  }, [focusPanel, row.id])
   // A built-in plugin's own section drawn by core code (Mail's routers): shown while the plugin runs,
   // since what it reads is that plugin's.
   const corePanel = row.installed && on && hasCorePluginPanel(row.id)
@@ -238,7 +248,7 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
   // An optional plugin of a source is removed on its own (back to waiting under its source);
   // any other source plugin goes with its whole source.
   const ownRemove = row.source.kind === 'bundled' || row.install === 'optional'
-  const removable = row.installed && (row.sourceSlug || row.source.kind === 'bundled')
+  const removable = isRemovable(row)
   const remove = removable ? (
     <SettingsGroup className="apps-detail-group" data-testid={`plugin-remove-group-${row.id}`}>
       <SettingsRow

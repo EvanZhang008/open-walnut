@@ -12,19 +12,24 @@
  * stored (the Mac on its own LAN) the tile keeps the plain `<img src>`.
  */
 import { useEffect, useState } from 'react'
-import { apiGetText } from '@/api/client'
+import { apiGetBlob } from '@/api/client'
 import { getDeviceToken } from '@/api/device-token'
 import { hashPluginId, monogramFor, PLUGIN_TINTS } from './settings-icons'
 import '@/styles/settings-plugin-icon.css'
 
-/** One fetch per icon version (`?v=` is in the key) for the page's life; a few KB each. */
+/**
+ * One fetch per picture version (`?v=` is in the key) for the page's life: an icon is a few KB,
+ * and the Store's screenshots (up to 2 MB each) are only the few plugins it lists. Read as bytes,
+ * so the server's own type (SVG, PNG, JPEG, WebP) stays on the blob.
+ */
 const authedIcons = new Map<string, Promise<string>>()
 
 function authedIconSrc(iconUrl: string): Promise<string> {
   let pending = authedIcons.get(iconUrl)
   if (!pending) {
-    pending = apiGetText(iconUrl, undefined, { timeoutMs: 10_000 })
-      .then((svg) => URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' })))
+    const screenshot = /\/screenshot(\?|$)/.test(iconUrl)
+    pending = apiGetBlob(iconUrl, { timeoutMs: screenshot ? 30_000 : 10_000 })
+      .then((blob) => URL.createObjectURL(blob))
     // A failure is not cached: the next mount tries again.
     pending.catch(() => { authedIcons.delete(iconUrl) })
     authedIcons.set(iconUrl, pending)
@@ -32,8 +37,11 @@ function authedIconSrc(iconUrl: string): Promise<string> {
   return pending
 }
 
-/** The src to draw: the URL itself, or (with a device token) a blob URL once it has loaded. */
-function useIconSrc(iconUrl: string | undefined): { src?: string; failed: boolean } {
+/**
+ * The src to draw for a plugin picture (its icon, its screenshot): the URL itself, or (with a
+ * device token) a blob URL once it has loaded.
+ */
+export function useIconSrc(iconUrl: string | undefined): { src?: string; failed: boolean } {
   const needsToken = Boolean(iconUrl) && Boolean(getDeviceToken())
   const [loaded, setLoaded] = useState<{ url: string; src?: string; failed: boolean } | null>(null)
   useEffect(() => {

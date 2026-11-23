@@ -47,6 +47,13 @@ export const EXPERIMENTAL_FEATURES = [
     default: false,
   },
   {
+    id: 'apps_home',
+    name: 'Apps as a home screen',
+    description: 'The Apps page shows everything installed together, built-in apps and plugins, as icons or a list, opening on the ones you used recently. Each app has one Open button and one menu; the Store beside it holds what you can add and your sources.',
+    summary: 'The Apps page shows built-in apps and plugins together, opening on the ones you used recently.',
+    default: false,
+  },
+  {
     id: 'quiet_rail',
     name: 'Fewer icons on the sidebar',
     description: 'Tasks, Routines, Passwords and Calendar leave the sidebar and open from the Apps page instead. Each keeps its address and its links; turn its switch on in Apps to put it back on the sidebar.',

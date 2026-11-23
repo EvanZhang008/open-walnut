@@ -432,6 +432,17 @@ export function openAppActivity(activity: AppActivity, key: string): AppActivity
   }
 }
 
+/**
+ * Used, not opened on the Sidebar: only the recently used list moves (the Apps page's Recently
+ * used reads it). Every way in records this while open apps do not stay on the Sidebar
+ * (experiment apps_stay_open off), so turning that experiment on later shows no surprise rows.
+ * The same record when nothing changes, so a re-render writes nothing.
+ */
+export function noteAppUsed(activity: AppActivity, key: string): AppActivity {
+  if (!key || activity.recent[0] === key) return activity
+  return { ...activity, recent: [key, ...without(activity.recent, key)].slice(0, APP_RECENT_MAX) }
+}
+
 /** Closing only takes the Sidebar row away: the app stays recent. */
 export function closeAppActivity(activity: AppActivity, key: string): AppActivity {
   if (!activity.open.includes(key)) return activity

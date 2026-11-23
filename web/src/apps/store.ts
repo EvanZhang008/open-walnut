@@ -8,6 +8,7 @@ import {
   createAppPreferences,
   moveApp,
   openAppActivity,
+  noteAppUsed,
   parseAppActivity,
   parseAppPins,
   parseAppPreferences,
@@ -154,6 +155,11 @@ export function subscribeAppActivity(listener: () => void): () => void {
 /** An app was opened (any way in: a link, the palette, a deep link, Back). */
 export function markAppOpened(key: string): void {
   activityStore.update((current) => openAppActivity(current, key))
+}
+
+/** It was used (opened, or a plugin without a screen had its page open): Recently used only. */
+export function markAppUsed(key: string): void {
+  activityStore.update((current) => noteAppUsed(current, key))
 }
 
 /** The person closed it: its Sidebar row goes, it stays recently used. */

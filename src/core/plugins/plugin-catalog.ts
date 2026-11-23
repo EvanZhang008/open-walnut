@@ -236,6 +236,8 @@ export interface PluginRegistryRow {
   /** `/api/plugin-runtime/<id>/icon?v=…`, present only when the manifest's icon exists on this
    *  machine. Added by the registry route (plugin-icon-route.ts), never by the pure merge. */
   iconUrl?: string
+  /** Present only when the manifest's `screenshot` exists on the server: the Apps page's Store shows it. */
+  screenshotUrl?: string
 }
 
 export interface PluginRegistryResult {

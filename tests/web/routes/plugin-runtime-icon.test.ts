@@ -1,5 +1,5 @@
 /**
- * GET /api/plugin-runtime/:id/icon and the `iconUrl` on store rows.
+ * GET /api/plugin-runtime/:id/icon and /screenshot, and the `iconUrl` and `screenshotUrl` on store rows.
  *
  * Pins the contract the Settings tiles read: an installed plugin's icon comes from the
  * folder it runs from; a plugin that is not installed yet is found where its catalog
@@ -18,6 +18,8 @@ import { IntegrationRegistry } from '../../../src/core/integration-registry.js'
 import type { PluginLifecycleRecord } from '../../../src/core/plugins/plugin-manager.js'
 import { createPluginRuntimeRouter } from '../../../src/web/routes/plugin-runtime.js'
 
+/** The 8-byte PNG signature and a little after it: the route serves bytes, it never decodes them. */
+const PNG = '\x89PNG\r\n\x1a\n-not-a-real-picture'
 const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>'
 
 let base: string
@@ -35,7 +37,7 @@ beforeEach(async () => {
   base = await fsp.mkdtemp(path.join(os.tmpdir(), 'plugin-icon-route-'))
   installedDirs = new Map()
   // Installed from a folder of its own, with an icon.
-  await writePlugin(path.join(base, 'plugins', 'acme-plugin'), 'acme-plugin', { icon: 'icon.svg' }, { 'icon.svg': SVG })
+  await writePlugin(path.join(base, 'plugins', 'acme-plugin'), 'acme-plugin', { icon: 'icon.svg', screenshot: 'shot.png' }, { 'icon.svg': SVG, 'shot.png': PNG })
   // A sandboxed webview is a screen too.
   await writePlugin(path.join(base, 'plugins', 'view-plugin'), 'view-plugin', { webview: { title: 'View', entry: 'index.html' } })
   installedDirs.set('view-plugin', path.join(base, 'plugins', 'view-plugin'))
@@ -45,13 +47,16 @@ beforeEach(async () => {
   installedDirs.set('plain-plugin', path.join(base, 'plugins', 'plain-plugin'))
   // Installed, but its manifest tries to point outside the folder. Its web entry is on an
   // apiVersion the loader never loads a web module for, so it has no screen.
-  await writePlugin(path.join(base, 'plugins', 'sneaky-plugin'), 'sneaky-plugin', { icon: '../secret.svg', apiVersion: 2, web: 'dist/web.mjs' })
+  await writePlugin(path.join(base, 'plugins', 'sneaky-plugin'), 'sneaky-plugin', { icon: '../secret.svg', screenshot: '../secret.png', apiVersion: 2, web: 'dist/web.mjs' })
+  await fsp.writeFile(path.join(base, 'plugins', 'secret.png'), PNG)
   await fsp.writeFile(path.join(base, 'plugins', 'secret.svg'), SVG)
   installedDirs.set('sneaky-plugin', path.join(base, 'plugins', 'sneaky-plugin'))
   // Not installed: a bundled store row and an example row, both with icons.
   await writePlugin(path.join(base, 'store', 'store-plugin'), 'store-plugin', {
-    icon: 'icon.svg', server: 'dist/server.mjs', catalog: { adds: ['App'] },
+    icon: 'icon.svg', screenshot: 'pictures/store.webp', server: 'dist/server.mjs', catalog: { adds: ['App'] },
   }, { 'icon.svg': SVG })
+  await fsp.mkdir(path.join(base, 'store', 'store-plugin', 'pictures'), { recursive: true })
+  await fsp.writeFile(path.join(base, 'store', 'store-plugin', 'pictures', 'store.webp'), 'RIFF....WEBP')
   await writePlugin(path.join(base, 'checkout', 'examples', 'sample-plugin'), 'sample-plugin', { icon: 'icon.svg' }, { 'icon.svg': SVG })
   await fsp.mkdir(path.join(base, 'home'), { recursive: true })
   await fsp.writeFile(path.join(base, 'home', 'plugin-registry.json'), JSON.stringify({
@@ -168,5 +173,37 @@ describe('GET /api/plugin-runtime/registry: dir', () => {
     expect(byId.get('acme-plugin')?.hasUi).toBeUndefined()
     expect(byId.get('sneaky-plugin')?.hasUi).toBeUndefined()
     expect(byId.get('store-plugin')?.hasUi).toBeUndefined()
+  })
+})
+
+describe('GET /api/plugin-runtime/:id/screenshot', () => {
+  it('serves the manifest screenshot with its own type and the same locked-down headers', async () => {
+    const app = setup()
+    const png = await request(app).get('/api/plugin-runtime/acme-plugin/screenshot').expect(200)
+    expect(png.headers['content-type']).toBe('image/png')
+    expect(png.headers['x-content-type-options']).toBe('nosniff')
+    expect(png.headers['content-security-policy']).toContain('sandbox')
+    // Not installed yet: found where its catalog entry lives, in a subfolder.
+    await request(app).get('/api/plugin-runtime/store-plugin/screenshot').expect(200).expect('Content-Type', 'image/webp')
+  })
+
+  it('answers 404 without one, and never serves a file outside the plugin folder', async () => {
+    const app = setup()
+    const plain = await request(app).get('/api/plugin-runtime/plain-plugin/screenshot').expect(404)
+    expect(plain.body.error).toContain('declares no screenshot')
+    const sneaky = await request(app).get('/api/plugin-runtime/sneaky-plugin/screenshot').expect(404)
+    expect(sneaky.body.error).toContain('inside the plugin folder')
+    await request(app).get('/api/plugin-runtime/..%2F..%2Fetc/screenshot').expect(400)
+  })
+
+  it('carries screenshotUrl on a registry row exactly where the route serves one', async () => {
+    const app = setup()
+    const response = await request(app).get('/api/plugin-runtime/registry').expect(200)
+    const rows = response.body.rows as Array<{ id: string; screenshotUrl?: string }>
+    const byId = new Map(rows.map((row) => [row.id, row]))
+    expect(byId.get('acme-plugin')?.screenshotUrl).toMatch(/^\/api\/plugin-runtime\/acme-plugin\/screenshot\?v=/)
+    expect(byId.get('store-plugin')?.screenshotUrl).toMatch(/^\/api\/plugin-runtime\/store-plugin\/screenshot\?v=/)
+    for (const id of ['plain-plugin', 'sneaky-plugin', 'remote-plugin', 'sample-plugin']) expect(byId.get(id)?.screenshotUrl, id).toBeUndefined()
+    for (const row of rows) if (row.screenshotUrl) await request(app).get(row.screenshotUrl).expect(200)
   })
 })

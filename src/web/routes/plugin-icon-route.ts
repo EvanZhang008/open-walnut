@@ -1,7 +1,8 @@
 /**
- * GET /api/plugin-runtime/:pluginId/icon, and the `iconUrl` every store row carries.
+ * GET /api/plugin-runtime/:pluginId/icon and /screenshot, and the `iconUrl` and `screenshotUrl`
+ * every store row carries.
  *
- * One lookup serves both, so a row never advertises an icon the route would 404: the
+ * One lookup serves both, so a row never advertises a picture the route would 404: the
  * folder an installed plugin runs from wins; a plugin that is not installed is found
  * where its catalog entry says it lives on this machine (the bundled store folder, the
  * builtin folder, or an example in this checkout). git and npm catalog rows have no
@@ -17,7 +18,7 @@ import path from 'node:path'
 import type { Router } from 'express'
 import { validatePluginId } from '../../core/plugins/ids.js'
 import type { PluginCatalogEntry, PluginCatalogSource } from '../../core/plugins/plugin-catalog.js'
-import { findPluginIcon, pluginIconUrl, readPluginIcon } from '../../core/plugins/plugin-icon.js'
+import { findPluginAsset, pluginAssetUrl, readPluginAsset, PLUGIN_ICON, PLUGIN_SCREENSHOT, type PluginAssetRule } from '../../core/plugins/plugin-icon.js'
 
 /** Short: an icon can change under a linked checkout, and `?v=` already busts it when it does. */
 const ICON_CACHE_CONTROL = 'private, max-age=300'
@@ -28,6 +29,15 @@ const ICON_CACHE_CONTROL = 'private, max-age=300'
  * script anyway, and the inline styles a drawing uses still apply.
  */
 const ICON_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+
+/** The Content-Type a picture is served with, by its extension (only the rules' types reach here). */
+function assetContentType(file: string): string {
+  const ext = path.extname(file).toLowerCase()
+  if (ext === '.svg') return 'image/svg+xml; charset=utf-8'
+  if (ext === '.png') return 'image/png'
+  if (ext === '.webp') return 'image/webp'
+  return 'image/jpeg'
+}
 
 export interface PluginIconDirs {
   /** The folder a discovered plugin runs from, whatever its state. */
@@ -80,18 +90,26 @@ async function iconDirFor(
   return entry ? catalogIconDir(entry, dirs) : undefined
 }
 
-/** Every row, in order, plus `iconUrl` where the icon exists. A lookup failure only drops that row's icon. */
+/**
+ * Every row, in order, plus `iconUrl` and `screenshotUrl` where the picture exists. A lookup
+ * failure only drops that row's picture.
+ */
 export async function withPluginIconUrls<T extends { id: string; source: PluginCatalogSource }>(
   rows: readonly T[],
   catalog: readonly PluginCatalogEntry[],
   dirs: PluginIconDirs,
-): Promise<Array<T & { iconUrl?: string }>> {
+): Promise<Array<T & { iconUrl?: string; screenshotUrl?: string }>> {
   const byId = new Map(catalog.map((entry) => [entry.id, entry]))
   return Promise.all(rows.map(async (row) => {
     try {
       const dir = await iconDirFor(row.id, byId.get(row.id) ?? row, dirs)
-      const icon = dir ? await findPluginIcon(dir) : null
-      return icon?.ok ? { ...row, iconUrl: pluginIconUrl(row.id, icon) } : row
+      if (!dir) return row
+      const [icon, shot] = await Promise.all([findPluginAsset(dir, PLUGIN_ICON), findPluginAsset(dir, PLUGIN_SCREENSHOT)])
+      return {
+        ...row,
+        ...(icon.ok ? { iconUrl: pluginAssetUrl(row.id, icon, PLUGIN_ICON) } : {}),
+        ...(shot.ok ? { screenshotUrl: pluginAssetUrl(row.id, shot, PLUGIN_SCREENSHOT) } : {}),
+      }
     } catch {
       return row
     }
@@ -102,7 +120,16 @@ export function mountPluginIconRoute(
   router: Router,
   opts: { dirs: PluginIconDirs; loadCatalog(): Promise<PluginCatalogEntry[]> },
 ): void {
-  router.get('/:pluginId/icon', async (req, res) => {
+  mountPluginAssetRoute(router, opts, PLUGIN_ICON)
+  mountPluginAssetRoute(router, opts, PLUGIN_SCREENSHOT)
+}
+
+function mountPluginAssetRoute(
+  router: Router,
+  opts: { dirs: PluginIconDirs; loadCatalog(): Promise<PluginCatalogEntry[]> },
+  rule: PluginAssetRule,
+): void {
+  router.get(`/:pluginId/${rule.field}`, async (req, res) => {
     let pluginId: string
     try {
       const raw = req.params.pluginId
@@ -121,17 +148,17 @@ export function mountPluginIconRoute(
         res.status(404).json({ error: `Plugin "${pluginId}" is not on this machine` })
         return
       }
-      const icon = await readPluginIcon(dir)
-      if (!icon.ok) {
-        res.status(icon.status).json({ error: `Plugin "${pluginId}" has no usable icon: ${icon.error}` })
+      const asset = await readPluginAsset(dir, rule)
+      if (!asset.ok) {
+        res.status(asset.status).json({ error: `Plugin "${pluginId}" has no usable ${rule.field}: ${asset.error}` })
         return
       }
-      res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8')
+      res.setHeader('Content-Type', assetContentType(asset.file))
       res.setHeader('Cache-Control', ICON_CACHE_CONTROL)
       res.setHeader('X-Content-Type-Options', 'nosniff')
       res.setHeader('Content-Security-Policy', ICON_CSP)
       // res.send adds the ETag and answers a matching If-None-Match with 304.
-      res.send(icon.body)
+      res.send(asset.body)
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) })
     }

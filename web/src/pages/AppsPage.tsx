@@ -24,6 +24,7 @@ import { BUILTIN_APPS_TITLE, builtinParts, builtinsMatching, builtinsShown } fro
 import { GET_MORE_TITLE, PLUGIN_CATEGORY_LABELS, PLUGIN_CATEGORY_ORDER, isAppsFilter, type AppsFilter } from '@/components/apps-page/categories'
 import { usePageView } from '@/utils/view-memory'
 import { PluginStoreGrid, type PluginStoreSummary } from '@/components/apps-page/PluginStoreGrid'
+import { AppsHome } from '@/components/apps-page/AppsHome'
 import { PluginDetail } from '@/components/apps-page/PluginDetail'
 import { usePluginStore } from '@/components/apps-page/usePluginStore'
 import { PluginAskDrawer } from '@/components/apps-page/PluginAskDrawer'
@@ -105,11 +106,13 @@ function AppsPageBody() {
   // The grid's scroll position, kept while a detail page is open and put back on return.
   const scrollRef = useRef<HTMLDivElement>(null)
   const gridScroll = useRef(0)
-  const openDetail = useCallback((key: 'plugin' | 'app', value: string) => {
+  const openDetail = useCallback((key: 'plugin' | 'app', value: string, panel?: string) => {
     if (!detailOpen) gridScroll.current = scrollRef.current?.scrollTop ?? 0
-    setParams({ [key]: value }, { state: { fromApps: true } })
+    setParams({ [key]: value, ...(panel ? { panel } : {}) }, { state: { fromApps: true } })
   }, [detailOpen, setParams])
-  const openPlugin = useCallback((id: string) => openDetail('plugin', id), [openDetail])
+  const openPlugin = useCallback((id: string, panel?: string) => openDetail('plugin', id, panel), [openDetail])
+  // Experiment apps_home: the page is a home screen of everything installed, and a Store beside it.
+  const home = useExperimental('apps_home')
   // "Configure with AI" (experiment plugin_ai_configure): a chat about the open plugin beside its
   // page, kept in the address (`&ask=1`) so a reload or a link opens it again.
   const aiConfigure = useExperimental('plugin_ai_configure')
@@ -181,6 +184,11 @@ function AppsPageBody() {
           )}
         </div>
       )}
+      {home ? (
+        <div className="apps-page-inner" hidden={detailOpen}>
+          <AppsHome store={store} builtins={shownBuiltins} folded={folded} heldFacts={heldFacts} held={held} onOpenPlugin={openPlugin} onOpenApp={openApp} showSaved={!detailOpen} />
+        </div>
+      ) : (
       <div className="apps-page-inner" hidden={detailOpen}>
         <header className="apps-hero">
           <span className="apps-hero-icon" aria-hidden="true"><AppsIcon size={26} /></span>
@@ -246,6 +254,7 @@ function AppsPageBody() {
           </section>
         )}
       </div>
+      )}
     </div>
     {askRow && (
       <aside className="apps-ask-panel" data-testid="plugin-ask-panel" aria-label={`Configure ${askRow.name} with AI`}>

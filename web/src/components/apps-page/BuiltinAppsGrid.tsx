@@ -51,7 +51,7 @@ const HOME_PANELS: Partial<Record<RailItemId, { panel: HomePanelId; toggleEvent:
   'home-scratchpad': { panel: 'scratchpad', toggleEvent: 'sidebar:toggle-scratchpad' },
 }
 
-function setPartOnRail(part: AppPart, on: boolean, quietRail: boolean): void {
+export function setPartOnRail(part: AppPart, on: boolean, quietRail: boolean): void {
   // A registry app goes through the one Sidebar switch: a quiet_rail app's pin is a placement.
   if (part.app) updateAppOnSidebar(part.app, on, quietRail)
   else updateAppDisposition(part.key, on ? 'pinned' : 'unpinned')

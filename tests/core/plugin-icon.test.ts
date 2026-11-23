@@ -1,6 +1,6 @@
 /**
- * The manifest `icon` field: the server-side path rule, the file lookup behind the icon
- * route, and the author CLI's `validate`, which must agree on what a usable icon is.
+ * The manifest `icon` and `screenshot` fields: the server-side path rule, the file lookup behind
+ * their routes, and the author CLI's `validate`, which must agree on what a usable picture is.
  */
 
 import fsp from 'node:fs/promises'
@@ -9,7 +9,11 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   PLUGIN_ICON_MAX_BYTES,
+  PLUGIN_SCREENSHOT,
+  PLUGIN_SCREENSHOT_MAX_BYTES,
+  findPluginAsset,
   findPluginIcon,
+  validatePluginAssetPath,
   pluginIconUrl,
   validatePluginIconPath,
 } from '../../src/core/plugins/plugin-icon.js'
@@ -122,5 +126,40 @@ describe('walnut-plugin validate: icon', () => {
     const dir = await pluginDir({ icon: 'icon.svg', web: 'dist/web.mjs' }, { 'icon.svg': big })
     expect(await findPluginIcon(dir)).toMatchObject({ ok: false, status: 413 })
     expect((await validatePlugin(dir)).errors).toEqual([expect.stringContaining('an icon must be at most 64 KB')])
+  })
+})
+
+describe('screenshot', () => {
+  it('takes a relative .png, .jpg or .webp path and nothing else', () => {
+    expect(validatePluginAssetPath('pictures/shot.png', PLUGIN_SCREENSHOT)).toEqual({ ok: true, rel: 'pictures/shot.png' })
+    expect(validatePluginAssetPath('./shot.JPG', PLUGIN_SCREENSHOT)).toEqual({ ok: true, rel: 'shot.JPG' })
+    for (const bad of ['shot.svg', 'shot.html', '../shot.png', '/abs/shot.png', 'https://x.test/shot.png', '', 42]) {
+      expect(validatePluginAssetPath(bad, PLUGIN_SCREENSHOT).ok, String(bad)).toBe(false)
+    }
+  })
+
+  it('is found like the icon, refused over 2 MB, and a symlink to another type is refused', async () => {
+    const dir = await pluginDir({ screenshot: 'shot.webp' }, { 'shot.webp': 'RIFF' })
+    expect(await findPluginAsset(dir, PLUGIN_SCREENSHOT)).toMatchObject({ ok: true })
+    const big = await pluginDir({ screenshot: 'shot.png' }, { 'shot.png': 'x'.repeat(PLUGIN_SCREENSHOT_MAX_BYTES + 1) })
+    expect(await findPluginAsset(big, PLUGIN_SCREENSHOT)).toMatchObject({ ok: false, status: 413, error: expect.stringContaining('2 MB') })
+    const linked = await pluginDir({ screenshot: 'shot.png' }, { 'page.html': '<script>1</script>' })
+    await fsp.symlink(path.join(linked, 'page.html'), path.join(linked, 'shot.png'))
+    expect(await findPluginAsset(linked, PLUGIN_SCREENSHOT)).toMatchObject({ ok: false, status: 404 })
+  })
+
+  it('walnut-plugin validate agrees: a good one passes, a bad one names the field', async () => {
+    expect((await validatePlugin(await pluginDir({ screenshot: 'shot.png', web: 'dist/web.mjs' }, { 'shot.png': 'png' }))).errors).toEqual([])
+    expect((await validatePlugin(await pluginDir({ screenshot: 'shot.gif', web: 'dist/web.mjs' }, { 'shot.gif': 'gif' }))).errors)
+      .toEqual([expect.stringContaining('manifest.screenshot must be a .png, .jpg or .webp file')])
+    expect((await validatePlugin(await pluginDir({ screenshot: 'missing.png', web: 'dist/web.mjs' }))).errors)
+      .toEqual([expect.stringContaining('manifest.screenshot file does not exist: missing.png')])
+    // What the host would refuse after install, validate refuses first: an empty file, a link out of the folder.
+    expect((await validatePlugin(await pluginDir({ screenshot: 'shot.png', web: 'dist/web.mjs' }, { 'shot.png': '' }))).errors)
+      .toEqual([expect.stringContaining('manifest.screenshot is empty or not a file')])
+    const out = await pluginDir({ screenshot: 'shot.png', web: 'dist/web.mjs' })
+    await fsp.writeFile(path.join(path.dirname(out), 'x.png'), 'png')
+    await fsp.symlink(path.join(path.dirname(out), 'x.png'), path.join(out, 'shot.png'))
+    expect((await validatePlugin(out)).errors).toEqual([expect.stringContaining('manifest.screenshot must be a path inside the plugin folder')])
   })
 })

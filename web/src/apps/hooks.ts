@@ -27,6 +27,7 @@ import {
   getAppPins,
   getAppPreferences,
   markAppOpened,
+  markAppUsed,
   subscribeAppActivity,
   subscribeAppPins,
   subscribeAppPreferences,
@@ -80,6 +81,14 @@ export function useAppCatalog(): AppCatalog {
   }, [preferences, registrySnapshot, webviews.apps, webviews.loading, activeKey, sidebarDefault, quietRail])
 }
 
+/**
+ * The recently used app keys, most recent first, whatever the experiment: the Apps page's
+ * Recently used resolves them against its own items (a plugin page counts as `plugin:<id>`).
+ */
+export function useRecentAppKeys(): readonly string[] {
+  return useSyncExternalStore(subscribeAppActivity, getAppActivity, getAppActivity).recent
+}
+
 /** The keys pinned on the Apps page, or null while the experiment `apps_stay_open` is off. */
 export function useAppPagePins(): readonly string[] | null {
   const on = useExperimental('apps_stay_open')
@@ -118,6 +127,9 @@ export function useTrackOpenedApp(app: RegisteredApp | undefined): void {
   const on = useExperimental('apps_stay_open')
   const key = app && tracksAppActivity(app) ? app.key : ''
   useEffect(() => {
-    if (on && key) markAppOpened(key)
+    if (!key) return
+    // Recently used on the Apps page counts every app opened; only the experiment keeps it open on the Sidebar.
+    if (on) markAppOpened(key)
+    else markAppUsed(key)
   }, [on, key])
 }

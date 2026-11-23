@@ -10,32 +10,25 @@
  * that app's card in Built-in sidebar apps, never a second card here. A plugin with an App has Open and
  * that App's sidebar switch on its card, as a built-in app has.
  */
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useEffect, type ReactElement } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppCatalog } from '@/apps/hooks'
 import type { RegisteredApp } from '@/apps/registry'
-import { SettingsGroup, SettingsNotice, SettingsRow } from '@/components/settings/SettingsSection'
+import { SettingsGroup, SettingsRow } from '@/components/settings/SettingsSection'
 import { EmptyState, LoadingState } from '@/components/common/EmptyState'
-import { SettingsButton } from '@/components/settings/inputs/SettingsButton'
 import { PluginIcon, pluginTileTints } from '@/components/settings/PluginIcon'
-import { PluginPendingDependencies } from '@/components/settings/sections/PluginDependencyRows'
 import { PluginSourceHead, UpdatesHead } from '@/components/settings/sections/PluginSourcesGroup'
-import { sourceRowKey } from '@/components/settings/plugin-update-types'
 import { firstSentence } from '@/components/settings/sections/plugin-row-view'
 import { BUNDLED_AVAILABLE_TITLE, STORE_OPTIONAL_TITLE } from '@/components/settings/sections/plugin-bundled-actions'
-import { buildInstallLink, INSTALL_LINK_SCHEME, type InstallLinkTarget } from '../../../../src/core/plugin-install-link'
-import { peekPendingInstall, settlePendingInstall, subscribeOpenLinks } from '@/utils/open-link'
-import { useDraft } from '@/hooks/useDraft'
-import { draftKey } from '@/utils/drafts'
 import { GET_MORE_TITLE, PLUGIN_CATEGORY_ORDER, categoryOf, pluginMatches, type AppsFilter, type PluginCategoryId } from './categories'
 import { AppBadge, AppsGrid, SidebarSwitch } from './app-bits'
 import { StoreCard, type StoreCardPart } from './StoreCard'
-import { originKind, partParents, type RegistryRow } from './plugin-store-model'
+import { appsOfPlugin, originKind, partParents, type RegistryRow } from './plugin-store-model'
 import { pluginCardFacts } from './plugin-card-facts'
 import { updateAppOnSidebar } from '@/apps/store'
 import type { PluginStore } from './usePluginStore'
-import { ExposeGuide } from './ExposeGuide'
-import { installedSourceFor, sourceDisplayName, sourceSections, type SourceSection } from './source-sections'
+import { sourceSections, type SourceSection } from './source-sections'
+import { AddSourceForm, LinkRequestCards, PendingDependencies, StoreNotices, useAddSource } from './PluginAddFlows'
 import '@/styles/settings-sections-addons.css'
 
 export interface PluginStoreSummary {
@@ -50,23 +43,6 @@ const SECTION_SUB: Record<'builtin' | 'local', string> = {
   local: 'In a folder on this computer that no source installed, so nothing updates them.',
 }
 
-/** The one line an install says before it runs: clicking Install is the consent. */
-const INSTALL_CONSENT = "Install only from a source you trust: a plugin's code runs inside Walnut with full access to your tasks, notes, credentials and this computer."
-
-/** A git remote the local git can clone; anything else is treated as an npm spec. */
-function looksLikeGitUrl(value: string): boolean {
-  return /^(https?:\/\/|ssh:\/\/|git@[\w.-]+:|file:\/\/)/.test(value)
-}
-
-/** What the link card says when its install fails: the reason in plain words first. */
-function linkFailureText(err: unknown): string {
-  const e = err as { message?: string; gitCause?: unknown; sentence?: unknown }
-  if (e?.gitCause === 'auth') return "Couldn't get the plugins: this account has no access to that repository. Ask whoever shared the link for access, then try again."
-  if (e?.gitCause === 'network') return "Couldn't get the plugins: the repository could not be reached. Check the network or VPN, then try again."
-  if (typeof e?.sentence === 'string' && e.gitCause && e.gitCause !== 'unknown') return `Couldn't get the plugins: ${e.sentence}`
-  return `Couldn't get the plugins from that source. ${e?.message ?? String(err)}`
-}
-
 /** A card's line for a plugin with no description: where it comes from, said plainly. */
 function fallbackLine(row: RegistryRow): string {
   if (row.installed) return originKind(row)
@@ -74,23 +50,6 @@ function fallbackLine(row: RegistryRow): string {
   if (row.source.kind === 'bundled') return BUNDLED_AVAILABLE_TITLE
   if (row.sourceSlug) return STORE_OPTIONAL_TITLE
   return originKind(row)
-}
-
-/** The Apps a plugin adds, in catalog order. */
-export function appsOfPlugin(apps: readonly RegisteredApp[], pluginId: string): RegisteredApp[] {
-  return apps.filter((app) => app.kind !== 'core' && app.pluginId === pluginId)
-}
-
-export function StoreNotices({ store }: { store: PluginStore }) {
-  return (
-    <>
-      {/* Only Remove needs a page-level word: no plugin survives to carry the tag. */}
-      {store.restartNeeded && <SettingsNotice kind="warn">Restart Walnut to finish removing that plugin&apos;s code.</SettingsNotice>}
-      {store.error && <SettingsNotice kind="error" role="alert">{store.error}</SettingsNotice>}
-      {store.notice && <SettingsNotice kind="success">{store.notice}</SettingsNotice>}
-      {store.notice && store.addedPluginIds.length > 0 && <ExposeGuide pluginIds={store.addedPluginIds} testId="expose-guide-added" />}
-    </>
-  )
 }
 
 export function PluginStoreGrid({ store, filter, query, onSummary, onOpen, folded, heldInFilter = 0 }: {
@@ -108,70 +67,7 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen, folde
   const navigate = useNavigate()
   const catalog = useAppCatalog()
   const { registry, installed, available } = store
-  // A source typed or pasted and not installed yet survives leaving the page; a successful Add ends it.
-  const urlDraft = useDraft(draftKey('plugin-source', 'new'))
-  const { text: url, setText: setUrl } = urlDraft
-  const [addOpen, setAddOpen] = useState(false)
-  const urlInputRef = useRef<HTMLInputElement>(null)
-  // A source an install link asked for (utils/open-link.ts), shown in its own card.
-  const [linkRequest, setLinkRequest] = useState<InstallLinkTarget | null>(null)
-  const [linkError, setLinkError] = useState<string | null>(null)
-
-  // An install link someone clicked: its own card at the top, where the page lands. A newer
-  // link replaces it. It stays pending until Install, Cancel or (already installed) Done.
-  useEffect(() => {
-    const take = () => {
-      const target = peekPendingInstall()
-      if (!target) return
-      setLinkRequest(target)
-      setLinkError(null)
-      store.setNotice(null)
-      store.setError(null)
-    }
-    take()
-    return subscribeOpenLinks(take)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // A source typed earlier and not installed yet keeps the form open.
-  useEffect(() => { if (url.trim()) setAddOpen(true) }, [url])
-
-  const handleAdd = async () => {
-    const value = url.trim()
-    if (!value) return
-    store.setBusy('add')
-    store.setError(null)
-    store.setNotice(null)
-    const sentKey = urlDraft.key
-    try {
-      const isSnippet = value.startsWith('{')
-      const isInstallLink = value.toLowerCase().startsWith(INSTALL_LINK_SCHEME)
-      await store.installSource(isSnippet || isInstallLink || looksLikeGitUrl(value) ? { url: value } : { spec: value })
-      urlDraft.clear(sentKey)
-    } catch (err) {
-      store.setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      store.setBusy(null)
-    }
-  }
-
-  const handleLinkInstall = async () => {
-    if (!linkRequest) return
-    const target = linkRequest
-    store.setBusy('link')
-    setLinkError(null)
-    store.setNotice(null)
-    store.setError(null)
-    try {
-      await store.installSource({ url: buildInstallLink(target) })
-      settlePendingInstall(target)
-      setLinkRequest((current) => (current === target ? null : current))
-    } catch (err) {
-      setLinkError(linkFailureText(err))
-    } finally {
-      store.setBusy(null)
-    }
-  }
+  const add = useAddSource(store)
 
   // One tint per plugin across both lists, picked the way the Settings sidebar picks them.
   const tints = pluginTileTints(store.rows)
@@ -201,10 +97,6 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen, folde
   const matchingAvailable = available.filter((row) => !row.sourceSlug && pluginMatches(row, query))
   const searching = query.trim() !== ''
   const presentKey = PLUGIN_CATEGORY_ORDER.filter((category) => [...topLevel, ...waiting].some((row) => categoryOf(row) === category)).join(',')
-  const linkInstalled = linkRequest ? installedSourceFor(linkRequest, store.sources) : null
-  // Until the installed sources are read, the card cannot tell a fresh install from one already
-  // there: it says it is checking rather than offer an Install that may be wrong.
-  const linkChecking = linkRequest !== null && !store.sourcesLoaded
   const matchCount = (showGroups ? groups.reduce((n, group) => n + group.rows.length, 0) : 0) + (showGetMore ? matchingAvailable.length : 0)
   const loaded = registry !== null
   useEffect(() => {
@@ -261,79 +153,7 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen, folde
     <div id="plugin-store" className="apps-plugins" data-testid="apps-plugins">
       <StoreNotices store={store} />
 
-      {linkRequest && linkInstalled && (
-        <SettingsGroup heading="Already installed" className="plugin-store-group plugin-link-request" data-testid="plugin-link-request" data-link-installed="true">
-          <SettingsRow
-            label={`${sourceDisplayName(linkInstalled)} is installed`}
-            help={
-              <span>
-                {(linkInstalled.plugins.length > 0 ? linkInstalled.plugins : linkInstalled.lastKnownPlugins ?? [])
-                  .map((plugin) => plugin.name ?? plugin.id).filter(Boolean).join(', ') || 'Its plugins are listed below.'}
-                {' '}Nothing to install. Its section below says whether it is up to date.
-              </span>
-            }
-            control={
-              <span className="settings-addons-inline">
-                <SettingsButton
-                  variant="text"
-                  onClick={() => {
-                    void store.updates.checkRow(sourceRowKey(linkInstalled.slug), { kind: 'source', slug: linkInstalled.slug })
-                    document.querySelector(`[data-testid="apps-source-${CSS.escape(linkInstalled.slug)}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
-                  }}
-                  data-testid="plugin-link-check"
-                >
-                  Check for updates
-                </SettingsButton>
-                <SettingsButton
-                  variant="primary"
-                  onClick={() => { settlePendingInstall(linkRequest); setLinkRequest(null); setLinkError(null) }}
-                  data-testid="plugin-link-done"
-                >
-                  Done
-                </SettingsButton>
-              </span>
-            }
-          />
-        </SettingsGroup>
-      )}
-
-      {linkRequest && !linkInstalled && (
-        <SettingsGroup heading="Install from a link" className="plugin-store-group plugin-link-request" data-testid="plugin-link-request" data-link-checking={linkChecking ? 'true' : undefined}>
-          <SettingsRow
-            label="Source"
-            help={
-              <span>
-                <code className="settings-addons-mono" data-testid="plugin-link-source">
-                  {linkRequest.kind === 'npm' ? linkRequest.spec : linkRequest.url}
-                  {linkRequest.kind === 'git' && linkRequest.ref ? ` (branch ${linkRequest.ref})` : ''}
-                </code>
-                <span className="plugin-install-consent" data-testid="plugin-link-consent">{INSTALL_CONSENT}</span>
-                {store.sourcesFailed && (
-                  <span className="plugin-install-consent" data-testid="plugin-link-unknown">Walnut could not read its installed sources just now, so this one may be installed already.</span>
-                )}
-              </span>
-            }
-            error={linkError ?? undefined}
-            control={
-              <span className="settings-addons-inline">
-                <SettingsButton variant="text" disabled={store.busy === 'link'} onClick={() => { settlePendingInstall(linkRequest); setLinkRequest(null); setLinkError(null) }} data-testid="plugin-link-cancel">
-                  Cancel
-                </SettingsButton>
-                <SettingsButton
-                  variant="primary"
-                  busy={store.busy === 'link' || linkChecking}
-                  busyLabel={linkChecking ? 'Checking...' : 'Installing...'}
-                  reserve={['Checking...']}
-                  onClick={() => void handleLinkInstall()}
-                  data-testid="plugin-link-install"
-                >
-                  Install
-                </SettingsButton>
-              </span>
-            }
-          />
-        </SettingsGroup>
-      )}
+      <LinkRequestCards store={store} />
 
       {showGroups && (
         <div className="apps-plugin-groups plugin-store-installed" data-testid="plugin-store-installed">
@@ -367,11 +187,8 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen, folde
               <button
                 type="button"
                 className="apps-card apps-card-add"
-                aria-expanded={addOpen}
-                onClick={() => {
-                  setAddOpen((open) => !open)
-                  if (!addOpen) requestAnimationFrame(() => urlInputRef.current?.focus())
-                }}
+                aria-expanded={add.open}
+                onClick={add.toggle}
                 data-testid="apps-add-from-link"
               >
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
@@ -380,67 +197,8 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen, folde
             )}
           </AppsGrid>
 
-          {/* The free-form install, for anything the catalog does not list. */}
-          {(addOpen || url.trim() !== '') && (
-            <SettingsGroup
-              heading="Install from git or npm"
-              className="apps-add-form"
-              footer={registry?.cloud
-                ? 'Read from your Mac over the bridge; installing and removing sources happens on the Mac.'
-                : registry?.sourcesUnavailable
-                  ? "The installed-source list couldn't be read, so Update and Remove are unavailable here."
-                  : 'Neither kind ever updates itself: you press Update.'}
-            >
-              <SettingsRow
-                label="Git URL or npm package"
-                htmlFor="plugin-source-url"
-                help={`A repo holds one plugin or one per folder; npm installs pin an exact version with scripts off. ${INSTALL_CONSENT}`}
-                wide
-                className="settings-row-stacked"
-                control={
-                  <span className="settings-addons-inline">
-                    <input
-                      id="plugin-source-url"
-                      ref={urlInputRef}
-                      type="text"
-                      data-draft-key={urlDraft.key ?? undefined}
-                      className="settings-input settings-input--long settings-input--mono"
-                      value={url}
-                      onChange={(e) => setUrl(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void handleAdd() } }}
-                      placeholder="https://github.com/example/walnut-plugin"
-                      spellCheck={false}
-                    />
-                    <SettingsButton
-                      variant="primary"
-                      disabled={!url.trim()}
-                      title={!url.trim() ? 'Paste a Git URL or an npm package first.' : undefined}
-                      busy={store.busy === 'add'}
-                      busyLabel="Installing..."
-                      onClick={() => void handleAdd()}
-                      data-testid="plugin-source-add"
-                    >
-                      Install
-                    </SettingsButton>
-                  </span>
-                }
-              />
-            </SettingsGroup>
-          )}
-
-          {/* Phase two of an install from the form: the plugin that just arrived needs
-              another one. These rows name every source it would add and ARE the consent. */}
-          {store.pending && !store.pending.rowId && (
-            <SettingsGroup heading="Dependencies">
-              <PluginPendingDependencies
-                plan={store.pending.plan}
-                busy={store.busy === `pending:${store.pending.slug}`}
-                nameFor={store.nameOf}
-                onInstall={() => void store.installDependencies(store.pending!.slug, `pending:${store.pending!.slug}`)}
-                onDismiss={() => store.setPending(null)}
-              />
-            </SettingsGroup>
-          )}
+          <AddSourceForm store={store} add={add} />
+          <PendingDependencies store={store} />
 
         </section>
       )}

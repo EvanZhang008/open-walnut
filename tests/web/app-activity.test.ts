@@ -458,8 +458,9 @@ describe('who may hide an app', () => {
     const callers = sources
       .filter(({ rel, text }) => !OWNERS.has(rel) && /\b(?:updateAppOnSidebar|keepAppOnSidebar|setAppOnSidebar|setAppPlacement)\b/.test(text))
       .map(({ rel }) => rel)
-    // The Apps page's plugin card carries its App's switch too (2026-11-21), a person's click like the others.
-    expect(callers.sort()).toEqual(['components/apps-page/BuiltinAppsGrid.tsx', 'components/apps-page/PluginDetail.tsx', 'components/apps-page/PluginStoreGrid.tsx', 'components/layout/Sidebar.tsx'])
+    // The Apps page's plugin card carries its App's switch too (2026-11-21), a person's click like the others,
+    // and so does the home screen's item menu (Show on the sidebar, experiment apps_home).
+    expect(callers.sort()).toEqual(['components/apps-page/AppsHome.tsx', 'components/apps-page/BuiltinAppsGrid.tsx', 'components/apps-page/PluginDetail.tsx', 'components/apps-page/PluginStoreGrid.tsx', 'components/layout/Sidebar.tsx'])
     expect(sources.filter(({ rel, text }) => !OWNERS.has(rel) && /\bplacement:\s*\{\s*\.\.\./.test(text)).map(({ rel }) => rel)).toEqual([])
   })
 

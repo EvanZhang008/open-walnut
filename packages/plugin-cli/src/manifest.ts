@@ -4,6 +4,7 @@ import { draftsOffDevice, viewStatesInMemory, type DraftHome } from './view-stat
 import { contentTaskCalls, contentTaskWarning } from './content-task-scan.js'
 import { parseManifestJobs } from '../../../src/core/plugin-jobs/manifest.js'
 import { parseManifestHubPorts } from '../../../src/core/hosts/hub-port-manifest.js'
+import { findPluginAsset, PLUGIN_ICON, PLUGIN_SCREENSHOT, type PluginAssetRule } from '../../../src/core/plugins/plugin-icon.js'
 
 export interface PluginBuildConfig {
   server?: string
@@ -26,6 +27,8 @@ export interface PluginManifest {
   webview?: { title: string; entry?: string; icon?: string }
   /** Relative `.svg` path inside the plugin folder: the plugin's tile in Apps. */
   icon?: string
+  /** A .png, .jpg or .webp picture of the plugin at work, shown in the Apps page's Store. */
+  screenshot?: string
   build?: PluginBuildConfig
   settingsIn?: 'plugins' | 'app'
   /** How the plugin's App works inside a focus space (experiment focus_workspace): `'scoped'` keeps
@@ -61,11 +64,31 @@ export interface ValidationResult {
 }
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/
-/** The host refuses a larger icon (413) and draws the monogram instead. */
-const ICON_MAX_BYTES = 64 * 1024
 /** The host clamps to these (src/core/plugins/plugin-file-area.ts). */
 const SYNCED_AREA_MAX_BYTES = 20 * 1024 * 1024
 const TMP_MAX_TTL_HOURS = 30 * 24
+
+/** A manifest picture field's errors, in the CLI's words: the path, its type, its size, that it exists. */
+async function assetErrors(root: string, value: string | undefined, rule: PluginAssetRule): Promise<string[]> {
+  if (value === undefined) return []
+  const field = `manifest.${rule.field}`
+  if (!safeRelativePath(value)) return [`${field} must be a path inside the plugin folder, for example "${rule.example}"`]
+  if (/["'<>?#\0]/.test(value)) return [`${field} contains characters a file name cannot use here`]
+  if (!rule.extensions.some((ext) => value.trim().toLowerCase().endsWith(ext))) return [`${field} must be ${rule.kinds}`]
+  // The host's own lookup (realpath, inside the folder, a regular non-empty file of the type, the cap).
+  const found = await findPluginAsset(root, rule)
+  if (found.ok) return []
+  if (found.status === 413) {
+    let size = 0
+    try { size = (await fs.stat(path.join(root, value))).size } catch { /* the cap is what matters */ }
+    const cap = rule.maxBytes >= 1024 * 1024 ? `${rule.maxBytes / (1024 * 1024)} MB` : `${rule.maxBytes / 1024} KB`
+    return [`${field} is ${Math.ceil(size / 1024)} KB; ${rule.field === 'icon' ? 'an icon' : 'a screenshot'} must be at most ${cap}`]
+  }
+  if (/inside the plugin folder/.test(found.error)) return [`${field} must be a path inside the plugin folder (a link out of it is refused too)`]
+  if (/is not a file/.test(found.error)) return [`${field} is empty or not a file: ${value}`]
+  if (found.error.includes(`must be ${rule.kinds}`)) return [`${field} links to a file that is not ${rule.kinds}`]
+  return [`${field} file does not exist: ${value}`]
+}
 
 function jobErrors(manifest: PluginManifest): string[] {
   const jobs = manifest.jobs as unknown
@@ -135,27 +158,10 @@ export async function validatePlugin(root = process.cwd()): Promise<ValidationRe
     errors.push(`manifest.category must be one of ${PLUGIN_CATEGORIES.map((c) => `'${c}'`).join(', ')}`)
   }
 
-  // The same rules the host applies when it serves the icon (validatePluginIconPath and
-  // PLUGIN_ICON_MAX_BYTES in src/core/plugins/plugin-icon.ts), so an icon that passes
-  // here never turns into a silent monogram after install.
-  if (manifest.icon !== undefined) {
-    if (!safeRelativePath(manifest.icon)) {
-      errors.push('manifest.icon must be a path inside the plugin folder, for example "icon.svg"')
-    } else if (/["'<>?#\0]/.test(manifest.icon)) {
-      errors.push('manifest.icon contains characters a file name cannot use here')
-    } else if (!manifest.icon.trim().toLowerCase().endsWith('.svg')) {
-      errors.push('manifest.icon must be an .svg file')
-    } else {
-      try {
-        const stat = await fs.stat(path.join(root, manifest.icon))
-        if (stat.size > ICON_MAX_BYTES) {
-          errors.push(`manifest.icon is ${Math.ceil(stat.size / 1024)} KB; an icon must be at most ${ICON_MAX_BYTES / 1024} KB`)
-        }
-      } catch {
-        errors.push(`manifest.icon file does not exist: ${manifest.icon}`)
-      }
-    }
-  }
+  // The same rules the host applies when it serves the icon and the screenshot
+  // (validatePluginAssetPath and the PLUGIN_ICON / PLUGIN_SCREENSHOT rules in
+  // src/core/plugins/plugin-icon.ts), so a picture that passes here never goes missing after install.
+  for (const rule of [PLUGIN_ICON, PLUGIN_SCREENSHOT]) errors.push(...await assetErrors(root, manifest[rule.field], rule))
 
   // The host drops a bad area with a warning; here it is an error, so the author fixes it before shipping.
   if (manifest.storage !== undefined) {

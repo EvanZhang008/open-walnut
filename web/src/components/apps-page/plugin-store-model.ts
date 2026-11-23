@@ -5,6 +5,7 @@
  * tests/web/plugin-store-model.test.ts.
  */
 import type { PluginCategory } from '../../../../src/core/plugins/plugin-category'
+import type { RegisteredApp } from '@/apps/registry'
 import type { DependencyPlanItem, MissingDependencyView } from '@/components/settings/sections/PluginDependencyRows'
 import type { PluginSource } from '@/components/settings/sections/PluginSourcesGroup'
 import { RESTART_PENDING_STATE, type UpdateState } from '@/components/settings/plugin-update-types'
@@ -65,6 +66,8 @@ export interface RegistryRow {
   toggleable: boolean
   /** Present only when the manifest's icon exists on the server; otherwise the tile is a monogram. */
   iconUrl?: string
+  /** Present only when the manifest's `screenshot` exists on the server: the Store shows it under the plugin's card. */
+  screenshotUrl?: string
   /** Installed only: the folder its code loads from on the server's host. An older server sends none. */
   dir?: string
   /** Installed only: it ships a web entry (an App, a page, a panel), on or off. */
@@ -331,4 +334,18 @@ export function addedNoticeTail(count: number, waiting: number): string {
   const plural = (n: number) => `${n} plugin${n === 1 ? '' : 's'}`
   if (waiting >= count) return `${waiting === 1 ? 'It waits' : 'They wait'} under the source: press Install on the ones you want.`
   return `${plural(count - waiting)} came on; ${plural(waiting)} ${waiting === 1 ? 'waits' : 'wait'} under the source for you to press Install.`
+}
+
+/**
+ * A plugin you can remove from its page: an installed one that came from a source (it goes with
+ * that source) or ships with Walnut's store folder (it goes back to Plugins to add). The page's
+ * Remove row and the home screen's Remove... both ask this.
+ */
+export function isRemovable(row: Pick<RegistryRow, 'installed' | 'sourceSlug' | 'source'>): boolean {
+  return row.installed && (!!row.sourceSlug || row.source.kind === 'bundled')
+}
+
+/** The Apps a plugin adds, in catalog order. */
+export function appsOfPlugin(apps: readonly RegisteredApp[], pluginId: string): RegisteredApp[] {
+  return apps.filter((app) => app.kind !== 'core' && app.pluginId === pluginId)
 }

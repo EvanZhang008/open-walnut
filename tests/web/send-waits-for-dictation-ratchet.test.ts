@@ -264,6 +264,7 @@ const SELF_GATED: Record<string, Role> = {
   'components/tasks/TodoSearchBar.tsx|MicInput aria-label="Search tasks"': FILTER,
   'components/tasks/ViewDropdown.tsx|MicInput aria-label="Search filters"': FILTER,
   'pages/AppsPage.tsx|MicInput data-testid="apps-search"': FILTER,
+  'components/apps-page/AppsHome.tsx|MicInput data-testid="apps-search"': FILTER,
   'pages/DashboardPage.tsx|MicInput aria-label="Search tasks"': FILTER,
   'components/sessions/EngineSettingsPopoverBody.tsx|MicInput aria-label="Find a setting"': FILTER,
 };
