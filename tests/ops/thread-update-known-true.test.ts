@@ -25,4 +25,22 @@ describe('thread_update known', () => {
     await (op.handler as (a: unknown, c: unknown) => Promise<unknown>)({ id: 'th-aaaaaaaaaaaa', known: true, task: 'lead-1' }, call).catch(() => undefined)
     expect(sent).toMatchObject({ known: 'all' })
   })
+
+  it('takes waiting (the status question\'s word) as pending, and still refuses a word that is no state', async () => {
+    const input = z.object(getOp('thread_update')!.input as z.ZodRawShape)
+    expect(input.safeParse({ id: 'th-aaaaaaaaaaaa', state: 'waiting' }).success).toBe(true)
+    expect(input.safeParse({ id: 'th-aaaaaaaaaaaa', state: 'closed' }).success).toBe(false)
+    const op = getOp('thread_update')!
+    let sent: Record<string, unknown> | null = null
+    const call = async (_m: string, path: string, body?: unknown) => {
+      if (path.includes('/threads/')) { sent = body as Record<string, unknown>; return { thread: { id: 'th-aaaaaaaaaaaa', title: 'x', state: 'pending' } } }
+      return { task: { id: 'lead-1' } }
+    }
+    await (op.handler as (a: unknown, c: unknown) => Promise<unknown>)({ id: 'th-aaaaaaaaaaaa', state: 'waiting', task: 'lead-1' }, call).catch(() => undefined)
+    expect(sent).toMatchObject({ state: 'pending' })
+  })
+
+  it('thread_split reads into as merge_into', () => {
+    expect(getOp('thread_split')!.renamedInput).toEqual(expect.arrayContaining([{ from: 'into', to: 'merge_into' }]))
+  })
 })
