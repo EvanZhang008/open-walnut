@@ -10,14 +10,14 @@
  */
 import { log } from '../../logging/index.js'
 import type { OnToolResultPayload, OnToolUsePayload, SessionHookDefinition } from '../session-hooks/types.js'
-import { agentCutChars, toolErrorCode, walnutOpOfToolCall } from './normalize.js'
+import { agentCutChars, toolErrorCode, walnutToolCall } from './normalize.js'
 import { recordConfirmedCut, recordToolError } from './record.js'
 import { recordShip, setShipState, shipFailed, shipOfCommand } from './ships.js'
 
 const PENDING_MS = 3 * 60 * 60_000
 const MAX_PENDING = 500
 
-interface Pending { at: number; op?: string; client?: 'mcp' | 'cli'; ship?: string }
+interface Pending { at: number; op?: string; client?: 'mcp' | 'cli'; answered?: boolean; ship?: string }
 const pending = new Map<string, Pending>()
 
 function remember(id: string, p: Pending): void {
@@ -39,12 +39,13 @@ export const realUseHook: SessionHookDefinition = {
     if ('toolName' in payload) {
       const use = payload as OnToolUsePayload
       if (!use.toolUseId) return
-      const op = walnutOpOfToolCall(use.toolName, use.input)
+      const call = walnutToolCall(use.toolName, use.input)
+      const op = call?.op
       const command = use.toolName === 'Bash' && typeof use.input?.command === 'string' ? use.input.command : ''
       const ship = command ? shipOfCommand(command) : null
       if (!op && !ship) return
       const now = Date.now()
-      remember(use.toolUseId, { at: now, ...(op ? { op, client: use.toolName === 'Bash' ? 'cli' : 'mcp' } : {}), ...(ship ? { ship } : {}) })
+      remember(use.toolUseId, { at: now, ...(op ? { op, client: use.toolName === 'Bash' ? 'cli' : 'mcp', answered: call!.answered } : {}), ...(ship ? { ship } : {}) })
       if (ship && use.taskId) {
         recordShip({ taskId: use.taskId, key: use.toolUseId, at: now, how: ship, state: 'started' })
         log.task.info('real use: the task ships', { taskId: use.taskId, how: ship })
@@ -57,8 +58,11 @@ export const realUseHook: SessionHookDefinition = {
     pending.delete(res.toolUseId!)
     const text = typeof res.result === 'string' ? res.result : ''
     if (run.op) {
+      // A cut counts for the op only when what was cut was its answer as the op sized it: not a
+      // whole answer the caller asked for (`_full`), nor output of the program it was piped or
+      // written into (normalize.ts walnutToolCall).
       const cut = agentCutChars(text)
-      if (cut !== null) recordConfirmedCut(run.op, cut, run.client ?? 'unknown')
+      if (cut !== null) { if (run.answered !== false) recordConfirmedCut(run.op, cut, run.client ?? 'unknown') }
       // Every failed Walnut call the agent read, by session, host, op and code (never its words).
       else if (res.isError && !res.replayed) {
         const code = toolErrorCode(text)

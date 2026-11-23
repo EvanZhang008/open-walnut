@@ -10,9 +10,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { closeUsageWatchStore, pruneStore, readToolErrors, setUsageWatchFile } from '../../../src/core/usage-watch/store.js'
+import { closeUsageWatchStore, pruneStore, readEvents, readToolErrors, setUsageWatchFile } from '../../../src/core/usage-watch/store.js'
 import { _resetUsageRecorderForTesting, flushUsage, recordToolError } from '../../../src/core/usage-watch/record.js'
-import { toolErrorCode } from '../../../src/core/usage-watch/normalize.js'
+import { toolErrorCode, walnutToolCall } from '../../../src/core/usage-watch/normalize.js'
 import { runUsageWatchAction } from '../../../src/core/usage-watch/actions.js'
 import { deriveSessionHookPoints } from '../../../src/core/session-hooks/derive/session.js'
 import { EventNames } from '../../../src/core/event-bus.js'
@@ -88,6 +88,48 @@ describe('the session hook counts every failed Walnut call it reads', () => {
     const event = { name: EventNames.SESSION_TOOL_RESULT, data: { sessionId: 's', toolUseId: 't', result: 'x', isError: true, replayed: true } }
     const points = deriveSessionHookPoints(event as never, new Map(), () => {})
     expect(points[0]?.extraPayload).toMatchObject({ toolUseId: 't', isError: true, replayed: true })
+  })
+})
+
+describe('a cut counts for an op only when what was cut was its answer', () => {
+  // 2026-11-23: `walnut tools call task_history '{..}' > /tmp/x 2>&1; python3 - <<EOF` printed
+  // 16 KB from the python, and it was counted as task_history's answer cut.
+  const bash = (command: string) => walnutToolCall('Bash', { command })
+  it('reads where the walnut call\'s output went', () => {
+    expect(bash("walnut tools call task_get '{\"id\":\"x\"}'")).toEqual({ op: 'task_get', answered: true })
+    expect(bash("walnut tools call task_get '{}' 2>&1")).toEqual({ op: 'task_get', answered: true })
+    expect(bash("walnut tools call task_get '{}' 2>/dev/null")).toEqual({ op: 'task_get', answered: true })
+    expect(bash("walnut tools call task_get '{}' >&2")).toEqual({ op: 'task_get', answered: true })
+    expect(bash("cd /x && walnut tools call task_get '{}' || echo failed")).toEqual({ op: 'task_get', answered: true })
+    for (const away of [
+      "walnut tools call task_history '{}' > /tmp/h.json 2>&1; python3 - <<'EOF'\nprint(1)\nEOF",
+      "walnut tools call task_history '{}' >/tmp/h.json",
+      "walnut tools call task_history '{}' >> /tmp/h.json",
+      "walnut tools call task_history '{}' 1>/tmp/h.json",
+      "walnut tools call task_history '{}' &>/tmp/h.json",
+      "walnut tools call task_history '{}' | python3 -c 'import json,sys; print(json.load(sys.stdin))'",
+      "walnut tools call task_history '{}' 2>&1 | tee /tmp/h.json",
+      "walnut tools call task_history '{\"id\":\"x\",\"_full\":true}'",
+    ]) expect(bash(away), away).toEqual({ op: 'task_history', answered: false })
+    expect(walnutToolCall('mcp__walnut__task_history', { id: 'x', _full: true })).toEqual({ op: 'task_history', answered: false })
+    expect(walnutToolCall('mcp__walnut__task_history', { id: 'x' })).toEqual({ op: 'task_history', answered: true })
+  })
+
+  it('the session hook counts the op\'s own cut and skips the others', async () => {
+    const { realUseHook, _resetRealUseHookForTesting } = await import('../../../src/core/usage-watch/session-hook.js')
+    _resetRealUseHookForTesting()
+    const base = { taskId: 'task-1', sessionId: 's', session: { host: 'local' } }
+    const persisted = '<persisted-output>\nOutput too large (16.6KB). Full output saved to: /tmp/x.txt'
+    const run = async (id: string, toolName: string, input: Record<string, unknown>) => {
+      await realUseHook.handler!({ ...base, toolName, toolUseId: id, input } as never)
+      await realUseHook.handler!({ ...base, toolUseId: id, result: persisted } as never)
+    }
+    await run('c1', 'Bash', { command: "walnut tools call task_history '{\"id\":\"x\"}' > /tmp/h.json 2>&1; python3 - <<'EOF'\nprint('x' * 17000)\nEOF" })
+    await run('c2', 'Bash', { command: "walnut tools call task_history '{\"id\":\"x\",\"_full\":true}'" })
+    await run('c3', 'mcp__walnut__task_history', { id: 'x', _full: true })
+    await run('c4', 'Bash', { command: "walnut tools call task_get '{\"id\":\"x\"}' 2>&1" })
+    flushUsage(Date.now() + 60_000)
+    expect(readEvents({ since: 0 }).filter((e) => e.problem === 'cut').map((e) => [e.name, e.code])).toEqual([['task_get', 'cut_cli']])
   })
 })
 

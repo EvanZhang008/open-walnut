@@ -13,15 +13,24 @@
  * from the next line to its end word.
  */
 export function simpleCommands(script: string): string[][] {
+  return shellCommands(script).map((c) => c.words)
+}
+
+/**
+ * The same commands, each with whether its output goes into the next one (`a | b`, never
+ * `a || b`). A redirect stays one word with its `&` (`2>&1`, `&>file`, `>&2`), never a split.
+ */
+export interface ShellCommand { words: string[]; pipe: boolean }
+export function shellCommands(script: string): ShellCommand[] {
   const text = String(script ?? '')
-  const cmds: string[][] = []
+  const cmds: ShellCommand[] = []
   let words: string[] = []
   let w = ''
   let inWord = false
   let q: string | null = null
   const heredocs: string[] = []
   const endWord = () => { if (inWord) words.push(w); w = ''; inWord = false }
-  const endCmd = () => { endWord(); if (words.length) cmds.push(words); words = [] }
+  const endCmd = (pipe = false) => { endWord(); if (words.length) cmds.push({ words, pipe }); words = [] }
   for (let i = 0; i < text.length; i++) {
     const c = text[i]!
     if (q) {
@@ -51,7 +60,9 @@ export function simpleCommands(script: string): string[][] {
       }
       continue
     }
-    if (c === ';' || c === '&' || c === '|' || c === '\n' || c === '(' || c === ')' || c === '`') { endCmd(); continue }
+    if (c === '|') { if (text[i + 1] === '|') { i++; endCmd() } else endCmd(true); continue }
+    if (c === '&' && (text[i + 1] === '>' || (inWord && (text[i - 1] === '>' || text[i - 1] === '<')))) { w += c; inWord = true; continue }
+    if (c === ';' || c === '&' || c === '\n' || c === '(' || c === ')' || c === '`') { endCmd(); continue }
     if (c === ' ' || c === '\t') { endWord(); continue }
     w += c
     inWord = true

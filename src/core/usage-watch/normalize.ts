@@ -4,7 +4,7 @@
  * from a short list, and the name of a built code chunk. Never content: no argument, answer,
  * message, path segment, file name or stack.
  */
-import { base, simpleCommands, unwrap } from './shell-words.js'
+import { base, shellCommands, unwrap } from './shell-words.js'
 
 /** An error code an API or the gateway answered: a short identifier, never free text. */
 const CODE_RE = /^[a-z][a-z0-9_]{0,47}$/
@@ -159,14 +159,29 @@ export function agentCutChars(result: string): number | null {
 
 /** The Walnut op a tool call names: `mcp__walnut__task_get`, or a Bash line running `walnut tools call task_get`. */
 export function walnutOpOfToolCall(toolName: string, input: Record<string, unknown> | undefined): string | null {
+  return walnutToolCall(toolName, input)?.op ?? null
+}
+
+/**
+ * The Walnut op a tool call names, and whether what its agent reads back can be that op's answer
+ * (`answered`): not when the caller asked for the whole answer (`_full`), nor when the walnut
+ * call's output went to a file or into another program. 2026-11-23: `walnut tools call
+ * task_history '{..}' > /tmp/x 2>&1; python3 - <<EOF` printed 16 KB from the python, and it was
+ * counted as task_history's answer cut.
+ */
+export function walnutToolCall(toolName: string, input: Record<string, unknown> | undefined): { op: string; answered: boolean } | null {
   const mcp = /^mcp__walnut__([a-z][a-z0-9_]*)$/.exec(toolName)
-  if (mcp) return mcp[1]!
+  if (mcp) return { op: mcp[1]!, answered: input?._full !== true }
   if (toolName !== 'Bash') return null
   const command = typeof input?.command === 'string' ? input.command : ''
   // The command the line runs, never a word it reads (`grep "walnut tools call x"`).
-  for (const words of simpleCommands(command)) {
+  for (const { words, pipe } of shellCommands(command)) {
     const w = unwrap(words)
-    if (base(w[0]) === 'walnut' && w[1] === 'tools' && w[2] === 'call' && /^[a-z][a-z0-9_]*$/.test(w[3] ?? '')) return w[3]!
+    if (base(w[0]) !== 'walnut' || w[1] !== 'tools' || w[2] !== 'call' || !/^[a-z][a-z0-9_]*$/.test(w[3] ?? '')) continue
+    const full = /"_full"\s*:\s*true/.test(w[4] ?? '')
+    // `>`, `>>`, `1>`, `&>` send its output away; `2>...` and `>&2` leave it on the agent's screen.
+    const away = w.slice(4).some((word) => /^(?:1|&)?>>?(?!&2$)/.test(word))
+    return { op: w[3]!, answered: !pipe && !away && !full }
   }
   return null
 }
