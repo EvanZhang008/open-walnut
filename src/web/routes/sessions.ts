@@ -1227,8 +1227,8 @@ sessionsRouter.get('/git-status', async (req: Request, res: Response, next: Next
     // maxAge=<seconds>: re-read only answers older than this (a page keeping its rows watched).
     const maxAge = Number(req.query.maxAge)
     const maxAgeMs = Number.isFinite(maxAge) && maxAge > 0 ? Math.min(maxAge, 3_600) * 1_000 : undefined
-    const { getSessionGitGlances } = await import('../../core/session-git-status.js')
-    res.json({ glances: await getSessionGitGlances(ids, { waitMs: refresh ? 8_000 : 1_500, refresh, maxAgeMs }) })
+    const { getSessionGitGlances, GLANCE_COLD_WAIT_MS, GLANCE_REFRESH_WAIT_MS } = await import('../../core/session-git-status.js')
+    res.json({ glances: await getSessionGitGlances(ids, { waitMs: refresh ? GLANCE_REFRESH_WAIT_MS : GLANCE_COLD_WAIT_MS, refresh, maxAgeMs }) })
   } catch (err) {
     next(err)
   }

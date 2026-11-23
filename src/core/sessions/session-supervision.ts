@@ -1,6 +1,7 @@
 import { SessionControlError } from './session-controls.js'
 import { isSessionStopSuperseded, sessionStops } from './session-stop.js'
 import { linkFailureKind } from '../../providers/link-failure.js'
+import { withDeadline } from '../../lib/with-deadline.js'
 
 /**
  * The last state each session's host confirmed, so a read whose host did not
@@ -21,6 +22,25 @@ function keep(sid: string, startup: unknown, supervision: unknown): void {
 
 export function _resetSupervisionLastKnownForTesting(): void { lastKnown.clear() }
 
+/**
+ * The longest a read waits before it answers the kept state (or unavailable). Under the page's
+ * 8 s timeout and the usage watch's 5 s slow read: the host's own 5 s RPC plus the link's waits
+ * around it went past 8 s on a loaded host (2026-11-23, 12 page timeouts in 6 h). The RPC goes on
+ * behind, and a late answer is kept for the next poll.
+ */
+export const SUPERVISION_READ_DEADLINE_MS = 4_500
+let readDeadlineMs = SUPERVISION_READ_DEADLINE_MS
+export function _setSupervisionReadDeadlineForTesting(ms?: number): void { readDeadlineMs = ms ?? SUPERVISION_READ_DEADLINE_MS }
+
+type SupervisionAnswer = { stopRequest: unknown; available: boolean; startup: unknown; supervision: unknown; stale?: boolean }
+
+/** What a read whose host did not answer in time says: the kept state marked stale, else unavailable. */
+function keptOrUnavailable(sid: string, stopRequest: unknown): SupervisionAnswer {
+  const kept = lastKnown.get(sid)
+  if (kept && Date.now() - kept.at < LAST_KNOWN_MS) return { stopRequest, available: true, startup: kept.startup, supervision: kept.supervision, stale: true }
+  return { stopRequest, available: false, startup: 'unavailable', supervision: null }
+}
+
 function validSupervision(value: unknown): boolean {
   if (value === null) return true
   if (!value || typeof value !== 'object') return false
@@ -33,7 +53,13 @@ function validSupervision(value: unknown): boolean {
     && (record.reason === null || typeof record.reason === 'string')
 }
 
-export async function readSessionSupervision(sid: string, enabled?: boolean) {
+export async function readSessionSupervision(sid: string, enabled?: boolean): Promise<SupervisionAnswer> {
+  if (enabled !== undefined) return askSupervision(sid, enabled)
+  const { getSessionByClaudeIdSync } = await import('../session-tracker.js')
+  return withDeadline(askSupervision(sid), readDeadlineMs, () => keptOrUnavailable(sid, getSessionByClaudeIdSync(sid)?.stopRequest ?? null))
+}
+
+async function askSupervision(sid: string, enabled?: boolean): Promise<SupervisionAnswer> {
   const { getSessionByClaudeId } = await import('../session-tracker.js')
   const record = await getSessionByClaudeId(sid)
   if (!record) throw new SessionControlError('Session not found', 404)
@@ -67,10 +93,7 @@ export async function readSessionSupervision(sid: string, enabled?: boolean) {
       throw new SessionControlError('Host did not answer; automatic recovery may have changed. Check again in a moment.', 504, { code: 'host_no_answer' })
     }
     const current = await getSessionByClaudeId(sid)
-    const stopRequest = current?.stopRequest ?? null
-    const kept = lastKnown.get(sid)
-    if (kept && Date.now() - kept.at < LAST_KNOWN_MS) return { stopRequest, available: true, startup: kept.startup, supervision: kept.supervision, stale: true }
-    return { stopRequest, available: false, startup: 'unavailable', supervision: null }
+    return keptOrUnavailable(sid, current?.stopRequest ?? null)
   }
   if (reply.ok !== true) throw new SessionControlError(typeof reply.error === 'string' ? reply.error : 'Host did not confirm automatic recovery settings', 503)
   if (!validSupervision(reply.cronSupervision)) throw new SessionControlError('Host returned invalid automatic recovery state', 503)

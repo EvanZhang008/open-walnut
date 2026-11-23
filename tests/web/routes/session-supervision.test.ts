@@ -17,7 +17,7 @@ import { enqueueMessage, getQueue, resetCache } from '../../../src/core/session-
 import { sessionRunner } from '../../../src/providers/claude-code-session.js'
 import { bus } from '../../../src/core/event-bus.js'
 import { markLinkFailure } from '../../../src/providers/link-failure.js'
-import { _resetSupervisionLastKnownForTesting } from '../../../src/core/sessions/session-supervision.js'
+import { _resetSupervisionLastKnownForTesting, _setSupervisionReadDeadlineForTesting } from '../../../src/core/sessions/session-supervision.js'
 
 const SID = '10000000-0000-4000-8000-000000000202'
 const HOST = 'supervision-test-host'
@@ -49,6 +49,7 @@ beforeEach(async () => {
   resetCache()
   bus.clear()
   _resetSupervisionLastKnownForTesting()
+  _setSupervisionReadDeadlineForTesting()
   await fs.mkdir(WALNUT_HOME, { recursive: true })
   await createSessionRecord(SID, 'supervision-api-task', 'test', WALNUT_HOME, { host: HOST, initialProcessStatus: 'idle' })
 })
@@ -236,6 +237,38 @@ describe('session supervision API with real stop persistence', () => {
       const read = await request(app()).get(`/api/sessions/${SID}/supervision`)
       expect(read.status).toBe(200)
       expect(read.body).toMatchObject({ available: false, startup: 'unavailable', supervision: null })
+    })
+
+    // 2026-11-23: the host's 5 s RPC plus the link's waits around it went past the page's 8 s
+    // timeout on a loaded host (12 page timeouts in 6 h): a read answers by its own deadline.
+    it('a read whose host is slow answers by the read deadline, and the late answer is kept for the next poll', async () => {
+      const { send } = daemon()
+      const good = await request(app()).get(`/api/sessions/${SID}/supervision`)
+      _resetSupervisionLastKnownForTesting()
+      _setSupervisionReadDeadlineForTesting(150)
+      let release!: (value: Record<string, unknown>) => void
+      send.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
+      const startedAt = Date.now()
+      const slow = await request(app()).get(`/api/sessions/${SID}/supervision`)
+      expect(Date.now() - startedAt).toBeLessThan(2_000)
+      expect(slow.status).toBe(200)
+      expect(slow.body).toEqual({ stopRequest: null, available: false, startup: 'unavailable', supervision: null })
+      release({ ok: true, cronSupervision: good.body.supervision })
+      send.mockImplementation(() => new Promise(() => {}))
+      await vi.waitFor(async () => {
+        const next = await request(app()).get(`/api/sessions/${SID}/supervision`)
+        expect(next.body).toEqual({ ...good.body, stale: true })
+      }, { timeout: 5_000, interval: 20 })
+    })
+
+    it('a change is never cut by the read deadline: it waits for the host\'s answer', async () => {
+      const { send } = daemon()
+      _setSupervisionReadDeadlineForTesting(50)
+      const original = send.getMockImplementation()!
+      send.mockImplementationOnce(async (command, args, timeout) => { await new Promise((resolve) => setTimeout(resolve, 200)); return original(command, args, timeout) })
+      const response = await request(app()).put(`/api/sessions/${SID}/supervision`).send({ enabled: false })
+      expect(response.status).toBe(200)
+      expect(response.body.supervision.enabled).toBe(false)
     })
 
     it('an error of the host\'s own is not hidden', async () => {
