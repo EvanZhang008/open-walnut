@@ -8,6 +8,7 @@ import { TINY_SILENT_MP4_BASE64 } from './fixtures/tiny-video'
 import { dragAcrossWords, press as click } from './real-press'
 import { DRAFT_PANEL, closeModelPicker, serverHome, shownHomePath } from './draft-helpers'
 import { openSessionBoard as openBoardBy, showCustomBoard as showPageBy } from './board-view-helpers'
+import { FIXTURE_ASK } from './fixture-ask'
 
 export const AGENT_TEXT_BASE = process.env.AGENT_TEXT_URL ?? 'http://localhost:3457'
 /** A neutral picture of the repo's own (192px) when the run names no real screenshot. */
@@ -213,7 +214,7 @@ export async function taskWithReply(request: APIRequestContext, title: string, p
  *  as the line's writer; none is a person's write, as before. */
 export async function setReport(request: APIRequestContext, id: string, body: Record<string, unknown>, carried: (status: any) => boolean, headers?: Record<string, string>): Promise<any> {
   const data = body.state === 'needs'
-    ? { user_kind: 'user_info', user_kind_why: 'Only the user knows which fixture design is current', ...body }
+    ? { ...FIXTURE_ASK, ...body }
     : body
   await ok(await request.put(`/api/v1/tasks/${id}/report`, { data, ...(headers ? { headers } : {}) }), 'report')
   let last: any = null
