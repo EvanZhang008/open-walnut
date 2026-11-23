@@ -56,10 +56,17 @@ const log = (msg, data = {}) => process.stderr.write(JSON.stringify({ at: new Da
 
 /** One listener per peer, kept: each connection to it is piped to the peer's daemon port now. */
 const forwards = new Map()
-async function forward(to) {
+/** One listener per peer even for two asks at once: the first ask's promise is kept before it listens. */
+function forward(to) {
   const portFile = peers()[to]
-  if (!portFile) throw new Error(`${to} is not a member`)
+  if (!portFile) return Promise.reject(new Error(`${to} is not a member`))
   if (forwards.has(to)) return forwards.get(to)
+  const listening = listen(to, portFile)
+  forwards.set(to, listening)
+  listening.catch(() => forwards.delete(to))
+  return listening
+}
+async function listen(to, portFile) {
   const srv = net.createServer((sock) => {
     let port = 0
     try { port = Number(fs.readFileSync(portFile, 'utf8').trim()) } catch { /* between starts */ }
@@ -73,7 +80,6 @@ async function forward(to) {
     out.on('close', end)
   })
   const port = await new Promise((resolve, reject) => { srv.once('error', reject); srv.listen(0, '127.0.0.1', () => resolve(srv.address().port)) })
-  forwards.set(to, port)
   log('forward: listening', { to, port })
   return port
 }

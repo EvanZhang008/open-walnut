@@ -13,15 +13,17 @@
  * (`runs_sessions: true`, the experiment off), as the rollout turns hosts on.
  *
  *   downgrade     (1) a host-judged turn held running; this tree's leader stopped and the older
- *                 release's leader started on the same data and port. Judged: it starts (or refuses
- *                 clearly); the host stands down within its bound (WALNUT_HOST_OLD_LEADER_MS, set by
+ *                 release's leader started on the same data and port. Judged: it starts and reads the
+ *                 data (a refusal fails); the host stands down within its bound (WALNUT_HOST_OLD_LEADER_MS, set by
  *                 --old-leader-ms for the run); the turn, released after that, ends with one answer
  *                 and no second turn nobody asked for; a message from the old leader is answered once.
  *   upgrade       (2) the same cluster, this tree's leader again: the task and the session read as
  *                 before, the host judges again, each host fact reaches the leader once, a send is
  *                 answered once over the channel.
- *   old-host      (3) this tree's leader with the switch on for a host whose daemon and server are
- *                 the older release: a new start takes the legacy path and answers.
+ *   old-host      (3) this tree's leader with the switch on for a host whose daemon is the older
+ *                 release (checked at the start and the end; the host's server is this tree's plain
+ *                 one, the older release had no one-service mode): a new start takes the legacy path
+ *                 and answers.
  *   per-host-off  (4) this tree only: `runs_sessions: false` while a host-judged turn runs; the turn
  *                 ends and reports over the channel; the next start there is legacy.
  *   restart-control  this tree only: the upgrade's last check (a send's turn end over the channel)
@@ -34,11 +36,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { HOST_KEY, waitFor } from '../../tests/helpers/replica-cluster.ts'
 import { writeClusterLogs } from '../../tests/helpers/replica-cluster-reads.ts'
-import { factsAtBothEnds, startHostJudgeCluster, untilFactsStill } from '../../tests/helpers/host-judge-cluster.ts'
+import { macRows } from '../../tests/helpers/replica-cluster-reads.ts'
+import { factsAtBothEnds, isHostFact, startHostJudgeCluster, untilFactsStill } from '../../tests/helpers/host-judge-cluster.ts'
 import { installOlder, olderManifest } from './mixed-leader-host.mjs'
 import { NET_HOST_LINES, clusterDirs, startNewLeaderAgain, startOldLeader, stopClusterMac, stopMacDaemon } from './host-judged-leaders.mjs'
 import { rehearseOldHost } from './host-judged-old-host.mjs'
-import { errorLines, keepLogs, leaderReads, sessionView, startOn, streamCounts, taskView } from './host-judged-reads.mjs'
+import { errorLines, keepLogs, leaderReads, sessionView, startOn, stopLeftovers, streamCounts, taskView } from './host-judged-reads.mjs'
 
 const SCENARIOS = ['downgrade', 'old-host', 'per-host-off', 'restart-control']
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -69,20 +72,42 @@ function hostServiceTrace(d) {
   return { updateJobs: audit.length, serviceInstances: logs.length, restartsForSpec: restarts }
 }
 
+/**
+ * A scenario's cleanup, every step on its own (one that throws never keeps the next from running):
+ * the processes it started beside the cluster first, then the logs (files, read while the base is
+ * still there), the cluster, and whatever still runs from the cluster's base. What failed is noted.
+ */
+async function cleanUp(r, h, { label, files, out, extra = [] }) {
+  const note = (what, err) => { (r.cleanup ??= []).push(`${what}: ${String(err?.message ?? err).slice(0, 300)}`) }
+  for (const [what, fn] of extra) { try { await fn() } catch (err) { note(what, err) } }
+  if (!h) return
+  try { r.logs = writeClusterLogs(h.c, label) } catch (err) { note('logs', err) }
+  try { r.files = keepLogs(h.c.base, path.join(out, files)) } catch (err) { note('files', err) }
+  const base = h.c.base
+  try { await h.stop() } catch (err) { note('cluster stop', err) }
+  try { const left = await stopLeftovers(base); if (left.length) r.leftovers = left } catch (err) { note('leftovers', err) }
+}
+
+/** The leader's stored channel cursor for the host (its sessions store), read while no leader runs. */
+function storedCursor(h) {
+  try { return Number(macRows(h.c, 'SELECT seq FROM session_channel_cursor WHERE host_id = ?', 'sessions.sqlite', HOST_KEY)[0]?.seq ?? 0) } catch { return null }
+}
+
 async function rehearseDowngradeUpgrade({ older, oldLeaderMs, out }) {
   const r1 = { scenario: 'downgrade', older: older.version, oldLeaderMs, checks: {}, problems: [] }
   const r2 = { scenario: 'upgrade', older: older.version, checks: {}, problems: [] }
-  const h = await startHostJudgeCluster({
-    macSwitch: false, macHostExtra: [...NET_HOST_LINES, '    runs_sessions: true'],
-    hostEnv: { WALNUT_HOST_RUNS_SESSIONS: '', WALNUT_HOST_OLD_LEADER_MS: String(oldLeaderMs) },
-  })
-  const L = leaderReads(h)
-  const d = clusterDirs(h)
-  const port = h.c.macPort
+  let h = null
   let old = null
   let again = null
   const fail = (r, why) => { r.problems.push(why); process.stdout.write(`  ✗ ${r.scenario}: ${why}\n`) }
   try {
+    h = await startHostJudgeCluster({
+      macSwitch: false, macHostExtra: [...NET_HOST_LINES, '    runs_sessions: true'],
+      hostEnv: { WALNUT_HOST_RUNS_SESSIONS: '', WALNUT_HOST_OLD_LEADER_MS: String(oldLeaderMs) },
+    })
+    const L = leaderReads(h)
+    const d = clusterDirs(h)
+    const port = h.c.macPort
     r1.base = d.base
     await waitFor(async () => { const s = await h.mac(`/side?host=${HOST_KEY}`); return s.linked && s.judges }, 180_000, 'the Mac to link the host\'s session channel')
     const release = path.join(d.base, 'release-held-turn')
@@ -98,7 +123,7 @@ async function rehearseDowngradeUpgrade({ older, oldLeaderMs, out }) {
     await sleep(3_000)
     r1.before = { task: taskView(await L.task(taskId)), session: sessionView(await L.session(sid)), judge: await h.mac(`/judge?sid=${sid}`), hostQueue: await h.host(`/queue?sid=${sid}`), stream: streamCounts(h, sid) }
 
-    // 1: the downgrade, mid-turn.
+    // 1: the downgrade, mid-turn. The older leader must start on the newer leader's data: a refusal is a FAIL.
     r1.checks.newLeaderStop = await stopClusterMac(h)
     old = await startOldLeader(h, older, { port, logFile: path.join(out, 'downgrade-old-leader.log') })
     r1.checks.oldLeaderUp = { health: !!old.health, upMs: old.upMs, exit: old.exit }
@@ -152,8 +177,10 @@ async function rehearseDowngradeUpgrade({ older, oldLeaderMs, out }) {
 
     // 2: the upgrade again.
     r2.ran = true
-    await old.stop()
-    r2.checks.oldExit = await old.proc.exitCode
+    // { code, sig }: a signal death has no exit code.
+    r2.checks.oldExit = await old.stop()
+    // Where the new leader takes the host's log up again: every fact after it must reach it once.
+    r2.checks.cursorAtUpgrade = storedCursor(h)
     again = await startNewLeaderAgain(h, { port, label: 'upgrade' })
     r2.checks.newLeaderUpMs = again.upMs
     const linked = await waitFor(async () => (await h.host('/judging')).live && !(await h.host('/judging')).standsDown, 180_000, 'the host to judge again', 500).then(() => true, () => false)
@@ -164,13 +191,6 @@ async function rehearseDowngradeUpgrade({ older, oldLeaderMs, out }) {
     for (const k of ['title', 'project', 'phase', 'status']) if (r2.checks.reads.task[k] !== r1.after.task[k]) fail(r2, `the task's ${k} reads ${JSON.stringify(r2.checks.reads.task[k])}, under the old leader ${JSON.stringify(r1.after.task[k])}`)
     for (const k of ['taskId', 'host', 'title', 'judge']) if (r2.checks.reads.session[k] !== r1.after.session[k]) fail(r2, `the session's ${k} reads ${JSON.stringify(r2.checks.reads.session[k])}, under the old leader ${JSON.stringify(r1.after.session[k])}`)
     if (r2.checks.reads.judge.judge !== 'host') fail(r2, `the session's judge reads ${JSON.stringify(r2.checks.reads.judge)} after the upgrade, ${JSON.stringify(r1.before.judge)} before the downgrade`)
-    await untilFactsStill(h).catch((err) => fail(r2, `the host's facts did not settle: ${err.message}`))
-    const facts = (await h.host('/facts?after=0')).recs
-    const events = await h.mac(`/events?sid=${sid}`)
-    const seen = events.filter((e) => e.source === 'host-channel').map((e) => `${e.name}:${e.hash}`)
-    const dupes = seen.filter((x, i) => seen.indexOf(x) !== i)
-    r2.checks.facts = { hostRecords: facts.filter((x) => x.sid === sid).length, leaderChannelEvents: seen.length, duplicates: dupes }
-    if (dupes.length) fail(r2, `the new leader heard ${dupes.length} host facts twice: ${dupes.slice(0, 5).join(', ')}`)
     for (const [needle, n] of [[releasedText, 1], [`echo: ${queued}`, 1], [oldWords, 1]]) {
       const c = await L.answers(sid, needle)
       if (c !== n) fail(r2, `"${needle}" is ${c} times in the history after the upgrade`)
@@ -187,19 +207,35 @@ async function rehearseDowngradeUpgrade({ older, oldLeaderMs, out }) {
     r2.checks.newSend.hostLog = entry.split('\n').filter((l) => l.includes(sid) && /suppressing replayed result|phase proxy|not this Walnut/.test(l)).map((l) => l.slice(0, 300))
     if (!viaChannel) fail(r2, 'a send after the upgrade was not answered over the channel')
     else if (r2.checks.newSend.history !== 1 || r2.checks.newSend.stream[`echo: ${newWords}`] !== 1) fail(r2, `the send after the upgrade was answered ${r2.checks.newSend.history} times (history), ${r2.checks.newSend.stream[`echo: ${newWords}`]} (host)`)
-    const f = factsAtBothEnds(facts, events, sid)
-    r2.checks.startedOnce = f.started.length
+    // Every host fact written after the stored cursor (the catch-up and the send's turn), once and in
+    // order, and nothing else: a missing one fails as a doubled one does. The new leader's probe hears
+    // only what came after its start, so its events are exactly the catch-up and after.
+    await untilFactsStill(h).catch((err) => fail(r2, `the host's facts did not settle: ${err.message}`))
+    const facts = (await h.host('/facts?after=0')).recs
+    const events = await h.mac(`/events?sid=${sid}`)
+    const seen = events.filter((e) => e.source === 'host-channel' && isHostFact(e.name)).map((e) => `${e.name}:${e.hash}`)
+    const dupes = seen.filter((x, i) => seen.indexOf(x) !== i)
+    const from = r2.checks.cursorAtUpgrade
+    const fa = factsAtBothEnds(facts.filter((x) => typeof from === 'number' && x.seq > from), events, sid)
+    const missing = fa.host.filter((x) => !fa.seen.includes(x))
+    r2.checks.facts = { hostRecords: facts.filter((x) => x.sid === sid).length, afterCursor: fa.host.length, leaderChannelEvents: seen.length, duplicates: dupes, missing, inOrder: JSON.stringify(fa.seen) === JSON.stringify(fa.host) }
+    if (typeof from !== 'number') fail(r2, 'the leader\'s stored channel cursor could not be read before the upgrade')
+    else if (!fa.host.length) fail(r2, `no host fact after the cursor (${from}) to judge`)
+    if (dupes.length) fail(r2, `the new leader heard ${dupes.length} host facts twice: ${dupes.slice(0, 5).join(', ')}`)
+    if (missing.length) fail(r2, `${missing.length} host facts after the cursor never reached the new leader: ${missing.slice(0, 5).join(', ')}`)
+    else if (!r2.checks.facts.inOrder) fail(r2, `the new leader heard the host's facts out of order or with extras:\n  host ${fa.host.join(' ')}\n  seen ${fa.seen.join(' ')}`)
+    // No second start of the session under the new leader (the old one judged its turns meanwhile).
+    r2.checks.started = fa.started.length
+    if (fa.started.length > 1) fail(r2, `the new leader heard session:started ${fa.started.length} times`)
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err)
     fail(r2.ran ? r2 : r1, `run failed: ${why}`)
   } finally {
     if (!r2.ran) fail(r2, 'not run: the downgrade did not get as far as the upgrade')
-    r1.logs = writeClusterLogs(h.c, 'host-judged-downgrade')
-    r1.files = keepLogs(d.base, path.join(out, 'downgrade-files'))
-    await old?.stop().catch(() => {})
-    await again?.stop().catch(() => {})
-    await stopMacDaemon(h).catch(() => {})
-    await h.stop().catch(() => {})
+    await cleanUp(r1, h, {
+      label: 'host-judged-downgrade', files: 'downgrade-files', out,
+      extra: [['old leader', () => old?.stop()], ['new leader again', () => again?.stop()], ['Mac daemon', () => h && stopMacDaemon(h)]],
+    })
   }
   return [r1, r2]
 }
@@ -207,9 +243,10 @@ async function rehearseDowngradeUpgrade({ older, oldLeaderMs, out }) {
 async function rehearsePerHostOff({ out }) {
   const r = { scenario: 'per-host-off', checks: {}, problems: [] }
   const fail = (why) => { r.problems.push(why); process.stdout.write(`  ✗ per-host-off: ${why}\n`) }
-  const h = await startHostJudgeCluster({ macSwitch: false, macHostExtra: [...NET_HOST_LINES, '    runs_sessions: true'], hostEnv: { WALNUT_HOST_RUNS_SESSIONS: '' } })
-  const L = leaderReads(h)
+  let h = null
   try {
+    h = await startHostJudgeCluster({ macSwitch: false, macHostExtra: [...NET_HOST_LINES, '    runs_sessions: true'], hostEnv: { WALNUT_HOST_RUNS_SESSIONS: '' } })
+    const L = leaderReads(h)
     r.base = h.c.base
     await waitFor(async () => { const s = await h.mac(`/side?host=${HOST_KEY}`); return s.linked && s.judges }, 180_000, 'the Mac to link the host\'s session channel')
     const release = path.join(h.c.base, 'release-per-host')
@@ -239,9 +276,7 @@ async function rehearsePerHostOff({ out }) {
   } catch (err) {
     fail(`run failed: ${err instanceof Error ? err.message : String(err)}`)
   } finally {
-    r.logs = writeClusterLogs(h.c, 'host-judged-per-host-off')
-    r.files = keepLogs(h.c.base, path.join(out, 'per-host-off-files'))
-    await h.stop().catch(() => {})
+    await cleanUp(r, h, { label: 'host-judged-per-host-off', files: 'per-host-off-files', out })
   }
   return [r]
 }
@@ -254,10 +289,12 @@ async function rehearsePerHostOff({ out }) {
 async function rehearseRestartControl({ out }) {
   const r = { scenario: 'restart-control', checks: {}, problems: [] }
   const fail = (why) => { r.problems.push(why); process.stdout.write(`  ✗ restart-control: ${why}\n`) }
-  const h = await startHostJudgeCluster({ macSwitch: false, macHostExtra: [...NET_HOST_LINES, '    runs_sessions: true'], hostEnv: { WALNUT_HOST_RUNS_SESSIONS: '' } })
-  const L = leaderReads(h)
-  const channelResult = async (sid, words) => (await h.mac(`/events?sid=${sid}`)).some((e) => e.source === 'host-channel' && e.name === 'session:result' && String(e.data?.result ?? '').includes(words))
+  let h = null
+  const channelResults = async (sid, words) => (await h.mac(`/events?sid=${sid}`)).filter((e) => e.source === 'host-channel' && e.name === 'session:result' && String(e.data?.result ?? '').includes(words)).length
+  const channelResult = async (sid, words) => (await channelResults(sid, words)) > 0
   try {
+    h = await startHostJudgeCluster({ macSwitch: false, macHostExtra: [...NET_HOST_LINES, '    runs_sessions: true'], hostEnv: { WALNUT_HOST_RUNS_SESSIONS: '' } })
+    const L = leaderReads(h)
     r.base = h.c.base
     await waitFor(async () => { const s = await h.mac(`/side?host=${HOST_KEY}`); return s.linked && s.judges }, 180_000, 'the Mac to link the host\'s session channel')
     const { taskId, sid } = await startOn(h, 'Across a service restart', 'ROUND before the restart')
@@ -269,19 +306,23 @@ async function rehearseRestartControl({ out }) {
     r.checks.restartedPid = await h.c.restartReplica()
     await waitFor(async () => (await h.host('/judging')).live, 180_000, 'the Mac back on the restarted host\'s channel')
     r.checks.hostCopyAtSend = (await h.host(`/task?id=${taskId}`)).phase
+    // The control means something only when the host's copy reads the turn handled at the send.
+    if (r.checks.hostCopyAtSend !== 'NEED_ACTION') fail(`the host's task copy reads ${JSON.stringify(r.checks.hostCopyAtSend)} at the send, not NEED_ACTION`)
     const sent = await L.send(sid, 'ROUND after the restart')
+    if (sent.status < 200 || sent.status >= 300) fail(`the send after the restart answered ${sent.status}`)
     const via = await waitFor(() => channelResult(sid, 'ROUND after the restart'), 120_000, 'the answer over the channel').then(() => true, () => false)
     await sleep(3_000)
     const entry = (() => { try { return fs.readFileSync(path.join(h.c.base, 'host-entry-stderr.log'), 'utf8') } catch { return '' } })()
-    r.checks.send = { status: sent.status, viaChannel: via, history: await L.answers(sid, 'ROUND after the restart'), stream: streamCounts(h, sid, ['ROUND after the restart']), task: taskView(await L.task(taskId)),
+    r.checks.send = { status: sent.status, viaChannel: via, channelResults: await channelResults(sid, 'ROUND after the restart'), history: await L.answers(sid, 'ROUND after the restart'), stream: streamCounts(h, sid, ['ROUND after the restart']), task: taskView(await L.task(taskId)),
       hostLog: entry.split('\n').filter((l) => l.includes(sid) && /suppressing replayed result|phase proxy/.test(l)).map((l) => l.slice(0, 300)) }
     if (!via) fail('after a plain service restart, the next turn\'s end did not reach the leader over the channel')
+    else if (r.checks.send.channelResults !== 1 || r.checks.send.history !== 1 || r.checks.send.stream['ROUND after the restart'] !== 1) {
+      fail(`the send after the restart was answered ${r.checks.send.history} times (history), ${r.checks.send.stream['ROUND after the restart']} (host), with ${r.checks.send.channelResults} turn ends over the channel`)
+    }
   } catch (err) {
     fail(`run failed: ${err instanceof Error ? err.message : String(err)}`)
   } finally {
-    r.logs = writeClusterLogs(h.c, 'host-judged-restart-control')
-    r.files = keepLogs(h.c.base, path.join(out, 'restart-control-files'))
-    await h.stop().catch(() => {})
+    await cleanUp(r, h, { label: 'host-judged-restart-control', files: 'restart-control-files', out })
   }
   return [r]
 }
@@ -291,13 +332,15 @@ function readme(results, older) {
   const key = (r) => {
     const c = r.checks
     if (r.scenario === 'downgrade') return `old leader up ${c.oldLeaderUp?.upMs ?? '?'} ms (${c.oldLeaderUp?.version ?? 'no health'}); host stood down ${c.standDown?.afterMs ?? 'never'} ms after it (bound ${c.standDown?.boundMs} ms, WALNUT_HOST_OLD_LEADER_MS=${r.oldLeaderMs}; the old leader's host-server install restarted the service ${c.hostService?.restartsForSpec ?? '?'}x); held turn: ${c.turnEnd?.stream?.turns ?? "?"} turns, ${c.turnEnd?.stream?.results ?? "?"} results for 2 messages, history ${c.turnEnd?.historyReleased ?? '?'}x; old-leader send answered ${c.oldSend?.history ?? '?'}x`
-    if (r.scenario === 'upgrade') return `host judges again: ${c.hostJudgesAgain?.linked}; judge ${c.reads?.judge?.judge ?? '?'}; channel events ${c.facts?.leaderChannelEvents ?? '?'}, duplicates ${c.facts?.duplicates?.length ?? '?'}; send answered ${c.newSend?.history ?? '?'}x in the history, its turn end over the channel: ${c.newSend?.viaChannel}`
-    if (r.scenario === 'old-host') return `old host daemon ${c.hostDaemon?.version ?? '?'}; names session-judge-v1: ${c.hostNamesJudge}; start judged ${c.start?.judge?.judge ?? '?'}, answered ${c.start?.answered}`
-    if (r.scenario === 'restart-control') return `service restarted (pid ${c.restartedPid ?? '?'}); host's task copy at the send: ${c.hostCopyAtSend ?? '?'}; next turn's end over the channel: ${c.send?.viaChannel}; answered ${c.send?.stream?.['ROUND after the restart'] ?? '?'}x on the host`
+    if (r.scenario === 'upgrade') return `host judges again: ${c.hostJudgesAgain?.linked}; judge ${c.reads?.judge?.judge ?? '?'}; facts after the cursor ${c.facts?.afterCursor ?? '?'}, missing ${c.facts?.missing?.length ?? '?'}, duplicates ${c.facts?.duplicates?.length ?? '?'}, in order ${c.facts?.inOrder}; send answered ${c.newSend?.history ?? '?'}x in the history, its turn end over the channel: ${c.newSend?.viaChannel}`
+    if (r.scenario === 'old-host') return `host daemon ${c.hostDaemon?.version ?? '?'} (pid ${c.hostDaemon?.pid ?? '?'}, the same at the end: ${c.hostDaemon?.sameAtEnd}); the leader judges there: ${c.leaderJudges}; start judged ${c.start?.judge?.judge ?? '?'}, answered ${c.start?.answered}`
+    if (r.scenario === 'restart-control') return `service restarted (pid ${c.restartedPid ?? '?'}); host's task copy at the send: ${c.hostCopyAtSend ?? '?'}; next turn's end over the channel: ${c.send?.viaChannel}; answered ${c.send?.stream?.['ROUND after the restart'] ?? '?'}x on the host, ${c.send?.history ?? '?'}x in the history, ${c.send?.channelResults ?? '?'} turn end(s) over the channel`
     if (r.scenario === 'per-host-off') return `off took ${c.offTookMs ?? '?'} ms; held turn over the channel: ${c.turnEnd?.viaChannel}, ${c.turnEnd?.stream?.results ?? '?'} results; next start judged ${c.nextStart?.judge?.judge ?? '?'}`
     return ''
   }
-  const rows = results.map((r) => `| ${r.scenario} | ${r.problems.length ? 'FAIL' : 'PASS'} | ${key(r)}${r.problems.length ? `<br>${r.problems.join('<br>')}` : ''} |`)
+  // What the cleanup found still running from a cluster's base, or could not do, is on the row too.
+  const after = (r) => [r.leftovers?.length ? `left running and stopped: ${r.leftovers.length}` : '', ...(r.cleanup ?? []).map((x) => `cleanup ${x}`)].filter(Boolean)
+  const rows = results.map((r) => `| ${r.scenario} | ${r.problems.length ? 'FAIL' : 'PASS'} | ${[key(r), ...after(r), ...r.problems].join('<br>')} |`)
   return [`# Host-judged sessions: rollback against ${older.version}`, '', `Run ${new Date().toISOString()}; older release open-walnut@${older.version} (${older.printed}, daemon ${older.daemonVersion}).`, '',
     '| Scenario | Verdict | Key numbers |', '|---|---|---|', ...rows, ''].join('\n')
 }
@@ -308,29 +351,32 @@ async function main() {
   fs.mkdirSync(out, { recursive: true })
   process.env.REPLICA_CLUSTER_LOG_DIR ??= out
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'hjr-'))
-  const manifest = await olderManifest(opts.older)
-  const older = await installOlder(work, manifest)
-  process.stdout.write(`older: ${older.printed} (daemon ${older.daemonVersion}); out: ${out}\n`)
-  const names = opts.only ?? SCENARIOS
   const results = []
-  const run = async (name, fn) => {
-    process.stdout.write(`\n▶ ${name}\n`)
-    const at = Date.now()
-    for (const r of await fn()) {
-      r.secs = Math.round((Date.now() - at) / 1000)
-      fs.writeFileSync(path.join(out, `${r.scenario}.json`), JSON.stringify(r, null, 2))
-      results.push(r)
-      process.stdout.write(`  ${r.problems.length ? '✗' : '✓'} ${r.scenario}\n`)
+  try {
+    const manifest = await olderManifest(opts.older)
+    const older = await installOlder(work, manifest)
+    process.stdout.write(`older: ${older.printed} (daemon ${older.daemonVersion}); out: ${out}\n`)
+    const names = opts.only ?? SCENARIOS
+    const run = async (name, fn) => {
+      process.stdout.write(`\n▶ ${name}\n`)
+      const at = Date.now()
+      for (const r of await fn()) {
+        r.secs = Math.round((Date.now() - at) / 1000)
+        fs.writeFileSync(path.join(out, `${r.scenario}.json`), JSON.stringify(r, null, 2))
+        results.push(r)
+        process.stdout.write(`  ${r.problems.length ? '✗' : '✓'} ${r.scenario}\n`)
+      }
     }
+    if (names.includes('downgrade')) await run('downgrade + upgrade', () => rehearseDowngradeUpgrade({ older, oldLeaderMs: opts.oldLeaderMs, out }))
+    if (names.includes('old-host')) await run('old-host', () => rehearseOldHost({ older, out }))
+    if (names.includes('per-host-off')) await run('per-host-off', () => rehearsePerHostOff({ out }))
+    if (names.includes('restart-control')) await run('restart-control', () => rehearseRestartControl({ out }))
+    fs.writeFileSync(path.join(out, 'README.md'), readme(results, older))
+    process.stdout.write(`\nevidence: ${out}\n`)
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true })
   }
-  if (names.includes('downgrade')) await run('downgrade + upgrade', () => rehearseDowngradeUpgrade({ older, oldLeaderMs: opts.oldLeaderMs, out }))
-  if (names.includes('old-host')) await run('old-host', () => rehearseOldHost({ older, out }))
-  if (names.includes('per-host-off')) await run('per-host-off', () => rehearsePerHostOff({ out }))
-  if (names.includes('restart-control')) await run('restart-control', () => rehearseRestartControl({ out }))
-  fs.writeFileSync(path.join(out, 'README.md'), readme(results, older))
-  process.stdout.write(`\nevidence: ${out}\n`)
-  fs.rmSync(work, { recursive: true, force: true })
-  process.exit(results.every((r) => r.problems.length === 0) ? 0 : 1)
+  process.exit(results.length > 0 && results.every((r) => r.problems.length === 0) ? 0 : 1)
 }
 
 if (import.meta.main) await main()

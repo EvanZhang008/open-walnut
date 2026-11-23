@@ -3,9 +3,10 @@
  * and do through whichever leader serves the Mac's port, and on the host's files: the leader's
  * frozen API (/api/v1, which an older release answers the same) and the session's stream on the host.
  */
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { HOST_KEY, waitFor } from '../../tests/helpers/replica-cluster.ts'
+import { HOST_KEY, _signalSafetyForTesting, waitFor } from '../../tests/helpers/replica-cluster.ts'
 import { hostStream } from '../../tests/helpers/replica-cluster-reads.ts'
 import { clusterDirs } from './host-judged-leaders.mjs'
 
@@ -72,4 +73,30 @@ export function keepLogs(base, dest) {
   }
   walk(base, 5)
   return dest
+}
+
+/**
+ * After a cluster's stop: every process still running whose command line names the cluster's temp
+ * base (an older release's host server the old leader installed there runs from it, and the cluster
+ * pins only what it started), each pinned by its start time and command line, then SIGTERM, and
+ * SIGKILL after 10 s if it is still that process. Returns what it found, for the scenario's record.
+ */
+export async function stopLeftovers(base) {
+  const { pin, stillPinned, signalPinned } = _signalSafetyForTesting
+  if (!base || base.length < 8) return []
+  let listing = ''
+  try { listing = execFileSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8', timeout: 10_000 }) } catch { return [] }
+  const found = []
+  for (const line of listing.split('\n')) {
+    const m = /^\s*(\d+)\s+(.*)$/.exec(line)
+    if (!m || !m[2].includes(base)) continue
+    const p = pin('leftover', Number(m[1]), (cmd) => cmd.includes(base))
+    if (p) found.push(p)
+  }
+  for (const p of found) signalPinned(p, 'SIGTERM')
+  for (const p of found) {
+    const gone = await waitFor(() => !stillPinned(p), 10_000, 'a leftover to stop', 100).then(() => true, () => false)
+    if (!gone) signalPinned(p, 'SIGKILL')
+  }
+  return found.map((p) => ({ pid: p.pid, command: p.command.slice(0, 200) }))
 }
