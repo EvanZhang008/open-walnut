@@ -519,7 +519,9 @@ describe('owner-scoped follower reads, replica-reads-v1 (replica plan WP6)', () 
       // The one broadcast every client hears names a session: a follower hears its own Walnut's only.
       // ...and a named bridge link its own Walnut's only (bridgeHearsSession).
       expect(src).toMatch(/if \(followerHears\(client, (payload\.)?sid\) && bridgeHearsSession\(client, (payload\.)?sid\)\) (\{ try \{ client\.send|sendEvent\(client, 'session_state')/)
-      expect(fnBody(src, 'bridgeHearsSession')).toMatch(/const owner = sessionHomeOf\(sid\)|var owner = sessionHomeOf\(sid\)/)
+      // The owner is the Walnut that spawned the session here last (the served-dir owner rule: a host's
+      // own service and the leader's link can share one daemon), not the first home of its record.
+      expect(fnBody(src, 'bridgeHearsSession')).toMatch(/const owner = sessionStartHomeOf\(sid\)|var owner = sessionStartHomeOf\(sid\)/)
       expect(fnBody(src, 'followerHears')).toMatch(/origin !== 'follower' \|\| followerReads\.ownRows\(followerHomeOf\(client\), \[\{ sid(: sid)? \}\]\)\.length === 1/)
       // WP6 fix round: a whole-repository answer is cut on its way out; a refusal is no 'command error'.
       expect(fnBody(src, 'followerScope')).toMatch(/if \(d\.scope\) followerReads\.hold\(ws, id, d\.scope\)/)

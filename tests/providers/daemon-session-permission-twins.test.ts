@@ -82,8 +82,11 @@ function buildTwin(kind: Twin, initial: Pending | null = pending(), owner = '') 
     SERVED_PUSHES: new Set(literals(sources[kind], 'SERVED_PUSHES')),
     followerReads: { settle: vi.fn(() => null) },
     followerScope: vi.fn(() => false),
-    // The Walnut the session belongs to ('' = none recorded).
+    // The Walnut the session belongs to ('' = none recorded). The bridge gate reads the Walnut that
+    // spawned it here last (sessionStartHomeOf, the served-dir owner rule of the restart fix), the
+    // same owner in this run.
     sessionHomeOf: () => owner,
+    sessionStartHomeOf: () => owner,
     // bridgeHearsSession re-reads the spawn journal on a miss; no journal here.
     journaledIds: () => new Set<string>(),
     journaledSids: null,
