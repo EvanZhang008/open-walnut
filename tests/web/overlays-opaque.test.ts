@@ -63,21 +63,37 @@ function files(dir: string, ext: string): string[] {
 
 const strip = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, '');
 
-/** The classes of each overlay a component portals out: the first two elements after `createPortal(`. */
+/** The overlay family's surface classes (styles/overlay-family.css): an element carrying one floats. */
+const FAMILY_SURFACES = ['wn-overlay', 'wn-menu', 'wn-dialog', 'wn-tip'];
+
+/**
+ * The classes of each overlay a component portals out: the first element after `createPortal(`,
+ * and the one after it only when the first is a full-window scrim (some rule of it sets
+ * `inset: 0`: the surface is the dialog inside it) or it floats on its own (positioned, or an
+ * overlay family surface: a nested flyout, a card beside its markers).
+ * Otherwise the second element is a part of the overlay (2026-11-23: the wikilink panel's empty line became <EmptyState/>, which carries
+ * no className, and its row `notes-wikilink-item` was taken for an overlay of its own).
+ */
 function portalledClasses(): Set<string> {
   const classes = new Set<string>();
+  const all = rules();
+  const tokensOf = (m: RegExpMatchArray): string[] =>
+    // A template's `${...}` parts are code (`${i === active ? ' active' : ''}`), not class names;
+    // a name it is glued to stays out too (`$` fails the name test below).
+    (m[1] ?? m[2]).replace(/\$\{[^}]*\}/g, '$').split(/\s+/).filter((token) => /^[a-z][\w-]*$/.test(token));
+  const isScrim = (tokens: string[]): boolean => tokens.some((cls) => all.some((r) => targets(r, cls) && decl(r.body, 'inset') === '0'));
+  // A part that floats on its own (a flyout nested in the overlay, or one that takes the overlay
+  // family's surface, styles/overlay-family.css) is an overlay too.
+  const floats = (tokens: string[]): boolean => tokens.some((cls) => FAMILY_SURFACES.includes(cls)
+    || all.some((r) => targets(r, cls) && /^(?:absolute|fixed)$/.test(decl(r.body, 'position') ?? '')));
   for (const file of files(WEB, '.tsx')) {
     const text = fs.readFileSync(file, 'utf8');
     for (const p of text.matchAll(/createPortal\(\s*(\w+)?/g)) {
       const built = p[1] ? text.search(new RegExp(`(?:const|let)\\s+${p[1]}\\s*=`)) : -1;
       const after = text.slice(built >= 0 ? built : p.index!);
-      const names = [...after.matchAll(/className=(?:"([^"]+)"|\{`([^`]+)`\})/g)].slice(0, 2);
-      for (const m of names) {
-        // A template's `${...}` parts are code (`${i === active ? ' active' : ''}`), not class names;
-        // a name it is glued to stays out too (`$` fails the name test below).
-        const literal = (m[1] ?? m[2]).replace(/\$\{[^}]*\}/g, '$');
-        for (const token of literal.split(/\s+/)) if (/^[a-z][\w-]*$/.test(token)) classes.add(token);
-      }
+      const [first, second] = [...after.matchAll(/className=(?:"([^"]+)"|\{`([^`]+)`\})/g)].slice(0, 2).map(tokensOf);
+      for (const token of first ?? []) classes.add(token);
+      if (first && second && (isScrim(first) || floats(second))) for (const token of second) classes.add(token);
     }
   }
   return classes;
