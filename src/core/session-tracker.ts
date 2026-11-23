@@ -56,7 +56,7 @@ import { _resetRowsSnapshotForTesting, noteSnapshotApplied, orphanedRow, planSna
 import { hasOwnRowListener, noteSessionRowWritten } from './session-channel/row-hook.js';
 import { prepared } from '../lib/sqlite-prepared.js';
 import { OrgError } from './org/org-store.js';
-import { registerMemoryHolder, sampledStringChars } from './observability/memory-ledger.js';
+import { registerBurstContext, registerMemoryHolder, registerSampleNote, sampledStringChars } from './observability/memory-ledger.js';
 import {
   assertOutsideHistoryImport, assertSessionHistoryWrite, isHistoryRefusal, sessionHistoryWriteNeedsCheck,
   taskDbHandle, type SessionHistoryFields,
@@ -181,7 +181,12 @@ export function withHeavyFields(record: SessionRecord): SessionRecord {
 }
 
 /** Store-shape counters for tests and the daily loop check. */
-const sessionStoreStats = { fullScans: 0, patchedRows: 0, cloneReads: 0, viewReads: 0, clonedRows: 0 };
+const sessionStoreStats = { fullScans: 0, externalScans: 0, scanMs: 0, patchedRows: 0, cloneReads: 0, viewReads: 0, clonedRows: 0 };
+// What the store's reads cost, on every `memory sample` and `memory burst` line: a full scan reads
+// and parses every row (about 7.4k), and the CPU profiles of the 22 GB climb on 2026-11-23 had
+// loadStoreRows at 9 s of a 30 s window. externalScans: another connection committed (a hook).
+registerSampleNote('sessionStore', () => `scans=${sessionStoreStats.fullScans} external=${sessionStoreStats.externalScans} scanMs=${Math.round(sessionStoreStats.scanMs)} clonedRows=${sessionStoreStats.clonedRows}`);
+registerBurstContext('sessionStore', () => ({ ...sessionStoreStats, scanMs: Math.round(sessionStoreStats.scanMs) }));
 export function _sessionStoreStatsForTesting(): Readonly<typeof sessionStoreStats> { return { ...sessionStoreStats }; }
 /** Forget the cached snapshot (the next reader scans), leaving init and the connection alone. */
 export function _dropSessionStoreCacheForTesting(): void { invalidateSessionStoreCache(); }
@@ -563,6 +568,8 @@ async function loadStoreRows(): Promise<SessionRecord[]> {
     // An on-stop hook writes through a separate SQLite connection. Retry if
     // that external commit races this SELECT so the cached rows and version
     // always describe the same database state.
+    if (sessionStoreCache !== null) sessionStoreStats.externalScans += 1;
+    const scanStart = performance.now();
     let before = currentDataVersion;
     let rows: Record<string, any>[];
     let after: string;
@@ -574,6 +581,7 @@ async function loadStoreRows(): Promise<SessionRecord[]> {
     sessionStoreCache = rows.map((row) => slimForCache(rowToSession(row)));
     sessionStoreCacheDataVersion = after;
     sessionStoreStats.fullScans += 1;
+    sessionStoreStats.scanMs += performance.now() - scanStart;
   }
   return sessionStoreCache;
 }

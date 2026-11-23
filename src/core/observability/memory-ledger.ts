@@ -325,6 +325,7 @@ const recentRss: Array<{ at: number; rssMb: number }> = [];
 let lastBurstAt = -Infinity;
 let lastBurstRssMb = Infinity;
 let lastBurstHeapWalkAt = -Infinity;
+let lastBurstHeapWalkRssMb = Infinity;
 
 /** Health-tick hook (every 30 s): log what was in flight when the footprint jumped. */
 export async function watchMemoryBurst(now = Date.now(), rssMb = processMemoryMb().rssMb): Promise<boolean> {
@@ -345,8 +346,12 @@ export async function watchMemoryBurst(now = Date.now(), rssMb = processMemoryMb
   const j = await loadJsc();
   const u = j?.memoryUsage();
   let heap: { liveMb?: number; extraMb?: number; objects: number; topTypes: Array<[string, number]> } | undefined;
-  if (j && rssMb >= BURST_HEAP_WALK_MB && now - lastBurstHeapWalkAt >= BURST_HEAP_WALK_EVERY_MS) {
+  // Inside the hour a peak twice the last walk's walks again: 2026-11-23 the walk at 6.7 GB
+  // (22:14) held off the one at 15.7 GB (22:43), whose heap was the one that said something.
+  if (j && rssMb >= BURST_HEAP_WALK_MB
+    && (now - lastBurstHeapWalkAt >= BURST_HEAP_WALK_EVERY_MS || rssMb >= lastBurstHeapWalkRssMb * 2)) {
     lastBurstHeapWalkAt = now;
+    lastBurstHeapWalkRssMb = rssMb;
     lastHeapWalkAt = now;
     const h = j.heapStats();
     heap = {
@@ -448,6 +453,7 @@ export function _resetMemoryLedgerForTesting(): void {
   lastBurstAt = -Infinity;
   lastBurstRssMb = Infinity;
   lastBurstHeapWalkAt = -Infinity;
+  lastBurstHeapWalkRssMb = Infinity;
   troughMb = Infinity;
   nudgedVia = 'tick';
   recentRss.length = 0;

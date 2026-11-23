@@ -60,10 +60,23 @@ export async function statFileId(file: string): Promise<ConfigFileId | null> {
 }
 
 /** A YAML mapping, or null for anything else (empty, a scalar, a list, a syntax error). */
+/**
+ * The last text parsed and its mapping. Every getConfig reads config.yaml, and on the live
+ * server that was many YAML parses a second (2026-11-23: 1.9 s of a 30 s CPU profile during
+ * the 22 GB climb); the file changes a few times a day. A copy of the kept mapping is handed
+ * out, so a caller that edits what it got never changes the next caller's (a clone is about a
+ * fifth of a parse).
+ */
+let lastParsed: { content: string; doc: Record<string, unknown> } | null = null
+
 export function parseConfigMapping(content: string): { doc: Record<string, unknown> | null; error?: string } {
+  if (lastParsed && lastParsed.content === content) return { doc: structuredClone(lastParsed.doc) }
   try {
     const parsed = yaml.load(content)
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return { doc: parsed as Record<string, unknown> }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      lastParsed = { content, doc: structuredClone(parsed as Record<string, unknown>) }
+      return { doc: parsed as Record<string, unknown> }
+    }
     return { doc: null, error: 'not a YAML mapping' }
   } catch (err) {
     return { doc: null, error: err instanceof Error ? err.message.split('\n')[0] : String(err) }

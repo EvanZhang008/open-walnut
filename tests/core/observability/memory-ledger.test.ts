@@ -197,6 +197,10 @@ describe('watchMemoryBurst', () => {
       warn.mockClear();
       expect(await watchMemoryBurst(t + 60_000, BURST_HEAP_WALK_MB + BURST_RISE_MB)).toBe(true);
       expect(warn.mock.calls.find((c) => c[0] === 'memory burst')?.[1]).not.toHaveProperty('heap');
+      // Inside the hour, a peak twice the walked one walks again (2026-11-23: 6.7 GB, then 15.7 GB).
+      warn.mockClear();
+      expect(await watchMemoryBurst(t + 90_000, BURST_HEAP_WALK_MB * 2)).toBe(true);
+      expect(warn.mock.calls.find((c) => c[0] === 'memory burst')?.[1]).toHaveProperty('heap');
     } finally { warn.mockRestore(); }
   });
 
