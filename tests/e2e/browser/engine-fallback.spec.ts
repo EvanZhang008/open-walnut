@@ -171,7 +171,7 @@ test('Settings: the fallback engine and its model save, read back after a reload
   await expect(select).toHaveValue('off')
   await expect(page.getByTestId('fallback-model-row')).toHaveCount(0)
   await expect(select.locator('option').first()).toHaveText('Wait for the reset')
-  await expect(page.getByTestId('fallback-engine-help')).toHaveText('New tasks use it while the default engine is out of usage.')
+  await expect(page.getByTestId('fallback-engine-help')).toHaveText('What new tasks do when the default engine runs out.')
   // The rest of the help is on the page, under the row's More, never only a hover (2026-11-22).
   await expect(page.getByTestId('fallback-engine-more')).toHaveCount(0)
   await row.getByTestId('settings-row-more').click()

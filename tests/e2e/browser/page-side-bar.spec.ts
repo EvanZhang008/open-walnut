@@ -28,7 +28,7 @@
  *  7. Home is as before: its own side bars right of the task panel, its own flags, no page side bar.
  */
 import fs from 'node:fs'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 
 const SHOTS = `${process.env.WALNUT_TASK_DIR ?? 'test-results'}/shots/page-side-bar`
@@ -73,6 +73,17 @@ test.beforeEach(async ({ page }) => {
   await isolateUiPrefs(page)
   await page.setViewportSize({ width: 1440, height: 900 })
 })
+
+/**
+ * The caret at the end of one paragraph: a click on its last visual line's right end, then End. A
+ * plain click lands mid-paragraph, and End moves only to the end of the visual line: in the
+ * Scratchpad's 300 px column a line wraps, so Enter there split it (2026-11-22).
+ */
+async function caretAtEndOf(page: Page, p: Locator) {
+  const box = (await p.boundingBox())!
+  await p.click({ position: { x: Math.max(1, box.width - 2), y: Math.max(1, box.height - 4) } })
+  await page.keyboard.press('End')
+}
 
 async function openOrg(page: Page) {
   await page.goto('/org')
@@ -247,8 +258,7 @@ test('the Scratchpad opens right of the agenda, takes the caret, and is the same
   await reread
   const afterFocus = page.waitForResponse(res => new URL(res.url()).pathname === '/api/notes/global' && res.request().method() === 'PUT', { timeout: 10_000 })
   // The caret at the end of that line (it went in where the caret opened, not always last).
-  await editor.locator('p', { hasText: line }).click()
-  await page.keyboard.press('End')
+  await caretAtEndOf(page, editor.locator('p', { hasText: line }))
   await page.keyboard.type('!')
   await afterFocus
   await expect.poll(async () => (await (await page.request.get('/api/notes/global')).json()).content).toContain(`${line}!`)
@@ -277,8 +287,7 @@ test('the Scratchpad opens right of the agenda, takes the caret, and is the same
   const orgLine = `org right after ${Date.now().toString(36)}`
   const homeEditor = home.locator('.notes-editor .tiptap')
   // The caret at the end of the note's last line.
-  await homeEditor.locator('p').last().click()
-  await page.keyboard.press('End')
+  await caretAtEndOf(page, homeEditor.locator('p').last())
   await page.keyboard.press('Enter')
   await page.keyboard.type(homeLine)
   await expect.poll(() => holding, 'the Home save is on its way and held').toBe(false)
@@ -287,8 +296,7 @@ test('the Scratchpad opens right of the agenda, takes the caret, and is the same
   await expect(page.locator('.global-notes-section')).toHaveCount(1)
   const orgEditor = scratchPane(page).locator('.notes-editor .tiptap')
   await expect(orgEditor).toContainText(homeLine)
-  await orgEditor.locator('p').last().click()
-  await page.keyboard.press('End')
+  await caretAtEndOf(page, orgEditor.locator('p').last())
   await page.keyboard.press('Enter')
   await page.keyboard.type(orgLine)
   release()
