@@ -168,7 +168,7 @@ export function EngineSplitRow({ config, save }: { config: Config; save: ReturnT
       )}
       <SettingsRow
         label="In projects"
-        help={projects.length ? `Only tasks in ${projects.join(', ')} take turns; the rest run on the default engine.` : 'Tasks in every project take turns.'}
+        help={projects.length ? `Only tasks in ${projects.join(', ')} take turns; the rest run on the default engine.` : 'None named, so tasks in every project take turns.'}
         more={projects.length ? undefined : 'Name projects here to share only their tasks; tasks in any other project then run on the default engine.'}
         error={projectsPick.error}
         data-testid="engine-split-projects"
