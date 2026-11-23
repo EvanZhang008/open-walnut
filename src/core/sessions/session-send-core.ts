@@ -1036,13 +1036,25 @@ async function performPlainSendOnce(input: SessionSendInput, throttled: { undo?:
     // Its message id keys it (a replay holds nothing more) and names it to op_result; on disk
     // before this send is answered, so a restart cannot drop it (held-notices-store.ts).
     const noteId = input.messageId ?? (await import('../session-queue-store.js')).generateId();
-    const { duplicate } = await holdQuietNote(targetSid, {
+    const { duplicate, full } = await holdQuietNote(targetSid, {
       key: caller.kind === 'session' ? caller.record.claudeSessionId : `${label}@${host}`,
       label: caller.kind === 'session' ? label : `${label} (on ${host}, not your user)`,
     }, {
       at: Date.now(), ...(input.title ? { title: input.title } : {}), text: body, mid: noteId,
-      ...(caller.kind === 'session' ? { from: caller.record.claudeSessionId } : {}), ...(heldTaskId ? { task: heldTaskId } : {}),
+      // A task's own note is kept whole and never dropped by age or the fold cap (quiet-notes.ts).
+      ...(caller.kind === 'session' ? {
+        from: caller.record.claudeSessionId, whole: true, ...(caller.record.taskId ? { fromTask: caller.record.taskId } : {}),
+      } : {}),
+      ...(heldTaskId ? { task: heldTaskId } : {}),
     });
+    if (full) {
+      // Never cut: the sender reads why, and can send it so it starts a turn.
+      const kb = (n: number) => Math.ceil(n / 1024);
+      throw new SendError('queue_full',
+        `session ${shortId(targetSid)} already holds ${kb(full.heldBytes)} KB of unread wake=false notes, and this one (${kb(full.bytes)} KB) would take it past ${kb(full.maxBytes)} KB; `
+        + 'nothing was held. Send it with wake=true (it starts a turn and is read now), or wait until the target reads what it holds.',
+        429, { heldBytes: full.heldBytes, bytes: full.bytes, maxBytes: full.maxBytes });
+    }
     log.session.info('session_send held: the note asks nothing, it rides the next message', {
       targetSessionId: targetSid, taskId: heldTaskId, callerKind: caller.kind, wake: input.wake, messageId: noteId, duplicate,
     });

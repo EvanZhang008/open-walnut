@@ -30,7 +30,10 @@ const HOLDERS: Record<string, How> = {
   'src/core/sessions/held-notices-store.ts#held': { durable: 'held-notices.json' },
   'src/core/sessions/held-notices-store.ts#taken': { durable: 'held-notices.json' },
   'src/core/sessions/held-notices-store.ts#fates': { durable: 'held-notices.json' },
-  'src/core/sessions/held-notices.ts#dropTells': { 'restart-ok': 'at most a second of drop notices batched per sender; each dropped note\'s fate is already on disk, and op_result reports it' },
+  // The tells that a note was dropped: on disk until told, tried again while telling fails (2026-11-23).
+  'src/core/sessions/held-notices-store.ts#tells': { durable: 'held-notices.json' },
+  'src/core/sessions/held-notices-store.ts#tellsOut': { durable: 'held-notices.json' },
+  'src/core/sessions/held-notices-sweep.ts#goneSince': { 'no-text': 'when a sweep lap first found a session gone; a restart only means one more lap before what waits for it is moved or dropped' },
   // Status lines and turn notices of the tasks a node follows.
   'src/core/sessions/status-riding.ts#riding': { durable: 'status-riding.json' },
   'src/core/sessions/status-riding.ts#toldDecisions': { durable: 'status-riding.json' },
@@ -141,6 +144,6 @@ describe('every holder of words that wait for a later message survives a restart
     // The server opens it at boot, so a restart reads it again; and the quiet note's hold is awaited
     // before its send is answered.
     expect(read('src/web/server.ts')).toContain("import('../core/sessions/held-notices-sweep.js').then((m) => m.startHeldNotices())");
-    expect(read('src/core/sessions/session-send-core.ts')).toMatch(/const \{ duplicate \} = await holdQuietNote\(/);
+    expect(read('src/core/sessions/session-send-core.ts')).toMatch(/const \{ duplicate, full \} = await holdQuietNote\(/);
   });
 });

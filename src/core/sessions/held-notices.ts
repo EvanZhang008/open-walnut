@@ -14,17 +14,19 @@
  *
  * Kept on disk as well as in memory (held-notices-store.ts, 2026-11-21: a restart dropped three
  * notes a lead held for a task): a restart keeps what waits, and the server opens the file at boot.
- * A note that is dropped anyway (its age limit, its session gone, pushed out by newer ones from the
- * same sender) is recorded so (op_result reads it by its message id) and its sender is told
- * (held-notices-sweep.ts).
+ * A task's own note (a part marked `whole`, held-notices-store.ts keptWhole) is never cut, never
+ * pushed out by newer ones and never expired by age: only its target being gone with no session
+ * going on for it drops it. A note that is dropped (a script's by its age limit or the cap, any by
+ * its session gone) is recorded so (op_result reads it by its message id) and its sending session
+ * is told (held-notices-sweep.ts); that tell is kept on disk until it is delivered.
  */
 import {
-  FOLD_PARTS_MAX, HOLD_MAX_MS, fateOf, held, metaOf, persist, recordFate, setFolded, setPushedOutHandler,
-  slotOf, storeLoading, taken, waitingNote, mergeOlder, clearNow, type Held,
+  FOLD_PARTS_MAX, HOLD_MAX_MS, expiredByAge, fateOf, held, metaOf, persist, queueTell, recordFate, setFolded,
+  setPushedOutHandler, slotOf, storeLoading, taken, takeTells, waitingNote, mergeOlder, clearNow, type DropTell, type Held,
 } from './held-notices-store.js';
 import { log } from '../../logging/index.js';
 
-export { FOLD_PARTS_MAX, HOLD_MAX_MS };
+export { FOLD_PARTS_MAX, HOLD_MAX_MS, type DropTell };
 
 /** Why a note left the hold unread (the sender's notice and op_result say it). */
 export const DROP_WHY = {
@@ -33,13 +35,11 @@ export const DROP_WHY = {
   pushed: `${FOLD_PARTS_MAX} newer notes from you waited for the same target, and only the newest ${FOLD_PARTS_MAX} are kept`,
 } as const;
 
-/** A dropped note whose sender is a session: told by held-notices-sweep.ts flushDropTells. */
-export interface DropTell { callerSid: string; op: string; taskId: string; reason: string }
-const dropTells: DropTell[] = [];
 let tellTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** Record each dropped part that is a note (it has a message id), and queue its sender's notice. */
+/** Record each dropped part that is a note (it has a message id), and queue its sender's notice (kept on disk until told). */
 export function dropParts(sid: string, parts: readonly unknown[], why: string, now = Date.now()): void {
+  let queued = false;
   for (const p of parts) {
     const m = metaOf(p);
     if (!m.mid) continue;
@@ -48,9 +48,13 @@ export function dropParts(sid: string, parts: readonly unknown[], why: string, n
     if (!m.from) continue;
     const sent = typeof m.at === 'number' ? new Date(m.at).toISOString().slice(0, 16).replace('T', ' ') : '';
     const what = m.title ? `"${m.title.replace(/\s+/g, ' ').trim().slice(0, 120)}"` : `message ${m.mid}`;
-    dropTells.push({ callerSid: m.from, op: 'task_send', taskId: m.task ?? '', reason: `${what}${sent ? `, sent ${sent} UTC` : ''}: ${why}` });
+    queueTell({
+      callerSid: m.from, op: 'task_send', taskId: m.task ?? '', reason: `${what}${sent ? `, sent ${sent} UTC` : ''}: ${why}`,
+      at: now, tries: 0, mid: m.mid, ...(m.fromTask ? { fromTask: m.fromTask } : {}),
+    });
+    queued = true;
   }
-  if (dropTells.length && !tellTimer) {
+  if (queued && !tellTimer) {
     // Batched: one notice per sender for what one sweep or one burst dropped.
     tellTimer = setTimeout(() => {
       tellTimer = null;
@@ -60,9 +64,9 @@ export function dropParts(sid: string, parts: readonly unknown[], why: string, n
   }
 }
 
-/** Take the dropped notes' notices waiting to be told. */
+/** Take the dropped notes' notices waiting to be told (settleTells says how it went). */
 export function takeDropTells(): DropTell[] {
-  return dropTells.splice(0, dropTells.length);
+  return takeTells();
 }
 
 setPushedOutHandler((sid, parts) => dropParts(sid, parts, DROP_WHY.pushed));
@@ -83,8 +87,8 @@ export function holdNotice(
  * Hold one more part of a folded notice: every part held under `key` reads as ONE notice,
  * `render(parts)`, oldest part first (2026-11-12, the org reflection: the load watchdog sent one
  * note per paused process, three in the same minute, each waking the session). A part that would
- * go past FOLD_PARTS_MAX pushes the oldest out. A part whose message id (`mid`) is already held,
- * delivered or dropped is a replay, and is not held again.
+ * go past FOLD_PARTS_MAX pushes the oldest out that is not a task's own note (keptWhole). A part
+ * whose message id (`mid`) is already held, delivered or dropped is a replay, and is not held again.
  */
 export function holdFoldedNotice<P>(
   sessionId: string, key: string, part: P, render: (parts: P[], dropped: number) => string, opts: { now?: number } = {},
@@ -146,7 +150,7 @@ export async function pendingHeldNotices(sessionId: string, now = Date.now()): P
   const keep: Array<[string, Held]> = [];
   let dropped = false;
   for (const [k, v] of t.entries) {
-    if (now - v.at > HOLD_MAX_MS) { dropParts(sessionId, v.parts ?? [], DROP_WHY.age, now); dropped = true; continue; }
+    if (expiredByAge(v, now)) { dropParts(sessionId, v.parts ?? [], DROP_WHY.age, now); dropped = true; continue; }
     // A notice its own news overtook (the request got its reply) is dropped, never sent stale.
     if (v.whileOpen?.length && !(await anyRequestOpen(v.whileOpen).catch(() => true))) { dropped = true; continue; }
     keep.push([k, v]);
@@ -241,7 +245,6 @@ export async function heldNoteState(mid: string): Promise<{
 /** Test seam: forget every held notice (and the file, when this process opened it). */
 export function _clearHeldNotices(): void {
   clearNow();
-  dropTells.length = 0;
   if (tellTimer) clearTimeout(tellTimer);
   tellTimer = null;
 }

@@ -7,7 +7,8 @@
  * WALNUT_HOME/cache/held-notices.json (cache/: git sync leaves it out, it is queue state):
  *   { version: 1,
  *     sessions: { <session id>: { <key>: { text, at, whileOpen?, parts?, dropped? } } },
- *     fates:    { <message id>: { state: 'delivered' | 'dropped', at, sid, why?, row? } } }
+ *     fates:    { <message id>: { state: 'delivered' | 'dropped', at, sid, why?, row? } },
+ *     tells?:   [ { callerSid, op, taskId, reason, at, tries, mid?, fromTask? } ] }   (senders still to be told)
  * Only the server opens it (openStore, at boot on the leader): a process that never opened it
  * keeps its notices in memory as before and never writes the file. A missing file, or one in a
  * shape this version does not read (an older or a newer release's, set aside first), reads as empty.
@@ -16,6 +17,17 @@
  * restart in between sends them again instead of losing them. A note's fate, by its message id, is
  * kept FATE_KEEP_MS for op_result. A folded notice's render function is not stored: the next part
  * held under its key renders every part again, restored ones included.
+ *
+ * A task's own note is never lost (2026-11-23, the user: no message is ever lost, at any time, and an
+ * error keeps being retried). A part marked `whole` (session-send-core.ts sets it when the sender is a
+ * session) is never pushed out by FOLD_PARTS_MAX and never expires by age: it waits until its
+ * target's next message, follows the target's session when that changes, and only when the target
+ * is gone with nothing going on for it is it dropped, with its sender told (the tell itself is kept
+ * here until it is held for the sender, as a `whole` part too, and tried again while that fails, for
+ * TELL_KEEP_MS; a tell no live session can take is written on the note's fate instead). What one
+ * target holds of whole notes is bounded by WHOLE_HELD_MAX_BYTES: past it a new wake=false note is
+ * refused at its send, never cut. Walnut's own status notices and scripts' notes keep the age limit
+ * and the cap; a script's dropped note still has its fate.
  */
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -23,13 +35,21 @@ import path from 'node:path';
 import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
 
-/** A held notice older than this is dropped unread: the live list has moved on. */
+/** A held notice older than this is dropped unread (never one with a `whole` part): the live list has moved on. */
 export const HOLD_MAX_MS = 3 * 24 * 60 * 60_000;
-/** Most parts one folded notice keeps; older ones are dropped (the newest say where things stand). */
+/** Most parts one folded notice keeps; older ones are dropped (the newest say where things stand), never a `whole` one. */
 export const FOLD_PARTS_MAX = 12;
 /** How long a note's fate is kept for op_result (its call's writes stay in the ledger 30 days). */
 export const FATE_KEEP_MS = 7 * 24 * 60 * 60_000;
 const FATES_MAX = 2_000;
+/**
+ * Most bytes of whole notes (a task's, keptWhole) one target holds unread: past it a new wake=false
+ * note is refused at its send (quiet-notes.ts holdQuietNote), so one rider never grows past what a
+ * CLI takes as one message.
+ */
+export const WHOLE_HELD_MAX_BYTES = 64 * 1024;
+/** How long a sender's tell is tried again before it is written on the note's fate as not told. */
+export const TELL_KEEP_MS = 7 * 24 * 60 * 60_000;
 const VERSION = 1;
 
 export interface Held {
@@ -61,11 +81,30 @@ export interface NoteFate {
 export interface Taken { sid: string; at: number; entries: Array<[string, Held]> }
 
 /** What a part of a folded notice may say about itself (a quiet note's do: quiet-notes.ts). */
-export interface PartMeta { at?: number; mid?: string; from?: string; task?: string; title?: string }
+export interface PartMeta {
+  at?: number; mid?: string; from?: string; task?: string; title?: string;
+  /** A task's own words: kept whole, never pushed out by the cap, never expired by age (keptWhole). */
+  whole?: boolean;
+  /** The sending session's task: told there when that session is gone (held-notices-sweep.ts). */
+  fromTask?: string;
+}
+
+/** A dropped note whose sender is a session: told by held-notices-sweep.ts flushDropTells. */
+export interface DropTell {
+  callerSid: string; op: string; taskId: string; reason: string;
+  /** When it was queued, and how many tries failed since (TELL_KEEP_MS bounds the tries). */
+  at: number; tries: number;
+  /** The dropped note's message id: its fate says so when no session can be told. */
+  mid?: string;
+  fromTask?: string;
+}
 
 export const held = new Map<string, Map<string, Held>>();
 export const taken = new Map<number, Taken>();
 const fates = new Map<string, NoteFate>();
+/** Senders still to be told their note was dropped; `tellsOut`: being told now (still written to the file). */
+const tells: DropTell[] = [];
+const tellsOut = new Set<DropTell>();
 
 let opened = false;
 /** False for a boot that could not read the file: it never writes it (openStore). */
@@ -85,6 +124,49 @@ export function metaOf(part: unknown): PartMeta {
   return part && typeof part === 'object' ? part as PartMeta : {};
 }
 
+/**
+ * A task's own note (its words kept whole and never dropped but for a target that is gone).
+ * A part written before the marker existed says so by its sending session (`from`): only a
+ * session's note ever carried one.
+ */
+export function keptWhole(part: unknown): boolean {
+  const m = metaOf(part);
+  return m.whole === true || (m.whole === undefined && typeof m.from === 'string' && m.from.length > 0);
+}
+
+/** Bytes of whole notes (a task's, with a message id) waiting for `sid`, in the hold or taken by a message. */
+export function wholeBytesHeld(sid: string): number {
+  let bytes = 0;
+  const add = (entries: Iterable<[string, Held]>) => {
+    for (const [, v] of entries) {
+      for (const p of v.parts ?? []) {
+        const m = metaOf(p) as PartMeta & { text?: unknown };
+        if (m.mid && keptWhole(p) && typeof m.text === 'string') bytes += Buffer.byteLength(m.text);
+      }
+    }
+  };
+  add(held.get(sid) ?? []);
+  for (const t of taken.values()) if (t.sid === sid) add(t.entries);
+  return bytes;
+}
+
+/** A notice past its age limit that may go: none of its parts is a task's own note. */
+export function expiredByAge(v: Held, now: number): boolean {
+  return now - v.at > HOLD_MAX_MS && !(v.parts ?? []).some(keptWhole);
+}
+
+/** The newest FOLD_PARTS_MAX of `all`, but every `whole` part kept: `out` is what the cap pushes out, oldest first. */
+function capParts(all: unknown[]): { parts: unknown[]; out: unknown[] } {
+  let over = all.length - FOLD_PARTS_MAX;
+  if (over <= 0) return { parts: all, out: [] };
+  const parts: unknown[] = [];
+  const out: unknown[] = [];
+  for (const p of all) {
+    if (over > 0 && !keptWhole(p)) { out.push(p); over--; } else parts.push(p);
+  }
+  return { parts, out };
+}
+
 export function slotOf(sid: string): Map<string, Held> {
   const slot = held.get(sid) ?? new Map<string, Held>();
   held.set(sid, slot);
@@ -92,16 +174,15 @@ export function slotOf(sid: string): Map<string, Held> {
 }
 
 /**
- * Store a folded notice of `all` parts under `key`, the newest FOLD_PARTS_MAX kept. Returns the
- * parts pushed out (the caller records them dropped). Without a render (two restored halves meeting)
- * the two texts are kept side by side.
+ * Store a folded notice of `all` parts under `key`, the newest FOLD_PARTS_MAX kept (and every part
+ * that is a task's own note, however many). Returns the parts pushed out (the caller records them
+ * dropped). Without a render (two restored halves meeting) the two texts are kept side by side.
  */
 export function setFolded(
   slot: Map<string, Held>, key: string, all: unknown[], droppedBefore: number,
   render: Held['render'], at: number, olderText?: string,
 ): unknown[] {
-  const parts = all.slice(-FOLD_PARTS_MAX);
-  const out = all.slice(0, all.length - parts.length);
+  const { parts, out } = capParts(all);
   const dropped = droppedBefore + out.length;
   const text = render ? render(parts, dropped) : [olderText, slot.get(key)?.text].filter(Boolean).join('\n\n');
   slot.set(key, { text, at, parts, dropped, ...(render ? { render } : {}) });
@@ -132,6 +213,24 @@ export function recordFate(mid: string, fate: NoteFate): void {
 
 export function fateOf(mid: string): NoteFate | undefined {
   return fates.get(mid);
+}
+
+/** A sender to tell its note was dropped (kept in the file until it is told). */
+export function queueTell(t: DropTell): void {
+  tells.push(t);
+}
+
+/** The senders to tell now; they stay in the file until settleTells says how it went. */
+export function takeTells(): DropTell[] {
+  const out = tells.splice(0, tells.length);
+  for (const t of out) tellsOut.add(t);
+  return out;
+}
+
+/** A batch takeTells gave is done: `untold` (delivery failed) waits for the next try. */
+export function settleTells(batch: readonly DropTell[], untold: readonly DropTell[]): void {
+  for (const t of batch) tellsOut.delete(t);
+  tells.push(...untold);
 }
 
 export function pruneFates(now = Date.now()): boolean {
@@ -179,12 +278,25 @@ function validFate(v: unknown): NoteFate | null {
   };
 }
 
-/** The file's notices and fates, or null when it is not a file this version reads. */
-function parseFile(raw: string): { sessions: Array<[string, string, Held]>; fates: Array<[string, NoteFate]> } | null {
+function validTell(v: unknown): DropTell | null {
+  if (!v || typeof v !== 'object') return null;
+  const t = v as Record<string, unknown>;
+  if (typeof t.callerSid !== 'string' || typeof t.op !== 'string' || typeof t.reason !== 'string') return null;
+  return {
+    callerSid: t.callerSid, op: t.op, taskId: typeof t.taskId === 'string' ? t.taskId : '', reason: t.reason,
+    at: typeof t.at === 'number' && Number.isFinite(t.at) ? t.at : Date.now(),
+    tries: typeof t.tries === 'number' && Number.isFinite(t.tries) ? t.tries : 0,
+    ...(typeof t.mid === 'string' ? { mid: t.mid } : {}),
+    ...(typeof t.fromTask === 'string' ? { fromTask: t.fromTask } : {}),
+  };
+}
+
+/** The file's notices, fates and tells, or null when it is not a file this version reads. */
+function parseFile(raw: string): { sessions: Array<[string, string, Held]>; fates: Array<[string, NoteFate]>; tells: DropTell[] } | null {
   let doc: unknown;
   try { doc = JSON.parse(raw); } catch { return null; }
   if (!doc || typeof doc !== 'object' || (doc as { version?: unknown }).version !== VERSION) return null;
-  const d = doc as { sessions?: unknown; fates?: unknown };
+  const d = doc as { sessions?: unknown; fates?: unknown; tells?: unknown };
   const sessions: Array<[string, string, Held]> = [];
   for (const [sid, keys] of Object.entries(d.sessions && typeof d.sessions === 'object' ? d.sessions : {})) {
     for (const [key, v] of Object.entries(keys && typeof keys === 'object' ? keys as object : {})) {
@@ -197,7 +309,8 @@ function parseFile(raw: string): { sessions: Array<[string, string, Held]>; fate
     const f = validFate(v);
     if (f) out.push([mid, f]);
   }
-  return { sessions, fates: out };
+  const told = (Array.isArray(d.tells) ? d.tells : []).map(validTell).filter((t): t is DropTell => !!t);
+  return { sessions, fates: out, tells: told };
 }
 
 /**
@@ -240,6 +353,8 @@ export function openStore(): Promise<void> {
         if (out.length) onPushedOut(sid, out);
       }
       for (const [mid, f] of file?.fates ?? []) if (!fates.has(mid)) fates.set(mid, f);
+      // Senders a dropped note was not yet told about: told with the next sweep's flush.
+      tells.unshift(...(file?.tells ?? []));
       if (file?.sessions.length) log.session.info('held notices kept across the restart', { notices: file.sessions.length, sessions: held.size });
       if (heldBefore) void persist();
     } catch (err) {
@@ -277,7 +392,8 @@ function snapshot(): string {
     sessions[sid] = {};
     for (const [key, { render: _render, ...v }] of slot) sessions[sid][key] = v;
   }
-  return JSON.stringify({ version: VERSION, sessions, fates: Object.fromEntries(fates) });
+  const tellsNow = [...tellsOut, ...tells];
+  return JSON.stringify({ version: VERSION, sessions, fates: Object.fromEntries(fates), ...(tellsNow.length ? { tells: tellsNow } : {}) });
 }
 
 /** A write this large or slow is logged: the whole state is serialized on the event loop. */
@@ -336,6 +452,8 @@ export function clearNow(removeFile = true): void {
   held.clear();
   taken.clear();
   fates.clear();
+  tells.length = 0;
+  tellsOut.clear();
   opened = false;
   writable = true;
   loaded = false;

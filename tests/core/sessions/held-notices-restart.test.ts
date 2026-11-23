@@ -9,9 +9,13 @@
  *  - a held note is on disk before its send is answered, and after a restart it rides the target's
  *    next message, once (a later restart, or a replay of the same send, holds nothing again);
  *  - a riding notice and a request's deadline notice survive a restart the same way;
- *  - a note dropped anyway (its target session gone, its age limit) is recorded dropped and its
- *    sending session is told, riding that session's next message; a session that took over
- *    (an engine switch's) gets what waited instead;
+ *  - a task's own note (the sender is a session) is never dropped by age and is kept whole; only
+ *    its target being gone with nothing going on for it drops it (2026-11-23, the user: no message
+ *    is ever lost, and an error keeps retrying);
+ *  - a note dropped anyway (its target session gone, a script's by its age limit) is recorded
+ *    dropped and its sending session is told, riding that session's next message (or its task's
+ *    session's, when the sender's own is gone); a session that took over (an engine switch's)
+ *    gets what waited instead;
  *  - a file of another shape, or none, reads as empty.
  * A restart here is what one does to this process: the module memory forgotten, the file read again.
  */
@@ -37,8 +41,8 @@ import { holdQuietNote } from '../../../src/core/sessions/quiet-notes.js';
 import {
   DROP_WHY, _clearHeldNotices, heldNoteState, heldNoticeKeys, holdNotice, pendingHeldNotices,
 } from '../../../src/core/sessions/held-notices.js';
-import { HOLD_MAX_MS, _resetHeldStoreForTesting } from '../../../src/core/sessions/held-notices-store.js';
-import { startHeldNotices, stopHeldNotices, sweepHeldNotices } from '../../../src/core/sessions/held-notices-sweep.js';
+import { HOLD_MAX_MS, WHOLE_HELD_MAX_BYTES, _resetHeldStoreForTesting } from '../../../src/core/sessions/held-notices-store.js';
+import { DROP_TELL_KEY, startHeldNotices, stopHeldNotices, sweepHeldNotices } from '../../../src/core/sessions/held-notices-sweep.js';
 
 const TARGET = 'aaaaaaaa-1111-4222-8333-000000000001';
 const SENDER = 'aaaaaaaa-1111-4222-8333-000000000002';
@@ -181,9 +185,10 @@ describe('a note dropped anyway tells its sender', () => {
     expect(dropped).toBe(1);
     expect(heldNoticeKeys(TARGET)).toEqual([]);
     expect(await heldNoteState('qm-gone-1')).toMatchObject({ state: 'dropped', why: DROP_WHY.gone });
-    // The sender's notice asks nothing either: it rides the sender's next message, no turn of its own.
+    // The sender's notice asks nothing either: it rides the sender's next message, no turn of its own,
+    // under its own key whose parts no age limit or cap drops (not riding-notices, which both do).
     expect(kicks).toEqual([]);
-    expect(heldNoticeKeys(SENDER)).toEqual(['riding-notices']);
+    expect(heldNoticeKeys(SENDER)).toEqual([DROP_TELL_KEY]);
     // And it survives a restart like any held notice.
     await restart();
     const row = await sendMessageToSession(SENDER, 'what next', { source: 'ui' });
@@ -195,17 +200,88 @@ describe('a note dropped anyway tells its sender', () => {
     expect(await heldNoteState('qm-gone-1')).toMatchObject({ state: 'dropped' });
   });
 
-  it('past its age limit: dropped and told; a Walnut notice that old is dropped without a word', async () => {
+  // Before 2026-11-23 a task's note past HOLD_MAX_MS was dropped (and told) like any notice; now
+  // age alone never drops a task's words. A script's note and Walnut's own notice still expire.
+  it('past its age limit: a task\'s note still waits and rides; a script\'s note and a Walnut notice that old are dropped', async () => {
     const old = Date.now() - HOLD_MAX_MS - 60_000;
-    await holdQuietNote(TARGET, fromSender, { at: old, title: 'Old news', text: 'FYI: old news.', mid: 'qm-old-1', from: SENDER, task: 't-target' });
+    await holdQuietNote(TARGET, fromSender, { at: old, title: 'Old news', text: 'FYI: old news.', mid: 'qm-old-1', from: SENDER, task: 't-target', whole: true });
+    await holdQuietNote(TARGET, { key: 'automation: w@local', label: 'automation: w' }, { at: old, title: 'Old script note', text: 'Paused pid 7. No reply needed.', mid: 'qm-old-script' });
     await holdNotice(TARGET, 'topic-not-taken:tp-2', 'OLD WALNUT NOTICE', { now: old });
     const { dropped } = await sweepHeldNotices();
     expect(dropped).toBe(2);
-    expect(await heldNoteState('qm-old-1')).toMatchObject({ state: 'dropped', why: DROP_WHY.age });
-    const held = (await pendingHeldNotices(SENDER))!;
-    expect(held.text).toContain('"Old news"');
-    expect(held.text).toContain(DROP_WHY.age);
-    expect(held.text).not.toContain('OLD WALNUT NOTICE');
+    expect(await heldNoteState('qm-old-script')).toMatchObject({ state: 'dropped', why: DROP_WHY.age });
+    expect(await heldNoteState('qm-old-1')).toMatchObject({ state: 'waiting', session_id: TARGET });
+    // Nothing of the task's was dropped, so its sender hears nothing.
+    expect(heldNoticeKeys(SENDER)).toEqual([]);
+    // Still there after a restart and a sweep well past the limit, and it rides the next message.
+    await restart();
+    await sweepHeldNotices(Date.now() + 30 * HOLD_MAX_MS);
+    const row = await sendMessageToSession(TARGET, 'back after a long while', { source: 'ui' });
+    expect(row.message).toContain('FYI: old news.');
+    expect(row.message).not.toContain('OLD WALNUT NOTICE');
+    expect(row.message).not.toContain('Paused pid 7.');
+    expect(await heldNoteState('qm-old-1')).toMatchObject({ state: 'delivered', row: row.id });
+  });
+
+  it('a task\'s wake=false sends are held whole through the real send: marked, uncut, every sentence', async () => {
+    // Real tasks on both ends: a task may send only to a task it shares context with.
+    const { addTask, linkSessionSlot } = await import('../../../src/core/task-manager.js');
+    const lead = (await addTask({ title: 'Lead task', project: 'Acme' })).task;
+    const worker = (await addTask({ title: 'Worker task', project: 'Acme' })).task;
+    const LEAD = 'aaaaaaaa-1111-4222-8333-000000000006';
+    const WORKER = 'aaaaaaaa-1111-4222-8333-000000000007';
+    await createSessionRecord(LEAD, lead.id, 'Acme', '/tmp', { initialProcessStatus: 'idle', title: 'Lead task' });
+    await createSessionRecord(WORKER, worker.id, 'Acme', '/tmp', { initialProcessStatus: 'idle', title: 'Worker task' });
+    await linkSessionSlot(lead.id, LEAD, 'exec');
+    await linkSessionSlot(worker.id, WORKER, 'exec');
+    const shared = 'The payments shard is still red and I am bisecting the change that broke it.';
+    const long = `${shared}\n\n${'detail '.repeat(600).trim()}\nLast line of the long note.`;
+    for (const [i, text] of [long, `Second note. ${shared}`].entries()) {
+      const sent = await performSessionSend({ to: WORKER, text, title: `update ${i}`, callerSid: LEAD, wake: false, messageId: `qm-task-whole-${i}` });
+      expect(sent).toMatchObject({ delivery: 'held' });
+    }
+    const file = JSON.parse(await fsp.readFile(FILE(), 'utf8'));
+    const parts = file.sessions[WORKER][`quiet-note:${LEAD}`].parts;
+    expect(parts.map((p: { whole?: boolean; from?: string; fromTask?: string }) => [p.whole, p.from, p.fromTask]))
+      .toEqual([[true, LEAD, lead.id], [true, LEAD, lead.id]]);
+    expect(parts[0].text).toBe(long);
+    const row = await sendMessageToSession(WORKER, 'next', { source: 'ui' });
+    expect(row.message.split(shared)).toHaveLength(3);
+    expect(row.message).toContain('> Last line of the long note.');
+    expect(row.message).toContain('detail '.repeat(599) + 'detail');
+
+    // What a target holds of whole notes is bounded: past it a new note is refused at its send,
+    // with words its sender reads, and nothing is held (never cut).
+    const big = 'x'.repeat(WHOLE_HELD_MAX_BYTES - 1024);
+    await expect(performSessionSend({ to: WORKER, text: big, callerSid: LEAD, wake: false, messageId: 'qm-task-big-1' })).resolves.toMatchObject({ delivery: 'held' });
+    await expect(performSessionSend({ to: WORKER, text: 'y'.repeat(2048), callerSid: LEAD, wake: false, messageId: 'qm-task-big-2' }))
+      .rejects.toMatchObject({ code: 'queue_full', message: expect.stringMatching(/already holds 63 KB of unread wake=false notes, and this one \(2 KB\) would take it past 64 KB; nothing was held\. Send it with wake=true/) });
+    expect(await heldNoteState('qm-task-big-2')).toMatchObject({ state: 'unknown' });
+    // Once the target reads what it holds, there is room again.
+    await sendMessageToSession(WORKER, 'read them', { source: 'ui' });
+    // (Other words: the same words again within five minutes are a repeat the throttle suppresses.)
+    await expect(performSessionSend({ to: WORKER, text: 'w'.repeat(2048), callerSid: LEAD, wake: false, messageId: 'qm-task-big-3' })).resolves.toMatchObject({ delivery: 'held' });
+  });
+
+  it('its sender\'s own session is gone too: told at the session its task goes on with', async () => {
+    const { addTask, linkSessionSlot } = await import('../../../src/core/task-manager.js');
+    const lead = (await addTask({ title: 'Lead task', project: 'Acme' })).task;
+    const NEW_LEAD = 'aaaaaaaa-1111-4222-8333-000000000005';
+    await holdQuietNote(TARGET, fromSender, { at: Date.now(), title: 'Shard red', text: 'FYI: shard red.', mid: 'qm-gone-2', from: SENDER, fromTask: lead.id, task: 't-target', whole: true });
+    await deleteSessionRecords(new Set([TARGET]), 'test');
+    await updateSessionRecord(SENDER, { archived: true, archive_reason: 'test' } as never);
+    await createSessionRecord(NEW_LEAD, lead.id, 'Acme', '/tmp', { initialProcessStatus: 'idle', title: 'Lead task' });
+    await linkSessionSlot(lead.id, NEW_LEAD, 'exec');
+    await sweepHeldNotices();
+    expect(await sweepHeldNotices()).toMatchObject({ dropped: 1 });
+    expect(await heldNoteState('qm-gone-2')).toMatchObject({ state: 'dropped', why: DROP_WHY.gone });
+    expect(heldNoticeKeys(NEW_LEAD)).toEqual([DROP_TELL_KEY]);
+    const row = await sendMessageToSession(NEW_LEAD, 'what next', { source: 'ui' });
+    expect(row.message).toContain('"Shard red"');
+    expect(row.message).toContain('NOT delivered');
+    // Told: nothing is left to tell after a restart.
+    const file = JSON.parse(await fsp.readFile(FILE(), 'utf8'));
+    expect(file.tells).toBeUndefined();
   });
 
   it('a session whose id changes takes what waits with its queue; one whose record went follows its task', async () => {
