@@ -475,9 +475,10 @@ sessionLifecycleV1Router.post('/sessions/:id/interrupt', async (req: Request, re
     if (isCompanion()) {
       // A session its host judges, the Mac away: the host stops its own turn (companion-host-ops.ts).
       const ops = await import('../../core/session-channel/companion-host-ops.js')
-      const operated = await ops.hostOperated(sessionId)
-      if (operated) {
-        const a = await ops.interruptViaHost(operated)
+      const route = await ops.hostRoute(sessionId)
+      if (route.kind === 'refuse') { sendError(res, route.status, route.code, route.message); return }
+      if (route.kind === 'operated') {
+        const a = await ops.interruptViaHost(route.t)
         res.status(a.status).json(a.body)
         return
       }
@@ -502,9 +503,10 @@ sessionLifecycleV1Router.post('/sessions/:id/permission', async (req: Request, r
     if (CLOUD_MODE) {
       // A session its host judges, the Mac away: the host proves the prompt is pending, then answers it.
       const ops = await import('../../core/session-channel/companion-host-ops.js')
-      const operated = await ops.hostOperated(sessionId)
-      if (operated) {
-        const a = await ops.permissionViaHost(operated, body)
+      const route = await ops.hostRoute(sessionId)
+      if (route.kind === 'refuse') { sendError(res, route.status, route.code, route.message); return }
+      if (route.kind === 'operated') {
+        const a = await ops.permissionViaHost(route.t, body)
         res.status(a.status).json(a.body)
         return
       }

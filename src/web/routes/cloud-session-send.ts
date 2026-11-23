@@ -166,18 +166,6 @@ async function cloudSendOnce(
 ): Promise<void> {
   const projected = await resolveHostOrAnswer(res, sessionId)
   if (!projected) return
-  // A session its host judges, the Mac away: queued on that host under the phone's message id
-  // (a retry is queued once), through its listener link; never the daemon's direct send behind
-  // its judge's back (session-channel/companion-host-ops.ts). Pictures wait for the Mac's path.
-  if (images.length === 0) {
-    const ops = await import('../../core/session-channel/companion-host-ops.js')
-    const operated = await ops.hostOperated(sessionId)
-    if (operated) {
-      const a = await ops.sendViaHost(operated, { text, messageId, timeoutMs: Math.max(1_000, order.answerBy - Date.now()) })
-      res.status(a.status).json(a.body)
-      return
-    }
-  }
   const host = projected.host
   // Every sentence below names the host by the name a person knows it by.
   const hostName = cloudSessionHostName(projected)
@@ -223,6 +211,9 @@ async function cloudSendOnce(
     sendError(res, 409, prior.code ?? 'not_sent', prior.message ?? 'Not sent.')
     return
   }
+  // A session its host judges, the Mac away: past the stop gate and the ledger above, it goes
+  // through the host's listener link only (session-channel/companion-host-ops.ts hostRoute).
+  if (await sendThroughHost(res, sessionId, text, images, messageId, prior?.state, order.answerBy)) return
   // A relay of an earlier try may sit in the Mac's queue: only the relay may
   // deliver this message from now on, so a bank of it is relay-only too.
   const relayedBefore = prior?.state === 'maybe-relayed'
@@ -483,6 +474,32 @@ async function cloudSendOnce(
     const reason = err instanceof Error ? err.message : String(err)
     sendError(res, 503, 'bridge_offline', relayFailureSentence(reason, host, hostName, projected.hostLabel))
   }
+}
+
+/**
+ * A send of a session its host judges, the Mac away (hostRoute): queued on that host under the
+ * phone's message id (the host's queue takes an id once, so a retry, or the Mac's relay of the same
+ * id later, is queued once there), its outcome recorded in the ledger like a relay's. Never the
+ * daemon's direct send behind its judge's back: with its link down, or for pictures (the host's
+ * send route takes text), a refusal the phone shows. False: not this path.
+ */
+async function sendThroughHost(
+  res: Response, sessionId: string, text: string, images: SessionImage[], messageId: string,
+  prior: import('../../core/send-queue.js').SendOutcomeState | undefined, answerBy: number,
+): Promise<boolean> {
+  const ops = await import('../../core/session-channel/companion-host-ops.js')
+  const route = await ops.hostRoute(sessionId)
+  if (route.kind === 'none') return false
+  if (route.kind === 'refuse') { sendError(res, route.status, route.code, route.message); return true }
+  if (images.length > 0) { sendError(res, 409, 'images_need_mac', ops.IMAGES_NEED_MAC); return true }
+  const queue = await import('../../core/send-queue.js')
+  // A direct delivery of it may have run (send-direct-gate.ts): sending it again could run it twice.
+  if (prior === 'direct-intent') { sendError(res, 409, 'delivery_unknown', queue.unknownFateMessage('the session\'s host')); return true }
+  const a = await ops.sendViaHost(route.t, { text, messageId, timeoutMs: Math.max(1_000, answerBy - Date.now()) })
+  if (a.status === 202) await queue.markSendOutcome(sessionId, messageId, 'relayed')
+  else if (a.maybeTaken) await queue.markSendOutcome(sessionId, messageId, 'maybe-relayed')
+  res.status(a.status).json(a.body)
+  return true
 }
 
 /**

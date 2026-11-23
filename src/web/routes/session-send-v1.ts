@@ -128,9 +128,11 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
       if (interrupt && !repeated) {
         // A session its host judges, the Mac away: the host stops the turn (session-channel/companion-host-ops.ts).
         const ops = await import('../../core/session-channel/companion-host-ops.js')
-        const operated = await ops.hostOperated(sessionId)
-        const stopped = operated
-          ? await ops.interruptViaHost(operated, INTERRUPT_RELAY_TIMEOUT_MS).then((a) => (a.status === 200 ? { ok: true as const } : { ok: false as const, failure: { kind: 'error' as const, status: a.status, code: String((a.body.error as { code?: unknown } | undefined)?.code ?? 'bridge_offline'), message: String((a.body.error as { message?: unknown } | undefined)?.message ?? '') } }))
+        const route = await ops.hostRoute(sessionId)
+        const stopped = route.kind === 'refuse'
+          ? { ok: false as const, failure: { kind: 'error' as const, status: route.status, code: route.code, message: route.message } }
+          : route.kind === 'operated'
+          ? await ops.interruptViaHost(route.t, INTERRUPT_RELAY_TIMEOUT_MS).then((a) => (a.status === 200 ? { ok: true as const } : { ok: false as const, failure: { kind: 'error' as const, status: a.status, code: String((a.body.error as { code?: unknown } | undefined)?.code ?? 'bridge_offline'), message: String((a.body.error as { message?: unknown } | undefined)?.message ?? '') } }))
           : await (await import('./v1-control-relay.js')).callPrimaryControl('interrupt', sessionId, undefined, INTERRUPT_RELAY_TIMEOUT_MS)
         if (!stopped.ok) {
           const f = stopped.failure
