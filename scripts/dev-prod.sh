@@ -1032,12 +1032,13 @@ fi
 # in the runtime/ dir beside its dist-bin/ (WALNUT_RUNTIME_DIR names that
 # parent, src/binary/runtime-tree.ts). Sets the global array server_argv;
 # `web --port N` follows it, after `env` and its -u options. A rehearsal adds its
-# private data and daemon dirs, and keeps its sessions over a server's exit as production's
-# daemon dir does (a named dir reaps them otherwise), so its restarts show what production's do.
+# private data and daemon dirs, and makes that daemon dir a persistent one as production's is
+# (WALNUT_DAEMON_PERSISTENT, local-daemon.ts: no parent watchdog, its sessions outlive the
+# daemon; a named dir reaps them otherwise), so its deploys show what production's do to sessions.
 set_server_argv() {
   server_argv=(WALNUT_RUNTIME_DIR="$(dirname "$(dirname "$1")")/runtime" "$1")
   if [[ "$REHEARSAL" == "1" ]]; then
-    server_argv=(OPEN_WALNUT_HOME="$REHEARSAL_HOME" WALNUT_DAEMON_DIR="$REHEARSAL_DAEMON_DIR" WALNUT_DAEMON_KEEP_SESSIONS=1 "${server_argv[@]}")
+    server_argv=(OPEN_WALNUT_HOME="$REHEARSAL_HOME" WALNUT_DAEMON_DIR="$REHEARSAL_DAEMON_DIR" WALNUT_DAEMON_PERSISTENT=1 "${server_argv[@]}")
   fi
   if [[ "$REHEARSAL" == "1" && "${WALNUT_DEVPROD_REHEARSAL_FAIL_LAUNCH:-0}" == "1" && "${rehearsal_fail_armed:-0}" == "1" ]]; then
     # The new server (the real build) answers /api/config but cannot serve the

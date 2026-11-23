@@ -1748,6 +1748,8 @@ export class LocalDaemon {
     // The keep-sessions switch is one daemon's own exit policy (the cloud tunnel
     // daemon sets it through envOverrides): never inherit it.
     delete env.WALNUT_DAEMON_KEEP_SESSIONS
+    // Read once, for the default daemon only (localDaemon below): never passed on.
+    delete env.WALNUT_DAEMON_PERSISTENT
     // The service daemon's state dir is its own (its triggers, hooks, host copies): a daemon
     // started here is never the service, and with this var inherited from a session of the
     // service daemon it could reach that daemon's state. The host's one service's runtime is that service.
@@ -2077,4 +2079,14 @@ export class LocalDaemon {
   }
 }
 
-export const localDaemon = new LocalDaemon({ inProcess: inProcessDaemonWanted })
+/**
+ * WALNUT_DAEMON_PERSISTENT=1: this server's named daemon dir keeps its sessions across server
+ * restarts, as the production dir does (no parent watchdog, the CLIs outlive the daemon). A deploy
+ * rehearsal's server sets it (scripts/dev-prod.sh) so the rehearsal shows what a deploy does to
+ * running sessions. The same two settings as the companion's tunnel daemon.
+ */
+export function defaultDaemonPersistence(env: NodeJS.ProcessEnv = process.env): Pick<LocalDaemonOptions, 'persistent' | 'envOverrides'> {
+  return env.WALNUT_DAEMON_PERSISTENT === '1' ? { persistent: true, envOverrides: { WALNUT_DAEMON_KEEP_SESSIONS: '1' } } : {}
+}
+
+export const localDaemon = new LocalDaemon({ inProcess: inProcessDaemonWanted, ...defaultDaemonPersistence() })

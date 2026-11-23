@@ -58,3 +58,28 @@ describe('the daemon version a compiled server expects', () => {
     expect(expected(new LocalDaemon({ daemonDir: '/tmp/walnut-runtime-env-e' }))).toBeNull()
   })
 })
+
+describe('a deploy rehearsal\'s persistent daemon dir (WALNUT_DAEMON_PERSISTENT)', () => {
+  it('makes the default daemon keep its sessions and drop the parent watchdog, and is never passed on', async () => {
+    const { defaultDaemonPersistence } = await import('../../src/providers/local-daemon.js')
+    expect(defaultDaemonPersistence({})).toEqual({})
+    const opts = defaultDaemonPersistence({ WALNUT_DAEMON_PERSISTENT: '1' })
+    expect(opts).toEqual({ persistent: true, envOverrides: { WALNUT_DAEMON_KEEP_SESSIONS: '1' } })
+    const saved = process.env.WALNUT_DAEMON_PERSISTENT
+    process.env.WALNUT_DAEMON_PERSISTENT = '1'
+    try {
+      const kept = await new LocalDaemon({ daemonDir: '/tmp/walnut-runtime-env-f', ...opts }).buildSpawnEnv()
+      expect(kept.WALNUT_DAEMON_KEEP_SESSIONS).toBe('1')
+      expect(kept.WALNUT_DAEMON_PARENT_PID).toBeUndefined()
+      expect(kept.WALNUT_DAEMON_PERSISTENT).toBeUndefined()
+      // An isolated dir without it: the watchdog names this server, its sessions end with it.
+      const plain = await new LocalDaemon({ daemonDir: '/tmp/walnut-runtime-env-g' }).buildSpawnEnv()
+      expect(plain.WALNUT_DAEMON_PARENT_PID).toBe(String(process.pid))
+      expect(plain.WALNUT_DAEMON_KEEP_SESSIONS).toBeUndefined()
+      expect(plain.WALNUT_DAEMON_PERSISTENT).toBeUndefined()
+    } finally {
+      if (saved === undefined) delete process.env.WALNUT_DAEMON_PERSISTENT
+      else process.env.WALNUT_DAEMON_PERSISTENT = saved
+    }
+  })
+})
