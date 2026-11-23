@@ -30,6 +30,8 @@ const k = vi.hoisted(() => ({
   answer: { status: 202 } as { status: number; maybeTaken?: true },
   /** A send whose words hold here until released (a picture send still moving its pictures). */
   gate: null as Promise<void> | null,
+  /** Message ids that reached sendViaHost, in order (before any gate). */
+  entered: [] as string[],
 }))
 vi.mock('../../../src/core/session-projection.js', async (orig) => ({
   ...(await orig<object>()),
@@ -44,6 +46,7 @@ vi.mock('../../../src/core/session-channel/companion-host-ops.js', async (orig) 
   // The same answer for a caller that asks only whether the host operates it.
   hostOperated: async () => (k.route.kind === 'operated' ? k.route.t : null),
   sendViaHost: async (_t: unknown, o: { text: string; messageId: string; images?: unknown[] }) => {
+    k.entered.push(o.messageId)
     if (o.images?.length && k.gate) await k.gate
     k.sends.push({ text: o.text, messageId: o.messageId, ...(o.images ? { images: o.images } : {}) })
     return k.answer.status === 202 ? { status: 202, body: { messageId: o.messageId, viaHost: true } }
@@ -72,6 +75,7 @@ beforeEach(async () => {
   k.sends.length = 0
   k.answer = { status: 202 }
   k.gate = null
+  k.entered.length = 0
 })
 
 describe('a send through the host keeps the gates of every other path (M1)', () => {
@@ -125,7 +129,7 @@ describe('never the daemon\'s direct send (M2)', () => {
     let release!: () => void
     k.gate = new Promise((r) => { release = r })
     const a = send({ text: 'what is wrong in these?', messageId: 'qm-mobile-o1', images: [png, png, png] }).then((r) => r)
-    await new Promise((r) => setTimeout(r, 200))
+    await vi.waitFor(() => expect(k.entered).toEqual(['qm-mobile-o1']))
     // B waits for A to its own deadline, then is refused retryable: never queued on the host first.
     const b = await send({ text: 'also check the log', messageId: 'qm-mobile-o2' })
     expect(b.status, JSON.stringify(b.body)).toBe(503)

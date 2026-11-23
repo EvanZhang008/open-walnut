@@ -17,7 +17,7 @@
  *   P5b pictures  a send with 1 and with 3 pictures (land 8): each saved on the host byte for byte by
  *               its daemon's `image.save`, the CLI's words name them under the images header (as a
  *               legacy send's do), and each answer comes back once
- *   P5c too big a picture past the daemon's cap is refused with the legacy code, and nothing is sent
+ *   P5c too big a picture past the host's cap is refused as on every path, and nothing is sent
  *   P6 back     the Mac woken: it has every fact of the session once and in order (the phone's
  *               turns included), its history shows the pictures as a legacy send's, and the
  *               companion relays to the Mac again (no `viaHost`)
@@ -185,14 +185,15 @@ describe.skipIf(!RUN)('the phone operates a host-judged session through the comp
     }
   }, 300_000)
 
-  it('P5c: a picture past the daemon\'s cap is refused with the legacy code, and nothing is sent', async () => {
+  it('P5c: a picture past the host\'s cap is refused as on every path, and nothing is sent', async () => {
     const sends = async () => ((await h.host(`/events?sid=${sid}`)) as ProbeEvent[]).filter((e) => e.name === 'session:send').length
     const before = await sends()
     const big = png(10 * 1024 * 1024 + 1)
     const r = await h.phone('POST', `/api/v1/sessions/${sid}/messages`, { text: 'PICTURES too big', messageId: mid(), images: [{ data: big.toString('base64'), mediaType: 'image/png' }] })
-    expect(r.status, JSON.stringify(r.json)).toBe(400)
-    expect(r.json.error).toMatchObject({ code: 'image_upload_failed' })
-    expect(String(r.json.error.message)).toMatch(/too large/)
+    // The send route shrinks a picture to the host's cap or refuses it before anything goes, on
+    // every path (images.ts fitsImageSaveLimits); this one cannot shrink (not a real image).
+    expect(r.status, JSON.stringify(r.json)).toBe(413)
+    expect(r.json.error).toMatchObject({ code: 'image_too_large' })
     await new Promise((res) => setTimeout(res, 2_000))
     expect(await sends()).toBe(before)
     expect(resultsOf((await hostFacts()).recs, sid, 'PICTURES too big')).toEqual([])
