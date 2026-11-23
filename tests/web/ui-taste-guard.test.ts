@@ -1,6 +1,6 @@
 /**
  * The user's taste rules (.claude/skills/walnut-ui-requirements/SKILL.md, "Taste: round, quiet,
- * consistent", rules 14 to 18) where a file can hold them: the one input box's keys are circles,
+ * consistent", rules 14 to 20) where a file can hold them: the one input box's keys are circles,
  * its box is rounded and never square, and a one-line box is never an oval pill.
  *
  * 2026-11-22: a task unifying the input boxes turned every round key square and every box to 8 px;

@@ -1,20 +1,14 @@
 /**
- * One focus ring per field (2026-11-04, the user's screenshot of the passage
- * Comment box: a blue border around the box AND a 3px blue glow around the field
- * inside it). The glow came from a global `input:focus, textarea:focus` rule; a
- * box that draws its own ring with `:focus-within` had to be listed in a
- * "focus-ring-owners" rule so the field inside drew none.
+ * A focused field shows only its own edge, a shade darker: no ring, no glow, no accent colour.
  *
- * Since 2026-11-21 every field is drawn as the message box (styles/input-box.css,
- * "Fields"): any focus turns its 1 px edge --input-focus-edge, and keyboard focus
- * (`:focus-visible`) draws one 2 px accent ring, on the field, or on the field box
- * or message box that holds the words, never on the words inside one (2026-11-22
- * review: the edge alone is 1.4:1, under the 3:1 a focus indicator needs, and the
- * checkboxes had no focus at all). This test holds that: no rule that names every
- * field (`input:focus`, `:where(input, textarea):focus`, with no class) draws a glow
- * (a box-shadow) anywhere in the web app's CSS, nor an outline on a plain `:focus`;
- * the field focus rule sets only the edge; and the keyboard ring exists for fields,
- * field boxes, message boxes and the engine's own controls.
+ * 2026-11-04: the passage Comment box drew a blue border AND a 3 px blue glow (a global
+ * `input:focus` glow). 2026-11-22: a 2 px accent ring was added for keyboard focus on every field.
+ * 2026-11-23, the user, of that ring round the quick bar's box on open: "don't do this ... that
+ * highlight after it is selected, so gross!" (skill walnut-ui-requirements, rule 19). So every rule
+ * that styles a focused field (`input:focus`, `.x-search:focus-within`, `.wn-field:has(input:focus)`)
+ * may only set its edge to a grey (`--input-focus-edge`, `--border-strong`): never an outline, a
+ * box-shadow, or an edge in the accent or primary colour. The engine's own controls (a box to tick,
+ * a slider) have no edge to darken, so their keyboard ring stays, and buttons keep theirs.
  */
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
@@ -45,64 +39,86 @@ function splitSelectors(list: string): string[] {
   return [...out, cur].map((x) => x.trim()).filter(Boolean);
 }
 
-/** A declaration that draws a ring: a box-shadow or outline that is not `none`/`0`. */
-const RING = /(?:^|[;\s])(box-shadow|outline(?:-[a-z]+)?)\s*:(?!\s*(?:none|0|transparent)\s*(?:!important\s*)?(?:;|$))\s*[^;\s][^;]*/;
-const GLOW = /(?:^|[;\s])box-shadow\s*:(?!\s*(?:none|0|transparent)\s*(?:!important\s*)?(?:;|$))\s*[^;\s][^;]*/;
-/** A selector that names a focused field by its element only: every field on every page. */
-const BARE_FIELD_FOCUS = /^(?::(?:is|where)\()?\s*(input|textarea|select)(\s*,\s*(input|textarea|select))*\s*\)?(?::not\([^)]*\))*:focus(-visible)?$/;
-/** The same, with what a `:not()` leaves out taken away first (`:where(input:not([type=x]), textarea)`). */
-const bareFieldFocus = (sel: string) => BARE_FIELD_FOCUS.test(sel.replace(/:not\((?:[^()]|\([^()]*\))*\)/g, ''));
+/** A declaration that draws a ring or glow: a box-shadow or outline that is not `none`/`0`. */
+const RING = /(?:^|[;\s])(box-shadow|outline(?:-(?:width|style|color))?|outline)\s*:(?!\s*(?:none|0|transparent)\s*(?:!important\s*)?(?:;|$))\s*[^;\s][^;]*/;
+/** An edge in a colour that highlights: the accent, the primary, or a raw blue. */
+const LOUD_EDGE = /(?:^|[;\s])border(?:-(?:top|right|bottom|left))?(?:-color)?\s*:[^;]*(?:accent|primary|#4a7dff|#0a84ff|#007aff)/i;
 
-function globalFieldRings(): string[] {
+/** Native controls with no edge of their own: their keyboard ring stays. */
+const NATIVE_CONTROL = /\[type=['"]?(checkbox|radio|range|color|file)['"]?\]/;
+/** A class that names a text field: the last word is input, field, search, textarea, box, editor... */
+const FIELD_CLASS = /\.[\w-]*(?:-input|-field|-search|-textarea|-editor|-box|search-bar|^\.wn-field|^\.wn-input)(?![\w-])|^\.wn-(?:field|input)(?![\w-])/;
+/** Classes that end like a field but are a button or a piece of one. */
+const NOT_A_FIELD = /-(?:btn|button|key|clear|open|close|remove|cancel|icon|ic|toggle)(?![\w-])|clear-search|field-key/;
+
+/** True when `sel` styles a focused text field (by element, by field class, or by its box holding one). */
+function isFocusedField(sel: string): boolean {
+  if (!/:focus(?:-visible|-within)?/.test(sel)) return false;
+  if (NATIVE_CONTROL.test(sel) && !/textarea|select/.test(sel.replace(/:not\((?:[^()]|\([^()]*\))*\)/g, ''))) return false;
+  // The part that is focused (or holds the focus): the last compound before its :focus.
+  const subject = sel.replace(/\s*[>+~]\s*/g, ' ').split(/\s+(?![^()]*\))/).filter(Boolean).pop() ?? '';
+  if (NOT_A_FIELD.test(subject)) return false;
+  if (/^(?::(?:is|where)\()?\s*(?:input|textarea|select)\b/.test(subject)) return true;
+  if (/:has\([^)]*(?:input|textarea|select)[^)]*:focus/.test(subject)) return true;
+  return FIELD_CLASS.test(subject.split(':')[0]) || FIELD_CLASS.test(subject);
+}
+
+function loudFocusedFields(): string[] {
   const found: string[] = [];
   for (const file of cssFiles(ROOT)) {
     const css = strip(fs.readFileSync(file, 'utf8'));
     for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
       const [, selectors, body] = m;
-      if (!RING.test(body)) continue;
+      if (!RING.test(body) && !LOUD_EDGE.test(body)) continue;
       for (const sel of splitSelectors(selectors)) {
-        if (!bareFieldFocus(sel)) continue;
-        // Keyboard focus may draw its ring; nothing draws a glow, and a plain :focus draws no ring.
-        if (GLOW.test(body) || !sel.endsWith(':focus-visible')) found.push(`${path.relative(ROOT, file)}: ${sel}`);
+        if (isFocusedField(sel)) found.push(`${path.relative(ROOT, file)}: ${sel} { ${body.trim().replace(/\s+/g, ' ')} }`);
       }
     }
   }
   return found;
 }
 
-describe('a focused field draws one ring: its edge, and a keyboard ring', () => {
-  it('finds a global ring when there is one (the scan still works)', () => {
-    expect(bareFieldFocus('input:focus')).toBe(true);
-    expect(bareFieldFocus(':is(input, textarea):focus')).toBe(true);
-    expect(bareFieldFocus(":where(input:not([type='checkbox'], [type='radio']), textarea, select):focus")).toBe(true);
-    expect(bareFieldFocus('.my-box input:focus')).toBe(false);
+describe('a focused field shows only its edge, a shade darker', () => {
+  it('the scan finds what it is meant to (each shape once shipped)', () => {
+    expect(isFocusedField('input:focus')).toBe(true);
+    expect(isFocusedField(":where(input:not([type='checkbox'], [type='radio']), textarea, select):not(.wn-field > *, .wn-input *):focus-visible")).toBe(true);
+    expect(isFocusedField('.wn-field:has(> :is(input, textarea):focus-visible)')).toBe(true);
+    expect(isFocusedField('.search-bar:focus-within')).toBe(true);
+    expect(isFocusedField('.pw-search:focus-within')).toBe(true);
+    expect(isFocusedField('.plan-popup-input-field:focus')).toBe(true);
+    expect(isFocusedField('.routine-instructions-box:focus-within')).toBe(true);
+    expect(isFocusedField('.memory-edit-textarea:focus')).toBe(true);
+    expect(isFocusedField('.qb-bar .qb-text:focus')).toBe(false); // the bar draws no edge at all
+    // Buttons and native controls keep their keyboard ring.
+    expect(isFocusedField(".settings-container .settings-nav-clear-search:focus-visible")).toBe(false);
+    expect(isFocusedField('.wn-field-key:focus-visible')).toBe(false);
+    expect(isFocusedField(":where(input:is([type='checkbox'], [type='radio'], [type='range'])):focus-visible")).toBe(false);
     expect(RING.test(' box-shadow: 0 0 0 3px var(--accent-subtle)')).toBe(true);
-    expect(GLOW.test(' outline: 2px solid var(--accent)')).toBe(false);
-    expect(RING.test(' box-shadow: none')).toBe(false);
-    expect(RING.test(' outline: 0;')).toBe(false);
+    expect(RING.test(' outline: 2px solid var(--accent)')).toBe(true);
+    expect(RING.test(' outline: none')).toBe(false);
+    expect(LOUD_EDGE.test(' border-color: var(--accent)')).toBe(true);
+    expect(LOUD_EDGE.test(' border-color: var(--color-primary, #4a7dff)')).toBe(true);
+    expect(LOUD_EDGE.test(' border-color: var(--input-focus-edge, var(--border-strong))')).toBe(false);
   });
 
-  it('no rule draws a glow around every focused field, or a ring on every plain focus', () => {
-    expect(globalFieldRings(), 'a focused field shows its edge, and a ring only for keyboard focus (styles/input-box.css, "Fields")').toEqual([]);
+  it('no focused field draws a ring, a glow or an accent edge anywhere in the web app', () => {
+    expect(loudFocusedFields(), 'set the edge to var(--input-focus-edge) and nothing else (styles/input-box.css, "Fields")').toEqual([]);
   });
 
   const css = () => strip(fs.readFileSync(path.join(ROOT, 'styles/input-box.css'), 'utf8'));
   const rulesOf = (text: string) => [...text.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ sels: splitSelectors(m[1]), body: m[2].trim() }));
 
-  it('the field focus rule sets only the edge', () => {
-    const rule = rulesOf(css()).find((r) => r.sels.some((x) => bareFieldFocus(x) && x.endsWith(':focus')));
-    expect(rule, 'input-box.css has the fields\' `:focus { border-color: ... }`').toBeTruthy();
-    expect(rule!.body).toBe('border-color: var(--input-focus-edge);');
+  it('the field and message box focus rules set only the grey edge', () => {
+    const rules = rulesOf(css());
+    const field = rules.find((r) => r.sels.some((x) => /^:where\(input:not\(/.test(x) && x.endsWith(':focus')));
+    expect(field?.body).toBe('border-color: var(--input-focus-edge);');
+    expect(rules.find((r) => r.sels.includes('.wn-input:focus-within'))?.body).toBe('border-color: var(--input-focus-edge);');
+    expect(rules.find((r) => r.sels.includes('.wn-field:focus-within'))?.body).toBe('border-color: var(--input-focus-edge);');
+    expect(/--input-focus-edge:\s*var\(--border-strong\)/.test(css()), 'the edge is a grey').toBe(true);
   });
 
-  it('keyboard focus is a 2 px accent ring on fields, field boxes and native controls', () => {
-    const ring = (r: { body: string }) => /outline:\s*2px solid var\(--accent\)/.test(r.body);
-    const rules = rulesOf(css()).filter(ring);
-    const sels = rules.flatMap((r) => r.sels);
-    expect(sels.some((x) => /^:where\(input:not\(.*\), textarea, select\):not\(\.wn-field > \*, \.wn-input \*\):focus-visible$/.test(x)), 'fields').toBe(true);
-    expect(sels.some((x) => x.startsWith('.wn-field:has(') && x.includes(':focus-visible')), 'field boxes').toBe(true);
-    // The message box keeps its edge (input-box.css): a grey chat accent ringed every composer.
-    expect(sels.some((x) => x.startsWith('.wn-input')), 'no ring on message boxes').toBe(false);
-    expect(sels.some((x) => /type='checkbox'.*type='radio'.*type='range'.*:focus-visible$/.test(x)), 'checkboxes, radios and ranges').toBe(true);
+  it('the engine\'s own controls keep a keyboard ring (they have no edge to darken)', () => {
+    const sels = rulesOf(css()).filter((r) => /outline:\s*2px solid var\(--accent\)/.test(r.body)).flatMap((r) => r.sels);
+    expect(sels.some((x) => /type='checkbox'.*type='radio'.*type='range'.*:focus-visible$/.test(x))).toBe(true);
   });
 });

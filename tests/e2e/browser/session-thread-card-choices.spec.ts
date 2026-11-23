@@ -73,7 +73,7 @@ test.describe('Choices around the comment card', () => {
     await expect(c).toHaveCount(0)
     await expect(unsentRows(panel)).toHaveCount(0)
     await expect(chip(panel)).toHaveCount(0)
-    await expect(composer(panel)).toHaveAttribute('placeholder', /Send a message to this session/)
+    await expect(composer(panel)).toHaveAttribute('placeholder', '')
     // The card's ×.
     c = await ask(page, panel)
     await c.locator('.thread-card-close').click()
@@ -120,7 +120,7 @@ test.describe('Choices around the comment card', () => {
     // Opening is not quoting: no chip, the composer's words and placeholder stay.
     await expect(chip(panel)).toHaveCount(0)
     await expect(composer(panel)).toHaveValue('Words for the main conversation')
-    await expect(composer(panel)).toHaveAttribute('placeholder', /Send a message to this session/)
+    await expect(composer(panel)).toHaveAttribute('placeholder', '')
     await composer(panel).fill('')
     // Quote in chat: the card closes, the composer names the question.
     await card(panel).getByRole('button', { name: 'Quote in chat' }).click()
@@ -140,7 +140,7 @@ test.describe('Choices around the comment card', () => {
     await chip(panel).locator('[data-testid="composer-thread-target-clear"]').click()
     await expect(chip(panel)).toHaveCount(0)
     await expect(composer(panel)).toHaveValue('This one is for the main thread')
-    await expect(composer(panel)).toHaveAttribute('placeholder', /Send a message to this session/)
+    await expect(composer(panel)).toHaveAttribute('placeholder', '')
     await composer(panel).press('Enter')
     const bubble = panel.locator('.session-history .session-msg', { hasText: 'This one is for the main thread' }).first()
     await expect(bubble).toBeVisible({ timeout: 30_000 })

@@ -673,7 +673,7 @@
   border-top: 1px solid var(--border);
 }
 .routine-instructions-box:focus-within {
-  border-color: var(--accent);
+  border-color: var(--input-focus-edge, var(--border-strong));
 }
 .routine-trigger-box {
   border: 1px solid var(--border);

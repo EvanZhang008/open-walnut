@@ -95,7 +95,7 @@ async function typeAndSend(page: Page, sid: string, words: string) {
   })
   await page.goto(`${base()}/sessions?id=${sid}`)
   const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${sid}"]`).last()
-  const input = panel.locator('textarea[placeholder*="Send a message to this session"]').first()
+  const input = panel.locator('textarea[aria-label="Send a message to this session"]').first()
   await expect(input).toBeVisible({ timeout: 90_000 })
   await input.click()
   await input.pressSequentially(words, { delay: 15 })

@@ -170,8 +170,7 @@
 
 .tp-ai-rule-text:focus {
   outline: none;
-  border-color: var(--accent);
-  box-shadow: var(--settings-focus-ring);
+  border-color: var(--input-focus-edge, var(--border-strong));
 }
 
 /* ── Test a task: the field, then one verdict line ── */

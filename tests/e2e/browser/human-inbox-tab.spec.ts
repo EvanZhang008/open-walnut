@@ -237,7 +237,7 @@ test('a letter opens in the session Inbox tab beside the live chat, and answerin
 
   // ── A chat message sent WHILE the letter is open reaches the CLI ──
   const chatText = `PW TAB chat while reading ${NONCE}`
-  const chatInput = panel.getByPlaceholder('Send a message to this session...')
+  const chatInput = panel.getByRole('textbox', { name: 'Send a message to this session' })
   await expect(chatInput).toBeVisible()
   await chatInput.fill(chatText)
   await panel.locator('.session-panel-input .chat-send-btn-icon').click()

@@ -4389,8 +4389,10 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             placeholder={plainChat ? 'Ask a follow-up…' : threads.composerPlaceholder ?? (phoneLayer || phoneWidth
               ? (unread ? 'New reply above, not read yet' : sessionTask?.phase === 'WAITING' ? 'Message: moves it to Working' : 'Message')
               // A desktop says it in the line above the box (composer-prompt-warning), once.
-              // The red box of an unread reply says what it means (input-box.css).
-              : unread ? 'New reply above, not read yet. Send a message... (/ for commands)' : 'Send a message to this session... (/ for commands)')}
+              // The red box of an unread reply says what it means (input-box.css). Otherwise the
+              // box is empty: the user found the long hint ugly (2026-11-23, "remove this too ugly").
+              : unread ? 'New reply above, not read yet' : '')}
+            label="Send a message to this session"
             onValueChange={handleComposerValue}
             showCommands={false}
             {...(plainChat ? {} : {

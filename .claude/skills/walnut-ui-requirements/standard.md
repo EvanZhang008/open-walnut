@@ -140,7 +140,7 @@ placeholder). Its look is in the same file, `web/src/styles/input-box.css` ("Fie
 
 | Part | Look |
 |---|---|
-| Field | the bare `input, textarea, select`: corner `--input-radius` (12 px), fill `--input-fill` (4% of the text colour, 10% in dark), a transparent 1 px edge that turns `--input-focus-edge` on focus, no glow; keyboard focus adds a 2 px `--accent` ring (below) |
+| Field | the bare `input, textarea, select`: corner `--input-radius` (12 px), fill `--input-fill` (4% of the text colour, 10% in dark), a transparent 1 px edge that turns `--input-focus-edge` (a grey) on focus, and nothing more: no ring, no glow, no accent edge (below) |
 | Height | as tall as the buttons beside it: 34 px (`.btn`), or 28 px with `is-sm` beside `.btn-sm` (a toolbar, Settings, a plugin's small row, a lane or name rename); every one-line field 46 px on a phone (`.app-shell-navigation` or a portalled `.is-phone-layer`). Give a small field `is-sm`, never a height, and no vertical padding of its own. A text area's `min-height` is how many lines it starts with, not a look |
 | Placeholder | `--input-placeholder` (`--fg-notice`, 4.6:1 on the fill over white), never faded with opacity |
 | Error | one red edge (`aria-invalid="true"`), on every field |
@@ -174,12 +174,15 @@ placeholder). Its look is in the same file, `web/src/styles/input-box.css` ("Fie
 - No other file gives a field, its placeholder or its keys a fill, edge, corner, shadow, outline
   or height: `tests/web/ui-standard-ratchet.test.ts` (`restyledField`) fails on a new one. A
   rule that takes a field's look away (`border: 0` for the words inside a `wn-field`) is fine.
-- Keyboard focus is always visible (3:1 or more), never only the faint edge: a 2 px `--accent`
-  ring (`:focus-visible`) on the field, or on the `wn-field` box holding the words, never on the
-  words inside one (a message box, `wn-input`, keeps its edge and caret: in a chat the accent is
-  grey, and a ring framed every composer in dark); checkboxes, radios and ranges keep the engine's control and get
-  the same ring. No rule draws a glow around every focused field
-  (`tests/web/focus-ring-owner-guard.test.ts`).
+- A focused field, `wn-field` box or message box shows only its edge turning `--input-focus-edge`
+  (`--border-strong`), on a click and from the keys alike, and its caret: no outline, ring, glow,
+  or blue or accent edge, in any file (2026-11-23, the user, of a 2 px accent ring round the quick
+  bar: "so gross!"; SKILL.md rule 19). Only checkboxes, radios and ranges, which have no edge to
+  darken, keep a 2 px `--accent` ring for the keyboard
+  (`tests/web/focus-ring-owner-guard.test.ts` fails on any other).
+- An empty message box shows no hint text: the session box has none, only its `aria-label`
+  ("Send a message to this session"); a placeholder only says what the user cannot see otherwise,
+  in a few words ("New reply above, not read yet"; SKILL.md rule 20).
 
 ## Choice controls
 
@@ -217,7 +220,7 @@ with one line under the master saying why. A control is never shown on when what
 off. `tests/e2e/browser/choice-controls-dependent.spec.ts` walks every Settings section and fails on
 a master that is off while a control it names is not disabled.
 
-Every control keeps a visible 2 px `--accent` focus ring for the keyboard. A page's pick of tab,
+Every button and choice control keeps a visible 2 px `--accent` focus ring for the keyboard (a text field shows only its edge, above). A page's pick of tab,
 filter or mode is kept with `usePageView` (`tests/web/view-memory-guard.test.ts`).
 
 `tests/web/choice-controls-ratchet.test.ts` finds every tab, segmented control, switch, selectable

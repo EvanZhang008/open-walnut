@@ -391,7 +391,7 @@
   color: var(--fg-muted);
 }
 .ask-walnut-drawer-search:focus-within {
-  border-color: var(--walnut-accent);
+  border-color: var(--input-focus-edge, var(--border-strong));
 }
 /* The icon set's magnifier, never a text glyph (a glyph sits on a different
    baseline in each engine and font). */

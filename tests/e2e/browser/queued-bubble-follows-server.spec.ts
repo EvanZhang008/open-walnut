@@ -37,7 +37,7 @@ async function injectEvent(page: Page, name: string, data: unknown) {
 }
 
 async function sendViaUi(page: Page, text: string) {
-  const input = page.locator('textarea[placeholder*="Send a message to this session"]').first()
+  const input = page.locator('textarea[aria-label="Send a message to this session"]').first()
   await input.click()
   await input.fill(text)
   await input.press('Enter')

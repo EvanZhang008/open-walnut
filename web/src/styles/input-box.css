@@ -209,18 +209,11 @@ select { cursor: pointer; }
 input[list]::-webkit-calendar-picker-indicator,
 input[list]::-webkit-list-button { display: none !important; opacity: 0; }
 :where(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='hidden'], [type='button'], [type='submit'], [type='reset'], [type='image']), textarea, select):focus { border-color: var(--input-focus-edge); }
-/* Keyboard focus always shows, at 3:1 or more: a 2 px accent ring on the field or the field box
-   holding the words (never on the words inside one, which would ring twice). The message box
-   (`wn-input`) keeps its edge only: inside a chat --accent is grey (chat-palette.css), so the ring
-   drew a heavy dark frame round every composer on a click, and its caret and edge show focus. The
-   faint edge above alone is 1.4:1 (review, 2026-11-22). A browser counts every focus of a text
-   field as keyboard focus, so a text field shows it on a click too; a select only from the keys. */
-:where(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='hidden'], [type='button'], [type='submit'], [type='reset'], [type='image']), textarea, select):not(.wn-field > *, .wn-input *):focus-visible,
-.wn-field:has(> :is(input, textarea):focus-visible) {
-  outline: 2px solid var(--accent);
-  outline-offset: -1px;
-}
-/* The engine's own controls draw no field look, and their keyboard focus is the same ring. */
+/* Focus is the field's own edge turning a shade darker (above), nothing more: no ring, no glow,
+   no blue. The user, 2026-11-23, of a 2 px accent ring round the quick bar's box on open: "don't
+   do this ... that highlight after it is selected, so gross!" The caret shows where words go.
+   Only the engine's own controls (a box to tick, a slider) have no edge to darken, so their
+   keyboard focus, and only that, is a ring. */
 :where(input:is([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'])):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;

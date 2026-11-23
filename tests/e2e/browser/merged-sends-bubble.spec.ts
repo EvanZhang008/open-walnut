@@ -59,7 +59,7 @@ async function sends(page: Page): Promise<Array<{ messageId: string; userUuid?: 
 }
 
 async function sendViaUi(page: Page, text: string) {
-  const input = page.locator('textarea[placeholder*="Send a message to this session"]').first();
+  const input = page.locator('textarea[aria-label="Send a message to this session"]').first();
   await input.click();
   await input.pressSequentially(text, { delay: 8 });
   await input.press('Enter');

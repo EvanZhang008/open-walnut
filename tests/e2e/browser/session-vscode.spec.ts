@@ -108,7 +108,7 @@ for (const width of [1280, 820]) {
     }))
     await openHome(page)
     const panel = await openHomepageSession(page)
-    const draft = panel.getByPlaceholder('Send a message to this session...')
+    const draft = panel.getByRole('textbox', { name: 'Send a message to this session' })
     await draft.fill('Keep this unsent message')
     const menu = page.locator('.task-kebab-menu:visible')
     const openMenu = async () => {

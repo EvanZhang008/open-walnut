@@ -149,7 +149,7 @@
 
 .qb-text::placeholder { color: var(--qb-muted); }
 
-/* The bar is the field: its words get no box of their own (globals.css rings a focused input). */
+/* The bar is the field: its words get no box of their own (input-box.css darkens a focused field's edge). */
 .qb-bar .qb-text:focus,
 .qb-bar .qb-picker-search:focus {
   border: none;

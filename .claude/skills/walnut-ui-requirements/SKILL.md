@@ -71,18 +71,22 @@ the Mac app, the phone). When in doubt, take the simpler, rounder, quieter one.
     Example (2026-11-22): on the Org rows, "the number of red change to simple red dot", "the blue dot remove", "no ... the ! mark", "VP also show a status nonono".
 18. **A row shows its name and its one signal; counts, relative times ("+7"), summaries ("1 thread ...") and statuses belong in the detail view, not the row.**
     Example (2026-11-22): "remove the text of 1 thread xxx", "the time remove +7", "just show name of vp icon, red dot for thread", "avoid too much info".
+19. **A focused field shows only its own edge turning a shade darker: no ring, no glow, no blue or accent edge, on a click or from the keys.**
+    Example (2026-11-23): the quick bar opened with a thick 2 px blue ring round its box; the user: "don't do this ... that highlight after it is selected, so gross!" The caret shows where the words go; only a box to tick or a slider, which has no edge, keeps a keyboard ring ([standard.md](./standard.md#inputs); guard `tests/web/focus-ring-owner-guard.test.ts`).
+20. **An empty message box stays empty: no long hint text in it; a placeholder only when it says something the user cannot see otherwise (a reply he has not read yet), in a few words.**
+    Example (2026-11-23): the session box read "Send a message to this session... (/ for commands)"; the user: "remove this too ugly", "clean simple". The box keeps its name for screen readers (`aria-label`), not on the screen.
 
 ## Proof and shipping
 
-19. **Proof is a Playwright video recorded on a Linux dev host with a copy of the user's data, his window size and his flags, at least 1280 px wide, slow enough to see each step and its result.**
+21. **Proof is a Playwright video recorded on a Linux dev host with a copy of the user's data, his window size and his flags, at least 1280 px wide, slow enough to see each step and its result.**
     Example (2026-11-20): a demo on toy fixtures looked good while the real product with real data looked bad.
-20. **One task ships one thing; when many asks pile onto one task, split them and land them one at a time.**
+22. **One task ships one thing; when many asks pile onto one task, split them and land them one at a time.**
     Example (2026-11-20): one task carried the Needs you card's new look, one-decision paging and the full-window expand fix at once, so each slipped behind the others.
-21. **Report to the user briefly, with pictures or GIFs instead of long text.**
+23. **Report to the user briefly, with pictures or GIFs instead of long text.**
     Example (2026-11-20): the user's standing rule after long reports: pictures or GIFs over long text, his exact question answered first.
 
 ## Before you land
 
 Go through this list for the change: every item of rule 1 checked, the core flows of rule 2 walked,
-rules 14 to 18 held on every screen you touched (and nothing restyled that the user did not ask about, rule 4),
-the video of rule 19 watched by you frame by frame, and, after it is live, the one-line note to the user in its thread (rule 4).
+rules 14 to 20 held on every screen you touched (and nothing restyled that the user did not ask about, rule 4),
+the video of rule 21 watched by you frame by frame, and, after it is live, the one-line note to the user in its thread (rule 4).

@@ -88,7 +88,7 @@ for (const width of [1280, 820]) {
     await openHome(page)
     const panel = await openHomepageSession(page)
     const time = panel.locator('.session-panel-time')
-    const draft = panel.getByPlaceholder('Send a message to this session...')
+    const draft = panel.getByRole('textbox', { name: 'Send a message to this session' })
     await draft.fill('Keep this draft while checking the activity time')
     await expect(time).toHaveCount(0)
     await panel.locator('.session-panel-header').screenshot({

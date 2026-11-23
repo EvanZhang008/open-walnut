@@ -58,11 +58,12 @@ Check each item and say pass or fail with the evidence (picture and spot, or fil
 8. Words: labels are short, in the user's words, and say what happens; no internal jargon.
 9. Function: what the pictures and video show does what the user asked; nothing on screen
    contradicts it.
-10. Taste (SKILL.md rules 14 to 18): round, not square (keys and icon buttons circles, boxes
+10. Taste (SKILL.md rules 14 to 20): round, not square (keys and icon buttons circles, boxes
    rounded, no one-line box an oval pill); one shape per kind; no colour, badge, icon or line
    without meaning, the user's own icons kept; a signal is one plain red dot (no red number, "!"
    mark, extra dot or word saying the same); a row shows its name and one signal, its counts,
-   times and statuses in the detail view.
+   times and statuses in the detail view; a focused field shows only a darker grey edge (no ring,
+   glow or blue); an empty message box carries no long hint text.
 11. Asked for: every visible change in the pictures traces to the user's words in the brief. A
    shape, colour, icon or layout changed beyond them is a blocker until it was shown to him
    (SKILL.md rule 4).
