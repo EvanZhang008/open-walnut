@@ -10,7 +10,8 @@
  * Read when it opens. The recording is fetched and played only on the user's
  * own click, never before, never by itself.
  */
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { NoticeStatus } from '@/components/common/NoticeCard';
 import {
   fetchCompareAudio, fetchCompareTake,
@@ -162,7 +163,7 @@ export function VoiceAccuracyTakeDetail({ takeId, engines, judge, version, retry
   const [judging, setJudging] = useState(false);
   // Which text is shown is a view choice, kept like the pane's other ones.
   const [picked, setPicked] = usePageView<string>('settings-voice-accuracy', 'detailText', engines[0]?.id ?? SENT, isString);
-  const load = useCallback(async () => {
+  const load = useLeanCallback(async () => {
     try {
       setTake(await fetchCompareTake(takeId));
       setError(null);

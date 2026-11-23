@@ -8,7 +8,8 @@
  * recording's row, or its Details key, opens the whole recording in a dialog
  * (VoiceAccuracyTakeDialog): a row never grows in place. Texts show in full.
  */
-import { useCallback, useRef, useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { NoticeStatus } from '@/components/common/NoticeCard';
 import type { CompareDay, CompareEngineRow, CompareTake } from '@/api/stt-compare';
 import { useElementWidth } from '@/hooks/useElementWidth';
@@ -180,7 +181,7 @@ export function VoiceAccuracyTakes({ takes, total, hasMore, byDay, engines, judg
   const layout = takesLayout(width, engines.length, phone);
   const shown = dialogTake ? takes.find((t) => t.id === dialogTake) : undefined;
 
-  const close = useCallback((returnFocus = true) => {
+  const close = useLeanCallback((returnFocus = true) => {
     const id = dialogTake;
     setDialogTake(null);
     // The focus goes back to the row the dialog came from (its Details key).

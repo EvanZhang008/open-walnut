@@ -6,7 +6,8 @@
  * read again once. A write answers with the engines as they are now, so a switch
  * or a tick shows the server's state.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import {
   deleteCompareData, fetchCompareEngines, fetchCompareRun, fetchCompareSummary, fetchCompareTakes, isCompareOff,
   judgeCompareTake, saveCompareSettings, startCompareRun,
@@ -93,13 +94,13 @@ export function useVoiceAccuracy(): VoiceAccuracyData {
   // only ever cleared would drop every answer after that, leaving the first read's spinner forever.
   useEffect(() => { live.current = true; return () => { live.current = false }; }, []);
 
-  const fail = useCallback((err: unknown) => {
+  const fail = useLeanCallback((err: unknown) => {
     if (!live.current) return;
     if (isCompareOff(err)) { setOff(true); return; }
     setError(message(err));
   }, []);
 
-  const reload = useCallback(async () => {
+  const reload = useLeanCallback(async () => {
     try {
       const [e, s, t] = await Promise.all([fetchCompareEngines(), fetchCompareSummary(), fetchCompareTakes(TAKES_PAGE)]);
       if (!live.current) return;
@@ -117,7 +118,7 @@ export function useVoiceAccuracy(): VoiceAccuracyData {
 
   // The takes shown, read again while a run fills them: at most one read of REFRESH_MAX, and the
   // takes loaded past it (Show more) are kept as they are, so the list never shrinks under the user.
-  const refreshTakes = useCallback(async (count: number) => {
+  const refreshTakes = useLeanCallback(async (count: number) => {
     const t = await fetchCompareTakes(Math.min(REFRESH_MAX, Math.max(TAKES_PAGE, count)));
     if (live.current) setPage((prev) => mergeRefreshed(prev, t));
   }, []);
@@ -167,7 +168,7 @@ export function useVoiceAccuracy(): VoiceAccuracyData {
     return () => { stop = true; clearTimeout(timer); };
   }, [running, reload, refreshTakes, fail]);
 
-  const save = useCallback(async (row: string, patch: CompareSettingsPatch) => {
+  const save = useLeanCallback(async (row: string, patch: CompareSettingsPatch) => {
     setSaveError(null);
     try {
       const next = await saveCompareSettings(patch);
@@ -185,7 +186,7 @@ export function useVoiceAccuracy(): VoiceAccuracyData {
     }
   }, [fail]);
 
-  const run = useCallback(async (req: { takeIds?: string[]; engines?: string[]; force?: boolean } = {}): Promise<string | null> => {
+  const run = useLeanCallback(async (req: { takeIds?: string[]; engines?: string[]; force?: boolean } = {}): Promise<string | null> => {
     const named = !!req.takeIds?.length;
     if (!named) setRunError(null);
     try {
@@ -212,7 +213,7 @@ export function useVoiceAccuracy(): VoiceAccuracyData {
     }
   }, [fail]);
 
-  const judge = useCallback(async (takeId: string): Promise<string | null> => {
+  const judge = useLeanCallback(async (takeId: string): Promise<string | null> => {
     try {
       const p = await judgeCompareTake(takeId);
       log.info('voice-accuracy', 'judge again queued', { takeId });
@@ -225,7 +226,7 @@ export function useVoiceAccuracy(): VoiceAccuracyData {
     }
   }, [fail]);
 
-  const deleteData = useCallback(async (): Promise<boolean> => {
+  const deleteData = useLeanCallback(async (): Promise<boolean> => {
     setSaveError(null);
     try {
       const next = await deleteCompareData();
@@ -242,7 +243,7 @@ export function useVoiceAccuracy(): VoiceAccuracyData {
     }
   }, [reload]);
 
-  const more = useCallback(async () => {
+  const more = useLeanCallback(async () => {
     if (!page.nextCursor) return;
     try {
       const t = await fetchCompareTakes(TAKES_PAGE, page.nextCursor);
