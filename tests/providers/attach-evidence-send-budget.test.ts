@@ -3,6 +3,7 @@
  * host that takes the attach's optional reads and never answers them holds an
  * on-demand attach (a send waits on it) only for its budget; the attach then
  * goes on with the task phase as the turn's proxy and an unknown cost baseline.
+ * And its replay floor: with no watermark, the cursor of a future-only attach.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
 import path from 'node:path'
@@ -30,7 +31,7 @@ vi.mock('../../src/core/daemon-file-reader.js', async () => {
 })
 
 import { ClaudeCodeSession } from '../../src/providers/claude-code-session.js'
-import { bus } from '../../src/core/event-bus.js'
+import { bus, EventNames } from '../../src/core/event-bus.js'
 import { WALNUT_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js'
 import { createSessionRecord, getSessionByClaudeId } from '../../src/core/session-tracker.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
@@ -88,6 +89,45 @@ describe('on-demand attach behind a host that never answers', () => {
     }
     expect(await attachWith('ae-line', 5153, true)).toBe(false)
     expect(await attachWith('ae-proxy', 5156, false)).toBe(true)
+  })
+
+  it('with no watermark, a future-only attach takes its cursor as the replay floor: a new turn\'s result past it is processed', async () => {
+    // A task past IN_PROGRESS and no stream evidence: the phase proxy says the last turn was handled
+    // (the host of 2026-11-23 after its service restarted, whose record had no consumedOffset).
+    hang.on = true
+    const results: string[] = []
+    bus.subscribe('main-ai', (e) => { if (e.name === EventNames.SESSION_RESULT) results.push(String((e.data as { result?: unknown }).result)) })
+    const resultLine = (sid: string, text: string) => JSON.stringify({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, num_turns: 1, result: text, session_id: sid })
+    const attachAt = async (sid: string, pid: number, cursor: number | null) => {
+      const { task } = await addTask({ title: `Replay floor ${sid}` })
+      await updateTaskRaw(task.id, { phase: 'NEED_ACTION' })
+      await createSessionRecord(sid, task.id, 'proj', '/tmp', { pid, outputFile: '/tmp/nonexistent.jsonl', messageCount: 1 })
+      daemon.seedSession(sid, { pid, alive: true })
+      daemon.attachCursor = cursor
+      try {
+        return await ClaudeCodeSession.attachToExisting(record(await getSessionByClaudeId(sid)), MOCK_CLI, `ws://127.0.0.1:${daemon.port}`, { evidenceBudgetMs: 100 })
+      } finally { daemon.attachCursor = null }
+    }
+    const record = <T>(r: T | null | undefined): T => { expect(r).toBeTruthy(); return r! }
+    type Internals = { resultEmitted: boolean; _consumedOffset: number; handleStreamLine(line: string, v?: number): void }
+
+    const floored = await attachAt('ae-floor', 5158, 14_975)
+    const f = floored as unknown as Internals
+    expect(f.resultEmitted, 'the phase proxy').toBe(true)
+    expect(f._consumedOffset).toBe(14_975)
+    f.handleStreamLine(resultLine('ae-floor', 'the turn after the restart'), 16_059)
+    expect(results).toEqual(['the turn after the restart'])
+    expect(f._consumedOffset).toBe(16_059)
+    floored.detach()
+
+    // The control: an attach that names no cursor (an older daemon) keeps the boolean as its only guard.
+    results.length = 0
+    const bare = await attachAt('ae-no-floor', 5159, null)
+    const b = bare as unknown as Internals
+    expect(b._consumedOffset).toBe(-1)
+    b.handleStreamLine(resultLine('ae-no-floor', 'swallowed'), 16_059)
+    expect(results).toEqual([])
+    bare.detach()
   })
 
   it('a cost state that answers after the budget still seeds the baseline, once no result did', async () => {

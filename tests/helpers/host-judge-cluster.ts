@@ -49,6 +49,7 @@
  *         GET /cursor?host=  the channel cursor in the Mac's sessions store
  *   host  GET /facts?after=  the fact log: its id, head, floor, acked, permit (its pair too) and records
  *         GET /row?sid=      the host's own row of a session (null: none)
+ *         GET /task?id=      the phase of the host's own copy of a task (null: none)
  *         GET /events?sid=   the host's own bus events of a session (as above)
  *         GET /queue?sid=    the host's queue rows of a session (id, status, parkedReason, message)
  *         GET /live          is a leader linked and caught up
@@ -255,6 +256,10 @@ await serveProbe({
   },
   '/events': (q) => eventsOf(q.get('sid')),
   '/row': async (q) => ({ row: await (await import(${url('src/core/session-tracker.ts')})).getSessionByClaudeId(q.get('sid')) }),
+  '/task': async (q) => {
+    const t = await (await import(${url('src/core/task-manager.ts')})).getTask(q.get('id')).catch(() => null)
+    return { phase: t ? t.phase : null }
+  },
   '/live': () => ({ live: !!boot.hostSessionsRunning()?.channel.leaderLive() }),
   '/dialer': async () => {
     const cf = await import(${url('src/core/session-channel/host-credential-file.ts')})

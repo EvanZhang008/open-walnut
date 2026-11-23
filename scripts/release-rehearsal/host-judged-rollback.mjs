@@ -264,8 +264,11 @@ async function rehearseRestartControl({ out }) {
     r.sid = sid
     await waitFor(() => channelResult(sid, 'ROUND before the restart'), 120_000, 'the first answer over the channel')
     await waitFor(async () => (await L.task(taskId)).phase === 'NEED_ACTION', 60_000, 'the task to wait on the person')
+    // The host's own copy too: the condition under which its runner, attaching again, read the turn as handled.
+    await waitFor(async () => (await h.host(`/task?id=${taskId}`)).phase === 'NEED_ACTION', 60_000, 'the host\'s copy of the task to wait on the person')
     r.checks.restartedPid = await h.c.restartReplica()
     await waitFor(async () => (await h.host('/judging')).live, 180_000, 'the Mac back on the restarted host\'s channel')
+    r.checks.hostCopyAtSend = (await h.host(`/task?id=${taskId}`)).phase
     const sent = await L.send(sid, 'ROUND after the restart')
     const via = await waitFor(() => channelResult(sid, 'ROUND after the restart'), 120_000, 'the answer over the channel').then(() => true, () => false)
     await sleep(3_000)
@@ -290,7 +293,7 @@ function readme(results, older) {
     if (r.scenario === 'downgrade') return `old leader up ${c.oldLeaderUp?.upMs ?? '?'} ms (${c.oldLeaderUp?.version ?? 'no health'}); host stood down ${c.standDown?.afterMs ?? 'never'} ms after it (bound ${c.standDown?.boundMs} ms, WALNUT_HOST_OLD_LEADER_MS=${r.oldLeaderMs}; the old leader's host-server install restarted the service ${c.hostService?.restartsForSpec ?? '?'}x); held turn: ${c.turnEnd?.stream?.turns ?? "?"} turns, ${c.turnEnd?.stream?.results ?? "?"} results for 2 messages, history ${c.turnEnd?.historyReleased ?? '?'}x; old-leader send answered ${c.oldSend?.history ?? '?'}x`
     if (r.scenario === 'upgrade') return `host judges again: ${c.hostJudgesAgain?.linked}; judge ${c.reads?.judge?.judge ?? '?'}; channel events ${c.facts?.leaderChannelEvents ?? '?'}, duplicates ${c.facts?.duplicates?.length ?? '?'}; send answered ${c.newSend?.history ?? '?'}x in the history, its turn end over the channel: ${c.newSend?.viaChannel}`
     if (r.scenario === 'old-host') return `old host daemon ${c.hostDaemon?.version ?? '?'}; names session-judge-v1: ${c.hostNamesJudge}; start judged ${c.start?.judge?.judge ?? '?'}, answered ${c.start?.answered}`
-    if (r.scenario === 'restart-control') return `service restarted (pid ${c.restartedPid ?? '?'}); next turn's end over the channel: ${c.send?.viaChannel}; answered ${c.send?.stream?.['ROUND after the restart'] ?? '?'}x on the host`
+    if (r.scenario === 'restart-control') return `service restarted (pid ${c.restartedPid ?? '?'}); host's task copy at the send: ${c.hostCopyAtSend ?? '?'}; next turn's end over the channel: ${c.send?.viaChannel}; answered ${c.send?.stream?.['ROUND after the restart'] ?? '?'}x on the host`
     if (r.scenario === 'per-host-off') return `off took ${c.offTookMs ?? '?'} ms; held turn over the channel: ${c.turnEnd?.viaChannel}, ${c.turnEnd?.stream?.results ?? '?'} results; next start judged ${c.nextStart?.judge?.judge ?? '?'}`
     return ''
   }

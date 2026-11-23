@@ -231,6 +231,14 @@ inherited pid at boot, refuse to boot on the production data dir, send `strict` 
 journal names them for), and send no stop at all to a daemon without `owner-home-v1`. Ratchet:
 `tests/core/signal-call-ratchet.test.ts`.
 
+A host's own server starts its sessions naming its data dir as their home, while its follower link,
+the leader's link and the slices name that Walnut by its leader's home. Every owner lookup and compare
+in the daemon goes through `walnutOfHome` (both twins): a data dir of a server the daemon runs for a
+leader (`host-server-core.ts walnutOf`, from the spec files it reads again at boot) is that leader's
+Walnut. Without it, after a restart of the host's service, the host's runner could not read its own
+host-judged session's stream and dropped the next turn's result (2026-11-23 release rehearsal;
+`tests/providers/host-server-own-session-owner-twins.test.ts`, `tests/e2e/host-judge-service-restart-e2e.test.ts`).
+
 ## One CLI per session id on a host, whichever daemon asks
 
 **One CLI per session id on a host, whichever daemon asks** (`src/providers/cli-owner-core.ts`, both

@@ -2074,11 +2074,22 @@ function journaledIds() {
 }
 
 /** The data dir of the Walnut that first asked this host to spawn sid, if recorded. */
-// By its first home here (walnut-scope-core.ts canonical); the line keeps the home as it asked.
+// By walnutOfHome; the line keeps the home as it asked.
 function journaledHome(sid) {
   journaledIds();
   var home = journaledHomes.get(sid);
-  return home ? walnutScope.canonical(home) : home;
+  return home ? walnutOfHome(home) : home;
+}
+
+// The Walnut a home names wherever a session's owner is looked up or compared here: by its
+// first home (walnut-scope-core.ts canonical), and the data dir of a server this daemon runs
+// for a leader as that leader's Walnut (host-server-core.ts walnutOf). Twin of
+// daemon-standalone.ts walnutOfHome (rationale there).
+function walnutOfHome(home) {
+  var served;
+  // The supervisor is made further down: a lookup during boot before it sees homes as they are.
+  try { served = hostServers.walnutOf(home); } catch (e) { served = undefined; }
+  return walnutScope.canonical(served || home);
 }
 
 // The session lived on this host: its stream file, or the spawn journal. See livedHere in daemon-standalone.ts.
@@ -5094,9 +5105,9 @@ async function waitForHandoverReceipt(ws) {
 function sessionHomeOf(sid) {
   // The Walnut, by its first home here: a session its server started from a later home is the same Walnut's.
   var s = sessions.get(sid);
-  if (s && s.spawnInfo && s.spawnInfo.home) return walnutScope.canonical(s.spawnInfo.home);
+  if (s && s.spawnInfo && s.spawnInfo.home) return walnutOfHome(s.spawnInfo.home);
   var rec = journaledHome(sid) ? null : hostResume.recall(sid);
-  return walnutScope.canonical(journaledHome(sid) || (rec && rec.home) || offlineHost.ownerOf(sid) || '');
+  return walnutOfHome(journaledHome(sid) || (rec && rec.home) || offlineHost.ownerOf(sid) || '');
 }
 function spawnRecordOf(sid) {
   var s = sessions.get(sid);
@@ -5125,7 +5136,7 @@ async function resumeForTrigger(home, sid, text, messageId, taskId) {
   // and then the Walnut that asked for its latest spawn decides (below).
   if (!livedHere(sid)) return { ok: false, reason: 'no transcript of that session on this host' };
   var journaled = journaledHome(sid);
-  if (journaled !== undefined && journaled !== home) return { ok: false, reason: 'that session was started on this host for another Walnut' };
+  if (journaled !== undefined && journaled !== walnutOfHome(home)) return { ok: false, reason: 'that session was started on this host for another Walnut' };
   // trigger-resume-once: a try of a fire that already reached the session (a daemon killed
   // after the write, before the ack mark) starts nothing: the stream and its write records
   // are on disk, so they say so across a restart (lineReachedBefore).
@@ -5144,7 +5155,7 @@ async function resumeForTrigger(home, sid, text, messageId, taskId) {
   if (busy >= HOST_RESUME_MAX_BUSY) return { ok: false, reason: 'this host is busy' };
   var spawn = spawnRecordOf(sid);
   if (!spawn) return { ok: false, reason: 'no spawn record of that session on this host' };
-  if (journaled === undefined && walnutScope.canonical(spawn.home || '') !== home) return { ok: false, reason: 'this host has no record of starting that session for this Walnut' };
+  if (journaled === undefined && walnutOfHome(spawn.home || '') !== walnutOfHome(home)) return { ok: false, reason: 'this host has no record of starting that session for this Walnut' };
   if (!fs.existsSync(spawn.cwd)) return { ok: false, reason: 'its folder is gone from this host' };
   var args = hostResume.resumeArgs(spawn.args, sid, spawn.mode);
   hostResumedAt.set(sid, now);
@@ -6260,7 +6271,8 @@ function cmdFollowerReport(ws, cmd) {
 var hostCallTokens = (__CREATE_HOST_CALL_TOKENS__)({
   fs: fs, path: path, crypto: crypto, dir: DAEMON_DIR,
   uid: typeof process.getuid === 'function' ? process.getuid() : null,
-  socketFor: function (home) { var ws = followerSockets.get(home); return ws && ws.answersLocal === true ? ws.callSocket : undefined; },
+  // A host server's own data dir names its leader's Walnut (walnutOfHome): its ACP and job starts name that dir.
+  socketFor: function (home) { var ws = followerSockets.get(home) || followerSockets.get(walnutOfHome(home)); return ws && ws.answersLocal === true ? ws.callSocket : undefined; },
   log: function (level, msg, data) { logMsg(level, msg, data); },
 });
 
@@ -8625,7 +8637,7 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
       // a socket (hostCallTokens.envFor); unset otherwise. Keep in sync with daemon-standalone.ts.
       WALNUT_CALL_SOCKET: undefined,
       WALNUT_CALL_TOKEN: undefined,
-      ...hostCallTokens.envFor(walnutScope.canonical(spawnInfo.home || (resumeRec && resumeRec.home) || ''), sid),
+      ...hostCallTokens.envFor(walnutOfHome(spawnInfo.home || (resumeRec && resumeRec.home) || ''), sid),
       // Unset when the task has none, so an inherited value never names another
       // task's directory. Keep in sync with daemon-standalone.ts.
       WALNUT_TASK_DIR: taskDir || undefined,
@@ -8864,7 +8876,7 @@ function strictStartRefusal(sid, cmd, home, resume) {
   if (!journaledIds().has(sid)) journaledSids = null;
   const owner = journaledHome(sid);
   const journaled = journaledIds().has(sid);
-  if (owner ? owner === walnutScope.canonical(home || '') : !journaled && !resume) return null;
+  if (owner ? owner === walnutOfHome(home || '') : !journaled && !resume) return null;
   const whose = owner ? 'the Walnut at ' + owner : journaled ? 'a Walnut that did not record itself' : 'outside Walnut';
   return Object.assign(new Error('start: this session was started by ' + whose + ', not by this test server; a test server does not run a session of another Walnut'), { code: 'SESSION_NOT_OURS', errorKind: 'session_other_walnut' });
 }
@@ -12572,7 +12584,7 @@ function stopOwnerRefusal(sid, cmd) {
   if (home === undefined) return null;
   if (typeof home !== 'string' || !home) return { reason: 'bad_request', detail: 'home must name the asking Walnut' };
   const owner = journaledHome(sid);
-  if (owner) return owner === home ? null : { reason: 'not_owned', detail: 'other_walnut' };
+  if (owner) return owner === walnutOfHome(home) ? null : { reason: 'not_owned', detail: 'other_walnut' };
   const journaled = journaledIds().has(sid);
   const detail = journaled ? 'no_journaled_walnut' : 'not_journaled';
   if (cmd.strict === true) return { reason: 'not_owned', detail };
@@ -12602,7 +12614,7 @@ function orphanStopRefusal(sid, expectPid, home) {
   if (pgid !== expectPid) return { reason: 'not_owned', detail: 'pgid_mismatch' };
   if (!journaledIds().has(sid)) return { reason: 'not_owned', detail: 'not_journaled' };
   const owner = journaledHome(sid);
-  if (owner !== home) return { reason: 'not_owned', detail: owner ? 'other_walnut' : 'no_journaled_walnut' };
+  if (owner !== walnutOfHome(home)) return { reason: 'not_owned', detail: owner ? 'other_walnut' : 'no_journaled_walnut' };
   const now = Date.now();
   let mtimeMs;
   try { mtimeMs = fs.statSync(session.jsonlPath).mtimeMs; } catch { return { reason: 'protected', detail: 'no-stream-file' }; }

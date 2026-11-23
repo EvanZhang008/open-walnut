@@ -128,8 +128,12 @@ export interface HostServerDeps {
    * `<log>.1` and emptied in place (the server appends, so it writes on at 0).
    */
   maxLogBytes?: number
-  /** The host's one Walnut service: the follower of `home` is this very process (pid). */
-  self?: { home: string; pid: number; changed: (why: string) => void }
+  /**
+   * The host's one Walnut service: the follower of `home` is this very process (pid).
+   * `dataHome`: the data dir this process runs on (its OPEN_WALNUT_HOME), the home its
+   * own session starts name (walnutOf).
+   */
+  self?: { home: string; pid: number; changed: (why: string) => void; dataHome?: string }
   /** The home a Walnut is keyed by here (walnut-scope-core.ts canonical); only the service's own home is matched by it. */
   canonical?: (home: string) => string
   /** A leading service: the Walnut this machine leads. No follower of it is started, adopted or configured here. */
@@ -633,6 +637,27 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
       return true
     },
     homes: (): string[] => [...entries.keys()],
+    /**
+     * The Walnut (its leader's home) whose server here runs on data dir `home`, or undefined.
+     * A host's server starts its own sessions naming its data dir as their home (origin.home
+     * is its OPEN_WALNUT_HOME), while its follower link, the leader's link, the slices and
+     * the call sockets all name that Walnut by its leader's home. Every owner lookup of a
+     * session asks this first, so a session the host's own server started stays that
+     * Walnut's after any restart (the spec files are read again at boot).
+     */
+    walnutOf: (home: string): string | undefined => {
+      if (typeof home !== 'string' || !path.isAbsolute(home)) return undefined
+      const want = path.resolve(home)
+      const self = deps.self
+      if (self?.dataHome && path.isAbsolute(self.dataHome) && path.resolve(self.dataHome) === want) return self.home
+      for (const [key, e] of entries) {
+        for (const env of [e.spec.env, e.spec.fallback?.env]) {
+          const dir = env?.OPEN_WALNUT_HOME
+          if (typeof dir === 'string' && path.isAbsolute(dir) && path.resolve(dir) === want) return key
+        }
+      }
+      return undefined
+    },
     /** Each server's data dir on this host (OPEN_WALNUT_HOME of its spec and of its fallback). */
     dataDirs: (): string[] => {
       const out: string[] = []

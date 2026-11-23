@@ -261,6 +261,32 @@ describe('host server supervision', () => {
     expect(second.status('/h')).toMatchObject({ state: 'running', pid: 1001 })
   })
 
+  it('a server\'s data dir names its leader\'s Walnut (walnutOf), and still does for a new daemon after a restart', () => {
+    const data = path.join(dir, 'walnuts', 'w1', 'data')
+    const first = createHostServerSupervisor(deps())
+    first.configure('/h', spec({ env: { WALNUT_HOST_SERVER: '1', OPEN_WALNUT_HOME: data }, fallback: { args: ['/app/cli.js', 'host-server'], env: { OPEN_WALNUT_HOME: data + '-fallback' } } }))
+    expect(first.walnutOf(data)).toBe('/h')
+    expect(first.walnutOf(data + '/')).toBe('/h')
+    expect(first.walnutOf(data + '-fallback')).toBe('/h')
+    // A leader's own home, another dir, a relative path: no server's data dir.
+    for (const other of ['/h', path.join(dir, 'walnuts', 'w2', 'data'), 'walnuts/w1/data', '']) expect(first.walnutOf(other)).toBeUndefined()
+    timers = []
+    const second = createHostServerSupervisor(deps())
+    expect(second.walnutOf(data), 'nothing before boot').toBeUndefined()
+    second.boot()
+    expect(second.walnutOf(data)).toBe('/h')
+    // Removed: the dir names nobody any more.
+    second.configure('/h', null)
+    expect(second.walnutOf(data)).toBeUndefined()
+  })
+
+  it('the service\'s own data dir names the Walnut it follows', () => {
+    const own = path.join(dir, 'walnuts', 'self', 'data')
+    const sup = createHostServerSupervisor({ ...deps(), self: { home: '/leader', pid: process.pid, dataHome: own, changed: () => {} } })
+    expect(sup.walnutOf(own)).toBe('/leader')
+    expect(sup.walnutOf(path.join(dir, 'elsewhere'))).toBeUndefined()
+  })
+
   it('a new daemon starts a server whose pid now belongs to another process', () => {
     const first = createHostServerSupervisor(deps())
     first.configure('/h', spec())

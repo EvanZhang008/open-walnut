@@ -65,6 +65,7 @@ import path from 'node:path'
 import { log } from '../logging/index.js'
 import type { SessionRecord, ProcessStatus } from './types.js'
 import { isProductionDaemonDir } from '../lib/daemon-dir.js'
+import { isSelfHost } from '../replica/self-host.js'
 
 // ── Stream-file tail fold (pure) ──
 
@@ -563,13 +564,18 @@ const TAIL_WINDOW_MAX_BYTES = 2 * 1024 * 1024
  *  CLI dies (registry absolute paths; startup migration skips live pgids).
  *  Isolated envs (WALNUT_STREAMS_DIR / non-prod WALNUT_DAEMON_DIR) keep their
  *  single derived dir. Remote daemons run with default env, so the remote pair
- *  is fixed; `~` is expanded by the remote daemon's own fs RPC layer. */
+ *  is fixed; `~` is expanded by the remote daemon's own fs RPC layer.
+ *  A host's own server reading its own host (isSelfHost) runs beside that very
+ *  daemon: where WALNUT_STREAMS_DIR relocates the daemon's streams (an isolated
+ *  service), that dir comes first. */
 export function daemonStreamPathCandidates(sessionId: string, host?: string | null): string[] {
   if (host && host !== '__local__') {
-    return [
+    const remote = [
       `~/.open-walnut/tmp/streams/${sessionId}.jsonl`,
       `/tmp/open-walnut-streams/${sessionId}.jsonl`,
     ]
+    const own = process.env.WALNUT_STREAMS_DIR
+    return own && path.isAbsolute(own) && isSelfHost(host) ? [path.join(own, `${sessionId}.jsonl`), ...remote] : remote
   }
   if (process.env.WALNUT_STREAMS_DIR) {
     return [`${process.env.WALNUT_STREAMS_DIR}/${sessionId}.jsonl`]

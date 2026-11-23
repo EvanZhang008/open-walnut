@@ -51,7 +51,8 @@ describe('host call entry twin wiring', () => {
     const report = fnBody(src, 'cmdFollowerReport')
     expect(report).toMatch(/answersLocal === true \? hostCallTokens\.socketOf\(report\.callSocket\) : undefined/)
     // The core is given the follower's socket of a home, only for one that answers local calls.
-    expect(src).toMatch(/socketFor: (\(home\) => \{|function \(home\) \{) (const|var) ws = followerSockets\.get\(home\); return ws(\?\.data\?\.| && ws\.)answersLocal === true \? ws(\.data)?\.callSocket : undefined/)
+    // A host server's own data dir names its leader's Walnut (walnutOfHome): its ACP and job starts name that dir.
+    expect(src).toMatch(/socketFor: (\(home\) => \{|function \(home\) \{) (const|var) ws = followerSockets\.get\(home\) (\?\?|\|\|) followerSockets\.get\(walnutOfHome\(home\)\); return ws(\?\.data\?\.| && ws\.)answersLocal === true \? ws(\.data)?\.callSocket : undefined/)
     // No twin copy of the socket check or the env any more.
     for (const gone of ['function hostCallUrlOf(', 'function hostCallEnv(', 'function noteOwnOfflineAnswer(', 'WALNUT_CALL_URL']) expect(src, gone).not.toContain(gone)
   })
@@ -127,8 +128,9 @@ describe('host call entry twin wiring', () => {
 
   it.each(TWINS)('%s: a new session, an ACP worker and a plugin job get the entry beside the socket, and never an inherited one', (_n, src) => {
     // Native spawn: cleared first, then this run's own, keyed by the Walnut's first home here
-    // (a resumed record may still name a home that is now its alias: walnut-scope-core.ts).
-    expect(src).toMatch(/WALNUT_CALL_SOCKET: undefined,\n\s+WALNUT_CALL_TOKEN: undefined,\n\s+\.\.\.hostCallTokens\.envFor\(walnutScope\.canonical\(spawnInfo\.home (\?\?|\|\|) \(?resumeRec/)
+    // (a resumed record may still name a home that is now its alias: walnut-scope-core.ts), and a
+    // host server's own data dir by the Walnut it follows (walnutOfHome).
+    expect(src).toMatch(/WALNUT_CALL_SOCKET: undefined,\n\s+WALNUT_CALL_TOKEN: undefined,\n\s+\.\.\.hostCallTokens\.envFor\(walnutOfHome\(spawnInfo\.home (\?\?|\|\|) \(?resumeRec/)
     // ACP worker: '' unsets, then the worker's own WALNUT_SESSION_ID.
     expect(src).toMatch(/WALNUT_CALL_SOCKET: '',\n\s+WALNUT_CALL_TOKEN: '',/)
     expect(src).toMatch(/hostCallTokens\.envFor\(\(?cmd(?: as \{ home\?: unknown \}\))?\.home, /)

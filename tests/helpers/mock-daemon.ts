@@ -115,6 +115,8 @@ export class MockDaemon {
   heldElsewhere = new Map<string, number>()
   /** cli.holder: the Walnut the spawn journal names for a session, by sid. */
   journaledHomes = new Map<string, string>()
+  /** When set, an attach answers it as its `currentOffset` (the real daemon's watcher position). */
+  attachCursor: number | null = null
   /** The servers a session started (ports-v1): the real host scan, rooted at this mock's CLIs. */
   private ports = createDaemonPorts({
     agentPids: () => {
@@ -794,6 +796,7 @@ export class MockDaemon {
     this.sendOk(ws, id, {
       pid: session.pid,
       alive: session.exitCode === null,
+      ...(this.attachCursor !== null ? { currentOffset: this.attachCursor } : {}),
     })
   }
 

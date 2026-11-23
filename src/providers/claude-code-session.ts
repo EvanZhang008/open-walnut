@@ -4379,6 +4379,20 @@ export class ClaudeCodeSession {
             if (!session.holdDeathForWrite(attachedTransport, judge)) judge()
           },
         })
+        // A future-only attach with no watermark (a host's restarted service, a record
+        // that never had one): the daemon's cursor at the attach is where this instance
+        // starts, so an event past it was written after the attach and is new by
+        // position. Without this floor the replay guard had only the boolean, which the
+        // phase proxy may have set, and dropped a fresh turn's result as a replay
+        // (2026-11-23 release rehearsal, consumedOffset -1). In memory only: the turn
+        // ends this instance processes advance and persist it as before.
+        if (fromOffset === Number.MAX_SAFE_INTEGER && attachResult.alive && session._consumedOffset < 0
+          && attachedTransport.fileSize > 0 && attachedTransport.fileSize < Number.MAX_SAFE_INTEGER) {
+          session._consumedOffset = attachedTransport.fileSize
+          log.session.info('attachToExisting: no watermark, the attach cursor is the replay floor', {
+            sessionId: record.claudeSessionId, floor: attachedTransport.fileSize, resultEmitted: session.resultEmitted,
+          })
+        }
         if (attachResult.alive && session.hasPipe) await session.recoverCancelledRows()
         // Recover pending permission from daemon attach response.
         // The daemon tracks control_request state and returns it on attach.

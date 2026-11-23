@@ -558,12 +558,27 @@ function journaledIds(): Set<string> {
 
 /**
  * The Walnut that first asked this host to spawn `sid`, if recorded: by its first home here
- * (walnut-scope-core.ts canonical). The line keeps the home as it asked.
+ * (walnutOfHome). The line keeps the home as it asked.
  */
 function journaledHome(sid: string): string | undefined {
   journaledIds()
   const home = journaledHomes.get(sid)
-  return home ? walnutScope.canonical(home) : home
+  return home ? walnutOfHome(home) : home
+}
+
+/**
+ * The Walnut a home names wherever a session's owner is looked up or compared here: by its
+ * first home (walnut-scope-core.ts canonical), and the data dir of a server this daemon runs
+ * for a leader as that leader's Walnut (host-server-core.ts walnutOf). A host's own server
+ * starts its sessions naming its data dir, while its follower link, the leader's link and the
+ * slices name the Walnut by its leader's home: without this, after a restart of the service
+ * the host could not read its own session's stream. Keep in sync with daemon-source.ts.
+ */
+function walnutOfHome(home: string): string {
+  let served: string | undefined
+  // The supervisor is made further down: a lookup during boot before it sees homes as they are.
+  try { served = hostServers.walnutOf(home) } catch { served = undefined }
+  return walnutScope.canonical(served ?? home)
 }
 
 /**
@@ -3555,7 +3570,7 @@ function strictStartRefusal(sid: string, cmd: Record<string, unknown>, home: str
   if (!journaledIds().has(sid)) journaledSids = null
   const owner = journaledHome(sid)
   const journaled = journaledIds().has(sid)
-  if (owner ? owner === walnutScope.canonical(home ?? '') : !journaled && !resume) return null
+  if (owner ? owner === walnutOfHome(home ?? '') : !journaled && !resume) return null
   const whose = owner ? `the Walnut at ${owner}` : journaled ? 'a Walnut that did not record itself' : 'outside Walnut'
   return Object.assign(new Error(`start: this session was started by ${whose}, not by this test server; a test server does not run a session of another Walnut`), { code: 'SESSION_NOT_OURS', errorKind: 'session_other_walnut' })
 }
@@ -3788,7 +3803,7 @@ function spawnRecordOf(sid: string): { args: string[]; cwd: string; mode: string
  */
 function sessionHomeOf(sid: string): string {
   // The Walnut, by its first home here: a session its server started from a later home is the same Walnut's.
-  return walnutScope.canonical(sessions.get(sid)?.spawnInfo?.home || journaledHome(sid) || hostResume.recall(sid)?.home || offlineHost.ownerOf(sid) || '')
+  return walnutOfHome(sessions.get(sid)?.spawnInfo?.home || journaledHome(sid) || hostResume.recall(sid)?.home || offlineHost.ownerOf(sid) || '')
 }
 
 // ── Host resume for a trigger fire (trigger-host-resume-v1) ──
@@ -3813,7 +3828,7 @@ async function resumeForTrigger(home: string, sid: string, text: string, message
   // livedHere first: it reads the journal again on a miss, so the owner below is the file's as it is now.
   if (!livedHere(sid)) return { ok: false, reason: 'no transcript of that session on this host' }
   const journaled = journaledHome(sid)
-  if (journaled !== undefined && journaled !== home) return { ok: false, reason: 'that session was started on this host for another Walnut' }
+  if (journaled !== undefined && journaled !== walnutOfHome(home)) return { ok: false, reason: 'that session was started on this host for another Walnut' }
   // trigger-resume-once: a try of a fire that already reached the session (a daemon killed
   // after the write, before the ack mark) starts nothing: the stream and its write records
   // are on disk, so they say so across a restart (core.lineReachedBefore).
@@ -3832,7 +3847,7 @@ async function resumeForTrigger(home: string, sid: string, text: string, message
   if (busy >= HOST_RESUME_MAX_BUSY) return { ok: false, reason: 'this host is busy' }
   const spawn = spawnRecordOf(sid)
   if (!spawn) return { ok: false, reason: 'no spawn record of that session on this host' }
-  if (journaled === undefined && walnutScope.canonical(spawn.home ?? '') !== home) return { ok: false, reason: 'this host has no record of starting that session for this Walnut' }
+  if (journaled === undefined && walnutOfHome(spawn.home ?? '') !== walnutOfHome(home)) return { ok: false, reason: 'this host has no record of starting that session for this Walnut' }
   if (!fs.existsSync(spawn.cwd)) return { ok: false, reason: 'its folder is gone from this host' }
   const args = hostResume.resumeArgs(spawn.args, sid, spawn.mode)
   hostResumedAt.set(sid, now)
@@ -4876,7 +4891,8 @@ const hostServers = createHostServerSupervisor({
   maxLogBytes: Number(daemonEnv.WALNUT_HOST_SERVER_LOG_MAX_BYTES) || undefined,
   // The host's one Walnut service is the follower of options.selfHome: no child for it, and a spec
   // the leader changes for it restarts the whole service (its launcher starts it again).
-  ...(options.selfHome ? { self: { home: options.selfHome, pid: process.pid, changed: (why: string) => {
+  // dataHome: the data dir this service's own server runs on, the home its session starts name (walnutOf).
+  ...(options.selfHome ? { self: { home: options.selfHome, pid: process.pid, dataHome: daemonEnv.OPEN_WALNUT_HOME || undefined, changed: (why: string) => {
     logMsg('info', 'host server: the service\'s own follower spec changed; restarting the service', { home: options.selfHome, why })
     setTimeout(() => requestDaemonShutdown?.(), 0)
   } } } : {}),
@@ -5018,7 +5034,8 @@ function cmdFollowerReport(ws: ServerWebSocket<WsData>, cmd: Record<string, unkn
 const hostCallTokens = createHostCallTokens({
   fs, path, crypto, dir: DAEMON_DIR,
   uid: typeof process.getuid === 'function' ? process.getuid() : null,
-  socketFor: (home) => { const ws = followerSockets.get(home); return ws?.data?.answersLocal === true ? ws.data.callSocket : undefined },
+  // A host server's own data dir names its leader's Walnut (walnutOfHome): its ACP and job starts name that dir.
+  socketFor: (home) => { const ws = followerSockets.get(home) ?? followerSockets.get(walnutOfHome(home)); return ws?.data?.answersLocal === true ? ws.data.callSocket : undefined },
   log: (level, msg, data) => logMsg(level, msg, data),
 })
 
@@ -7952,7 +7969,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       // when its follower said a socket (hostCallTokens.envFor); unset otherwise, never inherited.
       WALNUT_CALL_SOCKET: undefined,
       WALNUT_CALL_TOKEN: undefined,
-      ...hostCallTokens.envFor(walnutScope.canonical(spawnInfo.home ?? resumeRec?.home ?? ''), sid),
+      ...hostCallTokens.envFor(walnutOfHome(spawnInfo.home ?? resumeRec?.home ?? ''), sid),
       // Unset when the task has none, so a value this daemon inherited (it was
       // started from inside a session) never names another task's directory.
       WALNUT_TASK_DIR: taskDir ?? undefined,
@@ -10932,7 +10949,7 @@ function stopOwnerRefusal(sid: string, cmd: Record<string, unknown>): { reason: 
   if (home === undefined) return null
   if (typeof home !== 'string' || !home) return { reason: 'bad_request', detail: 'home must name the asking Walnut' }
   const owner = journaledHome(sid)
-  if (owner) return owner === home ? null : { reason: 'not_owned', detail: 'other_walnut' }
+  if (owner) return owner === walnutOfHome(home) ? null : { reason: 'not_owned', detail: 'other_walnut' }
   const journaled = journaledIds().has(sid)
   const detail = journaled ? 'no_journaled_walnut' : 'not_journaled'
   if (cmd.strict === true) return { reason: 'not_owned', detail }
@@ -10979,7 +10996,7 @@ function orphanStopRefusal(sid: string, expectPid: unknown, home: unknown): { re
   if (pgid !== expectPid) return { reason: 'not_owned', detail: 'pgid_mismatch' }
   if (!journaledIds().has(sid)) return { reason: 'not_owned', detail: 'not_journaled' }
   const owner = journaledHome(sid)
-  if (owner !== home) return { reason: 'not_owned', detail: owner ? 'other_walnut' : 'no_journaled_walnut' }
+  if (owner !== walnutOfHome(home)) return { reason: 'not_owned', detail: owner ? 'other_walnut' : 'no_journaled_walnut' }
   const now = Date.now()
   let mtimeMs: number
   try { mtimeMs = fs.statSync(session.jsonlPath).mtimeMs } catch { return { reason: 'protected', detail: 'no-stream-file' } }
