@@ -250,9 +250,7 @@ export class NoticeBatch {
         if (group.every((g) => g.hold)) {
           // Past its deadline nothing came back: background, riding the asker's next message (held-notices.ts).
           const { holdNotice } = await import('./held-notices.js');
-          holdNotice(sid, `request-timeout:${ids.join(',')}`, text, {
-            validIf: async () => (await Promise.all(ids.map(requestStillOpen))).some(Boolean),
-          });
+          void holdNotice(sid, `request-timeout:${ids.join(',')}`, text, { whileOpen: ids });
         } else {
           const { deliverToSession } = await import('./session-send-core.js');
           await deliverToSession(group[0].origin, {
@@ -381,14 +379,6 @@ async function withinReadBudget<T>(read: Promise<T>): Promise<T | typeof TIMED_O
     read,
     new Promise<typeof TIMED_OUT>((resolve) => { timer = setTimeout(() => resolve(TIMED_OUT), LAST_MESSAGE_READ_MS); timer.unref?.(); }),
   ]).finally(() => clearTimeout(timer));
-}
-
-/** Whether the asking session's task is COMPLETE. Unknown counts as not. */
-/** A request still unanswered (pending, or past its deadline and open): a held notice of it still holds. */
-async function requestStillOpen(id: string): Promise<boolean> {
-  const { getSessionRequest } = await import('../session-requests.js');
-  const row = await getSessionRequest(id).catch(() => null);
-  return !!row && (row.status === 'pending' || row.status === 'expired');
 }
 
 /**
@@ -660,7 +650,7 @@ async function deliverSettled(
     }
     if (outcome === 'timeout' && !askerParked) {
       const { holdNotice } = await import('./held-notices.js');
-      holdNotice(origin.claudeSessionId, `request-timeout:${request.id}`, text, { validIf: () => requestStillOpen(request.id) });
+      void holdNotice(origin.claudeSessionId, `request-timeout:${request.id}`, text, { whileOpen: [request.id] });
       log.session.info('request fallback notification held for the next message (deadline passed)', {
         requestId: request.id, fromSessionId: request.fromSessionId, toSessionId: origin.claudeSessionId,
       });
@@ -1013,9 +1003,7 @@ export async function remindOverdue(now = Date.now()): Promise<number> {
       // A reminder asks nothing new: it rides the asker's next message (held-notices.ts).
       const { holdNotice } = await import('./held-notices.js');
       const ids = items.map((i) => i.request.id);
-      holdNotice(destination.session.claudeSessionId, `overdue:${ids.join(',')}`, text, {
-        validIf: async () => (await Promise.all(ids.map(requestStillOpen))).some(Boolean),
-      });
+      void holdNotice(destination.session.claudeSessionId, `overdue:${ids.join(',')}`, text, { whileOpen: ids });
       const delivery = 'held';
       sent++;
       log.session.info('overdue request reminder delivered', {

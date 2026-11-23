@@ -178,6 +178,8 @@ export function deriveSessionHookPoints(
         extraPayload: {
           toolUseId: data.toolUseId as string,
           result: data.result as string,
+          ...(data.isError === true ? { isError: true } : {}),
+          ...(data.replayed === true ? { replayed: true } : {}),
         } satisfies Partial<OnToolResultPayload>,
       });
       break;

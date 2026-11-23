@@ -145,6 +145,8 @@ export interface SessionToolResultData {
   sessionId: string
   toolUseId: string
   result: string
+  /** The call failed (the tool result's is_error). */
+  isError?: boolean
 }
 
 export interface SessionAskQuestionData {

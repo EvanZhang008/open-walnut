@@ -59,6 +59,8 @@ export const DAEMON_SOURCE_FILES = [
   // the two hashes disagree and the version guard can never converge.)
   'src/providers/gateway-core.ts',
   'src/providers/wn-cli.ts',
+  // Every gateway line the CLI and its MCP server write, with its wait (bundled into the CLI above).
+  'src/providers/gateway-request.ts',
   // How `walnut tools call` reads its args (inline / @file / stdin). Bundled
   // into the CLI above, so a change here must move the version — an unchanged
   // version means no host redeploys and @file silently stays unsupported.

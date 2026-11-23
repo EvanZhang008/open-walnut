@@ -3,7 +3,13 @@
  * 2026-10-30: half of a lead's turns were an agent-ack to a notice that only said something
  * moved). A request past its deadline and its reminder ride the session's next message; people read Walnut's own notices as "System".
  */
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+
+// A held notice of a request rides only while the request is open: rq-1 got its reply, rq-2 did not.
+vi.mock('../../src/core/session-requests.js', () => ({
+  getSessionRequest: async (id: string) => (id === 'rq-1' ? { id, status: 'replied' } : id === 'rq-2' ? { id, status: 'pending' } : undefined),
+}))
+
 import { _clearHeldNotices, holdNotice, pendingHeldNotices } from '../../src/core/sessions/held-notices.js'
 import { parseSessionEnvelopes, systemSender } from '../../src/lib/history-session-envelope.js'
 
@@ -35,9 +41,10 @@ describe('a background notice rides the next message', () => {
   })
 
   it('a notice its news overtook (the request got its reply) is dropped, not sent stale', async () => {
-    holdNotice('lead-1', 'request-timeout:rq-1', 'PAST ITS DEADLINE', { validIf: async () => false })
-    holdNotice('lead-1', 'request-timeout:rq-2', 'STILL OPEN', { validIf: async () => true })
-    expect((await pendingHeldNotices('lead-1'))!.text).toBe('STILL OPEN')
+    holdNotice('lead-1', 'request-timeout:rq-1', 'PAST ITS DEADLINE', { whileOpen: ['rq-1'] })
+    holdNotice('lead-1', 'request-timeout:rq-2', 'STILL OPEN', { whileOpen: ['rq-2'] })
+    holdNotice('lead-1', 'overdue:rq-1,rq-2', 'ONE STILL OPEN', { whileOpen: ['rq-1', 'rq-2'] })
+    expect((await pendingHeldNotices('lead-1'))!.text).toBe('STILL OPEN\n\nONE STILL OPEN')
   })
 })
 

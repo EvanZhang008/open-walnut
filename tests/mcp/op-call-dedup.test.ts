@@ -125,6 +125,11 @@ beforeEach(async () => {
     sent += 1
     const n = sent
     if (holdMs) { const ms = holdMs; holdMs = 0; await new Promise((r) => setTimeout(r, ms)) }
+    // wake=false: the server holds the note for the target's next message (quiet-notes.ts).
+    if (req.body.wake === false) {
+      res.status(202).json({ delivery: 'held', messageId: `qm-held-${n}`, targetSessionId: 'sess-target', targetTaskId: req.body.to })
+      return
+    }
     res.status(202).json({ delivery: 'queued', messageId: `qm-${n}`, requestId: `rq-${String(n).padStart(6, 'a')}`, targetTaskId: req.body.to })
   })
   app.get('/api/tasks/:id', (req, res) => { res.json({ task: { id: req.params.id, title: 'T', phase: 'TODO' } }) })
@@ -287,6 +292,39 @@ describe('a write call runs at most once per call id', () => {
     await run('task_send', { to: 'task-a', text: 'plain', expect_reply: false })
     await run('task_send', { to: 'task-a', text: 'plain', expect_reply: false })
     expect(sent).toBe(2)
+  })
+
+  it('a held note (wake=false) reads where it stands now, also after a restart: waiting, delivered, dropped', async () => {
+    // 2026-11-21: three such notes were lost to restarts while op_result kept reading "applied, held".
+    const { _clearHeldNotices, holdFoldedNotice, pendingHeldNotices, dropParts } = await import('../../src/core/sessions/held-notices.js')
+    _clearHeldNotices()
+    const callId = newCallId()
+    const held = await run('task_send', { to: 'task-a', text: 'FYI: green', wake: false }, callId)
+    expect(held.ok && held.result).toMatchObject({ delivery: 'held', messageId: 'qm-held-1' })
+    // The server's hold of it (session-send-core.ts holdQuietNote), and a restart of the call memory.
+    await holdFoldedNotice('sess-target', 'quiet-note:x', { at: Date.now(), text: 'FYI: green', mid: 'qm-held-1' }, () => 'NOTE')
+    _resetOpCallsForTesting()
+    const waiting = await run('op_result', { call_id: callId })
+    expect(waiting.ok && waiting.result).toMatchObject({ state: 'applied', held_note: { message_id: 'qm-held-1', state: 'waiting', session_id: 'sess-target' } })
+    expect(waiting.ok && (waiting.result as { outcome: string }).outcome).toContain('Its note waits to ride its target\'s next message')
+    // It rode the target's next message.
+    ;(await pendingHeldNotices('sess-target'))!.markTold('qm-row-7')
+    const rode = await run('op_result', { call_id: callId })
+    expect(rode.ok && rode.result).toMatchObject({ state: 'applied', held_note: { state: 'delivered', row: 'qm-row-7' } })
+    expect(rode.ok && (rode.result as { outcome: string }).outcome).toContain('Its note rode its target\'s next message')
+    // Another one dropped unread says so, and why.
+    const other = newCallId()
+    await run('task_send', { to: 'task-a', text: 'FYI: red', wake: false }, other)
+    dropParts('sess-target', [{ at: Date.now(), text: 'FYI: red', mid: 'qm-held-2' }], 'its target session is gone')
+    const gone = await run('op_result', { call_id: other })
+    expect(gone.ok && gone.result).toMatchObject({ held_note: { state: 'dropped', why: 'its target session is gone' } })
+    expect(gone.ok && (gone.result as { outcome: string }).outcome).toContain('Its note was dropped before reaching its target')
+    // A plain send carries no held_note.
+    const plain = newCallId()
+    await run('task_send', { to: 'task-a', text: 'plain', expect_reply: false }, plain)
+    const read = await run('op_result', { call_id: plain })
+    expect(read.ok && (read.result as Record<string, unknown>).held_note).toBeUndefined()
+    _clearHeldNotices()
   })
 
   it('op_result of an id this server never saw says unknown: nothing was written', async () => {

@@ -2835,9 +2835,19 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   function heldAnswerOf(home: string, name: string, rec: { seq?: unknown; args?: unknown }, duplicate: boolean): Record<string, unknown> {
     const args = (rec.args && typeof rec.args === 'object' ? rec.args : {}) as Record<string, unknown>
     const message = name !== 'agent_memory_write'
+    // A note that asks nothing (wake=false) is not delivered when the server is back: it waits for
+    // its target's next message there, as online (quiet-notes.ts), and no reply comes.
+    const quiet = message && args.in_reply_to === undefined && rules.holdsQuietly(rules.ruleInputOf(args))
+    const head = { queued: true, offline: true, held: true, op: name, seq: rec.seq, ...(message ? { messageId: args.messageId } : {}), ...(duplicate ? { duplicate: true } : {}) }
+    if (quiet) {
+      return {
+        ...head,
+        outcome: `Queued on this host: the Walnut server is away. When it is back, this note waits to ride its target's next message: it asks for no reply, so it starts no turn. ${offlineNote(home)} Do NOT resend.`,
+        next: 'Nothing to wait for: no reply comes back.',
+      }
+    }
     return {
-      queued: true, offline: true, held: true, op: name, seq: rec.seq,
-      ...(message ? { messageId: args.messageId } : {}), ...(duplicate ? { duplicate: true } : {}),
+      ...head,
       outcome: `Queued on this host: the Walnut server is away, and when it is back it ${message ? 'delivers this message' : 'makes this write'}, once. ${offlineNote(home)} Do NOT resend.`,
       next: message
         ? (args.in_reply_to !== undefined ? 'Nothing else is required.' : 'A reply you asked for arrives in your session once it is delivered; do not poll.')

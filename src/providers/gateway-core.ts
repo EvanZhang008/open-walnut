@@ -179,16 +179,58 @@ export const GATEWAY_WAIT_MAX_MS = 180_000;
 export const GATEWAY_MIN_RELAY_MS = 8_000;
 
 /**
+ * A line's `waitMs` as the daemon grants it, clamped to [GATEWAY_MIN_RELAY_MS, GATEWAY_WAIT_MAX_MS];
+ * undefined when the line names no wait (anything but a positive number). The one clamp of the
+ * daemon's plan, the client's builder (gateway-request.ts) and the host call entry's answer time.
+ */
+export function gatewayWaitMs(waitMs: unknown): number | undefined {
+  if (typeof waitMs !== 'number' || !Number.isFinite(waitMs) || waitMs <= 0) return undefined;
+  return Math.min(GATEWAY_WAIT_MAX_MS, Math.max(GATEWAY_MIN_RELAY_MS, Math.floor(waitMs)));
+}
+
+/**
+ * A call's plan. `never`: its client chose not to wait for a server (`waitMs: 0`); `identifyBy`:
+ * a call that named no wait waits for a server socket naming its Walnut until then (gatewayIdentifyPlan).
+ */
+export interface GatewayCallPlan { deadline: number; waits: boolean; never?: true; identifyBy?: number }
+
+/**
  * When a call ends, and whether it may wait for a server to come back. A CLI
  * that names its `waitMs` (a newer `walnut`) gets that time (clamped), waits
  * while no server is there, and is sent again within it. A caller that names
- * none (an older `walnut`, the Mac's own CLI, which falls back to HTTP) is
- * answered as before: no server is hub_unreachable at once, and one relay has
- * the hub timeout (a socket that closes inside it still sends it again).
+ * none (an older `walnut`) is answered as before: no server is hub_unreachable at
+ * once, and one relay has the hub timeout (a socket that closes inside it still
+ * sends it again); it only waits a moment for a server that is starting
+ * (gatewayIdentifyPlan). `waitMs: 0` is a caller that chose not to wait at all
+ * (the Mac's own CLI, which falls back to HTTP; a display record): never held.
  */
-export function gatewayCallPlan(waitMs: number | undefined, hubTimeoutMs: number, now: number): { deadline: number; waits: boolean } {
-  if (typeof waitMs !== 'number' || !Number.isFinite(waitMs) || waitMs <= 0) return { deadline: now + hubTimeoutMs, waits: false };
-  return { deadline: now + Math.min(GATEWAY_WAIT_MAX_MS, Math.max(GATEWAY_MIN_RELAY_MS, Math.floor(waitMs))), waits: true };
+export function gatewayCallPlan(waitMs: number | undefined, hubTimeoutMs: number, now: number): GatewayCallPlan {
+  const wait = gatewayWaitMs(waitMs);
+  if (wait !== undefined) return { deadline: now + wait, waits: true };
+  return waitMs === 0 ? { deadline: now + hubTimeoutMs, waits: false, never: true } : { deadline: now + hubTimeoutMs, waits: false };
+}
+
+/**
+ * How long a call that names no wait (an older client) may wait for a server socket that is here
+ * and has not said whose Walnut it is yet (a server starting). 2026-11-23: a session's task_create
+ * failed with hub_unreachable 13 s after a deploy restarted the server, whose socket was connected
+ * and not bound yet. Counted from the call's arrival; a relay after it still has the whole hub
+ * timeout, so the answer comes within this and the hub timeout (26 s by default), inside an older
+ * client's 30 s socket time and the host call entry's answer time.
+ */
+export const GATEWAY_IDENTIFY_WAIT_MS = 6_000;
+
+/**
+ * The plan of a call that named no wait, to wait for a server that is identifying: until
+ * `identifyBy` (its arrival and `windowMs`, kept across its resends), its deadline moved so a
+ * relay after the wait keeps the whole hub timeout. Null for a call that may wait anyway, one
+ * whose client chose not to (`never`), and once the window has passed.
+ */
+export function gatewayIdentifyPlan<P extends GatewayCallPlan>(plan: P, hubTimeoutMs: number, windowMs: number, now: number): { plan: P; atMostMs: number } | null {
+  if (plan.waits || plan.never) return null;
+  const identifyBy = plan.identifyBy ?? plan.deadline - hubTimeoutMs + windowMs;
+  if (identifyBy <= now) return null;
+  return { plan: { ...plan, identifyBy, deadline: Math.max(plan.deadline, identifyBy + Math.max(hubTimeoutMs, GATEWAY_MIN_RELAY_MS)) }, atMostMs: identifyBy - now };
 }
 
 /**
@@ -354,7 +396,10 @@ export interface GatewayRequest {
   /** The caller's $WALNUT_SESSION_ID — a lookup key only; daemon resolves the real sid. */
   sid: string;
   args: Record<string, unknown>;
-  /** How long the CLI waits for this answer in all (a newer `walnut`); the daemon queues and resends within it. */
+  /**
+   * How long the CLI waits for this answer in all (a newer `walnut`); the daemon queues and resends
+   * within it. 0: the caller chose not to wait for a server (gatewayCallPlan `never`).
+   */
   waitMs?: number;
 }
 
@@ -407,7 +452,8 @@ export function parseGatewayLine(line: string): ParseGatewayResult {
     }
     args = obj.args as Record<string, unknown>;
   }
-  const waitMs = typeof obj.waitMs === 'number' && Number.isFinite(obj.waitMs) && obj.waitMs > 0 ? obj.waitMs : undefined;
+  // A positive wait, or 0 (no wait, on purpose); anything else names none.
+  const waitMs = typeof obj.waitMs === 'number' && Number.isFinite(obj.waitMs) && obj.waitMs >= 0 ? obj.waitMs : undefined;
   return { ok: true, request: { v: 1, op: obj.op as GatewayOp, sid: obj.sid, args, ...(waitMs !== undefined ? { waitMs } : {}) } };
 }
 

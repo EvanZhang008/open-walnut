@@ -97,7 +97,8 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
         const { noteRequestMessage } = await import('../../core/session-requests.js')
         await noteRequestMessage(result.requestId, result.messageId).catch(() => {})
       }
-      const waiting = result.messageId && result.targetSessionId ? await sessionDeliveryWait(result.targetSessionId) : null
+      // A held note (wake=false) waits for the target's next message, not behind its host.
+      const waiting = result.messageId && result.targetSessionId && result.delivery !== 'held' ? await sessionDeliveryWait(result.targetSessionId) : null
       // One of the sender's Threads goes with the work it handed on (core/org/thread-follow.ts).
       const { handOffThread } = await import('../../core/org/thread-follow.js')
       const threadHandoff = result.targetTaskId && !result.repliedTo

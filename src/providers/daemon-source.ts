@@ -1358,6 +1358,14 @@ function runWnMinimal(argv, stdinText) {
   // JSON object {ok:false,error:{code,message,detail?}}: on stderr (stdout keeps an op's
   // partial result, as before), or with --json on stdout with stderr left empty. Lines
   // that used to follow on stderr join the message. Exit codes are unchanged.
+  // Twin of stderrDiscarded: stderr thrown away (2>/dev/null) or closed puts it on stdout too.
+  var wnStderrDiscarded = function () {
+    var err;
+    try { err = fs.fstatSync(2); } catch (e) { return true; }
+    var dn = null;
+    try { dn = fs.statSync(process.platform === 'win32' ? '\\\\\\\\.\\\\NUL' : '/dev/null'); } catch (e) { dn = null; }
+    return !!dn && err.dev === dn.dev && err.ino === dn.ino;
+  };
   var wnIsCall = false;
   var wnFail = function (code, message, exitCode, notes, detail, partial) {
     var lines = [String(message).replace(/^walnut: /, '')].concat(notes || [])
@@ -1365,7 +1373,7 @@ function runWnMinimal(argv, stdinText) {
       .filter(function (l) { return l !== ''; });
     var error = { code: code, message: lines.join('\\n') };
     if (detail !== undefined) error.detail = detail;
-    if (json) {
+    if (json || wnStderrDiscarded()) {
       if (error.detail === undefined && partial !== undefined) error.detail = partial;
       out(JSON.stringify({ ok: false, error: error }));
     } else {
@@ -1641,7 +1649,13 @@ function runWnMinimal(argv, stdinText) {
       var wbuf = '';
       var wdone = false;
       var wfinish = function (fn) { if (wdone) return; wdone = true; clearTimeout(wtimer); wsock.destroy(); fn(); };
-      var wtimer = setTimeout(function () { wfinish(retryOrTimeout); }, 30000);
+      // One poll may wait for a server as a tools call does, within what is left of the wait; with
+      // less left than the daemon's shortest wait (8 s) it waits for none and ends with what is left
+      // (twin of gateway-request.ts toolsCallLineWithin).
+      var wPollEnv = Number(process.env.WALNUT_CLI_WAIT_MS || '');
+      var wLeftMs = Math.max(1, Math.floor(wnWait.deadline - Date.now()));
+      var wPollMs = wLeftMs < 8000 ? 0 : Math.min(Number.isFinite(wPollEnv) && wPollEnv > 0 ? Math.min(Math.floor(wPollEnv), 180000) : 90000, wLeftMs);
+      var wtimer = setTimeout(function () { wfinish(retryOrTimeout); }, wPollMs ? wPollMs + 10000 : wLeftMs);
       var retryOrTimeout = function () {
         if (Date.now() >= wnWait.deadline) {
           out(JSON.stringify({ done: false, timeout: true, id: wnWait.id }));
@@ -1649,7 +1663,7 @@ function runWnMinimal(argv, stdinText) {
         }
         setTimeout(waitTick, 5000);
       };
-      wsock.on('connect', function () { wsock.write(JSON.stringify({ v: 1, op: op, sid: sid, args: args }) + '\\n'); });
+      wsock.on('connect', function () { wsock.write(JSON.stringify({ v: 1, op: op, sid: sid, args: args, waitMs: wPollMs }) + '\\n'); });
       wsock.on('error', function () { wfinish(retryOrTimeout); });
       wsock.on('close', function () { wfinish(retryOrTimeout); });
       wsock.setEncoding('utf-8');
@@ -5503,8 +5517,18 @@ var GATEWAY_WAIT_MAX_MS = 180000;
 var GATEWAY_MIN_RELAY_MS = 8000;
 var GATEWAY_RESEND_MIN_MS = 2000;
 function gatewayCallPlan(waitMs, hubTimeoutMs, now) {
-  if (typeof waitMs !== 'number' || !Number.isFinite(waitMs) || waitMs <= 0) return { deadline: now + hubTimeoutMs, waits: false };
+  if (typeof waitMs !== 'number' || !Number.isFinite(waitMs) || waitMs <= 0) {
+    return waitMs === 0 ? { deadline: now + hubTimeoutMs, waits: false, never: true } : { deadline: now + hubTimeoutMs, waits: false };
+  }
   return { deadline: now + Math.min(GATEWAY_WAIT_MAX_MS, Math.max(GATEWAY_MIN_RELAY_MS, Math.floor(waitMs))), waits: true };
+}
+// Mirror of gateway-core.ts: a call that named no wait waits a moment for a server that is identifying.
+var GATEWAY_IDENTIFY_WAIT_MS = 6000;
+function gatewayIdentifyPlan(plan, hubTimeoutMs, windowMs, now) {
+  if (plan.waits || plan.never) return null;
+  var identifyBy = typeof plan.identifyBy === 'number' ? plan.identifyBy : plan.deadline - hubTimeoutMs + windowMs;
+  if (identifyBy <= now) return null;
+  return { plan: Object.assign({}, plan, { identifyBy: identifyBy, deadline: Math.max(plan.deadline, identifyBy + Math.max(hubTimeoutMs, GATEWAY_MIN_RELAY_MS)) }), atMostMs: identifyBy - now };
 }
 function relayMayResendTo(relay, targetRun, targetReadsIt) {
   if (relay.readable || targetReadsIt) return true;
@@ -5576,7 +5600,8 @@ function parseGatewayLine(line) {
     args = parsed.args;
   }
   var request = { v: 1, op: parsed.op, sid: parsed.sid, args: args };
-  if (typeof parsed.waitMs === 'number' && Number.isFinite(parsed.waitMs) && parsed.waitMs > 0) request.waitMs = parsed.waitMs;
+  // A positive wait, or 0 (no wait, on purpose): mirror of gateway-core.ts parseGatewayLine.
+  if (typeof parsed.waitMs === 'number' && Number.isFinite(parsed.waitMs) && parsed.waitMs >= 0) request.waitMs = parsed.waitMs;
   return { ok: true, request: request };
 }
 
@@ -7122,7 +7147,8 @@ var GATEWAY_BIND_GRACE_MS = 60000;
 
 // The server sockets as the gateway's pick sees them, in connect order; withQuiet keeps
 // the quiet ones too. A socket that named a run moments ago and is not bound yet is
-// pending (twin of daemon-standalone.ts).
+// pending; one that opened moments ago and has named no run yet is fresh (twin of
+// daemon-standalone.ts).
 function gatewayCandidates(withQuiet) {
   var now = Date.now();
   var out = [];
@@ -7133,6 +7159,7 @@ function gatewayCandidates(withQuiet) {
     var run = client.serverRun;
     var row = { socket: client, bound: bound, run: run };
     if (!bound && !!run && typeof client.helloAt === 'number' && now - client.helloAt < GATEWAY_BIND_GRACE_MS) row.pending = true;
+    if (!bound && !run && typeof client.connectedAt === 'number' && now - client.connectedAt < GATEWAY_BIND_GRACE_MS) row.fresh = true;
     out.push(row);
   }
   return out;
@@ -7154,10 +7181,12 @@ function walnutPinned(home) {
 // is). Another Walnut's never; one that names no Walnut only for a Walnut that never
 // named itself here, or for a call no Walnut owns. Never the bridge adapter. 'say'
 // logs why a server is passed over (twin of daemon-standalone.ts).
-function gatewayTargetFor(home, say) {
+function gatewayTargetFor(home, say, seen) {
   var candidates = gatewayCandidates(false);
   var pinned = walnutPinned(home);
   var picked = gatewayIdentity.pick(candidates, home, { pinned: pinned, allowUnidentified: !home || !offlineHost.pendingHandover(home) });
+  // How many of the sockets passed over may name this Walnut in a moment (gatewayServerIdentifying).
+  if (seen) seen.identifying = picked.target === null ? picked.identifying : 0;
   var target = picked.target;
   if (!target && home && say && (picked.otherWalnut > 0 || picked.unidentified > 0)) {
     logMsg('info', 'gateway: no server of this Walnut connected, other servers not asked', {
@@ -7180,6 +7209,14 @@ function gatewayTargetFor(home, say) {
     target = null;
   }
   return target;
+}
+
+// No server of the Walnut of 'home' takes calls now, but one may in a moment: a socket between its
+// hello and its bind, or one that just opened and has named no run yet (twin of daemon-standalone.ts).
+function gatewayServerIdentifying(home) {
+  var seen = { identifying: 0 };
+  gatewayTargetFor(home, undefined, seen);
+  return seen.identifying > 0;
 }
 
 // No server of the call's Walnut may take it, and nothing was sent: retryable. Says so
@@ -7229,8 +7266,18 @@ function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
     noted = true;
     followerGateway.noteOwnOffline(home, capability, callerSid, payload, plan.ownServerAsked);
   };
-  // No server now and nothing sent: a call that may wait does, while it has time.
-  var waitHere = function () { return plan.waits && waitForPrimary(deadline, function () { sendGatewayRequest(capability, callerSid, payload, respond, noted ? Object.assign({}, plan, { ownAnswerNoted: true }) : plan); }, respond); };
+  // No server now and nothing sent: a call that may wait does, while it has time. A call that
+  // named no wait (an older client) still waits a moment while a server socket is here that has
+  // not said whose Walnut it is yet: GATEWAY_IDENTIFY_WAIT_MS from its arrival, a relay then keeping
+  // the whole hub timeout. Never a list, nor a call that chose not to wait (twin of daemon-standalone.ts).
+  var again = function (p) {
+    return function () { sendGatewayRequest(capability, callerSid, payload, respond, noted ? Object.assign({}, p, { ownAnswerNoted: true }) : p); };
+  };
+  var waitHere = function () {
+    if (plan.waits) return waitForPrimary(deadline, again(plan), respond);
+    var soon = capability === 'tools.call' ? gatewayIdentifyPlan(plan, GATEWAY_HUB_TIMEOUT_MS, GATEWAY_IDENTIFY_WAIT_MS, Date.now()) : null;
+    return !!soon && gatewayServerIdentifying(home) && waitForPrimary(soon.plan.deadline, again(soon.plan), respond, soon.atMostMs);
+  };
   var readable = !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home);
   // A call from outside any session is answered here only when it reads; its other
   // calls go to the companion while it leads (twin of daemon-standalone.ts).
@@ -7321,12 +7368,21 @@ function sendGatewayRequest(capability, callerSid, payload, respond, plan) {
 // Calls waiting for a server of their Walnut (nothing of them was sent yet); twin
 // of daemon-standalone.ts waitForPrimary / wakeGatewayCalls.
 var gatewayWaiting = new Set();
-function waitForPrimary(deadline, retry, respond, atMostMs) {
+function waitForPrimary(deadline, retry, respond, atMostMs, saysLeft) {
   var left = deadline - GATEWAY_MIN_RELAY_MS - Date.now();
   if (left <= 0 || daemonCommands.closed) return false;
-  var w = { retry: retry, respond: respond, timer: undefined };
+  // Its caller hung up while it waited: nothing was sent, nobody reads the answer (twin of daemon-standalone.ts).
+  var go = function () {
+    var gone = gatewayCallerLeft.get(respond);
+    if (gone && gone() === true) {
+      if (saysLeft) return saysLeft();
+      return logMsg('info', 'gateway: a waiting call ends, its caller left; nothing was sent');
+    }
+    retry();
+  };
+  var w = { retry: go, respond: respond, timer: undefined };
   // atMostMs: go sooner (a busy call's pause before it is asked again).
-  w.timer = setTimeout(function () { if (gatewayWaiting.delete(w)) retry(); }, typeof atMostMs === 'number' ? Math.min(left, atMostMs) : left);
+  w.timer = setTimeout(function () { if (gatewayWaiting.delete(w)) go(); }, typeof atMostMs === 'number' ? Math.min(left, atMostMs) : left);
   gatewayWaiting.add(w);
   return true;
 }
@@ -7575,16 +7631,13 @@ function heldCatalogAskAgain(relayId, call, payload, respond) {
 // (twin of daemon-standalone.ts busyAskAgain).
 function busyAskAgain(relayId, call, respond, refusal, inMs) {
   var attempt = (call.busyAgain || 0) + 1;
+  // waitForPrimary drops it when its caller left.
+  var saysLeft = function () { logMsg('info', 'gateway: busy call not asked again, its caller left', { relayId: relayId, callerSid: call.callerSid, op: call.payload.name, attempt: attempt }); };
   function go() {
-    var left = gatewayCallerLeft.get(respond);
-    if (left && left()) {
-      logMsg('info', 'gateway: busy call not asked again, its caller left', { relayId: relayId, callerSid: call.callerSid, op: call.payload.name, attempt: attempt });
-      return;
-    }
     var target = gatewayTargetFor(call.home);
     var spare = call.deadline - busyRelayMinLeftMs(GATEWAY_HUB_TIMEOUT_MS) - Date.now();
     if (!target || spare < 0) {
-      if (!target && spare > 0 && waitForPrimary(call.deadline, go, respond, spare)) return;
+      if (!target && spare > 0 && waitForPrimary(call.deadline, go, respond, spare, saysLeft)) return;
       return respond(refusal);
     }
     gatewayRelayCounter += 1;
@@ -7598,7 +7651,7 @@ function busyAskAgain(relayId, call, respond, refusal, inMs) {
     });
     sendRelayAttempt(next, target);
   }
-  if (!waitForPrimary(call.deadline, go, respond, inMs)) respond(refusal);
+  if (!waitForPrimary(call.deadline, go, respond, inMs, saysLeft)) respond(refusal);
 }
 
 // A plugin job's call: to the server of the Walnut that runs the job and no other,
@@ -7667,6 +7720,9 @@ function handleGatewayLine(line, respond, tokenProven) {
     var answer = typeof checkCallers.noteAnswer === 'function'
       ? function (resp) { checkCallers.noteAnswer(checkSid, resp); respond(resp); }
       : respond;
+    // The check's caller hanging up ends its waiting call too (waitForPrimary).
+    var checkLeft = gatewayCallerLeft.get(respond);
+    if (checkLeft && answer !== respond) gatewayCallerLeft.set(answer, checkLeft);
     return sendGatewayRequest(req.op, EXTERNAL_CALLER_SID, call.args, answer, gatewayCallPlan(req.waitMs, GATEWAY_HUB_TIMEOUT_MS, Date.now()));
   }
   if (pluginJobs.isRunSid(req.sid)) {
@@ -17651,6 +17707,8 @@ async function startDaemon() {
   wss.on('connection', (ws) => {
     heardFrom(ws);
     wsClients.add(ws);
+    // One that names no run yet is 'fresh' for the bind grace (gatewayCandidates; twin of daemon-standalone.ts).
+    ws.connectedAt = Date.now();
     logMsg('info', 'client connected', { clients: wsClients.size });
 
     // Ping/pong keepalive. Every frame back is proof of life (heardFrom).

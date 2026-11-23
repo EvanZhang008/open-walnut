@@ -263,7 +263,7 @@ export async function sendMessageToSession(
      * this send waits for: the send is durable from here. A scheduled routine marks its run sent
      * here (cron/sent-run.ts). With it the row is stored strictly: a disk failure throws instead
      * of leaving the row in the cache for a later flush, which a kill would lose. Never called for
-     * a notice that rides the next message (held in memory). Called, never awaited; a throw is only logged.
+     * a notice that rides the next message (held-notices.ts holds it). Called, never awaited; a throw is only logged.
      */
     onStored?: (msg: QueuedMessage) => void;
     /** Line it up for after the running turn instead of writing it into the live CLI: it can be edited or withdrawn until then (sessions/queue-after-turn.ts). */
@@ -360,8 +360,8 @@ export async function sendMessageToSession(
   const notes = [appState?.text, place?.text, folderMoved?.text, restart?.text, digest?.text, statusNote?.text, heldNotes?.text, withdrawn?.text, waitNote, retiredNote].filter(Boolean).join('\n\n');
   const lead = [notes, switchContext?.text].filter(Boolean).join('\n\n');
   const enqueueText = lead && !slashCommand ? `${lead}\n\n${body}` : body;
-  /** Mark told each note `carrier` holds; App state and held notices it does not are put back. */
-  const tellCarried = async (carrier: string): Promise<void> => {
+  /** Mark told each note `carrier` (stored as row `rowId`) holds; App state and held notices it does not are put back. */
+  const tellCarried = async (carrier: string, rowId?: string): Promise<void> => {
     if (place && carrier.startsWith(place.text)) await place.markTold();
     if (digest && carrier.includes(digest.text)) await digest.markTold();
     if (restart && carrier.includes(restart.text)) await restart.markTold();
@@ -373,7 +373,11 @@ export async function sendMessageToSession(
       if (carrier.includes(appState.text)) appState.markTold();
       else appState.release();
     }
-    if (heldNotes && !carrier.includes(heldNotes.text)) heldNotes.release();
+    if (heldNotes) {
+      // Off the file once the row that carries them is stored (held-notices.ts): never awaited.
+      if (carrier && carrier.includes(heldNotes.text)) heldNotes.markTold(rowId);
+      else heldNotes.release();
+    }
   };
   // Nothing but notices that ask nothing: never written to the CLI on its own, not even into a running
   // turn (a line that reaches the CLI as its turn ends starts a turn of its own: 2026-11-16, three
@@ -388,7 +392,8 @@ export async function sendMessageToSession(
   if (!opts?.wakeReason && !opts?.interrupt && !heldForMove && !heldForTurn && !personWords && rowRides(framedBody)) {
     await tellCarried('');
     if (opts?.stillWanted && !opts.stillWanted()) throw new SendNoLongerWantedError();
-    holdRidingNotice(sessionId, framedBody);
+    // Held in memory now and written to the held-notices file behind it, never awaited.
+    void holdRidingNotice(sessionId, framedBody);
     log.session.info('notice rides the next message: it asks nothing', { sessionId, source: opts?.source });
     const now = new Date();
     return { id: opts?.messageId ?? `rides-${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`, sessionId, message: framedBody, status: 'pending', enqueuedAt: now.toISOString(), seq: 0 };
@@ -414,7 +419,9 @@ export async function sendMessageToSession(
       ...(opts?.stopFence !== undefined ? { stopFence: opts.stopFence } : {}),
       ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
       ...(opts?.relayTaken ? { relayTaken: true } : {}),
-      ...(opts?.onStored ? { strict: true } : {}),
+      // A row that carries held notices is stored strictly too: they leave their own file once it is
+      // stored (markTold), so a row left only in the cache by a disk failure would lose both at a kill.
+      ...(opts?.onStored || heldNotes ? { strict: true } : {}),
       ...(opts?.lineUuid ? { lineUuid: opts.lineUuid } : {}),
       ...(opts?.closesPrompt || isPersonSendSource(opts?.source) ? { closesPrompt: true } : {}),
       ...(queueSentBy(opts?.source) ? { sentBy: queueSentBy(opts?.source) } : {}),
@@ -439,7 +446,7 @@ export async function sendMessageToSession(
     void import('./org/team-asks.js').then((m) => m.noteTeamAsk(sessionId, message, rawBody, opts?.source, msg.id)).catch(() => {});
   }
   // A repeat collapsed onto the row already queued: only the row that holds the note counts.
-  await tellCarried(msg.message);
+  await tellCarried(msg.message, msg.id);
   if (outputMode && msg.message.includes(outputMode.enqueueText)) await outputMode.commit();
 
   // Ask Walnut drift repair — AWAITED before SESSION_SEND is emitted, because

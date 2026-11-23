@@ -336,6 +336,7 @@ export class SessionServerClient {
         taskId: (d as unknown as Record<string, unknown>).taskId,
         toolUseId: d.toolUseId,
         result: d.result,
+        ...(d.isError === true ? { isError: true } : {}),
       }, ['main-ai'], { source: 'session-server' })
       break
     }

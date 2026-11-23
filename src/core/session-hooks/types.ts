@@ -141,6 +141,10 @@ export interface OnToolUsePayload extends SessionHookContext {
 export interface OnToolResultPayload extends SessionHookContext {
   toolUseId: string;
   result: string;
+  /** The tool call failed (the CLI's is_error). */
+  isError?: boolean;
+  /** A line the runner had read before (a restart's re-read), not a new result. */
+  replayed?: boolean;
 }
 
 /** onPlanComplete payload */

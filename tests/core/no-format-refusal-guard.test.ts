@@ -18,7 +18,7 @@ describe('no send is refused for the formats its text holds', () => {
   it('src holds no scope_mismatch refusal and no same_deliverable escape hatch (only its retired-input line)', () => {
     const hits = files('src').flatMap((f) => readFileSync(path.join(root, f), 'utf8').split('\n')
       .map((line, i) => ({ f, i: i + 1, line }))
-      .filter(({ line }) => /scope_mismatch|same_deliverable|sameDeliverable/.test(line) && !/retiredInput: \['same_deliverable'\]/.test(line)))
+      .filter(({ line }) => /scope_mismatch|same_deliverable|sameDeliverable/.test(line) && !/retiredInput: \['same_deliverable'[,\]]/.test(line)))
     expect(hits.map((h) => `${h.f}:${h.i}`)).toEqual([])
   })
 

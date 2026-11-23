@@ -45,6 +45,28 @@ describe('offline host: a write nothing could take is held for the server', () =
     expect(h.journal.records(JHOME).filter((r) => r.kind === 'op')).toHaveLength(2)
   })
 
+  it('a wake=false note held here says it rides its target\'s next message: no delivery, no turn, no reply', () => {
+    // 2026-11-21: the held answer promised such a note "delivers this message, once" and "a reply
+    // you asked for arrives"; the Mac holds it for the target's next message (quiet-notes.ts).
+    const h = journalHost(journalTmpDir(), { now: T0 }, { drains: DRAINS })
+    h.host.configure(jslice())
+    const quiet = h.host.holdWrite(JHOME, SID_A, 'tools.call', send({ to: 'msjfj3no', text: 'FYI: the build is green', wake: false }, 'oc-quiet123_0001'))
+    const r = (quiet as { ok: true; result: { outcome: string; next: string; messageId: string } }).result
+    expect(quiet).toMatchObject({ ok: true, result: { queued: true, held: true, op: 'task_send', messageId: 'qm-host-quiet123-0001' } })
+    expect(r.outcome).toContain('waits to ride its target\'s next message')
+    expect(r.outcome).toContain('starts no turn')
+    expect(r.outcome).not.toContain('delivers this message')
+    expect(r.next).toBe('Nothing to wait for: no reply comes back.')
+    // Its retry reads the same; a forced or ordinary send keeps the delivery words.
+    const again = h.host.holdWrite(JHOME, SID_A, 'tools.call', send({ to: 'msjfj3no', text: 'FYI: the build is green', wake: false }, 'oc-quiet123_0001'))
+    expect((again as { result: { duplicate?: boolean; next: string } }).result).toMatchObject({ duplicate: true, next: 'Nothing to wait for: no reply comes back.' })
+    for (const args of [{ to: 'msjfj3no', text: 'Rerun it', wake: false, force: true, reason: 'it must act again' }, { to: 'msjfj3no', text: 'Rerun it' }]) {
+      const loud = (h.host.holdWrite(JHOME, SID_A, 'tools.call', send(args)) as { result: { outcome: string; next: string } }).result
+      expect(loud.outcome).toContain('delivers this message')
+      expect(loud.next).toContain('A reply you asked for arrives')
+    }
+  })
+
   it('a reply keeps its in_reply_to, and a memory write is pinned to the caller\'s own task', () => {
     const h = journalHost(journalTmpDir(), { now: T0 }, { drains: DRAINS })
     h.host.configure(jslice())

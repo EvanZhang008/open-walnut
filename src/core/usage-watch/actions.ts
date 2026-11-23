@@ -1,10 +1,11 @@
 /**
  * The `usage_watch` op's actions (POST /api/v1/usage-watch): arm a watch, record an exemption,
- * drop a watch, list watches, read a target's numbers, record a ship from another release tool,
- * and the drill's probe. Answers stay small on purpose: a report lists at most 15 rows.
+ * drop a watch, list watches, read a target's numbers, read failed tool calls by session, op, code
+ * or host, record a ship from another release tool, and the drill's probe. Answers stay small on purpose: a report lists at most 15 rows.
  */
 import { lastShipOf, recordShip } from './ships.js'
 import { usageReport, targetEvents, type ReportRow } from './report.js'
+import { ERROR_GROUPS, toolErrorsReport, type ErrorGroup } from './tool-errors.js'
 import {
   EXEMPT_KINDS, MAX_CHECK_AFTER_MS, MIN_CHECK_AFTER_MS, getWatch, listWatches, newWatch, putWatch, targetProblem,
   type ExemptKind, type Watch, type WatchChecks,
@@ -163,6 +164,18 @@ export async function runUsageWatchAction(body: Record<string, unknown>, ctx: Ac
         outcome: `${rep.rows.length} name(s) recorded in ${range}${rep.rows.length > 15 ? '; the 15 with the most problems listed' : ''}.`,
       }
     }
+    case 'errors': {
+      const by = (body.by === undefined ? 'op' : String(body.by)) as ErrorGroup
+      if (!(ERROR_GROUPS as readonly string[]).includes(by)) throw new UsageWatchError(400, 'bad_by', `by is one of ${ERROR_GROUPS.join(', ')}.`)
+      const session = typeof body.session === 'string' && body.session.trim() ? body.session.trim().slice(0, 80) : undefined
+      const range = body.range === '24h' ? '24h' : '7d'
+      const rep = toolErrorsReport({ range, by, now, ...(session ? { session } : {}) })
+      return {
+        ...rep,
+        outcome: `${rep.total} failed Walnut tool call(s) in ${range}${session ? ` of ${session}` : ''}, by ${by}${rep.more ? `; the ${rep.rows.length} with the most listed` : ''}.`,
+        next: 'by: op, code, session or host; session: a session or task id (or its start) for its own failures one by one.',
+      }
+    }
     case 'ship': {
       const task = await subjectTask(body, ctx)
       const how = typeof body.how === 'string' && body.how.trim() ? body.how.trim().slice(0, 60) : 'release tool'
@@ -175,6 +188,6 @@ export async function runUsageWatchAction(body: Record<string, unknown>, ctx: Ac
       return { probe: probeFiller(n), chars: n, outcome: `A probe answer of ${n} filler characters (no content), for testing the real-use alarms.` }
     }
     default:
-      throw new UsageWatchError(400, 'bad_action', 'action is one of set, exempt, drop, list, report, ship, probe.')
+      throw new UsageWatchError(400, 'bad_action', 'action is one of set, exempt, drop, list, report, errors, ship, probe.')
   }
 }

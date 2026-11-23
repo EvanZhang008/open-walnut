@@ -80,6 +80,37 @@ async function save(): Promise<void> {
   }
 }
 
+/**
+ * A session's id changed (an engine switch, an ACP id's replacement: session-queue-park.ts
+ * migrateSessionQueue): what rides its next message, and what it was told, go to the new id, as
+ * its queue and held notices do. The newer item of a task wins when both ids hold one.
+ */
+export function moveRiding(fromSid: string, toSid: string): number {
+  if (!fromSid || !toSid || fromSid === toSid) return 0;
+  let moved = 0;
+  const from = riding.get(fromSid);
+  if (from?.size) {
+    const to = riding.get(toSid) ?? new Map<string, Item>();
+    for (const [task, item] of from) {
+      const there = to.get(task);
+      if (!there || there.at < item.at) to.set(task, item);
+      moved++;
+    }
+    riding.set(toSid, to);
+  }
+  riding.delete(fromSid);
+  for (const told of [toldNotices, toldDecisions] as Map<string, Map<string, unknown>>[]) {
+    const m = told.get(fromSid);
+    if (!m) continue;
+    const into = told.get(toSid) ?? new Map<string, unknown>();
+    for (const [task, v] of m) if (!into.has(task)) into.set(task, v);
+    told.set(toSid, into);
+    told.delete(fromSid);
+  }
+  if (moved) scheduleSave();
+  return moved;
+}
+
 /** Boot: what was riding before the restart. */
 export async function loadRiding(now = Date.now()): Promise<number> {
   try {

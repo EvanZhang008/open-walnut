@@ -21,6 +21,7 @@ import { z } from 'zod'
 import { OwnedRegistry } from '../core/plugins/owned-registry.js'
 import type { Disposable } from '../core/plugins/disposable.js'
 import type { AnswerFit, OpAnswer } from './answer.js'
+import { callerInputShape } from './count-cap.js'
 
 /** How an op reaches the server when it has no custom handler. */
 export interface HttpBinding {
@@ -88,8 +89,10 @@ export interface WalnutOp {
    * Retired fields whose text an older caller's write still needs, kept under the field that took
    * their place when the caller did not send that one (cut to `max` characters): `{ from, to, max }`,
    * with `list[].field` paths as in retiredInput. Applied before retiredInput drops `from`.
+   * With no `max`: another name agents send for `to`, moved as it came (any value, never cut) and
+   * judged by `to`'s schema; given under both names with different values, the call is refused.
    */
-  renamedInput?: readonly { from: string; to: string; max: number }[]
+  renamedInput?: readonly { from: string; to: string; max?: number }[]
   /** Default executor: one HTTP call against /api/v1. */
   bind?: HttpBinding
   /**
@@ -250,8 +253,9 @@ export function opNames(filter?: { readonly?: boolean }): string[] {
     .map((o) => o.name)
 }
 
+/** The schema a caller checks before it sends: a read-size count shows no most (count-cap.ts). */
 export function opInputJsonSchema(op: WalnutOp): Record<string, unknown> {
-  const schema = z.toJSONSchema(z.object(op.input), { target: 'draft-7', io: 'input' }) as Record<string, unknown>
+  const schema = z.toJSONSchema(z.object(callerInputShape(op)), { target: 'draft-7', io: 'input' }) as Record<string, unknown>
   delete schema.$schema
   return schema
 }

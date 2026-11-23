@@ -406,6 +406,14 @@ export async function migrateSessionQueue(
     delete s.queues[oldSessionId];
     return moved.map((message) => message.id);
   }, true);
+  // The notices waiting to ride its next message go with it (sessions/held-notices.ts), and the
+  // status lines riding it (sessions/status-riding.ts).
+  await (await import('./sessions/held-notices.js')).moveHeldNotices(oldSessionId, newSessionId).catch((err: unknown) => {
+    log.session.warn('held notices: not moved with the queue', { oldSessionId, newSessionId, error: err instanceof Error ? err.message : String(err) });
+  });
+  try { (await import('./sessions/status-riding.js')).moveRiding(oldSessionId, newSessionId); } catch (err) {
+    log.session.warn('status riding: not moved with the queue', { oldSessionId, newSessionId, error: err instanceof Error ? err.message : String(err) });
+  }
   if (movedIds.length === 0) return { movedIds: [] };
   log.session.info('session message queue identity migrated', {
     oldSessionId,
@@ -424,7 +432,11 @@ export async function rollbackSessionQueueMigration(
   newSessionId: string,
   movedIds: string[],
 ): Promise<void> {
-  if (oldSessionId === newSessionId || movedIds.length === 0) return;
+  if (oldSessionId === newSessionId) return;
+  // The held notices and status lines the migration moved go back too.
+  await (await import('./sessions/held-notices.js')).moveHeldNotices(newSessionId, oldSessionId).catch(() => 0);
+  try { (await import('./sessions/status-riding.js')).moveRiding(newSessionId, oldSessionId); } catch { /* a line only */ }
+  if (movedIds.length === 0) return;
   // strict mutateStore: a failed persist throws without committing anywhere,
   // so the old hand-rolled in-memory compensation is no longer needed.
   await mutateStore((s) => {

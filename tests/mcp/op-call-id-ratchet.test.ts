@@ -31,9 +31,12 @@ const SRC = walk('src')
 
 /**
  * Places that build a gateway `tools.call` request. Each must carry `callId` within its
- * statement, or name only reads (a read runs again freely; nothing to dedup).
+ * statement, or name only reads (a read runs again freely; nothing to dedup). A line built by
+ * the shared builder (src/providers/gateway-request.ts) counts at its caller, which hands it the args.
  */
-const CALL_SITE = /op:\s*'tools\.call'|op = 'tools\.call'|request\('tools\.call'|gateway\(socketPath, sid, 'tools\.call'/g
+const CALL_SITE = /op:\s*'tools\.call'|op = 'tools\.call'|request\('tools\.call'|gateway\(socketPath, sid, 'tools\.call'|\btoolsCallLine(?:Within)?\(/g
+/** Builds the line from its caller's args (and their call id); its callers are the sites. */
+const LINE_BUILDER = 'src/providers/gateway-request.ts'
 
 /** A site whose window names one of these reads only reads (a wait, a check, the manual). */
 const READ_SITES: Array<{ file: string; marker: string; why: string }> = [
@@ -42,6 +45,16 @@ const READ_SITES: Array<{ file: string; marker: string; why: string }> = [
   { file: 'src/providers/wn-cli.ts', marker: "'request_get' : 'task_get'", why: 'walnut wait polls request_get / task_get' },
   { file: 'src/providers/daemon-source.ts', marker: "name: 'skill_read'", why: 'walnut guide reads the manual' },
   { file: 'src/providers/daemon-source.ts', marker: "'request_get' : 'task_get'", why: 'walnut wait polls request_get / task_get' },
+]
+
+/**
+ * Sites that build the line from args their caller made, call id included: the CLI's main call
+ * and the MCP server's way to the gateway. The next test checks that those callers set the id.
+ */
+const RELAYS_CALLER_ARGS: Array<{ file: string; marker: string }> = [
+  { file: 'src/providers/wn-cli.ts', marker: 'toolsCallLine(sid, args, cliWaitMs())' },
+  { file: 'src/providers/wn-cli.ts', marker: 'toolsCallLine(sid, call, mcpWaitMs(env))' },
+  { file: 'src/providers/wn-cli.ts', marker: 'toolsCallLineWithin(sid, call, timeMs)' },
 ]
 
 /** Sites whose helper mints the id for every call it sends (checked below). */
@@ -54,6 +67,7 @@ describe('every client sends a call id with tools.call', () => {
     const missing: string[] = []
     let sites = 0
     for (const file of SRC) {
+      if (file === LINE_BUILDER) continue
       const text = read(file)
       for (const m of text.matchAll(CALL_SITE)) {
         sites += 1
@@ -69,6 +83,7 @@ describe('every client sends a call id with tools.call', () => {
         }
         if (/callId/.test(statement)) continue
         if (READ_SITES.some((r) => r.file === file && statement.includes(r.marker))) continue
+        if (RELAYS_CALLER_ARGS.some((r) => r.file === file && statement.includes(r.marker))) continue
         const minted = MINTED_INSIDE.find((r) => r.file === file && statement.includes(r.marker))
         if (minted && minted.helper.test(text)) continue
         const line = text.slice(0, m.index!).split('\n').length
@@ -85,9 +100,10 @@ describe('every client sends a call id with tools.call', () => {
     const mcp = read('src/providers/walnut-mcp-stdio.ts')
     // The call and its retry without the run id carry the call's own id, and name the client whose
     // surface the answer is held to (ops/answer.ts: a call naming none gets the CLI's smaller cap) ...
-    expect(mcp.match(/deps\.request\('tools\.call', (?:spilled \? \{ name, argsFile: spilled, callId, client: 'mcp' \} : )?\{ name, args, callId, client: 'mcp' \}\)/g)?.length).toBe(2)
+    // (with the client's cancel signal, so a cancelled call is never sent late)
+    expect(mcp.match(/deps\.request\('tools\.call', (?:spilled \? \{ name, argsFile: spilled, callId, client: 'mcp' \} : )?\{ name, args, callId, client: 'mcp' \}(?:, undefined, signal)?\)/g)?.length).toBe(2)
     // ... and the op_result read of a lost answer names that call, under an id of its own.
-    expect(mcp).toMatch(/deps\.request\('tools\.call', \{ name: 'op_result', args: \{ call_id: callId \}, callId: newCallId\(\) \}\)/)
+    expect(mcp).toMatch(/deps\.request\('tools\.call', \{ name: 'op_result', args: \{ call_id: callId \}, callId: newCallId\(\) \}(?:, Math\.max\(1, until - Date\.now\(\)\))?\)/)
     expect(mcp.match(/deps\.request\('tools\.call'/g)?.length).toBe(3)
   })
 })

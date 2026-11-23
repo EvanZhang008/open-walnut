@@ -1011,6 +1011,9 @@ defineOp({
     + '`content`; `append` adds `content` as a new timestamped entry at the end. This is the note on the task, not a '
     + 'notes-vault page (that is note_write). Before a replace, read the whole note: '
     + 'task_get {"id":"<id>","fields":["note"],"_full":true} (a plain task_get cuts a long note).',
+  // 2026-11-23: names agents sent for these in real use (72 hours of sessions): read as the declared ones.
+  retiredInput: ['task_id'],
+  renamedInput: [{ from: 'task_id', to: 'id' }],
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
     content: z.string().max(200_000).describe('Markdown: the whole note (replace) or the entry to add (append)'),
@@ -1208,6 +1211,9 @@ defineOp({
     + 'a log\'s or another tool\'s words into a skill. task defaults to your own task.',
   // The receipt never echoes the text written.
   answer: { kind: 'receipt', max: 800, whole: 'agent_skill_read {"name":"<name>"}' },
+  // 2026-11-23: names agents sent for these in real use (72 hours of sessions): read as the declared ones.
+  retiredInput: ['text'],
+  renamedInput: [{ from: 'text', to: 'content' }],
   input: {
     name: z.string().min(1).max(48).describe('Skill name: lowercase letters, digits and dashes'),
     description: z.string().max(200).optional().describe('One line: when to use it'),
@@ -1249,6 +1255,9 @@ defineOp({
     + 'another task\'s id writes that task\'s MEMORY.md (a deadline you note for a worker, say), as a person may.',
   // The receipt never echoes the text written.
   answer: { kind: 'receipt', max: 800, whole: 'agent_memory_read {}' },
+  // 2026-11-23: names agents sent for these in real use (72 hours of sessions): read as the declared ones.
+  retiredInput: ['text'],
+  renamedInput: [{ from: 'text', to: 'content' }],
   input: {
     content: z.string().max(40_000).describe('Markdown: the entry to add (append) or the whole file (replace); with file, the whole note ("" removes it)'),
     mode: z.enum(['append', 'replace']).optional().describe('append (default) or replace'),
@@ -1398,6 +1407,9 @@ defineOp({
     'A person\'s close is never held. On a close that goes through, its unanswered decision letters to the user are settled ' +
     'as no longer needed (they leave the inbox with that reason); one that must still reach the user goes back with ' +
     'human_inbox_mark archived:false. ' + RECEIPT_WORDS,
+  // 2026-11-23: names agents sent for these in real use (72 hours of sessions): read as the declared ones.
+  retiredInput: ['summary'],
+  renamedInput: [{ from: 'summary', to: 'result' }],
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
     result: z.string().min(1).max(2000).optional().describe('One sentence: what came of the work'),
@@ -1453,6 +1465,9 @@ defineOp({
     'needed, call this so it stops reading Partial: how="taken" or "dropped", with a short note (where it went, or why not). ' +
     'Items a close left for the user (409 owed_to_user) are settled with them, and then a session must give a note of 10+ ' +
     'characters saying how the user\'s items were handled.',
+  // 2026-11-23: names agents sent for these in real use (72 hours of sessions): read as the declared ones.
+  retiredInput: ['reason'],
+  renamedInput: [{ from: 'reason', to: 'note' }],
   input: {
     id: z.string().min(1).describe('The Partial task (id or unique prefix)'),
     how: z.enum(['taken', 'dropped']).describe('"taken": the items are someone\'s work now; "dropped": they are not needed'),

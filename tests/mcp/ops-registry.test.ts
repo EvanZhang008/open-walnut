@@ -119,15 +119,15 @@ describe('ops registry — arg validation (executor front door)', () => {
     expect(missing.ok).toBe(false)
   })
 
-  it('task_list rejects an unknown filter and an out-of-range limit before any transport', async () => {
+  it('task_list rejects an unknown filter and a limit under 1 before any transport', async () => {
     const unknown = await executeOp('task_list', { working_set: true, nope: 1 })
     expect(unknown.ok).toBe(false)
     if (!unknown.ok) expect(unknown.message).toContain('Invalid arguments for task_list')
 
-    // MAX_QUERY_LIMIT is 200 — the schema, not the route, is the first gate.
-    const tooMany = await executeOp('task_list', { limit: 500 })
-    expect(tooMany.ok).toBe(false)
-    if (!tooMany.ok) expect(tooMany.message).toMatch(/Invalid arguments for task_list.*limit/)
+    // The schema, not the route, is the first gate. A limit over 200 is read as 200 (count-cap.ts).
+    const none = await executeOp('task_list', { limit: 0 })
+    expect(none.ok).toBe(false)
+    if (!none.ok) expect(none.message).toMatch(/Invalid arguments for task_list.*limit/)
   })
 
   it('the api passthrough refuses non-/api/ paths', async () => {

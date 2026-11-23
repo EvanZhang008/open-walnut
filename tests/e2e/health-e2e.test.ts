@@ -163,7 +163,11 @@ describe('Apple Health through a real server', () => {
     expect(series.ok, JSON.stringify(series)).toBe(true)
     expect((series as any).result.points).toHaveLength(24)
 
-    const bad = await executeOp('health_sleep', { last_nights: 500 }, { apiBase: apiBase(), origin: LOCAL_ORIGIN })
+    // A read's count over its most is read as the most, and says so (src/ops/count-cap.ts).
+    const most = await executeOp('health_sleep', { last_nights: 500 }, { apiBase: apiBase(), origin: LOCAL_ORIGIN })
+    expect(most.ok, JSON.stringify(most)).toBe(true)
+    expect((most as any).result.walnut_note).toContain("last_nights 500 is over health_sleep's most, 90")
+    const bad = await executeOp('health_sleep', { last_nights: 0 }, { apiBase: apiBase(), origin: LOCAL_ORIGIN })
     expect(bad.ok).toBe(false)
   })
 

@@ -182,7 +182,7 @@ export async function captureReplies(sessionId: string, nowMs = Date.now()): Pro
         if (member.status !== 'active') continue;
         // More was said to it while this turn ran: the follow-up wake asks again, so nothing is said here.
         if (reply.busy && !turn.more) {
-          holdNotice(sessionId, `topic-not-taken:${topicId}`, notTakenNotice(topic));
+          void holdNotice(sessionId, `topic-not-taken:${topicId}`, notTakenNotice(topic));
           await store.mutateTopic(topicId, (t) => { t.messages.push(walnutLine(notTakenLine(member.name))); });
           continue;
         }

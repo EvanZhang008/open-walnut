@@ -166,7 +166,7 @@ export async function deliver(topic: Topic, message: TopicMessage, plan: Deliver
     const lines = unreadFor(topic, member, message.id).map((m) => messageLine(topic, m, opts.userName));
     if (!lines.length) continue;
     const head = { id: topic.id, title: topic.title };
-    holdFoldedNotice<FoldPart>(target.sessionId, `topic:${topic.id}`, { at: Date.now(), lines }, (parts, dropped) => renderFoldedTopic(head, parts, dropped));
+    void holdFoldedNotice<FoldPart>(target.sessionId, `topic:${topic.id}`, { at: Date.now(), lines }, (parts, dropped) => renderFoldedTopic(head, parts, dropped));
     readUpto.set(id, message.id);
   }
 

@@ -25,6 +25,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { GatewayError, GatewayOp, GatewayResponse } from './gateway-core.js'
+import { GATEWAY_WAIT_NOTICE_MS, MCP_CALL_WAIT_MS, waitNoticeText } from './gateway-request.js'
 import { GATEWAY_INLINE_ARGS_MAX_BYTES } from './tool-args-source.js'
 import { walnutMcpInstructions } from '../mcp/instructions.js'
 import { fitToolAnswer } from '../lib/tool-answer-fit.js'
@@ -64,13 +65,24 @@ export function mcpListAnswerMs(env: Record<string, string | undefined> = proces
   return Number.isFinite(client) && client > 0 ? Math.max(1_000, Math.min(MCP_LIST_ANSWER_MS, client - 2_000)) : MCP_LIST_ANSWER_MS
 }
 
-export type GatewayRequestFn = (op: GatewayOp, args: Record<string, unknown>, timeoutMs?: number) => Promise<GatewayResponse>
+/** `signal`: the client cancelled the call; the request's socket closes, so a daemon still holding it for a server drops it unsent. */
+export type GatewayRequestFn = (op: GatewayOp, args: Record<string, unknown>, timeoutMs?: number, signal?: AbortSignal) => Promise<GatewayResponse>
 
 export interface WalnutMcpDeps {
-  /** One gateway request on this host's daemon socket. */
+  /**
+   * One gateway request on this host's daemon socket (wn-cli.ts mcpGatewayRequest, built by
+   * gateway-request.ts). Its third argument: a list's answer time, or the time a call must be
+   * answered within (by default it waits for a server as long as the MCP call wait, mcpWaitMs).
+   */
   request: GatewayRequestFn
   /** Error lines the CLI prints for a gateway error (wn-cli formatErrorLines). */
   formatError: (error: GatewayError) => string[]
+  /** Tell the client about a call it gave a progressToken (notifications/progress params). */
+  progress?: (params: Record<string, unknown>) => void
+  /** How long a call waits for a server (what the request fn gives it), for the waiting notice. */
+  callWaitMs?: number
+  /** Overrides GATEWAY_WAIT_NOTICE_MS (tests). */
+  waitNoticeMs?: number
   /** Where a payload too big to inline is staged for the hub to pull. */
   tmpDir?: string
   /** Send a notification to the client (tools/list_changed after a short list is completed). */
@@ -299,7 +311,8 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
     const until = Date.now() + (deps.lostFollowMs ?? MCP_LOST_FOLLOW_MS)
     for (;;) {
       let read: GatewayResponse | null = null
-      try { read = await deps.request('tools.call', { name: 'op_result', args: { call_id: callId }, callId: newCallId() }) } catch { /* the daemon away: read as lost */ }
+      // A read ends within what is left of the follow, and waits for a server only inside it.
+      try { read = await deps.request('tools.call', { name: 'op_result', args: { call_id: callId }, callId: newCallId() }, Math.max(1, until - Date.now())) } catch { /* the daemon away: read as lost */ }
       if (!read) return null
       if (read.ok) {
         const b = (read.result ?? {}) as { state?: unknown; ok?: unknown; result?: unknown; message?: unknown; answer_withheld?: unknown }
@@ -314,7 +327,22 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
     }
   }
 
-  const callTool = async (params: Record<string, unknown>) => {
+  /** One progress notification after GATEWAY_WAIT_NOTICE_MS, only for a call whose client gave a progressToken. */
+  const waitingNotice = (meta: unknown): ReturnType<typeof setTimeout> | undefined => {
+    const token = (meta as { progressToken?: unknown } | null | undefined)?.progressToken
+    if (!deps.progress || (typeof token !== 'string' && typeof token !== 'number')) return undefined
+    const timer = setTimeout(() => {
+      deps.progress?.({ progressToken: token, progress: 0, message: `Walnut: ${waitNoticeText(deps.callWaitMs ?? MCP_CALL_WAIT_MS)}` })
+    }, deps.waitNoticeMs ?? GATEWAY_WAIT_NOTICE_MS)
+    timer.unref?.()
+    return timer
+  }
+
+  // Calls still running, by the client's request id: `notifications/cancelled` aborts one.
+  const running = new Map<string, AbortController>()
+  const requestKey = (id: unknown): string | null => (typeof id === 'string' || typeof id === 'number' ? `${typeof id}:${id}` : null)
+
+  const callTool = async (params: Record<string, unknown>, signal?: AbortSignal) => {
     const name = typeof params.name === 'string' ? params.name : ''
     if (!name) return toolError('tools/call needs a tool name')
     const given = params.arguments ?? {}
@@ -340,16 +368,20 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
       spilled = path.join(deps.tmpDir ?? os.tmpdir(), `walnut-mcp-args-${process.pid}-${Date.now().toString(36)}-${++spillSeq}.json`)
       fs.writeFileSync(spilled, raw, { encoding: 'utf-8', mode: 0o600 })
     }
+    // While the daemon holds the call for a server (a restart), a client that asked for progress
+    // hears it is waiting. Out of band only: the model's answer never carries a notice.
+    const notice = waitingNotice(params._meta)
     try {
       // `client` lets the hub measure the answer as this server prints it (lib/tool-answer-size.ts).
-      let resp = await deps.request('tools.call', spilled ? { name, argsFile: spilled, callId, client: 'mcp' } : { name, args, callId, client: 'mcp' })
+      let resp = await deps.request('tools.call', spilled ? { name, argsFile: spilled, callId, client: 'mcp' } : { name, args, callId, client: 'mcp' }, undefined, signal)
       // A server older than the run id refused it before anything ran: the same call without it.
       if (!resp.ok && runId && !spilled && refusedRunId(name, resp.error.message)) {
         dropRunId(name, args)
         runId = null
         // Other arguments, so another call: nothing of the first ran.
         callId = newCallId()
-        resp = await deps.request('tools.call', { name, args, callId, client: 'mcp' })
+        if (signal?.aborted) return toolError('walnut: the call was cancelled before it was sent again')
+        resp = await deps.request('tools.call', { name, args, callId, client: 'mcp' }, undefined, signal)
       }
       // Never more than an agent's tool result takes, whatever the op (tool-answer-fit.ts).
       if (resp.ok) return { content: [{ type: 'text', text: fitToolAnswer(resp.result, { op: name, dir: deps.answerDir }) }] }
@@ -369,6 +401,7 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
       if (neverSent(err)) return toolError([message, ...awayLines(name, args, "this host's Walnut daemon")].join('\n'))
       return toolError(lost(message))
     } finally {
+      clearTimeout(notice)
       if (spilled) { try { fs.unlinkSync(spilled) } catch { /* already gone */ } }
     }
   }
@@ -378,7 +411,15 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
     const method = typeof msg.method === 'string' ? msg.method : ''
     const isRequest = msg.id !== undefined && msg.id !== null
     const params = (msg.params && typeof msg.params === 'object' ? msg.params : {}) as Record<string, unknown>
-    if (!isRequest) return null // notifications/initialized, notifications/cancelled, ...
+    if (!isRequest) {
+      // A call the client gave up on (the user pressed Esc during a server restart): its socket
+      // closes, and a daemon still holding it for a server drops it, so it never runs late.
+      if (method === 'notifications/cancelled') {
+        const key = requestKey(params.requestId)
+        if (key) running.get(key)?.abort()
+      }
+      return null // notifications/initialized, ...
+    }
     switch (method) {
       case 'initialize':
         return replyOk(msg.id, {
@@ -417,8 +458,18 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
         if (!deps.notify && got) return replyErr(msg.id, -32603, got.error)
         return replyOk(msg.id, { tools: [] })
       }
-      case 'tools/call':
-        return replyOk(msg.id, await callTool(params))
+      case 'tools/call': {
+        const key = requestKey(msg.id)
+        const ctl = new AbortController()
+        if (key) running.set(key, ctl)
+        try {
+          const answer = await callTool(params, ctl.signal)
+          // A cancelled request gets no answer (MCP: the receiver should not send one).
+          return ctl.signal.aborted ? null : replyOk(msg.id, answer)
+        } finally {
+          if (key && running.get(key) === ctl) running.delete(key)
+        }
+      }
       case 'resources/list':
         return replyOk(msg.id, { resources: [] })
       case 'prompts/list':
@@ -432,7 +483,11 @@ export function createWalnutMcpHandler(deps: WalnutMcpDeps): (msg: JsonRpcReques
 /** Serve MCP on this process's stdin/stdout until stdin closes. */
 export function runWalnutMcpStdio(deps: WalnutMcpDeps): Promise<number> {
   const write = (reply: JsonRpcReply) => { process.stdout.write(JSON.stringify(reply) + '\n') }
-  const handle = createWalnutMcpHandler({ ...deps, notify: (method) => write({ jsonrpc: '2.0', method }) })
+  const handle = createWalnutMcpHandler({
+    ...deps,
+    notify: (method) => write({ jsonrpc: '2.0', method }),
+    progress: (params) => write({ jsonrpc: '2.0', method: 'notifications/progress', params }),
+  })
   return new Promise<number>((resolve) => {
     let buf = ''
     let pending = 0

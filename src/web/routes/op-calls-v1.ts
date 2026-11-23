@@ -18,6 +18,11 @@
  * The answer (`result`, `message`, each write's `answer`) goes only to the session that made
  * the call; another reader sees where it stands. An answer holding a secret, or too large, was
  * never kept (`not_kept`): a re-run under the same id gets it again through the route's checks.
+ *
+ * A task_send held as a note that asks nothing (`delivery: "held"`) also says where that note
+ * stands now, `held_note: { message_id, state, at?, why? }` (core/sessions/held-notices.ts):
+ * waiting to ride its target's next message, delivered (it rode one), dropped (and why), or
+ * unknown (this server holds no record of it: held over 7 days ago, or by an older version).
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { WALNUT_HOME } from '../../constants.js'
@@ -33,6 +38,19 @@ function bodyOf(body: string | undefined, contentType: string | undefined): unkn
     try { return JSON.parse(body) } catch { /* not JSON after all */ }
   }
   return body
+}
+
+type HeldNote = Awaited<ReturnType<typeof import('../../core/sessions/held-notices.js').heldNoteState>>
+
+/** The first answer that held a note (`delivery: "held"` with its message id), read for where it stands now. */
+async function heldNoteOf(answers: unknown[]): Promise<HeldNote | null> {
+  for (const a of answers) {
+    const b = a && typeof a === 'object' ? a as { delivery?: unknown; messageId?: unknown } : null
+    if (b?.delivery !== 'held' || typeof b.messageId !== 'string') continue
+    const { heldNoteState } = await import('../../core/sessions/held-notices.js')
+    return heldNoteState(b.messageId)
+  }
+  return null
 }
 
 opCallsV1Router.get('/op-calls/:id', async (req: Request, res: Response, next: NextFunction) => {
@@ -51,7 +69,9 @@ opCallsV1Router.get('/op-calls/:id', async (req: Request, res: Response, next: N
     const raw = req.headers['x-walnut-caller-sid']
     const reader = (Array.isArray(raw) ? raw[0] : raw ?? '').trim()
     const answers = !call?.callerSid || call.callerSid === reader
-    const writes = writesOfCall(WALNUT_HOME, id).map((w) => ({
+    const ledgerWrites = writesOfCall(WALNUT_HOME, id)
+    const bodies = ledgerWrites.map((w) => (w.entry ? bodyOf(w.entry.body, w.entry.contentType) : undefined))
+    const writes = ledgerWrites.map((w, i) => ({
       route: w.entry?.route,
       state: w.state,
       opId: w.opId,
@@ -59,10 +79,15 @@ opCallsV1Router.get('/op-calls/:id', async (req: Request, res: Response, next: N
         status: w.entry.status,
         outcome: w.entry.outcome,
         at: new Date(w.entry.appliedAt).toISOString(),
-        ...(answers && w.entry.body !== undefined ? { answer: bodyOf(w.entry.body, w.entry.contentType) } : {}),
+        ...(answers && w.entry.body !== undefined ? { answer: bodies[i] } : {}),
       } : {}),
     }))
     const writeRunning = writes.some((w) => w.state === 'running')
+    // Where a held note stands now, read from the answer that held it (the call's own, else its
+    // write's); another reader sees only its state, not where it went.
+    const heldNote = await heldNoteOf([call?.outcome?.ok ? call.outcome.result : undefined, ...bodies])
+    const shown = heldNote && !answers ? { message_id: heldNote.message_id, state: heldNote.state, ...(heldNote.at ? { at: heldNote.at } : {}) } : heldNote
+    const note = shown ? { held_note: shown } : {}
     if (call) {
       const o = call.outcome
       const state = writeRunning || call.endedAt === undefined ? 'running' : o && answerLost(o) ? 'lost' : 'done'
@@ -79,10 +104,11 @@ opCallsV1Router.get('/op-calls/:id', async (req: Request, res: Response, next: N
         ...(answers ? {} : { answer_withheld: 'the answer goes only to the session that made the call' }),
         repeats: call.repeats,
         writes,
+        ...note,
       })
       return
     }
-    res.json({ call_id: id, state: writeRunning ? 'running' : writes.length ? 'applied' : 'unknown', writes })
+    res.json({ call_id: id, state: writeRunning ? 'running' : writes.length ? 'applied' : 'unknown', writes, ...note })
   } catch (err) {
     next(err)
   }

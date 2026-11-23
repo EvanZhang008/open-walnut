@@ -28,6 +28,10 @@ import os from 'node:os'
 import path from 'node:path'
 import type { GatewayError, GatewayErrorCode, GatewayOp, GatewayRequest, GatewayResponse } from './gateway-core.js'
 import { EXTERNAL_CALLER_SID, wellKnownGatewaySocketPaths } from './gateway-core.js'
+import {
+  GATEWAY_WAIT_NOTICE_MS, WALNUT_CLI_TIMEOUT_MS, cliWaitMs, gatewayListLine, mcpWaitMs, toolsCallLine, toolsCallLineWithin, waitNoticeText,
+  type GatewayLine,
+} from './gateway-request.js'
 import { withFileLock } from '../utils/file-lock.js'
 import { waitThroughRestart } from '../lib/wait-through-restart.js'
 import { createHostCallClient } from './host-call-client-core.js'
@@ -36,7 +40,7 @@ import {
   classifyTemplateGateway, templateCheckGap, templateCheckInput, templateCheckReplyMs, templateCheckRequestInput,
 } from './trigger-check-core.js'
 import { SKILL_POINTER, formatOpHelp, formatToolsTable, inGroup, type ToolGroupRow, type ToolRow } from '../ops/op-help.js'
-import { gatewayFailureCode, renderToolCallFailure, splitToolsJsonFlag, toolCallFailure } from './tool-call-output.js'
+import { failureOnStdout, gatewayFailureCode, renderToolCallFailure, splitToolsJsonFlag, toolCallFailure } from './tool-call-output.js'
 import { awayLines, callerRunId, dropRunId, lostRunLines, namedOnSignal, neverSent, refusedRunId } from './host-exec-run-id.js'
 import { CALL_ID_ARG, callIdFor, callIdInJsonText, isCallId, lostCallDetail, lostCallLines, newCallId } from '../lib/op-call-id.js'
 import { cliAnswerText } from '../lib/tool-answer-size.js'
@@ -50,22 +54,8 @@ import {
 export { formatToolsTable }
 export type { ToolRow }
 
-/** Client-side wait for the daemon's single response line. */
-export const WALNUT_CLI_TIMEOUT_MS = 30_000
-
-/**
- * How long a `walnut tools call` gives the daemon in all (`waitMs`): while the
- * Walnut server restarts or its link to this host dials again, the daemon holds
- * the call and sends it again instead of failing it at once (2026-11-03: a deploy
- * and a link that kept breaking failed every call on clouddev for 8 minutes).
- * WALNUT_CLI_WAIT_MS sets it (tests); an older daemon answers within 30 s anyway.
- */
-export function cliWaitMs(env: NodeJS.ProcessEnv = process.env): number {
-  const n = Number(env.WALNUT_CLI_WAIT_MS ?? '')
-  return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 180_000) : 90_000
-}
-/** Past this with no answer, the call says on stderr that it waits for the server. */
-export const CLI_WAIT_NOTICE_MS = 10_000
+// Every gateway line is built in gateway-request.ts (the CLI's wait, the MCP server's, the rest).
+export { WALNUT_CLI_TIMEOUT_MS, cliWaitMs }
 
 // ── argv parsing (pure) ──
 
@@ -374,6 +364,7 @@ OUTPUT
     {"ok":false,"error":{"code":"...","message":"...","detail":...}}
   on stderr. stdout keeps what it printed before (an op's partial result, if any).
   Do not read a normal result through 2>&1: stderr is where the failure goes.
+  With stderr thrown away (2>/dev/null) the failure goes to stdout, as with --json.
   For a script, add --json (before call, before the op, or after the JSON):
   success is still the bare result, a failure is that one object on stdout and
   stderr stays empty. Check the exit code, or for "ok": false with an "error"
@@ -494,31 +485,41 @@ const ENTRY_LOST = 'ENTRY_LOST'
  * entry did not take it (nothing ran), the gateway socket with the very same line (same call id).
  * A line the entry took whose answer was lost fails as a socket call whose answer was lost does
  * (a timeout, or a link that broke after the line left), never sent again. Same answers either way.
+ * The line comes from gateway-request.ts, which names its wait and its socket time.
  */
 function requestOverSocket(
   socketPath: string,
-  req: GatewayRequest,
-  timeoutMs = WALNUT_CLI_TIMEOUT_MS,
+  line: GatewayLine,
   env: NodeJS.ProcessEnv = process.env,
+  signal?: AbortSignal,
 ): Promise<GatewayResponse> {
+  const { req, timeoutMs } = line
   const entry = createHostCallClient({ http, env })
-  if (!entry.entry()) return requestOverSocketOnly(socketPath, req, timeoutMs)
+  if (!entry.entry()) return requestOverSocketOnly(socketPath, req, timeoutMs, signal)
   return entry.post(req as unknown as Record<string, unknown>, timeoutMs).then((o) => {
     if (o.kind === 'answer') return o.resp as GatewayResponse
     if (o.kind === 'lost') {
       if (o.timeout) throw new WalnutCliTimeoutError(o.message)
       throw Object.assign(new Error(o.message), { code: ENTRY_LOST, answerStarted: true })
     }
-    return requestOverSocketOnly(socketPath, req, timeoutMs)
+    return requestOverSocketOnly(socketPath, req, timeoutMs, signal)
   })
+}
+
+/** What a request the caller cancelled fails with: nothing more is read or sent for it. */
+export class WalnutCallCancelledError extends Error {
+  readonly code = 'cancelled'
+  constructor() { super('the call was cancelled') }
 }
 
 function requestOverSocketOnly(
   socketPath: string,
   req: GatewayRequest,
   timeoutMs = WALNUT_CLI_TIMEOUT_MS,
+  signal?: AbortSignal,
 ): Promise<GatewayResponse> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new WalnutCallCancelledError()); return }
     const sock = net.connect(socketPath)
     // One decoder for the whole reply: a multi-byte character split across two
     // chunks decodes whole, never as two U+FFFD.
@@ -526,13 +527,16 @@ function requestOverSocketOnly(
     let buf = ''
     let scanFrom = 0
     let done = false
+    const onAbort = () => finish(() => reject(new WalnutCallCancelledError()))
     const finish = (fn: () => void) => {
       if (done) return
       done = true
       clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
       sock.destroy()
       fn()
     }
+    signal?.addEventListener('abort', onAbort, { once: true })
     const timer = setTimeout(
       () => finish(() => reject(new WalnutCliTimeoutError(`no reply within ${timeoutMs}ms`))),
       timeoutMs,
@@ -632,7 +636,9 @@ export function stoppingAnswer(resp: GatewayResponse): boolean {
 }
 
 export interface RideRestartDeps {
-  request?: (socketPath: string, req: GatewayRequest, timeoutMs?: number) => Promise<GatewayResponse>
+  request?: (socketPath: string, line: GatewayLine, signal?: AbortSignal) => Promise<GatewayResponse>
+  /** The caller gave up: no further try, and the open one's socket closes. */
+  signal?: AbortSignal
   restarting?: (socketPath: string) => boolean
   sleep?: (ms: number) => Promise<void>
   now?: () => number
@@ -651,11 +657,10 @@ export interface RideRestartDeps {
  */
 export async function requestRidingRestart(
   socketPath: string,
-  req: GatewayRequest,
-  timeoutMs?: number,
+  line: GatewayLine,
   deps: RideRestartDeps = {},
 ): Promise<GatewayResponse> {
-  const request = deps.request ?? requestOverSocket
+  const request = deps.request ?? ((p: string, l: GatewayLine, sig?: AbortSignal) => requestOverSocket(p, l, process.env, sig))
   const restarting = deps.restarting ?? ((p: string) => daemonRestartingAt(p))
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
   const now = deps.now ?? Date.now
@@ -666,9 +671,9 @@ export async function requestRidingRestart(
   for (;;) {
     let resp: GatewayResponse | undefined
     let failure: unknown
-    try { resp = await request(socketPath, req, timeoutMs) } catch (err) { failure = err }
+    try { resp = await request(socketPath, line, deps.signal) } catch (err) { failure = err }
     const again = (resp ? stoppingAnswer(resp) : noListener(failure) || unreadReset(failure, platform))
-      && now() < until && restarting(socketPath)
+      && now() < until && restarting(socketPath) && !deps.signal?.aborted
     if (!again) {
       if (resp) return resp
       throw failure
@@ -695,12 +700,7 @@ export async function fetchHubOps(
   const sid = (env.WALNUT_SESSION_ID ?? '').trim()
   if (!socket || !sid || !probeSocket(socket)?.isSocket) return null
   try {
-    const resp = await requestOverSocket(
-      socket,
-      { v: 1, op: 'tools.list', sid, args: name ? { name } : {} },
-      HUB_CATALOG_TIMEOUT_MS,
-      env,
-    )
+    const resp = await requestOverSocket(socket, gatewayListLine('tools.list', sid, name ? { name } : {}, HUB_CATALOG_TIMEOUT_MS), env)
     if (!resp.ok) return null
     const ops = resp.result.ops
     return Array.isArray(ops) ? ops as ToolRow[] : null
@@ -724,8 +724,10 @@ export async function callHostDaemonTool(
   const sid = (env.WALNUT_SESSION_ID ?? '').trim()
   if (!socket || !sid || !probeSocket(socket)?.isSocket) return null
   try {
-    // The call's id (src/lib/op-call-id.ts): a resend runs it at most once. `client`: its answer is printed by a CLI (ops/answer.ts).
-    return await requestOverSocket(socket, { v: 1, op: 'tools.call', sid, args: { name, args, ...(callId ? { callId } : {}), client: 'cli' } }, WALNUT_CLI_TIMEOUT_MS, env)
+    // The call's id (src/lib/op-call-id.ts): a resend runs it at most once. `client`: its answer is
+    // printed by a CLI (ops/answer.ts). No wait: with no server here the Mac's CLI goes its HTTP way
+    // at once (src/commands/tools.ts), nothing was delivered.
+    return await requestOverSocket(socket, toolsCallLine(sid, { name, args, ...(callId ? { callId } : {}), client: 'cli' }, 'none'), env)
   } catch (err) {
     // A timeout is no proof nothing was delivered: it is the answer, not a miss. Nor is a line
     // the host call entry took whose answer broke off.
@@ -829,10 +831,11 @@ async function runTriggerCheckViaGateway(
   }
   let resp: GatewayResponse
   try {
-    resp = await requestOverSocket(socketPath, {
-      v: 1, op: 'tools.call', sid,
-      args: { name: 'trigger_template_check', args: { template: parsed.template, params, input: templateCheckRequestInput(input) } },
-    }, templateCheckReplyMs(performance.now()))
+    // No wait: a check that meets no server is a quiet run that keeps its cursor (templateCheckGap,
+    // below), and the next run picks up; waiting would only hold the check, which the daemon kills at 30 s.
+    resp = await requestOverSocket(socketPath, toolsCallLine(sid,
+      { name: 'trigger_template_check', args: { template: parsed.template, params, input: templateCheckRequestInput(input) } },
+      'none', templateCheckReplyMs(performance.now())))
   } catch (err) {
     return gap('unreachable', `the Walnut daemon did not answer (${err instanceof Error ? err.message : String(err)})`)
   }
@@ -880,7 +883,7 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
   ): Promise<number> => {
     const streams = renderToolCallFailure(
       toolCallFailure(code, message.replace(/^walnut: /, ''), more.notes, more.detail),
-      { json: call?.json === true, partial: more.partial },
+      { json: failureOnStdout(call?.json === true), partial: more.partial },
     )
     if (streams.stdout) await writeStdout(streams.stdout)
     if (streams.stderr) process.stderr.write(streams.stderr)
@@ -1046,14 +1049,16 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
 
   let resp: GatewayResponse
   // A call may wait out a server restart (cliWaitMs); a list of ops does not.
-  const waitMs = op === 'tools.call' ? cliWaitMs() : undefined
+  const lineFor = (): GatewayLine => (op === 'tools.call' ? toolsCallLine(sid, args, cliWaitMs()) : gatewayListLine(op, sid, args))
+  const line = lineFor()
+  const waitMs = line.req.waitMs
   const waitNotice = waitMs && noticeToStderr() ? setTimeout(() => {
-    process.stderr.write(`walnut: no answer yet; this call waits up to ${Math.round(waitMs / 1000)}s\n`)
-  }, CLI_WAIT_NOTICE_MS) : undefined
+    process.stderr.write(`walnut: ${waitNoticeText(waitMs)}\n`)
+  }, GATEWAY_WAIT_NOTICE_MS) : undefined
   waitNotice?.unref?.()
-  const socketTimeoutMs = waitMs ? waitMs + 10_000 : WALNUT_CLI_TIMEOUT_MS
+  const socketTimeoutMs = line.timeoutMs
   try {
-    resp = await requestRidingRestart(socketPath, { v: 1, op, sid, args, ...(waitMs ? { waitMs } : {}) }, socketTimeoutMs)
+    resp = await requestRidingRestart(socketPath, line)
     // A server older than the run id refused it before anything ran: the same call without it.
     if (!resp.ok && runId && parsed.kind === 'tools.call' && refusedRunId(parsed.name, resp.error.message)) {
       dropRunId(parsed.name, callArgs)
@@ -1062,7 +1067,7 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
       args.callId = callId = newCallId()
       // The id is gone from the call: a stop now must not name it (2026-11-05 review).
       unarmRun()
-      resp = await requestRidingRestart(socketPath, { v: 1, op, sid, args, ...(waitMs ? { waitMs } : {}) }, socketTimeoutMs)
+      resp = await requestRidingRestart(socketPath, lineFor())
     }
   } catch (err) {
     if (err instanceof WalnutCliTimeoutError) {
@@ -1211,7 +1216,8 @@ async function recordCardedCall(
       ...(!resp.ok ? { error: `${resp.error.code}: ${resp.error.message}`.slice(0, 600) } : {}),
       fields,
     }
-    await requestOverSocket(socketPath, { v: 1, op: 'tools.call', sid, args: { name: 'op_card_record', args: record, callId: newCallId() } }, RECORD_TIMEOUT_MS)
+    // No wait: display data only, and it must not hold the CLI's exit.
+    await requestOverSocket(socketPath, toolsCallLine(sid, { name: 'op_card_record', args: record, callId: newCallId() }, 'none', RECORD_TIMEOUT_MS))
   } catch { /* display data only */ }
 }
 
@@ -1237,11 +1243,29 @@ async function runMcpServer(argv: string[]): Promise<number> {
     ...(endpoint.external ? {} : { listCache: fileToolListCache(path.join(path.dirname(socketPath), 'mcp-tool-lists'), sid) }),
     // A call carries WALNUT_TEST_RUN the way `walnut tools call` does, so a test run through
     // the tools makes test objects too.
-    request: (op, args, timeoutMs) => requestRidingRestart(socketPath, {
-      v: 1, op, sid, args: op === 'tools.call' ? { ...args, ...testRunArg() } : args,
-    }, timeoutMs),
+    request: mcpGatewayRequest(socketPath, sid),
+    callWaitMs: mcpWaitMs(),
     formatError: formatErrorLines,
   })
+}
+
+/**
+ * The MCP server's one way to the gateway (gateway-request.ts). A call carries WALNUT_TEST_RUN and
+ * waits for a server as long as mcpWaitMs: an agent's call rides a server restart as a `walnut tools
+ * call` does. With `timeMs` (a lost call's follow read) it is answered within that. A list waits for
+ * nothing, `timeMs` being its answer time.
+ */
+export function mcpGatewayRequest(
+  socketPath: string,
+  sid: string,
+  send: (socketPath: string, line: GatewayLine, signal?: AbortSignal) => Promise<GatewayResponse> = (p, l, sig) => requestRidingRestart(p, l, sig ? { signal: sig } : {}),
+  env: NodeJS.ProcessEnv = process.env,
+): (op: GatewayOp, args: Record<string, unknown>, timeMs?: number, signal?: AbortSignal) => Promise<GatewayResponse> {
+  return (op, args, timeMs, signal) => {
+    if (op !== 'tools.call') return send(socketPath, gatewayListLine(op, sid, args, timeMs), signal)
+    const call = { ...args, ...testRunArg(env) }
+    return send(socketPath, timeMs === undefined ? toolsCallLine(sid, call, mcpWaitMs(env)) : toolsCallLineWithin(sid, call, timeMs), signal)
+  }
 }
 
 // ── walnut mcp — sugar over the mcp_* ops (mcp-cli-args.ts) ──
@@ -1266,13 +1290,15 @@ async function runMcpCli(argv: string[]): Promise<number> {
   const callOp = async (name: string, args: Record<string, unknown>): Promise<GatewayResponse | number> => {
     // The call's id (src/lib/op-call-id.ts): a resend runs it at most once, op_result reads it.
     const callId = newCallId()
+    // A call waits out a server restart as `walnut tools call` does.
+    const line = toolsCallLine(sid, { name, args, callId }, cliWaitMs())
     try {
-      const resp = await requestRidingRestart(socketPath, { v: 1, op: 'tools.call', sid, args: { name, args, callId } })
+      const resp = await requestRidingRestart(socketPath, line)
       if (!resp.ok && resp.error.code === 'hub_timeout') process.stderr.write(lostCallLines(name, undefined, callId).join('\n') + '\n')
       return resp
     } catch (err) {
       if (err instanceof WalnutCliTimeoutError) {
-        process.stderr.write('walnut: hub_timeout: no reply from the Walnut daemon within 30s\n')
+        process.stderr.write(`walnut: hub_timeout: no reply from the Walnut daemon within ${Math.round(line.timeoutMs / 1000)}s\n`)
         process.stderr.write(lostCallLines(name, undefined, callId).join('\n') + '\n')
         return 5
       }
@@ -1421,8 +1447,7 @@ function gatewayOpCall(socketPath: string, sid: string) {
       // The daemon holds the call as long as a `walnut tools call` (cliWaitMs): a browser step that
       // waits for the person holds up to 25 s on the Mac, past the gateway's 20 s default
       // (2026-11-16: an upload the person approved came back "primary server timed out").
-      const waitMs = cliWaitMs()
-      resp = await requestOverSocket(socketPath, { v: 1, op: 'tools.call', sid, args: { name, args, callId, ...testRunArg() }, waitMs }, waitMs + 10_000)
+      resp = await requestOverSocket(socketPath, toolsCallLine(sid, { name, args, callId, ...testRunArg() }, cliWaitMs()))
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : String(err) }
     }
@@ -1526,9 +1551,7 @@ async function runWait(
   for (;;) {
     let resp: GatewayResponse
     try {
-      resp = await requestOverSocket(socketPath, {
-        v: 1, op: 'tools.call', sid, args: { name: opName, args: { id: parsed.id } },
-      })
+      resp = await requestOverSocket(socketPath, toolsCallLineWithin(sid, { name: opName, args: { id: parsed.id } }, deadline - Date.now(), cliWaitMs()))
     } catch (err) {
       // A transient hub/daemon hiccup must not abort a long wait — keep polling
       // until the budget runs out; only report the transport error at the end.
@@ -1588,9 +1611,7 @@ async function runWaitMany(
       if (settled.has(id)) continue
       let resp: GatewayResponse
       try {
-        resp = await requestOverSocket(socketPath, {
-          v: 1, op: 'tools.call', sid, args: { name: id.startsWith('rq-') ? 'request_get' : 'task_get', args: { id } },
-        })
+        resp = await requestOverSocket(socketPath, toolsCallLineWithin(sid, { name: id.startsWith('rq-') ? 'request_get' : 'task_get', args: { id } }, deadline - Date.now(), cliWaitMs()))
       } catch (err) {
         // Transient, as in the one-id wait: keep polling until the budget runs out.
         latest.set(id, { ...(latest.get(id) ?? {}), transportError: err instanceof Error ? err.message : String(err) })

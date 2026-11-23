@@ -97,7 +97,7 @@ import { createHostJournal } from './host-journal-core.js'
 import { createLeaderBook } from './leader-core.js'
 import { createWalnutScope } from './walnut-scope-core.js'
 import { createServedWalnuts } from './served-walnuts-core.js'
-import { createGatewayIdentity } from './gateway-identity-core.js'
+import { createGatewayIdentity, type GatewaySocketFacts } from './gateway-identity-core.js'
 import { createHeldCatalogs } from './held-catalogs-core.js'
 import { createLiveSettings } from './live-settings-core.js'
 import { createOfflineSearch } from './offline-search-core.js'
@@ -238,6 +238,9 @@ import {
   demoGatewaySocketPath,
   GATEWAY_MAX_LINE_BYTES,
   gatewayCallPlan,
+  gatewayIdentifyPlan,
+  type GatewayCallPlan,
+  GATEWAY_IDENTIFY_WAIT_MS,
   gatewayHubTimeoutMs,
   gatewayShimScript,
   GATEWAY_MIN_RELAY_MS,
@@ -1060,6 +1063,8 @@ interface WsData {
   serverRun?: string
   /** When its hello named that run and said its server binds: until it does, a moment of grace (gatewayCandidates). */
   helloAt?: number
+  /** When it opened: one that has named no run yet is `fresh` for the same grace (gatewayCandidates). */
+  connectedAt?: number
   /** The ops that server names read-only (its hello's `readOps`): a relay of one may go to it from another run. */
   readOps?: Set<string>
 }
@@ -5896,19 +5901,22 @@ const GATEWAY_BIND_GRACE_MS = 60_000
 /**
  * The server sockets as the gateway's pick sees them (gateway-identity-core.ts), in
  * connect order; `withQuiet` keeps the quiet ones too (who is here, not who may take
- * a call). A socket that named a run moments ago and is not bound yet is `pending`.
+ * a call). A socket that named a run moments ago and is not bound yet is `pending`;
+ * one that opened moments ago and has named no run yet is `fresh`.
  */
-function gatewayCandidates(withQuiet: boolean): Array<{ socket: ServerWebSocket<WsData>; bound?: string; run?: string; pending?: boolean }> {
+function gatewayCandidates(withQuiet: boolean): Array<GatewaySocketFacts<ServerWebSocket<WsData>>> {
   const now = Date.now()
-  const out: Array<{ socket: ServerWebSocket<WsData>; bound?: string; run?: string; pending?: boolean }> = []
+  const out: Array<GatewaySocketFacts<ServerWebSocket<WsData>>> = []
   for (const client of wsClients) {
     // A quiet client is a dead forward (see pickTrustedClient): never a target.
     if (!isServerClient(client) || (!withQuiet && isQuietTrustedClient(client))) continue
     const bound = gatewayClientHomes.get(client)
     const run = client.data?.serverRun
     const helloAt = client.data?.helloAt
+    const connectedAt = client.data?.connectedAt
     const pending = !bound && !!run && helloAt !== undefined && now - helloAt < GATEWAY_BIND_GRACE_MS
-    out.push({ socket: client, bound, run, ...(pending ? { pending } : {}) })
+    const fresh = !bound && !run && connectedAt !== undefined && now - connectedAt < GATEWAY_BIND_GRACE_MS
+    out.push({ socket: client, bound, run, ...(pending ? { pending } : {}), ...(fresh ? { fresh } : {}) })
   }
   return out
 }
@@ -5937,10 +5945,12 @@ function walnutPinned(home: string | undefined): boolean {
  * bulk socket names none. `say` logs why a server is passed over (the first look at a
  * call, not a resend's).
  */
-function gatewayTargetFor(home: string | undefined, say?: { callerSid: string; op: unknown }): ServerWebSocket<WsData> | null {
+function gatewayTargetFor(home: string | undefined, say?: { callerSid: string; op: unknown }, seen?: { identifying: number }): ServerWebSocket<WsData> | null {
   const candidates = gatewayCandidates(false)
   const pinned = walnutPinned(home)
   const picked = gatewayIdentity.pick(candidates, home, { pinned, allowUnidentified: !home || !offlineHost.pendingHandover(home) })
+  // How many of the sockets passed over may name this Walnut in a moment (gatewayServerIdentifying).
+  if (seen) seen.identifying = picked.target === null ? picked.identifying : 0
   let target = picked.target
   if (!target && home && say && (picked.otherWalnut > 0 || picked.unidentified > 0)) {
     logMsg('info', 'gateway: no server of this Walnut connected, other servers not asked', {
@@ -5969,6 +5979,17 @@ function gatewayTargetFor(home: string | undefined, say?: { callerSid: string; o
 }
 
 /**
+ * No server of `home`'s Walnut takes calls now, but one may in a moment: a socket between
+ * its hello and its bind, or one that just opened and has named no run yet (a server
+ * starting). Keep in sync with daemon-source.ts.
+ */
+function gatewayServerIdentifying(home: string | undefined): boolean {
+  const seen = { identifying: 0 }
+  gatewayTargetFor(home, undefined, seen)
+  return seen.identifying > 0
+}
+
+/**
  * No server of the call's Walnut may take it, and nothing was sent: retryable. Says
  * so when servers of another Walnut are connected here, so nobody reads it as this
  * host having no server at all.
@@ -5990,7 +6011,7 @@ function sendGatewayRequest(
   callerSid: string,
   payload: Record<string, unknown>,
   respond: (resp: GatewayResponse) => void,
-  plan: { deadline: number; waits: boolean; ownServerAsked?: boolean; ownAnswerNoted?: boolean } = gatewayCallPlan(undefined, gatewayHubTimeoutMs(), Date.now()),
+  plan: GatewayCallPlan & { ownServerAsked?: boolean; ownAnswerNoted?: boolean } = gatewayCallPlan(undefined, gatewayHubTimeoutMs(), Date.now()),
 ) {
   const home = gatewayOwnerHome(callerSid)
   const target = gatewayTargetFor(home, { callerSid, op: payload.name })
@@ -6012,8 +6033,17 @@ function sendGatewayRequest(
     followerGateway.noteOwnOffline(home, capability, callerSid, payload, plan.ownServerAsked)
   }
   // No server now and nothing sent: a call that may wait does, while it has time
-  // (a deploy's restart, a link dialing again), then goes as if it had just come.
-  const waitHere = () => plan.waits && waitForPrimary(deadline, () => sendGatewayRequest(capability, callerSid, payload, respond, noted ? { ...plan, ownAnswerNoted: true } : plan), respond)
+  // (a deploy's restart, a link dialing again), then goes as if it had just come. A call
+  // that named no wait (an older client) still waits a moment while a server socket is here
+  // that has not said whose Walnut it is yet (a server starting): GATEWAY_IDENTIFY_WAIT_MS
+  // from its arrival, a relay then keeping the whole hub timeout. Never a list, nor a call
+  // whose client chose not to wait (waitMs 0). Keep in sync with daemon-source.ts.
+  const again = (p: typeof plan) => () => sendGatewayRequest(capability, callerSid, payload, respond, noted ? { ...p, ownAnswerNoted: true } : p)
+  const waitHere = (): boolean => {
+    if (plan.waits) return waitForPrimary(deadline, again(plan), respond)
+    const soon = capability === 'tools.call' ? gatewayIdentifyPlan(plan, gatewayHubTimeoutMs(), GATEWAY_IDENTIFY_WAIT_MS, Date.now()) : null
+    return !!soon && gatewayServerIdentifying(home) && waitForPrimary(soon.plan.deadline, again(soon.plan), respond, soon.atMostMs)
+  }
   // A relayed read this host can answer from its copy does not end in a timeout:
   // nothing is applied twice by reading.
   const readable = !!home && capability === 'tools.call' && offlineHost.hasHome(home) && offlineHost.answersRead(payload.name, home)
@@ -6120,13 +6150,23 @@ const gatewayWaiting = new Set<{ retry: () => void; respond: (resp: GatewayRespo
  * Park a call until a server says hello, names its Walnut or speaks again after
  * missed beats (wakeGatewayCalls), or until it must go anyway: a relay still gets
  * GATEWAY_MIN_RELAY_MS of the call's time (or after `atMostMs`, when sooner).
- * False when there is no time to wait.
+ * False when there is no time to wait. A call whose caller left meanwhile goes
+ * nowhere (`saysLeft` logs it). Keep in sync with daemon-source.ts.
  */
-function waitForPrimary(deadline: number, retry: () => void, respond: (resp: GatewayResponse) => void, atMostMs = Number.POSITIVE_INFINITY): boolean {
+function waitForPrimary(
+  deadline: number, retry: () => void, respond: (resp: GatewayResponse) => void, atMostMs = Number.POSITIVE_INFINITY,
+  saysLeft: () => void = () => logMsg('info', 'gateway: a waiting call ends, its caller left; nothing was sent'),
+): boolean {
   const left = deadline - GATEWAY_MIN_RELAY_MS - Date.now()
   if (left <= 0 || daemonCommands.closed) return false
-  const w: { retry: () => void; respond: (resp: GatewayResponse) => void; timer: ReturnType<typeof setTimeout> | undefined } = { retry, respond, timer: undefined }
-  w.timer = setTimeout(() => { if (gatewayWaiting.delete(w)) retry() }, Math.min(left, atMostMs))
+  // Its caller hung up while it waited (a ^C, a client that gave up): nothing of it was sent,
+  // nobody reads the answer, so it goes nowhere (a retry of the caller's would run it twice).
+  const go = () => {
+    if (gatewayCallerLeft.get(respond)?.() === true) return saysLeft()
+    retry()
+  }
+  const w: { retry: () => void; respond: (resp: GatewayResponse) => void; timer: ReturnType<typeof setTimeout> | undefined } = { retry: go, respond, timer: undefined }
+  w.timer = setTimeout(() => { if (gatewayWaiting.delete(w)) go() }, Math.min(left, atMostMs))
   gatewayWaiting.add(w)
   return true
 }
@@ -6424,15 +6464,13 @@ function heldCatalogAskAgain(relayId: number, call: GatewayRelayCall, payload: R
  */
 function busyAskAgain(relayId: number, call: GatewayRelayCall, respond: (resp: GatewayResponse) => void, refusal: GatewayResponse, inMs: number): void {
   const attempt = (call.busyAgain ?? 0) + 1
+  // waitForPrimary drops it when its caller left.
+  const saysLeft = () => logMsg('info', 'gateway: busy call not asked again, its caller left', { relayId, callerSid: call.callerSid, op: call.payload.name, attempt })
   const go = () => {
-    if (gatewayCallerLeft.get(respond)?.()) {
-      logMsg('info', 'gateway: busy call not asked again, its caller left', { relayId, callerSid: call.callerSid, op: call.payload.name, attempt })
-      return
-    }
     const target = gatewayTargetFor(call.home)
     const spare = call.deadline - busyRelayMinLeftMs(gatewayHubTimeoutMs()) - Date.now()
     if (!target || spare < 0) {
-      if (!target && spare > 0 && waitForPrimary(call.deadline, go, respond, spare)) return
+      if (!target && spare > 0 && waitForPrimary(call.deadline, go, respond, spare, saysLeft)) return
       return respond(refusal)
     }
     const next = ++gatewayRelayCounter
@@ -6445,7 +6483,7 @@ function busyAskAgain(relayId: number, call: GatewayRelayCall, respond: (resp: G
     })
     sendRelayAttempt(next, target)
   }
-  if (!waitForPrimary(call.deadline, go, respond, inMs)) respond(refusal)
+  if (!waitForPrimary(call.deadline, go, respond, inMs, saysLeft)) respond(refusal)
 }
 
 /**
@@ -6509,6 +6547,9 @@ function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => voi
     logMsg('info', 'gateway: trigger check caller', { op: req.op, ...(check ? { trigger: check.id, kind: check.kind } : { ended: true }) })
     // The run hears whether the machine failed this call (trigger-check-core.ts machineFaultOf).
     const answer = (resp: GatewayResponse) => { checkCallers.noteAnswer(req.sid, resp); respond(resp) }
+    // The check's caller hanging up ends its waiting call too (waitForPrimary).
+    const left = gatewayCallerLeft.get(respond)
+    if (left) gatewayCallerLeft.set(answer, left)
     return sendGatewayRequest(req.op, EXTERNAL_CALLER_SID, call.args, answer, gatewayCallPlan(req.waitMs, gatewayHubTimeoutMs(), Date.now()))
   }
   if (pluginJobs.isRunSid(req.sid)) {
@@ -15275,6 +15316,7 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
     open(ws) {
       heardFrom(ws)
       wsClients.add(ws)
+      if (ws.data) ws.data.connectedAt = Date.now()
       // DUP-DEBUG: a stable wsId so later logs tell each socket's activity apart; paired with the
       // close log. A sid still subscribed by a wsId already closed means the GC of dead subscribers broke.
       logMsg('info', 'client connected', { wsId: wsId(ws), clients: wsClients.size })

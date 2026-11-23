@@ -3,8 +3,9 @@
  * machine, out of sync and backups' content). Hourly rows per tool op, route and page-error kind,
  * the recent problems one by one, the watches tasks registered, and the ships Walnut saw.
  * Nothing in it is content: names, counts, sizes, times and error codes; task ids only in the
- * watches and ships tasks registered themselves, and in the notes sent (with the titles of the
- * tasks they name, as the note said them).
+ * watches and ships tasks registered themselves, in the notes sent (with the titles of the
+ * tasks they name, as the note said them), and with the session and host of each failed Walnut
+ * tool call a session read (tool_errors: which op, which code, never its words).
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -69,6 +70,10 @@ function create(file: string): DB {
       sent_at INTEGER, detail TEXT);
     CREATE INDEX IF NOT EXISTS sends_day ON sends (recipient, family, day);
     CREATE TABLE IF NOT EXISTS alive (hour INTEGER PRIMARY KEY, minutes INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS tool_errors (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, sid TEXT NOT NULL, task_id TEXT,
+      host TEXT NOT NULL, op TEXT NOT NULL, client TEXT NOT NULL, code TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS tool_errors_at ON tool_errors (at);
   `)
   return d
 }
@@ -145,6 +150,36 @@ export function readEvents(filter: { kind?: UsageKind; name?: string; since?: nu
   })
 }
 
+/** A session's failed Walnut tool call, as its agent read it (session-hook.ts). */
+export interface ToolErrorRow { at: number; sid: string; taskId?: string; host: string; op: string; client: string; code: string }
+
+export const MAX_TOOL_ERRORS = 50_000
+
+export function addToolErrors(rows: readonly ToolErrorRow[]): void {
+  if (!rows.length) return
+  withStore(undefined, (d) => {
+    const put = d.prepare('INSERT INTO tool_errors (at, sid, task_id, host, op, client, code) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    d.transaction(() => {
+      for (const r of rows) put.run(r.at, r.sid, r.taskId ?? null, r.host, r.op, r.client, r.code)
+    })()
+  })
+}
+
+/** The failed calls since `since`, newest first, at most `limit`, of one session (an id or its start) when named. */
+export function readToolErrors(filter: { since: number; session?: string; limit?: number }): ToolErrorRow[] {
+  return withStore([], (d) => {
+    const where = ['at >= ?']
+    const args: unknown[] = [filter.since]
+    if (filter.session) { where.push('(sid = ? OR sid LIKE ? OR task_id = ? OR task_id LIKE ?)'); args.push(filter.session, `${filter.session}%`, filter.session, `${filter.session}%`) }
+    const rows = d.prepare(`SELECT at, sid, task_id, host, op, client, code FROM tool_errors WHERE ${where.join(' AND ')} ORDER BY at DESC LIMIT ?`)
+      .all(...args, Math.min(filter.limit ?? MAX_TOOL_ERRORS, MAX_TOOL_ERRORS)) as Array<Record<string, unknown>>
+    return rows.map((r) => ({
+      at: Number(r.at), sid: String(r.sid), ...(r.task_id ? { taskId: String(r.task_id) } : {}),
+      host: String(r.host), op: String(r.op), client: String(r.client), code: String(r.code),
+    }))
+  })
+}
+
 /** One minute of this server recording, for telling a gap (the server was down) from no use. */
 export function markAlive(now = Date.now()): void {
   withStore(undefined, (d) => {
@@ -165,6 +200,8 @@ export function pruneStore(now = Date.now()): void {
     d.prepare('DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY at DESC LIMIT ?)').run(MAX_EVENTS)
     d.prepare('DELETE FROM sends WHERE due_at < ?').run(now - 7 * 86_400_000)
     d.prepare('DELETE FROM alive WHERE hour < ?').run(now - RETAIN_HOURS * 3_600_000)
+    d.prepare('DELETE FROM tool_errors WHERE at < ?').run(now - RETAIN_EVENT_DAYS * 86_400_000)
+    d.prepare('DELETE FROM tool_errors WHERE id NOT IN (SELECT id FROM tool_errors ORDER BY at DESC LIMIT ?)').run(MAX_TOOL_ERRORS)
   })
 }
 

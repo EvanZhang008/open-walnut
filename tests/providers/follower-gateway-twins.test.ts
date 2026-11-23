@@ -62,7 +62,8 @@ describe('follower gateway twin wiring', () => {
       expect(src).toContain('(!target || offlineHost.pendingHandover(home)) && callerSid !== EXTERNAL_CALLER_SID && !plan.ownServerAsked && followerGateway.answers(home)')
       // The daemon's own away answer is counted once per call, a call that waited and came again included.
       expect(src.match(/followerGateway\.noteOwnOffline\(/g)).toHaveLength(1)
-      expect(src).toMatch(/noted \? (\{ \.\.\.plan, ownAnswerNoted: true \}|Object\.assign\(\{\}, plan, \{ ownAnswerNoted: true \}\)) : plan/)
+      // (the plan a waiting call goes again with: its own, or the one an identify wait moved, `p`)
+      expect(src).toMatch(/noted \? (\{ \.\.\.(plan|p), ownAnswerNoted: true \}|Object\.assign\(\{\}, (plan|p), \{ ownAnswerNoted: true \}\)) : (plan|p)\b/)
       // A plugin job's call in the window waits for its leader or the follower, within its own deadline.
       expect(src).toContain('followerGateway.routeJob(')
       // To the leader it names the same job, in the same `caller` frame field, on every attempt.

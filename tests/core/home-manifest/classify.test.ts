@@ -43,7 +43,7 @@ describe('classifyHomePath', () => {
 
   it('keeps the ledgers and queue state in cache/ as leader data', () => {
     for (const rel of [
-      'cache/applied-ops.sqlite', 'cache/status-riding.json', 'cache/status-reconcile.json', 'cache/task-dir-size-notices.json',
+      'cache/applied-ops.sqlite', 'cache/status-riding.json', 'cache/held-notices.json', 'cache/status-reconcile.json', 'cache/task-dir-size-notices.json',
       'cache/suggest-accuracy.jsonl', 'cache/engine-split.json', 'cache/work-card.json', 'cache/host-fix-failures.json',
       'cache/agent-actions.json', 'cache/agent-action-salt.json',
     ]) expect(cls(rel), rel).toBe('leader-data')
@@ -230,6 +230,7 @@ describe('the manifest against the backup\'s excluded dirs (src/core/backup/scan
     'cache.leader-op-outcomes': 'outcomes of outward ops the witnesses reported: in cache/ so git sync skips it',
     'cache.leader-deferred-work': 'outward work a closed door held, done once the doors open: in cache/ so git sync skips it',
     'cache.status-riding': 'queue state of what rides the next message: in cache/ so git sync skips it',
+    'cache.held-notices': 'queue state of the notes and notices that wait for the next message: in cache/ so git sync skips it',
     'cache.status-reconcile': 'the asks already made: in cache/ so git sync skips it',
     'cache.task-dir-size-notices': 'notices already given: in cache/ so git sync skips it',
     'cache.suggest-accuracy': 'an append-only ledger: in cache/ so git sync skips it',

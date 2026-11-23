@@ -18,12 +18,20 @@ On the leader only, in `WALNUT_HOME/local/usage-watch.sqlite` (this machine, nev
 - **Confirmed cuts.** Claude Code's own note in a tool result (`exceeds maximum allowed tokens`,
   `Output too large`) is read by the session hook (`usage-watch/session-hook.ts`) and counted on
   the op the call named. Only a confirmed cut rings an alarm.
+- **Failed tool calls by session.** Every failed Walnut tool call a session's agent read, on every
+  host, as the session hook sees the result (`is_error`, not a replayed line): its session, task,
+  host, op, client and an error code read off the result (`toolErrorCode` in
+  `usage-watch/normalize.ts`: the CLI's failure JSON, the MCP server's `walnut: <code>:` line, or
+  Claude Code's own refusal, such as `no_such_tool` after the MCP link dropped). This counts what
+  the server never answered too. `usage_watch {"action":"errors","by":"op|code|session|host"}`
+  reads them grouped; `"session":"<id or its start>"` lists one session's (or task's) one by one
+  (`usage-watch/tool-errors.ts`). Kept 14 days, at most 50,000.
 - **Requests** from the browser and the phone, by the route template Express matched (an op's own
   call to the API is counted under its tool, a test run's not at all).
 - **Page errors**: a failed or timed-out request as its route template, or a thrown error as its
   type and the built code bundle it came from. Never a message, URL, argument or answer.
 
-Hourly rows are kept 30 days, problem events 14 days (at most 5,000), with no session or task id.
+Hourly rows are kept 30 days, problem events 14 days (at most 5,000), with no session or task id; only the failed tool calls above name their session and task.
 
 ## Alarms
 

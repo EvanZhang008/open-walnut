@@ -116,6 +116,28 @@ describe('gateway identity: which socket a call may go to', () => {
     expect(g.pick(rows, B, { pinned: false, allowUnidentified: true }).target).toBeNull()
   })
 
+  // 2026-11-23: a task_create failed 13 s after the server started, its socket connected and not
+  // yet bound. With no target, the pick counts the sockets that may say whose they are in a moment.
+  it('with no target, it counts the sockets that may name the Walnut in a moment (pending, or fresh and nameless)', () => {
+    const g = createGatewayIdentity()
+    const opts = { pinned: true, allowUnidentified: true }
+    expect(g.pick([{ socket: 'newA', run: 'run-a', pending: true }], A, opts)).toMatchObject({ target: null, identifying: 1 })
+    expect(g.pick([{ socket: 'justOpened', fresh: true }], A, opts)).toMatchObject({ target: null, identifying: 1 })
+    // A socket that names none and has been here a while (an older server, another Walnut's bulk
+    // socket before it said its run) is no sign of a server starting.
+    expect(g.pick(facts(['legacy', undefined, undefined]), A, opts)).toMatchObject({ target: null, unidentified: 1, identifying: 0 })
+    // Another Walnut's socket never counts; nor does anything once there is a target.
+    g.noteRun('run-b', B)
+    expect(g.pick(facts(['mainB', B, 'run-b']), A, opts)).toMatchObject({ target: null, otherWalnut: 1, identifying: 0 })
+    expect(g.pick([...facts(['mainA', A, 'run-a0']), { socket: 'newA', run: 'run-a', pending: true }], A, opts)).toMatchObject({ target: 'mainA', identifying: 0 })
+    // An unpinned Walnut takes a fresh nameless socket at once (as any nameless one); a pending one still counts.
+    expect(g.pick([{ socket: 'justOpened', fresh: true }], A, { pinned: false, allowUnidentified: true })).toMatchObject({ target: 'justOpened', identifying: 0 })
+    expect(g.pick([{ socket: 'newA', run: 'run-a', pending: true }], A, { pinned: false, allowUnidentified: true })).toMatchObject({ target: null, identifying: 1 })
+    // A call no Walnut owns: nothing to wait for (it takes any nameless socket, a pending one included).
+    expect(g.pick([], undefined, opts)).toMatchObject({ target: null, identifying: 0 })
+    expect(g.pick([{ socket: 'newA', run: 'run-a', pending: true }], undefined, opts)).toMatchObject({ target: 'newA', identifying: 0 })
+  })
+
   it('one Walnut whatever slashes its dir is written with', () => {
     const g = createGatewayIdentity()
     g.noteRun('run-a', A + '/')

@@ -53,12 +53,12 @@ const ALLOWED_MODULES: Record<string, string> = {
   './task-wait-resume.js': 'wait note from the local task record and its trigger list',
   './org/retired-lead.js': 'retired lead note from the local org store',
   './sessions/ask-withdraw.js': 'withdrawn-answer note read from the local task and session records',
-  './sessions/held-notices.js': 'held notices kept in memory on this server',
+  './sessions/held-notices.js': 'held notices kept in memory on this server (and in its local held-notices file, written behind, never awaited)',
   './org/team-asks.js': 'fire and forget (void ... .then), never awaited before the emit',
   './sessions/personal-ai-lane.js': 'Ask Walnut persona drift repair: one indexed local record read, TTL-bounded rebuild from local config',
   './human-inbox/item-execution.js': 'inbox item boundary check against the local inbox store (inbox item sends only)',
   './sessions/session-stop.js': 'stop fence read from the local session record',
-  './sessions/wake-policy.js': 'pure check of the row\'s notice envelopes, and the in-memory hold for one that asks nothing',
+  './sessions/wake-policy.js': 'pure check of the row\'s notice envelopes, and the in-memory hold for one that asks nothing (its file write is never awaited)',
   './sessions/cold-hold.js': 'cache-aware delivery: reads the session record and this queue file, and writes this queue file',
 }
 
@@ -82,7 +82,7 @@ const ALLOWED_AWAITS: Record<string, string> = {
   'waitNoteFor': 'task-wait-resume.ts: local task record and trigger list (only for a waiting task)',
   'pendingRetiredLeadNote': 'retired-lead.ts: local org store',
   'pendingWithdrawnNote': 'ask-withdraw.ts: local task and session records (and a local task write for one answered again)',
-  'pendingHeldNotices': 'held-notices.ts: in-memory notices',
+  'pendingHeldNotices': 'held-notices.ts: in-memory notices (the first send after boot waits for the local held-notices file to be read)',
   'prepareQueuedHintedSend': 'hint-send.ts: local hint registry and session record',
   'enqueueMessage': 'this file: the local queue store write',
   'validateInboxMessageBoundary': 'item-execution.ts: local inbox store (inbox item sends only)',

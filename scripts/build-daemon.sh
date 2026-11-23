@@ -57,6 +57,7 @@ SOURCES=(
   src/providers/daemon-capabilities.ts
   src/providers/gateway-core.ts
   src/providers/wn-cli.ts
+  src/providers/gateway-request.ts
   src/providers/tool-args-source.ts
   src/ops/op-help.ts
   src/providers/mcp-cli-args.ts

@@ -149,8 +149,9 @@ enum TimelineInboundMessage {
         "moved", "folder-moved", "restarted", "org-update", "status", "waiting", "handed-over", "timeout", "task-routing-policy", "answer-withdrawn",
         // The status push carries the notices of followed tasks too (status-riding.ts on the server).
         "completed", "error", "stopped", "blocked",
-        // Notes that asked for no reply, held for the next message (sessions/quiet-notes.ts).
-        "quiet-notes",
+        // Notes that asked for no reply, held for the next message (sessions/quiet-notes.ts), and the
+        // notice to their sender that one was dropped unread (sessions/held-notices-sweep.ts).
+        "quiet-notes", "note-dropped",
         // A topic's lines that did not wake the member (topics/topic-text.ts on the server).
         "topic-news",
     ]

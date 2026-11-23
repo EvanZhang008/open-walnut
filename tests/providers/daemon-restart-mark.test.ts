@@ -113,7 +113,7 @@ describe('requestRidingRestart: a call waits for the next daemon while the mark 
   it.each(['ENOENT', 'ECONNREFUSED'])('no listener (%s), then the next daemon answers: the answer, one notice', async (code) => {
     const s = scripted([errno(code), errno(code), errno(code), OK])
     const { d, told, slept } = deps()
-    await expect(requestRidingRestart('/x/agent-gateway.sock', REQ, 1000, { ...d, request: s.request })).resolves.toEqual(OK)
+    await expect(requestRidingRestart('/x/agent-gateway.sock', { req: REQ, timeoutMs: 1000 }, { ...d, request: s.request })).resolves.toEqual(OK)
     expect(s.calls).toBe(4)
     expect(told).toEqual([RESTART_WAIT_LINE])
     expect(slept).toEqual([RESTART_POLL_MS, RESTART_POLL_MS, RESTART_POLL_MS])
@@ -122,7 +122,7 @@ describe('requestRidingRestart: a call waits for the next daemon while the mark 
   it('the stopping daemon turned it away, then the next daemon answers', async () => {
     const s = scripted([STOPPING, errno('ENOENT'), OK])
     const { d, told } = deps()
-    await expect(requestRidingRestart('/x/agent-gateway.sock', REQ, 1000, { ...d, request: s.request })).resolves.toEqual(OK)
+    await expect(requestRidingRestart('/x/agent-gateway.sock', { req: REQ, timeoutMs: 1000 }, { ...d, request: s.request })).resolves.toEqual(OK)
     expect(s.calls).toBe(3)
     expect(told).toHaveLength(1)
     expect(stoppingAnswer(STOPPING)).toBe(true)
@@ -131,12 +131,12 @@ describe('requestRidingRestart: a call waits for the next daemon while the mark 
   it('without a fresh mark nothing waits: the refusal and the stopping answer come back at once', async () => {
     const refused = scripted([errno('ENOENT'), OK])
     const a = deps({ restarting: () => false })
-    await expect(requestRidingRestart('/x/s', REQ, 1000, { ...a.d, request: refused.request })).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(requestRidingRestart('/x/s', { req: REQ, timeoutMs: 1000 }, { ...a.d, request: refused.request })).rejects.toMatchObject({ code: 'ENOENT' })
     expect(refused.calls).toBe(1)
     expect(a.told).toEqual([])
     const stopping = scripted([STOPPING, OK])
     const b = deps({ restarting: () => false })
-    await expect(requestRidingRestart('/x/s', REQ, 1000, { ...b.d, request: stopping.request })).resolves.toEqual(STOPPING)
+    await expect(requestRidingRestart('/x/s', { req: REQ, timeoutMs: 1000 }, { ...b.d, request: stopping.request })).resolves.toEqual(STOPPING)
     expect(stopping.calls).toBe(1)
   })
 
@@ -144,14 +144,14 @@ describe('requestRidingRestart: a call waits for the next daemon while the mark 
     let looks = 0
     const s = scripted([errno('ENOENT')])
     const { d } = deps({ restarting: () => ++looks <= 3 })
-    await expect(requestRidingRestart('/x/s', REQ, 1000, { ...d, request: s.request })).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(requestRidingRestart('/x/s', { req: REQ, timeoutMs: 1000 }, { ...d, request: s.request })).rejects.toMatchObject({ code: 'ENOENT' })
     expect(s.calls).toBe(4)
   })
 
   it('a mark rewritten forever still ends at RESTART_RIDE_MAX_MS', async () => {
     const s = scripted([errno('ECONNREFUSED')])
     const { d, slept } = deps()
-    await expect(requestRidingRestart('/x/s', REQ, 1000, { ...d, request: s.request })).rejects.toMatchObject({ code: 'ECONNREFUSED' })
+    await expect(requestRidingRestart('/x/s', { req: REQ, timeoutMs: 1000 }, { ...d, request: s.request })).rejects.toMatchObject({ code: 'ECONNREFUSED' })
     expect(slept.reduce((a, b) => a + b, 0)).toBe(RESTART_RIDE_MAX_MS)
   })
 
@@ -159,7 +159,7 @@ describe('requestRidingRestart: a call waits for the next daemon while the mark 
   it.each(['ECONNRESET', 'EPIPE'])('a call the exiting daemon never read (%s, on Linux) waits too', async (code) => {
     const s = scripted([errno(code), errno('ENOENT'), OK])
     const { d, told } = deps()
-    await expect(requestRidingRestart('/x/s', REQ, 1000, { ...d, request: s.request, platform: 'linux' })).resolves.toEqual(OK)
+    await expect(requestRidingRestart('/x/s', { req: REQ, timeoutMs: 1000 }, { ...d, request: s.request, platform: 'linux' })).resolves.toEqual(OK)
     expect(s.calls).toBe(3)
     expect(told).toHaveLength(1)
   })
@@ -177,7 +177,7 @@ describe('requestRidingRestart: a call waits for the next daemon while the mark 
     await new Promise<void>((resolve) => server.listen(sockPath, () => resolve()))
     try {
       const { d, told } = deps()
-      const err = await requestRidingRestart(sockPath, REQ, 5000, { ...d, platform: 'linux' }).catch((e: unknown) => e)
+      const err = await requestRidingRestart(sockPath, { req: REQ, timeoutMs: 5000 }, { ...d, platform: 'linux' }).catch((e: unknown) => e)
       expect(err).toMatchObject({ code: 'ECONNRESET', answerStarted: true })
       expect(took).toBe(1)
       expect(told).toEqual([])
@@ -195,14 +195,14 @@ describe('requestRidingRestart: a call waits for the next daemon while the mark 
     ] as Array<[Error, NodeJS.Platform]>) {
       const s = scripted([step, OK])
       const { d, told } = deps()
-      await expect(requestRidingRestart('/x/s', REQ, 1000, { ...d, request: s.request, platform })).rejects.toBe(step)
+      await expect(requestRidingRestart('/x/s', { req: REQ, timeoutMs: 1000 }, { ...d, request: s.request, platform })).rejects.toBe(step)
       expect(s.calls).toBe(1)
       expect(told).toEqual([])
     }
     const away: GatewayResponse = { ok: false, error: { code: 'hub_unreachable', message: 'the Walnut server is not answering' } }
     const s = scripted([away, OK])
     const { d } = deps()
-    await expect(requestRidingRestart('/x/s', REQ, 1000, { ...d, request: s.request })).resolves.toEqual(away)
+    await expect(requestRidingRestart('/x/s', { req: REQ, timeoutMs: 1000 }, { ...d, request: s.request })).resolves.toEqual(away)
     expect(s.calls).toBe(1)
     expect(stoppingAnswer(away)).toBe(false)
   })

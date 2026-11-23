@@ -69,7 +69,8 @@ describe('a check\'s HTTP call the machine failed', () => {
     const r = await executeOp('task_update', { id: 'task-1', title: 'x' }, { apiBase: base, origin: LOCAL_ORIGIN })
     expect(r).toMatchObject({ ok: false, status: 507, code: 'disk_full' })
     await reportCheckOutcome(r, checkEnv(d.socket))
-    expect(d.lines).toEqual([{ v: 1, op: 'tools.call', sid: 'trigger-check:abc', args: { name: CHECK_FAULT_OP, args: { kind: 'disk_full' }, callId: CALL_ID } }])
+    // waitMs 0: built by the shared builder as a call that never waits (the daemon answers it itself).
+    expect(d.lines).toEqual([{ v: 1, op: 'tools.call', sid: 'trigger-check:abc', args: { name: CHECK_FAULT_OP, args: { kind: 'disk_full' }, callId: CALL_ID }, waitMs: 0 }])
   })
 
   it('no server at all is server_away', async () => {

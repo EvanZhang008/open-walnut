@@ -583,7 +583,7 @@ async function flush(parentSid: string): Promise<void> {
       if (covered.length > 0) {
         const { holdNotice } = await import('./held-notices.js');
         const texts = covered.map(buildSubtaskNoticeText);
-        covered.forEach((n, i) => holdNotice(parentSid, `subtask-completed:${n.child.id}`, texts[i]));
+        covered.forEach((n, i) => { void holdNotice(parentSid, `subtask-completed:${n.child.id}`, texts[i]); });
         noteCompletionsTold(covered);
         log.session.info('subtask completion held for the next message: its reply already reached the parent', {
           parentSid, parentTaskId, children: covered.map((n) => n.child.id),

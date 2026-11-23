@@ -32,7 +32,7 @@ import fs from 'node:fs/promises'
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 import path from 'node:path'
 import { HOST_CALL_ANSWER_HEADER, HOST_CALL_PATH } from '../providers/host-call-client-core.js'
-import { GATEWAY_HUB_TIMEOUT_MS, GATEWAY_MAX_LINE_BYTES, GATEWAY_MIN_RELAY_MS, GATEWAY_WAIT_MAX_MS, parseGatewayLine, wantsCallerProof } from '../providers/gateway-core.js'
+import { GATEWAY_HUB_TIMEOUT_MS, GATEWAY_MAX_LINE_BYTES, gatewayWaitMs, parseGatewayLine, wantsCallerProof } from '../providers/gateway-core.js'
 import { isDaemonDrainRefusal } from '../providers/daemon-drain-resend.js'
 import { wasNotSent } from '../host-server/daemon-link.js'
 import { HOST_CALL_SOCKET_MAX_BYTES } from '../providers/host-call-token-core.js'
@@ -89,12 +89,13 @@ function readBody(req: IncomingMessage, max: number): Promise<Buffer | null> {
   })
 }
 
-/** How long the daemon may take on this line: the call's own time (gatewayCallPlan) and a spare. */
+/**
+ * How long the daemon may take on this line: the call's own time (gatewayCallPlan) and a spare. A
+ * line that names no wait gets the hub timeout, its spare also covering the moment it may wait for
+ * a server that is starting (GATEWAY_IDENTIFY_WAIT_MS).
+ */
 export function answerBudgetMs(waitMs: unknown): number {
-  const call = typeof waitMs === 'number' && Number.isFinite(waitMs) && waitMs > 0
-    ? Math.min(GATEWAY_WAIT_MAX_MS, Math.max(GATEWAY_MIN_RELAY_MS, Math.floor(waitMs)))
-    : GATEWAY_HUB_TIMEOUT_MS
-  return call + ANSWER_SPARE_MS
+  return (gatewayWaitMs(waitMs) ?? GATEWAY_HUB_TIMEOUT_MS) + ANSWER_SPARE_MS
 }
 
 export function createHostCallEntry(deps: HostCallEntryDeps): HostCallEntry {

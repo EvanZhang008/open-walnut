@@ -63,8 +63,9 @@ export const RIDER_NOTICE_OUTCOMES: readonly string[] = [
   // renderItems, org-follow.ts): one per SubtaskNoticeKind. 2026-11-10: they were not on the
   // list, so five of them in front of the user's message drew open above his words.
   'completed', 'error', 'stopped', 'blocked',
-  // Notes that asked for no reply, held for the next message (sessions/quiet-notes.ts, 2026-11-12).
-  'quiet-notes',
+  // Notes that asked for no reply, held for the next message (sessions/quiet-notes.ts, 2026-11-12),
+  // and the notice to their sender that one was dropped unread (sessions/held-notices-sweep.ts).
+  'quiet-notes', 'note-dropped',
   // A topic's lines that did not wake the member, held for its next message (topics/topic-text.ts).
   'topic-news',
 ];

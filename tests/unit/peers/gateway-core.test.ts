@@ -224,6 +224,9 @@ describe('constants', () => {
 // host for 8 minutes. A call now has a time budget its CLI names, and a relay may go again.
 import {
   gatewayCallPlan,
+  gatewayIdentifyPlan,
+  gatewayWaitMs,
+  GATEWAY_IDENTIFY_WAIT_MS,
   relayAttemptMs,
   relayMayResendTo,
   helloReadOps,
@@ -233,11 +236,13 @@ import {
 } from '../../../src/providers/gateway-core.js';
 
 describe('a call\'s time budget and resends', () => {
-  it('parses the CLI\'s waitMs, and leaves it out when it is not a positive number', () => {
+  it('parses the CLI\'s waitMs (0 too: no wait, on purpose), and leaves it out when it is no number of ms', () => {
     const base = { v: 1, op: 'tools.call', sid: 's', args: { name: 'walnut_status' } };
     const ok = parseGatewayLine(JSON.stringify({ ...base, waitMs: 90000 }));
     expect(ok.ok && ok.request.waitMs).toBe(90000);
-    for (const bad of [0, -5, 'soon', null]) {
+    const none = parseGatewayLine(JSON.stringify({ ...base, waitMs: 0 }));
+    expect(none.ok && none.request.waitMs).toBe(0);
+    for (const bad of [-5, 'soon', null]) {
       const res = parseGatewayLine(JSON.stringify({ ...base, waitMs: bad }));
       expect(res.ok && 'waitMs' in res.request).toBe(false);
     }
@@ -248,6 +253,32 @@ describe('a call\'s time budget and resends', () => {
     expect(gatewayCallPlan(90_000, 20_000, 1_000)).toEqual({ deadline: 91_000, waits: true });
     expect(gatewayCallPlan(10 * 60_000, 20_000, 0)).toEqual({ deadline: GATEWAY_WAIT_MAX_MS, waits: true });
     expect(gatewayCallPlan(1, 20_000, 0)).toEqual({ deadline: GATEWAY_MIN_RELAY_MS, waits: true });
+    // 0: the caller chose not to wait at all.
+    expect(gatewayCallPlan(0, 20_000, 1_000)).toEqual({ deadline: 21_000, waits: false, never: true });
+    // The one clamp (the builder and the host call entry use it too).
+    for (const [asked, granted] of [[1, GATEWAY_MIN_RELAY_MS], [12_345.7, 12_345], [10 ** 9, GATEWAY_WAIT_MAX_MS], [0, undefined], [-1, undefined], [Number.NaN, undefined], ['9000', undefined]] as const) {
+      expect(gatewayWaitMs(asked), String(asked)).toBe(granted);
+    }
+  });
+
+  // 2026-11-23: a task_create failed 13 s after a deploy restarted the server, its socket not bound yet.
+  it('a call that named no wait waits a moment for a server that is starting, its relay keeping the whole hub timeout', () => {
+    const hub = 20_000;
+    const plan = gatewayCallPlan(undefined, hub, 1_000);
+    const first = gatewayIdentifyPlan(plan, hub, GATEWAY_IDENTIFY_WAIT_MS, 1_200)!;
+    expect(first).toEqual({ plan: { deadline: 1_000 + GATEWAY_IDENTIFY_WAIT_MS + hub, waits: false, identifyBy: 1_000 + GATEWAY_IDENTIFY_WAIT_MS }, atMostMs: GATEWAY_IDENTIFY_WAIT_MS - 200 });
+    // Its resend keeps the window it had (from its arrival), and never moves the end again.
+    expect(gatewayIdentifyPlan(first.plan, hub, GATEWAY_IDENTIFY_WAIT_MS, 5_000)).toEqual({ plan: first.plan, atMostMs: 1_000 + GATEWAY_IDENTIFY_WAIT_MS - 5_000 });
+    expect(gatewayIdentifyPlan(first.plan, hub, GATEWAY_IDENTIFY_WAIT_MS, 1_000 + GATEWAY_IDENTIFY_WAIT_MS)).toBeNull();
+    // A relay at the window's end still has the hub timeout, and the answer comes inside an older client's 30 s.
+    expect(relayAttemptMs(first.plan.deadline, first.plan.identifyBy!, hub)).toBe(hub);
+    expect(first.plan.deadline - 1_000).toBeLessThan(30_000);
+    // Never for a call that may wait anyway, or one that chose not to.
+    expect(gatewayIdentifyPlan(gatewayCallPlan(60_000, hub, 0), hub, GATEWAY_IDENTIFY_WAIT_MS, 0)).toBeNull();
+    expect(gatewayIdentifyPlan(gatewayCallPlan(0, hub, 0), hub, GATEWAY_IDENTIFY_WAIT_MS, 0)).toBeNull();
+    // A hub timeout shorter than a relay's least time still leaves the wait room to end.
+    const small = gatewayIdentifyPlan(gatewayCallPlan(undefined, 1_000, 0), 1_000, GATEWAY_IDENTIFY_WAIT_MS, 0)!;
+    expect(small.plan.deadline - GATEWAY_MIN_RELAY_MS).toBeGreaterThanOrEqual(small.atMostMs);
   });
 
   it('a call that may change something goes again only to the server run it went to', () => {
@@ -331,6 +362,28 @@ describe('a busy host_exec is asked again', () => {
     expect(busyRelayAgainMs('host_exec', BUSY, 10_000, 20_000, hub)).toBeNull();
     expect(busyRelayAgainMs('host_copy', BUSY, 90_000, 5_000, hub)).toBeNull();
     expect(busyRelayAgainMs('host_exec', 'Walnut API error (host_offline): x', 90_000, 5_000, hub)).toBeNull();
+  });
+
+  it('the JS twin\'s copy of a call\'s plan and its identify wait (daemon-source.ts) decides the same', () => {
+    const src = getDaemonSource();
+    const a = src.indexOf('var GATEWAY_WAIT_MAX_MS =');
+    const b = src.indexOf('\n}\n', src.indexOf('function gatewayIdentifyPlan('));
+    expect(a).toBeGreaterThan(-1);
+    expect(b).toBeGreaterThan(a);
+    const twin = new Function(`${src.slice(a, b + 3)}\nreturn { gatewayCallPlan, gatewayIdentifyPlan, GATEWAY_IDENTIFY_WAIT_MS, GATEWAY_MIN_RELAY_MS, GATEWAY_WAIT_MAX_MS };`)() as {
+      gatewayCallPlan: typeof gatewayCallPlan; gatewayIdentifyPlan: typeof gatewayIdentifyPlan; GATEWAY_IDENTIFY_WAIT_MS: number; GATEWAY_MIN_RELAY_MS: number; GATEWAY_WAIT_MAX_MS: number;
+    };
+    expect([twin.GATEWAY_IDENTIFY_WAIT_MS, twin.GATEWAY_MIN_RELAY_MS, twin.GATEWAY_WAIT_MAX_MS]).toEqual([GATEWAY_IDENTIFY_WAIT_MS, GATEWAY_MIN_RELAY_MS, GATEWAY_WAIT_MAX_MS]);
+    const waits = [undefined, 0, -3, 1, 7_999, 8_000, 12_345.7, 60_000, 10 ** 9, Number.NaN];
+    for (const w of waits) for (const hub of [1_000, 11_000, 20_000]) for (const now of [0, 5_000]) {
+      const plan = gatewayCallPlan(w, hub, now);
+      expect(twin.gatewayCallPlan(w, hub, now), JSON.stringify([w, hub, now])).toEqual(plan);
+      for (const later of [now, now + 100, now + 5_999, now + 6_000, now + 30_000]) {
+        const mine = gatewayIdentifyPlan(plan, hub, GATEWAY_IDENTIFY_WAIT_MS, later);
+        expect(twin.gatewayIdentifyPlan(plan, hub, GATEWAY_IDENTIFY_WAIT_MS, later), JSON.stringify([w, hub, now, later])).toEqual(mine);
+        if (mine) expect(twin.gatewayIdentifyPlan(mine.plan, hub, GATEWAY_IDENTIFY_WAIT_MS, later + 50)).toEqual(gatewayIdentifyPlan(mine.plan, hub, GATEWAY_IDENTIFY_WAIT_MS, later + 50));
+      }
+    }
   });
 
   it('the JS twin\'s copy (daemon-source.ts) decides the same', () => {

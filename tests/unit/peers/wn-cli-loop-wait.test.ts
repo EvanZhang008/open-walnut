@@ -9,14 +9,17 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { cliWaitMs } from '../../../src/providers/wn-cli.js'
 import { GATEWAY_HUB_TIMEOUT_MS } from '../../../src/providers/gateway-core.js'
+import { GATEWAY_ANSWER_SLACK_MS, toolsCallLine } from '../../../src/providers/gateway-request.js'
 
 const SRC = fs.readFileSync(path.resolve(__dirname, '../../../src/providers/wn-cli.ts'), 'utf8')
 
 describe('the shared CLI loops wait as long as a tools call', () => {
-  it('gatewayOpCall sends waitMs, with the socket open past it', () => {
+  it('gatewayOpCall sends waitMs (the shared builder, with the socket open past it)', () => {
     const body = SRC.slice(SRC.indexOf('function gatewayOpCall('), SRC.indexOf('/** `walnut pass` on a host'))
-    expect(body).toMatch(/const waitMs = cliWaitMs\(\)/)
-    expect(body).toMatch(/requestOverSocket\(socketPath, \{ v: 1, op: 'tools\.call', sid, args: \{[^}]*\}, waitMs \}, waitMs \+ 10_000\)/)
+    expect(body).toMatch(/requestOverSocket\(socketPath, toolsCallLine\(sid, \{[^}]*\}, cliWaitMs\(\)\)\)/)
+    const line = toolsCallLine('s', {}, cliWaitMs({}))
+    expect(line.req.waitMs).toBe(cliWaitMs({}))
+    expect(line.timeoutMs).toBe(cliWaitMs({}) + GATEWAY_ANSWER_SLACK_MS)
   })
 
   it('that wait is longer than a browser step holds for the person (25 s), the gateway default is not', () => {

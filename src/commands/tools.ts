@@ -184,13 +184,13 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
   if (sub === 'call') {
     const name = args[1]
     // Every failure of a call is ONE JSON object (tool-call-output.ts): on stderr, or on stdout with --json.
-    const { renderToolCallFailure, toolCallFailure, opFailureCode, gatewayFailureCode } = await import('../providers/tool-call-output.js')
+    const { failureOnStdout, renderToolCallFailure, toolCallFailure, opFailureCode, gatewayFailureCode } = await import('../providers/tool-call-output.js')
     const output = { json: globals.json === true }
     const fail = (
       code: string, message: string, exitCode: number,
       more: { notes?: readonly string[]; detail?: unknown; partial?: unknown } = {},
     ): void => {
-      const streams = renderToolCallFailure(toolCallFailure(code, message, more.notes, more.detail), { json: output.json, partial: more.partial })
+      const streams = renderToolCallFailure(toolCallFailure(code, message, more.notes, more.detail), { json: failureOnStdout(output.json), partial: more.partial })
       // Raw stream writes, never console.*: bun's console.error paints its text red under
       // FORCE_COLOR even into a pipe, and the ANSI prefix breaks JSON.parse (wn-cli.ts does the same).
       if (streams.stdout) process.stdout.write(streams.stdout)

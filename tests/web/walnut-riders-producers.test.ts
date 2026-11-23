@@ -76,6 +76,20 @@ describe('the rider list names every note Walnut puts in front of a message', ()
     expect(ios.sort()).toEqual([...RIDER_NOTICE_OUTCOMES].sort());
   });
 
+  it('a notice that rides the held fold in front of a message is on the list, or a known gap', () => {
+    // Every NOTICE_RIDES outcome waits in the held notices (sessions/wake-policy.ts holdRidingNotice)
+    // and goes in front of the next message, a person's words included. One not on the list draws
+    // those words inside its card. The gaps below predate this guard (2026-11-23); a new outcome
+    // fails until it is on the list on both surfaces, or named here with why.
+    const KNOWN_GAPS = ['applied', 'noop', 'switch-expired', 'move-expired', 'adopted', 'released', 'check_machine_fault', 'workspace-remade'];
+    const block = read('src/core/sessions/wake-policy.ts').match(/export const NOTICE_RIDES: readonly string\[\] = \[([\s\S]*?)\n\];/);
+    expect(block, 'wake-policy.ts declares NOTICE_RIDES').toBeTruthy();
+    const rides = [...block![1].replace(/\/\/.*$/gm, '').matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    expect(rides).toContain('note-dropped');
+    expect(rides.filter((o) => !RIDER_NOTICE_OUTCOMES.includes(o) && !KNOWN_GAPS.includes(o))).toEqual([]);
+    expect(KNOWN_GAPS.filter((o) => RIDER_NOTICE_OUTCOMES.includes(o) || !rides.includes(o)), 'a known gap closed or gone: remove it').toEqual([]);
+  });
+
   it('every outcome on the list splits off a person\'s words', () => {
     for (const outcome of RIDER_NOTICE_OUTCOMES) {
       const note = `<walnut-message kind="notification" from="Walnut" outcome="${outcome}">\nA note.\n</walnut-message>`;

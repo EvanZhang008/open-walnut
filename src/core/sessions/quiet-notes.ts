@@ -8,11 +8,13 @@
  * note that ends "No reply needed") is held (held-notices.ts) and rides in front of the target's
  * next message instead. Every such note from the same sender waits under one key, so a burst
  * reads as ONE notice: each note's time and title, and its words without the sentences an earlier
- * note in the same notice already said. Held in memory, like every held notice: a restart drops
- * what still waits, which a note that asks nothing can afford.
+ * note in the same notice already said. Kept on disk like every held notice (held-notices-store.ts):
+ * a restart keeps what waits, and each note is written there before its send is answered. A note is
+ * held once by its message id, so a replay of the same send holds nothing more.
  */
 import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
-import { holdFoldedNotice } from './held-notices.js';
+import { holdFoldedNotice, noteKnown } from './held-notices.js';
+import { storeLoading } from './held-notices-store.js';
 
 /** The rider outcome (lib/history-walnut-riders.ts RIDER_NOTICE_OUTCOMES, iOS riderOutcomes). */
 export const QUIET_NOTES_OUTCOME = 'quiet-notes';
@@ -32,7 +34,15 @@ export function asksNothing(input: { wake?: boolean; text: string; automation?: 
   return input.automation === true && NO_REPLY_RE.test(input.text.trim());
 }
 
-export interface QuietNotePart { at: number; title?: string; text: string }
+export interface QuietNotePart {
+  at: number; title?: string; text: string;
+  /** The note's message id: held once by it, and op_result reads its fate by it. */
+  mid?: string;
+  /** The sending session, told if the note is dropped unread (held-notices-sweep.ts). */
+  from?: string;
+  /** The target's task, named in that notice. */
+  task?: string;
+}
 
 function hhmm(ms: number): string {
   return `${new Date(ms).toISOString().slice(11, 16)} UTC`;
@@ -77,7 +87,21 @@ export function renderQuietNotes(from: string, parts: readonly QuietNotePart[], 
   });
 }
 
-/** Hold a note that asks nothing for the target's next message, folded with that sender's others. */
-export function holdQuietNote(sessionId: string, sender: { key: string; label: string }, part: QuietNotePart): void {
-  holdFoldedNotice<QuietNotePart>(sessionId, `quiet-note:${sender.key}`, part, (parts, dropped) => renderQuietNotes(sender.label, parts, dropped), { now: part.at });
+/**
+ * Hold a note that asks nothing for the target's next message, folded with that sender's others.
+ * Held in memory at once (when the file is read); resolves once it is on disk. `duplicate`: a note
+ * with the same message id is already held, delivered or dropped, so nothing more was held.
+ */
+export function holdQuietNote(sessionId: string, sender: { key: string; label: string }, part: QuietNotePart): Promise<{ duplicate: boolean }> {
+  const hold = (): Promise<{ duplicate: boolean }> => {
+    if (part.mid && noteKnown(part.mid)) return Promise.resolve({ duplicate: true });
+    // Only what the notice reads is kept: renderQuietNotes cuts a longer note to QUIET_NOTE_TEXT_MAX.
+    const chars = [...part.text];
+    const kept = chars.length > QUIET_NOTE_TEXT_MAX + 1 ? { ...part, text: chars.slice(0, QUIET_NOTE_TEXT_MAX + 1).join('') } : part;
+    return holdFoldedNotice<QuietNotePart>(sessionId, `quiet-note:${sender.key}`, kept,
+      (parts, dropped) => renderQuietNotes(sender.label, parts, dropped), { now: part.at }).then(() => ({ duplicate: false }));
+  };
+  // Right after boot, a replay is told apart from a new note only once the file is read.
+  const loading = storeLoading();
+  return loading ? loading.then(hold) : hold();
 }

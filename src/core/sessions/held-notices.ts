@@ -11,56 +11,98 @@
  * error, a completed subtask to check. Two more ride here (2026-11-12): a subtask's completion
  * its reply already told (subtask-notices.ts), and a note that asks nothing (quiet-notes.ts),
  * folded per sender (holdFoldedNotice).
- * In memory: a restart drops what waits, and the request it was about is still listed as open
- * (open_items, the Brief).
+ *
+ * Kept on disk as well as in memory (held-notices-store.ts, 2026-11-21: a restart dropped three
+ * notes a lead held for a task): a restart keeps what waits, and the server opens the file at boot.
+ * A note that is dropped anyway (its age limit, its session gone, pushed out by newer ones from the
+ * same sender) is recorded so (op_result reads it by its message id) and its sender is told
+ * (held-notices-sweep.ts).
  */
-/** A held notice older than this is dropped unread: the live list has moved on. */
-const HOLD_MAX_MS = 3 * 24 * 60 * 60_000;
+import {
+  FOLD_PARTS_MAX, HOLD_MAX_MS, fateOf, held, metaOf, persist, recordFate, setFolded, setPushedOutHandler,
+  slotOf, storeLoading, taken, waitingNote, mergeOlder, clearNow, type Held,
+} from './held-notices-store.js';
+import { log } from '../../logging/index.js';
 
-interface Held {
-  text: string;
-  at: number;
-  /** Still worth telling when the next message goes (a request still unanswered): else dropped. */
-  validIf?: () => Promise<boolean>;
-  /** A folded notice (holdFoldedNotice): every part held under its key, oldest first, and how it reads. */
-  parts?: unknown[];
-  /** Older parts FOLD_PARTS_MAX pushed out: the notice says how many. */
-  dropped?: number;
-  render?: (parts: unknown[], dropped: number) => string;
+export { FOLD_PARTS_MAX, HOLD_MAX_MS };
+
+/** Why a note left the hold unread (the sender's notice and op_result say it). */
+export const DROP_WHY = {
+  age: `it waited ${HOLD_MAX_MS / 86_400_000} days and its target sent no message in that time`,
+  gone: 'its target session is gone (it was removed or closed with nothing taking over)',
+  pushed: `${FOLD_PARTS_MAX} newer notes from you waited for the same target, and only the newest ${FOLD_PARTS_MAX} are kept`,
+} as const;
+
+/** A dropped note whose sender is a session: told by held-notices-sweep.ts flushDropTells. */
+export interface DropTell { callerSid: string; op: string; taskId: string; reason: string }
+const dropTells: DropTell[] = [];
+let tellTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Record each dropped part that is a note (it has a message id), and queue its sender's notice. */
+export function dropParts(sid: string, parts: readonly unknown[], why: string, now = Date.now()): void {
+  for (const p of parts) {
+    const m = metaOf(p);
+    if (!m.mid) continue;
+    recordFate(m.mid, { state: 'dropped', at: now, sid, why });
+    log.session.info('held note dropped unread', { messageId: m.mid, sessionId: sid, fromSessionId: m.from, taskId: m.task, why });
+    if (!m.from) continue;
+    const sent = typeof m.at === 'number' ? new Date(m.at).toISOString().slice(0, 16).replace('T', ' ') : '';
+    const what = m.title ? `"${m.title.replace(/\s+/g, ' ').trim().slice(0, 120)}"` : `message ${m.mid}`;
+    dropTells.push({ callerSid: m.from, op: 'task_send', taskId: m.task ?? '', reason: `${what}${sent ? `, sent ${sent} UTC` : ''}: ${why}` });
+  }
+  if (dropTells.length && !tellTimer) {
+    // Batched: one notice per sender for what one sweep or one burst dropped.
+    tellTimer = setTimeout(() => {
+      tellTimer = null;
+      void import('./held-notices-sweep.js').then((m) => m.flushDropTells()).catch(() => {});
+    }, 1_000);
+    tellTimer.unref?.();
+  }
 }
 
-/** Most parts one folded notice keeps; older ones are dropped (the newest say where things stand). */
-export const FOLD_PARTS_MAX = 12;
+/** Take the dropped notes' notices waiting to be told. */
+export function takeDropTells(): DropTell[] {
+  return dropTells.splice(0, dropTells.length);
+}
 
-const held = new Map<string, Map<string, Held>>();
+setPushedOutHandler((sid, parts) => dropParts(sid, parts, DROP_WHY.pushed));
 
-/** Hold `text` for the session's next message; a newer notice with the same key replaces it. */
+/**
+ * Hold `text` for the session's next message; a newer notice with the same key replaces it.
+ * `whileOpen`: request ids; the notice is dropped unsent once none of them is open any more.
+ * Held in memory at once; the promise resolves once it is on disk too.
+ */
 export function holdNotice(
-  sessionId: string, key: string, text: string, opts: { now?: number; validIf?: () => Promise<boolean> } = {},
-): void {
-  const slot = held.get(sessionId) ?? new Map<string, Held>();
-  slot.set(key, { text, at: opts.now ?? Date.now(), ...(opts.validIf ? { validIf: opts.validIf } : {}) });
-  held.set(sessionId, slot);
+  sessionId: string, key: string, text: string, opts: { now?: number; whileOpen?: readonly string[] } = {},
+): Promise<void> {
+  slotOf(sessionId).set(key, { text, at: opts.now ?? Date.now(), ...(opts.whileOpen?.length ? { whileOpen: [...opts.whileOpen] } : {}) });
+  return persist();
 }
 
 /**
  * Hold one more part of a folded notice: every part held under `key` reads as ONE notice,
  * `render(parts)`, oldest part first (2026-11-12, the org reflection: the load watchdog sent one
  * note per paused process, three in the same minute, each waking the session). A part that would
- * go past FOLD_PARTS_MAX pushes the oldest out.
+ * go past FOLD_PARTS_MAX pushes the oldest out. A part whose message id (`mid`) is already held,
+ * delivered or dropped is a replay, and is not held again.
  */
 export function holdFoldedNotice<P>(
   sessionId: string, key: string, part: P, render: (parts: P[], dropped: number) => string, opts: { now?: number } = {},
-): void {
-  const slot = held.get(sessionId) ?? new Map<string, Held>();
+): Promise<void> {
+  const mid = metaOf(part).mid;
+  if (mid && noteKnown(mid)) return Promise.resolve();
+  const slot = slotOf(sessionId);
   const prev = slot.get(key);
-  const all = [...((prev?.parts as P[] | undefined) ?? []), part];
-  const parts = all.slice(-FOLD_PARTS_MAX);
-  const dropped = (prev?.dropped ?? 0) + all.length - parts.length;
-  const draw = render as (parts: unknown[], dropped: number) => string;
   // Its age is its newest part's: a part added late is not dropped with the old ones.
-  slot.set(key, { text: draw(parts, dropped), at: opts.now ?? Date.now(), parts, dropped, render: draw });
-  held.set(sessionId, slot);
+  const out = setFolded(slot, key, [...(prev?.parts ?? []), part], prev?.dropped ?? 0,
+    render as Held['render'], opts.now ?? Date.now(), prev && !prev.render ? prev.text : undefined);
+  if (out.length) dropParts(sessionId, out, DROP_WHY.pushed);
+  return persist();
+}
+
+/** Whether a note with this message id waits, rode a message, or was dropped (a replay holds nothing). */
+export function noteKnown(mid: string): boolean {
+  return !!fateOf(mid) || !!waitingNote(mid);
 }
 
 /** What waits for a session's next message, read without taking it (tests, the send's answer). */
@@ -68,43 +110,138 @@ export function heldNoticeKeys(sessionId: string): string[] {
   return [...(held.get(sessionId)?.keys() ?? [])];
 }
 
+/** Whether any of these requests is still unanswered (pending, or past its deadline and open). */
+async function anyRequestOpen(ids: readonly string[]): Promise<boolean> {
+  const { getSessionRequest } = await import('../session-requests.js');
+  for (const id of ids) {
+    const row = await getSessionRequest(id).catch(() => null);
+    if (row && (row.status === 'pending' || row.status === 'expired')) return true;
+  }
+  return false;
+}
+
+let nextToken = 1;
+
 /**
  * The notices waiting for a session's next message, taken out of the hold (so two sends at once
- * never both carry them), or null. `release` puts back what the message did not carry.
+ * never both carry them), or null. `markTold(row)` says the stored message `row` carries them;
+ * `release` puts back what it did not carry. Until one is called they stay in the file, so a
+ * restart in between sends them again rather than losing them: at least once, never lost. The
+ * same holds after markTold until its write is on disk, and for a send that held them past the
+ * sweep's lap (held-notices-sweep.ts puts them back): either may carry them twice, rarely.
+ * "Delivered" means stored in a row of the session's queue; a row withdrawn later still reads so.
  */
-export async function pendingHeldNotices(sessionId: string, now = Date.now()): Promise<{ text: string; release: () => void } | null> {
+export async function pendingHeldNotices(sessionId: string, now = Date.now()): Promise<{
+  text: string; release: () => void; markTold: (row?: string) => void;
+} | null> {
+  // The first send after boot carries what waited before the restart.
+  const loading = storeLoading();
+  if (loading) await loading;
   const slot = held.get(sessionId);
   if (!slot) return null;
   held.delete(sessionId);
-  const taken: Array<[string, Held]> = [];
-  for (const [k, v] of slot) {
-    if (now - v.at > HOLD_MAX_MS) continue;
+  const token = nextToken++;
+  const t = { sid: sessionId, at: now, entries: [...slot] };
+  taken.set(token, t);
+  const keep: Array<[string, Held]> = [];
+  let dropped = false;
+  for (const [k, v] of t.entries) {
+    if (now - v.at > HOLD_MAX_MS) { dropParts(sessionId, v.parts ?? [], DROP_WHY.age, now); dropped = true; continue; }
     // A notice its own news overtook (the request got its reply) is dropped, never sent stale.
-    if (v.validIf && !(await v.validIf().catch(() => true))) continue;
-    taken.push([k, v]);
+    if (v.whileOpen?.length && !(await anyRequestOpen(v.whileOpen).catch(() => true))) { dropped = true; continue; }
+    keep.push([k, v]);
   }
-  if (!taken.length) return null;
+  t.entries = keep;
+  if (!keep.length) {
+    taken.delete(token);
+    if (dropped) void persist();
+    return null;
+  }
+  let settled = false;
   return {
-    text: taken.map(([, v]) => v.text).join('\n\n'),
+    text: keep.map(([, v]) => v.text).join('\n\n'),
     release: () => {
-      const cur = held.get(sessionId) ?? new Map<string, Held>();
-      // A newer notice of the same key that came meanwhile wins; a folded one keeps both parts' lists.
-      for (const [k, v] of taken) {
-        const now2 = cur.get(k);
-        if (!now2) cur.set(k, v);
-        else if (v.parts && now2.parts && now2.render) {
-          const all = [...v.parts, ...now2.parts];
-          const parts = all.slice(-FOLD_PARTS_MAX);
-          const dropped = (v.dropped ?? 0) + (now2.dropped ?? 0) + all.length - parts.length;
-          cur.set(k, { ...now2, parts, dropped, text: now2.render(parts, dropped) });
+      if (settled) return;
+      settled = true;
+      putBack(token);
+      void persist();
+    },
+    markTold: (row) => {
+      if (settled) return;
+      settled = true;
+      // Put back meanwhile (held-notices-sweep.ts: a message that said nothing for minutes): they
+      // wait again and their fate is recorded when they ride.
+      if (!taken.delete(token)) return;
+      const at = Date.now();
+      for (const [, v] of keep) {
+        for (const p of v.parts ?? []) {
+          const mid = metaOf(p).mid;
+          if (mid) recordFate(mid, { state: 'delivered', at, sid: sessionId, ...(row ? { row } : {}) });
         }
       }
-      held.set(sessionId, cur);
+      void persist();
     },
   };
 }
 
-/** Test seam. */
+/** Put what a message took back in the hold; a newer notice of the same key that came meanwhile wins. */
+export function putBack(token: number): void {
+  const t = taken.get(token);
+  if (!t) return;
+  taken.delete(token);
+  const cur = slotOf(t.sid);
+  for (const [k, v] of t.entries) {
+    const out = mergeOlder(cur, k, v);
+    if (out.length) dropParts(t.sid, out, DROP_WHY.pushed);
+  }
+}
+
+/**
+ * What waits for `fromSid` waits for `toSid` now: its session's id changed (session-queue-park.ts
+ * migrateSessionQueue, where the queue moves too) or another session took over from it (an engine
+ * switch, held-notices-sweep.ts). Resolves to how many notices moved, once they are on disk.
+ */
+export async function moveHeldNotices(fromSid: string, toSid: string): Promise<number> {
+  if (!fromSid || !toSid || fromSid === toSid) return 0;
+  const loading = storeLoading();
+  if (loading) await loading;
+  // What a message of the old id took goes back under the new one if that message did not carry it.
+  for (const t of taken.values()) if (t.sid === fromSid) t.sid = toSid;
+  const slot = held.get(fromSid);
+  if (!slot?.size) return 0;
+  held.delete(fromSid);
+  const dest = slotOf(toSid);
+  for (const [k, v] of slot) {
+    const out = mergeOlder(dest, k, v);
+    if (out.length) dropParts(toSid, out, DROP_WHY.pushed);
+  }
+  log.session.info('held notices moved to the session that goes on', { fromSessionId: fromSid, toSessionId: toSid, keys: [...slot.keys()] });
+  await persist();
+  return slot.size;
+}
+
+/** Where a note stands now, by its message id (op_result): waiting, delivered, dropped, or unknown here. */
+export async function heldNoteState(mid: string): Promise<{
+  message_id: string; state: 'waiting' | 'delivered' | 'dropped' | 'unknown'; at?: string; session_id?: string; why?: string; row?: string;
+}> {
+  const loading = storeLoading();
+  if (loading) await loading;
+  const waiting = waitingNote(mid);
+  if (waiting) return { message_id: mid, state: 'waiting', at: new Date(waiting.at).toISOString(), session_id: waiting.sid };
+  const f = fateOf(mid);
+  if (f) {
+    return {
+      message_id: mid, state: f.state, at: new Date(f.at).toISOString(), session_id: f.sid,
+      ...(f.why ? { why: f.why } : {}), ...(f.row ? { row: f.row } : {}),
+    };
+  }
+  return { message_id: mid, state: 'unknown' };
+}
+
+/** Test seam: forget every held notice (and the file, when this process opened it). */
 export function _clearHeldNotices(): void {
-  held.clear();
+  clearNow();
+  dropTells.length = 0;
+  if (tellTimer) clearTimeout(tellTimer);
+  tellTimer = null;
 }

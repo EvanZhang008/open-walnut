@@ -11,7 +11,7 @@
 import { count } from '../observability/metrics.js'
 import { reportGauge } from '../health-monitor/gauges.js'
 import { addCall, emptyAgg, type Agg, type OutcomeClass, type UsageKind } from './agg.js'
-import { addEvents, addHours, markAlive, pruneStore, readHours, type UsageEvent } from './store.js'
+import { addEvents, addHours, addToolErrors, markAlive, pruneStore, readHours, type ToolErrorRow, type UsageEvent } from './store.js'
 import { TemplateMatcher, type PageErrorKind } from './normalize.js'
 import type { ToolClient } from '../../lib/tool-answer-size.js'
 import { labelValue } from './counters.js'
@@ -31,6 +31,7 @@ export const answeredTemplates = new TemplateMatcher()
 
 let pending = new Map<string, { hour: number; kind: UsageKind; name: string; agg: Agg }>()
 let events: UsageEvent[] = []
+let toolErrors: ToolErrorRow[] = []
 let timer: ReturnType<typeof setInterval> | null = null
 /** Only the server that started the recorder counts (a replica or a CLI process never does). */
 let active = false
@@ -115,6 +116,17 @@ export function recordOpCall(c: OpCall): void {
   if (c.cls !== 'ok' || c.overLimit) {
     event({ at: now, kind: 'op', name: c.op, problem: c.cls !== 'ok' ? c.cls : 'over_limit', ...(c.code ? { code: c.code } : {}), chars: c.size, ms: c.ms })
   }
+}
+
+/**
+ * A session's Walnut tool call that failed as its agent read it, on any host: the server's
+ * refusals, the client's own (Walnut unreachable, the tool gone after a disconnect) and Claude
+ * Code's (its input refused). Its session, task, host, op and error code; never its words.
+ */
+export function recordToolError(row: Omit<ToolErrorRow, 'at'> & { at?: number }): void {
+  if (!active) return
+  if (toolErrors.length < MAX_EVENTS_PER_FLUSH) toolErrors.push({ ...row, at: row.at ?? Date.now() })
+  count('usage.tool_errors', 1, { code: labelValue(row.code) })
 }
 
 /** Claude Code said it saved an answer of this op to a file instead of passing it on. */
@@ -214,8 +226,11 @@ export function flushUsage(now = Date.now()): void {
   pending = new Map()
   const evs = events
   events = []
+  const errs = toolErrors
+  toolErrors = []
   addHours(rows)
   addEvents(evs)
+  addToolErrors(errs)
   markAlive(now)
   if (now - lastPrune > HOUR_MS) { lastPrune = now; pruneStore(now) }
   for (const [route, at] of routeErrorsAt) if (now - at > HOUR_MS) routeErrorsAt.delete(route)
@@ -269,6 +284,7 @@ export function _resetUsageRecorderForTesting(on = true, started = 0): void {
   lastStallAt = -Infinity
   pending = new Map()
   events = []
+  toolErrors = []
   routeErrorsAt.clear()
   badArgGauges.clear()
   lastPrune = 0

@@ -36,6 +36,7 @@ import { isCallId, takeCallIdArg, writeOpId } from '../lib/op-call-id.js'
 import { runOnce } from './op-calls.js'
 import { FULL_ARG, agentAnswer, answerFit, cutTextRefusal, takeFullArg, type AnswerFit, type AnswerSurface } from './answer.js'
 import { COLLECTION_MAX, oversizedCollection } from '../lib/zod-rules.js'
+import { capOverCounts, countCapNote } from './count-cap.js'
 import { TASK_DIR_VAR, opTmpPathNote } from '../lib/tmp-draft-path.js'
 import { opLinkNotes } from '../lib/missing-links.js'
 
@@ -398,10 +399,20 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 function dropRetiredInput(op: WalnutOp, raw: Record<string, unknown>): Record<string, unknown> {
   let out = raw
   const own = (o: Record<string, unknown>, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k)
-  const carry = (o: Record<string, unknown>, from: string, to: string, max: number): Record<string, unknown> => {
-    const text = o[from]
-    if (typeof text !== 'string' || !text.trim() || own(o, to)) return o
-    return { ...o, [to]: Array.from(text.trim()).slice(0, max).join('') }
+  // Both names given with different values: the other name is kept, so the call is refused for it.
+  const conflicting = new Set<string>()
+  const carry = (o: Record<string, unknown>, from: string, to: string, max: number | undefined): Record<string, unknown> => {
+    if (!own(o, from)) return o
+    const value = o[from]
+    // Another name for the key (no max): the value as it came, judged by the key's own schema.
+    if (max === undefined) {
+      if (!own(o, to)) return { ...o, [to]: value }
+      if (JSON.stringify(o[to]) !== JSON.stringify(value)) conflicting.add(from)
+      return o
+    }
+    // A retired field's text an older caller still sends: kept under its new name, cut to fit.
+    if (typeof value !== 'string' || !value.trim() || own(o, to)) return o
+    return { ...o, [to]: Array.from(value.trim()).slice(0, max).join('') }
   }
   for (const r of op.renamedInput ?? []) {
     const cut = r.from.indexOf('[].')
@@ -416,7 +427,7 @@ function dropRetiredInput(op: WalnutOp, raw: Record<string, unknown>): Record<st
   for (const path of op.retiredInput ?? []) {
     const cut = path.indexOf('[].')
     if (cut < 0) {
-      if (!own(out, path)) continue
+      if (!own(out, path) || conflicting.has(path)) continue
       if (out === raw) out = { ...raw }
       delete out[path]
       continue
@@ -445,13 +456,19 @@ function dropRetiredInput(op: WalnutOp, raw: Record<string, unknown>): Record<st
 export function parseOpArgs(
   op: WalnutOp,
   rawArgs: Record<string, unknown> | undefined,
-): { ok: true; args: Record<string, unknown> } | { ok: false; message: string; invalidArgs: true } {
+): { ok: true; args: Record<string, unknown>; capNote?: string } | { ok: false; message: string; invalidArgs: true } {
   const raw = rawArgs ?? {}
-  const input = isPlainObject(raw) ? dropRetiredInput(op, raw) : raw
+  let input = isPlainObject(raw) ? dropRetiredInput(op, raw) : raw
   // Before zod, which walks every entry of a record or an unbounded list (lib/zod-rules.ts).
   const oversized = oversizedCollection(input)
   if (oversized) return { ok: false, message: `Invalid arguments for ${op.name}: ${oversized}: more than ${COLLECTION_MAX} entries`, invalidArgs: true }
-  const parsed = z.object(op.input).strict().safeParse(input)
+  let parsed = z.object(op.input).strict().safeParse(input)
+  // A read-size count over its most is read as the most, and the answer says so (count-cap.ts).
+  const capped = parsed.success || op.tags?.readonly !== true ? null : capOverCounts(input, parsed.error.issues)
+  if (capped) {
+    input = capped.input
+    parsed = z.object(op.input).strict().safeParse(input)
+  }
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => {
       // A "did you mean" never stands alone: the keys the object takes follow it, so a wrong guess costs no round trip.
@@ -464,7 +481,7 @@ export function parseOpArgs(
     }).join('; ')
     return { ok: false, message: `Invalid arguments for ${op.name}: ${issues}`, invalidArgs: true }
   }
-  return { ok: true, args: parsed.data as Record<string, unknown> }
+  return { ok: true, args: parsed.data as Record<string, unknown>, ...(capped ? { capNote: countCapNote(op.name, capped.capped) } : {}) }
 }
 
 /**
@@ -553,18 +570,22 @@ export async function executeOp(
     return once && op.handler ? withEarlierWrites(outcome, base, prov) : outcome
   }
   const outcome = once ? await runOnce(once, op.name, args, explicitSid, run) : await run()
+  // A read-size count read as its most says so (count-cap.ts), to every caller.
+  const notes = parsed.capNote ? [parsed.capNote] : []
   // Text a session hands on gets one line back when it names a draft in a temp dir (tmp-draft-path.ts)
   // or, for the user, an id with no link to open it (missing-links.ts).
-  if (human || pluginId) return outcome
-  const noted = await withHandedTextNote(op.name, args, outcome, origin, explicitSid)
-  // An agent reads a receipt for a write and capped content for a read (answer.ts).
-  if (!surface || noted.result === undefined) return noted
-  return { ...noted, result: agentAnswer(op, args, noted.result, full, surface) }
+  if (!human && !pluginId) notes.push(...await handedTextNotes(op.name, args, outcome, origin, explicitSid))
+  // An agent reads a receipt for a write and capped content for a read (answer.ts). The notes go on
+  // after it: an op's own shape builds a new answer and would leave them out.
+  const answered = human || pluginId || !surface || outcome.result === undefined
+    ? outcome
+    : { ...outcome, result: agentAnswer(op, args, outcome.result, full, surface) }
+  return notes.length ? withNote(answered, notes.join(' ')) : answered
 }
 
 /**
- * A session's successful op whose arguments hand on text that needs one more step, as `walnut_note`
- * on its result:
+ * The notes for a session's successful op whose arguments hand on text that needs one more step,
+ * for its result's `walnut_note`:
  *  - a draft, plan or evidence path in a temp dir: move the file into the task directory and send
  *    the new path (tmp-draft-path.ts; WALNUT_TMP_WRITE_NOTE=0 turns it off);
  *  - words for the user (a thread summary, a letter, a Needs you ask) naming a code review, ticket or
@@ -573,13 +594,13 @@ export async function executeOp(
  * In the session's own process (WALNUT_TASK_DIR set: its MCP server, its CLI) and on the server
  * answering a session (a gateway call); never for a person or a plugin.
  */
-async function withHandedTextNote(name: string, args: Record<string, unknown>, outcome: OpOutcome, origin: string, sid: string | undefined): Promise<OpOutcome> {
-  if (!outcome.ok || !isPlainObject(outcome.result)) return outcome
+async function handedTextNotes(name: string, args: Record<string, unknown>, outcome: OpOutcome, origin: string, sid: string | undefined): Promise<string[]> {
+  if (!outcome.ok || !isPlainObject(outcome.result)) return []
   // This process is the calling session's own (its MCP server, its CLI) only when it runs under
   // that session's id: a server started from a task's shell inherits a task directory too.
   const self = process.env.WALNUT_SESSION_ID?.trim()
   const own = !sid || sid === self ? process.env.WALNUT_TASK_DIR?.trim() : undefined
-  if (!own && !sid) return outcome
+  if (!own && !sid) return []
   const notes: string[] = []
   try {
     const tmp = process.env.WALNUT_TMP_WRITE_NOTE === '0' ? null : opTmpPathNote(name, args, {
@@ -590,7 +611,14 @@ async function withHandedTextNote(name: string, args: Record<string, unknown>, o
     if (tmp) notes.push(tmp)
   } catch { /* a note never fails the call */ }
   if (process.env.WALNUT_LINK_NOTE !== '0') notes.push(...await opLinkNotes(name, args))
-  return notes.length ? { ...outcome, result: { ...outcome.result, walnut_note: notes.join(' ') } } : outcome
+  return notes
+}
+
+/** `note` added to a successful object answer's `walnut_note`, after any note it already has. */
+function withNote(outcome: OpOutcome, note: string): OpOutcome {
+  if (!outcome.ok || !isPlainObject(outcome.result)) return outcome
+  const had = typeof outcome.result.walnut_note === 'string' && outcome.result.walnut_note ? `${outcome.result.walnut_note} ` : ''
+  return { ...outcome, result: { ...outcome.result, walnut_note: had + note } }
 }
 
 /**

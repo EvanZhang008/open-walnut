@@ -342,6 +342,9 @@ defineOp({
     + 'after he reacted: known "<tm-id>" or "all", or close "acked" or "dropped" (user_words quoting him when he asked for it); '
     + 'the same subject as another open thread: {"id":"th-...","merge_into":"th-..."} alone (thread_split undoes it). '
     + `A refusal names the call that goes through. Answers a receipt; thread_get reads the thread. ${RULES_IN_PROMPT} ${THREADS_OPTIONS_RULE} ${WORD_TO_USER_RULE}`,
+  // 2026-11-23: names agents sent for these in real use (72 hours of sessions): read as the declared ones.
+  retiredInput: ['summary', 'thread_id'],
+  renamedInput: [{ from: 'summary', to: 'reply' }, { from: 'thread_id', to: 'id' }],
   input: UPDATE_INPUT,
   handler: async (args, call) => {
     const id = await ownTask(args, call)

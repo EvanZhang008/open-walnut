@@ -47,8 +47,9 @@ export const NOTICE_RIDES: readonly string[] = [
   // A subtask stopped, parked itself or waits on the user (subtask-notices.ts): its lead's work
   // comes back with its completion, its error, or its reply. The parent's own wait note (task-wait-resume.ts).
   'stopped', 'waiting', 'blocked',
-  // Notes that asked for no reply (quiet-notes.ts).
-  'quiet-notes',
+  // Notes that asked for no reply (quiet-notes.ts), and the notice to a sender that one of its such
+  // notes was dropped before it reached its target (held-notices-sweep.ts): nobody waited on it.
+  'quiet-notes', 'note-dropped',
   // A topic's lines that did not wake the member (topics/topic-text.ts): it reads them next time.
   'topic-news',
   // A write made while the server was away applied, or had nothing to do (offline-handover.ts).
@@ -151,11 +152,11 @@ export function rowRides(text: string): boolean {
 /**
  * Hold a row of notices that ask nothing for the session's next message (held-notices.ts): every
  * such row waits under one key, so ten status notices read as one block in front of the next
- * message, the newest FOLD_PARTS_MAX kept. In memory, like every held notice: a restart drops what
- * waits, which notices that ask nothing can afford.
+ * message, the newest FOLD_PARTS_MAX kept. Kept on disk like every held notice, so a restart keeps
+ * what waits; the promise resolves once it is written (the queue does not wait for it).
  */
-export function holdRidingNotice(sessionId: string, text: string, now = Date.now()): void {
-  holdFoldedNotice<string>(sessionId, 'riding-notices', text, (parts, dropped) => [
+export function holdRidingNotice(sessionId: string, text: string, now = Date.now()): Promise<void> {
+  return holdFoldedNotice<string>(sessionId, 'riding-notices', text, (parts, dropped) => [
     ...parts,
     ...(dropped > 0 ? [`(${dropped} older notice${dropped === 1 ? '' : 's'} that asked nothing dropped: the newest say where things stand.)`] : []),
   ].join('\n\n'), { now });

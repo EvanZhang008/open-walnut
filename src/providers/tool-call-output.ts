@@ -1,3 +1,5 @@
+import fs from 'node:fs'
+
 export interface ToolCallErrorBody {
   code: string
   message: string
@@ -26,6 +28,29 @@ export function toolCallFailure(
 export interface ToolCallStreams {
   stdout: string
   stderr: string
+}
+
+/**
+ * Whether this process's stderr is thrown away (`2>/dev/null`, or closed). A failure written there
+ * would reach nobody: the caller then reads an empty stdout and takes it for a broken answer
+ * (2026-11-22: a lead's `walnut tools call task_history ... 2>/dev/null > f` read an empty file
+ * after its limit was refused). Such a failure goes to stdout instead, as with --json.
+ */
+export function stderrDiscarded(stat: (fd: number) => { dev: number; ino: number; rdev?: number } = fs.fstatSync,
+  nullStat: () => { dev: number; ino: number; rdev?: number } | null = devNullStat): boolean {
+  let err: { dev: number; ino: number; rdev?: number }
+  try { err = stat(2) } catch { return true }
+  const dn = nullStat()
+  return !!dn && err.dev === dn.dev && err.ino === dn.ino
+}
+
+function devNullStat(): { dev: number; ino: number } | null {
+  try { return fs.statSync(process.platform === 'win32' ? '\\\\.\\NUL' : '/dev/null') } catch { return null }
+}
+
+/** Where a call's failure goes: stdout with --json, or when stderr is thrown away. */
+export function failureOnStdout(json: boolean): boolean {
+  return json || stderrDiscarded()
 }
 
 /** Each stream's text. `partial` goes to stdout by default, into `error.detail` with --json. */

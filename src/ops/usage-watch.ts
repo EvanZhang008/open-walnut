@@ -16,9 +16,10 @@ defineOp({
     + 'comes to that task, and at the check time each target is judged (Passed, Failed, Too little use, Unknown). A task that shipped cannot complete without one. '
     + '`exempt`: no watch, with `kind` (copy, colour, docs, tests, not_shipped, or watched_elsewhere: real use is watched outside Walnut, a pipeline alarm or a dashboard) and a `reason` of 20+ characters saying why (for watched_elsewhere: what watches it, who reads it, when). '
     + '`report`: the numbers of a `target` or the 15 names with the most problems (`range` 24h or 7d). `list`, `drop` (`id`), '
+    + '`errors`: failed Walnut tool calls as sessions read them, every host, grouped `by` op, code, session or host (`session`: one session or task, its failures one by one; `range`). '
     + '`ship` (record a ship from another release tool, `how`), `probe` (an answer of `chars` filler characters, for testing the alarms).',
   input: {
-    action: z.enum(['set', 'exempt', 'drop', 'list', 'report', 'ship', 'probe']).describe('What to do'),
+    action: z.enum(['set', 'exempt', 'drop', 'list', 'report', 'errors', 'ship', 'probe']).describe('What to do'),
     targets: z.union([z.string(), z.array(z.string().max(200)).max(10)]).optional().describe('set: op:<tool>, route:<METHOD> <template>, page:<part>'),
     checks: z.object({
       max_answer_chars: z.number().optional(), max_fail_pct: z.number().optional(), no_new_codes: z.boolean().optional(),
@@ -32,7 +33,9 @@ defineOp({
     reason: z.string().max(500).optional().describe('exempt: why nothing in real use can show this change (20+ characters)'),
     id: z.string().max(80).optional().describe('drop: the watch id'),
     target: z.string().max(200).optional().describe('report: one target'),
-    range: z.enum(['24h', '7d']).optional().describe('report: the time span (default 7d)'),
+    range: z.enum(['24h', '7d']).optional().describe('report, errors: the time span (default 7d)'),
+    by: z.enum(['op', 'code', 'session', 'host']).optional().describe('errors: how to group them (default op)'),
+    session: z.string().max(80).optional().describe('errors: one session or task id, or its start'),
     how: z.string().max(60).optional().describe('ship: what shipped it'),
     chars: z.number().int().min(1).max(55_000).optional().describe('probe: the answer\'s length'),
   },

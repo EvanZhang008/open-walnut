@@ -935,33 +935,18 @@ const RETIRED_LEAD_TELL_GAP_MS = 10 * 60_000;
  * the log line.
  */
 async function tellCallers(unapplied: Unapplied[]): Promise<void> {
-  const bySession = new Map<string, Unapplied[]>();
-  for (const u of unapplied) bySession.set(u.callerSid, [...(bySession.get(u.callerSid) ?? []), u]);
-  const [{ getSessionByClaudeId }, { buildWalnutMessage }, { deliverToSession }] = await Promise.all([
-    import('./session-tracker.js'),
-    import('./peers/walnut-message-tag.js'),
-    import('./sessions/session-send-core.js'),
+  const [{ tellCallers: tell, callerItemLine }, { buildWalnutMessage }] = await Promise.all([
+    import('./sessions/caller-notice.js'), import('./peers/walnut-message-tag.js'),
   ]);
-  for (const [sid, items] of bySession) {
-    try {
-      const session = await getSessionByClaudeId(sid);
-      if (!session) continue;
-      const text = buildWalnutMessage({
-        kind: 'notification',
-        attrs: { from: 'Walnut', note: 'automated Walnut status notice' },
-        body: [
-          'While the Walnut server was away, this host saved changes you made and said they would be applied later. These were NOT applied:',
-          ...items.map((u) => `- ${u.op}${u.taskId ? ` ${u.taskId}` : ''}: ${u.reason}`),
-          'Read the task (walnut tools call task_get) and redo the change if it still applies.',
-        ].join('\n'),
-      });
-      await deliverToSession(session, { busText: text, enqueueText: text, source: 'walnut-notify', taskId: session.taskId });
-    } catch (err) {
-      log.session.warn('offline handover: could not tell the caller about unapplied writes', {
-        callerSid: sid, error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
+  await tell(unapplied, (items) => buildWalnutMessage({
+    kind: 'notification',
+    attrs: { from: 'Walnut', note: 'automated Walnut status notice' },
+    body: [
+      'While the Walnut server was away, this host saved changes you made and said they would be applied later. These were NOT applied:',
+      ...items.map(callerItemLine),
+      'Read the task (walnut tools call task_get) and redo the change if it still applies.',
+    ].join('\n'),
+  }), 'unapplied writes (offline handover)');
 }
 
 /** A review score a host journalled with an offline reply: kept on the replier's task, as online. */

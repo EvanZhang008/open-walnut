@@ -18,6 +18,7 @@ import { CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import { getOp, getOpOwner, listOps, opNames, executeOp, resolveApiBase } from '../ops/index.js'
 import { opInputJsonSchema } from '../ops/registry.js'
+import { callerInputShape } from '../ops/count-cap.js'
 import { groupOfOp, listedForRole, summarizeGroups, type ListingRole } from '../ops/op-groups.js'
 import { inGroup } from '../ops/op-help.js'
 import { LOCAL_ORIGIN } from '../lib/caller-origin.js'
@@ -158,7 +159,8 @@ export function registerWalnutTools(
     server.registerTool(op.name, {
       title: op.title,
       description: op.description,
-      inputSchema: op.input,
+      // A read-size count shows no most: over it, the op answers with its most (count-cap.ts).
+      inputSchema: callerInputShape(op),
       annotations: {
         ...(op.tags.readonly ? { readOnlyHint: true } : {}),
         ...(op.tags.destructive !== undefined ? { destructiveHint: op.tags.destructive } : {}),

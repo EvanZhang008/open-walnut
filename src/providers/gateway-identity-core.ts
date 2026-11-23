@@ -26,6 +26,12 @@
  * - A socket whose hello named a run moments ago and that nothing bound yet (a new
  *   server between its hello and its `leader.configure`) is nobody's target until it
  *   binds or the grace runs out (`pending`), for a call whose Walnut is known.
+ * - With no target, the pick counts the sockets passed over that may say whose they are
+ *   in a moment (`identifying`): a pending one, or one that opened moments ago and has
+ *   named no run yet (`fresh`). The daemon lets a call that named no wait of its own (an
+ *   older client) wait for them a little, within its time, instead of failing it at once
+ *   (2026-11-23: a task_create failed 13 s after the server started, its socket connected
+ *   and not yet bound).
  * - A result for a call whose Walnut is known is taken only from a socket of that
  *   Walnut (`mayAnswer`).
  *
@@ -48,6 +54,8 @@ export interface GatewaySocketFacts<S> {
    * call never reaches it in that window.
    */
   pending?: boolean
+  /** It opened moments ago (within the same grace) and has named no run yet: a server between its connect and its hello, maybe. */
+  fresh?: boolean
 }
 
 export interface GatewayPick<S> {
@@ -56,6 +64,8 @@ export interface GatewayPick<S> {
   otherWalnut: number
   /** Sockets that name no Walnut and were passed over because the call's Walnut is pinned. */
   unidentified: number
+  /** With no target: of the sockets passed over, those that may name the call's Walnut in a moment (pending or fresh). */
+  identifying: number
 }
 
 export interface GatewayIdentity {
@@ -128,14 +138,16 @@ export function createGatewayIdentity(): GatewayIdentity {
     let linked: S | null = null
     let unidentified: S | null = null
     let unidentifiedCount = 0
+    let identifying = 0
     let otherWalnut = 0
     for (const c of candidates) {
       const walnut = walnutOf(c.bound, c.run)
       // Held back only from a Walnut's call: a call no Walnut owns takes it as before (an
       // older server that names its run and never binds).
-      if (!walnut && c.pending && home) { unidentifiedCount += 1; continue }
+      if (!walnut && c.pending && home) { unidentifiedCount += 1; identifying += 1; continue }
       if (!walnut) {
         unidentifiedCount += 1
+        if (c.fresh) identifying += 1
         if (unidentified === null) unidentified = c.socket
         continue
       }
@@ -147,10 +159,15 @@ export function createGatewayIdentity(): GatewayIdentity {
       }
       otherWalnut += 1
     }
-    if (!home) return { target: unidentified, otherWalnut, unidentified: 0 }
-    if (bound !== null || linked !== null) return { target: bound !== null ? bound : linked, otherWalnut, unidentified: 0 }
-    if (!opts.pinned && opts.allowUnidentified) return { target: unidentified, otherWalnut, unidentified: unidentified === null ? unidentifiedCount : 0 }
-    return { target: null, otherWalnut, unidentified: unidentifiedCount }
+    // A call no Walnut owns takes any socket that names none, a pending one included: with no target there was none.
+    if (!home) return { target: unidentified, otherWalnut, unidentified: 0, identifying: 0 }
+    if (bound !== null || linked !== null) return { target: bound !== null ? bound : linked, otherWalnut, unidentified: 0, identifying: 0 }
+    if (!opts.pinned && opts.allowUnidentified) {
+      return unidentified !== null
+        ? { target: unidentified, otherWalnut, unidentified: 0, identifying: 0 }
+        : { target: null, otherWalnut, unidentified: unidentifiedCount, identifying }
+    }
+    return { target: null, otherWalnut, unidentified: unidentifiedCount, identifying }
   }
 
   function mayAnswer(bound: string | undefined, run: string | undefined, rawHome: string | undefined, pinned: boolean): boolean {

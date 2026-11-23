@@ -189,3 +189,30 @@ export function failureClass(r: { invalidArgs?: boolean; unreachable?: boolean; 
   // A handler's own answer (resultError) carries its result: a refusal. A throw carries none.
   return r.result !== undefined || code ? { cls: 'refused', code: code ?? 'refused' } : { cls: 'error', code: 'thrown' }
 }
+
+/**
+ * The error code of a session's failed Walnut tool call, from the result its agent read
+ * (session-hook.ts): the code the CLI's failure JSON names, the `walnut: <code>:` line of the MCP
+ * server (with the API's own code in parentheses when it gave one), or what Claude Code itself
+ * said before the call reached Walnut (the tool gone, its input refused, the MCP link timed out
+ * or closed). A code only, never the text.
+ */
+export function toolErrorCode(result: string): string {
+  const head = String(result ?? '').slice(0, 2_000)
+  const word = (m: RegExpExecArray | null): string | undefined => safeCode(m?.[1])
+  if (/No such tool available: mcp__/.test(head)) return 'no_such_tool'
+  if (/InputValidationError/.test(head)) return 'client_bad_args'
+  if (/MCP error -32001|Request timed out/i.test(head)) return 'mcp_timeout'
+  if (/MCP error -32000|Connection closed|Not connected|MCP server .{0,60}(?:disconnected|not connected)/i.test(head)) return 'mcp_disconnected'
+  if (/Invalid arguments for [a-z_]+:/.test(head)) return 'bad_args'
+  const api = word(/Walnut API error \(([a-z][a-z0-9_]{1,40})\)/.exec(head))
+  if (api) return api
+  const cli = word(/"code"\s*:\s*"([a-z][a-z0-9_]{1,40})"/.exec(head))
+  if (cli) return cli
+  const mcp = word(/(?:^|\n)\s*walnut: ([a-z][a-z0-9_]{1,40}):/.exec(head))
+  if (mcp) return mcp
+  if (/command not found|No such file or directory/.test(head)) return 'cli_missing'
+  if (/PreToolUse|hook (?:error|blocked)|blocked by (?:a )?hook/i.test(head)) return 'hook_refused'
+  if (/doesn't want to proceed|was rejected|Permission .{0,40}denied/i.test(head)) return 'denied'
+  return 'other'
+}

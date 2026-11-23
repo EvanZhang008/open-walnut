@@ -217,7 +217,8 @@ describe('a message under another name, only where the op declares one such key'
     expect(refusal(op('task_send'), { to: 't1', prompt: 'hi' })).toContain('Unrecognized key: "prompt"; did you mean "text"?')
     expect(refusal(op('task_start'), { id: 't1', prompt: 'hi' })).toContain('Unrecognized key: "prompt"; did you mean "message"?')
     expect(refusal(op('task_start'), { id: 't1', text: 'hi' })).toContain('Unrecognized key: "text"; did you mean "message"?')
-    expect(refusal(op('task_send'), { to: 't1', message: 'hi' })).toContain('Unrecognized key: "message"; did you mean "text"?')
+    // task_send reads `message` as `text` since 2026-11-23 (renamedInput, measured-arg-names.test.ts).
+    expect(parseOpArgs(op('task_send'), { to: 't1', message: 'hi' })).toEqual({ ok: true, args: { to: 't1', text: 'hi' } })
   })
 
   it('no guess when the op declares both keys a name could mean', () => {

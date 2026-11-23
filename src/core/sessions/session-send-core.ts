@@ -1017,16 +1017,23 @@ async function performPlainSend(input: SessionSendInput): Promise<DeliveredSendR
       : caller.kind === 'external' && caller.app ? `${caller.app} (App)`
         : input.callerLabel ? `automation: ${input.callerLabel}` : walnutSends ? `Walnut (${input.source})` : 'an unidentified process';
     const host = caller.kind === 'session' ? displayHost(caller.record.host) : input.callerHost?.trim().slice(0, 64) || 'unknown';
-    holdQuietNote(targetSid, {
+    const heldTaskId = target.taskId ?? target.session.taskId;
+    // Its message id keys it (a replay holds nothing more) and names it to op_result; on disk
+    // before this send is answered, so a restart cannot drop it (held-notices-store.ts).
+    const noteId = input.messageId ?? (await import('../session-queue-store.js')).generateId();
+    const { duplicate } = await holdQuietNote(targetSid, {
       key: caller.kind === 'session' ? caller.record.claudeSessionId : `${label}@${host}`,
       label: caller.kind === 'session' ? label : `${label} (on ${host}, not your user)`,
-    }, { at: Date.now(), ...(input.title ? { title: input.title } : {}), text: body });
-    const heldTaskId = target.taskId ?? target.session.taskId;
+    }, {
+      at: Date.now(), ...(input.title ? { title: input.title } : {}), text: body, mid: noteId,
+      ...(caller.kind === 'session' ? { from: caller.record.claudeSessionId } : {}), ...(heldTaskId ? { task: heldTaskId } : {}),
+    });
     log.session.info('session_send held: the note asks nothing, it rides the next message', {
-      targetSessionId: targetSid, taskId: heldTaskId, callerKind: caller.kind, wake: input.wake,
+      targetSessionId: targetSid, taskId: heldTaskId, callerKind: caller.kind, wake: input.wake, messageId: noteId, duplicate,
     });
     return {
       delivery: 'held',
+      messageId: noteId,
       targetSessionId: targetSid,
       targetTitle: target.session.title ?? null,
       ...(heldTaskId ? { targetTaskId: heldTaskId } : {}),

@@ -13,6 +13,7 @@ const CACHE_ENTRIES: readonly HomeEntry[] = [
   lead('cache.leader-op-outcomes', 'cache/leader-op-outcomes.json', 'file', 'Outcomes of outward ops the leader permit\'s witnesses reported, so none goes out twice'),
   lead('cache.leader-deferred-work', 'cache/leader-deferred-work.json', 'file', 'Outward work a closed door held back (a list rename, a moved copy, a remote delete, an unsubscribe answer), done once the doors open'),
   lead('cache.status-riding', 'cache/status-riding.json', 'file', 'Status lines and turn notices waiting to ride a session\'s next message'),
+  lead('cache.held-notices', 'cache/held-notices.json', 'file', 'Notes and notices waiting to ride a session\'s next message, and what became of each note'),
   lead('cache.status-reconcile', 'cache/status-reconcile.json', 'file', 'Status asks already made per session and turn, so none is asked again'),
   lead('cache.task-dir-size-notices', 'cache/task-dir-size-notices.json', 'file', 'Oversized task folder notices already given'),
   lead('cache.suggest-accuracy', 'cache/suggest-accuracy.jsonl', 'file', 'Ledger of what the launch suggestions proposed against what was launched', { appendOnly: true }),

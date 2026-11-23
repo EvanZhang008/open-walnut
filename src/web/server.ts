@@ -2445,6 +2445,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // ── The model windows Claude Code reported, kept across restarts (src/providers/model-window-store.ts).
   void import('../providers/model-window-store.js').then((m) => m.startModelWindowStore()).catch(() => {})
 
+  // ── Notes and notices waiting to ride a session's next message, kept across restarts
+  // (src/core/sessions/held-notices-store.ts): read before the sends of this boot carry them.
+  if (role() === 'leader') void import('../core/sessions/held-notices-sweep.js').then((m) => m.startHeldNotices())
+    .catch((err) => log.web.warn('held notices: not started', { error: String(err) }))
+
   // ── The one status the user sees per task (src/core/user-status-sync.ts).
   if (bootPolicy('user-status')) {
     const { startUserStatusSync } = await import('../core/user-status-sync.js')
@@ -8168,6 +8173,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
       try { await closeHttpServer(httpServer, { dropConnections: opts.dropConnections }) } finally { httpServer = null }
     }
     await shutdownStep('threads files, last', async () => (await import('../core/org/threads-sync.js')).flushThreadsExports(), { budgetMs: 800, afterClose: true })
+    // Held notes and notices the requests the close drained wrote (core/sessions/held-notices-store.ts).
+    await shutdownStep('held notices, last', async () => (await import('../core/sessions/held-notices-sweep.js')).stopHeldNotices(), { budgetMs: 800, afterClose: true })
   } finally {
     releaseSelfApiRoot()
     // Started before the HTTP close; the release caps itself at 3 s (RELEASE_CAP_MS).

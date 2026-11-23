@@ -91,7 +91,11 @@ describe('Places through a real server', () => {
 
     const filtered = await executeOp('places_visits', { last_days: 2, place: 'nowhere' }, local())
     expect((filtered as any).result.visits).toEqual([])
-    const bad = await executeOp('places_visits', { last_days: 500 }, local())
+    // A read's count over its most is read as the most, and says so (src/ops/count-cap.ts).
+    const most = await executeOp('places_visits', { last_days: 500 }, local())
+    expect(most.ok, JSON.stringify(most)).toBe(true)
+    expect((most as any).result.walnut_note).toContain("last_days 500 is over places_visits's most, 90")
+    const bad = await executeOp('places_visits', { last_days: 0 }, local())
     expect(bad.ok).toBe(false)
     const badRange = await json('GET', '/api/places/visits?from=2026-01-01&to=2026-09-01')
     expect(badRange.status).toBe(400)

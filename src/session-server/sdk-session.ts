@@ -568,6 +568,8 @@ export class SdkSession {
               sessionId,
               toolUseId: 'tool_use_id' in block ? block.tool_use_id : '',
               result: typeof content === 'string' ? content.slice(0, 2000) : '',
+              // A failed call (the real-use monitor counts Walnut's: usage-watch/session-hook.ts).
+              ...('is_error' in block && block.is_error === true ? { isError: true } : {}),
             })
           }
         }
