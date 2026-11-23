@@ -89,6 +89,8 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   // A list's own order: the journal has no record for it (a Focus bar move is a task-move).
   { method: 'PATCH', pattern: '/api/v1/tasks/reorder', away: 'needs-leader', why: 'list_order_needs_mac' },
   { method: 'PATCH', pattern: '/api/v1/tasks/:id', away: 'host-write' },
+  // The start check writes nothing: this host answers it with its own reading of the caller (start-ceiling.ts).
+  { method: 'POST', pattern: '/api/v1/tasks/start-check', away: 'read' },
   { method: W, pattern: '/api/v1/tasks/:id', away: 'needs-leader', why: 'task_writes_need_mac' },
   { method: 'GET', pattern: '/api/v1/sessions', away: 'read' },
   { method: 'GET', pattern: '/api/v1/sessions/list-dirs', away: 'needs-leader', why: 'files_need_mac' },

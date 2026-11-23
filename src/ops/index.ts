@@ -46,6 +46,7 @@ import './router.js'
 import './session-op-record.js'
 import './link-check.js'
 import './reply-language-check.js'
+import './task-start-check.js'
 
 export {
   defineOp,

@@ -101,13 +101,53 @@ export async function capStartMode(
   callerSid: string | undefined, requested?: string, opts: { implied?: boolean } & CallerTrust = {},
 ): Promise<SessionMode | undefined> {
   if (!callerSid?.trim() && !opts.unproven) return requested as SessionMode | undefined;
-  const caller = await startCallerOf(callerSid, opts);
-  try { return applyStartModeCeiling(caller, requested, opts); }
-  catch (err) {
+  const verdict = startModeVerdict(await startCallerOf(callerSid, opts), requested, opts);
+  if ('refused' in verdict) {
     const { QuickStartError } = await import('./quick-start.js');
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new QuickStartError(opts.unproven ? `${msg} ${UNPROVEN_NOTE}` : msg, 403);
+    throw new QuickStartError(verdict.refused, 403);
   }
+  return verdict.mode;
+}
+
+/**
+ * The ceiling's verdict for a caller already read (startCallerOf, or a host replica's
+ * awayStartCaller): the mode to use, or the refusal's words (UNPROVEN_NOTE after them for an
+ * unproven caller). Pure; capStartMode and the start check (startCheckAnswer) both read it.
+ */
+export function startModeVerdict(
+  caller: StartCaller, requested: string | undefined, opts: { implied?: boolean; unproven?: boolean } = {},
+): { mode: SessionMode | undefined } | { refused: string } {
+  try { return { mode: applyStartModeCeiling(caller, requested, opts) }; }
+  catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { refused: opts.unproven ? `${msg} ${UNPROVEN_NOTE}` : msg };
+  }
+}
+
+/** What task_start_check answers: whether this caller may start a task in `mode` now, and as whom. */
+export interface StartCheckAnswer {
+  allowed: boolean;
+  /** The mode a start would run in; the asked mode when refused. */
+  mode: SessionMode;
+  caller: StartCaller['kind'];
+  /** The ceiling's refusal, word for word as a start would hear it. Only when refused. */
+  reason?: string;
+}
+
+/** The mode a start check asks about (its body's `mode`), or null when it names no known mode. */
+export function startCheckMode(body: unknown): SessionMode | null {
+  const mode = body && typeof body === 'object' ? (body as { mode?: unknown }).mode : undefined;
+  return typeof mode === 'string' && SESSION_MODE_IDS.includes(mode as SessionMode) ? mode as SessionMode : null;
+}
+
+export const START_CHECK_BAD_MODE = `mode must be one of: ${SESSION_MODE_IDS.join(', ')}`;
+
+/** The start check's answer for a caller already read: the ceiling a start applies, nothing else. Pure. */
+export function startCheckAnswer(caller: StartCaller, mode: SessionMode, opts: { unproven?: boolean } = {}): StartCheckAnswer {
+  const verdict = startModeVerdict(caller, mode, opts);
+  return 'refused' in verdict
+    ? { allowed: false, mode, caller: caller.kind, reason: verdict.refused }
+    : { allowed: true, mode: verdict.mode ?? mode, caller: caller.kind };
 }
 
 /**

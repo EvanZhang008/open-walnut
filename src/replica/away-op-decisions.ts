@@ -58,6 +58,7 @@ export const AWAY_OP_DECISIONS: Readonly<Record<string, AwayOpDecision>> = {
   task_focus_tier_set: host('a tier change journaled as task-move', WRITES),
   task_move: macWrite('Moving a task to another project or folder'),
   task_start: host('a task made on this host while away starts here from the leader\'s template; a task made on the leader, a resume or another host needs the leader', STARTS),
+  task_start_check: host('the start-mode ceiling with this replica\'s own reading of the caller (awayStartCaller); writes nothing and says nothing of whether one task can start here', 'src/replica/start-ceiling.ts'),
   task_stop: macWrite('Stopping a task\'s session or start queue'),
   task_restart: macWrite('Restarting a session'),
   task_switch_engine: macWrite('Switching a task\'s engine'),

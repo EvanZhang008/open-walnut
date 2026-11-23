@@ -16,7 +16,8 @@
  *                self-calls for it carry it): an outside caller whatever its actor, as on the leader
  */
 import type { IncomingMessage } from 'node:http'
-import { applyStartModeCeiling, type StartCaller } from '../core/sessions/delegated-mode.js'
+import type { NextFunction, Request, RequestHandler, Response } from 'express'
+import { START_CHECK_BAD_MODE, startCheckAnswer, startCheckMode, startModeVerdict, type StartCaller } from '../core/sessions/delegated-mode.js'
 import { vouchedPluginJob, type VouchedJob } from '../core/plugin-jobs/job-caller.js'
 import type { SessionMode } from '../core/types.js'
 import { claimedOrigin } from '../web/middleware/request-origin.js'
@@ -54,12 +55,35 @@ export async function awayStartCaller(req: IncomingMessage, actor: WriteActor, d
  * never handed back to the daemon's own away answer).
  */
 export async function capAwayStart(caller: StartCaller, requested: string | undefined): Promise<{ mode: SessionMode | undefined } | { refused: PortAnswer }> {
-  try {
-    return { mode: applyStartModeCeiling(caller, requested || undefined) }
-  } catch (err) {
-    const { launchErrorCode } = await import('../core/sessions/mobile-launch.js')
-    const message = err instanceof Error ? err.message : String(err)
-    return { refused: { answered: false, status: 403, body: { error: { code: launchErrorCode(403), message } } } }
+  const verdict = startModeVerdict(caller, requested || undefined)
+  if (!('refused' in verdict)) return verdict
+  const { launchErrorCode } = await import('../core/sessions/mobile-launch.js')
+  return { refused: { answered: false, status: 403, body: { error: { code: launchErrorCode(403), message: verdict.refused } } } }
+}
+
+export interface StartCheckDeps {
+  /** Who the request acts for (write-actor.ts writeActorOf), or null: no known caller, an outside one. */
+  actorOf(req: Request): WriteActor | null
+  startCaller: StartCallerDeps
+}
+
+/**
+ * POST /api/v1/tasks/start-check (task_start_check) on a host replica: the leader's answer
+ * (web/routes/task-start-check-v1.ts) with this replica's reading of the caller (awayStartCaller),
+ * so a job asks the same question whether the Mac answers or is away. It says only what the ceiling
+ * decides: a start of a task made on the Mac still needs the Mac. Reads nothing else, writes nothing.
+ */
+export function awayStartCheck(deps: StartCheckDeps): RequestHandler {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (req.method.toUpperCase() !== 'POST' || req.path.replace(/\/+$/, '') !== '/v1/tasks/start-check') { next(); return }
+    void (async () => {
+      const mode = startCheckMode(req.body)
+      if (!mode) { res.status(400).json({ error: { code: 'bad_request', message: START_CHECK_BAD_MODE } }); return }
+      const actor = deps.actorOf(req)
+      // No actor (a token this replica does not know as a caller): an outside caller, capped.
+      const caller: StartCaller = actor ? await awayStartCaller(req, actor, deps.startCaller) : { kind: 'external' }
+      res.json(startCheckAnswer(caller, mode, { unproven: !!callerUnprovenOf(req) }))
+    })().catch(next)
   }
 }
 

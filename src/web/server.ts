@@ -2172,6 +2172,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })
     hostReplicaAway = away
     app.use('/api', away.reads)
+    // The start check with this replica's own reading of the caller (start-ceiling.ts), before the leader's route.
+    {
+      const { awayStartCheck, replicaStartCaller } = await import('../replica/start-ceiling.js')
+      app.use('/api', awayStartCheck({ actorOf: (req) => away.actorOf(req), startCaller: replicaStartCaller }))
+    }
     // WP11: note writes while away, before the task writes (which refuse a journaled write they do not know).
     app.use('/api', away.notes)
     // A new Ask Walnut while the Mac is away (WP12): a session on this host, started by its
@@ -3022,6 +3027,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Task + focus endpoints (additive, Wave 1): detail/delete/star/notes/
   // reorder/batch + pin/tier — A-class (local store; replica rides the outbox).
   app.use('/api/v1', taskV1Router)
+  // Whether a caller may start a task in a mode now (task_start_check): the start's own ceiling, no write.
+  app.use('/api/v1', (await import('./routes/task-start-check-v1.js')).taskStartCheckV1Router)
   // Unified send surface (additive): POST /messages (session_send core) +
   // GET /requests/:id (expect_reply status). Primary-only — 501 on a replica.
   app.use('/api/v1', messagesV1Router)

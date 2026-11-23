@@ -50,7 +50,6 @@ import { PIN_TIER_POLICY, SESSION_ENGINE_IDS, migrateFocusTier } from '../../cor
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 import { logRouteError } from './route-error-log.js'
 import { startRouteSource } from '../../core/sessions/send-sent-by.js'
-import { callerUnprovenOf } from '../../lib/caller-unproven.js'
 
 export const taskV1Router = Router()
 
@@ -550,15 +549,15 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
     }
     const workspace = ws as { provider: string; inputs?: unknown } | undefined
     const noWorkspace = b.workspace === false || b.no_workspace === true
-    const rawSid = req.headers['x-walnut-caller-sid']
-    const callerSid = (Array.isArray(rawSid) ? rawSid[0] : rawSid ?? '').trim() || undefined
+    // Who asks (the caller sid, a plugin job its host's daemon vouched for, the unproven mark), read
+    // by the one reader the start check shares (core/sessions/start-request-caller.ts).
+    const { startRequestCaller } = await import('../../core/sessions/start-request-caller.js')
+    const trust = startRequestCaller(req)
+    const callerSid = trust.callerSid
     // A program's own start of a program run is the program's (core/sessions/plugin-run.ts).
     const rawPlugin = req.headers['x-walnut-plugin-id']
     const { programStartSource } = await import('../../core/sessions/plugin-run.js')
     const programSource = await programStartSource({ sid: callerSid, pluginId: (Array.isArray(rawPlugin) ? rawPlugin[0] : rawPlugin)?.trim() || undefined }, id)
-    // A plugin job its host's daemon vouched for (core/plugin-jobs/job-caller.ts): the mode ceiling's caller.
-    const { vouchedPluginJob } = await import('../../core/plugin-jobs/job-caller.js')
-    const callerJob = vouchedPluginJob(req) ?? undefined
     const { startSessionForTask, SessionExistsError } = await import('../../core/sessions/task-start.js')
     const { QuickStartError } = await import('../../core/sessions/quick-start.js')
     const { SubtaskLimitError } = await import('../../core/sessions/subtask-limits.js')
@@ -586,9 +585,10 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
         replyTimeoutSecs: typeof b.reply_timeout === 'number' ? b.reply_timeout : undefined,
         handsOn: str('hands_on'),
         callerSid,
-        ...(callerJob ? { callerJob } : {}),
+        // A plugin job its host's daemon vouched for (core/plugin-jobs/job-caller.ts): the mode ceiling's caller.
+        ...(trust.callerJob ? { callerJob: trust.callerJob } : {}),
         // Its host could not prove that sid (lib/caller-unproven.ts): the ceiling reads an outside caller.
-        callerUnproven: callerUnprovenOf(req),
+        callerUnproven: trust.callerUnproven,
         startAttemptId: str('start_attempt_id'),
         source: programSource ?? startRouteSource('api-v1', req.headers),
         // An agent's start answers once its session is up or the start failed (a sync call,

@@ -47,14 +47,18 @@ function part(raw: unknown): string | undefined {
   return v && v.length <= PART_MAX && !/[\s,]/.test(v) ? v : undefined
 }
 
-/** The ops whose calls the vouched job matters to: those that start a task (POST /tasks/:id/start). */
+/**
+ * The ops whose calls the vouched job matters to: those that start a task (POST /tasks/:id/start),
+ * and task_start_check, which starts nothing but must read the caller exactly as a start does
+ * (POST /tasks/start-check), so a job that asks "may I start in bypass now" hears its starts' answer.
+ */
 const START_PATH = '/tasks/:id/start'
-const START_OPS = new Set(['task_create', 'task_start'])
+const START_OPS = new Set(['task_create', 'task_start', 'task_start_check'])
 
 /**
- * Whether a relayed op can start a task, so its self-calls need the job: task_create, task_start
- * and any op that declares the start route. A job's reads and other writes hold no token, so a
- * job that polls never fills the hold its starts need.
+ * Whether a relayed op can start a task (or asks the start's ceiling: task_start_check), so its
+ * self-calls need the job: those ops and any op that declares the start route. A job's reads and
+ * other writes hold no token, so a job that polls never fills the hold its starts need.
  */
 export function opStartsTask(op: { name: string; bind?: { path?: string }; routes?: ReadonlyArray<{ path: string }> }): boolean {
   return START_OPS.has(op.name) || op.bind?.path === START_PATH || !!op.routes?.some((r) => r.path === START_PATH)

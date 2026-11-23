@@ -97,10 +97,10 @@ describe('one hold for every relayed word (lib/relay-hold.ts)', () => {
 })
 
 describe('only an op that can start a task holds the job', () => {
-  it('task_create, task_start and org_send (which declares the start route) do; reads and other writes do not', async () => {
+  it('task_create, task_start, org_send (which declares the start route) and task_start_check (which asks the start\'s ceiling) do; reads and other writes do not', async () => {
     const { getOp } = await import('../../src/ops/index.js')
     const { opStartsTask } = await import('../../src/core/plugin-jobs/job-caller.js')
-    for (const name of ['task_create', 'task_start', 'org_send']) expect(opStartsTask(getOp(name)!), name).toBe(true)
+    for (const name of ['task_create', 'task_start', 'org_send', 'task_start_check']) expect(opStartsTask(getOp(name)!), name).toBe(true)
     for (const name of ['task_list', 'task_get', 'task_send', 'task_update', 'api']) expect(opStartsTask(getOp(name)!), name).toBe(false)
   })
 })

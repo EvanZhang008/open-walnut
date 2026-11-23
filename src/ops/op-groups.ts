@@ -93,7 +93,7 @@ export const OP_GROUPS: readonly OpGroupDef[] = [
     ops: ['host_daemon_update', 'host_profile_get'],
     prefixes: ['mcp_'],
   },
-  { id: 'checks', title: 'Checks Walnut runs: task statuses, links in a text, feature nodes, security alerts', ops: ['status_check', 'link_check', 'reply_language_check', 'feature_node_connections', 'security_alert_check'] },
+  { id: 'checks', title: 'Checks Walnut runs: task statuses, the mode you may start work in, links in a text, feature nodes, security alerts', ops: ['status_check', 'task_start_check', 'link_check', 'reply_language_check', 'feature_node_connections', 'security_alert_check'] },
   { id: 'settings', title: 'Plugin settings, message hints and tag display', ops: ['plugin_settings', 'plugin_settings_set'], prefixes: ['hint_', 'tag_display_'] },
 ]
 
