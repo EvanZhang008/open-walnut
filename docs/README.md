@@ -116,6 +116,7 @@ must live under one of these top-level categories instead of directly under
   git-over-HTTPS data plane, the live-session bridge, and what the box installs
   to run sessions itself.
 - [Host network](reference/host-network.md): reach a Walnut machine with no SSH door. One invite link joins it; the Mac then reaches its daemon directly or through the relay on the user's own cloud companion, and only listed machines get in.
+- [Kubernetes hosts](reference/kubernetes-hosts.md): a Walnut host as a pod. It joins the host network with one invite, keeps everything (Claude Code's history, its network key, Walnut itself) in a persistent volume at its home, so a deleted or moved pod comes back as the same host; image and manifests in `infra/kubernetes/`.
 - [Phone connection routes](reference/phone-connection-routes.md): the three ways the
   iOS app reaches a Walnut (Wi-Fi, Tailscale, cloud companion), how one pairing works on
   every box, and how the app picks and switches routes.

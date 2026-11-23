@@ -79,6 +79,7 @@ describe('the class: every list of hosts to pick from goes through pickableHosts
     'src/core/expose/placement.ts': 'only always-on hosts matched by hostname, which a joined row (*.walnut-net.invalid) never is',
     'src/core/hosts/host-connect-action.ts': 'reconnects the rows that failed',
     'src/core/net/net-mac.ts': 'the joined rows themselves',
+    'src/core/net/net-hosts.ts': 'which rows and fields a config write keeps, not a host picker',
     'src/core/session-projection.ts': 'labels by alias',
     'src/core/companion-sessions.ts': 'labels by alias',
     'src/core/sessions/host-lost.ts': 'counts whether any other row answers (this machine may be the one offline)',

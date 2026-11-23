@@ -16,6 +16,7 @@ import { isFollower, isHostReplicaProgram } from './server-role.js';
 import { COMPANION_ALIAS, migrateLegacyCompanionKeep } from './replication/companion-keep.js';
 import { applyFoundHostAnswers, askingAboutFoundHosts, mergeFoundHosts } from './hosts/found-hosts.js';
 import { keepNotOfferedRows } from './hosts/found-host-offer.js';
+import { withoutAddresslessNewHosts } from './net/net-hosts.js';
 import { noteRequestTagConfig } from './sessions/request-tag.js';
 import { firstRunStampAllowed, homeHoldsWork, stampFirstRun } from './first-run.js';
 import { writeConfigSection, type ConfigWriteOptions } from './config-section-write.js';
@@ -360,6 +361,8 @@ export async function updateConfig(partial: Partial<Config>, opts: ConfigWriteOp
       // A found host's not Linux mark, which no editor carries, stays on the row as stored now
       // (core/hosts/found-host-offer.ts): a save never offers the host again.
       if (partial.hosts !== undefined) existing.hosts = keepNotOfferedRows(existing.hosts as Record<string, unknown>, hostsBefore);
+      // A merged write patches hosts; it never makes one with no address (net-hosts.ts).
+      if (partial.hosts !== undefined && opts.mergeEntries) existing.hosts = withoutAddresslessNewHosts(existing.hosts as Record<string, unknown>, hostsBefore);
     }
     return { write: true, result: undefined };
   });

@@ -826,7 +826,7 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       // which also takes it off the companion's list.
       const { keepNetHosts, NetHostAliasTaken } = await import('../../core/net/net-hosts.js')
       try {
-        const kept = keepNetHosts(sent, current)
+        const kept = keepNetHosts(sent, current, { merge: sections.mergeEntries })
         // A merged write touches only the hosts it names: a net row it left out stays as the
         // write lock finds it, never as this earlier read saw it.
         body.hosts = (sections.mergeEntries

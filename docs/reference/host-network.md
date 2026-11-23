@@ -179,6 +179,9 @@ connection the machine's own client closed before the answer.
 
 ## Joining a machine
 
+A pod in a Kubernetes cluster joins the same way, with the invite in a secret its entrypoint
+reads on its first start: docs/reference/kubernetes-hosts.md.
+
 1. Settings > Remote Hosts > Machines that joined with a link > Add a machine. The Mac
    turns the network on (`net.enabled`), tells the companion its own network id, and
    asks it for an invite: a 12 character code, one use, 10 minutes.

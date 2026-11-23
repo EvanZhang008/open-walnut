@@ -1,0 +1,146 @@
+# A Walnut host as a pod (docs/reference/kubernetes-hosts.md). Set the image, then, within the
+# invite's 10 minutes (Settings > Remote Hosts > Add a machine makes it):
+#
+#   kubectl create namespace walnut
+#   kubectl -n walnut create secret generic walnut-join --from-literal=invite='<join link or wn1- ticket>'
+#   kubectl apply -f walnut-host.yaml
+#
+# The pod joins the host network once, with the invite, and from then on is a host like any
+# other in Settings > Remote Hosts. Everything it keeps (Walnut, Claude Code, the host's network
+# key, every session's history) is in the volume mounted at its home, so deleting the pod, a
+# node going away or a new image changes nothing: the next pod mounts the same volume and comes
+# back as the same host. Deleting the volume is what ends the host.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: walnut
+---
+# The home volume. Retain: deleting the claim (or the StatefulSet) never deletes the disk, so a
+# mistake cannot take the history with it. On EKS Auto Mode the provisioner is
+# ebs.csi.eks.amazonaws.com; with the EBS CSI driver add-on it is ebs.csi.aws.com.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: walnut-home
+provisioner: ebs.csi.eks.amazonaws.com
+parameters:
+  type: gp3
+  encrypted: "true"
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+---
+# EKS Auto Mode only (leave it out elsewhere, with the pod's nodeSelector and toleration):
+# nodes of their own, never consolidated while the pod runs, so a running session is not moved.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: walnut
+spec:
+  template:
+    spec:
+      # Auto Mode's own NodeClass (its built-in pools use it too).
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: default
+      # Auto Mode replaces a node after at most 21 days, counting the 24 h it waits for a pod
+      # that may not be disrupted: the pod then restarts on a new node (its volume goes with it).
+      expireAfter: 480h
+      taints:
+        - key: walnut-host
+          effect: NoSchedule
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+        - key: eks.amazonaws.com/instance-category
+          operator: In
+          values: ["c", "m", "r"]
+        - key: eks.amazonaws.com/instance-generation
+          operator: Gt
+          values: ["4"]
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 5m
+  limits:
+    cpu: "32"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: eks-walnut
+  namespace: walnut
+spec:
+  # No Service of that name is needed: nothing connects to the pod (it dials out to the host
+  # network), and the field only names the pods' DNS domain.
+  serviceName: eks-walnut
+  replicas: 1
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: walnut-host
+  # The volumes outlive the StatefulSet: they are the hosts.
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  template:
+    metadata:
+      labels:
+        app: walnut-host
+      annotations:
+        # No voluntary move (consolidation, drift) while sessions run on it.
+        karpenter.sh/do-not-disrupt: "true"
+    spec:
+      # The pod's hostname (eks-walnut-0, ...) is the name it joins with.
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      # A stop is a shutdown (entrypoint.sh): TERM to every process, 45 s for them to end.
+      terminationGracePeriodSeconds: 60
+      nodeSelector:
+        karpenter.sh/nodepool: walnut
+      tolerations:
+        - key: walnut-host
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: host
+          image: walnut-host:latest
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: "3"
+              memory: 12Gi
+            limits:
+              memory: 15Gi
+          volumeMounts:
+            - name: home
+              mountPath: /home/walnut
+            - name: join
+              mountPath: /etc/walnut-join
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # One use: once joined, the host keeps its key in its home and never reads it again.
+        - name: join
+          secret:
+            secretName: walnut-join
+            optional: true
+        # /tmp outlives a container restart and is gone with the pod, as at a reboot; nothing
+        # Walnut must keep is there.
+        - name: tmp
+          emptyDir:
+            sizeLimit: 20Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: home
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: walnut-home
+        resources:
+          requests:
+            storage: 100Gi

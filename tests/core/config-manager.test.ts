@@ -126,6 +126,31 @@ describe('updateConfig', () => {
   });
 });
 
+describe('a merged hosts write never makes a host with no address', () => {
+  it('drops a patch for a host removed since the writer read it, and keeps real ones', async () => {
+    // The net machine eks-0 was removed (Remove) after the writer read it; its patch arrives.
+    const initial = { version: 1, hosts: { box: { hostname: 'box.example', label: 'Box' } } };
+    await fs.writeFile(CONFIG_FILE, yaml.dump(initial), 'utf-8');
+    await updateConfig({
+      hosts: {
+        'eks-0': { capabilities: ['cloud'] },
+        box: { capabilities: ['always-on'] },
+        fresh: { hostname: 'fresh.example' },
+      },
+    } as any, { mergeEntries: true });
+    const result = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as any;
+    expect(Object.keys(result.hosts).sort()).toEqual(['box', 'fresh']);
+    expect(result.hosts.box).toEqual({ hostname: 'box.example', label: 'Box', capabilities: ['always-on'] });
+  });
+
+  it('leaves a whole-map write as sent', async () => {
+    await fs.writeFile(CONFIG_FILE, yaml.dump({ version: 1, hosts: {} }), 'utf-8');
+    await updateConfig({ hosts: { odd: { label: 'no address' } } } as any);
+    const result = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as any;
+    expect(result.hosts.odd).toEqual({ label: 'no address' });
+  });
+});
+
 describe('saveConfig (full replace)', () => {
   it('replaces entire file, dropping unmentioned keys', async () => {
     const initial = {
