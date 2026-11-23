@@ -106,6 +106,16 @@ export async function turnOfOwnSession(): Promise<(sid: string) => { waits: unkn
   }
 }
 
+/**
+ * The bus subscribers of the family's members that act on a turn end, by the name each subscribes
+ * with (tests/core/session-channel/stand-down-held.test.ts checks the list against the sources).
+ * turn-run listens to sends only; cold hold and the stale repair subscribe to nothing.
+ */
+export const RESEND_TURN_END_SUBSCRIBERS: readonly string[] = [
+  'queue-after-turn', 'idle-compaction', 'prompt-refresh-respawn', 'context-full-recovery', 'safeguard-switch',
+  'model-restore', 'session-auto-continue', 'session-endpoint-wait', 'session-usage-limit-wait',
+]
+
 export interface HostResendFamily {
   /** The bus subscribers the family registered (a replay goes to these only). */
   readonly names: readonly string[]
@@ -119,7 +129,6 @@ export async function startHostResendFamily(o: { say?: Say } = {}): Promise<Host
   const say: Say = o.say ?? (() => {})
   const stops: Array<() => void> = []
   const { bus } = await import('../event-bus.js')
-  const before = new Set(bus.subscriberNames())
   const step = async (name: string, fn: () => Promise<(() => void) | void>): Promise<void> => {
     try {
       const stop = await fn()
@@ -187,7 +196,8 @@ export async function startHostResendFamily(o: { say?: Say } = {}): Promise<Host
     repair.start()
     return repair.stop
   })
-  const names = bus.subscriberNames().filter((n) => !before.has(n))
+  // The members that act on a turn end, as each subscribes (a fixed list: nothing else hears a replay).
+  const names = RESEND_TURN_END_SUBSCRIBERS.filter((n) => bus.has(n))
   say('info', 'host sessions: the resend family runs here for this host\'s own sessions', { members: stops.length })
   return {
     names,

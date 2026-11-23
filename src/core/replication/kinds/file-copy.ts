@@ -37,6 +37,8 @@ export interface FileCopy<Row> {
   follower(): RowSetFollower
   /** The copy's rows by key, or null when there is none (never copied, or turned off). */
   read(): Promise<Record<string, Row> | null>
+  /** This box's clock when the last manifest (or a matched round) arrived; 0 when there is none. */
+  heardAt(): Promise<number>
   reset(): void
 }
 
@@ -107,6 +109,7 @@ export function createFileCopy<Row>(spec: FileCopySpec<Row>): FileCopy<Row> {
   return {
     follower: () => (follower ??= make()),
     read: async () => (await readFile())?.rows ?? null,
+    heardAt: async () => (await readFile())?.at ?? 0,
     reset: () => { mem = null; follower = null; serial = serialChain() },
   }
 }

@@ -209,3 +209,22 @@ describe('N1: the stop of the switch following waits for a late start and stops 
     expect(calls).toEqual([])
   })
 })
+
+describe('round 2, N1: only a leader_capabilities row heard since the leader that answers now began counts', () => {
+  it('a row an earlier leader left says nothing; one heard after the presence began says the channel', async () => {
+    const { leaderSaysChannelNow } = await import('../../../src/core/session-channel/host-boot.js')
+    const caps = async () => ['session-channel-v1']
+    expect(await leaderSaysChannelNow({ caps, heardAt: async () => 1000, presenceSince: () => 2000 })).toBe(false)
+    expect(await leaderSaysChannelNow({ caps, heardAt: async () => 3000, presenceSince: () => 2000 })).toBe(true)
+    expect(await leaderSaysChannelNow({ caps: async () => undefined, heardAt: async () => 3000, presenceSince: () => 2000 })).toBe(false)
+    expect(await leaderSaysChannelNow({ caps: async () => ['other'], heardAt: async () => 3000, presenceSince: () => 2000 })).toBe(false)
+  })
+
+  it('host-boot.ts reads the copy\'s heard time and the presence for it', async () => {
+    const fsp = await import('node:fs/promises')
+    const src = await fsp.readFile(new URL('../../../src/core/session-channel/host-boot.ts', import.meta.url), 'utf8')
+    expect(src).toMatch(/leaderSaysChannel: async \(\) => leaderSaysChannelNow\(/)
+    expect(src).toMatch(/configCopyHeardAt\(\)/)
+    expect(src).toMatch(/presenceSince: \(\) => leaderPresence\(\)\.since/)
+  })
+})

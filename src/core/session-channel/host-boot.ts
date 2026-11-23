@@ -118,6 +118,13 @@ async function ownRows(hostKey: string): Promise<SessionRecord[]> {
   return (await listSessions()).filter((r) => rowOwnedHere(r, hostKey))
 }
 
+/** Does the leader that answers now say it speaks the channel (old-leader-watch.ts LEADER_CHANNEL_CAP)? */
+export async function leaderSaysChannelNow(d: { caps(): Promise<unknown>; heardAt(): Promise<number>; presenceSince(): number }): Promise<boolean> {
+  const caps = await d.caps()
+  if (!Array.isArray(caps) || !caps.includes(LEADER_CHANNEL_CAP)) return false
+  return (await d.heardAt()) > d.presenceSince()
+}
+
 /** Put the pieces together (once). Null, with the reason logged, when this host cannot. */
 export async function startHostSessions(o: StartHostSessionsOptions): Promise<HostSessions | null> {
   if (current) return current
@@ -240,16 +247,19 @@ export async function startHostSessions(o: StartHostSessionsOptions): Promise<Ho
   })
   const [{ leaderPresence }, { setHostStandsDown, hostStandsDown }, { getConfig }] = await Promise.all([import('../server-role.js'), import('../sessions/judge-of.js'), import('../config-manager.js')])
   // The turn ends the family skipped while standing down, for its stand-up (stand-down-held.ts).
-  const held = createStandDownHeld({ standingDown: hostStandsDown, owns: (sid) => emitter.owns(sid) })
+  const held = createStandDownHeld({ standingDown: hostStandsDown, owns: (sid) => emitter.owns(sid), offsetOf: (sid) => runner.findSessionByClaudeId(sid)?.consumedOffset, log: say })
   bus.subscribe(STAND_DOWN_HELD_SUBSCRIBER, (event) => held.note(event), { global: true, interest: ['session:'] })
   const oldLeader = startOldLeaderWatch({
     leaderAnswers: () => leaderPresence().answers,
     channelLinked: () => channel.leaderLive() || dialer.linked(),
-    // The leader's own word in its config copy: one that speaks the channel never makes this host stand down on the timeout.
-    leaderSaysChannel: async () => {
-      const caps = (await getConfig().catch(() => null))?.leader_capabilities
-      return Array.isArray(caps) && caps.includes(LEADER_CHANNEL_CAP)
-    },
+    // The leader's own word in its config copy: one that speaks the channel never makes this host
+    // stand down on the timeout. Only a copy heard since the leader that answers now began answering
+    // counts: a row an earlier leader left (a straight downgrade) says nothing of this one.
+    leaderSaysChannel: async () => leaderSaysChannelNow({
+      caps: async () => (await getConfig().catch(() => null))?.leader_capabilities,
+      heardAt: async () => (await import('../replication/kinds/config.js')).configCopyHeardAt().catch(() => 0),
+      presenceSince: () => leaderPresence().since,
+    }),
     // Every member of the resend family acts only on what judgedHere names (none, standing down); the
     // family stays subscribed in its order before the emitter. The CLIs, routes, log and emitter go on.
     standDown: () => setHostStandsDown(true),

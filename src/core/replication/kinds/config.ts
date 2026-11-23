@@ -136,6 +136,11 @@ export async function readConfigCopy(): Promise<Record<string, unknown> | null> 
   return out
 }
 
+/** This host's clock when the last config round from the leader arrived (0: none). */
+export async function configCopyHeardAt(): Promise<number> {
+  return copy.heardAt()
+}
+
 /** Tests only. */
 export function _resetConfigCopyForTesting(): void {
   copy.reset()
