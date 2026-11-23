@@ -260,6 +260,17 @@ describe.each(SHELLS)('the service launcher under %s', (_label, bin) => {
     expect(alive(v1pid)).toBe(true)
   })
 
+  it('ends its service and itself once its script and its state are both gone (a removed test dir)', async () => {
+    const v1 = stub('v1')
+    const launcher = launch(writeLauncher(v1))
+    await until(() => live('v1').length === 1, 5_000, 'first start')
+    const service = live('v1')[0]!.pid
+    fs.rmSync(dir, { recursive: true, force: true })
+    await until(() => !alive(launcher.pid!) && !alive(service), 25_000, 'the launcher and its service to end')
+    // The cleanup after each test writes its stop mark here.
+    fs.mkdirSync(state, { recursive: true })
+  })
+
   it('a failed switch during a probation puts back the last proven version, and tells that start it is a put-back', async () => {
     // A version still in its probation is not proven: a second update inside it falls back to the one before.
     const v1 = stub('v1'); const v2 = stub('v2'); const v3 = stub('v3', 'fail')

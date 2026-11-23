@@ -331,6 +331,9 @@ l_runnable() {
 # The script was rewritten: a newer launcher runs on in place (its service watched on by pid); a script
 # that is no launcher any more (the experiment turned off: the classic boot script) gets a stopped service.
 l_selfcheck() {
+  # Its script and its state are both gone (a test's temp dir removed under it): nothing keeps this
+  # launcher's work any more, so it ends its service and itself instead of ticking on forever.
+  if [ ! -e "$SELF" ] && [ ! -d "$L" ]; then l_stop "$K_STOP"; exit 0; fi
   [ "$s_phase" = trial ] && return 0; [ -f "$L/request" ] && return 0
   lc_sum=$(cksum < "$SELF" 2>/dev/null); [ -n "$lc_sum" ] && [ "$lc_sum" != "$l_sum" ] || return 0
   if [ "$(sed -n 3p "$SELF")" = '${LAUNCHER_MARK}' ]; then l_log "the launcher script changed: running the new one"
