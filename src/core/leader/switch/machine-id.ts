@@ -41,6 +41,16 @@ export function permitHolderId(env: NodeJS.ProcessEnv = process.env): string | n
 }
 
 /**
+ * Where this machine keeps the records of the witnesses it serves for other machines' write
+ * permission (witness-route.ts): `<root>/<walnut id>/<witness id>/permit-record.json`. Beside the
+ * machine-id file, outside every data home: a witness's record belongs to the machine, and a
+ * copy of a data home never carries it.
+ */
+export function witnessRoot(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(path.dirname(machineIdFile(env)), 'leader-witness')
+}
+
+/**
  * The instance lock of this machine's leader process (permit/instance-lock.ts): one server per
  * machine id may hold the write permission. Beside the machine-id file, so the one-machine
  * rehearsal's two "machines" each have their own.

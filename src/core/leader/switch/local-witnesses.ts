@@ -1,7 +1,9 @@
 /**
- * Witnesses in local directories (this phase: every machine of the switch is on one
- * computer). Each witness is a directory holding the permit core's record file; any process
- * may serve a request to it, one at a time under a cross-process lock on that file.
+ * Witnesses in directories of this computer: a one-computer switch's own witnesses, and the
+ * records a machine serves for others (witness-route.ts). Each witness is a directory holding
+ * the permit core's record file; any process may serve a request to it, one at a time under a
+ * cross-process lock on that file. How a request reaches a witness (this file for a local one,
+ * the network for a remote one) is witness-transport.ts.
  *
  * Several processes (the old leader's server, the new one's, the switch command) serve the
  * same witness, so each keeps its own PermitWitness and reloads it whenever the file differs
@@ -21,14 +23,14 @@ import { withFileLock } from '../../../utils/file-lock.js'
 import { createWitnessClock } from '../permit/clock.js'
 import { bootstrapWitnessStore, createFilePermitStore } from '../permit/store.js'
 import { PermitWitness } from '../permit/witness.js'
-import type { PermitParams, PermitReply, PermitRequest, PermitTransport } from '../permit/types.js'
-import type { WitnessPlace } from './settings.js'
+import type { PermitParams, PermitReply, PermitRequest } from '../permit/types.js'
+import type { LocalWitnessPlace } from './settings.js'
 
 import { registerMemoryHolder } from '../../observability/memory-ledger.js'
 
 const RECORD = 'permit-record.json'
 
-export function witnessRecordFile(place: WitnessPlace): string {
+export function witnessRecordFile(place: LocalWitnessPlace): string {
   return path.join(place.dir, RECORD)
 }
 
@@ -50,7 +52,7 @@ function readText(file: string): string {
  * is the async one (a server's event loop never waits on it), held a short while: a witness whose
  * lock is busy that long gives no answer, as a slow one on a network would.
  */
-export function serveLocalWitness(place: WitnessPlace, req: PermitRequest, params: PermitParams): Promise<PermitReply | null> {
+export function serveLocalWitness(place: LocalWitnessPlace, req: PermitRequest, params: PermitParams): Promise<PermitReply | null> {
   if (!fs.existsSync(place.dir)) return Promise.resolve(null)
   const file = witnessRecordFile(place)
   return withFileLock(file, async () => {
@@ -72,30 +74,12 @@ export function forgetLocalWitnesses(): void {
 }
 
 /**
- * The permit core's transport over local witness directories. A reply is handed back on a
- * later tick, as a network would, so the client never sees an answer inside its own send.
+ * Set up witness directories that have never held a record, with the first list (`list`: the
+ * whole fixed list when `places` are only the ones on this machine). A directory that already
+ * holds one is left as it is (a witness that lost its record rejoins through a list change,
+ * never by starting over: store.ts).
  */
-export function localWitnessTransport(places: WitnessPlace[], params: PermitParams, deliver: (reply: PermitReply) => void): PermitTransport {
-  const byId = new Map(places.map((p) => [p.id, p]))
-  return {
-    send(witness, req) {
-      const place = byId.get(witness)
-      if (!place) return
-      setImmediate(() => {
-        // A lock that could not be taken, a disk error: no answer.
-        void serveLocalWitness(place, req, params).catch(() => null).then((reply) => { if (reply) deliver(reply) })
-      })
-    },
-  }
-}
-
-/**
- * Set up witness directories that have never held a record, with the first list. A directory
- * that already holds one is left as it is (a witness that lost its record rejoins through a
- * list change, never by starting over: store.ts).
- */
-export function setUpLocalWitnesses(places: WitnessPlace[]): { made: string[]; kept: string[] } {
-  const list = places.map((p) => p.id)
+export function setUpLocalWitnesses(places: LocalWitnessPlace[], list: string[] = places.map((p) => p.id)): { made: string[]; kept: string[] } {
   const made: string[] = []
   const kept: string[] = []
   for (const p of places) {

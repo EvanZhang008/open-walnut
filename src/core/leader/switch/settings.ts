@@ -5,13 +5,16 @@
  *
  * ```yaml
  * leader_switch:
- *   witnesses:                 # three, a majority of two; this phase: local directories
- *     - { id: w1, dir: /srv/walnut-witness/w1 }
+ *   witnesses:                 # three, a majority of two (the list is FIXED: a majority of this list)
+ *     - { id: w1, dir: /srv/walnut-witness/w1 }   # a directory on this computer
+ *     - { id: w2, host: dev-box }                  # the Walnut service on a host (a `hosts` alias, or a machine id)
  *   machines:
  *     - id: <machine id>       # this machine's stable id (src/core/machine-id.ts)
  *       home: /path/to/home    # its data home when it leads
  *       standby_dir: /path     # where the other leader's standby batches land on it
  *       port: 3456
+ *       account_home: /home/me # optional: the account's home dir there (default: env.HOME below);
+ *                              # the switch moves paths under it to the other machine's
  *       start_command: [...]   # optional: how to start its server (default: this CLI's `web --port`)
  *       env: { K: V }          # optional: extra environment for that server
  *   back_window_hours: 168     # `--back` is offered this long after a switch
@@ -23,13 +26,29 @@ import YAML from 'yaml'
 import { DEFAULT_PERMIT_PARAMS, type PermitParams } from '../permit/types.js'
 import { experimentalEnabled, type ExperimentalFlags } from '../../experimental.js'
 
-export interface WitnessPlace { id: string; dir: string }
+/** A witness whose record is a directory on this computer (one-computer rehearsals and tests). */
+export interface LocalWitnessPlace { id: string; dir: string }
+/**
+ * A witness served by another machine's Walnut service (witness-route.ts): `host` is a `hosts`
+ * alias of config.yaml, or that machine's id when it is not an alias (witness-transport.ts).
+ */
+export interface RemoteWitnessPlace { id: string; host: string }
+export type WitnessPlace = LocalWitnessPlace | RemoteWitnessPlace
+
+export function isRemoteWitness(w: WitnessPlace): w is RemoteWitnessPlace {
+  return 'host' in w
+}
+export function isLocalWitness(w: WitnessPlace): w is LocalWitnessPlace {
+  return 'dir' in w
+}
 
 export interface MachinePlace {
   id: string
   home: string
   standbyDir: string
   port: number
+  /** The account's home dir on that machine: paths under it move to the other machine's (home-paths.ts). */
+  accountHome?: string
   start?: string[]
   env?: Record<string, string>
 }
@@ -66,11 +85,14 @@ export function parseSwitchSettings(raw: unknown): { settings: LeaderSwitchSetti
   const witnesses: WitnessPlace[] = []
   for (const w of Array.isArray(o.witnesses) ? o.witnesses : []) {
     const x = w as Record<string, unknown>
-    if (!str(x?.id) || !str(x?.dir)) return { settings: null, problem: 'leader_switch.witnesses: each needs id and dir' }
-    witnesses.push({ id: x.id, dir: path.resolve(x.dir) })
+    if (!str(x?.id) || (str(x?.dir) === str(x?.host))) return { settings: null, problem: 'leader_switch.witnesses: each needs an id and exactly one of dir (a directory here) or host (another machine)' }
+    witnesses.push(str(x.dir) ? { id: x.id, dir: path.resolve(x.dir) } : { id: x.id, host: String(x.host).trim() })
   }
   if (witnesses.length < 3) return { settings: null, problem: `leader_switch.witnesses lists ${witnesses.length}; at least three are needed for a majority that survives one loss` }
   if (new Set(witnesses.map((w) => w.id)).size !== witnesses.length) return { settings: null, problem: 'leader_switch.witnesses: ids must be unique' }
+  // Two witness ids that reach one machine would be one witness counted twice: a majority that is not one.
+  const where = witnesses.map((w) => (isRemoteWitness(w) ? `host:${w.host}` : `dir:${w.dir}`))
+  if (new Set(where).size !== witnesses.length) return { settings: null, problem: 'leader_switch.witnesses: each witness needs its own dir or host (two ids on one place count one machine twice)' }
   const machines: MachinePlace[] = []
   for (const m of Array.isArray(o.machines) ? o.machines : []) {
     const x = m as Record<string, unknown>
@@ -82,7 +104,8 @@ export function parseSwitchSettings(raw: unknown): { settings: LeaderSwitchSetti
     const env = x.env && typeof x.env === 'object'
       ? Object.fromEntries(Object.entries(x.env as Record<string, unknown>).filter(([, v]) => typeof v === 'string')) as Record<string, string>
       : undefined
-    machines.push({ id: x.id, home: path.resolve(x.home), standbyDir: path.resolve(x.standby_dir), port, ...(start ? { start } : {}), ...(env ? { env } : {}) })
+    const accountHome = str(x.account_home) ? x.account_home : env?.HOME
+    machines.push({ id: x.id, home: path.resolve(x.home), standbyDir: path.resolve(x.standby_dir), port, ...(accountHome ? { accountHome } : {}), ...(start ? { start } : {}), ...(env ? { env } : {}) })
   }
   if (machines.length < 2) return { settings: null, problem: 'leader_switch.machines must list the two machines a leader can move between' }
   if (new Set(machines.map((m) => m.id)).size !== machines.length) return { settings: null, problem: 'leader_switch.machines: ids must be unique' }

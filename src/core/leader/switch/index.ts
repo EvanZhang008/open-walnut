@@ -6,8 +6,9 @@
  */
 export { runLeaderSwitch, readSwitchState, switchStateFile, SwitchRefused, type SwitchState, type SwitchStep, type SwitchOptions } from './flow.js'
 export { leaderPermitAtBoot, currentLeaderPermit, LeaderBootRefused } from './boot.js'
-export { setUpLocalWitnesses, serveLocalWitness, localWitnessTransport, forgetLocalWitnesses } from './local-witnesses.js'
-export { readHomeSwitchConfig, parseSwitchSettings, type LeaderSwitchSettings, type MachinePlace, type WitnessPlace } from './settings.js'
+export { setUpLocalWitnesses, serveLocalWitness, forgetLocalWitnesses } from './local-witnesses.js'
+export { createWitnessTransport, setUpRemoteWitness, addWitnessReach } from './witness-transport.js'
+export { readHomeSwitchConfig, parseSwitchSettings, machineById, type LeaderSwitchSettings, type MachinePlace, type WitnessPlace, type LocalWitnessPlace, type RemoteWitnessPlace, isLocalWitness, isRemoteWitness } from './settings.js'
 export { readMarker, readHistory, readMayAct, type HandedOverMarker, type MayActLine } from './records.js'
 export { permitHolderId, machineIdFile } from './machine-id.js'
 export { LocalSide, type SwitchSide } from './side.js'

@@ -5,7 +5,7 @@
  * so the invariant check is known to bite.
  */
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_PERMIT_PARAMS, type PermitParams } from '../../../../src/core/leader/permit/index.js'
+import { DEFAULT_PERMIT_PARAMS, type PermitParams, type PermitReply } from '../../../../src/core/leader/permit/index.js'
 import { SimStore, World, actUntilReleaseStood, pilot, releaseOnAnyLive, takeOnMinorityRelease } from './sim.js'
 
 const W = ['w1', 'w2', 'w3']
@@ -63,6 +63,12 @@ interface Variant {
   minorityTakes?: boolean
   /** Negative control (releases): a witness takes a release on any live record, whoever holds it. */
   releaseAnyOwner?: boolean
+  /** The network transport's timeout per request (default: none; the real default is 20 s). */
+  transportTimeoutMs?: number
+  /** Old replies come back after newer ones (a link or a transport that redelivers): the core must not care. */
+  replayOldReplies?: boolean
+  /** Negative control: a transport that also hands each reply over as another witness's (one machine counted as two). */
+  wrongWitnessId?: boolean
 }
 
 function schedule(seed: number, v: Variant = {}): { world: World; totalMs: number } {
@@ -72,6 +78,11 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
     slow: v.lateSteps ? 0.1 : 0.04, slowMs: v.lateSteps ? [60_000, 300_000] : [1_000, 90_000],
   }, seed)
   const r = world.rand
+  if (v.transportTimeoutMs !== undefined) world.transportTimeoutMs = v.transportTimeoutMs
+  // With the real 15 s timeout the real in-flight caps apply too (lost messages free their slot then).
+  if (v.transportTimeoutMs === 15_000) world.transportMaxInFlight = undefined
+  if (v.replayOldReplies) world.wrapDeliver = replayOldReplies(world, r)
+  if (v.wrongWitnessId) world.wrapDeliver = answerAsWrongWitness(world, r)
   const bound = (v.params?.maxDriftRate === 0 ? DEFAULT_PERMIT_PARAMS.maxDriftRate : params.maxDriftRate) * (v.driftShare ?? 0.99)
   const drift = (side: 1 | -1) => (v.worstDrift ? side : r() * 2 - 1) * bound
   const extra = v.members ? (v.pool5 ? ['w4', 'w5'] : ['w4']) : []
@@ -170,7 +181,12 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
         })
       } else if (kind === 3) {
         const m = world.machines.get(M[Math.floor(r() * 3)])!
-        m.clock.wallJumps.push([world.now, (r() * 2 - 1) * 120_000])
+        const jump = (r() * 2 - 1) * 120_000
+        // Not in the middle of a sleep: a wall clock set back while a machine sleeps hides that much of the sleep from the
+        // fallback clock (mono-wall, clock.ts); the machines the permit runs on count sleep with the boot clock. It has
+        // its own named case: system-clock.test.ts 'a set-back of 77 s, 68 s into the sleep' (seed 65 of the
+        // 'instant they may' chunk met it once the transport changed the random stream).
+        if (!m.clock.asleep()) m.clock.wallJumps.push([world.now, jump])
       } else if (kind === 4) {
         const w = world.witnesses.get(pool[Math.floor(r() * pool.length)])!
         w.clock.sleeps.push([world.now, world.now + 5_000 + r() * 60_000])
@@ -229,6 +245,39 @@ function schedule(seed: number, v: Variant = {}): { world: World; totalMs: numbe
   return { world, totalMs }
 }
 
+/**
+ * A transport that redelivers: after a reply it hands over, an OLDER reply of the same witness comes
+ * again up to 30 s later, so a read or an answer is seen after a newer one.
+ */
+function replayOldReplies(world: World, r: () => number): NonNullable<World['wrapDeliver']> {
+  return (_from, base) => {
+    const seen = new Map<string, PermitReply[]>()
+    return (reply) => {
+      base(reply)
+      const list = seen.get(reply.witness) ?? []
+      list.push(reply)
+      seen.set(reply.witness, list)
+      if (list.length > 1 && r() < 0.5) {
+        const old = list[Math.floor(r() * (list.length - 1))]!
+        world.injected++
+        world.after(1 + r() * 30_000, () => base(JSON.parse(JSON.stringify(old)) as PermitReply))
+      }
+    }
+  }
+}
+
+/** Negative control: half the replies are handed over a second time under another witness's id. */
+function answerAsWrongWitness(world: World, r: () => number): NonNullable<World['wrapDeliver']> {
+  return (_from, base) => (reply) => {
+    base(reply)
+    if (r() < 0.5) {
+      const others = W.filter((w) => w !== reply.witness)
+      world.injected++
+      base({ ...reply, witness: others[Math.floor(r() * others.length)]! })
+    }
+  }
+}
+
 /** Negative control: list changes carry no op entries to the witnesses that join. */
 function dropLedger(c: object): void {
   ;(c as { ops: { ledger: () => unknown[] } }).ops.ledger = () => []
@@ -258,10 +307,12 @@ async function sweep(seeds: number, v: Variant = {}, from = 1, stopAtFirst = fal
   /** Planned stops whose release reached every witness and stood, and those of them taken over within 10 s. */
   let fullStood = 0
   let fast = 0
+  let injected = 0
   for (let seed = from; seed < from + seeds; seed++) {
     await new Promise((res) => setImmediate(res))
     const { world, totalMs } = schedule(seed, v)
     sent += world.sends.size
+    injected += world.injected
     unknown += world.unknownSeen.size
     if (world.violations.length > 0 || doubleSends(world).length > 0) {
       violations++
@@ -281,7 +332,7 @@ async function sweep(seeds: number, v: Variant = {}, from = 1, stopAtFirst = fal
       if (next && next[0] - e.at < 10_000) fast++
     }
   }
-  return { violations, firstBad, activeShare: active / total, sent, unknown, releases, stood, fastShare: fullStood ? fast / fullStood : 0 }
+  return { violations, firstBad, injected, activeShare: active / total, sent, unknown, releases, stood, fastShare: fullStood ? fast / fullStood : 0 }
 }
 
 describe('write permission: random schedules', () => {
@@ -411,6 +462,31 @@ describe('write permission: random schedules', () => {
     expect(r.stood).toBeGreaterThan(100)
   }, 120_000)
 
+  // The network transport is the real one (witness-transport.ts) in every run above; these add what
+  // only it can do: time a request out, and see replies that come again.
+  it('never lets two machines act at once when the transport drops a reply after 3 s (100 seeds)', async () => {
+    const r = await sweep(100, { transportTimeoutMs: 3_000 })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+    expect(r.activeShare).toBeGreaterThan(0.3)
+  }, 120_000)
+
+  it('never lets two machines act at once with the real 15 s timeout and steps arriving minutes late (60 seeds)', async () => {
+    const r = await sweep(60, { transportTimeoutMs: 15_000, members: true, pool5: true, lateSteps: true, tickMs: 1_000 })
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+  }, 120_000)
+
+  it('never lets two machines act at once when old replies arrive again after newer ones (200 seeds)', async () => {
+    const r = await sweep(200, { replayOldReplies: true })
+    expect(r.injected, 'old replies were redelivered').toBeGreaterThan(1_000)
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+  }, 120_000)
+
+  it('never lets two processes act at once, or sends an op twice, when old replies come again across restarts, planned stops and list changes (60 seeds)', async () => {
+    const r = await sweep(60, { replayOldReplies: true, ops: true, releases: true, restarts: true, members: true, tickMs: 1_000 })
+    expect(r.injected).toBeGreaterThan(1_000)
+    expect(r.firstBad, `first violating seed ${r.firstBad}`).toBeNull()
+  }, 120_000)
+
   it('holds with no faults beyond the network across longer runs', async () => {
     const r = await sweep(20, { minutes: 60 })
     expect(r.firstBad).toBeNull()
@@ -474,6 +550,12 @@ describe('write permission: random schedules', () => {
 
     it('a new process that takes it on a release seen at a minority: it acts beside the next holder', async () => {
       const r = await sweep(200, { releases: true, tickMs: 1_000, minorityTakes: true }, 1, true)
+      expect(r.violations).toBeGreaterThan(0)
+    }, 120_000)
+
+    it('a transport that answers as another witness too: one machine counts as two and the majority is not one', async () => {
+      const r = await sweep(300, { wrongWitnessId: true })
+      expect(r.injected).toBeGreaterThan(1_000)
       expect(r.violations).toBeGreaterThan(0)
     }, 120_000)
 

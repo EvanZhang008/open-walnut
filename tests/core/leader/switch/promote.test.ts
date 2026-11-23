@@ -9,9 +9,10 @@ import os from 'node:os'
 import path from 'node:path'
 import YAML from 'yaml'
 import Database from '../../../../src/lib/sqlite.js'
-import { demoteTrialHome, promoteCopy, promotedBy, rewriteLedgerHome } from '../../../../src/core/leader/switch/promote.js'
+import { demoteTrialHome, moveRoots, promoteCopy, promotedBy } from '../../../../src/core/leader/switch/promote.js'
+import { homePathRules, rewriteLedgerHome } from '../../../../src/core/leader/switch/home-path-rules.js'
 import { promotionRefusal, readPromoted } from '../../../../src/core/leader/switch/records.js'
-import { configPathsInto } from '../../../../src/core/leader/switch/self-check.js'
+import { leftoverPaths } from '../../../../src/core/leader/switch/self-check.js'
 
 let root = ''
 beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'leader-promote-')) })
@@ -139,8 +140,8 @@ describe('rewriteLedgerHome', () => {
   })
 })
 
-describe('configPathsInto (the trial\'s self-check)', () => {
-  it('finds settings that still name the old home, leader_switch aside', () => {
+describe('leftoverPaths (the trial\'s self-check)', () => {
+  it('names a setting that still points into the old home; leader_switch and standby.dir are kept on purpose', () => {
     const home = path.join(root, 'b', 'home')
     fs.mkdirSync(home, { recursive: true })
     fs.writeFileSync(path.join(home, 'config.yaml'), YAML.stringify({
@@ -149,6 +150,95 @@ describe('configPathsInto (the trial\'s self-check)', () => {
       notes: { extra_dirs: ['/srv/a/home/notes-extra', '/elsewhere'] },
       other: '/srv/a/homework',
     }))
-    expect(configPathsInto(home, '/srv/a/home')).toEqual(['notes.extra_dirs[0]'])
+    // A store no rule names: a new one, undecided.
+    fs.mkdirSync(path.join(home, 'cache'), { recursive: true })
+    fs.writeFileSync(path.join(home, 'cache', 'status-riding.json'), JSON.stringify({ at: '/srv/a/home/x' }))
+    const roots = moveRoots({ previousHome: '/srv/a/home', home })
+    const r = leftoverPaths(home, roots, homePathRules())
+    expect(r.problems).toHaveLength(2)
+    expect(r.problems[0]).toMatch(/left old paths where it rewrites them: config.yaml \(notes.extra_dirs\[\]\): \/srv\/a\/home\/notes-extra/)
+    expect(r.problems[1]).toMatch(/no rule decides about .*cache\/status-riding.json \(at\): \/srv\/a\/home\/x/)
+  })
+})
+
+describe('a home swapped around this machine\'s daemon state (home-manifest isMachineRuntimePath)', () => {
+  const put = (dir: string, rel: string, body: string) => { fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true }); fs.writeFileSync(path.join(dir, rel), body) }
+  const RUNTIME = ['tmp/leader/leader-k.json', 'tmp/offline-host/journal-k.ndjson', 'tmp/streams/s.jsonl', 'tmp/host-vitals/2026-11-23.jsonl']
+
+  it('the daemon\'s files stay at their paths, the same files, written through an open fd during the swap; the rest goes aside and comes back on demote', async () => {
+    const standby = path.join(root, 'b', 'standby')
+    const home = path.join(root, 'b', 'home')
+    makeCopy(standby, '/old')
+    for (const f of RUNTIME) put(home, f, 'line 0\n')
+    put(home, 'notes/old.md', '# old\n')
+    put(home, 'tmp/plugins/p/scratch.txt', 'rebuildable, not the daemon\'s\n')
+    put(home, 'local/leader-switch/handed-over.json', '{"state":"handed-over"}')
+    const inodes = RUNTIME.map((f) => fs.statSync(path.join(home, f)).ino)
+    const fd = fs.openSync(path.join(home, 'tmp/streams/s.jsonl'), 'a')
+    let n = 0
+    const timer = setInterval(() => fs.writeSync(fd, `line ${++n}\n`), 1)
+    try {
+      await promoteCopy({ switchId: 's7', standbyDir: standby, home, previousHome: '/old', reverseStandbyDir: '/rev' })
+    } finally {
+      clearInterval(timer)
+    }
+    fs.writeSync(fd, `line ${++n}\n`)
+    fs.closeSync(fd)
+    expect(RUNTIME.map((f) => fs.statSync(path.join(home, f)).ino)).toEqual(inodes)
+    const lines = fs.readFileSync(path.join(home, 'tmp/streams/s.jsonl'), 'utf8').trim().split('\n')
+    expect(lines).toEqual(Array.from({ length: n + 1 }, (_, i) => `line ${i}`))
+    expect(fs.readFileSync(path.join(home, 'notes', 'a.md'), 'utf8')).toBe('# a\n')
+    const aside = `${home}.before-s7`
+    expect(fs.readFileSync(path.join(aside, 'notes', 'old.md'), 'utf8')).toBe('# old\n')
+    expect(fs.existsSync(path.join(aside, 'tmp/plugins/p/scratch.txt'))).toBe(true)
+    expect(fs.existsSync(path.join(aside, 'local/leader-switch/handed-over.json'))).toBe(true)
+    expect(RUNTIME.filter((f) => fs.existsSync(path.join(aside, f)))).toEqual([])
+    expect(fs.existsSync(path.join(home, 'notes', 'old.md'))).toBe(false)
+    // The trial failed: the tried entries go aside, the old ones come back, the daemon's stay.
+    const d = await demoteTrialHome({ switchId: 's7', home })
+    expect(d).toEqual({ keptAt: `${home}.trial-failed-s7`, restored: true })
+    expect(RUNTIME.map((f) => fs.statSync(path.join(home, f)).ino)).toEqual(inodes)
+    expect(fs.readFileSync(path.join(home, 'notes', 'old.md'), 'utf8')).toBe('# old\n')
+    expect(fs.existsSync(path.join(home, 'notes', 'a.md'))).toBe(false)
+    expect(fs.existsSync(path.join(home, 'local/leader-switch/handed-over.json'))).toBe(true)
+    expect(fs.existsSync(path.join(`${home}.trial-failed-s7`, 'notes', 'a.md'))).toBe(true)
+    expect(fs.existsSync(aside)).toBe(false)
+  })
+
+  it('a kill part way through moving the old entries aside: a rerun finishes the swap', async () => {
+    const standby = path.join(root, 'b', 'standby')
+    const home = path.join(root, 'b', 'home')
+    makeCopy(standby, '/old')
+    put(home, 'tmp/leader/leader-k.json', '{}')
+    put(home, 'notes/left.md', 'not moved yet\n')
+    put(home, 'local/leader-switch/handed-over.json', '{}')
+    put(`${home}.before-s8`, 'notes/moved.md', 'moved already\n')
+    const r = await promoteCopy({ switchId: 's8', standbyDir: standby, home, previousHome: '/old', reverseStandbyDir: '/rev' })
+    expect(r.movedAside).toBe(`${home}.before-s8`)
+    expect(fs.readdirSync(path.join(`${home}.before-s8`, 'notes')).sort()).toEqual(['left.md', 'moved.md'])
+    expect(fs.existsSync(path.join(`${home}.before-s8`, 'local/leader-switch/handed-over.json'))).toBe(true)
+    expect(fs.existsSync(path.join(home, 'tmp/leader/leader-k.json'))).toBe(true)
+    expect(promotedBy(home)).toBe('s8')
+  })
+
+  it('a kill part way through moving the copy in (its mark is in the home): a rerun moves the rest in, nothing aside again', async () => {
+    const standby = path.join(root, 'b', 'standby')
+    const home = path.join(root, 'b', 'home')
+    makeCopy(standby, '/old')
+    // As a kill leaves it: the copy's local/ (the mark) and notes/ are in, the rest still in the copy.
+    const copy = path.join(standby, 'copy')
+    fs.chmodSync(copy, 0o700)
+    put(home, 'tmp/leader/leader-k.json', '{}')
+    fs.chmodSync(path.join(copy, 'notes'), 0o700)
+    fs.renameSync(path.join(copy, 'notes'), path.join(home, 'notes'))
+    fs.mkdirSync(path.join(home, 'local', 'leader-switch'), { recursive: true })
+    fs.writeFileSync(path.join(home, 'local', 'leader-switch', 'promoted.json'), JSON.stringify({ switchId: 's9', state: 'promoting', from: '/old', at: new Date().toISOString() }))
+    put(`${home}.before-s9`, 'previous.txt', 'was here')
+    const r = await promoteCopy({ switchId: 's9', standbyDir: standby, home, previousHome: '/old', reverseStandbyDir: '/rev' })
+    expect(fs.existsSync(copy)).toBe(false)
+    expect(fs.existsSync(path.join(home, 'config.yaml'))).toBe(true)
+    expect(fs.existsSync(path.join(home, 'notes', 'a.md'))).toBe(true)
+    expect(fs.readdirSync(`${home}.before-s9`)).toEqual(['previous.txt'])
+    expect(r.movedAside).toBe(`${home}.before-s9`)
   })
 })

@@ -90,8 +90,11 @@ The holder's clock must never run slow, a witness's never fast:
   longer. After a restart it counts the record it holds as accepted at the restart.
 
 **Assumptions.** (1) No clock's rate is off by more than `maxDriftRate` (2% by default).
-(2) Only on the fallback clock: while a holder sleeps, its wall clock is not set back by nearly
-as long as the sleep lasted (within 1 s), since such a step hides the sleep from both clocks.
+(2) Only on the fallback clock: while a holder sleeps, its wall clock is not set back at all, or by so
+little that the rest of the sleep still outlasts its lease. A set-back of S seconds hides S seconds of the
+sleep (the step counts the wall clock's advance, sleep minus S, and the distrust rule fires only when the
+wall clock ends up behind the monotonic one, that is, S above the sleep): a 90 s sleep with a 77 s set-back
+wakes still acting beside the next holder (named case in `system-clock.test.ts`, found by model-check seed 65).
 The sleep-counting clock removes (2): a named case sleeps 90 s with the wall set back 90 s, and
 only the fallback wakes still acting. A VM pause that neither the boot clock nor the wall
 clock counts is outside both, as is a pause of the witness's own machine that its monotonic

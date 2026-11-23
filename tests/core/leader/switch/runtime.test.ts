@@ -14,10 +14,10 @@ import { assertOutwardDoor, leaderPermitActive, outwardDoorsOpen, setOutwardDoor
 import { openPermitClient, proposeAndWait, readStanding } from '../../../../src/core/leader/switch/permit-ops.js'
 import { readMayAct, readOpOutcomes, readUnresolvedOps, writeMarker, writePromoted } from '../../../../src/core/leader/switch/records.js'
 import { DEFAULT_PERMIT_PARAMS } from '../../../../src/core/leader/permit/types.js'
-import type { LeaderSwitchSettings } from '../../../../src/core/leader/switch/settings.js'
+import type { LeaderSwitchSettings, LocalWitnessPlace } from '../../../../src/core/leader/switch/settings.js'
 
 let root = ''
-let settings: LeaderSwitchSettings
+let settings: LeaderSwitchSettings & { witnesses: LocalWitnessPlace[] }
 const runtimes: PermitRuntime[] = []
 const home = (m: string) => path.join(root, m, 'home')
 

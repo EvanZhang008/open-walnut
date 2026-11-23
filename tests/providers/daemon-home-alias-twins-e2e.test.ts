@@ -20,7 +20,9 @@
  * and a move the host cannot follow is said on the answer; (h) a backup that reached the host first
  * gives way once the real copy's server says it is gone (`copyGone`), and the same Walnut's own
  * record at the new path is not told; (e) a rollback reader (sha1 of the home each file embeds) finds
- * every file under its own name.
+ * every file under its own name; (s) a leader switch to another machine (its new leader declares
+ * the old holder's path, src/core/leader/switch/moved-home.ts): one set, one copy, one job set,
+ * the new leader's; a fire in delivery at that moment reaches it once; the switch back flips it.
  *
  * What's real: both daemon twins, their files, a node check script, the clocks. Mocked: nothing.
  */
@@ -34,6 +36,8 @@ import { WebSocket } from 'ws'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { testBun } from '../helpers/bun-runtime.js'
+import { noteHome } from '../../src/core/home-move.js'
+import { switchedHereAfterCommit } from '../../src/core/leader/switch/moved-home.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const BUN = process.env.BUN_PATH && fs.existsSync(process.env.BUN_PATH) ? process.env.BUN_PATH : testBun() ?? null
@@ -448,6 +452,137 @@ for (const twin of ['standalone', 'source'] as const) {
       expect(split).toMatchObject({ ok: true })
       expect(split).not.toHaveProperty('moveNotTaken')
       await declared.close()
+    }, 60_000)
+
+    /**
+     * What a leader server says to a host after a leader switch, by the real leader rules on real
+     * files: its promotion record (moved-home.ts, its permit played as `leading`), its home record
+     * (home-move.ts noteHome), and the description leader.configure carries (primary-leader.ts).
+     */
+    async function switchedLeaderFrame(home: string, machine: string, walnutId: string, promoted: Record<string, unknown> | null): Promise<Record<string, unknown>> {
+      fs.mkdirSync(path.join(home, 'local', 'leader-switch'), { recursive: true })
+      if (promoted) fs.writeFileSync(path.join(home, 'local', 'leader-switch', 'promoted.json'), JSON.stringify(promoted))
+      const switched = await switchedHereAfterCommit(home, () => ({ machine, trial: false, status: () => ({ state: 'leading', record: { number: 99, holder: machine } }) }))
+      const formers = await noteHome(home, machine, walnutId, { declares: true, switched })
+      return { cmd: 'leader.configure', home, walnutId, backup: false, ...(formers.length ? { movedFrom: formers[0], formerHomes: formers } : {}) }
+    }
+
+    it('(s) a leader switch to another machine: the host follows, a fire mid-delivery reaches the new leader once, and the switch back flips it', async () => {
+      // The old leader's server spells its data dir with a `/./` (path.resolve would drop it): the host keys that exact string.
+      const SA = `${path.join(BASE, 'machine-a')}/./walnut`
+      const SB = path.join(BASE, 'machine-b', 'data', 'walnut')
+      const SC = path.join(BASE, 'machine-c', 'walnut')
+      const W_S = crypto.randomBytes(16).toString('hex')
+      const swSet = () => ({ version: 1, triggers: [def('sw-fresh', FRESH)] })
+      const swFires = (c: Client) => c.events.filter((e) => e.ev === 'trigger.fired' && e.id === 'sw-fresh')
+      const scopeFiles = (key: string) => jsonFiles(RUN_DIR).filter((f) => f.includes(key))
+
+      // The Walnut leads on machine A: its epoch, its set (first fire acked), its plugin jobs, its copy.
+      const a = await client()
+      expect(await configureLeader(a, SA, W_S)).toMatchObject({ ok: true, epoch: 1 })
+      expect(await a.rpc({ cmd: 'triggers.configure', home: SA, config: swSet() })).toMatchObject({ ok: true, count: 1 })
+      const first = await waitFor(() => a.fires('sw-fresh')[0], 20_000, 'the first fire of sw-fresh')
+      expect(await a.rpc({ cmd: 'triggers.ack', triggerId: 'sw-fresh', seq: first.seq, home: SA })).toMatchObject({ acked: true })
+      expect(await a.rpc({ cmd: 'jobs.configure', home: SA, spec: { home: SA, walnutId: W_S, jobs: JOBS() } })).toMatchObject({ ok: true })
+      expect(await a.rpc({ cmd: 'host.slice', slice: slice(SA, 'sw-copy-1', Date.now()) })).toMatchObject({ ok: true })
+
+      // Mid-delivery: a fire is on A's socket, neither claimed nor acked, when the switch commits.
+      expect(await a.rpc({ cmd: 'triggers.run', triggerId: 'sw-fresh', home: SA })).toMatchObject({ ok: true, ran: true })
+      const owed = await waitFor(() => a.fires('sw-fresh').find((f) => f.seq !== first.seq), 15_000, 'the fire in delivery')
+      const runsAtSwitch = runsOf('sw-fresh')
+
+      // Machine B committed the switch: its first frame declares A's path as A's server spelled it.
+      const promotedB = { switchId: 'sw-1', state: 'led', from: path.resolve(SA), to: 'machine-b', handover: 5, fromHomeOnHosts: SA, fromFormerHomes: [], at: new Date().toISOString() }
+      const frameB = await switchedLeaderFrame(SB, 'machine-b', W_S, promotedB)
+      expect(frameB).toMatchObject({ movedFrom: SA, formerHomes: [SA] })
+      const b = await client()
+      expect(await b.rpc(frameB), 'the same epoch: the leader book goes on').toMatchObject({ ok: true, epoch: 1 })
+      expect(readJson(aliasFile())).toMatchObject({ aliases: { [SB]: { to: SA, walnutId: W_S } }, places: { [SA]: SB } })
+
+      // The fire in delivery reaches the new leader (the configure's replay), the same (epoch, seq).
+      expect(await b.rpc({ cmd: 'triggers.configure', home: SB, config: swSet() })).toMatchObject({ ok: true, count: 1 })
+      await waitFor(() => swFires(b).find((f) => f.seq === owed.seq), 15_000, 'the replay of the fire in delivery at B')
+      // The old leader's socket, still open at that moment, can take it no more; the new one takes it once.
+      const oldClaim = await a.rpc({ cmd: 'triggers.claim', triggerId: 'sw-fresh', seqs: [owed.seq], epoch: owed.epoch, home: SA })
+      expect(oldClaim).toMatchObject({ ok: false, errorKind: 'walnut_home_busy', movedTo: SB })
+      expect(await a.rpc({ cmd: 'triggers.ack', triggerId: 'sw-fresh', seq: owed.seq, home: SA })).toMatchObject({ ok: false, errorKind: 'walnut_home_busy' })
+      expect(await b.rpc({ cmd: 'triggers.claim', triggerId: 'sw-fresh', seqs: [owed.seq], epoch: owed.epoch, home: SB })).toMatchObject({ claimed: [owed.seq] })
+      expect(await b.rpc({ cmd: 'triggers.ack', triggerId: 'sw-fresh', seq: owed.seq, home: SB })).toMatchObject({ acked: true })
+      const atB = swFires(b).map((f) => `${f.epoch}/${f.seq}`)
+      expect([...new Set(atB)], 'one fire reached the new leader, under its own numbers').toEqual([`${owed.epoch}/${owed.seq}`])
+      expect(runsOf('sw-fresh'), 'no check ran again for it').toBe(runsAtSwitch)
+      // Acked: a later connect of the new leader is owed nothing.
+      const seen = swFires(b).length
+      expect(await b.rpc({ cmd: 'triggers.configure', home: SB, config: swSet() })).toMatchObject({ ok: true })
+      // The configure's replays go right after its answer, on the same socket: a ping after it comes back behind them.
+      await b.rpc({ cmd: 'ping' })
+      expect(swFires(b)).toHaveLength(seen)
+
+      // One copy on the host, the new leader's: no set, job, copy or record keyed by B's own path.
+      const jobsB = await b.rpc({ cmd: 'jobs.configure', home: SB, spec: { home: SB, walnutId: W_S, jobs: JOBS() } })
+      expect(jobsB.jobs).toHaveLength(1)
+      expect(await b.rpc({ cmd: 'host.slice', slice: slice(SB, 'sw-copy-2', Date.now()) })).toMatchObject({ ok: true })
+      expect(scopeFiles(sha(SB)), 'nothing is keyed by the new path').toEqual([])
+      expect(fs.existsSync(path.join(RUN_DIR, 'walnuts', sha(SA), 'triggers.json'))).toBe(true)
+      expect(fs.existsSync(path.join(RUN_DIR, 'plugin-jobs', `jobs-${sha(SA)}.json`))).toBe(true)
+      expect(readJson(path.join(RUN_DIR, 'offline-host', `slice-${sha(SA)}.json`))).toMatchObject({ hash: 'sw-copy-2' })
+      // The old path is refused for good: nothing of the old leader's keeps going there.
+      expect(await configureLeader(a, SA, W_S)).toMatchObject({ ok: false, errorKind: 'walnut_home_busy', movedTo: SB })
+      expect(await a.rpc({ cmd: 'triggers.configure', home: SA, config: swSet() })).toMatchObject({ ok: false, errorKind: 'walnut_home_busy' })
+      await a.close()
+
+      // A cross-machine copy with no switch record declares nothing: a Walnut of its own by its path.
+      const frameC = await switchedLeaderFrame(SC, 'machine-c', W_S, null)
+      expect(frameC).not.toHaveProperty('movedFrom')
+      const c = await client()
+      expect(await c.rpc(frameC)).toMatchObject({ ok: true, epoch: 1 })
+      expect(readJson(aliasFile()).aliases[SC]).toBeUndefined()
+      expect(readJson(aliasFile()).places[SA]).toBe(SB)
+      await c.close()
+
+      // The switch back: a fresh copy at A's path (no home record of its own) declares B's path; the host flips, no contest.
+      fs.rmSync(path.join(path.resolve(SA), 'local'), { recursive: true, force: true })
+      await b.close()
+      const promotedA = { switchId: 'sw-2', state: 'led', from: SB, to: 'machine-a', handover: 9, fromHomeOnHosts: SB, fromFormerHomes: [SA], at: new Date().toISOString() }
+      const frameA = await switchedLeaderFrame(SA, 'machine-a', W_S, promotedA)
+      expect(frameA).toMatchObject({ movedFrom: SB, formerHomes: [SB] })
+      const a2 = await client()
+      const back = await a2.rpc(frameA)
+      expect(back).toMatchObject({ ok: true, epoch: 1 })
+      expect(back).not.toHaveProperty('moveNotTaken')
+      expect(readJson(aliasFile()).places[SA]).toBeUndefined()
+      const b2 = await client()
+      expect(await configureLeader(b2, SB, W_S)).toMatchObject({ ok: false, errorKind: 'walnut_home_busy', movedTo: SA })
+      await b2.close()
+      // The set goes on at A with the same numbering, and nothing was owed.
+      expect(await a2.rpc({ cmd: 'triggers.configure', home: SA, config: swSet() })).toMatchObject({ ok: true, count: 1 })
+      await a2.rpc({ cmd: 'ping' })
+      expect(swFires(a2), 'the acked fire is not owed again').toEqual([])
+      expect(await a2.rpc({ cmd: 'triggers.run', triggerId: 'sw-fresh', home: SA })).toMatchObject({ ok: true, ran: true })
+      const after = await waitFor(() => a2.fires('sw-fresh')[0], 15_000, 'a fire after the switch back')
+      expect(after.epoch).toBe(owed.epoch)
+      expect(after.seq).toBe((owed.seq as number) + 1)
+      await a2.rpc({ cmd: 'triggers.ack', triggerId: 'sw-fresh', seq: after.seq, home: SA })
+      expect(scopeFiles(sha(SB))).toEqual([])
+      await a2.close()
+    }, 120_000)
+
+    it('(s2) a commit start cannot read a witness over its daemon link: a follower stream needs a socket that described its Walnut, and that Walnut\'s follower', async () => {
+      // The witness route is served by the host's Walnut service (its follower); the leader's
+      // daemon link reaches it as openStream('follower'). Before leader.configure (or host.slice)
+      // binds the socket, the host routes no such stream; after a bind to a new path, it finds no
+      // follower of that path (the host's follower follows the Walnut's first home).
+      const closeOf = (c: Client, sid: string) => waitFor(() => c.events.find((e) => e.ev === 'stream-close' && e.sid === sid), 10_000, `the close of ${sid}`)
+      const unbound = await client()
+      unbound.rpc({ cmd: 'stream.open', sid: 'o-witness-1', to: 'follower', purpose: 'replica' }).catch(() => {})
+      expect(await closeOf(unbound, 'o-witness-1')).toMatchObject({ error: 'this link opens no such stream' })
+      await unbound.close()
+      const fresh = await client()
+      const NEW = path.join(BASE, 'machine-n', 'walnut')
+      expect(await configureLeader(fresh, NEW, crypto.randomBytes(16).toString('hex'))).toMatchObject({ ok: true })
+      fresh.rpc({ cmd: 'stream.open', sid: 'o-witness-2', to: 'follower', purpose: 'replica' }).catch(() => {})
+      expect(await closeOf(fresh, 'o-witness-2')).toMatchObject({ error: 'no server on this host follows that Walnut' })
+      await fresh.close()
     }, 60_000)
 
     it('(e) a rollback reader finds every file: each is named by the sha1 of the home it embeds', () => {

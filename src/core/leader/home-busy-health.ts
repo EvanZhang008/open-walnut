@@ -14,6 +14,9 @@
  *   - a declared move not taken (leader.configure's `moveNotTaken`): the host keeps this Walnut's
  *     earlier data under a folder it could not follow, so what ran there before is not shown.
  *
+ *   - a leader switch to this data dir whose commit is not confirmed in time (moved-home.ts): every
+ *     host is held, sends nothing and retries, until a witness majority confirms it.
+ *
  * An accepted leader.configure clears the refusal; one that took the declared move clears the other.
  */
 
@@ -110,6 +113,32 @@ export function noteHomeServed(hostKey: string): void {
     .then(({ inProcessDaemonWanted }) => inProcessDaemonWanted())
     .then((yes) => (yes ? conditions.recover(key) : undefined))
     .catch(() => {})
+}
+
+export const SWITCH_HELD_KEY = 'walnut-switch-held'
+
+export function switchHeldItem(switchId: string): NewNotification {
+  return {
+    kind: 'operation-error',
+    severity: 'warning',
+    title: 'Hosts wait for the leader switch to be confirmed',
+    body: `This Walnut became the leader by switch ${switchId}, but a majority of its witnesses has not confirmed it yet. Until they do, no host is connected to it, so its hosts keep the earlier leader's triggers, jobs and sessions as they were and nothing of them is lost. It connects again on its own once the witnesses answer.`,
+    detail: `leader switch ${switchId}: commit not confirmed; host connections held (home-move.ts HomeMoveHeld)`,
+    dedupKey: SWITCH_HELD_KEY,
+    recoveryKey: SWITCH_HELD_KEY,
+    category: 'Sessions',
+  }
+}
+
+/** A leader switch's commit was not confirmed in time: hosts are held (raise, or count again). */
+export function noteSwitchHeld(switchId: string): void {
+  void conditions.raise(SWITCH_HELD_KEY, async () => switchHeldItem(switchId))
+}
+
+/** The switch's commit is confirmed and its move declared: the held item, if any, recovers. */
+export function noteSwitchConfirmed(): void {
+  if (conditions.toldOf(SWITCH_HELD_KEY) === 'clear') return
+  void conditions.recover(SWITCH_HELD_KEY)
 }
 
 /** Tests only. */

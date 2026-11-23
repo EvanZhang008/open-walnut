@@ -314,6 +314,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `$XDG_STATE_HOME/open-walnut/secrets/` | machine | yes | This host's copy of the fleet secrets shared with it |
 | `$XDG_STATE_HOME/open-walnut/tasks/` | machine | no | Task working folders of sessions that ran on this machine: on purpose, they belong to the host a session runs on, and a leader switch does not move sessions |
 | `$XDG_STATE_HOME/open-walnut/leader-instance/` | machine | no | The instance lock of a switchable leader: one leader server per machine id holds the write permission |
+| `$XDG_STATE_HOME/open-walnut/leader-witness/` | machine | no | The records this machine keeps as a witness of another machine's write permission (one per Walnut): a witness that lost its record never starts over, so it never travels with a copy |
 | `$XDG_STATE_HOME/open-walnut/approvals/` | machine | yes | Wait tokens of approval asks made from this machine's shell |
 | `$XDG_STATE_HOME/open-walnut/net/` | machine | yes | This machine's host network identity (always under ~/.local/state) |
 | `$XDG_STATE_HOME/open-walnut/console/` | machine | yes | The console of this machine after it handed the leader over (always under ~/.local/state): the address its leader served, the switch and the console device's token, written at the handover; and which replica holds that address now |

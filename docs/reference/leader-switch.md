@@ -10,10 +10,11 @@ It joins two earlier pieces: the [standby copy](./standby-copy.md) (the whole da
 copied in batches of one moment) and the [write permission](./leader-write-permission.md)
 (numbered records kept by a fixed majority of witnesses).
 
-**This phase runs both machines on one computer**: the witnesses are three local directories
-and each "machine" is a home, a standby folder and a machine-id file. Nothing crosses a network
-and no credential is involved. Later phases replace the local pieces (witness transport,
-`LocalSide`, the standby transport) with remote ones; the flow and its rules stay.
+**The flow runs both machines on one computer** (each "machine" is a home, a standby folder and
+a machine-id file, `LocalSide`); the witnesses may be directories there or the Walnut service of
+another machine ([Witnesses on other machines](#witnesses-on-other-machines)). The remaining local
+pieces (`LocalSide`, the standby transport) are replaced by remote ones in later steps; the flow
+and its rules stay.
 
 ## Setting it up
 
@@ -24,16 +25,17 @@ standby:
   dir: /srv/b/standby          # the batches of the current leader land here (the other machine's standby_dir)
 leader_switch:
   witnesses:
-    - { id: w1, dir: /srv/witness/w1 }
+    - { id: w1, dir: /srv/witness/w1 }         # a directory on this computer
     - { id: w2, dir: /srv/witness/w2 }
-    - { id: w3, dir: /srv/witness/w3 }
+    - { id: w3, host: dev-box }                # the Walnut service of another machine
   machines:
     - { id: machine-a, home: /srv/a/home, standby_dir: /srv/a/standby, port: 3456 }
-    - { id: machine-b, home: /srv/b/home, standby_dir: /srv/b/standby, port: 3460 }
+    - { id: machine-b, home: /srv/b/home, standby_dir: /srv/b/standby, port: 3460, account_home: /home/b }  # optional: paths under it move (Paths)
   back_window_hours: 168
 ```
 
-`walnut leader witnesses init` sets up each witness directory once. A machine's id is its one
+`walnut leader witnesses init` sets up each witness once (a directory here, or the record on the
+witness machine: [Witnesses on other machines](#witnesses-on-other-machines)). A machine's id is its one
 stable id (`src/core/machine-id.ts`, `~/.local/state/open-walnut/machine-id`, the id the daemons
 send too); it is the holder id of the permission, and the `id` of its `machines` entry.
 `WALNUT_MACHINE_ID_FILE` names another file, read as it is and never made (the one-machine
@@ -109,17 +111,24 @@ in the old home before it runs and is safe to repeat; `--resume` continues after
    keep running under the existing restart rules. The downtime starts here.
 4. **final-batch**: one standby batch of the stopped home (a batch voided by an outside writer
    is tried again, six times), a verify pass, and a second batch that must find nothing changed.
-5. **promote**: the copy becomes the new home in one rename (`promote.ts`; a folder already at
-   that path is kept as `<home>.before-<switch>`; `promoted.json` goes into the copy before
-   the rename, so the home is marked from the instant it exists), its read-only modes become read-write, and
-   what names the old home's path is rewritten: the applied-ops ledger's `home` column
-   (without it every op id the old leader applied would apply again on the new one: the
-   rehearsal shows it) and `standby.dir` (the new leader's batches go to the old machine's
-   standby folder, for the switch back). Sends the old leader had begun and not settled
+5. **promote**: the copy becomes the new home (`promote.ts`; `promoted.json` goes into the copy
+   first). With no folder at that path it is one rename, so the home is marked from the instant it
+   exists. A folder already there (the first switch's target holding this machine's daemon state,
+   a switch back's handed-over home) is swapped around this machine's daemon runtime places
+   (home manifest `isMachineRuntimePath`: the journal root, leader book, streams and samples an
+   installed daemon keeps in `<home>/tmp`): everything else goes to `<home>.before-<switch>`, the
+   copy's entries come in, and the daemon's places never move, so it keeps writing them at the path
+   it reads while the swap runs (moving them away and back would lose what it wrote by path in
+   between). The old `local/` goes last and the copy's first, so the home holds a marker but for
+   two renames. Demoting a failed trial swaps back the same way. Its read-only modes become read-write, and
+   the old machine's paths are rewritten by the rule table ([Paths](#paths)), among them the
+   applied-ops ledger's `home` column (without it every op id the old leader applied would
+   apply again on the new one: the rehearsal shows it) and `standby.dir` (the new leader's
+   batches go to the old machine's standby folder, for the switch back). Sends the old leader had begun and not settled
    (mail rows `sending` or `unknown`) are listed as "outcome unknown".
 6. **trial**: an offline self-check (every file of the batch at its size, every database
-   through integrity_check with the old home's row count, config.yaml naming no path in the
-   old home), then the new leader starts with `WALNUT_LEADER_TRIAL=1`: it never asks for the
+   through integrity_check with the old home's row count, no path of the old machine left
+   that no rule keeps: [Paths](#paths)), then the new leader starts with `WALNUT_LEADER_TRIAL=1`: it never asks for the
    permission, so every outward door stays closed, and every gate reads the boot policy's
    trial column ([below](#the-trial-column)): HTTP, the databases and their migrations, and
    nothing else (no plugin, standby copy, session, timer, routine, git job or outward work);
@@ -383,6 +392,62 @@ a whole batch. `drift/` stays. A top-level entry (`chunks/`, `copy/`, ...) that 
 resolves outside the folder, is left as it is; a link deeper inside (in `copy/`, say) is removed
 as a link and never followed, so nothing outside the folder is touched.
 
+### Hosts follow the new leader
+
+A host keys each Walnut by the data dir path its server speaks from (`walnut-scope-core.ts`). A
+new leader on another path, or another machine, would be a new Walnut there: a second trigger set,
+a second job set, its own detached records, while the old ones stay under the old path. So the new
+leader **declares a move** from the old holder's path, as a moved data dir does
+(`src/core/home-move.ts`, [session daemon](./session-daemon.md#a-walnut-has-one-key-on-a-host-whatever-its-data-dir)).
+Each host makes the new path an alias of the Walnut's first home there and refuses the old path
+for good (`walnut_home_busy`). From then on its trigger epoch, seq and memory, plugin jobs,
+detached records, copies, host server and bridge are the new leader's, with one copy of each.
+The hosts and the daemon twins are unchanged.
+
+- **Where the old path comes from**: the old leader's own server. `GET /api/leader/status` answers
+  `homeOnHosts` (its data dir exactly as it sends it to hosts, plus the former homes its
+  `local/home.json` keeps). The preflight stores it in the switch state and refuses a leader that
+  does not say it. Before the commit start the switch writes it into the new home's
+  `promoted.json` (`fromHomeOnHosts`, `fromFormerHomes`, with `to` and `handover`). The
+  `machines` entry is not used: it is a person's spelling, resolved, and a host keys the exact
+  string. The handover record is not used either: the new holder's renew replaces it at the witnesses.
+- **When** (`src/core/leader/switch/moved-home.ts`): the permit guards the process (not a trial),
+  the home has no handed-over marker, `promoted.json` names this machine, and the switch
+  committed. That means `led`, or, in the commit start, its own record above the handover standing
+  on a majority. Until then every host connect holds its commands, so no host hears the Walnut
+  from the new path first: that would give the new path a record of its own, and the move could
+  never be taken there. One wait lasts at most twice the longest a good commit takes
+  (`2 x (validMs + witnessMarginMs)`, 124 s by default). Past that, the connection attempt fails
+  with `HomeMoveHeld`: no frame is sent, its backoff retries with a fresh wait, and a Walnut Health
+  item ("Hosts wait for the leader switch to be confirmed") stays until a later attempt declares. It
+  is never answered as "nothing to declare". A permit that stops before its commit stands settles
+  the wait with nothing. An ephemeral server never declares. Declared with `in_process_daemon` off
+  too, on every connect.
+- **Not built: a candidate's own link to remote witnesses.** The commit start reaches a witness
+  through its daemon link as a follower stream. A host routes that only for a socket that described
+  its Walnut, and only to a follower of that same path. Before the move is declared, the new path
+  is neither (case (s2) of the twins test). With every witness remote and reached only over daemon
+  links, the commit cannot stand. The switch then rolls back at its commit deadline, which is safe:
+  the old leader leads again. It needs a link that does not go through the Walnut's follower (the
+  host-dialed door of phase 5a, or a port stream to the host's service). The home's
+  record keeps the switch id (`switchId`), so restarts and later moves on that machine go on by the
+  usual rules.
+- **Switch back**: the same rule the other way. The fresh copy at the old machine's path declares
+  the other machine's path, and the host flips where the Walnut is now. There is no `contested`,
+  because the declaration names where the host has it now.
+- A copy on another machine with no switch record, a record not committed, or one naming another
+  machine declares nothing, as before. With the experiment off `judgeHome` is the rule it always
+  was (pinned by a verbatim copy in `tests/core/home-move.test.ts`).
+- The handed-over standby must never connect to a host as this Walnut (it would claim the lead
+  and drain the host's journal into the old home). `tests/core/leader/switch/standby-no-host-link.test.ts`
+  guards it.
+
+Tests: `tests/core/home-move.test.ts`, `tests/core/leader/switch/moved-home.test.ts`,
+`tests/core/leader/primary-leader-home-moves.test.ts`, and case (s) of
+`tests/providers/daemon-home-alias-twins-e2e.test.ts` on both twins. That case covers one set,
+job set and copy, all the new leader's, nothing keyed by the new path, a fire in delivery at the
+aliasing moment taken once by the new leader with the old socket refused, and the switch back.
+
 ### What a person sees
 
 | Failure | What happens | What the person sees |
@@ -482,9 +547,48 @@ make the downtime long.
 | small (a few hundred files) | 8.2 to 8.8 s |
 | 20 GB of leader data (80 files of 256 MB, 20,000 small files, the databases) | 28.2 s: final batch and its second look 4.1 s, promotion 11.8 s (most of it making every file writable, made parallel since), trial 8.4 s, real start 3.8 s |
 
+## Paths
+
+A home promoted on another machine, another OS or under another account still holds the paths its
+stores wrote on the old one: the old home (`/home/old/.open-walnut/...`) and the old account home
+(`/home/old/...`, from `account_home` of each `machines` entry, else its `env.HOME`). The promotion
+rewrites them by a rule table, and the trial's self-check scans for what is left.
+
+**The scan** (`src/core/leader/switch/home-paths.ts`) reads every file of the home: config and other
+YAML by key, JSON by key path, JSON lines by line and key path, SQLite by `table.column` and row (JSON in
+a column by its key path too), other text by line. A file over 16 MB is listed as not read, binaries are
+skipped, a database's `-wal` is read through the database. A path is a root followed by a separator or the
+end of the path: `/home/a` is not in `/home/ab/x`. Unicode, JSON escapes (`\u00e9`, `\/`, `\\`) and
+Windows-style roots (`C:\Users\a`, either separator after them) are handled. Measured on a synthetic home
+of 22,004 files and 255 MB (20k notes, 2k thread files, a 200k-line log, a sessions database of 50k rows, a
+tasks database of 20k rows; `WALNUT_HOME_PATHS_BENCH=1` on `tests/core/leader/switch/home-paths.test.ts`,
+a dev box at load 90 on 48 cores): the whole home in 4.4 s (72,641 hits); the trial's scan, which skips
+what a `keep` rule decides whole, 1.7 s (it still reads the tasks database's JSON). In the rehearsal the
+trial's scan took 53 ms of the 8.4 s downtime.
+
+**The rules** (`src/core/leader/switch/home-path-rules.ts`), the first that covers a place decides it:
+
+| Where | Rule |
+|---|---|
+| `config.yaml`, `config/` | rewritten, both roots: a setting the leader follows on its own machine (a model, a key file, a source checkout) is the same place under the new home or account home. Kept: `leader_switch` (names both machines), the host-keyed places (`standby.walnut`, `usage.proxy_log_dirs`, `external_session_import.excluded_cwds`). `standby.dir` is set to the old machine's standby folder |
+| `cache/applied-ops.sqlite` | the `home` column of this home's rows moves to the new home (rows already there win); another home's rows are kept |
+| `tasks/tasks.sqlite` | a path in the home inside a task's or a project's JSON (`cwd` of Main and Ask, a routine launch) moves to the new home; a path in the account home (a repo, a task folder) is kept: the work and its files stay on the machine that ran it |
+| `cron-jobs.json`, `triggers/`, `hooks/`, `actions/`, `commands/`, `skills/`, `CLAUDE.md`, plugins' files | a path in the home moves (a trigger's check script, a plugin's data); a path in the account home is kept |
+| sessions, subagent runs, folder lists, `hosts/`, `workspaces/`, `tmp/file-history/` | kept: where a session or a subagent ran, on the machine that ran it (its transcript and folder are there; a sweep that removes left folders must find them where they were made) |
+| notes, memory, histories, inboxes, threads, boards, logs, usage | kept: text a person or an agent wrote, or a log; nothing follows it |
+| a copy beside a store (`config.yaml.bak`) | as the store |
+| machine or rebuildable data (manifest) | never in a batch, so it does not travel |
+| a top-level file no store of Walnut names | the user's own file in the vault: kept |
+
+Anything else (a store no rule decides) fails the trial with the file, the key or row and the path, and the switch rolls back.
+The ratchet `tests/core/leader/switch/home-path-ratchet.test.ts` fills a synthetic home with the real writers (task and
+session stores, the config writer, the ledger, the folder lists), takes a real batch, promotes it to another home under
+another account home, and fails on a hit no rule decides, on one the promotion should have rewritten, on a rule nothing meets
+any more, and on a leader-data store of the manifest that is in no rule and not in `NO_PATH_STORES`.
+
 ## Rehearsal
 
-`bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--trials] [--flag-off] [--restarts] [--console] [--all] [--keep]`
+`bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--trials] [--flag-off] [--restarts] [--paths] [--console] [--all] [--keep]`
 runs on any Linux dev box (in a Walnut dev container: `walnut-dev run bun ...`). It builds two
 machines and three witnesses in `<work dir>`, starts A on a synthetic home with tasks, notes,
 a plugin's files and a routine, keeps a standby copy at B, drives writes through A's API, runs
@@ -496,26 +600,109 @@ and leaves its home's hash unchanged, B's writes come back with `--back` and A l
 (its standby stopped by the switch), B started by hand then is a standby naming A. `--kills` kills the command at each
 step (after the handover, during the final batch, during and after the promotion, during the trial,
 between the commit's majority and its marker, after the commit) and resumes it; `--trials`
-breaks the copy (a corrupt database, a missing note, an old program) and expects a rollback;
+breaks the copy (a corrupt database, a missing note, an old program, an old-home path in a store
+no rule decides) and expects a rollback; `--paths` moves a home to another HOME prefix and checks
+what the [path rules](#paths) did (the main run does too, and scans both homes after each switch);
 `--flag-off` checks that nothing of it runs with the experiment off; `--console` runs the old
 leader's console ([its rehearsal](./leader-switch-console.md#rehearsal)). Its test is
 `tests/e2e/leader-switch-real.test.ts`. The standby copies and promoted homes are read-only, so at
 the end the run makes `<work dir>` writable again and removes it when every check passed (`--keep`
 keeps it); a failed run keeps it, writable, as evidence.
 
+## Witnesses on other machines
+
+A witness entry is `{ id, dir }` (a directory on this computer) or `{ id, host }` (the Walnut service
+of another machine). `host` is a `hosts` alias of config.yaml, or, when it is none, the machine id a
+connected host reported in its hello. The list stays FIXED and a majority of it decides; two entries on one
+`dir` or `host` are refused (two ids on one machine would be one witness counted twice).
+
+**The route.** A host's Walnut service (`walnut web --replica`, the host's one service) answers
+`POST /host-api/witness/request` (one permit request, one reply) and `POST /host-api/witness/setup` on
+its leader door, the door only the host daemon's relayed streams reach
+(`src/replica/leader-door.ts`, `src/core/leader/switch/witness-route.ts`, the wire in
+`witness-wire.ts`). The record is on that machine's disk, `<state dir>/open-walnut/leader-witness/<walnut id>/<witness id>/permit-record.json`
+(next to `machine-id`, outside every data home, `machine` class in the home manifest), kept by the
+same code as a local witness: one file, one lock, a durable write before each answer.
+
+**Who may ask.** The route answers only a caller that belongs to this Walnut, and the check is ONE
+function, `authorizeWitnessCaller` (`witness-route.ts`). Today a caller can reach the door only through the host
+daemon's relayed stream from the leader of the Walnut the service follows, and the Walnut id in the body must be
+the one the service follows (403 otherwise; 503 when the service does not know its own). When the host-dialed door exists, a caller is authorized by the socket that passed its handshake (both sides prove the
+credential's verify key by challenge-response): the door passes the credential's own Walnut and machine ids instead, no per-request token
+is made, and that function is the only place that changes.
+
+**When it answers.** A machine serves a witness only when the experiment `switchable_leader` is on (a host's
+config is a copy of the leader's) AND an operator set the witness up (`walnut leader witnesses init`): a
+witness that lost its record never starts over by itself, so a request alone never makes one. Otherwise
+the answer is **404 `not_found`**, byte for byte the answer of a path the service never had: nothing tells a
+caller from today's service, and with the experiment off the door loads none of the permit or switch code (it checks the
+flag first). 404 rather than 503 because 503 would say "a witness is here", and a caller gets nothing more from
+it (any answer but 200 is no answer to the permit client). One witness id per Walnut per machine: a second `setup`
+with another id is refused with 409, and a request for an id this machine does not hold is 404.
+
+**The transport.** `src/core/leader/switch/witness-transport.ts` is the `PermitTransport` for both kinds of
+witness. A remote request is one HTTP request on a stream the host daemon relays (the leader server's link: `link(host)`,
+`openStream('follower', 'replica')`, `requestOver`). That pooled link is a full daemon connection (it describes this Walnut to the host:
+slice, leader.configure, the offline drain), so only the leader server's own permit client uses it (`daemonLink: true`, not in a trial
+start); a standby, `walnut leader status` and the switch command's preflight reach a remote witness only through a registered reach.
+`walnut leader witnesses init` sets remote witnesses up through the running server (`POST /api/leader/witnesses/init`). The reply is handed to the client on a later tick; each request
+has a **15 s timeout** (the renew period) and a reply after it is dropped as a lost one; a reply counts only when it names the
+witness asked and the request sent; at most 4 reads and 16 proposals are open to one witness at once; nothing is retried here
+(the client retransmits, and a duplicate is a no-op at a witness). The permit core is safe under a lost,
+repeated, late, reordered or redelivered reply: the model check
+(`tests/core/leader/permit/`) runs every machine through this transport, over a link that delays, drops,
+duplicates and reorders, with timeouts, and with old replies redelivered after newer ones.
+
+**A slow witness.** The leader's lease is `validMs - holderMarginMs` = 58 s from when it SENT a renew, and it renews every
+15 s. A reply counts only while its record is the client's open proposal, and the next renew replaces that proposal 15 s after
+it was sent, so a majority's round trip must stay **under the 15 s renew period**: each request times out at 15 s, and a witness slower than
+that is as good as lost. With two of three witnesses out of reach the leader then has no majority (the same as the witness being down).
+Under it, just before each answer the leader has `43 s - roundTrip` left, above the 15 s an outward send needs
+(`minSendRemainingMs`) for every round trip under 15 s. Measured in the simulated world through the real transport, a leader that reaches
+two of three witnesses and the slower one has this round trip:
+
+| round trip of the slower majority witness | lease left just before the next answer | may act | outward sends allowed |
+|---|---|---|---|
+| 10 ms | 43.0 s | always | always |
+| 10 s | 33.0 s | always | always |
+| 14.9 s | 28.3 s | always | always |
+| 20 s, 30 s, 40 s | none | never (no renew is ever chosen) | never |
+
+Over real loopback doors (a leader door behind a TCP socket per witness, records fsynced on disk, three witnesses, no daemon or ssh hop) the
+renew round trip measured **median 78 ms, p95 403 ms, max 421 ms** over 40 renews (the poll that reads the outcome adds up to 20 ms; fsync dominates).
+A real host link adds the daemon relay and the network on top: a few hundred ms to a few seconds is far inside the 15 s.
+
+(The same holds with no timeout at all: the open proposal is replaced first. The lease math alone would allow a round trip up to
+28 s for outward sends and 43 s for acting, but the core never uses a reply that late. Counting a late ack of an earlier renew would
+widen this and is safe, since the witness took exactly that record, but it is a change of the permit core, not made here.)
+
+**Readers.** The switch command (preflight, the handover, the commit wait, a cancel) and `walnut leader status` open no host link: with a
+remote witness in the list they read the witnesses through a running leader server of this Walnut, `GET /api/leader/witnesses` (this machine
+only; the old leader's server before the handover, the new leader's commit start after it; a trial start answers 409). With none running they
+say so ("the witnesses ... are on other machines and only a running leader server can read them") and read nothing. Local witnesses are read
+in the command's own process as before. A standby still reads remote witnesses only through a registered reach.
+
+**A candidate has no link yet.** A machine that is not the leader yet (the new leader's trial and commit start) has no link to any host: the daemon opens a stream to a host's
+service only for a server that has spoken for a leader home, a host's service follows the OLD leader's data path, and the trial
+column turns `local-daemon` and `host-network` off. Such a process reaches only its local witnesses, so with three remote
+witnesses a candidate gets no majority and a switch refuses in preflight. The transport takes any way to reach a host
+(`addWitnessReach`, tried before the daemon link): the host-dialed door of the leader (the "5a" door, which carries
+`/host-api/witness/` calls when it allows that prefix) registers one for each host that dialed it. A candidate cannot use the
+leader's door, so it needs one of: a door of its own that hosts dial (the standby serves it, hosts list it), or the commit start opens
+the host links before it renews (an outward configure the doors list must then cover). The first needs 5a's door on a
+non-leader, the second a decision; neither is built here. A relay through the old leader is not an option today:
+the two machines have no route to each other.
+
 ## Not built yet
 
-- **Remote transports**: witnesses on other machines, a remote `SwitchSide` (start and stop a
-  server on another machine), the standby transport over the network. What changes then: the
-  witness transport (`local-witnesses.ts` becomes a request over the links), `LocalSide`
-  (`side.ts`), the standby target's transport (task aead7731), and the path rewrite (the new
-  home's path differs per machine). The flow, the records, the marker, the boot rule and the
-  doors stay.
-- **Daemons key everything by the home's path** (triggers, plugin jobs, the leader book): a new
-  leader on another path is a new Walnut to them. On one computer the two homes are two paths,
-  so the rehearsal's triggers and plugin jobs do not move with the switch (no daemon runs in
-  it); moving them needs the daemon to key by the Walnut's id (the session daemon is not
-  changed in this phase).
+- **Remote transports**: a remote `SwitchSide` (start and stop a server on another machine), the
+  standby transport over the network. What changes then: `LocalSide` (`side.ts`), the standby
+  target's transport (task aead7731). The path rewrite between homes and accounts is [done](#paths);
+  whose host the old leader's own local sessions and folders become after a switch is not decided.
+  The flow, the records, the marker, the boot rule and the doors stay. The witness transport is
+  [done](#witnesses-on-other-machines) except for a candidate's own link to the witnesses.
+- **Hosts following the new leader** is built ([Hosts follow the new leader](#hosts-follow-the-new-leader)):
+  no daemon runs in the rehearsal yet, so that runs only in the real-daemon test.
 - **Operation ids registered at the witnesses before an outward send**: the permit core has
   them (`registerOps`, `beginSend`, `reportOutcome`), no send path calls them yet. For this
   manual switch they add nothing the data does not carry: the old leader is stopped and its

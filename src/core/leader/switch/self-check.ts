@@ -6,8 +6,10 @@
  *     old leader held as leader data: one missing is a copy that cannot lead);
  *   - every database of the batch passes integrity_check, and has as many rows as the old
  *     home's (read-only; the old leader is stopped);
- *   - config.yaml (its leader_switch section aside, which names both homes) names no path in
- *     the old home: the new leader would keep reading and writing the old machine's folder;
+ *   - no path of the old machine is left in the home but those the rule table keeps on purpose
+ *     (home-paths.ts scans, home-path-rules.ts decides): one the promotion should have
+ *     rewritten, or one no rule names, and the new leader would keep using the old machine's
+ *     places (the trial rolls back; the paths are in the message);
  * Online, against the trial server:
  *   - it runs a program that can read the data (its version is not older than the old one's);
  *   - the newest task of the old home and one of its notes read back through the API as they
@@ -15,43 +17,47 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import YAML from 'yaml'
 import { inspectSqliteOffThread } from '../../../lib/sqlite.js'
 import type { BatchFile } from '../../standby/types.js'
 import type { SwitchSide } from './side.js'
 import { pickReadBackNote, readBackThroughServer, type ReadBackNote } from '../../trial-start/read-back.js'
+import { describeHit, judgePathHits, keptPlace, ruleCoversFile, scanHomePaths, type PathHit, type PathRoot, type PathRule } from './home-paths.js'
 
 export interface CheckOutcome { ok: boolean; problems: string[]; detail: Record<string, unknown> }
 
-const REWRITTEN = new Set(['cache/applied-ops.sqlite', 'config.yaml'])
-
 const TASK_QUERY = 'SELECT id, title FROM tasks ORDER BY updated_at DESC LIMIT 1'
 
-/** Settings in config.yaml that name a path in the old home (leader_switch, which names both homes, aside). */
-export function configPathsInto(home: string, oldHome: string): string[] {
-  let cfg: unknown
-  try { cfg = YAML.parse(fs.readFileSync(path.join(home, 'config.yaml'), 'utf8')) } catch { return [] }
-  const root = path.resolve(oldHome)
-  const hits: string[] = []
-  const walk = (v: unknown, at: string) => {
-    if (typeof v === 'string') { if (v === root || v.startsWith(`${root}${path.sep}`)) hits.push(at); return }
-    if (Array.isArray(v)) { v.forEach((x, i) => walk(x, `${at}[${i}]`)); return }
-    if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) if (!(at === '' && k === 'leader_switch')) walk(x, at ? `${at}.${k}` : k)
-  }
-  walk(cfg, '')
-  return hits
+/** Old-machine paths the promotion left in the home that no rule keeps, as problems. */
+export function leftoverPaths(home: string, roots: readonly PathRoot[], rules: readonly PathRule[]): { problems: string[]; detail: Record<string, unknown> } {
+  const scan = scanHomePaths(home, roots, { skip: keptPlace(rules) })
+  const j = judgePathHits(scan.hits, rules)
+  const problems: string[] = []
+  const list = (hits: PathHit[]) => `${hits.slice(0, 8).map(describeHit).join('; ')}${hits.length > 8 ? `; ... ${hits.length - 8} more` : ''}`
+  if (j.notRewritten.length) problems.push(`the promotion left old paths where it rewrites them: ${list(j.notRewritten.map((x) => x.hit))}`)
+  if (j.unknown.length) problems.push(`the home holds old-machine paths no rule decides about (a store the switch does not know: docs/reference/leader-switch.md, Paths): ${list(j.unknown)}`)
+  const detail = { files: scan.files, bytes: scan.bytes, ms: Math.round(scan.ms), hits: scan.hits.length, kept: j.kept.length, skipped: scan.skipped }
+  return { problems, detail }
 }
 
-export async function offlineCheck(o: { sourceHome: string; home: string; files: BatchFile[]; sizesAndRows?: boolean }): Promise<CheckOutcome & { task: { id: string; title: string } | null; note: ReadBackNote | null }> {
-  const problems: string[] = []
+export async function offlineCheck(o: {
+  sourceHome: string
+  home: string
+  files: BatchFile[]
+  sizesAndRows?: boolean
+  /** The roots the promotion moved (promote.ts moveRoots) and the rule table it used. */
+  roots: readonly PathRoot[]
+  rules: readonly PathRule[]
+}): Promise<CheckOutcome & { task: { id: string; title: string } | null; note: ReadBackNote | null }> {
   const exact = o.sizesAndRows !== false
   let missing = 0
-  const intoOld = configPathsInto(o.home, o.sourceHome)
-  if (intoOld.length) problems.push(`config.yaml names the old home's folder (${intoOld.slice(0, 5).join(', ')}): the new leader would keep using the old machine's files`)
+  const paths = leftoverPaths(o.home, o.roots, o.rules)
+  const problems: string[] = [...paths.problems]
+  // The promotion may have rewritten these (a size changes; a custom rewrite may drop rows).
+  const rewritable = (rel: string) => o.rules.some((r) => r.rule === 'rewrite' && ruleCoversFile(r, rel))
+  const rowsChange = (rel: string) => o.rules.some((r) => r.rule === 'rewrite' && r.apply && ruleCoversFile(r, rel))
   for (const f of o.files) {
     let size = -1
-    // The promotion rewrote these two for the new home (promote.ts): present is enough.
-    if (REWRITTEN.has(f.p)) { if (!fs.existsSync(path.join(o.home, f.p))) problems.push(`${f.p}: missing`); continue }
+    if (rewritable(f.p)) { if (!fs.existsSync(path.join(o.home, f.p))) problems.push(`${f.p}: missing`); continue }
     try { size = fs.statSync(path.join(o.home, f.p)).size } catch { /* missing */ }
     if (size < 0 || (exact && size !== f.size)) {
       missing++
@@ -69,11 +75,11 @@ export async function offlineCheck(o: { sourceHome: string; home: string; files:
     ])
     counts[rel] = { copy: copy.rows, source: source.rows }
     if (!copy.ok) problems.push(`${rel}: ${copy.detail ?? 'integrity check failed'} in the new home`)
-    else if (exact && source.ok && !REWRITTEN.has(rel) && copy.rows !== source.rows) problems.push(`${rel}: ${copy.rows} rows in the new home, ${source.rows} in the old one`)
+    else if (exact && source.ok && !rowsChange(rel) && copy.rows !== source.rows) problems.push(`${rel}: ${copy.rows} rows in the new home, ${source.rows} in the old one`)
     if (rel === 'tasks/tasks.sqlite' && source.row && typeof source.row.id === 'string') task = { id: source.row.id, title: String(source.row.title ?? '') }
   }))
   const note = pickReadBackNote(o.files.map((f) => f.p))
-  return { ok: problems.length === 0, problems, detail: { files: o.files.length, databases: counts }, task, note }
+  return { ok: problems.length === 0, problems, detail: { files: o.files.length, databases: counts, paths: paths.detail }, task, note }
 }
 
 function versionTuple(v: string): number[] {

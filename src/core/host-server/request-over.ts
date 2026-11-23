@@ -1,8 +1,9 @@
 /**
  * One HTTP request to the server on a host, over a byte stream its daemon relays
  * (HostServerHost.openStream), answered as a fetch Response: the copy target's
- * `/bridge/replica` (manager.ts) and the session calls of a host that runs its own
- * sessions (session-channel/leader-side.ts).
+ * `/bridge/replica` (manager.ts), the session calls of a host that runs its own
+ * sessions (session-channel/leader-side.ts), and the leader switch's witness calls to
+ * a host's `/host-api/witness/*` (leader/switch/witness-transport.ts).
  */
 import http from 'node:http'
 import type { Duplex } from 'node:stream'

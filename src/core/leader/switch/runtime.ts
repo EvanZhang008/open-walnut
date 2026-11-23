@@ -53,6 +53,12 @@ export interface PermitRuntime {
   mayAct(): boolean
   /** What Settings and the switch read: the state, the record held, the time left. */
   status(): { state: RuntimeState; mayAct: boolean; remainingMs: number; record: ReturnType<typeof summarize>; why?: string; handover?: number }
+  /**
+   * The witnesses' record as THIS process reads it over its own links (read only, proposes nothing):
+   * the one way a command reads remote witnesses (witness-reader.ts). `standing` is the record a majority
+   * holds (null: none ever), `agreed` false when no record has a majority among the answers.
+   */
+  readWitnesses(): Promise<{ standing: PermitRecord | null; agreed: boolean; answered: number; of: number }>
   /** The switch's handover, written by this process (the only one the witnesses take it from). */
   handover(to: string): Promise<{ ok: boolean; record?: PermitRecord; why?: string }>
   /** Take back a handover this process wrote (the switch rolled back while this server runs). */
@@ -86,6 +92,8 @@ export interface RuntimeOptions {
   lockPath?: string
   /** The switch asks this server to commit: the number of the handover to it that it may renew on. */
   commitHandover?: number
+  /** Tests: how remote witnesses are reached (witness-transport.ts), in place of the host links. */
+  net?: Partial<import('./witness-transport.js').WitnessTransportOptions>
   log?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 }
 
@@ -154,7 +162,8 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
   const { home, holderId: me, settings } = opts
   const log = opts.log ?? (() => {})
   let lock: InstanceLock | null = null
-  const h = openPermitClient(me, settings.witnesses, settings.params, () => !lock || lock.held())
+  // The leader server reaches remote witnesses over its host links; a trial start describes this Walnut to no host.
+  const h = openPermitClient(me, settings.witnesses, settings.params, () => !lock || lock.held(), { daemonLink: !opts.trial, ...opts.net })
   let state: RuntimeState = 'waiting'
   let why: string | undefined
   let timer: ReturnType<typeof setTimeout> | null = null
@@ -451,6 +460,10 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
     status: () => ({ state, mayAct: h.client.mayAct(), remainingMs: h.client.remainingMs(), record: summarize(lastRecord), ...(why ? { why } : {}), ...(handoverRecord ? { handover: handoverRecord.number } : {}) }),
     handover,
     cancel,
+    readWitnesses: async () => {
+      const r = await readStanding(h)
+      return { standing: r.standing ?? null, agreed: r.standing !== undefined, answered: r.answered, of: h.places.length }
+    },
     stop: async () => {
       if (stopped) return
       const wasLeading = state === 'leading' && h.client.mayAct()

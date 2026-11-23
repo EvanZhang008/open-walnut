@@ -11,7 +11,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { KILL_POINTS, TRIAL_FAILURES, rehearseCancel, rehearseCancelAfterCommit, rehearseFlagOff, rehearseNoWitnesses, rehearseRestart, rehearseKill, rehearseLedgerControl, rehearseSwitchAndBack, rehearseTrialFailure, type Check } from '../../scripts/leader-switch/rehearsal.js'
+import { KILL_POINTS, TRIAL_FAILURES, rehearseCancel, rehearseCancelAfterCommit, rehearseFlagOff, rehearseHomePrefix, rehearseNoWitnesses, rehearseRestart, rehearseKill, rehearseLedgerControl, rehearseSwitchAndBack, rehearseTrialFailure, type Check } from '../../scripts/leader-switch/rehearsal.js'
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'leader-switch-e2e-'))
 afterAll(() => {
@@ -33,6 +33,11 @@ describe('the manual leader switch, real servers', () => {
     expect(r.checks.all.length).toBeGreaterThan(20)
     expect(r.downtimeMs).toBeGreaterThan(0)
   }, 600_000)
+
+  it('a home moved to another HOME prefix: its own places name the new home, settings the new account, a repo stays where the work is, and no old path is left', async () => {
+    const c = await rehearseHomePrefix(path.join(root, 'home-prefix'), () => {}, ports())
+    expect(failed(c.all)).toEqual([])
+  }, 300_000)
 
   it('control: without the ledger rewrite the old leader\'s ops apply again on the new one', async () => {
     const c = await rehearseLedgerControl(path.join(root, 'ledger'), () => {}, ports())

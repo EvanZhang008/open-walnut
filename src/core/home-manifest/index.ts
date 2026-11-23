@@ -40,6 +40,11 @@ const SQLITE_SIBLINGS = ['-wal', '-shm', '-journal']
  */
 const COPY_SUFFIX = /\.(bak|backup|tmp|conflicted|corrupt|unreadable|migrated)([.-][^/]*)?$/
 
+/** The file a copy beside it copies (`config.yaml.bak` -> `config.yaml`), or `rel` itself. */
+export function originalOfCopy(rel: string): string {
+  return COPY_SUFFIX.test(rel) ? rel.replace(COPY_SUFFIX, '') || rel : rel
+}
+
 function normalize(rel: string): string {
   return rel.replace(/\\/g, '/').replace(/\/{2,}/g, '/').replace(/^(\.\/)+/, '').replace(/^\/+|\/+$/g, '')
 }
@@ -96,6 +101,39 @@ const APPEND_ONLY = HOME_ENTRIES.filter((e) => e.appendOnly)
 export function isAppendOnlyHomePath(relPath: string): boolean {
   if (!APPEND_ONLY.some((e) => e.path === relPath || e.match?.test(relPath))) return false
   return classifyHomePath(relPath)?.appendOnly === true
+}
+
+/**
+ * Places this machine's daemon writes inside the data home while it runs (the installed layout
+ * keeps its journal root, leader book, streams and samples in `<home>/tmp`, daemon-standalone.ts):
+ * they belong to the machine, so a leader switch never moves them with the home it swaps
+ * (src/core/leader/switch/promote.ts), and the daemon never loses a file it is writing.
+ *
+ * TODO(B3, task mwsfdtpv-38a7): a stand-in naming today's daemon-written paths; replace the id
+ * list with the manifest's own "this machine's daemon runtime state" flag when it lands.
+ */
+const MACHINE_RUNTIME_IDS: ReadonlySet<string> = new Set([
+  'tmp.offline-host', 'tmp.leader-book', 'tmp.host-vitals', 'tmp.streams', 'tmp.spawned-sessions', 'tmp.resume-records',
+  'tmp.trigger-state', 'tmp.usage-budgets', 'tmp.host-exec', 'tmp.host-replica', 'tmp.host-server', 'tmp.plugin-jobs',
+])
+
+/** The one predicate: an entry is this machine's daemon runtime state (see MACHINE_RUNTIME_IDS). */
+export function isMachineRuntimeEntry(entry: HomeEntry): boolean {
+  return MACHINE_RUNTIME_IDS.has(entry.id)
+}
+
+const RUNTIME_PATHS = HOME_ENTRIES.filter(isMachineRuntimeEntry).map((e) => e.path)
+
+/** `relPath` is a daemon runtime place or lies inside one. */
+export function isMachineRuntimePath(relPath: string): boolean {
+  const rel = normalize(relPath)
+  return RUNTIME_PATHS.some((p) => rel === p || rel.startsWith(`${p}/`))
+}
+
+/** A daemon runtime place lies inside the dir `relPath` ('' is the home itself). */
+export function holdsMachineRuntime(relPath: string): boolean {
+  const rel = normalize(relPath)
+  return RUNTIME_PATHS.some((p) => rel === '' || p.startsWith(`${rel}/`))
 }
 
 /** The class of `relPath`, with the unknown default for a name no entry knows. */

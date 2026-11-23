@@ -15,6 +15,8 @@ import { standbyStatus } from '../../src/core/standby/index.js'
 import { experimentalEnabled } from '../../src/core/experimental.js'
 import { readMayAct, readMarker, type MayActLine } from '../../src/core/leader/switch/records.js'
 import { readSwitchState } from '../../src/core/leader/switch/flow.js'
+import { describeHit, judgePathHits, pathRoots, scanHomePaths } from '../../src/core/leader/switch/home-paths.js'
+import { homePathRules } from '../../src/core/leader/switch/home-path-rules.js'
 
 export interface Check { name: string; ok: boolean; detail: string }
 
@@ -175,6 +177,19 @@ export function checkOneLeader(c: Checks, label: string, a: Machine, b: Machine,
   c.add(`${label}: no outward operation went through a door on both machines`, both.length === 0, both.length ? both.slice(0, 5).join(', ') : `${ops.size} operations, each on one machine`)
 }
 
+/**
+ * The new leader's home holds no path of the old machine but those the rule table keeps
+ * (src/core/leader/switch/home-path-rules.ts): the whole home scanned, kept places included.
+ */
+export function checkNoOldPaths(c: Checks, to: Machine, from: Machine, label: string): void {
+  const roots = pathRoots({ fromHome: from.home, toHome: to.home, fromAccount: from.env?.HOME, toAccount: to.env?.HOME })
+  const scan = scanHomePaths(to.home, roots)
+  const j = judgePathHits(scan.hits, homePathRules())
+  const bad = [...j.notRewritten.map((x) => x.hit), ...j.unknown]
+  c.add(`${label}: no path of ${from.id}'s home or account home is left in ${to.id}'s home but those kept on purpose`, bad.length === 0,
+    `${scan.files} files in ${Math.round(scan.ms)} ms; ${j.kept.length} kept (${[...new Set(j.kept.map((k) => k.rule))].join(', ')})${bad.length ? `; left: ${bad.slice(0, 5).map(describeHit).join('; ')}` : ''}`)
+}
+
 function iso(t: number): string {
   return Number.isFinite(t) && t > 0 ? new Date(t).toISOString() : 'never'
 }
@@ -247,6 +262,9 @@ export async function rehearseSwitchAndBack(root: string, print: (c: Check) => v
     c.add('B leads with the write permission', !!(await status(w, w.b))?.mayAct)
     c.add('a send A claimed and never settled is listed as outcome unknown, never sent again', (st?.outcomeUnknown ?? []).includes('mail d-1:3 (sending)'), JSON.stringify(st?.outcomeUnknown))
     await checkCarried(c, w, w.b, w.a, { tasks: [...s.tasks, ...acked], notes: [...s.notes, ...load.notes], pluginFiles: [...s.pluginFiles, late] }, 'A -> B')
+    c.add('the trial scanned the new home for old-machine paths', (st?.log ?? []).some((l) => /old-machine paths rewritten/.test(l.note ?? '')) && (st?.log ?? []).some((l) => /paths scanned/.test(l.note ?? '')),
+      (st?.log ?? []).filter((l) => /paths/.test(l.note ?? '')).map((l) => l.note).join(' | '))
+    checkNoOldPaths(c, w.b, w.a, 'A -> B')
     c.add('load ran across the switch', acked.length > 0, `${acked.length} tasks acknowledged by A during the switch`)
     // The applied-ops ledger came along under B's home: A's last ops replayed on B apply none twice.
     const before = (await w.api(w.b, 'GET', '/api/tasks?project=Rehearsal%20load')).json?.tasks?.length ?? -1
@@ -317,6 +335,7 @@ export async function rehearseSwitchAndBack(root: string, print: (c: Check) => v
     c.add('A\'s standby was stopped by the switch back; the leader now holds its port', !a.standbyServer() && !!a.runningServer() && (await w.api(w.a, 'GET', '/api/leader/status')).json?.standby !== true)
     await standbyA.stop()
     await checkCarried(c, w, w.a, w.b, { tasks: [...s.tasks, ...acked, ...onB], notes: [...s.notes, noteB], pluginFiles: [...s.pluginFiles, late] }, 'B -> A')
+    checkNoOldPaths(c, w.a, w.b, 'B -> A')
     c.add("A's handed-over home is kept beside the new one", fs.existsSync(`${w.a.home}.before-${sb!.id}`) && readMarker(`${w.a.home}.before-${sb!.id}`)?.state === 'handed-over')
     await checkStandby(c, w, w.b, w.a.id, 'B started again by hand after the switch back')
     return { checks: c, downtimeMs: st?.downtimeMs, backDowntimeMs: sb?.downtimeMs }
@@ -445,7 +464,7 @@ export async function rehearseCancel(root: string, print: (c: Check) => void, po
   }
 }
 
-export const TRIAL_FAILURES = ['corrupt-database', 'missing-file', 'old-version'] as const
+export const TRIAL_FAILURES = ['corrupt-database', 'missing-file', 'old-version', 'undecided-path'] as const
 
 /** The trial finds a broken copy: the switch cancels and A leads again with everything. */
 export async function rehearseTrialFailure(root: string, kind: typeof TRIAL_FAILURES[number], print: (c: Check) => void, ports: { portA: number; portB: number }): Promise<Checks> {
@@ -466,6 +485,10 @@ export async function rehearseTrialFailure(root: string, kind: typeof TRIAL_FAIL
       fs.closeSync(fd)
     } else if (kind === 'missing-file') {
       fs.rmSync(path.join(w.b.home, 'notes', s.notes[0]!.rel))
+    } else if (kind === 'undecided-path') {
+      // A store no path rule decides (as a new one would be) still names A's home.
+      fs.mkdirSync(path.join(w.b.home, 'cache'), { recursive: true })
+      fs.writeFileSync(path.join(w.b.home, 'cache', 'status-riding.json'), JSON.stringify({ dir: path.join(w.a.home, 'workdir') }))
     } else {
       const cfgFile = path.join(w.a.home, 'config.yaml')
       const cfg = YAML.parse(fs.readFileSync(cfgFile, 'utf8'))
@@ -475,9 +498,56 @@ export async function rehearseTrialFailure(root: string, kind: typeof TRIAL_FAIL
     const resumed = await w.cli(w.a.home, ['leader', 'switch', '--resume'])
     const st = readSwitchState(w.a.home)
     c.add(`trial ${kind}: the switch rolled back`, st?.step === 'rolled-back' && resumed.code === 3, `exit ${resumed.code}; why: ${st?.rollbackWhy?.slice(0, 200)}`)
+    if (kind === 'undecided-path') c.add('trial undecided-path: the reason names the file, the key and the path', (st?.rollbackWhy ?? '').includes(`cache/status-riding.json (dir): ${path.join(w.a.home, 'workdir')}`), st?.rollbackWhy?.slice(0, 300) ?? '')
     c.add(`trial ${kind}: A leads again`, !!(await status(w, w.a))?.mayAct)
     c.add(`trial ${kind}: no marker left on A, B not running`, !readMarker(w.a.home) && !b.runningServer())
     await checkCarried(c, w, w.a, w.a, { tasks: s.tasks, notes: s.notes, pluginFiles: s.pluginFiles }, `trial ${kind}`)
+    return c
+  } finally {
+    await a.stopServer().catch(() => {})
+    await b.stopServer().catch(() => {})
+  }
+}
+
+/**
+ * A home moved to another HOME prefix (B's account folder is `<root>.users/b`, sharing only a
+ * string prefix with A's): A's settings, its trigger script, a task that works in the home and
+ * one in a repo of A's account. After the switch the home's own places name B's home, the
+ * settings B's account, the repo stays A's (the work is there), and the scan finds nothing left.
+ */
+export async function rehearseHomePrefix(root: string, print: (c: Check) => void, ports: { portA: number; portB: number }): Promise<Checks> {
+  const c = new Checks(print)
+  const w = makeWorld(root, { ...ports, dirB: path.join(`${root}.users`, 'b') })
+  const a = w.side(w.a)
+  const b = w.side(w.b)
+  const A = w.a.env!.HOME!
+  const B = w.b.env!.HOME!
+  try {
+    const cfgFile = path.join(w.a.home, 'config.yaml')
+    const cfg = YAML.parse(fs.readFileSync(cfgFile, 'utf8'))
+    cfg.stt = { whisper_cpp_model: `${A}/models/ggml-base.bin` }
+    cfg.push = { apns: { key_path: `${w.a.home}/secrets/apns.p8` } }
+    fs.writeFileSync(cfgFile, YAML.stringify(cfg))
+    fs.mkdirSync(path.join(w.a.home, 'triggers', 't1'), { recursive: true })
+    fs.writeFileSync(path.join(w.a.home, 'triggers', 't1', 'check.sh'), `#!/bin/sh\ncat ${w.a.home}/notes/watch.md\n`)
+    if (!c.add('home prefix: A starts', (await a.startServer('leader', 300_000)).ok)) return c
+    const inHome = await w.api(w.a, 'POST', '/api/tasks', { title: 'works in the home', project: 'Rehearsal', cwd: w.a.home })
+    const inRepo = await w.api(w.a, 'POST', '/api/tasks', { title: 'works in a repo', project: 'Rehearsal', cwd: `${A}/code/proj` })
+    if (!c.add('home prefix: two tasks with folders on A', inHome.status < 300 && inRepo.status < 300, `${inHome.status} ${inRepo.status}`)) return c
+    await waitForBatch(w.b.standbyDir, Date.now())
+    const sw = await w.cli(w.a.home, ['leader', 'switch', '--to', w.b.id])
+    const st = readSwitchState(w.a.home)
+    if (!c.add('home prefix: switch A -> B completes (the trial\'s scan passed)', sw.code === 0 && st?.step === 'done', `exit ${sw.code}; ${sw.out.trim().split('\n').slice(-3).join(' | ')}`)) return c
+    const cwdOf = async (id: string) => { const r = await w.api(w.b, 'GET', `/api/tasks/${id}`); return r.json?.task?.cwd ?? r.json?.cwd }
+    const homeCwd = await cwdOf(inHome.json.task.id)
+    const repoCwd = await cwdOf(inRepo.json.task.id)
+    c.add('home prefix: the task that works in the home now works in B\'s home; the repo task keeps A\'s repo', homeCwd === w.b.home && repoCwd === `${A}/code/proj`, `home task ${homeCwd}; repo task ${repoCwd}`)
+    const cfgB = YAML.parse(fs.readFileSync(path.join(w.b.home, 'config.yaml'), 'utf8'))
+    c.add('home prefix: settings name B\'s account and B\'s home; standby.dir is A\'s standby folder', cfgB.stt?.whisper_cpp_model === `${B}/models/ggml-base.bin` && cfgB.push?.apns?.key_path === `${w.b.home}/secrets/apns.p8` && cfgB.standby?.dir === w.a.standbyDir,
+      JSON.stringify({ stt: cfgB.stt, push: cfgB.push, standby: cfgB.standby?.dir }))
+    const script = fs.readFileSync(path.join(w.b.home, 'triggers', 't1', 'check.sh'), 'utf8')
+    c.add('home prefix: the trigger script reads B\'s home', script === `#!/bin/sh\ncat ${w.b.home}/notes/watch.md\n`, JSON.stringify(script))
+    checkNoOldPaths(c, w.b, w.a, 'home prefix')
     return c
   } finally {
     await a.stopServer().catch(() => {})
@@ -571,6 +641,10 @@ export async function rehearseNoWitnesses(root: string, print: (c: Check) => voi
     c.add('no witnesses: the experiment reads on (its own switch and every_experiment)', experimentalEnabled(on, 'switchable_leader') && on.every_experiment === true, JSON.stringify(on))
     const r = await w.api(w.a, 'GET', '/api/leader/status')
     c.add('no witnesses: no leader status route', r.status === 404, `status ${r.status}`)
+    // The witness route of a host's service is not on a leader's app, and answers no differently than a path it never had.
+    const witnessCall = await w.api(w.a, 'POST', '/host-api/witness/request', { v: 1, walnutId: 'x', witness: 'w1', request: { type: 'read' } })
+    const neverHad = await w.api(w.a, 'POST', '/host-api/never-had-this', {})
+    c.add('no witnesses: no witness route answers, as for a path it never had', witnessCall.status === neverHad.status && witnessCall.status !== 200 && witnessCall.status < 500, `witness ${witnessCall.status}, never had ${neverHad.status}`)
     const s = await seed(w, w.a, 3)
     const fired = await waitFor('the routine to fire', async () => cronLastRun(w.a.home, s.cronId) !== null, 90_000).then(() => true).catch(() => false)
     c.add('no witnesses: a task is created and the routine fires', s.tasks.length === 3 && fired, `${s.tasks.length} tasks, routine last ran ${cronLastRun(w.a.home, s.cronId)}`)
@@ -601,6 +675,10 @@ export async function rehearseFlagOff(root: string, print: (c: Check) => void, p
     c.add('flag off: A starts as before', (await a.startServer('leader', 300_000)).ok)
     const r = await w.api(w.a, 'GET', '/api/leader/status')
     c.add('flag off: no leader status route', r.status === 404, `status ${r.status}`)
+    // The witness route of a host's service is not on a leader's app, and answers no differently than a path it never had.
+    const witnessCall = await w.api(w.a, 'POST', '/host-api/witness/request', { v: 1, walnutId: 'x', witness: 'w1', request: { type: 'read' } })
+    const neverHad = await w.api(w.a, 'POST', '/host-api/never-had-this', {})
+    c.add('flag off: no witness route answers, as for a path it never had', witnessCall.status === neverHad.status && witnessCall.status !== 200 && witnessCall.status < 500, `witness ${witnessCall.status}, never had ${neverHad.status}`)
     await seed(w, w.a, 2)
     // (local/leader-switch/server-leader.log is the rehearsal's own: its LocalSide started the server.)
     const written = ['may-act.jsonl', 'switch-state.json', 'handed-over.json', 'history.json'].filter((f) => fs.existsSync(path.join(w.a.home, 'local', 'leader-switch', f)))

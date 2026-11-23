@@ -430,7 +430,10 @@ copy and declares nothing, unless it is the same folder (realpath: a symlink, HO
 ways), which is a move from the other spelling; a copy or a restore on another machine declares
 nothing. A restore switch carries the record with the data folder. The record is kept whatever the
 one-service experiment (`in_process_daemon`) says, off the connect path; only the declaration waits
-for it, and with it known off a connect waits on nothing of this.
+for it, and with it known off a connect waits on nothing of this. A leader switch that committed
+(`docs/reference/leader-switch.md`, "Hosts follow the new leader") is the one move across machines:
+the new leader declares the old holder's data dir, as that server spelled it, with the experiment
+off too, and its connects wait until its commit stands.
 
 On the host, `movedFrom` makes the new home an alias of the first one (`<leader dir>/homes.json`
 v2, which older daemons never read; land 1's v1 entries are dropped at first read) only when the

@@ -29,9 +29,10 @@ import Database from '../../../lib/sqlite.js'
 import { getVersion } from '../../version.js'
 import { snapshotTo, verifyStandby, standbyStatus, StandbyTarget } from '../../standby/index.js'
 import { majorityOf, type PermitRecord } from '../permit/types.js'
-import { openPermitClient, readStanding } from './permit-ops.js'
+import { makeWitnessReader, type ReadingServer } from './witness-reader.js'
 import { appendHistory, readHistory, readMarker, removeMarker, summarize, switchDir, takeSwitchLock, writeDurableJson, writeMarker, writePromoted, promotedFile, readPromoted } from './records.js'
-import { demoteTrialHome, promoteCopy } from './promote.js'
+import { demoteTrialHome, moveRoots, promoteCopy } from './promote.js'
+import { homePathRules } from './home-path-rules.js'
 import { offlineCheck, olderVersion, onlineCheck } from './self-check.js'
 import { LocalSide, type SwitchSide } from './side.js'
 import { machineByHome, machineById, readHomeSwitchConfig, type LeaderSwitchSettings, type MachinePlace } from './settings.js'
@@ -50,6 +51,9 @@ export interface SwitchState {
   standbyDir: string
   /** Where the new leader's batches go (the old machine's standby_dir). */
   reverseStandbyDir: string
+  /** The two machines' account home dirs (leader_switch.machines[].account_home): paths under the old one move. */
+  sourceAccountHome?: string
+  targetAccountHome?: string
   sourceVersion: string
   sourceWasRunning: boolean
   step: SwitchStep
@@ -66,6 +70,8 @@ export interface SwitchState {
   rollbackWhy?: string
   /** The offline self-check of the new home passed (a resumed trial does not judge again a home its trial server touched). */
   offlineChecked?: boolean
+  /** The data dir the old leader's hosts know it by, as its server said at the preflight (moved-home.ts). */
+  sourceHomeOnHosts?: { home: string; formerHomes: string[] }
   /** Sends the old leader had begun and not settled: never sent again, listed for a person. */
   outcomeUnknown?: string[]
 }
@@ -147,6 +153,8 @@ async function runLocked(opts: SwitchOptions, env: NodeJS.ProcessEnv, out: (line
   if (!source || !target) throw new SwitchRefused(`machine ${!source ? st.from : st.to} is not in leader_switch.machines`)
   const srcSide = sideOf(source)
   const dstSide = sideOf(target)
+  // Tests only: the promotion leaves the applied-ops ledger as the old home wrote it.
+  const skipLedger = opts.skipLedgerRewrite || env.WALNUT_LEADER_SWITCH_SKIP_LEDGER_REWRITE === '1'
 
   const save = (step: SwitchStep, note?: string) => {
     st.step = step
@@ -167,7 +175,7 @@ async function runLocked(opts: SwitchOptions, env: NodeJS.ProcessEnv, out: (line
 
   // The switch command reads the witnesses and never proposes: they take records only from the
   // process that holds the permission, which is always a server.
-  const reader = openPermitClient(`${st.from}-switch-reader`, settings.witnesses, settings.params)
+  const readWitnesses = witnessReading(`${st.from}-switch-reader`, settings, srcSide, dstSide)
   const fail = (why: string): never => { throw new StepFailed(why) }
 
   for (;;) {
@@ -180,7 +188,7 @@ async function runLocked(opts: SwitchOptions, env: NodeJS.ProcessEnv, out: (line
         }
         case 'handover': {
           writeMarker(st.sourceHome, { switchId: st.id, to: st.to, state: 'switching', at: new Date().toISOString(), ...(st.handover ? { handover: st.handover } : {}) })
-          const { standing } = await readStanding(reader)
+          const { standing } = await readWitnesses()
           let done: number | null = null
           if (standing && standing.kind === 'handover' && standing.from === st.from && standing.to === st.to) done = standing.number
           else if (committedRecord(standing, st)) { save('commit', `already committed (record ${standing!.number})`); break }
@@ -227,11 +235,13 @@ async function runLocked(opts: SwitchOptions, env: NodeJS.ProcessEnv, out: (line
           await dstSide.stopServer()
           const r = await promoteCopy({
             switchId: st.id, standbyDir: st.standbyDir, home: st.targetHome, previousHome: st.sourceHome, reverseStandbyDir: st.reverseStandbyDir,
-            skipLedgerRewrite: opts.skipLedgerRewrite || env.WALNUT_LEADER_SWITCH_SKIP_LEDGER_REWRITE === '1',
+            ...accountHomes(st),
+            skipLedgerRewrite: skipLedger,
             afterRename: () => killPoint(env, 'during-promote'),
           })
           st.outcomeUnknown = listUnsettledSends(st.targetHome)
-          save('trial', `copy is the new home${r.movedAside ? ` (what was there is kept at ${r.movedAside})` : ''}; ${r.ledgerRows} ledger rows moved to it`)
+          const moved = r.rewritten.reduce((n, d) => n + d.values, 0)
+          save('trial', `copy is the new home${r.movedAside ? ` (what was there is kept at ${r.movedAside})` : ''}; ${r.ledgerRows} ledger rows moved to it; ${moved} old-machine paths rewritten in ${r.rewritten.length} files`)
           killPoint(env, 'after-promote')
           break
         }
@@ -240,9 +250,17 @@ async function runLocked(opts: SwitchOptions, env: NodeJS.ProcessEnv, out: (line
           const files = (await new StandbyTarget(st.standbyDir).current()).files
           // A resumed trial: its server may have touched the home (a WAL checkpoint, a row it
           // reconciled), so sizes and row counts are judged only the first time.
-          const off = await offlineCheck({ sourceHome: st.sourceHome, home: st.targetHome, files, sizesAndRows: !st.offlineChecked })
+          const off = await offlineCheck({
+            sourceHome: st.sourceHome, home: st.targetHome, files, sizesAndRows: !st.offlineChecked,
+            roots: moveRoots({ previousHome: st.sourceHome, home: st.targetHome, ...accountHomes(st) }),
+            rules: homePathRules({ skipLedgerRewrite: skipLedger }),
+          })
           if (!off.ok) fail(`self-check of the new home: ${off.problems.join('; ')}`)
-          if (!st.offlineChecked) { st.offlineChecked = true; save('trial', 'offline self-check passed') }
+          if (!st.offlineChecked) {
+            st.offlineChecked = true
+            const p = off.detail.paths as { files: number; ms: number; kept: number }
+            save('trial', `offline self-check passed (old-machine paths scanned: ${p.files} files in ${p.ms} ms, ${p.kept} kept on purpose, none left)`)
+          }
           const started = await dstSide.startServer('trial')
           if (!started.ok) fail(`the trial start failed: ${started.why}${started.logTail ? `\n${started.logTail.split('\n').slice(-8).join('\n')}` : ''}`)
           killPoint(env, 'during-trial')
@@ -255,10 +273,13 @@ async function runLocked(opts: SwitchOptions, env: NodeJS.ProcessEnv, out: (line
         case 'commit': {
           // The new leader's server writes the commit itself (the witnesses take a renew on the
           // handover from the new holder's server): start it told the handover's number.
+          // Before its start the new home says where the old leader was on its hosts: it declares that once its commit stands (moved-home.ts).
+          const onHosts = { to: st.to, handover: st.handover, ...(st.sourceHomeOnHosts ? { fromHomeOnHosts: st.sourceHomeOnHosts.home, fromFormerHomes: st.sourceHomeOnHosts.formerHomes } : {}) }
+          if (readPromoted(st.targetHome)?.state !== 'led') writePromoted(st.targetHome, { switchId: st.id, state: 'promoted', from: st.sourceHome, ...onHosts, at: new Date().toISOString() })
           let committed: PermitRecord | null = null
           const deadline = Date.now() + takeBackMs(settings)
           while (!committed && Date.now() < deadline) {
-            const { standing } = await readStanding(reader)
+            const { standing } = await readWitnesses()
             if (committedRecord(standing, st)) { committed = standing!; break }
             if (standing && !(standing.kind === 'handover' && standing.to === st.to && standing.from === st.from)) fail(`the handover is not standing at the witnesses any more (${JSON.stringify(summarize(standing))})`)
             if (!dstSide.runningServer()) {
@@ -271,7 +292,7 @@ async function runLocked(opts: SwitchOptions, env: NodeJS.ProcessEnv, out: (line
           st.commit = committed!.number
           killPoint(env, 'after-commit-majority')
           writeMarker(st.sourceHome, { switchId: st.id, to: st.to, state: 'handed-over', handover: st.handover, commit: st.commit, at: new Date().toISOString() })
-          writePromoted(st.targetHome, { switchId: st.id, state: 'led', from: st.sourceHome, at: new Date().toISOString() })
+          writePromoted(st.targetHome, { switchId: st.id, state: 'led', from: st.sourceHome, ...onHosts, at: new Date().toISOString() })
           appendHistory(st.targetHome, { switchId: st.id, from: st.from, to: st.to, committedAt: new Date().toISOString(), record: st.commit })
           save('start-target', `record ${st.commit} at a majority: ${st.to} holds the write permission, ${st.from} never acts again`)
           break
@@ -294,7 +315,7 @@ async function runLocked(opts: SwitchOptions, env: NodeJS.ProcessEnv, out: (line
           return st
         case 'cancel': {
           // A commit that stood first sends the switch forward, whatever asked for the cancel.
-          const before = (await readStanding(reader)).standing
+          const before = (await readWitnesses()).standing
           if (committedRecord(before, st)) {
             out('cancel: the commit stood before the cancel; finishing the switch instead')
             save('commit', 'committed before the cancel')
@@ -304,7 +325,7 @@ async function runLocked(opts: SwitchOptions, env: NodeJS.ProcessEnv, out: (line
           // hold next is final (the switch command itself proposes nothing). A commit that stood
           // between the read above and the stop shows below (its release, too, counts).
           await dstSide.stopServer()
-          const { standing } = await readStanding(reader)
+          const { standing } = await readWitnesses()
           if (committedRecord(standing, st)) {
             out('cancel: the commit stood before the cancel; finishing the switch instead')
             save('commit', 'committed before the cancel')
@@ -393,7 +414,21 @@ function takeBackMs(settings: LeaderSwitchSettings): number {
   return p.validMs + p.witnessMarginMs + p.backoffMaxMs + 30_000
 }
 
+function accountHomes(st: SwitchState): { previousAccountHome?: string; accountHome?: string } {
+  return { ...(st.sourceAccountHome ? { previousAccountHome: st.sourceAccountHome } : {}), ...(st.targetAccountHome ? { accountHome: st.targetAccountHome } : {}) }
+}
+
 const PRE_COMMIT = new Set<SwitchStep>(['preflight', 'handover', 'stop-source', 'final-batch', 'promote', 'trial', 'commit'])
+
+/**
+ * The witnesses' record for the switch: local ones read here, remote ones through whichever side's server
+ * runs (the old leader before the handover, the new leader's commit start after it; a trial start cannot read them).
+ */
+function witnessReading(id: string, settings: LeaderSwitchSettings, srcSide: SwitchSide, dstSide: SwitchSide): () => Promise<{ standing: PermitRecord | null | undefined; answered: number }> {
+  const servers = (): ReadingServer[] => [srcSide, dstSide].filter((side) => side.runningServer()).map((side) => ({ api: (m: string, p: string) => side.api(m, p) }))
+  const read = makeWitnessReader(id, settings, servers)
+  return () => read().catch((err) => { throw err instanceof Error && err.name === 'NoLeaderServerToRead' ? new StepFailed(err.message) : err })
+}
 
 class StepFailed extends Error {
   constructor(message: string) { super(message); this.name = 'StepFailed' }
@@ -421,6 +456,8 @@ function newState(home: string, settings: LeaderSwitchSettings, opts: SwitchOpti
     to: target.id,
     sourceHome: source.home,
     targetHome: target.home,
+    ...(source.accountHome ? { sourceAccountHome: source.accountHome } : {}),
+    ...(target.accountHome ? { targetAccountHome: target.accountHome } : {}),
     standbyDir: target.standbyDir,
     reverseStandbyDir: source.standbyDir,
     sourceVersion: env.WALNUT_LEADER_SWITCH_SOURCE_VERSION || getVersion(),
@@ -439,7 +476,9 @@ async function preflight(st: SwitchState, settings: LeaderSwitchSettings, src: S
   if (!running) problems.push(`the old leader's server is not running on ${st.sourceHome}: start it first (only the process that holds the permission can hand it over)`)
   else {
     const s = await src.api('GET', '/api/leader/status').catch(() => null)
-    const j = s?.json as { version?: string; permit?: { mayAct?: boolean; state?: string } } | null
+    const j = s?.json as { version?: string; permit?: { mayAct?: boolean; state?: string }; homeOnHosts?: SwitchState['sourceHomeOnHosts'] } | null
+    if (typeof j?.homeOnHosts?.home === 'string' && j.homeOnHosts.home) st.sourceHomeOnHosts = { home: j.homeOnHosts.home, formerHomes: Array.isArray(j.homeOnHosts.formerHomes) ? j.homeOnHosts.formerHomes : [] }
+    else if (j?.permit) problems.push('the old leader does not say which data dir its hosts know it by (a program older than this switch): its hosts could not follow the new leader')
     if (!j?.permit) problems.push('the old leader runs without the write permission wired (start it with the experiment on and leader_switch set)')
     else if (!j.permit.mayAct) problems.push(`the old leader may not act now (${j.permit.state})`)
     if (j?.version) st.sourceVersion = j.version
@@ -461,8 +500,7 @@ async function preflight(st: SwitchState, settings: LeaderSwitchSettings, src: S
     problems.push(`the standby copy ${st.standbyDir}: ${(err as Error).message}`)
   }
   // The witnesses: a majority answers and names the old leader.
-  const h = openPermitClient(`${st.from}-switch-reader`, settings.witnesses, settings.params)
-  const { standing, answered } = await readStanding(h)
+  const { standing, answered } = await witnessReading(`${st.from}-switch-reader`, settings, src, dst)()
   if (answered < majorityOf(settings.witnesses.map((w) => w.id))) problems.push(`only ${answered} of ${settings.witnesses.length} witnesses answered`)
   else if (!standing) problems.push(standing === null ? 'the witnesses hold no record yet: start the leader once with the permission' : 'the witnesses do not agree on a record')
   else if (standing.holder !== st.from || standing.kind === 'handover') problems.push(standing.kind === 'release'

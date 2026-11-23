@@ -51,7 +51,7 @@ import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { ACP_BUSY_FILE, acpTurnsHold } from './acp-upgrade-hold.js'
 import { assertDaemonDialsOpen, daemonDialsClosed } from './daemon-dial-gate.js'
 import { DAEMON_BINARIES_DIR, IS_DEMO, IS_EPHEMERAL, WALNUT_HOME } from '../constants.js'
-import { settledHomeMove } from '../core/home-move.js'
+import { isHomeMoveHeld, settledHomeMove } from '../core/home-move.js'
 import { BUILD_BACKOFF_MS, backoffLeftMs, buildBackedOff, readBuildBackoff, writeBuildBackoff, type BuildBackoffEntry } from './daemon-build-backoff.js'
 import { BACK_TRIES_MAX, pendingReplaces, serviceModeAsks } from './daemon-update-store.js'
 import { gateSessionCommand, settleSessionCommand } from './ephemeral-session-gate.js'
@@ -2574,9 +2574,22 @@ export class DaemonConnection {
     const gate: Promise<void> = import('../core/leader/primary-leader.js')
       .then((m) => m.declareHomeMove(this.leaderLink()))
       .catch((err: unknown) => {
+        // A leader switch's commit not confirmed in time: this attempt fails before any frame (a
+        // frame from this home first would make the host keep it as a Walnut of its own), and the
+        // backoff tries again, each try waiting afresh (home-move.ts HomeMoveHeld).
+        if (isHomeMoveHeld(err)) {
+          log.session.warn('DaemonConnection: held until the leader switch is confirmed; nothing sent, retrying', { host: this.hostKey, switchId: err.switchId, error: err.message })
+          if (this.homeMoveGate === gate) {
+            this.closeTransport()
+            void this.failReconnect(err, this._reconnectChainDelayMs || DaemonConnection.RECONNECT_DELAY_MS)
+          }
+          throw err
+        }
         log.session.warn('DaemonConnection: the home move could not be declared; commands go on', { host: this.hostKey, error: err instanceof Error ? err.message : String(err) })
       })
       .finally(() => { if (this.homeMoveGate === gate) this.homeMoveGate = null })
+    // Commands waiting on a held gate fail with it; nothing else awaits it.
+    gate.catch(() => {})
     return gate
   }
 

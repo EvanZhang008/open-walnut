@@ -28,8 +28,23 @@ export interface LeaderDoor {
   close(): Promise<void>
 }
 
+/** Where `/host-api/witness/*` is served (core/leader/switch/witness-route.ts). Tests pass their own; absent: this machine's. */
+export interface WitnessDoorOptions {
+  /** Whether the experiment `switchable_leader` is on here (a host's config is a copy of the leader's). */
+  enabled(): Promise<boolean>
+  /** The Walnut this service follows. */
+  walnutId(): string | null
+  /** Where this machine keeps witness records (default: beside this machine's id file). */
+  root?(): string
+}
+
+/** The witness route's own prefix, spelled here so the door loads nothing of the switch to compare a path. */
+const WITNESS_PATH_PREFIX = '/host-api/witness/'
+
 export interface LeaderDoorOptions {
   devices: DeviceCopy
+  /** `/host-api/witness/*`: a machine's witness of the write permission. */
+  witness?: WitnessDoorOptions
   /** What `GET /host-api/status` answers (the replica's report). */
   status?: () => Record<string, unknown>
   /** The session routes of a host that runs its sessions, once installed (null: none). */
@@ -43,6 +58,28 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(text)
 }
 
+/**
+ * A witness call, answered when the experiment `switchable_leader` is on here. Off, nothing of the
+ * permit is loaded and the path falls through to the same 404 it has always had.
+ */
+async function witnessAnswered(req: IncomingMessage, res: ServerResponse, opts: LeaderDoorOptions): Promise<boolean> {
+  const own = opts.witness ?? await defaultWitnessDoor()
+  if (!(await own.enabled())) return false
+  const [{ handleWitnessHttp }, { witnessRoot }] = await Promise.all([import('../core/leader/switch/witness-route.js'), import('../core/leader/switch/machine-id.js')])
+  await handleWitnessHttp(req, res, { walnutId: own.walnutId, root: own.root?.() ?? witnessRoot(), log: opts.log })
+  return true
+}
+
+async function defaultWitnessDoor(): Promise<WitnessDoorOptions> {
+  return {
+    enabled: async () => {
+      const [{ getConfig }, { experimentalEnabled }] = await Promise.all([import('../core/config-manager.js'), import('../core/experimental.js')])
+      return experimentalEnabled((await getConfig()).experimental, 'switchable_leader')
+    },
+    walnutId: () => (process.env.WALNUT_WALNUT_ID ?? '').trim() || null,
+  }
+}
+
 export function createLeaderDoor(opts: LeaderDoorOptions): LeaderDoor {
   let replicaRouter: http.RequestListener | null = null
 
@@ -52,6 +89,7 @@ export function createLeaderDoor(opts: LeaderDoorOptions): LeaderDoor {
       if (req.method === 'GET' && url.pathname === '/host-api/status') {
         return sendJson(res, 200, { ok: true, ...(opts.status?.() ?? {}) })
       }
+      if (url.pathname.startsWith(WITNESS_PATH_PREFIX) && await witnessAnswered(req, res, opts)) return
       if (url.pathname === '/bridge/replica') {
         if (!replicaRouter) {
           const [{ default: express }, { createLinkedReplicaRouter }] = await Promise.all([

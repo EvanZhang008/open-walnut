@@ -6,18 +6,28 @@
 import { createHolderClock } from '../permit/clock.js'
 import { PermitClient } from '../permit/client.js'
 import type { PermitParams, PermitRecord, PermitReply } from '../permit/types.js'
-import { localWitnessTransport } from './local-witnesses.js'
-import type { WitnessPlace } from './settings.js'
+import { createWitnessTransport, hostLinkCall, placesOf, type WitnessTransportOptions } from './witness-transport.js'
+import { isRemoteWitness, type WitnessPlace } from './settings.js'
 
 export interface PermitHandle {
   client: PermitClient
   places: WitnessPlace[]
 }
 
-/** `guard`: false stops acting at once (the instance lock's held()). */
-export function openPermitClient(id: string, places: WitnessPlace[], params: PermitParams, guard?: () => boolean): PermitHandle {
+/**
+ * `guard`: false stops acting at once (the instance lock's held()). `net`: how remote witnesses
+ * are reached (witness-transport.ts). By default only through a registered reach (the host-dialed
+ * door): `daemonLink: true` adds the pooled daemon link to the host, which describes this Walnut to
+ * that host (host.slice, leader.configure, the offline drain) and so is for the leader server alone,
+ * never a standby, a reader command or a trial start.
+ */
+export function openPermitClient(id: string, places: WitnessPlace[], params: PermitParams, guard?: () => boolean, net: Partial<WitnessTransportOptions> & { daemonLink?: boolean } = {}): PermitHandle {
+  const { daemonLink, ...transportOpts } = net
   let client: PermitClient | null = null
-  const transport = localWitnessTransport(places, params, (reply: PermitReply) => client?.receive(reply))
+  const transport = createWitnessTransport({
+    placeOf: placesOf(places), params, deliver: (reply: PermitReply) => client?.receive(reply),
+    ...(places.some(isRemoteWitness) ? { remote: hostLinkCall({ daemonLink: daemonLink === true }) } : {}), ...transportOpts,
+  })
   client = new PermitClient({ id, list: places.map((p) => p.id), transport, clock: createHolderClock(), params, ...(guard ? { guard } : {}) })
   return { client, places }
 }

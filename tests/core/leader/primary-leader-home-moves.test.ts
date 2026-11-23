@@ -2,7 +2,9 @@
  * A leader declares its home move (leader.configure's movedFrom, home-move.ts) only under the
  * one-service experiment, and only when its data dir really moved; the connect's first frame
  * carries it (declareHomeMove). A host that refuses this data dir (`walnut_home_busy`) becomes
- * one Walnut Health item for that host, which an accepted leader.configure clears.
+ * one Walnut Health item for that host, which an accepted leader.configure clears. A leader switch
+ * to this data dir that committed declares the previous holder's path with the experiment off too
+ * (src/core/leader/switch/moved-home.ts), and a connect waits for its commit.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
@@ -14,18 +16,26 @@ vi.mock('../../../src/constants.js', async () => {
   return createMockConstants('walnut-leader-home-moves')
 })
 
-const health = vi.hoisted(() => ({ busy: [] as Array<[string, string, string]>, served: [] as string[], notTaken: [] as Array<[string, string]>, taken: [] as string[] }))
+const health = vi.hoisted(() => ({ busy: [] as Array<[string, string, string]>, served: [] as string[], notTaken: [] as Array<[string, string]>, taken: [] as string[], held: [] as string[], confirmed: 0 }))
 vi.mock('../../../src/core/leader/home-busy-health.js', () => ({
   noteHomeBusy: (host: string, movedTo: string, kind = 'busy') => { health.busy.push([host, movedTo, kind]) },
   noteHomeServed: (host: string) => { health.served.push(host) },
   noteMoveNotTaken: (host: string, why: string) => { health.notTaken.push([host, why]) },
   noteMoveTaken: (host: string) => { health.taken.push(host) },
+  noteSwitchHeld: (switchId: string) => { health.held.push(switchId) },
+  noteSwitchConfirmed: () => { health.confirmed++ },
 }))
 
+// The permit of this process (boot.ts): none, unless a test plays a switch's new leader.
+const permit = vi.hoisted(() => ({ current: null as null | { machine: string; trial: boolean; runtime: { status(): { state: string; record: { number: number; holder: string } | null } } } }))
+vi.mock('../../../src/core/leader/switch/boot.js', () => ({ currentLeaderPermit: () => permit.current }))
+
 import { WALNUT_HOME } from '../../../src/constants.js'
+import { setOutwardDoorChecker } from '../../../src/core/leader/switch/doors.js'
+import { writePromoted } from '../../../src/core/leader/switch/records.js'
 import { configureHostLeader, declareHomeMove } from '../../../src/core/leader/primary-leader.js'
 import { inProcessDaemonWanted, resetInProcessDaemonWantedForTests } from '../../../src/providers/in-process-daemon.js'
-import { homeRecordFile, resetHomeMoveForTests, settledHomeMove } from '../../../src/core/home-move.js'
+import { homeRecordFile, isHomeMoveHeld, resetHomeMoveForTests, settledHomeMove } from '../../../src/core/home-move.js'
 import { readMachineId, setMachineIdHomeForTest } from '../../../src/core/machine-id.js'
 
 const saved = process.env.WALNUT_IN_PROCESS_DAEMON
@@ -40,6 +50,9 @@ beforeEach(() => {
   fs.rmSync(homeRecordFile(WALNUT_HOME), { force: true })
 })
 afterEach(() => {
+  permit.current = null
+  setOutwardDoorChecker(null)
+  fs.rmSync(path.join(WALNUT_HOME, 'local', 'leader-switch'), { recursive: true, force: true })
   if (saved === undefined) delete process.env.WALNUT_IN_PROCESS_DAEMON
   else process.env.WALNUT_IN_PROCESS_DAEMON = saved
   resetInProcessDaemonWantedForTests()
@@ -200,5 +213,94 @@ describe('leader.configure and declared home moves', () => {
     expect(await configureHostLeader(h.conn)).toBeNull()
     expect(health.busy).toEqual([['h1', '/new/home', 'busy']])
     expect(health.served).toEqual([])
+  })
+})
+
+describe('leader.configure after a leader switch to this data dir', () => {
+  const OLD = '/srv/machine-a/./walnut'
+  /** This process is the new leader of switch s1: the permit guards it, and its promotion record says where the old leader was. */
+  let looks = 0
+  function newLeader(state: 'leading' | 'waiting', recordState: 'promoted' | 'led' = 'promoted', to = 'machine-b') {
+    let st = state
+    looks = 0
+    permit.current = { machine: 'machine-b', trial: false, runtime: { status: () => (looks++, { state: st, record: st === 'leading' ? { number: 8, holder: 'machine-b' } : { number: 7, holder: 'machine-a' } }) } }
+    setOutwardDoorChecker(() => {}, () => st === 'leading')
+    writePromoted(WALNUT_HOME, { switchId: 's1', state: recordState, from: '/srv/machine-a/walnut', to, handover: 7, fromHomeOnHosts: OLD, fromFormerHomes: [], at: new Date().toISOString() })
+    return { commit: () => { st = 'leading' } }
+  }
+
+  it('the experiment off and the switch committed: every leader.configure carries the old holder\'s path, raw', async () => {
+    switchTo('0')
+    newLeader('leading')
+    expect(settledHomeMove(), 'a connect holds its commands for the declaration').toBeUndefined()
+    const first = host({ ok: true, epoch: 3, holder: 'primary' })
+    await declareHomeMove(first.conn)
+    expect(first.sent).toEqual([expect.objectContaining({ cmd: 'leader.configure', home: WALNUT_HOME, movedFrom: OLD, formerHomes: [OLD] })])
+    const later = host({ ok: true, epoch: 3, holder: 'primary' })
+    await configureHostLeader(later.conn)
+    expect(later.sent.find((s) => s.cmd === 'leader.configure')).toMatchObject({ movedFrom: OLD, formerHomes: [OLD] })
+    expect(JSON.parse(fs.readFileSync(homeRecordFile(WALNUT_HOME), 'utf8'))).toMatchObject({ home: WALNUT_HOME, movedFrom: OLD, switchId: 's1' })
+  })
+
+  it('before the commit stands nothing reaches the host; at the commit the first frame declares', async () => {
+    switchTo('0')
+    const leader = newLeader('waiting')
+    const h = host({ ok: true, epoch: 3, holder: 'primary' })
+    const done = configureHostLeader(h.conn)
+    // It looked at its permit three times and still waits.
+    await vi.waitFor(() => expect(looks).toBeGreaterThanOrEqual(3), { timeout: 10_000 })
+    expect(h.sent, 'no frame before the commit').toEqual([])
+    leader.commit()
+    await done
+    expect(h.sent[0]).toMatchObject({ cmd: 'leader.configure', movedFrom: OLD })
+  })
+
+  it('the witness majority out of reach: each attempt fails at its deadline with no frame and a Health item; back, it declares once', async () => {
+    switchTo('0')
+    health.held.length = 0
+    health.confirmed = 0
+    process.env.WALNUT_TEST_COMMIT_WAIT_MS = '500'
+    try {
+      const leader = newLeader('waiting')
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const h = host({ ok: true, epoch: 3, holder: 'primary' })
+        const started = Date.now()
+        const err = await declareHomeMove(h.conn).catch((e: unknown) => e)
+        expect(isHomeMoveHeld(err), 'the attempt fails, never "nothing to declare"').toBe(true)
+        expect(Date.now() - started).toBeLessThan(5_000)
+        expect(h.sent, 'no frame: the host keeps no record for the new path').toEqual([])
+        expect(settledHomeMove(), 'the next connect waits afresh').toBeUndefined()
+        const configured = host({ ok: true, epoch: 3, holder: 'primary' })
+        expect(isHomeMoveHeld(await configureHostLeader(configured.conn).catch((e: unknown) => e))).toBe(true)
+        expect(configured.sent).toEqual([])
+      }
+      await vi.waitFor(() => expect(health.held).toContain('s1'))
+      expect(fs.existsSync(homeRecordFile(WALNUT_HOME)), 'nothing judged or kept while held').toBe(false)
+      // The majority answers again: the commit stands, and the next attempt declares, once.
+      leader.commit()
+      const back = host({ ok: true, epoch: 3, holder: 'primary' })
+      await declareHomeMove(back.conn)
+      expect(back.sent).toEqual([expect.objectContaining({ cmd: 'leader.configure', movedFrom: OLD, formerHomes: [OLD] })])
+      await vi.waitFor(() => expect(health.confirmed).toBe(1))
+    } finally {
+      delete process.env.WALNUT_TEST_COMMIT_WAIT_MS
+    }
+  })
+
+  it('a record naming another machine, or no permit (the experiment off), declares nothing: as before', async () => {
+    switchTo('0')
+    newLeader('leading', 'led', 'machine-c')
+    const h = host({ ok: true, epoch: 3, holder: 'primary' })
+    await configureHostLeader(h.conn)
+    expect(h.sent.find((s) => s.cmd === 'leader.configure')).not.toHaveProperty('movedFrom')
+    resetHomeMoveForTests()
+    fs.rmSync(homeRecordFile(WALNUT_HOME), { force: true })
+    newLeader('leading', 'led')
+    permit.current = null
+    setOutwardDoorChecker(null)
+    expect(settledHomeMove(), 'no permit and the experiment known off: nothing waits').toBeNull()
+    const off = host({ ok: true, epoch: 3, holder: 'primary' })
+    await configureHostLeader(off.conn)
+    expect(off.sent.find((s) => s.cmd === 'leader.configure')).not.toHaveProperty('movedFrom')
   })
 })

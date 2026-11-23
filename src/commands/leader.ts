@@ -57,11 +57,22 @@ export async function runLeaderStatus(options: Record<string, unknown>): Promise
     const { readUnresolvedOps } = await import('../core/leader/switch/records.js')
     const out: Record<string, unknown> = { home, marker: m.readMarker(home), switch: m.readSwitchState(home), history: m.readHistory(home), unresolvedOps: readUnresolvedOps(home) }
     if (cfg.settings) {
-      const { openPermitClient, readStanding } = await import('../core/leader/switch/permit-ops.js')
+      const { makeWitnessReader, NoLeaderServerToRead } = await import('../core/leader/switch/witness-reader.js')
       const { summarize } = await import('../core/leader/switch/records.js')
-      const h = openPermitClient(m.permitHolderId() ?? 'status-reader', cfg.settings.witnesses, cfg.settings.params)
-      const r = await readStanding(h)
-      out.witnesses = { answered: r.answered, of: cfg.settings.witnesses.length, standing: r.standing === undefined ? 'no majority' : summarize(r.standing) }
+      // Remote witnesses are read by this machine's running leader server, never by this command.
+      const me = m.machineById(cfg.settings, m.permitHolderId() ?? '')
+      const server = { api: async (method: string, urlPath: string) => {
+        if (!me) throw new Error('this machine is not one of leader_switch.machines')
+        const res = await fetch(`http://127.0.0.1:${me.port}${urlPath}`, { method, signal: AbortSignal.timeout(20_000) })
+        return { status: res.status, json: await res.json().catch(() => null) as unknown }
+      } }
+      try {
+        const r = await makeWitnessReader(m.permitHolderId() ?? 'status-reader', cfg.settings, () => [server])()
+        out.witnesses = { answered: r.answered, of: cfg.settings.witnesses.length, standing: r.standing === undefined ? 'no majority' : summarize(r.standing) }
+      } catch (err) {
+        if (!(err instanceof NoLeaderServerToRead)) throw err
+        out.witnesses = { unavailable: err.message }
+      }
     } else out.problem = cfg.problem
     console.log(JSON.stringify(out, null, 2))
   } catch (err) {
@@ -76,8 +87,23 @@ export async function runLeaderWitnessesInit(options: Record<string, unknown>): 
     const cfg = m.readHomeSwitchConfig(home)
     if (!cfg.flag) return fail('the experiment switchable_leader is off')
     if (!cfg.settings) return fail(cfg.problem ?? 'no leader_switch section')
-    const r = m.setUpLocalWitnesses(cfg.settings.witnesses)
+    const list = cfg.settings.witnesses.map((w) => w.id)
+    const r = m.setUpLocalWitnesses(cfg.settings.witnesses.filter(m.isLocalWitness), list)
     console.log(`Witnesses set up: ${r.made.join(', ') || 'none'}; already set up: ${r.kept.join(', ') || 'none'}`)
+    // A remote witness is set up by its own machine's service, asked by the running leader server over its host links.
+    const remote = cfg.settings.witnesses.filter(m.isRemoteWitness)
+    if (remote.length) {
+      const me = m.machineById(cfg.settings, m.permitHolderId() ?? '')
+      const res = me ? await fetch(`http://127.0.0.1:${me.port}/api/leader/witnesses/init`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(120_000) }).catch(() => null) : null
+      const body = res ? await res.json().catch(() => null) as { results?: Array<{ witness: string; host: string; ok: boolean; made?: boolean; error?: string }>; why?: string } | null : null
+      if (!body?.results) {
+        console.log(`Remote witnesses ${remote.map((w) => w.id).join(', ')} not set up: ${body?.why ?? 'this machine\'s leader server did not answer'}. Start the leader (it holds the permission) and run this again.`)
+        process.exitCode = 1
+      } else {
+        for (const x of body.results) console.log(`Witness ${x.witness} on ${x.host}: ${x.ok ? (x.made ? 'set up' : 'already set up') : `not set up (${x.error})`}`)
+        if (body.results.some((x) => !x.ok)) process.exitCode = 1
+      }
+    }
   } catch (err) {
     fail(err)
   }

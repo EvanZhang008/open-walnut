@@ -98,6 +98,15 @@ export interface PromotedRecord {
   switchId: string
   state?: 'promoting' | 'promoted' | 'led'
   from?: string
+  /**
+   * Written by the switch before its commit start (moved-home.ts): the machine the lead goes to,
+   * the handover it commits on, and the data dir the previous holder spoke from on its hosts with
+   * the former homes its record kept, as that server spelled them.
+   */
+  to?: string
+  handover?: number
+  fromHomeOnHosts?: string
+  fromFormerHomes?: string[]
   at: string
   torn?: true
 }

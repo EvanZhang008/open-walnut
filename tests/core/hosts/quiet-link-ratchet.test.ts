@@ -77,6 +77,7 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   'src/core/routines/run-start-deps.ts': { calls: 4, kind: 'wake-recheck', why: 'cancels a start nobody confirmed; a lost cancel answers unknown and the retry goes on' },
   'src/core/routines/trigger-daemon.ts': { calls: 2, kind: 'wake-recheck', why: 'the link for trigger tests, claims and acks; a lost ack costs one replay' },
   'src/core/secrets/fleet-secrets.ts': { calls: 1, kind: 'wake-recheck', why: 'a lost put is kept as maybe there and sent again when the host next connects' },
+  'src/core/leader/switch/witness-transport.ts': { calls: 1, kind: 'wake-recheck', why: 'a witness request of the write permission on the leader server\'s own link, under a 15 s timeout of its own; a lost request is no answer, the client resends it and a duplicate is a no-op at a witness' },
   'src/core/session-changes.ts': { calls: 2, kind: 'wake-recheck', why: 'change reads; the routes bound them (boundHostRead)' },
   'src/core/sessions/org-own-folder.ts': { calls: 5, kind: 'wake-recheck', why: 'before an Org node\'s own-folder move: a capability flag of the linked daemon, and cli.holder reads that ask whether a CLI still holds the transcript; a lost read answers unknown and nothing moves' },
   'src/core/session-commit.ts': { calls: 2, kind: 'wake-recheck', why: 'a commit job a person starts; a lost start fails the job where they see it' },

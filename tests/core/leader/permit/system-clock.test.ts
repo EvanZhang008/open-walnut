@@ -170,7 +170,8 @@ describe('the simulation checks the invariant at the instant a machine wakes (re
 })
 
 describe('a holder that sleeps 90 s while its wall clock is set back by as much', () => {
-  function run(bootClock: boolean) {
+  /** `setBackMs`: how far the wall clock is set back, `afterMs` into the sleep (the sleep is 30 s to 120 s). */
+  function run(bootClock: boolean, setBackMs = 90_000, afterMs = 1) {
     const w = new World(DEFAULT_PERMIT_PARAMS, { ...CALM }, 7)
     for (const id of W) w.addWitness(id, { bootstrap: W })
     const a = w.addMachine('A', W, { bootClock })
@@ -181,7 +182,7 @@ describe('a holder that sleeps 90 s while its wall clock is set back by as much'
     pilot(w, 'B', { wantsLead: true, tickMs: 250, backoff: false })
     w.run(30_000)
     a.clock.sleeps.push([30_000, 120_000])
-    a.clock.wallJumps.push([30_001, -90_000])
+    a.clock.wallJumps.push([30_000 + afterMs, -setBackMs])
     let atWake: boolean | null = null
     w.at(120_000, () => { atWake = a.c.mayAct() })
     w.run(200_000)
@@ -199,5 +200,33 @@ describe('a holder that sleeps 90 s while its wall clock is set back by as much'
     const { w, atWake } = run(false)
     expect(atWake).toBe(true)
     expect(w.violations.length).toBeGreaterThan(0)
+  })
+
+  // Found by a random schedule (model-check seed 65 of the 'instant they may' chunk): a 90 s sleep with the wall
+  // clock set back by 77 s, 68 s into the sleep. The fallback counts max(monotonic advance, wall advance) per step; the
+  // monotonic one stood still and the wall one went forward by 90 - 77 = 13 s, which is not behind the monotonic one, so
+  // the "set back by more than 1 s in one step" distrust never fires. 77 of the 90 sleeping seconds vanish.
+  // Today's behaviour, asserted as it is: ANY set-back during a sleep hides that much of it from the fallback clock, not only one
+  // within 1 s of the sleep's length (docs/reference/leader-write-permission.md assumption (2) says the latter). It breaks
+  // "at no instant do two machines act": A wakes with 13 s counted of 90, still inside its record, while B has held since
+  // the witnesses' record of A ran out.
+  describe('a set-back of 77 s, 68 s into the sleep', () => {
+    it('on the boot clock: wakes with mayAct() false, and B took over meanwhile', () => {
+      const { w, atWake } = run(true, 77_000, 68_000)
+      expect(atWake).toBe(false)
+      expect(w.violations).toEqual([])
+    })
+
+    it('on the fallback: it wakes still acting beside B (the invariant breaks; the core is not changed for it)', () => {
+      const { w, atWake } = run(false, 77_000, 68_000)
+      expect(atWake).toBe(true)
+      expect(w.violations.length).toBeGreaterThan(0)
+    })
+
+    it('a set-back small enough that the sleep still counts past the lease is safe on the fallback (10 s)', () => {
+      const { w, atWake } = run(false, 10_000, 68_000)
+      expect(atWake).toBe(false)
+      expect(w.violations).toEqual([])
+    })
   })
 })

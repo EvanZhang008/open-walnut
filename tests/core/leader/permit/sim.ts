@@ -3,7 +3,17 @@
  * clocks (rate drift, wall offset and jumps, sleeps that stop the monotonic clock), a
  * network that delays, drops, duplicates and reorders, witnesses that crash and restart
  * from their stored file, and machines whose mayAct() is checked after every event.
+ *
+ * Every machine reaches its witnesses through the REAL network transport
+ * (src/core/leader/switch/witness-transport.ts): timeouts, reply checks, the later tick, the
+ * JSON wire. Only the link under it is the simulation's: a RemoteCall that sends the request and
+ * the reply through World.transmit (delay, drop, duplicate, reorder, cuts). A test replaces it
+ * with `world.makeLink` to break the link in a way of its own.
  */
+import {
+  createWitnessTransport, type RemoteCall, type RemoteCallResult,
+} from '../../../../src/core/leader/switch/witness-transport.js'
+import type { WitnessCall } from '../../../../src/core/leader/switch/witness-wire.js'
 import {
   bootstrapWitnessStore, prepareJoiningWitness, mayAskForTakeover, PermitClient, PermitWitness, createHolderClock, createWitnessClock, decodeStored, encodeStored,
   type ElapsedClock, type PermitParams, type PermitRecord, type PermitReply, type PermitRequest, type PermitStore, type StoredWitness,
@@ -108,7 +118,7 @@ export class World {
   machines = new Map<string, MachineNode>()
   /** Pairs that cannot talk: "a|b". */
   cut = new Set<string>()
-  violations: Array<{ at: number; who: string[] }> = []
+  violations: Array<{ at: number; who: string[]; leases?: string[] }> = []
   /** Every change of who may act: [time, ids]. */
   timeline: Array<[number, string[]]> = [[0, []]]
   activeMs = new Map<string, number>()
@@ -133,6 +143,18 @@ export class World {
   onNewClient: ((m: MachineNode) => void) | null = null
   /** Called with every witness start (addWitness, a restart): a negative control patches it here. */
   onNewWitness: ((n: WitnessNode) => void) | null = null
+  /** Per request timeout of the transport (Infinity: none, as a link whose only fault is its own delays). Set before addMachine. */
+  transportTimeoutMs = Infinity
+  /** Open requests per witness the transport allows (Infinity: the model check's lost messages never time out, so they would use the slots up). */
+  transportMaxInFlight: number | undefined = Infinity
+  /** Replace the link under the transport (set before addMachine); `base` is the simulated one. */
+  makeLink: ((from: string, base: RemoteCall) => RemoteCall) | null = null
+  /** Replace what the transport hands the client (set before addMachine): a broken transport for a negative control. `base` delivers to the client. */
+  wrapDeliver: ((from: string, base: (reply: PermitReply) => void) => (reply: PermitReply) => void) | null = null
+  /** Faults a negative control injected below or above the transport (wrapDeliver). */
+  injected = 0
+  /** What the transport threw away, by reason. */
+  drops: Record<string, number> = {}
 
   constructor(public params: PermitParams, public net: NetOptions = CALM, seed = 1) {
     this.rand = rng(seed)
@@ -222,7 +244,15 @@ export class World {
       : createHolderClock({ monotonic: node.clock.monotonic, wall: node.clock.wall, ...(node.bootClock ? { boot: { kind: 'boottime' as const, now: node.clock.boot } } : {}) })
     return new PermitClient({
       id: node.id, list, clock, params: this.params, ...(nonce ? { testNonce: nonce } : {}), ...(cfg ? { cfg } : {}), ...(epoch !== undefined ? { epoch } : {}),
-      transport: { send: (w, req) => this.send(node.key, w, req) },
+      transport: createWitnessTransport({
+        placeOf: (id) => ({ id, host: id }), params: this.params, walnutId: 'sim',
+        deliver: this.wrapDeliver ? this.wrapDeliver(node.key, (reply) => this.deliverToMachine(node.key, reply)) : (reply) => this.deliverToMachine(node.key, reply),
+        remote: this.makeLink ? this.makeLink(node.key, this.simLink(node.key)) : this.simLink(node.key),
+        timeoutMs: this.transportTimeoutMs, ...(this.transportMaxInFlight !== undefined ? { maxInFlight: this.transportMaxInFlight } : {}),
+        defer: (fn) => this.after(0, fn),
+        after: (ms, fn) => { let live = true; this.after(ms, () => { if (live) fn() }); return () => { live = false } },
+        onDrop: (why) => { this.drops[why] = (this.drops[why] ?? 0) + 1 },
+      }),
     })
   }
 
@@ -304,15 +334,20 @@ export class World {
     }
   }
 
-  private send(from: string, to: string, req: PermitRequest): void {
-    if (req.type === 'propose' && req.record.kind === 'release' && this.releaseReach.get(req.record.nonce)?.has(to) === false) return
-    this.transmit(from, to, req, () => this.deliverToWitness(from, to, req))
+  /** The simulated link of process `from`: the request and the reply each cross the network (World.transmit), as JSON. */
+  simLink(from: string): RemoteCall {
+    return (place, _path, body, done) => {
+      const to = place.id
+      const req = JSON.parse(JSON.stringify((body as WitnessCall).request)) as PermitRequest
+      if (req.type === 'propose' && req.record.kind === 'release' && this.releaseReach.get(req.record.nonce)?.has(to) === false) return
+      this.transmit(from, to, req, () => this.deliverToWitness(from, to, req, done))
+    }
   }
 
   /** Called with the reply about to go out; return true to crash the witness instead of answering. */
   crashBeforeAnswer: ((witness: string, req: PermitRequest, reply: PermitReply) => boolean) | null = null
 
-  private deliverToWitness(from: string, to: string, req: PermitRequest): void {
+  private deliverToWitness(from: string, to: string, req: PermitRequest, done: (r: RemoteCallResult | null) => void): void {
     const n = this.witnesses.get(to)
     if (!n || !n.w || n.clock.asleep()) return
     const reply = n.w.handle(req)
@@ -324,7 +359,8 @@ export class World {
       this.crashWitness(to, 1_000 + this.rand() * 10_000)
       return
     }
-    this.transmit(to, from, reply, () => this.deliverToMachine(from, reply))
+    const wire = JSON.parse(JSON.stringify({ ok: true, reply })) as unknown
+    this.transmit(to, from, reply, () => done({ status: 200, body: wire }))
   }
 
   private deliverToMachine(id: string, reply: PermitReply): void {
@@ -354,7 +390,16 @@ export class World {
     this.lastCheck = this.now
     const last = this.timeline[this.timeline.length - 1][1]
     if (last.join() !== who.join()) this.timeline.push([this.now, who])
-    if (who.length > 1) this.violations.push({ at: this.now, who })
+    if (who.length > 1) {
+      // What each acting machine stands on (for reading a violating schedule's trace).
+      const leases = who.map((k) => {
+        const nodeClock = this.machines.get(k)!.clock
+        const c = this.machines.get(k)!.c as unknown as { lease: { record: PermitRecord; until: number } | null; opts: { clock: ElapsedClock } }
+        const l = c.lease
+        return `${k}: #${l?.record.number} ${l?.record.kind} by ${l?.record.by}/${l?.record.nonce} until ${Math.round(l?.until ?? 0)}, clock ${Math.round(c.opts.clock.now())}, left ${Math.round((l?.until ?? 0) - c.opts.clock.now())}, sleeps ${JSON.stringify(nodeClock.sleeps.map(([a, b]) => [Math.round(a), Math.round(b)]))}, wall jumps ${JSON.stringify(nodeClock.wallJumps.map(([a, b]) => [Math.round(a), Math.round(b)]))}, drift ${nodeClock.drift}`
+      })
+      this.violations.push({ at: this.now, who, leases })
+    }
   }
 
   /** Run every event up to `until`, checking the invariant after each one. */

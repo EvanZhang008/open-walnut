@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 import YAML from 'yaml'
 import { LocalSide } from '../../src/core/leader/switch/side.js'
 import { setUpLocalWitnesses } from '../../src/core/leader/switch/local-witnesses.js'
-import type { MachinePlace, WitnessPlace } from '../../src/core/leader/switch/settings.js'
+import type { LocalWitnessPlace, MachinePlace } from '../../src/core/leader/switch/settings.js'
 
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
@@ -24,7 +24,7 @@ export interface World {
   root: string
   a: Machine
   b: Machine
-  witnesses: WitnessPlace[]
+  witnesses: LocalWitnessPlace[]
   side(m: Machine): LocalSide
   /** One request to a machine's server; `opId` sends x-walnut-op-id. */
   api(m: Machine, method: string, urlPath: string, body?: unknown, opId?: string): Promise<{ status: number; json: any; headers: Headers }>
@@ -61,8 +61,8 @@ export function treeHash(dir: string): string {
   return h.digest('hex')
 }
 
-function machine(root: string, name: string, port: number, homeName = 'home'): Machine {
-  const dir = path.join(root, name)
+function machine(root: string, name: string, port: number, homeName = 'home', at?: string): Machine {
+  const dir = at ?? path.join(root, name)
   const idFile = path.join(dir, 'machine-id')
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   fs.writeFileSync(idFile, `machine-${name}\n`)
@@ -79,7 +79,7 @@ function machine(root: string, name: string, port: number, homeName = 'home'): M
   }
 }
 
-export function switchConfig(w: { a: Machine; b: Machine; witnesses: WitnessPlace[] }, standbyDir: string, intervalSeconds = 5): Record<string, unknown> {
+export function switchConfig(w: { a: Machine; b: Machine; witnesses: LocalWitnessPlace[] }, standbyDir: string, intervalSeconds = 5): Record<string, unknown> {
   const m = (x: Machine) => ({ id: x.id, home: x.home, standby_dir: x.standbyDir, port: x.port, start_command: x.start, env: x.env })
   return {
     experimental: { switchable_leader: true },
@@ -89,10 +89,11 @@ export function switchConfig(w: { a: Machine; b: Machine; witnesses: WitnessPlac
 }
 
 /** `homeA`: A's data home's name in its folder (`.open-walnut`: where an install keeps it, in HOME). */
-export function makeWorld(root: string, opts: { portA: number; portB: number; intervalSeconds?: number; homeA?: string }): World {
+/** `dirB`: B's machine folder (its HOME) somewhere else than `<root>/b`, for a home that moves to another prefix. */
+export function makeWorld(root: string, opts: { portA: number; portB: number; intervalSeconds?: number; homeA?: string; dirB?: string }): World {
   fs.mkdirSync(root, { recursive: true, mode: 0o700 })
   const a = machine(root, 'a', opts.portA, opts.homeA)
-  const b = machine(root, 'b', opts.portB)
+  const b = machine(root, 'b', opts.portB, 'home', opts.dirB)
   const witnesses = ['w1', 'w2', 'w3'].map((id) => ({ id, dir: path.join(root, 'witnesses', id) }))
   fs.mkdirSync(a.home, { recursive: true, mode: 0o700 })
   fs.writeFileSync(path.join(a.home, 'config.yaml'), YAML.stringify(switchConfig({ a, b, witnesses }, b.standbyDir, opts.intervalSeconds)))
