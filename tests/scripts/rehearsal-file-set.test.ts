@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest'
 // CLI runs as its own process, so its imports count too (2026-10-28: it began
 // importing ./mock-claude-flags.mjs, and every session in every image failed).
 const ROOT = path.resolve(__dirname, '../..')
-const MOCK = ['tests/providers/mock-claude.mjs', 'tests/providers/mock-claude-flags.mjs']
+const MOCK = ['tests/providers/mock-claude.mjs', 'tests/providers/mock-claude-flags.mjs', 'tests/providers/mock-claude-side-answer.mjs']
 const SHIPPED = ['package.json', 'scripts', ...MOCK]
 const IMPORT = /^\s*(?:import|export)\s[^'"]*?from\s+['"]([^'"]+)['"]|^\s*import\s+['"]([^'"]+)['"]/gm
 

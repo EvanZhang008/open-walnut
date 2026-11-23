@@ -21,7 +21,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
 import { expectPanelRunning } from './session-header-labels-helpers'
 import { selectSection } from './todo-panel-helpers'
-import { isolateUiPrefsContext, presetPanelDesign } from './status-section-helpers'
+import { expectHandedBackToRead, isolateUiPrefsContext, presetPanelDesign } from './status-section-helpers'
 import { sessionResultPhase } from '../../../src/core/phase'
 
 const SCREENSHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/task-reopen'
@@ -125,10 +125,10 @@ async function completeThenMessage(
   expect(reopened.completed_at).toBeUndefined()
   await page.screenshot({ path: `${SCREENSHOT_DIR}/${shot}-round${round}-reopened.png` })
 
-  // The reopened turn ends → handed back the normal way: red row + unread dot,
+  // The reopened turn ends → handed back the normal way: To read + unread dot,
   // and the panel's turn is over (no Stop; the header has no status badge any more).
   await expect.poll(async () => (await readTask(page, taskId)).phase, { timeout: 20_000 }).toBe(HANDBACK_PHASE)
-  await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
+  await expectHandedBackToRead(page, taskId, card)
   await expectPanelRunning(panel, false)
   const handedBack = await readTask(page, taskId)
   expect(handedBack.unread).toBe(true)
@@ -167,7 +167,7 @@ test('a completed task returns to in progress when its session is messaged again
   await selectSection(page, task.focus_tier === 'focus' ? 'Focus' : 'Satellite')
   const card = page.locator(`.todo-pinned-section:not(.todo-pinned-section-recent) [data-task-id="${taskId}"]`)
   await expect(card).toBeVisible()
-  await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
+  await expectHandedBackToRead(page, taskId, card)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/${testInfo.project.name}-round0-handed-back.png` })
 
   // Round 1 and round 2: complete → message → back in progress → handed back.

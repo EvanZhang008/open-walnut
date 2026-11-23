@@ -25,7 +25,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
 import { selectSection, showMoreUntil } from './todo-panel-helpers'
-import { isolateUiPrefsContext, presetPanelDesign } from './status-section-helpers'
+import { expectHandedBackToRead, isolateUiPrefsContext, presetPanelDesign } from './status-section-helpers'
 import { sessionResultPhase } from '../../../src/core/phase'
 import { expectPanelRunning } from './session-header-labels-helpers'
 import { dropFakes } from './route-teardown'
@@ -194,7 +194,7 @@ test('a spawned reservation joins snapshot tracking before its first turn ends',
     expect(response.ok()).toBe(true)
     return (await response.json()).task.phase
   }).toBe(sessionResultPhase('IN_PROGRESS'))
-  await expect(card).toHaveClass(/needs-action/)
+  await expectHandedBackToRead(page, taskId, card)
   await expectPanelRunning(panel, false)
   await expect(panel.getByText('Reservation tracking verified', { exact: true }).first()).toBeVisible()
   await page.screenshot({ path: `${SCREENSHOT_DIR}/reservation-${testInfo.project.name}-settled.png` })
@@ -205,7 +205,7 @@ test('a spawned reservation joins snapshot tracking before its first turn ends',
   await expect(panel.getByText('Followup stayed on the original process', { exact: true }).first()).toBeVisible()
   await expect.poll(async () => (await read()).process_status).toBe('idle')
   expect((await read()).pid).toBe(started.pid)
-  await expect(card).toHaveClass(/needs-action/)
+  await expectHandedBackToRead(page, taskId, card)
   await expect(panel.locator('.rich-app-building')).toHaveCount(0)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/reservation-${testInfo.project.name}-followup.png` })
   const evidence = JSON.stringify({ started, settled, final: await read(), failedResponses, errors,
@@ -246,7 +246,7 @@ test('a resumed background agent stays running until its new invocation ends', a
     expect(response.ok()).toBe(true)
     return (await response.json()).task.phase
   }).toBe(sessionResultPhase('IN_PROGRESS'))
-  await expect(page.locator(`[data-task-id="${taskId}"]`).first()).toHaveClass(/needs-action/)
+  await expectHandedBackToRead(page, taskId, page.locator(`[data-task-id="${taskId}"]`).first())
   await expect(page.getByText("A session's summary couldn't be parsed", { exact: true })).toHaveCount(0)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/resumed-agent-finished.png` })
 })

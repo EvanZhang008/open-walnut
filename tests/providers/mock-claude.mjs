@@ -22,6 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { OPTIONAL_VALUE_FLAGS, VALUE_FLAGS } from './mock-claude-flags.mjs';
+import { sideQuestionAnswer } from './mock-claude-side-answer.mjs';
 
 const args = process.argv.slice(2);
 let transcriptParent = null;
@@ -423,23 +424,9 @@ if (inputFormat === 'stream-json') {
             response: { subtype: 'success', request_id: parsed.request_id, response: { added, removed, errors: {} } },
           }) + '\n');
         } else if (parsed.type === 'control_request' && parsed.request?.subtype === 'side_question') {
-          // side_question is auto-title's PRIMARY channel (main-model prompt we
-          // author). Mirror the real CLI's 3-level nesting: response.response.response.
-          // Deterministic title: "Side title: " + first five words of the user's
-          // message line in the question envelope (same word logic as the titler).
-          const q = String(parsed.request.question ?? '');
-          const msgLine = q.match(/User's first message: ([\s\S]*?)(?:\nReply with|$)/);
-          let src = (msgLine ? msgLine[1] : q).trim();
-          src = src.replace(/^(?:(?:slow|chunk-delay):\d+\s+)+/, '');
-          const five = src.split(/\s+/).slice(0, 5).join(' ');
-          // The Changed view's caption question (src/core/diff-summary.ts) gets a caption, as a
-          // real model writes one, never its own prompt echoed back under "Side title:" (2026-11-10
-          // review: a Demo with this mock showed "Side title: Caption YOUR change to notes.md").
-          const caption = q.match(/^Caption YOUR change to `([^`]+)`/);
-          const response = caption ? `Updates \`${caption[1]}\`.`
-            : q.includes('PHASE_SIGNAL:') && q.includes('EXEC_SUMMARY:')
-            ? 'EXEC_SUMMARY: The fixture turn finished.\nUSER_REQUEST: Validate the session flow.\nCONTEXT: An isolated test session.\nPROGRESS: The turn finished.\nREFERENCES: unchanged\nWORK_LOG: append: Finished the fixture turn.\nTITLE: unchanged\nRECAP: The fixture turn finished.\nPHASE_SIGNAL: conversational(user-asked-question)\nSTATUS: succeeded\nWHAT_I_DID: Answered the fixture prompt.\nNEXT_STEPS: Continue the conversation.\nBLOCKERS: none\nUSER_INTENT: question-pending\nVERIFIED: not-applicable'
-            : `Side title: ${five}`;
+          // side_question: the answer as a real model writes it (mock-claude-side-answer.mjs).
+          // Mirror the real CLI's 3-level nesting: response.response.response.
+          const response = sideQuestionAnswer(String(parsed.request.question ?? ''));
           process.stdout.write(JSON.stringify({
             type: 'control_response',
             response: { subtype: 'success', request_id: parsed.request_id, response: { response } },

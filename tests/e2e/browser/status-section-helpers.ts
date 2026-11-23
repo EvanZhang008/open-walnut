@@ -182,3 +182,19 @@ export async function endRunningTurn(request: APIRequestContext, sessionId: stri
   await interruptTurn(request, sessionId)
   await request.post(`/api/sessions/${sessionId}/terminate`).catch(() => {})
 }
+
+/**
+ * A live turn that ended with only its result handed the task back To read: its report came
+ * (the mock answers Walnut's status question) and asked the user nothing, so the card is no
+ * Needs you (session-status.ts taskNeedsAction) and the task never reads Waiting on that report.
+ */
+export async function expectHandedBackToRead(page: Page, taskId: string, card: Locator): Promise<void> {
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/tasks/${taskId}`)
+    expect(response.ok()).toBe(true)
+    return (await response.json()).task.user_status?.state
+  // Until then it reads Working while work it started still runs (a background agent the turn
+  // resumed can outlive the turn by tens of seconds), or Waiting a moment on its report.
+  }, { timeout: 60_000 }).toBe('read')
+  await expect(card).not.toHaveClass(/needs-action/)
+}
