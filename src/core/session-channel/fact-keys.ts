@@ -30,6 +30,8 @@ export const FACT_KEYS: Readonly<Record<string, readonly [FactKeyClass, string]>
   host: ['rewritten', 'the link\'s host'],
   messageIds: ['scoped', 'queue rows: none of another session (linesNotOthers); a row the leader never made stands'],
   messageId: ['scoped', 'a queue row: removed when it is another session\'s'],
+  dictationIds: own('the recordings dictated into a person\'s send (stt/dictation-ids.ts): Voice Accuracy pairs only a recording kept on this machine, never another session\'s object'),
+  dictationText: TEXT,
   attemptId: ['scoped', 'a transfer attempt: only one the leader started on this host; else the fork-init is not said'],
   preassignedId: own('the id a transfer\'s start named; the leader reads the attempt and actualId only'),
   fromPlanSessionId: own('the plan session a failed start came from: read only by the runner that emits it'),

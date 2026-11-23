@@ -23,7 +23,7 @@ import { SettingsNotice } from '../SettingsSection';
 import { SegmentedControl } from '../inputs/SegmentedControl';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { showEngineRow } from './VoiceAccuracyEngines';
-import { RUN_WORDS, engineName, judgeBlocker, judgeWords, resultModel, seconds, sentHeading, shortLabel } from './voice-accuracy-model';
+import { RUN_WORDS, engineName, judgeBlocker, judgeWords, resultModel, seconds, sentExact, sentHeading, shortLabel } from './voice-accuracy-model';
 import { EmptyState } from '@/components/common/EmptyState';
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -189,7 +189,9 @@ export function VoiceAccuracyTakeDetail({ takeId, engines, judge, version, retry
 
   const options = [
     ...engines.map((e) => ({ value: e.id, label: shortLabel(e), title: e.label, testId: `va-show-${e.id}` })),
-    { value: SENT, label: 'Probably sent', title: 'What you probably sent, matched by text', testId: 'va-show-sent' },
+    sentExact(take)
+      ? { value: SENT, label: 'Sent', title: 'What you sent', testId: 'va-show-sent' }
+      : { value: SENT, label: 'Probably sent', title: 'What you probably sent, matched by text', testId: 'va-show-sent' },
   ];
   const shown = options.some((o) => o.value === picked) ? picked : options[0]!.value;
   const engine = engines.find((e) => e.id === shown);
@@ -228,7 +230,7 @@ export function VoiceAccuracyTakeDetail({ takeId, engines, judge, version, retry
               <span
                 className="va-detail-head"
                 data-testid="va-sent-heading"
-                title={take.sentSimilarity !== undefined ? `Paired by how alike the texts are (${Math.round(take.sentSimilarity * 100)}% alike), within 15 minutes of the recording; not by the recording itself.` : undefined}
+                title={!sentExact(take) && take.sentSimilarity !== undefined ? `Paired by how alike the texts are (${Math.round(take.sentSimilarity * 100)}% alike), within 15 minutes of the recording; not by the recording itself.` : undefined}
               >
                 {take.sentText !== undefined ? sentHeading(take) : 'What you sent'}
               </span>

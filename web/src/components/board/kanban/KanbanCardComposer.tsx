@@ -11,6 +11,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { sendSessionMessage } from '@/api/session-send';
+import { dictationField, type SentDictation } from '@/utils/dictation-takes';
 import { log } from '@/utils/log';
 import { ICON_SEND } from '@/components/common/Icons';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
@@ -33,11 +34,11 @@ export function composerPlaceholder(title: string): string {
 }
 
 /** The send itself (the composer's own RPC), failing after 15s without an answer. */
-export async function sendToCardSession(sessionId: string, message: string, images?: ImageAttachment[]): Promise<void> {
+export async function sendToCardSession(sessionId: string, message: string, images?: ImageAttachment[], dictation?: SentDictation | null): Promise<void> {
   // Pictures go up over HTTP first, never on the socket; the RPC carries their names (api/image-upload.ts).
   const pictures = await buildImageRefsPayload(images);
   // An answer slower than that counts as lost: the server's own record of the line decides (api/session-send.ts).
-  await sendSessionMessage({ sessionId, message, ...pictures }, { timeoutMs: SEND_TIMEOUT_MS });
+  await sendSessionMessage({ sessionId, message, ...pictures, ...dictationField(dictation) }, { timeoutMs: SEND_TIMEOUT_MS });
 }
 
 function reasonOf(err: unknown): string {
@@ -68,8 +69,11 @@ export function KanbanCardComposer({ card, onSent, onClose }: KanbanCardComposer
     setError('');
     const started = Date.now();
     const sentKey = draft.key;
+    // The recordings dictated into the box whose words go now: the send names them.
+    const dictation = mic.current?.claimDictation(message);
     try {
-      await sendToCardSession(sessionId, message, images.length ? images : undefined);
+      await sendToCardSession(sessionId, message, images.length ? images : undefined, dictation?.dictation);
+      dictation?.settle();
       log.info('board', 'kanban card message sent', { cardTaskId: card.taskId, sessionId, images: images.length, ms: Date.now() - started });
       setSending(false);
       draft.clear(sentKey);

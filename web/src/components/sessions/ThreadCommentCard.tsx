@@ -306,10 +306,13 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
     setSending(true);
     // A first send turns an Ask into a question with its own key: the words go from the one they were typed under.
     const sentKey = draft.key;
-    const origin = sentKey ? draftOriginOf(sentKey, t) : undefined;
+    // The recordings dictated into the box whose words go now: the send names them (origin).
+    const dictation = mic.current?.claimDictation(t);
+    const origin = sentKey ? draftOriginOf(sentKey, t, dictation?.dictation) : undefined;
     try {
       const ok = await p.onSend(t, images.length ? images : undefined, origin);
       if (ok) {
+        dictation?.settle();
         // A transcription landing after the send would repeat what was just sent.
         mic.current?.clear();
         pictures.clear();

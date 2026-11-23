@@ -24,6 +24,7 @@ import { initialMicHealth, micHealthTick, micHealthTrackEnded, byteFrameRms, cla
 import { log } from '@/utils/log';
 import { acquireMediaHold, type MediaHoldHandle } from '@/api/media-hold';
 import { TakeAhead, formatOfMime } from '@/api/stt-take-ahead';
+import { deliverFinalText } from '@/utils/stt-final-text';
 
 export interface UseSpeechToTextOptions {
   /** Called with transcribed text when transcription completes */
@@ -51,6 +52,13 @@ export interface UseSpeechToTextOptions {
    * the complete words are inserted instead, never dropped.
    */
   onRefine?: (finalText: string, provisional: string) => boolean | void;
+  /**
+   * The engine's final text for a stored recording, with the recording's id, once that text landed
+   * in the box (onTranscribe wrote it, or onRefine returned true; never for a preview that stayed):
+   * the box remembers which recordings its text came from, so its send names them
+   * (utils/dictation-takes.ts).
+   */
+  onTake?: (recordingId: string, text: string) => void;
   /** ISO 639-1 language hint */
   language?: string;
 }
@@ -179,7 +187,7 @@ const isMediaRecorderSupported =
   !!navigator.mediaDevices?.getUserMedia &&
   typeof MediaRecorder !== 'undefined';
 
-export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: UseSpeechToTextOptions): UseSpeechToTextReturn {
+export function useSpeechToText({ onTranscribe, onDraft, onRefine, onTake, language }: UseSpeechToTextOptions): UseSpeechToTextReturn {
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -263,6 +271,8 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
   onDraftRef.current = onDraft;
   const onRefineRef = useRef(onRefine);
   onRefineRef.current = onRefine;
+  const onTakeRef = useRef(onTake);
+  onTakeRef.current = onTake;
   // Set when the user acts on the text themselves (sends the message) while a
   // recording is live: stop, and deliver nothing.
   const discardedRef = useRef(false);
@@ -702,21 +712,18 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
             setVoiceStatus({ transcribing: false, lastFailed: false });
             if (!isMountedRef.current) return;
             lastDraftRef.current = null; // superseded by the whole-clip text
-            if (provisional !== null) {
-              // The draft is already in the user's text box. Let the consumer swap
-              // it only if it is still sitting there untouched; identical text is a
-              // no-op it can skip. Falls back to a plain write when the consumer
-              // does not implement refining.
-              if (onRefineRef.current) {
-                // The user changed the preview meanwhile: their edit stands, and
-                // the whole-clip text stays in the recordings history.
-                if (onRefineRef.current(finalText, provisional) === false) {
-                  log.warn('stt', `whole-clip text not swapped in: the preview was edited before it arrived (${provisional.length} preview chars, ${finalText.length} final chars)`);
-                }
-              } else if (finalText !== provisional) onTranscribeRef.current(finalText);
-            } else {
-              onTranscribeRef.current(finalText);
+            // The draft may already be in the user's text box: the consumer swaps it only if it is
+            // still sitting there untouched (utils/stt-final-text.ts). The user changed the preview
+            // meanwhile: their edit stands, the whole-clip text stays in the recordings history, and
+            // the box is not told the take is its own (its text is not the engine's).
+            const landed = deliverFinalText(finalText, provisional, {
+              onTranscribe: (t) => onTranscribeRef.current(t),
+              ...(onRefineRef.current ? { onRefine: (f: string, p: string) => onRefineRef.current!(f, p) } : {}),
+            });
+            if (!landed && provisional !== null) {
+              log.warn('stt', `whole-clip text not swapped in: the preview was edited before it arrived (${provisional.length} preview chars, ${finalText.length} final chars)`);
             }
+            if (landed && result.recordingId) onTakeRef.current?.(result.recordingId, finalText);
             const preview = finalText.length > 50 ? finalText.slice(0, 50) + '...' : finalText;
             log.info('stt', `Transcribed: "${preview}" (${tookMs}ms${via})`);
             logTiming(finalText.length, tookMs, result.heardAheadSec ?? 0, result.aheadEngineMs ?? 0);
@@ -1102,6 +1109,8 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         retryReplacesRef.current = null;
         const swapped = replaces !== null && onRefineRef.current?.(result.text, replaces) === true;
         if (!swapped) onTranscribeRef.current(result.text);
+        const takeId = result.recordingId ?? savedId;
+        if (takeId) onTakeRef.current?.(takeId, result.text);
         const preview = result.text.length > 50 ? result.text.slice(0, 50) + '...' : result.text;
         log.info('stt', `Retry transcribed: "${preview}" (${result.durationMs}ms, model=${model ?? 'configured'}, ${swapped ? 'replaced the partial text' : 'inserted'})`);
       } else if (!result.text && isMountedRef.current) {

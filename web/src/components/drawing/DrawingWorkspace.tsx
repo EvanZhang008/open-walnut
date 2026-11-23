@@ -45,6 +45,7 @@ import { useOverlayRoom } from './canvas-overlay';
 import { useFullscreenArea } from '@/components/layout/fullscreen-area';
 import { FitButton, HeaderFitMore, useHeaderFit } from '@/components/common/HeaderFit';
 import './drawing-workspace.css';
+import { downloadBlob } from '@/utils/download-blob';
 
 export interface DrawingWorkspaceState {
   path: string;
@@ -185,17 +186,6 @@ type DiagramRun =
 function onScreen(el: HTMLElement | null): boolean {
   if (!el || document.visibilityState !== 'visible') return false;
   return el.getClientRects().length > 0 && !el.closest('.main-page-wrapper-hidden');
-}
-
-function download(blob: Blob, name: string): void {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 const STATUS_TEXT: Record<DrawingSnapshot['state'], string> = {
@@ -627,7 +617,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     try {
       if (!sceneHasContent(snap?.scene)) { setNotice('Draw something first: an empty drawing has nothing to download.'); return; }
       const blob = kind === 'png' ? await handle.exportPng() : await handle.exportSvg();
-      download(blob, exportFileName(snap?.title || 'drawing', kind));
+      downloadBlob(blob, exportFileName(snap?.title || 'drawing', kind));
     } catch (err) {
       log.warn('drawing', 'export failed', { kind, error: String(err) });
       if (mounted.current) setNotice(`The ${kind.toUpperCase()} could not be made: ${drawingErrorMessage(err)}`);

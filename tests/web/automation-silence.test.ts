@@ -363,6 +363,7 @@ describe('ratchet: every sound in the web app stays silent under automation', ()
     'plugin-store/walnut-drawing/src/narration/recorder.ts': 'its capture node reaches the speakers only through a gain of zero, and the page silencer',
     'web/src/hooks/useSpeechToText.ts': 'a meter: its graph never reaches the speakers',
     'web/src/components/common/FileContentView.tsx': 'its <audio>/<video> are muted by the page silencer, and its HTML preview runs it per load',
+    'web/src/components/settings/sections/VoiceAccuracyTakeDetail.tsx': "Voice Accuracy's Play recording: an <audio> made only by the user's click, muted by the page silencer",
     'web/src/apps/mail/mail-html.ts': 'drops every media element from a mail',
     'web/src/utils/file-kind.ts': 'only names the media kinds a file view shows',
     'web/src/components/settings/sections/BackupSection.tsx': "a backup's destination setting (cfg.destination), no audio",
@@ -374,7 +375,6 @@ describe('ratchet: every sound in the web app stays silent under automation', ()
     'web/src/hooks/useVoiceConversation.ts': "voice conversation's AudioContext: the page silencer gives it a sink of none",
     'web/src/voice/voice-speaker.ts': 'reads answers through that AudioContext (sink of none) or speechSynthesis (a counted no-op under the page silencer)',
     'web/src/voice/voice-mic.ts': 'a meter on the mic: its graph never reaches the speakers',
-    'web/src/components/settings/sections/VoiceAccuracyTakeDetail.tsx': "Voice Accuracy's Play recording: an <audio> made only by the user's click, muted by the page silencer",
     'web/src/voice/waiting-cue.ts': "voice conversation's waiting chime: plays into the speaker's output on that AudioContext (sink of none under the page silencer)",
   };
 

@@ -21,6 +21,7 @@
  * Last writer wins per key; the server's copy is read before the first render,
  * and again whenever the window comes back to the front.
  */
+import { forgetDictatedTakes, type SentDictation } from './dictation-takes';
 import { apiGet, apiPut } from '@/api/client';
 import { getDeviceToken } from '@/api/device-token';
 import { log } from '@/utils/log';
@@ -83,6 +84,8 @@ export function clearDraft(key: string | null | undefined): void {
  */
 export function discardDraft(key: string): void {
   discardedAt.set(key, ++saveSeq);
+  // Its dictations are gone with its words.
+  forgetDictatedTakes(key);
   writeDraft(key, '');
   // The attachments kept beside the words go with them (ChatInput keeps them on this device).
   try { localStorage.removeItem(KEPT_ATTACHMENTS_PREFIX + key); } catch { /* storage off */ }
@@ -150,10 +153,14 @@ export function isSentDraftCopy(key: string, text: string | null, mark?: number,
 const sentAt = new Map<string, { text: string; mark: number; at: number }>();
 
 /** Local composer ownership, never sent to the server. */
-export interface DraftOrigin { readonly key: string; readonly text: string; readonly sent: number }
+export interface DraftOrigin {
+  readonly key: string; readonly text: string; readonly sent: number;
+  /** The recordings dictated into the draft whose words it sent, with the box's own text (utils/dictation-takes.ts): the send carries them. */
+  readonly dictation?: SentDictation;
+}
 
-export function draftOriginOf(key: string, text: string): DraftOrigin {
-  return { key, text, sent: ++saveSeq };
+export function draftOriginOf(key: string, text: string, dictation?: SentDictation | null): DraftOrigin {
+  return { key, text, sent: ++saveSeq, ...(dictation ? { dictation } : {}) };
 }
 
 const revisions = new Map<string, { mark: number; origin?: number }>();

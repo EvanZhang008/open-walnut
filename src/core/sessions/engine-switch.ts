@@ -83,6 +83,8 @@ export interface EngineSwitchRequest {
   message?: string;
   /** What the user typed, when it differs from `message`. */
   displayText?: string;
+  /** The recordings dictated into it (stt/dictation-ids.ts): kept with the message, named on its delivery. */
+  dictation?: { ids: string[]; text?: string };
   /** The session asking (an agent), or undefined for a person. */
   callerSid?: string;
   /** Its host's daemon could not prove `callerSid` (lib/caller-unproven.ts): the ceiling reads an outside caller. */
@@ -370,12 +372,12 @@ async function switchFrom(req: EngineSwitchRequest, task: Task): Promise<EngineS
     ...(lost ? { from_host_lost: lost } : {}),
     ...(req.userWords?.trim() ? { user_words: req.userWords.trim().slice(0, 2000) } : {}),
     ...(req.reason?.trim() ? { reason: req.reason.trim().slice(0, 200) } : {}),
-    ...(message ? { message: firstMessage, display_text: req.displayText ?? message } : {}),
+    ...(message ? { message: firstMessage, display_text: req.displayText ?? message, ...(req.dictation ? { dictation: req.dictation } : {}) } : {}),
     by: asker,
     // The asker by name, for the session's line ("Walnut VP is moving this task..."), so a switch an
     // agent asked for never reads as the result of the person's own click (2026-11-15).
     ...(framed?.title && caller.kind === 'session' && caller.record.taskId !== task.id ? { by_name: framed.title.slice(0, 120) } : {}),
-    ...(carry ? { message: carry.message, ...(carry.display_text ? { display_text: carry.display_text } : {}) } : {}),
+    ...(carry ? { message: carry.message, ...(carry.display_text ? { display_text: carry.display_text } : {}), ...(carry.dictation ? { dictation: carry.dictation } : {}) } : {}),
   };
   if (busy && !now) {
     await tm.updateTaskRaw(task.id, { engine_switch: state }, { source: 'engine-switch', emitEvent: true });
@@ -403,11 +405,11 @@ export async function cancelPendingSwitch(taskId: string, opts: { deliver?: bool
     const sw = cur.engine_switch;
     if (sw?.state === 'pending') {
       held = sw;
-      return { engine_switch: { ...sw, state: 'failed', error: 'cancelled', message: undefined, display_text: undefined } };
+      return { engine_switch: { ...sw, state: 'failed', error: 'cancelled', message: undefined, display_text: undefined, dictation: undefined } };
     }
     if (sw?.state === 'failed' && sw.message) {
       held = sw;
-      return { engine_switch: { ...sw, message: undefined, display_text: undefined } };
+      return { engine_switch: { ...sw, message: undefined, display_text: undefined, dictation: undefined } };
     }
     return null;
   }, { source: 'engine-switch', emitEvent: true });
@@ -416,6 +418,7 @@ export async function cancelPendingSwitch(taskId: string, opts: { deliver?: bool
     const { sendMessageToSession } = await import('../session-message-queue.js');
     await sendMessageToSession(held.from_session_id, held.display_text ?? held.message, {
       source: held.by === 'human' ? 'ui' : 'engine-switch', taskId, enqueueMessage: held.message,
+      ...(held.dictation ? { dictation: held.dictation } : {}),
     });
     return { cancelled: true, delivered: true };
   }
@@ -762,7 +765,7 @@ async function handOver(
     // The task is on the engine its user picked now: a fallback start's note is done.
     engine_fallback: null,
     engine_switch: {
-      ...state, state: 'done', message: undefined, display_text: undefined, held_rows: undefined, session_id: sessionId,
+      ...state, state: 'done', message: undefined, display_text: undefined, dictation: undefined, held_rows: undefined, session_id: sessionId,
       error: undefined, interrupted: undefined, carried_turns: prepared.carried.carriedTurns, trimmed_turns: prepared.carried.trimmedTurns,
       ...(prepared.transcriptPath ? { transcript_path: prepared.transcriptPath } : {}),
       ...(prepared.moved ? { moved: prepared.moved } : {}),

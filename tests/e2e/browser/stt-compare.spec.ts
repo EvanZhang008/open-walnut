@@ -7,7 +7,7 @@
  *     /import-bench, the only way in that runs no engine) show in the summary as estimated
  *     errors from earlier AI guesses on the same recordings, and the judge's line says its
  *     sending is not allowed (its consent is unticked), with the way to that setting.
- *  3. A recording opens in a dialog (never in its row), the frosted app modal, inside the viewport
+ *  3. A recording opens in a dialog (never in its row), a glass dialog of the overlay family, inside the viewport
  *     with nothing scrolling sideways at 1280 px: Play recording and Recalculate at the top, one
  *     engine's text at a time beside the AI's guess, the text exactly as the engine wrote it
  *     (missing words listed apart), the legend, what was probably sent with its "Probably" label
@@ -19,8 +19,10 @@
  *     "Estimate errors" and runs to its end; the consent is put back after.
  *  5. At 390 px the recordings are a stacked list and nothing scrolls sideways; each consent tick
  *     sits on its label's first line with the label in full beside it, and the engines'
- *     switches line up at the right whatever their state's words. At 320 px the dialog is a
- *     full-height sheet whose engine switch wraps instead of scrolling sideways.
+ *     switches line up at the right whatever their state's words. The dialog opened there is on
+ *     top of everything, the phone's top bar included: the point at the centre of its Close is the
+ *     Close itself (2026-11-22: the top bar sat over it and took its clicks). At 320 px the dialog
+ *     is a full-height sheet whose engine switch wraps instead of scrolling sideways.
  * The fixture is shared: the takes are this run's own (stamped ids), and the flag and consent go back.
  */
 import fs from 'node:fs'
@@ -125,6 +127,16 @@ async function dialogFits(page: Page): Promise<{ top: number; bottom: number; vh
     const scrollers = [document.documentElement, box, box.querySelector('.va-take-dialog-body'), box.querySelector('.settings-segmented')]
       .filter((el): el is HTMLElement => !!el)
     return { top: r.top, bottom: r.bottom, vh: window.innerHeight, extra: scrollers.map((el) => el.scrollWidth - el.clientWidth) }
+  })
+}
+
+/** Is the open dialog's Close the element at its own centre (its icon inside it counts), so nothing lies over it? */
+async function closeOnTop(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const close = document.querySelector('[data-testid="va-take-dialog-close"]') as HTMLElement
+    const r = close.getBoundingClientRect()
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+    return !!hit && (hit === close || close.contains(hit))
   })
 }
 
@@ -248,6 +260,18 @@ test('summary, a recording opened, a consent ticked, and the phone layout', asyn
   await expect(page.getByTestId('va-last-run')).toHaveText(/^The last run (compared|found nothing)/, { timeout: 60_000 })
   await expect(page.getByTestId('va-progress')).toHaveCount(0)
 
+  // Your data: the edited dictations kept (none yet: the benchmark has no sends), and their download.
+  const pairs = page.getByTestId('va-pairs')
+  await pairs.scrollIntoViewIfNeeded()
+  await expect(pairs).toContainText('Edited dictations kept: 0')
+  await expect(page.getByTestId('va-pairs-download')).toBeDisabled()
+  {
+    const res = await request.get('/api/stt/compare/pairs.jsonl')
+    expect(res.status()).toBe(200)
+    expect((await res.text()).trim()).toBe('')
+  }
+  await shot(page, 'your-data')
+
   // The phone: a stacked list, nothing wider than the screen.
   await page.setViewportSize({ width: 390, height: 844 })
   await expect(takes).toHaveAttribute('data-layout', 'stacked')
@@ -279,6 +303,19 @@ test('summary, a recording opened, a consent ticked, and the phone layout', asyn
   expect(new Set(rights).size, `switch right edges ${rights.join(', ')}`).toBe(1)
   await shot(page, 'phone')
 
+  // The dialog opened on a phone is on top of everything: nothing (the top bar) sits over its Close.
+  {
+    const phoneRow = takes.locator(`[data-testid="va-take-row"][data-take="${paired}"]`)
+    await phoneRow.scrollIntoViewIfNeeded()
+    await phoneRow.getByTestId('va-take-details').click()
+    await expect(dialog).toBeVisible()
+    const close = dialog.getByTestId('va-take-dialog-close')
+    await expect(close).toBeVisible()
+    expect(await closeOnTop(page), 'the element at the centre of the Close is the Close').toBe(true)
+    await close.click()
+    await expect(dialog).toHaveCount(0)
+  }
+
   // At 320 px the dialog is a sheet the height of the screen, and its five-way engine switch wraps.
   await page.setViewportSize({ width: 320, height: 640 })
   const narrowRow = takes.locator(`[data-testid="va-take-row"][data-take="${paired}"]`)
@@ -294,6 +331,7 @@ test('summary, a recording opened, a consent ticked, and the phone layout', asyn
     expect(fit.bottom - fit.top, 'a full-height sheet').toBeGreaterThanOrEqual(fit.vh - 2)
     for (const extra of fit.extra) expect(extra, 'nothing in the sheet scrolls sideways at 320 px').toBeLessThanOrEqual(1)
   }
+  expect(await closeOnTop(page), 'the element at the centre of the Close is the Close at 320 px').toBe(true)
   await dialog.getByTestId('va-take-dialog-close').click()
   await expect(dialog).toHaveCount(0)
 })

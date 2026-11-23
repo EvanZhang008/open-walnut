@@ -7,7 +7,8 @@
  * action), and the recordings. Server: src/web/routes/stt-compare.ts.
  */
 import { useState } from 'react';
-import type { CompareEngines, CompareEngineRow, CompareProgress, CompareSummary } from '@/api/stt-compare';
+import { fetchComparePairs, type CompareEngines, type CompareEngineRow, type CompareProgress, type CompareSummary } from '@/api/stt-compare';
+import { downloadBlob } from '@/utils/download-blob';
 import { SettingsGroup, SettingsLoadingRow, SettingsNotice, SettingsRow } from '../SettingsSection';
 import { SectionCard } from '../inputs/SectionCard';
 import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
@@ -222,7 +223,40 @@ function LoadError({ error, reload }: { error: string; reload: () => Promise<voi
 
 /** The limits of what Voice Accuracy keeps (store.ts MAX_TAKES, voice-retention.ts). */
 export const DATA_LIMITS =
-  'At most 500 compared recordings, on this computer only; past that the oldest comparison is dropped. While the experiment is on, the recordings it compares are kept past your voice retention setting; once it is off, they follow that setting again.';
+  'At most 500 compared recordings, on this computer only; past that the oldest comparison is dropped, the ones you edited before sending last. While the experiment is on, the recordings it compares are kept past your voice retention setting; once it is off, they follow that setting again.';
+
+/**
+ * The dictations edited before they were sent (each one's audio, the engine's text and what was
+ * sent), kept for later and downloaded as one JSON line each (GET /pairs.jsonl).
+ */
+function PairsRow({ count }: { count: number }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const download = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      downloadBlob(await fetchComparePairs(), 'walnut-dictation-pairs.jsonl');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <SettingsRow
+      label={`Edited dictations kept: ${count}`}
+      help="Each recording with the engine's text and what you sent, one JSON line each, from messages of one dictation."
+      error={error ? `Couldn't download them: ${error}` : undefined}
+      data-testid="va-pairs"
+      control={(
+        <SettingsButton onClick={() => void download()} busy={busy} busyLabel="Downloading..." disabled={count === 0} data-testid="va-pairs-download">
+          Download pairs
+        </SettingsButton>
+      )}
+    />
+  );
+}
 
 /** Removes everything Voice Accuracy kept; shown with the experiment off too, so turning it off can leave nothing behind. */
 function DeleteGroup({ data }: { data: ReturnType<typeof useVoiceAccuracy> }) {
@@ -234,6 +268,7 @@ function DeleteGroup({ data }: { data: ReturnType<typeof useVoiceAccuracy> }) {
         help={DATA_LIMITS}
         data-testid="va-data-limits"
       />
+      {!data.off && data.summary && <PairsRow count={data.summary.editedTakes ?? 0} />}
       <SettingsRow
         label="Delete comparison data"
         help={done

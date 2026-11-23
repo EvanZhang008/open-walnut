@@ -3715,6 +3715,9 @@ export interface EngineSwitchState {
   message?: string;
   /** The words the user typed, for the composer's pending row. */
   display_text?: string;
+  /** The recordings dictated into those words and the composer's text (stt/dictation-ids.ts), kept with
+   *  `message`: its delivery names them, so Voice Accuracy pairs them exactly. */
+  dictation?: { ids: string[]; text?: string };
   /** A remote task moving to an engine only this Mac runs: the user confirmed the move. */
   confirm_move?: boolean;
   /** A move to another host (task_move): `to.host` is where the new session runs, and the

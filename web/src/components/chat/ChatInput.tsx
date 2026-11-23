@@ -28,6 +28,7 @@ import type { Task } from '@open-walnut/core';
 import { StatusBadge } from '../common/StatusBadge';
 import { MicButton, type MicControl } from '../common/MicButton';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
+import { claimDictation, forgetDictatedTakes, noteDictatedTake } from '@/utils/dictation-takes';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { pasteRichTextAsMarkdown } from '@/utils/html-to-markdown';
 import { DRAFT_FLUSH_EVENT, noteDraftWrite, type DraftFlushDetail } from '@/utils/unsaved-work';
@@ -1115,7 +1116,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
     slashIndexRef.current = -1;
     slashEndRef.current = -1;
     slashDismissedAtRef.current = -1;
-    if (!keepDraft) clearDraft();
+    if (!keepDraft) { clearDraft(); forgetDictatedTakes(draftKeyRef.current); }
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
@@ -1156,6 +1157,8 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
     cb: (text: string, images?: ImageAttachment[], origin?: DraftOrigin) => void | Promise<boolean>,
     text: string,
     sent: ComposerAttachment[],
+    /** The box's own words as the person typed them (a pill as its `@[label]` token). */
+    boxText: string,
   ) => {
     const imgs = sentImages(sent);
     // The files go as words: the header naming where each one was saved.
@@ -1164,12 +1167,15 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
     setRecallShown(null);
     // Recall offers it once the send is accepted (a refused one comes back to the box).
     const recallKey = promptRecallKey;
-    const accepted = () => { if (recallKey) noteSentPrompt(recallKey, text); };
     // Optimistically clear the box for snappy feel, but keep the draft until we know
     // the send was accepted server-side.
     // The key the words were typed under: the box may show another one by the
     // time the send settles.
     const sentKey = draftKeyRef.current;
+    // The recordings dictated into this draft whose words go now, with the box's own text (not the
+    // message Walnut builds from it): the send carries them (origin).
+    const dictation = claimDictation(sentKey, boxText);
+    const accepted = () => { if (recallKey) noteSentPrompt(recallKey, text); dictation.settle(); };
     // The words being sent are the draft until the send settles (a reload now
     // keeps them), written at once: the save the debounce still owes would fire
     // during the send and put them back in the emptied box (2026-10-30).
@@ -1193,7 +1199,9 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
       else writeKeptAttachments(sentKey, readKeptAttachments(sentKey).filter((a) => !keptSent.some((k) => k.id === a.id)));
     };
     resetInput(true);
-    const origin: DraftOrigin | undefined = sentKey ? { key: sentKey, text, sent: sentMark } : undefined;
+    const origin: DraftOrigin | undefined = sentKey
+      ? { key: sentKey, text, sent: sentMark, ...(dictation.dictation ? { dictation: dictation.dictation } : {}) }
+      : undefined;
     const failed = () => {
       // Its attachments go back to the box or stay kept (below): not cleared as sent.
       if (sending && sendingAttachmentsRef.current === sending) sendingAttachmentsRef.current = null;
@@ -1283,7 +1291,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
     // Send as regular message (includes session slash commands). A split send opens
     // the reading pane first, on what the reader sees before the chat follows the send.
     if (inSplit) onSendInSplit?.();
-    dispatchSend(onSend, text, attachments.items);
+    dispatchSend(onSend, text, attachments.items, cur);
   };
 
   const closePalette = useCallback(() => {
@@ -1652,6 +1660,8 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
 
   const handleChange = (newValue: string) => {
     lastInputAtRef.current = Date.now();
+    // Emptied: none of the box's dictations is in it any more.
+    if (!newValue.trim()) forgetDictatedTakes(draftKeyRef.current);
     // Edited: a recalled message is a draft from now on, even typed back to what it was.
     if (recallRef.current && newValue !== recallRef.current.text) { recallRef.current = null; setRecallShown(null); }
     // A pasted ref tag (someone copies a pill's markup, or a draft written by
@@ -2002,7 +2012,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
     if ((!text && !hasAttachments) || disabled || sendBlocked || !onInterruptSend || attachments.failed > 0) return;
     if (attachments.pending > 0) { setSendWhenReady('interrupt'); return; }
     setSendWhenReady(false);
-    dispatchSend(onInterruptSend, text, attachments.items);
+    dispatchSend(onInterruptSend, text, attachments.items, cur);
   };
 
   // Send (the button, Enter, Interrupt & send) waits for a live dictation's words.
@@ -2453,6 +2463,7 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
           onTranscribe={(text) => writeDictation(text, false)}
           onDraft={(text) => writeDictation(text, true)}
           onRefine={refineDictation}
+          onTake={(id, words) => noteDictatedTake(draftKeyRef.current, id, words)}
           controlRef={micControlRef}
           disabled={disabled || camera.micHeld}
           // A light box (one of many: an ask card's) is the Voice panel's Insert target only once

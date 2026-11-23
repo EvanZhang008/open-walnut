@@ -50,13 +50,35 @@ export interface CompareTake {
   durationSec?: number
   format: string
   audioRef: AudioRef
-  /** What the user probably sent after this take, kept as sent (sent-text.ts). */
+  /** What the user sent after this take, kept as sent, only Walnut's hint blocks removed (sent-text.ts). */
   sentText?: string
   sentAt?: string
-  /** How sentText was paired with this take: by text similarity within 15 minutes, never by recording id. */
-  sentMatch?: 'text-similarity'
-  /** That pairing's similarity, 0 to 1 (1: the very same text). */
+  /**
+   * How sentText was paired with this take: `recording-id`, the send named this recording (the
+   * composer it was dictated into remembered it); `text-similarity`, a guess by how alike the texts
+   * are, within 15 minutes, for a send that named none.
+   */
+  sentMatch?: 'text-similarity' | 'recording-id'
+  /**
+   * How alike the sent text and the engine's are, 0 to 1 (1: the very same text): a similarity
+   * pairing's, or a recording-id pairing's of one take (learn-from-sends sentAgainstDictation).
+   */
   sentSimilarity?: number
+  /** A recording-id pairing of one take whose sent text has words typed before or after the dictation's (never exported). */
+  sentExtra?: boolean
+  /**
+   * A recording-id pairing whose engine text is no longer in the sent text word for word (spaces
+   * aside): the user edited the dictation. A training pair kept for later (pairs.ts), unless shared
+   * or taken from the message; such entries are the last the store's cap drops.
+   */
+  edited?: boolean
+  /** The send named several takes: sentText is the whole box, not this take's alone (never exported). */
+  sentShared?: boolean
+  /**
+   * `message`: no composer text came with the send (an older client), so sentText is the message
+   * without Walnut's hint blocks, which may hold Walnut's other additions (never exported).
+   */
+  sentFrom?: 'message'
   /** The text Walnut produced for this take at the time. */
   inUseText?: string
   results: Record<string, EngineResult>

@@ -21,6 +21,7 @@ import { join } from 'node:path'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { log } from '../../logging/index.js'
 import { STOP } from './user-terms.js'
+import { dictationOf, type SentDictation } from './dictation-ids.js'
 
 const WINDOW_MS = 15 * 60_000
 const MAX_HELD = 20
@@ -39,6 +40,8 @@ export interface DictationSource { kind: 'recording' | 'archive'; id: string }
 
 const held: { text: string; at: number; source?: DictationSource }[] = []
 const seenIds: string[] = []
+/** Sends paired by recording id lately, by their text (noteSentWithDictations). */
+const exactSends: { text: string; at: number }[] = []
 
 /** A transcript the user may now send on, made at `at`. */
 export function noteDictation(text: string, at = Date.now(), source?: DictationSource): void {
@@ -101,6 +104,40 @@ function commonTable(a: Token[], b: Token[]): Uint16Array[] | null {
     }
   }
   return dp[0]![0]! < MIN_SHARE * Math.max(a.length, b.length) ? null : dp
+}
+
+/** Words typed before or after a dictation beyond this many: the send holds more than that dictation. */
+const MAX_ADDED_AT_ENDS = 1
+
+/**
+ * How a sent text stands to the one dictation it came from: `similarity`, the common tokens over the
+ * longer text's (0 when they share less than MIN_SHARE), and `extra` when words were added before the
+ * first word it kept or after the last one (a typed "Please check:" in front, another take's text
+ * after it). Words added between kept ones are corrections, not extra.
+ */
+export function sentAgainstDictation(dictated: string, sent: string): { similarity: number; extra: boolean } {
+  const a = tokens(dictated)
+  const b = tokens(sent)
+  const dp = commonTable(a, b)
+  if (!dp) return { similarity: 0, extra: true }
+  // Walk the common subsequence; note where its first and last matches sit in each text. It starts
+  // in the send as late as a whole common part still can, so a typed prefix that holds one of the
+  // dictation's words ("In the end, the build...") is still a prefix, not a middle insertion.
+  let i = 0
+  let j = 0
+  while (j + 1 < b.length && dp[0]![j + 1]! === dp[0]![0]!) j++
+  let first: [number, number] | null = null
+  let last: [number, number] = [0, 0]
+  while (i < a.length && j < b.length) {
+    if (a[i]!.text === b[j]!.text) { first ??= [i, j]; last = [i + 1, j + 1]; i++; j++ }
+    else if (dp[i]![j + 1]! >= dp[i + 1]![j]!) j++
+    else i++
+  }
+  if (!first) return { similarity: 0, extra: true }
+  // Words the send has at an end beyond those it replaced there.
+  const lead = first[1] - first[0]
+  const tail = (b.length - last[1]) - (a.length - last[0])
+  return { similarity: dp[0]![0]! / Math.max(a.length, b.length), extra: lead > MAX_ADDED_AT_ENDS || tail > MAX_ADDED_AT_ENDS }
 }
 
 /** The spans a send changed in a dictation, when the send is that dictation edited by hand. */
@@ -298,30 +335,50 @@ export async function startLearningFromSends(): Promise<void> {
   if (isFollower()) return
   started = true
   bus.subscribe('stt-learn-from-sends', (event) => {
-    const data = event.data as { message?: unknown; source?: unknown; sentBy?: unknown; messageId?: unknown } | undefined
-    if (typeof data?.message !== 'string' || !held.length) return
+    const data = event.data as { message?: unknown; source?: unknown; sentBy?: unknown; messageId?: unknown; dictationIds?: unknown; dictationText?: unknown } | undefined
+    if (typeof data?.message !== 'string') return
     const by = data.sentBy ?? queueSentBy(typeof data.source === 'string' ? data.source : undefined)
     if (by !== 'person') return
+    noteSentWithDictations(data.message, dictationOf(data))
+    if (!held.length) return
     const text = data.message.replace(HINT_BLOCK, '').trim()
     const id = typeof data.messageId === 'string' ? data.messageId : undefined
-    // Voice Accuracy keeps what was sent beside its take, only while its experiment is on: the
-    // dictations are copied now (learning below may use one up) and matched once the switch is read.
-    // It keeps the text as the person sent it (spaces and line breaks included), only without
-    // Walnut's own hint blocks, which the person never typed.
-    if (held.some((d) => d.source)) {
-      const now = Date.now()
-      const dictations = held.slice()
-      const asSent = withoutHints(data.message)
-      void import('./compare/sent-text.js').then((m) => m.recordSentTextOf(asSent, now, dictations)).catch(() => {})
-    }
     void learnFromSend(text, Date.now(), id).catch((err) => log.stt.warn(`learning from an edit failed: ${err instanceof Error ? err.message : String(err)}`))
   }, { global: true, interest: [EventNames.SESSION_MESSAGE_QUEUED] })
+}
+
+/**
+ * Voice Accuracy keeps what a person sent beside its take, only while its experiment is on. A send
+ * naming its recordings (`dictation`, kept on its queue row) pairs with each exactly, on the
+ * composer's own text when it came (compare/sent-text.ts); one naming none is matched by text to a
+ * recent dictation, as sent without Walnut's hint blocks (the dictations are copied now: learning
+ * may use one up before the switch is read). Also called by a send that queues no message (the
+ * session:send RPC's engine switch, which starts a session).
+ */
+export function noteSentWithDictations(message: string, dictation?: SentDictation): void {
+  const now = Date.now()
+  const asSent = withoutHints(message)
+  while (exactSends.length && now - exactSends[0]!.at > WINDOW_MS) exactSends.shift()
+  if (dictation?.ids.length) {
+    exactSends.push({ text: asSent, at: now })
+    if (exactSends.length > MAX_HELD) exactSends.shift()
+    void import('./compare/sent-text.js').then((m) => m.recordSentByIds(dictation.ids, { message: asSent, ...(dictation.text !== undefined ? { boxText: dictation.text } : {}) }, now)).catch(() => {})
+    return
+  }
+  // Only a dedupe, never the pairing's source (the ids ride the row): the same words again without
+  // their ids within the window (another copy of an exactly paired send) are never guessed onto
+  // another take.
+  if (exactSends.some((e) => e.text === asSent)) return
+  if (!held.some((d) => d.source)) return
+  const dictations = held.slice()
+  void import('./compare/sent-text.js').then((m) => m.recordSentTextOf(asSent, now, dictations)).catch(() => {})
 }
 
 /** Test hook. */
 export function _resetLearningForTest(): void {
   held.length = 0
   seenIds.length = 0
+  exactSends.length = 0
   learned = null
   loading = null
   unreadable = false

@@ -108,7 +108,7 @@ export const TOP_LEVEL_ENTRIES: readonly HomeEntry[] = [
   lead('time-tracking', 'time-tracking', 'dir', 'Time records: work hours, calls, app and site samples'),
   mach('health', 'health', 'dir', 'Health data: it follows the existing rule that this data stays on the machine that collected it (git sync and backups leave it out)'),
   mach('places', 'places', 'dir', 'Place visits from the phone: they follow the existing rule that this data stays on the machine that collected it'),
-  mach('stt-compare', 'stt-compare', 'dir', 'Voice Accuracy (experimental): this machine\'s takes heard again by other engines, their texts and scores; it points at this machine\'s own recordings'),
+  mach('stt-compare', 'stt-compare', 'dir', 'Voice Accuracy (experimental): this machine\'s takes heard again by other engines, their texts and scores, and the text you sent after each dictation; it points at this machine\'s own recordings'),
   lead('browser-replays', 'browser', 'dir', 'Replays of what agents did in the browser, per task'),
   // This machine.
   mach('local', 'local', 'dir', 'Per-machine records (children with another class are listed)', { listsChildren: true }),

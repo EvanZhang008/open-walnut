@@ -17,6 +17,18 @@ export const WEB_SRC = path.join(__dirname, '../../web/src');
 export const FAMILY = ['wn-overlay', 'wn-menu', 'wn-dialog', 'wn-scrim', 'wn-tip'];
 /** Families of their own, owned elsewhere: the notice card (NoticeCard) and the glass materials. */
 const OTHER_FAMILIES = ['wn-notice', 'wn-glass', 'wn-glass-fill', 'wn-glass-frost'];
+/** A kind of floating surface owned elsewhere. The glass classes are a material, never a kind: a glass
+ *  overlay still takes its kind's class for its corner and its layer (2026-11-22: the Voice Accuracy
+ *  recording dialog carried only `wn-glass`, counted as on the family, and its scrim, with no layer,
+ *  opened under the phone's top bar, which took the Close button's clicks). */
+const OTHER_KINDS = ['wn-notice'];
+
+/** Is a portal's overlay (the classes of its first two elements) off the family? A dialog panel
+ *  needs its scrim too: the scrim carries the layer (`--z-modal`). */
+export function offFamilyRoots(roots: readonly string[]): boolean {
+  if (!roots.some((c) => FAMILY.includes(c) || OTHER_KINDS.includes(c))) return true;
+  return roots.includes('wn-dialog') && !roots.includes('wn-scrim');
+}
 
 /**
  * Portals that are not a floating surface of this family, each with why. A new entry needs a reason
@@ -258,7 +270,7 @@ export function countAll(): Counts {
     const appended = appendsSurface(text);
     if ((!new RegExp(`\\b${portalCall(text)}\\(`).test(text) && !appended) || NOT_OVERLAY[r]) continue;
     const roots = portalRoots(text);
-    bump(out.offFamily, r, roots.filter((cls) => !cls.some((c) => FAMILY.includes(c) || OTHER_FAMILIES.includes(c))).length);
+    bump(out.offFamily, r, roots.filter(offFamilyRoots).length);
     // A surface appended by hand: its classes are set in code, so the file must name a family class.
     if (appended && !roots.length && !FAMILY.some((c) => new RegExp(`\\b${c}\\b`).test(text))) bump(out.offFamily, r);
     // A tooltip closes when the pointer leaves: a file whose every surface is a wn-tip needs no close hook.

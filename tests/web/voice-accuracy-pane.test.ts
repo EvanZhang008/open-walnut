@@ -290,6 +290,9 @@ describe('Voice Accuracy: the words of the summary and the run', () => {
 
   it('labels the row preview with its source', () => {
     expect(takeText(take({ sentText: 'what I sent' }))).toEqual({ source: 'Probably sent', text: 'what I sent' })
+    expect(takeText(take({ sentText: 'what I sent', sentMatch: 'text-similarity' })).source).toBe('Probably sent')
+    // Paired by its recording: what was sent, not a guess.
+    expect(takeText(take({ sentText: 'what I sent', sentMatch: 'recording-id' }))).toEqual({ source: 'Sent', text: 'what I sent' })
     expect(takeText(take()).source).toBe('Engine text')
   })
 })

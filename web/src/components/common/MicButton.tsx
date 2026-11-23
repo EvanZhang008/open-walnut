@@ -46,6 +46,8 @@ interface MicButtonProps {
    * return true when the box now holds `finalText` in its place.
    */
   onRefine?: (finalText: string, provisional: string) => boolean | void;
+  /** The engine's final text for a stored recording, with its id (useSpeechToText onTake). */
+  onTake?: (recordingId: string, text: string) => void;
   /**
    * Receives the composer's handle on this mic: `discard` stops and throws the
    * audio away (the user switched the box to another target), and `busy` /
@@ -89,7 +91,7 @@ function MicWaveform({ level }: { level: number }) {
   );
 }
 
-export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, language, disabled, size = 'md', insertBox, onSettled }: MicButtonProps) {
+export function MicButton({ onTranscribe, onDraft, onRefine, onTake, controlRef, language, disabled, size = 'md', insertBox, onSettled }: MicButtonProps) {
   const popupOwner = useId();
   /**
    * Did this recording deliver a FINAL text? Tracked because the mic now KEEPS the
@@ -117,6 +119,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
     ...(onRefine
       ? { onRefine: (final: string, provisional: string) => { delivered.current = true; return onRefine(final, provisional); } }
       : {}),
+    ...(onTake ? { onTake } : {}),
     ...(language ? { language } : {}),
   };
   const { isSupported, isRecording, isTranscribing, error, toggleRecording, retryWithModel, retryLast, lastDebugPath, hasLastRecording, level, micLive, micOpening, silenceWarning, draftNotice, discardRecording, finishRecording, isBusy } = useSpeechToText(sttOptions);

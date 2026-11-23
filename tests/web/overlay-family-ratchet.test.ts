@@ -8,7 +8,8 @@
  *
  * Counted per file (overlay-family-scan.ts), from the source, so a NEW overlay is found by itself:
  *   - offFamily: a portal whose overlay (its first two elements) carries no family class
- *     (wn-overlay, wn-menu, wn-dialog, wn-scrim, wn-tip; or the notice card and glass families).
+ *     (wn-overlay, wn-menu, wn-dialog, wn-scrim, wn-tip; or the notice card), or a dialog panel
+ *     (wn-dialog) without its wn-scrim. A glass class alone is a material, not a kind.
  *   - noCloseHook: a file that portals an overlay and closes it with neither useOverlayLayer
  *     (Escape, outside press, stacking) nor useModalOverlay (dialogs).
  *   - handEscape: a hand-written `key === 'Escape'` in such a file (the layer's `onEscape` and
@@ -25,7 +26,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { walk, scanCss } from './css-scan';
-import { countAll, floatingClasses, members, portalRoots, stripComments, ESCAPE_TEST, ESCAPE_NOT_A_CLOSE, NOT_OVERLAY, WEB_SRC, type Counts } from './overlay-family-scan';
+import { countAll, floatingClasses, members, offFamilyRoots, portalRoots, stripComments, ESCAPE_TEST, ESCAPE_NOT_A_CLOSE, NOT_OVERLAY, WEB_SRC, type Counts } from './overlay-family-scan';
 
 const BASELINE = path.join(__dirname, 'overlay-family-baseline.json');
 const STANDARD = '.claude/skills/walnut-ui-requirements/standard.md';
@@ -78,6 +79,12 @@ describe('overlay family: one look and one close for every floating surface', ()
     // A `/*` inside a line comment opens nothing (it swallowed 23 KB of SessionPathSelector).
     expect(stripComments('// see a/*.tsx\nuseOverlayLayer({ open })\n// */')).toMatch(/useOverlayLayer\(/);
     expect(stripComments('const u = "http://x"; const el = <p>a // b</p>;')).toContain('http://x');
+    // 2026-11-22: a dialog in the glass alone, over a scrim with no layer, opened under the phone's top bar.
+    expect(offFamilyRoots(portalRoots('createPortal(<div className="app-modal-overlay"><div className="app-modal x-dialog wn-glass" /></div>, document.body)')[0]!)).toBe(true);
+    expect(offFamilyRoots(['x-overlay', 'app-modal', 'wn-dialog'])).toBe(true);
+    expect(offFamilyRoots(['app-modal-overlay', 'wn-scrim', 'app-modal', 'x-dialog', 'wn-dialog', 'wn-glass'])).toBe(false);
+    expect(offFamilyRoots(['cal-create-popover', 'wn-overlay', 'wn-glass'])).toBe(false);
+    expect(offFamilyRoots(['wn-notice', 'wn-glass-frost'])).toBe(false);
   });
 
   it('every file it exempts still portals something, and says why', () => {

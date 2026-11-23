@@ -226,6 +226,6 @@ export async function sendResumeMessage(taskId: string, state: EngineSwitchState
   const { sendMessageToSession } = await import('../session-message-queue.js');
   await sendMessageToSession(sessionId, state.display_text ?? state.message ?? '', {
     source: state.by === 'human' ? 'ui' : 'engine-switch', taskId, enqueueMessage: message, hinted: true,
-    messageId: `qm-${state.id}`, ...(mode ? { mode } : {}),
+    messageId: `qm-${state.id}`, ...(mode ? { mode } : {}), ...(state.dictation ? { dictation: state.dictation } : {}),
   });
 }

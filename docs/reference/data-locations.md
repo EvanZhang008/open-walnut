@@ -125,7 +125,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.open-walnut/time-tracking/` | leader-data | no | Time records: work hours, calls, app and site samples |
 | `~/.open-walnut/health/` | machine | no | Health data: it follows the existing rule that this data stays on the machine that collected it (git sync and backups leave it out) |
 | `~/.open-walnut/places/` | machine | no | Place visits from the phone: they follow the existing rule that this data stays on the machine that collected it |
-| `~/.open-walnut/stt-compare/` | machine | no | Voice Accuracy (experimental): this machine's takes heard again by other engines, their texts and scores; it points at this machine's own recordings |
+| `~/.open-walnut/stt-compare/` | machine | no | Voice Accuracy (experimental): this machine's takes heard again by other engines, their texts and scores, and the text you sent after each dictation; it points at this machine's own recordings |
 | `~/.open-walnut/browser/` | leader-data | no | Replays of what agents did in the browser, per task |
 | `~/.open-walnut/local/` | machine | no | Per-machine records (children with another class are listed) |
 | `~/.open-walnut/server.lock.json` | machine | no | The running server's singleton lock: pid and port |
@@ -327,7 +327,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `$XDG_STATE_HOME/open-walnut/daemon-previous/` | machine | no | The previous daemon build, kept for a rollback |
 | `$XDG_STATE_HOME/open-walnut/primary-daemon/` | machine | no | The tunnel daemon of this machine |
 | `~/.local/share/open-walnut/daemon/` | machine | no | The login service's daemon state and boot script |
-| `~/.local/share/open-walnut/daemon/service-mode.json` | machine | no | Whose follower the login service runs as the host's one Walnut service, and for which version (written only by walnut daemon install or update) |
+| `~/.local/share/open-walnut/daemon/service-mode.json` | machine | no | What the login service runs as the machine's one Walnut service (the follower of a Walnut, or its leader), and for which version (written by walnut daemon install or update and by the leader switch through setServiceRole) |
 | `~/.local/share/open-walnut/bin/` | rebuildable | no | Voice input helper binaries, installed again on demand |
 | `~/.local/share/open-walnut/stt-llama/` | rebuildable | no | Local voice model runtime, installed again on demand |
 | `~/.local/share/open-walnut/stt-mlx/` | rebuildable | no | Local voice model runtime, installed again on demand |

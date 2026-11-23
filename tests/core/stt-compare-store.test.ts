@@ -1,7 +1,8 @@
 /**
  * The comparison store: one JSON per take, merged per engine, newest first
- * with a cursor, at most 500 entries (the one touched longest ago goes, never
- * the one just written), written whole, and cleared whole.
+ * with a cursor, at most 500 entries (the one touched longest ago goes, an
+ * training pair only after every other entry, never the one just written),
+ * written whole, and cleared whole.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
@@ -18,6 +19,8 @@ beforeEach(async () => {
 afterEach(async () => { await rm(dir, { recursive: true, force: true }) })
 
 const base = (at: string) => ({ source: 'web' as const, at, format: 'webm', audioRef: { kind: 'recording' as const, id: 'x' } })
+/** A training pair (training-pair.ts): one dictation, edited, nothing added. */
+const pair = { edited: true, sentMatch: 'recording-id' as const, sentSimilarity: 0.9, sentText: 'we ship on friday', inUseText: 'we ship on fryday' }
 
 describe('CompareStore', () => {
   it('ids name the recording and refuse anything else', () => {
@@ -75,6 +78,34 @@ describe('CompareStore', () => {
     await expect(store.upsert('rec-old', { results: { 'in-use': { text: 'x', ms: 1, at: 'a' } } })).resolves.toMatchObject({ id: 'rec-old' })
     expect(await store.has('rec-m0')).toBe(false)
     expect(await store.count()).toBe(MAX_TAKES)
+  })
+
+  it('an edited take (a training pair) goes only after every unedited one, oldest unedited first', async () => {
+    const at = (i: number) => new Date(Date.UTC(2026, 0, 3) + i * 60_000).toISOString()
+    // The two oldest are edited; the rest, and the ones that come after, are not.
+    for (let i = 0; i < MAX_TAKES; i++) await store.upsert(`rec-e${i}`, { ...base(at(i)), ...(i < 2 ? pair : {}) })
+    await store.upsert('rec-over1', base(at(MAX_TAKES)))
+    await store.upsert('rec-over2', base(at(MAX_TAKES + 1)))
+    expect(await store.has('rec-e0')).toBe(true)
+    expect(await store.has('rec-e1')).toBe(true)
+    expect(await store.has('rec-e2')).toBe(false)
+    expect(await store.has('rec-e3')).toBe(false)
+    expect(await store.has('rec-e4')).toBe(true)
+    expect(await store.count()).toBe(MAX_TAKES)
+  })
+
+  it('with only edited takes left to drop, the edited one touched longest ago goes; the new one never does', async () => {
+    const at = (i: number) => new Date(Date.UTC(2026, 0, 4) + i * 60_000).toISOString()
+    for (let i = 0; i < MAX_TAKES; i++) await store.upsert(`rec-p${i}`, { ...base(at(i)), ...pair })
+    await store.upsert('rec-plain', base(at(MAX_TAKES)))
+    expect(await store.has('rec-plain')).toBe(true)
+    expect(await store.has('rec-p0')).toBe(false)
+    expect(await store.has('rec-p1')).toBe(true)
+    // A fresh store reads the edited flag back from disk and orders the same way.
+    const fresh = new CompareStore(async () => join(dir, 'takes'))
+    await fresh.upsert('rec-plain2', base(at(MAX_TAKES + 1)))
+    expect(await fresh.has('rec-plain')).toBe(false)
+    expect(await fresh.has('rec-p1')).toBe(true)
   })
 
   it('clear removes every entry and its folder', async () => {

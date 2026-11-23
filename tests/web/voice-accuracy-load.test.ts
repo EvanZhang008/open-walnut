@@ -16,7 +16,10 @@ const api = vi.hoisted(() => ({
   fetchCompareSummary: vi.fn(),
   fetchCompareTakes: vi.fn(),
   fetchCompareRun: vi.fn(),
+  fetchComparePairs: vi.fn(),
 }))
+const saved = vi.hoisted(() => ({ files: [] as Array<{ blob: Blob; name: string }> }))
+vi.mock('@/utils/download-blob', () => ({ downloadBlob: (blob: Blob, name: string) => { saved.files.push({ blob, name }) } }))
 vi.mock('@/api/stt-compare', async (importOriginal) => ({ ...(await importOriginal<object>()), ...api }))
 vi.mock('@/utils/log', () => ({ log: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } }))
 
@@ -217,6 +220,28 @@ describe('Voice Accuracy: the engines and the run say what to do', () => {
     expect(limits).toContain('At most 500 compared recordings')
     expect(limits).toContain('the oldest comparison is dropped')
     expect(limits).toContain('once it is off, they follow that setting again')
+    expect(limits).toContain('the ones you edited before sending last')
+  })
+
+  it('counts the edited dictations kept and downloads them as one file', async () => {
+    api.fetchCompareSummary.mockResolvedValue({ ...SUMMARY, editedTakes: 3 })
+    const file = new Blob(['{"id":"rec-1"}\n'], { type: 'application/x-ndjson' })
+    api.fetchComparePairs.mockResolvedValue(file)
+    saved.files.length = 0
+    await render()
+    expect(q('va-pairs')!.textContent).toContain('Edited dictations kept: 3')
+    const button = q('va-pairs-download') as HTMLButtonElement
+    expect(button.textContent).toContain('Download pairs')
+    expect(button.disabled).toBe(false)
+    await act(async () => { button.dispatchEvent(new window.Event('click', { bubbles: true })) })
+    expect(api.fetchComparePairs).toHaveBeenCalledTimes(1)
+    expect(saved.files).toEqual([{ blob: file, name: 'walnut-dictation-pairs.jsonl' }])
+  })
+
+  it('an older server without the count shows none kept, with nothing to download', async () => {
+    await render()
+    expect(q('va-pairs')!.textContent).toContain('Edited dictations kept: 0')
+    expect((q('va-pairs-download') as HTMLButtonElement).disabled).toBe(true)
   })
 })
 

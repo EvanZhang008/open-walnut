@@ -6,6 +6,7 @@
  * write chain; nothing outside them imports it.
  */
 
+import type { SentDictation } from './stt/dictation-ids.js';
 import { readJsonFile, writeJsonFile } from '../utils/fs.js';
 import { FileLockTimeoutError, withFileLock } from '../utils/file-lock.js';
 import { SESSION_QUEUE_FILE } from '../constants.js';
@@ -110,6 +111,12 @@ export interface QueuedMessage {
    * rows written without a source and by older versions: nothing is folded then.
    */
   sentBy?: 'person' | 'agent';
+  /**
+   * A person's send: the recordings dictated into it and the composer's own text (stt/dictation-ids.ts),
+   * kept with the row so every later event of it names them (Voice Accuracy pairs them exactly).
+   * Absent on every other row and on rows of older versions.
+   */
+  dictation?: SentDictation;
   /**
    * A person sent it (the composer, the phone, the `walnut` CLI, a plan button),
    * or a leader answering its worker's question: delivering it answers a pending

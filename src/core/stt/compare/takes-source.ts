@@ -76,3 +76,19 @@ export async function takeAudioPath(ref: AudioRef): Promise<{ path: string; form
   const found = await voiceArchive.audioPath(ref.id).catch(() => null)
   return found ? { path: found.path, format: found.record.format } : null
 }
+
+/** The engine and model that made a take's text at the time, as its recording recorded them. */
+export async function inUseEngineOf(ref: AudioRef): Promise<{ engine?: string; model?: string }> {
+  if (ref.kind === 'recording') {
+    const { getRecordingMeta } = await import('../recordings.js')
+    const meta = await getRecordingMeta(ref.id).catch(() => null)
+    const engine = meta?.result?.engine ?? meta?.engine
+    const model = meta?.result?.model
+    return { ...(engine ? { engine } : {}), ...(model ? { model } : {}) }
+  }
+  const { voiceArchive } = await import('../voice-archive.js')
+  const record = await voiceArchive.get(ref.id).catch(() => null)
+  const engine = record?.asr?.engine
+  const model = record?.asr?.model
+  return { ...(engine ? { engine } : {}), ...(model ? { model } : {}) }
+}

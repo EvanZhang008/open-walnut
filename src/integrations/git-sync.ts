@@ -995,8 +995,9 @@ const GITIGNORE_CONTENT = withPluginFilesBlockLast(GITIGNORE_BODY);
  *    pid and instance id). Tracked since 2026-08-18, so the other box read the
  *    Mac's running editor as its own. Not a credential (the editor binds loopback
  *    with no auth, and the id only detects a stale URL), just machine-local.
- *  - stt-compare/: Voice Accuracy's compared takes. Each points at a recording
- *    of this machine (which never syncs), so another box could not use it.
+ *  - stt-compare/: Voice Accuracy's compared takes, with the text the user sent
+ *    after each dictation. Each points at a recording of this machine (which
+ *    never syncs), so another box could not use it.
  *
  * These are also actively untracked (see ensureMachineLocalUntracked): being
  * gitignored on THIS box while still tracked in the index is the dangerous

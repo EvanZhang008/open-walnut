@@ -181,8 +181,8 @@ export function takeCell(take: CompareTake, engine: { id: string; after?: string
 }
 
 /** The recording's own words for its row, and where they come from: what was sent, else what Walnut wrote then. */
-export function takeText(take: CompareTake): { source: typeof SENT_SOURCE | 'Engine text'; text: string } {
-  if (take.sentText !== undefined) return { source: SENT_SOURCE, text: take.sentText };
+export function takeText(take: CompareTake): { source: typeof SENT_SOURCE | typeof SENT_EXACT_SOURCE | 'Engine text'; text: string } {
+  if (take.sentText !== undefined) return { source: sentExact(take) ? SENT_EXACT_SOURCE : SENT_SOURCE, text: take.sentText };
   return { source: 'Engine text', text: take.inUseText ?? take.results['in-use']?.text ?? '' };
 }
 
@@ -274,14 +274,21 @@ const clock = (iso: string | undefined) => {
   return d && !Number.isNaN(d.getTime()) ? d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
 };
 
+/** The send named this recording (the composer it was dictated into remembered it): a fact, not a guess. */
+export function sentExact(take: Pick<CompareTake, 'sentMatch'>): boolean {
+  return take.sentMatch === 'recording-id';
+}
+
 /**
- * The heading of what was sent: a guess by text, never stated as fact. Walnut pairs a person's
- * send with a dictation by how alike their texts are, within 15 minutes, not by the recording.
+ * The heading of what was sent. Paired by recording id it is what was sent; paired by how alike
+ * the texts are (a send that named no recording, within 15 minutes) it is a guess, never stated as fact.
  */
-export function sentHeading(take: Pick<CompareTake, 'sentAt'>): string {
+export function sentHeading(take: Pick<CompareTake, 'sentAt' | 'sentMatch'>): string {
+  if (sentExact(take)) return 'What you sent';
   const at = clock(take.sentAt);
   return `Probably what you sent (matched by text${at ? `, ${at}` : ''})`;
 }
 
-/** The row preview's source: what was probably sent, else what Walnut wrote then. */
+/** The row preview's source: what was probably sent (or, paired by recording, sent), else what Walnut wrote then. */
 export const SENT_SOURCE = 'Probably sent';
+export const SENT_EXACT_SOURCE = 'Sent';

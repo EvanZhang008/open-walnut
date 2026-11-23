@@ -557,6 +557,9 @@ export interface SessionMessageQueuedEvent {
   /** Held for the session's next wake (sessions/cold-hold.ts): why, and when it goes at the latest. */
   heldReason?: string;
   heldRetryAt?: string;
+  /** A person's send: the recordings dictated into it and the box's own text (stt/dictation-ids.ts), for Voice Accuracy's exact pairing. */
+  dictationIds?: string[];
+  dictationText?: string;
 }
 
 /** ACP dialect: ≈ session/request_permission (request side). Previously emitted

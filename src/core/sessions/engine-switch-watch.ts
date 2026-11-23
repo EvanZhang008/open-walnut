@@ -204,7 +204,7 @@ async function resumeSwitches(): Promise<number> {
           // The task is on the engine its user picked now: a fallback start's note is done.
           engine_fallback: null,
           engine_switch: {
-            ...sw, state: 'done', message: undefined, display_text: undefined, held_rows: undefined, error: undefined, interrupted: undefined,
+            ...sw, state: 'done', message: undefined, display_text: undefined, dictation: undefined, held_rows: undefined, error: undefined, interrupted: undefined,
             resume_session_id: undefined, resume_message: undefined, session_id: to, ...(sw.resume_session_id === to ? { resumed: true } : {}),
           },
         }, { source: 'engine-switch', emitEvent: true });

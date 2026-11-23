@@ -60,7 +60,7 @@ beforeEach(() => { state.config = { experimental: { stt_compare: true }, stt: { 
 describe('/api/stt/compare', () => {
   it('every route answers 409 experimental_off while the experiment is off', async () => {
     state.config = {}
-    for (const [method, path] of [['get', '/summary'], ['get', '/takes'], ['get', `/takes/rec-${REC}`], ['get', `/takes/rec-${REC}/audio`], ['get', '/engines'], ['put', '/settings'], ['post', '/run'], ['get', '/run'], ['post', `/takes/rec-${REC}/judge`], ['post', '/import-bench']] as const) {
+    for (const [method, path] of [['get', '/summary'], ['get', '/pairs.jsonl'], ['get', '/takes'], ['get', `/takes/rec-${REC}`], ['get', `/takes/rec-${REC}/audio`], ['get', '/engines'], ['put', '/settings'], ['post', '/run'], ['get', '/run'], ['post', `/takes/rec-${REC}/judge`], ['post', '/import-bench']] as const) {
       const res = await request(app)[method](`/api/stt/compare${path}`).send({})
       expect(res.status, `${method} ${path}`).toBe(409)
       expect(res.body).toEqual({ error: 'experimental_off' })
@@ -247,5 +247,35 @@ describe('/api/stt/compare', () => {
     const res = await request(app).post(`/api/stt/compare/takes/rec-${REC}/judge`)
     expect(res.status).toBe(409)
     expect(res.body).toEqual({ error: 'needs_consent', engine: 'judge' })
+  })
+
+  it('exports the edited dictations, one JSON line each, and counts them in the summary; a shared text or one read off the message is no pair', async () => {
+    const dir = join(constants.home, 'tmp', 'stt-recordings')
+    await mkdir(dir, { recursive: true })
+    const EDITED = '2026-11-21T13-00-00-000Z'
+    const PLAIN = '2026-11-21T13-01-00-000Z'
+    const SHARED = '2026-11-21T13-02-00-000Z'
+    const FROM_MESSAGE = '2026-11-21T13-03-00-000Z'
+    for (const id of [EDITED, PLAIN, SHARED, FROM_MESSAGE]) {
+      await writeFile(join(dir, `${id}.webm`), Buffer.from('audio'))
+      await writeFile(join(dir, `${id}.json`), JSON.stringify({ timestamp: '2026-11-21T13:00:00.000Z', format: 'webm', engine: 'mlx', result: { text: 'we ship on friday', durationMs: 5, engine: 'mlx', model: 'qwen3-asr' } }))
+    }
+    const skeleton = (id: string) => ({ source: 'web' as const, at: '2026-11-21T13:00:00.000Z', format: 'webm', audioRef: { kind: 'recording' as const, id }, inUseText: 'we ship on friday' })
+    await compareStore.upsert(`rec-${EDITED}`, { ...skeleton(EDITED), sentText: 'We ship on Friday.\n', sentMatch: 'recording-id', sentSimilarity: 1, edited: true })
+    await compareStore.upsert(`rec-${PLAIN}`, { ...skeleton(PLAIN), sentText: 'we ship on friday', sentMatch: 'recording-id' })
+    // Two takes in one message: the text is both takes' and more, no one take's transcript.
+    await compareStore.upsert(`rec-${SHARED}`, { ...skeleton(SHARED), sentText: 'We ship on Friday. And Monday too.', sentMatch: 'recording-id', sentShared: true, edited: true })
+    // An older client named no box text: the message may still carry Walnut's framing.
+    await compareStore.upsert(`rec-${FROM_MESSAGE}`, { ...skeleton(FROM_MESSAGE), sentText: 'We ship on Friday!', sentMatch: 'recording-id', sentFrom: 'message', edited: true })
+    const res = await request(app).get('/api/stt/compare/pairs.jsonl')
+    expect(res.status).toBe(200)
+    expect(res.headers['content-type']).toMatch(/application\/x-ndjson/)
+    expect(res.headers['content-disposition']).toMatch(/attachment/)
+    const lines = res.text.split('\n').filter(Boolean).map((l) => JSON.parse(l))
+    expect(lines).toEqual([{
+      id: `rec-${EDITED}`, at: '2026-11-21T13:00:00.000Z', audioPath: join(dir, `${EDITED}.webm`),
+      engineText: 'we ship on friday', sentText: 'We ship on Friday.\n', engine: 'mlx', model: 'qwen3-asr',
+    }])
+    expect((await request(app).get('/api/stt/compare/summary')).body.editedTakes).toBe(1)
   })
 })

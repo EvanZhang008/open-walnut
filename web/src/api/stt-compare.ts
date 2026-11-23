@@ -63,6 +63,8 @@ export interface CompareSummary {
   best?: string;
   byDay: CompareDay[];
   judge: { state: CompareEngineState; detail?: string };
+  /** Dictations edited before they were sent, kept as training pairs (older servers: absent). */
+  editedTakes?: number;
 }
 
 export interface CompareResult { text?: string; error?: string; ms: number; at: string; model?: string }
@@ -73,12 +75,15 @@ export interface CompareTake {
   at: string;
   durationSec?: number;
   format: string;
-  /** What the user probably sent: paired by text similarity within 15 minutes, never by recording id. */
+  /** What the user sent after this take. */
   sentText?: string;
   sentAt?: string;
-  sentMatch?: 'text-similarity';
-  /** That pairing's similarity, 0 to 1. */
+  /** `recording-id`: the send named this recording (exact); `text-similarity`: a guess by text within 15 minutes. */
+  sentMatch?: 'text-similarity' | 'recording-id';
+  /** A similarity pairing's similarity, 0 to 1. */
   sentSimilarity?: number;
+  /** Paired by recording id, and what was sent is not the engine's text: a training pair. */
+  edited?: boolean;
   inUseText?: string;
   results: Record<string, CompareResult>;
   reference?: { text: string; judge: string; at: string };
@@ -137,6 +142,9 @@ export const startCompareRun = (req: { last?: number; takeIds?: string[]; engine
 export const judgeCompareTake = (id: string) => apiPost<CompareProgress>(`${BASE}/takes/${encodeURIComponent(id)}/judge`, {}, quiet);
 /** Removes the compared takes, the stored key and the pane's settings (works with the experiment off). */
 export const deleteCompareData = () => apiPost<CompareEngines>(`${BASE}/delete-data`, {}, quiet);
+
+/** The edited dictations, one JSON line each (audio path, engine text, sent text), for the user to keep. */
+export const fetchComparePairs = () => apiGetBlob(`${BASE}/pairs.jsonl`, { timeoutMs: 120_000 });
 
 /** The take's recording, for the user's own Play button (never fetched before the click); null when it is no longer kept. */
 export async function fetchCompareAudio(id: string, signal?: AbortSignal): Promise<Blob | null> {

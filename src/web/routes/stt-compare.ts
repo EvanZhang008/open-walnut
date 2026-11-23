@@ -4,7 +4,9 @@
  * nothing is kept, run or uploaded then (what was kept before stays until the
  * pane's Delete comparison data removes it).
  *
- *   GET  /summary?engines=a,b     per engine over the shared takes, and by day
+ *   GET  /summary?engines=a,b     per engine over the shared takes, by day, and the edited dictations kept
+ *   GET  /pairs.jsonl             the edited dictations, one JSON line each; only messages made from
+ *                                 one dictation, with the composer's own text (compare/pairs.ts)
  *   GET  /takes?limit&cursor      takes, newest first, with run states
  *   GET  /takes/:id               one take with each engine's word diff against the reference
  *   GET  /takes/:id/audio         the recording, for the user's own Play button
@@ -32,6 +34,7 @@ import { BenchFormatError, importBench } from '../../core/stt/compare/import-ben
 import { judgeAgain, runComparison, runProgress, runStatesOf } from '../../core/stt/compare/runner.js'
 import { wordDiff } from '../../core/stt/compare/score.js'
 import { compareFlag, compareSection, deleteCompareData, engineEnabled, elevenLabsKey, elevenLabsKeyFrom, uploadAllowed, writeCompareSettings } from '../../core/stt/compare/settings.js'
+import { isTrainingPair, trainingPairs } from '../../core/stt/compare/pairs.js'
 import { compareStore, validTakeId } from '../../core/stt/compare/store.js'
 import { scoredEngines, summarize } from '../../core/stt/compare/summary.js'
 import { takeAudioPath } from '../../core/stt/compare/takes-source.js'
@@ -60,8 +63,28 @@ sttCompareRouter.get('/summary', async (req: Request, res: Response, next: NextF
       ? req.query.engines.split(',').filter((id) => COMPARE_ENGINES.some((e) => e.id === id))
       : COMPARE_ENGINES.filter((e) => engineEnabled(config, e.id) && scored.has(e.id)).map((e) => e.id)
     const judge = await JUDGE.status(config)
-    res.json({ ...summarize(takes, engines), judge: { state: judge.state, ...(judge.detail ? { detail: judge.detail } : {}) } })
+    res.json({
+      ...summarize(takes, engines), judge: { state: judge.state, ...(judge.detail ? { detail: judge.detail } : {}) },
+      editedTakes: takes.filter(isTrainingPair).length,
+    })
   } catch (err) { next(err) }
+})
+
+sttCompareRouter.get('/pairs.jsonl', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.set({ 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Content-Disposition': 'attachment; filename="walnut-dictation-pairs.jsonl"', 'Cache-Control': 'no-store' })
+    for await (const pair of trainingPairs()) {
+      if (res.destroyed) return // the download was dropped: nothing more to write
+      // Waits for room, or for the download to be dropped (a close never drains).
+      if (!res.write(`${JSON.stringify(pair)}\n`)) {
+        await new Promise<void>((resolve) => {
+          const done = () => { res.off('drain', done); res.off('close', done); resolve() }
+          res.once('drain', done); res.once('close', done)
+        })
+      }
+    }
+    res.end()
+  } catch (err) { if (!res.headersSent) next(err); else res.end() }
 })
 
 sttCompareRouter.get('/takes', async (req: Request, res: Response, next: NextFunction) => {

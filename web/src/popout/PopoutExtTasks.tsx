@@ -20,10 +20,12 @@ import { useApprovals } from '@/components/approvals/approvals-store';
 import { AgentText } from '@/components/common/AgentText';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { AnswerBox } from '@/components/common/AnswerBox';
+import type { BoxMicHandle } from '@/components/common/BoxMic';
 import { useImageAttachments } from '@/components/common/image-attachments';
 import { TasksProvider, useTasksContext } from '@/contexts/TasksContext';
 import { NotificationProvider } from '@/contexts/notifications';
 import { useDraft } from '@/hooks/useDraft';
+import { dictationField } from '@/utils/dictation-takes';
 import { draftKey } from '@/utils/drafts';
 import { log } from '@/utils/log';
 import { resolveTaskSessionId } from '@/utils/session-status';
@@ -267,13 +269,17 @@ function TaskReply({ task, line, rowState, reply, onChange }: { task: Task; line
   // The words wait in the draft store and pictures go with them, as in the chat.
   const draft = useDraft(sessionId ? draftKey('ext-task-reply', task.id) : null);
   const pictures = useImageAttachments();
+  const mic = useRef<BoxMicHandle | null>(null);
   const send = async (words: string) => {
     const message = words.trim();
     const images = pictures.images;
     if ((!message && images.length === 0) || !sessionId || state === 'sending') return;
     onChange({ state: 'sending' });
+    // The recordings dictated into the box whose words go now: the send names them.
+    const dictation = mic.current?.claimDictation(message);
     try {
-      await sendSessionMessage({ sessionId, message, ...(await buildImageRefsPayload(images)) });
+      await sendSessionMessage({ sessionId, message, ...(await buildImageRefsPayload(images)), ...dictationField(dictation?.dictation) });
+      dictation?.settle();
       draft.clear(draft.key, words);
       pictures.clear();
       onChange({ state: 'sent', words: message.length > 120 ? `${message.slice(0, 119)}…` : message });
@@ -298,7 +304,7 @@ function TaskReply({ task, line, rowState, reply, onChange }: { task: Task; line
         <AnswerBox value={draft.text} onChange={(t) => { draft.setText(t); if (state === 'sent' || state === 'error') onChange({ state: '' }); }}
           onSubmit={(t) => void send(t)} sendLabel="Send" sending={state === 'sending'} draftKey={draft.key}
           placeholder={`Reply to ${taskTitleOf(task).slice(0, 40)}`} minRows={2} testId="ext-task-input" sendTestId="ext-task-send"
-          inputClassName="ext-task-input" pictures={pictures} />
+          inputClassName="ext-task-input" pictures={pictures} micRef={mic} />
         <div className="ext-task-actions">
           <button type="button" className="btn btn-sm" onClick={() => openTask(task.id)}>Open in Walnut</button>
           <FocusButton task={task} />

@@ -3,14 +3,17 @@
  * <WALNUT_HOME>/stt-compare/takes/<takeId>.json, written atomically (tmp +
  * rename). Machine-local like the recordings it points at (never synced). At
  * most MAX_TAKES are kept; past that the entry touched longest ago goes (its
- * audio is the recording stores' business, never touched here). The entry just
- * written is never the one that goes.
+ * audio is the recording stores' business, never touched here). A training pair
+ * (training-pair.ts: the audio, the engine's text and what the user sent) goes
+ * only once no other entry is left to drop. The entry just written is
+ * never the one that goes.
  *
  * This process is the only writer, so the entries are held in memory after the
  * first read; every write goes through one queue per store.
  */
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { isTrainingPair } from './training-pair.js'
 import type { AudioRef, CompareTake, EngineResult } from './types.js'
 
 export const MAX_TAKES = 500
@@ -110,13 +113,16 @@ export class CompareStore {
   /**
    * Create or merge an entry. `results` merge per engine (an engine's entry
    * set to undefined is removed); every other field present replaces. A new
-   * entry needs `source`, `at`, `format` and `audioRef`.
+   * entry needs `source`, `at`, `format` and `audioRef`. `unless`, judged in the
+   * same queue turn as the write: when it holds for the entry as it is, nothing is
+   * written and the entry is returned as it is.
    */
-  upsert(id: string, patch: TakePatch): Promise<CompareTake> {
+  upsert(id: string, patch: TakePatch, unless?: (prior: CompareTake) => boolean): Promise<CompareTake> {
     if (!validTakeId(id)) return Promise.reject(new Error(`invalid take id: ${id}`))
     return this.queue(async () => {
       const map = await this.load()
       const prior = map.get(id)
+      if (prior && unless?.(prior)) return structuredClone(prior)
       if (!prior && (!patch.source || !patch.at || !patch.format || !patch.audioRef)) throw new Error(`take ${id} is new and lacks its source`)
       const { results, ...rest } = patch
       const merged: CompareTake = { ...(prior ?? { id, results: {} }), ...rest, id } as CompareTake
@@ -129,15 +135,20 @@ export class CompareStore {
       // Touched: to the end of the order.
       map.delete(id)
       map.set(id, merged)
-      if (!prior && map.size > MAX_TAKES) await this.dropLeastTouched(map)
+      if (!prior && map.size > MAX_TAKES) await this.dropLeastTouched(map, id)
       return structuredClone(merged)
     })
   }
 
-  /** The entries touched longest ago go, until MAX_TAKES are left; the last one touched never does. */
-  private async dropLeastTouched(map: Map<string, CompareTake>): Promise<void> {
+  /**
+   * The entries touched longest ago go, until MAX_TAKES are left: unedited ones first, edited ones
+   * (training pairs) only after every unedited one went; `keep`, the one just written, never does.
+   */
+  private async dropLeastTouched(map: Map<string, CompareTake>, keep: string): Promise<void> {
     const dir = await this.dirOf()
-    const over = [...map.keys()].slice(0, Math.max(0, map.size - MAX_TAKES))
+    const order = [...map.values()].filter((t) => t.id !== keep)
+    const ranked = [...order.filter((t) => !isTrainingPair(t)), ...order.filter(isTrainingPair)]
+    const over = ranked.slice(0, Math.max(0, map.size - MAX_TAKES)).map((t) => t.id)
     for (const id of over) {
       await rm(join(dir, `${id}.json`), { force: true })
       map.delete(id)

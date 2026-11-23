@@ -29,6 +29,7 @@
  * not one only a person can fix (a deleted folder or session record, too large).
  */
 
+import { dictationEventFields, type SentDictation } from './stt/dictation-ids.js';
 import { noteRecentHumanMessage } from './recent-task-touch.js';
 import { log } from '../logging/index.js';
 import { lineUuidFor, noteLineCarries, splitBatchAtUuid } from '../providers/batch-uuid.js';
@@ -137,6 +138,8 @@ export async function enqueueMessage(
   sessionId: string,
   message: string,
   opts?: { id?: string; userUuid?: string; stopFence?: string | null; relayTaken?: boolean; lineUuid?: string; closesPrompt?: boolean; sentBy?: 'person' | 'agent'; recentText?: string; heldReason?: string;
+    /** A person's send: its dictations (QueuedMessage.dictation). */
+    dictation?: SentDictation;
     /** With heldReason: the readiness kind the row waits on (QueuedMessage.waitsFor). */
     waitsFor?: string;
     /** With heldReason: a cold hold's send (QueuedMessage.coldSend). */
@@ -177,6 +180,7 @@ export async function enqueueMessage(
     ...(inherited ? { lineUuid: inherited, lineTries: 1 } : {}),
     ...(opts?.closesPrompt ? { closesPrompt: true as const } : {}),
     ...(opts?.sentBy ? { sentBy: opts.sentBy } : {}),
+    ...(opts?.dictation?.ids.length ? { dictation: opts.dictation } : {}),
   };
   // Every row is on disk (synced) before its sender hears "queued" (2026-11-23, the user: a
   // message is never lost, a restart or crash included). A row only the cache held, flushed a
@@ -351,6 +355,8 @@ export async function sendMessageToSession(
     hinted?: boolean;
     /** Asked right before the row is stored: false drops the send (SendNoLongerWantedError). */
     stillWanted?: () => boolean;
+    /** A person's send: the recordings dictated into it and the box's text (stt/dictation-ids.ts), kept on its row. */
+    dictation?: SentDictation;
     /**
      * Told the moment the row is on disk (or met the same id already queued), before anything else
      * this send waits for: the send is durable from here. A scheduled routine marks its run sent
@@ -520,6 +526,7 @@ export async function sendMessageToSession(
       ...(opts?.lineUuid ? { lineUuid: opts.lineUuid } : {}),
       ...(opts?.closesPrompt || isPersonSendSource(opts?.source) ? { closesPrompt: true } : {}),
       ...(queueSentBy(opts?.source) ? { sentBy: queueSentBy(opts?.source) } : {}),
+      ...(opts?.dictation && queueSentBy(opts?.source) === 'person' ? { dictation: opts.dictation } : {}),
       ...(heldForMove || heldForTurn ? { heldReason: heldForMove ?? heldForTurn } : {}),
       ...(heldCold ? { heldReason: heldCold, coldSend: { source: opts?.source ?? 'unknown', ...(opts?.endsWait ? { endsWait: true as const } : {}) } } : {}),
     });
@@ -609,6 +616,9 @@ export async function sendMessageToSession(
     // The send's user line: the proof the row is that send's when its answer is lost (web api/session-send.ts).
     ...(msg.userUuid ? { userUuid: msg.userUuid } : {}),
     enqueuedAt: msg.enqueuedAt,
+    // Voice Accuracy pairs the box's text with these recordings exactly (stt/learn-from-sends.ts). From
+    // the row: a resend that collapses onto it, hours later, names them too.
+    ...dictationEventFields(msg.dictation),
     ...(heldShown?.heldReason ? { heldReason: heldShown.heldReason, ...(heldShown.heldRetryAt ? { heldRetryAt: heldShown.heldRetryAt } : {}) } : {}),
   }, ['main-ai'], { source });
 
@@ -857,6 +867,8 @@ export async function editMessage(
   sessionId: string, messageId: string, newText: string, opts?: { onlyUnsent?: boolean },
 ): Promise<boolean> {
   let stored: string | undefined;
+  let repaired: SentDictation | undefined;
+  let forget: { dictation: SentDictation; message: string } | undefined;
   let droppedBrief = false;
   // An edit from a browser under automation is an agent's words, whoever's row it edits
   // (sessions/automated-client.ts): framed, and it no longer answers the person's prompt.
@@ -876,12 +888,27 @@ export async function editMessage(
     // An App's AI-only brief on the row stays as it was: the editor saw its fold (lib/ai-only-envelope.ts).
     // Its pictures, files and Walnut's notices in front stay too: the queue card shows only the words
     // (sessions/queue-edit-frame.ts).
+    const priorMessage = msg.message;
     if (newText.startsWith('/') && hasAiOnly(msg.message)) droppedBrief = !handOnBrief(queue, msg, queue.indexOf(msg));
     msg.message = newText.startsWith('/') ? newText : replaceHintedText(msg.message, keepAiOnly(msg.message, keepLeadingFrame(msg.message, newText)));
     if (automated) { msg.sentBy = 'agent'; delete msg.closesPrompt; }
+    // Its dictations pair with the words that go now: the person's edit is the box text; an agent's
+    // words are no one's dictation, and the person's old pairing goes.
+    if (msg.dictation) {
+      const before = { dictation: msg.dictation, message: priorMessage };
+      if (automated) { forget = before; delete msg.dictation; }
+      // The queue card edits the composed text: a reference tag in it is Walnut's, not the person's
+      // words, so such an edit pairs from the message (never exported).
+      else { msg.dictation = { ids: msg.dictation.ids, ...(REF_TAG.test(newText) ? {} : { text: newText }) }; repaired = msg.dictation; }
+    }
     stored = msg.message;
     return true;
   });
+  if (ok && forget) forgetPairing(forget);
+  if (ok && repaired && stored !== undefined) {
+    const d = repaired, message = stored;
+    void import('./stt/learn-from-sends.js').then((m) => m.noteSentWithDictations(message, d)).catch(() => {});
+  }
   // A command goes to the CLI raw: the brief that rode the row is owed again (sessions/app-brief.ts).
   if (ok && droppedBrief) forgetBriefsTold(sessionId);
   // The "Prompt is too long" recovery resends a row as it reaches the session: the edited words.
@@ -892,12 +919,21 @@ export async function editMessage(
   return ok;
 }
 
+/** A reference tag Walnut composed into a message (<task-ref/>, <session-ref/>, ...). */
+const REF_TAG = /<[a-z]+(?:-[a-z]+)*-ref\b/;
+
+/** Voice Accuracy forgets what it paired with a row's dictations: their words did not go as paired. */
+function forgetPairing({ dictation, message }: { dictation: SentDictation; message: string }): void {
+  void Promise.all([import('./stt/compare/sent-text.js'), import('./stt/learn-from-sends.js')])
+    .then(([m, l]) => m.forgetSentByIds(dictation.ids, dictation.text ?? l.withoutHints(message))).catch(() => {});
+}
+
 /**
  * Delete a pending or parked message ("Discard"). Returns true on success.
  * Returns false if the message is missing or already processing (in flight —
  * deleting it would race the delivery points' own scoped removal).
  */
-export async function deleteMessage(sessionId: string, messageId: string): Promise<boolean> {
+export async function deleteMessage(sessionId: string, messageId: string, opts?: { discarded?: boolean }): Promise<boolean> {
   const { switchContextIn, keepSwitchContext, dropKeptSwitchContext } = await import('./sessions/engine-switch-io.js');
   // The engine switch's carried context on this row, with no other queued row to take it: kept on
   // the session record BEFORE the row goes, so a send in between still carries it (a copy twice is
@@ -909,6 +945,7 @@ export async function deleteMessage(sessionId: string, messageId: string): Promi
     ? await keepSwitchContext(sessionId, early) : false;
   let keep: string | null = null;
   let droppedBrief = false;
+  let discarded: { dictation: SentDictation; message: string } | undefined;
   const deleted = await mutateStore((s) => {
     const queue = s.queues[sessionId];
     if (!queue) return false;
@@ -918,6 +955,7 @@ export async function deleteMessage(sessionId: string, messageId: string): Promi
     if (queue[idx].status === 'processing') return false;
 
     const [removed] = queue.splice(idx, 1);
+    if (removed.dictation) discarded = { dictation: removed.dictation, message: removed.message };
     // Spliced out: a row now at `idx` or later stood after it.
     if (hasAiOnly(removed.message)) droppedBrief = !handOnBrief(queue, removed, idx - 0.5);
     // The engine switch's carried context rode this row: the next queued row takes it, else the
@@ -938,6 +976,9 @@ export async function deleteMessage(sessionId: string, messageId: string): Promi
     return true;
   }, false, true);
   if (deleted && keep && !keptEarly) await keepSwitchContext(sessionId, keep);
+  // Discarded by the person, never sent: Voice Accuracy forgets the text it paired with its
+  // dictations. Other removals (its words carried into a new start, a notice dropped) leave it.
+  if (deleted && discarded && opts?.discarded) forgetPairing(discarded);
   // The brief that rode the removed row never reached the model: the next message carries it again.
   if (deleted && droppedBrief) forgetBriefsTold(sessionId);
   if (keptEarly && (!deleted || !keep)) await dropKeptSwitchContext(sessionId);

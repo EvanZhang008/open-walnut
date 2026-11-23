@@ -19,6 +19,7 @@ import { adoptFailedDraft, bindDraftOrigin, forgetFailedDraft, settleRetriedDraf
 import { newUserUuid } from '@/utils/thread-tree';
 import type { RowWithSendUuids } from '@/utils/send-uuids';
 import { onKept, sendSessionMessage, type SendAck } from '@/api/session-send';
+import { dictationField } from '@/utils/dictation-takes';
 import { applyLateKept, composerSendError, shownSendError, type SendErrorState } from '@/components/sessions/send-acceptance';
 import { dueForAutoRetry, expiredAutoRetry, nextAutoRetryExpiry, sameWaitingSend, waitsForConnectionAfter } from './send-auto-retry';
 
@@ -49,8 +50,8 @@ export interface SessionSendOptions {
   switchEngine?: { engine: string; model?: string; effort?: string };
   /** Sent from this thread's Follow up on an Org node's Threads: the message is filed under it. */
   threadId?: string;
-  /** The composer draft the words came from. Kept on the bubble only, never sent: a Retry
-   *  accepted after a failed send settles that draft (utils/drafts.ts settleRetriedDraft). */
+  /** The composer draft the words came from. Kept on the bubble: a Retry accepted after a failed
+   *  send settles that draft (utils/drafts.ts settleRetriedDraft). Only its `dictation` (ids and box text) is sent. */
   draftOrigin?: DraftOrigin;
 }
 
@@ -489,7 +490,8 @@ export function useSessionSend(activeSessionId: string | null, options?: {
         ...(opts?.switchEngine ? { switchEngine: opts.switchEngine } : {}),
         ...(opts?.threadId ? { threadId: opts.threadId } : {}),
       };
-      const res = await sendSessionMessage(rpcPayload as typeof rpcPayload & { sessionId: string; message: string });
+      // The recordings dictated into the draft and its own text: Voice Accuracy pairs them exactly.
+      const res = await sendSessionMessage({ ...rpcPayload, ...dictationField(opts?.draftOrigin?.dictation) } as typeof rpcPayload & { sessionId: string; message: string });
       if (followRedirect(res, tempId, sessionId)) return true;
       if (res?.answeredLetter) {
         // His words answered the letter its thread holds: the session gets them as its answer.
@@ -576,7 +578,7 @@ export function useSessionSend(activeSessionId: string | null, options?: {
         ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
         ...(opts?.hints ? { hints: opts.hints } : {}),
       };
-      const res = await sendSessionMessage(rpcPayload as typeof rpcPayload & { sessionId: string; message: string });
+      const res = await sendSessionMessage({ ...rpcPayload, ...dictationField(opts?.draftOrigin?.dictation) } as typeof rpcPayload & { sessionId: string; message: string });
       if (followRedirect(res, tempId, sessionId)) return true;
       if (res?.messageId) adoptAnswer(tempId, res);
       return true;
@@ -637,6 +639,7 @@ export function useSessionSend(activeSessionId: string | null, options?: {
         ...(failedMsg.userUuid ? { userUuid: failedMsg.userUuid } : {}),
         ...(failedMsg.requestedHints ? { hints: failedMsg.requestedHints } : {}),
         ...(failedMsg.threadId ? { threadId: failedMsg.threadId } : {}),
+        ...dictationField(failedMsg.draftOrigin?.dictation),
       }));
     sendWith(failedMsg.images)
       .catch((e: Error) => {

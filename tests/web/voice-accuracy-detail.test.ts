@@ -206,6 +206,23 @@ describe('Voice Accuracy: an opened recording', () => {
     expect(q('va-engine-text')!.textContent).toBe('the second one is Tailscale ')
   })
 
+  it('a send paired by its recording reads as what was sent, with no "Probably"', async () => {
+    const d = await detailOf()
+    Object.assign(d, { sentText: 'the second one is Tailscale.', sentAt: '2026-11-18T10:31:00.000Z', sentMatch: 'recording-id', edited: true })
+    api.fetchCompareTake.mockResolvedValue(d)
+    await open()
+    expect(q('va-show-sent')!.textContent).toBe('Sent')
+    const input = q('va-show-sent')!.querySelector('input')!
+    const setChecked = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), 'checked')?.set
+    await act(async () => {
+      setChecked?.call(input, true)
+      input.dispatchEvent(new win.Event('click', { bubbles: true }))
+    })
+    expect(q('va-sent-heading')!.textContent).toBe('What you sent')
+    expect(q('va-sent-heading')!.getAttribute('title')).toBeNull()
+    expect(q('va-engine-text')!.textContent).toBe('the second one is Tailscale.')
+  })
+
   it('says the recording is no longer available when its audio is gone, and throws nothing', async () => {
     api.fetchCompareAudio.mockResolvedValue(null)
     await open()

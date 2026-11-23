@@ -607,7 +607,7 @@ export async function editSessionQueuedMessage(
 /** Delete a still-pending queued message. */
 export async function deleteSessionQueuedMessage(sessionId: string, messageId: string): Promise<{ ok: true }> {
   const { deleteMessage } = await import('../session-message-queue.js');
-  const ok = await deleteMessage(sessionId, messageId);
+  const ok = await deleteMessage(sessionId, messageId, { discarded: true });
   if (!ok) throw new SessionControlError('Message not deletable (already processing or not found)', 409);
   return { ok: true };
 }

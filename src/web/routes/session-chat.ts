@@ -14,6 +14,7 @@ import { normalizeEngine } from '../../core/agents/engine-registry.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tracker.js'
 import { getSessionPendingPermissions } from '../../core/sessions/session-lifecycle.js'
 import { sendMessageToSession, editMessage, deleteMessage, getQueue, settledLineUuid } from '../../core/session-message-queue.js'
+import { dictationEventFields, dictationOf } from '../../core/stt/dictation-ids.js'
 import { heldRows, PROMPT_HOLD_REASON } from '../../providers/line-consumption.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
 import { prepareHintedSend } from '../../core/hints/hint-send.js'
@@ -128,6 +129,8 @@ export function registerSessionChatRpc(): void {
       throw new Error('session:send userUuid must be a v4 UUID string')
     }
     const userUuid = typeof data.userUuid === 'string' ? data.userUuid : undefined
+    // The recordings dictated into the composer this came from (optional; an older client sends none).
+    const dictation = dictationOf(data)
 
     // Process images: save to disk and embed file paths in the message.
     //
@@ -186,6 +189,7 @@ export function registerSessionChatRpc(): void {
         messageId,
         message: data.message as string,
         source: 'ui',
+        ...dictationEventFields(dictation),
       }, ['main-ai'], { source: 'web-ui' })
 
       return { messageId }
@@ -342,9 +346,18 @@ export function registerSessionChatRpc(): void {
         ...(typeof switchTo.model === 'string' && switchTo.model ? { model: switchTo.model } : {}),
         ...(typeof switchTo.effort === 'string' ? { effort: switchTo.effort as SessionEffort } : {}),
         ...(typeof switchTo.permissionMode === 'string' ? { permissionMode: switchTo.permissionMode as SessionMode } : {}),
+        ...(dictation ? { dictation } : {}),
         source: 'ui', detach: true,
       })
       log.web.info('session:send RPC engine switch', { sessionId: data.sessionId, taskId: record.taskId, engine: switchTo.engine, state: out.state })
+      // It starts a session and queues no message, so its dictations are paired here.
+      // On the leader only, as the listener (a follower's recordings are the leader's to pair).
+      if (dictation) {
+        const [{ noteSentWithDictations }, { isFollower }] = await Promise.all([
+          import('../../core/stt/learn-from-sends.js'), import('../../core/server-role.js'),
+        ])
+        if (!isFollower()) noteSentWithDictations(data.message as string, dictation)
+      }
       return { messageId: out.switchId, engineSwitch: out }
     }
 
@@ -375,6 +388,7 @@ export function registerSessionChatRpc(): void {
       // A Retry of a row that already went out keeps its line's uuid, so the CLI
       // skips it when it did run (the failed bubble only meant "not confirmed").
       ...(retryLine ? { lineUuid: retryLine } : {}),
+      ...(dictation ? { dictation } : {}),
     })
 
     // Advance the edge only AFTER the text is safely queued: a throw above must
@@ -505,7 +519,7 @@ export function registerSessionChatRpc(): void {
     }
 
     const sid = data.sessionId, mid = data.messageId
-    const res = await queuedChange(mid, { change: () => deleteMessage(sid, mid), readQueue: queueOf(sid), isHeld: (id) => heldRows(sid)?.has(id) ?? false })
+    const res = await queuedChange(mid, { change: () => deleteMessage(sid, mid, { discarded: true }), readQueue: queueOf(sid), isHeld: (id) => heldRows(sid)?.has(id) ?? false })
     if (!res.ok) log.web[res.outcome === 'unavailable' ? 'warn' : 'info']('queued message not deleted', { sessionId: sid, messageId: mid, outcome: res.outcome, ...(res.error ? { error: res.error } : {}) })
     return res
   })

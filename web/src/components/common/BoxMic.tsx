@@ -14,16 +14,19 @@
  * writes words that has no mic; tests/web/mic-input-submit-waits.test.ts holds
  * the waiting).
  */
-import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type FocusEvent, type InputHTMLAttributes, type KeyboardEvent, type ReactNode, type Ref, type RefObject } from 'react';
+import { useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState, type FocusEvent, type InputHTMLAttributes, type KeyboardEvent, type ReactNode, type Ref, type RefObject } from 'react';
 import { MicButton, type MicControl } from '@/components/common/MicButton';
 import { ownsMicControl } from '@/components/common/MicPopover';
 import { useSendAfterDictation, type DictationControl } from '@/hooks/useSendAfterDictation';
 import { useBoxDictation } from '@/hooks/useBoxDictation';
+import { claimDictation, forgetDictatedTakes, noteDictatedTake, type DictationClaim } from '@/utils/dictation-takes';
 import '@/styles/box-mic.css';
 
 export interface BoxMicHandle extends DictationControl {
   /** Stop and throw away a live recording, and forget the dictation spans. */
   clear: () => void;
+  /** The recordings dictated into this box whose words its text being sent still holds, for the send to carry (utils/dictation-takes.ts). */
+  claimDictation: (sent: string) => DictationClaim;
 }
 
 export interface BoxMicProps {
@@ -44,11 +47,15 @@ export function BoxMic({ boxRef, text, setText, disabled, size = 'sm', className
   // On the stable `reset`, not the per-render `dictation` object: the handle would otherwise be
   // detached and re-attached on every commit, so a clear() from a layout cleanup found null.
   const reset = dictation.reset;
+  const takesBox = `box-mic:${useId()}`;
   useImperativeHandle(handleRef, () => ({
-    clear: () => { micControl.current?.discard(); reset(); },
+    clear: () => { micControl.current?.discard(); reset(); forgetDictatedTakes(takesBox); },
+    claimDictation: (sent: string) => claimDictation(takesBox, sent),
     busy: () => micControl.current?.busy() ?? false,
     finish: () => micControl.current?.finish() ?? Promise.resolve({ error: null }),
-  }), [reset]);
+  }), [reset, takesBox]);
+  // An emptied box holds none of its dictations any more.
+  useEffect(() => { if (!text.trim()) forgetDictatedTakes(takesBox); }, [text, takesBox]);
   // A box that goes away takes its recording with it.
   useEffect(() => () => micControl.current?.discard(), []);
   // A box moved to another object drops the words still owed to the old one, before they can land.
@@ -77,6 +84,7 @@ export function BoxMic({ boxRef, text, setText, disabled, size = 'sm', className
         onTranscribe={dictation.onTranscribe}
         onDraft={dictation.onDraft}
         onRefine={dictation.onRefine}
+        onTake={(id, words) => noteDictatedTake(takesBox, id, words)}
         controlRef={micControl}
         onSettled={dictation.settled}
         disabled={disabled}
