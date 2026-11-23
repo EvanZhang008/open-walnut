@@ -48,6 +48,7 @@ import { NeedsLeaderError } from './replication/needs-leader.js';
 import { foldTurnSpeed } from './sessions/speed-totals.js';
 import { judgedByHost, mergeHostFacts, ownedPartOf, rowOwnedHere, thisHostKey, writingAsHost } from './sessions/session-row-owner.js';
 import { clearLeaderDrops, leaderDroppedIn, noteLeaderDrop } from './session-channel/leader-drops.js';
+import { noteTurnEndIn, type HostTurnEnd } from './session-channel/turn-ends.js';
 import { _resetRowsSnapshotForTesting, noteSnapshotApplied, orphanedRow, planSnapshot, snapshotIsStale } from './session-channel/rows-snapshot.js';
 import { hasOwnRowListener, noteSessionRowWritten } from './session-channel/row-hook.js';
 import { prepared } from '../lib/sqlite-prepared.js';
@@ -3521,6 +3522,12 @@ export interface HostChannelBatch {
   /** Sessions of the batch's other records: answered in `gone` when the leader deleted them. */
   check?: readonly string[];
   /**
+   * The batch's turn ends that move a task's phase (session-channel/turn-ends.ts): each one of a
+   * host-judged row of this host is marked in the same transaction, so a leader that stops before
+   * its handlers acted sets the phase at its next boot.
+   */
+  turnEnds?: readonly HostTurnEnd[];
+  /**
    * A rows frame: `rows` are every row the host owns now, as of record `at` of its log. A frame at
    * or below what is applied already is skipped whole; a row of that host it no longer names is
    * deleted only when the host names it in `gone`, else kept (session-channel/rows-snapshot.ts).
@@ -3659,6 +3666,14 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
         }
       }
       if (batch.drops?.length) clearLeaderDrops(handle, hostId, batch.drops);
+      if (batch.turnEnds?.length) {
+        const at = Date.now();
+        for (const te of batch.turnEnds) {
+          if (te.seq <= after || gone.has(te.sid)) continue;
+          const row = read(te.sid);
+          if (row && row.host === hostId && judgedByHost(row)) noteTurnEndIn(handle, hostId, te.sid, te.edge, at);
+        }
+      }
       // Never back: a batch an earlier link already passed keeps the position where it is.
       if (!(stored && stored.logId === batch.cursor.logId && stored.seq > batch.cursor.seq)) writeChannelCursor(handle, hostId, batch.cursor);
     }));

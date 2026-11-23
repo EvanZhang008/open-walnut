@@ -26,6 +26,8 @@ import { channelClassOf, sessionIdOf } from './event-classes.js'
 import { EventNames } from '../event-bus.js'
 import { HOST_SESSIONS_PATH, type LiveState } from './host-api.js'
 import { SESSION_JUDGE_CAP } from './switch.js'
+import { turnEndEdgeOf } from '../sessions/turn-end-edge.js'
+import type { HostTurnEnd } from './turn-ends.js'
 import { answerOf, dialOverStream, requestOverStream, type ChannelSocket, type HostCallAnswer } from './leader-links.js'
 import type { HostChannelBatch, HostChannelBatchResult } from '../session-tracker.js'
 import type { SessionRecord } from '../types.js'
@@ -164,6 +166,8 @@ export function createLeaderSide(deps: LeaderSideDeps) {
     const renames: HostChannelBatch['renames'][number][] = []
     const drops: string[] = []
     const check = new Set<string>()
+    // Turn ends that move a task's phase: marked with the rows, so a leader that stops before saying them sets the phase at boot (turn-ends.ts).
+    const turnEnds: HostTurnEnd[] = []
     // A new id a rename of this batch moves a row to: its row is that session's, never a start (R2-H1).
     const renamedTo = new Set<string>()
     for (const r of recs) {
@@ -172,9 +176,13 @@ export function createLeaderSide(deps: LeaderSideDeps) {
       if (r.name === 'row') rows.push({ sid: r.sid, born: d.born === true || d.resync === true, patch: (d.patch ?? {}) as Record<string, unknown>, seq: r.seq })
       else if (r.name === 'rename' && typeof d.from === 'string' && typeof d.to === 'string') { renames.push({ from: d.from, to: d.to, seq: r.seq }); renamedTo.add(d.to) }
       else if (r.name === 'drop') drops.push(r.sid)
-      else check.add(r.sid)
+      else {
+        check.add(r.sid)
+        const edge = channelClassOf(r.name) === 'fact' && sessionIdOf(r.name, r.data) === r.sid ? turnEndEdgeOf(r.name, r.data) : null
+        if (edge) turnEnds.push({ sid: r.sid, edge, seq: r.seq })
+      }
     }
-    const applied = await deps.applyBatch({ hostId, rows, renames, cursor: next, ...(drops.length ? { drops } : {}), ...(check.size ? { check: [...check] } : {}) })
+    const applied = await deps.applyBatch({ hostId, rows, renames, cursor: next, ...(drops.length ? { drops } : {}), ...(check.size ? { check: [...check] } : {}), ...(turnEnds.length ? { turnEnds } : {}) })
     const { written } = applied
     for (const sid of written) after(hostId, 'noteHostJudged', sid, () => deps.noteHostJudged(sid, hostId))
     const wrote = new Set(written)

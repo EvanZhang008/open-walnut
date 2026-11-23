@@ -233,6 +233,10 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
       void side.dropOnHost(host)
     }
   }, { global: true, interest: [EventNames.SESSION_DELETED] })
+  // M3: the turn ends a stop of this leader's left unsaid (committed, the phase not written) set their tasks' phases now, before the links (turn-ends.ts).
+  void import('./turn-ends.js').then((m) => m.reconcileHostTurnEnds({ log: (level, msg, data) => log.session[level](msg, data) })).catch((err: unknown) => {
+    log.session.warn('session channel: the boot reconcile of host turn ends failed', { error: err instanceof Error ? err.message : String(err) })
+  })
   for (const view of hostServer.peekHostServerViews()) look(view)
   log.session.info('session channels: the leader side is on (hosts that name session-judge-v1 run their sessions)')
   return () => {

@@ -445,6 +445,15 @@ permission prompts still name Walnut.
   the daemon keeps one CLI per session (cli-owner), so its send or resume goes on with the same
   conversation. It does not hear the host's facts, so until those CLIs end both sides judge their turns and
   the host's judgement goes unheard. Not tested against a real older release.
+- **A leader that stops between a batch and its facts (M3).** The channel applies a host's records
+  in one transaction and says their facts after it, where the turn-end handlers move the task's
+  phase. A stop in between (a crash, a deploy's restart while the handler waits on its git pull) would
+  leave the task In Progress for good, since the applied records never come again. So the same
+  transaction marks each host-judged session's last phase-moving turn end (`session_turn_ends`,
+  `src/core/session-channel/turn-ends.ts`; the edge comes from `sessions/turn-end-edge.ts`, which the
+  live handler shares), and the leader's boot applies a mark through `applySessionPhase` only when the
+  task's phase has not moved since and the row runs no new turn. A legacy row is never marked; a
+  second boot finds no mark (`tests/core/session-channel/turn-ends-reconcile.test.ts`).
 - **Delete and archive.** Archive is the leader's field and reaches the host in the sessions copy. A delete
   starts on the leader and goes to the session's host as a command (`POST /host-api/sessions/drop`), never in
   the copy: a host keeps its own rows when the copy stops naming them, and the copy reaches every replica,

@@ -6259,8 +6259,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const resultEvent = eventData<'session:result'>(event)
       const teamActive = resultEvent.teamActive === true || resultEvent.backgroundActive === true
       const detachedBgActive = resultEvent.detachedBgActive === true
-      const wakeupPending = resultEvent.wakeupPending === true
-      const workContinues = teamActive || detachedBgActive || wakeupPending
+      // The one rule of a turn end whose work goes on (sessions/turn-end-edge.ts), as the channel's turn-end record reads it.
+      const workContinues = (await import('../core/sessions/turn-end-edge.js')).turnEndWorkContinues(resultEvent)
 
       if (isError || !taskId) {
         // A foreground error does not mean that background work still running has ended; the error notification is kept on its own.

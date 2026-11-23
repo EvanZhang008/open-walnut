@@ -1119,4 +1119,10 @@ const SCHEMA_SQL = `
     row TEXT NOT NULL,
     at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS session_turn_ends (
+    claude_session_id TEXT PRIMARY KEY,
+    host_id TEXT NOT NULL,
+    edge TEXT NOT NULL,
+    at INTEGER NOT NULL
+  );
 `;
