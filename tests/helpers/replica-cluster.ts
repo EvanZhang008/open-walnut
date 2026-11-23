@@ -415,7 +415,7 @@ export const windowEnv = (): Record<string, string> => ({
  * The host daemon: a minimal env of its own (no variable of the runner leaks into it, or into the replica it starts).
  * Also tests/e2e/replica-old-mac-e2e.test.ts (an old Mac in front of the same daemon).
  */
-export async function startHostDaemon(twin: Twin, dir: string, home: string, bin: string, built = false, opts: { asInstalled?: boolean } = {}): Promise<{ proc: ChildProcess; pid: number; port: number }> {
+export async function startHostDaemon(twin: Twin, dir: string, home: string, bin: string, built = false, opts: { asInstalled?: boolean; release?: string } = {}): Promise<{ proc: ChildProcess; pid: number; port: number }> {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   const env: Record<string, string> = {
     PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`, HOME: home, TMPDIR: os.tmpdir(),
@@ -428,7 +428,10 @@ export async function startHostDaemon(twin: Twin, dir: string, home: string, bin
     ...windowEnv(),
   }
   let proc: ChildProcess
-  if (twin === 'source') {
+  if (opts.release) {
+    // An older release's daemon: its compiled file's own daemon entry.
+    proc = spawn(opts.release, ['__daemon', '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
+  } else if (twin === 'source') {
     const script = path.join(dir, 'daemon.cjs')
     fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
     // The trigger sidecar a deploy ships beside the script (scripts/build-daemon.sh):
@@ -751,11 +754,15 @@ export type SeedMac = (o: { base: string; macData: string; env: Record<string, s
  * `hostService`: the host runs under its launcher and is switched to its one Walnut service (see
  * the header); the twin is the standalone one, the only one a service holds. `macBootExtra`: code
  * the Mac's boot script runs after its server started, before it reports its port. `macEnv`: more
- * of the Mac's env (a timing knob of a feature under test).
+ * of the Mac's env (a timing knob of a feature under test). `hostRelease`: an older host, a released
+ * Walnut's compiled file as its daemon (`__daemon --start`), as a registry install leaves it; its
+ * server is still the one the Mac installs there, this tree's, as a leader puts its own build on a
+ * host (scripts/release-rehearsal/host-judged-old-host.mjs).
  */
-export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; daemonBuilt?: boolean; seedMac?: SeedMac; plugin?: ClusterPlugin; macConfigExtra?: readonly string[]; macHostExtra?: readonly string[]; linkProxy?: boolean; hostService?: HostServiceOptions; macBootExtra?: string; macEnv?: Record<string, string> }): Promise<ReplicaCluster> {
+export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; daemonBuilt?: boolean; seedMac?: SeedMac; plugin?: ClusterPlugin; macConfigExtra?: readonly string[]; macHostExtra?: readonly string[]; linkProxy?: boolean; hostService?: HostServiceOptions; macBootExtra?: string; macEnv?: Record<string, string>; hostRelease?: string }): Promise<ReplicaCluster> {
   assertWindows(WINDOWS)
   if (opts.hostService && (opts.twin !== 'standalone' || opts.daemonBuilt)) throw new Error('replica-cluster: a host service runs the standalone twin from source')
+  if (opts.hostRelease && (opts.hostService || opts.daemonBuilt)) throw new Error('replica-cluster: an older host runs its release\'s daemon, no service and no daemon build of this tree')
   const app: ClusterApp = opts.app ?? 'source'
   if (app === 'built') {
     const missing = builtAppMissing()
@@ -888,7 +895,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
       launcher = await startHostLauncher({ dir: d.hostDaemon, state: d.hostState, home: d.hostHome, bin: d.bin, host: opts.hostService, afterFile })
       hostDaemon = { proc: launcher.proc, pid: launcher.proc.pid!, port: Number(fs.readFileSync(path.join(d.hostDaemon, 'daemon.port'), 'utf8')) }
     } else {
-      hostDaemon = await startHostDaemon(opts.twin, d.hostDaemon, d.hostHome, d.bin, opts.daemonBuilt === true)
+      hostDaemon = await startHostDaemon(opts.twin, d.hostDaemon, d.hostHome, d.bin, opts.daemonBuilt === true, opts.hostRelease ? { release: opts.hostRelease } : {})
     }
     // A launcher's host moves its door's port at each start: the proxy asks where it is at each connection.
     const doorPortFile = path.join(d.hostDaemon, 'daemon.port')

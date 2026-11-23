@@ -79,7 +79,7 @@ function parseArgs(argv) {
 }
 
 /** The registry's manifest of `older` (`latest` resolved through its dist-tags). */
-async function olderManifest(older) {
+export async function olderManifest(older) {
   let version = older
   if (older === 'latest') {
     const res = await outsideFetch(`${UPSTREAM}/${PACKAGE}`, { headers: { accept: 'application/vnd.npm.install-v1+json' } }, { timeoutMs: 60_000 })
@@ -95,7 +95,7 @@ async function olderManifest(older) {
 const COMMON_ENV = { WALNUT_PLUGIN_JOBS_IN_TEST: '1', WALNUT_NO_AUTO_UPDATE: '1' }
 
 /** The older release installed once; every old leader and old daemon runs from it. */
-async function installOlder(work, manifest) {
+export async function installOlder(work, manifest) {
   const w = new IsolatedWalnut({ work, name: 'older-install', extraEnv: COMMON_ENV })
   await w.install(`${PACKAGE}@${manifest.version}`, allowedScripts(manifest))
   const launcher = w.bin

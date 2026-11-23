@@ -10,10 +10,13 @@ import fs from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
-import { onTestFailed } from 'vitest'
 import Database from '../../src/lib/sqlite.js'
 import type { ReplicaCluster } from './replica-cluster.js'
 import { createHostCallClient, type HostCallOutcome } from '../../src/providers/host-call-client-core.js'
+
+// Only a test run has vitest's state: a script outside it (scripts/release-rehearsal/host-judged-rollback.mjs)
+// reads the same files and never registers a failure hook.
+const vitest = process.env.VITEST ? await import('vitest') : null
 
 /** A gateway answer: `{ok, result}` or `{ok:false, error}`. */
 export type GatewayAnswer = Record<string, any>
@@ -94,7 +97,8 @@ export function sessionCliEnv(c: ReplicaCluster, sid: string): Record<string, st
 
 /** On a failure: the cluster's logs in a file that outlives it, its path printed. */
 export function keepLogsOnFailure(c: () => ReplicaCluster | undefined, label: string): void {
-  onTestFailed(() => {
+  if (!vitest) throw new Error('keepLogsOnFailure runs inside a vitest test only')
+  vitest.onTestFailed(() => {
     const cl = c()
     if (cl) process.stdout.write(`replica-cluster: ${label} logs at ${writeClusterLogs(cl, label)}\n`)
   })

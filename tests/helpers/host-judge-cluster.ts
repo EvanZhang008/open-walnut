@@ -143,8 +143,8 @@ const serveProbe = (routes, extra) => new Promise((resolve) => {
 })
 `
 
-/** The Mac's probe, run in its boot script (replica-cluster.ts macBoot `extra`; `c` is its constants module). */
-const macProbe = (record: 'full' | 'count') => `
+/** The Mac's probe, run in its boot script (replica-cluster.ts macBoot `extra`; `c` is its constants module); a leader booted again over the Mac's data takes it too (scripts/release-rehearsal/host-judged-leaders.mjs). */
+export const macProbe = (record: 'full' | 'count') => `
 ${recorder(record)}
 const eld = (await import('node:perf_hooks')).monitorEventLoopDelay({ resolution: 1 })
 eld.enable()
