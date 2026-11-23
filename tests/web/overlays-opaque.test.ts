@@ -111,11 +111,20 @@ function rules(): Rule[] {
   return out;
 }
 
+/** The classes each rule's selectors end on, read once per rule (the checks ask this classes x rules times). */
+const lastClasses = new WeakMap<Rule, Set<string>>();
+
 function targets(rule: Rule, cls: string): boolean {
-  return rule.selector.split(',').some((sel) => {
-    const last = sel.trim().split(/\s+|>|\+|~/).filter(Boolean).pop() ?? '';
-    return new RegExp(`\\.${cls}(?![\\w-])`).test(last.replace(/::?[\w-]+(\([^)]*\))?/g, ''));
-  });
+  let set = lastClasses.get(rule);
+  if (!set) {
+    set = new Set<string>();
+    for (const sel of rule.selector.split(',')) {
+      const last = sel.trim().split(/\s+|>|\+|~/).filter(Boolean).pop() ?? '';
+      for (const m of last.replace(/::?[\w-]+(\([^)]*\))?/g, '').matchAll(/\.([\w-]+)/g)) set.add(m[1]);
+    }
+    lastClasses.set(rule, set);
+  }
+  return set.has(cls);
 }
 
 const decl = (body: string, prop: string): string | null => {
