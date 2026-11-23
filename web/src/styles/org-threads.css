@@ -199,3 +199,8 @@
 .org-thread-move-note .org-thread-link { flex: none; }
 @keyframes org-thread-move-note-fade { 0%, 83% { opacity: 1; } 100% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .org-thread-move-note { animation: none; } }
+
+/* The box that scrolls a Threads list holds its card in view by hand (useThreadsHold.ts, both
+   engines: WebKit has no CSS scroll anchoring), so Chromium's own anchoring stays out of it: two
+   corrections of one move undo each other. */
+.org-rail-body:has(> .org-threads), .session-threads-body:has(> .org-threads) { overflow-anchor: none; }

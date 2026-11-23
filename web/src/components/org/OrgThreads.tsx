@@ -85,6 +85,7 @@ import { FOLDED_GROUPS, THREAD_GROUPS, THREAD_GROUP_LABELS, ackCardLine, backFro
 import { TaskChips } from './ThreadTaskChips';
 import { KnownBlock } from './ThreadKnown';
 import { OrgThreadsByState, ThreadsEmpty } from './OrgThreadsByState';
+import { useThreadsHold } from './useThreadsHold';
 import '@/styles/org-threads.css';
 import '@/styles/notice-card.css';
 
@@ -454,6 +455,8 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
   const rootRef = useRef<HTMLDivElement>(null);
   const allGroups = useMemo(() => (byState ? groupThreads(all ?? [], clock) : null), [byState, all, clock]);
   const groups = useMemo(() => (allGroups ? origin.onlyGroups(allGroups) : null), [allGroups, origin]);
+  // While he reads, the cards hold their order under the pointer and the one in view its place (useThreadsHold.ts).
+  const hold = useThreadsHold(rootRef, open, groups);
   const focused = useFocusedThread(owner?.id, all, rootRef, (t) => {
     // The filter leaves it out: every thread shows again, so the asked one can.
     if (!fromOrigin(t, origin.pick)) origin.setPick(ORIGIN_ALL);
@@ -479,17 +482,17 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
     <OrgThreadsWatching threads={watching} card={(t, copy) => card(t, copy)} onReorder={(writes) => { for (const w of writes) void state.update(w.id, { watch_at: w.watch_at }); }} />
   );
   return (
-    <div ref={rootRef} className="org-threads" data-testid="org-threads" onClick={onEntityClick}>
+    <div ref={rootRef} className="org-threads" data-testid="org-threads" onClick={onEntityClick} onPointerEnter={hold.onPointerEnter} onPointerLeave={hold.onPointerLeave}>
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}
       {all === null && !state.error && <LoadingState size="section" title="Loading threads…" />}
       {origin.choices && <ThreadOriginFilter choices={origin.choices} pick={origin.pick} onPick={origin.setPick} />}
-      {groups && all !== null && <OrgThreadsByState watching={watchingList} groups={groups} opened={opened} onOpen={openFold} card={(t) => card(t)} name={name} owner={owner} epoch={state.catchUp ?? 0} {...(owner ? { onShowThread: (id: string) => askThreadFocus(owner.id, id) } : {})} />}
+      {hold.groups && all !== null && <OrgThreadsByState watching={watchingList} groups={hold.groups} opened={opened} onOpen={openFold} card={(t) => card(t)} name={name} owner={owner} epoch={state.catchUp ?? 0} {...(owner ? { onShowThread: (id: string) => askThreadFocus(owner.id, id) } : {})} />}
       {!groups && (<>
       {watchingList}
       {all !== null && !open.length && (hidden.length || snoozed.length
         ? <EmptyState size="section" title="Nothing for you now" hint={`${hidden.length ? `${name} is on the ones below; each` : 'Each snoozed one below'} comes back here when there is news.`} testId="org-threads-empty" />
             : <ThreadsEmpty />)}
-      {!!open.length && <ul className="org-thread-list" data-testid="org-thread-list" data-show="open">{open.map((t) => card(t))}</ul>}
+      {!!open.length && <ul className="org-thread-list" data-testid="org-thread-list" data-show="open">{hold.open.map((t) => card(t))}</ul>}
       {snoozed.length > 0 && (
         <DisclosureButton expanded={showSnoozed} className="org-threads-closed-toggle" data-testid="org-threads-snoozed" onClick={() => setShowSnoozed(!showSnoozed)}>
           {snoozed.length} snoozed
