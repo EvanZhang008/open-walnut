@@ -26,8 +26,10 @@
  * here until it is held for the sender, as a `whole` part too, and tried again while that fails, for
  * TELL_KEEP_MS; a tell no live session can take is written on the note's fate instead). What one
  * target holds of whole notes is bounded by WHOLE_HELD_MAX_BYTES: past it a new wake=false note is
- * refused at its send, never cut. Walnut's own status notices and scripts' notes keep the age limit
- * and the cap; a script's dropped note still has its fate.
+ * refused at its send, never cut. A topic's fold (topics/topic-delivery.ts) is `whole` too: the
+ * member's read mark moved past its posts, which go back to the topic as unread if it is dropped.
+ * Walnut's own status notices and scripts' notes keep the age limit and the cap; a script's dropped
+ * note still has its fate.
  */
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -87,6 +89,10 @@ export interface PartMeta {
   whole?: boolean;
   /** The sending session's task: told there when that session is gone (held-notices-sweep.ts). */
   fromTask?: string;
+  /** A drop tell (held-notices-sweep.ts flushDropTells): the dropped notes it tells of. */
+  told?: Array<Pick<DropTell, 'callerSid' | 'mid' | 'reason'> & Partial<DropTell>>;
+  /** A topic's fold (topics/topic-text.ts FoldPart): its posts go back unread when it is dropped. */
+  topic?: string;
 }
 
 /** A dropped note whose sender is a session: told by held-notices-sweep.ts flushDropTells. */
@@ -113,8 +119,8 @@ let loading: Promise<void> | null = null;
 let loaded = false;
 /** Bumped by a test reset: a write or load of an older generation does nothing. */
 let generation = 0;
-let writeChain: Promise<void> = Promise.resolve();
-let queuedWrite: Promise<void> | null = null;
+let writeChain: Promise<unknown> = Promise.resolve();
+let queuedWrite: Promise<boolean> | null = null;
 
 function storeFile(): string {
   return path.join(WALNUT_HOME, 'cache', 'held-notices.json');
@@ -402,19 +408,21 @@ const SLOW_WRITE_MS = 50;
 
 /**
  * Write what waits now. Resolves once a write that started after this call is on disk (writes are
- * coalesced: a change made while one is queued rides it). Never rejects: a failed write is logged
- * and the notices still wait in memory. A no-op until the file was opened.
+ * coalesced: a change made while one is queued rides it): true when it is, false when it is not (a
+ * failed write is logged and the notices still wait in memory; a boot that cannot write keeps them
+ * in memory only). Never rejects. A no-op (true) until the file was opened.
  */
-export function persist(): Promise<void> {
-  if (!opened) return Promise.resolve();
+export function persist(): Promise<boolean> {
+  if (!opened) return Promise.resolve(true);
   if (queuedWrite) return queuedWrite;
   const gen = generation;
-  const next: Promise<void> = writeChain.then(async () => {
+  const next: Promise<boolean> = writeChain.then(async () => {
     if (queuedWrite === next) queuedWrite = null;
     try {
       // Never before the file's own notices are in memory: they would be written over.
       await loading;
-      if (gen !== generation || !writable) return;
+      if (gen !== generation) return true;
+      if (!writable) return false;
       const file = storeFile();
       await fsp.mkdir(path.dirname(file), { recursive: true });
       const { writeFileAtomic } = await import('../config-store.js');
@@ -425,8 +433,10 @@ export function persist(): Promise<void> {
         log.session.warn('held notices: a large write', { bytes: text.length, serializeMs: Math.round(ms), sessions: held.size, fates: fates.size });
       }
       await writeFileAtomic(file, text, 0o600);
+      return true;
     } catch (err) {
       log.session.warn('held notices: not saved', { error: err instanceof Error ? err.message : String(err) });
+      return false;
     }
   });
   queuedWrite = next;

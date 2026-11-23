@@ -21,6 +21,15 @@
  * carries what it has not read (wakeAgain, from topic-replies.ts). In flight means live
  * (topic-turn-live.ts): the member's delivery session still runs that turn or holds its wake. A
  * turn that no longer runs, or one in another session, is stale: the new wake replaces it.
+ *
+ * A member never loses a post (2026-11-23, the user: no message is ever lost). A fold moves the
+ * member's readUpto only once the fold is on disk, so its held part is `whole` (no age limit or fold
+ * cap drops it) and it follows the member's task to its next session. Only a session gone with none
+ * going on drops it, and then its posts go back to the topic as unread first (returnFoldsUnread):
+ * the member's next wake or fold carries them again, and each message says why it was not read yet.
+ * A readUpto moved back meanwhile is never moved forward again by a delivery that read the topic
+ * before (advanceRead). What a wake or fold shows is still cut at WAKE_LINES_MAX_CHARS, newest kept,
+ * with a pointer to topic_read for the older lines: those are in the topic, not lost.
  */
 import { log } from '../../logging/index.js';
 import { PeerThrottle } from '../peers/peer-throttle.js';
@@ -28,7 +37,7 @@ import { holdFoldedNotice } from '../sessions/held-notices.js';
 import { ORG_MAIN_NODE, pickLead, pickMain } from '../org/org-tree.js';
 import type { Task } from '../types.js';
 import {
-  type MemberId, type Topic, type TopicMember, type TopicMessage, type TopicPendingTurn,
+  TopicError, type MemberId, type Topic, type TopicMember, type TopicMessage, type TopicPendingTurn,
 } from './topics-model.js';
 import { messageLine, renderFoldedTopic, topicWakeText, unreadFor, type FoldPart } from './topic-text.js';
 import type { DeliveryPlan, DeliveryRefusal } from './topic-wake.js';
@@ -60,7 +69,7 @@ export const NO_TASK_WHY = 'its task was not found';
 export const ORG_OFF_WHY = 'the org is off';
 /** A wake held back because the member's topic turn still runs: it reads the line when that turn ends. */
 export { QUEUED_WHY } from './topic-reasons.js';
-import { QUEUED_WHY } from './topic-reasons.js';
+import { FOLD_GONE_WHY, QUEUED_WHY } from './topic-reasons.js';
 
 export type MemberTarget = { taskId: string; sessionId: string; orgNode: boolean } | { why: string; taskId?: string };
 
@@ -99,6 +108,24 @@ function laterOf(topic: Topic, a: string | undefined, b: string): string {
   const ia = topic.messages.findIndex((m) => m.id === a);
   const ib = topic.messages.findIndex((m) => m.id === b);
   return ib > ia ? b : a;
+}
+
+/**
+ * Move `member`'s readUpto (in the fresh `t`) up to `upto`, for a delivery that read the member
+ * unread from `from`. A readUpto that went back meanwhile (returnFoldsUnread: its folds' session is
+ * gone) stays where it is, so the next wake carries everything again. Once it passes a message the
+ * member's FOLD_GONE_WHY mark is on, that mark goes: the member has read it.
+ */
+export function advanceRead(t: Topic, member: TopicMember, from: string | undefined, upto: string): void {
+  const at = (id: string | undefined) => (id ? t.messages.findIndex((m) => m.id === id) : -1);
+  if (at(member.readUpto) < at(from)) return;
+  member.readUpto = laterOf(t, member.readUpto, upto);
+  const end = at(member.readUpto);
+  for (const m of t.messages.slice(0, end + 1)) {
+    if (!m.refused?.some((r) => r.member === member.id && r.why === FOLD_GONE_WHY)) continue;
+    m.refused = m.refused.filter((r) => !(r.member === member.id && r.why === FOLD_GONE_WHY));
+    if (!m.refused.length) delete m.refused;
+  }
 }
 
 /**
@@ -163,11 +190,18 @@ export async function deliver(topic: Topic, message: TopicMessage, plan: Deliver
     const target = await memberTarget(member).catch((): MemberTarget => ({ why: 'not reached' }));
     // No session: nothing to hold it for; the member reads it with its next wake (readUpto stays).
     if ('why' in target) continue;
-    const lines = unreadFor(topic, member, message.id).map((m) => messageLine(topic, m, opts.userName));
-    if (!lines.length) continue;
+    const unread = unreadFor(topic, member, message.id);
+    if (!unread.length) continue;
+    const lines = unread.map((m) => messageLine(topic, m, opts.userName));
     const head = { id: topic.id, title: topic.title };
-    void holdFoldedNotice<FoldPart>(target.sessionId, `topic:${topic.id}`, { at: Date.now(), lines }, (parts, dropped) => renderFoldedTopic(head, parts, dropped));
-    readUpto.set(id, message.id);
+    // Whole: no age limit or fold cap drops it, since its readUpto moves (returnFoldsUnread).
+    const part: FoldPart = {
+      at: Date.now(), lines, whole: true, topic: topic.id, member: id, task: target.taskId, first: unread[0].id, upto: message.id,
+    };
+    // readUpto moves only once the fold is on disk: a fold that was not saved is read again with the next wake.
+    const saved = await holdFoldedNotice<FoldPart>(target.sessionId, `topic:${topic.id}`, part, (parts, dropped) => renderFoldedTopic(head, parts, dropped));
+    if (saved) readUpto.set(id, message.id);
+    else log.task.warn('topics: a fold was not saved; its member reads these lines with its next wake', { topicId: topic.id, memberId: id, sessionId: target.sessionId });
   }
 
   // The turns are already on disk; never written again here (a reply captured meanwhile cleared one).
@@ -180,7 +214,7 @@ export async function deliver(topic: Topic, message: TopicMessage, plan: Deliver
     }
     for (const [id, upto] of readUpto) {
       const member = t.members.find((x) => x.id === id);
-      if (member) member.readUpto = laterOf(t, member.readUpto, upto);
+      if (member) advanceRead(t, member, topic.members.find((x) => x.id === id)?.readUpto, upto);
     }
   });
   return { topic: saved, outcome };
@@ -240,7 +274,7 @@ export async function wakeAgain(topicId: string, memberId: string, userName: str
   }
   await mutateTopic(topic.id, (t) => {
     const m = t.members.find((x) => x.id === member.id);
-    if (m) m.readUpto = laterOf(t, m.readUpto, last.id);
+    if (m) advanceRead(t, m, member.readUpto, last.id);
   }, { touch: false });
   return true;
 }
@@ -254,4 +288,60 @@ async function restorePendingTurn(topicId: string, id: MemberId, messageId: stri
     if (before) member.pendingTurn = before;
     else delete member.pendingTurn;
   }, { touch: false });
+}
+
+/**
+ * Folds held for a session that is gone with none going on (held-notices-sweep.ts, before it drops
+ * them): each member's readUpto goes back to just before the first post its folds carried, so its
+ * next wake or fold carries them again, and each of those messages says why (FOLD_GONE_WHY). Only
+ * ever moves a readUpto back, so running it twice is the same as once. Posts the member was given
+ * after the fold (a wake meanwhile) are given again too: delivered twice, never lost. A topic or a
+ * member that is no more has nothing left to read. Returns the topics that could not be written:
+ * the sweep keeps their folds and tries them again next lap.
+ */
+export async function returnFoldsUnread(parts: readonly unknown[]): Promise<Set<string>> {
+  const failed = new Set<string>();
+  const byTopic = new Map<string, Map<string, { first?: string; upto?: string }>>();
+  for (const p of parts) {
+    const f = (p && typeof p === 'object' ? p : {}) as FoldPart;
+    if (typeof f.topic !== 'string' || typeof f.member !== 'string') continue;
+    const members = byTopic.get(f.topic) ?? new Map<string, { first?: string; upto?: string }>();
+    byTopic.set(f.topic, members);
+    const cur = members.get(f.member);
+    // The parts are oldest first: the first part's first post and the last part's last.
+    members.set(f.member, { first: cur?.first ?? f.first, upto: f.upto ?? cur?.upto });
+  }
+  const { mutateTopic } = await import('./topics-store.js');
+  for (const [topicId, members] of byTopic) {
+    try {
+      await mutateTopic(topicId, (t) => {
+        for (const [memberId, span] of members) {
+          const member = t.members.find((x) => x.id === memberId);
+          if (!member) continue;
+          const from = span.first ? t.messages.findIndex((m) => m.id === span.first) : -1;
+          const to = span.upto ? t.messages.findIndex((m) => m.id === span.upto) : -1;
+          if (from < 0 && to < 0) continue;
+          // The first post was capped out of the file: every message kept is after it.
+          const start = from < 0 ? 0 : from;
+          const read = member.readUpto ? t.messages.findIndex((m) => m.id === member.readUpto) : -1;
+          if (read >= start) {
+            if (start > 0) member.readUpto = t.messages[start - 1].id;
+            else delete member.readUpto;
+          }
+          for (const m of t.messages.slice(start, (to < 0 ? t.messages.length - 1 : to) + 1)) {
+            if (!m.folded?.includes(member.id) || m.refused?.some((r) => r.member === member.id && r.why === FOLD_GONE_WHY)) continue;
+            m.refused = [...(m.refused ?? []), { member: member.id, why: FOLD_GONE_WHY }];
+          }
+          log.task.warn('topics: folded posts went back unread, their session is gone', { topicId, memberId, first: span.first, upto: span.upto });
+        }
+      }, { touch: false });
+    } catch (err) {
+      if (err instanceof TopicError && err.code === 'not_found') continue;
+      failed.add(topicId);
+      log.task.warn('topics: folded posts could not go back unread; kept, tried again next lap', {
+        topicId, error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return failed;
 }

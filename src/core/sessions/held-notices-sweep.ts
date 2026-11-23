@@ -15,13 +15,19 @@
  * while telling fails (TELL_KEEP_MS at most); with no live session to take it, the note's fate says
  * so. That notice asks nothing either (outcome note-dropped): nobody waited on the note, so it
  * rides the sender's next message (DROP_TELL_KEY, never aged or capped out) rather than starting a turn.
+ * What a gone session drops leaves a record its sender can read, but for Walnut's own status notices:
+ * a note its fate; a tell (its sender's session gone too) the fates of the notes it told of; a
+ * topic's fold its posts, back to the topic as unread (topic-delivery.ts returnFoldsUnread, done
+ * before the drop and tried again next lap while it fails).
  */
 import { log } from '../../logging/index.js';
 import {
-  TELL_KEEP_MS, closeStore, expiredByAge, fateOf, held, metaOf, openStore, persist, pruneFates, recordFate, settleTells, taken,
-  type DropTell,
+  TELL_KEEP_MS, closeStore, expiredByAge, held, metaOf, openStore, persist, pruneFates, settleTells, taken,
+  type DropTell, type Held,
 } from './held-notices-store.js';
-import { DROP_WHY, dropParts, holdFoldedNotice, moveHeldNotices, putBack, takeDropTells } from './held-notices.js';
+import {
+  DROP_WHY, dropParts, holdFoldedNotice, moveHeldNotices, putBack, takeDropTells, tellUndeliverable,
+} from './held-notices.js';
 
 const SWEEP_MS = 10 * 60_000;
 /** A message that took notices and said nothing for this long did not carry them. */
@@ -118,20 +124,52 @@ export async function sweepHeldNotices(now = Date.now()): Promise<{ dropped: num
     }
     // Gone on the first look: the next lap decides.
     if (!goneSince.has(sid)) { goneSince.set(sid, now); continue; }
-    goneSince.delete(sid);
     // Read again after the awaits: a send may have taken them meanwhile.
     const still = held.get(sid);
-    if (!still?.size) continue;
-    held.delete(sid);
+    if (!still?.size) { goneSince.delete(sid); continue; }
+    // A topic's folded posts go back to the topic as unread before they go. A topic that could not
+    // be written keeps its folds for the next lap; everything else goes now. What changed during
+    // the return (a fold held meanwhile) waits for the next lap whole.
+    const { tried, failed } = await topicFoldsReturned(sid, still);
+    if (held.get(sid) !== still || topicFolds(still).some((p) => !tried.has(p))) continue;
+    const keep = (v: Held) => (v.parts ?? []).some((p) => failed.has(metaOf(p).topic ?? ''));
+    const go = [...still].filter(([, v]) => !keep(v));
+    const kept = still.size - go.length;
+    if (!kept) { goneSince.delete(sid); held.delete(sid); } else for (const [key] of go) still.delete(key);
+    if (!go.length) continue;
     changed = true;
-    for (const v of still.values()) dropParts(sid, v.parts ?? [], DROP_WHY.gone, now);
-    dropped += still.size;
-    log.session.info('held notices dropped: their session is gone', { sessionId: sid, keys: [...still.keys()] });
+    for (const [, v] of go) dropParts(sid, v.parts ?? [], DROP_WHY.gone, now);
+    dropped += go.length;
+    log.session.info('held notices dropped: their session is gone', { sessionId: sid, keys: go.map(([key]) => key), keptForRetry: kept });
   }
   if (pruneFates(now)) changed = true;
   if (changed) await persist();
   await flushDropTells();
   return { dropped, moved };
+}
+
+/** The parts of `slot`'s notices that are a topic's fold (topics/topic-text.ts FoldPart). */
+function topicFolds(slot: Map<string, Held>): unknown[] {
+  return [...slot.values()].flatMap((v) => (v.parts ?? []).filter((p) => !!metaOf(p).topic));
+}
+
+/**
+ * Give the topic folds among `slot`'s notices back to their topics as unread: `tried` are the parts
+ * it handled, `failed` the topics that could not be written (their folds stay for the next lap).
+ */
+async function topicFoldsReturned(sid: string, slot: Map<string, Held>): Promise<{ tried: Set<unknown>; failed: Set<string> }> {
+  const folds = topicFolds(slot);
+  const tried = new Set(folds);
+  if (!folds.length) return { tried, failed: new Set() };
+  try {
+    const { returnFoldsUnread } = await import('../topics/topic-delivery.js');
+    return { tried, failed: await returnFoldsUnread(folds) };
+  } catch (err) {
+    log.session.warn('held notices: a gone session\'s topic posts could not go back unread; kept, tried again next lap', {
+      sessionId: sid, error: err instanceof Error ? err.message : String(err),
+    });
+    return { tried, failed: new Set(folds.map((p) => metaOf(p).topic ?? '')) };
+  }
 }
 
 /** The key a sender's tells wait under: their parts are `whole`, so no age limit or cap drops them. */
@@ -154,22 +192,6 @@ async function tellWhere(t: DropTell): Promise<string | null> {
     if (next && to && !to.archived) return next;
   }
   return null;
-}
-
-/**
- * A tell no session can take: said on the note's fate (op_result's held_note reads it) and logged,
- * never handed to a session that is gone as if it were told.
- */
-function tellUndeliverable(t: DropTell, why: string, now: number): void {
-  log.session.warn('held notices: the sender of a dropped note could not be told', {
-    messageId: t.mid, callerSid: t.callerSid, taskId: t.taskId, fromTaskId: t.fromTask, tries: t.tries, why,
-  });
-  if (!t.mid) return;
-  const prev = fateOf(t.mid);
-  recordFate(t.mid, {
-    state: 'dropped', at: now, sid: prev?.sid ?? '',
-    why: `${prev?.why ?? 'it was dropped before reaching its target'}; its sender was not told either: ${why}`,
-  });
 }
 
 /** The words of one sender's tell: the notes of its that were dropped. */
@@ -214,7 +236,13 @@ export async function flushDropTells(now = Date.now()): Promise<number> {
   for (const [sid, list] of bySession) {
     try {
       const text = await tellText(list);
-      void holdFoldedNotice<{ at: number; text: string; whole: true }>(sid, DROP_TELL_KEY, { at: now, text, whole: true },
+      // It names the notes it tells of: dropped in turn (this session gone too), their fates say so.
+      const notes = list.map((t) => ({
+        callerSid: t.callerSid, reason: t.reason, taskId: t.taskId, ...(t.mid ? { mid: t.mid } : {}), ...(t.fromTask ? { fromTask: t.fromTask } : {}),
+      }));
+      const task = list.find((t) => t.fromTask)?.fromTask;
+      void holdFoldedNotice<{ at: number; text: string; whole: true; told: typeof notes; task?: string }>(sid, DROP_TELL_KEY,
+        { at: now, text, whole: true, told: notes, ...(task ? { task } : {}) },
         (parts) => parts.map((p) => p.text).join('\n\n'), { now });
       told++;
     } catch (err) {

@@ -37,12 +37,35 @@ export const DROP_WHY = {
 
 let tellTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** Record each dropped part that is a note (it has a message id), and queue its sender's notice (kept on disk until told). */
+/**
+ * A sender that cannot be told its note was dropped: said on the note's fate (op_result's held_note
+ * reads it) and logged with the note, never handed to a session that is gone as if it were told.
+ */
+export function tellUndeliverable(t: Pick<DropTell, 'callerSid' | 'mid' | 'reason'> & Partial<DropTell>, why: string, now = Date.now()): void {
+  log.session.warn('held notices: the sender of a dropped note could not be told', {
+    messageId: t.mid, note: t.reason, callerSid: t.callerSid, taskId: t.taskId, fromTaskId: t.fromTask, tries: t.tries, why,
+  });
+  if (!t.mid) return;
+  const prev = fateOf(t.mid);
+  recordFate(t.mid, {
+    state: 'dropped', at: now, sid: prev?.sid ?? '',
+    why: `${prev?.why ?? 'it was dropped before reaching its target'}; its sender was not told either: ${why}`,
+  });
+}
+
+/**
+ * Record each dropped part that is a note (it has a message id), and queue its sender's notice (kept
+ * on disk until told). A dropped tell (a part naming the notes it `told` of: its sender's session is
+ * gone too) is written on each of those notes' fates instead.
+ */
 export function dropParts(sid: string, parts: readonly unknown[], why: string, now = Date.now()): void {
   let queued = false;
   for (const p of parts) {
     const m = metaOf(p);
-    if (!m.mid) continue;
+    if (!m.mid) {
+      for (const t of Array.isArray(m.told) ? m.told : []) if (t && typeof t === 'object') tellUndeliverable(t, `the notice that would tell it was dropped too, as ${why}`, now);
+      continue;
+    }
     recordFate(m.mid, { state: 'dropped', at: now, sid, why });
     void import('./delivery-ledger.js').then((l) => l.recordDelivery({ step: 'dropped', id: m.mid, sessionId: sid, why })).catch(() => {});
     log.session.info('held note dropped unread', { messageId: m.mid, sessionId: sid, fromSessionId: m.from, taskId: m.task, why });
@@ -75,11 +98,11 @@ setPushedOutHandler((sid, parts) => dropParts(sid, parts, DROP_WHY.pushed));
 /**
  * Hold `text` for the session's next message; a newer notice with the same key replaces it.
  * `whileOpen`: request ids; the notice is dropped unsent once none of them is open any more.
- * Held in memory at once; the promise resolves once it is on disk too.
+ * Held in memory at once; the promise resolves once it is on disk too (true), or that write failed (false).
  */
 export function holdNotice(
   sessionId: string, key: string, text: string, opts: { now?: number; whileOpen?: readonly string[] } = {},
-): Promise<void> {
+): Promise<boolean> {
   slotOf(sessionId).set(key, { text, at: opts.now ?? Date.now(), ...(opts.whileOpen?.length ? { whileOpen: [...opts.whileOpen] } : {}) });
   return persist();
 }
@@ -90,12 +113,13 @@ export function holdNotice(
  * note per paused process, three in the same minute, each waking the session). A part that would
  * go past FOLD_PARTS_MAX pushes the oldest out that is not a task's own note (keptWhole). A part
  * whose message id (`mid`) is already held, delivered or dropped is a replay, and is not held again.
+ * Resolves true once it is on disk (persist), false when that write failed (it still waits in memory).
  */
 export function holdFoldedNotice<P>(
   sessionId: string, key: string, part: P, render: (parts: P[], dropped: number) => string, opts: { now?: number } = {},
-): Promise<void> {
+): Promise<boolean> {
   const mid = metaOf(part).mid;
-  if (mid && noteKnown(mid)) return Promise.resolve();
+  if (mid && noteKnown(mid)) return Promise.resolve(true);
   const slot = slotOf(sessionId);
   const prev = slot.get(key);
   // Its age is its newest part's: a part added late is not dropped with the old ones.

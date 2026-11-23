@@ -136,7 +136,21 @@ export function topicWakeText(input: WakeTextInput): string {
   });
 }
 
-export interface FoldPart { at: number; lines: string[] }
+/**
+ * One fold of topic lines held for a member's next message. `whole`: never aged or capped out
+ * (held-notices-store.ts keptWhole), so a fold reaches the member; what it shows is still cut at
+ * WAKE_LINES_MAX_CHARS (renderFoldedTopic), with a pointer to topic_read for the older lines. The
+ * rest names the posts it carries, so a fold whose session is gone with none going on gives them
+ * back to the topic as unread (topic-delivery.ts returnFoldsUnread).
+ */
+export interface FoldPart {
+  at: number; lines: string[];
+  whole?: true;
+  /** The topic, the member, its task (held-notices-sweep.ts finds the task's next session by it). */
+  topic?: string; member?: string; task?: string;
+  /** The first and the last message the lines carry. */
+  first?: string; upto?: string;
+}
 
 /** The folded notice: what was said while this member was not woken, riding its next message. */
 export function renderFoldedTopic(topic: Pick<Topic, 'id' | 'title'>, parts: readonly FoldPart[], dropped: number): string {

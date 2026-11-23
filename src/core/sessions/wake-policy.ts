@@ -156,9 +156,9 @@ export function rowRides(text: string): boolean {
  * Hold a row of notices that ask nothing for the session's next message (held-notices.ts): every
  * such row waits under one key, so ten status notices read as one block in front of the next
  * message, the newest FOLD_PARTS_MAX kept. Kept on disk like every held notice, so a restart keeps
- * what waits; the promise resolves once it is written (the queue does not wait for it).
+ * what waits; the promise resolves once it is written, true when that worked (the queue does not wait for it).
  */
-export function holdRidingNotice(sessionId: string, text: string, now = Date.now()): Promise<void> {
+export function holdRidingNotice(sessionId: string, text: string, now = Date.now()): Promise<boolean> {
   return holdFoldedNotice<string>(sessionId, 'riding-notices', text, (parts, dropped) => [
     ...parts,
     // Inside an envelope: a bare line here would read as the user's own words (2026-11-23 review).

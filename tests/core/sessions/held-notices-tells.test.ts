@@ -5,7 +5,10 @@
  *    age limit or fold cap drops it once it is counted told;
  *  - a tell whose sender cannot be looked up (an error) waits and is tried again, kept in the
  *    held-notices file across a restart, for TELL_KEEP_MS; then its note's fate says it was not told;
- *  - a tell no live session can take is never handed to a dead one: the note's fate says so.
+ *  - a tell no live session can take is never handed to a dead one: the note's fate says so;
+ *  - a tell already held for its sender whose session then goes with none going on is dropped by the
+ *    gone-session sweep with a record: its note's fate says the sender was not told, and a warning
+ *    names the note.
  * The session store is stubbed so a lookup can fail, find a live sender, or find none.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -30,6 +33,7 @@ vi.mock('../../../src/core/session-tracker.js', () => ({
 }));
 
 import { WALNUT_HOME } from '../../../src/constants.js';
+import { log } from '../../../src/logging/index.js';
 import {
   DROP_WHY, FOLD_PARTS_MAX, HOLD_MAX_MS, _clearHeldNotices, dropParts, heldNoteState, heldNoticeKeys, pendingHeldNotices,
 } from '../../../src/core/sessions/held-notices.js';
@@ -120,5 +124,35 @@ describe('the sender of a dropped note is told, whatever fails on the way', () =
     expect(await flushDropTells()).toBe(0);
     expect(await fileTells()).toEqual([]);
     expect((await heldNoteState('qm-t-3')).why).toContain('its sender was not told either: telling it failed for 7 days');
+  });
+
+  it('a tell held for its sender, whose session then goes with none going on: the note\'s fate and a warning say it was not told', async () => {
+    live.add('sid-sender');
+    drop('qm-t-4', 'sid-sender', 'Held tell');
+    expect(await flushDropTells()).toBe(1);
+    expect(heldNoticeKeys('sid-sender')).toEqual([DROP_TELL_KEY]);
+
+    live.delete('sid-sender');
+    const warn = vi.spyOn(log.session, 'warn');
+    try {
+      // Gone on the first lap; the second drops it.
+      await sweepHeldNotices();
+      expect(heldNoticeKeys('sid-sender')).toEqual([DROP_TELL_KEY]);
+      await sweepHeldNotices();
+      expect(heldNoticeKeys('sid-sender')).toEqual([]);
+      expect(warn).toHaveBeenCalledWith('held notices: the sender of a dropped note could not be told', expect.objectContaining({
+        messageId: 'qm-t-4', callerSid: 'sid-sender', note: expect.stringContaining('"Held tell"'),
+      }));
+    } finally {
+      warn.mockRestore();
+    }
+    const state = await heldNoteState('qm-t-4');
+    expect(state).toMatchObject({ state: 'dropped', session_id: 'sid-target' });
+    expect(state.why).toContain(DROP_WHY.gone);
+    expect(state.why).toContain(`its sender was not told either: the notice that would tell it was dropped too, as ${DROP_WHY.gone}`);
+    // Nobody to tell about the tell: nothing is queued again.
+    expect(await flushDropTells()).toBe(0);
+    await persist();
+    expect(await fileTells()).toEqual([]);
   });
 });
