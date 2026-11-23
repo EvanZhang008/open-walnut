@@ -96,6 +96,10 @@ test('submitted work offers Close instead of Cancel and closing does not undo th
   const count = (await receipt(request, sent.id, item.id)).receipts.length;
   await form.getByRole('button', { name: 'Confirm mark read', exact: true }).click();
   await expect.poll(async () => (await receipt(request, sent.id, item.id)).receipts.length, { timeout: 25_000 }).toBe(count + 1);
+  // The new receipt is written pending and the plan runs on in the background (marking_read,
+  // then finished): the snapshot below is taken once that run is over, so the comparison after
+  // Close sees only what Close itself could change.
+  await expect.poll(async () => (await receipt(request, sent.id, item.id)).receipts.every((r: { stage: string }) => r.stage === 'finished'), { timeout: 25_000 }).toBe(true);
   await expect(form.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0);
   const close = form.getByRole('button', { name: 'Close', exact: true });
   await expect(close).toHaveAttribute('title', 'Close this view. Submitted work continues.');
