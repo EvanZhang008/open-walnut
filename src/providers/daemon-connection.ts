@@ -11126,9 +11126,25 @@ export function credentialWaitingHosts(): Array<{ host: string; failedAt: number
  * Disconnect all daemon connections. Called on server shutdown, so each host's
  * SSH ControlMaster is left running for the next server process to reuse.
  */
+/** Connections a server's stop leaves open: a leader switch's copy link, until its final mark (core/leader/switch/peer.ts hold). */
+const keptThroughStop = new Set<DaemonConnection>()
+
+/**
+ * Keep `conn` open through disconnectAllDaemons: it still leaves the pool (nothing else of a stopping
+ * server finds it), and nothing dials it again (daemon-dial-gate.ts). The release closes it once the
+ * pool let it go, and leaves it alone while it is still pooled (no stop came).
+ */
+export function keepThroughStop(conn: DaemonConnection): () => void {
+  keptThroughStop.add(conn)
+  return () => {
+    if (!keptThroughStop.delete(conn)) return
+    if (!isPooledConnection(conn)) conn.disconnect({ keepSshMaster: true })
+  }
+}
+
 export function disconnectAllDaemons(): void {
   for (const [key, conn] of connectionPool) {
-    conn.disconnect({ keepSshMaster: true })
+    if (!keptThroughStop.has(conn)) conn.disconnect({ keepSshMaster: true })
     releasedFromPool.add(conn)
   }
   connectionPool.clear()

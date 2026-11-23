@@ -99,8 +99,9 @@ SQLite write was judged too risky.
 A switch is two jobs, one on each machine, and the witnesses between them. Neither job reaches
 into the other machine: they meet only at the witnesses (the permit record decides), in the
 switch notes (progress, never a decision: [Switch notes](#switch-notes)), and over the old leader's
-copy link (the one the standby batches already travel, `peer.ts` `SwitchPeer`: today kind `local`,
-a folder on this computer; the daemon kind is the next step's).
+copy link (the one the standby batches already travel, `peer.ts` `SwitchPeer`: kind `local`, a
+folder on this computer, or kind `daemon`, the old leader's server's link to the new machine's
+daemon: [The copy link to another machine](#the-copy-link-to-another-machine)).
 
 - The **command** (`switch-command.ts`) does no step itself. It starts this machine's job as a
   detached process (a closed terminal or a killed command stops nothing), prints its lines and
@@ -121,8 +122,10 @@ job runs per home (`local/leader-switch/switch.lock`) and one target job per swi
 
 Source job:
 
-1. **preflight**: the old leader runs with the permission (only its process can hand it over), the standby copy has
-   a complete batch under 5 minutes old and verifies without drift, the copy's config has the
+1. **preflight**: the old leader runs with the permission (only its process can hand it over), the copy link answers
+   (for kind `daemon`: the new machine's daemon says hello with every capability the link uses), the standby copy has
+   a complete batch under 5 minutes old (checked in the candidate's own check, on its machine) and verifies without
+   drift (the copy link's `verify`, run where the copy is), the copy's config has the
    experiment and the section, a majority of witnesses answers and names the old leader. Then the
    old leader's server is asked to begin (`POST /api/leader/switch/begin`, the trust rule below; it records who
    started the switch on which machine in its console and in Walnut Health), and the
@@ -222,6 +225,36 @@ where the batches go). A begin forwarded by another machine is taken only from t
 goes to (`final-stop.ts` `beginRefusal`). The forwarding itself (a replica passing a person's
 `walnut leader switch` to the leader) is not wired yet.
 
+### The copy link to another machine
+
+With `standby.host` set, the standby copy lives on that host (a machine in `leader_switch.machines`
+named by its id or `host_key`, `standby.dir` its `standby_dir`) and the copy link is kind `daemon`
+(`peer.ts` `DaemonPeer`): the old leader's server holds it, its own host link to the new machine's
+daemon, the same link the periodic batches travel. Only existing capability-gated daemon commands
+cross it:
+
+| What | Command |
+|---|---|
+| batches (periodic and final) | `fs.writePart` of the batch, `walnut standby receive` there (`exec.script`), as `RemoteStandbyTarget` |
+| the ticket, the final mark, a cleared check report | `fs.write` with `atomic` (fsync, then rename: `fs-write-atomic-v1`) into `standby_dir/switch/` |
+| the check report, the target state | `fs.read` |
+| the target job (and its `--check`) | `exec.run` with `detach` and `endGroup`, job id `hx-leader-switch-<id>` (a second start answers `job_exists`, which counts as started), the machine's `env` from `leader_switch.machines` as an `env K=V` prefix |
+| verify | `walnut standby receive verify` there (`exec.script`), as `RemoteStandbyTarget.verify` |
+
+The preflight asks the daemon's hello first and names each capability it lacks
+(`DAEMON_PEER_CAPABILITIES`: fs-write-part-v1, host-script-v1, host-exec-v1, host-exec-group-v1,
+host-exec-detach-v1, fs-write-atomic-v1). A call that loses the link is tried again on a new one
+for up to 2 minutes; a refusal from the daemon is never retried. The begin rule (`beginRefusal`)
+also checks that the machine starting the switch has a `host_key` that `config.yaml`'s `hosts`
+names (the new leader dials it back as a host).
+
+The trial's checks run in the target job, on the new machine, against its own copy: before the
+promotion rewrites any path the job reads the copy's row counts, newest task and a read-back note
+(`readCopyFacts`, kept in the target state so a resumed job compares the same facts), and the
+offline and online checks compare the promoted home with those. Neither job reads the other
+machine's files by path. The promoted home's `standby` points back at the old machine
+(`standby.host` its `host_key`), so its batches go the other way over the new leader's link.
+
 ### The switch stop
 
 The old leader's server ends itself for the switch: an API call, never a signal (a signal is the
@@ -287,7 +320,8 @@ witnesses' record stays that.
 
 Whether the target can lead as a service is asked, never guessed: in the preflight, for a target
 reached as a host, the leader's link must show `leader` in the host's hello `serviceRoles` and in its
-launcher's `goodRoles`; and right before the commit the target job asks the version its own launcher
+launcher's `goodRoles` (a host whose hello names no launcher runs no service there: nothing to check, the
+same rule as on this machine; a hello with no `serviceRoles` at all is an older Walnut and refused); and right before the commit the target job asks the version its own launcher
 goes back to (`__daemon --service-roles`) when a service runs that machine. Either no refuses.
 
 ### A launcher during a switch
@@ -1192,13 +1226,9 @@ witness, above).
 
 ## Not built yet
 
-- **The copy link to another machine**: the two jobs and their ticket, mark and notes are built ([Two jobs](#two-jobs));
-  `SwitchPeer` has only the kind `local` (a standby folder on this computer). The daemon kind (the batches, the ticket,
-  the mark and the target job's start over the host link) is the next step's; `peerFor` refuses a `standby.host` until then.
-  The trial's online and offline checks still read the old home by its path from the target side (one computer only);
-  they move to the copy and the ticket with the daemon kind. The path rewrite between homes and accounts is [done](#paths);
-  whose host the old leader's own local sessions and folders become after a switch is not decided. The witness transport is
-  [done](#witnesses-on-other-machines), with a candidate's own ways to the witnesses (a and b).
+- **The copy link to another machine** is [built](#the-copy-link-to-another-machine) and rehearsed on one computer with
+  real daemons ([Rehearsal](#rehearsal), `--remote`); not yet run between the two dev boxes (rehearsal (b)). Whose host the
+  old leader's own local sessions and folders become after a switch is not decided.
 - **A begin forwarded from another machine**: the trust rule is built and tested (`beginRefusal`); a replica passing a
   person's `walnut leader switch` to the leader is not wired.
 - **The service role, as tested**: the two call sites and the start hook run against the real mode writer on a scratch install
@@ -1210,8 +1240,6 @@ witness, above).
   of its own, the others only over links) waits for the door. Tests: a real host daemon runtime relays the leader's `follower`/`replica` stream to a real leader door
   with the route on it (`tests/core/leader/switch/witness-twin.test.ts`), and a spy on the link module shows no link before the
   first lead, none for a refused or trial start, and the link of each host after it (`witness-link-gate.test.ts`).
-- **The candidate's own probe on another machine**: it runs in the candidate's own target job (`--check`), started over the copy
-  link; on another machine that needs the daemon kind above.
 - **Hosts following the new leader** is built ([Hosts follow the new leader](#hosts-follow-the-new-leader)):
   no daemon runs in the rehearsal yet, so that runs only in the real-daemon test.
 - **The host hooks are not set yet** ([the steps around the stop](#the-old-machine-as-a-host-and-the-steps-around-the-stop)):

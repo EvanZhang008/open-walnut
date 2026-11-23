@@ -16,6 +16,7 @@ import path from 'node:path'
 import { DAEMON_PEER_CAPABILITIES, DaemonPeer, peerFor, targetJobId } from '../../../../src/core/leader/switch/peer.js'
 import { RemoteStandbyTarget, type DaemonLink } from '../../../../src/core/standby/remote-transport.js'
 import { markLinkFailure } from '../../../../src/providers/link-failure.js'
+import { DaemonConnection, disconnectAllDaemons, isPooledConnection, setPooledConnectionForTest } from '../../../../src/providers/daemon-connection.js'
 import { finalMarkName, readSwitchFile, ticketName } from '../../../../src/core/leader/switch/ticket.js'
 import { standbyStatus } from '../../../../src/core/standby/index.js'
 import { testBun } from '../../../helpers/bun-runtime.js'
@@ -62,6 +63,55 @@ function peerOver(link: () => Promise<DaemonLink>, root: string): DaemonPeer {
 }
 
 describe('the copy link over a daemon, against a fake link', () => {
+  it('a switch stop\'s teardown of every host link leaves the held copy link open; closing the peer closes it', async () => {
+    const root = dir()
+    const held = new DaemonConnection('dev-b', { hostname: 'dev-b' })
+    const other = new DaemonConnection('dev-c', { hostname: 'dev-c' })
+    setPooledConnectionForTest('dev-b', held)
+    setPooledConnectionForTest('dev-c', other)
+    const disconnected = new Set<string>()
+    for (const [c, k] of [[held, 'dev-b'], [other, 'dev-c']] as const) {
+      const orig = c.disconnect.bind(c)
+      c.disconnect = (o) => { disconnected.add(k); orig(o) }
+    }
+    const m = machine(root)
+    let peer: DaemonPeer | null = null
+    const target = new RemoteStandbyTarget({ connect: () => peer!.via(), dir: m.standbyDir, spoolDir: path.join(root, 'spool') })
+    peer = new DaemonPeer(m, m.standbyDir, { host: 'dev-b', connect: async () => held, home: path.join(root, 'a'), target })
+    try {
+      await peer.hold()
+      disconnectAllDaemons()
+      // The pool let both go (nothing else of the stopping server finds them); only the other one was closed.
+      expect(isPooledConnection(held)).toBe(false)
+      expect([...disconnected]).toEqual(['dev-c'])
+      // The batches and the files go over the held link, not a new dial.
+      expect(await peer.via()).toBe(held)
+      peer.close()
+      expect([...disconnected].sort()).toEqual(['dev-b', 'dev-c'])
+    } finally {
+      setPooledConnectionForTest('dev-b', null)
+      setPooledConnectionForTest('dev-c', null)
+    }
+  })
+
+  it('a hold with no stop after it leaves the pooled link open when the peer closes', async () => {
+    const root = dir()
+    const conn = new DaemonConnection('dev-b', { hostname: 'dev-b' })
+    setPooledConnectionForTest('dev-b', conn)
+    let closed = false
+    const orig = conn.disconnect.bind(conn)
+    conn.disconnect = (o) => { closed = true; orig(o) }
+    try {
+      const p = peerOver(async () => conn, root)
+      await p.hold()
+      p.close()
+      expect(closed).toBe(false)
+      expect(isPooledConnection(conn)).toBe(true)
+    } finally {
+      setPooledConnectionForTest('dev-b', null)
+    }
+  })
+
   it('names every capability the daemon\'s hello lacks, and is ready with all of them', async () => {
     const root = dir()
     const some = fakeLink(['fs-write-part-v1', 'host-exec-v1'], () => ({ ok: true }))

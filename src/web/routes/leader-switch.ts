@@ -263,7 +263,14 @@ leaderSwitchRouter.post('/switch/final-stop', thisMachineOnly, async (req, res) 
   res.status(202).json({ ok: true, stoppedAt })
   // After the answer is on its way, whether or not the caller is still there to read it (a dropped
   // caller must not leave this server taken for a stop that never runs).
-  setImmediate(() => {
+  setImmediate(async () => {
+    // The copy link outlives the stop's teardown of every host link (a stopping server dials nothing): the final
+    // batch and the mark go over it last. Held before the stop starts, for at most 10 s.
+    const held = await Promise.race([
+      sw.peer.hold().then(() => null, (err: unknown) => (err instanceof Error ? err.message : String(err))),
+      new Promise<string>((r) => setTimeout(() => r('no link within 10 s'), 10_000).unref?.()),
+    ])
+    if (held) log.web.warn('leader switch: the copy link could not be held for the stop (the final batch may find no link, and the switch rolls back)', { switchId, why: held })
     const taken = server.requestSwitchStop({
       windowMs: Math.max(0, sw.commitDeadline - Date.now()),
       abort: (why) => abort.abort(why),

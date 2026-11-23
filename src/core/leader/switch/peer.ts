@@ -46,6 +46,11 @@ export interface SwitchPeer {
   readFile<T>(name: string): Promise<T | null>
   /** Start the target job of `switchId` on that machine, detached; a job of it that runs already is left alone. */
   startTargetJob(switchId: string, opts: { check: boolean }): Promise<StartJobResult>
+  /**
+   * Keep the link this switch stop needs open past the stop's teardown of every host link (its sessions'
+   * runtime ends first; the final batch and the mark come after): called when the switch stop begins.
+   */
+  hold(): Promise<void>
   /** Stop sending there (the final stop closes every link). */
   close(): void
 }
@@ -99,6 +104,7 @@ export class LocalPeer implements SwitchPeer {
     return { ok: true, ...(child.pid ? { pid: child.pid } : {}) }
   }
 
+  async hold(): Promise<void> { /* a folder here: no link */ }
   close(): void { /* nothing held */ }
 }
 
@@ -134,6 +140,8 @@ export class DaemonPeer implements SwitchPeer {
   readonly kind = 'daemon' as const
   private readonly target: import('../../standby/remote-transport.js').RemoteStandbyTarget
   private link: DaemonLink | null = null
+  /** The connection held through the switch stop (hold), and its release. */
+  private held: { link: DaemonLink; release: () => void } | null = null
   private closed = false
 
   constructor(
@@ -147,16 +155,34 @@ export class DaemonPeer implements SwitchPeer {
       /** The walnut program there (`standby.walnut`, default walnut). */
       walnut?: string[]
       linkWaitMs?: number
+      /** The batches' target; its link is `via()` (peerFor), so a held link carries them too. */
       target: import('../../standby/remote-transport.js').RemoteStandbyTarget
     },
   ) {
     this.target = o.target
   }
 
+  /** The link every command of this copy link goes over: the held one in a switch stop, else the server's pooled link. */
+  async via(): Promise<DaemonLink> {
+    if (this.closed) throw new Error('the copy link was closed')
+    return this.held?.link ?? this.o.connect()
+  }
+
   private async conn(): Promise<DaemonLink> {
     if (this.closed) throw new Error('the copy link was closed')
-    this.link ??= await this.o.connect()
+    this.link ??= await this.via()
     return this.link
+  }
+
+  async hold(): Promise<void> {
+    if (this.held || this.closed) return
+    const link = await this.o.connect()
+    const { keepThroughStop } = await import('../../../providers/daemon-connection.js')
+    const release = typeof (link as { disconnect?: unknown }).disconnect === 'function'
+      ? keepThroughStop(link as import('../../../providers/daemon-connection.js').DaemonConnection)
+      : () => {}
+    this.held = { link, release }
+    this.link = link
   }
 
   /** One command, sent again over a new link while the link is down (for `linkWaitMs`); a refusal throws. */
@@ -235,6 +261,8 @@ export class DaemonPeer implements SwitchPeer {
   close(): void {
     this.closed = true
     this.target.close()
+    this.held?.release()
+    this.held = null
   }
 }
 
@@ -251,8 +279,11 @@ export async function peerFor(o: { to: MachinePlace; standby: { dir?: string; ho
     const host = o.standby.host
     const connect = o.connect ?? (async (h: string) => (await import('../../hosts/link.js')).link(h))
     const { RemoteStandbyTarget } = await import('../../standby/remote-transport.js')
-    const target = new RemoteStandbyTarget({ connect: () => connect(host), dir: o.to.standbyDir, ...(o.standby.walnut ? { walnut: o.standby.walnut } : {}), spoolDir: path.join(o.home, 'tmp', 'standby-spool'), ...(o.linkWaitMs ? { linkWaitMs: o.linkWaitMs } : {}) })
-    return new DaemonPeer(o.to, o.to.standbyDir, { host, connect: () => connect(host), home: o.home, ...(o.standby.walnut ? { walnut: o.standby.walnut } : {}), ...(o.linkWaitMs ? { linkWaitMs: o.linkWaitMs } : {}), target })
+    // The batches ride the peer's own link (held through a switch stop, else the pool's).
+    let peer: DaemonPeer | null = null
+    const target = new RemoteStandbyTarget({ connect: () => peer!.via(), dir: o.to.standbyDir, ...(o.standby.walnut ? { walnut: o.standby.walnut } : {}), spoolDir: path.join(o.home, 'tmp', 'standby-spool'), ...(o.linkWaitMs ? { linkWaitMs: o.linkWaitMs } : {}) })
+    peer = new DaemonPeer(o.to, o.to.standbyDir, { host, connect: () => connect(host), home: o.home, ...(o.standby.walnut ? { walnut: o.standby.walnut } : {}), ...(o.linkWaitMs ? { linkWaitMs: o.linkWaitMs } : {}), target })
+    return peer
   }
   if (path.resolve(o.standby.dir) !== path.resolve(o.to.standbyDir)) return { refused: `this leader's standby copy goes to ${o.standby.dir}, not to ${o.to.id}'s standby_dir ${o.to.standbyDir}` }
   return new LocalPeer(o.to, o.to.standbyDir, o.env)

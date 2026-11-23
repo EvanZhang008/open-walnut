@@ -532,7 +532,9 @@ async function twoDown(x: Ctx): Promise<void> {
     for (const id of down) w.witnessDown(id, false)
   }
   c.add(`two witnesses down (${down.join(', ')}): the preflight refuses, naming what it lacks`, sw?.code === 1 && /witnesses answered|majority/.test(sw.out), last(sw?.out ?? '', 2))
-  const byTheSwitch = [...changed].filter((p) => !control.has(p) && !/^(local\/leader-switch\/(may-act|server-leader\.log|source-job)|logs\/|local\/health-monitor\/)/.test(p))
+  // What a running leader writes by itself whether or not a switch was asked (the same list as the no-link e2e's).
+  const live = /^(local\/leader-switch\/(may-act|server-leader\.log)|local\/health-monitor\/|logs\/|cache\/|tmp\/|sync\/|\.git\/|.*\.(sqlite|db)-(wal|shm)$|.*\.log$)/
+  const byTheSwitch = [...changed].filter((p) => !control.has(p) && !live.test(p))
   c.add(`two witnesses down: nothing changed on ${L.id} (no switch state, no marker, its home by the manifest's classes but what it changes by itself)`, readSwitchState(L.home)?.id === stateBefore && !readMarker(L.home) && byTheSwitch.length === 0, `changed by the refused switch: ${byTheSwitch.slice(0, 8).join(', ') || 'none'}; by the leader alone: ${[...control].slice(0, 5).join(', ') || 'none'}`)
   const o1 = homeO ? await snapshotHome(O.home) : null
   const keptO = o0 && o1 ? compareKept(o0, o1) : null
@@ -558,12 +560,21 @@ async function cutAfterCommit(x: Ctx): Promise<void> {
     for (const p of cuts) p.setMode('pass')
   }
   const t1 = Date.now()
-  trueAfter = await waitFor('the leader to act again', async () => ((await status(w, N))?.mayAct === true ? Date.now() - t1 : null), 120_000, 200).catch(() => NaN)
+  // What the permit says meanwhile (its state and why, each change), the evidence when it does not come back.
+  const seen: string[] = []
+  const permitNow = async () => ((await w.api(N, 'GET', '/api/leader/status').catch(() => null))?.json as { permit?: { mayAct?: boolean; state?: string; why?: string } } | null)?.permit ?? null
+  trueAfter = await waitFor('the leader to act again', async () => {
+    const p = await permitNow()
+    const line = `${p?.state}: ${p?.why ?? ''}`
+    if (seen[seen.length - 1]?.endsWith(line) !== true) seen.push(`+${((Date.now() - t1) / 1000).toFixed(0)}s ${line}`)
+    return p?.mayAct === true ? Date.now() - t1 : null
+  }, 300_000, 500).catch(() => NaN)
+  x.log(`cut after the commit, the permit after the links returned: ${seen.join(' | ')}`)
   const doors = readMayAct(N.home).filter((l) => l.event === 'door' && l.mayAct && l.t > t0 + (falseAfter || 0) && l.t < t1)
   x.times['new leader cut from the other witnesses: mayAct false after'] = `${falseAfter} ms (lease ${params.validMs} ms)`
   x.times['and true again after the links returned'] = `${trueAfter} ms`
   c.add(`cut after the commit: ${N.id}'s mayAct goes false within the lease (${params.validMs} ms) once it reaches only its own witness`, Number.isFinite(falseAfter) && falseAfter <= params.validMs + 5_000, `${falseAfter} ms`)
-  c.add(`cut after the commit: it comes back once the witnesses answer, and nothing went through a door meanwhile`, Number.isFinite(trueAfter) && doors.length === 0, `true again after ${trueAfter} ms; ${doors.length} door line(s) while it could not act`)
+  c.add(`cut after the commit: it comes back once the witnesses answer, and nothing went through a door meanwhile`, Number.isFinite(trueAfter) && doors.length === 0, `true again after ${trueAfter} ms; ${doors.length} door line(s) while it could not act; ${seen.slice(-4).join(' | ')}`)
 }
 
 /** A kill at each step of either job, resumed (on the machine whose job died): one leader, everything carried. */
