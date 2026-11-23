@@ -4,7 +4,11 @@
  * that set still carries, and returns the exact state file of that Walnut's scope
  * (a hand-written full host state, so no user script runs) without writing it.
  * The pure rules are covered in trigger-state-snapshot-core.test.ts; this proves the
- * twins call them with the right facts.
+ * twins call them with the right facts. The receiving half, triggers.state.seed, is
+ * proven the same way: a seeded state is the one the next configure arms the trigger
+ * with (its first check fires only what the seen set lacks), and is never written over
+ * a file, through a symlink, for a held trigger or from another Walnut's socket. The
+ * configure reply's armed/draining counts ride along.
  *
  * What's real: both daemon twins, their files. What's mocked: nothing. The daemon
  * runs with a minimal env (fixture HOME and TMPDIR, a system-only PATH), not as a
@@ -46,12 +50,14 @@ async function waitFor<T>(pick: () => T | undefined, ms: number, what: string): 
 /** One server socket. Every RPC has a deadline, and a closed socket fails what is pending. */
 class Client {
   private nextId = 1
+  /** Every frame that answers no RPC (trigger.fired, trigger.checked, ...). */
+  readonly events: Record<string, any>[] = []
   private waiters = new Map<number, { resolve: (reply: Record<string, any>) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>()
   private constructor(private ws: WebSocket) {
     ws.on('message', (data: Buffer | string) => {
       const msg = JSON.parse(typeof data === 'string' ? data : data.toString()) as Record<string, unknown>
       const waiter = typeof msg.id === 'number' ? this.waiters.get(msg.id) : undefined
-      if (!waiter) return
+      if (!waiter) { this.events.push(msg); return }
       this.waiters.delete(msg.id as number)
       clearTimeout(waiter.timer)
       waiter.resolve(msg)
@@ -92,6 +98,8 @@ for (const twin of ['standalone', 'source'] as const) {
     const FIXTURE_HOME = path.join(BASE, 'home')
     const FIXTURE_TMP = path.join(BASE, 'tmp')
     const CHECK = path.join(BASE, 'check.cjs')
+    const CHECK_SEED = path.join(BASE, 'check-seed.cjs')
+    const SEED_ITEMS = ['uid-100', 'uid-101', 'uid-102']
     const HOME_A = path.join(BASE, 'walnut-a')
     const HOME_B = path.join(BASE, 'walnut-b')
     // The daemon's own file naming (triggerStateFileName) inside the daemon's own scope dir.
@@ -127,6 +135,8 @@ for (const twin of ['standalone', 'source'] as const) {
       }
       // Neutral: reports nothing new and touches nothing.
       fs.writeFileSync(CHECK, "console.log(JSON.stringify({ fire: false }))\n")
+      // The moved watcher: reports two items it already reported on the old daemon, and one new.
+      fs.writeFileSync(CHECK_SEED, `console.log(JSON.stringify({ fire: true, items: ${JSON.stringify(SEED_ITEMS.map((id) => ({ id })))}, state: { lastUid: 102 } }))\n`)
       for (const dir of [RUN_DIR, FIXTURE_HOME, FIXTURE_TMP]) fs.mkdirSync(dir, { recursive: true })
       // A minimal env: nothing of the real HOME, no credentials, no inherited Walnut settings.
       const env: NodeJS.ProcessEnv = {
@@ -228,6 +238,92 @@ for (const twin of ['standalone', 'source'] as const) {
       const a = await client()
       expect(await configure(a, ['armed-watch', 'keep-a'], HOME_A)).toMatchObject({ ok: true, count: 2 })
       expect(await snapshot(a, { home: HOME_A, triggerId: 'armed-watch' })).toMatchObject({ ok: true, supported: false, reason: 'still_configured' })
+    }, 60_000)
+
+    // ── triggers.state.seed (trigger-state-seed-v1): the receiving half of a set move ──
+
+    const HOME_C = path.join(BASE, 'walnut-c')
+    const SEED_TID = 'moved-mail-watch'
+    const seedDef = { id: SEED_TID, name: SEED_TID, everyMs: 3_600_000, check: { run: `${JSON.stringify(process.execPath)} ${JSON.stringify(CHECK_SEED)}` } }
+    const seed = (c: Client, frame: Record<string, unknown>) => c.rpc({ cmd: 'triggers.state.seed', ...frame })
+    const digestOf = (s: unknown) => createHash('sha256').update(canonicalTriggerStateJson(s)).digest('hex')
+
+    it('advertises trigger-state-seed-v1', async () => {
+      const hello = await (await client()).rpc({ cmd: 'hello' })
+      expect(hello.capabilities as string[]).toContain('trigger-state-seed-v1')
+    })
+
+    it('a configure reply says what the home still arms and drains', async () => {
+      const c = await client()
+      expect(await c.rpc({ cmd: 'triggers.configure', home: path.join(BASE, 'walnut-d'), config: { version: 1, triggers: [] } }))
+        .toMatchObject({ ok: true, applied: true, count: 0, armed: 0, draining: 0 })
+      expect(await c.rpc({ cmd: 'triggers.configure', home: path.join(BASE, 'walnut-d'), config: { version: 1, triggers: [def('d-watch')] } }))
+        .toMatchObject({ ok: true, count: 1, armed: 1, draining: 0 })
+      expect(await c.rpc({ cmd: 'triggers.configure', home: path.join(BASE, 'walnut-d'), config: { version: 1, triggers: [] } }))
+        .toMatchObject({ ok: true, count: 0, armed: 0, draining: 0 })
+    }, 60_000)
+
+    it('seeds the moved state, and the first configure arms the trigger with it: only a new item fires', async () => {
+      const moved = fakeState('epoch-moved')
+      const digest = digestOf(moved)
+      const own = stateFile(HOME_C, SEED_TID)
+      // The set's daemon has not been pushed this Walnut's triggers yet (the leader holds the push).
+      const c = await client()
+      expect(await seed(c, { triggerId: SEED_TID, state: moved, digest })).toMatchObject({ ok: true, seeded: false, reason: 'home_required' })
+      expect(await seed(c, { home: HOME_C, triggerId: SEED_TID, state: moved, digest: 'f'.repeat(64) })).toMatchObject({ ok: true, seeded: false, reason: 'digest_mismatch' })
+      const pending = { ...moved, pendingFires: [{ seq: 10, atMs: Date.now(), items: [{ id: 'uid-102' }], durationMs: 3 }] }
+      expect(await seed(c, { home: HOME_C, triggerId: SEED_TID, state: pending, digest: digestOf(pending) })).toMatchObject({ seeded: false, reason: 'pending_fires' })
+      expect(fs.existsSync(own), 'a refused seed writes nothing').toBe(false)
+
+      expect(await seed(c, { home: HOME_C, triggerId: SEED_TID, state: moved, digest })).toMatchObject({ ok: true, seeded: true, triggerId: SEED_TID, digest, seq: 9, seenCount: 2 })
+      const body = fs.readFileSync(own, 'utf-8')
+      expect(JSON.parse(body)).toEqual(moved)
+      expect(fs.statSync(own).mode & 0o777).toBe(0o600)
+      expect(fs.readdirSync(path.dirname(own)), 'no temp file left').toEqual([path.basename(own)])
+      // A resend of the same state (a lost reply) answers seeded; another state is never written over it.
+      expect(await seed(c, { home: HOME_C, triggerId: SEED_TID, state: moved, digest })).toMatchObject({ seeded: true, already: true })
+      const other = fakeState('epoch-other')
+      expect(await seed(c, { home: HOME_C, triggerId: SEED_TID, state: other, digest: digestOf(other) })).toMatchObject({ ok: true, seeded: false, reason: 'state_exists' })
+      expect(fs.readFileSync(own, 'utf-8')).toBe(body)
+
+      // The push the leader held: the trigger arms with the seeded file, which stays as it is.
+      expect(await c.rpc({ cmd: 'triggers.configure', home: HOME_C, config: { version: 1, triggers: [seedDef] } })).toMatchObject({ ok: true, count: 1, armed: 1 })
+      expect(fs.readFileSync(own, 'utf-8'), 'configure reads the seeded state, it does not replace it').toBe(body)
+      expect(await seed(c, { home: HOME_C, triggerId: SEED_TID, state: moved, digest })).toMatchObject({ ok: true, seeded: false, reason: 'still_configured' })
+
+      // Its first check reports three items; two are in the moved seen set.
+      expect(await c.rpc({ cmd: 'triggers.run', home: HOME_C, triggerId: SEED_TID })).toMatchObject({ ok: true, ran: true })
+      const fired = await waitFor(() => c.events.find((e) => e.ev === 'trigger.fired' && e.id === SEED_TID), 20_000, 'the first fire')
+      expect(fired.items.map((i: { id: string }) => i.id), 'only the item the old daemon never reported').toEqual(['uid-102'])
+      expect(fired.epoch, 'the moved epoch, so the server dedups across the move').toBe('epoch-moved')
+      expect(fired.seq).toBe(10)
+      const after = JSON.parse(fs.readFileSync(own, 'utf-8'))
+      expect(Object.keys(after.seen).sort()).toEqual(SEED_ITEMS)
+      expect(after.state).toEqual({ lastUid: 102 })
+
+      // Acked and disarmed: nothing of this home is left armed or draining.
+      expect(await c.rpc({ cmd: 'triggers.ack', home: HOME_C, triggerId: SEED_TID, seq: 10 })).toMatchObject({ ok: true, acked: true })
+      expect(await c.rpc({ cmd: 'triggers.configure', home: HOME_C, config: { version: 1, triggers: [] } })).toMatchObject({ ok: true, armed: 0, draining: 0 })
+      // Disarmed, the file is this Walnut's own again: still never overwritten.
+      expect(await seed(c, { home: HOME_C, triggerId: SEED_TID, state: moved, digest })).toMatchObject({ seeded: false, reason: 'state_exists' })
+    }, 60_000)
+
+    it('never writes through a symlink, and a socket of another Walnut cannot seed', async () => {
+      const moved = fakeState('epoch-link')
+      const digest = digestOf(moved)
+      const link = stateFile(HOME_C, 'linked-watch')
+      const target = path.join(BASE, 'link-target.json')
+      fs.mkdirSync(path.dirname(link), { recursive: true })
+      fs.symlinkSync(target, link)
+      const c = await client()
+      expect(await seed(c, { home: HOME_C, triggerId: 'linked-watch', state: moved, digest })).toMatchObject({ ok: true, seeded: false, reason: 'state_exists' })
+      expect(fs.existsSync(target)).toBe(false)
+
+      const bound = await client()
+      expect(await bound.rpc({ cmd: 'leader.configure', home: HOME_A, walnutId: 'walnuta' })).toMatchObject({ ok: true })
+      const r = await seed(bound, { home: HOME_C, triggerId: 'foreign-watch', state: moved, digest })
+      expect(r).toMatchObject({ ok: false, errorKind: 'not_owner' })
+      expect(fs.existsSync(stateFile(HOME_C, 'foreign-watch'))).toBe(false)
     }, 60_000)
   })
 }

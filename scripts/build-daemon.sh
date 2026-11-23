@@ -167,6 +167,7 @@ SOURCES=(
   src/providers/trigger-check-sidecar.ts
   src/providers/trigger-clock-core.ts
   src/providers/trigger-state-snapshot-core.ts
+  src/providers/trigger-state-seed-core.ts
   src/providers/clock-schedule-core.ts
   src/core/cron/trigger-timing.ts
   src/core/transcript-chain.ts

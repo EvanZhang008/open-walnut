@@ -213,6 +213,7 @@ import {
 import { buildScheduledMessage, buildTriggerMessage } from './trigger-envelope-core.js'
 import { START_TASK_TOKEN, clockDueMs, clockFireOwed, clockStateOnArm, dropStaleClockFires, type ClockReport } from './trigger-clock-core.js'
 import { takeTriggerStateSnapshot } from './trigger-state-snapshot-core.js'
+import { seedTriggerState } from './trigger-state-seed-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { createDaemonPorts, defaultPortScanIo } from './port-scan-core.js'
@@ -3225,6 +3226,8 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'triggers.claim': return daemonCommands.run(() => cmdTriggersClaim(ws, id as number, cmd))
     // trigger-state-snapshot-v1: read-only, still trusted-socket only (host data).
     case 'triggers.state.snapshot': return daemonCommands.run(() => cmdTriggersStateSnapshot(ws, id as number, cmd))
+    // trigger-state-seed-v1: writes only a file nothing holds, trusted-socket only.
+    case 'triggers.state.seed': return daemonCommands.run(() => cmdTriggersStateSeed(ws, id as number, cmd))
     case 'skills.sync': return cmdSkillsSync(ws, id as number, cmd)
     case 'bridgeResume': return daemonCommands.run(() => cmdBridgeResume(ws, id as number, cmd))
     case 'stt': return cmdSttRelay(ws, id as number, cmd)
@@ -9505,11 +9508,14 @@ async function configureTriggers(ws: ServerWebSocket<WsData>, id: number, cmd: R
   if (ws.data) ws.data.triggerScope = home
   pruneTriggerStateFiles(now)
   const clocks = clockReports(home)
+  // What this home still holds after the push: a set move empties it and waits for 0 and 0.
+  const armedCount = armedOf(home).length
+  const drainingCount = fireHolders(home).length - armedCount
   logMsg('info', 'triggers configured', {
     scope: walnutScope.label(home), hash, count: defs.length, changed, clocks: clocks.length,
-    released: released.map((r) => r.id), draining: fireHolders(home).length - armedOf(home).length,
+    released: released.map((r) => r.id), draining: drainingCount,
   })
-  sendOk(ws, id, { applied: true, changed, count: defs.length, clocks, released, ...(probe ? { held: true } : delta ? { delta: true } : {}), ...(refused.length ? { refused } : {}) })
+  sendOk(ws, id, { applied: true, changed, count: defs.length, armed: armedCount, draining: drainingCount, clocks, released, ...(probe ? { held: true } : delta ? { delta: true } : {}), ...(refused.length ? { refused } : {}) })
 
   // At-least-once replay: a fire the server never acked (Mac asleep, tunnel
   // down) is redelivered now that a trusted client is provably here. The server
@@ -9669,6 +9675,46 @@ function cmdTriggersStateSnapshot(ws: ServerWebSocket<WsData>, id: number, cmd: 
     logMsg('info', 'trigger state snapshot', {
       id: typeof cmd.triggerId === 'string' ? cmd.triggerId.slice(0, 200) : '', scope: walnutScope.label(home),
       supported: reply.supported, ...(reply.supported ? { seq: reply.state.seq, seen: reply.seenCount } : { reason: reply.reason }),
+    })
+    sendOk(ws, id, reply as unknown as Record<string, unknown>)
+  })
+}
+
+/**
+ * triggers.state.seed (trigger-state-seed-v1): a snapshot's state, taken on another
+ * daemon, written as this Walnut's state file of a trigger this daemon does not hold,
+ * never over a file (trigger-state-seed-core.ts holds every rule), so the next
+ * configure arms it with that seen set and cursor. Runs behind any configure in
+ * flight. Every refusal but a foreign home is an ok reply `{seeded: false, reason}`.
+ * Mirror daemon-source.ts.
+ */
+function cmdTriggersStateSeed(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (refuseForeignHome(ws, id, cmd, 'triggers.state.seed')) return
+  return triggersConfigureGate.run('triggers.configure', async () => {
+    const home = walnutScope.askedHome(cmd)
+    const reply = seedTriggerState({
+      fs,
+      askedHome: home,
+      triggerId: cmd.triggerId,
+      state: cmd.state,
+      digest: cmd.digest,
+      liveFacts: (h, tid) => {
+        const key = triggerKey(h, tid)
+        return {
+          configured: !!triggerScopes.get(h)?.configured.some((def) => def.id === tid),
+          armed: armedTriggers.has(key),
+          draining: drainingTriggers.has(key),
+          checkRunning: [...triggerChecksRunning].some((e) => e.def.id === tid && e.home === h),
+          hostDeliveryInFlight: hostDeliveriesInFlight.has(key),
+        }
+      },
+      stateDir: (h) => triggerStateDirOf(h),
+      statePath: (h, tid) => triggerStatePath(h, tid),
+      tempTag: `${process.pid}-${crypto.randomBytes(4).toString('hex')}`,
+    })
+    logMsg('info', 'trigger state seed', {
+      id: typeof cmd.triggerId === 'string' ? cmd.triggerId.slice(0, 200) : '', scope: walnutScope.label(home),
+      seeded: reply.seeded, ...(reply.seeded ? { seq: reply.seq, seen: reply.seenCount, ...(reply.already ? { already: true } : {}) } : { reason: reply.reason }),
     })
     sendOk(ws, id, reply as unknown as Record<string, unknown>)
   })

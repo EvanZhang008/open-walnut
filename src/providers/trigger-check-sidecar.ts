@@ -11,3 +11,5 @@ export { buildScheduledMessage, buildTriggerMessage } from './trigger-envelope-c
 // triggers.state.snapshot (trigger-state-snapshot-v1): the source twin advertises it
 // only when the loaded sidecar carries takeTriggerStateSnapshot.
 export * from './trigger-state-snapshot-core.js';
+// triggers.state.seed (trigger-state-seed-v1): gated the same way on seedTriggerState.
+export * from './trigger-state-seed-core.js';

@@ -802,6 +802,16 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // fail closed: a daemon without it has no such command, and the server must not
   // migrate state from it. Sidecar-gated in the source twin like triggers-v1.
   'trigger-state-snapshot-v1',
+  // 'trigger-state-seed-v1': `triggers.state.seed {home, triggerId, state, digest}` writes
+  // a snapshot's state (trigger-state-snapshot-v1, taken on another daemon) as this
+  // Walnut's state file of a trigger this daemon does not hold (not configured, armed,
+  // draining, running or delivering) and only where no file is (never overwritten), so
+  // a service set move keeps the dedup set and cursor: the next configure arms the
+  // trigger with it. The state must parse with the snapshot's strict parser and match
+  // its digest. Answers `{seeded: true}` (`already: true` for a resend of the same state)
+  // or `{seeded: false, reason}` (trigger-state-seed-core.ts). Without it the server
+  // pushes the set without the state. Sidecar-gated in the source twin like snapshot.
+  'trigger-state-seed-v1',
   'git-file-history-v1',
   'fs-mutate-v1',
   'fs-write-atomic-v1',

@@ -75,6 +75,7 @@ export const RESEND_AFTER_LOST: Readonly<Record<string, string>> = {
   'turns.configure': 'the whole setting, pushed again', 'workspace.configure': 'the whole setting, pushed again',
   'jobs.configure': 'the whole job list, pushed again', 'bridge.configure': 'the whole setting, pushed again',
   'server.configure': 'the whole setting, pushed again', 'usage.budget.configure': 'the whole budget, pushed again',
+  'triggers.state.seed': 'never overwrites: a second seed of the same state finds its own file and answers seeded',
 }
 
 /** Whether `cmd` is sent again after `failure` (refused by a draining daemon, or its reply lost in a swap). */

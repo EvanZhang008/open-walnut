@@ -267,7 +267,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'transcript-archive-v1', 'host-cache-prune-v1', 'host-exec-v1', 'host-exec-v2', 'host-exec-wait-v1', 'host-exec-group-v1', 'host-script-v1', 'host-exec-detach-v1', 'host-script-detach-v1', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'history-ready-v1', 'history-ready-subagent-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'trigger-caller-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'triggers-delta-v1', 'acp-model-catalog-v1', 'acp-light-bounds-v1', 'acp-survive-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1', 'pty-stream-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'ports-v1', 'task-dir-v1', 'task-dir-prune-v1', 'task-dir-prune-builds-v1', 'task-dir-sizes-v1', 'transcript-archive-v1', 'host-cache-prune-v1', 'host-exec-v1', 'host-exec-v2', 'host-exec-wait-v1', 'host-exec-group-v1', 'host-script-v1', 'host-exec-detach-v1', 'host-script-detach-v1', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'history-ready-v1', 'history-ready-subagent-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'trigger-caller-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'trigger-state-snapshot-v1', 'trigger-state-seed-v1', 'triggers-delta-v1', 'acp-model-catalog-v1', 'acp-light-bounds-v1', 'acp-survive-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'codex-outside-v1', 'claude-outside-v1', 'budget-v2', 'walnut-mcp-v1', 'pty-stream-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -4795,6 +4795,8 @@ function dispatchCommand(ws, id, cmd) {
     case 'triggers.claim': return daemonCommands.run(function () { return cmdTriggersClaim(ws, id, cmd); });
     // trigger-state-snapshot-v1: read-only, still trusted-socket only (host data).
     case 'triggers.state.snapshot': return daemonCommands.run(function () { return cmdTriggersStateSnapshot(ws, id, cmd); });
+    // trigger-state-seed-v1: writes only a file nothing holds, trusted-socket only.
+    case 'triggers.state.seed': return daemonCommands.run(function () { return cmdTriggersStateSeed(ws, id, cmd); });
     case 'skills.sync': return cmdSkillsSync(ws, id, cmd);
     case 'bridgeResume': return daemonCommands.run(function () { return cmdBridgeResume(ws, id, cmd); });
     case 'stt': return cmdSttRelay(ws, id, cmd);
@@ -10668,11 +10670,14 @@ async function configureTriggers(ws, id, cmd) {
   ws.triggerScope = home;
   pruneTriggerStateFiles(now);
   var clocks = clockReports(home);
+  // What this home still holds after the push: a set move empties it and waits for 0 and 0.
+  var armedCount = armedOf(home).length;
+  var drainingCount = fireHolders(home).length - armedCount;
   logMsg('info', 'triggers configured', {
     scope: walnutScope.label(home), hash: hash, count: defs.length, changed: changed, clocks: clocks.length,
-    released: released.map(function (r) { return r.id; }), draining: fireHolders(home).length - armedOf(home).length,
+    released: released.map(function (r) { return r.id; }), draining: drainingCount,
   });
-  var reply = { applied: true, changed: changed, count: defs.length, clocks: clocks, released: released };
+  var reply = { applied: true, changed: changed, count: defs.length, armed: armedCount, draining: drainingCount, clocks: clocks, released: released };
   if (probe) reply.held = true;
   else if (delta) reply.delta = true;
   if (refused.length) reply.refused = refused;
@@ -10842,6 +10847,47 @@ function cmdTriggersStateSnapshot(ws, id, cmd) {
     var logged = { id: typeof cmd.triggerId === 'string' ? cmd.triggerId.slice(0, 200) : '', scope: walnutScope.label(home), supported: reply.supported };
     if (reply.supported) { logged.seq = reply.state.seq; logged.seen = reply.seenCount; } else { logged.reason = reply.reason; }
     logMsg('info', 'trigger state snapshot', logged);
+    sendOk(ws, id, reply);
+  });
+}
+
+// triggers.state.seed (trigger-state-seed-v1): a snapshot's state, taken on another
+// daemon, written as this Walnut's state file of a trigger this daemon does not hold,
+// never over a file (trigger-state-seed-core.ts, through the sidecar, holds every
+// rule), so the next configure arms it with that seen set and cursor. Runs behind any
+// configure in flight. Every refusal but a foreign home is an ok reply
+// {seeded: false, reason}. Mirror daemon-standalone.ts.
+function cmdTriggersStateSeed(ws, id, cmd) {
+  if (refuseForeignHome(ws, id, cmd, 'triggers.state.seed')) return;
+  if (!triggerCheckCore || typeof triggerCheckCore.seedTriggerState !== 'function') {
+    return sendOk(ws, id, { seeded: false, reason: 'sidecar_missing' });
+  }
+  return sessionStartGate.run('triggers.configure', async function () {
+    var home = walnutScope.askedHome(cmd);
+    var reply = triggerCheckCore.seedTriggerState({
+      fs: fs,
+      askedHome: home,
+      triggerId: cmd.triggerId,
+      state: cmd.state,
+      digest: cmd.digest,
+      liveFacts: function (h, tid) {
+        var key = triggerKey(h, tid);
+        var scope = triggerScopes.get(h);
+        return {
+          configured: !!scope && scope.configured.some(function (def) { return def.id === tid; }),
+          armed: armedTriggers.has(key),
+          draining: drainingTriggers.has(key),
+          checkRunning: [...triggerChecksRunning].some(function (e) { return e.def.id === tid && e.home === h; }),
+          hostDeliveryInFlight: hostDeliveriesInFlight.has(key),
+        };
+      },
+      stateDir: function (h) { return triggerStateDirOf(h); },
+      statePath: function (h, tid) { return triggerStatePath(h, tid); },
+      tempTag: process.pid + '-' + crypto.randomBytes(4).toString('hex'),
+    });
+    var logged = { id: typeof cmd.triggerId === 'string' ? cmd.triggerId.slice(0, 200) : '', scope: walnutScope.label(home), seeded: reply.seeded };
+    if (reply.seeded) { logged.seq = reply.seq; logged.seen = reply.seenCount; if (reply.already) logged.already = true; } else { logged.reason = reply.reason; }
+    logMsg('info', 'trigger state seed', logged);
     sendOk(ws, id, reply);
   });
 }
@@ -15341,6 +15387,7 @@ function daemonCapabilities() {
   if (triggerCheckCore && typeof triggerCheckCore.applyClockFire === 'function' && typeof triggerCheckCore.buildScheduledMessage === 'function') caps.push('clock-routine-v1');
   // An older sidecar carries no snapshot rules: the capability stays off (fail closed).
   if (triggerCheckCore && typeof triggerCheckCore.takeTriggerStateSnapshot === 'function') caps.push('trigger-state-snapshot-v1');
+  if (triggerCheckCore && typeof triggerCheckCore.seedTriggerState === 'function') caps.push('trigger-state-seed-v1');
   // A routine run started here needs the start's checks and its task token from the sidecar.
   if (triggerCheckCore && typeof triggerCheckCore.applyClockFire === 'function' && typeof triggerCheckCore.validateClockStartSpec === 'function' && typeof triggerCheckCore.START_TASK_TOKEN === 'string') caps.push('clock-host-start-v1');
   if (cronRuntime) caps.push('cron-supervision-v1', 'service-update-v1', 'service-update-force-v1');

@@ -240,6 +240,8 @@ export const DAEMON_SOURCE_FILES = [
   // triggers.state.snapshot rules (trigger-state-snapshot-v1), bundled into the binary
   // and shipped in the trigger-check-core.cjs sidecar: same lockstep rule.
   'src/providers/trigger-state-snapshot-core.ts',
+  // triggers.state.seed rules (trigger-state-seed-v1): bundled and in the sidecar the same way.
+  'src/providers/trigger-state-seed-core.ts',
   'src/providers/clock-schedule-core.ts',
   'src/core/cron/trigger-timing.ts',
   'src/core/transcript-chain.ts',
