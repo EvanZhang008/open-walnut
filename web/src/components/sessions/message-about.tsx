@@ -6,8 +6,6 @@
  * The pills read as the task's live name and status like every other pill.
  */
 import { createContext } from 'react';
-import { FoldRow } from './TurnFolds';
-import { disclosureIds, useRowDisclosure } from './row-disclosure';
 import { readAboutTag } from '@open-walnut/message-about';
 import { useTaskTitle } from '@/components/transfer/TransferLinks';
 import '@/styles/message-about.css';
@@ -30,24 +28,6 @@ export function rowAbout(about: readonly string[] | undefined, rawText: string |
 function AboutPill({ id }: { id: string }) {
   const title = useTaskTitle(id);
   return <a href={taskPath(id)} className="task-link" data-task-id={id}>{title ?? id}</a>;
-}
-
-/**
- * Under a reply in a session's chat the tasks it is about are one folded line, the turn's own
- * small chevron and "About 2 tasks" in its grey, opened to the pills (2026-11-23, the user, by
- * voice: take away the about line, "use the same small arrow" the threads use). `msgId` keeps it
- * open across the reply's redraws (row-disclosure.ts).
- */
-export function MessageAboutFold({ ids, msgId }: { ids: readonly string[]; msgId: string | undefined }) {
-  const [open, setOpen] = useRowDisclosure(disclosureIds.about(msgId), false);
-  if (!ids.length) return null;
-  const words = `About ${ids.length} ${ids.length === 1 ? 'task' : 'tasks'}`;
-  return (
-    <FoldRow open={open} onToggle={() => setOpen((o) => !o)} testId="msg-about" className="msg-about-fold" attrs={{ 'data-ids': ids.join(',') }}
-      head={<span className="tool-run-label">{words}</span>}>
-      {open && <div className="msg-about-pills msg-about-fold-pills">{ids.map((id) => <AboutPill key={id} id={id} />)}</div>}
-    </FoldRow>
-  );
 }
 
 /** The tasks as a labelled line of pills (a thread card's answer, components/org/thread-card-text.tsx). */

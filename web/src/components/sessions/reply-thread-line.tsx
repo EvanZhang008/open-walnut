@@ -68,12 +68,27 @@ function ReplyArc() {
   );
 }
 
-function TaskPart({ id }: { id: string }) {
+/**
+ * A reply that names its tasks and no thread: the thread line's own arrow, then the tasks, shown
+ * as they are with nothing to open first (2026-11-23, the user: "use the same small arrow" the
+ * threads use, then "why collapse it again? ... just show the little arrow and then show it").
+ */
+export function AboutLine({ ids }: { ids: readonly string[] }) {
+  if (!ids.length) return null;
+  return (
+    <div className="msg-reply-thread is-answer" data-testid="msg-about" data-ids={ids.join(',')}>
+      <ReplyArc />
+      {ids.map((id, i) => <TaskPart key={id} id={id} first={i === 0} />)}
+    </div>
+  );
+}
+
+function TaskPart({ id, first = false }: { id: string; first?: boolean }) {
   const title = useTaskTitle(id);
   const openTask = useOpenTask();
   return (
     <>
-      <span className="msg-reply-thread-sep" aria-hidden="true">{'·'}</span>
+      {!first && <span className="msg-reply-thread-sep" aria-hidden="true">{'·'}</span>}
       <button type="button" className="msg-reply-thread-task" data-testid="msg-reply-thread-task" data-task-id={id}
         onClick={(e) => { e.stopPropagation(); openTask(id); }}>{title ?? id}</button>
     </>

@@ -66,24 +66,19 @@ test('a VP\'s reply shows the tasks it is about as live pills, and the line neve
   const about = chat.getByTestId('msg-about')
   await expect(about).toHaveCount(1, { timeout: 30_000 })
   await expect(about).toHaveAttribute('data-ids', `${ids.move},${ids.boxes}`)
-  // A fold row like the turn summary's (the user, 2026-11-23: "use the same little arrow"):
-  // closed it reads "About 2 tasks"; a click shows the pills.
-  await expect(about).toHaveAttribute('data-open', 'false')
-  const toggle = about.getByRole('button', { name: 'About 2 tasks' })
-  await expect(about.locator('.process-fold-chevron')).toHaveCount(1)
-  await toggle.click()
-  await expect(about).toHaveAttribute('data-open', 'true')
+  // The thread line's arrow, then the tasks, shown as they are: nothing to open first (the user,
+  // 2026-11-23: "just show the little arrow and then show it").
+  await expect(about.getByTestId('msg-reply-thread-arc')).toHaveCount(1)
+  await expect(about.getByRole('button', { name: /About \d+ tasks?/ })).toHaveCount(0)
   // The pills read as the tasks' names, not their ids.
   await expect(about).toContainText(`Book the movers ${STAMP}`, { timeout: 30_000 })
   await expect(about).toContainText(`Pack the boxes ${STAMP}`)
-  // Each wears its task's live status dot, as every pill does.
-  await expect(about.locator(`a.task-link[data-task-id="${ids.move}"]`)).toHaveAttribute('data-user-state', /\w/)
   // The reply's own words carry no line (the user's own message, echoed as typed, may).
   const reply = chat.locator('.session-msg').filter({ has: page.getByTestId('msg-about') })
   await expect(reply).not.toContainText('walnut-about')
   await about.screenshot({ path: `test-results/org-message-about-${test.info().project.name}.png` })
   // A pill opens its task beside the page. A real press and release, as a person clicks: the pill must still be there at the release.
-  await about.locator(`a.task-link[data-task-id="${ids.move}"]`).click()
+  await about.locator(`[data-testid="msg-reply-thread-task"][data-task-id="${ids.move}"]`).click()
   await expect(page.getByTestId('org-side')).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId('org-side-title')).toHaveText(`Book the movers ${STAMP}`)
 })
