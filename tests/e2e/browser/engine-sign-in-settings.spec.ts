@@ -172,7 +172,8 @@ test('a host without the CLI: Not installed with the installer line, and Install
   await expect(row.locator('.wn-notice-status')).toHaveText('Not signed in', { timeout: 60_000 })
   await expect(row.getByTestId('engine-sign-in-install-command')).toHaveCount(0)
   await expect(install).toHaveText('Sign in with Google')
-  await video.hold(HOLD)
+  await video.caption('Installed: the host now reads Not signed in')
+  await video.hold(HOLD * 1.5)
   await video.stop('engine-sign-in-install')
 })
 
@@ -197,7 +198,7 @@ test('every state of a host row, wide and at 900 px', async ({ page }) => {
   await home(page)
   await openSessionsSettings(page)
   const words = group(page).locator('.wn-notice-status')
-  await expect(words).toHaveText(['Signed in with Google', 'Not signed in', 'Not installed', 'Not connected', 'Signed in with API key', 'Not set'])
+  await expect(words).toHaveText(['Signed in with Google', 'Not signed in', 'Not installed', 'Not connected', 'Signed in with its own API key', 'Not set'])
   await expect(page.getByTestId('engine-sign-in-buildbox').getByTestId('engine-sign-in-action')).toHaveText('Check now')
   // The installer line shows whole, wrapped in its box under the state, Install at the row's right.
   const chip = page.getByTestId('engine-sign-in-devbox-2').locator('.hc-chip')

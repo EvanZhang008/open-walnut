@@ -38,7 +38,7 @@ describe('a host row at rest', () => {
     expect(rowView(status({ state: 'signed_in', method: 'api-key', apiKey: { set: true, source: 'settings' } }), 'antigravity').title).toMatch(/set below/)
     // A key in the host's own environment is not Walnut's to remove either, and the row says where it is.
     const env = rowView(status({ state: 'signed_in', method: 'api-key', apiKey: { set: true, source: 'host-env' } }), 'antigravity')
-    expect(env).toMatchObject({ word: 'Signed in with API key', action: null })
+    expect(env).toMatchObject({ word: 'Signed in with its own API key', action: null })
     expect(env.title).toMatch(/own environment/)
   })
 

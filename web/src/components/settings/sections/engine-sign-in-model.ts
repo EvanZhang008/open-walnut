@@ -43,10 +43,10 @@ export function rowView(s: EngineSignInStatus, engine: SignInEngine): RowView {
   if (s.state === 'signed_in') {
     if (s.method === 'api-key') {
       // The key is the group's own row (every machine's); one in the host's own environment is not Walnut's.
-      return {
-        tone: 'ok', word: 'Signed in with API key', action: null,
-        title: s.apiKey.source === 'settings' ? `Its sessions use the ${ui.keyName} set below.` : `The ${ui.keyName} is set in this host's own environment.`,
-      };
+      // A host's own key reads as its own, so it never contradicts the shared key row's "Not set".
+      return s.apiKey.source === 'settings'
+        ? { tone: 'ok', word: 'Signed in with API key', action: null, title: `Its sessions use the ${ui.keyName} set below.` }
+        : { tone: 'ok', word: 'Signed in with its own API key', action: null, title: `The ${ui.keyName} is set in this host's own environment.` };
     }
     return { tone: 'ok', word: `Signed in with ${ui.account}`, action: 'sign-out', actionLabel: 'Sign out' };
   }
