@@ -5,8 +5,10 @@
  *
  *   - From REORG_REMIND_AT VPs (vpCount: every project row), one line suggests
  *     merging some.
- *   - Close hides it for this page load, until the count passes the one it was closed at: one more
- *     VP brings it back, in the same load too. A reload shows it again.
+ *   - Close hides it until the count passes the one it was closed at: one more VP brings it back.
+ *     The count is kept (REORG_CLOSED_KEY, a ui-prefs key the server mirrors), so a reload, a
+ *     restart or another device keeps it closed at that count (2026-11-23, the user: "我已经close
+ *     了 ... 他至少在六个VP，他就不要再提醒我了").
  *   - "Never remind me" turns it off for good: the ui-prefs key REORG_NEVER_KEY, which
  *     ui-prefs-sync mirrors to the server (`PUT /api/ui-prefs`, kept apart for a test run by
  *     src/core/test-run-prefs.ts). An agent sets it the same way, through the `api` op:
@@ -17,6 +19,14 @@
 export const REORG_REMIND_AT = 6;
 export const REORG_NEVER_KEY = 'open-walnut-org-reorg-reminder';
 export const REORG_NEVER_VALUE = 'never';
+/** The VP count the reminder was last closed at, kept like the never choice. */
+export const REORG_CLOSED_KEY = 'open-walnut-org-reorg-closed-at';
+
+/** The kept close count, or null when none (or not a count). */
+export function reorgClosedFrom(raw: string | null | undefined): number | null {
+  const n = raw ? Number(raw) : NaN;
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
 
 /** Whether the reminder shows: enough VPs, not turned off, and more VPs than when it was last closed. */
 export function showReorgReminder(vps: number, never: boolean, closedAt: number | null): boolean {
@@ -34,17 +44,25 @@ export function reorgNeverFrom(raw: string | null | undefined): boolean {
   return raw === REORG_NEVER_VALUE;
 }
 
-// The count it was closed at, for this page load only: the Org page unmounts on every navigation,
-// so component state would bring it back on the next visit to the page.
+// The count it was closed at: kept in the ui-prefs key, and in memory for when storage is off. The Org
+// page unmounts on every navigation, so component state alone would bring it back on the next visit.
 let closedAtThisLoad: number | null = null;
 
-export function reorgClosedAt(): number | null {
-  return closedAtThisLoad;
+function storedClosedAt(): number | null {
+  try { return reorgClosedFrom(globalThis.localStorage?.getItem(REORG_CLOSED_KEY)); } catch { return null; }
 }
 
-/** Close it at `vps` VPs; the higher of two closes counts. */
+export function reorgClosedAt(): number | null {
+  const kept = storedClosedAt();
+  if (kept === null) return closedAtThisLoad;
+  return Math.max(kept, closedAtThisLoad ?? 0);
+}
+
+/** Close it at `vps` VPs and keep that count; the higher of two closes counts. */
 export function closeReorgReminder(vps: number): number {
-  closedAtThisLoad = Math.max(closedAtThisLoad ?? 0, vps);
+  closedAtThisLoad = Math.max(reorgClosedAt() ?? 0, vps);
+  // An `open-walnut-` key: ui-prefs-sync mirrors it to the server, so it holds on every device.
+  try { globalThis.localStorage?.setItem(REORG_CLOSED_KEY, String(closedAtThisLoad)); } catch { /* storage off: this load only */ }
   return closedAtThisLoad;
 }
 

@@ -1,6 +1,6 @@
 /**
  * One line above the Org page's list once there are many VPs (org-reorg-reminder.ts): open the
- * chart to merge some, close it for this load, or never see it again.
+ * chart to merge some, close it until there is one more VP, or never see it again.
  */
 import { useState } from 'react';
 import { log } from '@/utils/log';
@@ -17,7 +17,7 @@ export function OrgReorgReminder({ vps, onOpenChart }: { vps: number; onOpenChar
   const [closedAt, setClosedAt] = useState(reorgClosedAt);
   if (!showReorgReminder(vps, never, closedAt)) return null;
   const close = () => {
-    log.info('org-page', 'reorg reminder closed for this load', { vps });
+    log.info('org-page', 'reorg reminder closed at this count', { vps });
     setClosedAt(closeReorgReminder(vps));
   };
   const neverAgain = () => {

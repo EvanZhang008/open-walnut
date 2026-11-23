@@ -6,7 +6,7 @@
  *   - from 6 VPs one line suggests merging some, with Org chart, Close and Never remind me
  *   - Close hides it for this load: leaving the page and coming back keeps it hidden
  *   - one more VP brings it back in the same load
- *   - a reload is a new load: it shows again
+ *   - a reload keeps a close at that count (2026-11-23: "我已经close了 ... 他就不要再提醒我了")
  *   - Never remind me hides it for good, a reload included
  * The fixture is shared, so this file makes its own VPs (enough to reach 6) and removes them.
  */
@@ -50,10 +50,10 @@ test.afterAll(async ({ request }) => {
   }
 })
 
-test('the reorg reminder: shows from 6 VPs, Close holds for the load, a new VP brings it back, Never ends it', async ({ page, request }) => {
+test('the reorg reminder: shows from 6 VPs, Close holds at that count across reloads, a new VP brings it back, Never ends it', async ({ page, request }) => {
   await isolateUiPrefs(page)
   await loadHome(page)
-  await page.evaluate(() => localStorage.removeItem('open-walnut-org-reorg-reminder'))
+  await page.evaluate(() => { localStorage.removeItem('open-walnut-org-reorg-reminder'); localStorage.removeItem('open-walnut-org-reorg-closed-at') })
   await openOrg(page)
 
   // Reach 6 VPs, whatever the shared fixture holds.
@@ -85,10 +85,15 @@ test('the reorg reminder: shows from 6 VPs, Close holds for the load, a new VP b
   await expect(page.getByTestId('org-reorg-reminder')).toBeVisible()
   await expect(page.getByTestId('org-reorg-reminder')).toContainText(`You have ${n} VPs.`)
 
-  // A reload is a new load: a close from before does not hold.
+  // A reload keeps the close at this count; one more VP brings it back.
   await page.getByTestId('org-reorg-close').click()
   await expect(page.getByTestId('org-reorg-reminder')).toHaveCount(0)
   await page.reload()
+  await expect(page.getByTestId('org-vps-head')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('org-reorg-reminder')).toHaveCount(0)
+  await makeVp(request, `Reorg ${next++} ${STAMP}`)
+  n++
+  await expect.poll(() => vpCount(page), { timeout: 30_000 }).toBe(n)
   await expect(page.getByTestId('org-reorg-reminder')).toBeVisible({ timeout: 30_000 })
 
   // Never remind me: gone for good, a reload and another VP included.

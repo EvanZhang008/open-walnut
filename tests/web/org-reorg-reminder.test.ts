@@ -6,8 +6,8 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
-  REORG_NEVER_KEY, REORG_NEVER_VALUE, REORG_REMIND_AT, _resetReorgReminderForTests, closeReorgReminder, reorgClosedAt, reorgLine,
-  reorgNeverFrom, showReorgReminder,
+  REORG_CLOSED_KEY, REORG_NEVER_KEY, REORG_NEVER_VALUE, REORG_REMIND_AT, _resetReorgReminderForTests, closeReorgReminder, reorgClosedAt,
+  reorgClosedFrom, reorgLine, reorgNeverFrom, showReorgReminder,
 } from '../../web/src/components/org/org-reorg-reminder.js'
 import { syncableKey } from '../../src/core/ui-prefs-keys.js'
 
@@ -35,16 +35,30 @@ describe('when the reminder shows', () => {
     expect(showReorgReminder(8, false, closedAt)).toBe(true)
   })
 
-  it('the close is kept for the page load (module state), not per mount, and a load starts fresh', () => {
-    closeReorgReminder(8)
-    // The list mounts again (the user went to another page and back): still closed at 8.
-    expect(reorgClosedAt()).toBe(8)
-    // A lower count closed later never lowers it.
-    closeReorgReminder(6)
-    expect(reorgClosedAt()).toBe(8)
-    _resetReorgReminderForTests()
-    expect(reorgClosedAt()).toBeNull()
-    expect(showReorgReminder(8, false, reorgClosedAt())).toBe(true)
+  it('the close is kept past the page load: a reload at the same count stays closed (2026-11-23)', () => {
+    const store = new Map<string, string>()
+    const ls = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v) }, removeItem: (k: string) => { store.delete(k) } }
+    const was = (globalThis as { localStorage?: unknown }).localStorage
+    ;(globalThis as { localStorage?: unknown }).localStorage = ls
+    try {
+      closeReorgReminder(8)
+      expect(store.get(REORG_CLOSED_KEY)).toBe('8')
+      // A lower count closed later never lowers it.
+      closeReorgReminder(6)
+      expect(reorgClosedAt()).toBe(8)
+      // A new load: memory is gone, the kept count still holds.
+      _resetReorgReminderForTests()
+      expect(reorgClosedAt()).toBe(8)
+      expect(showReorgReminder(8, false, reorgClosedAt())).toBe(false)
+      expect(showReorgReminder(9, false, reorgClosedAt())).toBe(true)
+    } finally {
+      ;(globalThis as { localStorage?: unknown }).localStorage = was
+    }
+  })
+
+  it('the kept close count reads only a whole positive number', () => {
+    expect(reorgClosedFrom('6')).toBe(6)
+    for (const v of [null, undefined, '', '0', '-2', '6.5', 'six']) expect(reorgClosedFrom(v)).toBeNull()
   })
 
   it('Never remind me turns it off at every count, closed or not', () => {
@@ -63,6 +77,7 @@ describe('the stored choice', () => {
 
   it('is a ui-prefs key the server keeps (synced across devices, kept apart for a test run)', () => {
     expect(syncableKey(REORG_NEVER_KEY)).toBe(true)
+    expect(syncableKey(REORG_CLOSED_KEY)).toBe(true)
   })
 
   it('the line names the count in plain words', () => {
