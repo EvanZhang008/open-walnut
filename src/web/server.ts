@@ -2530,7 +2530,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // A session channel per host that names session-judge-v1 (a host names it only while it runs
     // sessions itself), whatever the switch says now: a session a host already runs keeps reporting
     // after the switch went off. The switch decides only where a new start goes (switch.ts).
-    if (role() === 'leader') {
+    // WALNUT_LEADER_SESSION_CHANNELS=0 runs this leader as one from before the channel (tests of a
+    // cluster that mixes versions: tests/e2e/host-judge-mixed-versions-e2e.test.ts).
+    if (role() === 'leader' && process.env.WALNUT_LEADER_SESSION_CHANNELS !== '0') {
       void import('../core/session-channel/leader-boot.js').then(async (m) => {
         await m.startLeaderSessionChannels()
       }).catch((err) => log.session.warn('session channels: the leader side did not start', { error: err instanceof Error ? err.message : String(err) }))

@@ -16975,10 +16975,11 @@ function dialBridge(link, gen) {
 // ── Session idle scanner ──
 // 5min: long enough for model response delays (up to 120s) and MCP tool execution,
 // short enough to detect stuck sessions promptly.
-const SESSION_IDLE_WARNING_MS = 5 * 60 * 1000;     // 5 minutes
+// The two windows below can be shortened by their WALNUT_SESSION_* variables (tests of the scan only).
+const SESSION_IDLE_WARNING_MS = parseInt(process.env.WALNUT_SESSION_IDLE_WARNING_MS || '', 10) || 5 * 60 * 1000;     // 5 minutes
 // 2hr: conservative — gives plenty of time for legitimate background work (builds,
 // long MCP ops, await_human_action), but eventually reclaims resources.
-const SESSION_IDLE_KILL_MS = 2 * 60 * 60 * 1000;   // 2 hours
+const SESSION_IDLE_KILL_MS = parseInt(process.env.WALNUT_SESSION_IDLE_KILL_MS || '', 10) || 2 * 60 * 60 * 1000;   // 2 hours
 // Cron-armed sessions (/loop): the CLI's in-process scheduler lives in THIS
 // process's memory — killing it silently kills the loop. Extended, not
 // disabled: the CLI auto-expires recurring crons after 7 days.
@@ -16991,6 +16992,8 @@ const SESSION_CRON_IDLE_KILL_MS = 7 * 24 * 60 * 60 * 1000;   // 7 days
 // daemon-standalone.ts for the full rationale.
 const SESSION_BG_IDLE_KILL_MS = 3 * 24 * 60 * 60 * 1000;   // 3 days
 const SESSION_SCAN_INTERVAL_MS = 60000;             // every 60s
+// The idle scan's own cadence (WALNUT_SESSION_IDLE_SCAN_MS shortens it for a test of the scan).
+const SESSION_IDLE_SCAN_MS = parseInt(process.env.WALNUT_SESSION_IDLE_SCAN_MS || '', 10) || SESSION_SCAN_INTERVAL_MS;
 
 // Last-resort cron evidence: the CLI scheduler's own debug log in HOME
 // (survives /tmp wipes). See daemon-standalone.ts for the full rationale.
@@ -17857,7 +17860,7 @@ async function startDaemon() {
     if (foldCheckpointTimer.unref) foldCheckpointTimer.unref();
 
     // Start session idle scanner (every 60s)
-    setInterval(scanIdleSessions, SESSION_SCAN_INTERVAL_MS);
+    setInterval(scanIdleSessions, SESSION_IDLE_SCAN_MS);
 
     // A cron job's next run passing is not a CLI line; republish on the clock.
     setInterval(function () { cronMetadata.refresh(); }, SESSION_SCAN_INTERVAL_MS);
