@@ -13,8 +13,9 @@ import path from 'node:path'
 import { z } from 'zod'
 import { guardedPath } from '../setup/exec-guard.js'
 import {
-  LINK_NOTE_EXEMPT, LINK_NOTE_OPS, askUserQuestionText, findMissingLinks, linkNotes, opLinkNotes, opMissingLinksNote,
+  askUserQuestionText, linkNoteOps, findMissingLinks, linkNotes, opLinkNotes, opMissingLinksNote,
 } from '../../src/lib/missing-links.js'
+import { USER_TEXT_EXEMPT, USER_TEXT_OPS } from '../../src/lib/user-text-ops.js'
 import { _setGithubCommitCheck, deadCommitLinksNote, findDeadCommitLinks } from '../../src/lib/github-commit-check.js'
 import { ASK_LINKS_HOOK_COMMAND, askLinksHooks } from '../../src/providers/ask-links-hook.js'
 import { sessionSettingsHooks } from '../../src/providers/session-settings-hooks.js'
@@ -117,8 +118,8 @@ describe('a long text', () => {
 
 describe('the note', () => {
   it('names what is missing, what to add and how to fix it', () => {
-    const note = opMissingLinksNote('thread_update', { id: 'th-1234567', reply: `CR-245678901 ${REVIEW}; PR #12` })!
-    expect(note).toMatch(/^Walnut note: Your thread summary \(thread_update reply\) names CR-245678901 \(code review\), PR #12 \(pull request\) for the user with no link to open it\./)
+    const note = opMissingLinksNote('thread_update', { id: 'th-1234567', reply: `CR-1234567 ${REVIEW}; PR #12` })!
+    expect(note).toMatch(/^Walnut note: Your thread \(thread_update\) names CR-1234567 \(code review\), PR #12 \(pull request\) for the user with no link to open it\./)
     expect(note).toContain('full https:// URL')
     expect(note).toContain('thread_update with reply')
     expect(opMissingLinksNote('thread_update', { id: 'th-1234567', reply: 'All done: https://code.example.com/reviews/CR-245678901 (CR-245678901)' })).toBeNull()
@@ -146,12 +147,15 @@ describe('every op that hands the user words is checked or says why not (guard)'
       /^(human_inbox|thread|brief)_/.test(op.name)
       || Object.keys(op.input ?? {}).some((k) => k === 'user_kind' || k === 'report')
     )).map((op) => op.name)
-    expect(handsUser.filter((n) => !LINK_NOTE_OPS[n] && !LINK_NOTE_EXEMPT[n])).toEqual([])
-    expect([...Object.keys(LINK_NOTE_OPS), ...Object.keys(LINK_NOTE_EXEMPT)].filter((n) => !handsUser.includes(n))).toEqual([])
+    // The words list itself (user-text-ops.ts) has its own class guard (tests/lib/user-text-ops.test.ts);
+    // here: each op of the user's threads, letters, Brief and reports carries the link note.
+    const linked = linkNoteOps()
+    expect(handsUser.filter((n) => !linked[n] && !USER_TEXT_EXEMPT[n])).toEqual([])
+    expect(Object.keys(linked).filter((n) => !handsUser.includes(n))).toEqual([])
   })
 
   it('every field it reads is one the op takes', () => {
-    for (const [name, spec] of Object.entries(LINK_NOTE_OPS)) {
+    for (const [name, spec] of Object.entries(linkNoteOps())) {
       const input = getOp(name)!.input as Record<string, unknown>
       for (const f of spec.fields) expect(Object.keys(input), `${name}.${f}`).toContain(f.split('.')[0])
     }
@@ -160,7 +164,7 @@ describe('every op that hands the user words is checked or says why not (guard)'
 
 describe('the executor adds the note to a session\'s op result', () => {
   const saved = { td: process.env.WALNUT_TASK_DIR, off: process.env.WALNUT_LINK_NOTE }
-  const ops = LINK_NOTE_OPS as Record<string, (typeof LINK_NOTE_OPS)[string]>
+  const ops = USER_TEXT_OPS
   beforeAll(() => {
     definePluginOp('link-note-test', {
       name: 'link_note_test_reply', title: 'echo', description: 'Takes a reply (test only).',
@@ -168,7 +172,7 @@ describe('the executor adds the note to a session\'s op result', () => {
       handler: async () => ({ ok: true }),
       tags: { readonly: true },
     })
-    ops.link_note_test_reply = { fields: ['reply'], what: 'Your test reply', fix: 'Fix it.' }
+    ops.link_note_test_reply = { fields: ['reply'], what: 'Your test reply', links: 'Fix it.' }
   })
   afterAll(() => {
     removePluginOps('link-note-test')

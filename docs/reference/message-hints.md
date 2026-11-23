@@ -23,6 +23,16 @@ answers that did so (2026-11-14 to 2026-11-20) are gone; `tests/core/hints/no-re
 keeps them out. An older config's override for that kind, or a session record's old
 `hintState.drift`, is ignored.
 
+Since 2026-11-23 (Main for the user: a reply to him with no Chinese must not go out, held by the
+product; option A, never the chat reply) one check runs BEFORE words reach him, never after: while
+the `reply_language_gate` experiment is on and the setting names a language, a session's op whose
+words the user reads (`src/lib/user-text-ops.ts`: a message to another task, a thread, a letter,
+the Board, the Brief, a report) is refused when its prose is not in that language
+(`src/ops/reply-language-gate.ts`, judged by `src/lib/reply-language.ts`), and an AskUserQuestion
+prompt is denied the same way (`src/providers/reply-language-hook.ts`). The session writes it again;
+nothing is noted on a send that went out, and a chat reply is never judged. The same guard test
+pins that boundary.
+
 Every hint costs every session that gets it on every message it rides. Add one only
 when nothing else can carry it, never restate a rule the prompt already has, keep it
 to a line or two, and measure its bytes per message first. The 2026-11-06 audit found

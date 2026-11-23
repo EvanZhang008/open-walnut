@@ -242,6 +242,12 @@ export const EXPERIMENTAL_FEATURES = [
     ownSwitchOnly: true,
   },
   {
+    id: 'reply_language_gate',
+    name: 'Hold sends that are not in your reply language',
+    description: 'When your Reply language setting names a language, words an agent sends you (a message to another task, a thread, a letter, the Board, the Brief, a task report, a question it asks you) that are not in that language are not sent: the agent is told to write them again in it. Code, commands, paths and quoted words do not count. Its chat replies are never held or corrected. Off: every send goes out as written.',
+    default: false,
+  },
+  {
     id: 'real_use_watch',
     name: 'Real-use watch',
     description: 'When a real-use alarm rings (a tool answer the agent got cut, tool errors, slow reads, server errors, page failures), Walnut tells the task that shipped the change and watches it, or the project lead when none does, at most one note every 4 hours. A task that shipped a change cannot complete before it names what real use should show (usage_watch). Off: Walnut still records real use and shows it in Settings, and tells nobody.',

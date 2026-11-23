@@ -221,6 +221,7 @@ export const AWAY_OP_DECISIONS: Readonly<Record<string, AwayOpDecision>> = {
   hint_reset: macWrite('A hint'),
   workspace_providers: read(),
   link_check: host('runs in this server\'s own process: no route'),
+  reply_language_check: read('the config copy: the reply-language setting and the experiment switch'),
   api: host('any route: answered by that route\'s own row here (reads on the copies; a write without an away row needs the leader)'),
 
   // ── hosts, exec, copies ──

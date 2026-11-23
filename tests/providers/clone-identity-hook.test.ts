@@ -301,11 +301,11 @@ describe('cloneIdentityHooks', () => {
     const all = sessionSettingsHooks({}) as Record<string, Groups>
     // Beside it on PreToolUse: the temp-dir git guard, the approval-records guard, the shell-dollar
     // guard, the pattern-kill guard, the sound guard, the type check guard, the Codex provider guard and
-    // the AskUserQuestion link note.
-    expect(all.PreToolUse.map((g) => g.hooks[0].command === CLONE_IDENTITY_COMMAND)).toEqual([false, false, true, false, false, false, false, false, false])
+    // the AskUserQuestion link note and reply-language gate.
+    expect(all.PreToolUse.map((g) => g.hooks[0].command === CLONE_IDENTITY_COMMAND)).toEqual([false, false, true, false, false, false, false, false, false, false])
     expect(all.PostToolUse.map((g) => g.matcher)).toEqual(['Write|Bash', 'Bash'])
     const off = sessionSettingsHooks({ WALNUT_CLONE_IDENTITY: '0' }) as Record<string, Groups>
-    expect(off.PreToolUse).toHaveLength(8)
+    expect(off.PreToolUse).toHaveLength(9)
     expect(off.PostToolUse.map((g) => g.matcher)).toEqual(['Write|Bash'])
   })
 })

@@ -3034,6 +3034,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', (await import('./routes/private-tasks-v1.js')).privateTasksV1Router)
   // The message-hint registry: list, change, reset (reads anywhere, writes primary-only).
   app.use('/api/v1', (await import('./routes/hints-v1.js')).hintsV1Router)
+  // What the send gate holds a session's words for the user to (ops/reply-language-gate.ts).
+  app.use('/api/v1', (await import('./routes/reply-language-v1.js')).replyLanguageV1Router)
   // Focus spaces: saved lists of projects and tasks, and the one the person is in (experiment focus_workspace).
   app.use('/api/v1', (await import('./routes/focus-spaces-v1.js')).focusSpacesV1Router)
   // When this home first ran the hint registry: only older rows can carry the old bracket lines.

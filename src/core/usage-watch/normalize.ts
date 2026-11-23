@@ -189,6 +189,8 @@ export function walnutToolCall(toolName: string, input: Record<string, unknown> 
 /** How a failed op call ended, from what the op answered (executor.ts OpOutcome). */
 export function failureClass(r: { invalidArgs?: boolean; unreachable?: boolean; lost?: boolean; status?: number; code?: string; result?: unknown }): { cls: 'refused' | 'bad_args' | 'error' | 'timeout' | 'unreachable'; code: string } {
   const code = safeCode(r.code)
+  // Words the reply-language send gate held back (ops/reply-language-gate.ts): a refusal of its own, counted apart from bad arguments.
+  if (code === 'reply_language') return { cls: 'refused', code }
   if (r.invalidArgs) return { cls: 'bad_args', code: code ?? 'invalid_args' }
   if (r.unreachable) return { cls: 'unreachable', code: code ?? 'unreachable' }
   if (r.lost) return { cls: 'timeout', code: code ?? 'lost' }

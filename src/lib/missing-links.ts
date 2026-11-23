@@ -11,7 +11,7 @@
  * Commits are not asked for (2026-11-20, the user: no one reads a commit, so give him the rest and
  * no commit links): a hash with no link stays quiet.
  *
- * Where it runs: a session's Walnut op that hands the user words (LINK_NOTE_OPS, ops/executor.ts adds
+ * Where it runs: a session's Walnut op that hands the user words (an entry of lib/user-text-ops.ts with `links`, ops/executor.ts adds
  * the note to the op's answer) and a Claude Code AskUserQuestion (the PreToolUse hook in
  * providers/ask-links-hook.ts, through the link_check op). Class guard:
  * tests/lib/missing-links.test.ts (every op that hands the user words is listed or exempt).
@@ -29,6 +29,7 @@
  */
 
 import { deadCommitLinksNote, findDeadCommitLinks } from './github-commit-check.js'
+import { USER_TEXT_OPS, at, opUserText } from './user-text-ops.js'
 
 export type LinkRefKind = 'code review' | 'ticket' | 'pull request'
 
@@ -151,48 +152,24 @@ export function missingLinksNote(missing: readonly MissingLink[], what: string, 
 }
 
 /**
- * The Walnut ops whose words the user reads as they are, each with the fields that hold them
- * (a dotted path reads inside an object; an array is read item by item) and how to correct a slip.
- * The class guard (tests/lib/missing-links.test.ts) fails on a new op that hands the user words
- * until it is listed here or in LINK_NOTE_EXEMPT.
+ * The ops whose words get the link note: the entries of the one list of words the user reads
+ * (user-text-ops.ts) that carry a `links` fix. Read when called, so an entry added later counts.
  */
-export const LINK_NOTE_OPS: Readonly<Record<string, { fields: readonly string[]; what: string; fix: string }>> = {
-  thread_update: { fields: ['reply'], what: 'Your thread summary (thread_update reply)', fix: 'Write the summary again with the links (thread_update with reply).' },
-  thread_create: { fields: ['text'], what: 'Your new thread\'s first post (thread_create)', fix: 'Put the links in the thread\'s summary (thread_update with reply).' },
-  human_inbox_send: { fields: ['subject', 'markdown', 'html', 'text', 'actions.label', 'actions.description'], what: 'Your letter (human_inbox_send)', fix: 'Do not send the letter again: reply to it with the links (human_inbox_reply with its letter id).' },
-  human_inbox_reply: { fields: ['markdown', 'html', 'text'], what: 'Your reply in the letter (human_inbox_reply)', fix: 'Reply once more with the links (human_inbox_reply).' },
-  task_report_set: { fields: ['report.ask', 'report.ask_more', 'report.next'], what: 'Your task report (task_report_set)', fix: 'Set the report again with the links (task_report_set; a Needs you ask carries them in ask_more).' },
-  task_update: { fields: ['report.ask', 'report.ask_more', 'report.next'], what: 'Your task report (task_update report)', fix: 'Set the report again with the links (task_report_set; a Needs you ask carries them in ask_more).' },
-  brief_write: { fields: ['content', 'edits.new'], what: 'Your Brief (brief_write)', fix: 'Write the Brief again with the links (brief_write).' },
+export function linkNoteOps(): Record<string, { fields: readonly string[]; what: string; fix: string }> {
+  const out: Record<string, { fields: readonly string[]; what: string; fix: string }> = {}
+  for (const [name, spec] of Object.entries(USER_TEXT_OPS)) if (spec.links) out[name] = { fields: spec.fields, what: spec.what, fix: spec.links }
+  return out
 }
 
-/** Ops that hand the user words but are not checked, with why (the class guard reads this list). */
-export const LINK_NOTE_EXEMPT: Readonly<Record<string, string>> = {
-  human_inbox_mark: 'read, pin and archive flags only',
-  human_inbox_answer: 'records the user\'s own answer, in his words',
-  thread_file: 'files the user\'s own words under a thread',
-  thread_split: 'moves the user\'s own message to a thread of its own',
-  thread_move: 'hands a thread to another node; its why goes to that node',
-}
-
-function at(v: unknown, path: string[], out: string[]): void {
-  if (Array.isArray(v)) { for (const x of v) at(x, path, out); return }
-  if (!path.length) { if (typeof v === 'string') out.push(v); return }
-  if (v && typeof v === 'object') at((v as Record<string, unknown>)[path[0]], path.slice(1), out)
-}
-
-/** The words of a LINK_NOTE_OPS op the user reads, joined; null for any other op. */
-function opUserText(op: string, args: unknown): { text: string; what: string; fix: string } | null {
-  const spec = LINK_NOTE_OPS[op]
-  if (!spec || !args || typeof args !== 'object') return null
-  const parts: string[] = []
-  for (const f of spec.fields) at(args, f.split('.'), parts)
-  return { text: parts.join('\n\n'), what: spec.what, fix: spec.fix }
+/** The words of a link-noted op the user reads, joined; null for any other op. */
+function opLinkText(op: string, args: unknown): { text: string; what: string; fix: string } | null {
+  const t = opUserText(op, args)
+  return t?.spec.links ? { text: t.text, what: t.spec.what, fix: t.spec.links } : null
 }
 
 /** The note for a session's op whose words for the user name ids with no link, or null. */
 export function opMissingLinksNote(op: string, args: unknown): string | null {
-  const t = opUserText(op, args)
+  const t = opLinkText(op, args)
   return t ? missingLinksNote(findMissingLinks(t.text), t.what, t.fix) : null
 }
 
@@ -215,7 +192,7 @@ export async function linkNotes(text: string, what: string, fix: string): Promis
 
 /** linkNotes for a session's op: nothing for an op whose words the user does not read. */
 export async function opLinkNotes(op: string, args: unknown): Promise<string[]> {
-  const t = opUserText(op, args)
+  const t = opLinkText(op, args)
   return t ? linkNotes(t.text, t.what, t.fix) : []
 }
 

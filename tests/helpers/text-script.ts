@@ -1,8 +1,8 @@
 /**
  * Is a text written in the language a reply-language sentence asks for? A test tool only: the
  * letters ratchet (tests/core/walnut-letters-ratchet.test.ts) checks with it that Walnut's own
- * Chinese texts are Chinese. Walnut itself never judges a session's words for their language
- * (2026-11-20, the user removed that reminder; tests/core/hints/no-reply-language-reminder.test.ts).
+ * Chinese texts are Chinese. Walnut judges a session's words only in its send gate, before they go
+ * out (src/lib/reply-language.ts; tests/core/hints/no-reply-language-reminder.test.ts pins who may).
  *
  * Code, inline code, links, paths, HTML and quoted words are left out before counting: they are
  * English in every language, or keep the language they were said in.

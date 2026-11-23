@@ -89,7 +89,7 @@ describe('every op answers an agent within its cap', () => {
 
   it('only a hook\'s or a check script\'s read, an inline image and a single-use approval ask are answered uncut', () => {
     // approval_request: a single-use ask, whose asker checks the envelope Walnut made before anything runs.
-    expect(ops.filter((op) => op.answer?.whole_for).map((op) => op.name).sort()).toEqual(['agent_memory_read', 'approval_request', 'browser', 'link_check', 'open_items', 'trigger_template_check'])
+    expect(ops.filter((op) => op.answer?.whole_for).map((op) => op.name).sort()).toEqual(['agent_memory_read', 'approval_request', 'browser', 'link_check', 'open_items', 'reply_language_check', 'trigger_template_check'])
     const op = ops.find((o) => o.name === 'open_items')!
     const big = largeResult()
     expect(agentAnswer(op, { hook: 'compact' }, big)).toBe(big)

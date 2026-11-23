@@ -39,8 +39,11 @@ import { COLLECTION_MAX, oversizedCollection } from '../lib/zod-rules.js'
 import { capOverCounts, countCapNote } from './count-cap.js'
 import { TASK_DIR_VAR, opTmpPathNote } from '../lib/tmp-draft-path.js'
 import { opLinkNotes } from '../lib/missing-links.js'
+import { GATE_SETTING_PATH, REPLY_LANGUAGE_CODE, gateSettingFor, replyLanguageRefusal } from './reply-language-gate.js'
 
 const REQUEST_TIMEOUT_MS = 10_000
+/** How long a send waits for the reply-language setting before it goes out unjudged. */
+const GATE_SETTING_TIMEOUT_MS = 3_000
 
 /**
  * Resolve the `/api/v1` base. `OPEN_WALNUT_API_URL` may be the server root or
@@ -337,6 +340,12 @@ export function materializeBinding(
 export interface ExecuteOpOptions {
   apiBase?: string
   callerSid?: string
+  /**
+   * A write held while its host was away, replayed now (offline handover): its words already went
+   * past the session's own checks when it was held, and the session was told it would be delivered,
+   * so the reply-language send gate does not judge it again.
+   */
+  replayed?: true
   /** The plugin the call is made through (callPluginOp): provenance, whoever the caller is. */
   callerPluginId?: string
   /** The job of that plugin (a relayed plugin job call on a host replica): provenance only. */
@@ -547,6 +556,16 @@ export async function executeOp(
   const surface: AnswerSurface | undefined = options.forAgent ? (options.forAgent === 'mcp' ? 'mcp' : 'cli') : undefined
   const fit = surface && !full && !human && !pluginId && !op.answer?.whole_for?.(args) ? answerFit(op, surface) : undefined
   const run = async (): Promise<OpOutcome> => {
+    // A session's words for the user in another language than his setting are not sent
+    // (reply-language-gate.ts). Inside the once-run: a retry of a call whose first try went out is
+    // answered from the ledger, never judged again and told it was not sent.
+    if (!human && !pluginId && explicitSid && !options.replayed) {
+      const refusal = await replyLanguageRefusal(op.name, args, () => gateSettingFor(base, async () => {
+        const r = await rawRequest(base, 'GET', GATE_SETTING_PATH, undefined, GATE_SETTING_TIMEOUT_MS, { sid: explicitSid, explicitSid, callerKind, origin })
+        return r.ok ? { answered: true, body: r.result } : { answered: r.status !== undefined }
+      }))
+      if (refusal) return { ok: false, message: refusal, invalidArgs: true, code: REPLY_LANGUAGE_CODE }
+    }
     const prov: CallerProvenance = {
       sid: explicitSid,
       explicitSid,

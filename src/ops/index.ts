@@ -45,6 +45,7 @@ import './feature-nodes.js'
 import './router.js'
 import './session-op-record.js'
 import './link-check.js'
+import './reply-language-check.js'
 
 export {
   defineOp,
