@@ -5576,7 +5576,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // array here would silently break real-time streaming. Per-event cost is cheap
   // (in-memory append + ws send). The interest optimization targets the OTHER global
   // subscribers that would only early-return on these deltas anyway.
-  bus.subscribe('main-ai', async (event) => {
+  // A host's turn end this handler ran leaves no boot-reconcile mark (session-channel/turn-ends.ts).
+  const { clearingTurnEndMarks } = await import('../core/session-channel/turn-ends.js')
+  bus.subscribe('main-ai', clearingTurnEndMarks(async (event) => {
     // ── Streaming events: buffer server-side + broadcast to all clients (filtered client-side) ──
     if (event.name === 'session:text-delta') {
       const { sessionId, taskId, delta, msgId, parentToolUseId, subagentType, taskDescription, replayed } = eventData<'session:text-delta'>(event)
@@ -6676,7 +6678,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         taskId,
       })
     }
-  })
+  }))
 
   // -- Migrate legacy config to plugins format (before loading plugins) --
   try {

@@ -7,8 +7,10 @@
  * come again, and the task stays In Progress with its session idle.
  *
  * So the same transaction keeps a mark per session of its last turn end that moves a phase
- * (turn-end-edge.ts: the edge, and the leader's time of the commit), and at the leader's boot
- * `reconcileHostTurnEnds` looks at each mark once:
+ * (turn-end-edge.ts: the edge, and the leader's time of the commit), and the leader's turn-end
+ * handler removes it once it ran, whatever it decided (held for a retrier, a quiet turn, the main
+ * agent, applied: clearingTurnEndMarks), so a mark that stands means only "the handler never ran".
+ * At the leader's boot `reconcileHostTurnEnds` looks at each such mark once:
  *
  *   the session's row is gone, no longer this host's, has no task, or runs a turn again   nothing
  *   the task's phase moved at or after the mark (the handler did it, or anyone since)   nothing
@@ -42,6 +44,27 @@ export function turnEndMarks(): TurnEndMark[] {
   if (!handle) return []
   const rows = handle.prepare('SELECT claude_session_id AS sid, host_id AS hostId, edge, at FROM session_turn_ends ORDER BY at, claude_session_id').all() as TurnEndMark[]
   return rows.filter((r) => r.edge === 'session:result' || r.edge === 'session:error')
+}
+
+/** The leader's handler of `sid`'s turn end ran (it began at `startedAt`): its mark goes, not a newer one. */
+export function clearTurnEndMark(sid: string, startedAt: number): void {
+  getDb()?.prepare('DELETE FROM session_turn_ends WHERE claude_session_id = ? AND at <= ?').run(sid, startedAt)
+}
+
+/**
+ * The leader's turn-end handler (web/server.ts), wrapped: after it ran for a host's session:result or
+ * session:error, whatever it decided and even when it threw, that session's mark goes (the mark was
+ * committed before the fact was said, so before the handler began; a newer turn end's mark stays).
+ * Every other event goes straight to the handler.
+ */
+export function clearingTurnEndMarks<E extends { name: string; data: unknown; source?: string }>(handler: (event: E) => Promise<void> | void): (event: E) => Promise<void> | void {
+  return (event: E) => {
+    if ((event.name !== 'session:result' && event.name !== 'session:error') || event.source !== 'host-channel') return handler(event)
+    const sid = (event.data as { sessionId?: unknown } | null)?.sessionId
+    const startedAt = Date.now()
+    const clear = () => { if (typeof sid === 'string' && sid) { try { clearTurnEndMark(sid, startedAt) } catch { /* the boot looks at it again */ } } }
+    return (async () => { try { await handler(event) } finally { clear() } })()
+  }
 }
 
 /** The mark `m` is done with: removed unless a newer turn end replaced it meanwhile. */
