@@ -316,6 +316,8 @@ export function computePlacement(input: PlacementInput): MenuPlacement & { side:
   return { top, right, maxHeight, side: openUp ? 'up' : 'down' };
 }
 
+/** The space between a host and the flyout beside it, so the two read as two layers. */
+const FLYOUT_BESIDE_GAP = 6;
 /** The narrowest a flyout beside its host is made to read in (a list of names still fits). */
 const FLYOUT_BESIDE_MIN = 260;
 
@@ -496,7 +498,7 @@ export function useMenuPlacement(
       const besideRow = !anchorPoint && !beside ? trigger?.closest<HTMLElement>('[data-flyouts-beside]') : null;
       const hostEl = besideRow ? besideRow.closest<HTMLElement>('.wn-menu, [role="menu"], .task-kebab-menu') ?? besideRow : null;
       const sideOfHost = hostEl && triggerRect
-        ? flyoutBesideHost(hostEl.getBoundingClientRect(), triggerRect, menuWidth, window.innerWidth, gap, margin)
+        ? flyoutBesideHost(hostEl.getBoundingClientRect(), triggerRect, menuWidth, window.innerWidth, Math.max(gap, FLYOUT_BESIDE_GAP), margin)
         : null;
       const stacked = besideAt ? null : computePlacement({
         anchor: sideOfHost?.anchor ?? { top: r.top, bottom: r.bottom, right: r.right, ...('left' in r ? { left: r.left } : {}) },
