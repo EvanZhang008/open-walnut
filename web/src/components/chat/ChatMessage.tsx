@@ -52,6 +52,9 @@ interface ChatMessageProps {
   errorCount?: number;
   queued?: boolean;
   onCancel?: () => void;
+  /** A queued send that was refused: the reason, said on the bubble with Retry (useChat retryFailedMessage). */
+  failed?: string;
+  onRetry?: () => void;
   taskLookup?: Map<string, Task>;
   onSessionClick?: (sessionId: string) => void;
   /**
@@ -907,7 +910,7 @@ function MemoizedTextBlock({ content, cardScope, render, onClick }: {
   );
 }
 
-function ChatMessageBubble({ role, content, blocks, images, taskContext, routeInfo, timestamp, source, cronJobName, notification, errorCount, queued, onCancel, taskLookup, onSessionClick, cardScope, textSource }: ChatMessageProps) {
+function ChatMessageBubble({ role, content, blocks, images, taskContext, routeInfo, timestamp, source, cronJobName, notification, errorCount, queued, onCancel, failed, onRetry, taskLookup, onSessionClick, cardScope, textSource }: ChatMessageProps) {
   const { lightboxSrc, openLightbox, closeLightbox } = useLightbox();
 
   // Paths open on the writer's machine; unknown reads nothing and loads no picture until one is chosen.
@@ -1295,6 +1298,12 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
                 {onCancel && <button className="chat-queued-cancel" onClick={onCancel} type="button" aria-label="Cancel queued message">&times;</button>}
               </span>
             )}
+            {failed && (
+              <div className="chat-send-failed" role="alert" data-testid="chat-send-failed">
+                <span className="chat-send-failed-reason">Not sent: {failed}</span>
+                {onRetry && <button className="btn btn-sm" onClick={onRetry} type="button">Retry</button>}
+              </div>
+            )}
           </div>
         ) : (
           (!isCollapsed || !shouldAutoCollapse) && (
@@ -1356,6 +1365,8 @@ function arePropsEqual(prev: ChatMessageProps, next: ChatMessageProps): boolean 
     prev.errorCount === next.errorCount &&
     prev.queued === next.queued &&
     prev.onCancel === next.onCancel &&
+    prev.failed === next.failed &&
+    prev.onRetry === next.onRetry &&
     prev.taskLookup === next.taskLookup &&
     prev.onSessionClick === next.onSessionClick &&
     prev.cardScope === next.cardScope &&

@@ -330,12 +330,12 @@ describe('kept as before', () => {
     expect((await api('POST', `/human-inbox/${id}/human-reply`, { text: 'See this', clientId: 'ios-7' })).status).toBe(202)
   })
 
-  it('a picture this box cannot keep: 503 and no record (the words never go without it)', async () => {
+  it('a picture this box cannot keep: refused with the reason and no record (the words never go without it)', async () => {
     const id = await seedLetter()
-    // An upload that is not on this box.
-    expect((await api('POST', `/human-inbox/${id}/human-reply`, { text: 'See this', clientId: 'ios-8', imageRefs: ['1700000000000-aaaaaaaaaaaa.png'] })).status).toBe(503)
+    // An upload that is not on this box: a retry cannot bring it back, so 400 says to attach it again.
+    expect((await api('POST', `/human-inbox/${id}/human-reply`, { text: 'See this', clientId: 'ios-8', imageRefs: ['1700000000000-aaaaaaaaaaaa.png'] })).status).toBe(400)
     // One good picture and one that is not a picture at all.
-    expect((await api('POST', `/human-inbox/${id}/human-reply`, { text: 'See this', clientId: 'ios-8', images: [PNG, { data: 'x', mediaType: 'text/plain' }] })).status).toBe(503)
+    expect((await api('POST', `/human-inbox/${id}/human-reply`, { text: 'See this', clientId: 'ios-8', images: [PNG, { data: 'x', mediaType: 'text/plain' }] })).status).toBe(400)
     expect(replyRecords()).toEqual([])
   })
 

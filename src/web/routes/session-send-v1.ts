@@ -19,30 +19,29 @@ import { applyVoiceReply } from '../../core/sessions/voice-reply.js'
 import { withImagePaths, type SessionImage } from '../../core/sessions/cloud-images.js'
 import { cloudSend } from './cloud-session-send.js'
 import { sendError } from './cloud-send-words.js'
+import { MAX_SESSION_IMAGES, checkImagePayloads, compressImagesInMemory, fitsImageSaveLimits, isImageAttachError, savePicturesToDisk } from './images.js'
 import { log } from '../../logging/index.js'
 
 const SID_RE = /^[A-Za-z0-9_-]+$/
 
-// Image attachments (additive), the same limits as session-chat.ts.
-const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
-const MAX_SESSION_IMAGES = 5
-const MAX_IMAGE_BASE64_LENGTH = 14_000_000 // ~10MB binary
 // How long the companion waits for the primary to take a stop that comes before a send.
 const INTERRUPT_RELAY_TIMEOUT_MS = 15_000
 
-/** Extract valid image payloads from a request body (silently drops junk). */
-export function extractValidImages(raw: unknown): SessionImage[] {
-  if (!Array.isArray(raw)) return []
-  return (raw as Array<{ data?: unknown; mediaType?: unknown }>)
-    .filter((img) =>
-      typeof img?.data === 'string'
-      && img.data.length > 0
-      && img.data.length <= MAX_IMAGE_BASE64_LENGTH
-      && typeof img.mediaType === 'string'
-      && ALLOWED_MIME.has(img.mediaType),
-    )
-    .slice(0, MAX_SESSION_IMAGES)
-    .map((img) => ({ data: img.data as string, mediaType: img.mediaType as string }))
+/**
+ * A request body's pictures, every one checked (images.ts checkImagePayloads):
+ * all of them, in order, or an ImageAttachError naming the one that cannot go.
+ * Never a shorter list: a picture left out while the words went on was a
+ * message the person thought the agent had seen.
+ */
+export function sessionImagesOf(raw: unknown): SessionImage[] {
+  return checkImagePayloads(raw, MAX_SESSION_IMAGES)
+}
+
+/** Answer an ImageAttachError as the v1 error shape; false for any other error. */
+export function sendImageAttachError(res: Response, err: unknown): boolean {
+  if (!isImageAttachError(err)) return false
+  sendError(res, err.status, err.code, err.message)
+  return true
 }
 
 // ─── POST /sessions/:id/messages ────────────────────────────────────────────
@@ -61,7 +60,13 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
     }
     // Additive: `images` allows an otherwise-empty text turn. Old clients that
     // send no images keep the exact 400-on-empty-text behavior.
-    const images = extractValidImages(req.body?.images)
+    let images: SessionImage[]
+    try {
+      images = sessionImagesOf(req.body?.images)
+    } catch (err) {
+      if (sendImageAttachError(res, err)) return
+      throw err
+    }
     const rawText = req.body?.text
     const text = typeof rawText === 'string' ? rawText : ''
     if (text.trim() === '' && images.length === 0) {
@@ -117,6 +122,18 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
       const rawMid = req.body?.messageId
       const clientMessageId = typeof rawMid === 'string' && /^qm-[A-Za-z0-9-]{1,64}$/.test(rawMid)
         ? rawMid : undefined
+      // The host's `image.save` takes a picture up to its cap: an oversized one is
+      // downscaled and recompressed here to fit, and one that still does not fit is
+      // refused now, with the words kept on the phone, never sent without it.
+      // Before the stop below: a picture refused here must not have stopped the running turn.
+      if (images.length > 0) {
+        images = await compressImagesInMemory(images)
+        const over = images.findIndex((img) => !fitsImageSaveLimits(img.data))
+        if (over >= 0) {
+          sendError(res, 413, 'image_too_large', `${images.length === 1 ? 'The picture' : `Picture ${over + 1} of ${images.length}`} is too large to send to this session's host even after shrinking it. Attach it as a file instead.`)
+          return
+        }
+      }
       // The relay carries text only, so the stop goes first and the message after it: the
       // runner's send waits out a stop still settling (claude-code-session.ts handleSend).
       // A stop that did not reach the primary sends nothing, so the words stay in the composer.
@@ -160,21 +177,20 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
     // Same "[Images attached …]" prefix format as the WS session-chat path.
     // Remote sessions: RemoteSessionManager.prepareOutbound() uploads the local
     // files and rewrites the paths on the way to the exec host (no work here).
+    //
+    // All or nothing: a picture that cannot be saved refuses the send (the phone
+    // keeps the words and the pictures), never sends the words without it.
     let enqueueText: string | undefined
-    const savedPaths: string[] = []
+    let savedPaths: string[] = []
     if (images.length > 0) {
-      const { saveImageToDisk } = await import('./images.js')
-      for (const img of images) {
-        try {
-          const { filePath } = await saveImageToDisk(img.data, img.mediaType)
-          savedPaths.push(filePath)
-        } catch (err) {
-          log.web.warn('Failed to save mobile session image', { sessionId, error: err instanceof Error ? err.message : String(err) })
-        }
+      try {
+        savedPaths = (await savePicturesToDisk(images)).map((s) => s.filePath)
+      } catch (err) {
+        log.web.warn('mobile session images not saved; the send is refused', { sessionId, error: err instanceof Error ? err.message : String(err) })
+        if (sendImageAttachError(res, err)) return
+        throw err
       }
-      if (savedPaths.length > 0) {
-        enqueueText = withImagePaths(text, savedPaths)
-      }
+      enqueueText = withImagePaths(text, savedPaths)
     }
 
     // Additive idempotency (parity with the cloud relay): a retrying phone

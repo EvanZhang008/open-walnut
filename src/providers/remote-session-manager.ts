@@ -21,7 +21,7 @@ import { STATUS_PROBE_TIMEOUT_MS, statusReplyAlive } from './daemon-status-reply
 import path from 'node:path'
 import { IS_EPHEMERAL, REMOTE_IMAGES_DIR, WALNUT_HOME } from '../constants.js'
 import {
-  attachedFilePaths, findShippableFiles, localShipRoots, rewriteShipped, shipFile, UPLOAD_PART_CAPABILITY,
+  attachedFilePaths, attachmentBlocks, findShippableFiles, localShipRoots, rewriteShipped, shipFile, UPLOAD_PART_CAPABILITY,
   type ShippableFile, type ShipOutcome,
 } from './outbound-uploads.js'
 import { cliStateOf, isConversationActivityLine, type CliTurnState } from './stream-activity.js'
@@ -111,6 +111,9 @@ export async function askCliHolder(conn: Pick<DaemonConnection, 'hasCapability' 
     return { state: 'unknown', detail: err instanceof Error ? err.message : String(err) }
   }
 }
+
+/** Why an attachment did not reach a host whose link was down when the message went. */
+const LINK_DOWN_REASON = 'the link to this host was down'
 
 export class RemoteSessionManager implements SessionManager {
   /** When this manager's CLI was spawned (ms; 0 = attached, not spawned here). */
@@ -1540,7 +1543,9 @@ export class RemoteSessionManager implements SessionManager {
   async prepareOutbound(message: string): Promise<string> {
     // Local daemon: same filesystem — no path rewriting needed
     if (!this.isRemote) return message
-    if (!this.conn?.connected) return message
+    // No link: nothing can be copied, so every attachment the message lists is a failure, said to
+    // the agent on its line and to the sender in the chat (never a bare local path passed on).
+    if (!this.conn?.connected) return this.markUndelivered(message, LINK_DOWN_REASON)
 
     let rewritten = message
 
@@ -1550,6 +1555,10 @@ export class RemoteSessionManager implements SessionManager {
     // files or paste header takes shipLocalFiles' chunked lane, whatever its extension.
     const asFiles = attachedFilePaths(message)
     const imagePaths = findLocalImagePaths(message).filter((p) => !asFiles.has(p))
+    // A picture the host would not take keeps its local path WITH the reason after it (the
+    // files lane's note, outbound-uploads.ts rewriteShipped): before, the bare local path went
+    // on, and the agent was handed a file that does not exist there with no word why.
+    const imageFailed = new Map<string, string>()
     for (const localPath of imagePaths) {
       try {
         const data = fs.readFileSync(localPath)
@@ -1571,6 +1580,7 @@ export class RemoteSessionManager implements SessionManager {
           log.session.warn('RemoteSessionManager: image upload rejected by daemon — keeping local path', {
             localPath, remotePath, host: this.hostKey, error: result.error,
           })
+          imageFailed.set(localPath, String(result.error ?? 'the host refused the picture'))
           continue
         }
 
@@ -1579,10 +1589,49 @@ export class RemoteSessionManager implements SessionManager {
         log.session.warn('RemoteSessionManager: image upload failed', {
           localPath, error: err instanceof Error ? err.message : String(err),
         })
+        imageFailed.set(localPath, err instanceof Error ? err.message : String(err))
       }
+    }
+    if (imageFailed.size > 0) {
+      rewritten = rewriteShipped(rewritten, new Map(), imageFailed)
+      this.tellUndelivered(imageFailed)
     }
 
     return this.shipLocalFiles(rewritten)
+  }
+
+  /** Every attachment `message` lists that exists here, marked as not copied for `reason`. */
+  private markUndelivered(message: string, reason: string): string {
+    const failed = new Map<string, string>()
+    for (const block of attachmentBlocks(message)) {
+      if (block.kind === 'narration') continue
+      for (const p of block.paths) if (path.isAbsolute(p) && fs.existsSync(p)) failed.set(p, reason)
+    }
+    if (failed.size === 0) return message
+    this.tellUndelivered(failed)
+    return rewriteShipped(message, new Map(), failed)
+  }
+
+  /**
+   * The sender's half of an attachment that did not reach the host: an error row in the
+   * session's chat (session:system-event), right where the message went. The agent's half is
+   * the note on its line (rewriteShipped). This runs at delivery, after the send was accepted,
+   * so the chat is the one place left to say it.
+   */
+  private tellUndelivered(failed: Map<string, string>): void {
+    const sessionId = this._sid
+    if (failed.size === 0 || !sessionId) return
+    const names = [...failed.keys()].map((p) => path.basename(p))
+    const reason = [...new Set(failed.values())].join('; ')
+    const taskId = this._taskId
+    const host = this.hostKey
+    log.session.warn('RemoteSessionManager: attachments did not reach the host; the sender is told', { host, sid: sessionId, count: failed.size, reason })
+    void Promise.all([import('../core/event-bus.js'), import('../core/hosts/host-display-name.js')]).then(([{ bus, EventNames }, { hostDisplayName }]) => {
+      const one = failed.size === 1
+      const message = `${one ? `The attachment ${names[0]} did not` : `${failed.size} attachments (${names.join(', ')}) did not`} reach ${hostDisplayName(host)} (${reason}). The agent was told it cannot open ${one ? 'it' : 'them'}; send ${one ? 'it' : 'them'} again.`
+      bus.emit(EventNames.SESSION_SYSTEM_EVENT, { sessionId, ...(taskId ? { taskId } : {}), variant: 'error' as const, message },
+        ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
+    }).catch(() => {})
   }
 
   /**
@@ -1595,7 +1644,7 @@ export class RemoteSessionManager implements SessionManager {
    */
   private async shipLocalFiles(message: string): Promise<string> {
     const conn = this.conn
-    if (!conn?.connected) return message
+    if (!conn?.connected) return this.markUndelivered(message, LINK_DOWN_REASON)
     const files = findShippableFiles(message, localShipRoots(getConnectedDaemonConnection('__local__')?.taskDirRoot))
     if (files.length === 0) return message
     const shipped = new Map<string, string>()
@@ -1603,6 +1652,7 @@ export class RemoteSessionManager implements SessionManager {
     if (!conn.hasCapability(UPLOAD_PART_CAPABILITY)) {
       log.session.warn('RemoteSessionManager: host cannot take files yet, keeping local paths', { host: this.hostKey, count: files.length })
       for (const file of files) failed.set(file.localPath, "this host's Walnut daemon cannot take files yet")
+      this.tellUndelivered(failed)
       return rewriteShipped(message, shipped, failed)
     }
     for (const file of files) {
@@ -1610,6 +1660,7 @@ export class RemoteSessionManager implements SessionManager {
       if (outcome.ok) shipped.set(file.localPath, outcome.path)
       else failed.set(file.localPath, outcome.reason)
     }
+    this.tellUndelivered(failed)
     return rewriteShipped(message, shipped, failed)
   }
 

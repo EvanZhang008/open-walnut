@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto'
 import fsp from 'node:fs/promises'
 import { IMAGES_DIR, MOBILE_STAGED_IMAGES_DIR } from '../../constants.js'
 import { log } from '../../logging/index.js'
-import { compressForApi } from '../../utils/image-compress.js'
+import { MAX_BASE64_BYTES, compressForApi } from '../../utils/image-compress.js'
 import { imageContextBlock } from '../../lib/attachment-headers.js'
 
 export interface ImagePayload {
@@ -43,14 +43,173 @@ export interface ProcessedImages {
 }
 
 const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+/**
+ * Pictures one message may carry where they travel as model image blocks (the
+ * main agent's chat, the cloud chat-turn relay). A longer list is REFUSED with
+ * an ImageAttachError, never cut short.
+ */
 const MAX_IMAGES_PER_MESSAGE = 5
+/**
+ * Pictures one message to a Claude Code session may carry. The session reads
+ * each one from its file path (its stdin takes text only), so the per-message
+ * model cap does not apply; but every picture it reads stays in its context, and
+ * the API takes at most 100 images per request, so this stays well under that.
+ * Past it the send is refused, never cut short.
+ */
+export const MAX_SESSION_IMAGES = 20
 
 /**
- * `image.save` caps, mirrored from the daemon twins so an oversized attachment
- * is refused HERE (and the caller can degrade) instead of after a full bridge
- * round trip. Decoded bytes and base64 length are both checked, exactly as the
- * daemon checks them.
+ * Why a message's pictures cannot go as sent. Thrown BEFORE anything is sent,
+ * so the sender's words stay in the composer with the reason beside them:
+ * a picture is never dropped while the words go on without it (2026-11-23, the
+ * user: messages, and what they carry, are never lost).
+ *
+ * `status` is the HTTP answer (the express error handler and the v1 routes read
+ * it); a WS RPC answers with the message.
  */
+export type ImageAttachCode =
+  | 'image_invalid'
+  | 'image_unsupported_type'
+  | 'too_many_images'
+  | 'image_not_found'
+  | 'image_too_large'
+  | 'image_save_failed'
+
+export class ImageAttachError extends Error {
+  readonly status: number
+  constructor(readonly code: ImageAttachCode, message: string) {
+    super(message)
+    this.name = 'ImageAttachError'
+    this.status = code === 'image_save_failed' ? 500 : code === 'image_too_large' ? 413 : 400
+  }
+}
+
+export function isImageAttachError(err: unknown): err is ImageAttachError {
+  return err instanceof ImageAttachError
+}
+
+/** "Picture 2 of 3" for one that is named in an error. */
+function nth(i: number, total: number): string {
+  return total === 1 ? 'The picture' : `Picture ${i + 1} of ${total}`
+}
+
+/**
+ * The inline pictures of a request body, every one checked: the list as it came
+ * (in order, none left out), or an ImageAttachError naming the first that cannot
+ * go. Absent or empty is no pictures. Size is not checked here: the save
+ * downscales and recompresses an oversized picture to fit (compressForApi).
+ */
+export function checkImagePayloads(raw: unknown, max: number = MAX_IMAGES_PER_MESSAGE): ImagePayload[] {
+  if (raw === undefined || raw === null) return []
+  if (!Array.isArray(raw)) throw new ImageAttachError('image_invalid', '`images` must be a list of { data, mediaType } pictures.')
+  if (raw.length === 0) return []
+  if (raw.length > max) {
+    throw new ImageAttachError('too_many_images',
+      `This message has ${raw.length} pictures and one message takes at most ${max}. Send the rest in another message.`)
+  }
+  return raw.map((img, i) => {
+    const entry = img as { data?: unknown; mediaType?: unknown } | null
+    if (!entry || typeof entry !== 'object' || typeof entry.data !== 'string' || entry.data.length === 0
+      || typeof entry.mediaType !== 'string') {
+      throw new ImageAttachError('image_invalid', `${nth(i, raw.length)} has no picture data (it needs base64 \`data\` and a \`mediaType\`).`)
+    }
+    if (!ALLOWED_IMAGE_TYPES.has(entry.mediaType)) {
+      throw new ImageAttachError('image_unsupported_type',
+        `${nth(i, raw.length)} is ${entry.mediaType}; pictures must be PNG, JPEG, GIF or WebP. Convert it, or attach it as a file.`)
+    }
+    return { data: entry.data, mediaType: entry.mediaType }
+  })
+}
+
+/**
+ * The upload names of a request body's `imageRefs`, every one checked the same
+ * way: a name the upload endpoint could not have produced is refused, not
+ * skipped.
+ */
+export function checkImageRefNames(refs: unknown, max: number = MAX_IMAGES_PER_MESSAGE): string[] {
+  if (refs === undefined || refs === null) return []
+  if (!Array.isArray(refs)) throw new ImageAttachError('image_invalid', '`imageRefs` must be a list of { filename } uploads.')
+  if (refs.length > max) {
+    throw new ImageAttachError('too_many_images',
+      `This message has ${refs.length} pictures and one message takes at most ${max}. Send the rest in another message.`)
+  }
+  return refs.map((r, i) => {
+    const name = r && typeof r === 'object' ? (r as { filename?: unknown }).filename : r
+    if (!isSafeImageFilename(name)) {
+      throw new ImageAttachError('image_invalid', `${nth(i, refs.length)} names no uploaded picture. Attach it again.`)
+    }
+    return name
+  })
+}
+
+/** Pictures compressed at once: each sharp run can hold a decoded bitmap of tens of MB. */
+const SAVE_CONCURRENCY = 4
+
+/**
+ * Compress (downscale/recompress an oversized one) and save each picture, at most
+ * SAVE_CONCURRENCY at a time, in order. All or nothing: a picture that still does
+ * not fit after compressing refuses the send with 'image_too_large' (413), one
+ * that cannot be written with 'image_save_failed' (500); either way the pictures
+ * this call already wrote are removed again, so a refused send leaves nothing.
+ */
+export async function savePicturesToDisk(images: ImagePayload[]): Promise<Array<{ filePath: string; filename: string; mediaType: string; data: string }>> {
+  const out: Array<{ filePath: string; filename: string; mediaType: string; data: string }> = new Array(images.length)
+  const written: string[] = []
+  let next = 0
+  let failed: unknown = null
+  const saveOne = async (img: ImagePayload, i: number) => {
+    const { buffer, mimeType } = await compressForApi(Buffer.from(img.data, 'base64'), img.mediaType)
+    const data = buffer.toString('base64')
+    if (data.length > MAX_BASE64_BYTES) {
+      throw new ImageAttachError('image_too_large',
+        `${nth(i, images.length)} is ${Math.round(buffer.length / 1024 / 1024)} MB even after shrinking it, past the ${Math.floor(MAX_BASE64_BYTES * 3 / 4 / 1024 / 1024)} MB a picture can be. Attach it as a file instead.`)
+    }
+    let saved: { filePath: string; filename: string }
+    try {
+      saved = await saveImageToDisk(data, mimeType)
+    } catch (err) {
+      log.web.warn('a picture could not be saved; the send is refused', { error: err instanceof Error ? err.message : String(err) })
+      throw new ImageAttachError('image_save_failed',
+        `${nth(i, images.length)} could not be saved on the server (${err instanceof Error ? err.message : String(err)}). Your message was not sent; send it again.`)
+    }
+    written.push(saved.filePath)
+    out[i] = { ...saved, mediaType: mimeType, data }
+  }
+  const worker = async () => {
+    while (failed === null && next < images.length) {
+      const i = next++
+      try {
+        await saveOne(images[i]!, i)
+      } catch (err) {
+        failed ??= err
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(SAVE_CONCURRENCY, images.length) }, worker))
+  if (failed !== null) {
+    await Promise.all(written.map((p) => fsp.rm(p, { force: true }).catch(() => {})))
+    throw failed instanceof ImageAttachError ? failed
+      : new ImageAttachError('image_save_failed', `A picture could not be saved on the server (${failed instanceof Error ? failed.message : String(failed)}). Your message was not sent; send it again.`)
+  }
+  return out
+}
+
+/**
+ * The saved paths of a message to a Claude Code session, from whichever form the
+ * body carries (`imageRefs` uploads win over inline `images`, as everywhere).
+ * Every picture is kept or the send is refused with ImageAttachError; none is
+ * dropped. The session reads them from these paths.
+ */
+export async function saveSessionPictures(images: unknown, imageRefs: unknown): Promise<string[]> {
+  if (Array.isArray(imageRefs) && imageRefs.length > 0) {
+    const resolved = await resolveImageRefs(imageRefs, MAX_SESSION_IMAGES)
+    return resolved?.savedImages.map((s) => s.filePath) ?? []
+  }
+  const checked = checkImagePayloads(images, MAX_SESSION_IMAGES)
+  if (checked.length === 0) return []
+  return (await savePicturesToDisk(checked)).map((s) => s.filePath)
+}
+
 const IMAGE_SAVE_MAX_BASE64_LENGTH = 14_000_000
 const IMAGE_SAVE_MAX_BYTES = 10 * 1024 * 1024
 
@@ -109,25 +268,15 @@ export async function readImageAsBase64(filePath: string): Promise<{ data: strin
 /**
  * Validate, compress, save images to disk, and build API content blocks.
  * Shared by chat handler and quick-start session handler.
+ *
+ * Every picture is kept or the call throws ImageAttachError (a bad entry, more
+ * than `max`, a failed save): it never returns fewer pictures than it was given.
+ * Null only for an empty list.
  */
-export async function processAndSaveImages(images: ImagePayload[]): Promise<ProcessedImages | null> {
-  const validImages = images
-    .filter(img => ALLOWED_IMAGE_TYPES.has(img.mediaType))
-    .filter(img => !!img.data)
-    .slice(0, MAX_IMAGES_PER_MESSAGE)
-
-  if (validImages.length === 0) return null
-
-  const saved = await Promise.all(
-    validImages.map(async (img) => {
-      const rawBuffer = Buffer.from(img.data, 'base64')
-      const { buffer, mimeType } = await compressForApi(rawBuffer, img.mediaType)
-      const compressedBase64 = buffer.toString('base64')
-      const { filePath, filename } = await saveImageToDisk(compressedBase64, mimeType)
-      return { filePath, filename, mediaType: mimeType, data: compressedBase64 }
-    }),
-  )
-
+export async function processAndSaveImages(images: unknown, max: number = MAX_IMAGES_PER_MESSAGE): Promise<ProcessedImages | null> {
+  const checked = checkImagePayloads(images, max)
+  if (checked.length === 0) return null
+  const saved = await savePicturesToDisk(checked)
   return {
     savedImages: saved.map(s => ({ filePath: s.filePath, filename: s.filename, mediaType: s.mediaType })),
     imageContentBlocks: saved.map(s => ({
@@ -282,29 +431,25 @@ export function isSafeImageFilename(name: unknown): name is string {
  * shape `processAndSaveImages` returns — no re-encoding, the upload already
  * compressed and clamped the bytes.
  *
- * Refs naming a missing/invalid file are skipped rather than throwing: a send
- * must never fail wholesale because one attachment went stale.
+ * All or nothing: a ref naming no upload, or an upload no longer on disk,
+ * refuses the send with ImageAttachError, so the composer keeps the words and
+ * the person attaches the picture again. Skipping it sent the words alone, and
+ * the agent answered about a picture it never saw.
  */
-export async function resolveImageRefs(refs: unknown[]): Promise<ProcessedImages | null> {
-  const filenames = refs
-    .map(r => (r && typeof r === 'object' ? (r as { filename?: unknown }).filename : r))
-    .filter(isSafeImageFilename)
-    .slice(0, MAX_IMAGES_PER_MESSAGE)
-
+export async function resolveImageRefs(refs: unknown[], max: number = MAX_IMAGES_PER_MESSAGE): Promise<ProcessedImages | null> {
+  const filenames = checkImageRefNames(refs, max)
   if (filenames.length === 0) return null
 
-  const resolved = await Promise.all(filenames.map(async (filename) => {
+  const saved = await Promise.all(filenames.map(async (filename, i) => {
     const filePath = path.join(IMAGES_DIR, filename)
     const image = await readImageAsBase64(filePath)
     if (!image) {
-      log.web.warn('image ref not found on disk — skipping', { filename })
-      return null
+      log.web.warn('image ref not found on disk; the send is refused', { filename })
+      throw new ImageAttachError('image_not_found',
+        `${nth(i, filenames.length)} is no longer on the server. Remove it and attach it again.`)
     }
     return { filePath, filename, mediaType: image.mediaType, data: image.data }
   }))
-
-  const saved = resolved.filter((r): r is NonNullable<typeof r> => r !== null)
-  if (saved.length === 0) return null
 
   return {
     savedImages: saved.map(s => ({ filePath: s.filePath, filename: s.filename, mediaType: s.mediaType })),
@@ -329,10 +474,7 @@ export async function resolvePayloadImages(
   if (Array.isArray(imageRefs) && imageRefs.length > 0) {
     return resolveImageRefs(imageRefs)
   }
-  if (Array.isArray(images) && images.length > 0) {
-    return processAndSaveImages(images as ImagePayload[])
-  }
-  return null
+  return processAndSaveImages(images)
 }
 
 /**

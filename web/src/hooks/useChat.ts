@@ -45,6 +45,13 @@ export interface ChatMessage {
   queued?: boolean;
   queueId?: number;
   /**
+   * A queued message that went out after the turn and was refused (its pictures could not go, an
+   * offline socket, a 500): the reason. The bubble keeps the words and pictures and offers Retry
+   * (retryFailedMessage); its composer was emptied when it was queued, so this is the only place
+   * left that still holds the message.
+   */
+  failed?: string;
+  /**
    * The server's turn id (uuid) — the one id that is the SAME while the turn
    * streams and after a reload, because it rides both the live `agent:*` events
    * and the persisted history entry. `key` cannot do this job: it is a
@@ -312,6 +319,8 @@ export type MergedErrorMessage = WithErrorCount<ChatMessage>;
 export type ChatSendOutcome = 'sent' | 'queued' | 'dropped' | 'failed';
 
 export const MAX_QUEUE_SIZE = 10;
+interface QueuedChatSend { id: number; text: string; taskContext?: TaskContext; images?: ImageAttachment[]; mode?: 'plan'; planModeFirst?: boolean; planModeOff?: boolean }
+
 interface UseChatReturn {
   messages: ChatMessage[];
   isStreaming: boolean;
@@ -339,6 +348,8 @@ interface UseChatReturn {
   addLocalMessage: (content: string, source?: ChatMessage['source']) => void;
   stopGeneration: () => void;
   cancelQueuedMessage: (queueId: number) => void;
+  /** Send a failed queued message again (ChatMessage.failed): queued behind a running turn, else at once. */
+  retryFailedMessage: (queueId: number) => void;
   clearQueue: () => void;
   loadOlderMessages: () => void;
 }
@@ -425,7 +436,9 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
   const nextPageRef = useRef(2);
   // Queue for messages sent while AI is streaming
   const queueIdCounter = useRef(0);
-  const queueRef = useRef<{ id: number; text: string; taskContext?: TaskContext; images?: ImageAttachment[]; mode?: 'plan'; planModeFirst?: boolean; planModeOff?: boolean }[]>([]);
+  const queueRef = useRef<QueuedChatSend[]>([]);
+  /** The last send's refusal, for the queued bubble it failed (drainOrStop). */
+  const lastSendErrorRef = useRef<string>('');
   // Track whether an RPC is in flight (to know when to drain)
   const rpcInFlightRef = useRef(false);
   // Timer ID for delayed drain after errors (cleared on queue reset / unmount)
@@ -948,6 +961,13 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
     setMessages((prev) => prev.filter((m) => !(m.queued && m.queueId === queueId)));
   }, []);
 
+  /** A queued send that was refused: its bubble says why and keeps what it carries for Retry. */
+  const failedSendsRef = useRef(new Map<number, QueuedChatSend>());
+  const markQueuedFailed = useCallback((send: QueuedChatSend, reason: string) => {
+    failedSendsRef.current.set(send.id, send);
+    setMessages((prev) => prev.map((m) => (m.queueId === send.id && m.role === 'user' ? { ...m, queued: false, failed: reason || 'Send failed' } : m)));
+  }, []);
+
   /** Drain the next queued message, or set isStreaming=false if queue is empty */
   const drainOrStop = useCallback(() => {
     if (queueRef.current.length > 0) {
@@ -964,11 +984,12 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
           return m;
         });
       });
-      void sendRpcRef.current?.(next.text, next.taskContext, next.images, undefined, next.mode, next.planModeFirst, next.planModeOff);
+      void sendRpcRef.current?.(next.text, next.taskContext, next.images, undefined, next.mode, next.planModeFirst, next.planModeOff)
+        .then((outcome) => { if (outcome === 'failed') markQueuedFailed(next, lastSendErrorRef.current); });
     } else {
       setIsStreaming(false);
     }
-  }, []);
+  }, [markQueuedFailed]);
 
   /** Send a message via RPC (not queued). Answers `sent` or `failed`; never rejects. */
   const sendRpc = useCallback((text: string, taskContext?: TaskContext, images?: ImageAttachment[], source?: string, mode?: 'plan', planModeFirst?: boolean, planModeOff?: boolean): Promise<'sent' | 'failed'> => {
@@ -1012,6 +1033,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
       })
       .catch((e: Error): 'failed' => {
         rpcInFlightRef.current = false;
+        lastSendErrorRef.current = e.message;
         notify({
           kind: 'operation-error',
           toastReason: 'failure', severity: 'error',
@@ -1058,6 +1080,21 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
     setMessages((prev) => [...prev, userMsg]);
     return await sendRpc(text, taskContext, images, source, mode, planModeFirst, planModeOff);
   }, [sendRpc, flushTextDelta]);
+
+  const retryFailedMessage = useCallback((queueId: number) => {
+    const send = failedSendsRef.current.get(queueId);
+    if (!send) return;
+    failedSendsRef.current.delete(queueId);
+    if (isStreamingRef.current) {
+      queueRef.current.push(send);
+      setQueueCount(queueRef.current.length);
+      setMessages((prev) => prev.map((m) => (m.queueId === queueId && m.role === 'user' ? { ...m, failed: undefined, queued: true } : m)));
+      return;
+    }
+    setMessages((prev) => prev.map((m) => (m.queueId === queueId && m.role === 'user' ? { ...m, failed: undefined } : m)));
+    void sendRpc(send.text, send.taskContext, send.images, undefined, send.mode, send.planModeFirst, send.planModeOff)
+      .then((outcome) => { if (outcome === 'failed') markQueuedFailed(send, lastSendErrorRef.current); });
+  }, [sendRpc, markQueuedFailed]);
 
   const clearMessages = useCallback(() => {
     flushTextDelta();
@@ -1108,5 +1145,5 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
   // second clause a caller can act on the render where the id has arrived and the fetch has not started.
   const loading = isLoading || (conversationId !== null && loadedFor !== conversationId);
 
-  return { messages, isStreaming, isCompacting, toolActivity, isLoading: loading, stats, queueCount, hasMore, isLoadingOlder, prependedRef, sendMessage, clearMessages, addLocalMessage, stopGeneration, cancelQueuedMessage, clearQueue, loadOlderMessages };
+  return { messages, isStreaming, isCompacting, toolActivity, isLoading: loading, stats, queueCount, hasMore, isLoadingOlder, prependedRef, sendMessage, clearMessages, addLocalMessage, stopGeneration, cancelQueuedMessage, retryFailedMessage, clearQueue, loadOlderMessages };
 }

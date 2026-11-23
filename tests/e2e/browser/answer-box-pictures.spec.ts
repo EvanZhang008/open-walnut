@@ -240,6 +240,17 @@ test('a question card sends its answer and its picture as one message', async ({
   await box.fill(`Like this one (${NONCE})`)
   await pasteScreenshot(box, `Badge mock ${NONCE}`)
   await expect(card.locator('.answer-box-pictures img')).toHaveCount(1)
+  // A picture past the box's limit is said beside the box, never left out without a word
+  // (2026-11-23: what a message carries is never lost silently). Five fit; the sixth is named.
+  const notice = card.locator('.picture-strip-notice')
+  for (let i = 2; i <= 6; i++) await pasteScreenshot(box, `Extra ${i}`)
+  await expect(card.locator('.answer-box-pictures img')).toHaveCount(5)
+  await expect(notice).toHaveText('Only 5 pictures fit in one message; 1 was not added.')
+  await shot(card, 'question-sixth-picture-said')
+  // Taking extras off clears the line; back to the one picture this answer sends.
+  for (let i = 0; i < 4; i++) await card.locator('.answer-box-pictures .chat-image-remove').last().click()
+  await expect(card.locator('.answer-box-pictures img')).toHaveCount(1)
+  await expect(notice).toHaveCount(0)
   await beat(page, 1500)
   await shot(card, 'question-before-submit')
   // An upload the server refuses answers nothing and keeps the words and the picture for the next try.

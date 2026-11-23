@@ -23,6 +23,8 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
 import { WALNUT_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js'
 import type { SshTarget } from '../../src/providers/session-io.js'
+import { withImagePaths } from '../../src/core/sessions/cloud-images.js'
+import { SHIP_FAILED_NOTE } from '../../src/providers/outbound-uploads.js'
 
 const tmpBase = WALNUT_HOME
 
@@ -148,7 +150,24 @@ describe('RemoteSessionManager.prepareOutbound (local → remote image upload)',
     expect(await mgr.prepareOutbound(text)).toBe(text)
   })
 
-  it('is a no-op with no connection (message must not be mangled before start)', async () => {
+  it('an attached picture the host would not take is named with the reason, never passed on bare', async () => {
+    const imgPath = path.join(tmpBase, 'attached-fail.png')
+    fs.writeFileSync(imgPath, 'data')
+    const mgr = new RemoteSessionManager('sid-reject-header', 'remotehost', REMOTE_TARGET)
+    injectConn(mgr, makeConn(async () => ({ ok: false, error: 'fs.write failed: EACCES' })))
+    const text = withImagePaths('what is wrong here?', [imgPath])
+    const out = await mgr.prepareOutbound(text)
+    // The agent reads why it cannot open the file (the files lane's note), instead of a bare
+    // local path that does not exist on the host.
+    expect(out).toContain(`- ${imgPath}${SHIP_FAILED_NOTE}fs.write failed: EACCES)`)
+    expect(out).toContain('what is wrong here?')
+
+    const thrown = new RemoteSessionManager('sid-throw-header', 'remotehost', REMOTE_TARGET)
+    injectConn(thrown, makeConn(async () => { throw new Error('daemon command timeout: fs.write') }))
+    expect(await thrown.prepareOutbound(text)).toContain(`- ${imgPath}${SHIP_FAILED_NOTE}daemon command timeout: fs.write)`)
+  })
+
+  it('with no connection, prose is left as it is and an attached picture is named as not copied', async () => {
     const imgPath = path.join(tmpBase, 'noconn.png')
     fs.writeFileSync(imgPath, 'data')
 
@@ -159,7 +178,25 @@ describe('RemoteSessionManager.prepareOutbound (local → remote image upload)',
 
     const text = `See ${imgPath}`
     expect(await mgr.prepareOutbound(text)).toBe(text)
+    // Under the images header it is an attachment: the agent reads why it cannot open it.
+    const attached = withImagePaths('look', [imgPath])
+    expect(await mgr.prepareOutbound(attached)).toContain(`- ${imgPath}${SHIP_FAILED_NOTE}the link to this host was down)`)
     expect(conn.send).not.toHaveBeenCalled()
+  })
+
+  it('a picture that did not reach the host is said to the sender in the session chat', async () => {
+    const imgPath = path.join(tmpBase, 'tell.png')
+    fs.writeFileSync(imgPath, 'data')
+    const { bus } = await import('../../src/core/event-bus.js')
+    const emit = vi.spyOn(bus, 'emit')
+    const mgr = new RemoteSessionManager('sid-tell', 'remotehost', REMOTE_TARGET)
+    ;(mgr as unknown as { _sid: string })._sid = 'sid-tell'
+    injectConn(mgr, makeConn(async () => ({ ok: false, error: 'fs.write failed: EACCES' })))
+    await mgr.prepareOutbound(withImagePaths('look', [imgPath]))
+    await vi.waitFor(() => expect(emit).toHaveBeenCalledWith('session:system-event',
+      expect.objectContaining({ sessionId: 'sid-tell', variant: 'error', message: expect.stringContaining('The attachment tell.png did not reach') }),
+      ['main-ai'], expect.anything()))
+    emit.mockRestore()
   })
 
   it('skips upload entirely for the local daemon (__local__ shares the filesystem)', async () => {

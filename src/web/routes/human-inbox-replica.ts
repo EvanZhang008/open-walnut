@@ -218,6 +218,8 @@ function pictureCount(b: Record<string, unknown>, max: number): number {
  */
 async function keptPictures(b: Record<string, unknown>): Promise<Array<{ name: string; bytes: Buffer }> | null> {
   const { saveAnswerPictures, MAX_ANSWER_PICTURES } = await import('../../core/answer-pictures.js')
+  // A picture that cannot be kept throws ImageAttachError (answer-pictures.ts): it goes up to the
+  // route, which says which picture and why, and nothing is held.
   const names = await saveAnswerPictures(b)
   if (names.length === 0 || names.length < pictureCount(b, MAX_ANSWER_PICTURES)) return null
   const { IMAGES_DIR } = await import('../../constants.js')

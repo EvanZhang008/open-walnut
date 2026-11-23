@@ -73,8 +73,11 @@ describe('picture names a turn may keep', () => {
   it('a body\'s pictures are saved, whether uploaded (imageRefs) or inline (the phone)', async () => {
     const uploaded = picture('up-1.png');
     expect(await saveAnswerPictures({ imageRefs: [{ filename: uploaded }] })).toEqual([uploaded]);
-    const inline = await saveAnswerPictures({ images: [{ data: PNG_1X1, mediaType: 'image/png' }, { data: 'x', mediaType: 'text/plain' }] });
+    const inline = await saveAnswerPictures({ images: [{ data: PNG_1X1, mediaType: 'image/png' }] });
     expect(inline).toHaveLength(1);
+    // One that is not a picture refuses the answer: the good one never goes without it.
+    await expect(saveAnswerPictures({ images: [{ data: PNG_1X1, mediaType: 'image/png' }, { data: 'x', mediaType: 'text/plain' }] }))
+      .rejects.toThrow(/PNG, JPEG, GIF or WebP/);
     expect(fs.existsSync(path.join(IMAGES_DIR, inline[0]!))).toBe(true);
     expect(await saveAnswerPictures({})).toEqual([]);
   });
@@ -165,10 +168,11 @@ describe('a question answer with pictures is one tool result', () => {
     expect(picturePath).toMatch(/^- \/remote\/images\/[^/]+$/);
   });
 
-  it('no pictures, or none that can be saved, leaves the answers as they were', async () => {
+  it('no pictures leaves the answers as they were; one that is gone refuses the answer', async () => {
     const answers = { 'Which layout?': 'A' };
     expect(await withAnswerPictures(answers, asked, {}, async (t) => t)).toEqual({ answers, pictures: 0 });
-    expect(await withAnswerPictures(answers, asked, { imageRefs: [{ filename: 'gone.png' }] }, async (t) => t)).toEqual({ answers, pictures: 0 });
+    // Never the words without the picture: the prompt stays open to answer again.
+    await expect(withAnswerPictures(answers, asked, { imageRefs: [{ filename: 'gone.png' }] }, async (t) => t)).rejects.toThrow(/no longer on the server/);
     expect(await withAnswerPictures({}, asked, { imageRefs: [{ filename: picture('x.png') }] }, async (t) => t)).toEqual({ answers: {}, pictures: 0 });
   });
 });

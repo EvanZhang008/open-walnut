@@ -1532,8 +1532,14 @@ export async function respondSessionPermission(
   let pictureCount = 0;
   if (allow && answerPatch && pictures) {
     const { withAnswerPictures } = await import('../answer-pictures.js');
+    // A picture that cannot go refuses the answer with the reason (the prompt stays open to
+    // answer again), never resolves it without the picture (answer-pictures.ts).
+    const { isImageAttachError } = await import('../../web/routes/images.js');
     const withPictures = await withAnswerPictures(answerPatch.answers, pendingRequest.input, pictures,
-      (text) => session.transport?.prepareOutbound(text) ?? Promise.resolve(text));
+      (text) => session.transport?.prepareOutbound(text) ?? Promise.resolve(text)).catch((err: unknown) => {
+      if (isImageAttachError(err)) throw new SessionControlError(err.message, err.status);
+      throw err;
+    });
     answerPatch = { answers: withPictures.answers };
     pictureCount = withPictures.pictures;
   }

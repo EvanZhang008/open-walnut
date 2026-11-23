@@ -7670,6 +7670,17 @@ img[data-lightbox-src],
   color: var(--error);
 }
 
+/* A queued chat message that was refused when it went out: the reason and Retry (a plain .btn.btn-sm) on its bubble. */
+.chat-send-failed {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: var(--font-size-sm);
+  color: var(--error);
+}
+
 .chat-queue-indicator {
   display: flex;
   align-items: center;

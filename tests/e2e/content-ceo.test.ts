@@ -124,20 +124,33 @@ describe('POST /api/v1/content/ceo', () => {
     const res = await post({
       item: ITEM,
       note: 'Is this the plan from the screenshot?',
-      images: [{ data: png, mediaType: 'image/png' }, { data: 'x', mediaType: 'text/html' }],
+      images: [{ data: png, mediaType: 'image/png' }],
     })
     expect(res.status).toBe(200)
     expect(starts).toHaveLength(1)
     const message = String(starts[0].message)
     const lines = message.split('\n')
     expect(lines[0]).toBe(IMAGES_ATTACHED_LINE)
-    // One saved picture (the non-image was dropped), on disk, then the person's words.
+    // The saved picture, on disk, then the person's words.
     const paths = lines.slice(1).filter((l) => l.startsWith('- ')).map((l) => l.slice(2))
     expect(paths).toHaveLength(1)
     expect(paths[0]).toMatch(/\.png$/)
     await expect(fs.stat(paths[0])).resolves.toBeTruthy()
     expect(message).toContain('\n\nIs this the plan from the screenshot?\n\n')
     expect(message).toContain('<external-content source="Mail">')
+  })
+
+  it('refuses a note whose attachment is not a picture, starting nothing (never the words without it)', async () => {
+    starts.length = 0
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+    const res = await post({
+      item: ITEM,
+      note: 'Is this the plan from the screenshot?',
+      images: [{ data: png, mediaType: 'image/png' }, { data: 'x', mediaType: 'text/html' }],
+    })
+    expect(res.status).toBe(400)
+    expect(JSON.stringify(await res.json())).toMatch(/Picture 2 of 2 is text\/html/)
+    expect(starts).toHaveLength(0)
   })
 
   it("puts it in Main's live chat as the person's message, and holds it while Main waits on a prompt", async () => {

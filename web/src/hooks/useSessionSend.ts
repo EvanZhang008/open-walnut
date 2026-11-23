@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { wsClient } from '@/api/ws';
 import { hasPendingHintsSource, takePendingHints, takePendingHintsAsync } from '@/utils/pending-hints';
-import { buildImageRefsPayload } from '@/api/image-upload';
+import { buildImageRefsPayload, isStaleImageRefError, withoutUploadedNames } from '@/api/image-upload';
 import { spillOversizedText } from '@/api/paste-spill';
 import { log } from '@/utils/log';
 import type { OptimisticMessage } from '@/components/sessions/SessionChatHistory';
@@ -629,7 +629,7 @@ export function useSessionSend(activeSessionId: string | null, options?: {
     // at send time is keyed by it, so a retry that minted (or omitted) a uuid would
     // land the message at the top level while the chip still promised a thread.
     // Harmless when the server re-drains the original row (it already carries it).
-    buildImageRefsPayload(failedMsg.images)
+    const sendWith = (images: ImageAttachment[] | undefined) => buildImageRefsPayload(images)
       .then((imagePayload) => sendSessionMessage({
         sessionId, message: failedMsg.text, retryOf: queueId, ...imagePayload,
         // A resend by itself never un-parks a row the server set aside (only a person's Retry does).
@@ -637,7 +637,17 @@ export function useSessionSend(activeSessionId: string | null, options?: {
         ...(failedMsg.userUuid ? { userUuid: failedMsg.userUuid } : {}),
         ...(failedMsg.requestedHints ? { hints: failedMsg.requestedHints } : {}),
         ...(failedMsg.threadId ? { threadId: failedMsg.threadId } : {}),
-      }))
+      }));
+    sendWith(failedMsg.images)
+      .catch((e: Error) => {
+        // An upload the server no longer has: the same name fails forever, so the pictures go up
+        // again from their bytes (the bubble keeps the fresh ones for any later retry).
+        const fresh = isStaleImageRefError(e.message) ? withoutUploadedNames(failedMsg.images) : null;
+        if (!fresh) throw e;
+        log.info('send', 'retry: an uploaded picture was gone, uploading it again', { sessionId, queueId });
+        setOptimisticMsgs((prev) => prev.map((m) => (m.queueId === queueId ? { ...m, images: fresh } : m)));
+        return sendWith(fresh);
+      })
       .then((res) => {
         release([queueId]);
         if (failedMsg.draftOrigin) settleRetriedDraft(failedMsg.draftOrigin);

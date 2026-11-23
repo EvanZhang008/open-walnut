@@ -16,8 +16,6 @@ import { attachmentHeaderBlock } from '../lib/attachment-headers.js';
 /** Pictures per message, the chat's cap (MAX_IMAGES_PER_MESSAGE in web/routes/images.ts). */
 export const MAX_ANSWER_PICTURES = 5;
 const NAME_RE = /^[\w.-]{1,200}\.(?:png|jpe?g|gif|webp)$/i;
-const MAX_INLINE_BASE64 = 14_000_000;
-const INLINE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
 /** The picture file names a stored turn may carry: plain names in IMAGES_DIR, never a path. */
 export function cleanPictureNames(raw: unknown): string[] {
@@ -30,28 +28,31 @@ export function cleanPictureNames(raw: unknown): string[] {
   return out;
 }
 
-/** A request body's pictures, saved: the file names, in order (none when it carries none). */
+/**
+ * A request body's pictures, saved: the file names, in order (none when it carries none).
+ *
+ * Every picture is kept or this throws ImageAttachError (web/routes/images.ts) naming the one
+ * that cannot go: a bad entry, more than MAX_ANSWER_PICTURES, an upload no longer on disk, a
+ * save that failed. Every caller runs it before anything is recorded, so the answer is refused
+ * with the reason and the box keeps the words and the pictures (2026-11-23, the user: messages,
+ * and what they carry, are never lost). Before, a picture that could not be saved was logged
+ * and left out, and the words went on without it.
+ */
 export async function saveAnswerPictures(body: { images?: unknown; imageRefs?: unknown }): Promise<string[]> {
-  // Never throws: the words are the answer, and a picture that cannot be saved (a corrupt one, a
-  // full disk) must not cost them (the record goes first, letter-ops.ts). Logged, then left out.
-  try {
-    // Uploaded names: already on disk, only checked.
-    if (Array.isArray(body.imageRefs) && body.imageRefs.length > 0) {
-      const names = cleanPictureNames(body.imageRefs.map((r) => (r && typeof r === 'object' ? (r as { filename?: unknown }).filename : r)));
-      const kept: string[] = [];
-      for (const n of names) if (await isPictureFile(n)) kept.push(n);
-      return kept;
+  const { ImageAttachError, checkImageRefNames, checkImagePayloads, savePicturesToDisk } = await import('../web/routes/images.js');
+  // Uploaded names: already on disk, only checked.
+  if (Array.isArray(body.imageRefs) && body.imageRefs.length > 0) {
+    const names = checkImageRefNames(body.imageRefs, MAX_ANSWER_PICTURES);
+    for (const [i, n] of names.entries()) {
+      const which = names.length === 1 ? 'The picture' : `Picture ${i + 1} of ${names.length}`;
+      if (cleanPictureNames([n]).length === 0) throw new ImageAttachError('image_invalid', `${which} names no uploaded picture. Attach it again.`);
+      if (!(await isPictureFile(n))) throw new ImageAttachError('image_not_found', `${which} is no longer on the server. Remove it and attach it again.`);
     }
-    const inline = Array.isArray(body.images) ? body.images.filter(isInlinePicture) : [];
-    if (inline.length === 0) return [];
-    const { processAndSaveImages } = await import('../web/routes/images.js');
-    const saved = await processAndSaveImages(inline.slice(0, MAX_ANSWER_PICTURES));
-    return cleanPictureNames(saved?.savedImages.map((s) => s.filename) ?? []);
-  } catch (err) {
-    const { log } = await import('../logging/index.js');
-    log.web.warn('answer pictures not saved; the words go without them', { error: err instanceof Error ? err.message : String(err) });
-    return [];
+    return [...new Set(names)];
   }
+  const inline = checkImagePayloads(body.images, MAX_ANSWER_PICTURES);
+  if (inline.length === 0) return [];
+  return [...new Set((await savePicturesToDisk(inline)).map((s) => s.filename))];
 }
 
 async function isPictureFile(name: string): Promise<boolean> {
@@ -60,24 +61,16 @@ async function isPictureFile(name: string): Promise<boolean> {
 
 /**
  * The companion's half: its own uploads (`imageRefs`) are files on THIS box, which the Mac
- * cannot read, so they travel to the Mac inline, with the phone's inline ones.
+ * cannot read, so they travel to the Mac inline, with the phone's inline ones. All or an
+ * ImageAttachError, as saveAnswerPictures: never a shorter list than was sent.
  */
 export async function inlineAnswerPictures(body: { images?: unknown; imageRefs?: unknown }): Promise<Array<{ data: string; mediaType: string }>> {
-  const out: Array<{ data: string; mediaType: string }> = [];
+  const { checkImagePayloads, resolveImageRefs } = await import('../web/routes/images.js');
   if (Array.isArray(body.imageRefs) && body.imageRefs.length > 0) {
-    const { resolveImageRefs } = await import('../web/routes/images.js');
-    const got = await resolveImageRefs(body.imageRefs).catch(() => null);
-    for (const b of got?.imageContentBlocks ?? []) out.push({ data: b.source.data, mediaType: b.source.media_type });
-  } else if (Array.isArray(body.images)) {
-    for (const img of body.images) if (isInlinePicture(img)) out.push({ data: img.data, mediaType: img.mediaType });
+    const got = await resolveImageRefs(body.imageRefs, MAX_ANSWER_PICTURES);
+    return (got?.imageContentBlocks ?? []).map((b) => ({ data: b.source.data, mediaType: b.source.media_type }));
   }
-  return out.slice(0, MAX_ANSWER_PICTURES);
-}
-
-function isInlinePicture(img: unknown): img is { data: string; mediaType: string } {
-  const i = img as { data?: unknown; mediaType?: unknown } | null;
-  return !!i && typeof i.data === 'string' && i.data.length > 0 && i.data.length <= MAX_INLINE_BASE64
-    && typeof i.mediaType === 'string' && INLINE_TYPES.has(i.mediaType);
+  return checkImagePayloads(body.images, MAX_ANSWER_PICTURES);
 }
 
 /** The images header naming the pictures that are still on disk, or '' for none. */

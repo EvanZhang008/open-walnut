@@ -97,6 +97,7 @@ import {
 } from '../../core/boards/board-team.js'
 import { answerBoardChoice } from '../../core/boards/board-choice-answer.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
+import { isImageAttachError } from './images.js'
 import { picturesHeader, saveAnswerPictures } from '../../core/answer-pictures.js'
 
 export { buildBoardThreadPrompt }
@@ -226,6 +227,11 @@ export function route(fn: Handler) {
       }
       if (err instanceof RouteError) {
         sendError(res, err.status, err.code, err.message, err.extra)
+        return
+      }
+      // A picture that cannot go (answer-pictures.ts): refused with the reason, nothing posted.
+      if (isImageAttachError(err)) {
+        sendError(res, err.status, err.code, err.message)
         return
       }
       next(err)

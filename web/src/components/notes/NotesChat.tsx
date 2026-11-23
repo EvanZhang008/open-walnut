@@ -85,6 +85,8 @@ export function NotesChat({ activeNotePath, headerLeft, conversationId }: {
                 notification={'notification' in msg ? msg.notification : undefined}
                 queued={'queued' in msg ? msg.queued : undefined}
                 onCancel={msg.queued && msg.queueId != null ? () => chat.cancelQueuedMessage(msg.queueId!) : undefined}
+                failed={'failed' in msg ? msg.failed : undefined}
+                onRetry={msg.failed && msg.queueId != null ? () => chat.retryFailedMessage(msg.queueId!) : undefined}
               />
             ))}
             {chat.toolActivity && (

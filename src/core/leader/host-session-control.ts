@@ -128,12 +128,17 @@ export function createHostSessionControl(deps: HostControlDeps) {
    * answer with the reason, never drops it: the card stays open to answer again.
    */
   async function withPictures(t: LeadHost, answers: Record<string, string>, images: unknown): Promise<{ ok: true; answers: Record<string, string>; pictures: number } | { ok: false; answer: HostControlAnswer }> {
-    const list = (Array.isArray(images) ? images : []).filter((i): i is { data: string; mediaType: string } =>
-      !!i && typeof (i as { data?: unknown }).data === 'string' && typeof (i as { mediaType?: unknown }).mediaType === 'string')
+    const list = Array.isArray(images) ? images as unknown[] : []
     const keys = Object.keys(answers)
     if (list.length === 0 || keys.length === 0) return { ok: true, answers, pictures: 0 }
+    // Every picture goes or the answer is refused with the reason: none is left out or cut off.
+    if (list.length > MAX_ANSWER_PICTURES) {
+      return { ok: false, answer: answer(400, 'too_many_images', `This answer has ${list.length} pictures and one answer takes at most ${MAX_ANSWER_PICTURES}.`) }
+    }
+    const bad = list.findIndex((i) => !i || typeof (i as { data?: unknown }).data !== 'string' || typeof (i as { mediaType?: unknown }).mediaType !== 'string')
+    if (bad >= 0) return { ok: false, answer: answer(400, 'image_invalid', `Picture ${bad + 1} of ${list.length} has no picture data (it needs base64 \`data\` and a \`mediaType\`).`) }
     const paths: string[] = []
-    for (const img of list.slice(0, MAX_ANSWER_PICTURES)) {
+    for (const img of list as Array<{ data: string; mediaType: string }>) {
       let saved: Record<string, unknown>
       try {
         saved = await deps.request(t.host, 'image.save', { data: img.data, mediaType: img.mediaType }, IMAGE_SAVE_TIMEOUT_MS)

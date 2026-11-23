@@ -21,9 +21,9 @@
  *   POST /quick/task-message { taskId, text, images? }   → { taskId, sessionId, started, held? }
  *        The same for one task found in the list: the text goes into that task's chat as the
  *        user's own message, or starts its session with it when it has none. Fire and forget.
- *        `images` (both sends): up to 5 `{ data: base64, mediaType }`, a screenshot from the
+ *        `images` (both sends): `{ data: base64, mediaType }` pictures, a screenshot from the
  *        clipboard; saved here and named by path in the message, the phone's way
- *        (session-send-v1.ts). With an image the text may be empty.
+ *        (session-send-v1.ts); one that cannot go refuses the send (400). With an image the text may be empty.
  *        Both are the one send below.
  *   POST /quick/send { to?, text, images?, follow?, userUuid?, resend? } → as /quick/main
  *        The quick bar's send (web/src/components/quickbar/): `to` is the task id the people list
@@ -57,7 +57,7 @@ import { role } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import type { SessionRecord, Task } from '../../core/types.js'
 import { withImagePaths, type SessionImage } from '../../core/sessions/cloud-images.js'
-import { extractValidImages } from './session-send-v1.js'
+import { sessionImagesOf } from './session-send-v1.js'
 import { routeSource, startRouteSource } from '../../core/sessions/send-sent-by.js'
 import { callerUnprovenOf } from '../../lib/caller-unproven.js'
 
@@ -252,7 +252,7 @@ async function leavesFocus(taskId: string | null): Promise<boolean> {
  * task's, as the user's own message; `follow: true` streams the reply to it (sendAndFollow).
  */
 async function quickSend(req: Request, res: Response, taskId: string | null, badRequest: string, opts: { testRunGuard?: boolean; kept?: boolean } = {}): Promise<void> {
-  const images = extractValidImages(req.body?.images)
+  const images = sessionImagesOf(req.body?.images)
   const text = textOf(req.body?.text, MAX_TEXT_CHARS) ?? (images.length > 0 && blankText(req.body?.text) ? '' : null)
   if (text === null || taskId === '') {
     res.status(400).json({ error: badRequest, code: 'bad_request' })
@@ -341,7 +341,7 @@ async function sendAndFollow(send: () => Promise<QuickMainResult>, res: Response
 quickInputV1Router.post('/quick/session', async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!primaryOnly(res)) return
-    const images = extractValidImages(req.body?.images)
+    const images = sessionImagesOf(req.body?.images)
     const text = textOf(req.body?.text, MAX_TEXT_CHARS) ?? (images.length > 0 && blankText(req.body?.text) ? '' : null)
     if (text === null) {
       res.status(400).json({ error: `text must be 1-${MAX_TEXT_CHARS} characters`, code: 'bad_request' })
@@ -444,16 +444,10 @@ export async function sendToMain(text: string, images: SessionImage[] = [], sour
  */
 async function withSavedImages(text: string, images: SessionImage[]): Promise<string> {
   if (images.length === 0) return text
-  const { saveImageToDisk } = await import('./images.js')
-  const paths: string[] = []
-  for (const img of images) {
-    try {
-      paths.push((await saveImageToDisk(img.data, img.mediaType)).filePath)
-    } catch (error) {
-      log.web.warn('quick input image not saved', { error: error instanceof Error ? error.message : String(error) })
-    }
-  }
-  return paths.length > 0 ? withImagePaths(text, paths) : text
+  // All or nothing (images.ts savePicturesToDisk): a picture that cannot be saved refuses the
+  // send with the reason, never sends the words without it.
+  const { savePicturesToDisk } = await import('./images.js')
+  return withImagePaths(text, (await savePicturesToDisk(images)).map((s) => s.filePath))
 }
 
 /** A person's send source, unless a session made the request (an agent calling this route is not a person). */

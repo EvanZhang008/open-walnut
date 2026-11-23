@@ -32,7 +32,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { role } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { routeSource } from '../../core/sessions/send-sent-by.js'
-import { extractValidImages } from './session-send-v1.js'
+import { sessionImagesOf } from './session-send-v1.js'
 import { ceoContentText, ceoRequestText, newTaskDraftText, normalizeContentItem } from '../../core/content-actions/content-item.js'
 import { createEnvelopeKit } from '../../core/peers/envelope-kit.js'
 import type { Task } from '../../core/types.js'
@@ -163,7 +163,7 @@ contentV1Router.post('/content/ceo', async (req: Request, res: Response, next: N
       return
     }
     const text = ceoMessage(item, noted.note)
-    const images = extractValidImages(req.body?.images)
+    const images = sessionImagesOf(req.body?.images)
     const source = routeSource('ui', req.headers)
     const { sendToMain, sendToTaskChat } = await import('./quick-input-v1.js')
     const to = { id: target.id, kind: target.kind, name: target.name }

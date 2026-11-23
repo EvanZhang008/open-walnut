@@ -7,25 +7,35 @@ import { useRef, useState, type ClipboardEvent, type DragEvent } from 'react';
 import { IMAGE_ACCEPT, pastedImageFiles, type ImageAttachments } from './image-attachments';
 import '@/styles/picture-strip.css';
 
-/** The pictures waiting to be sent, each with its ×; nothing when there are none. */
+/**
+ * The pictures waiting to be sent, each with its ×, and the line saying what the last add left
+ * out (image-attachments.ts `notice`); nothing when there is neither.
+ */
 export function PictureStrip({ pictures, className, testId, readOnly }: {
   pictures: ImageAttachments;
   className?: string;
   testId?: string;
   readOnly?: boolean;
 }) {
-  if (pictures.images.length === 0) return null;
+  const id = testId ?? 'picture-strip';
+  const notice = !readOnly && pictures.notice
+    ? <div className="picture-strip-notice" role="status" data-testid={`${id}-notice`}>{pictures.notice}</div>
+    : null;
+  if (pictures.images.length === 0) return notice;
   return (
-    <div className={`chat-image-previews picture-strip${className ? ` ${className}` : ''}`} data-testid={testId ?? 'picture-strip'}>
-      {pictures.images.map((img, i) => (
-        <div key={i} className="chat-image-preview">
-          <img src={`data:${img.mediaType};base64,${img.data}`} alt={img.name} />
-          {!readOnly && (
-            <button type="button" className="chat-image-remove" aria-label="Remove image" onClick={() => pictures.remove(i)}>&times;</button>
-          )}
-        </div>
-      ))}
-    </div>
+    <>
+      <div className={`chat-image-previews picture-strip${className ? ` ${className}` : ''}`} data-testid={id}>
+        {pictures.images.map((img, i) => (
+          <div key={i} className="chat-image-preview">
+            <img src={`data:${img.mediaType};base64,${img.data}`} alt={img.name} />
+            {!readOnly && (
+              <button type="button" className="chat-image-remove" aria-label="Remove image" onClick={() => pictures.remove(i)}>&times;</button>
+            )}
+          </div>
+        ))}
+      </div>
+      {notice}
+    </>
   );
 }
 

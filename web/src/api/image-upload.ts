@@ -67,6 +67,24 @@ export async function buildImageRefsPayload(
 
 const UPLOADED_URL_RE = /^\/api\/images\/([\w.-]+)$/;
 
+/**
+ * The server refused a send because an uploaded picture it names is gone (images.ts
+ * `image_not_found`, e.g. the images folder was cleaned while the message waited). Sending the
+ * same name again fails the same way forever.
+ */
+export function isStaleImageRefError(message: string | undefined): boolean {
+  return !!message && /is no longer on the server/.test(message);
+}
+
+/**
+ * The pictures with their upload names dropped, so the next send uploads them again from their
+ * bytes; null when one carries no bytes (only its name), which no resend can bring back.
+ */
+export function withoutUploadedNames(images: ImageAttachment[] | undefined): ImageAttachment[] | null {
+  if (!images?.length || images.some((img) => !img.data)) return null;
+  return images.map(({ url: _url, ...img }) => img);
+}
+
 /** The images-folder name of a picture already uploaded (its `url`), or null. */
 export function uploadedImageName(img: ImageAttachment): string | null {
   const m = img.url ? UPLOADED_URL_RE.exec(img.url) : null;

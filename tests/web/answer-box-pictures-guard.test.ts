@@ -127,7 +127,7 @@ describe('every box for an AI takes pictures', () => {
     expect(read('components/content/CeoComposer.tsx')).toMatch(/const sentPictures = pictures\.images/)
     expect(read('utils/content-actions.ts')).toMatch(/'\/api\/v1\/content\/ceo', \{ item, note: words, \.\.\.\(pictures\.length > 0 \? \{ images: pictures \}/)
     const route = fs.readFileSync(path.resolve(WEB_SRC, '../../src/web/routes/content-v1.ts'), 'utf8')
-    expect(route).toMatch(/const images = extractValidImages\(req\.body\?\.images\)/)
+    expect(route).toMatch(/const images = sessionImagesOf\(req\.body\?\.images\)/)
     expect(route).toMatch(/sendToMain\(text, images, source\)/)
     // A VP or router picked in the box's To row gets them too.
     expect(route).toMatch(/sendToTaskChat\(await getTask\(target\.id\), text, source, images\)/)

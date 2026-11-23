@@ -44,6 +44,7 @@ import { CLOUD_MODE } from '../../constants.js'
 import { isCompanion, isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { relayControlAction, sendV1Error as sendError } from './v1-control-relay.js'
+import { isImageAttachError } from './images.js'
 import {
   LETTER_HTML_MAX_BYTES, letterFieldMaxBytes,
   type AgentReplyInput, type NewLetter,
@@ -148,6 +149,11 @@ async function guard(
     const letterErr = asLetterError(err)
     if (letterErr && !res.headersSent) {
       sendError(res, letterErr.status, ERROR_CODES[letterErr.code] ?? 'bad_request', letterErr.message)
+      return
+    }
+    // A picture that cannot go (answer-pictures.ts): refused with the reason, nothing recorded.
+    if (isImageAttachError(err) && !res.headersSent) {
+      sendError(res, err.status, err.code, err.message)
       return
     }
     next(err)

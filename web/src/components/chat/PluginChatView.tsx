@@ -150,6 +150,8 @@ export function PluginChatView({
                 onCancel={message.queued && message.queueId != null
                   ? () => chat.cancelQueuedMessage(message.queueId!)
                   : undefined}
+                failed={'failed' in message ? message.failed : undefined}
+                onRetry={message.failed && message.queueId != null ? () => chat.retryFailedMessage(message.queueId!) : undefined}
               />
             ))}
             {chat.toolActivity && (

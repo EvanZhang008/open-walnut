@@ -46,7 +46,7 @@ import type { SessionRecord, SessionMode, Task, SessionEffort } from '../../core
 import { VALID_SESSION_MODEL_IDS, VALID_SESSION_EFFORT_IDS, resolveModelSwitchValue, sessionModelsAsCatalog, migrateFocusTier } from '../../core/types.js'
 import { getHostModelCatalog, listHostModelCatalogs } from '../../core/host-model-catalog.js'
 import type { SessionHistoryMessage } from '../../core/session-history.js'
-import { processAndSaveImages, buildSessionImageContext } from './images.js'
+import { MAX_SESSION_IMAGES, processAndSaveImages, buildSessionImageContext } from './images.js'
 import { sessionRunner } from '../../providers/claude-code-session.js'
 import { readAcpSessionHistoryState } from '../../providers/acp-session-history.js'
 import type { ImagePayload } from './images.js'
@@ -684,7 +684,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     // Prefix is applied AFTER spill inside quickStartSession (same order as before).
     let messagePrefix: string | undefined
     if (images && images.length > 0) {
-      const processed = await processAndSaveImages(images)
+      const processed = await processAndSaveImages(images, MAX_SESSION_IMAGES)
       if (processed) {
         messagePrefix = buildSessionImageContext(processed.savedImages)
       }
@@ -2945,7 +2945,7 @@ sessionsRouter.post('/:sessionId/side-threads', async (req: Request, res: Respon
     // plain question, so the chip label stays the user's words.
     let imageContext = ''
     if (images && images.length > 0) {
-      const processed = await processAndSaveImages(images)
+      const processed = await processAndSaveImages(images, MAX_SESSION_IMAGES)
       if (processed) imageContext = buildSessionImageContext(processed.savedImages)
     }
     const { sideThreadManager } = await import('../../core/sessions/side-thread-manager.js')
@@ -3554,7 +3554,7 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
     // focus directive but BEFORE the request inside the core fork message.
     let imageContext = ''
     if (images && images.length > 0) {
-      const processed = await processAndSaveImages(images)
+      const processed = await processAndSaveImages(images, MAX_SESSION_IMAGES)
       if (processed) imageContext = buildSessionImageContext(processed.savedImages)
     }
 

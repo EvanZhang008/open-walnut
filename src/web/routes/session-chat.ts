@@ -23,7 +23,7 @@ import { launchPromptFor, startLaunchPromptRegistry } from '../../core/sessions/
 import { queueOf, queuedChange } from '../../core/sessions/queued-change.js'
 import { getSideQuestion } from '../../core/side-questions.js'
 import { buildReferenceCards, appendReferenceCards, stripReferenceCards } from '../../core/sessions/reference-cards.js'
-import { saveImageToDisk, resolveImageRefs } from './images.js'
+import { saveSessionPictures } from './images.js'
 import { log } from '../../logging/index.js'
 import { parseTestRunLabel, testRunMarkingEnabled, withTestRun } from '../../core/test-run.js'
 import { sessionRunner } from '../../providers/claude-code-session.js'
@@ -35,10 +35,6 @@ import { hasAiOnly, redactAiOnly } from '../../lib/ai-only-envelope.js'
 import { attachmentHeaderBlock } from '../../lib/attachment-headers.js'
 import { attributedUnlessAutomated } from '../../core/sessions/send-frame.js'
 import { oneSendAtATime, sameSendSettled } from '../../core/sessions/send-once.js'
-
-const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
-const MAX_SESSION_IMAGES = 5
-const MAX_IMAGE_BASE64_LENGTH = 14_000_000 // ~10MB binary
 
 /**
  * v4 uuid, and ONLY v4. The value becomes the CLI's own transcript-line uuid
@@ -139,31 +135,13 @@ export function registerSessionChatRpc(): void {
     // path web clients take — base64 bytes must never ride a WS frame, which the
     // server caps at 4MB and enforces by CLOSING the socket with code 1009 before
     // any handler runs. Inline `images` stays supported for REST/legacy callers.
+    //
+    // Every picture is kept or the send is refused here, before anything is queued:
+    // the RPC's error reaches the composer, which keeps the words and the pictures
+    // (sendSessionMessage: thrown = refused). A stale upload, an unsupported type or
+    // a failed save used to be skipped, and the words went on alone.
     let augmentedMessage = data.message as string
-    const savedPaths: string[] = []
-
-    if (Array.isArray(data.imageRefs) && data.imageRefs.length > 0) {
-      const resolved = await resolveImageRefs(data.imageRefs)
-      if (resolved) savedPaths.push(...resolved.savedImages.map(s => s.filePath))
-    } else if (Array.isArray(data.images) && data.images.length > 0) {
-      const validImages = (data.images as Array<{ data?: unknown; mediaType?: unknown }>)
-        .filter(img =>
-          typeof img.data === 'string'
-          && typeof img.mediaType === 'string'
-          && ALLOWED_MIME.has(img.mediaType)
-          && (img.data as string).length <= MAX_IMAGE_BASE64_LENGTH
-        )
-        .slice(0, MAX_SESSION_IMAGES)
-
-      for (const img of validImages) {
-        try {
-          const { filePath } = await saveImageToDisk(img.data as string, img.mediaType as string)
-          savedPaths.push(filePath)
-        } catch (err) {
-          log.web.warn('Failed to save session image', { error: (err as Error).message })
-        }
-      }
-    }
+    const savedPaths = await saveSessionPictures(data.images, data.imageRefs)
 
     if (savedPaths.length > 0) {
       augmentedMessage = `${attachmentHeaderBlock('images', savedPaths)}${data.message}`

@@ -54,8 +54,13 @@ export async function open(page: Page, history: unknown[] = []): Promise<Harness
                 intercepted = true
                 ;(window as any).__sent.push({ message: p.payload.message, imageRefs: p.payload.imageRefs })
                 ;(window as any).__lastSendId = p.id
+                // A refused send hears the server's refusal (its words, as the server says them).
+                const refusal = sessionStorage.getItem('pw-refuse-send')
+                if (refusal) setTimeout(() => this.dispatchEvent(new MessageEvent('message', {
+                  data: JSON.stringify({ type: 'res', id: p.id, ok: false, error: refusal }),
+                })), 10)
                 // A held send never hears back (the server has not confirmed it).
-                if (!sessionStorage.getItem('pw-hold-send')) answer(p.id, { messageId: `qm-file${++n}` })
+                else if (!sessionStorage.getItem('pw-hold-send')) answer(p.id, { messageId: `qm-file${++n}` })
               }
               if (p.type === 'req' && p.method === 'session:stream-subscribe') { intercepted = true; answer(p.id, { blocks: [], isStreaming: false }) }
               if (p.type === 'req' && p.method === 'session:get-queue' && p.payload?.sessionId === 'pw-file-attach-session') { intercepted = true; answer(p.id, { messages: [] }) }

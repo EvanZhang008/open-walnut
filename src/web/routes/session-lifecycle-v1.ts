@@ -37,6 +37,7 @@ import { CLOUD_MODE } from '../../constants.js'
 import { isCompanion } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { relayControlAction, sendV1Error as sendError, v1ErrorCode } from './v1-control-relay.js'
+import { isImageAttachError } from './images.js'
 import { markHandledFailure } from '../middleware/handled-failure.js'
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 import { callerUnprovenOf } from '../../lib/caller-unproven.js'
@@ -535,6 +536,11 @@ sessionLifecycleV1Router.post('/sessions/:id/permission', async (req: Request, r
       { images: body.images, imageRefs: body.imageRefs },
     ))
   } catch (err) {
+    // A picture that cannot go (answer-pictures.ts): the prompt stays open, the reason is said.
+    if (isImageAttachError(err) && !res.headersSent) {
+      sendError(res, err.status, err.code, err.message)
+      return
+    }
     next(err)
   }
 })

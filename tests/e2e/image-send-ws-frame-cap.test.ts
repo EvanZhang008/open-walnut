@@ -26,7 +26,10 @@
  *      the image path is embedded in the message the session receives.
  *   3. Refs and inline base64 produce the SAME augmented message, so the new
  *      path is a true substitute for REST callers that still send inline.
- *   4. A stale/bogus ref degrades to a plain text send instead of failing.
+ *   4. A stale/bogus ref refuses the send with the reason and queues nothing: the
+ *      composer keeps the words and the picture. It used to degrade to a plain text
+ *      send, and the agent answered about a picture it never saw (2026-11-23, the
+ *      user: messages, and what they carry, are never lost).
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -212,7 +215,7 @@ describe('WS frame cap (the mechanism behind "WebSocket disconnected")', () => {
     ws.close();
   }, 30_000);
 
-  it('a stale ref degrades to a plain text send instead of failing', async () => {
+  it('a stale ref refuses the send with the reason and queues nothing', async () => {
     const sessionId = 'stale-ref-session';
     await makeSession(sessionId);
 
@@ -223,18 +226,16 @@ describe('WS frame cap (the mechanism behind "WebSocket disconnected")', () => {
       imageRefs: [{ filename: '1700000000000-deadbeefcafe.png' }], // never uploaded
     });
 
+    // The socket survives and the RPC answers with the refusal, never a text-only send.
     expect(outcome.kind).toBe('response');
     if (outcome.kind !== 'response') return;
-    expect(outcome.res.ok).toBe(true);
-
-    const texts = (await getQueue(sessionId)).map((m) => m.message).join('\n');
-    expect(texts).toContain('text still matters');
-    // No image preamble — nothing was attached, and the user's words survived.
-    expect(texts).not.toContain('[Images attached');
+    expect(outcome.res.ok).toBe(false);
+    expect(outcome.res.error).toMatch(/no longer on the server/);
+    expect(await getQueue(sessionId)).toEqual([]);
     ws.close();
   }, 30_000);
 
-  it('rejects a path-traversal filename in a ref', async () => {
+  it('rejects a path-traversal filename in a ref, queueing nothing', async () => {
     const sessionId = 'traversal-ref-session';
     await makeSession(sessionId);
 
@@ -246,10 +247,9 @@ describe('WS frame cap (the mechanism behind "WebSocket disconnected")', () => {
     });
 
     expect(outcome.kind).toBe('response');
-    const texts = (await getQueue(sessionId)).map((m) => m.message).join('\n');
-    expect(texts).toContain('nice try');
-    expect(texts).not.toContain('passwd');
-    expect(texts).not.toContain('[Images attached');
+    if (outcome.kind !== 'response') return;
+    expect(outcome.res.ok).toBe(false);
+    expect(await getQueue(sessionId)).toEqual([]);
     ws.close();
   }, 30_000);
 });

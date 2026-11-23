@@ -69,7 +69,7 @@ import {
 import {
   PRIMARY_UNREACHABLE_MESSAGE, cloudTurnRows, mergeRowsByTime, mergeCloudRowsIntoRelayedPage, cloudChatCapability,
 } from './cloud-chat-fallback.js'
-import { processAndSaveImages, buildImageAnnotation, buildSessionImageContext, type ImagePayload } from './images.js'
+import { checkImagePayloads, isImageAttachError, processAndSaveImages, buildImageAnnotation, buildSessionImageContext, type ImagePayload } from './images.js'
 import { stripEntityRefs } from '../../utils/entity-refs.js'
 import { withUserFileLock } from '../../utils/user-file-lock.js'
 import { log } from '../../logging/index.js'
@@ -1757,14 +1757,10 @@ function noteActiveTurn(conversationId: string, turnId: string, messageId: strin
 
 // ── Image attachments (additive) ──
 // Frozen-contract note: `images` is optional. Absent → identical to today.
-// Mirrors the WS chat pipeline (chat.ts): candidate entries are filtered here
-// (allowed type + string data, capped at 5) exactly like processAndSaveImages
-// filters, so we can decide "empty text is OK because an image is present"
-// before doing the disk I/O. processAndSaveImages does the same filtering
-// again + compression when it actually saves.
-
-const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
-const MAX_IMAGES_PER_MESSAGE = 5
+// Mirrors the WS chat pipeline (chat.ts): every entry is checked here
+// (images.ts checkImagePayloads, at most 5) so we can decide "empty text is OK
+// because an image is present" before doing the disk I/O, and so a picture that
+// cannot go refuses the turn with a 400 instead of being left out of it.
 
 /**
  * One turn's image attachments as they travel through the engine router.
@@ -1779,20 +1775,6 @@ interface TurnImageData {
   savedImages: Array<{ filePath: string; filename: string; mediaType: string }>
   imageContentBlocks: unknown[] | null
   images?: ImagePayload[]
-}
-
-/** Extract the valid image payloads from a request body (silently drops junk). */
-function extractValidImages(raw: unknown): ImagePayload[] {
-  if (!Array.isArray(raw)) return []
-  return (raw as Array<{ data?: unknown; mediaType?: unknown }>)
-    .filter((img) =>
-      typeof img?.data === 'string'
-      && img.data.length > 0
-      && typeof img.mediaType === 'string'
-      && ALLOWED_IMAGE_TYPES.has(img.mediaType),
-    )
-    .slice(0, MAX_IMAGES_PER_MESSAGE)
-    .map((img) => ({ data: img.data as string, mediaType: img.mediaType as string }))
 }
 
 /**
@@ -1835,7 +1817,14 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
     }
     // Additive: `images` allows an otherwise-empty text turn. Old clients that
     // send no images keep the exact 400-on-empty-text behavior.
-    const images = extractValidImages(req.body?.images)
+    let images: ImagePayload[]
+    try {
+      images = checkImagePayloads(req.body?.images)
+    } catch (err) {
+      if (!isImageAttachError(err)) throw err
+      sendError(res, err.status, err.code, err.message)
+      return
+    }
     const rawText = req.body?.text
     const { frameStartText, framingCallerOf } = await import('../../core/sessions/send-frame.js')
     const { startRouteSource } = await import('../../core/sessions/send-sent-by.js')
