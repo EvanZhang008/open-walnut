@@ -105,6 +105,14 @@ describe('what is kept', () => {
     expect(thrown).toEqual({ kind: 'TypeError in the ThreadCard chunk', request: false })
     expect(JSON.stringify(thrown)).not.toContain('secret')
     expect(pageErrorKind('[app] something the app logged', '', t)).toBeNull()
+    // The browser's own errors have no stack to place them: each has a name, never "Other in the unknown chunk"
+    // (2026-11-23: the Mac app's WebKit line, args as browser-logger.ts sends them).
+    expect(pageErrorKind('[uncaught] ResizeObserver loop completed with undelivered notifications.', 'http://localhost:3456/?s1=a&s2=b:0:0, undefined', t))
+      .toEqual({ kind: 'ResizeObserver loop in the page', request: false })
+    expect(pageErrorKind('[uncaught] ResizeObserver loop limit exceeded', '', t)?.kind).toBe('ResizeObserver loop in the page')
+    expect(pageErrorKind('[uncaught] Script error.', ':0:0', t)?.kind).toBe('Script error from another origin')
+    // A thrown message that only starts like one is still the page's own error.
+    expect(pageErrorKind('[uncaught] ResizeObserver loop completed with undelivered notifications. TypeError: x', '', t)?.kind).toBe('TypeError in the unknown chunk')
     // A network error never reached the server; anything else the browser threw is the page's own.
     for (const err of ['TypeError: Failed to fetch', 'TypeError: Load failed', 'TypeError: NetworkError when attempting to fetch resource.']) {
       expect(pageErrorKind('[api] GET /api/sessions/search FAILED after 3ms', err, t)?.how, err).toBe('failed')

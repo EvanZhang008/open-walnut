@@ -87,6 +87,17 @@ function errorTypeOf(text: string): string {
   return m && ERROR_TYPES.has(m[1]!) ? m[1]! : 'Other'
 }
 
+/**
+ * Error lines the browser makes itself, with no stack or file to place them, by a name of their own.
+ * A ResizeObserver loop is a callback that changed a watched box's size inside the observer's own
+ * delivery (Chromium's older words: "loop limit exceeded"); "Script error." is any error from a
+ * script of another origin, whose details the browser hides.
+ */
+const BROWSER_ERRORS: ReadonlyArray<{ re: RegExp; kind: string }> = [
+  { re: /^\[uncaught\] ResizeObserver loop (?:completed with undelivered notifications|limit exceeded)\.?$/, kind: 'ResizeObserver loop in the page' },
+  { re: /^\[uncaught\] (?:Uncaught )?Script error\.?$/, kind: 'Script error from another origin' },
+]
+
 /** The web client's own line for a request that failed in the page (web/src/api/client.ts). */
 const CLIENT_FAIL_RE = /^\[api\] (GET|POST|PUT|PATCH|DELETE) (\S+) (FAILED|rejected)\b(.*)$/
 
@@ -134,6 +145,10 @@ export function pageErrorKind(message: string, args: string | undefined, templat
       : { kind: `${fail[1]} unknown request ${words}`, request: true, how }
   }
   if (!text.startsWith('[uncaught]') && !text.startsWith('[unhandledrejection]')) return null
+  // Errors the browser itself raises carry no stack and no file, so they would all read as
+  // "Other in the unknown chunk" (2026-11-23: 43 ResizeObserver loops in a day, by that name).
+  const own = BROWSER_ERRORS.find((b) => b.re.test(text))
+  if (own) return { kind: own.kind, request: false }
   const all = `${text} ${String(args ?? '').slice(0, 2_000)}`
   const type = errorTypeOf(all)
   const chunk = chunkOf(all)

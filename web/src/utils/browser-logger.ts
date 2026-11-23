@@ -23,6 +23,7 @@
 import { wsClient } from '../api/ws'
 import { getDeviceToken } from '../api/device-token'
 import { detectInputClient } from './input-latency-monitor'
+import { installResizeLoopWitness, resizeLoopWitness } from './resize-loop-witness'
 
 // ── Types ──
 
@@ -263,8 +264,11 @@ export function initBrowserLogger(): void {
   // (the browser prints them natively), so without these hooks a crash — e.g. a
   // throw inside a drag event handler or a render error that blanks the page —
   // leaves zero trace in the server log.
+  installResizeLoopWitness()
   window.addEventListener('error', (e) => {
-    addEntry('error', [`[uncaught] ${e.message}`, `${e.filename ?? ''}:${e.lineno ?? 0}:${e.colno ?? 0}`, e.error instanceof Error ? e.error : undefined])
+    // A ResizeObserver loop has no file or stack: its line names the observers of that frame instead.
+    const where = /^ResizeObserver loop/.test(e.message ?? '') ? `observers: ${resizeLoopWitness() || 'none noted'}` : `${e.filename ?? ''}:${e.lineno ?? 0}:${e.colno ?? 0}`
+    addEntry('error', [`[uncaught] ${e.message}`, where, e.error instanceof Error ? e.error : undefined])
   })
   window.addEventListener('unhandledrejection', (e) => {
     addEntry('error', ['[unhandledrejection]', e.reason instanceof Error ? e.reason : safeStringify(e.reason)])

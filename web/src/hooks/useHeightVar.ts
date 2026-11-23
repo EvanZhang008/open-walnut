@@ -54,7 +54,16 @@ export function useHeightVar(
     };
 
     apply();
-    const ro = new ResizeObserver(apply);
+    // A resize is written on the next frame, never inside the observer's callback: the property
+    // pads the transcript beside the measured element, and a box outside what this observer
+    // watches changing inside its callback is what WebKit reports as 'ResizeObserver loop
+    // completed with undelivered notifications' (2026-11-23: 43 in a day in the Mac app, each as
+    // a message was sent and the glass composer shrank; as useTitleRowTight.ts).
+    let frame = 0;
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => { frame = 0; apply(); });
+    });
     ro.observe(el);
     // The HOST as well, not only the measured overlay: a panel revealed by its
     // container (mobile → desktop, a tab switch) is a resize of the host, and
@@ -63,6 +72,7 @@ export function useHeightVar(
     if (host !== el) ro.observe(host);
     return () => {
       ro.disconnect();
+      cancelAnimationFrame(frame);
       host.style.removeProperty(varName);
     };
     // hostRef and targetRef are stable ref objects; varName is constant per call site.
