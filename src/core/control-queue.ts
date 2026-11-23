@@ -95,6 +95,22 @@ export async function keepSessionPatch(sessionId: string, patch: Record<string, 
   return enqueueSessionPatch(sessionId, patch);
 }
 
+/**
+ * True when this box still holds a patch of this session for the Mac, queued or journaled: a new
+ * one then goes behind it (keepSessionPatch), never past it to the Mac, which takes them by arrival.
+ * A journaled one counts only while the Mac drains the kind (one parked by an older Mac waits for
+ * nothing it will do).
+ */
+export async function sessionPatchHeld(sessionId: string): Promise<boolean> {
+  if (await queuedForSession(sessionId)) return true;
+  try {
+    const journal = await import('./companion-journal.js');
+    return journal.macDrains('session-meta') && journal.companionJournalSessionIds().has(sessionId);
+  } catch {
+    return false;
+  }
+}
+
 /** True when a patch of this session is queued (the common empty queue costs one readdir). */
 async function queuedForSession(sessionId: string): Promise<boolean> {
   let names: string[];

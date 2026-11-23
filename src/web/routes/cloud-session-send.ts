@@ -108,7 +108,7 @@ export async function cloudSend(
   const answerBy = acceptedAt + SEND_ANSWER_DEADLINE_MS
   // ORDER: registered at arrival, so a later send of the session waits for
   // this one, and the sweep holds the session's rows behind it (send-order.ts).
-  const { enterSessionOrder } = await import('../../core/send-order.js')
+  const { enterSessionOrder, wakeSessionSends } = await import('../../core/send-order.js')
   const turn = enterSessionOrder(sessionId, messageId, acceptedAt)
   const key = `${sessionId}\u0000${messageId}`
   const earlier = sendsInFlight.get(key) ?? Promise.resolve()
@@ -131,10 +131,7 @@ export async function cloudSend(
     if (sendsInFlight.get(key) === mine) sendsInFlight.delete(key)
     turn.leave()
     // A later send may have been held behind this one: it can go now.
-    void (async () => {
-      const queue = await import('../../core/send-queue.js')
-      if (await queue.sessionHasBankedSend(sessionId)) await queue.flushSendQueue()
-    })().catch(() => {})
+    wakeSessionSends(sessionId)
   }
 }
 

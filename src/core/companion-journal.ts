@@ -296,6 +296,8 @@ export function journalSessionMeta(input: { sessionId: string; patch: Record<str
   if (r.ok) {
     log.session.info('companion journal: saved a session change for the Mac', { sessionId: input.sessionId, opId: r.opId, seq: r.seq, fields: keys })
     for (const fn of listeners) { try { fn() } catch { /* a listener never loses the record */ } }
+    // A Mac that answers drains it at once (a patch kept behind its session's while it answers).
+    void tellMacJournalDue('session-meta')
   } else {
     log.session.error('companion journal: a session change was refused', { sessionId: input.sessionId, code: r.code, why: r.why, error: r.message })
   }
@@ -397,6 +399,8 @@ export function journalInboxReply(input: InboxReplyInput): AppendResult | null {
   if (r.ok) {
     log.notif.info('companion journal: saved a reply to a letter for the Mac', { letterId: input.letterId, op: input.op, opId: r.opId, seq: r.seq, kind, ...(pictures.length ? { pictures: pictures.length } : {}), ...(r.duplicate ? { duplicate: true } : {}) })
     for (const fn of listeners) { try { fn() } catch { /* a listener never loses the record */ } }
+    // A Mac that answers drains it at once (a turn held behind earlier ones while it answers).
+    if (!r.duplicate) void tellMacJournalDue('inbox-reply')
   } else {
     log.notif.error('companion journal: a reply to a letter was refused', { letterId: input.letterId, op: input.op, code: r.code, why: r.why, error: r.message })
   }
@@ -466,11 +470,18 @@ export function companionJournalSessionIds(): Set<string> {
 /** The queues' sweep: records that still wait are announced again this often. */
 export const JOURNAL_DUE_SWEEP_MS = 60_000
 let telling = false
+/**
+ * An ask that came while one was out, asked once that one ends: its records may be newer than
+ * what that drain read, and an ask a sleeping Mac never answered held the next one off for its
+ * whole timeout (2026-11-22: a reply waited 15 s on the companion after the Mac woke).
+ */
+let askAgain: { why: string; always: boolean } | null = null
 
 /**
  * Tell the Mac that records wait (`server.journal.due` over the primary relay, the
  * queues' path); it drains them over /bridge/journal. False when nothing waits or
- * the Mac did not answer (the next sweep asks again). One ask at a time.
+ * the Mac did not answer (the next sweep asks again). One ask at a time; one that
+ * comes meanwhile goes right after it (askAgain).
  *
  * `always`: ask with nothing waiting too. The bridge connecting asks so: the drain
  * is how this box learns which kinds the Mac drains (a Mac that never drained gets
@@ -478,7 +489,11 @@ let telling = false
  * An older Mac refuses the action; nothing else happens.
  */
 export async function tellMacJournalDue(why: string, always = false): Promise<boolean> {
-  if (!onCompanion() || telling || (!always && !companionJournalDue())) return false
+  if (!onCompanion() || (!always && !companionJournalDue())) return false
+  if (telling) {
+    askAgain = { why, always: always || askAgain?.always === true }
+    return false
+  }
   telling = true
   try {
     const { callPrimaryControl } = await import('../web/routes/v1-control-relay.js')
@@ -490,12 +505,16 @@ export async function tellMacJournalDue(why: string, always = false): Promise<bo
     return false
   } finally {
     telling = false
+    const next = askAgain
+    askAgain = null
+    if (next) void tellMacJournalDue(next.why, next.always)
   }
 }
 
 /**
  * The bridge to the Mac connecting, a frame from the Mac (at most every 15 s: a Mac
- * that slept wakes on a socket that never closed), and the 60 s sweep. Returns the stop.
+ * that slept wakes on a socket that never closed), the Mac answering again (this box's
+ * view of it, core/server-role.ts), and the 60 s sweep. Returns the stop.
  */
 export function startCompanionJournalDue(): { stop: () => void } {
   const timer = setInterval(() => { void tellMacJournalDue('sweep') }, JOURNAL_DUE_SWEEP_MS)
@@ -507,6 +526,10 @@ export function startCompanionJournalDue(): { stop: () => void } {
     unhooks.push(addPrimaryBridgeConnectedHandler(() => { void tellMacJournalDue('bridge-connected', true) }))
     unhooks.push(addPrimaryBridgeActivityHandler(() => { void tellMacJournalDue('bridge-activity') }))
   }).catch(() => { /* the sweep still asks */ })
+  void import('./server-role.js').then(({ onLeaderPresence }) => {
+    if (stopped) return
+    unhooks.push(onLeaderPresence((answers) => { if (answers) void tellMacJournalDue('leader-back') }))
+  }).catch(() => { /* the bridge's frames still ask */ })
   // A boot with records left: ask once the bridge had a moment to connect.
   const first = setTimeout(() => { void tellMacJournalDue('boot') }, 10_000)
   first.unref?.()

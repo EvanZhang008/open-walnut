@@ -361,6 +361,15 @@ export async function pendingTurnCount(): Promise<number> {
   return (await journalTurns()).length;
 }
 
+/**
+ * Whether a read, pin or archive flag waits in this box's own queue for the Mac (the queue an
+ * older Mac drains; the journal's records are web/v1-forward/held.ts's, by kind). The Mac's own
+ * answer would not show it, so inbox calls stay here meanwhile.
+ */
+export async function inboxFlagsQueued(): Promise<boolean> {
+  return (await readFileEntries()).some(e => e.state === 'pending');
+}
+
 async function readAckedTurns(): Promise<LetterTurnEntry[]> {
   try {
     const raw: unknown = JSON.parse(await fsp.readFile(ACKED_TURNS_FILE(), 'utf-8'));
@@ -407,22 +416,26 @@ function copyHoldsTurn(letter: LetterRecord, turn: LetterTurnEntry): boolean {
 
 /**
  * The turns to show on top of the copy `letters`: every one still in the journal, and the
- * acked ones the copy does not hold yet (those it holds, or past the TTL, are dropped here).
+ * acked ones the copy does not hold yet. Those past the TTL are dropped from the file here, and
+ * those `letters` hold too unless `prune` is false (a letter read from another folder than the
+ * index's judges by its own letter and leaves the file to the index's readers).
  */
-async function liveTurns(letters: ReadonlyArray<LetterRecord> | null): Promise<LetterTurnEntry[]> {
+async function liveTurns(letters: ReadonlyArray<LetterRecord> | null, opts: { prune?: boolean } = {}): Promise<LetterTurnEntry[]> {
   const pending = await journalTurns();
   const acked = await readAckedTurns();
   if (!acked.length) return pending;
   const now = Date.now();
   const byId = new Map((letters ?? []).map(l => [l.id, l]));
+  const expired = (t: LetterTurnEntry): boolean => now - (t.ackedAt ?? t.at) > ACKED_TURN_TTL_MS;
   const settled = (t: LetterTurnEntry): boolean => {
-    if (now - (t.ackedAt ?? t.at) > ACKED_TURN_TTL_MS) return true;
+    if (expired(t)) return true;
     const letter = byId.get(t.letterId);
     return !!letter && copyHoldsTurn(letter, t);
   };
   const keep = acked.filter(t => !settled(t));
-  if (keep.length !== acked.length) {
-    await editAckedTurns(turns => turns.filter(t => !settled(t))).catch(err => {
+  const drop = opts.prune === false ? expired : settled;
+  if (acked.some(drop)) {
+    await editAckedTurns(turns => turns.filter(t => !drop(t))).catch(err => {
       log.notif.warn('human-inbox replica: could not prune acked replies', { err: String(err) });
     });
   }
@@ -593,7 +606,7 @@ export async function mirrorList(opts: { archived?: boolean } = {}): Promise<Mir
   const index = await readMirrorIndex();
   if (!index) return null;
   const entries = await liveEntries(index.lastUpdated);
-  const turns = await liveTurns(index.letters);
+  const turns = await liveTurns(index.letters, await pruneAcked());
   const letters = index.letters.map(l => overlay(l, entries, turns));
   const { sortLetters } = await import('./store.js');
   const wantArchived = opts.archived === true;
@@ -620,20 +633,15 @@ export async function mirrorRecord(id: string): Promise<LetterRecord | null> {
   const index = await readMirrorIndex();
   const record = index?.letters.find(l => l.id === id);
   if (!index || !record) return null;
-  return overlay(record, await liveEntries(index.lastUpdated), await liveTurns(index.letters));
+  return overlay(record, await liveEntries(index.lastUpdated), await liveTurns(index.letters, await pruneAcked()));
 }
 
 /** One letter from the copy (bodies included, as the primary would send it), or null. */
 export async function mirrorLetter(id: string): Promise<LetterDetail | null> {
   const index = await readMirrorIndex();
   if (!index || !index.letters.some(l => l.id === id)) return null;
-  const { getLetter, humanInboxPaths } = await import('./store.js');
-  // The copy's letter needs the copy's bodies too; else the files git sync wrote.
-  const [own, bodies] = await Promise.all([mirrorSource('inbox'), mirrorSource('inbox-bodies')]);
-  // Bodies turned off for the box: the copy's letter, every body left to the body route (the Mac's).
-  const gate = await import('../replication/kinds/gate.js');
-  const deferBodies = own.asOf !== null && gate.keepsCopies('inbox-bodies') && await gate.copyKindOff('inbox-bodies');
-  const dir = own.asOf !== null && (bodies.asOf !== null || deferBodies) ? own.dir : humanInboxPaths.dir;
+  const { getLetter } = await import('./store.js');
+  const { dir, deferBodies } = await letterDetailSource();
   const opts = deferBodies ? { dir, deferBodies } : { dir };
   // getLetter reads the index again; a checkout landing between the two reads
   // can hand it a half-written file, so one miss is retried.
@@ -643,7 +651,33 @@ export async function mirrorLetter(id: string): Promise<LetterDetail | null> {
     detail = await getLetter(id, opts);
   }
   if (!detail) return null;
-  return overlay(detail, await liveEntries(index.lastUpdated), await liveTurns(index.letters));
+  // Acked turns are judged against the letter served (it may come from another folder than the
+  // index above, git sync's); only the index's readers drop them from the file (pruneAcked).
+  return overlay(detail, await liveEntries(index.lastUpdated), await liveTurns([detail], { prune: false }));
+}
+
+/**
+ * Where a letter's detail is read from (mirrorLetter): the copy's letter needs the copy's bodies
+ * too, else the files git sync wrote; with bodies turned off for the box, the copy's letter with
+ * every body left to the body route (the Mac's). `elsewhere`: that is another folder than the
+ * index's, so a turn the index holds may not be in the letter read yet.
+ */
+async function letterDetailSource(): Promise<{ dir: string; deferBodies: boolean; elsewhere: boolean }> {
+  const { humanInboxPaths } = await import('./store.js');
+  const [own, bodies] = await Promise.all([mirrorSource('inbox'), mirrorSource('inbox-bodies')]);
+  const gate = await import('../replication/kinds/gate.js');
+  const deferBodies = own.asOf !== null && gate.keepsCopies('inbox-bodies') && await gate.copyKindOff('inbox-bodies');
+  const dir = own.asOf !== null && (bodies.asOf !== null || deferBodies) ? own.dir : humanInboxPaths.dir;
+  return { dir, deferBodies, elsewhere: dir !== own.dir };
+}
+
+/**
+ * Whether the index's readers may drop an acked turn the index holds: only when a letter is read
+ * from the index's own folder, else the letter read (from the other folder) could still lack it
+ * and would lose it for a while (2026-11-23 review); then only the TTL drops it.
+ */
+async function pruneAcked(): Promise<{ prune: boolean }> {
+  return { prune: !(await letterDetailSource()).elsewhere };
 }
 
 // ── Replay ──

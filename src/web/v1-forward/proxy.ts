@@ -30,7 +30,8 @@ import { setLeaderPresence } from '../../core/server-role.js'
 import { LEADER_HEARTBEAT_MS } from '../../core/leader/protocol.js'
 import { picturesGoInline } from './inline-pictures.js'
 import type { RelayFailure } from '../routes/v1-control-relay.js'
-import { MAX_FORWARD_REQUEST_BYTES, companionAnswers, forwardRequestHeaders, isTaskCopyWrite, parseConsoleCopyCall, parseConsoleTaskWrite, parseForwardUrl, phoneCopyReadOf } from './policy.js'
+import { MAX_FORWARD_REQUEST_BYTES, companionAnswers, forwardRequestHeaders, heldCallOf, isTaskCopyWrite, parseConsoleCopyCall, parseConsoleTaskWrite, parseForwardUrl, phoneCopyReadOf } from './policy.js'
+import { HELD_WHY, companionHeldFor, type HeldCall } from './held.js'
 import { refuseWhenDiskFull } from '../middleware/disk-guard.js'
 import { forwardOnStream } from './stream-forward.js'
 import { markCountedOnMac } from './counted-on-mac.js'
@@ -66,13 +67,17 @@ export interface ForwardDeps {
    */
   stream?: { capable: () => boolean | Promise<boolean>; open: () => Promise<Duplex> }
   /**
-   * This box still holds task writes for the Mac (a queued op, or a live op on its way,
-   * core/task-queue.ts). A new task write then runs here and joins them, in order, rather
-   * than overtake them on the forward: the Mac applies a task's writes in the order they
-   * were made, and a newer one ahead of an older one of the same field reads as two writers.
+   * This box still holds changes of the call's family for the Mac (policy.ts HELD_FOR_MAC): a
+   * record in its journal, or a queued or live op. The call then runs here, whose route keeps
+   * the order (a task write joins the task queue, a letter turn is held behind the held ones, a
+   * session patch is kept behind its session's) and shows what is held (a letter read relays and
+   * puts the held turns on top), rather than reach the Mac past them on the forward.
+   * 2026-11-22: a letter opened on the phone lost the reply it showed as held for 15 s after the
+   * Mac woke (back once the Mac drained), and a reply sent then would have reached the session first.
    */
-  taskWritesPending?: () => boolean | Promise<boolean>
+  heldFor?: (call: HeldCall) => boolean | Promise<boolean>
 }
+
 
 /** A read waits this long for the Mac before the companion answers it from its copy. */
 export const FORWARD_READ_TIMEOUT_MS = 8_000
@@ -184,7 +189,18 @@ export function createV1Forward(deps: ForwardDeps) {
     const kept = companionAnswers(method, req.path)
     // A kept read of a copy turned off for this box (policy.ts phoneCopyReadOf): the Mac's while it answers.
     if (kept && !(await keptReadOff(method, req.path))) return answerHere(kept, req, res, next)
-    return toMac(req, res, next, method, isTaskCopyWrite(method, req.path))
+    const call: HeldCall | null = isTaskCopyWrite(method, req.path) ? { family: 'task-writes' } : heldCallOf(method, req.path)
+    return toMac(req, res, next, method, call)
+  }
+
+  /**
+   * Whether this box holds something for the Mac that the call would read past or overtake, as
+   * the why it answers here; null when not. What was made here first reaches the Mac first, and
+   * a read made here shows it.
+   */
+  async function heldHere(call: HeldCall | null): Promise<string | null> {
+    if (!call || !deps.heldFor || !(await deps.heldFor(call))) return null
+    return HELD_WHY[call.family]
   }
 
   /**
@@ -200,7 +216,7 @@ export function createV1Forward(deps: ForwardDeps) {
     if (!parseConsoleTaskWrite(method, req.originalUrl)) return next()
     if (!deps.enabled()) return answerHere('turned-off', req, res, next)
     if (deps.ownCall?.(req)) return answerHere('own-call', req, res, next)
-    return toMac(req, res, next, method, true)
+    return toMac(req, res, next, method, { family: 'task-writes' })
   }
 
   /**
@@ -213,19 +229,21 @@ export function createV1Forward(deps: ForwardDeps) {
     if (!parseConsoleCopyCall(method, req.originalUrl)) return next()
     if (!deps.enabled()) return answerHere('turned-off', req, res, next)
     if (deps.ownCall?.(req)) return answerHere('own-call', req, res, next)
-    return toMac(req, res, next, method, false)
+    return toMac(req, res, next, method, null)
   }
 
   /**
-   * The one ladder both mounts take once the call is the Mac's to answer. `taskWrite`:
-   * a write of the task store, which waits behind this box's own pending task writes.
+   * The one ladder both mounts take once the call is the Mac's to answer. `held`: the call's
+   * held family (a task write, an inbox call, a session patch), which stays here while this box
+   * holds changes of that family for the Mac.
    */
-  async function toMac(req: Request, res: Response, next: NextFunction, method: string, taskWrite: boolean): Promise<void> {
+  async function toMac(req: Request, res: Response, next: NextFunction, method: string, held: HeldCall | null): Promise<void> {
     const now = deps.now()
     const why = macAnswers(await deps.primary(), now, suspectAt, unsupportedUntil)
     if (why) return answerHere(why, req, res, next)
-    // Order: a task write never overtakes this box's queued ones (they drain first).
-    if (taskWrite && deps.taskWritesPending && await deps.taskWritesPending()) return answerHere('queue-first', req, res, next)
+    // Order: a call never reads past or overtakes what this box holds for the Mac (it drains first).
+    const heldWhy = await heldHere(held)
+    if (heldWhy) return answerHere(heldWhy, req, res, next)
     // Pictures uploaded to this box travel inline: the Mac cannot read this disk.
     if (!(await picturesGoInline(req, res))) return
     const body = bodyOf(req)
@@ -442,10 +460,7 @@ export function getV1Forward(): ReturnType<typeof createV1Forward> {
       const { callPrimaryControl } = await import('../routes/v1-control-relay.js')
       return callPrimaryControl('server.http', '__server__', params, timeoutMs)
     },
-    taskWritesPending: async () => {
-      const q = await import('../../core/task-queue.js')
-      return q.liveTaskOpsInFlight() > 0 || (await q.queuedTaskOpCount()) > 0
-    },
+    heldFor: companionHeldFor,
     stream: {
       capable: async () => {
         if (process.env.WALNUT_COMPANION_STREAM === '0') return false

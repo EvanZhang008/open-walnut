@@ -24,6 +24,8 @@ import type { LetterRecord } from '../../core/human-inbox/types.js'
 import type { InboxReplyInput } from '../../core/companion-journal.js'
 import type { TakenTurn } from './human-inbox-takeover.js'
 import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
+import { PICTURE_SAVE_MARGIN_MS, dropPictures, hasPictures, keptPictures } from './human-inbox-turn-pictures.js'
+import { relayCounted, relayOut } from './human-inbox-turn-order.js'
 
 const SERVER_RELAY_SID = '__server__'
 
@@ -194,52 +196,6 @@ export async function replicaSetLetterState(
   res.json({ letter: await q.mirrorRecord(id), queued: true })
 }
 
-/** The request carries pictures (uploads named here, or inline). */
-function hasPictures(b: Record<string, unknown>): boolean {
-  return (Array.isArray(b.images) && b.images.length > 0) || (Array.isArray(b.imageRefs) && b.imageRefs.length > 0)
-}
-
-/** The route's time kept for saving and journaling a turn's pictures after a relay that hung. */
-const PICTURE_SAVE_MARGIN_MS = 5_000
-
-/**
- * How many different pictures the request sends (the store keeps at most MAX_ANSWER_PICTURES,
- * and one picture sent twice may be saved once).
- */
-function pictureCount(b: Record<string, unknown>, max: number): number {
-  const list: unknown[] = Array.isArray(b.imageRefs) && b.imageRefs.length > 0 ? b.imageRefs : Array.isArray(b.images) ? b.images : []
-  const key = (p: unknown): string => JSON.stringify(p && typeof p === 'object' ? [(p as Record<string, unknown>).filename, (p as Record<string, unknown>).data, (p as Record<string, unknown>).mediaType] : p)
-  return Math.min(new Set(list.slice(0, max).map(key)).size, max)
-}
-
-/**
- * The request's pictures saved in this box's images folder, with their bytes, in order; null
- * when any one is not kept (a bad picture, an upload not here, a full disk).
- */
-async function keptPictures(b: Record<string, unknown>): Promise<Array<{ name: string; bytes: Buffer }> | null> {
-  const { saveAnswerPictures, MAX_ANSWER_PICTURES } = await import('../../core/answer-pictures.js')
-  // A picture that cannot be kept throws ImageAttachError (answer-pictures.ts): it goes up to the
-  // route, which says which picture and why, and nothing is held.
-  const names = await saveAnswerPictures(b)
-  if (names.length === 0 || names.length < pictureCount(b, MAX_ANSWER_PICTURES)) return null
-  const { IMAGES_DIR } = await import('../../constants.js')
-  const fsp = await import('node:fs/promises')
-  const path = await import('node:path')
-  try {
-    return await Promise.all(names.map(async (name) => ({ name, bytes: await fsp.readFile(path.join(IMAGES_DIR, name)) })))
-  } catch {
-    return null
-  }
-}
-
-/** Pictures saved here for a turn the journal then refused (the inline ones: an upload stays). */
-async function dropPictures(names: string[]): Promise<void> {
-  const { IMAGES_DIR } = await import('../../constants.js')
-  const fsp = await import('node:fs/promises')
-  const path = await import('node:path')
-  await Promise.all(names.map((n) => fsp.rm(path.join(IMAGES_DIR, n), { force: true }).catch(() => {})))
-}
-
 /**
  * How long a turn's relay waits when this box already knows the Mac does not answer (its
  * presence, server-role.ts leaderAnswers): long enough for a Mac that just came back, short
@@ -247,6 +203,12 @@ async function dropPictures(names: string[]): Promise<void> {
  * sat on "Sending" for the whole 10 s relay and an answer came back as the raw relay timeout.
  */
 const LEADER_AWAY_RELAY_MS = 2_000
+
+/** A turn held behind earlier ones that could not be kept (it was never relayed): the phone tries again. */
+const HELD_BEHIND_WORDS = 'Not sent yet: an earlier reply is still on its way to your Mac. Try again in a moment.'
+
+/** What a turn keeps of its deadline after waiting behind the session's earlier ones: its own relay or hold. */
+const TURN_ORDER_MARGIN_MS = 4_000
 
 /** The answer for a turn this box keeps for the Mac: pending, and held here (types.ts ThreadEntryDelivery). */
 const HELD_DELIVERY = { status: 'pending', held: true } as const
@@ -298,23 +260,73 @@ export async function replicaLetterTurn(
 ): Promise<void> {
   // The human's moment, taken before any wait.
   const madeAt = Date.now()
-  const action = op === 'reply' ? 'server.human-inbox.human-reply' : 'server.human-inbox.answer'
-  const { macDrains, journalInboxReply, companionJournalRecords, inboxReplyOpId } = await import('../../core/companion-journal.js')
+  const { macDrains } = await import('../../core/companion-journal.js')
   const journalable = macDrains(hasPictures(body) ? 'inbox-reply-pictures' : 'inbox-reply') && !opts.callerSid
+  // ORDER: registered at arrival in the session's one registry of phone turns (send-order.ts), so
+  // a later turn of the letter's session waits until this one is relayed or held, and is never
+  // relayed past it (2026-11-23 review: a turn still in its relay when the Mac woke was journaled
+  // after the next one, which the Mac had taken first). Its chat sends wait behind it the same way.
+  const known = journalable ? await (await replicaState()).mirrorRecord(id) : null
+  const orderKey = known ? ((await import('./human-inbox-takeover.js')).originOf(known) ?? `letter:${id}`) : null
+  const { enterSessionOrder, wakeSessionSends } = await import('../../core/send-order.js')
+  const order = orderKey ? enterSessionOrder(orderKey, `ltr-${crypto.randomUUID()}`, madeAt) : null
+  try {
+    let afterEarlier = false
+    if (order) {
+      await order.waitForEarlier(opts.answerBy - TURN_ORDER_MARGIN_MS - (hasPictures(body) ? PICTURE_SAVE_MARGIN_MS : 0))
+      // An earlier turn of the session still out at this one's deadline. In its relay to the Mac:
+      // relayed now, this one could reach the Mac first, and held now, its record would drain ahead
+      // of the earlier one's, so neither is sent nor kept and the phone tries again (2026-11-23
+      // review). Past its relay (being held, or handed to its session): this one is never relayed
+      // either, but held behind it, where the session's lock (human-inbox-takeover.ts) orders them.
+      if (order.earlierInFlight()) {
+        if (orderKey !== null && relayOut(orderKey)) {
+          log.notif.info('human-inbox replica: a letter turn waited out its deadline behind an earlier one still in its relay', { letterId: id, op, session: orderKey })
+          sendError(res, 503, 'bridge_offline', HELD_BEHIND_WORDS)
+          return
+        }
+        afterEarlier = true
+      }
+    }
+    await letterTurnInOrder(res, op, id, body, relayParams, opts, madeAt, journalable, orderKey, afterEarlier)
+  } finally {
+    order?.leave()
+    if (orderKey) wakeSessionSends(orderKey)
+  }
+}
+
+/** replicaLetterTurn once every earlier turn of the session was answered (or its wait ran out). */
+async function letterTurnInOrder(
+  res: Response,
+  op: 'reply' | 'answer',
+  id: string,
+  body: Record<string, unknown>,
+  relayParams: Record<string, unknown>,
+  opts: { callerSid?: string; answerBy: number },
+  madeAt: number,
+  journalable: boolean,
+  orderKey: string | null,
+  afterEarlier: boolean,
+): Promise<void> {
+  const action = op === 'reply' ? 'server.human-inbox.human-reply' : 'server.human-inbox.answer'
+  const { journalInboxReply, companionJournalRecords, inboxReplyOpId } = await import('../../core/companion-journal.js')
   const madeId = op === 'reply' && journalable && body.clientId === undefined ? `rp-${crypto.randomUUID()}` : undefined
   const params = madeId ? { ...relayParams, clientId: madeId } : relayParams
-  // A turn this box already handed to its session (replica takeover): that turn, never a relay
-  // that would make the Mac, just back, deliver it a second time.
+  let behind = false
   if (journalable) {
     const early = turnFromBody(op, id, body, madeAt)
     const q = await replicaState()
-    const known = early ? await q.mirrorRecord(id) : null
-    const { earlierDirectTurn } = await import('./human-inbox-takeover.js')
-    const taken = early && known ? await earlierDirectTurn(known, early) : null
+    const known = await q.mirrorRecord(id)
+    const takeover = await import('./human-inbox-takeover.js')
+    // A turn this box already handed to its session (replica takeover): that turn, never a relay
+    // that would make the Mac, just back, deliver it a second time.
+    const taken = early && known ? await takeover.earlierDirectTurn(known, early) : null
     if (taken) {
       await answerTaken(res, q, id, known as LetterRecord, early as InboxReplyInput, taken)
       return
     }
+    // Behind a turn this box still holds for the Mac: held after it, never relayed past it.
+    behind = !!known && (afterEarlier || await takeover.heldAheadOf(known))
   }
   // A journalable turn answers inside the route's deadline even when the relay hangs, its
   // pictures saved and journaled inside it too (a client that gave up would resend a reply
@@ -322,7 +334,9 @@ export async function replicaLetterTurn(
   const margin = hasPictures(body) ? PICTURE_SAVE_MARGIN_MS : 0
   const { leaderAnswers } = await import('../../core/server-role.js')
   const budget = Math.max(1_000, opts.answerBy - margin - Date.now())
-  const out = await tryControlRelay(action, SERVER_RELAY_SID, params, journalable ? (leaderAnswers() ? budget : Math.min(budget, LEADER_AWAY_RELAY_MS)) : undefined)
+  const out: Awaited<ReturnType<typeof tryControlRelay>> = behind
+    ? { ok: false, notSent: true, answer: (r) => sendError(r, 503, 'bridge_offline', HELD_BEHIND_WORDS) }
+    : await relayCounted(orderKey, () => tryControlRelay(action, SERVER_RELAY_SID, params, journalable ? (leaderAnswers() ? budget : Math.min(budget, LEADER_AWAY_RELAY_MS)) : undefined))
   if (out.ok) {
     const reply = out.reply
     if (reply.ok === true && reply.result && typeof reply.result === 'object') {
@@ -346,7 +360,17 @@ export async function replicaLetterTurn(
     out.answer(res)
     return
   }
-  const fail = (): void => { if (out.ok) sendRelayReplyError(res, out.reply); else out.answer(res) }
+  /**
+   * A turn this route does not keep. Relayed, the Mac's own answer. Held behind earlier turns it
+   * was never relayed: a turn the Mac refuses anyway gets that refusal here (`refusal`), and only
+   * one that could not be kept is told to try again (2026-11-23 review: an option picked after a
+   * held answer heard "try again" instead of the Mac's 409).
+   */
+  const fail = (refusal?: { status: number; code: string; message: string }): void => {
+    if (behind && refusal) sendError(res, refusal.status, refusal.code, refusal.message)
+    else if (out.ok) sendRelayReplyError(res, out.reply)
+    else out.answer(res)
+  }
   const waiting = (turn: Parameters<typeof inboxReplyOpId>[0]): boolean => {
     const opId = inboxReplyOpId(turn)
     return companionJournalRecords().some((r) => r.opId === opId)
@@ -360,12 +384,24 @@ export async function replicaLetterTurn(
     const clientId = madeId ?? body.clientId
     const { CLIENT_ID_RE } = await import('../../core/human-inbox/normalize.js')
     // A picture alone is a reply, as on the Mac.
-    if ((!text && !hasPictures(body)) || typeof clientId !== 'string' || !CLIENT_ID_RE.test(clientId)) { fail(); return }
+    if (typeof clientId !== 'string' || !CLIENT_ID_RE.test(clientId)) { fail({ status: 400, code: 'bad_request', message: 'clientId is not valid' }); return }
+    // A retry of a reply may come with no words (the phone resends a picture-only reply by its
+    // clientId alone): the held record, or the turn the letter already shows (the Mac took it), as
+    // the Mac answers one; never a refusal.
+    if (!text && !hasPictures(body) && !waiting({ letterId: id, op: 'reply', text, clientId, madeAt })) {
+      const recorded = record.thread.find((t) => t.from === 'human' && t.clientId === clientId)
+      if (recorded) {
+        res.status(202).json({ letter: (await q.mirrorLetter(id)) ?? record, delivery: recorded.delivery ?? { status: 'pending' }, queued: true, clientId })
+        return
+      }
+      fail({ status: 400, code: 'bad_request', message: 'text is required' })
+      return
+    }
     input = { letterId: id, op: 'reply', text, clientId, madeAt }
   } else {
     const actionId = typeof body.actionId === 'string' ? body.actionId.trim() : ''
     const freeText = typeof body.freeText === 'string' ? body.freeText.trim() : ''
-    if (!record.actions?.some((a) => a.id === actionId)) { fail(); return }
+    if (!record.actions?.some((a) => a.id === actionId)) { fail({ status: 400, code: 'bad_request', message: actionId ? `Unknown actionId: ${actionId}` : 'actionId is required' }); return }
     input = { letterId: id, op: 'answer', actionId, ...(freeText ? { freeText } : {}), madeAt }
     if (record.answered && !record.answered.by && !waiting(input)) {
       // The same answer again (a retry, its record waiting or taken): the letter as it stands.
@@ -374,7 +410,7 @@ export async function replicaLetterTurn(
       const { boundThreadText } = await import('../../core/human-inbox/store.js')
       const same = record.answered.actionId === actionId && boundThreadText(record.answered.freeText ?? '') === boundThreadText(freeText)
       // Pictures with it are not on that answer, and would go nowhere: the 503, as the Mac's 409.
-      if (!same || hasPictures(body)) { fail(); return }
+      if (!same || hasPictures(body)) { fail({ status: 409, code: 'conflict', message: `Letter ${id} was already answered (${record.answered.actionId})` }); return }
       res.status(202).json({ letter: (await q.mirrorLetter(id)) ?? record, delivery: { status: 'pending' }, queued: true })
       return
     }
@@ -415,7 +451,7 @@ export async function replicaLetterTurn(
   }
   log.notif.info('human-inbox replica: a reply kept for the Mac (primary unreachable)', {
     letterId: id, op, opId: saved.opId, seq: saved.seq, ...(saved.duplicate ? { duplicate: true } : {}),
-    relay: out.ok ? classifyRelayReply(out.reply).kind : out.notSent ? 'not_sent' : 'maybe_sent',
+    relay: behind ? 'held_behind' : out.ok ? classifyRelayReply(out.reply).kind : out.notSent ? 'not_sent' : 'maybe_sent',
   })
   // The same turn again while the first was handed to its session: its record is that delivery.
   if (saved.duplicate) {

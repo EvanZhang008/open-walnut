@@ -136,6 +136,54 @@ export function isTaskCopyWrite(method: string, rel: string): boolean {
   return /^\/(tasks|focus)(\/|$)/.test(rel) && !/^\/tasks\/[^/]+\/board(\/|$)/.test(rel)
 }
 
+/**
+ * The calls that must not reach the Mac past a change the companion still holds for it:
+ * `task-writes` (a task write: the Mac would take a newer write of a field before the older
+ * one, which reads as two writers), `inbox` (any inbox call: the Mac's letter would come back
+ * without the held reply, and a new reply would reach the session ahead of it), `session-patch`
+ * (a session's metadata patch: the Mac takes those by arrival, so the held older one would win).
+ */
+export type HeldFamily = 'task-writes' | 'inbox' | 'session-patch'
+
+/**
+ * Every kind the companion's journal holds for the Mac (core/companion-journal.ts), with the
+ * calls a waiting record of it keeps on the companion (`family`, proxy.ts heldHere), or why no
+ * forwarded call can pass it (`none`). A new kind is classed here before it ships: the test
+ * tests/web/routes/v1-forward-held.test.ts reads the journal's kinds from its source.
+ */
+export const HELD_FOR_MAC: Readonly<Record<string, { family: HeldFamily } | { none: string }>> = {
+  'task-fields': { family: 'task-writes' },
+  'task-create': { family: 'task-writes' },
+  'inbox-reply': { family: 'inbox' },
+  'inbox-reply-pictures': { family: 'inbox' },
+  'inbox-reply-direct': { family: 'inbox' },
+  'inbox-state': { family: 'inbox' },
+  'session-meta': { family: 'session-patch' },
+  'chat-turn': { none: 'the Personal AI chat is answered here (chat)' },
+  'conversation-edit': { none: 'the chat list is answered here (chat)' },
+  // Merged by the Mac whatever came first: a forwarded write is never undone by the late record.
+  note: { none: 'the Mac merges the change against the base it was made on, its own newer edit included (offline-merge/notes.ts)' },
+  memory: { none: 'the Mac merges the save against the base it was made on, its own newer edit included (apply-memory.ts)' },
+  'note-move': { none: 'the Mac finds the note by its id and keeps its own place on a clash (apply-note-move.ts)' },
+  'note-attachment': { none: 'the Mac never overwrites a picture at the path; a clash is kept beside it (apply-note-attachment.ts)' },
+}
+
+/** The held family a call belongs to (beside task writes, isTaskCopyWrite), or null. `rel` is under /api/v1. */
+export function heldCallOf(method: string, rel: string): { family: 'inbox' } | { family: 'session-patch'; sessionId: string } | null {
+  const key = ruleKey(rel)
+  if (/^\/human-inbox(\/|$)/.test(key)) return { family: 'inbox' }
+  const session = /^\/sessions\/([^/]+)$/i.exec(rel)
+  if (session && method.toUpperCase() === 'PATCH') {
+    try { return { family: 'session-patch', sessionId: decodeURIComponent(session[1]) } } catch { return null }
+  }
+  return null
+}
+
+/** The journal kinds whose waiting records keep `family`'s calls on the companion. */
+export function heldKindsOf(family: HeldFamily): Set<string> {
+  return new Set(Object.entries(HELD_FOR_MAC).filter(([, c]) => 'family' in c && c.family === family).map(([k]) => k))
+}
+
 /** A forwarded task write ran here and was answered 2xx: the follower copies get it now. */
 export function noteForwardedTaskWrite(method: string, rel: string, status: number): void {
   if (status < 200 || status >= 300 || !isTaskCopyWrite(method, rel)) return

@@ -372,6 +372,16 @@ describe('the Mac comes back', () => {
       expect(await queuedPatches(S1)).toEqual([])
       expect(await queuedPatches(S2)).toHaveLength(1)
 
+      // The Mac answers now, and S2's changes are still held for it: a patch the phone makes of
+      // S2 is kept behind them, never relayed past them (the Mac takes them by arrival, so the
+      // held older one would win). S1 holds nothing, so its patch goes to the Mac.
+      const now = await patchSession(S2, { title: 'Acme two, renamed when back' })
+      expect(now.status).toBe(200)
+      expect(now.body).toMatchObject({ queued: true, session: { title: 'Acme two, renamed when back' } })
+      expect((await patchSession(S1, { title: 'Acme one, renamed when back' })).status).toBe(200)
+      expect(sentPatches.slice(2)).toEqual([{ sid: S1, patch: { title: 'Acme one, renamed when back' } }])
+      expect((await queuedPatches(S2)).map((o) => o.patch)).toEqual([{ title: 'Acme two, queued behind' }, { title: 'Acme two, renamed when back' }])
+
       // The Mac drains the journal (the handover's two calls).
       const drained = await postToCloudJournal('offline.drain', { home: '/Users/someone/.open-walnut', kinds: [...APPLIED_V2_KINDS] })
       const kinds = drained.records.map((r: { kind: string; taskId?: string; sid?: string }) => `${r.kind}:${r.taskId ?? r.sid}`)
@@ -393,8 +403,11 @@ describe('the Mac comes back', () => {
       await fs.writeFile(humanInboxPaths.indexFile, JSON.stringify(idx))
       expect(await inboxLetter()).toMatchObject({ read: false, pinned: true })
       expect(await flagFiles()).toEqual([])
-      await waitFor(async () => (await queuedPatches(S2)).length === 0, 'the patch of S2 to leave the queue')
-      expect(sentPatches.at(-1)).toEqual({ sid: S2, patch: { title: 'Acme two, queued behind' } })
+      await waitFor(async () => (await queuedPatches(S2)).length === 0, 'the patches of S2 to leave the queue')
+      expect(sentPatches.filter((p) => p.sid === S2)).toEqual([
+        { sid: S2, patch: { title: 'Acme two, queued behind' } },
+        { sid: S2, patch: { title: 'Acme two, renamed when back' } },
+      ])
 
       // The note held behind it goes now.
       await waitFor(async () => (await queuedFor(B)).length === 0, 'the note of B to leave the queue')

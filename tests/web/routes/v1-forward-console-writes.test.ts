@@ -31,6 +31,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-console-writes'))
 
 import { createV1Forward, type CallOutcome, type PrimarySnapshot } from '../../../src/web/v1-forward/proxy.js'
+import type { HeldCall } from '../../../src/web/v1-forward/held.js'
 import { CONSOLE_TASK_WRITES, parseConsoleTaskWrite } from '../../../src/web/v1-forward/policy.js'
 import { createCompanionDoor } from '../../../src/web/v1-forward/stream-door.js'
 import { checkForwardTarget } from '../../../src/web/v1-forward/target.js'
@@ -65,7 +66,7 @@ function companion(opts: { primary?: () => PrimarySnapshot | null; call?: (p: Re
     primary: async () => (opts.primary ? opts.primary() : fresh()),
     call: async (params) => { calls.push(params); return opts.call ? opts.call(params) : reply(201, { from: 'mac', task: { id: 'k-mac-1' } }) },
     ...(opts.stream ? { stream: opts.stream } : {}),
-    ...(opts.pending ? { taskWritesPending: opts.pending } : {}),
+    ...(opts.pending ? { heldFor: (c: HeldCall) => c.family === 'task-writes' && opts.pending!() } : {}),
   })
   const app = express()
   app.use(express.json())

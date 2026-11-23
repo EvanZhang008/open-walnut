@@ -89,6 +89,23 @@ async function refuseSessionControl(req: Request, res: Response, sessionId: stri
 }
 
 /** The answer's pictures for the Mac: this box's uploads cannot be read there, so all go inline. */
+/** A session's row for an answer this box gives itself, from the synced projection when it has one. */
+async function projectedSessionRecord(sessionId: string): Promise<Record<string, unknown>> {
+  try {
+    const { readSessionProjection } = await import('../../core/session-projection.js')
+    const row = (await readSessionProjection())?.sessions.find((s) => s.id === sessionId)
+    if (row) {
+      return {
+        claudeSessionId: sessionId,
+        process_status: row.process_status,
+        ...(row.title !== undefined ? { title: row.title } : {}),
+        ...(row.mode !== undefined ? { mode: row.mode } : {}),
+      }
+    }
+  } catch { /* minimal record */ }
+  return { claudeSessionId: sessionId }
+}
+
 async function relayedPictures(body: Record<string, unknown>): Promise<{ images?: Array<{ data: string; mediaType: string }> }> {
   if (body.images === undefined && body.imageRefs === undefined) return {}
   const { inlineAnswerPictures } = await import('../../core/answer-pictures.js')
@@ -315,6 +332,20 @@ sessionLifecycleV1Router.patch('/sessions/:id', async (req: Request, res: Respon
         res.status(taken.status).json(taken.body)
         return
       }
+      const queue = await import('../../core/control-queue.js')
+      /** Kept for the Mac: the optimistic row in the frozen { session } shape (additive `queued`). */
+      const kept = async (): Promise<boolean> => {
+        if (!(await queue.keepSessionPatch(sessionId, patch))) return false
+        res.status(200).json({ session: { ...(await projectedSessionRecord(sessionId)), ...patch }, queued: true })
+        return true
+      }
+      // Behind a patch of this session still held for the Mac: kept after it, never relayed past
+      // it (the Mac takes a session's patches by arrival, so the older one would win).
+      if (await queue.sessionPatchHeld(sessionId)) {
+        if (await kept()) return
+        sendError(res, 503, 'bridge_offline', 'Not saved yet: an earlier change to this session is still on its way to your Mac. Try again in a moment.')
+        return
+      }
       const { callPrimaryControl } = await import('./v1-control-relay.js')
       const reply = await callPrimaryControl('patch', sessionId, patch, 20_000)
       if (reply.ok) {
@@ -322,27 +353,7 @@ sessionLifecycleV1Router.patch('/sessions/:id', async (req: Request, res: Respon
         return
       }
       if (reply.failure.kind === 'bridge_offline' || reply.failure.kind === 'needs_upgrade') {
-        const { keepSessionPatch } = await import('../../core/control-queue.js')
-        const opId = await keepSessionPatch(sessionId, patch)
-        if (opId) {
-          // Optimistic response in the frozen { session } shape, built from the
-          // synced projection row when available (additive `queued` marker).
-          let record: Record<string, unknown> = { claudeSessionId: sessionId }
-          try {
-            const { readSessionProjection } = await import('../../core/session-projection.js')
-            const row = (await readSessionProjection())?.sessions.find((s) => s.id === sessionId)
-            if (row) {
-              record = {
-                claudeSessionId: sessionId,
-                process_status: row.process_status,
-                ...(row.title !== undefined ? { title: row.title } : {}),
-                ...(row.mode !== undefined ? { mode: row.mode } : {}),
-              }
-            }
-          } catch { /* minimal record */ }
-          res.status(200).json({ session: { ...record, ...patch }, queued: true })
-          return
-        }
+        if (await kept()) return
         // Queue write failed — the honest transport error is all that's left.
         sendError(res, 503, 'bridge_offline', reply.failure.message)
         return

@@ -66,6 +66,14 @@ export function enterSessionOrder(sessionId: string, messageId: string, accepted
   }
 }
 
+/** A turn of the session was answered: a banked send held behind it may go now (send-queue-sweep.ts). */
+export function wakeSessionSends(sessionId: string): void {
+  void (async () => {
+    const queue = await import('./send-queue.js')
+    if (await queue.sessionHasBankedSend(sessionId)) await queue.flushSendQueue()
+  })().catch(() => {})
+}
+
 /** When the earliest send of the session still being handed over reached the companion, or null. */
 export function earliestSendInFlight(sessionId: string): number | null {
   const list = inFlight.get(sessionId)

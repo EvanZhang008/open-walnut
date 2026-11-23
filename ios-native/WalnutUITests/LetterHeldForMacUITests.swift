@@ -3,8 +3,8 @@ import XCTest
 
 /// The proof video of a reply sent while the Mac is away (2026-11-20): against the real world of
 /// tests/e2e/letter-held-for-mac-video.local.ts (a real companion, the Mac asleep), the reply shows
-/// "Received · <time>. It goes to <task> when your Mac is back." at once, never "Sending" and
-/// never an error; once the world brings the Mac back, the same line reads "Sent to <task> · <time>".
+/// "Received · <time>. It goes to <task> when your Mac is back." within seconds ("Sending" only while
+/// the send is out), never an error; once the world brings the Mac back, the same line reads "Sent to <task> · <time>".
 ///
 /// Runs only when the runner gets `WALNUT_UITEST_LETTER_VIDEO` (the world's marker URL, through
 /// run-ui-tests.sh); every step it takes is posted there, so the video's tap dots and captions
@@ -66,7 +66,9 @@ extension LetterReplyUITests {
         await tap(app.buttons["inbox.letter.send"], "send")
         await post("sent-tapped")
 
-        // Received at once: never "Sending", never an error, in every sample until it shows.
+        // Received within seconds: "Sending" only while the send is out (the companion first tries
+        // the Mac for about 2 s), never an error, in every sample until it shows.
+        let tappedAt = Date()
         let received = statusLine(app, prefix: "Received")
         var lines: [[String]] = []
         let shown = waitUntil(timeout: 20) {
@@ -74,7 +76,8 @@ extension LetterReplyUITests {
             return received.exists
         }
         XCTAssertTrue(shown, "no Received line: \(lines.last ?? [])")
-        let wrong = lines.flatMap { $0 }.filter { $0.hasPrefix("Sending") || $0.hasPrefix("Not sent") || $0.hasPrefix("Not confirmed") }
+        XCTAssertLessThan(Date().timeIntervalSince(tappedAt), 10, "Received took too long: \(lines)")
+        let wrong = lines.flatMap { $0 }.filter { $0.hasPrefix("Not sent") || $0.hasPrefix("Not confirmed") }
         XCTAssertEqual(wrong, [], "a wrong line showed on the way")
         XCTAssertTrue(received.label.hasSuffix("It goes to \(world.recipient) when your Mac is back."), received.label)
         add(XCTAttachment(screenshot: app.screenshot()))
@@ -83,7 +86,18 @@ extension LetterReplyUITests {
 
         // The world brings the Mac back now; the slow re-read turns the same line to Sent.
         let sent = statusLine(app, prefix: "Sent to \(world.recipient) · ")
-        XCTAssertTrue(sent.waitForExistence(timeout: 300), "never Sent: \(statusLabels(app))")
+        // The reply stays on the page while the Mac drains it: the conversation box and a status line
+        // for the reply in every sample (2026-11-22: for 15 s after the Mac woke the letter came back
+        // without the reply, the box went, and the page jumped).
+        let box = app.descendants(matching: .any).matching(identifier: "inbox.letter.conversation").firstMatch
+        var gone: [String] = []
+        let became = waitUntil(timeout: 300) {
+            let lines = statusLabels(app)
+            if !box.exists || lines.isEmpty { gone.append("\(Date().timeIntervalSince1970): box=\(box.exists) \(lines)") }
+            return sent.exists
+        }
+        XCTAssertTrue(became, "never Sent: \(statusLabels(app))")
+        XCTAssertEqual(gone, [], "the reply left the page while the Mac drained it")
         XCTAssertFalse(received.exists, "Received stayed next to Sent: \(statusLabels(app))")
         add(XCTAttachment(screenshot: app.screenshot()))
         await post("sent-shown", ["label": sent.label, "lines": statusLabels(app)])

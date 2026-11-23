@@ -40,14 +40,38 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-inbox-companion-reply', { CLOUD_MODE: true }))
 
 /** The fake Mac: how it behaves, and every call it got. */
-const { mac } = vi.hoisted(() => ({
+const { mac, order } = vi.hoisted(() => ({
   mac: {
-    mode: 'offline' as 'offline' | 'timeout' | 'old' | 'online',
+    mode: 'offline' as 'offline' | 'timeout' | 'old' | 'online' | 'slow',
+    /** In 'slow': each relay waits for this, then answers as 'offline'. */
+    gate: null as null | Promise<void>,
     calls: [] as Array<{ action: string; params: Record<string, unknown>; timeoutMs?: number }>,
     /** The Mac's own reply while online. */
     answer: null as null | ((action: string, params: Record<string, unknown>) => Record<string, unknown>),
   },
+  /** Turns waiting right now behind an earlier turn of their session (send-order.ts). */
+  order: { waiting: 0 },
 }))
+
+// The real registry, counting the turns that wait behind an earlier one, so a test waits on that
+// state rather than on a clock.
+vi.mock('../../src/core/send-order.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/core/send-order.js')>()
+  return {
+    ...actual,
+    enterSessionOrder: (...args: Parameters<typeof actual.enterSessionOrder>) => {
+      const turn = actual.enterSessionOrder(...args)
+      return {
+        ...turn,
+        waitForEarlier: async (by: number) => {
+          if (!turn.earlierInFlight()) return turn.waitForEarlier(by)
+          order.waiting++
+          try { await turn.waitForEarlier(by) } finally { order.waiting-- }
+        },
+      }
+    },
+  }
+})
 
 vi.mock('../../src/web/routes/v1-control-relay.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/web/routes/v1-control-relay.js')>()
@@ -59,6 +83,7 @@ vi.mock('../../src/web/routes/v1-control-relay.js', async (importOriginal) => {
     ...actual,
     tryControlRelay: async (action: string, _sid: string, params: Record<string, unknown> = {}, timeoutMs?: number) => {
       mac.calls.push({ action, params, timeoutMs })
+      if (mac.mode === 'slow') { await mac.gate; return offline(true) }
       if (mac.mode === 'offline') return offline(true)
       if (mac.mode === 'timeout') return offline(false)
       if (mac.mode === 'old') return { ok: true as const, reply: { ok: false, error: `Unknown control action: ${action}` } }
@@ -78,7 +103,7 @@ import { humanInboxPaths, sendLetter } from '../../src/core/human-inbox/store.js
 import {
   _resetCompanionJournalForTesting, ackCompanionJournal, companionJournalBlobBody, companionJournalDir, companionJournalRecords, drainCompanionJournal,
 } from '../../src/core/companion-journal.js'
-import { humanInboxV1Router } from '../../src/web/routes/human-inbox-v1.js'
+import { humanInboxV1Router, setDeliveryWaitForTests } from '../../src/web/routes/human-inbox-v1.js'
 import type { LetterRecord, LetterSender, ThreadEntry } from '../../src/core/human-inbox/types.js'
 
 const SENDER: LetterSender = { sessionId: 'sess-companion-reply', host: 'workstation' }
@@ -107,6 +132,8 @@ beforeEach(async () => {
   fs.rmSync(humanInboxPaths.dir, { recursive: true, force: true })
   fs.rmSync(HUMAN_INBOX_QUEUE_DIR, { recursive: true, force: true })
   mac.mode = 'offline'
+  mac.gate = null
+  setDeliveryWaitForTests(undefined)
   mac.calls.length = 0
   mac.answer = null
   fs.rmSync(IMAGES_DIR, { recursive: true, force: true })
@@ -126,10 +153,10 @@ async function api(method: string, p: string, body?: unknown): Promise<{ status:
 }
 
 /** A letter in the box's copy, as the Mac wrote it. */
-async function seedLetter(): Promise<string> {
+async function seedLetter(sender: LetterSender = SENDER): Promise<string> {
   return (await sendLetter({
     subject: 'Pick a layout for the marina page', type: 'action_required', markdown: '# Two layouts',
-    actions: [{ id: 'a', label: 'Layout A' }, { id: 'b', label: 'Layout B' }], sender: SENDER,
+    actions: [{ id: 'a', label: 'Layout A' }, { id: 'b', label: 'Layout B' }], sender,
   })).id
 }
 
@@ -166,7 +193,9 @@ describe('a reply while the Mac is away', () => {
     expect(rest).toEqual([])
     expect(rec).toMatchObject({ kind: 'inbox-reply', letterId: id, op: 'reply', text: 'Layout A, but keep the map', clientId: 'ios-1' })
     expect(rec.madeAt).toBeGreaterThanOrEqual(before)
-    expect(mac.calls.map((c) => c.action)).toEqual(['server.human-inbox.human-reply'])
+    expect(mac.calls.map((c) => c.action).filter((a) => a !== 'server.journal.due')).toEqual(['server.human-inbox.human-reply'])
+    // The Mac is asked to drain it at once (it takes it as soon as it answers).
+    await vi.waitFor(() => expect(mac.calls.some((c) => c.action === 'server.journal.due')).toBe(true))
 
     // The phone resends its draft: the same record, the same single turn.
     const again = await api('POST', `/human-inbox/${id}/human-reply`, { text: 'Layout A, but keep the map', clientId: 'ios-1' })
@@ -204,6 +233,9 @@ describe('a reply while the Mac is away', () => {
     })
     const synced = await api('GET', `/human-inbox/${id}`)
     expect(humanTurns(synced.json.letter)).toMatchObject([{ clientId: 'ios-2', delivery: { status: 'queued' } }])
+    // The letter read judges the kept entry against the letter it serves and leaves the file be
+    // (its folder may be another than the index's); the list, read against the index, drops it.
+    await api('GET', '/human-inbox')
     expect(fs.existsSync(ACKED_FILE())).toBe(false)
   })
 
@@ -236,13 +268,17 @@ describe('a reply while the Mac is away', () => {
 
   it('a Mac this box knows is away gets a short relay, and one that answers the whole budget', async () => {
     const { setLeaderPresence } = await import('../../src/core/server-role.js')
+    const relays = () => mac.calls.filter((c) => c.action === 'server.human-inbox.human-reply')
     const id = await seedLetter()
     setLeaderPresence(false, 'mac-away')
     await api('POST', `/human-inbox/${id}/human-reply`, { text: 'Layout B', clientId: 'ios-away' })
-    expect(mac.calls.at(-1)!.timeoutMs).toBeLessThanOrEqual(2_000)
+    expect(relays().at(-1)!.timeoutMs).toBeLessThanOrEqual(2_000)
     setLeaderPresence(true, 'answers')
-    await api('POST', `/human-inbox/${id}/human-reply`, { text: 'Layout A', clientId: 'ios-here' })
-    expect(mac.calls.at(-1)!.timeoutMs).toBeGreaterThan(5_000)
+    // Another session's letter (a reply of the same session would be held behind the first).
+    const other = await seedLetter({ sessionId: 'sess-companion-other', host: 'workstation' })
+    await api('POST', `/human-inbox/${other}/human-reply`, { text: 'Layout A', clientId: 'ios-here' })
+    expect(relays()).toHaveLength(2)
+    expect(relays().at(-1)!.timeoutMs).toBeGreaterThan(5_000)
     setLeaderPresence(false, 'mac-away')
   })
 
@@ -269,8 +305,11 @@ describe('an answer while the Mac is away', () => {
     expect(again.status).toBe(202)
     expect(replyRecords()).toHaveLength(1)
     expect(humanTurns(again.json.letter)).toHaveLength(1)
-    // Another answer: the Mac takes one per letter, so it is not kept for it.
-    expect((await api('POST', `/human-inbox/${id}/answer`, { actionId: 'a' })).status).toBe(503)
+    // Another answer: the Mac takes one per letter, so it is not kept for it, and the phone hears
+    // the Mac's own refusal (it was never relayed past the held answer).
+    const other = await api('POST', `/human-inbox/${id}/answer`, { actionId: 'a' })
+    expect(other.status).toBe(409)
+    expect(other.json.error.message).toBe(`Letter ${id} was already answered (b)`)
     expect(replyRecords()).toHaveLength(1)
 
     const list = await api('GET', '/human-inbox')
@@ -284,6 +323,7 @@ describe('an answer while the Mac is away', () => {
       l.thread.push({ from: 'human', text: 'Layout B: with the dark header', at: Date.now(), delivery: { status: 'queued', at: Date.now() } })
     })
     expect(humanTurns((await api('GET', `/human-inbox/${id}`)).json.letter)).toMatchObject([{ delivery: { status: 'queued' } }])
+    await api('GET', '/human-inbox')
     expect(fs.existsSync(ACKED_FILE())).toBe(false)
   })
 
@@ -365,6 +405,78 @@ describe('kept as before', () => {
     const refused = await api('POST', `/human-inbox/${id}/answer`, { actionId: 'b' })
     expect(refused.status).toBe(409)
     expect(refused.json.error.message).toBe('Letter was already answered (a)')
+    expect(replyRecords()).toEqual([])
+  })
+})
+
+describe('a turn of the session waits for one still in its relay (send-order.ts)', () => {
+  it('waits, then holds after it; one whose wait runs out first is neither relayed nor kept, and is told to try again', async () => {
+    const id = await seedLetter()
+    // The route waits up to its deadline less 4 s for the session's earlier turns: 2 s here.
+    setDeliveryWaitForTests(6_000)
+    let open!: () => void
+    mac.mode = 'slow'
+    mac.gate = new Promise<void>((r) => { open = r })
+    const first = api('POST', `/human-inbox/${id}/human-reply`, { text: 'First', clientId: 'ios-40' })
+    await vi.waitFor(() => expect(mac.calls.filter((c) => c.action === 'server.human-inbox.human-reply')).toHaveLength(1))
+    // Another letter of the same session: it must not pass the first, still in its relay.
+    const sibling = await seedLetter()
+    const late = await api('POST', `/human-inbox/${sibling}/human-reply`, { text: 'Second', clientId: 'ios-41' })
+    expect(late.status).toBe(503)
+    expect(late.json.error.message).toMatch(/earlier reply is still on its way/)
+    expect(mac.calls.filter((c) => c.action === 'server.human-inbox.human-reply')).toHaveLength(1)
+    expect(replyRecords()).toEqual([])
+    // A turn that comes while the first is out and waits it out: held after it.
+    const waiter = api('POST', `/human-inbox/${sibling}/human-reply`, { text: 'Second', clientId: 'ios-41' })
+    await vi.waitFor(() => expect(order.waiting).toBe(1))
+    open()
+    expect((await first).status).toBe(202)
+    expect((await waiter).status).toBe(202)
+    expect(replyRecords().map((r) => r.clientId)).toEqual(['ios-40', 'ios-41'])
+    // It never went by relay: it was held behind the first.
+    expect(mac.calls.filter((c) => c.action === 'server.human-inbox.human-reply')).toHaveLength(1)
+  })
+
+  it('a retry with no words of a reply still held is that reply, never a refusal', async () => {
+    const id = await seedLetter()
+    expect((await api('POST', `/human-inbox/${id}/human-reply`, { text: '', clientId: 'ios-50', images: [PNG] })).status).toBe(202)
+    const again = await api('POST', `/human-inbox/${id}/human-reply`, { text: '', clientId: 'ios-50' })
+    expect(again.status).toBe(202)
+    expect(again.json.delivery).toEqual({ status: 'pending', held: true })
+    expect(replyRecords()).toHaveLength(1)
+  })
+})
+
+describe('the Mac answers again while turns are held (2026-11-22)', () => {
+  it('a new reply or answer to the letter is held behind them, never relayed past them; the Mac is asked to drain at once', async () => {
+    const id = await seedLetter()
+    expect((await api('POST', `/human-inbox/${id}/human-reply`, { text: 'First', clientId: 'ios-20' })).status).toBe(202)
+    mac.mode = 'online'
+    mac.answer = () => { throw new Error('relayed past a held turn') }
+    mac.calls.length = 0
+    const second = await api('POST', `/human-inbox/${id}/human-reply`, { text: 'Second', clientId: 'ios-21' })
+    expect(second.status).toBe(202)
+    expect(second.json).toMatchObject({ queued: true, delivery: { status: 'pending', held: true }, clientId: 'ios-21' })
+    expect(humanTurns(second.json.letter).map((t) => t.clientId)).toEqual(['ios-20', 'ios-21'])
+    const answer = await api('POST', `/human-inbox/${id}/answer`, { actionId: 'b' })
+    expect(answer.status).toBe(202)
+    // Another letter of the same session: its turn reaches that session too, so it waits as well.
+    const sibling = await seedLetter()
+    expect((await api('POST', `/human-inbox/${sibling}/human-reply`, { text: 'Third', clientId: 'ios-22' })).json.delivery).toEqual({ status: 'pending', held: true })
+    // In the journal in the order made, so the Mac drains them in that order; none went by relay.
+    expect(companionJournalRecords().map((r) => r.clientId ?? r.actionId)).toEqual(['ios-20', 'ios-21', 'b', 'ios-22'])
+    expect(mac.calls.filter((c) => c.action.startsWith('server.human-inbox.'))).toEqual([])
+    await vi.waitFor(() => expect(mac.calls.some((c) => c.action === 'server.journal.due')).toBe(true))
+  })
+
+  it('once the Mac took them, a reply goes by relay again', async () => {
+    const id = await seedLetter()
+    expect((await api('POST', `/human-inbox/${id}/human-reply`, { text: 'First', clientId: 'ios-30' })).status).toBe(202)
+    await macTakes(replyRecords().map((r) => r.seq as number))
+    mac.mode = 'online'
+    mac.answer = (_action, params) => ({ ok: true, result: { letter: { id: params.id, fromMac: true }, delivery: { status: 'pending' } } })
+    const next = await api('POST', `/human-inbox/${id}/human-reply`, { text: 'Next', clientId: 'ios-31' })
+    expect(next.json).toEqual({ letter: { id, fromMac: true }, delivery: { status: 'pending' } })
     expect(replyRecords()).toEqual([])
   })
 })

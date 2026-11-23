@@ -15,7 +15,9 @@
  *      relay error; a retry of the first reply's clientId adds no turn;
  *   2. the companion's letter shows the turns held;
  *   3. the Mac back drains them: S's CLI gets both replies in order and the answer, each once, and
- *      the companion's letter, once its copy has the Mac's, shows them delivered, no longer held.
+ *      the companion's letter, once its copy has the Mac's, shows them delivered, no longer held;
+ *      no read of the letter meanwhile comes back without them (2026-11-22: the companion forwarded
+ *      the read to the Mac before it drained, and the phone dropped the turns for 15 s).
  * Only the Claude CLI is a mock.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -116,23 +118,42 @@ describe.skipIf(!liveWallsAvailable())('the phone answers letters while the Mac 
       const { talk, pick } = letters(way)
       const [first, second] = replies(way)
       const label = shipLabel(way)
-      await macReturns(way)
-      await macHoldsDevboxAgain()
-      const got = () => inboxOf(world.devbox, S)
-      await waitFor(() => got().some((m) => m.includes(second.text)) && got().some((m) => m.includes(label)), 180_000, 'the turns at S\'s CLI')
-      // Long enough for a second drain or a redelivery to show.
-      await sleep(2 * T)
-      const lines = got()
-      for (const text of [first.text, second.text, label]) expect(lines.filter((m) => m.includes(text)), text).toHaveLength(1)
-      // In order: the session's queue may hand both to the CLI as one message, first then second.
-      const all = lines.join('\n')
-      expect(all.indexOf(first.text)).toBeLessThan(all.indexOf(second.text))
-      // The companion's letter, once its copy holds the Mac's turns: delivered, no longer held.
-      const settled = (turns: Entry[]) => turns.length > 0 && turns.every((t) => t.delivery && t.delivery.status !== 'pending' && t.delivery.held === undefined)
-      const thread = await waitFor(async () => { const t = await humanTurns(talk); return settled(t.turns) ? t : null }, 180_000, 'the companion to read the replies delivered')
-      expect(thread.turns.map((t) => t.clientId)).toEqual([first.clientId, second.clientId])
-      const picked = await waitFor(async () => { const t = await humanTurns(pick); return settled(t.turns) ? t : null }, 180_000, 'the companion to read the answer delivered')
-      expect(picked.turns).toHaveLength(1)
+      // Every read of the letter from the moment the Mac is back shows both replies. 2026-11-22: for
+      // 15 s after the Mac woke the companion forwarded the phone's read to the Mac, whose letter did
+      // not hold them yet; the phone dropped the turns, and its page jumped.
+      const lost: string[] = []
+      let watching = true
+      const watch = (async () => {
+        while (watching) {
+          const t = await humanTurns(talk).catch(() => null)
+          const ids = t?.status === 200 ? t.turns.map((x) => x.clientId) : null
+          if (ids && !(ids.includes(first.clientId) && ids.includes(second.clientId))) lost.push(`${Date.now()}: ${JSON.stringify(ids)}`)
+          await sleep(200)
+        }
+      })()
+      try {
+        await macReturns(way)
+        await macHoldsDevboxAgain()
+        const got = () => inboxOf(world.devbox, S)
+        await waitFor(() => got().some((m) => m.includes(second.text)) && got().some((m) => m.includes(label)), 180_000, 'the turns at S\'s CLI')
+        // Long enough for a second drain or a redelivery to show.
+        await sleep(2 * T)
+        const lines = got()
+        for (const text of [first.text, second.text, label]) expect(lines.filter((m) => m.includes(text)), text).toHaveLength(1)
+        // In order: the session's queue may hand both to the CLI as one message, first then second.
+        const all = lines.join('\n')
+        expect(all.indexOf(first.text)).toBeLessThan(all.indexOf(second.text))
+        // The companion's letter, once its copy holds the Mac's turns: delivered, no longer held.
+        const settled = (turns: Entry[]) => turns.length > 0 && turns.every((t) => t.delivery && t.delivery.status !== 'pending' && t.delivery.held === undefined)
+        const thread = await waitFor(async () => { const t = await humanTurns(talk); return settled(t.turns) ? t : null }, 180_000, 'the companion to read the replies delivered')
+        expect(thread.turns.map((t) => t.clientId)).toEqual([first.clientId, second.clientId])
+        const picked = await waitFor(async () => { const t = await humanTurns(pick); return settled(t.turns) ? t : null }, 180_000, 'the companion to read the answer delivered')
+        expect(picked.turns).toHaveLength(1)
+      } finally {
+        watching = false
+        await watch
+      }
+      expect(lost, 'reads of the letter that lost the held replies after the Mac was back').toEqual([])
     }, 400_000)
   }
 })

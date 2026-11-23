@@ -86,7 +86,8 @@ async function underSessionLock<T>(sessionId: string, fn: () => Promise<T>): Pro
 }
 
 const messageIdOf = (opId: string): string => `ltr-${opId}`
-const originOf = (record: LetterRecord): string | null => {
+/** The session a letter's turns go to (its sender), or null for one no session sent. */
+export const originOf = (record: LetterRecord): string | null => {
   const sid = record.sender?.sessionId
   return sid && sid !== 'external' ? sid : null
 }
@@ -210,8 +211,9 @@ async function recordDirect(
 
 /** A letter turn of `sessionId` the journal still holds for the Mac: a later one must wait behind it. */
 async function heldTurnOfSession(sessionId: string): Promise<boolean> {
-  const { companionJournalRecords } = await import('../../core/companion-journal.js')
-  const held = companionJournalRecords().filter((r) => HELD_KINDS.has(r.kind))
+  const { companionJournalRecords, macDrains } = await import('../../core/companion-journal.js')
+  // One of a kind the Mac no longer drains (an older release) is no turn it will deliver first.
+  const held = companionJournalRecords().filter((r) => HELD_KINDS.has(r.kind) && macDrains(r.kind))
   if (held.length === 0) return false
   const { mirrorRecord } = await import('../../core/human-inbox/replica-state.js')
   const letters = new Map<string, string | undefined>()
@@ -223,6 +225,20 @@ async function heldTurnOfSession(sessionId: string): Promise<boolean> {
     if (origin === undefined || origin === sessionId) return true
   }
   return false
+}
+
+/**
+ * A turn this box still holds for the Mac that a new turn of `record` must follow: any turn of
+ * the same letter (the Mac writes a letter's turns in the order it gets them, one delivered here
+ * included), or one of the same session not delivered yet. Relayed instead, the new turn would
+ * reach the Mac, and the session, ahead of it: it is held behind it (human-inbox-replica.ts).
+ */
+export async function heldAheadOf(record: LetterRecord): Promise<boolean> {
+  const { companionJournalRecords, INBOX_TURN_KINDS, macDrains } = await import('../../core/companion-journal.js')
+  // A record of a kind the Mac no longer drains (an older release) is no turn the Mac will see first.
+  if (companionJournalRecords().some((r) => INBOX_TURN_KINDS.includes(r.kind) && r.letterId === record.id && macDrains(r.kind))) return true
+  const sessionId = originOf(record)
+  return sessionId ? heldTurnOfSession(sessionId) : false
 }
 
 /** The words the session gets: the Mac's own wrapper for this turn (letter-ops.ts buildLetterDeliveryText). */
