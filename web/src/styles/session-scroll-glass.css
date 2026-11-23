@@ -37,6 +37,7 @@
      missing or off (below). */
   --sp-glass-bg: var(--bg);
   --sp-glass-blur: none;
+  --sp-composer-glass-bg: var(--sp-glass-bg);
   /* Over the timeline's own floating layers (comment card 11, jump arrow 10),
      under the header (30) and the composer (40). */
   --z-sp-glass: 29;
@@ -45,12 +46,13 @@
   :root {
     --sp-glass-bg: var(--glass-legible-bg);
     --sp-glass-blur: var(--glass-legible-blur);
+    --sp-composer-glass-bg: color-mix(in srgb, var(--glass-legible-bg) 82%, transparent);
   }
 }
 @media (prefers-reduced-transparency: reduce) {
-  :root { --sp-glass-bg: var(--bg); --sp-glass-blur: none; }
+  :root { --sp-glass-bg: var(--bg); --sp-glass-blur: none; --sp-composer-glass-bg: var(--bg); }
 }
-html[data-glass="solid"] { --sp-glass-bg: var(--bg); --sp-glass-blur: none; }
+html[data-glass="solid"] { --sp-glass-bg: var(--bg); --sp-glass-blur: none; --sp-composer-glass-bg: var(--bg); }
 
 /* ── The composer ── */
 .session-panel { --sp-composer-h: 0px; }
@@ -74,7 +76,9 @@ html[data-glass="solid"] { --sp-glass-bg: var(--bg); --sp-glass-blur: none; }
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  background: var(--sp-glass-bg);
+  /* A lighter tint than the header's: the rows passing under the composer leave a soft trace of
+     colour (under the strong blur never words), and the typed draft still reads crisply on it. */
+  background: var(--sp-composer-glass-bg);
   -webkit-backdrop-filter: var(--sp-glass-blur);
   backdrop-filter: var(--sp-glass-blur);
   -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--glass-g4-fade));
@@ -112,7 +116,42 @@ html[data-glass="solid"] { --sp-glass-bg: var(--bg); --sp-glass-blur: none; }
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
+  /* No rule under the glass, and its lower edge dissolves over --sp-glass-edge: seen in the Mac
+     app's own web view (2026-11-23), a hairline under a blurred header still read as the hard
+     dividing line the user asked away, the row crossing it cut sharp at the line. The edge
+     reaches below the header (or the bar), over the rows' top padding at rest. */
+  :root .session-panel.is-glass-chat:not(.pending-session-panel):not(.draft-session-panel):not(:has(> .session-error-banner, > .session-action-panel)) > .session-panel-header {
+    border-bottom-color: transparent;
+  }
+  :root .session-panel.is-glass-chat:not(.pending-session-panel):not(.draft-session-panel):not(.has-glass-bar):not(:has(> .session-error-banner, > .session-action-panel)) > .session-panel-header::before,
+  :root .session-panel.is-glass-chat.has-glass-bar:not(:has(> .session-error-banner, > .session-action-panel)) .session-panel-chat-col.has-tree-bar > .tree-path-bar::before {
+    bottom: calc(-1 * var(--sp-glass-edge));
+    /* Two layers, added: all of it down to the edge, and the edge's fade everywhere but the
+       scrollbar's column, whose thumb starts right under the chrome and stays drawn whole. */
+    -webkit-mask-image: linear-gradient(to top, transparent var(--sp-glass-edge), #000 var(--sp-glass-edge)), linear-gradient(to top, transparent, #000 var(--sp-glass-edge));
+    mask-image: linear-gradient(to top, transparent var(--sp-glass-edge), #000 var(--sp-glass-edge)), linear-gradient(to top, transparent, #000 var(--sp-glass-edge));
+    -webkit-mask-size: 100% 100%, calc(100% - var(--sp-scrollbar-w)) 100%;
+    mask-size: 100% 100%, calc(100% - var(--sp-scrollbar-w)) 100%;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: 0 0;
+    mask-position: 0 0;
+  }
+  :root .session-panel.is-glass-chat.has-glass-bar:not(:has(> .session-error-banner, > .session-action-panel)) .session-panel-chat-col.has-tree-bar > .tree-path-bar {
+    border-bottom-color: transparent;
+  }
+  /* The composer's card lets the band's one pane of glass through (below): a glass card of its
+     own over the band's glass stacked two tints, and in the Mac app's web view the rows under the
+     card left no trace at all, the card reading as the solid slab it was. Its frame stays. */
+  :root .session-panel.is-glass-chat .session-panel-input .chat-input-box {
+    background: transparent;
+  }
+  :root .session-panel.is-glass-chat .session-panel-input .chat-input-box::before {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }
+:root { --sp-glass-edge: 14px; --sp-scrollbar-w: 6px; }
 .session-panel.is-glass-chat.has-glass-bar:not(:has(> .session-error-banner, > .session-action-panel)) .session-panel-chat-col.has-tree-bar {
   --sp-bar-cover: calc(var(--sp-header-h, 76px) + 44px);
 }

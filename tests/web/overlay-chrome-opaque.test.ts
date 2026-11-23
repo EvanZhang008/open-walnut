@@ -54,7 +54,8 @@ const BLURRED_MENUS: Record<string, string> = {
  */
 const GLASS_SWITCH = /\.is-glass-chat\b/;
 /** The chrome the switch may turn to glass: the rule's subject (its last compound) must be one. */
-const GLASS_CHROME = new Set(['session-panel-header', 'tree-path-bar', 'session-top', 'session-panel-input']);
+// chat-input-box: the composer's card inside session-panel-input, glass with the band around it.
+const GLASS_CHROME = new Set(['session-panel-header', 'tree-path-bar', 'session-top', 'session-panel-input', 'chat-input-box']);
 
 /** A selector with every :not(...) and :has(...) taken out, nested parentheses included. */
 function withoutNegatives(sel: string): string {
@@ -287,6 +288,8 @@ describe('chrome over scrolling content is solid', () => {
     expect(glassExempt(':root .session-panel.is-glass-chat > .session-panel-header::before')).toBe(true);
     expect(glassExempt('.session-panel.is-glass-chat .session-panel-body > .session-top[data-float]::before')).toBe(true);
     expect(glassExempt('.session-panel.is-glass-chat.has-glass-bar .tree-path-bar')).toBe(true);
+    expect(glassExempt(':root .session-panel.is-glass-chat .session-panel-input .chat-input-box')).toBe(true);
+    expect(glassExempt('.session-panel-input .chat-input-box')).toBe(false);
     // The switch only inside :not() or :has(): checked as before.
     expect(glassExempt('.session-panel:not(.is-glass-chat) .session-panel-header')).toBe(false);
     expect(glassExempt('.main-page:has(.session-panel.is-glass-chat) .session-panel-header')).toBe(false);
