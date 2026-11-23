@@ -20,14 +20,16 @@ async function writeRich(markdown: string): Promise<void> {
 /**
  * Two small copy actions for a chat message: copy the raw Markdown, or copy as
  * rich text (formatted HTML) for pasting into Docs/Word/email. Each is the shared
- * Copy button (CopyButton.tsx), a quiet key that says Copied for a moment.
+ * Copy button (CopyButton.tsx), a quiet key that says Copied for a moment. Each says only
+ * "MD" or "Rich" by its icon (2026-11-23, the user: "this just md and rich people will
+ * undersnad", "let's not make this so verbose"); its hover and its name say the whole action.
  */
 export function CopyMessageButtons({ markdown }: CopyMessageButtonsProps) {
   return (
     <span className="msg-copy-actions">
-      <CopyButton text={markdown} label="Copy Markdown" kind="ghost" icon keepLabel isolate write={writeMarkdown}
+      <CopyButton text={markdown} label="MD" kind="ghost" icon keepLabel isolate write={writeMarkdown}
         className="msg-copy-btn" title="Copy the message as Markdown source" aria-label="Copy Markdown" />
-      <CopyButton text={markdown} label="Copy rich text" kind="ghost" icon keepLabel isolate write={writeRich}
+      <CopyButton text={markdown} label="Rich" kind="ghost" icon keepLabel isolate write={writeRich}
         className="msg-copy-btn" title="Copy the message as rich text: keeps formatting when pasted into a doc or email" aria-label="Copy rich text" />
     </span>
   );
