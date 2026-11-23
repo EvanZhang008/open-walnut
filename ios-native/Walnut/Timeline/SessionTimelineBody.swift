@@ -227,8 +227,7 @@ struct SessionTimelineBody: View {
             SessionFileViewer(name: target.ref.displayName, path: target.ref.path,
                               host: target.host ?? "", ref: target.ref,
                               cwd: target.cwd, sessionID: target.sessionID,
-                              hostNote: target.hostNote, missingNote: target.missing,
-                              unknownSource: target.unknownSource)
+                              hostNote: target.hostNote, missingNote: target.missing)
         }
         .sheet(item: $dirTarget) { target in
             DirectoryPreviewSheet(target: target)

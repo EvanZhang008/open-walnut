@@ -18,9 +18,6 @@ struct TextFileTarget: Identifiable, Equatable {
     var hostNote: String? = nil
     /// No host has it: the viewer shows this line instead of reading anything.
     var missing: String? = nil
-    /// No machine is known for it (`ClickedPath.unreachableSource`): the viewer lets the user
-    /// pick the machine to open it from.
-    var unknownSource = false
 
     init(ref: FilePathRef, host: String? = nil, cwd: String? = nil, sessionID: String? = nil,
          hostNote: String? = nil, missing: String? = nil) {
@@ -50,8 +47,10 @@ struct FilePathLinkHandling: ViewModifier {
     var cwd: String? = nil
     var sessionID: String? = nil
     var task: WalnutTask? = nil
-    /// The writer of these words is not known: a tap opens nothing (`LinkSource.unknownSource`).
+    /// The writer of these words is not known: a tap looks the path up on every machine
+    /// (`LinkSource.unknownSource`), the task `taskID` names first.
     var unknownSource = false
+    var taskID: String? = nil
     /// Every file link in this subtree was tagged by the phone with its writer
     /// (`FilePreviewLink.tagging(_:source:)`): the tag names the machine, and a link with none
     /// reads as unknown. Off everywhere else, so a tag in an agent's own markup is never read.
@@ -92,16 +91,17 @@ struct FilePathLinkHandling: ViewModifier {
                 guard let ref = FilePreviewLink.reference(from: url) else { return .systemAction }
                 let explicit = LinkSourceResolver.explicitSource(
                     for: url, readsSourceTags: readsSourceTags,
-                    own: LinkSource(host: host, cwd: cwd, sessionID: sessionID, unknownSource: unknownSource))
+                    own: LinkSource(host: host, cwd: cwd, sessionID: sessionID, unknownSource: unknownSource, taskID: taskID))
                 // Only the task this handler was given (its own conversation's task, say): never one
                 // a link's query names.
                 let lookup = tasks, mine = tapSeq, own = task
                 pathLookup = Task { @MainActor in
                     let route = await LinkSourceResolver.route(ref, explicit: explicit, task: own, lookup: lookup) { ref, from in
                         // The writer's machine first; the user's other machines when it lacks the file
-                        // (a lead relays a worker's evidence path). Only a machine the user tapped is
-                        // looked up alone (SessionFilesSheet).
-                        await ClickedPath.locate(ref, host: from.host, cwd: from.cwd, sessionID: from.sessionID)
+                        // (a lead relays a worker's evidence path). A writer not known: every machine,
+                        // its task's first.
+                        await ClickedPath.locate(ref, host: from.host, cwd: from.cwd, sessionID: from.sessionID,
+                                                 anywhere: from.unknownSource, taskID: from.taskID)
                     }
                     guard !Task.isCancelled, mine == tapSeq else { return }
                     switch route {
@@ -119,8 +119,7 @@ struct FilePathLinkHandling: ViewModifier {
                 SessionFileViewer(name: target.ref.displayName, path: target.ref.path,
                                   host: target.host ?? "", ref: target.ref,
                                   cwd: target.cwd, sessionID: target.sessionID,
-                                  hostNote: target.hostNote, missingNote: target.missing,
-                                  unknownSource: target.unknownSource)
+                                  hostNote: target.hostNote, missingNote: target.missing)
             }
             .sheet(item: $dirTarget) { DirectoryPreviewSheet(target: $0) }
             .sheet(item: $taskTarget) { destination in
@@ -142,7 +141,7 @@ extension View {
     func handlingFilePathLinks(source: LinkSource) -> some View {
         modifier(FilePathLinkHandling(host: source.hostKnown ? source.host ?? "" : nil,
                                       cwd: source.cwd, sessionID: source.sessionID,
-                                      unknownSource: source.unknownSource))
+                                      unknownSource: source.unknownSource, taskID: source.taskID))
     }
 
     /// One of a task's own texts: opened from where that text was written, never its current session.

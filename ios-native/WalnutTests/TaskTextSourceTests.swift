@@ -6,6 +6,8 @@ import XCTest
 @MainActor
 final class TaskTextSourceTests: XCTestCase {
     private let ref = FilePathRef(path: "/tmp/run/report.md")
+    /// A writer not known, in the task every test here builds: its machines are asked first.
+    private let unknownOfTask = LinkSource(unknownSource: true, taskID: "mtask001-0a0a")
 
     private final class ScriptedLookup: LinkSourceLookup {
         var sessions: [WalnutSession] = []
@@ -71,23 +73,25 @@ final class TaskTextSourceTests: XCTestCase {
     func testAnOldRecordWithNoWriterIsUnknownNotTheCurrentSession() async {
         let t = task(status: needs(by: "self", sid: nil))
         for field: LinkSource.TaskTextField in [.needs, .now, .next, .waiting, .line, .summary, .result, .partial] {
-            XCTAssertEqual(LinkSource.forTaskText(t, field), .unknown, "\(field)")
+            XCTAssertEqual(LinkSource.forTaskText(t, field), unknownOfTask, "\(field)")
         }
         let lookup = ScriptedLookup()
         lookup.byId = ["s-live": session("s-live", host: "devbox")]
         let r = await route(.forTaskText(t, .needs), task: t, lookup: lookup)
-        XCTAssertEqual(r.asked, [], "no lookup on any machine")
+        XCTAssertEqual(r.asked, [unknownOfTask], "every machine is asked, the task's first")
+        XCTAssertEqual(r.asked.first?.taskID, t.id)
+        XCTAssertNil(r.asked.first?.host)
+        XCTAssertNil(r.asked.first?.sessionID)
         XCTAssertEqual(lookup.fetches + lookup.resolves, [], "not the task's current or newest session")
-        guard case .text(let target) = r.route else { return XCTFail("one line in the viewer") }
-        XCTAssertTrue(target.unknownSource, "the viewer offers the user's machines")
+        guard case .text(let target) = r.route else { return XCTFail("the viewer opens") }
         XCTAssertNil(target.host)
-        XCTAssertTrue(target.missing?.contains("not recorded") == true, target.missing ?? "")
-        XCTAssertFalse(target.missing?.contains("online") == true, "an unknown writer is no network problem")
+        XCTAssertNil(target.missing, "the locate answers, never a question to the person")
     }
 
     func testAnUnknownSourceNamesNothingAndIsNotEmpty() {
         let unknown = LinkSource(host: "devbox", cwd: "/srv", sessionID: "s1", unknownSource: true)
         XCTAssertEqual(unknown, .unknown)
+        XCTAssertNil(LinkSource(sessionID: "s1", taskID: "mtask001-0a0a").taskID, "a task id rides only an unknown writer")
         XCTAssertFalse(unknown.isEmpty, "never read as 'no source named', which falls back to the task")
         XCTAssertFalse(unknown.hostKnown)
         XCTAssertNil(unknown.sessionID)
@@ -127,7 +131,7 @@ final class TaskTextSourceTests: XCTestCase {
         s.answeredFor = WalnutAnsweredFor(by: "human")
         XCTAssertEqual(LinkSource.forTaskText(task(status: s), .waiting), .primary)
         s.answeredFor = WalnutAnsweredFor(by: "mmain001-0e0e")
-        XCTAssertEqual(LinkSource.forTaskText(task(status: s), .waiting), .unknown, "an answer with no session is not known")
+        XCTAssertEqual(LinkSource.forTaskText(task(status: s), .waiting), unknownOfTask, "an answer with no session is not known")
     }
 
     func testWaitingWordsOpenOnlyFromTheirOwnWriter() {
@@ -136,7 +140,7 @@ final class TaskTextSourceTests: XCTestCase {
         s.reportBy = "self"
         s.reportSessionId = "s-report"
         // Walnut's own waiting words beside a report's now: the report's writer is not theirs.
-        XCTAssertEqual(LinkSource.forTaskText(task(status: s), .waiting), .unknown)
+        XCTAssertEqual(LinkSource.forTaskText(task(status: s), .waiting), unknownOfTask)
         XCTAssertEqual(LinkSource.forTaskText(task(status: s), .now), LinkSource(sessionID: "s-report"))
         s.waitingBy = "self"
         s.waitingSessionId = "s-wait"
@@ -145,7 +149,7 @@ final class TaskTextSourceTests: XCTestCase {
         s.waitingSessionId = nil
         XCTAssertEqual(LinkSource.forTaskText(task(status: s), .waiting), .primary)
         s.waitingBy = "self"
-        XCTAssertEqual(LinkSource.forTaskText(task(status: s), .waiting), .unknown, "an older record with no session id")
+        XCTAssertEqual(LinkSource.forTaskText(task(status: s), .waiting), unknownOfTask, "an older record with no session id")
         s.answeredFor = WalnutAnsweredFor(by: "mmain001-0e0e", sessionId: "s-main")
         s.waitingSessionId = "s-wait"
         XCTAssertEqual(LinkSource.forTaskText(task(status: s), .waiting), LinkSource(sessionID: "s-main"), "the answer's own writer first")
@@ -165,8 +169,8 @@ final class TaskTextSourceTests: XCTestCase {
         // An older `human` with no host may be a session caller Walnut could not resolve.
         t.resultReport?.by = "human"
         t.resultReport?.sessionId = nil
-        XCTAssertEqual(LinkSource.forTaskText(t, .result), .unknown)
-        XCTAssertEqual(LinkSource.forTaskText(t, .partial), .unknown)
+        XCTAssertEqual(LinkSource.forTaskText(t, .result), unknownOfTask)
+        XCTAssertEqual(LinkSource.forTaskText(t, .partial), unknownOfTask)
         t.resultReport?.host = "local"
         XCTAssertEqual(LinkSource.forTaskText(t, .result), .primary)
         XCTAssertEqual(LinkSource.forTaskText(t, .partial), .primary)
@@ -190,18 +194,18 @@ final class TaskTextSourceTests: XCTestCase {
         s.reportBy = "self"
         s.reportSessionId = "s-report"
         var t = task(status: s)
-        XCTAssertEqual(LinkSource.forTaskText(t, .needs), .unknown, "last words never read: not known")
+        XCTAssertEqual(LinkSource.forTaskText(t, .needs), unknownOfTask, "last words never read: not known")
         t.lastWords = WalnutLastWords(text: "x", at: "2026-11-01T00:00:00Z", sessionId: "s-last")
         XCTAssertEqual(LinkSource.forTaskText(t, .needs), LinkSource(sessionID: "s-last"))
         s.toRead = "answer"
-        XCTAssertEqual(LinkSource.forTaskText(task(status: s), .needs), .unknown,
+        XCTAssertEqual(LinkSource.forTaskText(task(status: s), .needs), unknownOfTask,
                        "an answer shows its waiting words: never the report's now writer")
         s.waitingBy = "task:mlead001-0f0f"
         s.waitingSessionId = "s-quoted"
         XCTAssertEqual(LinkSource.forTaskText(task(status: s), .needs), LinkSource(sessionID: "s-quoted"))
         for source in ["letter", "choice", "prompt", "error"] {
             XCTAssertEqual(LinkSource.forTaskText(task(status: needs(by: "self", sid: "s-report", source: source)), .needs),
-                           .unknown, "Walnut's own words for \(source)")
+                           unknownOfTask, "Walnut's own words for \(source)")
         }
     }
 
@@ -214,7 +218,7 @@ final class TaskTextSourceTests: XCTestCase {
         s.reportBy = "self"
         s.reportSessionId = "s-b"
         let t = task(status: s)
-        XCTAssertEqual(LinkSource.forTaskText(t, .needs), .unknown, "the ask's writer is not recorded")
+        XCTAssertEqual(LinkSource.forTaskText(t, .needs), unknownOfTask, "the ask's writer is not recorded")
         XCTAssertEqual(LinkSource.forTaskText(t, .now), LinkSource(sessionID: "s-b"))
         s.askBy = "self"
         s.askSessionId = "s-a"
@@ -229,7 +233,7 @@ final class TaskTextSourceTests: XCTestCase {
         var t = task()
         t.resultReport = WalnutResultReport(notDone: ["/tmp/run/report.md"], result: "/tmp/run/out.md",
                                             by: "task:mb000002-0b0b", sessionId: "s-b", notDoneBy: "unknown")
-        XCTAssertEqual(LinkSource.forTaskText(t, .partial), .unknown)
+        XCTAssertEqual(LinkSource.forTaskText(t, .partial), unknownOfTask)
         XCTAssertEqual(LinkSource.forTaskText(t, .result), LinkSource(sessionID: "s-b"))
         t.resultReport?.notDoneBy = nil
         XCTAssertEqual(LinkSource.forTaskText(t, .partial), LinkSource(sessionID: "s-b"), "one writer for both")
@@ -244,11 +248,11 @@ final class TaskTextSourceTests: XCTestCase {
         """.utf8))
         XCTAssertNil(row.userStatus?.askSessionId)
         XCTAssertNil(row.resultReport?.notDoneBy)
-        XCTAssertEqual(LinkSource.forTaskText(row, .needs), .unknown, "no ask writer: never the report's")
-        XCTAssertEqual(LinkSource.forTaskText(row, .waiting), .unknown, "no waiting writer: never the report's")
+        XCTAssertEqual(LinkSource.forTaskText(row, .needs), unknownOfTask, "no ask writer: never the report's")
+        XCTAssertEqual(LinkSource.forTaskText(row, .waiting), unknownOfTask, "no waiting writer: never the report's")
         XCTAssertEqual(LinkSource.forTaskText(row, .now), LinkSource(sessionID: "s-rep"))
-        XCTAssertEqual(LinkSource.forTaskText(row, .result), .unknown)
-        XCTAssertEqual(LinkSource.forTaskText(row, .partial), .unknown)
+        XCTAssertEqual(LinkSource.forTaskText(row, .result), unknownOfTask)
+        XCTAssertEqual(LinkSource.forTaskText(row, .partial), unknownOfTask)
         let fresh = try JSONDecoder().decode(WalnutResultReport.self, from: Data(
             #"{"not_done":["x"],"by":"task:m1","sessionId":"s1","not_done_by":"unknown"}"#.utf8))
         XCTAssertEqual(fresh.notDoneBy, "unknown")
@@ -276,13 +280,13 @@ final class TaskTextSourceTests: XCTestCase {
         }
     }
 
-    func testAnUnknownTagRoutesWithNoLookup() async throws {
+    func testAnUnknownTagIsLookedUpEverywhereWithNoSessionRead() async throws {
         var s = AttributedString("report.md")
         s.link = try XCTUnwrap(FilePreviewLink.url(for: ref))
         let url = try XCTUnwrap(FilePreviewLink.tagging(s, source: .unknown).runs.first?.link)
         let lookup = ScriptedLookup()
         let r = await route(try XCTUnwrap(FilePreviewLink.linkSource(from: url)), task: task(), lookup: lookup)
-        XCTAssertEqual(r.asked, [])
+        XCTAssertEqual(r.asked, [unknownOfTask], "every machine, the handler's task first")
         XCTAssertEqual(lookup.fetches + lookup.resolves, [])
     }
 

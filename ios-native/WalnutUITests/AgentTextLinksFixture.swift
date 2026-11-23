@@ -493,6 +493,11 @@ extension AgentTextLinksUITests {
         try reads().filter { $0.seq > seq && $0.path == "/api/v1/files/locate" }.count
     }
 
+    /// Every-machine lookups (`anywhere=1`, a writer not known) after observed request `seq`.
+    func anywhereLocates(after seq: Int) throws -> Int {
+        try reads().filter { $0.seq > seq && $0.path == "/api/v1/files/locate" && $0.query["anywhere"] == "1" }.count
+    }
+
     func lastSeq() throws -> Int { try state()["observedSeq"] as? Int ?? 0 }
 
     /// Every request for the fixture image after observed request `seq`, served or not.

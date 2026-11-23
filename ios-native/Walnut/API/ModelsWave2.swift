@@ -907,6 +907,8 @@ struct PathLocation: Codable, Equatable {
     let elsewhere: Bool?
     let missing: Bool?
     let checked: [String]?
+    /// An every-machine lookup (`anywhere`): the machines that did not answer, so the file may be there.
+    let unreachable: [String]?
     let via: String?
     let line: Int?
     let column: Int?

@@ -259,24 +259,13 @@ final class AgentTextLinksUITests: XCTestCase {
         let seqBefore = try lastSeq()
         try capture(app, "agent-summary-before-tap")
         tapReady(link(in: summary, "readme.txt", contains: true), in: sheet)
-        // The fixture's summary records no writer session: the phone names no machine for it and
-        // reads nothing until the user picks one.
-        let missing = element(app, "session.files.viewer.missing")
-        XCTAssertTrue(missing.waitForExistence(timeout: 20), "an unknown writer did not open the not-recorded viewer")
-        let notRecorded = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'was not recorded'")).firstMatch
-        XCTAssertTrue(notRecorded.waitForExistence(timeout: 5), "the viewer does not say the source was not recorded")
-        XCTAssertTrue(app.staticTexts["Choose a machine"].exists, "the question to answer is titled as a fault")
-        XCTAssertFalse(app.staticTexts["Not Found"].exists, "choosing a machine reads as a missing file")
-        let local = element(app, "session.files.viewer.pick.local")
-        XCTAssertTrue(local.waitForExistence(timeout: 5), "the viewer offers no Local choice")
-        XCTAssertEqual(try fileReads(), before, "an unknown writer read a file before the user picked a machine")
-        XCTAssertEqual(try locates(after: seqBefore), 0, "an unknown writer was looked up on a guessed machine")
-        XCTAssertEqual(taskPagesOpen(app), tasks, "the file link opened a task")
-        try capture(app, "agent-summary-unknown-source")
-        local.tap()
+        // The fixture's summary records no writer session: the path is looked up on every machine,
+        // the task's first, and opens from the one that has it; the person is never asked to pick.
         expectTextViewer(app, showing: Self.lineTwo)
-        XCTAssertGreaterThan(try locates(after: seqBefore), 0, "Local did not look the path up")
+        XCTAssertFalse(element(app, "session.files.viewer.missing").exists, "an unknown writer's file read as missing")
+        XCTAssertGreaterThan(try anywhereLocates(after: seqBefore), 0, "an unknown writer was not looked up on every machine")
         XCTAssertGreaterThan(try fileReads(), before)
+        XCTAssertEqual(taskPagesOpen(app), tasks, "the file link opened a task")
         try capture(app, "agent-summary-file-viewer")
         closeTextViewer(app)
         XCTAssertTrue(heading.waitForExistence(timeout: 10), "closing the viewer left the task details")
@@ -385,8 +374,8 @@ final class AgentTextLinksUITests: XCTestCase {
     }
 
     /// An agent turn from before the server recorded its writer: its image is a link, not bytes
-    /// read on a guess, and a tap opens the not-recorded viewer with no lookup and no read.
-    @MainActor func testAnOldTurnWithNoWriterLoadsNoImageAndReadsNoFile() throws {
+    /// read on a guess, and a tap looks it up on every machine and shows it from the one that has it.
+    @MainActor func testAnOldTurnWithNoWriterLoadsNoImageUntilTappedThenFindsItsMachine() throws {
         let id = try XCTUnwrap(fixture.letters.oldTurn, "the fixture seeded no old turn")
         let subject = try XCTUnwrap(fixture.letters.subjects.oldTurn)
         let seq = try lastSeq()
@@ -399,25 +388,18 @@ final class AgentTextLinksUITests: XCTestCase {
         XCTAssertTrue(imageLink.waitForExistence(timeout: 20), "the old turn's image is not drawn as a link")
         XCTAssertEqual(try mediaRequests(after: seq), 0, "an unknown writer's image was requested")
         try capture(app, "agent-old-turn-image-link")
+        XCTAssertEqual(try fileContentReads(of: fixture.image), imageReads, "a file was read for an unknown writer before a tap")
         tapReady(imageLink, in: conversation)
-        let missing = element(app, "session.files.viewer.missing")
-        XCTAssertTrue(missing.waitForExistence(timeout: 20), "the image link did not open the not-recorded viewer")
-        XCTAssertTrue(element(app, "session.files.viewer.pick.local").waitForExistence(timeout: 5))
-        XCTAssertEqual(try locates(after: seq), 0, "an unknown writer was looked up on a guessed machine")
-        XCTAssertEqual(try mediaRequests(after: seq), 0)
-        XCTAssertEqual(try fileContentReads(of: fixture.image), imageReads, "a file was read for an unknown writer")
-        try capture(app, "agent-old-turn-not-recorded")
-        // The user names the machine: the picture is read from there, as raw file bytes.
-        tap(element(app, "session.files.viewer.pick.local"))
+        // Every machine is asked; the picture is read from the one that has it, as raw file bytes.
         let picture = element(app, "session.files.viewer.image")
-        XCTAssertTrue(picture.waitForExistence(timeout: 30), "picking Local did not show the image")
+        XCTAssertTrue(picture.waitForExistence(timeout: 30), "the tap did not show the image")
         XCTAssertGreaterThan(picture.frame.width, 100, "the image is drawn too small to be the fixture picture")
         XCTAssertFalse(element(app, "session.files.viewer.imageFailed").exists)
-        XCTAssertFalse(missing.exists, "the not-recorded line stayed after the pick")
-        XCTAssertGreaterThan(try locates(after: seq), 0, "Local did not look the path up")
+        XCTAssertFalse(element(app, "session.files.viewer.missing").exists, "an unknown writer's image read as missing")
+        XCTAssertGreaterThan(try anywhereLocates(after: seq), 0, "an unknown writer was not looked up on every machine")
         XCTAssertGreaterThan(try rawFileReads(of: fixture.image, served: true), 0, "the image was not read as raw file bytes")
         XCTAssertEqual(try mediaRequests(after: seq), 0, "the media route was used")
-        try capture(app, "agent-old-turn-image-local")
+        try capture(app, "agent-old-turn-image-found")
         tap(app.navigationBars["fixture-chart.png"].buttons["Done"])
         let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: picture)
         XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 15), .completed, "the viewer did not close")
@@ -557,9 +539,9 @@ final class AgentTextLinksUITests: XCTestCase {
     }
 
     /// An Org thread card's summary and opening post: a path opens on the machine of the session
-    /// the server recorded as its writer, and a card with no recorded writer asks which machine
-    /// (it reads nothing until the user picks one), then opens from the one picked.
-    @MainActor func testOrgThreadCardPathsOpenOnTheirWritersMachineAndAskWhenTheWriterIsUnknown() throws {
+    /// the server recorded as its writer, and a card with no recorded writer is looked up on every
+    /// machine and opens from the one that has it, never a question about which machine.
+    @MainActor func testOrgThreadCardPathsOpenOnTheirWritersMachineAndFindTheUnknownWritersOne() throws {
         let org = try XCTUnwrap(fixture.org, "the fixture seeded no org")
         let threads = try XCTUnwrap(org.threads, "the fixture seeded no org threads")
         let app = try openOrgThreads(org)
@@ -598,17 +580,14 @@ final class AgentTextLinksUITests: XCTestCase {
         let before = try fileReads()
         let asked = try lastSeq()
         tapWrappedLink(guess, in: scroll)
-        XCTAssertTrue(element(app, "session.files.viewer.missing").waitForExistence(timeout: 20), "an unknown writer did not ask which machine")
-        XCTAssertTrue(element(app, "session.files.viewer.pick.local").waitForExistence(timeout: 5))
-        XCTAssertEqual(try locates(after: asked), 0, "an unknown writer was looked up on a guessed machine")
-        XCTAssertEqual(try fileReads(), before, "a file was read for an unknown writer")
-        try capture(app, "agent-org-thread-unknown-asks")
-        tap(element(app, "session.files.viewer.pick.local"))
         expectTextViewer(app, showing: Self.lineTwo)
-        XCTAssertGreaterThan(try locates(after: asked), 0, "Local did not look the path up")
+        XCTAssertFalse(element(app, "session.files.viewer.missing").exists, "an unknown writer's file read as missing")
+        XCTAssertGreaterThan(try anywhereLocates(after: asked), 0, "an unknown writer was not looked up on every machine")
+        XCTAssertGreaterThan(try fileReads(), before)
+        try capture(app, "agent-org-thread-unknown-found")
         closeTextViewer(app)
         XCTAssertTrue(unknown.waitForExistence(timeout: 10), "closing the viewer left the Threads page")
-        assertNothingOpens(app, "closing the picked machine's viewer")
+        assertNothingOpens(app, "closing the unknown writer's viewer")
     }
 
     @MainActor func testMarkdownBodyTaskMentionOpensItsTaskAndDoneReturns() throws {

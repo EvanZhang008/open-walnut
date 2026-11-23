@@ -50,7 +50,6 @@ const ALLOWED: Record<string, string> = {
   'web/src/components/common/DocCommentsLayer.tsx': 'another idea: a doc comment shown only in the source view',
   'ios-native/Walnut/API/WalnutAPIWave2.swift': 'the request itself',
   'ios-native/Walnut/Views/ClickedPath.swift': 'passes the caller\'s flag to the request',
-  'ios-native/Walnut/Views/Sessions/SessionFilesSheet.swift': 'the machine the person tapped is looked up alone',
 }
 
 describe('sourceOnly is set only where a person named the machine', () => {
@@ -72,9 +71,10 @@ describe('sourceOnly is set only where a person named the machine', () => {
       expect(text, `${p} exists`).toBeDefined()
       expect(settersIn(text!), p).toEqual([])
     }
-    // Only the person's own pick or tap is a literal `true`.
+    // Only a person's own pick of a machine would be a literal `true`, and no surface asks for one
+    // any more (never-ask-which-machine.test.ts): none sets it.
     const literal = SOURCES.filter((f) => settersIn(f.text).some((l) => /sourceOnly\s*:\s*true\b/.test(l) && !/\?\s*\{\s*sourceOnly:\s*true\s*\}/.test(l)))
-    expect(literal.map((f) => f.path)).toEqual(['ios-native/Walnut/Views/Sessions/SessionFilesSheet.swift'])
+    expect(literal.map((f) => f.path)).toEqual([])
   })
 
   it('catches the shapes it was written for', () => {

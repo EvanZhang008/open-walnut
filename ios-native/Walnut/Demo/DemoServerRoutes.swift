@@ -907,7 +907,7 @@ extension DemoServer {
         if s == ["files", "locate"] {
             let ref = r.query["ref"] ?? ""
             return .encoded(PathLocation(path: ref, host: r.query["host"], hostName: nil, found: true,
-                                         elsewhere: nil, missing: nil, checked: nil, via: "exact",
+                                         elsewhere: nil, missing: nil, checked: nil, unreachable: nil, via: "exact",
                                          line: nil, column: nil, endLine: nil))
         }
         if s == ["files", "resolve-path"] {

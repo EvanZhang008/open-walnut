@@ -8,12 +8,17 @@ struct LinkSource: Equatable {
     var cwd: String?
     var sessionID: String?
     /// The words' writer is not known (an older record, a writer Walnut could not name): a tap
-    /// opens nothing, never the task's current session or the primary by guess.
+    /// looks the path up on every machine (`ClickedPath.locate` `anywhere`), never on the task's
+    /// current session or the primary by guess.
     var unknownSource: Bool
+    /// With `unknownSource` only: the task the words belong to, whose machines are asked first.
+    var taskID: String?
 
-    init(host: String? = nil, cwd: String? = nil, sessionID: String? = nil, unknownSource: Bool = false) {
+    init(host: String? = nil, cwd: String? = nil, sessionID: String? = nil, unknownSource: Bool = false,
+         taskID: String? = nil) {
         let named = host?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.unknownSource = unknownSource
+        self.taskID = unknownSource ? Self.clean(taskID) : nil
         // An unknown source names nothing, whatever else was passed.
         self.hostKnown = !unknownSource && named != nil
         self.host = unknownSource || named == "local" || named == "__local__" ? nil : Self.clean(named)
@@ -107,12 +112,15 @@ enum LinkSourceResolver {
     @MainActor
     static func route(_ ref: FilePathRef, explicit: LinkSource, task: WalnutTask?, lookup: LinkSourceLookup?,
                       locate: @MainActor (FilePathRef, LinkSource) async -> ClickedPathRoute) async -> ClickedPathRoute {
-        // Every unknown machine below ends unreachable: guessing the primary opens another machine's file of that name.
-        // A writer nobody recorded: no lookup at all, and never the task's current session.
-        if explicit.unknownSource { return ClickedPath.unreachableSource(ref, notRecorded: true) }
+        // Every machine that cannot be named below is not guessed: the path is looked up on every
+        // machine, the task the words belong to first, and opens from the one that has it.
+        let anywhere = LinkSource(unknownSource: true, taskID: explicit.taskID ?? task?.id)
+        // A writer nobody recorded: never the task's current session.
+        if explicit.unknownSource { return await locate(ref, anywhere) }
         if !explicit.hostKnown, let sid = explicit.sessionID {
+            // A session that is gone or cannot be read now names no machine.
             guard let lookup, let session = await lookup.resolveSession(id: sid, task: nil) else {
-                return ClickedPath.unreachableSource(ref)
+                return await locate(ref, anywhere)
             }
             var found = LinkSource.of(session)
             found.cwd = explicit.cwd ?? found.cwd
@@ -120,12 +128,11 @@ enum LinkSourceResolver {
             return await locate(ref, found)
         }
         guard explicit.isEmpty, let task else { return await locate(ref, explicit) }
-        guard let lookup else { return ClickedPath.unreachableSource(ref) }
+        guard let lookup else { return await locate(ref, anywhere) }
         switch await source(for: task, lookup: lookup) {
         case .source(let source): return await locate(ref, source)
-        // A task whose session the phone cannot name has no known machine: the generic lookup would guess one.
-        case .noSession: return ClickedPath.unreachableSource(ref, notRecorded: true)
-        case .unreachable: return ClickedPath.unreachableSource(ref)
+        // A task whose session the phone cannot name has no known machine: every machine is asked.
+        case .noSession, .unreachable: return await locate(ref, anywhere)
         }
     }
 }
@@ -254,6 +261,12 @@ extension LinkSource {
     /// (the web's twin). Never the task's current session: a status from an older session, or a
     /// record from before the fields existed, would open the wrong machine's file of that name.
     static func forTaskText(_ task: WalnutTask, _ field: TaskTextField) -> LinkSource {
+        let source = recordedTaskText(task, field)
+        // An unknown writer still names its task: a path is looked up on that task's machines first.
+        return source.unknownSource ? LinkSource(unknownSource: true, taskID: task.id) : source
+    }
+
+    private static func recordedTaskText(_ task: WalnutTask, _ field: TaskTextField) -> LinkSource {
         let s = task.userStatus
         switch field {
         case .now, .next:

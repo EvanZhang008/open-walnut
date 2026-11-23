@@ -5,6 +5,12 @@ import XCTest
 final class LinkSourceTests: XCTestCase {
     private let ref = FilePathRef(path: "/tmp/run/report.md")
 
+    /// What the locate closure gets for a writer no machine can be named for: every machine,
+    /// the words' task first.
+    private func everywhere(_ taskID: String? = "mtask001-0a0a") -> LinkSource {
+        LinkSource(unknownSource: true, taskID: taskID)
+    }
+
     private final class ScriptedLookup: LinkSourceLookup {
         var sessions: [WalnutSession] = []
         var known: [String: [String]] = [:]
@@ -108,7 +114,7 @@ final class LinkSourceTests: XCTestCase {
         XCTAssertEqual(r.asked.first?.host, "devbox")
     }
 
-    func testATaskWithNoSessionOpensNothingFromAnyMachine() async {
+    func testATaskWithNoSessionIsLookedUpOnEveryMachine() async {
         for script in [
             { (l: ScriptedLookup) in l.known = ["mtask001-0a0a": []] },
             { (l: ScriptedLookup) in l.fetchAnswer = [] },
@@ -116,15 +122,12 @@ final class LinkSourceTests: XCTestCase {
             let lookup = ScriptedLookup()
             script(lookup)
             let r = await route(task: task(), lookup: lookup)
-            XCTAssertEqual(r.asked, [], "the locate closure never ran: no machine is known")
+            XCTAssertEqual(r.asked, [everywhere()], "no machine is known: every machine is asked, the task's first")
             XCTAssertEqual(lookup.resolves, [])
-            guard case .text(let target) = r.route else { return XCTFail("one line in the viewer") }
-            XCTAssertNotNil(target.missing, "the viewer reads nothing")
-            XCTAssertNil(target.host)
         }
     }
 
-    func testAnUnreadableSessionOpensNothingFromAnyMachine() async {
+    func testAnUnreadableSessionIsLookedUpOnEveryMachine() async {
         for script in [
             { (l: ScriptedLookup) in l.fetchAnswer = nil },
             { (l: ScriptedLookup) in l.known = ["mtask001-0a0a": ["s-gone"]] },
@@ -132,20 +135,19 @@ final class LinkSourceTests: XCTestCase {
             let lookup = ScriptedLookup()
             script(lookup)
             let r = await route(task: task(), lookup: lookup)
-            XCTAssertEqual(r.asked, [], "no lookup on a guessed machine")
-            guard case .text(let target) = r.route else { return XCTFail("one line in the viewer") }
-            XCTAssertNotNil(target.missing, "the viewer reads nothing")
-            XCTAssertNil(target.host)
+            XCTAssertEqual(r.asked, [everywhere()], "never a guessed machine: every machine, the task's first")
+            XCTAssertNil(r.asked.first?.host)
         }
     }
 
-    func testWithNoStoreATaskOrANamedSessionOpensNothing() async {
-        let cases: [(LinkSource, WalnutTask?)] = [(LinkSource(), task()), (LinkSource(sessionID: "s7"), nil), (LinkSource(sessionID: "s7"), task())]
-        for (explicit, t) in cases {
+    func testWithNoStoreATaskOrANamedSessionIsLookedUpOnEveryMachine() async {
+        let cases: [(LinkSource, WalnutTask?, String?)] = [
+            (LinkSource(), task(), "mtask001-0a0a"), (LinkSource(sessionID: "s7"), nil, nil),
+            (LinkSource(sessionID: "s7"), task(), "mtask001-0a0a"),
+        ]
+        for (explicit, t, taskID) in cases {
             let r = await route(explicit: explicit, task: t, lookup: nil)
-            XCTAssertEqual(r.asked, [], "no lookup on a guessed machine: \(explicit)")
-            guard case .text(let target) = r.route else { return XCTFail("one line in the viewer") }
-            XCTAssertNotNil(target.missing)
+            XCTAssertEqual(r.asked, [everywhere(taskID)], "never a guessed machine: \(explicit)")
         }
         let plain = await route(task: nil, lookup: nil)
         XCTAssertEqual(plain.asked, [LinkSource()])
@@ -223,12 +225,12 @@ final class LinkSourceTests: XCTestCase {
         XCTAssertFalse(l.linkSource(for: turns[1]).hostKnown, "a session with no host is looked up on tap")
     }
 
-    func testOldAgentTurnOpensNothingAndAsksNothing() async throws {
+    func testOldAgentTurnIsLookedUpOnEveryMachineAndReadsNoSession() async throws {
         let l = try letter(#"{"sessionId":"s1","host":"devbox"}"#, thread: #"[{"from":"agent","text":"a"}]"#)
         let lookup = ScriptedLookup()
         lookup.sessions = [session("s1", taskId: "mtask001-0a0a", host: "devbox", cwd: "/home/me")]
         let r = await route(explicit: l.linkSource(for: l.threadEntries[0]), task: task(live: "s1"), lookup: lookup)
-        XCTAssertEqual(r.asked, [])
+        XCTAssertEqual(r.asked, [everywhere()], "never the letter's sender's machine")
         XCTAssertEqual(lookup.fetches + lookup.resolves, [])
     }
 
@@ -260,11 +262,11 @@ final class LinkSourceTests: XCTestCase {
         XCTAssertEqual(lookup.fetches, [], "the named session wins over the task")
     }
 
-    func testAnUnreadableNamedSessionOpensNothingFromAnyMachine() async {
+    func testAGoneNamedSessionIsLookedUpOnEveryMachine() async {
         let r = await route(explicit: LinkSource(sessionID: "s-gone"), task: nil, lookup: ScriptedLookup())
-        XCTAssertEqual(r.asked, [])
-        guard case .text(let target) = r.route else { return XCTFail("one line in the viewer") }
-        XCTAssertNotNil(target.missing)
+        XCTAssertEqual(r.asked, [everywhere(nil)])
+        guard case .text(let target) = r.route else { return XCTFail("the viewer opens") }
+        XCTAssertNil(target.missing, "the person is never asked which machine has it")
     }
 
     func testANamedPrimaryNeedsNoLookup() async {
@@ -360,16 +362,14 @@ final class LinkSourceTests: XCTestCase {
                        .unknown, "a tagging handler reads a link with no tag as unknown")
     }
 
-    func testAnExternalSenderWithNoHostOpensNothingAndAsksNothing() async throws {
+    func testAnExternalSenderWithNoHostIsLookedUpOnEveryMachine() async throws {
         let l = try letter(#"{"sessionId":"external"}"#, thread: #"[{"from":"agent","text":"a","sender":{"sessionId":"external"}}]"#)
         XCTAssertEqual(l.linkSource(for: l.threadEntries[0]), .unknown)
         let lookup = ScriptedLookup()
         lookup.sessions = [session("s1", taskId: "mtask001-0a0a", host: "devbox", cwd: "/home/me")]
         for source in [l.linkSource, l.linkSource(for: l.threadEntries[0])] {
             let r = await route(explicit: source, task: task(live: "s1"), lookup: lookup)
-            XCTAssertEqual(r.asked, [], "an external writer with no host was looked up on a guessed machine")
-            guard case .text(let target) = r.route else { return XCTFail("one line in the viewer") }
-            XCTAssertNotNil(target.missing, "the viewer reads nothing")
+            XCTAssertEqual(r.asked, [everywhere()], "an external writer with no host: every machine, never a guessed one")
         }
         XCTAssertEqual(lookup.fetches + lookup.resolves, [])
         XCTAssertEqual(l.hostLabel, "Mac", "the label stays as it was; only the link's source changed")
@@ -419,7 +419,7 @@ final class LinkSourceTests: XCTestCase {
     }
 
     /// Two writers: the path sits inside one writer's span, and is still unknown, never guessed from it.
-    func testABriefCodeBlockOfSeveralWritersIsUnknownAndAsksNothing() async throws {
+    func testABriefCodeBlockOfSeveralWritersIsUnknownAndLookedUpEverywhere() async throws {
         let length = (Self.letterMarkdown as NSString).length
         let spans = [OrgBriefReply.Letter.Source(start: 0, end: 12, by: "human", sessionId: nil),
                      OrgBriefReply.Letter.Source(start: 12, end: length, by: "task:lead", sessionId: "sid-a")]
@@ -428,7 +428,7 @@ final class LinkSourceTests: XCTestCase {
         let lookup = ScriptedLookup()
         lookup.sessions = [session("sid-a", taskId: "mtask001-0a0a", host: "devbox", cwd: "/home/me")]
         let r = await route(explicit: source, task: task(live: "sid-a"), lookup: lookup)
-        XCTAssertEqual(r.asked, [], "a code path of several writers was looked up on a guessed machine")
+        XCTAssertEqual(r.asked, [everywhere()], "a code path of several writers: every machine, never a guessed one")
         XCTAssertEqual(lookup.fetches + lookup.resolves, [])
     }
 }

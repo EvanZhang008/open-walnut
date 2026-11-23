@@ -136,8 +136,7 @@ struct ChatTimelineBody: View {
         .sessionFileSheet(item: $textTarget) { target in
             SessionFileViewer(name: target.ref.displayName, path: target.ref.path,
                               host: target.host ?? "", ref: target.ref,
-                              hostNote: target.hostNote, missingNote: target.missing,
-                              unknownSource: target.unknownSource)
+                              hostNote: target.hostNote, missingNote: target.missing)
         }
         .sheet(item: $dirTarget) { target in
             DirectoryPreviewSheet(target: target)

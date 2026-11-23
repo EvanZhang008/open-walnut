@@ -304,48 +304,12 @@ struct SessionFileViewer: View {
     var hostNote: String? = nil
     /// No host has the tapped path: this line instead of a read.
     var missingNote: String? = nil
-    /// No machine is known for the tapped path (`ClickedPath.unreachableSource`): under the
-    /// missing line, the user's machines to open it from. Nothing is picked or probed for them.
-    var unknownSource = false
 
     @Environment(\.dismiss) private var dismiss
-    @Environment(TasksStore.self) private var tasks: TasksStore?
     private let api = WalnutAPI()
 
-    /// What the user's pick of a machine found (`ClickedPath.locate`), shown in place of the
-    /// tapped target it was picked for (`inputKey`); nil until they pick. Kept with that key, so
-    /// another tapped target never shows it, not even for the one render before `onChange`.
-    @State private var picked: Picked?
-    @State private var pickedDirectory: DirectoryTarget?
-    /// The machine being looked up now ("" = Local), and its lookup: a newer pick, a path change
-    /// or closing the viewer cancels it, so a late answer never replaces what is shown.
-    @State private var picking: String?
-    @State private var pickTask: Task<Void, Never>?
-    @State private var pickSeq = 0
     /// Bumped by every new target, so its read always starts over (`shownKey`).
     @State private var readGen = 0
-    /// The user's configured machines (`GET /sessions/launch-options`), read once the picker shows:
-    /// a list only, it locates and reads nothing. nil while it loads; `hostsFailed` when it could not.
-    @State private var launchHosts: [SessionLaunchOptions.Host]?
-    @State private var hostsFailed = false
-
-    /// The target on screen: the tapped one, or what a picked machine answered.
-    struct Shown: Equatable {
-        var name: String
-        var path: String
-        var host: String
-        var ref: FilePathRef?
-        var cwd: String?
-        var sessionID: String?
-        var hostNote: String?
-        var missing: String?
-        var unknownSource: Bool
-    }
-
-    struct Picked: Equatable {
-        let inputKey: String
-        let target: Shown
-    }
 
     private static func refKey(_ ref: FilePathRef?) -> [String] {
         [ref?.raw ?? "", ref?.line.map(String.init) ?? "", ref?.endLine.map(String.init) ?? "",
@@ -354,20 +318,14 @@ struct SessionFileViewer: View {
 
     /// The tapped target as given: every field of it, so a change of any one is another target.
     private var inputKey: String {
-        ([name, path, host, cwd ?? "", sessionID ?? "", hostNote ?? "", missingNote ?? "", unknownSource ? "1" : "0"]
+        ([name, path, host, cwd ?? "", sessionID ?? "", hostNote ?? "", missingNote ?? ""]
             + Self.refKey(ref)).joined(separator: "\u{1}")
     }
 
     /// The target on screen, and the read it was given (`readGen`): what a read is kept for.
     private var shownKey: String {
-        ([String(readGen), shown.path, shown.host, shown.cwd ?? "", shown.sessionID ?? "", shown.missing ?? ""]
-            + Self.refKey(shown.ref)).joined(separator: "\u{1}")
-    }
-
-    private var shown: Shown {
-        if let picked, picked.inputKey == inputKey { return picked.target }
-        return Shown(name: name, path: path, host: host, ref: ref, cwd: cwd, sessionID: sessionID,
-                     hostNote: hostNote, missing: missingNote, unknownSource: unknownSource)
+        ([String(readGen), path, host, cwd ?? "", sessionID ?? "", missingNote ?? ""]
+            + Self.refKey(ref)).joined(separator: "\u{1}")
     }
 
     /// The read below belongs to the target on screen: content, failure and heal of any other
@@ -394,14 +352,14 @@ struct SessionFileViewer: View {
 
     /// What is actually on screen: the requested path, or what the resolver
     /// found instead.
-    private var shownPath: String { (readIsCurrent ? healedPath : nil) ?? shown.path }
-    private var hostParam: String? { shown.host.isEmpty ? nil : shown.host }
+    private var shownPath: String { (readIsCurrent ? healedPath : nil) ?? path }
+    private var hostParam: String? { host.isEmpty ? nil : host }
     private var isHTMLPreviewable: Bool { FilePreviewLink.isPreviewablePath(shownPath) }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if let hostNote = shown.hostNote, shown.missing == nil {
+                if let hostNote, missingNote == nil {
                     Label(hostNote, systemImage: "desktopcomputer")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -412,32 +370,24 @@ struct SessionFileViewer: View {
                         .accessibilityIdentifier("session.files.viewer.hostNote")
                 }
                 VStack(spacing: 0) {
-                    if let missingNote = shown.missing {
-                        // Kept: its hint carries its own identifier and its actions the machine
-                        // picker, which WalnutEmptyState has no slot for.
-                        ContentUnavailableView { // ui-standard-ok: custom hint identifier and picker actions
-                            // Before any pick the machine is a question to answer, not a missing file.
-                            if shown.unknownSource && picked?.inputKey != inputKey {
-                                Label("Choose a machine", systemImage: "desktopcomputer")
-                            } else {
-                                Label("Not Found", systemImage: "questionmark.folder")
-                            }
+                    if let missingNote {
+                        // Kept: its hint carries its own identifier, which WalnutEmptyState has no slot for.
+                        ContentUnavailableView { // ui-standard-ok: custom hint identifier
+                            Label("Not Found", systemImage: "questionmark.folder")
                         } description: {
                             // On the line itself: an identifier on the container is overwritten by the
                             // viewer's own, which the container folds into.
                             Text(missingNote)
                                 .accessibilityIdentifier("session.files.viewer.missing")
-                        } actions: {
-                            if shown.unknownSource { machinePicker }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if AttachmentLoader.isFileImage(shownPath) {
-                        // From the machine this viewer names (a lookup confirmed it, or the user
-                        // picked it), never through the media route's primary-first read.
-                        SourceFileImageView(path: shownPath, host: shown.host)
+                        // From the machine this viewer names (a lookup confirmed it), never through
+                        // the media route's primary-first read.
+                        SourceFileImageView(path: shownPath, host: host)
                     } else if SessionMediaKind.forPath(shownPath) != nil {
                         SessionMediaView(path: shownPath, host: hostParam,
-                                         reference: shown.ref?.decorated ?? shown.path, cwd: shown.cwd, sessionID: shown.sessionID)
+                                         reference: ref?.decorated ?? path, cwd: cwd, sessionID: sessionID)
                     } else if isHTMLPreviewable && !showSource {
                         HTMLFilePreview(path: shownPath, host: hostParam)
                     } else {
@@ -448,10 +398,10 @@ struct SessionFileViewer: View {
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("session.files.viewer")
             }
-            .navigationTitle(shown.name)
+            .navigationTitle(name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if isHTMLPreviewable && shown.missing == nil {
+                if isHTMLPreviewable && missingNote == nil {
                     ToolbarItem(placement: .topBarLeading) {
                         Button(showSource ? "Preview" : "Source") { showSource.toggle() }
                             .accessibilityIdentifier("session.files.viewer.sourceToggle")
@@ -460,135 +410,18 @@ struct SessionFileViewer: View {
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
             }
         }
-        .sheet(item: $pickedDirectory) { DirectoryPreviewSheet(target: $0) }
-        // Another tapped target in the same viewer: nothing of the last one (its pick, its read)
-        // stays on screen.
-        .onChange(of: inputKey) {
-            cancelPick()
-            pickedDirectory = nil
-            show(nil)
-        }
-        .onDisappear { cancelPick() }
+        // Another tapped target in the same viewer: nothing of the last one's read stays on screen.
+        .onChange(of: inputKey) { restartRead() }
     }
 
-    // MARK: - Picking the machine
-
-    /// Local, then the user's configured machines with their names, then any other machine this
-    /// phone knows from its sessions. A list, never a pick: the file opens only from the machine the
-    /// user taps.
-    struct Machine: Hashable {
-        let alias: String
-        let label: String
-    }
-
-    private var machines: [Machine] {
-        let isRemote = { (h: String) in !h.isEmpty && h != "local" && h != "__local__" }
-        var out = [Machine(alias: "", label: "Local")]
-        var seen: Set<String> = [""]
-        for h in launchHosts ?? [] {
-            let alias = h.alias.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard isRemote(alias), seen.insert(alias).inserted else { continue }
-            let label = h.label.trimmingCharacters(in: .whitespacesAndNewlines)
-            out.append(Machine(alias: alias, label: label.isEmpty ? alias : label))
-        }
-        let fromSessions = Set((tasks?.sessions ?? []).map { $0.host.trimmingCharacters(in: .whitespacesAndNewlines) })
-        for alias in fromSessions.filter(isRemote).sorted() where seen.insert(alias).inserted {
-            out.append(Machine(alias: alias, label: alias))
-        }
-        return out
-    }
-
-    private func loadHosts() async {
-        guard launchHosts == nil else { return }
-        do {
-            launchHosts = try await api.sessionLaunchOptions().hosts
-            hostsFailed = false
-        } catch {
-            guard !Task.isCancelled else { return }
-            hostsFailed = true
-        }
-    }
-
-    @ViewBuilder
-    private var machinePicker: some View {
-        VStack(spacing: 8) {
-            Text("Open it from:")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            ForEach(machines, id: \.alias) { machine in
-                Button {
-                    pick(machine.alias)
-                } label: {
-                    HStack(spacing: 6) {
-                        if picking == machine.alias { ProgressView() }
-                        Text(machine.label)
-                    }
-                    .frame(minWidth: 160)
-                }
-                .buttonStyle(.walnut(.secondary))
-                .disabled(picking != nil)
-                .accessibilityIdentifier("session.files.viewer.pick.\(machine.alias.isEmpty ? "local" : machine.alias)")
-            }
-            if launchHosts == nil && !hostsFailed {
-                HStack(spacing: 6) {
-                    ProgressView()
-                    Text("Loading your machines…")
-                }
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            } else if hostsFailed {
-                Text("Couldn't load your machines, so this list may be incomplete.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("session.files.viewer.pick.hostsFailed")
-            }
-        }
-        .task { await loadHosts() }
-    }
-
-    private func cancelPick() {
-        pickTask?.cancel()
-        pickTask = nil
-        picking = nil
-        pickSeq &+= 1
-    }
-
-    /// Look the path up on the machine the user tapped only (`sourceOnly`), then show what it found.
-    private func pick(_ machine: String) {
-        cancelPick()
-        let mine = pickSeq
-        let target = shown.ref ?? FilePathRef(path: shown.path)
-        picking = machine
-        pickTask = Task { @MainActor in
-            let route = await ClickedPath.locate(target, host: machine, cwd: nil, sessionID: nil, sourceOnly: true)
-            guard !Task.isCancelled, mine == pickSeq else { return }
-            picking = nil
-            pickTask = nil
-            switch route {
-            case .text(let found):
-                show(Shown(name: found.ref.displayName, path: found.ref.path, host: found.host ?? "", ref: found.ref,
-                           cwd: found.cwd, sessionID: found.sessionID, hostNote: found.hostNote,
-                           // Not on that machine: the picker stays, so another one can be tried.
-                           missing: found.missing, unknownSource: found.missing != nil))
-            case .html(let found):
-                show(Shown(name: found.displayName, path: found.path, host: found.host ?? "", ref: FilePathRef(path: found.path),
-                           cwd: nil, sessionID: nil, hostNote: nil, missing: nil, unknownSource: false))
-            case .directory(let found):
-                pickedDirectory = found
-            }
-        }
-    }
-
-    /// A new target (nil: the tapped one again): the previous one's read and heal are dropped, so
-    /// nothing of it stays on screen.
-    private func show(_ next: Shown?) {
+    /// A new target: the previous one's read and heal are dropped, so nothing of it stays on screen.
+    private func restartRead() {
         loaded = false
         loadFailure = nil
         content = nil
         healedPath = nil
         healedNotice = nil
         showSource = false
-        picked = next.map { Picked(inputKey: inputKey, target: $0) }
         readGen &+= 1
     }
 
@@ -675,7 +508,7 @@ struct SessionFileViewer: View {
             healedNotice = nil
         }
         // This read is for the target on screen now; one it no longer shows sets nothing.
-        let path = shown.path, ref = shown.ref, readHost = hostParam
+        let readHost = hostParam
         let current = { !Task.isCancelled && key == shownKey }
         anchorLine = ref?.line
         anchorEndLine = ref?.endLine
@@ -739,8 +572,7 @@ struct SessionFileViewer: View {
     /// session transcript and the host's git index, which is exactly what fixes
     /// a path written from another cwd.
     private func resolve() async -> FilePathRef? {
-        let path = shown.path, ref = shown.ref, sessionID = shown.sessionID
-        guard let cwd = shown.cwd, !cwd.isEmpty else { return nil }
+        guard let cwd, !cwd.isEmpty else { return nil }
         do {
             let resolution = try await api.resolvePath(
                 rel: ref?.decorated ?? path, cwd: cwd, host: hostParam, sessionID: sessionID)

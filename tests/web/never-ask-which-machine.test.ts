@@ -57,11 +57,7 @@ const PIECES = [
 ]
 
 /** Files still asking, each with why, until they are moved to the lookup on every machine. */
-const NOT_YET: Record<string, string> = {
-  'ios-native/Walnut/Views/ClickedPath.swift': 'iPhone: unreachableSource still hands the viewer a machine row; moves to the anywhere lookup in the iPhone build that follows',
-  'ios-native/Walnut/Views/Sessions/SessionFilesSheet.swift': 'iPhone: the viewer\'s "Choose a machine" row; goes with ClickedPath.swift',
-  'ios-native/Walnut/Views/Sessions/FileSourceLinesView.swift': 'iPhone: describes the machine row; goes with ClickedPath.swift',
-}
+const NOT_YET: Record<string, string> = {}
 
 const hits = (res: RegExp[]) => SOURCES
   .filter((f) => res.some((re) => f.text.split('\n').some((l) => re.test(l))))

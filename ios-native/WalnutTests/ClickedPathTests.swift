@@ -36,10 +36,13 @@ final class ClickedPathTests: XCTestCase {
         AppConfig.processTokenOverride = savedToken
     }
 
-    private func tap(host: String?, sourceOnly: Bool, answer: String) async -> (ClickedPathRoute, [String: String]) {
+    private func tap(host: String?, sourceOnly: Bool, anywhere: Bool = false, taskID: String? = nil,
+                     answer: String) async -> (ClickedPathRoute, [String: String]) {
         LocateProbe.body = answer
-        let route = await ClickedPath.locate(FilePathRef(path: mac), host: host, cwd: "/w", sessionID: "s1",
-                                             sourceOnly: sourceOnly, api: WalnutAPI(protocolClasses: [LocateProbe.self]))
+        let route = await ClickedPath.locate(FilePathRef(path: mac), host: host, cwd: anywhere ? nil : "/w",
+                                             sessionID: anywhere ? nil : "s1", sourceOnly: sourceOnly,
+                                             anywhere: anywhere, taskID: taskID,
+                                             api: WalnutAPI(protocolClasses: [LocateProbe.self]))
         let items = LocateProbe.requests.last?.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?
             .queryItems ?? []
         return (route, Dictionary(items.map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { a, _ in a }))
@@ -50,8 +53,47 @@ final class ClickedPathTests: XCTestCase {
         let file = root.appendingPathComponent("Walnut/Views/Sessions/SessionFilesSheet.swift")
         let source = try String(contentsOf: file, encoding: .utf8)
         XCTAssertTrue(source.contains(".accessibilityElement(children: .contain)\n                .accessibilityIdentifier(\"session.files.viewer\")"))
-        XCTAssertTrue(source.contains("VStack(spacing: 0) {\n                    if let missingNote = shown.missing {"))
+        XCTAssertTrue(source.contains("VStack(spacing: 0) {\n                    if let missingNote {"))
         XCTAssertTrue(source.contains("Text(missingNote)\n                                .accessibilityIdentifier(\"session.files.viewer.missing\")"))
+    }
+
+    /// The writer is not known: every machine is asked, the task's first, and the file opens from
+    /// the one that has it; the person is never asked to pick (2026-11-23).
+    func testAnUnknownWriterAsksEveryMachineAndOpensFromTheOneThatHasIt() async {
+        let (route, query) = await tap(host: nil, sourceOnly: false, anywhere: true, taskID: "mtask001-0a0a",
+                                       answer: #"{"path":"\#(mac)","host":"spare","hostName":"Spare","found":true,"elsewhere":true,"via":"anywhere"}"#)
+        XCTAssertEqual(query["anywhere"], "1")
+        XCTAssertEqual(query["taskId"], "mtask001-0a0a")
+        XCTAssertNil(query["host"])
+        XCTAssertNil(query["sourceOnly"])
+        guard case .text(let target) = route else { return XCTFail("text") }
+        XCTAssertEqual(target.host, "spare")
+        XCTAssertEqual(target.hostNote, "Opened from Spare.")
+        XCTAssertNil(target.missing)
+    }
+
+    func testAnywhereIsSentOnlyWithNoMachineNamed() async {
+        let (_, named) = await tap(host: "devbox", sourceOnly: false, anywhere: true, taskID: "mtask001-0a0a",
+                                   answer: #"{"path":"\#(mac)","host":"devbox","found":true}"#)
+        XCTAssertNil(named["anywhere"], "a named machine is asked first, as before")
+        XCTAssertNil(named["taskId"])
+        let (_, alone) = await tap(host: nil, sourceOnly: true, anywhere: true,
+                                   answer: #"{"path":"\#(mac)","found":true}"#)
+        XCTAssertNil(alone["anywhere"])
+    }
+
+    func testAnUnknownWritersMissNamesWhoDidNotAnswer() async {
+        let (route, _) = await tap(host: nil, sourceOnly: false, anywhere: true,
+                                   answer: #"{"path":"\#(mac)","found":false,"missing":true,"checked":["Local"],"unreachable":["home-pc"]}"#)
+        guard case .text(let target) = route else { return XCTFail("text") }
+        XCTAssertEqual(target.missing, "Couldn't find \(mac) on your Mac. home-pc did not answer, so the file may be there.")
+        XCTAssertNil(target.host)
+    }
+
+    func testAnUnknownWriterWithNoAnswerReadsNoMachine() async {
+        let (route, _) = await tap(host: nil, sourceOnly: false, anywhere: true, answer: #"{"path":"\#(mac)","found":false}"#)
+        guard case .text(let target) = route else { return XCTFail("text") }
+        XCTAssertEqual(target.missing, "Couldn't look for \(mac): no machine could be asked.", "never the primary read by guess")
     }
 
     func testAKnownSourceAsksTheServerForItsOwnMachineOnly() async {
@@ -173,5 +215,23 @@ final class ClickedPathTests: XCTestCase {
         XCTAssertEqual(ClickedPath.missingLine(path: "/x", checked: ["Local"]), "Couldn't find /x on your Mac.")
         XCTAssertEqual(ClickedPath.missingLine(path: "/x", checked: ["A", "B"]), "Couldn't find /x on A or B.")
         XCTAssertEqual(ClickedPath.missingLine(path: "/x", checked: []), "Couldn't find /x on any of your machines.")
+    }
+
+    /// The web's `missingPathLine` (tests/web/never-ask-which-machine.test.ts), with the phone's
+    /// name for the primary.
+    func testMissingLineShapesForAnEveryMachineLookup() {
+        XCTAssertEqual(ClickedPath.missingLine(path: "/a/b", checked: ["Local", "Dev box"], anywhere: true),
+                       "Couldn't find /a/b on your Mac or Dev box.")
+        XCTAssertEqual(ClickedPath.missingLine(path: "/a/b", checked: ["Local"], anywhere: true, unreachable: ["home-pc"]),
+                       "Couldn't find /a/b on your Mac. home-pc did not answer, so the file may be there.")
+        XCTAssertEqual(ClickedPath.missingLine(path: "/a/b", checked: [], anywhere: true, unreachable: ["home-pc", "Dev box"]),
+                       "Couldn't look for /a/b: home-pc or Dev box did not answer, so the file may be there.")
+        XCTAssertEqual(ClickedPath.missingLine(path: "/a/b", checked: [], anywhere: true),
+                       "Couldn't look for /a/b: no machine could be asked.")
+        XCTAssertEqual(ClickedPath.missingLine(path: "src/a.ts", checked: [], anywhere: true),
+                       "Couldn't open src/a.ts: it is a relative path, and Walnut does not know which session's folder it is in.")
+        XCTAssertEqual(ClickedPath.missingLine(path: "~/a", checked: ["Spare"], anywhere: true), "Couldn't find ~/a on Spare.")
+        // A named machine's miss reads as before.
+        XCTAssertEqual(ClickedPath.missingLine(path: "/a/b", checked: ["Dev box"]), "Couldn't find /a/b on Dev box.")
     }
 }
