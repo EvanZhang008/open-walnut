@@ -17,7 +17,6 @@ export const HEADER_FIT_EXEMPT: Record<string, string> = {
   'components/sessions/SessionPanel.tsx session-panel-header': 'A two-line shell: the buttons are on line one, folded by useSessionHeaderFit; the title has line two to itself (useTitleRowTight below 440 px).',
   'components/sessions/DraftSessionPanel.tsx session-panel-header': 'The same two-line shell as the session panel: an empty tool row, then the title row, where the "for:" text gives way first.',
   'components/sessions/ThreadStackHeader.tsx thread-stack-header': 'A block shell of a row plus a subtitle; the inner row keeps its title block at least min(34%, 200px) wide beside the back button.',
-  'components/sessions/VoiceConversationBar.tsx voice-bar': 'A grid: the title has its own minmax(0, 1fr) cell and wraps, and below 480 px the tools take their own line.',
   'components/sessions/SessionUsageDialog.tsx session-usage-heading': 'A dialog title beside one fixed 32 px close button; the title and the session name wrap (overflow-wrap), top-aligned on purpose.',
   // Rows whose "title" is inside the one button, or that have no title to crush.
   'components/settings/SettingsFoldGroup.tsx settings-fold-group-heading': 'The only button is the full-width fold toggle that holds the title itself; nothing ever sits beside the title.',
