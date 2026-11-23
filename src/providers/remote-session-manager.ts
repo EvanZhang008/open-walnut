@@ -17,7 +17,7 @@
 
 import { noteLineParsed } from './line-parse-count.js'
 import fs from 'node:fs'
-import { statusReplyAlive } from './daemon-status-reply.js'
+import { STATUS_PROBE_TIMEOUT_MS, statusReplyAlive } from './daemon-status-reply.js'
 import path from 'node:path'
 import { IS_EPHEMERAL, REMOTE_IMAGES_DIR, WALNUT_HOME } from '../constants.js'
 import {
@@ -1402,11 +1402,11 @@ export class RemoteSessionManager implements SessionManager {
     }
 
     try {
-      const result = await this.conn.send('status', { sid: this._sid })
+      const result = await this.conn.send('status', { sid: this._sid }, STATUS_PROBE_TIMEOUT_MS)
       // An error reply (a daemon shutting down) is no answer, never a death (daemon-status-reply.ts).
       return statusReplyAlive(result) ?? true
     } catch {
-      return true // send failed (possibly reconnecting) — assume alive
+      return true // send failed or got no answer in time (possibly reconnecting) — assume alive
     }
   }
 

@@ -2,6 +2,8 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { SESSIONS_DIR, WALNUT_HOME } from '../constants.js';
 import { isSessionProcessAlive } from '../utils/session-liveness.js';
+import { mapLimit } from '../utils/map-limit.js';
+import { LIVENESS_PROBE_CONCURRENCY } from './sessions/liveness-concurrency.js';
 import { log } from '../logging/index.js';
 import { isQuietTurn } from './sessions/quiet-turn.js';
 import type {
@@ -930,6 +932,45 @@ export function activeSessionLimitFor(host: string | undefined | null, sessionLi
     ?? (key === 'local' ? DEFAULT_LOCAL_LIMIT : key === CLOUD_BOX_HOST_ALIAS ? CLOUD_BOX_DEFAULT_LIMIT : DEFAULT_REMOTE_LIMIT));
 }
 
+/** How long one liveness scan may take (livenessOfAll): a host load's own probe waits as long. */
+export const LIVENESS_SCAN_DEADLINE_MS = 4_000;
+
+/** One running-session scan at a time per host filter: callers that ask meanwhile share it. */
+const activeScans = new Map<string, Promise<Record<string, SessionRecord[]>>>();
+
+/**
+ * Each of `candidates` alive or not (isSessionProcessAlive), in order, LIVENESS_PROBE_CONCURRENCY
+ * at once: every scan that judges many sessions' processes asks through here, never in a loop of
+ * awaits (tests/core/session-liveness-scan-guard.test.ts). The whole scan answers within
+ * `deadlineMs`: a session not answered by then reads alive, the state its record already says,
+ * never a death, and no probe starts after it (on a link that answers in 3 s, 38 sessions in
+ * waves of 8 took about 15 s, past a caller's own 10 s limit).
+ */
+export async function livenessOfAll(
+  candidates: readonly SessionRecord[], deadlineMs = LIVENESS_SCAN_DEADLINE_MS,
+): Promise<boolean[]> {
+  const verdicts: Array<boolean | undefined> = new Array(candidates.length);
+  let over = false;
+  const work = mapLimit(candidates, LIVENESS_PROBE_CONCURRENCY, async (s, i) => {
+    if (over) return;
+    verdicts[i] = await isSessionProcessAlive(s);
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = await Promise.race([
+    work.then(() => false),
+    new Promise<true>((resolve) => { timer = setTimeout(() => resolve(true), deadlineMs); timer.unref?.(); }),
+  ]).finally(() => { if (timer) clearTimeout(timer); });
+  if (late) {
+    over = true;
+    work.catch(() => { /* a probe that fails after the deadline changes nothing here */ });
+    log.session.info('liveness scan: past its deadline, the sessions not answered keep their state', {
+      sessions: candidates.length, unanswered: verdicts.filter((v) => v === undefined).length, deadlineMs,
+    });
+  }
+  return candidates.map((_, i) => verdicts[i] ?? true);
+}
+
+
 /** Default idle session limits per host (Layer 2). */
 const DEFAULT_LOCAL_IDLE_LIMIT = 30;
 const DEFAULT_REMOTE_IDLE_LIMIT = 40;
@@ -943,7 +984,22 @@ const DEFAULT_REMOTE_IDLE_LIMIT = 40;
  * Side-effect: any stale records (process alive in DB but PID dead)
  * are asynchronously corrected to prevent future ghost-slot accumulation.
  */
-export async function getActiveSessionsByHost(): Promise<Record<string, SessionRecord[]>> {
+export async function getActiveSessionsByHost(opts: { hosts?: readonly string[] } = {}): Promise<Record<string, SessionRecord[]>> {
+  // `hosts`: only these hosts' sessions ('local' or an alias), so a start's admission on one host
+  // does not wait on another host's link. Concurrent callers of the same scan share it: k scans
+  // at once would put k times the probes on one link.
+  const only = opts.hosts ? new Set(opts.hosts) : null;
+  const key = only ? [...only].sort().join('\n') : '*';
+  let scan = activeScans.get(key);
+  if (!scan) {
+    scan = scanActiveSessions(only).finally(() => activeScans.delete(key));
+    activeScans.set(key, scan);
+  }
+  const result = await scan;
+  return Object.fromEntries(Object.entries(result).map(([k, list]) => [k, list.slice()]));
+}
+
+async function scanActiveSessions(only: ReadonlySet<string> | null): Promise<Record<string, SessionRecord[]>> {
   // ⚠️ DESIGN DEBT (see readStore): this materializes ALL ~5000+ rows then keeps
   // only the ~4 'running' ones — 99.9% wasted. Correct shape is
   // `SELECT * FROM sessions WHERE process_status='running'` (indexed) + a
@@ -959,18 +1015,19 @@ export async function getActiveSessionsByHost(): Promise<Record<string, SessionR
     // Prefix literal = SIDE_LANE_PREFIX (side-thread-fork.ts, which imports
     // this module — importing back would be circular).
     if (s.lane?.startsWith('side:')) return false;
-    return true;
+    return !only || only.has(s.host || 'local');
   }).map(cloneSession);
   const result: Record<string, SessionRecord[]> = {};
   const staleIds: SessionRecord[] = [];
-  for (const s of candidates) {
-    if (!await isSessionProcessAlive(s)) {
+  const alive = await livenessOfAll(candidates);
+  candidates.forEach((s, i) => {
+    if (!alive[i]) {
       staleIds.push(s);
-      continue;
+      return;
     }
     const key = s.host || 'local';
     (result[key] ??= []).push(s);
-  }
+  });
   if (staleIds.length > 0) {
     fixStaleRecords(staleIds);
   }
@@ -995,14 +1052,15 @@ export async function getAllAliveSessionsByHost(): Promise<Record<string, Sessio
   }).map(cloneSession);
   const result: Record<string, SessionRecord[]> = {};
   const staleIds: SessionRecord[] = [];
-  for (const s of candidates) {
-    if (!await isSessionProcessAlive(s)) {
+  const alive = await livenessOfAll(candidates);
+  candidates.forEach((s, i) => {
+    if (!alive[i]) {
       staleIds.push(s);
-      continue;
+      return;
     }
     const key = s.host || 'local';
     (result[key] ??= []).push(s);
-  }
+  });
   if (staleIds.length > 0) {
     fixStaleRecords(staleIds);
   }
@@ -1155,14 +1213,16 @@ export async function checkSessionLimit(
     if (s.process_status === 'error' && s.pid == null) return false;
     // Embedded/SDK sessions have no OS process: they don't count toward host limits
     if (s.provider === 'embedded' || s.provider === 'sdk') return false;
-    return true;
+    // This host's sessions only: another host's are not probed for this host's limit.
+    return (s.host || 'local') === key;
   }).map(cloneSession);
   const runningSessions: SessionRecord[] = [];
   const idleSessions: SessionRecord[] = [];
   const staleIds: SessionRecord[] = [];
 
-  for (const s of candidates) {
-    if (!await isSessionProcessAlive(s)) {
+  const alive = await livenessOfAll(candidates);
+  for (const [i, s] of candidates.entries()) {
+    if (!alive[i]) {
       staleIds.push(s);
       continue;
     }
@@ -1173,8 +1233,6 @@ export async function checkSessionLimit(
     // cold-resumes it with its profile re-applied.) Placed AFTER the liveness
     // check so a dead lane CLI still gets its record repaired by fixStaleRecords.
     if (s.lane) continue;
-    const sKey = s.host || 'local';
-    if (sKey !== key) continue;
     if (s.process_status === 'running') {
       runningSessions.push(s);
     } else if (s.process_status === 'idle' || s.process_status === 'error') {

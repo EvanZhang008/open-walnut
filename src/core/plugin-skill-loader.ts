@@ -22,6 +22,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { log } from '../logging/index.js';
+import { mapLimit } from '../utils/map-limit.js';
 import { CLAUDE_SETTINGS_FILE, CLAUDE_PLUGINS_DIR } from '../constants.js';
 
 export interface PluginSkillMeta {
@@ -73,31 +74,6 @@ export interface PluginDiscoveryConfig {
 }
 
 // ─── reader-agnostic discovery core ─────────────────────────────────
-
-/**
- * Bounded-concurrency map that preserves input order in the result.
- * The discovery core runs over a SkillFs whose remote implementation pays a
- * full daemon round-trip per read — sequential awaits made a ~200-skill host
- * take 12-22s per /api/slash-commands call (long enough to saturate the
- * browser's 6-per-origin connection pool). Pipelining the RTTs is the fix;
- * the bound keeps us from flooding one WS with hundreds of in-flight reads.
- */
-export async function mapLimit<T, R>(
-  items: readonly T[],
-  limit: number,
-  fn: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const i = next++;
-      results[i] = await fn(items[i], i);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
 
 /** In-flight read bound per discovery pass (per-host WS stays responsive). */
 const SKILL_READ_CONCURRENCY = 16;

@@ -17,10 +17,10 @@ import { log } from '../logging/index.js';
 import type { DaemonConnection } from '../providers/daemon-connection.js';
 import { linkFailureKind } from '../providers/link-failure.js';
 import { commandDescription } from '../utils/frontmatter.js';
+import { mapLimit } from '../utils/map-limit.js';
 import {
   discoverPluginSkills,
   parseSkillMeta,
-  mapLimit,
   type SkillFs,
   type PluginSkillMeta,
 } from './plugin-skill-loader.js';

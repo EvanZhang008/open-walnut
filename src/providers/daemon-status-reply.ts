@@ -19,3 +19,12 @@ export function statusReplyAlive(reply: { ok?: unknown; exists?: unknown; alive?
   if (!reply || reply.ok !== true) return null
   return reply.exists !== false && reply.alive === true
 }
+
+/**
+ * How long a liveness `status` ask waits for its answer (RemoteSessionManager.isAlive, and
+ * isSessionProcessAlive's probeDaemonSession). The command's own default is 30 s: on a link that
+ * stopped answering, one scan of many sessions then waited 30 s per session. Past this the ask is
+ * no answer, which both readers take as "still alive" (the caller keeps what it knew), never as a
+ * death. Other probeDaemonSession callers keep the default: they need an answer, not a guess.
+ */
+export const STATUS_PROBE_TIMEOUT_MS = 5_000

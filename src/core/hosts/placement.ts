@@ -58,6 +58,8 @@ export function placementWeight(host: string, config: { placement_weights?: Reco
   return raw !== undefined && Number.isFinite(n) && n >= 0 ? Math.min(n, 1000) : DEFAULT_WEIGHT;
 }
 const ASK_MS = 4_000;
+/** A running-session scan (hostLoads) at least this slow is logged with its size. */
+const SLOW_SCAN_MS = 2_000;
 
 function num(env: string | undefined, dflt: number): number {
   const n = Number(env);
@@ -366,12 +368,25 @@ export async function hostLoads(opts: { hosts?: string[]; cloudBox?: boolean } =
   const { pickableHosts } = await import('./joined-twins.js');
   const entries = pickableHosts(config.hosts ?? {}, config.net).filter(([, h]) => opts.cloudBox === true || !h.cloud_box);
   const names = opts.hosts ?? [LOCAL, ...entries.map(([k]) => k)];
+  // Each host's numbers are asked first, so their probes run while the sessions are judged
+  // below: the answer waits for the slower of the two, never their sum (loadOf never rejects).
+  const loads = new Map(names.map((h) => [h, loadOf(h)] as const));
   const { getActiveSessionsByHost, activeSessionLimitFor } = await import('../session-tracker.js');
   // The starts holding slots, read before the sessions: one whose record turns running in between
   // is counted by its hold, and once (by task) when both see it (review round 3, Sol).
   const { slotHoldersOn } = await import('../sessions/host-admission.js');
   const holders = new Map(names.map((h) => [h, slotHoldersOn(h)] as const));
-  const active = await getActiveSessionsByHost().catch(() => ({} as Record<string, import('../types.js').SessionRecord[]>));
+  const scanAt = Date.now();
+  // Only the asked hosts' sessions: a start's admission on one host never waits on another's link.
+  const scanHosts = opts.hosts ? names.map((h) => (h === LOCAL ? 'local' : h)) : undefined;
+  const active = await getActiveSessionsByHost(scanHosts ? { hosts: scanHosts } : {}).catch(() => ({} as Record<string, import('../types.js').SessionRecord[]>));
+  const scanMs = Date.now() - scanAt;
+  // The session scan asks each running session's daemon: a slow one names itself in the log.
+  if (scanMs >= SLOW_SCAN_MS) {
+    log.session.info('host loads: the running-session scan was slow', {
+      scanMs, sessions: Object.values(active).reduce((n, list) => n + list.length, 0),
+    });
+  }
   // A slot is a turn: a session that only waits after its turn (an armed wakeup, a background
   // command such as a land it waits on) reads as running but holds none (2026-11-06, the VP:
   // sessions only waiting on lands filled the cap; review round 6, Sol). Its CPU, if any, shows
@@ -386,7 +401,7 @@ export async function hostLoads(opts: { hosts?: string[]; cloudBox?: boolean } =
     const taken = new Set((active[key] ?? []).filter(inTurn).map((s) => (s.taskId ? `task:${s.taskId}` : `sid:${s.claudeSessionId}`)));
     for (const id of holders.get(host) ?? []) taken.add(`task:${id}`);
     const running = taken.size;
-    const got = await loadOf(host);
+    const got = await loads.get(host)!;
     const label = host === LOCAL ? 'this Mac' : hostDisplayName(host, config.hosts?.[host]?.label);
     const slots = hostSlots(key, got.load, config.session_limits, (k) => activeSessionLimitFor(k, undefined), host === LOCAL && !prober ? localSizedSlotsPin() : undefined);
     const live = host === LOCAL ? await localLiveCount(config, runner, holders.get(host) ?? []) : undefined;

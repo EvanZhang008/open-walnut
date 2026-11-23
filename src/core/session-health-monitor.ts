@@ -22,6 +22,7 @@ import { runPeriodic, slowTickWarnMs, type PeriodicHandle, type TickContext } fr
 import type { SessionRecord, Task, TaskPhase } from './types.js'
 import type { SessionWillReapEvent } from './event-types.js'
 import { emitSessionStatusChanged } from './session-tracker.js'
+import { LIVENESS_PROBE_CONCURRENCY } from './sessions/liveness-concurrency.js'
 import {
   classifySessionError,
   isRescuableStoppedRecord,
@@ -75,13 +76,8 @@ const DEPENDENT_PHASES = new Set(['reconcileStuck', 'hungSessions', 'idleTimeout
 const ORPHAN_SWEEP_EVERY_TICKS = 120
 /** Idle stops in flight at once per tick (each waits on its daemon, up to ~15s). */
 const IDLE_REAP_CONCURRENCY = 4
-/**
- * Liveness probes in flight at once before the liveness loop. Each one can be a daemon
- * `status` RPC; one after another over ~125 sessions they cost 0.5 to 1.8 s a tick
- * (2026-11-13), the loop's whole cost. Read-only, so running a few at once changes no
- * outcome; the loop's writes stay one at a time and in order.
- */
-export const LIVENESS_PROBE_CONCURRENCY = 8
+/** Liveness probes in flight at once before the liveness loop; the loop's writes stay one at a time and in order. */
+export { LIVENESS_PROBE_CONCURRENCY }
 /** A tick slower than this logs at warn with its phase breakdown; faster ones at debug. */
 export const SLOW_TICK_WARN_MS = slowTickWarnMs(HEALTH_CHECK_BUDGET_MS)
 /**

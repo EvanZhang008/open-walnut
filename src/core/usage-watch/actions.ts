@@ -84,7 +84,7 @@ function rowView(r: ReportRow): Record<string, unknown> {
   if (r.kind === 'op') {
     return { ...base, failed: r.fails, refused: r.refused, bad_args: r.badArgs, errors: r.errors + r.timeouts, unreachable: r.unreachable, cut: r.cut, over_limit: r.overLimit, answer_p95: r.sizeP95, largest: r.largest, codes: r.codes }
   }
-  if (r.kind === 'http') return { ...base, slow: r.slow, server_errors: r.serverErrors, p95_ms: r.msP95, codes: r.codes }
+  if (r.kind === 'http') return { ...base, slow: r.slow, server_errors: r.serverErrors, unreachable: r.unreachable, p95_ms: r.msP95, codes: r.codes }
   return base
 }
 

@@ -146,6 +146,8 @@ export interface HttpRequest {
   ms: number
   /** A read that waits on purpose or a stream: its time is no latency. */
   waits: boolean
+  /** A 503 saying the host it reads through is not reachable now (web/middleware/host-unreachable-answer.ts). */
+  hostUnreachable?: boolean
   now?: number
 }
 
@@ -156,10 +158,17 @@ export function recordHttp(r: HttpRequest): void {
   const name = `${r.method} ${r.template}`
   answeredTemplates.add(r.method, r.template)
   const agg = bucket('http', name, now)
-  const serverError = r.status >= 500 && r.status !== 501
-  const cls: OutcomeClass = serverError ? 'error' : r.status >= 400 ? 'refused' : 'ok'
+  // A 503 saying its host is not reachable now is unreachable, as an op call's is (normalize.ts
+  // failureClass), never this route's own error: the outage rings once, on its own alarm (Walnut
+  // Health's host link), not on every route that read through it (2026-11-23: deploys cut the
+  // clouddev link, and the history route's "Reconnecting" answers rang as its server errors).
+  // Any other 503 (a store busy, a state unavailable) is still the route's.
+  const unreachable = r.status === 503 && r.hostUnreachable === true
+  const serverError = r.status >= 500 && r.status !== 501 && !unreachable
+  const cls: OutcomeClass = unreachable ? 'unreachable' : serverError ? 'error' : r.status >= 400 ? 'refused' : 'ok'
   addCall(agg, { cls, ...(r.status >= 400 ? { code: `http_${r.status}` } : {}), chars: 0, ms: r.waits ? 0 : r.ms })
   const labels = { route: labelValue(name) }
+  if (unreachable) event({ at: now, kind: 'http', name, problem: 'unreachable', code: `http_${r.status}`, ms: r.ms })
   if (serverError) {
     agg.serverErrors++
     count('usage.http.server_errors', 1, labels)

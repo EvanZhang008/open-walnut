@@ -54,6 +54,7 @@ import {
   type UpdateState,
   type UpdateStatusRow,
 } from './update-status.js'
+import { mapLimit } from '../../utils/map-limit.js'
 
 const log = createSubsystemLogger('plugin-updates')
 
@@ -593,16 +594,3 @@ export class UpdateStatusCache {
 /** Rows whose local git facts are read at once: a page poll never starts a git process per row. */
 const LOCAL_READS_AT_ONCE = 4
 
-/** `items` mapped by `fn`, at most `limit` running at a time, results in order. */
-async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out = new Array<R>(items.length)
-  let next = 0
-  const worker = async () => {
-    while (next < items.length) {
-      const index = next++
-      out[index] = await fn(items[index]!)
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
-  return out
-}

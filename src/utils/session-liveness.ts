@@ -132,7 +132,10 @@ export async function isSessionProcessAlive(session: SessionRecord): Promise<boo
       // forever whenever no manager was registered (classic after a Walnut
       // restart before any attach). Probe failure (null) → connection flapped
       // mid-probe; fall through to the grace-period logic below.
-      const probe = await probeDaemonSession(session.host, session.claudeSessionId)
+      // A short deadline: no answer in it falls through to the grace logic below (alive while
+      // the link is up), never a death (daemon-status-reply.ts STATUS_PROBE_TIMEOUT_MS).
+      const { STATUS_PROBE_TIMEOUT_MS } = await import('../providers/daemon-status-reply.js')
+      const probe = await probeDaemonSession(session.host, session.claudeSessionId, STATUS_PROBE_TIMEOUT_MS)
       if (probe !== null) return probe.alive
     }
     // Disconnected — check grace period, in awake time (providers/awake-down-clock.ts)

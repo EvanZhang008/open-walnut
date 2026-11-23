@@ -177,6 +177,63 @@ describe('the recorder', () => {
     expect(Object.keys(ev[0]!)).not.toContain('sid')
   })
 
+  it("a 503 saying its host is not reachable now is unreachable, never the route's server error; any other 503 still is", () => {
+    // 2026-11-23: deploys cut a host's link and the history route's "Reconnecting" 503s rang as
+    // its server errors; an op call's 503 was already unreachable (failureClass).
+    expect(failureClass({ status: 503 }).cls).toBe('unreachable')
+    const T = '/api/sessions/:sessionId/history'
+    recordHttp({ method: 'GET', template: T, status: 503, ms: 20, waits: false, hostUnreachable: true, now: T0 })
+    recordHttp({ method: 'GET', template: T, status: 503, ms: 20, waits: false, now: T0 + 1 })
+    recordHttp({ method: 'GET', template: T, status: 500, ms: 20, waits: false, now: T0 + 2 })
+    flushUsage(T0 + 60_000)
+    const agg = readHours(T0 - H).find((r) => r.kind === 'http' && r.name === `GET ${T}`)!.agg
+    expect(agg).toMatchObject({ calls: 3, unreachable: 1, serverErrors: 2, errors: 2 })
+    expect(agg.codes).toEqual({ http_503: 2, http_500: 1 })
+    const problems = readEvents({ since: 0, limit: 50 }).filter((e) => e.kind === 'http').map((e) => `${e.problem}:${e.code}`).sort()
+    expect(problems).toEqual(['server_error:http_500', 'server_error:http_503', 'unreachable:http_503'])
+  })
+
+  it('through the real request logger: a host_reconnecting 503 is unreachable, a store-busy 503 a server error', async () => {
+    const { requestLogger } = await import('../../../src/web/middleware/request-logger.js')
+    const { HOST_RECONNECTING } = await import('../../../src/core/hosts/remote-read-bound.js')
+    const app = express()
+    app.use(requestLogger)
+    const r = express.Router()
+    r.get('/:sessionId/history', (_req, res) => { res.status(503).json({ error: 'Reconnecting to box', code: HOST_RECONNECTING }) })
+    r.get('/:sessionId/draft', (_req, res) => { res.status(503).json({ error: 'store busy' }) })
+    app.use('/api/sessions', r)
+    const v1 = express.Router()
+    v1.get('/files/:id', (_req, res) => { res.status(503).send({ error: { code: HOST_RECONNECTING, message: 'x' } }) })
+    app.use('/api/v1', v1)
+    const server = await new Promise<import('node:http').Server>((ok) => { const s = app.listen(0, () => ok(s)) })
+    try {
+      const port = (server.address() as { port: number }).port
+      for (const u of ['/api/sessions/s1/history', '/api/sessions/s1/draft', '/api/v1/files/f1']) await fetch(`http://127.0.0.1:${port}${u}`)
+      await new Promise((ok) => setTimeout(ok, 50))
+    } finally { await new Promise((ok) => server.close(ok)) }
+    flushUsage(Date.now() + 60_000)
+    const agg = (name: string) => readHours(0).find((row) => row.kind === 'http' && row.name === name)?.agg
+    expect(agg('GET /api/sessions/:sessionId/history')).toMatchObject({ unreachable: 1, serverErrors: 0 })
+    expect(agg('GET /api/sessions/:sessionId/draft')).toMatchObject({ unreachable: 0, serverErrors: 1 })
+    // res.send(object) goes through res.json: seen too.
+    expect(agg('GET /api/v1/files/:id')).toMatchObject({ unreachable: 1, serverErrors: 0 })
+  })
+
+  it('the request logger knows a host-unreachable 503 from its body, whichever route sent it', async () => {
+    const { watchHostUnreachableAnswer, isHostUnreachableAnswer } = await import('../../../src/web/middleware/host-unreachable-answer.js')
+    const answer = (status: number, body: unknown) => {
+      const res = { statusCode: 200, json(b: unknown) { void b; return res } } as unknown as import('express').Response
+      watchHostUnreachableAnswer(res)
+      ;(res as { statusCode: number }).statusCode = status
+      res.json(body)
+      return isHostUnreachableAnswer(res)
+    }
+    expect(answer(503, { error: 'Reconnecting to box', code: 'host_reconnecting' })).toBe(true)
+    expect(answer(503, { error: { code: 'host_reconnecting', message: 'x' } })).toBe(true)
+    expect(answer(503, { error: 'store busy' })).toBe(false)
+    expect(answer(200, { code: 'host_reconnecting' })).toBe(false)
+  })
+
   it('records nothing until started (a replica, a CLI process)', () => {
     _resetUsageRecorderForTesting(false)
     recordOpCall({ op: 'task_get', client: 'mcp', cls: 'ok', size: 1, overLimit: false, ms: 1, now: T0 })

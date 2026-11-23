@@ -5,11 +5,11 @@
 import { registeredTemplate } from './normalize.js'
 import { recordHttp } from './record.js'
 
-export function recordRequestUse(method: string, baseUrl: unknown, routePath: unknown, status: number, ms: number, waits: boolean): void {
+export function recordRequestUse(method: string, baseUrl: unknown, routePath: unknown, status: number, ms: number, waits: boolean, hostUnreachable = false): void {
   try {
     const template = registeredTemplate(baseUrl, routePath)
     // A request no route took (a static file, an unknown path) is no route's to watch.
     if (template === 'unmatched') return
-    recordHttp({ method, template, status, ms, waits })
+    recordHttp({ method, template, status, ms, waits, ...(hostUnreachable ? { hostUnreachable } : {}) })
   } catch { /* recording never fails a request */ }
 }

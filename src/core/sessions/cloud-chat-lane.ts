@@ -105,15 +105,12 @@ export function isCloudChatLaneKey(lane: string | undefined | null): boolean {
  * to `cloud.exec.max_sessions` with this count instead.
  */
 export async function liveCloudChatLaneCount(): Promise<number> {
-  const { listSessions } = await import('../session-tracker.js');
-  const { isSessionProcessAlive } = await import('../../utils/session-liveness.js');
-  let count = 0;
-  for (const s of await listSessions()) {
-    if (s.archived || s.host || !isCloudChatLaneKey(s.lane)) continue;
-    if (s.process_status === 'stopped' || s.process_status === 'error') continue;
-    if (s.status_reason === 'awaiting_spawn' || await isSessionProcessAlive(s)) count++;
-  }
-  return count;
+  const { listSessions, livenessOfAll } = await import('../session-tracker.js');
+  const lanes = (await listSessions()).filter((s) => !s.archived && !s.host && isCloudChatLaneKey(s.lane)
+    && s.process_status !== 'stopped' && s.process_status !== 'error');
+  const spawning = lanes.filter((s) => s.status_reason === 'awaiting_spawn');
+  const alive = await livenessOfAll(lanes.filter((s) => s.status_reason !== 'awaiting_spawn'));
+  return spawning.length + alive.filter(Boolean).length;
 }
 
 /**

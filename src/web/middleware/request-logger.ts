@@ -43,6 +43,7 @@ import { isHandledFailure, isRepeatAnswer } from './handled-failure.js'
 import { registerBurstContext } from '../../core/observability/memory-ledger.js'
 import { isLongPoll } from '../../core/usage-watch/normalize.js'
 import { recordRequestUse } from '../../core/usage-watch/request-record.js'
+import { isHostUnreachableAnswer, watchHostUnreachableAnswer } from './host-unreachable-answer.js'
 
 // Extend Express Request to carry the request ID
 declare global {
@@ -203,6 +204,9 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
     return
   }
 
+  // A 503 saying its host is not reachable now is real use's `unreachable`, not a server error.
+  if (req.originalUrl.startsWith('/api/')) watchHostUnreachableAnswer(res)
+
   // Assign a short request ID (8 hex chars — enough for local correlation)
   const reqId = crypto.randomBytes(4).toString('hex')
   req.reqId = reqId
@@ -313,7 +317,7 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
     // to the API (ops/executor.ts OP_CALL_HEADER) is counted under its tool instead; a test run's
     // requests stay out.
     if (fullPath.startsWith('/api/') && !req.headers['x-walnut-op-call'] && !req.headers['x-walnut-test-run']) {
-      recordRequestUse(req.method, req.baseUrl, req.route?.path, status, duration, isStream || isLongPoll(url) || aborted)
+      recordRequestUse(req.method, req.baseUrl, req.route?.path, status, duration, isStream || isLongPoll(url) || aborted, isHostUnreachableAnswer(res))
     }
     observe(isStream ? 'http.sse' : 'http.request', duration, {
       route: routeGroup,

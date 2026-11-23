@@ -28,7 +28,7 @@ import type { AwsCredentialIdentity, AwsCredentialIdentityProvider } from '@smit
 import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import { getVersion } from '../version.js';
-import { mapLimit } from '../plugin-skill-loader.js';
+import { mapLimit } from '../../utils/map-limit.js';
 import { diffAgainstManifest, scanDataDir, SQLITE_SNAPSHOT_PREFIX } from './scan.js';
 import { snapshotSqliteDbs } from './sqlite-snapshot.js';
 import type {

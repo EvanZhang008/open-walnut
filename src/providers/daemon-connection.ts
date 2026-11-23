@@ -11426,13 +11426,15 @@ export function getDaemonPoolStatus(): DaemonStatus[] {
 export async function probeDaemonSession(
   hostKey: string,
   sessionId: string,
+  /** How long to wait for the answer; the command's default unless a scan passes STATUS_PROBE_TIMEOUT_MS. */
+  timeoutMs?: number,
 ): Promise<{ alive: boolean; pid?: number } | null> {
   // Direct-pool fallback (see isDaemonConnected): '__local__' lives under a
   // `direct:<wsUrl>` key, so a bare map lookup could never probe local sessions.
   const conn = getConnectedDaemonConnection(hostKey)
   if (!conn) return null
   try {
-    const result = await conn.send('status', { sid: sessionId })
+    const result = await conn.send('status', { sid: sessionId }, timeoutMs)
     // An error reply (a daemon shutting down) is no answer, never a death (daemon-status-reply.ts).
     const alive = statusReplyAlive(result)
     if (alive === null) return null
