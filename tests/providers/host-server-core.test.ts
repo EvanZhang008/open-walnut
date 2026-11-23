@@ -280,6 +280,48 @@ describe('host server supervision', () => {
     expect(second.walnutOf(data)).toBeUndefined()
   })
 
+  it('a data dir that is a Walnut\'s own home, another server\'s, or the service\'s is refused at configure; walnutOf takes only the leader\'s layout, by real path', () => {
+    const data = path.join(dir, 'walnuts', 'w1', 'data')
+    fs.mkdirSync(data, { recursive: true })
+    const prod = path.join(dir, 'home', '.open-walnut')
+    const sup = createHostServerSupervisor({ ...deps(), realpath: (p) => { try { return fs.realpathSync(p) } catch { return null } }, walnutHomes: () => ['/leader-b', prod] })
+    const at = (home: string, env: Record<string, string>, walnutId = 'w1') => () => sup.configure(home, spec({ home, walnutId, env }))
+    // A Walnut's own home: a leader this daemon knows, the production data dir, a leader of a spec here.
+    expect(at('/h', { OPEN_WALNUT_HOME: '/leader-b' })).toThrow(/is a Walnut's own home/)
+    expect(at('/h', { OPEN_WALNUT_HOME: prod })).toThrow(/is a Walnut's own home/)
+    sup.configure('/h2', spec({ home: '/h2', walnutId: 'w2', env: { OPEN_WALNUT_HOME: path.join(dir, 'walnuts', 'w2', 'data') } }))
+    expect(at('/h', { OPEN_WALNUT_HOME: '/h2' })).toThrow(/is a Walnut's own home/)
+    // Another server's data dir, by real path (a link to it is the same dir).
+    fs.mkdirSync(path.join(dir, 'walnuts', 'w2', 'data'), { recursive: true })
+    fs.symlinkSync(path.join(dir, 'walnuts'), path.join(dir, 'linked'))
+    expect(at('/h', { OPEN_WALNUT_HOME: path.join(dir, 'linked', 'w2', 'data') })).toThrow(/data dir of another Walnut's server/)
+    expect(sup.status('/h').state).toBe('off')
+    // The leader's layout, named through the link: its Walnut.
+    sup.configure('/h', spec({ home: '/h', walnutId: 'w1', env: { OPEN_WALNUT_HOME: data } }))
+    expect(sup.walnutOf(path.join(dir, 'linked', 'w1', 'data'))).toBe('/h')
+    // Not the layout (no walnuts/<id>/ above it, or another id's): no Walnut.
+    const flat = path.join(dir, 'flat-data')
+    sup.configure('/h3', spec({ home: '/h3', walnutId: 'w3', env: { OPEN_WALNUT_HOME: flat } }))
+    expect(sup.walnutOf(flat)).toBeUndefined()
+    const wrong = path.join(dir, 'walnuts', 'w1x', 'data')
+    sup.configure('/h4', spec({ home: '/h4', walnutId: 'w4', env: { OPEN_WALNUT_HOME: wrong } }))
+    expect(sup.walnutOf(wrong)).toBeUndefined()
+  })
+
+  it('a spec kept from before the check runs on, but its conflicting data dir names no Walnut', () => {
+    const prod = path.join(dir, 'home', '.open-walnut')
+    const first = createHostServerSupervisor(deps())
+    // An older daemon kept it (no homes to check against then).
+    first.configure('/h', spec({ env: { OPEN_WALNUT_HOME: prod } }))
+    timers = []
+    const warned: string[] = []
+    const second = createHostServerSupervisor({ ...deps(), walnutHomes: () => [prod], log: (_l, msg) => { warned.push(msg) } })
+    second.boot()
+    expect(second.status('/h').state).toBe('running')
+    expect(second.walnutOf(prod)).toBeUndefined()
+    expect(warned).toContain('host server: its data dir is not taken as its Walnut\'s')
+  })
+
   it('the service\'s own data dir names the Walnut it follows', () => {
     const own = path.join(dir, 'walnuts', 'self', 'data')
     const sup = createHostServerSupervisor({ ...deps(), self: { home: '/leader', pid: process.pid, dataHome: own, changed: () => {} } })

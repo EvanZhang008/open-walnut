@@ -2034,6 +2034,9 @@ let journaledSids = null;
 // a sid decides; a first line without a home names no Walnut. Keep in sync with
 // daemon-standalone.ts (full rationale there).
 const journaledHomes = new Map();
+// sid -> the Walnut a start from a server's own data dir was for (the line's walnut). Twin of
+// daemon-standalone.ts journaledWalnuts.
+const journaledWalnuts = new Map();
 // Which Walnut a pushed setting belongs to, and where its copy is kept
 // (walnut-scope-core.ts, inlined). Its keyOf is the ONE key every core takes for a home: of
 // the Walnut's first home here (adoptCommandHome). Mirror daemon-standalone.ts.
@@ -2066,6 +2069,7 @@ function journaledIds() {
       if (rec && isJournalSid(rec.sid) && !ids.has(rec.sid)) {
         ids.add(rec.sid);
         if (typeof rec.home === 'string' && rec.home) journaledHomes.set(rec.sid, rec.home);
+        if (typeof rec.walnut === 'string' && path.isAbsolute(rec.walnut) && rec.walnut.length <= 1024) journaledWalnuts.set(rec.sid, rec.walnut);
       }
     } catch { /* torn tail from a crashed writer */ }
   }
@@ -2077,8 +2081,16 @@ function journaledIds() {
 // By walnutOfHome; the line keeps the home as it asked.
 function journaledHome(sid) {
   journaledIds();
+  var walnut = journaledWalnuts.get(sid);
+  if (walnut) return walnutScope.canonical(walnut);
   var home = journaledHomes.get(sid);
   return home ? walnutOfHome(home) : home;
+}
+
+// The Walnut whose server here runs on data dir home (host-server-core.ts walnutOf), or undefined.
+function servedWalnutOf(home) {
+  // The supervisor is made further down: a lookup during boot before it sees homes as they are.
+  try { return hostServers.walnutOf(home); } catch (e) { return undefined; }
 }
 
 // The Walnut a home names wherever a session's owner is looked up or compared here: by its
@@ -2086,10 +2098,7 @@ function journaledHome(sid) {
 // for a leader as that leader's Walnut (host-server-core.ts walnutOf). Twin of
 // daemon-standalone.ts walnutOfHome (rationale there).
 function walnutOfHome(home) {
-  var served;
-  // The supervisor is made further down: a lookup during boot before it sees homes as they are.
-  try { served = hostServers.walnutOf(home); } catch (e) { served = undefined; }
-  return walnutScope.canonical(served || home);
+  return walnutScope.canonical(servedWalnutOf(home) || home);
 }
 
 // The session lived on this host: its stream file, or the spawn journal. See livedHere in daemon-standalone.ts.
@@ -2115,6 +2124,7 @@ function appendSpawnJournal(sid, rec) {
     ids.add(sid);
     // Remember only what the line on disk says, so a restart reads the same.
     if (full && typeof rec.home === 'string' && rec.home) journaledHomes.set(sid, rec.home);
+    if (full && typeof rec.walnut === 'string' && rec.walnut) journaledWalnuts.set(sid, rec.walnut);
   } catch { /* best effort: the scan also consults the streams dir */ }
 }
 
@@ -2127,12 +2137,15 @@ function spawnInfoFor(args, cwd, resume, origin) {
   const fork = args.includes('--fork-session');
   const o = origin && typeof origin === 'object' ? origin : {};
   const text = (x, max) => (typeof x === 'string' && x && x.length <= max ? x : undefined);
+  const home = text(o.home, 1024);
   return {
     kind: fork ? 'fork' : resume ? 'resume' : 'new',
     parent: fork ? argValue(args, '--resume') : undefined,
     cwd,
-    home: text(o.home, 1024),
+    home,
     task: text(o.task, 128),
+    // A start from a server's own data dir: the Walnut it is for, kept on the journal line.
+    walnut: home ? servedWalnutOf(home) : undefined,
   };
 }
 
@@ -5105,9 +5118,29 @@ async function waitForHandoverReceipt(ws) {
 function sessionHomeOf(sid) {
   // The Walnut, by its first home here: a session its server started from a later home is the same Walnut's.
   var s = sessions.get(sid);
+  if (s && s.spawnInfo && s.spawnInfo.walnut) return walnutScope.canonical(s.spawnInfo.walnut);
   if (s && s.spawnInfo && s.spawnInfo.home) return walnutOfHome(s.spawnInfo.home);
   var rec = journaledHome(sid) ? null : hostResume.recall(sid);
   return walnutOfHome(journaledHome(sid) || (rec && rec.home) || offlineHost.ownerOf(sid) || '');
+}
+// The home a session's start named, by its first home only (no server data dir mapping): the
+// companion bridge's gate. Twin of daemon-standalone.ts sessionStartHomeOf (rationale there).
+function sessionStartHomeOf(sid) {
+  journaledIds();
+  var s = sessions.get(sid);
+  if (s && s.spawnInfo && s.spawnInfo.home) return walnutScope.canonical(s.spawnInfo.home);
+  var raw = journaledHomes.get(sid);
+  var rec = raw ? null : hostResume.recall(sid);
+  return walnutScope.canonical(raw || (rec && rec.home) || offlineHost.ownerOf(sid) || '');
+}
+// A stop asked from a server's own data dir reaches only a session that server spawned last here.
+// Twin of daemon-standalone.ts servedStopRefusal (rationale there).
+function servedStopRefusal(sid, home) {
+  if (!servedWalnutOf(home)) return null;
+  var s = sessions.get(sid);
+  var rec = hostResume.recall(sid);
+  var last = (s && s.spawnInfo && s.spawnInfo.home) || (rec && rec.home);
+  return last && walnutScope.canonical(last) === walnutScope.canonical(home) ? null : { reason: 'not_owned', detail: 'not_this_server' };
 }
 function spawnRecordOf(sid) {
   var s = sessions.get(sid);
@@ -6146,6 +6179,9 @@ var hostServers = (__CREATE_HOST_SERVER__)({
   randomToken: function () { return crypto.randomBytes(32).toString('hex'); },
   // The stdout log's cap while the server runs (WP14; tests set a small one). Twin of daemon-standalone.ts.
   maxLogBytes: Number(process.env.WALNUT_HOST_SERVER_LOG_MAX_BYTES) || undefined,
+  // A server's data dir names its Walnut (walnutOf) only by real path, and never a Walnut's own home. Twin of daemon-standalone.ts.
+  realpath: function (p) { try { return fs.realpathSync(p); } catch (e) { return null; } },
+  walnutHomes: function () { return leaderBook.homes().concat([path.join(HOME_DIR, '.open-walnut')]); },
 });
 
 // logs.tail ('replica-logs-v1', replica-logs-core.ts, inlined; WP14): the Mac reads
@@ -6809,7 +6845,7 @@ async function cmdLeaderControl(ws, id, cmd) {
 async function cmdSessionPermission(ws, id, cmd) {
   if (ws.origin !== 'bridge') return sendError(ws, id, 'session.permission: the cloud bridge only', { errorKind: 'refused' });
   if (!isJournalSid(cmd.sid)) return sendError(ws, id, 'session.permission: invalid sid', { errorKind: 'bad_request' });
-  var owner = sessionHomeOf(cmd.sid);
+  var owner = sessionStartHomeOf(cmd.sid);
   if (owner && !bridgeSpeaksFor(ws, owner)) return sendError(ws, id, 'session.permission: not a session of this Walnut', { errorKind: 'refused' });
   var r = await answerPermission(cmd.sid, { requestId: cmd.requestId, allow: cmd.allow, message: cmd.message, answers: cmd.answers, optionId: cmd.optionId }, 'session.permission');
   if (!r.ok) return sendError(ws, id, 'session.permission: ' + r.error, { errorKind: r.errorKind });
@@ -12583,6 +12619,8 @@ function stopOwnerRefusal(sid, cmd) {
   const home = cmd.home;
   if (home === undefined) return null;
   if (typeof home !== 'string' || !home) return { reason: 'bad_request', detail: 'home must name the asking Walnut' };
+  const served = servedStopRefusal(sid, home);
+  if (served) return served;
   const owner = journaledHome(sid);
   if (owner) return owner === walnutOfHome(home) ? null : { reason: 'not_owned', detail: 'other_walnut' };
   const journaled = journaledIds().has(sid);
@@ -12606,6 +12644,8 @@ function orphanStopRefusal(sid, expectPid, home) {
   if (typeof home !== 'string' || !home) return { reason: 'bad_request', detail: 'home must name the asking Walnut' };
   const session = sessions.get(sid);
   if (!session) return { reason: 'not_owned', detail: 'not_in_registry' };
+  const served = servedStopRefusal(sid, home);
+  if (served) return served;
   if (session.pid !== expectPid) return { reason: 'not_owned', detail: 'pid_mismatch' };
   if (SERVICE_MODE && session.bootId && session.bootId !== daemonBootId) return { reason: 'not_owned', detail: 'previous_boot' };
   if (session.state !== 'running' || session.exitCode !== null) return { reason: 'not_running' };
@@ -16260,7 +16300,7 @@ function bridgeHearsSession(client, sid) {
   var own = bridgeHomeOf(client);
   if (!own) return true;
   if (isJournalSid(sid) && !journaledIds().has(sid)) journaledSids = null;
-  var owner = sessionHomeOf(sid);
+  var owner = sessionStartHomeOf(sid);
   return !owner || owner === own;
 }
 

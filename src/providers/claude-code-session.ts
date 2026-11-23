@@ -4379,14 +4379,19 @@ export class ClaudeCodeSession {
             if (!session.holdDeathForWrite(attachedTransport, judge)) judge()
           },
         })
-        // A future-only attach with no watermark (a host's restarted service, a record
-        // that never had one): the daemon's cursor at the attach is where this instance
-        // starts, so an event past it was written after the attach and is new by
-        // position. Without this floor the replay guard had only the boolean, which the
-        // phase proxy may have set, and dropped a fresh turn's result as a replay
-        // (2026-11-23 release rehearsal, consumedOffset -1). In memory only: the turn
-        // ends this instance processes advance and persist it as before.
+        // A future-only attach with no watermark: the daemon's cursor at the attach is where
+        // this instance starts, so an event past it was written after the attach and is new
+        // by position. Without this floor the replay guard had only the boolean, which the
+        // phase proxy may have set, and dropped a fresh turn's result as a replay (2026-11-23
+        // release rehearsal, consumedOffset -1). A row has no watermark when this server
+        // judged no turn end of the session: a host's row after its leader judged the last
+        // turn (an older leader while the host stood down), or a row that never had one.
+        // Taken here, after the attach answered, because only its reply names the cursor; and
+        // only while this attach's transport is still the session's (v is a line's END offset,
+        // so the first line written after the attach is past the cursor). In memory only: the
+        // turn ends this instance processes advance and persist it as before.
         if (fromOffset === Number.MAX_SAFE_INTEGER && attachResult.alive && session._consumedOffset < 0
+          && session._transport === attachedTransport
           && attachedTransport.fileSize > 0 && attachedTransport.fileSize < Number.MAX_SAFE_INTEGER) {
           session._consumedOffset = attachedTransport.fileSize
           log.session.info('attachToExisting: no watermark, the attach cursor is the replay floor', {

@@ -235,9 +235,22 @@ A host's own server starts its sessions naming its data dir as their home, while
 the leader's link and the slices name that Walnut by its leader's home. Every owner lookup and compare
 in the daemon goes through `walnutOfHome` (both twins): a data dir of a server the daemon runs for a
 leader (`host-server-core.ts walnutOf`, from the spec files it reads again at boot) is that leader's
-Walnut. Without it, after a restart of the host's service, the host's runner could not read its own
-host-judged session's stream and dropped the next turn's result (2026-11-23 release rehearsal;
-`tests/providers/host-server-own-session-owner-twins.test.ts`, `tests/e2e/host-judge-service-restart-e2e.test.ts`).
+Walnut, and the spawn journal line names that Walnut (`walnut`, beside `home`) so it stays so after the
+spec is gone. Without it, after a restart of the host's service, the host's runner could not read its
+own host-judged session's stream and dropped the next turn's result (2026-11-23 release rehearsal).
+What follows the mapping: the follower's reads, the session's hooks and turn-snapshot settings, its
+gateway caller (whose `walnut` calls it makes), its call socket, and the leader's stop, orphan stop,
+strict start and trigger resume. What does not:
+- only the leader's layout counts (`<host root>/walnuts/<walnut id>/...`, by real path), and a spec whose
+  data dir is a Walnut's own home, the production data dir or another server's is refused at configure;
+- the companion bridge's gate reads the home as the start named it (`sessionStartHomeOf`): the bridge
+  never sends to, attaches to, resumes or answers a prompt of a session the host's own server started;
+  that server and its leader's channel operate it;
+- a stop asked from the data dir (the host's replica) reaches only a session that server spawned last
+  here (`servedStopRefusal`): one the Mac started and runs stays the Mac's to stop. The replica is that
+  Walnut everywhere else at the daemon, so the server's own guard (`replica-process-guard.ts`) is the
+  fence for the rest.
+Tests: `tests/providers/host-server-own-session-owner-twins.test.ts`, `tests/e2e/host-judge-service-restart-e2e.test.ts`.
 
 ## One CLI per session id on a host, whichever daemon asks
 

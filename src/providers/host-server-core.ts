@@ -138,6 +138,13 @@ export interface HostServerDeps {
   canonical?: (home: string) => string
   /** A leading service: the Walnut this machine leads. No follower of it is started, adopted or configured here. */
   leads?: string
+  /** The real path of an existing path, else null (walnutOf compares data dirs by it: `/home` may be a link). */
+  realpath?: (p: string) => string | null
+  /**
+   * Homes no server's data dir may be (dataDirConflict): every Walnut home this daemon knows
+   * (its leader book) and the production data dirs of this host (`~/.open-walnut`).
+   */
+  walnutHomes?: () => string[]
 }
 
 export function createHostServerSupervisor(deps: HostServerDeps) {
@@ -198,6 +205,60 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
   /** The entry for `home`: the service's own under its own home, whichever of its homes is named. */
   function entryOf(home: string): Entry | undefined {
     return entries.get(home) ?? (isSelf(home) ? entries.get(deps.self!.home) : undefined)
+  }
+
+  // ── A server's data dir as its Walnut's (walnutOf) ──
+  /** Real path of `p` (resolved; its real path when it exists), remembered until the specs change. */
+  const realMemo = new Map<string, string>()
+  function same(p: string): string {
+    const hit = realMemo.get(p)
+    if (hit !== undefined) return hit
+    const abs = path.resolve(p)
+    let real: string | null = null
+    try { real = deps.realpath ? deps.realpath(abs) : null } catch { real = null }
+    if (realMemo.size >= 1000) realMemo.clear()
+    realMemo.set(p, real ?? abs)
+    return real ?? abs
+  }
+  function dataDirsOf(spec: HostServerSpec): string[] {
+    const out: string[] = []
+    for (const env of [spec.env, spec.fallback?.env]) {
+      const dir = env?.OPEN_WALNUT_HOME
+      if (typeof dir === 'string' && path.isAbsolute(dir)) out.push(dir)
+    }
+    return out
+  }
+  /** The layout a leader writes for its server (install.ts walnutDirs): `<host root>/walnuts/<walnut id, 16>/<leaf>`. */
+  function shaped(dir: string, walnutId: string): boolean {
+    const r = path.resolve(dir)
+    const up = path.dirname(r)
+    return path.basename(up) === walnutId.slice(0, 16) && path.basename(path.dirname(up)) === 'walnuts'
+  }
+  /**
+   * Why `dir` cannot be the data dir of the server `key` runs, or null: a Walnut's own home
+   * (any leader's here, an alias of one, a production data dir) or another server's data dir.
+   * Such a dir would hand another Walnut's sessions to this server's Walnut (walnutOf).
+   */
+  function dataDirConflict(dir: string, key: string): string | null {
+    const d = same(dir)
+    let homes: string[] = []
+    try { homes = deps.walnutHomes ? deps.walnutHomes() : [] } catch { homes = [] }
+    for (const h of [...homes, ...entries.keys()]) if (typeof h === 'string' && path.isAbsolute(h) && same(h) === d) return 'is a Walnut\'s own home'
+    if (deps.canonical && deps.canonical(dir) !== dir) return 'is a Walnut\'s own home (an alias)'
+    for (const [other, e] of entries) {
+      if (other === key) continue
+      if (dataDirsOf(e.spec).some((x) => same(x) === d)) return 'is the data dir of another Walnut\'s server'
+    }
+    if (deps.self?.dataHome && !isSelf(key) && path.isAbsolute(deps.self.dataHome) && same(deps.self.dataHome) === d) return 'is the data dir of this service'
+    return null
+  }
+  /** Refuses a spec whose data dir conflicts (dataDirConflict), before anything is kept or started. */
+  function checkDataDirs(spec: HostServerSpec, key: string): void {
+    realMemo.clear()
+    for (const dir of dataDirsOf(spec)) {
+      const why = dataDirConflict(dir, key)
+      if (why) throw new Error(`server.configure: OPEN_WALNUT_HOME ${dir} ${why}`)
+    }
   }
 
   function specFile(home: string): string { return path.join(deps.dir, `server-${deps.keyOf(home)}.json`) }
@@ -498,6 +559,7 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
     if (asked.home !== named) throw new Error('server.configure: the spec belongs to another Walnut')
     // Kept under the service's home, the one its mode file and its next start match.
     const spec: HostServerSpec = { ...asked, home }
+    checkDataDirs(spec, home)
     if (prev && runKey(prev.spec) === runKey(spec)) {
       if (JSON.stringify(prev.spec.settings) !== JSON.stringify(spec.settings)) { prev.spec = spec; save(prev) }
       return statusOf(prev)
@@ -527,6 +589,7 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
     const spec = validate(raw)
     if (spec.home !== home) throw new Error('server.configure: the spec belongs to another Walnut')
     if (deps.leads && spec.walnutId === deps.leads) throw new Error(`server.configure: this machine leads Walnut ${deps.leads}; no follower of it runs here`)
+    checkDataDirs(spec, home)
     if (prev && runKey(prev.spec) === runKey(spec)) {
       if (JSON.stringify(prev.spec.settings) !== JSON.stringify(spec.settings)) {
         prev.spec = spec
@@ -606,6 +669,14 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
         start(e)
       }
     }
+    // A spec kept from before the data dir check runs as it did, but names no Walnut's sessions (walnutOf).
+    realMemo.clear()
+    for (const [key, e] of entries) {
+      for (const dir of dataDirsOf(e.spec)) {
+        const why = dataDirConflict(dir, key)
+        if (why) deps.log('warn', 'host server: its data dir is not taken as its Walnut\'s', { home: key, dir, why })
+      }
+    }
   }
 
   return {
@@ -645,15 +716,20 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
      * session asks this first, so a session the host's own server started stays that
      * Walnut's after any restart (the spec files are read again at boot).
      */
+    // Only a data dir of the layout the leader writes (shaped), and never one that is a Walnut's own
+    // home or another server's (dataDirConflict: refused at configure, ignored here for a spec kept
+    // from before that check). Compared by real path. The service's own dataHome is its launcher's,
+    // not a leader's word: no layout asked of it.
     walnutOf: (home: string): string | undefined => {
       if (typeof home !== 'string' || !path.isAbsolute(home)) return undefined
-      const want = path.resolve(home)
+      const want = same(home)
       const self = deps.self
-      if (self?.dataHome && path.isAbsolute(self.dataHome) && path.resolve(self.dataHome) === want) return self.home
+      if (self?.dataHome && path.isAbsolute(self.dataHome) && same(self.dataHome) === want) {
+        return dataDirConflict(self.dataHome, self.home) ? undefined : self.home
+      }
       for (const [key, e] of entries) {
-        for (const env of [e.spec.env, e.spec.fallback?.env]) {
-          const dir = env?.OPEN_WALNUT_HOME
-          if (typeof dir === 'string' && path.isAbsolute(dir) && path.resolve(dir) === want) return key
+        for (const dir of dataDirsOf(e.spec)) {
+          if (same(dir) === want && shaped(dir, e.spec.walnutId) && !dataDirConflict(dir, key)) return key
         }
       }
       return undefined
