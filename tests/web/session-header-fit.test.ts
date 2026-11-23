@@ -379,8 +379,13 @@ describe('Watch and Locate are window buttons of the header (2026-11-19, the use
     expect(panel).toMatch(/className="btn btn-icon btn-ghost task-action-btn session-panel-locate"[^\n]*data-header-id="locate"/);
     expect(panel).toContain('data-testid="session-locate-btn"');
     expect(panel).toMatch(/<WatchButton [^\n]*className="task-action-btn session-panel-watch" headerId="watch" testId="session-watch-btn"/);
-    // The kebab lost its Locate row, and the label row's Watch pill is gone.
-    expect(src('sessions/SessionMenuOpen.tsx')).not.toContain('session-menu-locate');
+    // The kebab lost its Locate row, and the label row's Watch pill is gone. Its one Locate row is
+    // a host header's (an Org node, 2026-11-23: the header's keys moved into its kebab, headerKeys),
+    // and only SessionPanel's host header asks for it.
+    const menu = src('sessions/SessionMenuOpen.tsx');
+    expect(menu.match(/session-menu-locate/g)?.length).toBe(1);
+    expect(menu).toMatch(/keys\.locate && \(\s*<Row key="locate"/);
+    expect(panel).toMatch(/headerKeys=\{hostHeader \?/);
     const watch = src('tasks/WatchToggle.tsx');
     expect(watch).not.toMatch(/export function WatchPill\b/);
     expect(watch).not.toContain('session-watch-pill');

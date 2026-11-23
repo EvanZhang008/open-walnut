@@ -16,7 +16,7 @@ import path from 'node:path'
 import type { Task } from '../../src/core/types.js'
 import { buildOrgTree } from '../../src/core/org/org-tree.js'
 import { buildChannels, type AlertProbe } from '../../web/src/components/org/org-channels-model.js'
-import { allTasksSections, headerPills, nodeKeepsThreads, orgTaskTabs, ownAskFirst, sectionCount } from '../../web/src/components/org/org-task-tabs.js'
+import { allTasksSections, headerPillWords, headerPills, nodeKeepsThreads, orgTaskTabs, ownAskFirst, sectionCount } from '../../web/src/components/org/org-task-tabs.js'
 
 const NOW = Date.parse('2026-11-20T10:00:00.000Z')
 const at = new Date(NOW - 60_000).toISOString()
@@ -145,5 +145,31 @@ describe('ratchets: every Org node count reads the one derivation', () => {
       'web/src/components/org/org-task-tabs.ts: askCount(sec.alerts)', // sectionCount
       'web/src/components/org/org-task-tabs.ts: askCount(tabs.needs)', // headerPills
     ].sort())
+  })
+})
+
+describe('the header counts in the user\'s words (2026-11-23: "xx working, yy waiting")', () => {
+  it('reads "N working", "N waiting", "N need you": no tab name, no "tasks"', () => {
+    expect(headerPillWords('working', 51)).toBe('51 working')
+    expect(headerPillWords('waiting', 22)).toBe('22 waiting')
+    expect(headerPillWords('notstarted', 5)).toBe('5 not started')
+    expect(headerPillWords('needs', 2)).toBe('2 need you')
+    expect(headerPillWords('needs', 1)).toBe('1 needs you')
+  })
+
+  it('counts working and waiting only: a task nobody started is no header count', () => {
+    const v = viewOf([lead, works, idle], (c) => c.rows.find((r) => r.contactId === lead.id) ?? c.main)
+    expect(v.pills.notstarted).toBeUndefined()
+    expect(v.sections.notstarted).toBe(1)
+  })
+
+  it('the header draws every task count through headerPillWords, and no "for you" on its threads', () => {
+    const src = fs.readFileSync(path.join(process.cwd(), 'web/src/components/org/OrgNodeDetail.tsx'), 'utf8')
+    const pills = src.slice(src.indexOf('function CountPills('), src.indexOf('/** The live action of the team'))
+    expect(pills).toContain('{headerPillWords(tab, n)}')
+    expect(pills).not.toMatch(/stateCountLabel|ORG_TASK_TAB_LABELS\.notstarted\}/)
+    expect(pills).toMatch(/\{threadCountLabel\(shown\)\}\n/)
+    // Round quiet keys, the button family's (buttons.css .btn-round), never a restyled .btn.
+    expect([...pills.matchAll(/className="btn btn-round"/g)].length).toBe(2)
   })
 })

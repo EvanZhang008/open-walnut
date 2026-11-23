@@ -9,7 +9,9 @@
  * Home"), disabled while the session record that names the task is on its way; Watch is
  * `session-watch-btn` (aria-pressed, aria-label "Watch" / "Stop watching"). A desktop session menu
  * has neither a Locate row nor a `task-kebab-watch` row; a phone, with no header, keeps the Watch
- * row and has no Locate. Open in new tab is only the Window group's row (`session-menu-popout`):
+ * row and has no Locate. An Org node's header has none of those keys: its kebab leads with Watch
+ * (`task-kebab-watch`), Locate (`session-menu-locate`), Minimize (`session-menu-minimize`) and
+ * Tags (`session-menu-tags`) instead (2026-11-23). Open in new tab is only the Window group's row (`session-menu-popout`):
  * the header has no button for it.
  */
 import { expect, type Locator, type Page } from '@playwright/test'

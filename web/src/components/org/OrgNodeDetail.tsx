@@ -1,11 +1,13 @@
 /**
  * The Org page's right side: the selected node (Main, or a project's lead).
  *
- *   header   one row (2026-11-02, the user picked design 1 of the side-bar round): who it is, its counts
- *            (each pill opens its tab), who it leads, when its work last moved; on the right the chat's
- *            status, the side bar's switch (dotted while it is closed and has news) and the chat's
- *            kebab, which holds Changed, Files, Terminal and Board ("hide all of them in the drop
- *            down button"). The chat draws no header of its own here (SessionPanel headerSlot).
+ *   header   one row on the avatar's centre line (2026-11-23, the user picked design 4 of the header
+ *            round): who it is, its counts as round quiet keys (each opens its tab); on the right the
+ *            chat's labels (Trigger, VP · 50), its kebab and the side bar's switch (dotted while it is
+ *            closed and has news). The kebab holds Watch, Locate, Minimize and the Tags list ("just move
+ *            all these to the drop done"), then Changed, Files, Terminal and Board. A narrow column puts
+ *            the counts on a line under the name. The chat draws no header of its own here
+ *            (SessionPanel headerSlot).
  *   chat     its own session (SessionPanel), always on screen; or a way to start one
  *   side bar beside the chat on a wide page, above it on a narrow one (OrgTaskRail): Tasks (by status,
  *            by team, or as the Board its lead keeps), Brief and Threads; it widens beside the chat
@@ -58,8 +60,7 @@ import { newsAt, sharedAnswers, threadCountLabel, type ThreadCounts } from '@ope
 import { threadCounts } from '@open-walnut/thread-groups';
 import { briefUpdating } from '@open-walnut/brief-fresh';
 import { useBriefRefresh } from './useBriefRefresh';
-import { ORG_TASK_TAB_LABELS, allTasksSections, headerPills, isSectionFlips, nodeKeepsThreads, orgTaskTabs, ownAskFirst, sectionFor, sectionOpen, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
-import { stateCountLabel } from '@open-walnut/user-status';
+import { ORG_TASK_TAB_LABELS, allTasksSections, headerPillWords, headerPills, isSectionFlips, nodeKeepsThreads, orgTaskTabs, ownAskFirst, sectionFor, sectionOpen, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
 import type { ImageAttachment } from '@/api/chat';
 import {
   areaIdWords, mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
@@ -119,18 +120,18 @@ const COLUMN_DOT: Record<TeamColumn['key'], string> = {
 /** The header's counts: the user's status of the node's work in the Board's words, made by
  *  `headerPills` from the same tabs as the side bar's sections; each pill opens its tab, and no
  *  "N open" (2026-11-03, the user: "remove xx open not needed also show thread and number").
- *  `keepsThreads` (the CEO, a VP, `nodeKeepsThreads`): its threads first, always, "0 threads" in grey,
+ *  `keepsThreads` (the CEO, a VP, `nodeKeepsThreads`): its threads first, always, "0 threads" too,
  *  and no Needs you of its own (2026-11-03, the user: "the little red should be thread instead of need
- *  u ... even if no thread, show 0 thread"); its tasks' asks are in its Tasks. Each number says what
- *  it counts (2026-11-21, a review on his data: "8 threads" over a Threads list whose All chip read 61,
- *  "32 Waiting / snoozed" beside a Waiting / Snoozed chip of 38): the threads pill counts the threads
- *  for him (Needs you and Done, thread-groups.ts threadsForHim), "for you"; the pills after it (no label of their own: 2026-11-23, a lone "Tasks" read as nothing)
- *  count its tasks, not threads. They are quiet keys (.btn-ghost): a line of counts, not a toolbar. */
+ *  u ... even if no thread, show 0 thread"); its tasks' asks are in its Tasks. The threads pill counts
+ *  the threads for him (Needs you and Done, thread-groups.ts threadsForHim), its red dot only while
+ *  there is one; the pills after it count its tasks in his words ("51 working", "22 waiting":
+ *  headerPillWords), no dot or icon of their own, except the red of a Needs you. Round quiet keys
+ *  (.btn-round), the user's pick of the header's layouts (2026-11-23, design 4). */
 function CountPills({ tabs, onOpen, approvals, keepsThreads, threads, onThreads }: { tabs: OrgTaskTabs; onOpen: (tab: OrgTaskTab) => void; approvals: number; keepsThreads: boolean; threads?: ThreadCounts; onThreads?: () => void }) {
   const shown = threads?.shown ?? 0;
   const pill = (tab: OrgTaskTab, n: number) => (
-    <button key={tab} type="button" className="btn btn-sm btn-ghost" data-testid={`org-pill-${tab}`} onClick={() => onOpen(tab)} title={`Show ${ORG_TASK_TAB_LABELS[tab]}`}>
-      <i style={{ background: TAB_DOT[tab] }} />{tab === 'notstarted' ? `${n} ${ORG_TASK_TAB_LABELS.notstarted}` : stateCountLabel(tab, n)}
+    <button key={tab} type="button" className="btn btn-round" data-testid={`org-pill-${tab}`} onClick={() => onOpen(tab)} title={`Show ${ORG_TASK_TAB_LABELS[tab]}`}>
+      {tab === 'needs' && <i style={{ background: TAB_DOT.needs }} />}{headerPillWords(tab, n)}
     </button>
   );
   return (
@@ -138,13 +139,13 @@ function CountPills({ tabs, onOpen, approvals, keepsThreads, threads, onThreads 
       {keepsThreads && (
         <button
           type="button"
-          className="btn btn-sm btn-ghost"
+          className="btn btn-round"
           data-testid="org-pill-threads"
           data-threads={shown}
           onClick={onThreads}
           title={shown ? `${threadCountLabel(shown)} for you${threads?.title ? `: ${threads.title}` : ''}` : 'Show Threads'}
         >
-          <i style={{ background: shown ? TAB_DOT.needs : TAB_DOT.waiting }} />{threadCountLabel(shown)} for you
+          {shown > 0 && <i style={{ background: TAB_DOT.needs }} />}{threadCountLabel(shown)}
         </button>
       )}
       {headerPills(tabs, approvals, keepsThreads).map((p) => pill(p.tab, p.n))}
@@ -499,7 +500,8 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
           </div>
         </div>
         <div className="org-detail-tools" data-testid="org-detail-tools">
-          {/* The chat's status and its kebab (Changed, Files, Terminal, Board, the session's menu). */}
+          {/* The chat's labels and its kebab (Watch, Locate, Minimize, Tags, then Changed, Files,
+              Terminal, Board and the session's menu): SessionPanel headerSlot. */}
           <span ref={setChatTools} className="org-detail-chat-tools" data-testid="org-detail-chat-tools" />
           {!isRouter && <button
             type="button"

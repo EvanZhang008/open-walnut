@@ -320,8 +320,8 @@ test('a decision letter: its two actions in the row, one click answers it, the r
   // The VP's header counts its threads, never its tasks' asks (4ea0b2f06): the letter is a row
   // of its Tasks, and the row going is what answering it shows.
   const counts = page.getByTestId('org-detail-counts')
-  await expect(counts.getByTestId('org-pill-threads')).toHaveText(/^\d+ threads? for you$/, { timeout: 60_000 })
-  await expect(counts).not.toContainText('Needs you')
+  await expect(counts.getByTestId('org-pill-threads')).toHaveText(/^\d+ threads?$/, { timeout: 60_000 })
+  await expect(counts).not.toContainText(/needs? you/i)
   const menu = await openAnswer(page, ids.letter, 'letter')
   const options = menu.getByTestId('org-answer-letter')
   await expect(options.getByTestId('org-answer-option')).toHaveText(['Sign it', 'Not yet'])
@@ -353,7 +353,7 @@ test('a decision letter: its two actions in the row, one click answers it, the r
   const gone = await watchRowGone(page, ids.letter)
   await options.getByTestId('org-answer-option').filter({ hasText: 'Sign it' }).click()
   await expect.poll(async () => (await gone()).gone).toBe(true)
-  expect((await gone()).counts).not.toContain('Needs you')
+  expect((await gone()).counts).not.toMatch(/needs? you/i)
   // The answer is on record.
   await expect.poll(async () => {
     const res = await request.get('/api/v1/human-inbox')

@@ -203,7 +203,7 @@ import { useMacSessionAway } from '@/hooks/useLeaderPresence';
 import type { PlusMenuAction } from '@/components/chat/plus-menu-actions';
 import { useMainQuickPlusActions } from '@/components/org/useMainQuickPlusActions';
 import { SessionHeaderMoreMenu, SessionHeaderToolRow } from './SessionHeaderMore';
-import { SessionHeaderLabels } from './SessionHeaderLabels';
+import { SessionHeaderLabels, type LabelsInMenu, type LabelsOpener } from './SessionHeaderLabels';
 import { titleRowBandProps, useTitleRowTight } from './useTitleRowTight';
 import { NoticeToken, PanelNotice } from './PanelNotice';
 import '@/styles/session-header-fit.css';
@@ -2868,6 +2868,13 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   // A host that draws the header (headerSlot): the badge and the kebab go there, the full desktop menu.
   // Not in fullscreen: the panel is an overlay then, over the host too, and needs its own header to come back.
   const hostHeader = !kebabSlot && !(phoneLayer || phoneHostSlot) && !!headerSlot && !shownFullscreen;
+  // The host's header line keeps only the labels and the kebab (2026-11-23, the Org node: "just move
+  // all these to the drop done"): Watch, Locate, Minimize and the Tags list are the kebab's first rows
+  // (SessionMenuOpen headerKeys), and the tags' list opens under the kebab.
+  const [hostTagCount, setHostTagCount] = useState(0);
+  const hostTagsOpener = useRef<LabelsOpener | null>(null);
+  const hostTagsAnchor = useLeanCallback(() => headerSlot?.querySelector<HTMLElement>('.task-kebab-btn') ?? headerSlot ?? null, [headerSlot]);
+  const hostTagsInMenu = useMemo<LabelsInMenu>(() => ({ anchor: hostTagsAnchor, handle: hostTagsOpener, onCount: setHostTagCount }), [hostTagsAnchor]);
   // The session's link tags (threads, docs, CRs), folded behind one control
   // (SessionHeaderLabels.tsx) and counted there.
   const headerTags = sessionTask
@@ -3126,6 +3133,12 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       onPopout={inset ? undefined : () => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd })}
       onFullscreen={inset || phoneWidth ? undefined : (shownFullscreen ? exitFullscreen : enterFullscreen)}
       fullscreenLabel={shownFullscreen ? 'Exit full screen' : 'Full screen'}
+      headerKeys={hostHeader ? {
+        ...(taskSlot === 'live' && sessionTask ? { watch: sessionTask } : {}),
+        ...(taskSlot === 'live' ? { locate: { label: locateLabel, why: locateWhy, onLocate: () => { const taskId = session?.taskId; if (taskId) locateOwnTask(taskId); } } } : {}),
+        ...(minimize ? { onMinimize: () => minimize(sessionId) } : {}),
+        tags: { count: hostTagCount, onOpen: (fromKeyboard: boolean) => hostTagsOpener.current?.open(fromKeyboard) },
+      } : undefined}
     />
     );
   };
@@ -3657,8 +3670,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               {!loading && !hostHeader && <SessionHeaderLabels>{headerTags}</SessionHeaderLabels>}
               {loading && <span className="badge session-panel-badge">Loading...</span> /* empty-state-ok: header badge beside the title */}
               {!loading && sessionId && !kebabSlot && !hostHeader && renderSessionKebab()}
-              {/* The host's header (headerSlot): the same pills, the folded link tags and the
-                  kebab, the kebab led by the view rows the hidden header held. */}
+              {/* The host's header (headerSlot): the same pills and the kebab; the folded link tags,
+                  Watch, Locate and Minimize are the kebab's first rows (hostTagsInMenu, headerKeys). */}
               {!loading && hostHeader && headerSlot && createPortal(
                 <>
                   {threads.hasQuestions && (
@@ -3669,21 +3682,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                     />
                   )}
                   {headerPills}
-                  <SessionHeaderLabels>{headerTags}</SessionHeaderLabels>
-                  {/* This panel's own header, and its Minimize, are hidden under the host's. */}
-                  {watchButton}
-                  {locateButton}
-                  {minimize && (
-                    <button
-                      type="button"
-                      className="btn btn-icon btn-ghost task-action-btn session-panel-minimize"
-                      onClick={() => minimize(sessionId)}
-                      title="Minimize to the taskbar: its chip opens this chat again (the chat stays here, it keeps running)"
-                      aria-label="Minimize session to the taskbar"
-                    >
-                      {ICON_MINIMIZE}
-                    </button>
-                  )}
+                  {/* This panel's own header is hidden under the host's; its tags list stays
+                      mounted (hidden) so the menu's Tags row can count and open it. */}
+                  <SessionHeaderLabels inMenu={hostTagsInMenu}>{headerTags}</SessionHeaderLabels>
                   {sessionId && renderSessionKebab()}
                 </>,
                 headerSlot,

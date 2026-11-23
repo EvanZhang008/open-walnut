@@ -6,7 +6,9 @@
  *
  * Scenario matrix:
  *  1. one header: the node's name once (the chat draws no header of its own), no Chat / Team / Board
- *     tabs; on its right the chat's status, the side bar's switch and the chat's kebab;
+ *     tabs; on its right the chat's labels, its kebab and the side bar's switch, nothing else: Watch,
+ *     Locate, Minimize and the Tags list are the kebab's first rows (2026-11-23, the user's pick of the
+ *     header round, "just move all these to the drop done"), each doing what its key did;
  *  2. the kebab holds Changed, Files, Terminal and Board: Files opens beside the chat (the chat
  *     stays), Board opens the side bar's Tasks on the lead's Board;
  *  3. the side bar's tabs: Tasks with its count, Brief, Threads; Tasks as All tasks or Board (two
@@ -19,7 +21,7 @@
  *  6. a narrow window stacks the side bar above the chat, with no widen;
  *  7. an old link naming a tab (?tab=team) opens the side bar on All tasks, then lets go of it;
  *  8. Quote on an ask in the side bar puts it into the chat beside it, focused;
- *  9. Minimize in the header puts the node's chat on the app's taskbar; its chip selects the node again.
+ *  9. Minimize in the header's kebab puts the node's chat on the app's taskbar; its chip selects the node again.
  * The fixture is shared, so this file makes its own projects and removes what it made.
  */
 import fs from 'node:fs'
@@ -28,7 +30,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { openKebabGroup } from './kebab-group-helpers'
-import { openSessionKebab, sessionWatchButton } from './session-kebab-helpers'
+import { closeSessionKebab, kebabRow, openSessionKebab } from './session-kebab-helpers'
 import { openAllSections, openSection, taskSection, type OrgSectionTab } from './org-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -115,7 +117,7 @@ test.afterAll(async ({ request }) => {
   for (const id of made) await removeTask(request, id)
 })
 
-test('one header: the name once, the chat\'s labels and kebab on its right, no Chat / Team / Board tabs', async ({ page }) => {
+test('one header: the name once, the chat\'s labels and kebab on its right, its window keys in the kebab, no Chat / Team / Board tabs', async ({ page }) => {
   await isolateUiPrefs(page)
   await page.setViewportSize({ width: 1440, height: 900 })
   await loadHome(page)
@@ -128,6 +130,14 @@ test('one header: the name once, the chat\'s labels and kebab on its right, no C
   expect((await chat.locator('> .session-panel-header').boundingBox())?.height ?? 0).toBeLessThanOrEqual(1)
   await expect(detail.getByText(`${LED} VP`, { exact: true }).filter({ visible: true })).toHaveCount(1)
   await expect(detail.locator('[data-testid^="org-tab-"]')).toHaveCount(0)
+  // Its counts are round keys in the user's words ("5 threads", "51 working", "22 waiting"), its
+  // threads first, no "for you", no "tasks", and no dot on a task count.
+  const counts = detail.getByTestId('org-detail-counts').locator('> button')
+  await expect(counts.first()).toHaveAttribute('data-testid', 'org-pill-threads')
+  await expect(counts.first()).toHaveText(/^\d+ threads?$/)
+  for (const text of await counts.allInnerTexts()) expect(text.trim()).toMatch(/^\d+ (threads?|working|waiting|not started|needs? you)$/)
+  await expect(counts.first()).toHaveClass(/\bbtn-round\b/)
+  await expect(detail.locator('[data-testid="org-detail-counts"] button:not([data-testid="org-pill-threads"]):not([data-testid="org-pill-needs"]) i')).toHaveCount(0)
   // The chat's state pills (the wait, Cron, Trigger, Worker, Leader), its folded link tags and its
   // kebab are in the node's header, as on a session's title row; Changed, Files and Terminal are
   // not on it, and neither is a run status (Running, Idle): SessionPanel headerPills.
@@ -145,17 +155,23 @@ test('one header: the name once, the chat\'s labels and kebab on its right, no C
       : c.matches('.task-row-pill, .task-waiting-chip, [data-header-pill]') ? 'pill'
       : `UNKNOWN:${c.className}`))
   expect(kinds.filter((k) => k.startsWith('UNKNOWN')), `header tools: ${kinds}`).toEqual([])
-  // The app's taskbar is global (2026-11-08): the node's chat minimizes too, from its header.
-  expect(kinds, `header tools: ${kinds}`).toContain('minimize')
-  // Watch and Locate are window buttons since 2026-11-19 (the user: "why locate task is not at
-  // top right?"), here too, just before Minimize.
-  expect(kinds.indexOf('watch'), `header tools: ${kinds}`).toBeGreaterThanOrEqual(0)
-  expect(kinds.indexOf('locate'), `header tools: ${kinds}`).toBe(kinds.indexOf('watch') + 1)
-  expect(kinds.indexOf('minimize'), `header tools: ${kinds}`).toBe(kinds.indexOf('locate') + 1)
-  // The pills come before the tags control, and the kebab is last.
+  // Only the labels and the kebab are on the row (2026-11-23, the user: "just move all these to the
+  // drop done"): no eye, crosshair, minus or tag count there, and the kebab is last.
+  expect(kinds.filter((k) => ['watch', 'locate', 'minimize', 'labels'].includes(k)), `header tools: ${kinds}`).toEqual([])
+  await expect(detail.locator('.org-detail-head [data-testid="session-watch-btn"], .org-detail-head [data-testid="session-locate-btn"], .org-detail-head .session-panel-minimize')).toHaveCount(0)
   const order = kinds.filter((k) => k !== 'thread-mode')
-  expect(order.lastIndexOf('pill') < Math.max(order.indexOf('labels'), order.indexOf('kebab')), `header tools: ${kinds}`).toBe(true)
   expect(order[order.length - 1], `header tools: ${kinds}`).toBe('kebab')
+  // They lead the kebab instead, in the order the row had them: Watch, Locate, Minimize.
+  const menu = await openSessionKebab(tools)
+  await expect(menu.getByTestId('task-kebab-watch')).toBeVisible({ timeout: 30_000 })
+  const rows = await menu.locator('.task-kebab-item').evaluateAll((els) => els.map((el) => el.getAttribute('data-testid') ?? ''))
+  const at = (id: string) => rows.indexOf(id)
+  expect(at('task-kebab-watch'), `menu rows: ${rows}`).toBe(0)
+  expect(at('session-menu-locate'), `menu rows: ${rows}`).toBe(1)
+  expect(at('session-menu-minimize'), `menu rows: ${rows}`).toBe(2)
+  // Named as its key was: the Org page hands it no locator of its own, so it finds the task on Home.
+  await expect(menu.getByTestId('session-menu-locate')).toHaveText('Find on Home')
+  await closeSessionKebab(tools)
   await expect(detail.locator('.org-detail-head').getByText('Changed', { exact: true })).toHaveCount(0)
   await expect(detail.locator('.org-detail-head').getByText('Files', { exact: true })).toHaveCount(0)
   await expect(detail.getByTestId('org-rail-toggle')).toHaveAttribute('aria-pressed', 'true')
@@ -166,7 +182,7 @@ test('one header: the name once, the chat\'s labels and kebab on its right, no C
 /** A beat a person can follow, only while recording (PW_VIDEO, walnut-dev webkit --video). */
 const beat = (page: Page) => (process.env.PW_VIDEO ? page.waitForTimeout(1200) : Promise.resolve())
 
-test('Minimize in the node\'s header puts its chat on the taskbar; the chip brings the node back from another one', async ({ page }) => {
+test('Minimize in the node\'s kebab puts its chat on the taskbar; the chip brings the node back from another one', async ({ page }) => {
   await isolateUiPrefs(page)
   await page.setViewportSize({ width: 1440, height: 900 })
   await loadHome(page)
@@ -177,7 +193,7 @@ test('Minimize in the node\'s header puts its chat on the taskbar; the chip brin
   const chip = page.locator(`.session-taskbar-chip[data-session-id="${ids.leadSid}"]`)
   await expect(chip).toHaveCount(0)
   await beat(page)
-  await detail.getByTestId('org-detail-chat-tools').getByRole('button', { name: 'Minimize session to the taskbar' }).click()
+  await (await kebabRow(detail.getByTestId('org-detail-chat-tools'), 'session-menu-minimize')).click()
   await expect(chip).toBeVisible()
   await beat(page)
   // Off to another node: the chip stays on the bar.
@@ -194,37 +210,56 @@ test('Minimize in the node\'s header puts its chat on the taskbar; the chip brin
   await beat(page)
 })
 
-test('Watch in the node\'s header is the eye, pressed while the node\'s task is watched; a second click ends it, and the kebab has no Watch row', async ({ page }) => {
+test('Watch, Locate and Tags in the node\'s kebab do what their keys did: Watch toggles the task, Tags opens its list under the kebab', async ({ page, request }) => {
   await isolateUiPrefs(page)
   await page.setViewportSize({ width: 1440, height: 900 })
-  await loadHome(page)
-  await openNode(page, LED)
-  const tools = page.getByTestId('org-detail-chat-tools')
-  const menu = page.locator('.task-kebab-menu')
-  // The node's header (the host's, the session's own hidden under it) carries the eye, named
-  // for what a click does: Watch, then Stop watching.
-  const watch = sessionWatchButton(tools)
-  await expect(watch).toBeVisible({ timeout: 30_000 })
-  await expect(watch).toHaveAttribute('aria-pressed', 'false')
-  await expect(watch).toHaveAccessibleName('Watch')
-  await beat(page)
-  await watch.click()
-  await expect(watch).toHaveAttribute('aria-pressed', 'true')
-  await expect(watch).toHaveAccessibleName('Stop watching')
-  await expect(watch).toHaveClass(/\bis-watched\b/)
-  await beat(page)
-  await watch.click()
-  await expect(watch).toHaveAttribute('aria-pressed', 'false')
-  await expect(watch).toHaveAccessibleName('Watch')
-  await expect(menu).toHaveCount(0)
-  // Its menu leaves Watch to the eye: the task's rows are there (Background, Watch's old
-  // neighbour), no Watch among them.
-  await openSessionKebab(tools)
-  // The task's half is drawn: its Move & transfer group (Background sits in it since 2026-11-22; a phone keeps the row).
-    await expect(menu.getByTestId('kebab-group-move').or(menu.getByTestId('task-kebab-background')).first()).toBeVisible({ timeout: 30_000 })
-  await expect(menu.getByTestId('task-kebab-watch')).toHaveCount(0)
-  await tools.locator('.task-kebab-btn').click()
-  await expect(menu).toHaveCount(0)
+  // Two plain tags of this test's own on the lead, so the menu's Tags row has a list to open.
+  const tags = [`side-a-${STAMP}`, `side-b-${STAMP}`]
+  const tagged = await request.patch(`/api/tasks/${ids.lead}`, { data: { add_tags: tags } })
+  expect(tagged.ok(), await tagged.text()).toBe(true)
+  try {
+    await loadHome(page)
+    await openNode(page, LED)
+    const tools = page.getByTestId('org-detail-chat-tools')
+    const menu = page.locator('.task-kebab-menu')
+    const watched = async () => !!((await (await request.get(`/api/tasks/${ids.lead}`)).json()).task?.watched_at)
+    // Watch: named for what a click does, and the task is watched, as the eye did.
+    let row = await kebabRow(tools, 'task-kebab-watch')
+    await expect(row).toHaveText('Watch')
+    await beat(page)
+    await row.click()
+    await expect(menu).toHaveCount(0)
+    await expect.poll(watched, { timeout: 20_000 }).toBe(true)
+    row = await kebabRow(tools, 'task-kebab-watch')
+    await expect(row).toHaveText('Stop watching')
+    // The task's own rows do not repeat it.
+    await expect(menu.getByTestId('task-kebab-watch')).toHaveCount(1)
+    await row.click()
+    await expect.poll(watched, { timeout: 20_000 }).toBe(false)
+    // Tags: its count in the row; a click opens the tag list under the kebab, a press outside closes it.
+    row = await kebabRow(tools, 'session-menu-tags')
+    await expect(row.getByTestId('session-menu-tags-count')).toHaveText(/^[2-9]\d*$/)
+    await row.click()
+    await expect(menu).toHaveCount(0)
+    const flyout = page.locator('[data-testid="session-header-labels-flyout"]:visible')
+    await expect(flyout).toBeVisible()
+    for (const t of tags) await expect(flyout).toContainText(t)
+    const kebab = await tools.locator('.task-kebab-btn').boundingBox()
+    const list = await flyout.boundingBox()
+    expect(list && kebab && list.y >= kebab.y + kebab.height - 1, 'the list opens under the kebab').toBe(true)
+    await page.getByTestId('org-detail-title').click()
+    await expect(flyout).toHaveCount(0)
+    // Locate: as its crosshair did, it finds the node's task on Home (main:locate-task, then Home).
+    await page.evaluate(() => {
+      const w = window as unknown as { __located?: string }
+      window.addEventListener('main:locate-task', (e) => { w.__located = (e as CustomEvent<{ taskId: string }>).detail.taskId }, { once: true })
+    })
+    await (await kebabRow(tools, 'session-menu-locate')).click()
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __located?: string }).__located ?? '')).toBe(ids.lead)
+    await expect(page.getByTestId('org-page')).toHaveCount(0)
+  } finally {
+    await request.patch(`/api/tasks/${ids.lead}`, { data: { remove_tags: tags } })
+  }
 })
 
 test('the kebab\'s Open group holds Changed, Files, Terminal and Board: Files opens beside the chat, Board opens the side bar on it', async ({ page }) => {

@@ -13,8 +13,12 @@
  * The tags stay mounted while the flyout is closed (a hidden portal), so the count reads
  * the tags that actually render and opening it fetches nothing; with no tag there is no
  * control. Guard: tests/web/session-header-labels-guard.test.ts.
+ *
+ * `inMenu`: a host that keeps its header line quiet (the Org node, 2026-11-23, the user: "just
+ * move all these to the drop done") draws no control here; its menu's Tags row opens the same
+ * list under the menu's key (`handle`), and `onCount` tells that row how many tags there are.
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type MutableRefObject, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
@@ -38,15 +42,26 @@ const tagsWord = (n: number) => `${n} ${n === 1 ? 'tag' : 'tags'}`;
 
 const textOf = (el: Element) => (el.textContent ?? '').replace(/\s+/g, ' ').trim();
 
-const TAG_ICON = (
+export const TAG_ICON = (
   <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden="true">
     <path d="M1.75 2.75v4.6l6.9 6.9 5.6-5.6-6.9-6.9h-4.6a1 1 0 0 0-1 1z" />
     <circle cx="5" cy="5" r="1.1" fill="currentColor" stroke="none" />
   </svg>
 );
 
-export function SessionHeaderLabels({ children }: { children: ReactNode }) {
-  const buttonRef = useRef<HTMLButtonElement>(null);
+/** Opens the folded list from somewhere else (a menu row); `fromKeyboard` moves the focus into it. */
+export interface LabelsOpener { open: (fromKeyboard: boolean) => void }
+
+export interface LabelsInMenu {
+  /** The key the list opens under (the menu's own). */
+  anchor: () => HTMLElement | null;
+  handle: MutableRefObject<LabelsOpener | null>;
+  onCount: (count: number) => void;
+}
+
+export function SessionHeaderLabels({ children, inMenu }: { children: ReactNode; inMenu?: LabelsInMenu }) {
+  // What the list opens under: this control's own button, or the menu's key (inMenu).
+  const buttonRef = useRef<HTMLElement | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
@@ -83,6 +98,23 @@ export function SessionHeaderLabels({ children }: { children: ReactNode }) {
     return () => cancelAnimationFrame(frame);
   }, [open]);
 
+  // Folded into a menu: its row hears the count, and opens the list under the menu's key.
+  const onCount = inMenu?.onCount;
+  useEffect(() => { onCount?.(labels.count); }, [onCount, labels.count]);
+  const handle = inMenu?.handle;
+  const anchor = inMenu?.anchor;
+  useEffect(() => {
+    if (!handle || !anchor) return;
+    handle.current = {
+      open: (fromKeyboard) => {
+        buttonRef.current = anchor();
+        keyboardOpen.current = fromKeyboard;
+        setOpen(true);
+      },
+    };
+    return () => { handle.current = null; };
+  }, [handle, anchor]);
+
   // A tag that takes the user somewhere (a link opens its page or file) closes the list.
   const closeAfterLeave = useCallback((e: MouseEvent) => {
     if ((e.target as Element).closest('.tag-chip-linked')) {
@@ -97,6 +129,7 @@ export function SessionHeaderLabels({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const folded = !!inMenu;
   // Escape and an outside press close the list through the overlay stack. A tag's own card
   // (its hover card, a change card) is a layer opened after this one, so it is on top: the
   // first Escape closes the card, the next one the list, and a press inside the card stays
@@ -105,20 +138,20 @@ export function SessionHeaderLabels({ children }: { children: ReactNode }) {
   // (each stops its own pointerdown) still closes the list.
   useOverlayLayer({
     open,
-    refs: [menuRef, buttonRef],
+    refs: folded ? [menuRef] : [menuRef, buttonRef],
     passOutsideClick: true,
     onClose: (reason) => {
       setOpen(false);
-      if (reason === 'escape') buttonRef.current?.focus();
+      if (reason === 'escape' && !folded) buttonRef.current?.focus();
     },
   });
 
   const { count, text } = labels;
   return (
     <>
-      {count > 0 && (
+      {count > 0 && !folded && (
         <button
-          ref={buttonRef}
+          ref={(el) => { buttonRef.current = el; }}
           type="button"
           className="btn btn-sm btn-ghost session-header-labels-btn"
           data-testid="session-header-labels"

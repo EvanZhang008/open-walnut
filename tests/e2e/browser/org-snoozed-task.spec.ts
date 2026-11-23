@@ -75,7 +75,7 @@ test('a snoozed task is not Needs you on the Org page; its date passing brings i
   const detail = page.getByTestId('org-detail')
   const counts = detail.getByTestId('org-detail-counts')
   await expect(counts).toContainText('0 threads')
-  await expect(counts).toContainText('Waiting')
+  await expect(counts.getByTestId('org-pill-waiting')).toHaveText(/^\d+ waiting$/)
   await expect(counts).not.toContainText(/needs? you/i)
   // A lead opens on its Threads (2026-11-04); its tasks' asks are in Tasks.
   await openTasksBy(detail, 'all')

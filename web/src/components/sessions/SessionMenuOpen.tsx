@@ -9,9 +9,16 @@
  * changed constantly while working (PanelCountRow explains).
  *
  * Each row calls the same handler as its header chip, so the header and the menu never drift.
+ *
+ * `headerKeys`: a host that draws the header and keeps its line quiet (the Org node, 2026-11-23, the
+ * user: "just move all these to the drop done") gets the header's window keys as the menu's first
+ * rows instead: Watch, Locate, Minimize and the Tags list, each doing what its key does.
  */
-import type { ReactNode } from 'react';
-import { ICON_EXPAND, ICON_FILE, ICON_FOLDER_OUTLINE, ICON_NEW_TAB, ICON_TERMINAL } from '../common/Icons';
+import type { MouseEvent, ReactNode } from 'react';
+import type { Task } from '@open-walnut/core';
+import { ICON_EXPAND, ICON_FILE, ICON_FOLDER_OUTLINE, ICON_LOCATE, ICON_MINIMIZE, ICON_NEW_TAB, ICON_TERMINAL } from '../common/Icons';
+import { WatchMenuItem } from '../tasks/WatchToggle';
+import { TAG_ICON } from './SessionHeaderLabels';
 import { KebabGroup } from './KebabGroup';
 import { useSessionServers } from '@/hooks/useSessionServers';
 import { openable, serversSummary } from './session-server-label';
@@ -78,11 +85,23 @@ export interface SessionMenuOpenProps {
    * and opens them; on: it opens them, and a second row turns them off. Absent: not offered.
    */
   threads?: ThreadsMenu;
+  /** The header's window keys as rows, where the host's header line has none (see the file's note). */
+  headerKeys?: SessionHeaderKeyRows;
+}
+
+export interface SessionHeaderKeyRows {
+  /** The session's task, once known: the Watch row. */
+  watch?: Task;
+  /** Locate: `why` while it cannot work yet (the row is drawn disabled, saying why). */
+  locate?: { label: string; why: string | null; onLocate: () => void };
+  onMinimize?: () => void;
+  /** The folded link tags: how many, and the opener of their list (`fromKeyboard` moves the focus in). */
+  tags?: { count: number; onOpen: (fromKeyboard: boolean) => void };
 }
 
 function Row({ icon, label, active, disabled, why, onClick, testId, trailing }: {
   icon: ReactNode; label: string; active?: boolean; disabled?: boolean; why?: string;
-  onClick: () => void; testId?: string; trailing?: ReactNode;
+  onClick: (e: MouseEvent) => void; testId?: string; trailing?: ReactNode;
 }) {
   return (
     <button
@@ -92,7 +111,7 @@ function Row({ icon, label, active, disabled, why, onClick, testId, trailing }: 
       disabled={disabled}
       title={disabled ? why : undefined}
       data-testid={testId}
-      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      onClick={(e) => { e.stopPropagation(); onClick(e); }}
     >
       <span className="task-kebab-icon">{icon}</span>
       <span>{label}</span>
@@ -131,10 +150,27 @@ export function SessionMenuOpen(p: SessionMenuOpenProps) {
     p.onPopout && <Row key="popout" icon={ICON_NEW_TAB} label="Open in new tab" onClick={() => { close(); p.onPopout!(); }} testId="session-menu-popout" />,
     p.onFullscreen && <Row key="full" icon={ICON_EXPAND} label={p.fullscreenLabel ?? 'Full screen'} onClick={() => { close(); p.onFullscreen!(); }} testId="session-menu-fullscreen" />,
   ].filter(Boolean);
+  const keys = p.headerKeys;
+  const keyRows = keys ? [
+    keys.watch && <WatchMenuItem key="watch" task={keys.watch} afterAction={close} />,
+    keys.locate && (
+      <Row key="locate" icon={ICON_LOCATE} label={keys.locate.label} disabled={!!keys.locate.why} why={keys.locate.why ?? undefined}
+        onClick={() => { close(); keys.locate!.onLocate(); }} testId="session-menu-locate" />
+    ),
+    keys.onMinimize && (
+      <Row key="minimize" icon={ICON_MINIMIZE} label="Minimize" onClick={() => { close(); keys.onMinimize!(); }} testId="session-menu-minimize" />
+    ),
+    keys.tags && keys.tags.count > 0 && (
+      <Row key="tags" icon={TAG_ICON} label="Tags" onClick={(e) => { close(); keys.tags!.onOpen(e.detail === 0); }} testId="session-menu-tags"
+        trailing={<span className="task-kebab-row-why" data-testid="session-menu-tags-count">{keys.tags.count}</span>} />
+    ),
+  ].filter(Boolean) : [];
   return (
     <>
+      {keyRows.length > 0 && <>{keyRows}<div className="task-kebab-divider" /></>}
       {/* Locate and Watch are on the header itself (2026-11-19: the crosshair among the window
-          buttons, the eye on the label row); Open in new tab lives only in the Window group below. */}
+          buttons, the eye on the label row), or the rows above (headerKeys); Open in new tab lives
+          only in the Window group below. */}
       <KebabGroup
         label="Open panel"
         // Four names, not every row: the hint's length sets the menu's width, and a wide menu

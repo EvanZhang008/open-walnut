@@ -109,6 +109,14 @@ export function nodeKeepsThreads(row: Pick<ChannelRow, 'kind' | 'isLead'>, conta
 /** One count of a node's header: a tab and how many it counts (each opens its tab). */
 export interface HeaderPill { tab: OrgTaskTab; n: number }
 
+/** A header count in the user's own short words (2026-11-23, the user: "reduce text 5 threads 51
+ *  workng tasks, 22 waiting tasks", then "acutally cahnge it to xx working, yy waiting"): the number
+ *  and what it counts in lower case, never a tab's long name, never "tasks". */
+export function headerPillWords(tab: HeaderPill['tab'], n: number): string {
+  if (tab === 'needs') return `${n} ${n === 1 ? 'needs' : 'need'} you`;
+  return `${n} ${tab === 'notstarted' ? 'not started' : tab}`;
+}
+
 /**
  * The node header's state counts, from the same tabs the side bar's sections are made of, so the two
  * never disagree. Needs you counts asks only (a card only to read is no ask), approvals included, as
@@ -119,7 +127,9 @@ export function headerPills(tabs: OrgTaskTabs, approvals: number, keepsThreads: 
   const needs = askCount(tabs.needs) + approvals;
   const out: HeaderPill[] = [];
   if (!keepsThreads && needs > 0) out.push({ tab: 'needs', n: needs });
-  for (const tab of ['working', 'waiting', 'notstarted'] as const) if (tabs[tab].length > 0) out.push({ tab, n: tabs[tab].length });
+  // Working and waiting only (2026-11-23, the user: "xx working, yy waiting", design 4): what nobody
+  // started stays in its own Tasks section, never a third count here.
+  for (const tab of ['working', 'waiting'] as const) if (tabs[tab].length > 0) out.push({ tab, n: tabs[tab].length });
   return out;
 }
 

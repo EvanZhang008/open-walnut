@@ -58,7 +58,7 @@ const ALLOWED_ON_ROW: Record<string, string> = {
 describe('session header title row', () => {
   it('renders no pill, chip or badge outside the folded labels control', () => {
     const row = titleRowJsx()
-      .replace(/<SessionHeaderLabels>[\s\S]*?<\/SessionHeaderLabels>/g, '<SessionHeaderLabels />')
+      .replace(/<SessionHeaderLabels(?: inMenu=\{hostTagsInMenu\})?>[\s\S]*?<\/SessionHeaderLabels>/g, '<SessionHeaderLabels />')
       .replace(/\bheaderPills\b/g, 'HEADER_PILLS')
       // The phone has no title row: its own top bar carries the wait as an hourglass
       // button beside its kebab (PhoneTopBar's action slot), a linked pull request's state
@@ -90,15 +90,17 @@ describe('session header title row', () => {
 
   it('draws the same pills and the same folded tags wherever the header is', () => {
     const header = headerJsx();
-    const folded = [...header.matchAll(/<SessionHeaderLabels>\{headerTags\}<\/SessionHeaderLabels>/g)];
-    // The title row's own, and the host header's (an Org node draws the panel's header in its own).
+    const folded = [...header.matchAll(/<SessionHeaderLabels(?: inMenu=\{hostTagsInMenu\})?>\{headerTags\}<\/SessionHeaderLabels>/g)];
+    // The title row's own, and the host header's (an Org node draws the panel's header in its own,
+    // the tags folded into its kebab: 2026-11-23).
     expect(folded.length).toBe(2);
+    expect([...header.matchAll(/<SessionHeaderLabels inMenu=\{hostTagsInMenu\}>/g)].length, 'only the host header folds them into the kebab').toBe(1);
     expect([...src.matchAll(/\{headerTags\}/g)].length).toBe(folded.length);
     // Drawn twice (the row and the host header), and nowhere else: its definition plus those two.
     expect([...header.matchAll(/\bheaderPills\s*\}/g)].length).toBe(2);
     expect([...src.matchAll(/\bheaderPills\s*\}/g)].length).toBe(2);
     // The control folds the tags and nothing else.
-    expect(src).not.toMatch(/<SessionHeaderLabels>(?!\{headerTags\}<\/SessionHeaderLabels>)/);
+    expect(src).not.toMatch(/<SessionHeaderLabels(?: inMenu=\{hostTagsInMenu\})?>(?!\{headerTags\}<\/SessionHeaderLabels>)/);
   });
 
   it('folds only the link tags; every state pill stays on the row', () => {

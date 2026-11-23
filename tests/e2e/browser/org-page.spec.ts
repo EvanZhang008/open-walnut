@@ -127,14 +127,16 @@ test('the sidebar opens Main and the leads; a lead\'s red is its threads, its ta
   // No "N open" pill (2026-11-03, the user: "remove xx open not needed").
   await expect(detail.getByTestId('org-detail-counts')).not.toContainText(' open')
   // Its threads first ("0 threads"), then the one user status's words (src/core/user-status.ts):
-  // the task nobody started counts under its own Not started pill (2026-11-09), out of Waiting /
-  // snoozed; the question is in its Tasks, never a Needs you of the node.
+  // the task nobody started is out of Waiting (2026-11-09) and no header count; the question is in
+  // its Tasks, never a Needs you of the node.
   const counts = detail.getByTestId('org-detail-counts')
   await expect(counts.locator('> *').first()).toHaveAttribute('data-testid', 'org-pill-threads')
-  await expect(counts.getByTestId('org-pill-threads')).toHaveText('0 threads for you')
-  await expect(counts).not.toContainText('Needs you')
-  await expect(counts).toContainText('1 Not started')
-  await expect(counts).not.toContainText('Waiting')
+  // In the user's short words (2026-11-23: "5 threads", "51 working"), no "for you", no "tasks".
+  await expect(counts.getByTestId('org-pill-threads')).toHaveText('0 threads')
+  await expect(counts).not.toContainText(/needs? you/i)
+  // Working and waiting only (2026-11-23, design 4): the task nobody started is in its Tasks.
+  await expect(counts.getByTestId('org-pill-notstarted')).toHaveCount(0)
+  await expect(counts).not.toContainText(/waiting/i)
   // A VP opens on its Threads (2026-11-04); its tasks' asks are in Tasks.
   await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
   await showTasks(detail)
@@ -321,7 +323,7 @@ test('a task whose Board asks the user to choose needs them: its row, its line, 
   // Led by what to do with it (2026-11-03): a Board choice is a decision.
   await expect(r).toHaveAttribute('title', new RegExp(`\\nRenewal ${STAMP}: Decide: \\S`))
   await r.click()
-  await expect(page.getByTestId('org-detail-counts')).toContainText('1 Needs you')
+  await expect(page.getByTestId('org-detail-counts').getByTestId('org-pill-needs')).toHaveText('1 needs you')
   // Listed on its own chat too: the chat does not show a Board's choice.
   await expectChatShown(page)
   await showTasks(page)
