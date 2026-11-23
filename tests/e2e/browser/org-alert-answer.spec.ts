@@ -325,9 +325,21 @@ test('a decision letter: its two actions in the row, one click answers it, the r
   const menu = await openAnswer(page, ids.letter, 'letter')
   const options = menu.getByTestId('org-answer-letter')
   await expect(options.getByTestId('org-answer-option')).toHaveText(['Sign it', 'Not yet'])
-  // Side by side: one line of buttons.
-  const [a, b] = await options.getByTestId('org-answer-option').evaluateAll((els) => els.map((e) => e.getBoundingClientRect().top))
-  expect(Math.abs(a! - b!)).toBeLessThan(2)
+  // A letter's actions are the card's option rows (standard.md, the ask card's "Option": "each
+  // choice of a question, a letter's actions, a Board choice | a row of its own, full width";
+  // 1e3af48258, the user's pick of ten card designs): one under the other, in order, each as wide
+  // as the card's answer row.
+  const rows = await options.getByTestId('org-answer-option').evaluateAll((els) => els.map((e) => {
+    const r = e.getBoundingClientRect()
+    const line = e.closest('.ask-card-answer')?.getBoundingClientRect()
+    return { top: r.top, bottom: r.bottom, left: r.left, width: r.width, lineWidth: line?.width ?? -1 }
+  }))
+  expect(rows).toHaveLength(2)
+  expect(rows[1]!.top, 'Not yet sits under Sign it').toBeGreaterThanOrEqual(rows[0]!.bottom)
+  for (const row of rows) {
+    expect(Math.abs(row.left - rows[0]!.left)).toBeLessThan(2)
+    expect(Math.abs(row.width - row.lineWidth), 'a row as wide as the answer row').toBeLessThan(2)
+  }
   await page.screenshot({ path: `test-results/org-answer-letter-${test.info().project.name}.png` })
   // The row answers the click, not the server: it goes at once, and a refused answer brings it back
   // with the reason.
