@@ -111,6 +111,8 @@ describe('ratchet: every envelope names its sender by the task', () => {
         if (rel === 'src/providers/daemon-source.ts' && /title: 't'/.test(args)) continue
         // A named automation has no task title; its shared anonymous envelope names the script.
         if (rel === 'src/core/sessions/send-frame.ts' && /anonymous: true/.test(args) && /automation: opts\.source/.test(args)) continue
+        // A plugin job its host vouched for has no task either: it is named by its App (plugins/plugin-caller.ts jobAppSender).
+        if (rel === 'src/core/sessions/send-frame.ts' && /anonymous: true/.test(args) && /\.\.\.jobAppSender\(/.test(args)) continue
         sites.push(`${rel}:${line}`)
         if (/record\.title/.test(args) || !NAMED_BY_TASK.test(args)) bad.push(`${rel}:${line}`)
       }

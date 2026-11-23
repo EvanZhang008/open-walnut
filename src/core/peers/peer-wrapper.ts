@@ -19,3 +19,8 @@ export type PeerSender = EnvelopeSender;
 export function buildPeerWrapper(originalText: string, sender: PeerSender, opts?: EnvelopeMessageOptions): string {
   return kit.buildPeerWrapper(originalText, sender, opts);
 }
+
+/** `<App> (App)`, or `<App> job <job> (App)`: the name an App's own message goes under (envelope-kit.ts). */
+export function appSenderName(app: string, job?: string): string {
+  return kit.appSenderName(app, job);
+}

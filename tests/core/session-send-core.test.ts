@@ -509,6 +509,37 @@ describe('performSessionSend — who is speaking decides the envelope', () => {
     expect(parseWalnutMessage(deliveredText(1))!.attrs.from).toBe('unnamed-app (App)');
   });
 
+  // 2026-11-23: a plugin job its host's daemon vouched for read as "unidentified process", so sessions
+  // followed its own instructions only "with caution".
+  it('a plugin job its host vouched for is named as its App\'s job, now and in a quiet note; never the user, and only for the outside caller', async () => {
+    const { _clearHeldNotices, pendingHeldNotices } = await import('../../src/core/sessions/held-notices.js');
+    _clearHeldNotices();
+    sessions = [rec('sess-target-1', { title: 'Target', taskId: 'task-t' }), rec('sess-caller-1', { title: 'Caller' })];
+    addOrdinaryTasksForSessions();
+    notePluginName('ticket-investigator', 'Ticket Investigator');
+    const job = { plugin: 'ticket-investigator', job: 'poll', host: 'newdev' };
+    await performSessionSend({ to: 'sess-target-1', text: 'post the report now', callerSid: 'external', callerHost: 'newdev', callerJob: job });
+    const sent = parseWalnutMessage(deliveredText(0))!;
+    expect(sent.attrs).toMatchObject({ from: 'Ticket Investigator job poll (App)', host: 'newdev', app: 'true' });
+    expect(sent.attrs.anonymous).toBeUndefined();
+    expect(sent.attrs.note).toContain('a background job of an App your user installed in Walnut, vouched for by its host');
+    // The same job's note that asks nothing waits under the same name.
+    const held = await performSessionSend({ to: 'sess-target-1', text: 'FYI: queue drained.', callerSid: 'external', callerHost: 'newdev', callerJob: job, wake: false });
+    expect(held.delivery).toBe('held');
+    expect((await pendingHeldNotices('sess-target-1'))!.text).toContain('Ticket Investigator job poll (App) (on newdev, not your user)');
+    // The job names nothing on a session's own send, and the App's own call keeps its own name.
+    await performSessionSend({ to: 'sess-target-1', text: 'from a session', callerSid: 'sess-caller-1', callerJob: job, expectReply: false });
+    const fromSession = parseWalnutMessage(deliveredText(1))!.attrs;
+    expect(fromSession['from-session']).toBe('sess-caller-1');
+    expect(fromSession.app).toBeUndefined();
+    expect(fromSession.from).not.toContain('(App)');
+    await performSessionSend({ to: 'sess-target-1', text: 'from the App', callerSid: 'plugin:ticket-investigator', callerJob: job });
+    expect(parseWalnutMessage(deliveredText(2))!.attrs.from).toBe('Ticket Investigator (App)');
+    // Without the vouched job it stays what it was.
+    await performSessionSend({ to: 'sess-target-1', text: 'from a script', callerSid: 'external', callerHost: 'newdev' });
+    expect(parseWalnutMessage(deliveredText(3))!.attrs).toMatchObject({ from: 'unidentified process', anonymous: 'true' });
+  });
+
   it('refuses a send that resolves to the calling session itself', async () => {
     sessions = [rec('sess-caller-1', { title: 'Caller' })];
 

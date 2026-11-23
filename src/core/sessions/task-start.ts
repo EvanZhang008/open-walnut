@@ -577,7 +577,8 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
       }
       const sent = await continueTaskConversation(conversation, {
         text: params.message?.trim() || task.description || `Working on task: ${task.title}`,
-        callerSid: params.callerSid, source: keptStartSource(params), expectReply: params.expectReply, replyTimeoutSecs: params.replyTimeoutSecs,
+        callerSid: params.callerSid, ...(params.callerJob ? { callerJob: params.callerJob } : {}),
+        source: keptStartSource(params), expectReply: params.expectReply, replyTimeoutSecs: params.replyTimeoutSecs,
         ...(params.handsOn ? { handsOn: params.handsOn } : {}),
       }).then((r) => { resumeSlot?.(SLOT_HOLD_MS); return r; }, (e: unknown) => { resumeSlot?.(0); throw e; });
       return {
@@ -749,6 +750,8 @@ async function startSessionForTaskNow(params: SessionStartParams, picked: { spli
         // theirs, an agent's framed, and Walnut's carried context as a hint block a display takes off.
         let firstMessage = params.source === 'engine-switch' ? startBody : frameStartText(startBody, {
           source: params.message?.trim() ? params.source : 'task-description', ...(params.callerSid ? { callerSid: params.callerSid } : {}),
+          // A plugin job its host vouched for: its App's job starts the task (send-frame.ts), never "Walnut (caller:external)".
+          ...(caller?.kind === 'external' && !caller.app && params.callerJob ? { job: params.callerJob } : {}),
           ...(caller?.kind === 'session' ? { caller: await framingCallerOf(caller.record) } : {}), ...(requestId ? { requestId } : {}),
         }) + (replyTrailer ? `\n${replyTrailer}` : '');
         // The reply trailer after an envelope that is not the request's own reads as typed words: frame the whole.
@@ -906,7 +909,8 @@ export async function moveFromLostHost(task: Task, params: SessionStartParams): 
   }
   const sent = await continueTaskConversation(record, {
     text: params.message?.trim() || task.description || `Working on task: ${task.title}`,
-    callerSid: params.callerSid, source: keptStartSource(params), expectReply: params.expectReply, replyTimeoutSecs: params.replyTimeoutSecs,
+    callerSid: params.callerSid, ...(params.callerJob ? { callerJob: params.callerJob } : {}),
+    source: keptStartSource(params), expectReply: params.expectReply, replyTimeoutSecs: params.replyTimeoutSecs,
     ...(params.handsOn ? { handsOn: params.handsOn } : {}),
   });
   return {

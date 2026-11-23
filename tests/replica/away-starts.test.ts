@@ -15,7 +15,8 @@ import { describe, expect, it, vi } from 'vitest'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type { Request, Response } from 'express'
-import { awayStarts, startSessionId, type AwayStartsDeps } from '../../src/replica/away-starts.js'
+import { awayStarts, frameAsCaller, startSessionId, type AwayStartsDeps } from '../../src/replica/away-starts.js'
+import { parseWalnutMessage } from '../../src/core/peers/walnut-message-tag.js'
 import type { ReplicaWrite, ReplicaWriteResult } from '../../src/replica/dispatch.js'
 import type { PortAnswer, WriteActor, WritePort } from '../../src/replica/write-port.js'
 import { awayStartCaller, replicaStartCaller, type StartCallerDeps } from '../../src/replica/start-ceiling.js'
@@ -311,6 +312,24 @@ describe('away starts', () => {
         const r = await h.post('/v1/tasks/t1/start', { message: 'go', mode: 'bypass' })
         expect(r).toEqual({ status: 403, body: { error: { code: 'bad_request', message: REFUSED } } })
         expect(h.calls).toEqual([])
+      }
+    })
+
+    it('the start\'s words of a vouched job are its App\'s job, as on the Mac; an unvouched one stays an automation', async () => {
+      const frames: Array<{ text: string; job: unknown }> = []
+      const frame: AwayStartsDeps['frame'] = async (text, actor, job) => { frames.push({ text, job: job ?? null }); return frameAsCaller(text, actor, async () => null, job) }
+      const vouched = harness({ frame })
+      expect((await vouched.post('/v1/tasks/t1/start', { message: 'go' })).status).toBe(200)
+      const first = parseWalnutMessage(String(vouched.calls[0]!.params.firstMessage))!
+      expect(first.attrs).toMatchObject({ from: 'acme job sync (App)', host: HOST, app: 'true' })
+      // A start into the session it already has here is the same job's message.
+      expect((await vouched.post('/v1/tasks/t3/start', { message: 'more' })).status).toBe(200)
+      expect(parseWalnutMessage(vouched.sends[0]!.text)!.attrs.from).toBe('acme job sync (App)')
+      expect(frames.map((f) => f.job)).toEqual([{ plugin: 'acme', job: 'sync', host: HOST }, { plugin: 'acme', job: 'sync', host: HOST }])
+      for (const vouchedJob of [() => null, () => ({ plugin: 'acme', job: 'other', host: HOST })]) {
+        const h = harness({ frame, startCaller: { sessionMode: async () => undefined, vouchedJob } })
+        expect((await h.post('/v1/tasks/t1/start', { message: 'go' })).status).toBe(200)
+        expect(parseWalnutMessage(String(h.calls[0]!.params.firstMessage))!.attrs).toMatchObject({ from: 'automation: plugin job acme/sync', anonymous: 'true' })
       }
     })
 

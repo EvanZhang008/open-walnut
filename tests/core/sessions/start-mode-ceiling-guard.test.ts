@@ -231,8 +231,8 @@ describe('launch-mode ceiling on every start path', () => {
     const route = files.find(f => f.file === 'src/web/routes/task-v1.ts')!.src
     const start = callsIn(route, ['startSessionForTask']).map(c => c.call)
     expect(start[0]).toMatch(/callerUnproven:\s*trust\.callerUnproven\b/)
-    // The one request reader of the start routes reads the mark (core/sessions/start-request-caller.ts).
-    expect(files.find(f => f.file === 'src/core/sessions/start-request-caller.ts')!.src).toMatch(/callerUnprovenOf\(req\)/)
+    // The one request reader of the start routes reads the mark (core/sessions/request-caller.ts).
+    expect(files.find(f => f.file === 'src/core/sessions/request-caller.ts')!.src).toMatch(/callerUnprovenOf\(req\)/)
     // The follower's away starts read it before their actor (replica/start-ceiling.ts).
     const away = files.find(f => f.file === 'src/replica/start-ceiling.ts')!.src
     expect(away).toMatch(/if \(callerUnprovenOf\(req\)\) return \{ kind: 'external' \}/)
@@ -240,7 +240,7 @@ describe('launch-mode ceiling on every start path', () => {
 
   it('the routes a job\'s task_create and task_start reach read the vouched job', () => {
     const route = files.find(f => f.file === 'src/web/routes/task-v1.ts')!.src
-    expect(files.find(f => f.file === 'src/core/sessions/start-request-caller.ts')!.src).toMatch(/vouchedPluginJob\(req\)/)
+    expect(files.find(f => f.file === 'src/core/sessions/request-caller.ts')!.src).toMatch(/vouchedPluginJob\(req\)/)
     const start = callsIn(route, ['startSessionForTask']).map(c => c.call)
     expect(start.length).toBe(1)
     expect(start[0]).toMatch(/\bcallerJob:\s*trust\.callerJob\b/)
@@ -257,7 +257,7 @@ describe('launch-mode ceiling on every start path', () => {
     const start = handlerOf(files.find(f => f.file === 'src/web/routes/task-v1.ts')!.src, '/tasks/:id/start')
     const check = handlerOf(files.find(f => f.file === 'src/web/routes/task-start-check-v1.ts')!.src, '/tasks/start-check')
     for (const [name, handler] of [['start', start], ['check', check]] as const) {
-      expect(handler, name).toMatch(/startRequestCaller\(req\)/)
+      expect(handler, name).toMatch(/\brequestCaller\(req\)/)
       // No second reading beside it: the sid header, the job's credential and the mark come from the reader only.
       expect(handler, name).not.toMatch(/vouchedPluginJob\(|callerUnprovenOf\(|headers\[['"]x-walnut-caller-sid['"]\]/)
     }
@@ -269,6 +269,19 @@ describe('launch-mode ceiling on every start path', () => {
     const awayCheck = replica.slice(replica.indexOf('export function awayStartCheck'))
     expect(awayCheck).toMatch(/awayStartCaller\(req, actor, deps\.startCaller\)/)
     expect(awayCheck).toMatch(/startCheckAnswer\(/)
+  })
+
+  it('the send route reads its caller through the same reader, and hands the send core only the vouched job', () => {
+    // A job's task_send is named by the credential the relay held (job-caller.ts), never by the plugin headers.
+    const src = files.find(f => f.file === 'src/web/routes/messages-v1.ts')!.src
+    const at = src.indexOf(`.post('/messages'`)
+    const handler = src.slice(at, at + 1 + src.slice(at + 1).search(/\nmessagesV1Router\.(?:get|post|patch|put|delete)\(/))
+    expect(handler).toMatch(/\brequestCaller\(req\)/)
+    expect(handler).not.toMatch(/vouchedPluginJob\(|header\(req, ['"]x-walnut-caller-sid['"]\)/)
+    const send = callsIn(handler, ['performSessionSend']).map(c => c.call)
+    expect(send.length).toBe(1)
+    expect(send[0]).toMatch(/\bcallerJob:\s*trust\.callerJob\b/)
+    expect(send[0]).not.toMatch(/callerJob:\s*\{|x-walnut-plugin-job/)
   })
 
   it('every start a host\'s own server makes while the Mac is away meets the Mac\'s ceiling', () => {

@@ -23,8 +23,8 @@ import { log } from '../../logging/index.js';
 import { matchIdRef, refNamesId } from '../../lib/id-ref.js';
 import type { SessionRecord } from '../types.js';
 import type { UserSaid } from './user-spoke.js';
-import { buildPeerWrapper } from '../peers/peer-wrapper.js';
-import { pluginCallerName } from '../plugins/plugin-caller.js';
+import { appSenderName, buildPeerWrapper } from '../peers/peer-wrapper.js';
+import { jobAppSender, pluginCallerName } from '../plugins/plugin-caller.js';
 import { senderTitleOf } from '../peers/sender-name.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import { sessionHandle } from '../peers/walnut-message-tag.js';
@@ -139,6 +139,9 @@ export interface SessionSendInput {
   callerHost?: string;
   /** An anonymous caller that named itself: a script or scheduled job (the CLI's `x-walnut-sender`). */
   callerLabel?: string;
+  /** The plugin job a caller `external` is, as its host's daemon vouched (plugin-jobs/job-caller.ts, read by
+   *  sessions/request-caller.ts): only who the envelope names (its App's job), never a gate (appSenderOf). */
+  callerJob?: import('../plugin-jobs/job-caller.js').VouchedJob;
   /** false: the note asks nothing, so it starts no turn; it rides the target's next message
    *  (sessions/quiet-notes.ts). A script's note that ends "No reply needed" is read so too.
    *  true: it goes now, also to a session whose prompt cache expired, where a note that asks for
@@ -441,6 +444,18 @@ async function orgNodeByName(to: string): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The App an anonymous send is from, for its envelope and its quiet note: its server half's own call
+ * (`plugin:<id>`, caller.app), or its background job its host's daemon vouched for (`callerJob`), else
+ * undefined. Only the sender's name: the job stays an outside caller to every gate (resolveCaller is
+ * unchanged, so caller.app stays the server half's alone), and it is never the user's word.
+ */
+function appSenderOf(caller: CallerIdentity, job: SessionSendInput['callerJob']): { app: string; appJob?: string } | undefined {
+  if (caller.kind !== 'external') return undefined;
+  if (caller.app) return { app: caller.app };
+  return job ? jobAppSender(job) : undefined;
 }
 
 /** Caller classes the envelope decision keys on. */
@@ -1048,11 +1063,12 @@ async function performPlainSendOnce(input: SessionSendInput, throttled: { undo?:
   // the same sender's other such notes (sessions/quiet-notes.ts, 2026-11-12).
   const conflict = wakeFalseConflict(input);
   if (conflict) throw sendErrorOf(conflict);
+  const appSender = appSenderOf(caller, input.callerJob);
   if (holdsQuietly(input) && fenced) {
     const { holdQuietNote } = await import('./quiet-notes.js');
     const label = caller.kind === 'session'
       ? sessionHandle(await senderTitleOf(caller.record), caller.record.claudeSessionId)
-      : caller.kind === 'external' && caller.app ? `${caller.app} (App)`
+      : appSender ? appSenderName(appSender.app, appSender.appJob)
         : input.callerLabel ? `automation: ${input.callerLabel}` : walnutSends ? `Walnut (${input.source})` : 'an unidentified process';
     const host = caller.kind === 'session' ? displayHost(caller.record.host) : input.callerHost?.trim().slice(0, 64) || 'unknown';
     const heldTaskId = target.taskId ?? target.session.taskId;
@@ -1172,7 +1188,7 @@ async function performPlainSendOnce(input: SessionSendInput, throttled: { undo?:
           ? displayHost(input.callerHost.trim().slice(0, 64))
           : walnutSends ? 'local' : 'unknown',
         anonymous: true,
-        ...(caller.kind === 'external' && caller.app ? { app: caller.app }
+        ...(appSender ? appSender
           : input.callerLabel ? { automation: input.callerLabel } : walnutSends ? {
             automation: input.source?.startsWith('automation:') ? input.source.slice('automation:'.length) : `Walnut (${input.source})`,
           } : {}),

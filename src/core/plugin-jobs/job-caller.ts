@@ -6,6 +6,9 @@
  * (sessions/delegated-mode.ts) caps it at `default`, so a job could not start its tasks in the
  * mode its plugin asks for (a ticket investigator's sessions run in `bypass`, as the user decided).
  *
+ * The same job's message into a session (task_send) was named "unidentified process" for the same
+ * reason; with the vouched job its envelope names the App's job (sessions/session-send-core.ts).
+ *
  * The chain of trust, each link checked where it is made (the same chain trigger-caller.ts keeps
  * for a trigger check's call):
  *   1. The host's daemon stamps `caller: {kind: 'plugin-job', plugin, job, vouched: true}` on the
@@ -17,11 +20,12 @@
  *      host's link, under the caller sid `external`, for a job this server gives that host now
  *      (plugin-jobs relayedJobOf).
  *   3. The relay (capability-router.ts) holds it here with the host whose link relayed it, only when
- *      it is vouched and the op can start a task, and gives the op's self-calls a token only this
- *      process made (holdRelayJob).
- *   4. A start route reads the token (vouchedPluginJob), only on a self-call made for that same
- *      anonymous caller from that same host, and capStartMode takes the job only for an outside
- *      caller, never for a session's sid.
+ *      it is vouched and the op reads who its caller is (opReadsVouchedJob: a start, the start check,
+ *      a message into a session), and gives the op's self-calls a token only this process made
+ *      (holdRelayJob).
+ *   4. A route reads the token (vouchedPluginJob, through sessions/request-caller.ts), only on a
+ *      self-call made for that same anonymous caller from that same host: capStartMode takes the job
+ *      only for an outside caller, never for a session's sid, and the send names it as the sender.
  * A bare `x-walnut-plugin-id` / `x-walnut-plugin-job` pair names a job but vouches for none: the
  * routes (task-v1.ts, api-v1.ts, messages-v1.ts) take those headers from anyone, so the only thing
  * that lifts the ceiling is a credential vouchedPluginJob(req) reads.
@@ -48,20 +52,28 @@ function part(raw: unknown): string | undefined {
 }
 
 /**
- * The ops whose calls the vouched job matters to: those that start a task (POST /tasks/:id/start),
- * and task_start_check, which starts nothing but must read the caller exactly as a start does
+ * The routes whose request reads the vouched job, one per kind of act that depends on who the caller is:
+ *   - POST /tasks/:id/start: a start's mode ceiling (sessions/delegated-mode.ts capStartMode), and the
+ *     message a start into a running conversation delivers (task-start.ts continueTaskConversation);
+ *   - POST /messages: a message into a session (task_send, session_send, org_send's send), whose
+ *     envelope names the job's App (sessions/session-send-core.ts).
+ */
+const JOB_PATHS: ReadonlySet<string> = new Set(['/tasks/:id/start', '/messages'])
+/**
+ * The ops that read it by name: task_create, task_start and session_start (task_start's deprecated
+ * alias, the same start), whose handlers call the start route without declaring it; and
+ * task_start_check, which starts nothing but must read the caller exactly as a start does
  * (POST /tasks/start-check), so a job that asks "may I start in bypass now" hears its starts' answer.
  */
-const START_PATH = '/tasks/:id/start'
-const START_OPS = new Set(['task_create', 'task_start', 'task_start_check'])
+const JOB_OPS: ReadonlySet<string> = new Set(['task_create', 'task_start', 'session_start', 'task_start_check'])
 
 /**
- * Whether a relayed op can start a task (or asks the start's ceiling: task_start_check), so its
- * self-calls need the job: those ops and any op that declares the start route. A job's reads and
- * other writes hold no token, so a job that polls never fills the hold its starts need.
+ * Whether a relayed op's self-calls read the vouched job: the ops above and any op that binds or
+ * declares one of those routes. A job's reads and other writes hold no token, so a job that polls
+ * never fills the hold its starts and messages need.
  */
-export function opStartsTask(op: { name: string; bind?: { path?: string }; routes?: ReadonlyArray<{ path: string }> }): boolean {
-  return START_OPS.has(op.name) || op.bind?.path === START_PATH || !!op.routes?.some((r) => r.path === START_PATH)
+export function opReadsVouchedJob(op: { name: string; bind?: { path?: string }; routes?: ReadonlyArray<{ path: string }> }): boolean {
+  return JOB_OPS.has(op.name) || JOB_PATHS.has(op.bind?.path ?? '') || !!op.routes?.some((r) => JOB_PATHS.has(r.path))
 }
 
 /**

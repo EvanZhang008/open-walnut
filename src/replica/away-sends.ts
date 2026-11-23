@@ -42,6 +42,8 @@ import { messageIdOfCall, writeOpId } from '../lib/op-call-id.js'
 import { refNamesId } from '../lib/id-ref.js'
 import { kit, replyTo, serverDelivers, type ReplyContext } from './away-replies.js'
 import { frameAsCaller, taskSessions } from './away-starts.js'
+import { replicaStartCaller, vouchedActorJob } from './start-ceiling.js'
+import type { VouchedJob } from '../core/plugin-jobs/job-caller.js'
 import { leaderAnswers } from '../core/server-role.js'
 import { admitRetiredLeadRule, directionDecides, holdsQuietly, opensRequest, parentCompleteRefusal, replyKindOf, ruleInputOf, wakeFalseConflict, type RetiredLeadFacts } from '../core/sessions/send-rules.js'
 import { clampReplyTimeoutSecs } from '../core/session-requests.js'
@@ -83,8 +85,10 @@ export interface AwaySendsDeps {
   request(cmd: string, params: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>>
   /** Whether the Mac answers now: only a same-host send is taken then, as the daemon's handleLocal takes it. */
   leaderAnswers(): boolean
-  /** A plugin job's words, framed as its automation's (send-frame.ts). */
-  frame(text: string, actor: WriteActor): Promise<string>
+  /** A plugin job's words, framed as its App's job when `job` vouches for it, else as its automation's (away-starts.ts frameAsCaller). */
+  frame(text: string, actor: WriteActor, job?: VouchedJob | null): Promise<string>
+  /** The plugin job the request's in-process credential vouches for (start-ceiling.ts replicaStartCaller), or null. Absent: none. */
+  vouchedJob?(req: Request): VouchedJob | null
   /** The task's sessions on this host (a plugin job's plain note goes to its latest). */
   sessionsOfTask(taskId: string): Promise<Array<{ sid: string; host?: string | null; startedAt?: string }>>
   /** A message delivered to a session here started a turn: it is watched again (ask-launch.ts watch). */
@@ -330,7 +334,9 @@ export function awaySends(deps: AwaySendsDeps): RequestHandler {
     const own = (await deps.sessionsOfTask(to)).filter((s) => !!deps.hostKey && str(s.host) === deps.hostKey)
     const s = [...own].sort((x, y) => str(y.startedAt).localeCompare(str(x.startedAt)))[0]
     if (!s) return needsLeaderAnswer('session_on_mac', 'That task has no session on this host; sending to it needs your Mac.')
-    const a = await deps.port.send(w, s.sid, await deps.frame(text, actor), undefined, { framed: true })
+    // A job its host's daemon vouched for is named as its App's job, as the Mac names it (session-send-core.ts).
+    const job = deps.vouchedJob ? vouchedActorJob(req, actor, { vouchedJob: deps.vouchedJob }) : null
+    const a = await deps.port.send(w, s.sid, await deps.frame(text, actor, job), undefined, { framed: true })
     if (a.answered || a.status >= 300) return a
     deps.continued?.(s.sid)
     return { answered: false, status: 200, body: { ...a.body, taskId: to, targetTaskId: to, targetSessionId: s.sid } }
@@ -400,7 +406,8 @@ export function wireAwaySends(o: {
     capabilities: o.capabilities,
     request: o.request,
     leaderAnswers: () => leaderAnswers(),
-    frame: (text, actor) => frameAsCaller(text, actor, task),
+    frame: (text, actor, job) => frameAsCaller(text, actor, task, job),
+    vouchedJob: (req) => replicaStartCaller.vouchedJob(req),
     sessionsOfTask: taskSessions,
     continued: (sid) => o.continued?.(sid),
     keptLocal: async (to) => {

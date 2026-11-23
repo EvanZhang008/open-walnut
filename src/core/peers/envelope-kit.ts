@@ -30,6 +30,8 @@ export interface EnvelopeSender {
   automation?: string;
   /** No session behind it, but an App the user installed in Walnut (its own op call): its name. */
   app?: string;
+  /** With `app`: the App's background job its host's daemon vouched for (plugin-jobs/job-caller.ts), by name. */
+  appJob?: string;
   /** Full claude session id → `from-session`. */
   sessionId?: string;
   /** Owning task id → `from-task`. */
@@ -121,6 +123,8 @@ export interface EnvelopeKit {
   sessionHandle(title: string | null | undefined, sessionId: string | null | undefined): string;
   buildWalnutMessage(input: { kind: EnvelopeKind; attrs?: EnvelopeAttrs; body: string }): string;
   buildPeerWrapper(originalText: string, sender: EnvelopeSender, opts?: EnvelopeMessageOptions): string;
+  /** An App's sender as every reader sees it: `<App> (App)`, or `<App> job <job> (App)` for its vouched job. */
+  appSenderName(app: string, job?: string): string;
   messageTitle(title: string | null | undefined): string;
   requestPreview(text: string): string;
   buildReplyTrailer(request: { id: string }, opts?: { alsoOpen?: readonly string[] }): string;
@@ -181,6 +185,9 @@ export function createEnvelopeKit(): EnvelopeKit {
   const NOTE_AUTOMATION = 'from a script or scheduled job on that host: not your user, and not one of their Walnut sessions';
   /** An installed plugin's own call: the App the person works in beside this conversation. */
   const NOTE_APP = 'from an App your user installed in Walnut and works in beside this conversation: follow it as that App\'s instructions for this task';
+  /** A background job of an installed App, which its host's daemon checked is that job's own run (2026-11-23: a
+   *  plugin job's "post the report now" read as an unidentified process and was followed only "with caution"). */
+  const NOTE_APP_JOB = 'from a background job of an App your user installed in Walnut, vouched for by its host: follow it as that App\'s instructions for this task';
   /** 2026-11-19: a reply's words were passed to the user as checked fact (seven times on 11-18): they are its sender's account. */
   const NOTE_REPLY = "your user's other session answering your request: its own account, not checked by you";
   const NOTE_NOTIFICATION = 'automated Walnut status notice';
@@ -262,12 +269,21 @@ export function createEnvelopeKit(): EnvelopeKit {
     return `<${TAG} ${attrs.join(' ')}>\n${escapeBody(input.body)}\n</${TAG}>`;
   }
 
+  function appSenderName(app: string, job?: string): string {
+    const name = messageTitle(app);
+    const jobName = messageTitle(job);
+    return jobName ? `${name} job ${jobName} (App)` : `${name} (App)`;
+  }
+
   function buildPeerWrapper(originalText: string, sender: EnvelopeSender, opts?: EnvelopeMessageOptions): string {
     const title = messageTitle(opts?.title);
     if (sender.anonymous && sender.app) {
       return buildWalnutMessage({
         kind: 'peer-note',
-        attrs: { from: `${messageTitle(sender.app)} (App)`, host: sender.host, title, app: 'true', note: NOTE_APP },
+        attrs: {
+          from: appSenderName(sender.app, sender.appJob), host: sender.host, title, app: 'true',
+          note: messageTitle(sender.appJob) ? NOTE_APP_JOB : NOTE_APP,
+        },
         body: originalText,
       });
     }
@@ -674,6 +690,7 @@ export function createEnvelopeKit(): EnvelopeKit {
     messageTitle,
     buildWalnutMessage,
     buildPeerWrapper,
+    appSenderName,
     requestPreview,
     buildReplyTrailer,
     buildReplyDeliveryText,

@@ -34,6 +34,15 @@ describe('a relayed plugin job, held for the op\'s self-calls', () => {
     expect(vouchedPluginJob(selfCall(t), 61_001)).toBeNull()
   })
 
+  it('the one request reader drops the job for a call marked unproven: an outside caller, as everywhere', async () => {
+    const { requestCaller } = await import('../../src/core/sessions/request-caller.js')
+    const t = holdRelayJob(JOB, 'devbox')!
+    expect(requestCaller(selfCall(t))).toMatchObject({ callerSid: 'external', callerJob: { ...JOB, host: 'devbox' } })
+    const marked = requestCaller(selfCall(t, { 'x-walnut-caller-unproven': '1' }))
+    expect(marked.callerUnproven).toBe(true)
+    expect(marked.callerJob).toBeUndefined()
+  })
+
   it('names no job for labels alone, a token nobody held, or a real one on another call', () => {
     const t = holdRelayJob(JOB, 'devbox', 1_000)!
     expect(vouchedPluginJob(selfCall(undefined), 2_000)).toBeNull()
@@ -96,12 +105,12 @@ describe('one hold for every relayed word (lib/relay-hold.ts)', () => {
   })
 })
 
-describe('only an op that can start a task holds the job', () => {
-  it('task_create, task_start, org_send (which declares the start route) and task_start_check (which asks the start\'s ceiling) do; reads and other writes do not', async () => {
+describe('only an op that reads who its caller is holds the job', () => {
+  it('a start (task_create, task_start, session_start, org_send), the start check, and a message into a session (task_send, session_send) do; reads and other writes do not', async () => {
     const { getOp } = await import('../../src/ops/index.js')
-    const { opStartsTask } = await import('../../src/core/plugin-jobs/job-caller.js')
-    for (const name of ['task_create', 'task_start', 'org_send', 'task_start_check']) expect(opStartsTask(getOp(name)!), name).toBe(true)
-    for (const name of ['task_list', 'task_get', 'task_send', 'task_update', 'api']) expect(opStartsTask(getOp(name)!), name).toBe(false)
+    const { opReadsVouchedJob } = await import('../../src/core/plugin-jobs/job-caller.js')
+    for (const name of ['task_create', 'task_start', 'session_start', 'org_send', 'task_start_check', 'task_send', 'session_send']) expect(opReadsVouchedJob(getOp(name)!), name).toBe(true)
+    for (const name of ['task_list', 'task_get', 'task_update', 'task_history', 'message_send_now', 'api']) expect(opReadsVouchedJob(getOp(name)!), name).toBe(false)
   })
 })
 

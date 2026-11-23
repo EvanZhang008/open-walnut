@@ -550,9 +550,9 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
     const workspace = ws as { provider: string; inputs?: unknown } | undefined
     const noWorkspace = b.workspace === false || b.no_workspace === true
     // Who asks (the caller sid, a plugin job its host's daemon vouched for, the unproven mark), read
-    // by the one reader the start check shares (core/sessions/start-request-caller.ts).
-    const { startRequestCaller } = await import('../../core/sessions/start-request-caller.js')
-    const trust = startRequestCaller(req)
+    // by the one reader the start check shares (core/sessions/request-caller.ts).
+    const { requestCaller } = await import('../../core/sessions/request-caller.js')
+    const trust = requestCaller(req)
     const callerSid = trust.callerSid
     // A program's own start of a program run is the program's (core/sessions/plugin-run.ts).
     const rawPlugin = req.headers['x-walnut-plugin-id']

@@ -1,7 +1,7 @@
 /**
  * task_start_check: may this caller start a task in a mode right now? The start-mode ceiling a
  * start applies (core/sessions/delegated-mode.ts), read through the same chain as task_start's
- * (the daemon's vouch, the relay's held job token: plugin-jobs/job-caller.ts START_OPS), with no
+ * (the daemon's vouch, the relay's held job token: plugin-jobs/job-caller.ts JOB_OPS), with no
  * task, no session and no write. Made for a plugin job's health check (2026-11-23: a ticket worker
  * looked healthy for 30 hours while its starts were capped at default and bypass refused).
  */

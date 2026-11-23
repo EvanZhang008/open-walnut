@@ -1,8 +1,8 @@
 /**
  * task_start_check (POST /api/v1/tasks/start-check): may this caller start a task in a mode now,
  * under the one start-mode ceiling (core/sessions/delegated-mode.ts), read through the same chain as
- * task_start's (the relay's held job token for a vouched job, core/plugin-jobs/job-caller.ts START_OPS;
- * the start route's own caller reader, core/sessions/start-request-caller.ts).
+ * task_start's (the relay's held job token for a vouched job, core/plugin-jobs/job-caller.ts JOB_OPS;
+ * the start route's own caller reader, core/sessions/request-caller.ts).
  *
  * Why: a ticket worker's plugin job looked healthy for 30 hours while its starts were capped at
  * default and bypass refused. The job now asks this check and alarms when it cannot start.

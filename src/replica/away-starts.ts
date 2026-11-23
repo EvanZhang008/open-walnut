@@ -39,6 +39,7 @@ import { sessionExistsWords } from '../core/sessions/one-session-per-task.js'
 import type { SessionMode } from '../core/types.js'
 import { awayStartCaller, capAwayStart, replicaStartCaller, type StartCallerDeps } from './start-ceiling.js'
 import { callerUnprovenOf } from '../lib/caller-unproven.js'
+import type { VouchedJob } from '../core/plugin-jobs/job-caller.js'
 
 /** The daemon capability a task start here needs (follower.start `run: 'task'`). */
 export const TASK_START_CAP = 'follower-gateway-v1'
@@ -72,8 +73,8 @@ export interface AwayStartsDeps {
   liveLimit(): number
   /** The fresh start the Mac would make (null: not on Claude Code). Throws when its context cannot be built. */
   freshStart(o: { host: string; cwd: string; task: TaskRow; meta: Record<string, unknown> | null }): Promise<FreshClaudeStart | null>
-  /** The first words as the caller's (send-frame.ts), never as a person's. */
-  frame(text: string, actor: WriteActor): Promise<string>
+  /** The first words as the caller's (send-frame.ts), never as a person's; `job`: the plugin job its host vouched for (frameAsCaller). */
+  frame(text: string, actor: WriteActor, job?: VouchedJob | null): Promise<string>
   /** Who the caller is for the start-mode ceiling: a session's mode, a vouched plugin job (start-ceiling.ts). */
   startCaller: StartCallerDeps
   /** A session started here: its row shows at once and its turns reach the console (ask-launch.ts noteStarted). */
@@ -117,8 +118,8 @@ export function awayStarts(deps: AwayStartsDeps): RequestHandler {
     }
   }
 
-  async function sendTo(w: ReplicaWrite, actor: WriteActor, sid: string, taskId: string, text: string): Promise<PortAnswer> {
-    const a = await deps.port.send(w, sid, await deps.frame(text, actor), undefined, { framed: true })
+  async function sendTo(w: ReplicaWrite, actor: WriteActor, sid: string, taskId: string, text: string, job: VouchedJob | null): Promise<PortAnswer> {
+    const a = await deps.port.send(w, sid, await deps.frame(text, actor, job), undefined, { framed: true })
     if (a.answered || a.status >= 300) return a
     deps.continued?.(sid)
     deps.log('info', 'replica: a message to a task on this host was delivered while the Mac is away', { taskId, sessionId: sid, opId: w.opId })
@@ -130,11 +131,14 @@ export function awayStarts(deps: AwayStartsDeps): RequestHandler {
 
   async function start(req: Request, w: ReplicaWrite, actor: WriteActor, taskId: string): Promise<PortAnswer> {
     // The Mac's ceiling first, as its task start caps the mode before anything else (task-start.ts).
-    const capped = await capAwayStart(await awayStartCaller(req, actor, deps.startCaller), str(bodyOf(req).mode), { unproven: !!callerUnprovenOf(req) })
+    const caller = await awayStartCaller(req, actor, deps.startCaller)
+    const capped = await capAwayStart(caller, str(bodyOf(req).mode), { unproven: !!callerUnprovenOf(req) })
     if ('refused' in capped) {
       deps.log('warn', 'replica: a task start asked for a mode looser than its caller may start', { taskId, opId: w.opId })
       return capped.refused
     }
+    // The job the ceiling found vouched for is also who the start's words are from (frameAsCaller).
+    const job = caller.kind === 'plugin-job' ? { plugin: caller.plugin, job: caller.job, host: caller.host } : null
     // Held before anything of the task is read, so a second start under another op id never reads the task
     // as free while this one is under way. The same op asked again goes on: the daemon starts
     // one session per id.
@@ -146,13 +150,13 @@ export function awayStarts(deps: AwayStartsDeps): RequestHandler {
     }
     if (held === undefined) holding.set(taskId, sid)
     try {
-      return await startFree(req, w, actor, taskId, capped.mode)
+      return await startFree(req, w, actor, taskId, capped.mode, job)
     } finally {
       if (held === undefined) holding.delete(taskId)
     }
   }
 
-  async function startFree(req: Request, w: ReplicaWrite, actor: WriteActor, taskId: string, capped: SessionMode | undefined): Promise<PortAnswer> {
+  async function startFree(req: Request, w: ReplicaWrite, actor: WriteActor, taskId: string, capped: SessionMode | undefined, job: VouchedJob | null): Promise<PortAnswer> {
     const b = bodyOf(req)
     const task = await deps.task(taskId)
     if (!task) return refusalAnswer('not_found', `Task ${taskId} not found`)
@@ -166,7 +170,7 @@ export function awayStarts(deps: AwayStartsDeps): RequestHandler {
       const same = own.find((x) => x.sid === startSessionId(w.opId, taskId))
       if (same) return { answered: false, status: 200, body: { taskId, sessionId: same.sid, started: true, offline: true, duplicate: true } }
       if (!message) return needsLeaderAnswer('session_resume_needs_mac', 'This task already has its session on this host; starting it again with no message needs your Mac.')
-      const a = await sendTo(w, actor, s.sid, taskId, message)
+      const a = await sendTo(w, actor, s.sid, taskId, message, job)
       return a.answered || a.status >= 300 ? a : { answered: false, status: 200, body: { taskId, sessionId: s.sid, continued: true, started: true, offline: true } }
     }
     if (sessions.length) return needsLeaderAnswer('task_runs_elsewhere', 'This task\'s session runs on another machine; starting it needs your Mac.')
@@ -202,13 +206,13 @@ export function awayStarts(deps: AwayStartsDeps): RequestHandler {
     }
     starting++
     try {
-      return await startHere(w, actor, b, task, taskId, message, { host: deps.hostKey, cwd, meta, mode: capped })
+      return await startHere(w, actor, b, task, taskId, message, { host: deps.hostKey, cwd, meta, mode: capped, job })
     } finally {
       starting--
     }
   }
 
-  async function startHere(w: ReplicaWrite, actor: WriteActor, b: Record<string, unknown>, task: TaskRow, taskId: string, message: string, at: { host: string; cwd: string; meta: Record<string, unknown> | null; mode: SessionMode | undefined }): Promise<PortAnswer> {
+  async function startHere(w: ReplicaWrite, actor: WriteActor, b: Record<string, unknown>, task: TaskRow, taskId: string, message: string, at: { host: string; cwd: string; meta: Record<string, unknown> | null; mode: SessionMode | undefined; job: VouchedJob | null }): Promise<PortAnswer> {
     const { host, cwd, meta } = at
     let fresh: FreshClaudeStart | null
     try {
@@ -228,8 +232,8 @@ export function awayStarts(deps: AwayStartsDeps): RequestHandler {
     const r = await w.call('follower.start', {
       run: 'task', sid, taskId, title: str(task.title) || taskId, cwd, mode, modeNamed: at.mode !== undefined || fresh.modeNamed,
       ...(model ? { model } : {}), ...(effort ? { effort } : {}),
-      // The first words framed with their source (deps.frame: a job's automation, a session's peer note).
-      context: fresh.context, taskToken: START_TASK_TOKEN, firstMessage: await deps.frame(first, actor),
+      // The first words framed with their source (deps.frame: a job's App or automation, a session's peer note).
+      context: fresh.context, taskToken: START_TASK_TOKEN, firstMessage: await deps.frame(first, actor, at.job),
       host, actor,
     }, { timeoutMs: START_TIMEOUT_MS })
     if (r.kind === 'answered') return { answered: true }
@@ -276,9 +280,18 @@ export async function taskSessions(taskId: string): Promise<TaskSession[]> {
 }
 
 /** Words delivered here as the caller's (send-frame.ts), never as a person's: a job's automation, a session's peer note. */
-export async function frameAsCaller(text: string, actor: WriteActor, task: (id: string) => Promise<TaskRow | null>): Promise<string> {
+/**
+ * A caller's words framed as the Mac frames them. A plugin job its host's daemon vouched for (`job`,
+ * start-ceiling.ts vouchedActorJob, naming this actor) is its App's job, as on the Mac (send-frame.ts);
+ * one only named by its headers stays an automation.
+ */
+export async function frameAsCaller(text: string, actor: WriteActor, task: (id: string) => Promise<TaskRow | null>, job?: VouchedJob | null): Promise<string> {
   const { frameStartText } = await import('../core/sessions/send-frame.js')
-  if (actor.kind === 'plugin-job') return frameStartText(text, { source: `automation:plugin job ${actor.plugin}/${actor.job}` })
+  if (actor.kind === 'plugin-job') {
+    return job && job.plugin === actor.plugin && job.job === actor.job
+      ? frameStartText(text, { source: 'api-agent', job })
+      : frameStartText(text, { source: `automation:plugin job ${actor.plugin}/${actor.job}` })
+  }
   // A device never starts here (needs_leader first); named all the same, as the console's start names it.
   if (actor.kind !== 'session') {
     const { startRouteSource } = await import('../core/sessions/send-sent-by.js')
@@ -326,7 +339,7 @@ export function wireAwayStarts(o: {
         defaults: readProjectLaunchDefaults(meta),
       })
     },
-    frame: (text, actor) => frameAsCaller(text, actor, (id) => o.away.task(id)),
+    frame: (text, actor, job) => frameAsCaller(text, actor, (id) => o.away.task(id), job),
     startCaller: replicaStartCaller,
     started: (row) => o.started(row),
     continued: (sid) => o.continued?.(sid),

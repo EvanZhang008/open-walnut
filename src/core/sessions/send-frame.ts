@@ -19,6 +19,7 @@
 import { isHistoryUserTurn } from '../../lib/history-turn-window.js';
 import { parseSessionEnvelopes } from '../../lib/history-session-envelope.js';
 import { buildPeerWrapper } from '../peers/peer-wrapper.js';
+import { jobAppSender } from '../plugins/plugin-caller.js';
 import { buildWalnutMessage, buildWalnutNote } from '../peers/walnut-message-tag.js';
 import { hintBlocksIn } from '../hints/hint-format.js';
 import { ambientAutomatedClient, automatedClientLabel } from './automated-client.js';
@@ -112,11 +113,12 @@ export async function framingCallerOf(record: FramingCaller): Promise<FramingCal
  * The first message of a started task. A person's start (a draft, the phone) goes as typed. A start
  * made from a session (`callerSid` set, whatever the route calls its source) is that task's peer note;
  * any other start from a non-person source is framed as Walnut's. `requestId` is the reply request the
- * start opened, which the envelope names (the reply trailer follows the envelope, as for a send).
+ * start opened, which the envelope names (the reply trailer follows the envelope, as for a send). `job`: a
+ * plugin job its host's daemon vouched for (plugin-jobs/job-caller.ts), whose start is its App's job's note.
  */
 export function frameStartText(
   text: string,
-  opts: { source: string; callerSid?: string; caller?: FramingCaller; requestId?: string },
+  opts: { source: string; callerSid?: string; caller?: FramingCaller; requestId?: string; job?: { plugin: string; job: string; host: string } },
 ): string {
   if (!readsAsPerson(text)) return text;
   if (opts.caller) {
@@ -127,6 +129,12 @@ export function frameStartText(
       ...(opts.caller.taskId ? { taskId: opts.caller.taskId } : {}),
       host: !opts.caller.host || opts.caller.host === '__local__' ? 'local' : opts.caller.host,
       ...(opts.requestId ? { requestId: opts.requestId } : {}),
+    });
+  }
+  if (opts.job) {
+    return buildPeerWrapper(text, {
+      title: '', shortId: '', anonymous: true, ...jobAppSender(opts.job),
+      host: !opts.job.host || opts.job.host === '__local__' ? 'local' : opts.job.host,
     });
   }
   // A caller that named itself but did not resolve (a session id Walnut no longer knows) is still not a person.

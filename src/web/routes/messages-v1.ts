@@ -11,7 +11,9 @@
  *
  * The caller is stamped from `x-walnut-caller-sid` (provenance, never
  * authorization): a session caller's words are peer-fenced and throttled; the
- * human's own CLI sends plain text. All the semantics live in
+ * human's own CLI sends plain text. The caller is read by the one reader the start
+ * routes share (core/sessions/request-caller.ts): a plugin job its host's daemon
+ * vouched for is named as its App's job. All the semantics live in
  * core/sessions/session-send-core.ts — this file is transport only.
  *
  * Replica: sends need the primary's session-runner + daemons; refuse honestly
@@ -50,9 +52,11 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
 
     const { performSessionSend, SendError } = await import('../../core/sessions/session-send-core.js')
     const { asksNothing } = await import('../../core/sessions/quiet-notes.js')
+    const { requestCaller } = await import('../../core/sessions/request-caller.js')
+    const trust = requestCaller(req)
     // No session and no person behind it (a script, a LaunchAgent, cron: the CLI's rule,
     // src/lib/cli-sender.ts): an anonymous sender that names itself, never the user.
-    const automationCaller = !header(req, 'x-walnut-caller-sid') && header(req, CALLER_KIND_HEADER) === 'automation'
+    const automationCaller = !trust.callerSid && header(req, CALLER_KIND_HEADER) === 'automation'
     try {
       const result = await performSessionSend({
         to: str(b.to),
@@ -84,7 +88,10 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
         // src/lib/cli-sender.ts): an anonymous sender that names itself, never the user.
         ...(automationCaller
           ? { callerSid: 'external', callerLabel: senderLabel(header(req, SENDER_LABEL_HEADER)) }
-          : { callerSid: header(req, 'x-walnut-caller-sid') }),
+          : { callerSid: trust.callerSid }),
+        // The plugin job its host's daemon vouched for (the relay's token, never the plugin headers):
+        // the envelope names its App's job instead of an unidentified process. It opens no gate.
+        ...(trust.callerJob ? { callerJob: trust.callerJob } : {}),
         callerHost: header(req, 'x-walnut-caller-host'),
         // The plugin the call was made through, for a program's own message into its run (core/sessions/plugin-run.ts).
         callerPluginId: header(req, 'x-walnut-plugin-id'),
@@ -102,7 +109,7 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
       // One of the sender's Threads goes with the work it handed on (core/org/thread-follow.ts).
       const { handOffThread } = await import('../../core/org/thread-follow.js')
       const threadHandoff = result.targetTaskId && !result.repliedTo
-        ? await handOffThread({ callerSid: header(req, 'x-walnut-caller-sid'), target: result.targetTaskId, threadId: str(b.thread), handsOn: !!result.handedOn?.length })
+        ? await handOffThread({ callerSid: trust.callerSid, target: result.targetTaskId, threadId: str(b.thread), handsOn: !!result.handedOn?.length })
         : null
       res.status(202).json({ ...result, ...(waiting ? { waiting } : {}), ...(threadHandoff ? { thread_handoff: threadHandoff } : {}) })
     } catch (err) {

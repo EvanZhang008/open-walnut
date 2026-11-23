@@ -12,6 +12,12 @@ import { awaySends, callIdOfOpId, sendMessageIdOf, type AwaySendsDeps } from '..
 import type { ReplicaWrite, ReplicaWriteResult } from '../../src/replica/dispatch.js'
 import type { PortAnswer, WriteActor, WritePort } from '../../src/replica/write-port.js'
 import { writeOpId } from '../../src/lib/op-call-id.js'
+import { frameAsCaller } from '../../src/replica/away-starts.js'
+import { replicaStartCaller } from '../../src/replica/start-ceiling.js'
+import { holdRelayJob, _clearRelayJobsForTesting } from '../../src/core/plugin-jobs/job-caller.js'
+import { getSelfCallToken, setSelfApiRoot } from '../../src/lib/self-api-root.js'
+import { hostOrigin } from '../../src/lib/caller-origin.js'
+import { parseWalnutMessage } from '../../src/core/peers/walnut-message-tag.js'
 
 const A = 'aaaaaaaa-1111-4111-8111-111111111111'
 const B = 'bbbbbbbb-2222-4222-8222-222222222222'
@@ -47,7 +53,7 @@ function harness(over: Partial<AwaySendsDeps> = {}, o: { actor?: WriteActor; pee
     ...over,
   }
   const handler = awaySends(deps)
-  async function post(body: Record<string, unknown>, opId = OP): Promise<{ status: number; body: any }> {
+  async function post(body: Record<string, unknown>, opId = OP, headers: Record<string, string> = {}): Promise<{ status: number; body: any }> {
     const w: ReplicaWrite = {
       opId, away: 'host-write', raw: Buffer.from(''), submit: vi.fn(),
       call: async (cmd, params) => {
@@ -56,7 +62,7 @@ function harness(over: Partial<AwaySendsDeps> = {}, o: { actor?: WriteActor; pee
       },
     }
     return new Promise((resolve, reject) => {
-      const req = { method: 'POST', path: '/v1/messages', body, replicaWrite: w, headers: {} } as unknown as Request
+      const req = { method: 'POST', path: '/v1/messages', body, replicaWrite: w, headers, socket: { remoteAddress: '10.0.0.9' } } as unknown as Request
       let status = 0
       const res = {
         headersSent: false, setHeader: () => {},
@@ -192,6 +198,41 @@ describe('a plugin job\'s message keeps its path (moved from away-starts.ts)', (
     expect((await h.post({ to: 't3', text: 'hi', expect_reply: true })).body.error).toMatchObject({ why: 'reply_needs_mac' })
     expect((await h.post({ to: 't3', text: 'hi', in_reply_to: 'rq-abcdef' })).body.error).toMatchObject({ why: 'message_needs_mac' })
     expect(h.sends).toEqual([])
+  })
+
+  // 2026-11-23: a vouched job's message reads as its App's job on the Mac; here it was an automation.
+  it('a job its host\'s daemon vouched for (this replica\'s own self-call with the relay\'s token) is named as its App\'s job, as on the Mac', async () => {
+    setSelfApiRoot('http://127.0.0.1:45997', { credential: true })
+    try {
+      const token = holdRelayJob({ plugin: 'acme', job: 'sync' }, 'devbox')!
+      const headers = (over: Record<string, string> = {}) => ({
+        authorization: `Bearer ${getSelfCallToken()}`, 'x-walnut-caller-sid': 'external', 'x-walnut-origin': hostOrigin('devbox'),
+        'x-walnut-plugin-id': 'acme', 'x-walnut-plugin-job': 'sync', 'x-walnut-caller-job': token, ...over,
+      })
+      const h = harness({
+        frame: (text, actor, job) => frameAsCaller(text, actor, async () => null, job),
+        vouchedJob: (req) => replicaStartCaller.vouchedJob(req),
+      }, { actor: JOB })
+      const sent = (i: number) => parseWalnutMessage(h.sends[i]!.text)!
+      expect((await h.post({ to: 't3', text: 'post the report now' }, OP, headers())).status).toBe(200)
+      expect(sent(0).attrs).toMatchObject({ kind: 'peer-note', from: 'acme job sync (App)', host: 'devbox', app: 'true' })
+      expect(sent(0).attrs.anonymous).toBeUndefined()
+      expect(sent(0).attrs.note).toContain('a background job of an App your user installed in Walnut, vouched for by its host')
+      expect(sent(0).body).toBe('post the report now')
+      // A token nobody held, the unproven mark, or no token at all: an automation, as before.
+      for (const [i, over] of [{ 'x-walnut-caller-job': 'made-up' }, { 'x-walnut-caller-unproven': '1' }, { 'x-walnut-caller-job': '' }].entries()) {
+        expect((await h.post({ to: 't3', text: `note ${i}` }, writeOpId('oc-feedfacefeedface', 'POST', '/messages', i + 1), headers(over))).status).toBe(200)
+        expect(sent(i + 1).attrs, JSON.stringify(over)).toMatchObject({ from: 'automation: plugin job acme/sync', anonymous: 'true' })
+        expect(sent(i + 1).attrs.app).toBeUndefined()
+      }
+      // A token held for another job of the plugin names none for this actor.
+      const other = harness({ frame: (text, actor, job) => frameAsCaller(text, actor, async () => null, job), vouchedJob: (req) => replicaStartCaller.vouchedJob(req) }, { actor: { kind: 'plugin-job', plugin: 'acme', job: 'other' } })
+      await other.post({ to: 't3', text: 'x' }, OP, headers({ 'x-walnut-plugin-job': 'other' }))
+      expect(parseWalnutMessage(other.sends[0]!.text)!.attrs.from).toBe('automation: plugin job acme/other')
+    } finally {
+      setSelfApiRoot(null)
+      _clearRelayJobsForTesting()
+    }
   })
 
   it('a device never sends here', async () => {

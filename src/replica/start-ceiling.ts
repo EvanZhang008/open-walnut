@@ -42,10 +42,19 @@ export async function awayStartCaller(req: IncomingMessage, actor: WriteActor, d
     // startModeCeiling reads an unknown or absent mode as 'default'.
     return { kind: 'session', mode: mode as SessionMode | undefined }
   }
+  const job = vouchedActorJob(req, actor, deps)
+  return job ? { kind: 'plugin-job', plugin: job.plugin, job: job.job, host: job.host } : { kind: 'external' }
+}
+
+/**
+ * The plugin job a request's in-process credential vouches for, when it is the very job the actor
+ * names (write-actor.ts reads the job from headers anyone can write), else null. The ceiling's
+ * caller (awayStartCaller) and the sender a job's message names here (away-sends.ts, away-starts.ts).
+ */
+export function vouchedActorJob(req: IncomingMessage, actor: WriteActor, deps: Pick<StartCallerDeps, 'vouchedJob'>): VouchedJob | null {
+  if (actor.kind !== 'plugin-job' || callerUnprovenOf(req)) return null
   const job = deps.vouchedJob(req)
-  return job && job.plugin === actor.plugin && job.job === actor.job
-    ? { kind: 'plugin-job', plugin: job.plugin, job: job.job, host: job.host }
-    : { kind: 'external' }
+  return job && job.plugin === actor.plugin && job.job === actor.job ? job : null
 }
 
 /**

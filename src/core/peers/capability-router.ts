@@ -414,11 +414,12 @@ async function handleToolsCall(
   const { holdRelayTrigger } = await import('../hosts/trigger-caller.js');
   const triggerToken = isTaskHostOpPath(op.bind?.path) ? holdRelayTrigger(payload.triggerCaller, host) : undefined;
   // The plugin job the host's daemon vouched made the call (plugin-jobs/job-caller.ts), only for the
-  // anonymous gateway caller daemon-connection.ts kept it for: the start routes read who it is.
+  // anonymous gateway caller daemon-connection.ts kept it for: the start and send routes read who it is.
   // Only for a job the daemon vouched for (`vouched === true`, its process tree checked) and an op that
-  // can start a task (opStartsTask): an unvouched job's call keeps its labels below and stays capped.
-  const { holdRelayJob, opStartsTask, releaseRelayJob } = await import('../plugin-jobs/job-caller.js');
-  const jobToken = meta.pluginJob?.vouched === true && isExternalCallerSid(callerSid) && opStartsTask(op) ? holdRelayJob(meta.pluginJob, host) : undefined;
+  // reads it (opReadsVouchedJob: a start, the start check, a message): an unvouched job's call keeps its
+  // labels below, stays capped and is sent as an unidentified process.
+  const { holdRelayJob, opReadsVouchedJob, releaseRelayJob } = await import('../plugin-jobs/job-caller.js');
+  const jobToken = meta.pluginJob?.vouched === true && isExternalCallerSid(callerSid) && opReadsVouchedJob(op) ? holdRelayJob(meta.pluginJob, host) : undefined;
   // The call's id, chosen by the caller's client (src/lib/op-call-id.ts): a resend of the
   // same call runs it at most once, and op_result reads what it did.
   const { isCallId } = await import('../../lib/op-call-id.js');

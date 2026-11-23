@@ -2,7 +2,7 @@
  * POST /tasks/start-check { mode } → 200 { allowed, mode, caller, reason? } (task_start_check):
  * whether the caller may start a task in `mode` right now, under the one start-mode ceiling every
  * start applies (core/sessions/delegated-mode.ts). It reads the caller with the start route's own
- * reader (core/sessions/start-request-caller.ts) and creates no task, starts no session and writes
+ * reader (core/sessions/request-caller.ts) and creates no task, starts no session and writes
  * nothing. Allowed and refused both answer 200, so a job's periodic check is never a failed call;
  * only a malformed mode is a 400.
  *
@@ -20,8 +20,8 @@ taskStartCheckV1Router.post('/tasks/start-check', async (req: Request, res: Resp
   try {
     const mode = startCheckMode(req.body)
     if (!mode) { sendV1Error(res, 400, 'bad_request', START_CHECK_BAD_MODE); return }
-    const { startRequestCaller } = await import('../../core/sessions/start-request-caller.js')
-    const trust = startRequestCaller(req)
+    const { requestCaller } = await import('../../core/sessions/request-caller.js')
+    const trust = requestCaller(req)
     const caller = await startCallerOf(trust.callerSid, { job: trust.callerJob, unproven: trust.callerUnproven })
     res.json(startCheckAnswer(caller, mode, { unproven: trust.callerUnproven }))
   } catch (err) {

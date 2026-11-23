@@ -73,7 +73,11 @@ export async function claimTaskForNewSession(taskId: string, attemptedSessionId 
  */
 export async function continueTaskConversation(
   record: SessionRecord,
-  opts: { text: string; callerSid?: string; expectReply?: boolean; replyTimeoutSecs?: number; handsOn?: string; source?: string },
+  opts: {
+    text: string; callerSid?: string; expectReply?: boolean; replyTimeoutSecs?: number; handsOn?: string; source?: string;
+    /** The plugin job a caller `external` is, as its host vouched: the message names its App's job (session-send-core.ts). */
+    callerJob?: import('../plugin-jobs/job-caller.js').VouchedJob;
+  },
 ): Promise<{ sessionId: string; requestId?: string; delivery: 'queued' | 'deferred'; handedOn?: string[]; handOnRefused?: { id: string; reason: string }[] }> {
   const { updateSessionRecord } = await import('../session-tracker.js');
   if (record.archived) {
@@ -84,6 +88,7 @@ export async function continueTaskConversation(
     to: record.claudeSessionId,
     text: opts.text,
     callerSid: opts.callerSid,
+    ...(opts.callerJob ? { callerJob: opts.callerJob } : {}),
     ...(opts.source ? { source: opts.source } : {}),
     expectReply: opts.expectReply,
     replyTimeoutSecs: opts.replyTimeoutSecs,
