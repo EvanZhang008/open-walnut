@@ -7778,17 +7778,17 @@ function startPluginSyncPolling(): void {
  * Gracefully shut down the server.
  */
 export async function stopServer(opts: { dropConnections?: boolean; reason?: string; bailMs?: number } = {}): Promise<void> {
-  // A switch's stop runs its final batch last (SwitchStop); any other stop sends none.
+  // At the entry, before any await: no boot owns the lane any more, and it stops now.
+  localDaemonLaneOwner++
+  localDaemonLane?.stop()
+  localDaemonLane = null
+  // A switch's stop runs its final batch last (SwitchStop); any other stop sends none. Still before any await.
   serverStopping = true
   const finalStop = switchStop
   switchStop = null
   // Any other stop of a server that handed over: nothing waits for its switch stop any more (no take-back
   // runs through the teardown; a rolled-back switch's next boot waits for the handover to run out).
   if (!finalStop) plainStopHook?.()
-  // At the entry, before any await: no boot owns the lane any more, and it stops now.
-  localDaemonLaneOwner++
-  localDaemonLane?.stop()
-  localDaemonLane = null
   // The next boot in this process decides its own mode (a trial's must not outlive it).
   setBootMode('normal')
   // A session that dies from here on died with this computer's shutdown (sessions/shutdown-death.ts).

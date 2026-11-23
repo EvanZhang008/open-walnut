@@ -21,7 +21,10 @@
  *                              # the switch moves paths under it to the other machine's
  *       start_command: [...]   # optional: how to start its server (default: this CLI's `web --port`)
  *       env: { K: V }          # optional: extra environment for that server
- *       doors: [https://...]   # optional: where hosts reach its server when it leads (the old machine's standby names them)
+ *       doors: [wss://...]     # optional: where hosts reach its server when it leads (its leader door, wss:// or https://;
+ *                              # ws:// or http:// to loopback): the old machine's standby names them, hosts follow them
+ *       host_key: dev-box      # optional: the name the OTHER machine's leader gives this machine in its `hosts`
+ *                              # (when this machine is the old leader, it becomes that leader's host by it)
  *   back_window_hours: 168     # `--back` is offered this long after a switch
  *   commit_window_s: 300       # from the handover to the new leader's commit start, at most
  *   stop_wait_s: 120           # the old leader cancels its own handover when no switch stop came this long after it
@@ -64,8 +67,22 @@ export interface MachinePlace {
   accountHome?: string
   start?: string[]
   env?: Record<string, string>
-  /** Where hosts and devices reach this machine's server when it leads (https://, or http:// to loopback): told by the old machine's standby after a switch. */
+  /** Where hosts and devices reach this machine's server when it leads (wss:// or https://, ws:// or http:// to loopback): told by the old machine's standby after a switch. */
   doors?: string[]
+  /** The name the other machine's leader gives this machine in its `hosts` (host_key): the old leader becomes its host by it. */
+  hostKey?: string
+}
+
+/** Why `raw` is no leader door address (null: it is one): wss:// or https://, ws:// or http:// only to loopback, no credentials or query. */
+export function doorAddressRefusal(raw: unknown): string | null {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 2048) return 'not a URL'
+  let u: URL
+  try { u = new URL(raw) } catch { return 'not a URL' }
+  if (!['https:', 'wss:', 'http:', 'ws:'].includes(u.protocol)) return 'not wss:// or https://'
+  if ((u.protocol === 'http:' || u.protocol === 'ws:') && !loopbackHost(u.hostname)) return 'ws:// and http:// only to a loopback address'
+  if (u.username || u.password) return 'a door address carries no credentials'
+  if (u.search || u.hash) return 'a door address carries no query'
+  return null
 }
 
 export interface LeaderSwitchSettings {
@@ -189,12 +206,16 @@ export function parseSwitchSettings(raw: unknown): { settings: LeaderSwitchSetti
     const accountHome = str(x.account_home) ? x.account_home : env?.HOME
     let doors: string[] | undefined
     if (x.doors !== undefined) {
-      if (!Array.isArray(x.doors) || x.doors.length > 8 || !x.doors.every((d) => typeof d === 'string' && witnessUrlRefusal(d) === null)) {
-        return { settings: null, problem: `leader_switch.machines: ${x.id}'s doors must be a list of https:// addresses (http:// only to loopback)` }
+      if (!Array.isArray(x.doors) || x.doors.length > 8 || !x.doors.every((d) => doorAddressRefusal(d) === null)) {
+        return { settings: null, problem: `leader_switch.machines: ${x.id}'s doors must be a list of wss:// or https:// addresses (ws:// or http:// only to loopback)` }
       }
-      doors = (x.doors as string[]).map(normalWitnessUrl)
+      doors = (x.doors as string[]).map((d) => d.replace(/\/+$/, ''))
     }
-    machines.push({ id: x.id, home: path.resolve(x.home), standbyDir: path.resolve(x.standby_dir), port, ...(accountHome ? { accountHome } : {}), ...(start ? { start } : {}), ...(env ? { env } : {}), ...(doors ? { doors } : {}) })
+    if (x.host_key !== undefined && !(typeof x.host_key === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(x.host_key))) {
+      return { settings: null, problem: `leader_switch.machines: ${x.id}'s host_key must be a host name (letters, digits, . _ -)` }
+    }
+    const hostKey = typeof x.host_key === 'string' ? x.host_key : undefined
+    machines.push({ id: x.id, home: path.resolve(x.home), standbyDir: path.resolve(x.standby_dir), port, ...(accountHome ? { accountHome } : {}), ...(start ? { start } : {}), ...(env ? { env } : {}), ...(doors ? { doors } : {}), ...(hostKey ? { hostKey } : {}) })
   }
   if (machines.length < 2) return { settings: null, problem: 'leader_switch.machines must list the two machines a leader can move between' }
   if (new Set(machines.map((m) => m.id)).size !== machines.length) return { settings: null, problem: 'leader_switch.machines: ids must be unique' }

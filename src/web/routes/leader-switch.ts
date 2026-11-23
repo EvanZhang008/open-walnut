@@ -73,9 +73,18 @@ leaderSwitchRouter.post('/handover', thisMachineOnly, async (req, res) => {
   // What must land before the handover record (this machine's console on the new leader, ...).
   const before = await beforeHandover({ to, machine: p.machine, home: WALNUT_HOME, address: listeningAddress() })
   if (!before.ok) { if (link && !('refused' in link)) link.peer.close(); res.status(409).json({ ok: false, why: before.why }); return }
+  // A switch's steps for its hosts and this machine's daemon (handover-host-steps.ts), the last of them right before the record.
+  const hostSteps = link && !('refused' in link) && typeof switchId === 'string' ? await hostStepsContext(link.settings, p.machine, to, switchId) : null
+  if (hostSteps) {
+    const { beforeHandoverRecord } = await import('../../core/leader/switch/handover-host-steps.js')
+    const h = await beforeHandoverRecord(hostSteps)
+    if (!h.ok) { await withdrawConsoleQuietly(p.machine, WALNUT_HOME); link!.peer.close(); res.status(409).json({ ok: false, why: `the hosts could not be readied for ${to}: ${h.why}` }); return }
+  }
   const r = await p.runtime.handover(to)
-  // Not handed over: the console minted for it will never stand.
+  // Not handed over: the console minted for it will never stand, nor the host steps.
   if (!r.ok) await withdrawConsoleQuietly(p.machine, WALNUT_HOME)
+  if (!r.ok && hostSteps) await (await import('../../core/leader/switch/handover-host-steps.js')).undoHostSteps(hostSteps)
+  if (r.ok && hostSteps) await (await import('../../core/leader/switch/handover-host-steps.js')).afterHandoverRecord(hostSteps)
   if (!r.ok && link && !('refused' in link)) link.peer.close()
   if (!r.ok || !link || 'refused' in link || typeof switchId !== 'string') {
     res.status(r.ok ? 200 : 409).json({ ok: r.ok, ...(r.record ? { record: r.record.number } : {}), ...(r.why ? { why: r.why } : {}) })
@@ -113,6 +122,18 @@ async function switchLink(to: string, me: string): Promise<{ peer: import('../..
   return 'refused' in peer ? peer : { peer, settings: cfg.settings }
 }
 
+/** What the host steps of this switch's handover need, or null when this machine or `to` is not in the list. */
+async function hostStepsContext(settings: import('../../core/leader/switch/settings.js').LeaderSwitchSettings, me: string, to: string, switchId: string): Promise<import('../../core/leader/switch/handover-host-steps.js').HostStepsContext | null> {
+  const [{ machineById }, { thisWalnutId }, { WALNUT_HOME }] = await Promise.all([
+    import('../../core/leader/switch/settings.js'), import('../../core/leader/switch/witness-transport.js'), import('../../constants.js'),
+  ])
+  const self = machineById(settings, me)
+  const target = machineById(settings, to)
+  const walnutId = await thisWalnutId().catch(() => null)
+  if (!self || !target || !walnutId) return null
+  return { home: WALNUT_HOME, walnutId, machineId: me, self, target, commitWindowMs: settings.commitWindowMs, switchId, log: (level, msg, data) => log.web[level](msg, data) }
+}
+
 /**
  * Takes this server's handover back (a cancel by hand, the stop wait, a target side that did not start):
  * never while its switch stop runs (final-stop.ts beginTakeBack), the console minted for it withdrawn.
@@ -139,8 +160,14 @@ async function takeBackHandover(why: string, o: { begun?: import('../../core/lea
   const state = p.runtime.status().state
   if (!r.ok && (/committed before the cancel/.test(r.why ?? '') || (state !== 'handed-over' && state !== 'lost'))) stop.dropHandedOver(begun.sw)
   else stop.endTakeBack(begun.sw, r.ok)
-  if (r.ok) await withdrawConsoleQuietly(p.machine, (await import('../../constants.js')).WALNUT_HOME)
-  else log.web.warn('leader switch: the handover could not be taken back yet', { switchId: begun.sw?.switchId ?? null, why: r.why })
+  if (r.ok) {
+    const { WALNUT_HOME } = await import('../../constants.js')
+    await withdrawConsoleQuietly(p.machine, WALNUT_HOME)
+    // The host steps of that handover, taken back while this server runs on (none ran: nothing to take back).
+    const { undoHostSteps } = await import('../../core/leader/switch/handover-host-steps.js')
+    const walnutId = await (await import('../../core/leader/switch/witness-transport.js')).thisWalnutId().catch(() => null)
+    if (begun.sw && walnutId) await undoHostSteps({ home: WALNUT_HOME, walnutId, machineId: p.machine, log: (level, msg, data) => log.web[level](msg, data) })
+  } else log.web.warn('leader switch: the handover could not be taken back yet', { switchId: begun.sw?.switchId ?? null, why: r.why })
   return r
 }
 

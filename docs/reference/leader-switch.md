@@ -136,7 +136,13 @@ Source job:
    witnesses and acts no more (`POST /api/leader/handover`). Before that record
    it makes what must ride the final batch (`before-handover.ts`: today this machine's console
    device, [The old leader's console](./leader-switch-console.md)); one that fails refuses the
-   handover. Once the record stands the server writes the ticket and starts the target job; when
+   handover. Then the host steps (`handover-host-steps.ts`, the interface the route calls
+   host-follow.ts's steps through: `prepareOldMachineAsHost`, `pushNewLeaderDoors`,
+   `configureOldMachineHostService`, and `announceSwitchStop` last before the record; after it
+   `retellNetMembers` and `dropOwnDaemonDuties`; `undoHandoverHostSteps` when the handover does not happen
+   or is taken back). They read the new leader's `leader_switch.machines[].doors` (wss:// or https://) and this
+   machine's `host_key` (the name the new leader gives it in its `hosts`); with either missing, or the steps not
+   set, none runs. Once the record stands the server writes the ticket and starts the target job; when
    it cannot, it cancels the handover and leads on. The source job waits (30 s at most) until the
    target job says it sees the handover at a majority it reaches by its own ways.
 3. **stop-source**: the switch stop ([below](#the-switch-stop)), asked through
