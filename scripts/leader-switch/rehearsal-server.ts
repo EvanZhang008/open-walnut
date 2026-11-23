@@ -23,6 +23,7 @@ if (!process.env.OPEN_WALNUT_HOME || !process.env.HOME || !process.env.OPEN_WALN
 }
 process.env.WALNUT_EPHEMERAL_STANDBY = '1'
 process.env.WALNUT_EPHEMERAL_LEADER_SWITCH = '1'
+process.env.WALNUT_LEADER_SWITCH_TEST_KNOBS = '1' // the switch routes take their test knobs (where a job dies, a pause) only here
 process.env.WALNUT_DISABLE_SEARCH ??= '1'
 process.env.WALNUT_DISABLE_BACKGROUND_AI ??= '1'
 process.env.WALNUT_DAEMON_DIR ??= `${process.env.HOME}/daemon`

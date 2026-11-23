@@ -183,11 +183,16 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
         }
         case 'stop-source': {
           const running = side.runningServer()
-          if (running) {
+          if (running && !readFinalStopResult(s.sourceHome, s.id)) {
             const r = await side.api('POST', '/api/leader/switch/final-stop', { switchId: s.id, ...(Object.keys(stopTest).length ? { test: stopTest } : {}) }).catch((err) => ({ status: 0, json: { why: (err as Error).message } }))
             const j = r.json as { ok?: boolean; why?: string } | null
-            if (!j?.ok) fail(`the old leader's server did not take the switch stop: ${j?.why ?? `status ${r.status}`}`)
+            // A resume while the server is in its stop already (it answers so, or its HTTP is closed): wait for it.
+            const inStop = j?.why === 'this server is in its switch stop already' || (r.status === 0 && alive(running.pid))
+            if (!j?.ok && !inStop) fail(`the old leader's server did not take the switch stop: ${j?.why ?? `status ${r.status}`}`)
+            if (inStop) out('the old leader\'s server is in its switch stop already; waiting for it to end')
             kill('during-final-batch')
+          }
+          if (running) {
             const until = Date.parse(s.commitDeadline ?? new Date(Date.now() + settings.commitWindowMs).toISOString()) + 60_000
             while (alive(running.pid) && Date.now() < until) await sleep(200)
             if (alive(running.pid)) fail('the old leader\'s server did not end its switch stop before the commit window ended')
@@ -236,7 +241,19 @@ async function runLocked(o: SourceJobOptions, env: NodeJS.ProcessEnv, out: (line
           return s
         }
         case 'cancel': {
-          if (committedRecord(await readStanding(), s)) { out('cancel: the commit stood first; finishing the switch instead'); save('hand-off', 'committed before the cancel'); break }
+          const standingNow = await readStanding()
+          if (committedRecord(standingNow, s)) { out('cancel: the commit stood first; finishing the switch instead'); save('hand-off', 'committed before the cancel'); break }
+          // The old leader ended with its final mark: the new leader may be promoting on it now. Rolling back
+          // here would start the old home beside it, so unless a person cancels, the new leader gave up, or
+          // the window and the take-back time passed, wait for its commit instead.
+          const fin = readFinalStopResult(s.sourceHome, s.id)
+          const until = Date.parse(s.commitDeadline ?? '') + takeBackMs(settings)
+          if (fin?.ok && !side.runningServer() && handoverStanding(standingNow, s) && !cancelAsked() && (await theirs())?.step !== 'gave-up' && Date.now() < until) {
+            out('cancel: the old leader ended with its final mark and the handover stands; waiting for the new leader instead')
+            s.rollbackWhy = undefined
+            save('wait-target', 'the final mark is out: the new leader decides')
+            break
+          }
           if (side.runningServer()) {
             // The old leader still runs: its own process takes the handover back and leads at once.
             const r = await side.api('POST', '/api/leader/cancel').catch((err) => ({ status: 0, json: { why: (err as Error).message } }))

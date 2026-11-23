@@ -119,7 +119,7 @@ describe('the service role on a real mode file (scratch install root)', () => {
     const oldHome = path.join(base, 'a-home')
     fs.mkdirSync(oldHome)
     writeServiceMode(root, { v: 1, home: oldHome, exe: EXE, role: 'leader', walnutId: WALNUT })
-    const st = stateFile('done')
+    const st = stateFile('hand-off')
     writeSwitchPointer({ switchId: 'S5', side: 'source', stateFile: st.file }, env)
     const want = { role: 'replica' as const, home: newLeaderHome, walnutId: WALNUT }
     // The kill: the wanted role is in the record, the mode never written.
@@ -142,10 +142,10 @@ describe('the service role on a real mode file (scratch install root)', () => {
     expect((readServiceMode(root) as { mode: { home: string } }).mode.home).toBe(oldHome)
   })
 
-  it('new leader at its commit: the start gets the handover for this start only; after the commit the leader role on the promoted home', async () => {
+  it('new leader: no start gets a right to commit from the hook; after the commit, the leader role on the promoted home', async () => {
     const st = stateFile('commit')
     writeSwitchPointer({ switchId: 'S6', side: 'target', stateFile: st.file }, env)
-    expect((await serviceStart()).env).toEqual({ WALNUT_LEADER_SWITCH_COMMIT: '7' })
+    expect(await serviceStart()).toEqual({ env: {}, changed: false, notes: [] })
     st.write({ step: 'role' })
     const want = { role: 'leader' as const, home: newLeaderHome, walnutId: WALNUT }
     await expect(applyServiceRole({ want, switchId: 'S6', set: async () => { throw new Killed() }, record: (x) => { if (x.set !== undefined) throw new Killed(); st.write({ serviceRole: x }) } })).rejects.toThrow(Killed)
@@ -153,6 +153,15 @@ describe('the service role on a real mode file (scratch install root)', () => {
     expect(ran).toMatchObject({ changed: true, env: {} })
     expect(readServiceMode(root)).toEqual({ mode: { v: 1, home: newLeaderHome, exe: EXE, role: 'leader', walnutId: WALNUT } })
     expect(await applyServiceRole({ want, switchId: 'S6', current: st.read().serviceRole, record: (x) => st.write({ serviceRole: x }) })).toMatchObject({ set: true })
+  })
+
+  it('a job past its role step is left alone, even with its role not set (a person\'s mode since is theirs)', async () => {
+    const st = stateFile('done')
+    st.write({ serviceRole: { role: 'leader', home: newLeaderHome, walnutId: WALNUT, at: 'x', set: false, why: 'no service install root' } })
+    writeSwitchPointer({ switchId: 'S8', side: 'target', stateFile: st.file }, env)
+    const before = readServiceMode(root)
+    expect((await serviceStart()).changed).toBe(false)
+    expect(readServiceMode(root)).toEqual(before)
   })
 
   it('another Walnut\'s service is refused by the writer: recorded not set, the mode unchanged', async () => {

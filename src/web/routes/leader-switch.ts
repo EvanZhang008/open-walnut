@@ -65,7 +65,7 @@ leaderSwitchRouter.post('/handover', thisMachineOnly, async (req, res) => {
   if (switchId !== undefined) {
     const { isSwitchId } = await import('../../core/leader/switch/ticket.js')
     if (!isSwitchId(switchId)) { res.status(400).json({ ok: false, why: 'not a switch id' }); return }
-    link = await switchLink(to)
+    link = await switchLink(to, p.machine)
     if ('refused' in link) { res.status(409).json({ ok: false, why: link.refused }); return }
   }
   // What must land before the handover record (this machine's console on the new leader, ...).
@@ -81,26 +81,64 @@ leaderSwitchRouter.post('/handover', thisMachineOnly, async (req, res) => {
   const started = await startTargetSide({ switchId, to, record: r.record!.number, link, home: WALNUT_HOME, machine: p.machine, test: req.body?.test })
   if (!started.ok) {
     // The new leader's machine has no ticket or no job: take the handover back, lead on.
-    const c = await p.runtime.cancel()
-    if (c.ok) await withdrawConsoleQuietly(p.machine, WALNUT_HOME)
-    res.status(409).json({ ok: false, why: `the handover is taken back: ${started.why}` })
+    const c = await takeBackHandover('the switch job did not start on the new leader\'s machine')
+    res.status(409).json({ ok: false, why: `${c.ok ? 'the handover is taken back' : `the handover could not be taken back yet (${c.why})`}: ${started.why}` })
     return
   }
   res.json({ ok: true, record: r.record!.number, commitDeadline: started.commitDeadline })
 })
 
-/** The copy link to `to` (core/leader/switch/peer.ts) and the settings, or why there is none. */
-async function switchLink(to: string): Promise<{ peer: import('../../core/leader/switch/peer.js').SwitchPeer; settings: import('../../core/leader/switch/settings.js').LeaderSwitchSettings } | { refused: string }> {
-  const [{ readHomeSwitchConfig, machineById }, { peerFor }, { WALNUT_HOME }, { getConfig }] = await Promise.all([
-    import('../../core/leader/switch/settings.js'), import('../../core/leader/switch/peer.js'), import('../../constants.js'), import('../../core/config-manager.js'),
+/**
+ * The copy link to `to` (core/leader/switch/peer.ts) and the settings, or why there is none. Every switch
+ * call that acts on `to` (the begin, the check, the handover) passes the same trust rule here first
+ * (final-stop.ts beginRefusal); a target reached as a host must also say its service can lead.
+ */
+async function switchLink(to: string, me: string): Promise<{ peer: import('../../core/leader/switch/peer.js').SwitchPeer; settings: import('../../core/leader/switch/settings.js').LeaderSwitchSettings } | { refused: string }> {
+  const [{ readHomeSwitchConfig, machineById }, { peerFor }, { beginRefusal }, { WALNUT_HOME }, { getConfig }] = await Promise.all([
+    import('../../core/leader/switch/settings.js'), import('../../core/leader/switch/peer.js'), import('../../core/leader/switch/final-stop.js'), import('../../constants.js'), import('../../core/config-manager.js'),
   ])
   const cfg = readHomeSwitchConfig(WALNUT_HOME)
   if (!cfg.settings) return { refused: cfg.problem ?? 'no leader_switch section' }
-  const target = machineById(cfg.settings, to)
-  if (!target) return { refused: `machine ${to} is not in leader_switch.machines` }
-  const standby = (await getConfig()).standby ?? {}
-  const peer = peerFor({ to: target, standby: { ...(standby.dir ? { dir: standby.dir } : {}), ...(standby.host ? { host: standby.host } : {}) } })
+  const raw = (await getConfig()).standby ?? {}
+  const standby = { ...(raw.dir ? { dir: raw.dir } : {}), ...(raw.host ? { host: raw.host } : {}) }
+  // A target reached as a host: what this leader's link knows of its service (hello serviceRoles, launcher goodRoles).
+  const hostService = standby.host ? ((await (await import('../../core/hosts/fleet.js')).getFleetHost(standby.host).catch(() => null))?.daemon ?? null) : undefined
+  const why = beginRefusal({ settings: cfg.settings, me, to, standby, ...(hostService !== undefined ? { hostService } : {}) })
+  if (why) return { refused: why }
+  const peer = peerFor({ to: machineById(cfg.settings, to)!, standby })
   return 'refused' in peer ? peer : { peer, settings: cfg.settings }
+}
+
+/**
+ * Takes this server's handover back (a cancel by hand, the stop wait, a target side that did not start):
+ * never while its switch stop runs (final-stop.ts beginTakeBack), the console minted for it withdrawn.
+ */
+async function takeBackHandover(why: string, o: { retryMs?: number; begun?: import('../../core/leader/switch/final-stop.js').HandedOverSwitch } = {}): Promise<{ ok: boolean; why?: string }> {
+  const p = currentLeaderPermit()
+  const stop = await import('../../core/leader/switch/final-stop.js')
+  if (!p || p.trial) { if (o.begun) stop.endTakeBack(o.begun, false); return { ok: false, why: 'this server does not hold the write permission' } }
+  // The stop wait began its take-back already (synchronously, in its timer); everyone else begins it here.
+  const begun = o.begun ? { ok: true as const, sw: o.begun } : stop.beginTakeBack()
+  if (!begun.ok) return { ok: false, why: begun.why }
+  const retryMs = o.retryMs
+  log.web.warn(`leader switch: this server takes its handover back (${why})`, { switchId: begun.sw?.switchId ?? null })
+  const r = await p.runtime.cancel().catch((err: unknown) => ({ ok: false, why: err instanceof Error ? err.message : String(err) }))
+  stop.endTakeBack(begun.sw, r.ok, r.ok ? undefined : retryMs)
+  if (r.ok) await withdrawConsoleQuietly(p.machine, (await import('../../constants.js')).WALNUT_HOME)
+  else log.web.warn('leader switch: the handover could not be taken back yet', { switchId: begun.sw?.switchId ?? null, why: r.why, retryMs: retryMs ?? null })
+  return r
+}
+
+/** The test knobs of a switch call (where a job or this server dies, the ledger control, a pause in the final batch): only in a rehearsal's server. */
+function testKnobs(raw: unknown): { killAt?: string; skipLedgerRewrite?: true; pauseAfterFirstBatchMs?: number } | undefined {
+  if (process.env.WALNUT_LEADER_SWITCH_TEST_KNOBS !== '1' || !raw || typeof raw !== 'object') return undefined
+  const t = raw as { killAt?: unknown; skipLedgerRewrite?: unknown; pauseAfterFirstBatchMs?: unknown }
+  const out = {
+    ...(typeof t.killAt === 'string' ? { killAt: t.killAt } : {}),
+    ...(t.skipLedgerRewrite === true ? { skipLedgerRewrite: true as const } : {}),
+    ...(typeof t.pauseAfterFirstBatchMs === 'number' ? { pauseAfterFirstBatchMs: Math.min(60_000, Math.max(0, t.pauseAfterFirstBatchMs)) } : {}),
+  }
+  return Object.keys(out).length ? out : undefined
 }
 
 /** After the handover stood: the ticket and the target job over the copy link, and the wait for the switch stop. */
@@ -116,8 +154,8 @@ async function startTargetSide(o: { switchId: string; to: string; record: number
   const had = handedOverSwitch()
   const deadline = had && had.switchId === o.switchId ? had.commitDeadline : Date.now() + settings.commitWindowMs
   const onHosts = await homeOnHostsNow().catch(() => null)
-  const t = o.test as { killAt?: unknown; skipLedgerRewrite?: unknown } | undefined
-  const test = t && typeof t === 'object' ? { ...(typeof t.killAt === 'string' ? { killAt: t.killAt } : {}), ...(t.skipLedgerRewrite === true ? { skipLedgerRewrite: true } : {}) } : undefined
+  const knobs = testKnobs(o.test)
+  const test = knobs ? { ...(knobs.killAt ? { killAt: knobs.killAt } : {}), ...(knobs.skipLedgerRewrite ? { skipLedgerRewrite: true } : {}) } : undefined
   const ticket = {
     v: 1, switchId: o.switchId, from: o.machine, to: o.to, handover: o.record,
     sourceHome: o.home, targetHome: target.home, reverseStandbyDir: self.standbyDir,
@@ -135,17 +173,10 @@ async function startTargetSide(o: { switchId: string; to: string; record: number
   const job = await peer.startTargetJob(o.switchId, { check: false }).catch((err: unknown) => ({ ok: false, why: err instanceof Error ? err.message : String(err) }))
   if (!job.ok) return { ok: false, why: `the switch job on ${o.to} did not start: ${job.why ?? 'no reason'}` }
   noteHandedOver({
-    switchId: o.switchId, to: o.to, record: o.record, peer, commitDeadline: deadline, stopWaitMs: settings.stopWaitMs,
-    onStopWaitOver: () => {
-      void (async () => {
-        const p = currentLeaderPermit()
-        if (!p) return
-        log.web.warn('leader switch: no switch stop came after the handover; this server takes it back', { switchId: o.switchId, waitedMs: settings.stopWaitMs })
-        const c = await p.runtime.cancel()
-        if (c.ok) await withdrawConsoleQuietly(p.machine, o.home)
-        else log.web.warn('leader switch: the handover could not be taken back yet', { switchId: o.switchId, why: c.why })
-      })()
-    },
+    switchId: o.switchId, to: o.to, peer, commitDeadline: deadline, stopWaitMs: settings.stopWaitMs,
+    // No stop within the wait: take the handover back; when the witnesses do not answer, try again every 5 s
+    // (a stop that comes between two tries is taken: the handover still stands).
+    onStopWaitOver: (sw) => { void takeBackHandover(`no switch stop came within ${Math.round(settings.stopWaitMs / 1000)} s`, { begun: sw, retryMs: 5_000 }) },
   })
   return { ok: true, commitDeadline: ticket.commitDeadline }
 }
@@ -159,21 +190,23 @@ leaderSwitchRouter.post('/switch/final-stop', thisMachineOnly, async (req, res) 
   const switchId = typeof req.body?.switchId === 'string' ? req.body.switchId : ''
   if (!p || p.trial) { res.status(409).json({ ok: false, why: 'this server does not hold the write permission' }); return }
   if (p.runtime.status().state !== 'handed-over') { res.status(409).json({ ok: false, why: `this server has not handed over (${p.runtime.status().state})` }); return }
-  const [{ beginSwitchStop, finishSwitchStop }, server, { WALNUT_HOME }] = await Promise.all([
+  const [{ beginSwitchStop, abandonSwitchStop, finishSwitchStop }, server, { WALNUT_HOME }] = await Promise.all([
     import('../../core/leader/switch/final-stop.js'), import('../server.js'), import('../../constants.js'),
   ])
   if (!server.switchStopAvailable()) { res.status(409).json({ ok: false, why: 'this server cannot stop itself for a switch (it was not started by `walnut web`, or it is stopping already)' }); return }
   const begun = beginSwitchStop(switchId)
   if (!begun.ok) { res.status(409).json({ ok: false, why: begun.why }); return }
-  const t = req.body?.test as { killAt?: unknown; pauseAfterFirstBatchMs?: unknown } | undefined
-  const test = t && typeof t === 'object' ? { ...(typeof t.killAt === 'string' ? { killAt: t.killAt } : {}), ...(typeof t.pauseAfterFirstBatchMs === 'number' ? { pauseAfterFirstBatchMs: Math.min(60_000, t.pauseAfterFirstBatchMs) } : {}) } : undefined
+  const knobs = testKnobs(req.body?.test)
+  const test = knobs ? { ...(knobs.killAt ? { killAt: knobs.killAt } : {}), ...(knobs.pauseAfterFirstBatchMs ? { pauseAfterFirstBatchMs: knobs.pauseAfterFirstBatchMs } : {}) } : undefined
   const abort = new AbortController()
   const stoppedAt = new Date().toISOString()
   const sw = begun.sw
   log.web.info('leader switch: the switch stop begins (doors closed, then the final batch)', { switchId, to: sw.to })
   res.status(202).json({ ok: true, stoppedAt })
-  res.on('finish', () => {
-    server.requestSwitchStop({
+  // After the answer is on its way, whether or not the caller is still there to read it (a dropped
+  // caller must not leave this server taken for a stop that never runs).
+  setImmediate(() => {
+    const taken = server.requestSwitchStop({
       windowMs: Math.max(0, sw.commitDeadline - Date.now()),
       abort: (why) => abort.abort(why),
       run: async () => {
@@ -183,6 +216,10 @@ leaderSwitchRouter.post('/switch/final-stop', thisMachineOnly, async (req, res) 
         return r.ok
       },
     })
+    if (!taken) {
+      log.web.warn('leader switch: the switch stop could not start in this process; it waits for its stop again', { switchId })
+      abandonSwitchStop(sw)
+    }
   })
 })
 
@@ -201,7 +238,9 @@ leaderSwitchRouter.post('/switch/check', thisMachineOnly, async (req, res) => {
   const [{ isSwitchId, checkReportName, removeSwitchFile }] = await Promise.all([import('../../core/leader/switch/ticket.js')])
   const switchId: unknown = req.body?.switchId
   if (!isSwitchId(switchId)) { res.status(400).json({ ok: false, why: 'not a switch id' }); return }
-  const link = await switchLink(to)
+  const p = currentLeaderPermit()
+  if (!p || p.trial) { res.status(409).json({ ok: false, why: 'this server does not hold the write permission' }); return }
+  const link = await switchLink(to, p.machine)
   if ('refused' in link) { res.status(409).json({ ok: false, why: link.refused }); return }
   if (link.peer.kind === 'local') removeSwitchFile(link.peer.standbyDir, checkReportName(switchId))
   const job = await link.peer.startTargetJob(switchId, { check: true })
@@ -224,18 +263,12 @@ leaderSwitchRouter.post('/switch/begin', thisMachineOnly, async (req, res) => {
   const p = currentLeaderPermit()
   const to = typeof req.body?.to === 'string' ? req.body.to : ''
   if (!p || p.trial) { res.status(409).json({ ok: false, why: 'this server does not hold the write permission' }); return }
-  const [{ readHomeSwitchConfig }, { beginRefusal, beganLine }, { isSwitchId }, { WALNUT_HOME }, { getConfig }] = await Promise.all([
-    import('../../core/leader/switch/settings.js'), import('../../core/leader/switch/final-stop.js'), import('../../core/leader/switch/ticket.js'), import('../../constants.js'), import('../../core/config-manager.js'),
-  ])
+  const [{ beganLine }, { isSwitchId }] = await Promise.all([import('../../core/leader/switch/final-stop.js'), import('../../core/leader/switch/ticket.js')])
   const switchId: unknown = req.body?.switchId
   if (!isSwitchId(switchId)) { res.status(400).json({ ok: false, why: 'not a switch id' }); return }
-  const cfg = readHomeSwitchConfig(WALNUT_HOME)
-  if (!cfg.settings) { res.status(409).json({ ok: false, why: cfg.problem ?? 'no leader_switch section' }); return }
-  const standby = (await getConfig()).standby ?? {}
-  // A target reached as a host: what this leader's link knows of its service (hello serviceRoles, launcher goodRoles).
-  const hostService = standby.host ? ((await (await import('../../core/hosts/fleet.js')).getFleetHost(standby.host).catch(() => null))?.daemon ?? null) : undefined
-  const why = beginRefusal({ settings: cfg.settings, me: p.machine, to, standby: { ...(standby.dir ? { dir: standby.dir } : {}), ...(standby.host ? { host: standby.host } : {}) }, ...(hostService !== undefined ? { hostService } : {}) })
-  if (why) { res.status(403).json({ ok: false, why }); return }
+  const link = await switchLink(to, p.machine)
+  if ('refused' in link) { res.status(403).json({ ok: false, why: link.refused }); return }
+  link.peer.close()
   const startedBy = { machine: p.machine, via: 'cli' as const }
   const line = beganLine({ switchId, from: p.machine, to, by: startedBy })
   log.web.info(`leader switch: ${line.title}`, { switchId, from: p.machine, to, startedBy })
@@ -245,15 +278,8 @@ leaderSwitchRouter.post('/switch/begin', thisMachineOnly, async (req, res) => {
 })
 
 leaderSwitchRouter.post('/cancel', thisMachineOnly, async (_req, res) => {
-  const p = currentLeaderPermit()
-  if (!p || p.trial) { res.status(409).json({ ok: false, why: 'this server does not hold the write permission' }); return }
   // A switch stop under way is past taking back: its final batch decides (a cancel would race its mark).
-  const stop = await import('../../core/leader/switch/final-stop.js')
-  if (stop.handedOverSwitch()?.phase === 'stopping') { res.status(409).json({ ok: false, why: 'this server is in its switch stop' }); return }
-  const r = await p.runtime.cancel()
-  if (r.ok) stop.forgetHandedOver()
-  // This server leads on: the console minted for the handover will never stand.
-  if (r.ok) await withdrawConsoleQuietly(p.machine, (await import('../../constants.js')).WALNUT_HOME)
+  const r = await takeBackHandover('cancelled by hand')
   res.status(r.ok ? 200 : 409).json(r)
 })
 

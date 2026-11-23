@@ -8,7 +8,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { beginRefusal, beginSwitchStop, finishSwitchStop, forgetHandedOver, noteHandedOver, runFinalBatch } from '../../../../src/core/leader/switch/final-stop.js'
+import { abandonSwitchStop, beginRefusal, beginSwitchStop, beginTakeBack, endTakeBack, finishSwitchStop, forgetHandedOver, noteHandedOver, runFinalBatch, type HandedOverSwitch } from '../../../../src/core/leader/switch/final-stop.js'
 import { LocalPeer, peerFor, type SwitchPeer } from '../../../../src/core/leader/switch/peer.js'
 import { readFinalStopResult } from '../../../../src/core/leader/switch/records.js'
 import { finalMarkName, readSwitchFile, validFinalMark } from '../../../../src/core/leader/switch/ticket.js'
@@ -71,7 +71,7 @@ describe('the final batch', () => {
     const peer = fakePeer([true])
     const files = new Map<string, unknown>()
     Object.assign(peer, { writeFile: async (n: string, v: unknown) => { files.set(n, v) } })
-    const r = await finishSwitchStop({ home, sw: { switchId: 'S1', to: 'machine-b', record: 3, peer, commitDeadline: Date.now() + 150, phase: 'stopping' }, stoppedAt: new Date().toISOString(), signal: live(), log: () => {} })
+    const r = await finishSwitchStop({ home, sw: { switchId: 'S1', to: 'machine-b', peer, commitDeadline: Date.now() + 150, phase: 'stopping' }, stoppedAt: new Date().toISOString(), signal: live(), log: () => {} })
     expect(r.ok).toBe(false)
     expect(r.why).toMatch(/still changed when the commit window ended/)
     expect(files.size).toBe(0)
@@ -84,7 +84,7 @@ describe('the final batch', () => {
     const files = new Map<string, unknown>()
     Object.assign(peer, { writeFile: async (n: string, v: unknown) => { files.set(n, v) } })
     const ctl = new AbortController()
-    const run = finishSwitchStop({ home, sw: { switchId: 'S2', to: 'machine-b', record: 3, peer, commitDeadline: Date.now() + 60_000, phase: 'stopping' }, stoppedAt: new Date().toISOString(), signal: ctl.signal, test: { pauseAfterFirstBatchMs: 5_000 }, log: () => {} })
+    const run = finishSwitchStop({ home, sw: { switchId: 'S2', to: 'machine-b', peer, commitDeadline: Date.now() + 60_000, phase: 'stopping' }, stoppedAt: new Date().toISOString(), signal: ctl.signal, test: { pauseAfterFirstBatchMs: 5_000 }, log: () => {} })
     setTimeout(() => ctl.abort('stopped by SIGTERM'), 30)
     const r = await run
     expect(r.ok).toBe(false)
@@ -100,7 +100,7 @@ describe('the final batch', () => {
     fs.writeFileSync(path.join(home, 'notes', 'a.md'), 'one\n')
     const standbyDir = path.join(base, 'standby')
     const peer = new LocalPeer({ id: 'machine-b', home: path.join(base, 'b-home'), standbyDir, port: 1 }, standbyDir)
-    const r = await finishSwitchStop({ home, sw: { switchId: 'S3', to: 'machine-b', record: 3, peer, commitDeadline: Date.now() + 60_000, phase: 'stopping' }, stoppedAt: '2026-11-23T00:00:00.000Z', signal: live(), log: () => {} })
+    const r = await finishSwitchStop({ home, sw: { switchId: 'S3', to: 'machine-b', peer, commitDeadline: Date.now() + 60_000, phase: 'stopping' }, stoppedAt: '2026-11-23T00:00:00.000Z', signal: live(), log: () => {} })
     expect(r.ok).toBe(true)
     const mark = readSwitchFile(standbyDir, finalMarkName('S3'))
     expect(validFinalMark(mark, 'S3')).toBe(true)
@@ -113,19 +113,46 @@ describe('the final batch', () => {
 describe('the wait for the switch stop', () => {
   it('no stop within the wait: the server takes its handover back; a stop after that is refused', () => {
     vi.useFakeTimers()
-    const over = vi.fn()
-    noteHandedOver({ switchId: 'S4', to: 'machine-b', record: 3, peer: fakePeer([false]), commitDeadline: Date.now() + 300_000, stopWaitMs: 120_000, onStopWaitOver: over })
+    let held: HandedOverSwitch | null = null
+    const over = vi.fn((sw: HandedOverSwitch) => { held = sw })
+    noteHandedOver({ switchId: 'S4', to: 'machine-b', peer: fakePeer([false]), commitDeadline: Date.now() + 300_000, stopWaitMs: 120_000, onStopWaitOver: over })
     vi.advanceTimersByTime(119_000)
     expect(over).not.toHaveBeenCalled()
     vi.advanceTimersByTime(2_000)
     expect(over).toHaveBeenCalledTimes(1)
-    expect(beginSwitchStop('S4')).toEqual({ ok: false, why: expect.stringMatching(/cancelled that handover/) })
+    // While it takes the handover back, a stop is refused (the two never both run), and so is a second take-back.
+    expect(beginSwitchStop('S4')).toEqual({ ok: false, why: expect.stringMatching(/taking that handover back/) })
+    expect(beginTakeBack()).toEqual({ ok: false, why: expect.stringMatching(/taking its handover back already/) })
+    // No witness majority this moment: it waits for its stop again, and tries again 5 s later.
+    endTakeBack(held, false, 5_000)
+    expect(beginSwitchStop('S4').ok).toBe(true)
+    abandonSwitchStop(held!)
+    vi.advanceTimersByTime(119_000)
+    expect(over).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(2_000)
+    expect(over).toHaveBeenCalledTimes(2)
+    endTakeBack(held, true)
+    expect(beginSwitchStop('S4')).toEqual({ ok: false, why: expect.stringMatching(/took that handover back/) })
+  })
+
+  it('a cancel by hand during the switch stop is refused; one before it makes the stop refused', () => {
+    vi.useFakeTimers()
+    noteHandedOver({ switchId: 'S8', to: 'machine-b', peer: fakePeer([false]), commitDeadline: Date.now() + 300_000, stopWaitMs: 120_000, onStopWaitOver: () => {} })
+    const t = beginTakeBack()
+    expect(t.ok).toBe(true)
+    expect(beginSwitchStop('S8').ok).toBe(false)
+    endTakeBack(t.ok ? t.sw : null, false)
+    expect(beginSwitchStop('S8').ok).toBe(true)
+    expect(beginTakeBack()).toEqual({ ok: false, why: expect.stringMatching(/in its switch stop/) })
+    // No switch handed over: a plain cancel goes ahead.
+    forgetHandedOver()
+    expect(beginTakeBack()).toEqual({ ok: true, sw: null })
   })
 
   it('a stop in time ends the wait: no cancel comes after it, and a second stop is refused', () => {
     vi.useFakeTimers()
     const over = vi.fn()
-    noteHandedOver({ switchId: 'S5', to: 'machine-b', record: 3, peer: fakePeer([false]), commitDeadline: Date.now() + 300_000, stopWaitMs: 120_000, onStopWaitOver: over })
+    noteHandedOver({ switchId: 'S5', to: 'machine-b', peer: fakePeer([false]), commitDeadline: Date.now() + 300_000, stopWaitMs: 120_000, onStopWaitOver: over })
     expect(beginSwitchStop('S5').ok).toBe(true)
     vi.advanceTimersByTime(300_000)
     expect(over).not.toHaveBeenCalled()
@@ -135,8 +162,8 @@ describe('the wait for the switch stop', () => {
 
   it('a resumed source job asking again keeps the first deadline and wait', () => {
     vi.useFakeTimers()
-    const first = noteHandedOver({ switchId: 'S7', to: 'machine-b', record: 3, peer: fakePeer([false]), commitDeadline: 1_000, stopWaitMs: 120_000, onStopWaitOver: () => {} })
-    const again = noteHandedOver({ switchId: 'S7', to: 'machine-b', record: 3, peer: fakePeer([false]), commitDeadline: 9_000, stopWaitMs: 120_000, onStopWaitOver: () => {} })
+    const first = noteHandedOver({ switchId: 'S7', to: 'machine-b', peer: fakePeer([false]), commitDeadline: 1_000, stopWaitMs: 120_000, onStopWaitOver: () => {} })
+    const again = noteHandedOver({ switchId: 'S7', to: 'machine-b', peer: fakePeer([false]), commitDeadline: 9_000, stopWaitMs: 120_000, onStopWaitOver: () => {} })
     expect(again).toBe(first)
     expect(again.commitDeadline).toBe(1_000)
   })

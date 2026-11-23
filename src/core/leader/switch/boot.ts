@@ -54,6 +54,8 @@ export async function leaderPermitAtBoot(input: LeaderBootInput): Promise<Permit
   if (input.ephemeral && env.WALNUT_EPHEMERAL_LEADER_SWITCH !== '1') return null
   const commit = Number(env.WALNUT_LEADER_SWITCH_COMMIT)
   const commitHandover = Number.isInteger(commit) && commit > 0 ? commit : undefined
+  const until = Number(env.WALNUT_LEADER_SWITCH_COMMIT_UNTIL)
+  const commitUntil = commitHandover !== undefined && Number.isSafeInteger(until) && until > 0 ? until : undefined
   const trial = input.trial === true
   const { readMarker, markerRefusal, promotionRefusal } = await import('./records.js')
   const marker = readMarker(input.home)
@@ -87,6 +89,7 @@ export async function leaderPermitAtBoot(input: LeaderBootInput): Promise<Permit
     trial,
     lockPath: leaderInstanceLockPath(env),
     ...(commitHandover !== undefined ? { commitHandover } : {}),
+    ...(commitUntil !== undefined ? { commitUntil } : {}),
     log: input.log,
   })
   if (rt.decision.kind === 'refuse') {

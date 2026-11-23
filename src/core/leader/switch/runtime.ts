@@ -105,6 +105,8 @@ export interface RuntimeOptions {
   lockPath?: string
   /** The switch asks this server to commit: the number of the handover to it that it may renew on. */
   commitHandover?: number
+  /** Wall-clock ms: after it the handover is no longer renewed on (the commit window ended; the old leader takes it back). */
+  commitUntil?: number
   /** Tests: how remote witnesses are reached (witness-transport.ts), in place of the host links. */
   net?: Partial<import('./witness-transport.js').WitnessTransportOptions>
   log?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
@@ -172,6 +174,8 @@ async function acquire(h: PermitHandle, me: string, commitHandover?: number): Pr
 }
 
 export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRuntime> {
+  /** The handover this start may commit on, while the commit window lasts. */
+  const commitOn = (): number | undefined => (opts.commitUntil !== undefined && Date.now() > opts.commitUntil ? undefined : opts.commitHandover)
   const { home, holderId: me, settings } = opts
   const log = opts.log ?? (() => {})
   let lock: InstanceLock | null = null
@@ -325,7 +329,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
       decision = { kind: 'refuse', why: `another Walnut server of this machine holds its instance lock (${taken.reason}): one leader process per machine` }
     } else {
       if (taken?.ok) { lock = taken.lock; lock.start() }
-      const got = await acquire(h, me, opts.commitHandover)
+      const got = await acquire(h, me, commitOn())
       if (got.ok) decision = { kind: 'lead', record: got.record! }
       else if (got.refused) decision = { kind: 'refuse', why: got.why!, ...(got.leader ? { leader: got.leader } : {}), ...(got.standing ? { record: got.standing } : {}) }
       else decision = { kind: 'waiting', why: got.why ?? 'no majority of the witnesses answered' }
@@ -357,7 +361,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
       if (r?.outcome === 'chosen') { learn(); note('lease', { record: r.record.number }) }
       else {
         const read = await readStanding(h)
-        const w = wantFor(read.standing, me, h.client.incarnation(), opts.commitHandover)
+        const w = wantFor(read.standing, me, h.client.incarnation(), commitOn())
         if (w.refuse) {
           state = 'lost'
           why = w.why
@@ -382,7 +386,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
       return
     }
     if (state === 'waiting') {
-      const got = await acquire(h, me, opts.commitHandover)
+      const got = await acquire(h, me, commitOn())
       if (stopped || state !== 'waiting') return
       if (got.ok) {
         lead(got.record!, 'leader permit: taken; the outward doors are open')

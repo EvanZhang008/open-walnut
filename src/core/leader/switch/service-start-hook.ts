@@ -4,10 +4,12 @@
  * 5 s, and reads local files only (node:fs, node:path, node:os: nothing else loads on that path).
  *
  *   - A kill between a switch job's record of the role it wants and the mode write (service-role.ts
- *     applyServiceRole: records first, mode second) is healed here: the record says the role, the mode
- *     file does not yet, so the hook asks for the record's role again (setRole is idempotent).
- *   - A target job at its commit step: this one start may commit on that handover only
- *     (WALNUT_LEADER_SWITCH_COMMIT, for this start's server env).
+ *     applyServiceRole: records first, mode second) is healed here: the job's state is still at its role
+ *     step (the target's `role`, the source's `hand-off`), the record says a role not yet marked set,
+ *     and the mode file says another, so the hook asks for the record's role again (setRole is idempotent).
+ *     A job past its role step, or a role it marked set, is left alone: a mode changed since is a person's.
+ *   - It gives no start the right to commit: a launcher's start on a home a switch is making waits
+ *     (promotion-wait.ts), and the commit start is the switch's own.
  *
  * It finds the switch's record through this machine's pointer (`leader-switch-pointer.json`, beside
  * the machine id, outside every home), which each job writes before its role step. The mode is never
@@ -40,10 +42,10 @@ interface RecordedRole { role?: unknown; home?: unknown; walnutId?: unknown; set
 export async function leaderSwitchStartHook(ctx: ServiceStartContext, env: NodeJS.ProcessEnv = process.env): Promise<ServiceStartResult> {
   const ptr = readSwitchPointer(env)
   if (!ptr) return {}
-  let st: { step?: string; handover?: number; serviceRole?: RecordedRole } | null = null
+  let st: { step?: string; serviceRole?: RecordedRole } | null = null
   try { st = JSON.parse(fs.readFileSync(ptr.stateFile, 'utf8')) } catch { return { note: `leader switch ${ptr.switchId}: its record ${ptr.stateFile} cannot be read` } }
   const out: ServiceStartResult = {}
-  if (ptr.side === 'target' && st?.step === 'commit' && Number.isSafeInteger(st.handover)) out.env = { WALNUT_LEADER_SWITCH_COMMIT: String(st.handover) }
+  if (st?.step !== (ptr.side === 'target' ? 'role' : 'hand-off')) return out
   const want = st?.serviceRole
   if (!want || (want.role !== 'leader' && want.role !== 'replica') || typeof want.home !== 'string' || typeof want.walnutId !== 'string' || !want.walnutId) return out
   // Marked set: the job saw the mode written. A mode changed since (by a person, `walnut daemon update`) is theirs.

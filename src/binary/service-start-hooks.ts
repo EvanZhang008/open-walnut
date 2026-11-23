@@ -35,7 +35,7 @@ export type ServiceStartHook = (ctx: ServiceStartContext) => Promise<ServiceStar
 
 /** Lazy: each entry is loaded only when a mode file reads. */
 export const SERVICE_START_HOOKS: Array<() => Promise<ServiceStartHook>> = [
-  // The leader switch: a kill between its role record and the mode, and a commit start's handover (local files only).
+  // The leader switch: a kill between its role record and the mode (local files only).
   async () => (await import('../core/leader/switch/service-start-hook.js')).leaderSwitchStartHook,
 ]
 

@@ -143,8 +143,13 @@ export function promotionRefusal(home: string, as: { trial: boolean; commit: boo
  * One switch job per home at a time: a second one (another terminal's --resume or --cancel while
  * the first still runs) is refused. Taken with O_EXCL; a lock whose process is gone is taken over.
  */
+/** The source job's lock: one switch from a home at a time. */
+export function switchLockFile(home: string): string {
+  return path.join(switchDir(home), 'switch.lock')
+}
+
 export function takeSwitchLock(home: string): () => void {
-  return takeJobLock(path.join(switchDir(home), 'switch.lock'), 'another `walnut leader switch` runs on this home')
+  return takeJobLock(switchLockFile(home), 'another `walnut leader switch` runs on this home')
 }
 
 /** The pid a job lock names while that process lives, else null. */

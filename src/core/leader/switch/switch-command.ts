@@ -13,12 +13,11 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { lockHolder, readMarker, summarize, switchDir } from './records.js'
+import { lockHolder, readMarker, summarize, switchLockFile } from './records.js'
 import { machineByHome, readHomeSwitchConfig, type LeaderSwitchSettings, type MachinePlace } from './settings.js'
 import { machineIdFile } from './machine-id.js'
 import { serverCommand } from '../../trial-start/process.js'
-import { switchFolder, ticketName, readSwitchFile, writeSwitchFile } from './ticket.js'
+import { homeKey, switchFolder, ticketName, readSwitchFile, writeSwitchFile } from './ticket.js'
 import {
   SOURCE_FINAL, SwitchRefused, TARGET_FINAL, readSwitchState, readTargetState, sourceCancelFile, targetCancelName,
   type SwitchState, type TargetState,
@@ -46,9 +45,6 @@ export interface SwitchOutcome {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-function homeKey(home: string): string {
-  return createHash('sha256').update(path.resolve(home)).digest('hex').slice(0, 16)
-}
 
 /** The source job's output: beside this machine's id, outside every home (a refused switch writes nothing in the home). */
 export function sourceJobLog(home: string, env: NodeJS.ProcessEnv): string {
@@ -128,7 +124,7 @@ export async function runLeaderSwitch(o: SwitchCommandOptions): Promise<SwitchOu
   const log = sourceJobLog(home, env)
   let from = (() => { try { return fs.statSync(log).size } catch { return 0 } })()
   const before = readSwitchState(home)
-  const lockFile = path.join(switchDir(home), 'switch.lock')
+  const lockFile = switchLockFile(home)
   let sourceExit: Promise<{ code: number | null; signal: string | null }> | null = null
   /** A target job this command just started counts as running until its lock shows (or 10 s pass). */
   let targetGraceUntil = 0
@@ -214,7 +210,7 @@ export async function switchStatus(o: { home: string; env?: NodeJS.ProcessEnv })
   const self = machineByHome(settings, home)
   const env = machineEnv(self, o.env ?? process.env)
   const source = readSwitchState(home)
-  const lock = path.join(switchDir(home), 'switch.lock')
+  const lock = switchLockFile(home)
   const { targetJobRunning } = await import('./target-job.js')
   const targets: Record<string, unknown>[] = []
   for (const m of settings.machines) {

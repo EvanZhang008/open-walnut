@@ -201,7 +201,9 @@ runs out at the witnesses (up to a minute)**, then grants itself. Nothing was lo
 was never changed.
 
 Defaults: `commit_window_s: 300` (from the handover to the last moment the new leader may start
-its commit; the final batch must end inside it), `stop_wait_s: 120` (the old leader's server cancels
+its commit; the final batch and its mark must end inside it, a mark dated after it is refused, no
+commit start begins after it, and the commit start itself stops renewing on the handover at that
+moment (`WALNUT_LEADER_SWITCH_COMMIT_UNTIL`); one already running gets 30 s more to reach its majority), `stop_wait_s: 120` (the old leader's server cancels
 its own handover when no switch stop came this long after it, so a source job that died after the
 handover leaves no machine without a leader for long; a stop asked later is refused).
 
@@ -217,7 +219,11 @@ The old leader's server ends itself for the switch: an API call, never a signal 
 ordinary planned stop). In order (`server.ts` `stopServer`, `final-stop.ts`):
 
 1. It takes the stop (`beginSwitchStop`: the handover of this switch stands and no stop or
-   cancel came before) and answers 202; `walnut web` gives it its usual bail plus the commit window.
+   take-back began before; the two are decided synchronously, so they never both run) and answers 202;
+   the stop starts whether or not the caller reads the answer. `walnut web` gives it its usual bail plus
+   the commit window. A take-back (a cancel by hand, the stop wait) is refused while the stop runs; one
+   that could not reach the witnesses lets the switch wait for its stop again, and the stop wait tries
+   again every 5 s.
 2. Its doors close and its stores close, as in a planned stop. A switch stop writes no
    release record: the handover is the last record of this process.
 3. **The final batch**: standby batches of the stopped home until one finds nothing changed (a
@@ -263,10 +269,11 @@ a few times. A machine whose job runs outside a service has no install root: rec
 
 A kill between the record and the mode is healed by the leader switch's service start hook
 (`service-start-hook.ts`, in `SERVICE_START_HOOKS`, under the hooks' shared 5 s): it reads this
-machine's last switch record (through `leader-switch-pointer.json` beside the machine id), and when the
-record's role is not yet marked set and the mode differs, asks for it again. For a target job at its
-commit it adds `WALNUT_LEADER_SWITCH_COMMIT` to that one start. A role the job marked set is left
-alone (a mode a person changed since is theirs). The mode is never the truth of who leads: the
+machine's last switch record (through `leader-switch-pointer.json` beside the machine id), and while
+that job is still at its role step (the target's `role`, the source's `hand-off`) with a role not yet
+marked set and a mode that differs, asks for it again. A job past its role step, or a role it marked
+set, is left alone (a mode a person changed since is theirs). The hook gives no start a right to
+commit: the commit start is the switch's own. The mode is never the truth of who leads: the
 witnesses' record stays that.
 
 Whether the target can lead as a service is asked, never guessed: in the preflight, for a target

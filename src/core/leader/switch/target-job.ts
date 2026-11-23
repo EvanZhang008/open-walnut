@@ -133,6 +133,8 @@ function newTargetState(standbyDir: string, t: SwitchTicket): TargetState {
 }
 
 const PRE_COMMIT = new Set<TargetStep>(['wait-mark', 'promote', 'trial', 'commit'])
+/** How long past the commit window a commit start already running may take to reach its majority. */
+const COMMIT_GRACE_MS = 30_000
 
 async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line: string) => void): Promise<TargetState> {
   let st = readTargetState(o.standbyDir, o.switchId)
@@ -144,6 +146,8 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
     return st
   } else {
     out(`resuming the target job of switch ${st.id} at ${st.step}`)
+    // Tests: a kill point dies once, at the first run (a resume runs on past it).
+    if (st.test?.killAt) delete st.test.killAt
   }
   const s = st
   const settings = settingsAt(o.standbyDir, s.targetHome)
@@ -193,7 +197,10 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
           let lastLook = 0
           while (!mark) {
             const m = readSwitchFile<FinalMark>(o.standbyDir, finalMarkName(s.id))
-            if (validFinalMark(m, s.id)) { mark = m; break }
+            if (validFinalMark(m, s.id)) {
+              if (Date.parse(m!.at) > deadline) fail(`the final mark came after the commit window (${m!.at} > ${s.commitDeadline})`)
+              mark = m; break
+            }
             if (Date.now() > deadline) fail(`no final mark from ${s.from} before the deadline ${s.commitDeadline}: its final batch did not reach this machine`)
             if (cancelAsked()) fail('cancelled by hand')
             if (Date.now() - lastLook > 2_000) {
@@ -255,8 +262,14 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
           let committed: PermitRecord | null = null
           const first = await readStanding()
           if (committedRecord(first, s)) committed = first!
-          // No commit starts after the deadline: the old machine takes the lead back after it.
-          if (!committed && !side.runningServer() && Date.now() > deadline) fail(`the commit window ended at ${s.commitDeadline} before the new leader's commit started`)
+          // No commit starts after the deadline: the old machine takes the lead back after it. A commit start
+          // left running past it (a resume) stops first, so what the witnesses hold next is final.
+          if (!committed && Date.now() > deadline) {
+            if (side.runningServer()) await side.stopServer()
+            const after = await readStanding()
+            if (committedRecord(after, s)) committed = after!
+            else fail(`the commit window ended at ${s.commitDeadline} before the new leader committed`)
+          }
           if (!committed && cancelAsked()) {
             // A cancel by hand: the commit start stops first, so what the witnesses hold next is final.
             await side.stopServer()
@@ -270,18 +283,26 @@ async function runLocked(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line
             if (refusal) fail(refusal)
           }
           if (readPromoted(s.targetHome)?.state !== 'led') writePromoted(s.targetHome, { switchId: s.id, state: 'promoted', from: s.sourceHome, ...onHosts, at: new Date().toISOString() })
-          const until = Date.now() + takeBackMs(settings)
+          // A commit start began inside the window may take a little past it to reach its majority; none starts after it.
+          const until = Math.min(Date.now() + takeBackMs(settings), deadline + COMMIT_GRACE_MS)
           while (!committed && Date.now() < until) {
             const standing = await readStanding()
             if (committedRecord(standing, s)) { committed = standing!; break }
             if (standing && !handoverStanding(standing, s)) fail(`the handover is not standing at the witnesses any more (${JSON.stringify(summarize(standing))})`)
             if (!side.runningServer()) {
-              const started = await side.startServer('leader', 120_000, s.handover, s.id)
+              if (Date.now() > deadline) break
+              const started = await side.startServer('leader', 120_000, s.handover, s.id, deadline)
               if (!started.ok) fail(`the new leader did not start to commit: ${started.why}${started.logTail ? `\n${started.logTail.split('\n').slice(-8).join('\n')}` : ''}`)
             }
             await sleep(250)
           }
-          if (!committed) fail('the new leader\'s commit did not reach a majority of the witnesses')
+          if (!committed) {
+            // Stopped first, so a late renew cannot stand after this job gave up.
+            if (side.runningServer()) await side.stopServer()
+            const after = await readStanding()
+            if (committedRecord(after, s)) committed = after!
+            else fail('the new leader\'s commit did not reach a majority of the witnesses inside the commit window')
+          }
           s.commit = committed!.number
           kill('after-commit-majority')
           writePromoted(s.targetHome, { switchId: s.id, state: 'led', from: s.sourceHome, ...onHosts, at: new Date().toISOString() })

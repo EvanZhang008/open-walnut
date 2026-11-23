@@ -27,52 +27,96 @@ import { hostLeadRefusal, type HostServiceFacts } from './service-role.js'
 export interface HandedOverSwitch {
   switchId: string
   to: string
-  record: number
   peer: SwitchPeer
   /** Wall-clock ms: the new leader starts no commit after it. */
   commitDeadline: number
-  phase: 'waiting' | 'stopping' | 'cancelled'
+  /** waiting: for its switch stop; stopping: in it; cancelling: taking the handover back (its stop wait, or a cancel). */
+  phase: 'waiting' | 'stopping' | 'cancelling'
 }
 
-let current: (HandedOverSwitch & { timer: ReturnType<typeof setTimeout> | null }) | null = null
+type Held = HandedOverSwitch & { timer: ReturnType<typeof setTimeout> | null; stopWaitMs: number; onStopWaitOver: (sw: HandedOverSwitch) => void }
+let current: Held | null = null
+/** The switch whose handover this server took back last (a stop asked after it is told so). */
+let cancelledId: string | null = null
 
 /** The switch this server handed over and has not stopped for yet, or null. */
 export function handedOverSwitch(): HandedOverSwitch | null { return current }
 
+function armStopWait(sw: Held, ms: number): void {
+  if (sw.timer) clearTimeout(sw.timer)
+  sw.timer = setTimeout(() => {
+    sw.timer = null
+    if (current !== sw || sw.phase !== 'waiting') return
+    // Synchronous with beginSwitchStop: a stop that comes now is refused, never run beside the take-back.
+    sw.phase = 'cancelling'
+    sw.onStopWaitOver(sw)
+  }, ms)
+  sw.timer.unref?.()
+}
+
 /**
  * The handover of `switchId` stood: wait `stopWaitMs` for its switch stop, else `onStopWaitOver`
- * (the server cancels the handover itself and leads again). A second call for the same switch (a
- * resumed source job asking again) keeps the first deadline.
+ * (the server takes the handover back itself and leads again; it reports with endTakeBack). A second
+ * call for the same switch (a resumed source job asking again) keeps the first deadline.
  */
-export function noteHandedOver(o: Omit<HandedOverSwitch, 'phase'> & { stopWaitMs: number; onStopWaitOver: () => void }): HandedOverSwitch {
-  if (current && current.switchId === o.switchId && current.phase === 'waiting') return current
+export function noteHandedOver(o: Omit<HandedOverSwitch, 'phase'> & { stopWaitMs: number; onStopWaitOver: (sw: HandedOverSwitch) => void }): HandedOverSwitch {
+  if (current && current.switchId === o.switchId) return current
   if (current?.timer) clearTimeout(current.timer)
-  const sw = { switchId: o.switchId, to: o.to, record: o.record, peer: o.peer, commitDeadline: o.commitDeadline, phase: 'waiting' as HandedOverSwitch['phase'], timer: null as ReturnType<typeof setTimeout> | null }
+  const sw: Held = { switchId: o.switchId, to: o.to, peer: o.peer, commitDeadline: o.commitDeadline, phase: 'waiting', timer: null, stopWaitMs: o.stopWaitMs, onStopWaitOver: o.onStopWaitOver }
   current = sw
-  sw.timer = setTimeout(() => {
-    if (current !== sw || sw.phase !== 'waiting') return
-    sw.phase = 'cancelled'
-    o.onStopWaitOver()
-  }, o.stopWaitMs)
-  sw.timer.unref?.()
+  cancelledId = null
+  armStopWait(sw, o.stopWaitMs)
   return sw
 }
 
-/** The handover was taken back (a cancel): nothing waits for a stop any more. */
+/**
+ * A take-back of the handover begins (a cancel by hand, or the stop wait): refused while the switch
+ * stop runs or another take-back does. Synchronous, so a stop and a take-back never both start.
+ */
+export function beginTakeBack(): { ok: true; sw: HandedOverSwitch | null } | { ok: false; why: string } {
+  const sw = current
+  if (!sw) return { ok: true, sw: null }
+  if (sw.phase === 'stopping') return { ok: false, why: 'this server is in its switch stop: its final batch decides' }
+  if (sw.phase === 'cancelling') return { ok: false, why: 'this server is taking its handover back already' }
+  if (sw.timer) { clearTimeout(sw.timer); sw.timer = null }
+  sw.phase = 'cancelling'
+  return { ok: true, sw }
+}
+
+/**
+ * How a take-back ended. Taken back: nothing waits for a stop any more. Not (no witness majority
+ * this moment): the switch waits for its stop again, and `retryMs` tries the take-back again then.
+ */
+export function endTakeBack(sw: HandedOverSwitch | null, ok: boolean, retryMs?: number): void {
+  if (!sw || current !== sw) return
+  if (ok) { if (current.timer) clearTimeout(current.timer); cancelledId = sw.switchId; current = null; return }
+  current.phase = 'waiting'
+  if (retryMs !== undefined) armStopWait(current, retryMs)
+}
+
+/** The switch stop begins: the stop wait ends here, and a take-back can no longer start. Synchronous, so the two never both run. */
+export function beginSwitchStop(switchId: string): { ok: true; sw: HandedOverSwitch } | { ok: false; why: string } {
+  const sw = current
+  if (!sw || sw.switchId !== switchId) return { ok: false, why: cancelledId === switchId ? 'this server took that handover back (no switch stop came in time, or a cancel)' : `this server handed over no switch ${switchId}` }
+  if (sw.phase === 'cancelling') return { ok: false, why: 'this server is taking that handover back' }
+  if (sw.phase === 'stopping') return { ok: false, why: 'this server is in its switch stop already' }
+  sw.phase = 'stopping'
+  if (current?.timer) { clearTimeout(current.timer); current.timer = null }
+  return { ok: true, sw }
+}
+
+/** The stop was taken but the process could not stop for it: the switch waits for its stop again (and its stop wait runs again). */
+export function abandonSwitchStop(sw: HandedOverSwitch): void {
+  if (current !== sw || sw.phase !== 'stopping') return
+  current.phase = 'waiting'
+  armStopWait(current, current.stopWaitMs)
+}
+
+/** Tests: forget the switch. */
 export function forgetHandedOver(): void {
   if (current?.timer) clearTimeout(current.timer)
   current = null
-}
-
-/** The switch stop begins: the stop wait ends here, and a cancel by it can no longer start. Synchronous, so the two never both run. */
-export function beginSwitchStop(switchId: string): { ok: true; sw: HandedOverSwitch } | { ok: false; why: string } {
-  const sw = current
-  if (!sw || sw.switchId !== switchId) return { ok: false, why: `this server handed over no switch ${switchId}` }
-  if (sw.phase === 'cancelled') return { ok: false, why: 'this server cancelled that handover (no switch stop came in time)' }
-  if (sw.phase === 'stopping') return { ok: false, why: 'this server is in its switch stop already' }
-  sw.phase = 'stopping'
-  if (current?.timer) clearTimeout(current.timer)
-  return { ok: true, sw }
+  cancelledId = null
 }
 
 export interface FinalBatchTest {
@@ -125,6 +169,8 @@ export async function finishSwitchStop(o: { home: string; sw: HandedOverSwitch; 
       return write({ switchId: o.sw.switchId, ok: false, why: b.why, stoppedAt: o.stoppedAt, at: new Date().toISOString() })
     }
     if (o.signal.aborted) return write({ switchId: o.sw.switchId, ok: false, why: 'the switch stop was stopped by a signal before its mark', stoppedAt: o.stoppedAt, at: new Date().toISOString() })
+    // The new leader starts no commit after the deadline: a mark after it would only say so later.
+    if (Date.now() > o.sw.commitDeadline) return write({ switchId: o.sw.switchId, ok: false, why: 'the final batch ended after the commit window: no final mark', stoppedAt: o.stoppedAt, at: new Date().toISOString() })
     const mark: FinalMark = { v: 1, switchId: o.sw.switchId, batch: b.batch, unchanged: true, released: true, stoppedAt: o.stoppedAt, at: new Date().toISOString() }
     await o.sw.peer.writeFile(finalMarkName(o.sw.switchId), mark)
     o.log('info', 'leader switch: final batch sent and marked; this server exits', { switchId: o.sw.switchId, batch: b.batch, batches: b.batches })

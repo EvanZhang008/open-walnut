@@ -115,9 +115,13 @@ export function validTicket(t: unknown, switchId: string): t is SwitchTicket {
 
 export interface SwitchClaim { switchId: string; pid: number; home: string; at: string }
 
+/** A short stable name of a home, for files about it kept outside it (its claim, its source job's output). */
+export function homeKey(home: string): string {
+  return createHash('sha256').update(path.resolve(home)).digest('hex').slice(0, 16)
+}
+
 export function switchClaimFile(home: string, env: NodeJS.ProcessEnv = process.env): string {
-  const key = createHash('sha256').update(path.resolve(home)).digest('hex').slice(0, 16)
-  return path.join(path.dirname(machineIdFile(env)), 'leader-instance', `switch-claim-${key}.json`)
+  return path.join(path.dirname(machineIdFile(env)), 'leader-instance', `switch-claim-${homeKey(home)}.json`)
 }
 
 /** The claim on `home`, alive or not: a claim whose job died still holds (its home may be half made until `--resume`). */
