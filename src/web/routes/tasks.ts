@@ -117,6 +117,26 @@ function isActiveSession(info: SessionInfo): boolean {
 }
 
 /** Enrich tasks that have slot sessions with session status info. */
+// The enrichment heals on read and never writes, so the same poisoned slot is
+// seen on every task list: warn once per task and session, not once per read.
+const warnedPoisonedSlots = new Set<string>()
+const WARNED_POISONED_SLOTS_MAX = 1000
+
+function warnPoisonedSlotOnce(taskId: string, archivedSessionId: string, liveSessionId: string): void {
+  const key = `${taskId}\u0000${archivedSessionId}`
+  if (warnedPoisonedSlots.has(key)) return
+  if (warnedPoisonedSlots.size >= WARNED_POISONED_SLOTS_MAX) warnedPoisonedSlots.clear()
+  warnedPoisonedSlots.add(key)
+  log.web.warn('healing archived session_id in enrichment — possible handleStart guard regression', {
+    taskId, archivedSessionId, liveSessionId,
+  })
+}
+
+/** Test seam: forget which poisoned slots were already reported. */
+export function resetPoisonedSlotWarningsForTest(): void {
+  warnedPoisonedSlots.clear()
+}
+
 export async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[]> {
   // Collect ALL session IDs needed across all tasks
   const sessionIds = new Set<string>()
@@ -204,17 +224,20 @@ export async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[
       // we treat that as "not archived" (safe default) and keep whatever was there.
       const currentSingle = enriched.session_id ? sessionMap.get(enriched.session_id) : undefined
       if (!enriched.session_id || currentSingle?.archived) {
-        if (currentSingle?.archived) {
-          log.web.warn('healing archived session_id in enrichment — possible handleStart guard regression', {
-            taskId: t.id, archivedSessionId: enriched.session_id,
-          })
-        }
         let replacement: string | undefined
         for (let i = taskSessions.length - 1; i >= 0; i--) {
           if (!taskSessions[i].archived) {
             replacement = taskSessions[i].claudeSessionId
             break
           }
+        }
+        // A slot naming an archived session is only poisoned when the task also
+        // has a live session the slot should name. A task whose ONE session was
+        // archived (a lost conversation keeps its row until the next start
+        // replaces it: one-session-per-task.ts) names it by design, and this
+        // read path runs on every task list, so it must not warn for that.
+        if (currentSingle?.archived && replacement) {
+          warnPoisonedSlotOnce(t.id, enriched.session_id!, replacement)
         }
         enriched.session_id = replacement
       }

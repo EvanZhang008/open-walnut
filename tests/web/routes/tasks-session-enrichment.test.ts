@@ -28,7 +28,8 @@ vi.mock('../../../src/core/session-tracker.js', () => ({
   listSessionsForTasks: vi.fn(),
 }))
 
-import { enrichTasksWithSessionStatus } from '../../../src/web/routes/tasks.js'
+import { enrichTasksWithSessionStatus, resetPoisonedSlotWarningsForTest } from '../../../src/web/routes/tasks.js'
+import { log } from '../../../src/logging/index.js'
 import { listSessionsForTasks } from '../../../src/core/session-tracker.js'
 import type { Task, SessionRecord, ProcessStatus, SessionMode, SessionProvider } from '../../../src/core/types.js'
 
@@ -66,6 +67,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
 
 beforeEach(() => {
   listSessionsMock.mockReset()
+  resetPoisonedSlotWarningsForTest()
+  vi.restoreAllMocks()
 })
 
 // ════════════════════════════════════════════════════════════════════
@@ -242,6 +245,57 @@ describe('enrichTasksWithSessionStatus — archived healing', () => {
     expect(enriched.exec_session_id).toBeUndefined()
     expect(enriched.plan_session_status).toBeUndefined()
     expect(enriched.exec_session_status).toBeUndefined()
+  })
+})
+
+// The heal runs on every task list read and never writes, so its warning must
+// mean a real poisoned slot (a live session exists that the slot should name),
+// reported once, never the designed state of a task whose only session was
+// archived (one-session-per-task.ts keeps a lost conversation's row until the
+// next start replaces it). 2026-11-23: one such task logged 48 times an hour.
+describe('enrichTasksWithSessionStatus — poisoned-slot warning', () => {
+  const POISON_LINE = 'healing archived session_id in enrichment — possible handleStart guard regression'
+  const poisonWarns = (spy: ReturnType<typeof vi.spyOn>) =>
+    spy.mock.calls.filter((c: unknown[]) => c[0] === POISON_LINE)
+
+  // Every archive reason the tree writes for a task's session leaves no live
+  // session behind; none of them may warn on its own.
+  for (const reason of ['remote_conversation_lost', 'conversation_never_persisted', 'retry', 'folder_and_history_gone', 'user', undefined]) {
+    it(`does not warn when the task's only session is archived (reason ${reason ?? 'none'})`, async () => {
+      const warn = vi.spyOn(log.web, 'warn')
+      listSessionsMock.mockResolvedValue([
+        makeSession({ claudeSessionId: 'only-1', taskId: 'task-1', archived: true, archive_reason: reason, process_status: 'error' as ProcessStatus }),
+      ])
+      const task = makeTask({ id: 'task-1', session_id: 'only-1', session_ids: ['only-1'] })
+      for (let i = 0; i < 3; i++) {
+        const [enriched] = await enrichTasksWithSessionStatus([task])
+        expect(enriched.session_id).toBeUndefined()
+        expect(enriched.session_status).toBeUndefined()
+      }
+      expect(poisonWarns(warn)).toHaveLength(0)
+    })
+  }
+
+  it('warns once per poisoned task and session across repeated reads', async () => {
+    const warn = vi.spyOn(log.web, 'warn')
+    listSessionsMock.mockResolvedValue([
+      makeSession({ claudeSessionId: 'arch-a', taskId: 'task-a', archived: true }),
+      makeSession({ claudeSessionId: 'live-a', taskId: 'task-a' }),
+      makeSession({ claudeSessionId: 'arch-b', taskId: 'task-b', archived: true }),
+      makeSession({ claudeSessionId: 'live-b', taskId: 'task-b' }),
+    ])
+    const tasks = [
+      makeTask({ id: 'task-a', session_id: 'arch-a', session_ids: ['arch-a'] }),
+      makeTask({ id: 'task-b', session_id: 'arch-b', session_ids: ['arch-b'] }),
+    ]
+    for (let i = 0; i < 3; i++) {
+      const [a, b] = await enrichTasksWithSessionStatus(tasks)
+      expect(a.session_id).toBe('live-a')
+      expect(b.session_id).toBe('live-b')
+    }
+    const calls = poisonWarns(warn)
+    expect(calls).toHaveLength(2)
+    expect(calls.map((c: unknown[]) => (c[1] as { taskId: string }).taskId).sort()).toEqual(['task-a', 'task-b'])
   })
 })
 
