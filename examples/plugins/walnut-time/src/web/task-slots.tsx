@@ -65,11 +65,13 @@ const AgentIcon = () => (
 
 /**
  * The header pill (the user, 2026-10-26: "a pill like human icon: 2h, and agent icon: 8h").
- * Each lane is an icon and one whole unit (the words "You" and "Agent" written out made it too wide
- * for a second column at 1280 px, where it fell into the row's "..."; 2026-11-23). Hovering grows nothing (2026-11-23, the user, on
+ * Each lane is its icon, its name and one whole unit, "You 0m · Agent 9h" (2026-11-22 words audit:
+ * icons alone did not say whose time each was). The names are `[data-fit-label]`: where the header
+ * row has no room for them (a second column at 1280 px) the host folds the pill to its icons before
+ * it would put it into "..." (session-header-fit.ts). Hovering grows nothing (2026-11-23, the user, on
  * what widens on hover outside a narrow list: "所有东西都放大真的是不太舒服"): the exact numbers
  * are its native tooltip, and for a screen reader its label; a click opens the day by day page.
- * The button's own text reads "You 2h · Agent 8h" (visually hidden words), which is what an
+ * The button's own text reads "You 2h · Agent 8h" (folded or not), which is what an
  * older host's "..." row prints; `data-header-value` gives a newer host the exact line.
  */
 function TimeChip({ totals, onOpen }: { totals: TimeTotals; onOpen: () => void }) {
@@ -94,10 +96,11 @@ function TimeChip({ totals, onOpen }: { totals: TimeTotals; onOpen: () => void }
         aria-label={`Time on this session. ${laneLine('You', (p) => p.humanMs, totals)}. ${laneLine('Agent', (p) => p.agentMs, totals)}. Open day by day.`}
       >
         <HumanIcon />
-        <span className="wt-sr">You </span>
+        <span className="wt-pill-name" data-fit-label="">You </span>
         <span className="wt-fact-v is-human" data-cell="you-compact">{formatLaneCompact(all.humanMs)}</span>
-        <span className="wt-sr"> {'\u00b7'} Agent </span>
+        <span className="wt-fact-sep" data-fit-label="">{' \u00b7 '}</span>
         <AgentIcon />
+        <span className="wt-pill-name" data-fit-label="">Agent </span>
         <span className="wt-fact-v is-agent" data-cell="agent-compact">{formatLaneCompact(all.agentMs)}</span>
       </button>
     </span>

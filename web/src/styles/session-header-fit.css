@@ -6,6 +6,8 @@
    that frame draw chips over the window buttons. */
 
 .session-meta-row-2 [data-header-id][data-hidden="true"] { display: none !important; }
+/* An item in its short form (the header rule's first step): its words go, its icons stay. */
+.session-meta-row-2 [data-header-id][data-header-form="short"] [data-fit-label] { display: none !important; }
 
 /* A task control the panel drew before its record said "no task" (Fork, Board,
    Locate, and the "..." chip when only they are folded): the place stays, with

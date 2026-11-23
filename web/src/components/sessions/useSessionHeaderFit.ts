@@ -24,11 +24,13 @@ const FIT_SLACK = 1;
 
 export interface ToolRowState {
   hidden: Set<string>;
+  /** Items shown in their short form (`data-header-form="short"`: their `[data-fit-label]` words hidden). */
+  short: Set<string>;
   /** What the row's "..." menu lists: hidden chips, then hidden window buttons. */
   inMore: string[];
 }
 
-const NO_TOOL_FIT: ToolRowState = { hidden: new Set(), inMore: [] };
+const NO_TOOL_FIT: ToolRowState = { hidden: new Set(), short: new Set(), inMore: [] };
 
 /** Priority (1 leaves last) and kind of every tool row item, by its `data-header-id`. */
 export const TOOL_ITEMS: Record<string, { kind: ToolItemKind; priority: number; name: string }> = {
@@ -99,6 +101,7 @@ const sameList = (a: string[], b: string[]) => a.length === b.length && a.every(
  */
 export function useToolRowFit(rowRef: RefObject<HTMLElement | null>): ToolRowState {
   const widths = useRef(new Map<string, number>());
+  const shortWidths = useRef(new Map<string, number>());
   const [state, setState] = useState<ToolRowState>(NO_TOOL_FIT);
   const current = useRef(state);
   current.current = state;
@@ -114,11 +117,23 @@ export function useToolRowFit(rowRef: RefObject<HTMLElement | null>): ToolRowSta
       if (el.childElementCount === 0 && !el.textContent?.trim()) continue;
       const spec = toolItemSpec(id, el);
       if (!spec) continue;
+      // An item with words in `[data-fit-label]` has a short form without them; each form's width is
+      // remembered while that form is on screen, and the short one is first read off the full one.
+      const labels = [...el.querySelectorAll<HTMLElement>('[data-fit-label]')];
       if (el.dataset.hidden !== 'true') {
         const w = el.getBoundingClientRect().width;
-        if (w > 0) widths.current.set(id, w);
+        if (w > 0 && el.dataset.headerForm === 'short') shortWidths.current.set(id, w);
+        else if (w > 0) {
+          widths.current.set(id, w);
+          if (labels.length > 0 && !shortWidths.current.has(id)) {
+            shortWidths.current.set(id, w - labels.reduce((sum, l) => sum + l.getBoundingClientRect().width, 0));
+          }
+        }
       }
-      items.push({ id, kind: spec.kind, priority: spec.priority, width: widths.current.get(id) });
+      items.push({
+        id, kind: spec.kind, priority: spec.priority, width: widths.current.get(id),
+        ...(labels.length > 0 ? { shortWidth: shortWidths.current.get(id) } : {}),
+      });
     }
     const more = row.querySelector<HTMLElement>('[data-header-more]');
     const moreWidth = more?.getBoundingClientRect().width || ASSUMED_MORE_WIDTH;
@@ -131,8 +146,8 @@ export function useToolRowFit(rowRef: RefObject<HTMLElement | null>): ToolRowSta
     });
     const hidden = [...fit.inMore, ...fit.dropped];
     const prev = current.current;
-    if (sameList([...prev.hidden], hidden) && sameList(prev.inMore, fit.inMore)) return null;
-    return { hidden: new Set(hidden), inMore: fit.inMore };
+    if (sameList([...prev.hidden], hidden) && sameList(prev.inMore, fit.inMore) && sameList([...prev.short], fit.short)) return null;
+    return { hidden: new Set(hidden), short: new Set(fit.short), inMore: fit.inMore };
   }, [rowRef]);
 
   const apply = useCallback((next: ToolRowState) => {
@@ -147,6 +162,8 @@ export function useToolRowFit(rowRef: RefObject<HTMLElement | null>): ToolRowSta
     for (const el of row.querySelectorAll<HTMLElement>('[data-header-id]')) {
       const hidden = next.hidden.has(el.dataset.headerId!) ? 'true' : 'false';
       if (el.dataset.hidden !== hidden) el.dataset.hidden = hidden;
+      const form = next.short.has(el.dataset.headerId!) ? 'short' : 'full';
+      if (el.dataset.headerForm !== form) el.dataset.headerForm = form;
     }
   }, [rowRef]);
 

@@ -276,9 +276,11 @@ test('the menu row pins the time to every session header, kept across a reload',
   await expect(menu).toBeVisible()
   const chip = item.getByTestId('time-session-chip')
   await expect(chip).toBeVisible()
-  // The pill: an icon and one whole unit per lane ("You" and "Agent" are there for a reader).
-  // Written out on screen it no longer fits a 1280 px window's second column and drops into "..."
-  // (2026-11-23), so the words stay in its text for a reader, its tooltip and the menu's Time row.
+  // The pill: per lane an icon, its name and one whole unit. A 1280 px window's second column has no
+  // room for the names, so the row folds the pill to its icons (the header rule's first step) instead
+  // of putting it into "..." (2026-11-23); its text keeps the words for a reader.
+  await expect(item).toHaveAttribute('data-header-form', 'short')
+  await expect(chip.locator('.wt-pill-name').first()).toBeHidden()
   await expect(chip).toHaveText('You 50m \u00b7 Agent 3h')
   await expect(chip).toHaveAttribute('aria-label', /Time on this session\. You: 50m total, .*Agent: 3h 02m total/)
   // Its exact numbers are its native tooltip; nothing grows out of it (task-slots.tsx TimeChip).
@@ -420,6 +422,15 @@ test('the header pill grows nothing on hover or focus: the exact numbers are its
   await expect(page).toHaveURL(new RegExp(`/task/${TASK}\\?session=${SID_A}$`))
   await page.getByTestId('time-task-back').click()
   await expect(column(page, SID_A)).toBeVisible({ timeout: 30_000 })
+
+  // ── A wide window: the row has room, so the pill says whose time each lane is ──
+  await page.setViewportSize({ width: 1920, height: 860 })
+  const wide = column(page, SID_A).getByTestId('time-session-chip')
+  await expect(wide.locator('.wt-pill-name')).toHaveText(['You', 'Agent'])
+  await expect(wide.locator('.wt-pill-name').first()).toBeVisible()
+  const wb = await wide.boundingBox()
+  await page.screenshot({ path: `${SHOTS}/session-pill-wide.png`, clip: { x: wb!.x - 60, y: wb!.y - 14, width: wb!.width + 120, height: wb!.height + 28 } })
+  await page.setViewportSize({ width: 1280, height: 860 })
   expect(errors).toEqual([])
 })
 

@@ -19,7 +19,10 @@
  * if it fits, so a wide chip that just missed the cut never leaves a
  * button-sized hole beside the "..." menu (2026-10-04: a hidden Heavy pill,
  * 90px wide, kept 60px of empty row and three buttons in the menu). The
- * activity time just hides (the kebab shows it) and takes what is left last. Lock, Expand and Close never
+ * activity time just hides (the kebab shows it) and takes what is left last. Before any of that, an
+ * item with a short form (its words in `[data-fit-label]`, a pinned fact's names) folds to it, the
+ * soonest-leaving first: the header rule's first step (HeaderFit.tsx), so a pill reads its words
+ * where they fit and keeps its icons where they do not. Lock, Expand and Close never
  * leave: a cramped column is the moment to go full screen, and the user asked for
  * Expand and Close (2026-10-03) and for Lock (2026-10-04) to stay whatever the
  * width. Nothing from this row goes into the title row's kebab, which is the
@@ -38,6 +41,8 @@ export interface ToolRowItem {
   priority: number;
   /** Natural width in px; undefined before the first measurement. */
   width?: number;
+  /** Its width folded to its short form (its `[data-fit-label]` words hidden); only items that have one. */
+  shortWidth?: number;
 }
 
 export interface ToolRowFit {
@@ -47,6 +52,8 @@ export interface ToolRowFit {
   inMore: string[];
   /** Hidden info items (the time); nowhere, their facts live elsewhere. */
   dropped: string[];
+  /** Items shown in their short form, in the caller's order. */
+  short: string[];
 }
 
 export interface ToolRowOptions {
@@ -84,14 +91,25 @@ export function toolRowWidth(items: ToolRowItem[], moreShown: boolean, opts: Too
   return leftWidth + rightWidth + (groups === 2 ? opts.groupGap : 0);
 }
 
-export function fitToolRow(items: ToolRowItem[], availableWidth: number, opts: ToolRowOptions): ToolRowFit {
-  const order = items.map((i) => i.id);
+export function fitToolRow(fullItems: ToolRowItem[], availableWidth: number, opts: ToolRowOptions): ToolRowFit {
+  const order = fullItems.map((i) => i.id);
   const byOrder = (set: Set<string>) => order.filter((id) => set.has(id));
-  const all = { visible: [...order], inMore: [], dropped: [] };
+  const all = { visible: [...order], inMore: [], dropped: [], short: [] };
   // A row that has not been laid out reports no width; the hooks skip those
   // frames, so a non-positive width here is a real "no room".
   const room = Math.max(1, availableWidth);
-  if (toolRowWidth(items, false, opts) <= room) return all;
+  if (toolRowWidth(fullItems, false, opts) <= room) return all;
+
+  // First step: what has a short form folds to it, the soonest-leaving first, while that makes it fit.
+  let items = fullItems;
+  const folded = new Set<string>();
+  const foldable = fullItems.filter((i) => i.kind !== 'fixed' && i.shortWidth != null && i.shortWidth > 0)
+    .sort((a, b) => b.priority - a.priority);
+  for (const f of foldable) {
+    items = items.map((i) => (i.id === f.id ? { ...i, width: i.shortWidth } : i));
+    folded.add(f.id);
+    if (toolRowWidth(items, false, opts) <= room) return { ...all, short: byOrder(folded) };
+  }
 
   const fixed = items.filter((i) => i.kind === 'fixed');
   const movable = items.filter((i) => i.kind !== 'fixed').sort((a, b) => a.priority - b.priority);
@@ -133,5 +151,6 @@ export function fitToolRow(items: ToolRowItem[], availableWidth: number, opts: T
     visible: byOrder(keptIds),
     inMore: byOrder(new Set(hidden.filter((i) => i.kind === 'chip' || i.kind === 'window').map((i) => i.id))),
     dropped: byOrder(new Set(hidden.filter((i) => i.kind === 'info').map((i) => i.id))),
+    short: byOrder(new Set([...folded].filter((id) => keptIds.has(id)))),
   };
 }
