@@ -123,6 +123,7 @@ import {
   _resetCompanionJournalForTesting, companionJournalDir, companionJournalRecords, drainCompanionJournal,
 } from '../../src/core/companion-journal.js'
 import { humanInboxV1Router, setDeliveryWaitForTests } from '../../src/web/routes/human-inbox-v1.js'
+import { _letterTurnsSettledForTesting } from '../../src/web/routes/human-inbox-takeover.js'
 import { inboxReplyOpId } from '../../src/core/companion-journal.js'
 import { markSendOutcome } from '../../src/core/send-outcomes.js'
 import type { LetterSender, ThreadEntry } from '../../src/core/human-inbox/types.js'
@@ -152,6 +153,9 @@ afterAll(async () => {
 })
 
 beforeEach(async () => {
+  // A delivery a test left running (it answered pending at its deadline) ends before the reset:
+  // its record must not land in the next test's journal.
+  await _letterTurnsSettledForTesting()
   _resetCompanionJournalForTesting()
   fs.rmSync(companionJournalDir(), { recursive: true, force: true })
   fs.rmSync(humanInboxPaths.dir, { recursive: true, force: true })

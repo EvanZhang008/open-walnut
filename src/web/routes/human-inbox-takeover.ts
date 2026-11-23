@@ -50,18 +50,28 @@ export type TakenTurn = { saved: AppendResult | null; delivery: DirectDelivery; 
 export type LetterTurnOutcome = { taken: TakenTurn } | { held: AppendResult | null } | { answerInFlight: true }
 
 const sessionLocks = new Map<string, Promise<unknown>>()
+type Phase = 'queued' | 'taking' | 'started' | 'holding' | 'cancelled'
 /** The settles of letter turns running now (waiting for their session's lock, or in it), in arrival order (`seq`). */
-type Settle = { opId: string; letterId: string; op: 'reply' | 'answer'; seq: number }
+type Settle = { opId: string; letterId: string; op: 'reply' | 'answer'; seq: number; phase: () => Phase }
 const inFlight = new Set<Settle>()
 let settleSeq = 0
 /** Settles that came before `seq` (every one, without it). */
 const settlesBefore = (seq = Infinity): Settle[] => [...inFlight].filter((t) => t.seq < seq)
-/** Another answer of `letterId` (not `opId`) came first and is being settled: it is the one that counts. */
-const answerAhead = (letterId: string, opId: string, seq?: number): boolean =>
-  settlesBefore(seq).some((t) => t.letterId === letterId && t.op === 'answer' && t.opId !== opId)
-/** The same turn is being settled by a request that came first, which keeps it (unless an earlier answer refuses it). */
+/**
+ * Another answer of `letterId` (not `opId`) may reach its session now (deciding inside the lock, or
+ * handed over): it is the one that counts. One still waiting for the lock never does: held behind
+ * this one, it finds this one's record and is held too, and the Mac keeps the first.
+ */
+const answerAhead = (letterId: string, opId: string): boolean =>
+  [...inFlight].some((t) => t.letterId === letterId && t.op === 'answer' && t.opId !== opId && (t.phase() === 'taking' || t.phase() === 'started'))
+/** The same turn is being settled by a request that came first, which keeps it (unless another answer counts). */
 const keptAhead = (input: InboxReplyInput, opId: string, seq?: number): boolean =>
-  settlesBefore(seq).some((t) => t.opId === opId) && !(input.op === 'answer' && answerAhead(input.letterId, opId, seq))
+  settlesBefore(seq).some((t) => t.opId === opId) && !(input.op === 'answer' && answerAhead(input.letterId, opId))
+
+/** Tests: every letter turn running now has ended (a late delivery included), so the next test starts clean. */
+export async function _letterTurnsSettledForTesting(): Promise<void> {
+  while (sessionLocks.size > 0) await Promise.allSettled([...sessionLocks.values()])
+}
 
 async function underSessionLock<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
   const before = sessionLocks.get(sessionId) ?? Promise.resolve()
@@ -242,8 +252,8 @@ async function deliveryText(record: LetterRecord, input: InboxReplyInput): Promi
  * At the deadline: a delivery that started answers `pending` and keeps going (its end journals it,
  * handed over or held). A turn that has not started is held at once, so a `pending` answer always
  * has its turn on disk; unless a request that came first settles the same turn (answered `pending`,
- * that one keeps it), or another answer of the same letter came first (`answerInFlight`: one answer
- * per letter, the first stands, as on the Mac).
+ * that one keeps it), or another answer of the same letter may reach the session now (`answerInFlight`:
+ * one answer per letter, the first stands, as on the Mac).
  */
 export async function settleLetterTurn(
   record: LetterRecord,
@@ -257,7 +267,7 @@ export async function settleLetterTurn(
   const deadline = Date.now() + opts.budgetMs - ANSWER_MARGIN_MS
   // queued: waiting for the lock; taking: deciding; started: a delivery may be out; holding: in hold().
   const state = {
-    phase: 'queued' as 'queued' | 'taking' | 'started' | 'holding' | 'cancelled',
+    phase: 'queued' as Phase,
     late: false,
     /** A cancelled turn's hold, written outside the lock: its run keeps the lock until it is on disk. */
     outerHold: null as Promise<unknown> | null,
@@ -265,7 +275,7 @@ export async function settleLetterTurn(
   // Read through a call: the phase moves in other callbacks while this one awaits.
   const phase = (): typeof state.phase => state.phase
   const mayStart = (): boolean => { if (state.phase === 'cancelled') return false; state.phase = 'started'; return true }
-  const me: Settle = { opId, letterId: record.id, op: input.op, seq: ++settleSeq }
+  const me: Settle = { opId, letterId: record.id, op: input.op, seq: ++settleSeq, phase }
   inFlight.add(me)
   /** Nothing more of a cancelled turn: once its hold is on disk, the session's next turn may go. */
   const cancelledEnd = async (): Promise<null> => { await state.outerHold; return null }
@@ -317,8 +327,9 @@ export async function settleLetterTurn(
   // the run sends and holds nothing.
   state.phase = 'cancelled'
   inFlight.delete(me)
-  // Only settles that came first count: they keep this turn, or (one answer per letter) win over it.
-  if (input.op === 'answer' && answerAhead(record.id, opId, me.seq)) return { answerInFlight: true }
+  // An answer that may reach the session wins over this one (one answer per letter); a request
+  // that came first for this same turn keeps it.
+  if (input.op === 'answer' && answerAhead(record.id, opId)) return { answerInFlight: true }
   if (keptAhead(input, opId, me.seq)) return { taken: { saved: null, delivery: { status: 'pending' }, inFlight: true } }
   log.notif.info('human-inbox replica: a letter turn was not settled in time behind its session; held for the Mac', { letterId: record.id, sessionId, opId })
   const outer = opts.hold()
