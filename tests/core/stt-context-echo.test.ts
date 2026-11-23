@@ -102,6 +102,9 @@ describe('engine calls outside transcribeAudio', () => {
     }
     walk(root)
     expect(found.sort()).toEqual([
+      // Voice Accuracy's Whisper large-v2: a one-shot whisper-cli of its own on a saved take, for the
+      // comparison only; its text never reaches a message, so the Qwen context checks do not apply.
+      'core/stt/compare/engines.ts:1',
       // transcribeAudio itself (the call, its plain retry after a read-back, its retry as Chinese after an
       // English answer) and the shadow engine (the vocab file only, never the Qwen context).
       'core/stt/index.ts:4',

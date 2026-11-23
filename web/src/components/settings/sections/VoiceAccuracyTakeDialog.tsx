@@ -62,8 +62,8 @@ export function VoiceAccuracyTakeDialog({ take, engines, judge, version, retryEr
           onMouseDown={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <header className="va-take-dialog-head">
-            <h2 className="va-take-dialog-title" id={titleId}>{`Recording of ${whenOf(take)}`}</h2>
+          <header className="va-take-dialog-head" data-fit-header>
+            <h2 className="va-take-dialog-title" id={titleId} data-fit-title>{`Recording of ${whenOf(take)}`}</h2>
             <button type="button" className="btn btn-ghost btn-icon" aria-label="Close" title="Close" data-testid="va-take-dialog-close" onClick={() => onClose()}>
               <span aria-hidden="true">&times;</span>
             </button>

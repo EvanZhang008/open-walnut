@@ -374,6 +374,7 @@ describe('ratchet: every sound in the web app stays silent under automation', ()
     'web/src/hooks/useVoiceConversation.ts': "voice conversation's AudioContext: the page silencer gives it a sink of none",
     'web/src/voice/voice-speaker.ts': 'reads answers through that AudioContext (sink of none) or speechSynthesis (a counted no-op under the page silencer)',
     'web/src/voice/voice-mic.ts': 'a meter on the mic: its graph never reaches the speakers',
+    'web/src/components/settings/sections/VoiceAccuracyTakeDetail.tsx': "Voice Accuracy's Play recording: an <audio> made only by the user's click, muted by the page silencer",
   };
 
   it('lists every file that can make sound', () => {
