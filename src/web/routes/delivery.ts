@@ -2,7 +2,8 @@
  * GET /api/delivery: where messages to sessions got to, from the delivery ledger
  * (core/sessions/delivery-ledger.ts). Read only. `id` (a message id), `task` (every session of the
  * task), `session`, `state` (read, written, queued, parked, held, carried, dropped, failed, cancelled,
- * sent), `days` (1 to 14, default 3), `limit` (default 200, newest first). The answer says how many
+ * sent), `days` (1 to 14, default 3), `limit` (default 200, newest first). A message still waiting says
+ * for how many minutes (`waitingMin`). The answer says how many
  * matched and counts them by state.
  */
 import { Router, type NextFunction, type Request, type Response } from 'express'
@@ -25,7 +26,7 @@ deliveryRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
       const { getSessionsForTask } = await import('../../core/session-tracker.js')
       sessions = new Set([...sessions, ...(await getSessionsForTask(task).catch(() => [])).map((s) => s.claudeSessionId)])
     }
-    const trails = trailsOf(await readDeliveryLines(days)).filter((t) => (!id || t.id === id)
+    const trails = trailsOf(await readDeliveryLines(days), Date.now()).filter((t) => (!id || t.id === id)
       && (!task || t.taskId === task || (t.sessionId !== undefined && sessions.has(t.sessionId)))
       && (!session || t.sessionId === session)
       && (!state || t.state === state))

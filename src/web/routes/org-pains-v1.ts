@@ -7,6 +7,7 @@
  *                                          (409 registry_unreadable: pains.json does not parse; it is never written over)
  *                                          the task that fixes a pain writes its rule, its guard test and itself here;
  *                                          rule/test/owner null clears it
+ *   GET   /org/nodes/:id/pains-tests       → { guardRun }   the last guard run (null before the first)
  *   PUT   /org/nodes/:id/pains-tests { at, commit?, results } → { results }   a guard run's results (scripts/pain-guards.mjs)
  *
  * Writes run on the primary only, like every other org write, and record who made them.
@@ -101,6 +102,17 @@ orgPainsV1Router.patch('/org/nodes/:id/pains/:painId', async (req: Request, res:
     }), Date.now())
     if (!found) throw new OrgError('not_found', 404, `No pain ${painId} in ${node.title}'s registry.`)
     res.json({ entry: { ...found, shown: p.statusOf(found) } })
+  } catch (err) {
+    fail(res, next, err)
+  }
+})
+
+// The last guard run alone, where its results are written (2026-11-23 audit: a run that passed showed nowhere to look by this path).
+orgPainsV1Router.get('/org/nodes/:id/pains-tests', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const node = await nodeOf(String(req.params.id))
+    const store = await import('../../core/org/reflection/pains-store.js')
+    res.json({ guardRun: await store.readGuardRun(node.id) })
   } catch (err) {
     fail(res, next, err)
   }

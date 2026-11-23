@@ -30,10 +30,10 @@ if (!registry || (!outFile && !dry)) {
 const root = path.resolve(opt('--root') ?? path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
 const entries = (JSON.parse(fs.readFileSync(registry, 'utf-8')).entries ?? []).filter((e) => e?.id && e?.test?.file && e?.test?.name);
 
-/** Is `name` a test title in the file's text: a string literal opening a test call (its escaped quotes read as quotes). */
+/** Is `name` a test or block title in the file's text: a string literal opening an it, test or describe call (its escaped quotes read as quotes). */
 const holdsTest = (text, name) => {
   const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`\\b(?:it|test)(?:\\.\\w+)*\\(\\s*(['"\`])${esc}\\1`).test(text.replace(/\\(['"`])/g, '$1'));
+  return new RegExp(`\\b(?:it|test|describe)(?:\\.\\w+)*\\(\\s*(['"\`])${esc}\\1`).test(text.replace(/\\(['"`])/g, '$1'));
 };
 
 const results = {};
@@ -59,8 +59,9 @@ if (toRun.size && !dry) {
   const byFile = new Map();
   for (const f of json?.testResults ?? []) byFile.set(path.relative(root, f.name), f.assertionResults ?? []);
   for (const [id, t] of toRun) {
-    // The test's own title, exactly (a title built at run time is matched the same way, as it ran).
-    const tests = (byFile.get(t.rel) ?? []).filter((a) => a.title === t.name || a.fullName === t.name);
+    // The test's own title, exactly (a title built at run time is matched the same way, as it ran),
+    // or a describe block's: every test in that block counts.
+    const tests = (byFile.get(t.rel) ?? []).filter((a) => a.title === t.name || a.fullName === t.name || (a.ancestorTitles ?? []).includes(t.name));
     if (!tests.length) {
       results[id] = json && !t.literal ? { result: 'no_test', detail: `${t.rel} has no test "${t.name}"` }
         : { result: 'not_run', detail: json ? 'not in the run\'s report' : `vitest gave no report (exit ${run.status}): ${(run.stderr ?? '').slice(-300)}` };

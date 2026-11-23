@@ -37,6 +37,7 @@ const ALLOWED_MODULES: Record<string, string> = {
   './event-bus.js': 'the in-process bus itself',
   './sessions/engine-switch.js': 'active session for a switched task: in-memory switch state and the local session store (waits only while a switch of this task runs)',
   './session-tracker.js': 'session record from the local sessions store',
+  './sessions/delivery-ledger.js': 'the delivery ledger: one line appended to a local file, never awaited',
   './router/delivery-scope.js': 'pure check of the router wake grant on the record',
   './org/org-enabled.js': 'org switch from the cached local config',
   './task-manager.js': 'task from the local task store (only while the org is off)',

@@ -12,13 +12,15 @@ import { spawnSync } from 'node:child_process'
 const root = path.resolve(import.meta.dirname, '..', '..')
 
 describe('pain-guards', () => {
-  it('reads each named test as passed, no_file, no_test or ci_only', () => {
+  it('reads each named test or describe block as passed, no_file, no_test or ci_only', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pain-guards-test-'))
     const registry = path.join(dir, 'pains.json')
     const out = path.join(dir, 'out.json')
     const entry = (id: string, file: string, name: string) => ({ id, title: id, test: { file, name } })
     fs.writeFileSync(registry, JSON.stringify({ schemaVersion: 1, entries: [
       entry('pn-pass', 'tests/fixtures/pain-guards/sample.test.ts', 'passes for the guard runner'),
+      // A describe block's title names its tests (2026-11-23 audit: pn-23 read as no_test).
+      entry('pn-block', 'tests/fixtures/pain-guards/sample.test.ts', 'pain guards fixture'),
       entry('pn-gone', 'tests/fixtures/pain-guards/missing.test.ts', 'anything'),
       entry('pn-renamed', 'tests/fixtures/pain-guards/sample.test.ts', 'a title nobody wrote'),
       entry('pn-helper', 'tests/helpers/mock-constants.ts', 'not a test'),
@@ -28,7 +30,7 @@ describe('pain-guards', () => {
     expect(run.status, run.stderr).toBe(0)
     const results = JSON.parse(fs.readFileSync(out, 'utf-8')).results
     expect(Object.fromEntries(Object.entries(results).map(([k, v]) => [k, (v as { result: string }).result]))).toEqual({
-      'pn-pass': 'passed', 'pn-gone': 'no_file', 'pn-renamed': 'no_test', 'pn-helper': 'no_test',
+      'pn-pass': 'passed', 'pn-block': 'passed', 'pn-gone': 'no_file', 'pn-renamed': 'no_test', 'pn-helper': 'no_test',
     })
     fs.rmSync(dir, { recursive: true, force: true })
   }, 200_000)

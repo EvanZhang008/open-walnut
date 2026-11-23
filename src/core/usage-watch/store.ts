@@ -180,6 +180,14 @@ export function readToolErrors(filter: { since: number; session?: string; limit?
   })
 }
 
+/** When the oldest kept failed call was recorded (ms), or null with none: a report says where its data starts. */
+export function oldestToolError(): number | null {
+  return withStore(null, (d) => {
+    const r = d.prepare('SELECT MIN(at) AS at FROM tool_errors').get() as { at?: number | null } | undefined
+    return r?.at == null ? null : Number(r.at)
+  })
+}
+
 /** One minute of this server recording, for telling a gap (the server was down) from no use. */
 export function markAlive(now = Date.now()): void {
   withStore(undefined, (d) => {

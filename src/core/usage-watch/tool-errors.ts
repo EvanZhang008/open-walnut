@@ -7,7 +7,7 @@
  * a refusal the server never saw (Walnut unreachable, a tool gone after a disconnect, Claude Code
  * refusing the input) is counted too. Ids, names and codes only, never what the call said.
  */
-import { readToolErrors, type ToolErrorRow } from './store.js'
+import { oldestToolError, readToolErrors, type ToolErrorRow } from './store.js'
 
 export const ERROR_GROUPS = ['op', 'code', 'session', 'host'] as const
 export type ErrorGroup = typeof ERROR_GROUPS[number]
@@ -37,6 +37,8 @@ function keyOf(r: ToolErrorRow, by: ErrorGroup): string {
 
 export function toolErrorsReport(opts: { range: '24h' | '7d'; by: ErrorGroup; session?: string; now?: number }): {
   range: string; by: ErrorGroup; from: string; total: number; rows: ErrorRow[]; more: number; hosts: Record<string, number>
+  /** When the record starts, when that is inside the range: before it nothing was recorded, not nothing failed. */
+  dataFrom?: string
   recent?: { at: string; op: string; code: string; client: string; host: string }[]
 } {
   const now = opts.now ?? Date.now()
@@ -70,6 +72,7 @@ export function toolErrorsReport(opts: { range: '24h' | '7d'; by: ErrorGroup; se
   })
   return {
     range: opts.range, by: opts.by, from: new Date(since).toISOString(), total: all.length,
+    ...(() => { const o = oldestToolError(); return o !== null && o > since ? { dataFrom: new Date(o).toISOString() } : {} })(),
     rows: rows.slice(0, ROWS), more: Math.max(0, rows.length - ROWS), hosts: top(hosts, 10),
     // One session asked for: its latest failures one by one.
     ...(opts.session ? { recent: all.slice(0, SAMPLE).map((r) => ({ at: new Date(r.at).toISOString(), op: r.op, code: r.code, client: r.client, host: r.host })) } : {}),

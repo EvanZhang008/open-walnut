@@ -15,11 +15,11 @@ import { log } from '../../../logging/index.js';
 import { judge, callModelDefault, normalizeForQuote, PRODUCT_DEFECT_KINDS, type CallModel, type Finding, type JudgeInput, type Verdict } from './judge.js';
 import { readTranscriptDefault, renderTurns, splitCardAnswers, turnsAround, type TurnText } from './context.js';
 import { parseCardAnswer, type ReflectionSignal, type SpokenMessage } from './signals.js';
-import { addGuidance, appendDayEntry, appendDayNote, deletedSince, readGuidance, readGuidanceStrict, writeFindingSkill, type DayEntry, type DayRule } from './records.js';
+import { addGuidance, appendDayEntry, appendDayNote, deletedSince, recordDayPass, readGuidance, readGuidanceStrict, writeFindingSkill, type DayEntry, type DayRule } from './records.js';
 import { claimCandidate, dailyCallsMax, DAILY_CALLS_RESERVED, localDate, markSeen, readReflectionState, recordBudgetLeft, takeChatSend, takeSkillWrite, updateReflectionState } from './state.js';
 import { screenSkillWrite } from '../../memory-safety.js';
 import { managedTasks } from './team.js';
-import { collectCandidates, type Candidate, type CandidateDeps } from './candidates.js';
+import { collectCandidates, sessionNowOf, type Candidate, type CandidateDeps } from './candidates.js';
 import { LANGUAGE_GUIDANCE, measureLanguage } from './language.js';
 import { messagesFromAsks, rulesTextOf, threadsFromRecords } from './inputs.js';
 import { PAIN_TITLES_FOR_JUDGE } from './pains.js';
@@ -172,7 +172,8 @@ export async function verdictOf(node: Task, c: Candidate, deps: Pick<ReflectDeps
 
 /** Judge one candidate (or check it, for wrong_language) and act on a real finding. */
 export async function reflectOnCandidate(
-  node: Task, nodeName: string, c: Candidate, deps: ReflectDeps, guidance: readonly string[], sentThisPass: Set<string> = new Set(),
+  // What this pass did already: a task id it sent a correction to, `lesson:<task>:<kind>` a lesson it kept.
+  node: Task, nodeName: string, c: Candidate, deps: ReflectDeps, guidance: readonly string[], thisPass: Set<string> = new Set(),
 ): Promise<{ verdict: Verdict; entry?: DayEntry }> {
   const verdict = await verdictOf(node, c, deps, guidance);
   if (verdict.verdict !== 'bad_decision') return { verdict };
@@ -192,20 +193,26 @@ export async function reflectOnCandidate(
     const chat = c.task.org_role === 'main' || c.task.org_role === 'lead';
     if (c.hold) { corrected = 'held'; held = c.hold; }
     // One a pass per task: a task's old session and its current one are the same reader now.
-    else if (sentThisPass.has(c.task.id)) { corrected = 'held'; held = 'one_per_pass'; }
+    else if (thisPass.has(c.task.id)) { corrected = 'held'; held = 'one_per_pass'; }
     else {
       const check = sendCheckOf(await deps.confirmSend(node, c.task, c.sessionId).catch(() => false));
       if (check !== 'ok' && check !== 'session_changed') { corrected = 'off'; notSent = check; }
       else if (chat && !(await takeChatSend(c.task.id, now))) { corrected = 'held'; held = 'own_cap'; }
       else {
-        sentThisPass.add(c.task.id);
+        thisPass.add(c.task.id);
         corrected = await deps.send(c.task, correctionText(node, nodeName, c, f, check === 'session_changed'), `${nodeName}'s reflection: ${f.correct_action.slice(0, 120)}`)
           .then((ok) => (ok ? 'sent' : 'failed'), () => 'failed' as const);
         if (check === 'session_changed') notSent = undefined, earlierSession = true;
       }
     }
   }
-  const rule = await keepRule(node, nodeName, c, f, guidance, now, deps);
+  // One lesson a pass per task and kind: his several messages about one thing are one lesson
+  // (2026-11-23 audit: one complaint judged 4 times wrote 4 nearly equal lessons).
+  const lessonKey = `lesson:${c.task.id}:${f.kind}`;
+  const rule: DayRule = thisPass.has(lessonKey) && (f.guidance || f.skill)
+    ? { kind: 'none', text: `not added (same lesson as an earlier finding on this task this pass): ${f.guidance ?? f.skill?.name ?? ''}` }
+    : await keepRule(node, nodeName, c, f, guidance, now, deps);
+  if (f.guidance || f.skill) thisPass.add(lessonKey);
   const entry: DayEntry = {
     at: new Date(now).toISOString(), signal: c.signal, task: { id: c.task.id, title: c.task.title }, ...(c.thread ? { thread: c.thread } : {}),
     finding: f, corrected, ...(held ? { held } : {}), ...(notSent ? { notSent } : {}), ...(earlierSession ? { earlierSession } : {}), rule, ...(corrected === 'sent' ? { handedTo: { taskId: c.task.id, title: c.task.title } } : {}),
@@ -247,7 +254,7 @@ export async function reflectForNode(node: Task, nodeName: string, all: readonly
   const left: string[] = [];
   const dropped: string[] = [];
   const today = localDate(now);
-  const sentThisPass = new Set<string>();
+  const thisPass = new Set<string>();
   // Newest first: when the budget runs out, what is left is the oldest, the least worth correcting.
   for (const c of candidates.sort((a, b) => b.to.localeCompare(a.to))) {
     // The language check calls no model: it spends nothing of the day's budget. Anger and long
@@ -262,7 +269,7 @@ export async function reflectForNode(node: Task, nodeName: string, all: readonly
     result.judged++;
     let out: { verdict: Verdict; entry?: DayEntry };
     try {
-      out = await reflectOnCandidate(node, nodeName, c, deps, lines.map((l) => l.text), sentThisPass);
+      out = await reflectOnCandidate(node, nodeName, c, deps, lines.map((l) => l.text), thisPass);
     } catch (err) {
       // Claimed already: a failure is never judged (or sent) again.
       out = { verdict: { verdict: 'unverified', why: `the step failed: ${err instanceof Error ? err.message : String(err)}` } };
@@ -281,10 +288,13 @@ export async function reflectForNode(node: Task, nodeName: string, all: readonly
     if (first || dropped.length) {
       const used = (await readReflectionState(node.id, now)).day.calls;
       const kind = used < callsMax ? `the judge calls anger and long talks may use (${used} of ${callsMax}; the last ${DAILY_CALLS_RESERVED} are kept for asks and defects)` : `the day's ${callsMax} judge calls`;
-      await appendDayNote(node.id, nodeName, today, `Judge budget: ${kind} were spent at ${new Date(now).toISOString().slice(11, 16)} UTC; ${left.length} moment${left.length === 1 ? '' : 's'} wait for a later pass${dropped.length ? `, ${dropped.length} too old to wait were dropped unjudged` : ''}.`)
+      await appendDayNote(node.id, nodeName, today, `Judge budget: ${kind} were spent at ${new Date(now).toISOString().slice(11, 16)} UTC; ${left.length} moment${left.length === 1 ? '' : 's'} wait for a later pass${dropped.length ? `, ${dropped.length} too old to wait were dropped unjudged` : ''}.`, now)
         .catch(() => {});
     }
   }
+  // Every pass is counted in the day's JSON: a node with nothing to judge still shows it ran.
+  await recordDayPass(node.id, nodeName, today, { candidates: result.candidates, judged: result.judged, skipped: result.skipped }, now)
+    .catch((err) => log.task.warn('reflection: the pass was not counted in the day record', { nodeId: node.id, error: err instanceof Error ? err.message : String(err) }));
   // Lessons a full day dropped are taken up again, a few a pass, after this pass's own findings had their places.
   await backfillDropped(node, nodeName, deps, now).catch((err) => log.task.warn('reflection: dropped lessons not taken up', { nodeId: node.id, error: err instanceof Error ? err.message : String(err) }));
   // A full guidance is the node's to tidy: told once a day which lessons wait for room.
@@ -311,7 +321,11 @@ export async function rememberDeletedGuidance(nodeId: string, nowMs: number): Pr
 }
 
 /** What confirmSend reads, so its rules are tested without a server. */
-export interface ConfirmLookups { getTask: (id: string) => Promise<Task | null>; orgTasks: () => Promise<Task[]>; orgEnabled: () => Promise<boolean>; dutyOn: (t: Task, id: string) => boolean }
+export interface ConfirmLookups {
+  getTask: (id: string) => Promise<Task | null>; orgTasks: () => Promise<Task[]>; orgEnabled: () => Promise<boolean>; dutyOn: (t: Task, id: string) => boolean;
+  /** The session a send reaches now (session-send-core.ts currentSessionOfTask). */
+  currentSession?: (t: Task) => Promise<string>;
+}
 
 /**
  * Right before a send: the node's switch and the org on, the task open, still on the session judged,
@@ -324,10 +338,13 @@ export async function confirmSendCheck(node: Task, task: Task, sessionId: string
   if (t.phase === 'COMPLETE') return 'task_done';
   if (!(await look.orgEnabled())) return 'org_off';
   if (t.id !== n.id && !managedTasks(n, await look.orgTasks()).some((x) => x.id === t.id)) return 'not_managed';
-  const current = t.session_id ?? t.exec_session_id ?? '';
+  const current = await sessionNowOf(t, look);
   if (!sessionId || !current) return 'no_session';
   return current === sessionId ? 'ok' : 'session_changed';
 }
+
+const currentSessionDefault = async (t: Task): Promise<string> =>
+  (await import('../../sessions/session-send-core.js')).currentSessionOfTask(t);
 
 /** The real dependencies. */
 export function defaultDeps(): ReflectDeps {
@@ -346,8 +363,9 @@ export function defaultDeps(): ReflectDeps {
       const [{ getTask }, { dutyOn }, { orgTasks }, { isOrgEnabled }] = await Promise.all([
         import('../../task-manager.js'), import('../duties/node-duties.js'), import('../org-store.js'), import('../org-enabled.js'),
       ]);
-      return confirmSendCheck(node, task, sessionId, { getTask: async (id) => (await getTask(id)) ?? null, orgTasks, orgEnabled: isOrgEnabled, dutyOn });
+      return confirmSendCheck(node, task, sessionId, { getTask: async (id) => (await getTask(id)) ?? null, orgTasks, orgEnabled: isOrgEnabled, dutyOn, currentSession: currentSessionDefault });
     },
+    currentSession: currentSessionDefault,
     readThreads: async (taskId) => {
       const { readThreads } = await import('../threads-store.js');
       return threadsFromRecords((await readThreads(taskId)).threads);

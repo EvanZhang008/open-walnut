@@ -280,6 +280,22 @@ function liveSessionsForTask(sessions: SessionRecord[]): SessionRecord[] {
   return sessions.filter((s) => !s.archived);
 }
 
+/** A task's session a send goes to: its current slot when that one is live, else its most recently active. */
+function pickTaskSession(sessions: readonly SessionRecord[], slot?: string): SessionRecord | undefined {
+  return sessions.find((s) => s.claudeSessionId === slot)
+    ?? [...sessions].sort((a, b) => (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? ''))[0];
+}
+
+/**
+ * The session a task_send to this task reaches now, or '' when it has none: the same pick as the send
+ * (a task's slot fields can be empty while its session runs: an org node's are, 2026-11-23 audit).
+ */
+export async function currentSessionOfTask(task: { id: string; session_id?: string | null; exec_session_id?: string | null }): Promise<string> {
+  const { getSessionsForTask } = await import('../session-tracker.js');
+  const live = liveSessionsForTask(await getSessionsForTask(task.id));
+  return pickTaskSession(live, task.session_id || task.exec_session_id || undefined)?.claudeSessionId ?? '';
+}
+
 /** The `Title [8hex]` / `[8hex]` handle every envelope and session_list row
  *  prints. The class is wider than hex because provider-issued session ids
  *  (ACP engines) are not UUIDs and still get printed this way. */
@@ -374,10 +390,7 @@ async function resolveSendTargetAddress(to: string, byName = false): Promise<Res
         `Task "${taskHit.title}" (${taskHit.id}) is not started. Use task_start with that id.`,
         409, { taskId: taskHit.id });
     }
-    // Prefer the task's current slot; otherwise the most recently active row.
-    const bySlot = sessions.find((s) => s.claudeSessionId === (taskHit.session_id || taskHit.exec_session_id))
-      ?? [...sessions].sort((a, b) => (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? ''))[0];
-    return { session: bySlot, taskId: taskHit.id };
+    return { session: pickTaskSession(sessions, taskHit.session_id || taskHit.exec_session_id)!, taskId: taskHit.id };
   }
 
   if (byPrefix.length === 1) return { session: byPrefix[0] };

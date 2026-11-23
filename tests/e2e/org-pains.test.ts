@@ -76,6 +76,10 @@ describe('the pain registry routes', () => {
     read = await api<{ entries: Entry[]; markdown: string; guardRun: { results: Record<string, { result: string }> } }>('GET', `/org/nodes/${id}/pains`)
     expect(read.json.guardRun.results['pn-01'].result).toBe('failed')
     expect(await fs.readFile(read.json.markdown, 'utf-8')).toContain('(last run: failed, expected 1)')
+    // Read back where it was written.
+    const last = await api<{ guardRun: { commit: string } }>('GET', `/org/nodes/${id}/pains-tests`)
+    expect(last.status).toBe(200)
+    expect(last.json.guardRun.commit).toBe('abc123')
 
     // A registry hand-edited into broken JSON is never written over: the write answers 409.
     const file = (read.json as unknown as { file: string }).file

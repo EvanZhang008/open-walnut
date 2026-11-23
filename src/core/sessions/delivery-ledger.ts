@@ -118,6 +118,8 @@ export interface DeliveryTrail {
   id: string; state: DeliveryState; sessionId?: string; taskId?: string; from?: string; title?: string;
   /** A held note: the message that carried it (its state is that message's). */
   carriedBy?: string;
+  /** Still waiting (held, parked, queued): minutes since the step it waits at, when the reader passed a clock. */
+  waitingMin?: number;
   steps: DeliveryLine[];
 }
 
@@ -133,7 +135,7 @@ function stateOf(steps: readonly DeliveryLine[]): DeliveryState {
  * started a line carrying it, written once it is in the CLI's input; a held note is where the queue row
  * that carried it is. Pure.
  */
-export function trailsOf(lines: readonly DeliveryLine[]): DeliveryTrail[] {
+export function trailsOf(lines: readonly DeliveryLine[], nowMs?: number): DeliveryTrail[] {
   const by = new Map<string, DeliveryLine[]>();
   const add = (id: string, l: DeliveryLine) => by.set(id, [...(by.get(id) ?? []), l]);
   const carrierOf = new Map<string, string>();
@@ -151,8 +153,10 @@ export function trailsOf(lines: readonly DeliveryLine[]): DeliveryTrail[] {
     const state = carriedBy ? own.get(carriedBy) ?? 'carried' : own.get(id)!;
     const sessionId = steps.find((s) => s.sessionId)?.sessionId;
     const taskId = steps.find((s) => s.taskId)?.taskId;
+    const waitsAt = state === 'held' || state === 'parked' || state === 'queued' ? [...steps].reverse().find((s) => s.step === state)?.at : undefined;
+    const waitingMin = nowMs !== undefined && waitsAt ? Math.max(0, Math.round((nowMs - Date.parse(waitsAt)) / 60_000)) : undefined;
     return {
-      id, state, ...(sessionId ? { sessionId } : {}), ...(taskId ? { taskId } : {}), ...(first.from ? { from: first.from } : {}),
+      id, state, ...(waitingMin !== undefined ? { waitingMin } : {}), ...(sessionId ? { sessionId } : {}), ...(taskId ? { taskId } : {}), ...(first.from ? { from: first.from } : {}),
       ...(first.title ? { title: first.title } : {}), ...(carriedBy ? { carriedBy } : {}), steps,
     };
   });

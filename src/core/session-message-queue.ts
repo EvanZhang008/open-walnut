@@ -557,6 +557,12 @@ export async function sendMessageToSession(
     coldHold.noteColdHold(sessionId);
     log.session.info('cold hold: message held for the session\'s next wake', { sessionId, messageId: msg.id, source });
   }
+  // A row held here is a step of its own in the delivery ledger (sessions/delivery-ledger.ts), so a wait
+  // of up to an hour reads as held, and why, not as queued (2026-11-23 audit).
+  if (holdsCold || holdsRow) {
+    const why = holdsCold ? `held for the session's next wake (it is cold), at the latest ${heldShown?.heldRetryAt ?? 'within the hour'}` : 'held for the end of the running turn';
+    void import('./sessions/delivery-ledger.js').then((l) => l.recordDelivery({ step: 'parked', id: msg.id, sessionId, why })).catch(() => {});
+  }
 
   // Tell session-runner to process the queued message (a row held for a move, for the turn's end or
   // for a cold session's next wake waits for it). Held rows that went back in line in front of it and

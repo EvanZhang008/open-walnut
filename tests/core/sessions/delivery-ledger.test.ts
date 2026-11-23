@@ -105,6 +105,17 @@ describe('the ledger file', () => {
     expect((await readDeliveryLines(1)).filter((l) => l.step === 'carried')).toEqual([])
   })
 
+  it('a message still waiting says for how many minutes, held, parked or queued; one that went on does not', () => {
+    const by = Object.fromEntries(trailsOf([
+      { at: t(0), step: 'held', id: 'mid-w', sessionId: 's1' },
+      { at: t(10), step: 'queued', id: 'qm-c' }, { at: t(15), step: 'parked', id: 'qm-c', why: 'held for the session\'s next wake' },
+      { at: t(20), step: 'queued', id: 'qm-d' }, { at: t(21), step: 'written', id: 'qm-d' },
+    ], Date.parse(t(45))).map((x) => [x.id, x]))
+    expect(by['mid-w']).toMatchObject({ state: 'held', waitingMin: 45 })
+    expect(by['qm-c']).toMatchObject({ state: 'parked', waitingMin: 30 })
+    expect(by['qm-d'].waitingMin).toBeUndefined()
+  })
+
   it('a row written and then failed or parked reads as failed or parked, not written', () => {
     const by = Object.fromEntries(trailsOf([
       { at: t(0), step: 'queued', id: 'qm-1' }, { at: t(1), step: 'written', id: 'qm-1' }, { at: t(2), step: 'parked', id: 'qm-1', why: 'stopped' },
@@ -140,5 +151,8 @@ describe('the send path', () => {
     expect(core).toMatch(/step: 'sent', id: messageId \?\? rowId/)
     expect(hold).toContain("l.recordDelivery({ step: 'carried', ...(row ? { id: row } : {}), sessionId, ids: mids })")
     expect(hold).toContain("l.recordDelivery({ step: 'dropped', id: m.mid, sessionId: sid, why })")
+    // A row held for a cold session's next wake or a turn's end is parked, with why.
+    const queue = await fs.readFile('src/core/session-message-queue.ts', 'utf-8')
+    expect(queue).toMatch(/if \(holdsCold \|\| holdsRow\) \{[\s\S]{0,400}step: 'parked', id: msg\.id, sessionId, why/)
   })
 })

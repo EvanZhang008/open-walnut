@@ -14,6 +14,7 @@
 import type { Task } from '../../types.js';
 import { log } from '../../../logging/index.js';
 import { normalizeForQuote, quoteHolds, type CallModel } from './judge.js';
+import { sessionNowOf } from './candidates.js';
 import { guidanceFileOf, readGuidanceStrict } from './records.js';
 import { localDate, readReflectionState, updateReflectionState } from './state.js';
 import { contentTokens, kept } from './guidance-merge.js';
@@ -92,6 +93,7 @@ export interface AlignDeps {
   send: (task: Task, text: string, title: string) => Promise<boolean>;
   /** Checked right before the send (pipeline.ts): the node's switch still on, the org on. */
   confirmSend?: (node: Task, task: Task, sessionId: string) => Promise<boolean | string>;
+  currentSession?: (task: Task) => Promise<string>;
 }
 
 /**
@@ -137,7 +139,7 @@ export async function alignGuidance(node: Task, nodeName: string, deps: AlignDep
     return [];
   }
   const flags = readAlign(raw, lines, check, changes);
-  const sessionId = node.session_id ?? node.exec_session_id ?? '';
+  const sessionId = await sessionNowOf(node, deps);
   if (flags.length && deps.confirmSend && !['ok', 'session_changed', true].includes(await deps.confirmSend(node, node, sessionId).catch(() => false))) return [];
   if (flags.length && !(await deps.send(node, flagNote(guidanceFileOf(node.id), flags), `Team guidance: ${flags.length} line(s) against the user's changed rules`).catch(() => false))) return [];
   await updateReflectionState(node.id, (s) => {

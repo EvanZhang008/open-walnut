@@ -162,7 +162,13 @@ export interface DayEntry {
 
 /** The day file's JSON twin: the entries for a script and the nightly note, no Markdown to parse. */
 export const DAY_SCHEMA_VERSION = 1;
-export interface DayFile { schemaVersion: 1; nodeId: string; nodeName: string; date: string; entries: DayEntry[] }
+export interface DayFile {
+  schemaVersion: 1; nodeId: string; nodeName: string; date: string; entries: DayEntry[];
+  /** The day's notes (a spent judge budget): the same lines as the Markdown's "> Note:". */
+  notes?: Array<{ at: string; text: string }>;
+  /** The day's passes: how many, and the last one's counts, so a day with no finding still shows it ran. */
+  passes?: { count: number; last: { at: string; candidates: number; judged: number; skipped: number } };
+}
 export const reflectionDayJsonOf = (nodeId: string, date: string): string => reflectionDayFileOf(nodeId, date).replace(/\.md$/, '.json');
 
 const SIGNAL_LABEL: Record<ReflectionSignal, string> = {
@@ -217,14 +223,17 @@ function normalizeEntry(raw: unknown): DayEntry | null {
 }
 
 /** A day's JSON as read: missing, unreadable (not JSON, or no entries list), or its entries. */
-type DayJson = { state: 'missing' } | { state: 'bad' } | { state: 'ok'; entries: DayEntry[] };
+type DayJson = { state: 'missing' } | { state: 'bad' } | { state: 'ok'; entries: DayEntry[]; notes?: DayFile['notes']; passes?: DayFile['passes'] };
 
 async function readDayJson(nodeId: string, date: string): Promise<DayJson> {
   const raw = await fsp.readFile(reflectionDayJsonOf(nodeId, date), 'utf-8').catch(() => null);
   if (raw === null) return { state: 'missing' };
   try {
     const f = JSON.parse(raw) as Partial<DayFile>;
-    return Array.isArray(f.entries) ? { state: 'ok', entries: f.entries.map(normalizeEntry).filter((x): x is DayEntry => !!x) } : { state: 'bad' };
+    return Array.isArray(f.entries) ? {
+      state: 'ok', entries: f.entries.map(normalizeEntry).filter((x): x is DayEntry => !!x),
+      ...(Array.isArray(f.notes) ? { notes: f.notes } : {}), ...(f.passes && typeof f.passes === 'object' ? { passes: f.passes } : {}),
+    } : { state: 'bad' };
   } catch {
     return { state: 'bad' };
   }
@@ -244,30 +253,53 @@ export async function readDayEntries(nodeId: string, date: string): Promise<DayE
  */
 export async function appendDayEntry(nodeId: string, nodeName: string, date: string, entry: DayEntry): Promise<string> {
   const file = reflectionDayFileOf(nodeId, date);
-  const json = reflectionDayJsonOf(nodeId, date);
   await withFileLock(file, async () => {
     await fsp.mkdir(path.dirname(file), { recursive: true });
     const had = await fsp.readFile(file, 'utf-8').catch(() => '');
     const head = had ? '' : `# Session reflection: ${nodeName}, ${date}\n\n`;
     await fsp.appendFile(file, head + renderDayEntry(entry), 'utf-8');
-    const read = await readDayJson(nodeId, date);
-    if (read.state === 'bad') await fsp.rename(json, `${json}.bad`).catch(() => {});
-    const day: DayFile = { schemaVersion: DAY_SCHEMA_VERSION, nodeId, nodeName, date, entries: [...(read.state === 'ok' ? read.entries : []), entry] };
-    const tmp = `${json}.${process.pid}.tmp`;
-    await fsp.writeFile(tmp, `${JSON.stringify(day, null, 2)}\n`, 'utf-8');
-    await fsp.rename(tmp, json);
+    await writeDayJson(nodeId, nodeName, date, (d) => { d.entries.push(entry); });
   });
   return file;
 }
 
 /** One line about the pass itself (a spent budget) in the day's Markdown; the JSON keeps findings only. */
-export async function appendDayNote(nodeId: string, nodeName: string, date: string, text: string): Promise<void> {
+export async function appendDayNote(nodeId: string, nodeName: string, date: string, text: string, nowMs = Date.now()): Promise<void> {
   const file = reflectionDayFileOf(nodeId, date);
+  const line = text.replace(/\s+/g, ' ').trim();
   await withFileLock(file, async () => {
     await fsp.mkdir(path.dirname(file), { recursive: true });
     const had = await fsp.readFile(file, 'utf-8').catch(() => '');
-    await fsp.appendFile(file, `${had ? '' : `# Session reflection: ${nodeName}, ${date}\n\n`}> Note: ${text.replace(/\s+/g, ' ').trim()}\n\n`, 'utf-8');
+    await fsp.appendFile(file, `${had ? '' : `# Session reflection: ${nodeName}, ${date}\n\n`}> Note: ${line}\n\n`, 'utf-8');
+    // In the JSON too: an audit reads the JSON (2026-11-23: "the day's record says nothing of the budget").
+    await writeDayJson(nodeId, nodeName, date, (d) => { d.notes = [...(d.notes ?? []), { at: new Date(nowMs).toISOString(), text: line }]; });
   });
+}
+
+/** One pass of the day, counted in its JSON (no Markdown line: a pass with no finding adds nothing to read). */
+export async function recordDayPass(nodeId: string, nodeName: string, date: string, counts: { candidates: number; judged: number; skipped: number }, nowMs = Date.now()): Promise<void> {
+  const file = reflectionDayFileOf(nodeId, date);
+  await withFileLock(file, async () => {
+    await fsp.mkdir(path.dirname(file), { recursive: true });
+    await writeDayJson(nodeId, nodeName, date, (d) => {
+      d.passes = { count: (d.passes?.count ?? 0) + 1, last: { at: new Date(nowMs).toISOString(), ...counts } };
+    });
+  });
+}
+
+/** Read, change and write the day's JSON whole (under the day file's lock): a broken one is set aside first. */
+async function writeDayJson(nodeId: string, nodeName: string, date: string, change: (d: DayFile) => void): Promise<void> {
+  const json = reflectionDayJsonOf(nodeId, date);
+  const read = await readDayJson(nodeId, date);
+  if (read.state === 'bad') await fsp.rename(json, `${json}.bad`).catch(() => {});
+  const day: DayFile = {
+    schemaVersion: DAY_SCHEMA_VERSION, nodeId, nodeName, date, entries: read.state === 'ok' ? read.entries : [],
+    ...(read.state === 'ok' && read.notes ? { notes: read.notes } : {}), ...(read.state === 'ok' && read.passes ? { passes: read.passes } : {}),
+  };
+  change(day);
+  const tmp = `${json}.${process.pid}.tmp`;
+  await fsp.writeFile(tmp, `${JSON.stringify(day, null, 2)}\n`, 'utf-8');
+  await fsp.rename(tmp, json);
 }
 
 /** A finding's skill, written to the org registry unless one of that name exists already. Never throws. */

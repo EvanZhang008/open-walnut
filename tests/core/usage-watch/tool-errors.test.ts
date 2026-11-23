@@ -43,6 +43,10 @@ describe('the code of a failed call, from what the agent read', () => {
     expect(toolErrorCode('<tool_use_error>InputValidationError: task_get failed due to the following issue')).toBe('client_bad_args')
     expect(toolErrorCode('MCP error -32001: Request timed out')).toBe('mcp_timeout')
     expect(toolErrorCode('MCP error -32000: Connection closed')).toBe('mcp_disconnected')
+    // No server answered (2026-11-23 audit: these read 'other', which a shell command never counts).
+    expect(toolErrorCode('Exit code 1\nno answer from the Walnut daemon: connect ENOENT /tmp/open-walnut/agent-gateway.sock')).toBe('no_daemon')
+    expect(toolErrorCode('Exit code 1\nthe hub gave no answer in 660 s (hub_timeout); the call may still run')).toBe('hub_timeout')
+    expect(toolErrorCode('Exit code 1\nWalnut server not running')).toBe('hub_unreachable')
     expect(toolErrorCode('Exit code 127\nzsh: command not found: walnut')).toBe('cli_missing')
     expect(toolErrorCode('Something else went wrong')).toBe('other')
   })
@@ -160,6 +164,16 @@ describe('usage_watch errors reads them grouped', () => {
     expect(bySession.rows.map((r) => [r.key, r.task, r.host])).toEqual([['s-mac', 'task-s-mac', 'local'], ['s-cloud', 'task-s-cloud', 'clouddev']])
     const byHost = await runUsageWatchAction({ action: 'errors', by: 'host', range: '24h' }, { ...ctx, now: at }) as { rows: { key: string; errors: number }[] }
     expect(byHost.rows.map((r) => [r.key, r.errors])).toEqual([['local', 2], ['clouddev', 2]])
+  })
+
+  it('says where its record starts when that is inside the range (none recorded before is not none failed)', async () => {
+    recordToolError({ at: at - 3_600_000, sid: 's-new', host: 'local', op: 'search', client: 'mcp', code: 'bad_args' })
+    flushUsage(at)
+    const week = await runUsageWatchAction({ action: 'errors', range: '7d' }, { ...ctx, now: at }) as { dataFrom?: string }
+    expect(week.dataFrom).toBe(new Date(at - 3_600_000).toISOString())
+    seed()
+    const day = await runUsageWatchAction({ action: 'errors', range: '24h' }, { ...ctx, now: at }) as { dataFrom?: string }
+    expect(day.dataFrom).toBeUndefined()
   })
 
   it('one session, by its id, its task\'s id or their start, with its failures one by one', async () => {

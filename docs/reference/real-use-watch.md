@@ -22,8 +22,10 @@ On the leader only, in `WALNUT_HOME/local/usage-watch.sqlite` (this machine, nev
   host, as the session hook sees the result (`is_error`, not a replayed line): its session, task,
   host, op, client and an error code read off the result (`toolErrorCode` in
   `usage-watch/normalize.ts`: the CLI's failure JSON, the MCP server's `walnut: <code>:` line, or
-  Claude Code's own refusal, such as `no_such_tool` after the MCP link dropped). This counts what
-  the server never answered too. `usage_watch {"action":"errors","by":"op|code|session|host"}`
+  Claude Code's own refusal, such as `no_such_tool` after the MCP link dropped, or no answer at all:
+  `no_daemon` for a gateway socket that is gone, `hub_timeout` and `hub_unreachable`). This counts
+  what the server never answered too. A report whose range starts before the first recorded failure
+  says where its record starts (`dataFrom`). `usage_watch {"action":"errors","by":"op|code|session|host"}`
   reads them grouped; `"session":"<id or its start>"` lists one session's (or task's) one by one
   (`usage-watch/tool-errors.ts`). Kept 14 days, at most 50,000.
 - **Requests** from the browser and the phone, by the route template Express matched (an op's own

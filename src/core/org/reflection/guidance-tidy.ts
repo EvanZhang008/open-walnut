@@ -10,6 +10,7 @@ import type { Task } from '../../types.js';
 import { log } from '../../../logging/index.js';
 import { normalizeForQuote } from './judge.js';
 import { droppedLessons } from './guidance-merge.js';
+import { sessionNowOf } from './candidates.js';
 import { guidanceFileOf, readGuidance } from './records.js';
 import { localDate, readReflectionState, updateReflectionState } from './state.js';
 import { guidanceRoomLeft } from './team-guidance-hint.js';
@@ -22,6 +23,7 @@ const TIDY_LISTED_MAX = 8;
 export interface TidyDeps {
   send: (task: Task, text: string, title: string) => Promise<boolean>;
   confirmSend?: (node: Task, task: Task, sessionId: string) => Promise<boolean | string>;
+  currentSession?: (task: Task) => Promise<string>;
 }
 
 export function tidyNote(file: string, roomLeft: number, waiting: readonly string[]): string {
@@ -44,7 +46,7 @@ export async function askTidy(node: Task, nodeName: string, deps: TidyDeps, nowM
   const done = new Set([...(state.backfilled ?? []), ...state.removed, ...(state.mergedLessons ?? []).map((m) => m.lesson)]);
   const waiting = (await droppedLessons(node.id, nowMs)).filter((l) => !done.has(normalizeForQuote(l.text))).map((l) => l.text);
   if (!waiting.length) return false;
-  const sessionId = node.session_id ?? node.exec_session_id ?? '';
+  const sessionId = await sessionNowOf(node, deps);
   if (deps.confirmSend && !['ok', 'session_changed', true].includes(await deps.confirmSend(node, node, sessionId).catch(() => false))) return false;
   // Marked first: a send that fails is not repeated today.
   await updateReflectionState(node.id, (s) => { s.tidyAsked = date; }, nowMs);
