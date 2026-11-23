@@ -9,7 +9,7 @@
 #
 # Now a caller files a request (its commit) and waits; ONE runner, detached from
 # every caller so a caller's timeout never cuts a deploy, does the deploys:
-#   - nothing goes out sooner than WALNUT_DEPLOY_MIN_GAP_SECS (600) after the last
+#   - nothing goes out sooner than WALNUT_DEPLOY_MIN_GAP_SECS (300) after the last
 #     restart (this queue's own record, dev-prod.sh's success stamp, the served
 #     build's time, whichever is latest) or 125 s after a deploy attempt;
 #   - the build starts WALNUT_DEPLOY_PREBUILD_SECS (420) before the gap ends, and the
@@ -41,8 +41,11 @@
 # Ratchet: tests/scripts/deploy-queue.test.ts. Needs SERVE_ROOT, JS_RUN and DQ_SCRIPT (the runner;
 # dev-prod.sh sources it for dq_hold_moves only).
 
-DQ_GAP="${WALNUT_DEPLOY_MIN_GAP_SECS:-600}"
-[[ "$DQ_GAP" =~ ^[0-9]+$ ]] || DQ_GAP=600
+# 300 since 2026-11-23 (600 before): a deploy now stops production for under 5 s and keeps every
+# session (ten deploys in a row measured 4.2 to 4.9 s), and the gap was the largest part left of a
+# land's way to production.
+DQ_GAP="${WALNUT_DEPLOY_MIN_GAP_SECS:-300}"
+[[ "$DQ_GAP" =~ ^[0-9]+$ ]] || DQ_GAP=300
 # After any deploy attempt (dev-prod.sh's own 120 s cooldown answers sooner). WALNUT_DEPLOY_ATTEMPT_GAP_SECS
 # for tests, whose stub has no cooldown.
 DQ_ATTEMPT_GAP="${WALNUT_DEPLOY_ATTEMPT_GAP_SECS:-125}"

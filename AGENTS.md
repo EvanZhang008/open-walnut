@@ -43,7 +43,7 @@ watched it work (the real UI for a UI change, a read-only check for the rest). A
 review, commit and deploy on your own; never end with "committed, not deployed, say deploy".
 The shared tree almost always holds other agents' uncommitted work, so deploy the commit, not
 the tree: `bash scripts/deploy-committed.sh` builds the committed HEAD in a clean clone and
-serves it (queued, at most one restart per 10 minutes, skipped when prod already serves it).
+serves it (queued, at most one restart per 5 minutes, skipped when prod already serves it).
 Never wait for the tree to be clean, and never stash, revert or commit their files to get
 there. If a deploy guard refuses (type-check, smoke boot, cooldown), fix what it names or
 report it as the blocker. Scope the commit to your own changes only, and run the usual

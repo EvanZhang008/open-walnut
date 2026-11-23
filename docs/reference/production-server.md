@@ -20,7 +20,7 @@ sessions read op text two deploys old). It skips the deploy (exit 0, no restart)
 already serves that commit or a later one containing it from a clean build, because every restart
 costs open windows seconds of timeouts (2026-10-28: up to 76 a day); `WALNUT_DEVPROD_FORCE=1`
 deploys anyway. Deploys are queued (`scripts/lib/deploy-queue.sh`, 2026-11-03: 31 restarts in a
-day): production restarts at most once per 10 minutes (`WALNUT_DEPLOY_MIN_GAP_SECS`; the next build starts 7 minutes before that, `WALNUT_DEPLOY_PREBUILD_SECS`, and only its stop of the old server waits for the 10 minutes to pass), and on a Mac whose load is over 4 per CPU it waits for the load to ease, up to 20 minutes after the last restart (`WALNUT_DEPLOY_BUSY_GAP_SECS`, 2026-11-09: four deploys an hour with an iOS build took the load to 400), a call
+day): production restarts at most once per 5 minutes (`WALNUT_DEPLOY_MIN_GAP_SECS`, 10 until 2026-11-23, when a deploy's stop fell under 5 s; the next build starts up to 3 minutes before that, `WALNUT_DEPLOY_PREBUILD_SECS` less the 125 s attempt gap, and only its stop of the old server waits for the gap to pass), and on a Mac whose load is over 4 per CPU it waits for the load to ease, up to 20 minutes after the last restart (`WALNUT_DEPLOY_BUSY_GAP_SECS`, 2026-11-09: four deploys an hour with an iOS build took the load to 400), a call
 inside the gap waits and goes out with the newest commit of then, and it exits 0 only once
 production serves a build containing its commit (it says which); a host's daemon is replaced at
 most once per 20 minutes (`src/providers/daemon-update-gap.ts`). Never wait for the tree to be clean, and never stash, revert or commit
