@@ -30,6 +30,7 @@ export const OUTSIDE_ENTRIES: readonly OutsideEntry[] = [
   outside('rebuildable', 'xdg-data', 'share.bin', 'open-walnut/bin', 'dir', 'Voice input helper binaries, installed again on demand'),
   outside('rebuildable', 'xdg-data', 'share.stt-llama', 'open-walnut/stt-llama', 'dir', 'Local voice model runtime, installed again on demand'),
   outside('rebuildable', 'xdg-data', 'share.stt-mlx', 'open-walnut/stt-mlx', 'dir', 'Local voice model runtime, installed again on demand'),
+  outside('rebuildable', 'xdg-data', 'share.tts-mlx', 'open-walnut/tts-mlx', 'dir', 'Local Chinese voice (text to speech) runtime, installed again on demand'),
   // The engine's own home: its data, never Walnut's.
   outside('machine', 'claude-home', 'claude', '', 'dir', 'The engine\'s own home on this machine'),
   outside('machine', 'claude-home', 'claude.projects', 'projects', 'dir', 'Engine transcripts (JSONL) of sessions that ran on this machine: on purpose, they belong to the host a session runs on, and a leader switch does not move sessions'),

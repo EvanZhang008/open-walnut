@@ -326,6 +326,7 @@ so data an upgrade left there is still copied or skipped right, but they have no
 | `~/.local/share/open-walnut/bin/` | rebuildable | no | Voice input helper binaries, installed again on demand |
 | `~/.local/share/open-walnut/stt-llama/` | rebuildable | no | Local voice model runtime, installed again on demand |
 | `~/.local/share/open-walnut/stt-mlx/` | rebuildable | no | Local voice model runtime, installed again on demand |
+| `~/.local/share/open-walnut/tts-mlx/` | rebuildable | no | Local Chinese voice (text to speech) runtime, installed again on demand |
 | `~/.claude/` | machine | no | The engine's own home on this machine |
 | `~/.claude/projects/` | machine | no | Engine transcripts (JSONL) of sessions that ran on this machine: on purpose, they belong to the host a session runs on, and a leader switch does not move sessions |
 | `~/.claude/settings.json` | machine | no | The engine's settings and enabled plugins |

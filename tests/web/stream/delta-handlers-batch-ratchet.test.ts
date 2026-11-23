@@ -82,6 +82,16 @@ const RULES: Record<string, (s: Site) => string | null> = {
   // Team agent deltas are lists of whole events the server already batched by
   // its poll; they append events, not characters to a block.
   'hooks/useTeamStream.ts': (s) => (s.event === 'session:team-agent-delta' && !GROW.test(s.body) ? null : 'grows a block per delta'),
+  // Voice mode reads the answer as it streams: each delta is added to the reader's
+  // own string (voice/stream-reader.ts), which hands on whole sentences; no block
+  // and no render per delta.
+  'hooks/useVoiceConversation.ts': (s) => {
+    if (s.event !== 'session:text-delta') return `unexpected event ${s.event}`;
+    if (GROW.test(s.body)) return 'grows a block per delta';
+    if (/\bset[A-Z]\w*\(/.test(s.body)) return 'sets React state per delta';
+    if (!/answer\(\)\.onDelta\(/.test(s.body)) return 'does not hand the delta to the stream reader (answer().onDelta)';
+    return null;
+  },
 };
 
 describe('session delta handlers batch', () => {
@@ -94,6 +104,7 @@ describe('session delta handlers batch', () => {
       'hooks/useSessionStream.ts session:text-delta',
       'hooks/useSessionStream.ts session:thinking-delta',
       'hooks/useTeamStream.ts session:team-agent-delta',
+      'hooks/useVoiceConversation.ts session:text-delta',
     ]);
   });
 
