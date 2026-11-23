@@ -75,6 +75,29 @@ describe('chooseServiceSet', () => {
     expect(await readSetOwner(defaultRoot())).toBe(A)
   })
 
+  it('step 2: a readable mode of another Walnut than the claimer outranks the claim (review round 1, should-fix 2)', async () => {
+    // B claimed a free-looking default while A was away; A, the one whose service it is, writes its mode.
+    await chooseServiceSet(input(B))
+    expect(await readSetOwner(defaultRoot())).toBe(B)
+    writeMode({ v: 1, home: path.join(home, 'data-a'), exe: '/x/daemon', walnutId: A, role: 'leader' })
+    const b = await chooseServiceSet(input(B))
+    expect(b.set.id).toBe('bbbbbbbbbbbbbbbb')
+    expect(b.why).toMatch(/another Walnut's \(its mode outranks the claim\)/)
+    const a = await chooseServiceSet(input(A))
+    expect(a.set.id).toBe('')
+    // A mode that agrees with the claim changes nothing.
+    writeMode({ v: 1, home: path.join(home, 'data-b'), exe: '/x/daemon', walnutId: B, role: 'leader' })
+    expect((await chooseServiceSet(input(B))).set.id).toBe('')
+  })
+
+  it('a claim temp file a crashed CLI left is removed under the lock (low 3)', async () => {
+    fs.mkdirSync(defaultRoot(), { recursive: true, mode: 0o700 })
+    const left = path.join(defaultRoot(), `${SET_OWNER_FILE}.999999999.0123abcd.tmp`)
+    fs.writeFileSync(left, '{}')
+    await chooseServiceSet(input(A))
+    expect(fs.existsSync(left)).toBe(false)
+  })
+
   it('step 4, no mode: a default daemon another Walnut used lately sends this one to its own set (two Walnuts sharing one daemon)', async () => {
     writeServes({ [walnutKeyOf(path.join(home, 'data-a'))]: NOW - 60_000, '-': NOW })
     const b = await chooseServiceSet(input(B))

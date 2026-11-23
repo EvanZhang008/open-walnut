@@ -5,7 +5,9 @@
  *   1. The Walnut's own set is installed (its install root holds a launcher, a boot script, a mode
  *      or an ownership record): its own set. Sticky, whatever the default does later.
  *   2. The default install root holds `set-owner.json {v:1, walnutId}`: this Walnut's, the default;
- *      another's (or one that does not read), its own set.
+ *      another's (or one that does not read), its own set. A readable mode owner that names another
+ *      Walnut than the claim wins over it (review round 1, should-fix 2): the Walnut that runs the
+ *      default service now owns it, whoever claimed the place while it was away.
  *   3. No claim: the default's owner by today's rule (service-mode.ts serviceModeOwner: the mode's
  *      walnutId, else the replica's follower spec). This Walnut: the default, claimed. Another: its own set.
  *   4. No mode (or one whose owner cannot be told): the default runtime's daemon.serves.json names
@@ -83,6 +85,19 @@ async function writeSetOwner(defaultRoot: string, walnutId: string): Promise<boo
   } finally { await fs.rm(tmp, { force: true }) }
 }
 
+/** A claim's temp file a crashed CLI left (its pid gone) is removed, under the lock (review round 1, low 3). */
+async function sweepClaimTemps(root: string): Promise<void> {
+  const names = await fs.readdir(root).catch(() => [] as string[])
+  for (const name of names) {
+    const m = /^set-owner\.json\.(\d+)\.[0-9a-f]{8}\.tmp$/.exec(name)
+    if (!m) continue
+    const pid = Number(m[1])
+    let alive = pid === process.pid
+    if (!alive) { try { process.kill(pid, 0); alive = true } catch (e) { alive = (e as NodeJS.ErrnoException).code === 'EPERM' } }
+    if (!alive) await fs.rm(path.join(root, name), { force: true }).catch(() => {})
+  }
+}
+
 /** Another Walnut than `ourKey` used the default runtime's daemon lately (its serves file). */
 async function sharedWithAnother(runtimeDir: string, ourKey: string | null, now: number): Promise<string | null> {
   if (!ourKey) return null
@@ -99,20 +114,28 @@ export async function chooseServiceSet(input: ServiceSetChoiceInput): Promise<Se
   for (const name of INSTALLED_MARKS) {
     if (await present(path.join(own.installRoot, name))) return { set: own, why: `its own set is installed (${name})` }
   }
-  const byClaim = (owner: string): ServiceSetChoice => owner === input.walnutId
-    ? { set: def, why: 'the default set is claimed by this Walnut' }
-    : { set: own, why: owner ? 'the default set is claimed by another Walnut' : 'the default set has a claim that does not read' }
+  const byMode = (): ServiceSetChoice | null => {
+    const owner = serviceModeOwner(root)
+    if (owner === 'none' || !owner.owner) return null
+    return owner.owner === input.walnutId
+      ? { set: def, why: 'the default service is this Walnut\'s' }
+      : { set: own, why: 'the default service is another Walnut\'s' }
+  }
+  const byClaim = (owner: string): ServiceSetChoice => {
+    // A mode another Walnut than the claimer wrote later is the default's owner now.
+    const mode = owner ? byMode() : null
+    if (mode && (mode.set === def) !== (owner === input.walnutId)) return { ...mode, why: `${mode.why} (its mode outranks the claim)` }
+    return owner === input.walnutId
+      ? { set: def, why: 'the default set is claimed by this Walnut' }
+      : { set: own, why: owner ? 'the default set is claimed by another Walnut' : 'the default set has a claim that does not read' }
+  }
   // 2.
   const claimed = await readSetOwner(root)
   if (claimed !== null) return byClaim(claimed)
   // 3 and 4, read again under the lock before a claim.
   const decide = async (): Promise<ServiceSetChoice> => {
-    const owner = serviceModeOwner(root)
-    if (owner !== 'none' && owner.owner) {
-      return owner.owner === input.walnutId
-        ? { set: def, why: 'the default service is this Walnut\'s' }
-        : { set: own, why: 'the default service is another Walnut\'s' }
-    }
+    const mode = byMode()
+    if (mode) return mode
     const other = await sharedWithAnother(input.defaultRuntimeDir, input.serveHome ? walnutKeyOf(input.serveHome) : null, (input.now ?? Date.now)())
     if (other) return { set: own, why: `the default daemon serves another Walnut (${other})` }
     return { set: def, why: 'the default set is free' }
@@ -121,6 +144,7 @@ export async function chooseServiceSet(input: ServiceSetChoiceInput): Promise<Se
   if (first.set === own || !input.claim) return first
   await fs.mkdir(root, { recursive: true, mode: 0o700 })
   return withServiceModeLockWait(root, async () => {
+    await sweepClaimTemps(root)
     const again = await readSetOwner(root)
     if (again !== null) return byClaim(again)
     const now = await decide()
