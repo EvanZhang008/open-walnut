@@ -146,10 +146,26 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     import('../standby/runner.js'), import('../server-role.js'), import('../config-manager.js'),
   ])
   const doorUrls = async (): Promise<string[]> => cleanDoorUrls((await getConfig()).session?.host_door_urls)
+  // The hosts in this leader's config now: only they are issued, let in and kept linked at the door.
+  let configured: Set<string> | null = null
+  const readConfigured = async (): Promise<Set<string> | null> => {
+    try { configured = issue.configuredHostKeys((await getConfig()).hosts) } catch { /* the last one read stands */ }
+    return configured
+  }
+  await readConfigured()
+  const isConfigured = (hostKey: string): boolean => configured?.has(hostKey) ?? false
+  // A host removed from the config (or turned off) loses its credential and its sockets.
+  const revokeGone = async (): Promise<void> => {
+    const now = await readConfigured()
+    if (!now) return
+    const gone = await issue.revokeHostsGone(now).catch((err: unknown) => { log.session.warn('host door: revoking the credentials of removed hosts failed', { error: err instanceof Error ? err.message : String(err) }); return [] })
+    if (gone.length > 0) log.session.info('host door: revoked the credentials of hosts no longer in the config', { machines: gone.length })
+  }
   const stopDoor = await startHostDoor({
     walnutId: async () => getInstanceId(),
     standing: standingNow,
     doors: doorUrls,
+    configured: isConfigured,
     adopt: (hostKey, sock) => side.adopt(hostKey, sock),
     log: (level, msg, data) => log.session[level](msg, data),
   })
@@ -167,6 +183,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
       return link.openStream('follower', purpose)
     },
     standing: (hostKey) => standingNow(hostKey).pair,
+    configured: isConfigured,
     syncStandby,
     log: (level, msg, data) => log.session[level](msg, data),
   })
@@ -200,7 +217,11 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   setHostTurnSource((sid) => remote.hostTurnStateOf(sid))
   const unlisten = hostServer.onHostServerView(look)
   // The switch is read again at every config write, so a start after it went off stays here.
-  bus.subscribe(CONFIG_SUBSCRIBER, () => { void side.refreshFlag(); void syncDoor(); issuer.refresh(); for (const v of hostServer.peekHostServerViews()) lookIssue(v) }, { global: true, interest: [EventNames.CONFIG_CHANGED] })
+  bus.subscribe(CONFIG_SUBSCRIBER, () => {
+    void side.refreshFlag(); void syncDoor(); issuer.refresh()
+    void revokeGone().then(() => { for (const v of hostServer.peekHostServerViews()) lookIssue(v) })
+  }, { global: true, interest: [EventNames.CONFIG_CHANGED] })
+  void revokeGone()
   // A delete of a host's session: its host drops its row too (leader-drops.ts), now when linked, else at its next link.
   bus.subscribe(DELETE_SUBSCRIBER, (event) => {
     const ids = (event.data as { sessionIds?: unknown } | null)?.sessionIds

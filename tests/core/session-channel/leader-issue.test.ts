@@ -17,7 +17,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-leader-is
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { _resetDeviceAuthForTesting } from '../../../src/core/device-auth.js'
-import { hostCredentialOf, verifyHostCredential } from '../../../src/core/session-channel/host-credentials.js'
+import { doorKeysOf, hostCredentialOf } from '../../../src/core/session-channel/host-credentials.js'
 import { issueOnce, startCredentialIssuer, type IssuerDeps } from '../../../src/core/session-channel/leader-issue.js'
 import { answerCredentialRoute, answerDoorsRoute, readHostCredential } from '../../../src/core/session-channel/host-credential-file.js'
 import { setMachineIdHomeForTest } from '../../../src/core/machine-id.js'
@@ -62,7 +62,7 @@ afterEach(async () => {
   await fsp.rm(home, { recursive: true, force: true })
 })
 
-function deps(o: { flag?: boolean; doors?: unknown; synced?: { n: number } } = {}): IssuerDeps {
+function deps(o: { flag?: boolean; doors?: unknown; synced?: { n: number }; configured?: Set<string>; logs?: string[] } = {}): IssuerDeps {
   return {
     walnutId: async () => WALNUT,
     flagOn: async () => o.flag ?? true,
@@ -71,7 +71,8 @@ function deps(o: { flag?: boolean; doors?: unknown; synced?: { n: number } } = {
     openStream: async () => net.connect(port, '127.0.0.1'),
     standing: () => ({ permitNumber: 0, epoch: 4 }),
     syncStandby: async () => { if (o.synced) o.synced.n++; return null },
-    log: () => {},
+    configured: (k) => (o.configured ?? new Set(['devbox', 'twin'])).has(k),
+    log: (_l, msg) => { o.logs?.push(msg) },
   }
 }
 
@@ -98,7 +99,8 @@ describe('issuing a host its door credential', () => {
     expect(synced.n).toBe(1)
     const held = await readHostCredential(WALNUT)
     expect(held).toMatchObject({ machineId: MACHINE, doors: [DOOR], permit: { permitNumber: 0, epoch: 4 } })
-    expect(await verifyHostCredential(held!.token)).toMatchObject({ which: 'current', verifyKey: held!.verifyKey })
+    expect((await hostCredentialOf(MACHINE))!.verifyKey).toBe(held!.verifyKey)
+    expect(JSON.stringify(posts)).not.toContain('token')
     expect(posts.map((p) => (p.check ? 'check' : 'write'))).toEqual(['check', 'write'])
 
     expect(await issueOnce(deps({ synced }), 'devbox', MACHINE, [DOOR])).toBe('held')
@@ -108,9 +110,9 @@ describe('issuing a host its door credential', () => {
     expect(await issueOnce(deps({ synced }), 'devbox', MACHINE, doors)).toBe('issued')
     const now = await readHostCredential(WALNUT)
     expect(now!.doors).toEqual(doors)
-    expect(now!.token).not.toBe(held!.token)
-    // The old token still opens the door with its own key, for its grace.
-    expect(await verifyHostCredential(held!.token)).toMatchObject({ which: 'previous', verifyKey: held!.verifyKey })
+    expect(now!.verifyKey).not.toBe(held!.verifyKey)
+    // The old key still opens the door, for its grace.
+    expect(doorKeysOf((await hostCredentialOf(MACHINE))!).map((k) => [k.which, k.verifyKey])).toEqual([['current', now!.verifyKey], ['previous', held!.verifyKey]])
   })
 
   it('with the write permission\'s system on, a refusal at the door mints and sends nothing', async () => {
@@ -134,5 +136,25 @@ describe('issuing a host its door credential', () => {
     issuer.noteHost('devbox', { connected: false, dials: true })
     expect(await issuer.pushDoors([DOOR])).toEqual({ told: [], failed: [] })
     issuer.stop()
+  })
+
+  it('issues only to a host in the config', async () => {
+    expect(await issueOnce(deps({ configured: new Set() }), 'devbox', MACHINE, [DOOR])).toBe('skipped')
+    expect(posts).toEqual([])
+    expect(await hostCredentialOf(MACHINE)).toBeNull()
+  })
+
+  it('two host keys reporting one machine id: the credential stays with the first, the second is refused and logged', async () => {
+    const logs: string[] = []
+    expect(await issueOnce(deps({ logs }), 'devbox', MACHINE, [DOOR])).toBe('issued')
+    const first = await hostCredentialOf(MACHINE)
+    const before = posts.length
+    expect(await issueOnce(deps({ logs }), 'twin', MACHINE, [DOOR])).toBe('refused')
+    expect(logs.some((l) => /two hosts report one machine id/.test(l))).toBe(true)
+    // Nothing asked of or sent to the second, nothing rotated: no fight between the two.
+    expect(posts.length).toBe(before)
+    expect(await hostCredentialOf(MACHINE)).toEqual(first)
+    expect(await issueOnce(deps({ logs }), 'devbox', MACHINE, [DOOR])).toBe('held')
+    expect(await hostCredentialOf(MACHINE)).toEqual(first)
   })
 })

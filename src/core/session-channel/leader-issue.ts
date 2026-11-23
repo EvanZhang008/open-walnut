@@ -19,8 +19,8 @@
  * not below what it holds). Hosts linked over a dialed socket hear it as a `doors` frame instead
  * (host-door.ts pushDoorsToDialed); leader-boot.ts pushHostDoors does both.
  */
-import { HOST_CREDENTIAL_PATH, HOST_DOORS_PATH, HOST_DOOR_CAP, cleanDoorUrls } from './door-wire.js'
-import { credentialDue, dropHostCredential, hostCredentialOf, mintHostCredential } from './host-credentials.js'
+import { HOST_CREDENTIAL_PATH, HOST_DOORS_PATH, HOST_DOOR_CAP, cleanDoorUrls, doorKeyId } from './door-wire.js'
+import { credentialDue, dropHostCredential, hostCredentialOf, hostCredentials, mintHostCredential } from './host-credentials.js'
 import { requestOverStream, type HostCallAnswer } from './leader-links.js'
 import { assertOutwardDoor, leaderPermitActive } from '../leader/switch/doors.js'
 import type { Duplex } from 'node:stream'
@@ -37,6 +37,8 @@ export interface IssuerDeps {
   doorUrls(): Promise<unknown>
   /** The machine id `hostKey`'s daemon said in its hello, or null. */
   machineIdOf(hostKey: string): string | null
+  /** Is `hostKey` a host in this leader's config (absent: every host is)? Only those are issued. */
+  configured?(hostKey: string): boolean
   openStream(hostKey: string, purpose: string): Promise<Duplex>
   standing(hostKey: string): PermitPair
   /** One standby batch now (null: no standby, nothing to wait for). */
@@ -45,7 +47,7 @@ export interface IssuerDeps {
   log(level: 'info' | 'warn', msg: string, data?: Record<string, unknown>): void
 }
 
-export type IssueOutcome = 'issued' | 'held' | 'skipped' | 'failed'
+export type IssueOutcome = 'issued' | 'held' | 'skipped' | 'refused' | 'failed'
 
 /** Does a host's last report name the door capability? */
 export function reportDials(report: { capabilities?: unknown } | null | undefined): boolean {
@@ -67,20 +69,27 @@ const sameDoors = (a: unknown, b: readonly string[]): boolean => Array.isArray(a
 /** One check of `hostKey`, and an issue when one is due (the header). */
 export async function issueOnce(d: IssuerDeps, hostKey: string, machineId: string, doors: readonly string[]): Promise<IssueOutcome> {
   const walnutId = await d.walnutId()
+  if (d.configured && !d.configured(hostKey)) return 'skipped'
   const rec = await hostCredentialOf(machineId)
+  // One record per machine, bound to its host key: another key that reports the same machine is
+  // refused (no rotation fight, no socket adopted under the wrong key), and says so.
+  if (rec?.hostKey && rec.hostKey !== hostKey) {
+    d.log('warn', 'host door: two hosts report one machine id; the credential stays with the first, the other is not issued', { host: hostKey, heldBy: rec.hostKey, machineId })
+    return 'refused'
+  }
   const held = await askCredential(d, hostKey, { check: true, walnutId, machineId })
   if (held.ok !== true) {
     d.log('warn', 'host door: the host did not say what credential it holds', { host: hostKey, error: String(held.error ?? 'refused') })
     return 'failed'
   }
-  const due = credentialDue(rec, (d.now ?? Date.now)()) || held.holds !== true || held.tokenHash !== rec?.tokenHash
-    || !sameDoors(held.doors, doors) || rec?.hostKey !== hostKey || rec?.walnutId !== walnutId
+  const due = credentialDue(rec, (d.now ?? Date.now)()) || held.holds !== true || !rec?.verifyKey || held.keyId !== doorKeyId(rec.verifyKey)
+    || !sameDoors(held.doors, doors) || rec.walnutId !== walnutId
   if (!due) return 'held'
   // A configure of a host: only the machine that holds the write permission sends it.
   if (leaderPermitActive()) assertOutwardDoor('host-credential', `host-credential:${machineId}`)
   const minted = await mintHostCredential({ machineId, walnutId, hostKey, now: d.now?.() })
   const { permitNumber, epoch } = d.standing(hostKey)
-  const a = await sendCredential(d, hostKey, { walnutId, machineId, token: minted.token, verifyKey: minted.verifyKey, doors: [...doors], permitNumber, epoch })
+  const a = await sendCredential(d, hostKey, { walnutId, machineId, verifyKey: minted.verifyKey, doors: [...doors], permitNumber, epoch })
   if (a.ok !== true) {
     d.log('warn', 'host door: the host did not keep its credential; asked again at its next link', { host: hostKey, error: String(a.error ?? 'refused') })
     return 'failed'
@@ -137,7 +146,7 @@ export function startCredentialIssuer(d: IssuerDeps): CredentialIssuer {
       const clean = cleanDoorUrls(doors)
       if (stopped || clean.length === 0 || !(await d.flagOn().catch(() => false))) return out
       const walnutId = await d.walnutId()
-      await Promise.all([...known].filter(([k]) => !skip?.has(k)).map(async ([hostKey, machineId]) => {
+      await Promise.all([...known].filter(([k]) => !skip?.has(k) && (d.configured?.(k) ?? true)).map(async ([hostKey, machineId]) => {
         const { permitNumber, epoch } = d.standing(hostKey)
         const a = await requestOverStream(d.openStream, hostKey, HOST_DOORS_PATH, { walnutId, machineId, doors: clean, permitNumber, epoch }, CALL_TIMEOUT_MS)
           .catch((err: unknown) => ({ ok: false, error: err instanceof Error ? err.message : String(err) }) as HostCallAnswer)
@@ -170,4 +179,21 @@ export async function revokeHostCredential(machineId: string): Promise<boolean> 
     await sync()
   }
   return gone
+}
+
+/**
+ * The hosts the user removed from this leader's config (or turned off) lose their door credential:
+ * every record whose host key is not in `configured` is revoked (revokeHostCredential: its sockets
+ * close at once, one standby batch). The machine ids revoked.
+ */
+export async function revokeHostsGone(configured: ReadonlySet<string>): Promise<string[]> {
+  const gone = (await hostCredentials()).filter((r) => r.machineId && (!r.hostKey || !configured.has(r.hostKey)))
+  const out: string[] = []
+  for (const r of gone) if (await revokeHostCredential(r.machineId!)) out.push(r.machineId!)
+  return out
+}
+
+/** The host keys of this leader's config a credential may be issued to: every host not turned off. */
+export function configuredHostKeys(hosts: Record<string, { enabled?: boolean } | null | undefined> | undefined): Set<string> {
+  return new Set(Object.entries(hosts ?? {}).filter(([, h]) => !!h && h.enabled !== false).map(([k]) => k))
 }

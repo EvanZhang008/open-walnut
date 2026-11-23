@@ -622,8 +622,9 @@ export function attachWss(server: HttpServer): WebSocketServer {
     }
 
     // /host-door (a leader door, core/leader-doors.ts; open only on the leader while the experiment
-    // host_runs_sessions is on): a host of this leader dialing in with the door credential this
-    // leader issued it. The credential is checked before the upgrade (core/session-channel/host-door.ts).
+    // host_runs_sessions is on): a host of this leader dialing in. The upgrade carries no secret: a
+    // rate-limited address gets 429, then both sides prove the key this leader issued the host in
+    // frames before anything else is taken (core/session-channel/host-door.ts).
     if (door === '/host-door') {
       import('../../core/session-channel/host-door.js')
         .then(({ handleHostDoorUpgrade, verifyHostDoorUpgrade }) => handleHostDoorUpgrade(request, socket, head, { verify: () => verifyHostDoorUpgrade(url, request) }))

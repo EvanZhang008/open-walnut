@@ -11,9 +11,9 @@ import type { Entrance } from './capabilities/manifest.js'
 export const LEADER_DOORS: readonly Entrance[] = [
   {
     path: '/host-door',
-    opensWith: 'A host of this leader dialing in to run its session channel: only a door credential this leader issued that host over its own daemon link (auth.json, issuer leader, named host-<machineId>), as Authorization: Bearer or a walnut.bearer. subprotocol entry, never in the URL; the host\'s hello must then name this Walnut and the credential\'s machine. Open only on the leader while the experiment host_runs_sessions is on.',
+    opensWith: 'A host of this leader dialing in to run its session channel. The upgrade carries no secret; the host and this leader each prove they hold the key S this leader issued that host over its own daemon link (auth.json, issuer leader, named host-<machineId>, bound to a host still in the config) with an HMAC over both sides\' fresh nonces, and nothing else is taken from the socket until the host\'s proof passed. Open only on the leader while the experiment host_runs_sessions is on.',
     verifiedIn: 'src/core/session-channel/host-door.ts',
-    check: 'await verifyHostCredential(presented.token)',
+    check: 'proofsEqual(expected, f.proof)',
   },
 ]
 

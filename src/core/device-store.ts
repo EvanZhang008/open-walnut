@@ -97,12 +97,12 @@ export interface DeviceRecord {
   machineId?: string
   walnutId?: string
   hostKey?: string
-  /** A host door credential: S, the key the leader proves itself with at the door (32 bytes hex; auth.json is leader data, sensitive). */
+  /** A host door credential: S, the key the leader and the host prove themselves with at the door (32 bytes hex; auth.json is leader data, sensitive). Its `tokenHash` is empty: no bearer opens the door. */
   verifyKey?: string
-  /** A host door credential: when the token was issued (ISO). */
+  /** A host door credential: when S was issued (ISO). */
   issuedAt?: string
-  /** A host door credential: the token and key a rotation replaced, still taken until `until` (ISO). */
-  previous?: { tokenHash: string; verifyKey: string; until: string }
+  /** A host door credential: the key a rotation replaced, still taken until `until` (ISO). */
+  previous?: { verifyKey: string; until: string }
 }
 
 /** A host's door credential this leader issued (DeviceRecord.issuer): only the leader's door takes it. */

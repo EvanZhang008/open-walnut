@@ -15,16 +15,16 @@ import crypto from 'node:crypto'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { machineIdFile, readMachineId } from '../machine-id.js'
-import { cleanDoorUrls, doorUrlRefusal, DOOR_SECRET_RE } from './door-wire.js'
+import { cleanDoorUrls, doorKeyId, doorUrlRefusal, DOOR_SECRET_RE } from './door-wire.js'
 import { comparePermit, isPermitPair, type PermitPair } from './channel.js'
 
 const WALNUT_ID_RE = /^[A-Za-z0-9_.-]{1,128}$/
 
 export interface HostCredential {
-  v: 1
+  v: 2
   walnutId: string
   machineId: string
-  token: string
+  /** S, the key this host and its leader prove themselves with at the door (door-wire.ts). */
   verifyKey: string
   /** The door URLs to dial, in order (door-wire.ts doorUrlRefusal: each one allowed). */
   doors: string[]
@@ -45,11 +45,12 @@ export function hostCredentialFile(walnutId: string): string {
 
 function parse(raw: unknown): HostCredential | null {
   const c = raw as Partial<HostCredential> | null
-  if (!c || typeof c !== 'object' || c.v !== 1) return null
+  // A v1 file (a bearer token, before the nonce handshake) does not read: the leader issues again.
+  if (!c || typeof c !== 'object' || c.v !== 2) return null
   if (typeof c.walnutId !== 'string' || typeof c.machineId !== 'string') return null
-  if (typeof c.token !== 'string' || !DOOR_SECRET_RE.test(c.token) || typeof c.verifyKey !== 'string' || !DOOR_SECRET_RE.test(c.verifyKey)) return null
+  if (typeof c.verifyKey !== 'string' || !DOOR_SECRET_RE.test(c.verifyKey)) return null
   if (!isPermitPair(c.permit)) return null
-  return { v: 1, walnutId: c.walnutId, machineId: c.machineId, token: c.token, verifyKey: c.verifyKey, doors: cleanDoorUrls(c.doors), permit: c.permit, issuedAt: typeof c.issuedAt === 'string' ? c.issuedAt : '' }
+  return { v: 2, walnutId: c.walnutId, machineId: c.machineId, verifyKey: c.verifyKey, doors: cleanDoorUrls(c.doors), permit: c.permit, issuedAt: typeof c.issuedAt === 'string' ? c.issuedAt : '' }
 }
 
 /** This machine's credential for `walnutId`, or null (none, or one that does not read). */
@@ -92,26 +93,28 @@ function doorsRefusal(doors: unknown): { error: string; why?: string } | null {
 /**
  * Keep a door credential the leader minted (host-credentials.ts mintHostCredential) for this very
  * machine: the credential route's write and any other caller take this one function. Refused, and
- * nothing written, for another machine, a secret of the wrong shape, a door no host may dial, or a
- * standing that does not read.
+ * nothing written, for another machine, a key of the wrong shape, a door no host may dial, a
+ * standing that does not read, or one below the highest this host holds (the credential's and
+ * `seen`, its fact log's: a stale leader never replaces the newer one's credential).
  */
 export async function writeHostCredentialFile(
-  input: { walnutId: string; machineId: string; token: string; verifyKey: string; doors: readonly string[]; permitNumber: number; epoch: number },
-  o: { thisMachine?: () => Promise<string>; now?: () => number } = {},
+  input: { walnutId: string; machineId: string; verifyKey: string; doors: readonly string[]; permitNumber: number; epoch: number },
+  o: { thisMachine?: () => Promise<string>; seen?: PermitPair | null; now?: () => number } = {},
 ): Promise<CredentialWrite> {
   const b = input as Record<string, unknown>
   if (typeof b.walnutId !== 'string' || !WALNUT_ID_RE.test(b.walnutId)) return { ok: false, error: 'walnut_mismatch' }
   const mine = await (o.thisMachine ?? readMachineId)()
   if (b.machineId !== mine) return { ok: false, error: 'machine_mismatch' }
-  if (typeof b.token !== 'string' || !DOOR_SECRET_RE.test(b.token) || typeof b.verifyKey !== 'string' || !DOOR_SECRET_RE.test(b.verifyKey)) {
-    return { ok: false, error: 'bad_secret' }
-  }
+  if (typeof b.verifyKey !== 'string' || !DOOR_SECRET_RE.test(b.verifyKey)) return { ok: false, error: 'bad_secret' }
   const bad = doorsRefusal(b.doors)
   if (bad) return { ok: false, ...bad }
   const permit = { permitNumber: b.permitNumber, epoch: b.epoch }
   if (!isPermitPair(permit)) return { ok: false, error: 'bad_permit' }
+  const held = await readHostCredential(b.walnutId)
+  const floor = [held?.permit, o.seen].reduce<PermitPair | null>((hi, p) => (p && (!hi || comparePermit(p, hi) > 0) ? p : hi), null)
+  if (floor && comparePermit(permit, floor) < 0) return { ok: false, error: 'stale_permit' }
   const credential: HostCredential = {
-    v: 1, walnutId: b.walnutId, machineId: mine, token: b.token, verifyKey: b.verifyKey, doors: cleanDoorUrls(b.doors), permit,
+    v: 2, walnutId: b.walnutId, machineId: mine, verifyKey: b.verifyKey, doors: cleanDoorUrls(b.doors), permit,
     issuedAt: new Date((o.now ?? Date.now)()).toISOString(),
   }
   await keep(credential)
@@ -171,11 +174,13 @@ export async function answerCredentialRoute(body: unknown, o: CredentialRouteOpt
   if (b.check === true) {
     const held = await readHostCredential(o.walnutId)
     if (!held || held.machineId !== mine) return { status: 200, body: { ok: true, holds: false } }
-    const tokenHash = crypto.createHash('sha256').update(held.token, 'utf8').digest('hex')
-    return { status: 200, body: { ok: true, holds: true, tokenHash, doors: held.doors, issuedAt: held.issuedAt } }
+    return { status: 200, body: { ok: true, holds: true, keyId: doorKeyId(held.verifyKey), doors: held.doors, issuedAt: held.issuedAt } }
   }
-  const w = await writeHostCredentialFile(b as Parameters<typeof writeHostCredentialFile>[0], { thisMachine: async () => mine, now: o.now })
-  if (!w.ok) return { status: w.error.endsWith('_mismatch') ? 403 : 400, body: { ok: false, error: w.error, ...(w.why ? { why: w.why } : {}) } }
+  const w = await writeHostCredentialFile(b as Parameters<typeof writeHostCredentialFile>[0], { thisMachine: async () => mine, seen: o.seenPermit?.() ?? null, now: o.now })
+  if (!w.ok) {
+    const status = w.error.endsWith('_mismatch') ? 403 : w.error === 'stale_permit' ? 409 : 400
+    return { status, body: { ok: false, error: w.error, ...(w.why ? { why: w.why } : {}) } }
+  }
   try { o.onIssued?.(w.credential) } catch { /* the dialer reads the file again at its next try */ }
   return { status: 200, body: { ok: true } }
 }

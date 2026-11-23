@@ -2,11 +2,12 @@
  * The door list and the call frames of a host-dialed link, against the leader's real door
  * (host-door.ts) and the host's real dialer (host-dialer.ts) and credential file:
  *
- *   - the welcome tells the leader's door list; the host keeps it when the welcome's standing is
- *     not below what it holds (updateHostCredentialDoors), and a `doors` frame (pushDoorsToDialed)
- *     is kept the same way; a lower standing changes nothing
- *   - a door that answers anything but 101 (a 409, a 5xx) is passed over for the next one, and the
- *     list is tried round and round with the backoff; `holder` is never checked
+ *   - once a socket passed its auth, the door tells the leader's door list (a `doors` frame); the
+ *     host keeps it when the welcome's standing is not below what it holds
+ *     (updateHostCredentialDoors), and a later `doors` frame (pushDoorsToDialed) is kept the same
+ *     way; a lower standing changes nothing
+ *   - a door that answers anything but 101 (a 429, a 409, a 503) is passed over for the next one,
+ *     and the list is tried round and round with the backoff; `holder` is never checked
  *   - call frames reach only an allowed prefix (door-calls.ts); the credential and doors routes
  *     never, whatever is registered
  */
@@ -22,6 +23,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-host-door
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { _resetDeviceAuthForTesting } from '../../../src/core/device-auth.js'
+import { _resetAuthRateLimitForTesting } from '../../../src/web/middleware/auth-rate-limit.js'
 import { mintHostCredential } from '../../../src/core/session-channel/host-credentials.js'
 import { handleHostDoorUpgrade, pushDoorsToDialed, startHostDoor, verifyHostDoorUpgrade } from '../../../src/core/session-channel/host-door.js'
 import { startHostDialer, type HostDialer } from '../../../src/core/session-channel/host-dialer.js'
@@ -45,6 +47,7 @@ let leaderDoors: string[] = []
 
 beforeEach(async () => {
   _resetDeviceAuthForTesting()
+  _resetAuthRateLimitForTesting()
   _resetDoorCallPrefixesForTesting()
   await fs.rm(path.join(WALNUT_HOME, 'auth.json'), { force: true })
   await fs.rm(path.join(WALNUT_HOME, 'auth.json.bak'), { force: true })
@@ -75,6 +78,7 @@ async function leaderDoor(holder = 'leader-machine'): Promise<string> {
     walnutId: async () => WALNUT,
     standing: () => ({ pair: standing, holder }),
     doors: async () => leaderDoors,
+    configured: () => true,
     adopt: (_k, s) => { adopted.push(s); return true },
     log: () => {},
   })
@@ -98,8 +102,7 @@ async function refusingDoor(status: number): Promise<{ url: string; dials: () =>
 async function hostHolds(doors: string[], permit: PermitPair = { permitNumber: 0, epoch: 1 }): Promise<void> {
   const minted = await mintHostCredential({ machineId: MACHINE, walnutId: WALNUT, hostKey: 'devbox' })
   expect(minted.record).toMatchObject({ kind: 'machine', issuer: 'leader', machineId: MACHINE, hostKey: 'devbox' })
-  expect(minted.record).not.toHaveProperty('token')
-  const w = await writeHostCredentialFile({ walnutId: WALNUT, machineId: MACHINE, token: minted.token, verifyKey: minted.verifyKey, doors, ...permit }, { thisMachine: async () => MACHINE })
+  const w = await writeHostCredentialFile({ walnutId: WALNUT, machineId: MACHINE, verifyKey: minted.verifyKey, doors, ...permit }, { thisMachine: async () => MACHINE })
   expect(w.ok).toBe(true)
 }
 
@@ -114,7 +117,7 @@ function dial(o: { seen?: PermitPair; backoffMs?: number } = {}): HostDialer {
 }
 
 describe('the leader\'s door list on the host', () => {
-  it('the welcome tells it, and the host keeps it with the welcome\'s standing; holder is never checked', async () => {
+  it('the door tells it once the socket is linked, and the host keeps it with the welcome\'s standing; holder is never checked', async () => {
     const url = await leaderDoor('some-other-machine')
     leaderDoors = [url, OTHER_DOOR]
     await hostHolds([url])
@@ -151,20 +154,21 @@ describe('the leader\'s door list on the host', () => {
 })
 
 describe('the host\'s dialer and its doors', () => {
-  it('passes a door that answers 409 or 5xx over for the next, and keeps cycling the list', async () => {
+  it('passes a door that answers 429, 409 or 503 over for the next, and keeps cycling the list', async () => {
+    const limited = await refusingDoor(429)
     const busy = await refusingDoor(409)
     const broken = await refusingDoor(503)
     const url = await leaderDoor()
-    await hostHolds([busy.url, broken.url, url])
+    await hostHolds([limited.url, busy.url, broken.url, url])
     dialer = dial()
     await vi.waitFor(() => expect(dialer!.linked()).toBe(true))
-    expect(busy.dials()).toBe(1)
-    expect(broken.dials()).toBe(1)
+    expect([limited.dials(), busy.dials(), broken.dials()]).toEqual([1, 1, 1])
     dialer.stop()
-    // A list of refusals only: tried again and again (not marked dead as a 401 is).
-    await hostHolds([busy.url, broken.url])
+    // A list of refusals only: tried again and again (a rate limit is no dead door).
+    await hostHolds([limited.url, busy.url, broken.url])
     dialer = dial({ backoffMs: 20 })
-    await vi.waitFor(() => expect(busy.dials()).toBeGreaterThanOrEqual(4), { timeout: 5_000 })
+    await vi.waitFor(() => expect(limited.dials()).toBeGreaterThanOrEqual(4), { timeout: 5_000 })
+    expect(busy.dials()).toBeGreaterThanOrEqual(3)
     expect(broken.dials()).toBeGreaterThanOrEqual(3)
     expect(dialer.linked()).toBe(false)
   })
