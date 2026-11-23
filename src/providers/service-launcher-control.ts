@@ -164,3 +164,25 @@ export function createLauncherControl(o: {
     },
   }
 }
+
+/**
+ * The version the launcher put back after a failed switch: the one its state says runs now (its good
+ * version), else `before` (what ran before the switch). Drill D3 (2026-11-23): the words named the
+ * version that was current before the switch while it was still in its probation, not the proven one
+ * the launcher actually restored.
+ */
+export async function launcherPutBack(L: Pick<LauncherControl, 'facts'>, before: string | null): Promise<string | null> {
+  return (await L.facts().catch(() => null))?.current || before
+}
+
+/** Ask the launcher to put the good version back in place of `exe`, and say what it did, in words. */
+export async function launcherRollbackWords(L: Pick<LauncherControl, 'facts' | 'rollback'>, exe: string, reason: string, before: string | null): Promise<string> {
+  const back = await L.rollback(exe, reason).catch(() => null)
+  if (back?.outcome === 'rolledback') return `the launcher put ${await launcherPutBack(L, before)} back`
+  return `the launcher was asked to put ${before} back (${back?.outcome ?? 'no answer'})`
+}
+
+/** The put-back a switch's answer names: read from the launcher when it rolled back, else `before`. */
+export async function switchPutBack(L: Pick<LauncherControl, 'facts'>, answer: LauncherResult | null, before: string | null): Promise<string | null> {
+  return answer?.outcome === 'rolledback' ? launcherPutBack(L, before) : before
+}

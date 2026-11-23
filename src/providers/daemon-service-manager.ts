@@ -12,7 +12,7 @@ import {
 import { performance } from 'node:perf_hooks'
 import { createLaunchAgentControl, LAUNCHD_NOT_SPAWNING, launchdLoadedFrom, parseLaunchdOverride, type LaunchdOverride, type LaunchdShortfall, type LaunchdSpawn } from './daemon-service-launchd.js'
 import { keepUnitActive } from './daemon-service-systemd.js'
-import type { LauncherControl, LauncherResult } from './service-launcher-control.js'
+import { launcherRollbackWords, switchPutBack, type LauncherControl, type LauncherResult } from './service-launcher-control.js'
 import { LAUNCHER_SCRIPT_NAME } from './service-launcher-script.js'
 import { serviceSetNames, type ServiceSet } from './service-set.js'
 
@@ -898,14 +898,14 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
       if (id) await L.prepared(id)
     }
     if (id) {
-      const failure = launcherSwitchFailure(await L.wait(id), prepared.executable, running)
+      const answer = await L.wait(id)
+      const failure = launcherSwitchFailure(answer, prepared.executable, await switchPutBack(L, answer, running))
       if (failure) return { ok: false, failure }
     }
     const confirmed = await confirm(scope, 'install', prepared.executable, updateOnly)
     // It became ready, then did not answer or stay: the launcher puts the version before it back.
     if (!confirmed.ok && id) {
-      const back = await L.rollback(prepared.executable, confirmed.failure.message).catch(() => null)
-      return { ok: false, failure: { ...confirmed.failure, rollback: back?.outcome === 'rolledback' ? `the launcher put ${running} back` : `the launcher was asked to put ${running} back (${back?.outcome ?? 'no answer'})` } }
+      return { ok: false, failure: { ...confirmed.failure, rollback: await launcherRollbackWords(L, prepared.executable, confirmed.failure.message, running) } }
     }
     return confirmed
   }

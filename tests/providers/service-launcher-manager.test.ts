@@ -16,7 +16,7 @@ import {
 import {
   cronLineState, crontabWithDaemonLine, daemonCronLine, daemonCronMinuteLine, readDaemonBootExecutable, renderDaemonBootScript,
 } from '../../src/providers/daemon-service-boot-script.js'
-import { launcherSeed, type LauncherControl, type LauncherResult } from '../../src/providers/service-launcher-control.js'
+import { launcherRollbackWords, launcherSeed, switchPutBack, type LauncherControl, type LauncherResult } from '../../src/providers/service-launcher-control.js'
 import { isLauncherScript, renderLauncherScript } from '../../src/providers/service-launcher-script.js'
 
 const HOME = '/home/walnut'
@@ -126,6 +126,24 @@ describe('the systemd manager with the launcher', () => {
     expect(result.failure.code).toBe('launcherRolledBack')
     expect(result.failure.stopped).toBe(true)
     expect(result.failure.message).toMatch(/not ready within 90 s/)
+  })
+
+  it('drill D3: the rollback words name the version the launcher put back (its state after), not the one current before the switch', async () => {
+    const PROVEN = `${ROOT}/versions/${'c'.repeat(64)}/daemon`
+    const L = fakeLauncher(SCRIPT, 'systemd', { current: OLD, answer: 'rolledback' })
+    // OLD was current but still in its probation; the launcher went back to its good version, PROVEN.
+    let reads = 0
+    L.control.facts = async () => ({ current: reads++ === 0 ? OLD : PROVEN, good: PROVEN, phase: 'committed', since: 1 })
+    L.files.set(SCRIPT, renderLauncherScript(config(OLD), { backend: 'systemd', self: SCRIPT }))
+    const h = systemdHarness({ unit: renderDaemonSystemdUnit(config(OLD), 'user', { launcher: SCRIPT }), launcher: L })
+    const result = await h.manager.update({ scope: 'user' })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.failure.rollback).toBe(`the launcher put ${PROVEN} back`)
+    // The put-back after a version that answered and then did not stay reads the launcher the same way.
+    expect(await launcherRollbackWords({ facts: async () => ({ current: PROVEN, good: PROVEN, phase: 'committed', since: 1 }), rollback: async (exe) => ({ id: 'b', outcome: 'rolledback', exe, reason: '' }) }, NEW, 'gone', OLD))
+      .toBe(`the launcher put ${PROVEN} back`)
+    expect(await switchPutBack({ facts: async () => null }, { id: 'x', outcome: 'rolledback', exe: NEW, reason: '' }, OLD)).toBe(OLD)
   })
 
   it('a version the launcher refuses today changes nothing and stops no daemon', async () => {

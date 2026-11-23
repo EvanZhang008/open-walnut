@@ -45,6 +45,7 @@ import {
 } from './daemon-service-manager.js'
 import { LAUNCHER_DIR_NAME, isLauncherScript } from './service-launcher-script.js'
 import { markLauncherLeaving } from './service-launcher-beat.js'
+import { launcherRollbackWords, switchPutBack } from './service-launcher-control.js'
 
 export interface CronServiceDeps extends Omit<DaemonServiceDeps, 'run' | 'platform'> {
   platform: 'linux' | 'darwin'
@@ -507,13 +508,13 @@ export function createCronDaemonServiceManager(deps: CronServiceDeps): DaemonSer
     }
     if (!(await deps.supervisor())) await deps.spawnDetached('/bin/sh', [script])
     if (id) {
-      const failure = launcherSwitchFailure(await L.wait(id), prepared.executable, running)
+      const answer = await L.wait(id)
+      const failure = launcherSwitchFailure(answer, prepared.executable, await switchPutBack(L, answer, running))
       if (failure) return { ok: false, failure }
     }
     const confirmed = await confirm(updateOnly ? 'update' : 'install', prepared.executable)
     if (!confirmed.ok && id) {
-      const back = await L.rollback(prepared.executable, confirmed.failure.message).catch(() => null)
-      return { ok: false, failure: { ...confirmed.failure, rollback: back?.outcome === 'rolledback' ? `the launcher put ${running} back` : `the launcher was asked to put ${running} back (${back?.outcome ?? 'no answer'})` } }
+      return { ok: false, failure: { ...confirmed.failure, rollback: await launcherRollbackWords(L, prepared.executable, confirmed.failure.message, running) } }
     }
     return confirmed
   }
