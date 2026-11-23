@@ -10,6 +10,8 @@
  *    goes to the person as a possible problem.
  */
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { categorySlug, keepHappeningByCategory, KEEPS_HAPPENING_MS } from '../../../src/core/notifications/health-investigate.js'
 import { builtinAlarm } from '../../../src/core/health-monitor/alarms.js'
 import { fixBrief } from '../../../src/core/health-monitor/brief.js'
@@ -91,6 +93,39 @@ describe('a remote host that stays down is looked into (host-down-gauge.ts)', as
     expect(walnutHostDown(s({ connected: true, phase: 'connected' }))).toBe(false)
     expect(walnutHostDown(s({ phase: 'tunnel' }))).toBe(false)
     expect(walnutHostDown(s({ kind: 'daemon', discovered: true }))).toBe(false)
+  })
+
+  it('never a laptop that is simply asleep or off, and every failure kind is sorted into sleep or fault', async () => {
+    // 2026-11-18 and 11-23: a remote MacBook asleep overnight opened a fix task each time.
+    const { mayBeAsleep, MAY_SLEEP_KINDS } = await import('../../../src/core/hosts/host-down-gauge.js')
+    const laptop = { kind: 'laptop', alwaysOn: null }
+    expect(mayBeAsleep({ kind: 'unreachable' }, laptop)).toBe(true)
+    expect(mayBeAsleep({ lastKind: 'timeout' }, { kind: 'laptop', alwaysOn: false })).toBe(true)
+    // A laptop kept always on, a dev box, or a laptop whose daemon broke is still looked into.
+    expect(mayBeAsleep({ kind: 'unreachable' }, { kind: 'laptop', alwaysOn: true })).toBe(false)
+    expect(mayBeAsleep({ kind: 'unreachable' }, { kind: 'private-cloud-vm', alwaysOn: null })).toBe(false)
+    expect(mayBeAsleep({ kind: 'daemon' }, laptop)).toBe(false)
+    expect(mayBeAsleep({}, laptop)).toBe(false)
+    // A down host's fleet reading is stale, so capabilities lose its uptime: the last week still counts.
+    const { keptOnLastWeek } = await import('../../../src/core/hosts/host-down-gauge.js')
+    expect(keptOnLastWeek([{ days: 1, minutes: 1440, online: 0.2 }, { days: 7, minutes: 10080, online: 0.99 }], 0.95)).toBe(true)
+    expect(keptOnLastWeek([{ days: 7, minutes: 10080, online: 0.6 }], 0.95)).toBe(false)
+    expect(keptOnLastWeek([{ days: 7, minutes: 600, online: 1 }], 0.95)).toBe(false)
+    expect(keptOnLastWeek(undefined, 0.95)).toBe(false)
+    // A new failure kind must be sorted: does a sleeping machine give it? Add it to one list.
+    const src = readFileSync(join(process.cwd(), 'src/core/sessions/host-connect-hint.ts'), 'utf8')
+    const start = src.indexOf('export type HostConnectErrorKind =')
+    // The union ends at the first line that is neither a member nor a comment.
+    const lines = src.slice(start).split('\n').slice(1)
+    const end = lines.findIndex((l) => !/^\s*(\||\/\/|$)/.test(l))
+    const union = lines.slice(0, end).join('\n')
+    const kinds = [...union.matchAll(/\|\s*'([a-z_]+)'/g)].map((m) => m[1])
+    expect(kinds.length).toBeGreaterThan(10)
+    const faultEvenAsleep = ['auth', 'host_key', 'cert_expired', 'agent_missing', 'proxy_login', 'proxy', 'shell_noise',
+      'dns', 'refused', 'runtime', 'not_linux', 'daemon', 'ephemeral', 'listing', 'cloud_update', 'cloud_exec_off',
+      'cloud_other_mac', 'cloud_tunnel', 'unknown']
+    const unsorted = kinds.filter((k) => !(MAY_SLEEP_KINDS as readonly string[]).includes(k) && !faultEvenAsleep.includes(k))
+    expect(unsorted).toEqual([])
   })
 
   it('its alarm dials the host again, then opens one fix task per host', () => {
