@@ -74,10 +74,12 @@ describe('DaemonConnection bridge visibility', () => {
       conn = new DaemonConnection('__local__', TARGET)
       await conn.connectDirect(`ws://127.0.0.1:${daemon.port}`)
       await waitFor(() => commands() >= 1)
+      await waitFor(() => !(conn as unknown as { bridgePushInFlight: boolean }).bridgePushInFlight)
       const before = commands()
       holdOwnBridge(true)
       ;(conn as unknown as { pushBridgeConfig(): void }).pushBridgeConfig()
-      await new Promise((r) => setTimeout(r, 200))
+      // Held, the push returns before it starts anything: no push is out, none was sent.
+      expect((conn as unknown as { bridgePushInFlight: boolean }).bridgePushInFlight).toBe(false)
       expect(commands()).toBe(before)
       conn.disconnect()
       conn = new DaemonConnection('bridge-hold-other', TARGET)
@@ -93,7 +95,8 @@ describe('DaemonConnection bridge visibility', () => {
       conn = new DaemonConnection('__local__', TARGET)
       await conn.connectDirect(`ws://127.0.0.1:${daemon.port}`)
       await waitFor(() => commands() >= 1)
-      await new Promise((r) => setTimeout(r, 200))
+      const inFlight = () => (conn as unknown as { bridgePushInFlight: boolean }).bridgePushInFlight
+      await waitFor(() => !inFlight())
       const before = commands()
       let release!: () => void
       bridgeConfigMock.gate = new Promise<void>((r) => { release = r })
@@ -102,7 +105,8 @@ describe('DaemonConnection bridge visibility', () => {
       holdOwnBridge(true)
       release()
       bridgeConfigMock.gate = null
-      await new Promise((r) => setTimeout(r, 300))
+      // The push that was out ends without a send (the check before the send saw the hold).
+      await waitFor(() => !inFlight())
       expect(commands()).toBe(before)
     } finally { holdOwnBridge(false) }
   })
