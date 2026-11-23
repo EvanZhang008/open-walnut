@@ -119,10 +119,14 @@ test('a picture pasted while the server restarts uploads by itself, and the mess
   }, { timeout: 30_000 }).not.toBe('')
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${sid}"]`)
   await expect(panel).toBeVisible({ timeout: 20_000 })
-  await expect(panel.locator('.session-history').getByText("didn't see this")).toBeVisible({ timeout: 30_000 })
+  // The user's own bubble: the mock agent's reply echoes the words too, as its own paragraph.
+  const sentBubble = panel.locator('.session-history .session-msg-user').getByText("didn't see this")
+  await expect(sentBubble).toBeVisible({ timeout: 30_000 })
   await expect(panel.locator('.session-history img').first()).toBeVisible()
   // Its turn ran: the mock agent answered the message that carried the picture.
   await expect.poll(async () => (await (await page.request.get(`/api/sessions/${sid}`)).json()).session?.process_status, { timeout: 60_000 }).toMatch(/^(idle|stopped)$/)
+  // Drawn once, after the turn as well.
+  await expect(sentBubble).toHaveCount(1)
   await page.screenshot({ path: path.join(shots, `${browserName}-3-sent.png`) })
 
   const state = await control('GET', '/state')
