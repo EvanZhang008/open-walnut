@@ -214,10 +214,8 @@
   font-size: 16px;
   font-weight: 600;
 }
-.org-detail-sub { margin-top: 2px; display: flex; flex-wrap: wrap; gap: 0 5px; align-items: center; font-size: var(--font-size-sm); }
-/* The counts read as one quiet line that wraps tight, no air between its lines (2026-11-23, the user:
-   "why looks so bad... so any whie space"). */
-.org-pills { display: inline-flex; flex-wrap: wrap; gap: 0 2px; }
+.org-detail-sub { margin-top: 3px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: var(--font-size-sm); }
+.org-pills { display: inline-flex; flex-wrap: wrap; gap: 5px; }
 /* Each count is a small family key that opens its tab in the Task view; its dot is the tab's colour. */
 .org-pills i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 
