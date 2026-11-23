@@ -42,8 +42,12 @@ function units(clause: string): number {
 const SHORT_CLAUSE = 3;
 /** After its pointer, a clause that goes on this long says what happened ("already gave you the three tasks deadlines"). */
 const SAYS_MORE = 4;
-/** What a pointer is followed by when it only names what was told: an open question ("told you where the task is"). */
-const OPEN_QUESTION = /^(?:where|which|what|how|when|who|why|whether)\b|^[^\uff0c\u3002,.]{0,6}(?:\u54ea|\u4ec0\u4e48|\u600e\u4e48|\u5982\u4f55|\u591a\u5c11|\u4e3a\u4ec0\u4e48)/i;
+/**
+ * What a pointer is followed by when it only names what was told: an open question ("told you where
+ * the task is"; in Chinese the question word comes last: "told you which two tasks they are, where").
+ * The answer itself, when there is one, is a clause of its own after it ("...: tomorrow 10:00").
+ */
+const OPEN_QUESTION = /^(?:where|which|what|how|when|who|why|whether)\b|\u54ea|\u4ec0\u4e48|\u600e\u4e48|\u5982\u4f55|\u591a\u5c11|\u4e3a\u4ec0\u4e48/i;
 
 /** The clause only points elsewhere: a pointer, and after it nothing but an open question or a few words. */
 function pointsOnly(clause: string): boolean {
@@ -65,7 +69,8 @@ function pointsOnly(clause: string): boolean {
 export function summaryPointsElsewhere(summary: string | null | undefined): string | null {
   const text = (summary ?? '').replace(/\s+/g, ' ').trim();
   if (!text || PROOF_RE.test(text)) return null;
-  const clauses = text.split(/[\u3002\uff0e.!\uff01?\uff1f;\uff1b:\uff1a,\uff0c\u3001\n]+/).map((c) => c.trim()).filter(Boolean);
+  // A dot, colon or comma between digits is part of a number, a version or a time ("1.35", "10:30").
+  const clauses = text.split(/(?:[\u3002\uff0e!\uff01?\uff1f;\uff1b\uff1a\uff0c\u3001\n]|(?<!\d)[.:,]|[.:,](?!\d))+/).map((c) => c.trim()).filter(Boolean);
   let pointed = false;
   for (const c of clauses) {
     if (pointsOnly(c)) { pointed = true; continue; }

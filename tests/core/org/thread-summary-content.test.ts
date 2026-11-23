@@ -18,6 +18,10 @@ describe('a summary that only says it was given elsewhere', () => {
     ['"answered in the chat"', '\u5df2\u5728\u804a\u5929\u91cc\u56de\u590d'],
     ['"stand-up summary: sent to you"', '\u7ad9\u4f1a\u603b\u7ed3\uff1a\u5df2\u53d1\u7ed9\u4f60'],
     ['English: told you where, not where', 'Told you where the cluster update task is.'],
+    // The shape of a card the user reported (invented garden data): the dot of a version split the
+    // clause, and the question word came last.
+    ['Chinese: told you where two tasks are, a version inside', '\u5df2\u544a\u8bc9\u4f60 Seed \u8ba2\u5355\u548c Pump 2.14 \u66f4\u6362\u8fd9\u4e24\u4e2a\u4efb\u52a1\u5728\u54ea'],
+    ['English: told you where, a version inside', 'Told you where the seed order and the pump 2.14 swap tasks are.'],
     ['English: answered in chat', 'Answered in the chat.'],
     ['English: see above', 'See above.'],
     ['English: bare answered', 'Answered'],
@@ -43,6 +47,9 @@ describe('a summary that carries the answer', () => {
     ['Chinese: deadlines on the three tasks given to you', '\u5df2\u7ecf\u7ed9\u4f60\u7684\u4e09\u4e2a\u4efb\u52a1\u90fd\u52a0\u4e0a\u4e86\u622a\u6b62\u65e5\u671f'],
     ['Chinese: mailed him, waiting on him', '\u5df2\u7ecf\u7ed9\u4ed6\u53d1\u4e86\u90ae\u4ef6\uff0c\u7b49\u4ed6\u56de\u590d'],
     ['Chinese: the CR sent to you is merged', '\u5df2\u53d1\u7ed9\u4f60\u5ba1\u7684 CR \u5df2\u5408\u5e76'],
+    ['Chinese: told you when, and the time itself', '\u5df2\u544a\u8bc9\u4f60\u4ec0\u4e48\u65f6\u5019\u4e0a\u7ebf\uff1a\u660e\u5929 10:30'],
+    ['English: told you when, and the time itself', 'Told you when it ships: tomorrow 10:30'],
+    ['a version and a time stay one clause', 'Version 1.35 is live in 3 regions since 10:30'],
     ['empty', ''],
   ])('passes: %s', (_name, summary) => {
     expect(summaryPointsElsewhere(summary)).toBeNull()
