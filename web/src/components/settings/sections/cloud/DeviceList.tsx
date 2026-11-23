@@ -84,7 +84,6 @@ function BrowsersAllSignIn() {
       <a className="settings-addons-link devices-go-link" href={`#${WAY_PANES.wifi}`} data-testid="devices-all-go-wifi-browser">Same Wi-Fi</a>
       {' or '}
       <a className="settings-addons-link devices-go-link" href={`#${WAY_PANES.browser}`} data-testid="devices-all-go-tunnel">{tunnel?.title ?? 'Tunnel'}</a>
-      {'.'}
     </>
   );
 }
@@ -98,7 +97,6 @@ const PHONES_ALL_PAIR = (
     <a className="settings-addons-link devices-go-link" href={`#${WAY_PANES.wifi}`} data-testid="devices-all-go-wifi">Same Wi-Fi</a>
     {' or '}
     <a className="settings-addons-link devices-go-link" href={`#${WAY_PANES.tailscale}`} data-testid="devices-all-go-tailscale">Tailscale</a>
-    {'.'}
   </>
 );
 
@@ -395,9 +393,10 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
       // Paired is not the same as using this way: say which, while Tailscale does not run here.
       heading={phonesWords.heading}
       headingTrailing={phones.length > 0 ? String(phones.length) : undefined}
-      // All devices manages first: the rows, then (on this Mac) where a new phone pairs.
+      // All devices: where a new phone pairs (on this Mac) on the heading line, found before the rows.
+      headingAction={scope === 'all' && !replica ? PHONES_ALL_PAIR : undefined}
       description={scope === 'all' ? PHONES_ALL_NOTE : undefined}
-      footer={scope === 'all' && !replica ? PHONES_ALL_PAIR : scope === 'tailscale' && (tailscaleRunning || listState !== 'ready') ? 'Tailscale reaches the pairing a phone has with this Mac: a phone here uses this way once the Tailscale app runs on it too, signed in to the same tailnet.' : undefined}
+      footer={scope === 'tailscale' && (tailscaleRunning || listState !== 'ready') ? 'Tailscale reaches the pairing a phone has with this Mac: a phone here uses this way once the Tailscale app runs on it too, signed in to the same tailnet.' : undefined}
       data-testid={scope === 'all' ? 'devices-phones-group' : `way-devices-${scope}`}
     >
       {phones.length === 0 && (scope !== 'all' || listState !== 'ready' || browsers.length === 0)
@@ -449,7 +448,7 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
           headingTrailing={String(linkBrowsers.length)}
           // A browser's sign-in is not tied to the address it opened: say so where a way's tab lists them.
           description={BROWSERS_NOTE}
-          footer={scope === 'all' && !replica ? <BrowsersAllSignIn /> : undefined}
+          headingAction={scope === 'all' && !replica ? <BrowsersAllSignIn /> : undefined}
           data-testid="devices-browsers-group"
         >
           {/* First, so it stays in reach above a long list; with one browser, its own row's

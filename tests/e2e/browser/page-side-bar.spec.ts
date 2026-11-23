@@ -451,9 +451,11 @@ test('the two side bars each keep their own width, handle and scrolling', async 
   await expect(scratchPane(page)).toBeVisible()
   await expectSideBySide(page, 'page-side-bar')
   await expectScrollsApart(page, 'page-side-bar')
-  await expect.poll(() => paneWidths(page, 'page-side-bar')).toEqual({ agenda: 400, scratchpad: 400 })
-  // The scratchpad's own edge narrows it alone; the page moves over with it.
-  await dragHandle(page, 'page-side-bar-scratchpad-resize', -60)
+  // A scratchpad never dragged opens as a narrow column beside the agenda (2026-11-22 audit: at the
+  // agenda's 400 px the two held 60% of the page with nothing written).
+  await expect.poll(() => paneWidths(page, 'page-side-bar')).toEqual({ agenda: 400, scratchpad: 300 })
+  // The scratchpad's own edge widens it alone; the page moves over with it.
+  await dragHandle(page, 'page-side-bar-scratchpad-resize', 40)
   await expect.poll(() => paneWidths(page, 'page-side-bar')).toEqual({ agenda: 400, scratchpad: 340 })
   // The agenda's edge widens it alone; the scratchpad keeps its width beside it.
   await dragHandle(page, 'page-side-bar-calendar-resize', 20)
@@ -490,7 +492,7 @@ test('the two side bars each keep their own width, handle and scrolling', async 
   await expect(page.getByTestId('home-companion-scratchpad')).toBeVisible()
   await expectSideBySide(page, 'home-companion')
   await expectScrollsApart(page, 'home-companion')
-  await dragHandle(page, 'home-companion-scratchpad-resize', -48)
+  await dragHandle(page, 'home-companion-scratchpad-resize', 52)
   await expect.poll(() => paneWidths(page, 'home-companion')).toEqual({ agenda: 400, scratchpad: 352 })
   await page.reload()
   await expect(page.getByTestId('home-companion-scratchpad')).toBeVisible({ timeout: 30_000 })
@@ -632,4 +634,24 @@ test('Home keeps its own column and flags', async ({ page }) => {
   await expect(agendaPane(page)).toBeVisible()
   await agendaToggle(page).click()
   await expect(bar(page)).toBeHidden()
+})
+
+test('the Notes tree sits at its rows\' width, never at a wider one it was dragged to', async ({ page }) => {
+  // 2026-11-22 audit: four folders held a 497 px tree (a width dragged once) beside the Scratchpad,
+  // the two taking 60% of the page with nothing written.
+  await page.addInitScript(() => localStorage.setItem('open-walnut-notes-tree-width', '497'))
+  await openOrg(page)
+  await goNotes(page)
+  const tree = page.locator('.notes-tree-pane')
+  await expect(tree).toBeVisible()
+  const fit = () => tree.evaluate((el) => {
+    const w = el.getBoundingClientRect().width
+    const cut = [...el.querySelectorAll<HTMLElement>('.wn-title')].filter((t) => t.getClientRects().length && t.scrollWidth > t.clientWidth + 1).length
+    return { w: Math.round(w), cut, natural: Math.ceil(el.scrollWidth) }
+  })
+  await expect.poll(async () => (await fit()).w).toBeLessThan(497)
+  const f = await fit()
+  expect(f.w, JSON.stringify(f)).toBeGreaterThanOrEqual(220)
+  expect(f.cut, `no row of the tree is cut (${JSON.stringify(f)})`).toBe(0)
+  expect(f.natural, `the tree holds its rows (${JSON.stringify(f)})`).toBeLessThanOrEqual(f.w + 1)
 })

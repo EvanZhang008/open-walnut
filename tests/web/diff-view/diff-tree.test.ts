@@ -9,7 +9,7 @@
  * Runs under vitest.diff-view.config.ts (web-rooted, for the `@/` alias).
  */
 import { describe, it, expect } from 'vitest';
-import { buildDiffTree, flattenFiles, allContainerIds, isMarkdownPath, shortRepoLabels } from '@/components/sessions/diffTree';
+import { buildDiffTree, flattenFiles, allContainerIds, isMarkdownPath, shortRepoLabels, renamedFromPart } from '@/components/sessions/diffTree';
 import type { SessionRepoGroup, SessionFileChange } from '@/api/session-changes';
 
 function file(relPath: string, status: SessionFileChange['status'] = 'modified'): SessionFileChange {
@@ -149,5 +149,23 @@ describe('isMarkdownPath', () => {
   it('rejects non-markdown', () => {
     expect(isMarkdownPath('src/x.ts')).toBe(false);
     expect(isMarkdownPath('readme.md.ts')).toBe(false);
+  });
+});
+
+describe('renamedFromPart', () => {
+  // A renamed row names its old path from the first folder it differs in (2026-11-22 audit: cut
+  // to its last segment, similar moves read alike).
+  it('drops only the folders both paths share', () => {
+    expect(renamedFromPart('src/core/stt/block-repeat-wav.ts', 'src/core/stt/wav-repair.ts')).toBe('block-repeat-wav.ts');
+    expect(renamedFromPart('src/core/a/x.ts', 'src/core/b/x.ts')).toBe('a/x.ts');
+    expect(renamedFromPart('lib/x.ts', 'src/lib/x.ts')).toBe('lib/x.ts');
+    expect(renamedFromPart('old.md', 'docs/old.md')).toBe('old.md');
+  });
+
+  it('tells apart moves that share a file name and differ deeper', () => {
+    const a = renamedFromPart('web/one/panel/list.tsx', 'web/shared/list.tsx');
+    const b = renamedFromPart('web/two/panel/list.tsx', 'web/shared/list.tsx');
+    expect(a).toBe('one/panel/list.tsx');
+    expect(a).not.toBe(b);
   });
 });

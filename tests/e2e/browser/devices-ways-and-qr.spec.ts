@@ -208,6 +208,14 @@ test('Phones & Cloud opens the tab in use: five tabs, what the way is, how the p
   const hints = await tabs(page).locator('.pc-tab-hint').allTextContents()
   expect(hints).toHaveLength(5)
   for (const hint of hints) expect(hint.trim().length, `hint "${hint}"`).toBeGreaterThan(0)
+  // Wider than a phone the bar wraps into a grid: each hint reads in one or two lines, never three
+  // under a narrow cap, and the bar never scrolls sideways (2026-11-22 audit).
+  const fit = await page.getByTestId('pc-tabs').evaluate((bar) => ({
+    sideways: bar.scrollWidth - bar.clientWidth,
+    lines: [...bar.querySelectorAll<HTMLElement>('.wn-tab-detail')].map((d) => Math.round(d.getBoundingClientRect().height / parseFloat(getComputedStyle(d).lineHeight))),
+  }))
+  expect(fit.sideways).toBeLessThanOrEqual(0)
+  for (const n of fit.lines) expect(n, `hint lines ${fit.lines.join(',')}`).toBeLessThanOrEqual(2)
   await expect(page.getByTestId('pc-tab-cloud')).toHaveAttribute('aria-current', 'page')
   await expectTabState(page, 'cloud', 'In use', { shown: true })
   await expect(page.getByTestId('pc-tab-devices-tailscale').locator('.devices-way-dot')).toHaveAttribute('data-dot', 'off')
@@ -340,7 +348,7 @@ test('each tab holds its own way and the devices that use it; All devices holds 
 
   await page.getByTestId('pc-tab-devices-phones').click()
   const dev = page.locator('#devices-phones')
-  await expect(dev.getByTestId('pc-intro-devices-phones').locator('.pc-intro-what')).toContainText('remove a phone or sign a browser out here')
+  await expect(dev.getByTestId('pc-intro-devices-phones').locator('.pc-intro-what')).toContainText('Remove a phone or sign a browser out here')
   await expect(dev.getByTestId('pc-intro-devices-phones').locator('.pc-intro-now')).toHaveCount(0)
   const phones = dev.getByTestId('devices-phones-group')
   await expect(phones.locator('.devices-row')).toHaveCount(3)
@@ -351,7 +359,10 @@ test('each tab holds its own way and the devices that use it; All devices holds 
   expect(await rowNames(dev.getByTestId('devices-extensions-group'))).toEqual(['extension-4d5e6f'])
   expect(await rowNames(dev.getByTestId('devices-macs'))).toEqual(['studio-mac'])
   await expect(phones.locator('.settings-group-heading')).toContainText('Phones with the Walnut app')
-  await expect(phones).toContainText('New phone: Cloud companion, Same Wi-Fi or Tailscale.')
+  // Where a new phone pairs sits on the group's heading line, found before its rows (2026-11-22 audit).
+  const pairLine = phones.locator('.settings-group-heading .settings-group-heading-action')
+  await expect(pairLine).toHaveText('New phone: Cloud companion, Same Wi-Fi or Tailscale')
+  expect((await pairLine.boundingBox())!.y).toBeLessThan((await phones.locator('.devices-row').first().boundingBox())!.y)
   // No pairing and no new QR here (each way's tab does that, for its own way), no Wi-Fi
   // code, no records that are no phone.
   for (const id of ['way-pair-all', 'devices-show-qr', 'devices-wifi-sign-in', 'devices-others-group', 'devices-add-group']) await expect(dev.getByTestId(id)).toHaveCount(0)

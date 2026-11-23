@@ -187,6 +187,9 @@ export interface SettingsGroupProps {
   heading?: ReactNode
   /** Right side of the heading line, e.g. `3 of 21 shown`. */
   headingTrailing?: ReactNode
+  /** What adds a row to the group (New phone: ...), on the heading line before its trailing count,
+   *  so it is found before the rows, never after a long list (2026-11-22 audit). */
+  headingAction?: ReactNode
   /** One sentence UNDER the heading, above the box, about every row in it. */
   description?: ReactNode
   /** One sentence BELOW the box about the whole group. */
@@ -204,6 +207,7 @@ export interface SettingsGroupProps {
 export function SettingsGroup({
   heading,
   headingTrailing,
+  headingAction,
   description,
   footer,
   disabled,
@@ -222,7 +226,7 @@ export function SettingsGroup({
       log.warn('settings', 'nested settings group', { sectionId: el.closest('.settings-section')?.id ?? null })
     }
   }, [])
-  const framed = hasContent(heading) || hasContent(headingTrailing) || hasContent(description) || hasContent(footer)
+  const framed = hasContent(heading) || hasContent(headingTrailing) || hasContent(headingAction) || hasContent(description) || hasContent(footer)
   const dim = disabled ? { 'aria-disabled': true as const, inert: true } : {}
   const box = (
     <div
@@ -236,9 +240,10 @@ export function SettingsGroup({
   if (!framed) return box
   return (
     <div className="settings-group-block" id={id} data-testid={testId} {...data} {...dim}>
-      {(hasContent(heading) || hasContent(headingTrailing)) && (
-        <div className="settings-group-heading">
+      {(hasContent(heading) || hasContent(headingTrailing) || hasContent(headingAction)) && (
+        <div className={`settings-group-heading${hasContent(headingAction) ? ' settings-group-heading-with-action' : ''}`}>
           <h4 className="settings-group-title settings-subcard-title">{heading}</h4>
+          {hasContent(headingAction) && <span className="settings-group-heading-action">{headingAction}</span>}
           {hasContent(headingTrailing) && <span className="settings-group-heading-trailing">{headingTrailing}</span>}
         </div>
       )}

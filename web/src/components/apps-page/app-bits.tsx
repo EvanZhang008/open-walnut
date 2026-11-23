@@ -3,23 +3,22 @@
  * icon, inside the plugin's error boundary) and its badge, drawn like the Sidebar's so an
  * App off the Sidebar still shows it here; and the one card grid every section uses.
  */
-import { useRef, type HTMLAttributes } from 'react'
+import type { HTMLAttributes } from 'react'
 import { PuzzleIcon } from '@/apps/icons'
 import type { RegisteredApp } from '@/apps/registry'
 import { PluginBoundary } from '@/components/common/PluginBoundary'
 import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch'
-import { useMasonryRows } from '@/hooks/useMasonryRows'
 
 /**
- * The grid of store cards, the same in every section (built-ins, each source, Get more). Its
- * cards keep their own height and flow like bricks (useMasonryRows): a card's description is
- * shown whole, so a long one no longer stretches every card of its row and leaves holes under
- * the short ones (2026-11-22, the UI audit).
+ * The grid of store cards, the same in every section (built-ins, each source, Get more). Cards read
+ * left to right, top to bottom, and the cards of one row share its height, so their footers
+ * (status, Sidebar, Open) line up across the row. A long description is clamped to a few lines on
+ * the card and read whole in place on hover or on the detail page (2026-11-22, the UI audit: packed
+ * cards of their own heights left ragged columns, a short card under a long one started the next
+ * row's cards out of order, and Open no longer lined up beside Open).
  */
 export function AppsGrid({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
-  const ref = useRef<HTMLDivElement>(null)
-  useMasonryRows(ref)
-  return <div ref={ref} className={className ? `apps-grid ${className}` : 'apps-grid'} {...rest} />
+  return <div className={className ? `apps-grid ${className}` : 'apps-grid'} {...rest} />
 }
 
 /**

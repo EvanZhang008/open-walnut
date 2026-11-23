@@ -39,7 +39,10 @@
 .home-navigation-scroll .status-section-card.status-card-two-line { min-height: 44px; padding-top: 4px; padding-bottom: 4px; }
 .status-card-body { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 1px; }
 .status-card-body > .todo-pinned-title { line-height: 18px; }
-.status-card-meta { display: flex; align-items: center; gap: 6px; min-width: 0; height: 15px; font-size: var(--font-size-xs); line-height: 15px; color: var(--fg-muted); white-space: nowrap; }
+/* The meta line wraps onto a second line rather than cut what it links (2026-11-22: a Waiting row's
+   "Worker <its leader>" lost the leader's name beside the project and the wake time); a row whose
+   parts fit keeps one line, and only a part longer than a whole line is cut (truncation-peek.ts). */
+.status-card-meta { display: flex; flex-wrap: wrap; align-items: center; column-gap: 6px; row-gap: 1px; min-width: 0; min-height: 15px; font-size: var(--font-size-xs); line-height: 15px; color: var(--fg-muted); white-space: nowrap; }
 .status-card-project { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* The project name is a link (RowProjectName): a click filters the panel to it. It reads as
    the label it was until the pointer is on it, and only it underlines, not the row. */
@@ -67,6 +70,10 @@
   content: '·'; position: static; inset: auto; margin-right: 6px; color: var(--fg-muted); font-weight: 400;
 }
 .status-card-meta .todo-recent-ago { flex: none; font-size: var(--font-size-xs); }
+/* A word that starts a wrapped meta line opens with no "·", and its line moves left by that room
+   (utils/meta-line-fit.ts marks it, as a search row's second line). */
+.status-card-meta > [data-line-start][data-line-start]::before { visibility: hidden; }
+.status-card-meta > [style*="--wrap-shift"] { position: relative; left: calc(-1 * var(--wrap-shift, 0px)); }
 /* On a phone the meta line's tags are labels, as a tier card's are (phone-fixes-r4.css
    R3-04): a 15 px button is no target, so a tap opens the row, whose detail has the links. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {

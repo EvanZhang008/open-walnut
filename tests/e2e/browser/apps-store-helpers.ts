@@ -64,3 +64,40 @@ export async function openApp(page: Page, trigger: Locator): Promise<string> {
   await expect(page.locator(`main[data-app-path="${appPath}"]`)).toHaveCount(1)
   return appPath
 }
+
+/**
+ * Every card grid on the Apps page is a tidy grid (2026-11-22, the UI audit: cards packed at their
+ * own heights left ragged columns and Open no longer lined up beside Open). Cards side by side
+ * share one top, one bottom and one footer line; a description stays within 3 lines (a note
+ * within 2), and a cut one opens whole when the pointer rests on its card.
+ */
+export async function expectTidyCardGrids(page: Page): Promise<void> {
+  const grids = await page.locator('[data-testid="apps-page"] .apps-grid').evaluateAll((els) => els.map((grid) => {
+    const rows = new Map<number, string[]>()
+    const tall: string[] = []
+    for (const card of Array.from(grid.querySelectorAll<HTMLElement>(':scope > .apps-card'))) {
+      const box = card.getBoundingClientRect()
+      const foot = card.querySelector('.apps-card-foot')?.getBoundingClientRect()
+      const key = Math.round(box.top)
+      // The Get more "add" card has no footer: it shares the row's bottom, not a footer line.
+      rows.set(key, [...(rows.get(key) ?? []), `bottom ${Math.round(box.bottom)}`, ...(foot ? [`foot ${Math.round(foot.bottom)}`] : [])])
+      for (const [sel, max] of [['.apps-card-line', 3], ['.apps-card-note', 2]] as const) {
+        const el = card.querySelector<HTMLElement>(sel)
+        const lh = el ? parseFloat(getComputedStyle(el).lineHeight) : 0
+        if (el && el.clientHeight > lh * max + 1) tall.push(`${card.dataset.testid} ${sel}`)
+      }
+    }
+    return { packed: grid.hasAttribute('data-packed'), ragged: [...rows.values()].filter((r) => ['bottom', 'foot'].some((k) => new Set(r.filter((v) => v.startsWith(k))).size > 1)), tall }
+  }))
+  expect(grids.length).toBeGreaterThan(0)
+  expect(grids.filter((g) => g.packed || g.ragged.length || g.tall.length), 'a card grid is not tidy').toEqual([])
+  const cut = page.locator('[data-testid="apps-page"] .apps-card-line')
+  const host = (await cut.evaluateAll((els) => els.findIndex((el) => el.scrollHeight > el.clientHeight + 2)))
+  if (host < 0) return
+  const line = cut.nth(host)
+  await line.hover({ force: true })
+  await expect(line).toHaveAttribute('data-peek-open', '', { timeout: 5_000 })
+  expect(await line.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
+  await page.mouse.move(0, 0)
+  await expect(line).not.toHaveAttribute('data-peek-open', '')
+}

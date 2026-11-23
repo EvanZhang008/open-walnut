@@ -114,6 +114,9 @@ export interface RowShape {
   overflow: string[];
   excess: number;
   withDetail: boolean;
+  /** The row shows its controls' short forms (the model pill as one family
+   *  word); absent means the full forms. */
+  condensed?: boolean;
 }
 
 /**
@@ -125,8 +128,11 @@ export interface RowShape {
  * with the buttons folded, never from what is shown now, so folding cannot free
  * the room that then unfolds them.
  *
- * The model pill's detail (its context percentage) weighs differently by layout.
- * On a desktop the buttons fold to keep it too. On a phone (`detailFirst`) the
+ * The model pill's full name and its detail (its context percentage) weigh
+ * differently by layout. On a desktop the buttons fold to keep them: the model and
+ * its effort are what the user reads on this row, the buttons are also in the "+"
+ * menu (2026-11-22: at 1280 the longer "Side chat" / "Session note" labels kept
+ * their row and shortened the model to "Opus 35%"). On a phone (`detailFirst`) the
  * buttons are the row's finger targets, 44px each (phone-session.css C19), and the
  * percentage goes first: from 2026-11-15, when they got that width, a 390px phone
  * folded them to keep "45%" (composer-lean-menu.spec.ts, red on every run).
@@ -134,7 +140,9 @@ export interface RowShape {
 export function foldDirectButtons(shown: RowShape, folded: RowShape, opts: { detailFirst?: boolean } = {}): boolean {
   if (folded.overflow.length !== shown.overflow.length) return folded.overflow.length < shown.overflow.length;
   if (folded.excess !== shown.excess) return folded.excess < shown.excess;
-  return !opts.detailFirst && folded.withDetail && !shown.withDetail;
+  if (opts.detailFirst) return false;
+  if (!folded.condensed && shown.condensed) return true;
+  return folded.withDetail && !shown.withDetail;
 }
 
 /** How many px a row of `room` lacks for `result`'s visible controls, the gaps

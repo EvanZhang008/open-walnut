@@ -13,6 +13,7 @@ import type { MailRowMenuHandle } from './MailRowContextMenu';
 import { AlertCircleIcon, AttachmentIcon, TaskIcon } from './mail-icons';
 import { mailboxRoleOf, outgoingKind, showsRouteLine } from './mail-route-model';
 import { MailRouteLine } from './MailRouteLine';
+import { AddressWords } from './AddressWords';
 
 /**
  * Does a click on this row belong to a text selection inside it?
@@ -126,7 +127,7 @@ export function MailRow({ message, selected, accounts, outbound, menu, flagFaile
               claim about the message, `Unknown recipient` is a claim about the cache, which is the true one
               and the same word `senderLabel` already uses for a missing sender. */}
           {outbound && recipient && <span className="mail-row-to">To </span>}
-          {outbound ? recipient || 'Unknown recipient' : senderLabel(message.from)}
+          <AddressWords text={outbound ? recipient || 'Unknown recipient' : senderLabel(message.from)} />
         </span>
         {account && (
           <span

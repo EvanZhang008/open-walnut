@@ -835,21 +835,8 @@
     align-items: center;
   }
 
-  /* The sender gets the whole line; the date and Details go under it. */
-  .app-shell-navigation .mail-app .mail-reader-sender {
-    flex-wrap: wrap;
-  }
-
-  .app-shell-navigation .mail-app .mail-reader-identity {
-    flex: 1 1 0;
-  }
-
-  .app-shell-navigation .mail-app .mail-reader-when {
-    flex: 1 1 100%;
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-  }
+  /* The sender has its column's whole line and the account, date and Details sit on one line
+     under it on every width (mail-reader.css .mail-reader-who), so the phone adds nothing. */
 
   /* One message: Reply, Reply all, Forward, Task, Unread as 44 px circles. */
   .app-shell-navigation .mail-app .mail-round-btn {

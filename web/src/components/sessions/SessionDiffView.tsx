@@ -25,7 +25,8 @@ import { buildFileData, differsOnlyInWhitespace, unmarkWhitespaceEdits } from '@
 import { DiffComparePicker, forgetGitRefs, shortSha } from '@/components/sessions/DiffComparePicker';
 import { changeSignature, compareKey, loadViewedMarks, saveViewedMarks, viewedState, type ViewedMarks, type ViewedState } from '@/components/sessions/diffViewed';
 import { timeAgo } from '@/utils/time';
-import { buildDiffTree, flattenFiles, allContainerIds, isMarkdownPath, type DiffTreeNode, type DiffTreeRepoNode } from '@/components/sessions/diffTree';
+import { buildDiffTree, flattenFiles, allContainerIds, isMarkdownPath, renamedFromPart, type DiffTreeNode, type DiffTreeRepoNode } from '@/components/sessions/diffTree';
+import { MovedFileBody } from '@/components/sessions/MovedFileBody';
 import { languageForPath, diffRefractor } from '@/components/sessions/diffHighlight';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { buildCommentMessage, buildReviewMessage } from '@/components/sessions/diffPrefill';
@@ -318,14 +319,20 @@ function TreeRow({
         data-viewed={vs}
       >
         <span className={`session-diff-tree-status status-${g.cls}`} title={g.title}>{g.ch}</span>
-        <span className="session-diff-tree-name wn-title">{node.name}</span>
+        {node.change.status === 'renamed' && node.change.oldRelPath ? (
+          // The old name rides beside the new one and wraps under it when the rail is
+          // narrow, so neither is ever cut (renamedFromPart: the part that differs).
+          <span className="session-diff-tree-names">
+            <span className="session-diff-tree-name wn-title">{node.name}</span>
+            <span className="session-diff-tree-renamed-from" title={`moved from ${node.change.oldRelPath}`}>{'← '}{renamedFromPart(node.change.oldRelPath, node.change.relPath)}</span>
+          </span>
+        ) : (
+          <span className="session-diff-tree-name wn-title">{node.name}</span>
+        )}
         {vs === 'viewed' && <span className="session-diff-tree-viewed" aria-label="viewed">{ICON_VIEWED_CHECK}</span>}
         {vs === 'changed' && <span className="session-diff-tree-changed" role="img" aria-label="changed since viewed" title="Changed since you viewed it" />}
         {critical?.has(node.change.filePath) && (
           <span className="session-diff-tree-critical" title={`AI: ${critical.get(node.change.filePath)}`}>✦</span>
-        )}
-        {node.change.status === 'renamed' && node.change.oldRelPath && (
-          <span className="session-diff-tree-renamed-from" title={`moved from ${node.change.oldRelPath}`}>← {node.change.oldRelPath.split('/').pop()}</span>
         )}
         {node.change.partial && <span className="session-diff-tree-partial" title="Reconstructed best-effort (file changed on disk after the edit)">{ICON_WARNING}</span>}
       </button>
@@ -814,8 +821,10 @@ function AiFileSummary({ sessionId, change }: { sessionId: string; change: Sessi
 export const FileDiffPane = memo(function FileDiffPane({
   change, viewType, rendered, sessionCwd, sessionHost, pending, sessionId, aiSummaryOn,
   onAddComment, onSendNow, onCopyComment, onRemoveComment,
-  ignoreWhitespace = false, onShowWhitespace, onShowUncommitted, viewedState, onToggleViewed, onNextUnviewed, onToggleRendered,
+  ignoreWhitespace = false, onShowWhitespace, onShowUncommitted, viewedState, onToggleViewed, onNextUnviewed, onToggleRendered, onOpenFile,
 }: {
+  /** Open the file in the Files tab (a moved file with nothing changed offers it). */
+  onOpenFile?: (path: string) => void;
   change: SessionFileChange;
   viewType: DiffViewMode;
   rendered: boolean;
@@ -1350,8 +1359,9 @@ export const FileDiffPane = memo(function FileDiffPane({
       <div className="session-diff-filepane-head">
         {/* Cut from the left when it does not fit: the file name is what must stay. */}
         <span className="session-diff-filepane-path" dir="rtl" title={change.status === 'renamed' && change.oldRelPath ? `${change.filePath}\nMoved from ${change.oldRelPath}` : change.filePath}><bdi>{change.relPath}</bdi></span>
+        {/* The old path is cut from the left too: its file name stays. */}
         {change.status === 'renamed' && change.oldRelPath && (
-          <span className="session-diff-filepane-renamed" title={`Moved from ${change.oldRelPath}`}>{'← '}<code>{change.oldRelPath}</code></span>
+          <span className="session-diff-filepane-renamed" dir="rtl" title={`Moved from ${change.oldRelPath}`}><bdi>{'← '}<code>{change.oldRelPath}</code></bdi></span>
         )}
         {change.untracked && (
           <span className="badge session-diff-ws-tag" title="A new file git does not track yet (not added)">untracked</span>
@@ -1430,7 +1440,7 @@ export const FileDiffPane = memo(function FileDiffPane({
         <EmptyState size="section" title="Binary file: no line diff to show" testId="session-diff-binary" />
       ) : change.status === 'renamed' ? (
         // The head above names where it moved from (← old path): the body says only what it means.
-        <EmptyState size="section" title="Moved, content unchanged" />
+        <MovedFileBody text={change.after} filePath={change.filePath} host={sessionHost} onOpen={onOpenFile ? () => onOpenFile(change.filePath) : undefined} />
       ) : ignoreWhitespace && differsOnlyInWhitespace(change.before, change.after) ? (
         // The action turns off the toolbar's Hide whitespace, for every file.
         <EmptyState size="section" title="Only whitespace changed in this file" testId="session-diff-ws-only"
@@ -3235,6 +3245,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
                 viewedState={viewedMap.get(selectedChange.filePath) ?? 'unviewed'}
                 onToggleViewed={toggleViewed}
                 onNextUnviewed={nextUnviewedId ? openNextUnviewed : null}
+                onOpenFile={onOpenFile}
               />
             ) : (
               <EmptyState size="pane" title="No file selected" hint="Select a file from the tree." />

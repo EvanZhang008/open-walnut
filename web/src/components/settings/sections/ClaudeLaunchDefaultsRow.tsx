@@ -8,9 +8,10 @@
  *
  *   Default model    [Not set (Claude Code decides: Opus 5.5) v]
  *   Default effort   [Not set (Claude Code decides)           v]
- *     Claude Code's own effort, as last seen: Fable 5.2: Medium, Opus 5.5: High
  *
- * Saves on pick, like Default engine.
+ * Each row's help is one short line; the rest (who wins, Claude Code's own effort as last seen)
+ * is the row's hover, so the engine checkboxes below stay on the first screen (2026-11-22, the
+ * audit's second look: three lines of help here pushed them off). Saves on pick, like Default engine.
  */
 import { useEffect, useState } from 'react';
 import type { Config } from '@open-walnut/core';
@@ -65,7 +66,8 @@ export function ClaudeLaunchDefaultsRow({ config, save }: { config: Config; save
       <SettingsRow
         label="Default model"
         htmlFor="default-claude-model"
-        help="Claude Code sessions with no model of their own start on it. Not set: Claude Code's own setting decides."
+        help="Sessions with no model of their own start on it."
+        title="Not set: Claude Code's own setting decides. A pick at create, a switch in the session and a project's own default win."
         error={model.error}
         data-testid="default-claude-model-row"
         control={
@@ -79,7 +81,9 @@ export function ClaudeLaunchDefaultsRow({ config, save }: { config: Config; save
       <SettingsRow
         label="Default effort"
         htmlFor="default-claude-effort"
-        help="Sessions with no effort of their own start at it; a task, session or project pick wins. Not set: Claude Code decides."
+        help="Sessions with no effort of their own start at it."
+        title={`A task, session or project pick wins. Not set: Claude Code decides.${seen ? `\nClaude Code's own effort, as last seen: ${seen}` : ''}`}
+        data-observed={seen || undefined}
         error={effort.error}
         data-testid="default-claude-effort-row"
         control={
@@ -89,13 +93,7 @@ export function ClaudeLaunchDefaultsRow({ config, save }: { config: Config; save
             {EFFORT_CHOICES.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         }
-      >
-        {seen && (
-          <span className="settings-row-help" data-testid="default-claude-effort-observed">
-            Claude Code&apos;s own effort, as last seen: {seen}
-          </span>
-        )}
-      </SettingsRow>
+      />
     </>
   );
 }

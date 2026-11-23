@@ -1,16 +1,32 @@
 /* Settings > Inbox Triage > Routing rules (TriageRoutingRules.tsx). */
 
+/* A rule is a grid: its match and target share the first line with the controls (one compact group
+   at the right), and everything under them (warning, note, who wrote it) takes the row's full width,
+   so three controls never narrow the rule's text into a column (2026-11-22 audit). The rule's text
+   spans both columns on the columns' own tracks (subgrid); the controls sit over its first line's
+   empty right cell. */
 .trr-rule {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 12px;
+  align-items: start;
   padding: 10px 14px;
   border-top: 1px solid var(--border);
 }
 .trr-rule:first-child { border-top: none; }
 .trr-rule-off .trr-rule-main { opacity: 0.55; }
 
-.trr-rule-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.trr-rule-main {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  display: grid;
+  grid-template-columns: subgrid;
+  row-gap: 3px;
+  min-width: 0;
+}
+.trr-rule-main > * { grid-column: 1 / -1; min-width: 0; }
+/* The first line keeps the controls' height, so the line under it never runs beneath them. */
+.trr-rule-main > .trr-rule-line { grid-column: 1; min-height: 22px; }
 .trr-rule-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: var(--font-size-md); color: var(--fg); }
 .trr-match { font-weight: 600; overflow-wrap: anywhere; }
 .trr-to { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
@@ -25,8 +41,10 @@
 
 /* Two areas at the row's end: the text keys (Edit, Remove), then the switch, each with room around
    it; at 4px the keys ran together as "Edit Remove" beside the switch (2026-11-22 audit). */
-.trr-rule-actions { display: flex; align-items: center; gap: 16px; flex: 0 0 auto; }
-.trr-rule-keys { display: inline-flex; align-items: center; gap: 12px; }
+/* Above the rule's text box, which spans both columns (an off rule's opacity paints it as a layer
+   over later siblings and took the controls' clicks). */
+.trr-rule-actions { position: relative; z-index: 1; grid-column: 2; grid-row: 1; display: flex; align-items: center; gap: 10px; }
+.trr-rule-keys { display: inline-flex; align-items: center; gap: 2px; }
 
 .trr-editor {
   display: flex;
@@ -69,8 +87,9 @@
 
 /* A phone-width settings page: the actions go under the rule instead of squeezing it. */
 @media (max-width: 600px) {
-  .trr-rule { flex-direction: column; gap: 6px; }
-  .trr-rule-actions { align-self: stretch; justify-content: flex-end; }
+  .trr-rule { row-gap: 6px; }
+  .trr-rule-main > .trr-rule-line { grid-column: 1 / -1; min-height: 0; }
+  .trr-rule-actions { grid-column: 1 / -1; grid-row: 2; justify-content: flex-end; }
   .trr-field > .settings-input, .trr-field > .trr-note-field, .trr-picker > .settings-input, .trr-picks { max-width: none; }
 }
 .trr-pick-active { background: var(--bg-hover); }
@@ -86,8 +105,9 @@ textarea.settings-input.trr-note-input { width: 100%; height: auto; min-height: 
 .trr-confirm-q { font-size: var(--font-size-sm); color: var(--fg-secondary); margin-right: 2px; }
 /* Confirming a removal: the question and its buttons take their own line under the rule, so the
    rule's text does not reflow narrower. */
-.trr-rule-removing { flex-wrap: wrap; }
-.trr-rule-removing .trr-rule-actions { flex: 1 0 100%; justify-content: flex-end; gap: 8px; }
+.trr-rule-removing { row-gap: 6px; }
+.trr-rule-removing .trr-rule-main > .trr-rule-line { grid-column: 1 / -1; }
+.trr-rule-removing .trr-rule-actions { grid-column: 1 / -1; grid-row: 2; justify-content: flex-end; gap: 8px; }
 @media (max-width: 600px) {
   .trr-pick { min-height: 44px; }
   /* `.btn.`: a finger's 44 px outranks the family's 28 px (tests/web/button-companion-tie.test.ts). */

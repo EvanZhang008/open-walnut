@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo, type CSSProperties } from 'react';
 import { isMacPlatform } from '@/hooks/usePanelKeyRouter';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useLocation, useNavigationType, useSearchParams } from 'react-router-dom';
@@ -1111,7 +1111,9 @@ export function NotesPage() {
       <div
         className="notes-tree-pane"
         ref={listPaneRef}
-        style={{ width: listWidth, flex: `0 0 ${listWidth}px` }}
+        // The kept width is the tree's most: it sits at its rows' own width (styles: .notes-tree-pane),
+        // so four folders do not hold an empty column at a width dragged long ago.
+        style={{ ['--notes-tree-max' as string]: `${listWidth}px` } as CSSProperties}
       >
         {treeError && <div role="alert">{treeError} <button type="button" onClick={() => void refreshTree()}>Retry</button></div>}
         <NotesTreePanel

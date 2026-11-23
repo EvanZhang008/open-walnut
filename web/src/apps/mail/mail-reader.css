@@ -88,10 +88,19 @@
 
 .mail-reader-sender {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   margin-top: 14px;
+}
+
+/* The avatar, then one column: who on the first line, where and when on a quiet line under it
+   (2026-11-22 review: the sender, its account pill and the date spread across the whole row). */
+.mail-reader-who {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .mail-avatar {
@@ -112,12 +121,10 @@
   user-select: none;
 }
 
-/* The sender keeps a readable measure (12rem, about one address) before anything else on the line gives way: the account
-   pill and the date never shrink, so on a narrow reader the date moves to its own line instead. With
-   `flex: 1 1 auto` the name was the only item that could shrink, and an address-only sender broke one
-   letter per line (2026-10-15). */
+/* The sender has the column's whole width: an address-only sender broke one letter per line when
+   it was the only item of a shared row that could shrink (2026-10-15), and breaks only after its
+   "@" now (AddressWords.tsx), never a lone ".org". */
 .mail-reader-identity {
-  flex: 1 1 12rem;
   min-width: 0;
   display: flex;
   flex-wrap: wrap;
@@ -138,13 +145,12 @@
   overflow-wrap: anywhere;
 }
 
-/* Which account holds this mail. One line and clipped rather than wrapped: it sits between the
-   sender's name and the date, and a two-line pill here would push the date and the Details control
-   down and reflow the whole header on a long display name. It never shrinks the sender's own name
-   below a readable measure either, hence the cap rather than `flex: 1`. */
+/* Which account holds this mail: metadata, first on the when line. One line, the first to give
+   way (its address on hover) so the date and Details keep theirs. */
 .mail-reader-account {
-  flex: 0 0 auto;
-  max-width: 30%;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
   padding: 1px 8px;
   border-radius: 999px;
   background: var(--bg-tertiary);
@@ -216,14 +222,20 @@
   color: var(--warning);
 }
 
+/* Account, date and Details on one line under the sender, a dot between them; it wraps whole
+   items, never inside the date. */
 .mail-reader-when {
-  flex: 0 0 auto;
-  /* Right-aligned on the sender's line, and on its own line when it wraps there. */
-  margin-left: auto;
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  min-width: 0;
+}
+.mail-reader-when > * + *::before {
+  content: '\00b7';
+  margin-right: 6px;
+  color: var(--fg-muted);
+  font-size: var(--font-size-sm);
 }
 
 .mail-reader-date {

@@ -152,6 +152,13 @@ test('Branch vs the default branch: every file the branch changes since it left 
   // as the shared empty state's title, which ends with no full stop.
   await expect(panel.locator('.session-diff-filepane-renamed')).toContainText('docs/guide.md')
   await expect(panel.locator('.session-diff-main')).toContainText('Moved, content unchanged')
+  // Under that line, the file's own text, numbered (2026-11-22 audit: the pane was otherwise empty).
+  await expect(panel.locator('[data-testid="moved-file-body"] .session-diff-moved-line').first()).toBeVisible()
+  await expect(panel.locator('[data-testid="moved-file-body"]')).toContainText('Run `atlas format <file>` to reformat a file.')
+  // The renamed row names its old file beside the new one, whole (never cut to an ellipsis).
+  const movedRow = panel.locator('.session-diff-tree-file', { hasText: 'usage.md' })
+  await expect(movedRow.locator('.session-diff-tree-renamed-from')).toHaveText('← guide.md')
+  expect(await movedRow.locator('.session-diff-tree-renamed-from').evaluate((e) => e.scrollWidth <= e.clientWidth + 1)).toBe(true)
   // A move with nothing changed has no Markdown to render, and no comment hint without lines.
   await expect(panel.locator('.session-diff-rendered-toggle')).toHaveCount(0)
   await expect(panel.locator('.session-diff-filepane-hint')).toHaveCount(0)

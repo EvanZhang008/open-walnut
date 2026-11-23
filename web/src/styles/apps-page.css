@@ -111,11 +111,8 @@
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 12px;
 }
-/* Packed by useMasonryRows (AppsGrid in app-bits.tsx): 4px rows, each card spans its own height plus
-   the gap, so a short card sits right under the card above it instead of stretching to the row's
-   longest description. */
-.apps-grid[data-packed] { grid-auto-rows: 4px; row-gap: 0; }
-.apps-grid[data-packed] > * { align-self: start; }
+/* Cards of one row stretch to its height (the grid's default), and each card's footer sits at its
+   bottom (.apps-card-foot), so Open lines up beside Open; descriptions are clamped below. */
 .apps-card-img { width: 20px; height: 20px; }
 .apps-lock {
   display: inline-grid;
@@ -188,18 +185,20 @@
 }
 .apps-card-main + .apps-card-badge { margin-left: 6px; }
 .apps-card-text:has(> .apps-card-badge) > .apps-card-main { display: inline-block; max-width: calc(100% - 34px); vertical-align: top; }
-.apps-card-line {
-  margin-top: 2px;
-  font-size: var(--font-size-sm);
-  line-height: 16px;
-  color: var(--fg-muted);
-}
+/* A card's description and its "Includes ..." note are body text, not its name: each is clamped to a
+   few lines so one long description no longer sets the whole row's height. The pointer on the card
+   opens them (utils/truncation-peek.ts) and the detail page shows them whole. */
+.apps-card-line,
 .apps-card-note {
-  margin-top: 4px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
   font-size: var(--font-size-sm);
-  line-height: 15px;
   color: var(--fg-muted);
 }
+.apps-card-line { margin-top: 2px; line-height: 16px; -webkit-line-clamp: 3; line-clamp: 3; }
+.apps-card-note { margin-top: 4px; line-height: 15px; -webkit-line-clamp: 2; line-clamp: 2; }
 /* An app of several parts (Calendar and its Agenda side bar): one row each, with its own
    switch, above the footer. The rows sit over the card's stretched button (z-index), so a
    switch never opens the detail page. */

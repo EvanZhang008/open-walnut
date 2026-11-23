@@ -26,6 +26,7 @@ import { setOpenMessageRead } from './mail-read-flag';
 import { MailContentActions } from './MailContentActions';
 import { MailInviteCard } from './MailInviteCard';
 import { MailSortLine } from './MailSortLine';
+import { AddressWords } from './AddressWords';
 import { getMailSnapshot, type MailOpenMessage } from './mail-store';
 import { mailboxRoleOf, outgoingKind, showsRouteLine } from './mail-route-model';
 import { MailRouteLine } from './MailRouteLine';
@@ -92,41 +93,45 @@ export function MailReaderHead({ open, message, accounts, providers }: Props) {
         >
           {mark.initial}
         </span>
-        <span className="mail-reader-identity">
-          <span className="mail-reader-from" title={message.from?.address}>
-            {senderLabel(message.from)}
+        {/* Who, then where and when on one quiet line under it (2026-11-22 review: the sender, the
+            account and the date sat spread across the row, the date far right over its Details). */}
+        <span className="mail-reader-who">
+          <span className="mail-reader-identity">
+            <span className="mail-reader-from" title={message.from?.address}>
+              <AddressWords text={senderLabel(message.from)} />
+            </span>
+            {message.from?.address && message.from.address !== senderLabel(message.from) && (
+              <span className="mail-reader-address"><AddressWords text={message.from.address} /></span>
+            )}
           </span>
-          {message.from?.address && message.from.address !== senderLabel(message.from) && (
-            <span className="mail-reader-address">{message.from.address}</span>
-          )}
-        </span>
-        {account && (
-          <span
-            className="mail-reader-account"
-            data-testid="mail-reader-account"
-            data-account-id={account.accountId}
-            title={account.address}
-            aria-label={`This message is in ${account.displayName || account.address}`}
-          >
-            {account.displayName || account.address}
+          <span className="mail-reader-when">
+            {account && (
+              <span
+                className="mail-reader-account"
+                data-testid="mail-reader-account"
+                data-account-id={account.accountId}
+                title={account.address}
+                aria-label={`This message is in ${account.displayName || account.address}`}
+              >
+                {account.displayName || account.address}
+              </span>
+            )}
+            <time className="mail-reader-date" title={message.sentAtHeader ?? undefined}>
+              {formatMailDate(message.sentAt)}
+            </time>
+            {extras.length > 0 && (
+              <button
+                type="button"
+                className="btn btn-sm mail-reader-details-btn"
+                data-testid="mail-reader-details"
+                aria-expanded={details}
+                onClick={() => setDetails((was) => !was)}
+              >
+                Details
+                <span className="btn-caret" aria-hidden="true"><ChevronIcon /></span>
+              </button>
+            )}
           </span>
-        )}
-        <span className="mail-reader-when">
-          <time className="mail-reader-date" title={message.sentAtHeader ?? undefined}>
-            {formatMailDate(message.sentAt)}
-          </time>
-          {extras.length > 0 && (
-            <button
-              type="button"
-              className="btn btn-sm mail-reader-details-btn"
-              data-testid="mail-reader-details"
-              aria-expanded={details}
-              onClick={() => setDetails((was) => !was)}
-            >
-              Details
-              <span className="btn-caret" aria-hidden="true"><ChevronIcon /></span>
-            </button>
-          )}
         </span>
       </div>
 

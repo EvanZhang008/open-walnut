@@ -26,8 +26,8 @@ import '@/styles/approvals-ask-row.css';
 
 type Save = (patch: (c: Config) => Partial<Config>, opts: { rowKey: string }) => Promise<unknown>;
 
-/** How many show before "Show all". */
-const FIRST = 5;
+/** How many show before "Show N more": the newest few, so the record never fills the page. */
+const FIRST = 3;
 /** How often the list reads again while the page shows. */
 const REREAD_MS = 10_000;
 
@@ -97,34 +97,52 @@ function UnaskedList({ off }: { off: boolean }) {
         ? <EmptyState size="row" title="Nothing went ahead yet" />
         : (
           <ul className="approvals-unasked-list">
-            {shown.map(({ lead: a, all: same }) => (
-              <li key={a.id} data-testid="settings-approvals-unasked-item" data-count={same.length}>
-                <details>
-                  <summary>
-                    <span className="approvals-unasked-what">{a.what}</span>
-                    <span className="approvals-unasked-meta">
-                      {a.requester.taskTitle ? `${a.requester.taskTitle} · ` : ''}
-                      {same.length > 1 ? `${same.length} times, last ` : ''}{timeAgo(whenOf(a), { long: true })}
-                    </span>
-                  </summary>
-                  <dl className="approvals-unasked-more-info">
-                    {a.requester.command && (<><dt>Command</dt><dd><code>{a.requester.command}</code></dd></>)}
-                    <dt>From</dt><dd>{fromText(a, hostLabel)}</dd>
-                    <dt>When</dt><dd>{same.map((x) => new Date(whenOf(x)).toLocaleString()).join(', ')}</dd>
-                    {a.detail && (<><dt>Detail</dt><dd><pre>{a.detail}</pre></dd></>)}
-                  </dl>
-                </details>
-              </li>
-            ))}
+            {shown.map(({ lead: a, all: same }) => {
+              // One scannable row: what happened (a path's folders moved out), its time in its own
+              // column; under it the task and the folders as one cut-able line, the count under the time.
+              const { text, dirs } = splitPaths(a.what);
+              const meta = [a.requester.taskTitle, ...dirs].filter(Boolean).join(' · ');
+              return (
+                <li key={a.id} data-testid="settings-approvals-unasked-item" data-count={same.length}>
+                  <details>
+                    <summary>
+                      <span className="approvals-unasked-what wn-title" title={text === a.what ? undefined : a.what}>{text}</span>
+                      <time className="approvals-unasked-when wn-fixed" dateTime={whenOf(a)} data-testid="settings-approvals-unasked-when">{timeAgo(whenOf(a), { long: true })}</time>
+                      {meta && <span className="approvals-unasked-meta wn-meta" data-testid="settings-approvals-unasked-meta">{meta}</span>}
+                      {same.length > 1 && <span className="approvals-unasked-count wn-fixed">{same.length} times</span>}
+                    </summary>
+                    <dl className="approvals-unasked-more-info">
+                      {text !== a.what && (<><dt>What</dt><dd>{a.what}</dd></>)}
+                      {a.requester.command && (<><dt>Command</dt><dd><code>{a.requester.command}</code></dd></>)}
+                      <dt>From</dt><dd>{fromText(a, hostLabel)}</dd>
+                      <dt>When</dt><dd>{same.map((x) => new Date(whenOf(x)).toLocaleString()).join(', ')}</dd>
+                      {a.detail && (<><dt>Detail</dt><dd><pre>{a.detail}</pre></dd></>)}
+                    </dl>
+                  </details>
+                </li>
+              );
+            })}
           </ul>
         )}
       {groups.length > FIRST && (
-        <button type="button" className="approvals-unasked-more" data-testid="settings-approvals-unasked-more" onClick={() => setAll((v) => !v)}>
-          {all ? 'Show fewer' : `Show all ${groups.length}`}
+        <button type="button" className="approvals-unasked-more" data-testid="settings-approvals-unasked-more" aria-expanded={all} onClick={() => setAll((v) => !v)}>
+          {all ? 'Show fewer' : `Show ${groups.length - FIRST} more`}
         </button>
       )}
     </SettingsRow>
   );
+}
+
+/** A folder path inside a step's words: `~/` or `/`, then one or more `name/` (a URL's `//` is not one). */
+const DIR_RE = /(?<![\w.:/])(?:~\/|\/)(?:[^\s/"“”]+\/)+/g;
+
+/**
+ * A step's words with each path's folders moved out, so the row names the file and the place it
+ * went ("Upload demo.mp4 from this computer into example.org") and the folders ride the meta line.
+ */
+export function splitPaths(what: string): { text: string; dirs: string[] } {
+  const dirs = [...new Set(what.match(DIR_RE) ?? [])];
+  return { text: dirs.length ? what.replace(DIR_RE, '') : what, dirs };
 }
 
 function whenOf(a: Approval): string {

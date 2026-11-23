@@ -203,6 +203,49 @@ describe('foldDirectButtons', () => {
     for (let total = 122 + DIRECT; total <= 600; total++) expect(decide(total)).toBe(false);
   });
 
+  describe('the model keeps its full name before the direct buttons keep their row', () => {
+    // The 1280px session panel (2026-11-22): Bypass 56, "Opus 5.5 35% · High" 140
+    // in full, "Opus" 37 + " 35%" 23 short; "Side chat" and "Session note" take
+    // 150px with their gaps. Beside them the row only held "Opus 35%".
+    const FULL: ControlFitInput[] = [
+      { id: 'mode', priority: 1, width: 56 },
+      { id: 'model', priority: 2, width: 140 },
+    ];
+    const natural = 56 + 4 + 140;
+    const shapeOf = (room: number) => {
+      const condensed = room < Math.max(220, natural);
+      const withDetail = !condensed || detailFits(56 + 4 + 37, 23, room);
+      const input = FULL.map((c) => (!condensed ? c : { ...c, width: c.id === 'model' ? 37 + (withDetail ? 23 : 0) : c.width }));
+      const result = pickVisibleControls(input, room, OPTS);
+      return { condensed, withDetail, overflow: result.overflow, excess: rowExcess(input, result, room, OPTS) };
+    };
+    const BUTTONS = 150;
+    const decideAt = (total: number, detailFirst = false) =>
+      foldDirectButtons(shapeOf(Math.max(1, total - BUTTONS)), shapeOf(total), { detailFirst });
+
+    it('folds Side chat and Session note rather than shorten the model to its family word', () => {
+      // 330px: beside the buttons 180px, the short form with its percentage fits;
+      // folded, the full model fits.
+      expect(shapeOf(330 - BUTTONS)).toMatchObject({ condensed: true, withDetail: true, overflow: [], excess: 0 });
+      expect(shapeOf(330)).toMatchObject({ condensed: false, overflow: [] });
+      expect(decideAt(330)).toBe(true);
+    });
+
+    it('keeps the buttons where the full model fits beside them', () => {
+      // The row is never in full form under 220px.
+      for (let total = 220 + BUTTONS; total <= 600; total++) expect(decideAt(total)).toBe(false);
+    });
+
+    it('keeps the buttons when folding would still leave the model short', () => {
+      const short = { overflow: [], excess: 0, withDetail: true, condensed: true };
+      expect(foldDirectButtons(short, { ...short })).toBe(false);
+    });
+
+    it('leaves a phone row as it was: the buttons are its finger targets', () => {
+      expect(decideAt(330, true)).toBe(false);
+    });
+  });
+
   describe('on a phone, the percentage goes first', () => {
     // A 390px phone (composer-lean-menu.spec.ts, Linux Chromium): Bypass 59, "Fable" about 41,
     // " 45%" 27; Note and btw are 44px finger targets (phone-session.css C19) with a 2px

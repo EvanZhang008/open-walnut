@@ -16,14 +16,18 @@
   color: var(--fg-muted);
 }
 
-/* The reader shows the router's words in full (standard.md rule 11): the name and the reason wrap,
-   the mark stays on the first line. A row keeps to one line instead (.mail-route-row, below). */
+/* The reader shows the router's words in full (standard.md rule 11): one sentence beside the mark,
+   the lead, the name and the reason after a dot on the same line while they fit, wrapping as text
+   under the first word, never under the mark. A row keeps to one line instead (.mail-route-row). */
 .mail-route-reader {
+  grid-template-columns: 6px minmax(0, 1fr);
   margin-top: 8px;
   font-size: var(--font-size-sm);
   align-items: start;
   overflow-wrap: anywhere;
 }
+.mail-route-words { min-width: 0; }
+.mail-route-reader .mail-route-sep { display: inline; }
 /* The mark on the first line's middle: half of what the line is taller than the 6px mark. */
 .mail-route-reader > .mail-route-mark { margin-top: calc((1lh - 6px) / 2); }
 

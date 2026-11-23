@@ -31,6 +31,10 @@ export type SideBarPane = 'agenda' | 'scratchpad';
 
 export const SIDE_BAR_CLOSED: PageSideBarView = { agenda: false, scratchpad: false };
 export const SIDE_BAR_WIDTH_DEFAULT = 400;
+/** A Scratchpad never dragged opens as a narrow column: a pad for a few lines, so the page beside
+ *  it keeps the room (2026-11-22 audit: an empty one at 400px and the Notes tree took 60% of the
+ *  page). Its own drag widens it, kept per page. */
+export const SCRATCHPAD_WIDTH_DEFAULT = 300;
 export const SIDE_BAR_WIDTH_MIN = 280;
 export const SIDE_BAR_WIDTH_MAX = 720;
 /** A side bar alone never takes more than this share of the window, so the page keeps room. */
@@ -86,6 +90,11 @@ export function sideBarWidth(stored: number | undefined, windowWidth: number, pa
 /** The width kept for one pane (the Scratchpad falls back to the old one-column width). */
 export function storedPaneWidth(view: PageSideBarView, pane: SideBarPane): number | undefined {
   return pane === 'agenda' ? view.width : view.scratchpadWidth ?? view.width;
+}
+
+/** The width one pane starts at before any drag of its own (or of the old one column). */
+export function paneWidth(view: PageSideBarView, pane: SideBarPane, windowWidth: number, paired = false): number {
+  return sideBarWidth(storedPaneWidth(view, pane) ?? (pane === 'scratchpad' ? SCRATCHPAD_WIDTH_DEFAULT : undefined), windowWidth, paired);
 }
 
 const VIEW_KEY = viewKey('side-bar', 'view');

@@ -78,6 +78,18 @@
   letter-spacing: 0;
 }
 
+/* A group's add action on its heading line (SettingsGroup headingAction): pushed right, the count
+   keeps the right edge as in every group (20px apart, so the count never reads as the action's);
+   a narrow pane moves the action under the title instead of squeezing it. */
+.settings-group-heading-with-action { flex-wrap: wrap; row-gap: 2px; }
+.settings-group-heading-action + .settings-group-heading-trailing { margin-left: 8px; }
+.settings-group-heading-action {
+  margin-left: auto;
+  font-size: var(--font-size-md);
+  line-height: 17px;
+  color: var(--fg-muted);
+}
+
 .settings-group-heading-trailing {
   flex: 0 0 auto;
   font-size: var(--font-size-md);
@@ -272,6 +284,18 @@
   min-height: 36px;
   padding-top: 8px;
   padding-bottom: 8px;
+}
+
+/* A row of several named fields: they sit beside the label while the copy keeps a readable
+   column, and wrap under it (still at the right) when not (2026-11-22, the audit's second look:
+   always stacked, the default mode row took four lines and pushed the engine list down). */
+.settings-row.settings-row-wraps {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.settings-row.settings-row-wraps > .settings-row-copy {
+  flex: 1 1 18em;
 }
 
 /* Label above, full-width content below (mono blocks, editors). */

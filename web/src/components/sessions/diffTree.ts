@@ -194,6 +194,21 @@ export function allContainerIds(nodes: DiffTreeNode[]): string[] {
   return out;
 }
 
+/**
+ * What a renamed file's tree row shows of its old path: the part that tells the move
+ * apart, from the first folder the two paths differ in down to the old file name
+ * (`src/core/a/x.ts` -> `src/core/b/y.ts` reads `a/x.ts`; a rename in place reads
+ * `x.ts`). The leading folders both share say nothing, and cutting the old path to
+ * its last segment hid which of several similar folders it left (2026-11-22 audit).
+ */
+export function renamedFromPart(oldRelPath: string, relPath: string): string {
+  const from = oldRelPath.split('/');
+  const to = relPath.split('/');
+  let i = 0;
+  while (i < from.length - 1 && i < to.length - 1 && from[i] === to[i]) i++;
+  return from.slice(i).join('/');
+}
+
 /** Is this file a markdown doc (so the diff view should offer a Rendered toggle)? */
 export function isMarkdownPath(relPath: string): boolean {
   return /\.(md|markdown|mdx)$/i.test(relPath);

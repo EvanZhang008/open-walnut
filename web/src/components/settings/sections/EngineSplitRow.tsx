@@ -114,8 +114,10 @@ export function EngineSplitRow({ config, save }: { config: Config; save: ReturnT
     <>
       <SettingsRow
         label="Share new tasks"
+        // Each row's help is one short line and the rest its hover: two-line helps here pushed the
+        // engine list off the first screen (2026-11-22, the audit's second look).
         help={on
-          ? 'A new task that names no engine takes turns between the checked entries below, and Usage & Costs compares them.'
+          ? 'New tasks that name no engine take turns between the entries below.'
           : switchOn
             ? 'Check two or more entries below to share new tasks between them. Until then every new task runs on the default engine.'
             // Off: what happens now only. What switching on gives is said once, in the entries'
@@ -161,13 +163,13 @@ export function EngineSplitRow({ config, save }: { config: Config; save: ReturnT
       })}
       {missing.length > 0 && (
         <SettingsRow label="Not installed on this machine" data-testid="engine-split-missing"
-          help={`${missing.map((e) => engineName(e.displayName)).join(', ')}. Install one where Walnut runs and it is offered here to share tasks with.`} />
+          help={`${missing.map((e) => engineName(e.displayName)).join(', ')}.`}
+          title="Install one where Walnut runs and it is offered here to share tasks with." />
       )}
       <SettingsRow
         label="In projects"
-        help={projects.length
-          ? `Only tasks in ${projects.join(', ')} take turns. Tasks in any other project run on the default engine.`
-          : 'None named, so tasks in every project take turns. Name projects to share only their tasks.'}
+        help={projects.length ? `Only tasks in ${projects.join(', ')} take turns.` : 'Every project takes turns.'}
+        title={projects.length ? 'Tasks in any other project run on the default engine.' : 'Name projects to share only their tasks.'}
         error={projectsPick.error}
         data-testid="engine-split-projects"
         control={(
@@ -190,7 +192,8 @@ export function EngineSplitRow({ config, save }: { config: Config; save: ReturnT
           label="Add an engine with a chosen model"
           help={unlisted
             ? `${typed} is not a model Claude Code lists here. It is sent as typed, so check the name (a model your proxy serves is fine).`
-            : "Adds an entry above for an engine on the model you name (say Claude Code on sonnet), so new tasks take turns with it."}
+            : 'Adds an entry above on the model you name.'}
+          title={unlisted ? undefined : 'Say Claude Code on sonnet: new tasks take turns with it.'}
           state={unlisted ? 'warning' : undefined}
           data-testid="engine-split-add"
           control={(

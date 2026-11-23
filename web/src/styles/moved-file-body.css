@@ -1,0 +1,19 @@
+/* A moved file under "Moved, content unchanged." (MovedFileBody.tsx): its own text in the diff table's
+   font and gutter, without add/delete colours since nothing changed, or its Open in Files button. */
+.session-diff-file-empty.session-diff-moved-note {
+  display: flex; flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px;
+}
+.session-diff-moved-note:has(+ .session-diff-moved-lines) { padding: 10px 16px; }
+.session-diff-moved-lines {
+  list-style: none; margin: 0; padding: 0;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono); font-size: var(--font-size-sm); line-height: 1.5;
+  tab-size: 4; font-variant-ligatures: none; color: var(--fg);
+}
+.session-diff-moved-line { display: flex; min-width: 0; }
+.session-diff-moved-num {
+  flex: none; min-width: 3.2em; padding: 0 8px; text-align: right;
+  color: var(--fg-muted); user-select: none; background: var(--bg-secondary);
+}
+.session-diff-moved-code { flex: 1 1 auto; min-width: 0; padding: 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.session-diff-moved-rest { padding: 6px 16px 12px; font-size: var(--font-size-xs); color: var(--fg-muted); }

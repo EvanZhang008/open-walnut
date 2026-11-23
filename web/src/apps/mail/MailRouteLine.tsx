@@ -118,7 +118,9 @@ export function MailRouteLine({ route, surface, subject, routingArea, routingCov
   const mark = <span className="mail-route-mark" data-route-status={view.status} {...(view.link?.kind === 'letter' ? { 'data-route-letter': '' } : {})} aria-hidden="true" />;
   // Same words on both surfaces, laid out twice. A row: the mark and the lead, then the name and the
   // router's reason in one column, the reason beside the name while it has room and on the next line
-  // when not, one line cut first (.wn-meta). The reader: the reason on a line of its own, in full.
+  // when not, one line cut first (.wn-meta). The reader: the lead, the name and the reason as one
+  // sentence after the mark, in full, wrapping as text (2026-11-22 review: the status and its
+  // reason took a line each).
   const line = row ? (
     <span className="mail-route mail-route-row" {...attrs}>
       {mark}
@@ -141,17 +143,19 @@ export function MailRouteLine({ route, surface, subject, routingArea, routingCov
   ) : (
     <p className="mail-route mail-route-reader" {...attrs}>
       {mark}
-      {lead}
-      {name && ' '}
-      {name}
-      {view.detail && (
-        <>
-          {' '}
-          <span className="mail-route-sep" aria-hidden="true">·</span>
-          {' '}
-          <span className="mail-route-detail">{view.detail}</span>
-        </>
-      )}
+      <span className="mail-route-words">
+        {lead}
+        {name && ' '}
+        {name}
+        {view.detail && (
+          <>
+            {' '}
+            <span className="mail-route-sep" aria-hidden="true">·</span>
+            {' '}
+            <span className="mail-route-detail">{view.detail}</span>
+          </>
+        )}
+      </span>
     </p>
   );
   // Beside the line, never inside it: the row and the reader line keep the same words.

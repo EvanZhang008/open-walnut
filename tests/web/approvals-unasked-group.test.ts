@@ -4,7 +4,7 @@
  * lines read as a wall).
  */
 import { describe, expect, it } from 'vitest'
-import { groupSame } from '../../web/src/components/settings/sections/ApprovalsAskRow.js'
+import { groupSame, splitPaths } from '../../web/src/components/settings/sections/ApprovalsAskRow.js'
 import type { Approval } from '../../web/src/api/approvals.js'
 
 const step = (id: string, what: string, taskId: string | undefined, at: string): Approval =>
@@ -29,5 +29,27 @@ describe('groupSame', () => {
       step('z', 'Post the changelog', undefined, '2026-11-20T10:00:00Z'),
     ]
     expect(groupSame(items).map((g) => g.all.length)).toEqual([1, 1, 1])
+  })
+})
+
+// One scannable row (2026-11-22 audit: long paths filled the row's words): a path's folders move to
+// the meta line and the file's name stays in the words; a URL's slashes are not folders.
+describe('splitPaths', () => {
+  it('moves each path\'s folders out and keeps the file name in place', () => {
+    expect(splitPaths('Upload ~/.local/state/walnut/tasks/t1/promo/demo.mp4 from this computer into example.org')).toEqual({
+      text: 'Upload demo.mp4 from this computer into example.org',
+      dirs: ['~/.local/state/walnut/tasks/t1/promo/'],
+    })
+    expect(splitPaths('Upload ~/Desktop/Screen Recording at 12.32.01 PM.mov from this computer into 127.0.0.1')).toEqual({
+      text: 'Upload Screen Recording at 12.32.01 PM.mov from this computer into 127.0.0.1',
+      dirs: ['~/Desktop/'],
+    })
+    expect(splitPaths('Upload /tmp/a/x.gif and /tmp/a/y.gif into example.org').dirs).toEqual(['/tmp/a/'])
+  })
+
+  it('leaves words with no path, and a URL, as they are', () => {
+    for (const what of ['Gave the password "garden.example" to "Bakery": sign in', 'Open https://example.org/a/b in the browser', 'Post the and/or note']) {
+      expect(splitPaths(what)).toEqual({ text: what, dirs: [] })
+    }
   })
 })

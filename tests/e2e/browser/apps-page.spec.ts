@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { appsHome, openAppsPage, serverHoldsAppPreferences as holdsAppPreferences, useAppsFixture } from './apps-page-fixture'
-import { backToApps, openApp, openBuiltinDetail, openPluginDetail } from './apps-store-helpers'
+import { backToApps, expectTidyCardGrids, openApp, openBuiltinDetail, openPluginDetail } from './apps-store-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 
 /**
@@ -319,6 +319,7 @@ test('the page groups plugins by where they come from: built in, each source, th
   const chips = await page.locator('.apps-chips button').evaluateAll((els) => els.map((el) => el.getAttribute('data-testid')))
   expect(chips[0]).toBe('apps-chip-all')
   expect(chips.slice(-2)).toEqual(['apps-chip-get', 'apps-chip-builtin'])
+  await expectTidyCardGrids(page)
 
   // Turning a plugin off keeps its card where it was (it reads Off there).
   const sigmaSection = page.locator('[data-testid^="apps-source-"]', { has: page.getByTestId('plugin-card-sigma') })

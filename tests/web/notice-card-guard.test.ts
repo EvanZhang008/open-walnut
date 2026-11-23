@@ -165,4 +165,24 @@ describe('one notification system', () => {
     expect(css).toMatch(/html \.wn-notice\.wn-notice \{[^}]*border-radius: var\(--radius-notice\)/);
     expect(css).not.toMatch(/border-(?:left|right)\s*:/);
   });
+  // 2026-11-22 review of the notification center: once titles stopped being cut, a row showed its
+  // whole technical paragraph too, and the panel held one or two notifications. The title stays
+  // whole; the text is a body: a few lines in the list, and the row's own Details opens every word.
+  it('a row of the notification center keeps its text to a few lines, and Details opens the rest', () => {
+    const css = read('web/src/styles/globals.css');
+    const closed = /\.wn-notice-line\.notification-feed-item-body \{([^}]*)\}/.exec(css)?.[1] ?? '';
+    const clamp = /-webkit-line-clamp:\s*(\d+)/.exec(closed);
+    expect(clamp, 'the closed row clamps its text').not.toBeNull();
+    expect(Number(clamp![1])).toBeLessThanOrEqual(4);
+    // Only an opened row shows every word.
+    for (const m of css.matchAll(/([^{}]*notification-feed-item-body[^{}]*)\{([^}]*)\}/g)) {
+      if (/line-clamp:\s*(unset|none)/.test(m[2])) expect(m[1], 'unclamped only when opened').toMatch(/\.is-open/);
+    }
+    const cards = read('web/src/components/common/NotificationFeedCards.tsx');
+    const item = cards.slice(cards.indexOf('function FeedItem('));
+    expect(item).toMatch(/useCutOff\(\[bodyRef\]/);
+    expect(item).toContain('lineRef={bodyRef}');
+    expect(item).toMatch(/line: `notification-feed-item-body\$\{detailOpen \? ' is-open' : ''\}`/);
+    expect(item).toMatch(/\{showToggle \? \(/);
+  });
 });

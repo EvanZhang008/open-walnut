@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { CalendarSidePanel } from '@/components/calendar/CalendarSidePanel';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import { useScratchpadSlot } from './ScratchpadHost';
-import { SIDE_BAR_LAYOUT_EVENT, SIDE_BAR_WIDTH_MIN, sideBarWidth, storedPaneWidth, usePageSideBar, type SideBarPane } from './page-side-bar';
+import { SIDE_BAR_LAYOUT_EVENT, SIDE_BAR_WIDTH_MIN, paneWidth, sideBarWidth, usePageSideBar, type SideBarPane } from './page-side-bar';
 import type { Task } from '@open-walnut/core';
 
 interface Props {
@@ -60,8 +60,8 @@ export function CompanionColumn({ calendarOpen, scratchpadOpen, onCloseCalendar,
   const { view, setWidth } = usePageSideBar(place ?? null);
   const windowWidth = useWindowWidth();
   const paired = calendarOpen && scratchpadOpen;
-  const agendaWidth = sideBarWidth(storedPaneWidth(view, 'agenda'), windowWidth, paired);
-  const scratchpadWidth = sideBarWidth(storedPaneWidth(view, 'scratchpad'), windowWidth, paired);
+  const agendaWidth = paneWidth(view, 'agenda', windowWidth, paired);
+  const scratchpadWidth = paneWidth(view, 'scratchpad', windowWidth, paired);
   // The full screen area starts beside the side bars (AppShell): tell it when they moved. A drag
   // in progress tells it too (PaneShell).
   useLayoutEffect(() => { window.dispatchEvent(new Event(SIDE_BAR_LAYOUT_EVENT)); }, [calendarOpen, scratchpadOpen, agendaWidth, scratchpadWidth]);

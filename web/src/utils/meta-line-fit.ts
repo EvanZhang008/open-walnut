@@ -10,8 +10,13 @@
  * One observer pair per list, never one per row; a scan is coalesced to one frame, and each pass
  * reads every box before it writes any.
  */
-const SEARCH_ROWS = '.todo-search-results .todo-item-content[data-search-meta]';
-const LINE_ITEMS = ':scope > .todo-search-meta-row, :scope > .todo-item-title-row > :is(.badge, .task-tag-pills, .todo-item-limit-pill)';
+/** Every line of words that wraps, and its items: a search row's second line, and a status card's
+ *  meta line, which wraps rather than cut its words (2026-11-22 audit: a Waiting row's linked work
+ *  was cut beside the project and the wake time). */
+const WRAPPED_LINES: ReadonlyArray<{ rows: string; items: string }> = [
+  { rows: '.todo-search-results .todo-item-content[data-search-meta]', items: ':scope > .todo-search-meta-row, :scope > .todo-item-title-row > :is(.badge, .task-tag-pills, .todo-item-limit-pill)' },
+  { rows: '.status-card-meta', items: ':scope > :not(.status-card-meta-fill)' },
+];
 
 interface Box { top: number; left: number; height: number; width: number }
 
@@ -61,10 +66,10 @@ export function wrapMarks(boxes: Box[], dotRooms: number[]): { start: boolean; s
 }
 
 export function scanMetaLineFit(root: ParentNode): void {
-  const reads = [...root.querySelectorAll<HTMLElement>(SEARCH_ROWS)].map((row) => {
-    const items = [...row.querySelectorAll<HTMLElement>(LINE_ITEMS)];
+  const reads = WRAPPED_LINES.flatMap(({ rows, items: itemSel }) => [...root.querySelectorAll<HTMLElement>(rows)].map((row) => {
+    const items = [...row.querySelectorAll<HTMLElement>(itemSel)];
     return { items, marks: wrapMarks(items.map((el) => el.getBoundingClientRect()), items.map(dotRoom)) };
-  });
+  }));
   for (const { items, marks } of reads) {
     items.forEach((el, i) => {
       const { start, shift } = marks[i];

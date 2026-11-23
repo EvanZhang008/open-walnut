@@ -42,6 +42,7 @@ import { RETRYING_LINE } from './mail-load-retry';
 import { CheckIcon, MoreIcon, TwistIcon } from './mail-icons';
 import { isOpenRow, selectingInside } from './MailMessageRow';
 import { MailRouteLine } from './MailRouteLine';
+import { AddressWords } from './AddressWords';
 import { outgoingKind, showsRouteLine } from './mail-route-model';
 import { pairKey, type MailSnapshot } from './mail-store';
 import type { MailRowMenuHandle } from './MailRowContextMenu';
@@ -113,7 +114,7 @@ const MailKidRow = memo(function MailKidRow({ message, selected, openMenu, menuO
       }}
     >
       <span className="mail-kid-dot" aria-hidden="true">{unread && <span className="mail-row-dot" />}</span>
-      <span className="mail-kid-from wn-title">{senderLabel(message.from)}</span>
+      <span className="mail-kid-from wn-title"><AddressWords text={senderLabel(message.from)} /></span>
       <span className="mail-kid-subject wn-title">{message.subject || '(no subject)'}</span>
       <span className="mail-row-time wn-fixed">{formatMailTime(message.sentAt)}</span>
       {showsRouteLine(message) && <MailRouteLine route={message.route} unavailable={message.routingUnavailable} routingArea={message.routingArea} routingCoverage={message.routingCoverage} surface="row" />}

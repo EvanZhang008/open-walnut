@@ -286,8 +286,10 @@ export function TriageRoutingRules({ off = false, onGroupIds }: { off?: boolean;
           onSaved={() => { setEditing(null); focusOpener(rule.id); void load(); }} />
       ) : (
         <div key={rule.id} className={`trr-rule${rule.enabled ? '' : ' trr-rule-off'}${removing === rule.id ? ' trr-rule-removing' : ''}`} data-testid="triage-rule" data-rule-id={rule.id}>
-          <div className="trr-rule-main" title={`Rule ${rule.id}`}>
-            <div className="trr-rule-line">
+          {/* The rule's parts are the row's own grid cells (triage-rules.css): its match and target
+              beside the controls, the rest under both at the row's full width. */}
+          <div className="trr-rule-main">
+            <div className="trr-rule-line" title={`Rule ${rule.id}`}>
               <span className="trr-match">{rule.matchText}</span>
               <span className="trr-to">
                 <span className="trr-arrow" aria-hidden="true">→</span>

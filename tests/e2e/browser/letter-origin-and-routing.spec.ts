@@ -174,6 +174,14 @@ test('a routing rule is added, turned off, edited and removed in Settings', asyn
   await expect(shadowed.getByTestId('triage-rule-shadowed')).toContainText('sender contains "acme-robotics.example"')
   await expect(row.first().getByTestId('triage-rule-shadowed')).toHaveCount(0)
   await group.screenshot({ path: path.join(SHOTS, 'routing-rules-shadowed.png') })
+  // The rule's warning, note and who wrote it take the row's full width: only its first line shares
+  // a line with the controls, which never narrow the rest (2026-11-22 audit).
+  const cells = await shadowed.evaluate((el) => {
+    const box = (q: string) => el.querySelector(q)!.getBoundingClientRect()
+    return { line: box('.trr-rule-line'), warn: box('.trr-warn'), actions: box('.trr-rule-actions') }
+  })
+  expect(cells.warn.right).toBeGreaterThan(cells.actions.left + 1)
+  expect(cells.actions.top).toBeLessThan(cells.line.bottom)
   // "Move this rule above it" puts the narrower rule first: then neither hides the other.
   await shadowed.getByTestId('triage-rule-move-up').click()
   await expect(group.getByTestId('triage-rule-shadowed')).toHaveCount(0)

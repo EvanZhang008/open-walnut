@@ -242,7 +242,11 @@ test('C15: every control sits right of its label at the group edge (14px inset)'
         const g = group.getBoundingClientRect()
         const l = label.getBoundingClientRect()
         if (Math.abs(a.right - (g.right - 1 - 14)) > 1.5) out.push(`${label.textContent}: right ${a.right} vs ${g.right - 15}`)
-        if (a.left < l.right - 0.5) out.push(`${label.textContent}: control left of label`)
+        // A row of several fields (.settings-row-wraps) puts them under the copy when they do not
+        // fit beside it, still at the right edge: only a control on the label's line must follow it.
+        const copy = r.querySelector<HTMLElement>(':scope > .settings-row-copy')!.getBoundingClientRect()
+        const under = r.classList.contains('settings-row-wraps') && a.top >= copy.bottom - 0.5
+        if (!under && a.left < l.right - 0.5) out.push(`${label.textContent}: control left of label`)
       }
       return out
     })

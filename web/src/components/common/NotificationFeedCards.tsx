@@ -30,6 +30,7 @@ import { useLocalAgentBlocked } from '@/utils/local-agent-runnable';
 import { taskPath } from '@/utils/task-path';
 import { log } from '@/utils/log';
 import { DisclosureButton } from '@/components/controls';
+import { useCutOff } from './NoticeText';
 
 /** Tool ids a person does not read, as the phone's center names them (N2-12). */
 const PHONE_TOOL_TITLES: Record<string, string> = { AskUserQuestion: 'Question', ExitPlanMode: 'Plan review' };
@@ -245,9 +246,12 @@ const FeedItem = memo(function FeedItem({
   canFix?: boolean;
   fixNeedsClone?: boolean;
 }) {
-  // The raw technical block, opened deliberately: the human title and text always show in full
-  // (standard.md, "Text that does not fit"), the JSON only when asked for.
+  // One disclosure for the rest of the row: the text past its few lines and the raw technical
+  // block. The title always shows in full (standard.md, "Text that does not fit"); the text is a
+  // body, so the list keeps it to three lines and several rows stay in sight (2026-11-22 review:
+  // a whole technical paragraph pushed the next notifications out of the panel).
   const [detailOpen, setDetailOpen] = useState(false);
+  const bodyRef = useRef<HTMLSpanElement>(null);
   // "Ask AI to fix" in flight / its failure text, per card; the in-flight flag seeds from the
   // module-level set so a card re-mounted mid-launch still reads busy.
   const [fixBusy, setFixBusy] = useState(() => fixesInFlight.has(n.dedupKey));
@@ -268,6 +272,11 @@ const FeedItem = memo(function FeedItem({
   const presented = n.kind === 'operation-error'
     ? presentError(n)
     : { title: n.title, body: n.body ?? '', detail: undefined as string | undefined };
+  // Measured while closed (and on every resize); once open, the toggle keeps the reason it had.
+  const bodyCut = useCutOff([bodyRef], `${presented.body}\n${detailOpen}`);
+  const cutClosed = useRef(bodyCut);
+  if (!detailOpen) cutClosed.current = bodyCut;
+  const showToggle = (detailOpen ? cutClosed.current : bodyCut) || !!presented.detail;
   const category = n.kind === 'operation-error' && showCategoryChip ? categoryOf(n) : null;
   // The condition this error described is gone; 'expired' is the other end (nothing can recover it).
   const recovered = n.resolved === 'recovered';
@@ -347,7 +356,8 @@ const FeedItem = memo(function FeedItem({
       avatar={noticeAvatarOf(n)}
       who={presented.title}
       wrapTitle
-      parts={{ who: 'notification-feed-item-title', line: 'notification-feed-item-body' }}
+      parts={{ who: 'notification-feed-item-title', line: `notification-feed-item-body${detailOpen ? ' is-open' : ''}` }}
+      lineRef={bodyRef}
       meta={<RowMeta n={n} detail={source.detail} extra={(
         <>
           {/* Occurrence fold: 36 identical failures are one row plus how often (99+ at most). Both
@@ -362,19 +372,24 @@ const FeedItem = memo(function FeedItem({
       onClose={onDismiss}
       closeLabel="Dismiss notification"
     >
-      {presented.detail && (
+      {/* Details and who it came from share one quiet line, so a clamped row costs no extra line. */}
+      {showToggle ? (
         <div className="nfc-card-detail">
-          <DisclosureButton
-            className="nfc-detail-toggle"
-            expanded={detailOpen}
-            onClick={(e) => { e.stopPropagation(); setDetailOpen(v => !v); }}
-          >
-            Details
-          </DisclosureButton>
-          {detailOpen && <pre className="nfc-card-pre" onClick={(e) => e.stopPropagation()}>{presented.detail}</pre>}
+          <div className="nfc-card-foot">
+            <DisclosureButton
+              className="nfc-detail-toggle"
+              data-testid="nfc-detail-toggle"
+              expanded={detailOpen}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); setDetailOpen(v => !v); }}
+            >
+              {detailOpen ? 'Less' : 'Details'}
+            </DisclosureButton>
+            <RowSource source={source} />
+          </div>
+          {detailOpen && presented.detail && <pre className="nfc-card-pre" onClick={(e) => e.stopPropagation()}>{presented.detail}</pre>}
         </div>
-      )}
-      <RowSource source={source} />
+      ) : <RowSource source={source} />}
       {/* The producer's own remedy ("Sign in"): a card that asks for an action shows it. */}
       {producerAction && (
         <div className="nfc-card-actions" {...stop}>

@@ -223,10 +223,36 @@
 
 .hf-dash .hf-card {
   padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
   outline: none;
+  container: hf-card / inline-size;
+}
+
+.hf-dash .hf-card-body { display: flex; flex-direction: column; gap: 10px; }
+
+/* A card as wide as the pane (one live host): stretched across it the rings sat 300px apart and
+   a sparse history became a long empty line, pushing Details off the first screen (2026-11-22,
+   the audit's second look). The rings and numbers keep a 360px column; the history and capabilities
+   take the rest beside them; the rest spans the card, after them. */
+@container hf-card (min-width: 640px) {
+  .hf-dash .hf-card-body {
+    display: grid;
+    grid-template-columns: minmax(0, 360px) minmax(0, 1fr);
+    grid-template-areas:
+      "head head"
+      "sys sys"
+      "vitals history"
+      "numbers history"
+      "numbers caps";
+    column-gap: 28px;
+    row-gap: 10px;
+  }
+  .hf-dash .hf-card-body > * { grid-column: 1 / -1; }
+  .hf-dash .hf-card-body > .hf-card-head { grid-area: head; }
+  .hf-dash .hf-card-body > .hf-card-sys { grid-area: sys; }
+  .hf-dash .hf-card-body > .hf-vitals { grid-area: vitals; align-self: center; }
+  .hf-dash .hf-card-body > .hf-numbers { grid-area: numbers; align-self: start; }
+  .hf-dash .hf-card-body > .hf-history { grid-area: history; align-self: center; }
+  .hf-dash .hf-card-body > .hf-caps { grid-area: caps; align-self: start; }
 }
 
 .hf-dash .hf-card:focus-visible { box-shadow: 0 0 0 2px var(--accent); }

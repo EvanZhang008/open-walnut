@@ -8,7 +8,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   SIDE_BAR_WIDTH_DEFAULT, SIDE_BAR_WIDTH_MAX, SIDE_BAR_WIDTH_MIN,
-  isPageSideBarView, sideBarPageOf, sideBarWidth, storedPaneWidth, withPaneWidth,
+  isPageSideBarView, sideBarPageOf, sideBarWidth, storedPaneWidth, withPaneWidth, paneWidth, SCRATCHPAD_WIDTH_DEFAULT,
 } from '../../web/src/components/layout/page-side-bar'
 
 describe('sideBarPageOf', () => {
@@ -65,6 +65,23 @@ describe('sideBarWidth', () => {
   it('never takes more than half the window, and never less than its minimum', () => {
     expect(sideBarWidth(700, 1000)).toBe(500)
     expect(sideBarWidth(400, 400)).toBe(SIDE_BAR_WIDTH_MIN)
+  })
+})
+
+describe('paneWidth', () => {
+  // 2026-11-22 audit: a Scratchpad never dragged opened at 400px beside the Notes tree, and the two
+  // held 60% of the page with nothing written.
+  it('opens a Scratchpad never dragged as a narrow column, narrower than the agenda', () => {
+    const fresh = { agenda: true, scratchpad: true }
+    expect(paneWidth(fresh, 'scratchpad', 1512)).toBe(SCRATCHPAD_WIDTH_DEFAULT)
+    expect(paneWidth(fresh, 'agenda', 1512)).toBe(SIDE_BAR_WIDTH_DEFAULT)
+    expect(SCRATCHPAD_WIDTH_DEFAULT).toBeLessThan(SIDE_BAR_WIDTH_DEFAULT)
+    expect(SCRATCHPAD_WIDTH_DEFAULT).toBeGreaterThanOrEqual(SIDE_BAR_WIDTH_MIN)
+  })
+
+  it('keeps a width the user dragged, and the old one-column width', () => {
+    expect(paneWidth({ agenda: false, scratchpad: true, scratchpadWidth: 520 }, 'scratchpad', 1512)).toBe(520)
+    expect(paneWidth({ agenda: false, scratchpad: true, width: 480 }, 'scratchpad', 1512)).toBe(480)
   })
 })
 

@@ -157,6 +157,8 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
   /** Last measured width of each direct button beside the row, kept while it is
    *  folded so the row can tell when there is room to bring it back. */
   const directWidths = useRef(new Map<string, number>());
+  /** The layout the widths above were measured in. */
+  const layoutRef = useRef(phone);
   const [folded, setFolded] = useState(false);
   const [overflow, setOverflow] = useState<string[]>([]);
   const overflowRef = useRef(overflow);
@@ -196,6 +198,13 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
         });
       }
       return;
+    }
+    // Widths measured in the other layout (a phone's 44px finger targets, a desktop's labels)
+    // say nothing about this one: forget them, so a fold decided on a desktop never stays on a
+    // phone, and the next pass measures every control again as it is drawn now.
+    if (layoutRef.current !== phone) {
+      layoutRef.current = phone;
+      for (const m of [widths, shortWidths, detailWidths, directWidths]) m.current.clear();
     }
     for (const el of bar.querySelectorAll<HTMLElement>(OWN_CONTROL)) {
       const id = el.dataset.controlId!;
@@ -270,7 +279,7 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
       }));
       const options = { gap: ROW_GAP, overflowButtonWidth: buttonWidth };
       const result = pickVisibleControls(input, room, options);
-      return { compact, withDetail, overflow: result.overflow, excess: rowExcess(input, result, room, options) };
+      return { compact, condensed: compact, withDetail, overflow: result.overflow, excess: rowExcess(input, result, room, options) };
     };
     // A laid-out row whose direct buttons leave nothing has 1px, not "not laid
     // out yet" (which shows every control and lets the buttons crush them).

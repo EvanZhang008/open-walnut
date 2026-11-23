@@ -129,7 +129,8 @@ export function usePhonesCloudView(): PhonesCloudView {
 
 export function TabBar({ tabs, current }: { tabs: readonly TabView[]; current: PhonesCloudTab | null }) {
   const navigate = useNavigate();
-  // A narrow pane scrolls the bar sideways: bring the open tab into it (the bar only, never the page).
+  // Wider than a phone the bar wraps into a grid (devices-ways.css); a phone's one row scrolls
+  // sideways: bring the open tab into it (the bar only, never the page).
   const barRef = useRef<HTMLDivElement>(null);
   // A tab's tag and dot arrive with the data and widen it: the open tab is brought into
   // view again then (it stayed cut off at the right edge of a phone).

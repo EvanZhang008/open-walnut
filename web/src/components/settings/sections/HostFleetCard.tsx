@@ -64,6 +64,9 @@ export function HostFleetCard({ host, now, action, onBootStart, onDetails }: {
   const name = host.local ? localMachineName(host) : host.label;
   return (
     <article className="hf-card" data-testid="hf-dash-card" data-host={host.host} id={`hf-card-${host.host}`} tabIndex={-1}>
+      {/* A card as wide as the pane reads in two columns (host-fleet.css): the rings and numbers
+          close together, the history beside them at a chart's width, Details on the first screen. */}
+      <div className="hf-card-body">
       <header className="hf-card-head">
         <span className="sps-host-dot hsd" data-kind={statusKind(host)} aria-hidden="true" />
         <span className="hf-card-name wn-title">{name}</span>
@@ -100,6 +103,7 @@ export function HostFleetCard({ host, now, action, onBootStart, onDetails }: {
       <ReadError host={host} now={now} />
       <div className="hf-card-foot"><DetailsToggle open={open} onToggle={toggle} label={name} /><ReadMark host={host} now={now} /></div>
       {open && <FleetFacts host={host} now={now} />}
+      </div>
     </article>
   );
 }

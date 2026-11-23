@@ -210,7 +210,7 @@ test('2 and 3. the tab says the tunnel and its host by name; "Your Walnut runs o
   await page.getByTestId('pc-tab-devices-phones').click()
   const all = page.locator('#devices-phones')
   await expect(all.getByTestId('devices-phones-group')).toContainText('Phones with the Walnut app', { timeout: 30_000 })
-  await expect(all.getByTestId('devices-phones-group')).toContainText('New phone: Cloud companion, Same Wi-Fi or Tailscale.')
+  await expect(all.getByTestId('devices-phones-group')).toContainText('New phone: Cloud companion, Same Wi-Fi or Tailscale')
   await expect(all.getByTestId('walnut-servers')).toHaveCount(1)
   await expect(all.locator('.settings-group-heading, h3').filter({ hasText: /Walnut servers|Add a phone|Advanced/ })).toHaveCount(0)
   await expect(all.getByTestId('way-pair-all')).toHaveCount(0)

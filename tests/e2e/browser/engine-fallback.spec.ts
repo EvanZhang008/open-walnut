@@ -171,7 +171,7 @@ test('Settings: the fallback engine and its model save, read back after a reload
   await expect(select).toHaveValue('off')
   await expect(page.getByTestId('fallback-model-row')).toHaveCount(0)
   await expect(select.locator('option').first()).toHaveText('Wait for the reset')
-  await expect(page.getByTestId('fallback-engine-help')).toHaveText(/^Pick an engine for new tasks while the default engine is out of usage/)
+  await expect(page.getByTestId('fallback-engine-help')).toHaveText('New tasks use it while the default engine is out of usage.')
   await expect(select.locator('option[value="claude"]')).toHaveText(/^Claude Code, another model/)
 
   await select.selectOption('codex')

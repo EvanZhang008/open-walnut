@@ -119,7 +119,7 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
     await expect(section.getByTestId('way-pair-all')).toHaveCount(0)
     await expect(section.locator('#devices-new-name')).toHaveCount(0)
     await expect(page.getByRole('radiogroup', { name: 'Pairing target' })).toHaveCount(0)
-    await expect(section.getByTestId('devices-phones-group')).toContainText('New phone: Cloud companion, Same Wi-Fi or Tailscale.')
+    await expect(section.getByTestId('devices-phones-group')).toContainText('New phone: Cloud companion, Same Wi-Fi or Tailscale')
     // Which address would a new QR carry? All devices on this Mac offers none.
     await expect(section.getByTestId('devices-show-qr')).toHaveCount(0)
 
