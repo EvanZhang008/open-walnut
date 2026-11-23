@@ -26,6 +26,7 @@
  */
 import type { Database as DatabaseType } from '../../lib/sqlite.js'
 import { getDb } from '../session-db.js'
+import { prepared } from '../../lib/sqlite-prepared.js'
 
 /** Inside the delete's transaction: `sid` was `hostId`'s row and the leader deleted it. */
 export function noteLeaderDrop(handle: DatabaseType, sid: string, hostId: string, at = Date.now()): void {
@@ -34,7 +35,7 @@ export function noteLeaderDrop(handle: DatabaseType, sid: string, hostId: string
 
 /** Did the leader delete `sid` (a mark its host has not answered yet)? */
 export function leaderDroppedIn(handle: DatabaseType, sid: string): boolean {
-  return handle.prepare('SELECT 1 FROM session_leader_drops WHERE claude_session_id = ?').pluck().get(sid) !== undefined
+  return prepared(handle, 'SELECT 1 FROM session_leader_drops WHERE claude_session_id = ?', 'pluck').get(sid) !== undefined
 }
 
 /** Inside the channel's apply transaction: the host dropped these, the marks go. */

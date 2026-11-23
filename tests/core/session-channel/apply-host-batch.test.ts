@@ -46,6 +46,30 @@ afterEach(() => {
 })
 
 describe('applyHostChannelBatch', () => {
+  it('compiles its statements once: the next batches prepare none of them again', async () => {
+    await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'p1', born: true, patch: born('p1'), seq: 1 }], renames: [], cursor: { logId: 'L1', seq: 1 }, check: ['p1'] })
+    const db = getDb()!
+    const spy = vi.spyOn(db, 'prepare')
+    try {
+      for (let i = 2; i <= 6; i++) {
+        await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 'p1', born: false, patch: { messageCount: i }, seq: i }], renames: [], cursor: { logId: 'L1', seq: i }, check: ['p1'] })
+      }
+      const texts = spy.mock.calls.map((c) => String(c[0]))
+      const apply = [
+        'SELECT * FROM sessions WHERE claude_session_id = ?',
+        'SELECT log_id, seq FROM session_channel_cursor WHERE host_id = ?',
+        'INSERT OR REPLACE INTO session_channel_cursor (host_id, log_id, seq) VALUES (?, ?, ?)',
+        'SELECT 1 FROM session_leader_drops WHERE claude_session_id = ?',
+        'SELECT total_changes() AS n',
+      ]
+      expect(texts.filter((t) => apply.includes(t))).toEqual([])
+    } finally {
+      spy.mockRestore()
+    }
+    expect((await getSessionByClaudeId('p1'))?.messageCount).toBe(6)
+    expect(loadChannelCursor(HOST)).toEqual({ logId: 'L1', seq: 6 })
+  })
+
   it('writes a born row and keeps the position, in one transaction', async () => {
     const r = await applyHostChannelBatch({ hostId: HOST, rows: [{ sid: 's1', born: true, patch: born('s1'), seq: 1 }], renames: [], cursor: { logId: 'L1', seq: 1 } })
     expect(r.written).toEqual(['s1'])

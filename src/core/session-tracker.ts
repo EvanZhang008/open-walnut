@@ -50,6 +50,7 @@ import { judgedByHost, mergeHostFacts, ownedPartOf, rowOwnedHere, thisHostKey, w
 import { clearLeaderDrops, leaderDroppedIn, noteLeaderDrop } from './session-channel/leader-drops.js';
 import { _resetRowsSnapshotForTesting, noteSnapshotApplied, orphanedRow, planSnapshot, snapshotIsStale } from './session-channel/rows-snapshot.js';
 import { hasOwnRowListener, noteSessionRowWritten } from './session-channel/row-hook.js';
+import { prepared } from '../lib/sqlite-prepared.js';
 import { OrgError } from './org/org-store.js';
 import { registerMemoryHolder, sampledStringChars } from './observability/memory-ledger.js';
 import {
@@ -131,7 +132,7 @@ function noteSessionRowTouched(claudeSessionId: string): void {
 
 /** Rows this connection has changed since it opened: SQLite's own counter. */
 function totalChanges(db: NonNullable<ReturnType<typeof getDb>>): number {
-  return db.prepare('SELECT total_changes() AS n').pluck().get() as number;
+  return prepared(db, 'SELECT total_changes() AS n', 'pluck').get() as number;
 }
 
 // ── Heavy prompt fields stay in SQLite for sessions that are not live ─────
@@ -3577,7 +3578,7 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
     const db = getDb();
     if (!db) throw new Error('applyHostChannelBatch: SQLite handle is null');
     const lockWait = transactionWhenFree((handle) => writingAsHost(() => {
-      const sel = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?');
+      const sel = prepared(handle, 'SELECT * FROM sessions WHERE claude_session_id = ?');
       const read = (id: string): SessionRecord | null => {
         const raw = sel.get(id) as Record<string, any> | undefined;
         return raw ? rowToSession(raw) : null;

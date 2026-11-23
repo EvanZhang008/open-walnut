@@ -48,6 +48,7 @@
  * off reads neither late nor fresh by mistake.
  */
 import type { FactLog, FactRecord } from './fact-log.js'
+import { FlowMerger } from './flow-merge.js'
 import type { SessionRecord } from '../types.js'
 
 export type ChannelFrame =
@@ -113,6 +114,8 @@ export interface HostChannelOptions {
   goneRows?(): string[]
   /** A leader resumed on a link (each link): what the leader keeps only in memory goes again (host-emitter.ts relive). */
   onLeaderLinked?(): void
+  /** How long text and thinking deltas merge into one flow frame (flow-merge.ts; 0: each goes at once). */
+  flowMergeMs?: number
   now?: () => number
   onLog?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 }
@@ -121,8 +124,10 @@ export interface HostChannelOptions {
 export class HostChannel {
   private readers = new Set<Reader>()
   private leaderReader: Reader | null = null
+  private readonly flows: FlowMerger
 
   constructor(private readonly o: HostChannelOptions) {
+    this.flows = new FlowMerger((sid, name, data, to) => this.sendFlow(sid, name, data, to), o.flowMergeMs)
     o.log.onDurable((recs) => this.live(recs))
   }
 
@@ -161,8 +166,18 @@ export class HostChannel {
     }
   }
 
-  /** A text delta: only to readers that are caught up, never kept. */
+  /** A text delta: only to readers that are caught up, never kept; deltas merge for a moment (flow-merge.ts). */
   flow(sid: string, name: string, data: unknown, to?: string[]): void {
+    if (!this.anyCaughtUp()) return
+    this.flows.add(sid, name, data, to)
+  }
+
+  private anyCaughtUp(): boolean {
+    for (const r of this.readers) if (r.caughtUp && r.alive) return true
+    return false
+  }
+
+  private sendFlow(sid: string, name: string, data: unknown, to?: string[]): void {
     for (const r of this.readers) if (r.caughtUp && r.alive) r.link.send({ ch: 'sf', op: 'flow', sid, name, data, ...(to ? { to } : {}) })
   }
 
@@ -236,6 +251,8 @@ export class HostChannel {
   }
 
   private live(recs: FactRecord[]): void {
+    // A session's deltas said before these facts go before them.
+    for (const sid of new Set(recs.map((x) => x.sid))) this.flows.flush(sid)
     for (const r of this.readers) {
       if (!r.alive || !r.caughtUp) continue
       const fresh = recs.filter((x) => x.seq > r.sentUpTo)
@@ -284,6 +301,9 @@ export interface LeaderChannelOptions {
   onLog?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 }
 
+/** At most this many facts frames apply in one call on the leader (a bound on one transaction). */
+const COALESCE_MAX_FRAMES = 64
+
 /** The leader's end of one link to one host. */
 export function attachLeaderChannel(link: ChannelLink, o: LeaderChannelOptions): { onFrame(frame: ChannelFrame): void; onClose(): void; resync(sids: string[]): void; idle(): Promise<void> } {
   const now = o.now ?? Date.now
@@ -302,7 +322,14 @@ export function attachLeaderChannel(link: ChannelLink, o: LeaderChannelOptions):
   let chain: Promise<void> = Promise.resolve()
   let ackTimer: ReturnType<typeof setTimeout> | null = null
   let open = true
+  /**
+   * The facts frames queued behind the apply that runs now, not started yet: a facts frame that
+   * arrives while they wait joins them, so they apply in one call (one transaction on the leader),
+   * in order, the position the last one's. Any other frame queued after them closes the batch.
+   */
+  let waiting: Array<Extract<ChannelFrame, { op: 'facts' }>> | null = null
   const serial = (fn: () => Promise<void>): void => {
+    if (waiting) waiting = null
     chain = chain.then(() => (open ? fn() : undefined)).catch((err: unknown) => {
       o.onLog?.('warn', 'session channel: applying failed; the link is closed and resumes from the last applied record', { hostId, error: err instanceof Error ? err.message : String(err) })
       open = false
@@ -345,10 +372,14 @@ export function attachLeaderChannel(link: ChannelLink, o: LeaderChannelOptions):
         })
       } else if (frame.op === 'facts') {
         noteHostClock(frame.sentAt)
+        if (waiting && waiting.length < COALESCE_MAX_FRAMES) { waiting.push(frame); return }
+        const batch = [frame]
         serial(async () => {
+          if (waiting === batch) waiting = null
           if (!cursor) return
           const c = cursor
-          const fresh = frame.recs.filter((r) => r.seq > c.seq)
+          let upTo = c.seq
+          const fresh = batch.flatMap((f) => f.recs).filter((r) => (r.seq > upTo ? (upTo = r.seq, true) : false))
           if (fresh.length === 0) return
           const at = now()
           // Late: older than lateMs on this leader's clock (a leader that was away or stopped).
@@ -365,6 +396,7 @@ export function attachLeaderChannel(link: ChannelLink, o: LeaderChannelOptions):
           cursor = next
           scheduleAck()
         })
+        waiting = batch
       } else if (frame.op === 'flow') {
         o.onFlow?.(hostId, frame.sid, frame.name, frame.data, frame.to)
       } else if (frame.op === 'refuse') {

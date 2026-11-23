@@ -390,3 +390,99 @@ describe('the leader standing: (permitNumber, epoch), compared in that order', (
     await again.close()
   })
 })
+
+describe('deltas merge on the host for a moment; facts stay one record each', () => {
+  /** A listener that is caught up, its frames as they come. */
+  async function caughtUpReader(host: HostChannel) {
+    const got: ChannelFrame[] = []
+    const side = host.attach({ send: (f) => got.push(f), close: () => {} })
+    side.onFrame({ ch: 'sf', op: 'listen', walnutId: 'w1' })
+    await until(() => got.some((f) => f.op === 'rows'))
+    await tick(5)
+    return got
+  }
+  const flowsOf = (got: ChannelFrame[]) => got.filter((f): f is Extract<ChannelFrame, { op: 'flow' }> => f.op === 'flow')
+
+  it('the deltas of one message in 50 ms go as one flow frame with the whole text', async () => {
+    const { log, host } = await hostOf()
+    const got = await caughtUpReader(host)
+    for (const piece of ['the build ', 'reads its ', 'config']) host.flow('s1', 'session:text-delta', { sessionId: 's1', delta: piece, msgId: 'm1' }, ['main-ai'])
+    expect(flowsOf(got)).toHaveLength(0)
+    await until(() => flowsOf(got).length > 0, 1000)
+    expect(flowsOf(got).map((f) => f.data)).toEqual([{ sessionId: 's1', delta: 'the build reads its config', msgId: 'm1' }])
+    expect(flowsOf(got)[0]!.to).toEqual(['main-ai'])
+    await log.close()
+  })
+
+  it('a session\'s order holds: another message, another kind of flow, and a fact each send what is open first', async () => {
+    const { log, host } = await hostOf()
+    const got = await caughtUpReader(host)
+    host.flow('s1', 'session:text-delta', { sessionId: 's1', delta: 'a', msgId: 'm1' })
+    host.flow('s1', 'session:text-delta', { sessionId: 's1', delta: 'b', msgId: 'm1' })
+    host.flow('s1', 'session:thinking-delta', { sessionId: 's1', delta: 'hmm', msgId: 'm1' })
+    host.flow('s1', 'session:live-activity', { sessionId: 's1', activity: 'writing' })
+    host.flow('s1', 'session:text-delta', { sessionId: 's1', delta: 'c', msgId: 'm2' })
+    host.flow('s2', 'session:text-delta', { sessionId: 's2', delta: 'other', msgId: 'm9' })
+    log.append('s1', 'session:tool-use', { sessionId: 's1' })
+    await log.flush()
+    await until(() => got.some((f) => f.op === 'facts'), 1000)
+    const order = got.filter((f) => f.op === 'flow' || f.op === 'facts').map((f) => (f.op === 'facts' ? 'facts' : `${f.sid}:${f.name.slice(8)}:${(f.data as { delta?: string }).delta ?? '-'}`))
+    // s1's deltas before its fact, in their order; s2's still open (nothing of s2 in the frame).
+    expect(order).toEqual(['s1:text-delta:ab', 's1:thinking-delta:hmm', 's1:live-activity:-', 's1:text-delta:c', 'facts'])
+    await until(() => flowsOf(got).some((f) => f.sid === 's2'), 1000)
+    expect(flowsOf(got).find((f) => f.sid === 's2')!.data).toMatchObject({ delta: 'other' })
+    await log.close()
+  })
+
+  it('every fact still goes as its own record, and nothing is merged when the merge is off', async () => {
+    const log = await FactLog.open({ dir, walnutId: 'w1', flushMs: 1, durable: false })
+    const host = new HostChannel({ log, walnutId: 'w1', hostId: 'devbox', ownRows: async () => [], flowMergeMs: 0 })
+    const got = await caughtUpReader(host)
+    host.flow('s1', 'session:text-delta', { sessionId: 's1', delta: 'a' })
+    host.flow('s1', 'session:text-delta', { sessionId: 's1', delta: 'b' })
+    expect(flowsOf(got).map((f) => (f.data as { delta: string }).delta)).toEqual(['a', 'b'])
+    for (let i = 0; i < 3; i++) log.append('s1', 'session:tool-use', { i })
+    await log.flush()
+    await until(() => got.filter((f) => f.op === 'facts').flatMap((f) => (f as { recs: FactRecord[] }).recs).length === 3, 1000)
+    await log.close()
+  })
+})
+
+describe('the leader applies the facts frames that queued behind one apply in one call', () => {
+  it('in order, its position the last one\'s, a rows frame between them kept in its place', async () => {
+    const calls: Array<{ seqs: number[]; next: number }> = []
+    const kinds: string[] = []
+    let release: () => void = () => {}
+    let hold = true
+    const sent: ChannelFrame[] = []
+    const side = attachLeaderChannel({ send: (f) => sent.push(f), close: () => {} }, {
+      walnutId: 'w1', hostId: 'devbox', permit: () => ({ permitNumber: 0, epoch: 1 }), ackEveryMs: 1,
+      loadCursor: async () => null,
+      apply: async (_h, recs, next) => {
+        kinds.push('facts')
+        calls.push({ seqs: recs.map((r) => r.seq), next: next.seq })
+        if (hold) { hold = false; await new Promise<void>((r) => { release = r }) }
+      },
+      applyRows: async () => { kinds.push('rows') },
+    })
+    const rec = (seq: number): FactRecord => ({ seq, opId: `o${seq}`, at: Date.now(), sid: 's1', sseq: seq, name: 'session:tool-use', data: { seq } })
+    side.onFrame({ ch: 'sf', op: 'hello', walnutId: 'w1', hostId: 'devbox', logId: 'L', floor: 1, head: 0, now: Date.now() })
+    await tick(5)
+    side.onFrame({ ch: 'sf', op: 'facts', recs: [rec(1)], sentAt: Date.now() })
+    await until(() => calls.length === 1)
+    // While the first apply runs: three frames, then a rows frame, then two more.
+    side.onFrame({ ch: 'sf', op: 'facts', recs: [rec(2)], sentAt: Date.now() })
+    side.onFrame({ ch: 'sf', op: 'facts', recs: [rec(3), rec(4)], sentAt: Date.now() })
+    side.onFrame({ ch: 'sf', op: 'facts', recs: [rec(4), rec(5)], sentAt: Date.now() })
+    side.onFrame({ ch: 'sf', op: 'rows', rows: [], upTo: 5, rowsAt: 5, logId: 'L' })
+    side.onFrame({ ch: 'sf', op: 'facts', recs: [rec(6)], sentAt: Date.now() })
+    side.onFrame({ ch: 'sf', op: 'facts', recs: [rec(7)], sentAt: Date.now() })
+    release()
+    await side.idle()
+    await tick(5)
+    await side.idle()
+    expect(calls).toEqual([{ seqs: [1], next: 1 }, { seqs: [2, 3, 4, 5], next: 5 }, { seqs: [6, 7], next: 7 }])
+    expect(kinds).toEqual(['facts', 'facts', 'rows', 'facts'])
+    await until(() => sent.some((f) => f.op === 'ack' && f.upTo === 7))
+  })
+})
