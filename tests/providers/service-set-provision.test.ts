@@ -143,7 +143,10 @@ describe('ServiceSetLink', () => {
     const c: SetLinkConn = {
       hostKey: 'h', kind: () => kind, connected: true,
       helloSet: () => hello,
-      send: async (cmd) => { calls.push(cmd); return {} },
+      send: async (cmd) => { calls.push(cmd); return { ok: true, status: { state: 'off' } } },
+      hasCapability: (cap) => cap === 'host-server-v1',
+      workUnderWay: () => 0,
+      drained: async () => true,
       run: async (command) => { calls.push(command.includes('net-route') ? `net-route${command.split('net-route')[1]!.split(' 2>')[0]}` : command); return '{"ok":true}' },
       provision: async () => { calls.push('provision'); return provision },
       relink: async () => {
@@ -160,8 +163,8 @@ describe('ServiceSetLink', () => {
       notice: (_k, t) => calls.push(t === null ? 'notice-clear' : 'notice'),
     }
     link = new ServiceSetLink(c, {
-      sessions: async () => [{ id: 's1', inTurn: false }],
-      stop: async (id) => { calls.push(`stop:${id}`); return true },
+      sessions: async () => [{ id: 's1' }],
+      stop: async (id) => { calls.push(`stop:${id}`); return { ok: true } },
       endpointId: async () => 'e'.repeat(64),
       sleep: async () => {},
       settleMs: 0,
@@ -174,7 +177,8 @@ describe('ServiceSetLink', () => {
     const t = conn('ssh', { set: SET, installed: true, ok: true, runtimeDir: rt })
     expect(await t.link.sshDir()).toBe(null)
     await t.link.check()
-    expect(t.calls).toEqual(['provision', 'hold', 'stop:s1', 'server.configure', 'relink', 'release', 'redeliver', 'notice-clear'])
+    // The follower is stopped and seen off first, then the session, then this Walnut's triggers there.
+    expect(t.calls).toEqual(['provision', 'hold', 'server.configure', 'server.status', 'stop:s1', 'triggers.configure', 'relink', 'release', 'redeliver', 'notice-clear'])
     expect(await serviceSetMoves.read('ssh:h')).toMatchObject({ phase: 'done', set: SET })
     expect(await t.link.sshDir()).toEqual({ dir: rt, set: SET })
     expect(t.link.standing).toBe('own')
@@ -214,6 +218,43 @@ describe('ServiceSetLink', () => {
     await t.link.check()
     expect(t.held()).toBe(false)
     expect(t.calls.filter((c) => c === 'hold').length).toBe(t.calls.filter((c) => c === 'release').length)
+  })
+
+  it('B7: a host whose move is done keeps its set with the flag off: its lines name the Walnut, SSH dials the set, no new move', async () => {
+    const rt = `/home/u/.open-walnut-host/walnuts/${SET}/rt`
+    const t = conn('ssh', { set: SET, installed: true, ok: true, runtimeDir: rt })
+    await t.link.check()
+    expect(await hostServiceSets.read('ssh:h')).toMatchObject({ set: SET, movedAt: expect.any(Number) })
+    process.env.WALNUT_HOST_SERVICE_SETS = '0'
+    // The update, status and install lines still carry --walnut: never the other Walnut's default service.
+    expect(await t.link.setAsk()).toEqual(ask)
+    // A month later the move's own record is gone: the host's record still says moved.
+    await serviceSetMoves.write('ssh:h', null)
+    expect(await t.link.sshDir()).toEqual({ dir: rt, set: SET })
+    // A link that reaches another daemon with the flag off starts no move.
+    t.setHello('')
+    const before = t.calls.length
+    await t.link.check()
+    expect(t.calls.slice(before).filter((c) => c === 'hold' || c.startsWith('stop:'))).toEqual([])
+  })
+
+  it('should-fix 8: a moved host\'s record never expires (other writes prune old entries)', async () => {
+    const old = Date.now() - 2 * 365 * 24 * 3600_000
+    await hostServiceSets.write('ssh:moved', { at: old, set: SET, runtimeDir: '/r', movedAt: old })
+    await hostServiceSets.write('ssh:plain', { at: old, set: SET, runtimeDir: '/r' })
+    await hostServiceSets.write('ssh:other', { at: Date.now(), set: '' })
+    const raw = JSON.parse(fs.readFileSync(process.env.WALNUT_SERVICE_SET_FILE!, 'utf8')) as Record<string, unknown>
+    const keys = Object.keys(raw).map((k) => k.split('|').pop())
+    expect(keys).toContain('ssh:moved')
+    expect(keys).not.toContain('ssh:plain')
+  })
+
+  it('low 15: an unknown set holds updates only until the first look ended (an older host that names no set, or a failed look)', async () => {
+    const t = conn('ssh', { set: null, installed: false, ok: false, message: 'older host' })
+    expect(t.link.looked).toBe(false)
+    await t.link.check()
+    expect((await t.link.standingFor()).standing).toBe('unknown')
+    expect(t.link.looked).toBe(true)
   })
 
   it('flag off: nothing runs at all', async () => {

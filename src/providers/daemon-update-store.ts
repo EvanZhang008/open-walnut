@@ -72,6 +72,8 @@ export class KeyedUpdateStore<T extends { at: number }> {
     private readonly envName: string,
     private readonly maxAgeMs: number,
     private readonly valid: (e: unknown) => e is T,
+    /** An entry this says yes to is kept whatever its age (a host's moved service set). */
+    private readonly lasting: (e: T) => boolean = () => false,
   ) {}
 
   private file(): string | null {
@@ -90,7 +92,7 @@ export class KeyedUpdateStore<T extends { at: number }> {
 
   /** Still within its time: a clock set back counts the same distance, so an entry never lasts much longer. */
   fresh(entry: { at: number } | null | undefined, now = Date.now()): boolean {
-    return !!entry && Math.abs(now - entry.at) < this.maxAgeMs
+    return !!entry && (Math.abs(now - entry.at) < this.maxAgeMs || this.lasting(entry as T))
   }
 
   /**

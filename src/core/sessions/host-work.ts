@@ -12,6 +12,7 @@
  */
 import type { SessionRecord } from '../types.js';
 import type { SessionSnapshot } from '../../providers/daemon-fold.js';
+import { outlivingOf, type OutlivingSource } from './outliving-work.js';
 
 /** The host's word on one session. */
 export interface HostWork {
@@ -19,6 +20,10 @@ export interface HostWork {
   alive: boolean;
   /** It runs a turn, or work of its own that outlives its turn (background commands, a team, a wakeup). */
   working: boolean;
+  /** In a turn now, one stopped on a permission prompt included (that turn waits on a person, but it is a turn). */
+  inTurn?: boolean;
+  /** Its own work that goes on after its turn (outliving-work.ts), a /loop included. */
+  outliving?: OutlivingSource[];
 }
 
 /** A `getState` answer read as HostWork; null when it says nothing (an error, no record, an empty stream). */
@@ -30,15 +35,18 @@ export function hostWorkFrom(
   const snap = resp.snapshot;
   if (!snap || !(snap.v > 0)) return typeof resp.alive === 'boolean' ? { alive: resp.alive, working: false } : null;
   const alive = resp.alive !== false && snap.cliState !== 'dead';
-  if (!alive) return { alive: false, working: false };
+  if (!alive) return { alive: false, working: false, inTurn: false, outliving: [] };
+  const wakeupArmed = typeof snap.wakeupAt === 'number' && snap.wakeupAt > now;
+  const outliving = outlivingOf({ detachedBgCount: snap.detachedBgCount, teamActive: snap.teamActive, wakeupArmed, cronActive: snap.cronActive });
+  const inTurn = snap.turnActive || snap.gatingBgCount > 0 || !!snap.pendingPermission;
   // A turn stopped on a permission prompt waits on a person, not on its asker.
-  if (snap.pendingPermission) return { alive: true, working: false };
+  if (snap.pendingPermission) return { alive: true, working: false, inTurn, outliving };
   const working = snap.turnActive
     || snap.gatingBgCount > 0
     || (snap.detachedBgCount ?? 0) > 0
     || snap.teamActive
-    || (typeof snap.wakeupAt === 'number' && snap.wakeupAt > now);
-  return { alive: true, working };
+    || wakeupArmed;
+  return { alive: true, working, inTurn, outliving };
 }
 
 /** How long the host gets to answer: this is asked only right before telling someone. */

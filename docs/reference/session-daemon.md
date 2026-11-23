@@ -544,9 +544,16 @@ walnut-net (one address and key; each member's streams go to its own Walnut's `d
 the service holding `ctl.sock` runs it and another takes over on the same key; a Walnut that leaves
 removes only its own members). A port stream never reaches another set's daemon door. Moving off a
 shared daemon does not carry live CLIs over (`src/providers/service-set-move.ts`): the leader waits
-(bounded) for a moment when none of its sessions there is in a turn, holds new work, stops them the
-normal way, flips the route (`walnut daemon net-route`, put back by itself unless confirmed) and resumes
-them in its own service on their next message; a move that cannot finish is put back and reported.
+(bounded) for a moment when nothing of it works there (no session in a turn or with work that outlives
+its turn, judged from the host's fresh `getState` and the runner; no host_exec run of its tasks; no
+command under way: `service-set-move-checks.ts`), holds every command that would start work there in
+`DaemonConnection.send` (`service-set-hold.ts`), stops its follower there, stops each session the normal
+way and proves its CLI gone (the daemon's `cli.holder`: pid and start time), empties its triggers and
+plugin jobs there (`triggers.configure`, `jobs.configure` for its home), flips the route (`walnut daemon
+net-route`, put back by itself unless confirmed) and resumes them in its own service on their next
+message; a move that cannot finish gives back what it took and is reported, and failures in a row back
+off and end after four tries. A host whose move is done stays this Walnut's set whatever the experiment
+says later (its lines keep `--walnut`, SSH keeps dialling the set's runtime dir).
 The shared daemon, its launcher and boot item stay as they are, the other Walnut's.
 
 **The follower calls the runtime directly.** In the service the follower link is

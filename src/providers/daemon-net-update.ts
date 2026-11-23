@@ -241,7 +241,7 @@ export interface NetUpdaterDeps {
    * name (null: no words, as before), where the link stands, the set it is on ('' the default), and
    * the set a line named. Absent: no words.
    */
-  sets?: { ask(): Promise<SetAsk | null>; standing(): Promise<LinkStanding>; set(): string; named(set: string | null): Promise<void>; check(): void }
+  sets?: { ask(): Promise<SetAsk | null>; standing(): Promise<LinkStanding>; set(): string; named(set: string | null): Promise<void>; check(): void; /** The link's first look at the host ended (ServiceSetLink.looked). */ looked?(): boolean }
   io?: NetUpdateIoOptions
   settleMs?: number
   recheckMs?: number
@@ -481,7 +481,8 @@ export class NetDaemonUpdater {
     // the shared one is left as it is), or the set not known yet (the link's first look finds it).
     const setAsk = this.d.sets ? await this.d.sets.ask() : null
     const standing = setAsk ? await this.d.sets!.standing() : 'unknown'
-    if (setAsk && (standing === 'shared' || standing === 'unknown')) {
+    // An unknown set holds only until the link's first look ended (low 15): then it is an older host or a failed look.
+    if (setAsk && (standing === 'shared' || (standing === 'unknown' && !(this.d.sets!.looked?.() ?? false)))) {
       this.d.sets!.check()
       return this.skipped({ go: false, skip: 'service-set', why: standing === 'shared'
         ? 'the daemon there is another Walnut\'s, and this Walnut moves to its own service there'

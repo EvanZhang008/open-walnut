@@ -68,16 +68,36 @@ export interface HostSetRecord {
   set: string
   /** The set's runtime dir on the host (service-set.ts serviceSetRuntimeDir), where its daemon.port is. */
   runtimeDir?: string
+  /**
+   * When this Walnut's sessions moved off another Walnut's shared daemon into this set. From then on
+   * the host is this set's for this Walnut, whatever the experiment says now (review round 1, B7):
+   * every line names the Walnut, SSH dials the set's runtime dir, and the record never expires (B7, should-fix 8).
+   */
+  movedAt?: number
 }
 
 const validHostSet = (e: unknown): e is HostSetRecord => {
   const r = e as HostSetRecord
   return !!r && typeof r === 'object' && Number.isFinite(r.at) && (r.set === '' || isServiceSetId(r.set))
     && (r.runtimeDir === undefined || (typeof r.runtimeDir === 'string' && r.runtimeDir.startsWith('/')))
+    && (r.movedAt === undefined || Number.isFinite(r.movedAt))
 }
 
-/** A set is the host's until the host says otherwise: a year, renewed at every line that names it. */
-export const hostServiceSets = new KeyedUpdateStore<HostSetRecord>('daemon-service-set.json', 'WALNUT_SERVICE_SET_FILE', 365 * 24 * 3600_000, validHostSet)
+/** This Walnut's sessions moved into its own set there (the record's movedAt). */
+export function movedToSet(r: HostSetRecord | null | undefined): r is HostSetRecord & { movedAt: number } {
+  return !!r?.set && typeof r.movedAt === 'number'
+}
+
+/** A set is the host's until the host says otherwise: a year, renewed at every line that names it; a moved one for good. */
+export const hostServiceSets = new KeyedUpdateStore<HostSetRecord>('daemon-service-set.json', 'WALNUT_SERVICE_SET_FILE', 365 * 24 * 3600_000, validHostSet, movedToSet)
+
+/** The move into `set` on `place` is done: kept on the host's record for good. */
+export async function markServiceSetMoved(place: string, set: string, now = Date.now()): Promise<void> {
+  const before = await hostServiceSets.read(place).catch(() => null)
+  if (before?.set !== set) return
+  if (movedToSet(before) && now - before.at < 24 * 3600_000) return
+  await hostServiceSets.write(place, { ...before, at: now, movedAt: before.movedAt ?? now })
+}
 
 /**
  * Keep the set a `walnut daemon` output names for `place`; null when it names none (an older host:
@@ -88,7 +108,8 @@ export async function recordServiceSetFrom(place: string, output: string, runtim
   if (set === null) return null
   const before = await hostServiceSets.read(place).catch(() => null)
   const dir = set ? runtimeDir ?? (before?.set === set ? before.runtimeDir : undefined) : undefined
-  await hostServiceSets.write(place, { at: Date.now(), set, ...(dir ? { runtimeDir: dir } : {}) })
+  const movedAt = set && before?.set === set ? before.movedAt : undefined
+  await hostServiceSets.write(place, { at: Date.now(), set, ...(dir ? { runtimeDir: dir } : {}), ...(movedAt !== undefined ? { movedAt } : {}) })
   return set
 }
 

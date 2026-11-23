@@ -72,6 +72,7 @@ import { NetDaemonUpdater, type NetUpdateState } from './daemon-net-update.js'
 import { claimDaemonUpdate, daemonUpdateHeldBy, peerUpdatingWhy, type UpdateClaim } from './daemon-update-claim.js'
 import { helloServiceSet, setServiceConfigPaths, type SetAsk } from './service-set-leader.js'
 import { ServiceSetLink } from './service-set-move-link.js'
+import { pastSetHold, SetHold } from './service-set-hold.js'
 import { provisionServiceSet, type SetProvision } from './service-set-provision.js'
 import { createNetUpdateIo } from './daemon-net-update-io.js'
 import type { DaemonUpdateView } from './daemon-net-update-record.js'
@@ -895,8 +896,8 @@ export class DaemonConnection {
   private _helloServiceSet = ''
   /** SSH: the set whose runtime dir `_remoteDir` is ('' the default's dirs): its service config is probed and updated. */
   private _remoteSet = ''
-  /** A service set move holds this host's starts and sends (service-set-move.ts): they wait as for a host that is away. */
-  private _setHold = false
+  /** A service set move holds this host's work (service-set-hold.ts): starts and sends wait as for a host that is away. */
+  private readonly _setHold = new SetHold()
   private _serviceSetLink: ServiceSetLink | null = null
   /** The home the host keeps this Walnut under after a declared move (leader.configure's homeHere), this connection. */
   private _homeHere: string | null = null
@@ -1570,6 +1571,7 @@ export class DaemonConnection {
       sets: {
         ask: async () => (await this.serviceSetLink?.setAsk()) ?? null,
         standing: async () => (await this.serviceSetLink?.standingFor().catch(() => null))?.standing ?? 'unknown',
+        looked: () => this.serviceSetLink?.looked ?? false,
         set: () => this._helloServiceSet,
         named: async (named) => { await this.serviceSetLink?.named(named) },
         check: () => { void this.serviceSetLink?.check() },
@@ -1704,7 +1706,7 @@ export class DaemonConnection {
   }
 
   /** A service set move holds this host's starts and sends now (hostLinkDown reads it). */
-  get serviceSetHeld(): boolean { return this._setHold }
+  get serviceSetHeld(): boolean { return this._setHold.on }
 
   /**
    * This link's part in service sets (service-set-move-link.ts): an SSH or host network link of the
@@ -1720,12 +1722,17 @@ export class DaemonConnection {
       kind: () => this.setLinkKind,
       get connected() { return conn._connected && !conn._destroyed },
       helloSet: () => this._helloServiceSet,
-      send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs) as Promise<Record<string, unknown>>,
+      // The move's own commands pass its hold.
+      send: (cmd, params, timeoutMs) => this.send(cmd, pastSetHold(params), timeoutMs) as Promise<Record<string, unknown>>,
+      hasCapability: (cap) => this.hasCapability(cap),
+      workUnderWay: () => this._setHold.inFlight,
+      drained: (boundMs) => this._setHold.drained(boundMs),
       run: (command, timeoutMs) => (this.setLinkKind === 'net' ? createNetUpdateIo(this, {}).run(command, timeoutMs) : this.sshExec(command, timeoutMs)),
       provision: (ask) => this.provisionServiceSet(ask),
       relink: (boundMs) => this.relinkForServiceSet(boundMs),
-      setHold: (on) => { this._setHold = on },
-      redeliver: () => { if (this._connected && !this._destroyed) notifyHostConnected(this.hostKey, this) },
+      setHold: (on) => { this._setHold.set(on) },
+      // Only the runner's delivery of what waited (review round 1, low 12): not every connect listener.
+      redeliver: () => { if (this._connected && !this._destroyed) redeliverHostRows(this.hostKey, this) },
       home: WALNUT_HOME,
       walnutId: async () => (await import('../core/device-auth.js')).getInstanceId(),
       notice: (key, text) => { void serviceSetNotice(this.hostKey, key, text) },
@@ -3136,11 +3143,18 @@ export class DaemonConnection {
     // A replica's own-sessions link does no leader work (ownSessionsOnly): a leader's command on it
     // is refused before it leaves, whichever path asked for it.
     if (this.ownSessionsOnly && LEADER_ONLY_COMMANDS.has(cmd)) throw new Error(`${cmd}: a host replica's own-sessions link sends no leader command`)
-    // A service set move holds new starts and sends (service-set-move.ts): refused in the words of a
-    // link that is down, so the runner keeps them pending and sends them once the move releases them.
-    if (this._setHold && (cmd === 'start' || cmd === 'send')) {
-      throw new Error(`DaemonConnection not connected to ${this.hostKey}: its sessions are moving to this Walnut's own service there; the message is kept and goes out once they are`)
-    }
+    // A service set move holds this Walnut's work for the host (service-set-hold.ts): a start or send is
+    // refused in the words of a link that is down (the runner keeps it pending and sends it on the
+    // release), any other work and the pushes that start work there wait for the release.
+    // Not held: counted and sent in this same tick, as before.
+    const admitted = !this._setHold.on ? this._setHold.track(cmd, params) : await this._setHold.admit(cmd, params, () => new Error(`DaemonConnection not connected to ${this.hostKey}: its sessions are moving to this Walnut's own service there; the message is kept and goes out once they are`))
+    try {
+      return await this.sendAdmitted(cmd, params, timeoutMs)
+    } finally { admitted() }
+  }
+
+  /** `send` past the leader-only check and the service set hold. */
+  private async sendAdmitted(cmd: string, params: Record<string, unknown>, timeoutMs: number): Promise<DaemonCommandResult> {
     // The connect's declared home move goes first: the host then keys what follows by the Walnut's first home.
     if (this.homeMoveGate && cmd !== 'leader.configure' && cmd !== 'ping') await this.homeMoveGate
     const traced = typeof params.traceId === 'string' && params.traceId ? params : { ...params, traceId: crypto.randomBytes(4).toString('hex') }
@@ -6003,7 +6017,7 @@ export class DaemonConnection {
     // while this one has its own set there ('shared': its sessions move, the shared one is left as it is),
     // or the set is not known yet (the link's first look finds it). Neither is updated from here.
     const sets = this.serviceSetLink ? await this.serviceSetLink.standingFor().catch(() => null) : null
-    if (sets && (sets.standing === 'shared' || sets.standing === 'unknown') && await this.serviceSetLink!.setAsk()) {
+    if (sets && (sets.standing === 'shared' || (sets.standing === 'unknown' && !this.serviceSetLink!.looked)) && await this.serviceSetLink!.setAsk()) {
       void this.serviceSetLink!.check()
       return false
     }
@@ -7091,9 +7105,11 @@ export class DaemonConnection {
    */
   private async reviveRemoteService(service: RemoteServiceTakeover): Promise<string | null> {
     if (this.isReadOnlyRemote || IS_EPHEMERAL || this.noSsh || service.unknown.length) return null
-    // Another Walnut's service while this one has its own set there: never revived from here.
-    if (this.serviceSetLink && (await this.serviceSetLink.standingFor().catch(() => null))?.standing === 'shared') return null
+    // Decided by the dir this link dials (review round 1, should-fix 9): this Walnut's own set's
+    // runtime dir is revived as its set, whatever a link that is down reads as; the default's dir while
+    // this Walnut has its own set there is another Walnut's service, never revived from here.
     const set = this._remoteSet
+    if (!set && this.serviceSetLink && (await this.serviceSetLink.standingFor().catch(() => null))?.standing === 'shared') return null
     const scope = reviveScopeOf(service.present, set)
     if (!scope) return null
     if (this._revivedAt !== null && Date.now() - this._revivedAt < REVIVE_EVERY_MS) return null
@@ -10689,6 +10705,15 @@ function notifyDaemonPhaseChange(hostKey: string): void {
       if (result instanceof Promise) (result as Promise<unknown>).catch(() => {})
     } catch { /* observers must never break connect */ }
   }
+}
+
+/** The runner's delivery of the rows that waited for this host (the pool-level reconnect callback alone). */
+function redeliverHostRows(hostKey: string, connection: DaemonConnection): void {
+  if (!onHostConnected) return
+  try {
+    const result = onHostConnected(hostKey, connection)
+    if (result instanceof Promise) result.catch(() => {})
+  } catch { /* redelivery must never break a move */ }
 }
 
 /** Internal: invoked by DaemonConnection.setConnected(true) transitions. */

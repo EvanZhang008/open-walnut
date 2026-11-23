@@ -31,22 +31,30 @@ describe('hostWorkFrom: the host daemon\'s fold read as at work', () => {
   const NOW = Date.parse('2026-11-08T04:57:25Z')
   it('a turn, background work, a team or an armed wakeup is work', () => {
     for (const over of [{ turnActive: true, cliState: 'running' as const }, { gatingBgCount: 1 }, { detachedBgCount: 2 }, { teamActive: true }, { wakeupAt: NOW + 60_000 }]) {
-      expect(hostWorkFrom({ ok: true, exists: true, alive: true, snapshot: snap(over) }, NOW), JSON.stringify(over)).toEqual({ alive: true, working: true })
+      expect(hostWorkFrom({ ok: true, exists: true, alive: true, snapshot: snap(over) }, NOW), JSON.stringify(over)).toMatchObject({ alive: true, working: true })
     }
   })
   it('idle between turns, a past wakeup, a /loop alone or a permission prompt is not', () => {
     for (const over of [{}, { wakeupAt: NOW - 1 }, { cronActive: true }, { turnActive: true, pendingPermission: { requestId: 'p1', toolName: 'Bash' } }]) {
-      expect(hostWorkFrom({ ok: true, exists: true, alive: true, snapshot: snap(over) }, NOW), JSON.stringify(over)).toEqual({ alive: true, working: false })
+      expect(hostWorkFrom({ ok: true, exists: true, alive: true, snapshot: snap(over) }, NOW), JSON.stringify(over)).toMatchObject({ alive: true, working: false })
     }
   })
   it('a dead process is stopped; no answer, an error or no record says nothing', () => {
-    expect(hostWorkFrom({ ok: true, exists: true, alive: false, snapshot: snap({ turnActive: true }) }, NOW)).toEqual({ alive: false, working: false })
-    expect(hostWorkFrom({ ok: true, exists: true, alive: true, snapshot: snap({ cliState: 'dead' }) }, NOW)).toEqual({ alive: false, working: false })
+    expect(hostWorkFrom({ ok: true, exists: true, alive: false, snapshot: snap({ turnActive: true }) }, NOW)).toMatchObject({ alive: false, working: false })
+    expect(hostWorkFrom({ ok: true, exists: true, alive: true, snapshot: snap({ cliState: 'dead' }) }, NOW)).toMatchObject({ alive: false, working: false })
     expect(hostWorkFrom({ ok: true, exists: true, alive: false, snapshot: null }, NOW)).toEqual({ alive: false, working: false })
     expect(hostWorkFrom(null, NOW)).toBeNull()
     expect(hostWorkFrom({ ok: false }, NOW)).toBeNull()
     expect(hostWorkFrom({ ok: true, exists: false }, NOW)).toBeNull()
     expect(hostWorkFrom({ ok: true, exists: true, snapshot: snap({ v: 0 }) }, NOW)).toBeNull()
+  })
+  it('names the turn and the work that outlives it, a /loop and a permission prompt included (a service set move reads them)', () => {
+    const read = (over: Partial<SessionSnapshot>) => hostWorkFrom({ ok: true, exists: true, alive: true, snapshot: snap(over) }, NOW)
+    expect(read({})).toEqual({ alive: true, working: false, inTurn: false, outliving: [] })
+    expect(read({ cronActive: true })).toMatchObject({ inTurn: false, outliving: ['loop'] })
+    expect(read({ detachedBgCount: 1, teamActive: true, wakeupAt: NOW + 1 })).toMatchObject({ inTurn: false, outliving: ['background', 'team', 'wakeup'] })
+    expect(read({ turnActive: true, pendingPermission: { requestId: 'p1', toolName: 'Bash' } })).toMatchObject({ working: false, inTurn: true })
+    expect(read({ gatingBgCount: 1 })).toMatchObject({ inTurn: true })
   })
 })
 

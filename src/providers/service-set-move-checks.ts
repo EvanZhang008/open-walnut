@@ -1,0 +1,227 @@
+/**
+ * What a service set move (service-set-move.ts) asks the shared daemon and this server before it
+ * stops anything there, each answered by the repo's own checks, never by a stored status alone
+ * (review round 1, B4 and B5):
+ *
+ *   moveSessions    this Walnut's sessions there: every record of this host the store holds live
+ *                   or failed (running, idle, error), and every one the daemon itself lists alive
+ *                   (a record a restart left 'stopped'). Each is judged busy by this server's runner
+ *                   (in a turn, work that outlives its turn: outliving-work.ts) and by a fresh
+ *                   getState from the daemon (host-work.ts hostWorkFrom: the turn, a permission
+ *                   prompt, background commands and subagents, an agent team, a wakeup, a /loop).
+ *                   No answer is busy. An ACP session blocks the move (its worker's stop cannot be
+ *                   proven the same way), as does a CLI of it running outside the shared daemon.
+ *   stopProven      the normal stop (terminateSession), then the proof its CLI is gone: the
+ *                   daemon's cli.holder, which judges the owner record by pid AND start time and
+ *                   scans the process table (cli-owner-core.ts). A lost host, an unconfirmed stop
+ *                   or a daemon that cannot answer cli.holder is no proof.
+ *   openWorkThere   other work of this Walnut there: commands under way on the link, and the
+ *                   host_exec runs of this Walnut's tasks (exec.list).
+ *   dropWalnutScope this Walnut's triggers and plugin jobs on the shared daemon emptied, the way the
+ *                   leader configures them (triggers.configure, jobs.configure for its home), so
+ *                   that daemon neither checks nor fires them nor resumes a session for a fire.
+ *   stopFollowerThere  this Walnut's follower there stopped and proven off (server.status).
+ */
+import type { SessionRecord } from '../core/types.js'
+import type { TerminateResult } from '../core/sessions/session-lifecycle.js'
+import { hostWorkFrom, HOST_WORK_TIMEOUT_MS } from '../core/sessions/host-work.js'
+import { OUTLIVING_SOURCES, type OutlivingSource } from '../core/sessions/outliving-work.js'
+import { isAcpEngine } from '../core/agents/engine-registry.js'
+import type { CliHolderAnswer } from './remote-session-manager.js'
+import type { MoveSession, StopResult } from './service-set-move.js'
+
+/** The link's part these checks use (service-set-move-link.ts SetLinkConn). */
+export interface MoveCheckLink {
+  hostKey: string
+  home: string
+  /** Past the move's own hold. */
+  send(cmd: string, params: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>
+  hasCapability(cap: string): boolean
+  /** Work commands on this link not answered yet. */
+  workUnderWay(): number
+  walnutId(): Promise<string>
+}
+
+/** This server's own facts; the defaults read the session store, the runner and the task store. */
+export interface MoveCheckDeps {
+  records?(): Promise<SessionRecord[]>
+  runner?(): Promise<{
+    inTurn(id: string): boolean | null
+    outliving(id: string): OutlivingSource[]
+    cronArmed(id: string): boolean
+  }>
+  terminate?(id: string): Promise<TerminateResult>
+  holder?(link: MoveCheckLink, sid: string): Promise<CliHolderAnswer>
+  /** Which of these task ids are this Walnut's. */
+  ownTasks?(ids: string[]): Promise<Set<string>>
+}
+
+const LIVE_OR_FAILED = new Set(['running', 'idle', 'error'])
+
+async function defaultRecords(): Promise<SessionRecord[]> {
+  return (await import('../core/session-tracker.js')).listSessions()
+}
+
+async function defaultRunner(): Promise<NonNullable<Awaited<ReturnType<NonNullable<MoveCheckDeps['runner']>>>>> {
+  const { sessionRunner } = await import('./claude-code-session.js')
+  return {
+    inTurn: (id) => sessionRunner.isInTurn(id),
+    outliving: (id) => sessionRunner.outlivingWorkOf(id),
+    cronArmed: (id) => sessionRunner.isCronArmed(id),
+  }
+}
+
+async function defaultHolder(link: MoveCheckLink, sid: string): Promise<CliHolderAnswer> {
+  const { askCliHolder } = await import('./remote-session-manager.js')
+  const { hostHolder } = await import('../core/sessions/org-own-folder.js')
+  const asked = { hasCapability: (c: string) => link.hasCapability(c), send: async (cmd: string, p: Record<string, unknown>, t?: number) => ({ ok: true, ...(await link.send(cmd, p ?? {}, t)) }) }
+  return hostHolder((s) => askCliHolder(asked, s), sid)
+}
+
+async function defaultTerminate(id: string): Promise<TerminateResult> {
+  const { terminateSession } = await import('../core/sessions/session-lifecycle.js')
+  return terminateSession(id, { by: 'walnut' })
+}
+
+async function defaultOwnTasks(ids: string[]): Promise<Set<string>> {
+  const { listTasksByIds } = await import('../core/task-manager.js')
+  return new Set((await listTasksByIds(ids)).map((t) => t.id))
+}
+
+const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e)).split('\n')[0]!.slice(0, 200)
+const workWords = (sources: readonly OutlivingSource[]): string => sources.map((s) => OUTLIVING_SOURCES[s]).join(', ')
+
+/** The daemon's own list of the sessions whose CLI lives there (`list`). Throws when it does not answer. */
+async function aliveOnDaemon(link: MoveCheckLink): Promise<Set<string>> {
+  const r = await link.send('list', {}, 10_000)
+  if (r.ok === false || !Array.isArray(r.sessions)) throw new Error(`the shared daemon did not list its sessions (${String(r.error ?? 'no list')})`)
+  return new Set((r.sessions as Array<{ sid?: unknown; alive?: unknown }>).filter((s) => s.alive === true && typeof s.sid === 'string').map((s) => s.sid as string))
+}
+
+/** One session judged: null when nothing of it runs on the host. */
+async function judge(link: MoveCheckLink, r: SessionRecord, listedAlive: boolean, d: MoveCheckDeps): Promise<MoveSession | null> {
+  const id = r.claudeSessionId
+  const say = (w: string) => `session ${id}: ${w}`
+  if (isAcpEngine(r.engine)) return { id, blocks: say('an ACP session, whose stop the move cannot prove; it stays where it is') }
+  const runner = await (d.runner ?? defaultRunner)()
+  if (runner.inTurn(id) === true) return { id, busy: say('in a turn') }
+  const own = [...runner.outliving(id)]
+  if (runner.cronArmed(id) && !own.includes('loop')) own.push('loop')
+  if (own.length) return { id, busy: say(workWords(own)) }
+  let resp: Record<string, unknown>
+  try {
+    resp = await link.send('getState', { sid: id }, HOST_WORK_TIMEOUT_MS)
+  } catch (e) {
+    return { id, busy: say(`the shared daemon did not answer for it (${errText(e)})`) }
+  }
+  const work = resp.ok === true && resp.exists === false && !listedAlive ? { alive: false } : hostWorkFrom(resp as Parameters<typeof hostWorkFrom>[0])
+  if (!work) return { id, busy: say('the shared daemon cannot say what it does') }
+  if (!work.alive && !listedAlive) {
+    // The daemon holds no live CLI of it: proven by the host's one owner record, else it runs elsewhere.
+    const h = await (d.holder ?? defaultHolder)(link, id)
+    if (h.state === 'free') return null
+    if (h.state === 'held') return { id, blocks: say(`a CLI of it runs on the host outside the shared daemon (${h.detail ?? 'live'})`) }
+    return { id, busy: say(`the host cannot say whether a CLI of it runs (${h.state}${h.detail ? `: ${h.detail}` : ''})`) }
+  }
+  if ('inTurn' in work && work.inTurn) return { id, busy: say('in a turn') }
+  const there = 'outliving' in work ? work.outliving ?? [] : []
+  if (there.length) return { id, busy: say(workWords(there)) }
+  return { id }
+}
+
+/** This Walnut's sessions on the shared daemon, each judged quiet, busy or blocking. Throws when the daemon cannot list them. */
+export async function moveSessions(link: MoveCheckLink, d: MoveCheckDeps = {}): Promise<MoveSession[]> {
+  const alive = await aliveOnDaemon(link)
+  const records = (await (d.records ?? defaultRecords)())
+    .filter((s) => s.host === link.hostKey && !s.archived && (LIVE_OR_FAILED.has(s.process_status) || alive.has(s.claudeSessionId)))
+  const out: MoveSession[] = []
+  for (const r of records) {
+    const j = await judge(link, r, alive.has(r.claudeSessionId), d)
+    if (j) out.push(j)
+  }
+  return out
+}
+
+/** Stop one session the normal way and prove its CLI gone; judged again first (it may have become busy). */
+export async function stopProven(link: MoveCheckLink, id: string, d: MoveCheckDeps = {}): Promise<StopResult> {
+  const record = (await (d.records ?? defaultRecords)()).find((s) => s.claudeSessionId === id && s.host === link.hostKey)
+  if (!record) return { ok: false, why: `session ${id}: its record is gone` }
+  const alive = await aliveOnDaemon(link).catch(() => null)
+  if (!alive) return { ok: false, busy: true, why: `session ${id}: the shared daemon did not list its sessions` }
+  const now = await judge(link, record, alive.has(id), d)
+  if (!now) return { ok: true }
+  if (now.blocks) return { ok: false, why: now.blocks }
+  if (now.busy) return { ok: false, busy: true, why: now.busy }
+  let res: TerminateResult
+  try {
+    res = await (d.terminate ?? defaultTerminate)(id)
+  } catch (e) {
+    const code = (e as { extra?: { code?: unknown } }).extra?.code
+    return { ok: false, why: code === 'cron_owner'
+      ? `session ${id}: it owns scheduled crons (a /loop), which its stop would end`
+      : `session ${id}: its stop failed (${errText(e)})` }
+  }
+  if (res.hostLost) return { ok: false, why: `session ${id}: its host read as lost, so its stop is not proven` }
+  if (res.status !== 'terminated' || (res.stopRequest && res.stopRequest.state !== 'confirmed')) {
+    return { ok: false, why: `session ${id}: the shared daemon did not confirm its stop (${res.stopRequest?.state ?? res.status})` }
+  }
+  const h = await (d.holder ?? defaultHolder)(link, id)
+  if (h.state === 'free') return { ok: true }
+  if (h.state === 'too-old') return { ok: false, why: `session ${id}: the shared daemon cannot prove its CLI is gone (no cli-holder-v1)` }
+  return { ok: false, why: `session ${id}: ${h.state === 'held' ? `a CLI of it still runs (${h.detail ?? 'live'})` : `the host did not say its CLI is gone (${h.detail ?? h.state})`}` }
+}
+
+/** Other work of this Walnut still on the shared daemon, in words; null when none. */
+export async function openWorkThere(link: MoveCheckLink, d: MoveCheckDeps = {}): Promise<string | null> {
+  const n = link.workUnderWay()
+  if (n > 0) return `${n} command${n === 1 ? '' : 's'} of this Walnut to the shared daemon (a start, a one-shot or a host command) still under way`
+  if (!link.hasCapability('host-exec-v1')) return null
+  let reply: Record<string, unknown>
+  try {
+    reply = await link.send('exec.list', {}, 10_000)
+  } catch (e) {
+    return `the shared daemon did not list its host commands (${errText(e)})`
+  }
+  if (!Array.isArray(reply.jobs)) return 'the shared daemon did not list its host commands'
+  const running = (reply.jobs as Array<{ running?: unknown; taskId?: unknown }>)
+    .filter((j) => j.running === true && typeof j.taskId === 'string' && j.taskId).map((j) => j.taskId as string)
+  if (running.length === 0) return null
+  const own = await (d.ownTasks ?? defaultOwnTasks)([...new Set(running)])
+  const mine = running.filter((t) => own.has(t)).length
+  return mine > 0 ? `${mine} host_exec run${mine === 1 ? '' : 's'} of this Walnut's tasks still run${mine === 1 ? 's' : ''} there` : null
+}
+
+/** Empty this Walnut's triggers and plugin jobs on the shared daemon (for its home only). Throws when not done. */
+export async function dropWalnutScope(link: MoveCheckLink): Promise<void> {
+  const home = link.home
+  const t = await link.send('triggers.configure', { config: { version: 1, triggers: [] }, home }, 30_000)
+  if (t.ok !== true) throw new Error(`the shared daemon did not drop this Walnut's triggers (${String(t.error ?? 'no answer')})`)
+  const pending = (Array.isArray(t.released) ? t.released as Array<{ pending?: unknown }> : []).filter((r) => Number(r?.pending) > 0)
+  // A released clock with fires nobody acked would be started there by the daemon itself.
+  if (pending.length) throw new Error(`${pending.length} clock routine${pending.length === 1 ? '' : 's'} there still had fires to deliver`)
+  if (!link.hasCapability('plugin-jobs-v1')) return
+  const walnutId = await link.walnutId()
+  const j = await link.send('jobs.configure', { home, spec: { v: 1, home, walnutId, jobs: [] } }, 30_000)
+  if (j.ok !== true) throw new Error(`the shared daemon did not drop this Walnut's plugin jobs (${String(j.error ?? 'no answer')})`)
+}
+
+/** Stop this Walnut's follower on the shared daemon and see it off. Throws when it may still run. */
+export async function stopFollowerThere(link: MoveCheckLink, sleep: (ms: number) => Promise<void>): Promise<void> {
+  // A daemon with no followers at all has none of this Walnut's to stop.
+  if (!link.hasCapability('host-server-v1')) return
+  const home = link.home
+  const r = await link.send('server.configure', { home, spec: null }, 15_000)
+  if (r.ok !== true) {
+    if (/unknown command/i.test(String(r.error ?? ''))) return
+    throw new Error(`server.configure was refused (${String(r.error ?? 'no answer')})`)
+  }
+  let state = ''
+  for (let i = 0; i < 5; i++) {
+    const st = await link.send('server.status', { home }, 10_000)
+    if (st.ok !== true) throw new Error(`server.status did not answer (${String(st.error ?? 'no answer')})`)
+    state = String((st.status as { state?: unknown } | undefined)?.state ?? 'off')
+    if (state === 'off') return
+    await sleep(2_000)
+  }
+  throw new Error(`it still reads ${state}`)
+}

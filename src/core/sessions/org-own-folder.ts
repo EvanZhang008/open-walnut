@@ -234,7 +234,7 @@ async function pooledHolder(host: string | null, sid: string): Promise<HolderAns
  * table for a CLI no record names, a terminal's `claude -r` included), and which Walnut the spawn
  * journal says started it. A CLI just stopped may take a moment to leave the table: asked again.
  */
-async function hostHolder(ask: AskHolder, sid: string, tries = HOLDER_TRIES): Promise<HolderAnswer> {
+export async function hostHolder(ask: AskHolder, sid: string, tries = HOLDER_TRIES): Promise<HolderAnswer> {
   let answer: HolderAnswer = { state: 'unknown' }
   for (let i = 0; i < tries; i++) {
     answer = await ask(sid)
