@@ -130,7 +130,7 @@ struct ChatDirectorSectionRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Text(verbatim: ChatDirectorsModel.vpInitial(director.vpName))
-                .font(.system(size: 12, weight: .semibold))
+                .font(Theme.Glyph.sm.font(.semibold))
                 .foregroundStyle(.white)
                 .frame(width: 28, height: 28)
                 .background(ChatOrgRowView.color(ChatOrgModel.avatarColor(director.vpName)).opacity(0.85), in: Circle())
@@ -164,7 +164,7 @@ struct ChatDirectorDot: View {
 
     var body: some View {
         Circle()
-            .fill(state == .waiting ? Color(.systemGray) : UserStatePill.color(state.shown))
+            .fill(UserStatePill.color(state.shown))
             .frame(width: 7, height: 7)
     }
 }
