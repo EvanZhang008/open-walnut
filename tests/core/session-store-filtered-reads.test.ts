@@ -183,10 +183,11 @@ describe('filtered session reads', () => {
       expect(m.value).toBeGreaterThan(0);
     }
 
-    // The capacity check probes every live candidate on every host, and copies
-    // exactly those: 6 alive rows (run/idle local and remote, side-1, lane-1).
+    // The capacity check probes only its own host's live candidates, and copies
+    // exactly those: 4 local rows (run-local, idle-local, side-1, lane-1), never
+    // another host's (2026-11-23: a scan of every host waited on each one's link).
     const limit = await measure(() => checkSessionLimit('local', undefined, { max_idle: 0 }));
-    expect(limit).toMatchObject({ cloneReads: 0, viewReads: 1, clonedRows: 6 });
+    expect(limit).toMatchObject({ cloneReads: 0, viewReads: 1, clonedRows: 4 });
 
     // The whole-store list still pays one full copy per call.
     const listed = await measure(() => listSessions());
