@@ -163,7 +163,8 @@ export function lookupApplied(key: LedgerKey, now = Date.now()): LedgerEntry | n
 export function lookupDrained(home: string, opId: string, hostKey?: string, now = Date.now()): LedgerEntry | null {
   if (!opId) return null;
   const pick = (rows: Array<{ hostKey: string; entry: LedgerEntry }>): LedgerEntry | null => {
-    const hits = rows.filter((r) => (hostKey === undefined || r.hostKey === hostKey) && r.entry.source === 'drain' && now - r.entry.appliedAt < LEDGER_TTL_MS);
+    const names = hostKey === undefined ? null : journalNamesOf(hostKey);
+    const hits = rows.filter((r) => (names === null || names.includes(r.hostKey)) && r.entry.source === 'drain' && now - r.entry.appliedAt < LEDGER_TTL_MS);
     return hits.sort((a, b) => b.entry.appliedAt - a.entry.appliedAt)[0]?.entry ?? null;
   };
   const fromMemory = (): LedgerEntry | null => pick([...memoryRows.entries()].flatMap(([k, entry]) => {
@@ -227,6 +228,15 @@ export function recordRemap(hostKey: string, home: string, minted: string, taskI
 
 /** The id this server gave a host's created task whose id `minted` was taken, or undefined. */
 export function lookupRemap(hostKey: string, home: string, minted: string): string | undefined {
+  // A drain under another name of the same daemon may have made it (journalNamesOf).
+  for (const name of journalNamesOf(hostKey)) {
+    const hit = lookupRemapUnder(name, home, minted);
+    if (hit !== undefined) return hit;
+  }
+  return undefined;
+}
+
+function lookupRemapUnder(hostKey: string, home: string, minted: string): string | undefined {
   const k = JSON.stringify([hostKey, home, minted]);
   const handle = open();
   if (!handle) return memoryRemap.get(k);
@@ -341,6 +351,7 @@ export function _setLedgerFileForTesting(file: string | null): void {
   lastPruneAt = 0;
   for (const r of inFlight.values()) r.resolve(null);
   inFlight.clear();
+  journalGroups.clear();
 }
 
 // -- A journaled record's op, wherever its direct write was recorded --
@@ -354,7 +365,31 @@ export function _setLedgerFileForTesting(file: string | null): void {
  * there, or the forward and its journaled retry both apply.
  */
 export function journaledKeys(key: LedgerKey): LedgerKey[] {
-  return key.hostKey === LOCAL_HOST ? [key] : [key, { ...key, hostKey: LOCAL_HOST }];
+  if (key.hostKey === LOCAL_HOST) return [key];
+  // Every name of the daemon whose journal it is (noteSameJournal): another link to it may have
+  // drained the record under its own name first, and its ack was lost or not sent yet.
+  return [key, ...journalNamesOf(key.hostKey).filter((h) => h !== key.hostKey).map((hostKey) => ({ ...key, hostKey })), { ...key, hostKey: LOCAL_HOST }];
+}
+
+/**
+ * The host names that reach one daemon, and so drain its one journal (src/providers/daemon-connection.ts
+ * names them from the daemon's own word before each drain). A row or a remap one of them recorded
+ * counts for all. 2026-11-23: `newdev` and `clouddev`, one machine, drained one journal under each
+ * name in turn: a record the first applied whose ack was lost would have run again under the second.
+ */
+const journalGroups = new Map<string, readonly string[]>();
+
+/** Record that these names reach one daemon's journal (each drain says so again). */
+export function noteSameJournal(names: readonly string[]): void {
+  const group = [...new Set(names.filter((n) => typeof n === 'string' && n && n !== LOCAL_HOST))];
+  if (group.length < 2) { for (const n of group) journalGroups.delete(n); return; }
+  for (const n of group) journalGroups.set(n, group);
+}
+
+/** Every name the journal drained under `hostKey` goes by, `hostKey` first. */
+export function journalNamesOf(hostKey: string): readonly string[] {
+  const group = journalGroups.get(hostKey);
+  return group ? [hostKey, ...group.filter((h) => h !== hostKey)] : [hostKey];
 }
 
 /** The ledger entry of a journaled record's op under any of its keys, or null. */

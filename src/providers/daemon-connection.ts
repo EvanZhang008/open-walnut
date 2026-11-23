@@ -2425,7 +2425,7 @@ export class DaemonConnection {
           if (this.offlineDrainDue) {
             this.offlineDrainDue = false
             try {
-              await runOfflineHandover(this.handoverConnection())
+              await runOfflineHandover(await this.handoverConnection())
             } catch (err) {
               this.offlineDrainDue = true
               throw err
@@ -3554,15 +3554,35 @@ export class DaemonConnection {
   /** Longest a relayed call waits on the host's journal before it is answered anyway. */
   private static readonly DRAIN_BEFORE_ANSWER_MS = 5_000
 
+  /** The keeper name daemonNames gave before this link's last drain (journalName without a machine id). */
+  private lastJournalKeeper: string | null = null
+
+  /**
+   * The journal this link's daemon keeps, the same from each of its names: its process (the
+   * instance id its hello gave; never the machine's, which two daemons on one machine share), else
+   * the name it goes by, else this link's own before it knew that.
+   */
+  private journalName(): string {
+    return this.liveInstanceId ? `instance:${this.liveInstanceId}` : this.lastJournalKeeper ?? this.hostKey
+  }
+
   /**
    * What the offline handover drives on this host. `rescue`: sessions the host
    * started again while we were away (a trigger fire it delivered itself) get
    * the reconnect look now, as if their records did not say stopped. Not
    * awaited: a relayed call waiting on the drain must not wait on these probes.
    */
-  private handoverConnection(): import('../core/offline-handover.js').HandoverConnection {
+  private async handoverConnection(): Promise<import('../core/offline-handover.js').HandoverConnection> {
+    // One journal per daemon, whichever of its names reaches it: the drain runs once at a time for
+    // it (journalKey), and its ledger and remap count a row any of its names recorded
+    // (noteSameJournal). This link still acts as itself (hostKey). 2026-11-23: `newdev` and
+    // `clouddev`, one machine, drained its journal each under its own name, twice at once.
+    const { keeper, aliases } = await this.daemonNames()
+    this.lastJournalKeeper = keeper
+    ;(await import('../core/offline-merge/ledger.js')).noteSameJournal(aliases)
     return {
       hostKey: this.hostKey,
+      journalKey: this.journalName(),
       send: (cmd, params, timeoutMs) => this.send(cmd, params, timeoutMs),
       rescue: async (sessionIds) => {
         void this.recoverDisconnectedSessions(new Set(sessionIds)).catch(() => {})
@@ -3585,12 +3605,12 @@ export class DaemonConnection {
     const { runOfflineHandover, runningHandover } = await import('../core/offline-handover.js')
     const deadline = Date.now() + DaemonConnection.DRAIN_BEFORE_ANSWER_MS
     while (Date.now() < deadline) {
-      let job = runningHandover(this.hostKey)
+      let job = runningHandover(this.journalName())
       if (!job && !this.offlineDrainDue) return
       let failed = false
       if (!job) {
         this.offlineDrainDue = false
-        job = runOfflineHandover(this.handoverConnection())
+        job = runOfflineHandover(await this.handoverConnection())
         job.then(() => this.pushHostSlice(), (err) => {
           failed = true
           this.offlineDrainDue = true
@@ -3642,7 +3662,7 @@ export class DaemonConnection {
       // them; its nudge reaches us before this request (one socket, in order).
       // Take the journal first, so a request id it names is already ours.
       before: async () => {
-        if (this.offlineDrainDue || (await import('../core/offline-handover.js')).runningHandover(this.hostKey)) await this.drainBeforeAnswering()
+        if (this.offlineDrainDue || (await import('../core/offline-handover.js')).runningHandover(this.journalName())) await this.drainBeforeAnswering()
       },
       send: (reply, kept) => this.sendGatewayResult(reply, call.relayId, kept, { capability: call.capability, callerSid: call.callerSid }),
     })
@@ -8305,7 +8325,7 @@ export class DaemonConnection {
         // A '__local__' instance the pool let go of while the import ran (a reset or a
         // replacement) marks nothing and pushes nothing, on either path: the key is its newer owner's.
         return import('../core/offline-handover.js')
-          .then(({ noteHandoverDue }) => { if (!this.localDialAbandoned()) noteHandoverDue(this.hostKey) })
+          .then(({ noteHandoverDue }) => { if (!this.localDialAbandoned()) noteHandoverDue(this.journalName()) })
           .catch(() => {})
           .finally(() => { if (!this.localDialAbandoned()) this.pushHostSlice() })
       }

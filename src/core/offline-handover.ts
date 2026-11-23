@@ -34,7 +34,13 @@ import { drainRecoveryKey, noteDrainErrorRaised, noteDrainSettled } from './offl
 
 /** What the handover needs from a daemon connection. */
 export interface HandoverConnection {
+  /** The host this link reaches, as its rows and actions name it (rescue, stops, sessions, callers). */
   hostKey: string;
+  /**
+   * The daemon's journal this link drains: the same from every name that reaches that daemon (its
+   * machine), so one drain runs at a time per journal, whichever link starts it. Absent: hostKey.
+   */
+  journalKey?: string;
   send(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>;
   /**
    * Look at these sessions again as a reconnect does, as if their records did
@@ -76,7 +82,13 @@ const RPC_TIMEOUT_MS = 30_000;
 /** Longest a fallback notice waits on a running handover. */
 const HANDOVER_WAIT_MS = 5_000;
 
+/** Keyed by journal (journalOf): two names of one daemon share one drain. */
 const running = new Map<string, { conn: HandoverConnection; job: Promise<HandoverResult> }>();
+
+/** The journal a connection drains (HandoverConnection.journalKey). */
+function journalOf(conn: HandoverConnection): string {
+  return conn.journalKey || conn.hostKey;
+}
 
 /**
  * Hosts that said they journaled something we have not drained yet (the
@@ -87,11 +99,12 @@ const running = new Map<string, { conn: HandoverConnection; job: Promise<Handove
  */
 const due = new Map<string, { at: number; done: Promise<void>; resolve: () => void }>();
 
-export function noteHandoverDue(hostKey: string): void {
-  if (due.has(hostKey)) return;
+/** A daemon nudged that its journal has records: `journal` is its journalKey (or the host key). */
+export function noteHandoverDue(journal: string): void {
+  if (due.has(journal)) return;
   let resolve!: () => void;
   const done = new Promise<void>((r) => { resolve = r; });
-  due.set(hostKey, { at: Date.now(), done, resolve });
+  due.set(journal, { at: Date.now(), done, resolve });
 }
 
 /** A nudge nobody drained this long ago (the host went away first) is dropped: its records wait for the next connect. */
@@ -104,9 +117,9 @@ function pruneDue(): void {
   }
 }
 
-/** The handover of this host that is running now, if any. */
-export function runningHandover(hostKey: string): Promise<HandoverResult> | undefined {
-  return running.get(hostKey)?.job;
+/** The handover of this journal (journalKey, or the host key) that is running now, if any. */
+export function runningHandover(journal: string): Promise<HandoverResult> | undefined {
+  return running.get(journal)?.job;
 }
 
 /** Resolves when every running or due handover has finished (or after HANDOVER_WAIT_MS). */
@@ -127,7 +140,8 @@ export async function waitForOfflineHandovers(maxMs = HANDOVER_WAIT_MS): Promise
  * reconnect in production does the same). Then this call runs its own once that one ends.
  */
 export function runOfflineHandover(conn: HandoverConnection): Promise<HandoverResult> {
-  const existing = running.get(conn.hostKey);
+  const journal = journalOf(conn);
+  const existing = running.get(journal);
   if (existing) {
     if (existing.conn === conn || existing.conn.alive?.() !== false) return existing.job;
     return existing.job.catch(() => undefined).then(() => runOfflineHandover(conn));
@@ -140,12 +154,15 @@ export function runOfflineHandover(conn: HandoverConnection): Promise<HandoverRe
   });
   const startedAt = Date.now();
   const job = handover(conn).finally(() => {
-    if (running.get(conn.hostKey)?.job === job) running.delete(conn.hostKey);
-    // Only a drain that began after the nudge has seen what the nudge was about.
-    const d = due.get(conn.hostKey);
-    if (d && d.at <= startedAt) { due.delete(conn.hostKey); d.resolve(); }
+    if (running.get(journal)?.job === job) running.delete(journal);
+    // Only a drain that began after the nudge has seen what the nudge was about (one marked
+    // under the link's own name, before it knew the journal's, too).
+    for (const key of new Set([journal, conn.hostKey])) {
+      const d = due.get(key);
+      if (d && d.at <= startedAt) { due.delete(key); d.resolve(); }
+    }
   });
-  running.set(conn.hostKey, { conn, job });
+  running.set(journal, { conn, job });
   return job;
 }
 
@@ -407,17 +424,18 @@ export function _setHandoverBackoffForTesting(steps: number[] | null): void {
 
 /** Drain the host again once a record's backoff ran out, on the same connection while it lives. */
 function scheduleRetry(conn: HandoverConnection, ms: number): void {
-  const prev = retryTimers.get(conn.hostKey);
+  const journal = journalOf(conn);
+  const prev = retryTimers.get(journal);
   if (prev) clearTimeout(prev);
   const t = setTimeout(() => {
-    retryTimers.delete(conn.hostKey);
+    retryTimers.delete(journal);
     if (conn.alive && !conn.alive()) return;
     runOfflineHandover(conn).catch((err) => {
       log.session.warn('offline handover: retry failed', { host: conn.hostKey, error: err instanceof Error ? err.message : String(err) });
     });
   }, ms);
   t.unref?.();
-  retryTimers.set(conn.hostKey, t);
+  retryTimers.set(journal, t);
 }
 
 /**
