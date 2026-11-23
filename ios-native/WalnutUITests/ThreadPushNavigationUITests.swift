@@ -103,6 +103,7 @@ final class ThreadPushNavigationUITests: ThreadPushUITestCase {
         // A task's session over Growth VP's page, then Design VP's thread.
         try openBarPage("Z")
         segment("Tasks").tap()
+        openWorkingSection()
         let row = el("org.tasks.row")
         XCTAssertTrue(row.waitForExistence(timeout: 15), "the Tasks view lists no work")
         XCTAssertTrue(poll(5) { inView(row) })

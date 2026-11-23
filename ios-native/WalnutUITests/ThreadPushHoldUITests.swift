@@ -20,6 +20,7 @@ final class ThreadPushHoldUITests: ThreadPushUITestCase {
     func testTADescriptionBeingEditedHoldsASameVPPush() throws {
         try openBarPage("T")
         segment("Tasks").tap()
+        openWorkingSection()
         let row = el("org.tasks.row")
         XCTAssertTrue(row.waitForExistence(timeout: 15), "the Tasks view lists no work")
         XCTAssertTrue(poll(5) { inView(row) }, "the task row is not in view: \(whereIs(row))")

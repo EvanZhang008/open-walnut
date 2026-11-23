@@ -50,6 +50,18 @@ final class ThreadPushLiveUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: id).firstMatch
     }
 
+
+    /// The Tasks view folds Working by default (2026-11-23): open it, where the fixture's worker is.
+    private func openWorkingSection() {
+        let head = el("org.tasks.section.working")
+        guard head.waitForExistence(timeout: 10), head.value as? String != "Open" else { return }
+        // A coordinate tap: XCUITest calls this header "not hittable" inside the drawer pager
+        // although nothing covers it on screen; the value check below proves the tap opened it.
+        head.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let opened = NSPredicate(format: "value == 'Open'")
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: opened, object: head)], timeout: 5), .completed, "Working did not open")
+    }
+
     private func card(_ threadId: String) -> XCUIElement { el("org.thread.\(threadId)") }
 
     private func cardTitle(_ threadId: String) -> XCUIElement {
@@ -213,6 +225,7 @@ final class ThreadPushLiveUITests: XCTestCase {
     func testBAPushWhileTasksOrBriefIsInFrontSwitchesToThreads() throws {
         try openThreadsPageFromTheBar("B")
         segment("Tasks").tap()
+        openWorkingSection()
         XCTAssertTrue(el("org.tasks").waitForExistence(timeout: 10), "no Tasks view")
         XCTAssertTrue(el("org.tasks.row").waitForExistence(timeout: 15), "the Tasks view lists no work")
         shot("B-tasks")
@@ -252,6 +265,7 @@ final class ThreadPushLiveUITests: XCTestCase {
     func testDAPushClosesATaskSessionOpenedFromThePage() throws {
         try openThreadsPageFromTheBar("D")
         segment("Tasks").tap()
+        openWorkingSection()
         let row = el("org.tasks.row")
         XCTAssertTrue(row.waitForExistence(timeout: 15), "the Tasks view lists no work")
         XCTAssertTrue(poll(5) { inView(row) }, "the Tasks view's row is not in view: \(whereIs(row))")

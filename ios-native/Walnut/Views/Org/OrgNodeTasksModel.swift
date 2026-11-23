@@ -32,9 +32,11 @@ enum OrgNodeTasksModel {
             case .done: return "Completed"
             }
         }
-        /// Open on a page's first look: what is in front of him now (the home rule).
-        /// What needs him and what runs now open; what waits and what is done stay folded.
-        var openByDefault: Bool { self == .watching || self == .needs || self == .working }
+        /// Open on a page's first look: what needs him, and what he watches (the home rule).
+        /// Working folds like what waits and what is done (2026-11-23, the user: "working 是
+        /// automatically collapsed ... 只有那个 needs you 是 default 是 show"; the web's
+        /// ORG_SECTION_OPEN_BY_DEFAULT).
+        var openByDefault: Bool { self == .watching || self == .needs }
     }
 
     struct Section: Equatable, Identifiable {

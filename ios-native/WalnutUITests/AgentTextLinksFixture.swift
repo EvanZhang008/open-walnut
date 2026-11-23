@@ -259,9 +259,10 @@ extension AgentTextLinksUITests {
 
     @MainActor func orgLinkPoint(_ row: XCUIElement) -> XCUICoordinate {
         let footnote = UIFont.preferredFont(forTextStyle: .footnote)
-        let title = UIFont.preferredFont(forTextStyle: .subheadline).lineHeight
+        // The row (OrgTaskRow): 12 of padding, the circle's 20 point slot, 12 of spacing; the name in body.
+        let title = UIFont.preferredFont(forTextStyle: .body).lineHeight
         let category = ["Take a look", "Can close", "Review", "Decide"].first { row.label.contains("\($0): ") } ?? "Decide"
-        let x = 30 + (category + ": " as NSString).size(withAttributes: [.font: footnote]).width + 14
+        let x = 44 + (category + ": " as NSString).size(withAttributes: [.font: footnote]).width + 14
         return row.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: x, dy: 10 + title + 3 + footnote.lineHeight / 2))
     }
 

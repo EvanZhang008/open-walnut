@@ -17,6 +17,26 @@ final class TeamStatusModelTests: XCTestCase {
         )
     }
 
+    /// None picked: Needs you while something needs the user, else All open; a pick wins
+    /// (2026-11-23, the user: the Board's "default ... 只受这个 needs you"; the web's defaultStatusFilter).
+    func testTheChipsOpenOnNeedsYouUntilOneIsPicked() {
+        let asks = TeamStatusModel.build(ownerId: "lead", tasks: [
+            task("lead", parent: nil, phase: "IN_PROGRESS", user: .init(state: "working")),
+            task("b", user: .init(state: "needs", ask: "Approve a real iPhone test?", source: "session")),
+            task("r", phase: "IN_PROGRESS", user: .init(state: "working")),
+        ], now: Self.now)
+        XCTAssertEqual(TeamStatusChip.shown(raw: "", board: asks), .needs)
+        XCTAssertNil(TeamStatusChip.shown(raw: TeamStatusChip.allOpenRaw, board: asks))
+        XCTAssertEqual(TeamStatusChip.shown(raw: "done", board: asks), .done)
+        let quiet = TeamStatusModel.build(ownerId: "lead", tasks: [
+            task("lead", parent: nil, phase: "IN_PROGRESS", user: .init(state: "working")),
+            task("r", phase: "IN_PROGRESS", user: .init(state: "working")),
+        ], now: Self.now)
+        XCTAssertNil(TeamStatusChip.shown(raw: "", board: quiet))
+        // A word no chip has (a filter a later build removed) reads as none picked.
+        XCTAssertEqual(TeamStatusChip.shown(raw: "gone", board: asks), .needs)
+    }
+
     func testGroupsByTheStoredStatusNotThePhase() {
         let tasks = [
             task("lead", parent: nil, phase: "IN_PROGRESS", user: .init(state: "working")),

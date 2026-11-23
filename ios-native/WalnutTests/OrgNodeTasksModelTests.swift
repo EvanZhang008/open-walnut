@@ -64,7 +64,8 @@ final class OrgNodeTasksModelTests: XCTestCase {
         XCTAssertEqual(s.first?.rows.map(\.id), ["w"])
         XCTAssertEqual(s.first { $0.id == "waiting" }?.rows.map(\.id), ["z"])
         XCTAssertEqual(s.first { $0.id == "notstarted" }?.title, "Not started")
-        XCTAssertEqual(s.map(\.openByDefault), [true, true, true, false, false, false])
+        // Only Watching and Needs you open; Working folds like the rest (2026-11-23).
+        XCTAssertEqual(s.map(\.openByDefault), [true, true, false, false, false, false])
     }
 
     func testPinGroupsFollowTheTierOrderThenNotPinned() {

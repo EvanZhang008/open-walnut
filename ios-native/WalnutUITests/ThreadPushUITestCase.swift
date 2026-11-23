@@ -43,6 +43,18 @@ class ThreadPushUITestCase: XCTestCase {
         app.descendants(matching: .any).matching(identifier: id).firstMatch
     }
 
+
+    /// The Tasks view folds Working by default (2026-11-23): open it, where the fixture's worker is.
+    func openWorkingSection() {
+        let head = el("org.tasks.section.working")
+        guard head.waitForExistence(timeout: 10), head.value as? String != "Open" else { return }
+        // A coordinate tap: XCUITest calls this header "not hittable" inside the drawer pager
+        // although nothing covers it on screen; the value check below proves the tap opened it.
+        head.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let opened = NSPredicate(format: "value == 'Open'")
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: opened, object: head)], timeout: 5), .completed, "Working did not open")
+    }
+
     func card(_ threadId: String) -> XCUIElement { el("org.thread.\(threadId)") }
 
     /// The Follow up box on a thread's card: there on every open card, with no tap.

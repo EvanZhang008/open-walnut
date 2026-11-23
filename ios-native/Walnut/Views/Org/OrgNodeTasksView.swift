@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// An Org node's Tasks on the phone: its teams' work by status or by pin group, one short row per
-/// task (its title and one line of what it does now), as the web side bar's Tasks. A row opens the
-/// task's session.
+/// task (its status circle and its name, as a Home row; a Needs you row also says what it asks), as
+/// the web side bar's Tasks. A row opens the task's session.
 struct OrgNodeTasksView: View {
     let nodeId: String
     let isMain: Bool
@@ -18,8 +18,9 @@ struct OrgNodeTasksView: View {
     @State private var loaded = false
     @State private var error: String?
     /// Sections the user opened or closed, kept per node ("nodeId/section" keys); the rest
-    /// follow their default.
-    @AppStorage("org.node.tasksFlipped", store: AppPrefs.defaults) private var flippedRaw = ""
+    /// follow their default. A new key since Working folds by default (2026-11-23): a flip kept
+    /// against the old default would now open Working, so every node starts from the new one.
+    @AppStorage("org.node.tasksFlipped2", store: AppPrefs.defaults) private var flippedRaw = ""
     private var flipped: Set<String> {
         Set(flippedRaw.split(separator: " ").compactMap { key in
             let parts = key.split(separator: "/", maxSplits: 1)
@@ -120,7 +121,7 @@ struct OrgNodeTasksView: View {
                         Button { onOpenTask(TaskOpenTarget(id: t.id, title: t.title)) } label: { OrgTaskRow(task: t) }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("org.tasks.row")
-                        if t.id != s.rows.last?.id { Divider().padding(.leading, 30) }
+                        if t.id != s.rows.last?.id { Divider().padding(.leading, 44) }
                     }
                 }
                 .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -145,39 +146,36 @@ struct OrgNodeTasksView: View {
     }
 }
 
-/// One task of a node's work: its status dot, its title, one line of what it does now, and when.
+/// One task of a node's work, as a Home row (`TaskRow`): its status circle and its name, nothing
+/// else (2026-11-23, the user: "就显示一个名字", "remve the time also"). A Needs you row also says
+/// what it asks, since that is what he answers; the web draws those as their ask cards.
 struct OrgTaskRow: View {
     let task: WalnutTask
+    /// The circle's slot; the row's text starts 12 + this + 12 points in.
+    static let circleWidth: CGFloat = 20
 
     var body: some View {
         let state = TeamStatusModel.state(of: task)
-        HStack(alignment: .top, spacing: 10) {
-            Circle()
-                .fill(UserStatePill.color(state))
-                .frame(width: 8, height: 8)
-                .padding(.top, 6)
+        HStack(alignment: .top, spacing: 12) {
+            // A fixed slot, so every row's name starts at one edge (and a test can find its line).
+            StatusCircle(status: task.statusKind)
+                .frame(width: OrgTaskRow.circleWidth)
+                .padding(.top, 2)
             VStack(alignment: .leading, spacing: 3) {
                 Text(AskProjectName.displayTitle(task.title, project: task.project, orgRole: task.orgRole))
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
-                if let line = OrgNodeTasksModel.line(task) {
+                    .foregroundStyle(task.isDone ? .secondary : .primary)
+                    .strikethrough(task.isDone, color: .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if state == .needs, let line = OrgNodeTasksModel.line(task) {
                     Text(MarkdownParser.inline(line))
                         .font(.footnote)
-                        .foregroundStyle(state == .needs ? Theme.needsText : .secondary)
-                        .lineLimit(1)
+                        .foregroundStyle(Theme.needsText)
                         // After the colour: a sheet reads the style of the view it hangs on, so a viewer or
                         // letter opened from this line would come up in the line's own tint.
                         .handlingFilePathLinks(source: OrgNodeTasksModel.lineSource(task))
                 }
             }
-            Spacer(minLength: 4)
-            if let at = WalnutTask.parseISO(task.userStatus?.at ?? task.updatedAt) {
-                Text(RelativeTime.short(date: at))
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .padding(.top, 2)
-            }
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)

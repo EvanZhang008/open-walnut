@@ -156,12 +156,12 @@ struct TeamStatusSection: View {
     /// from inside its scroll content is rebuilt when a text field in it takes focus.
     var onOpenTask: (_ id: String, _ title: String?) -> Void
     @Environment(TasksStore.self) private var tasks
-    /// The state chip picked (nil = All open), kept across a relaunch (`ViewMemory`).
-    @AppStorage(ViewMemory.key("team", "filter"), store: AppPrefs.defaults) private var filterRaw = ""
-    private var filter: TeamStatusChip? {
-        get { TeamStatusChip(rawValue: filterRaw) }
-        nonmutating set { filterRaw = newValue?.rawValue ?? "" }
-    }
+    /// The chip picked, kept across a relaunch (`ViewMemory`): a chip's word, "open" for All open,
+    /// empty while none was picked (then `TeamStatusChip.shown` opens on Needs you). A new key since
+    /// Needs you became the default (2026-11-23): what the old default left starts again, once.
+    @AppStorage(ViewMemory.key("team", "filter2"), store: AppPrefs.defaults) private var filterRaw = ""
+    private func filter(_ board: TeamStatusBoard) -> TeamStatusChip? { TeamStatusChip.shown(raw: filterRaw, board: board) }
+    private func pick(_ chip: TeamStatusChip?) { filterRaw = chip?.rawValue ?? TeamStatusChip.allOpenRaw }
     @State private var teamBusy = false
     @State private var teamError: String?
     @State private var confirmStop = false
@@ -191,15 +191,16 @@ struct TeamStatusSection: View {
                 chips(board)
                     // A thumb that lands just below a chip filters, it does not open the first row.
                     .padding(.bottom, 6)
-                let rows = filter.map { $0.rows(board) } ?? board.open
+                let shown = filter(board)
+                let rows = shown.map { $0.rows(board) } ?? board.open
                 if rows.isEmpty {
-                    Text(Self.emptyText(filter))
+                    Text(Self.emptyText(shown))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 } else {
                     VStack(spacing: 0) {
                         ForEach(rows) { row in
-                            Button { onOpenTask(row.task.id, AskProjectName.displayTitle(row.task.title, project: row.task.project, orgRole: row.task.orgRole)) } label: { TeamStatusRowView(row: row, flat: filter != nil) }
+                            Button { onOpenTask(row.task.id, AskProjectName.displayTitle(row.task.title, project: row.task.project, orgRole: row.task.orgRole)) } label: { TeamStatusRowView(row: row, flat: shown != nil) }
                                 .buttonStyle(.plain)
                                 // On the button, not its label: the row keeps its own id, and
                                 // `.contain` keeps the ids inside (.checked, .due, .live, .partial).
@@ -314,9 +315,10 @@ struct TeamStatusSection: View {
     private func chips(_ b: TeamStatusBoard) -> some View {
         // Wrapped onto a second line, never scrolled off the screen's edge.
         OrgChipFlow(spacing: 0) {
-            chip("All open \(b.open.count)", on: filter == nil) { filter = nil }
+            let shown = filter(b)
+            chip("All open \(b.open.count)", on: shown == nil) { pick(nil) }
             ForEach(TeamStatusChip.allCases, id: \.self) { c in
-                chip("\(c.count(b)) \(c.label)", on: filter == c, dot: c.dot) { filter = c }
+                chip("\(c.count(b)) \(c.label)", on: shown == c, dot: c.dot) { pick(c) }
             }
         }
     }
@@ -520,6 +522,18 @@ private struct RowTime: View {
 /// older build kept ("waiting", "needs") still reads.
 enum TeamStatusChip: String, CaseIterable {
     case needs, working, waiting, notStarted = "notstarted", done
+
+    /// The kept word for All open (nil as a chip).
+    static let allOpenRaw = "open"
+
+    /// The chip a team's rows show (nil = All open): the one picked, else Needs you while something
+    /// needs the user, else All open, never an empty list (2026-11-23, the user: the Board's
+    /// "default ... 只受这个 needs you"; the web's defaultStatusFilter).
+    static func shown(raw: String, board: TeamStatusBoard) -> TeamStatusChip? {
+        if raw == allOpenRaw { return nil }
+        if let picked = TeamStatusChip(rawValue: raw) { return picked }
+        return board.needs.isEmpty ? nil : .needs
+    }
 
     var label: String {
         switch self {
