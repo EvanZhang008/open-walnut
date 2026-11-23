@@ -13,7 +13,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { decideServiceEntry, nextServiceMode, pinRuntimePlace, readServiceMode, writeServiceMode, SERVICE_MODE_FILE } from '../../src/binary/service-entry.js'
+import { decideServiceEntry, pinRuntimePlace, stopOldFollowers } from '../../src/binary/service-entry.js'
+import { nextServiceMode, readServiceMode, writeServiceMode, SERVICE_MODE_FILE } from '../../src/binary/service-mode.js'
 import { RUNTIME_PLACE_ENV, runtimeRootsFor } from '../../src/binary/runtime-tree.js'
 import { defaultReadStartTime } from '../../src/providers/daemon-core.js'
 import { acquireDaemonInstanceLock } from '../../src/providers/daemon-instance-lock.js'
@@ -179,6 +180,35 @@ describe('runHostService while a daemon still holds the runtime dir', () => {
       if (lock.kind === 'owner') await lock.release()
     }
   }, 90_000)
+})
+
+// Review point 7: both roles stop the follower child an older daemon started before they serve
+// (runHostService for its spec, runLeaderService for every spec of the Walnut it leads), and end
+// when one does not stop or may still run.
+describe('stopOldFollowers, the one stop of an older daemon\'s follower', () => {
+  it('refuses to go on while one may still run, keeping its pid file; stops it for real otherwise', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'service-old-follower-'))
+    roots.push(root)
+    const follower = spawn('sleep', ['60'], { detached: true, stdio: 'ignore' })
+    const pid = follower.pid!
+    const gone = new Promise((r) => follower.once('exit', r))
+    try {
+      const pidFile = path.join(root, 'server-0123456789abcdef.pid')
+      fs.writeFileSync(pidFile, JSON.stringify({ pid, startTime: defaultReadStartTime(fs, pid) }))
+      // Its start time does not read: it may still be the follower, so the start ends.
+      expect(await stopOldFollowers([pidFile], { startTimeOf: () => null, exists: () => true, killGroup: () => {}, unknownRetryMs: 10 })).toBe(false)
+      expect(fs.existsSync(pidFile)).toBe(true)
+      expect(() => process.kill(pid, 0)).not.toThrow()
+      // Read for real: stopped (its group), the pid file gone.
+      expect(await stopOldFollowers([pidFile])).toBe(true)
+      await gone
+      expect(fs.existsSync(pidFile)).toBe(false)
+      // Nothing recorded: nothing to stop.
+      expect(await stopOldFollowers([pidFile, path.join(root, 'none.pid')])).toBe(true)
+    } finally {
+      try { process.kill(-pid, 'SIGKILL') } catch { /* gone */ }
+    }
+  }, 30_000)
 })
 
 // 2026-11-22, a real host: the service unpacked its tree under the launcher's env, then took the

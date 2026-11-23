@@ -28,7 +28,7 @@ export const OUTSIDE_ENTRIES: readonly OutsideEntry[] = [
   outside('machine', 'xdg-state', 'state.primary-daemon', 'open-walnut/primary-daemon', 'dir', 'The tunnel daemon of this machine'),
   // ~/.local/share/open-walnut.
   outside('machine', 'xdg-data', 'share.daemon', 'open-walnut/daemon', 'dir', 'The login service\'s daemon state and boot script'),
-  outside('machine', 'xdg-data', 'share.daemon.service-mode', 'open-walnut/daemon/service-mode.json', 'file', 'Whose follower the login service runs as the host\'s one Walnut service, and for which version (written only by walnut daemon install or update)'),
+  outside('machine', 'xdg-data', 'share.daemon.service-mode', 'open-walnut/daemon/service-mode.json', 'file', 'What the login service runs as the machine\'s one Walnut service (the follower of a Walnut, or its leader), and for which version (written by walnut daemon install or update and by the leader switch through setServiceRole)'),
   outside('rebuildable', 'xdg-data', 'share.bin', 'open-walnut/bin', 'dir', 'Voice input helper binaries, installed again on demand'),
   outside('rebuildable', 'xdg-data', 'share.stt-llama', 'open-walnut/stt-llama', 'dir', 'Local voice model runtime, installed again on demand'),
   outside('rebuildable', 'xdg-data', 'share.stt-mlx', 'open-walnut/stt-mlx', 'dir', 'Local voice model runtime, installed again on demand'),

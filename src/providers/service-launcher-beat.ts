@@ -25,6 +25,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { pruneDaemonServiceVersions } from './daemon-service-artifact.js'
+import { serviceRolesFrom } from './service-roles.js'
+import type { ServiceRole } from '../binary/service-mode.js'
 
 export const BEAT_MS = 5_000
 export const READY_RETRY_MS = 2_000
@@ -43,6 +45,11 @@ export interface LauncherFacts {
   since: number
   build?: string
   goodBuild?: string
+  /**
+   * The service roles the good version can take (service-roles.ts, `<good> __daemon --service-roles`),
+   * once the daemon asked it; absent until then and from a daemon that never asks.
+   */
+  goodRoles?: ServiceRole[]
   rollback?: LauncherRollback
 }
 
@@ -267,6 +274,7 @@ export function launcherFactsFrom(value: unknown): LauncherFacts | null {
   const facts: LauncherFacts = { current, good: clean(v.good) ?? '', phase: phase as LauncherPhase, since: typeof v.since === 'number' && v.since > 0 ? v.since : 0 }
   const build = clean(v.build, 64); if (build) facts.build = build
   const goodBuild = clean(v.goodBuild, 64); if (goodBuild) facts.goodBuild = goodBuild
+  if (Array.isArray(v.goodRoles)) facts.goodRoles = serviceRolesFrom(v.goodRoles)
   const r = v.rollback as Record<string, unknown> | undefined
   if (r && typeof r === 'object' && typeof r.at === 'number' && r.at > 0 && clean(r.from) && clean(r.reason, 2000)) {
     facts.rollback = { at: r.at, from: clean(r.from)!, to: clean(r.to) ?? '', reason: clean(r.reason, 2000)!, ...(clean(r.build, 64) ? { build: clean(r.build, 64)! } : {}) }

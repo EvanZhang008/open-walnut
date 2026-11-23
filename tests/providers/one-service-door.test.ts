@@ -26,7 +26,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { createStreamEndpoint } from '../../src/lib/link-stream.js'
-import { alive, doorPort, holderEnv, leaderOnDoor, openDoor, startHolder, stopHolders, until } from '../helpers/service-holder.js'
+import { alive, doorPort, fakeStreamCli, holderEnv, leaderOnDoor, openDoor, startHolder, stopHolders, until } from '../helpers/service-holder.js'
 
 const BUN = process.versions.bun ? process.execPath : null
 const LEADER = '/leader-of-test/walnut-home'
@@ -101,25 +101,6 @@ ws.onmessage = (m) => {
 }
 setInterval(() => {}, 1 << 30)
 `
-
-/** A fake CLI: an init line, then a result line for every line it reads. */
-function fakeCli(root: string): string {
-  const file = path.join(root, 'fake-cli.sh')
-  fs.writeFileSync(file, [
-    '#!/bin/sh',
-    'sid=fake',
-    'while [ $# -gt 0 ]; do',
-    '  if [ "$1" = "--session-id" ]; then sid="$2"; fi',
-    '  shift',
-    'done',
-    'echo "{\\"type\\":\\"system\\",\\"subtype\\":\\"init\\",\\"session_id\\":\\"$sid\\",\\"model\\":\\"fake\\",\\"tools\\":[]}"',
-    'while IFS= read -r line; do',
-    '  echo "{\\"type\\":\\"result\\",\\"subtype\\":\\"success\\",\\"is_error\\":false,\\"session_id\\":\\"$sid\\",\\"result\\":\\"ok\\"}"',
-    'done',
-    '',
-  ].join('\n'), { mode: 0o755 })
-  return file
-}
 
 describe.skipIf(!BUN || process.platform !== 'linux')('a host\'s one Walnut service, through its door', () => {
   it('a. walnut-net: the net supervisor starts walnut-net on the door\'s port file, and walnut-net reaches this runtime', async () => {
@@ -279,7 +260,7 @@ describe.skipIf(!BUN || process.platform !== 'linux')('a host\'s one Walnut serv
 
   it('d. two services on two dir sets of one HOME never adopt each other\'s sessions', async () => {
     const root = tempRoot('two')
-    const cli = fakeCli(root)
+    const cli = fakeStreamCli(root)
     // One account (one HOME, one spawn journal), two Walnut services each with its own daemon, state and data dirs.
     const shared = { HOME: path.join(root, 'home'), WALNUT_HOME_OVERRIDE: path.join(root, 'home'), WALNUT_SPAWN_JOURNAL: path.join(root, 'home', 'spawn-journal.jsonl') }
     const envA = holderEnv(path.join(root, 'a'), { serviceHome: '/walnut-a/home', extra: shared })

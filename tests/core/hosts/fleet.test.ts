@@ -399,3 +399,20 @@ describe('the card names the one Walnut service only when it is this Walnut\'s',
     expect(card?.daemon?.serves).toBe(serves)
   })
 })
+
+// The leader switch makes a machine lead only when the version there, and the version its launcher
+// goes back to, say they can (src/providers/service-roles.ts): both reach the card host_get shows.
+describe('the card carries what the host\'s versions can be as its one Walnut service', () => {
+  it('serviceRoles from hello and the launcher\'s goodRoles; nothing from a host that says nothing', async () => {
+    dev.conn.serviceRoles = ['replica', 'leader']
+    dev.conn.launcher = { current: '/v/cur/walnut', good: '/v/good/walnut', phase: 'committed', since: 1, goodRoles: ['replica', 'leader'] }
+    const card = await getFleetHost('devbox')
+    expect(card?.daemon?.serviceRoles).toEqual(['replica', 'leader'])
+    expect(card?.daemon?.launcher?.goodRoles).toEqual(['replica', 'leader'])
+    delete dev.conn.serviceRoles
+    dev.conn.launcher = { current: '/v/cur/walnut', good: '/v/good/walnut', phase: 'committed', since: 1 }
+    const older = await getFleetHost('devbox')
+    expect(older?.daemon).not.toHaveProperty('serviceRoles')
+    expect(older?.daemon?.launcher).not.toHaveProperty('goodRoles')
+  })
+})

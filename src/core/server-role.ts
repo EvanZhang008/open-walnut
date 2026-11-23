@@ -96,12 +96,28 @@ export function isHostReplicaProgram(): boolean {
  * set by its `--service` entry before the server's modules load): the runtime's own daemon dir,
  * the follower home it serves, and the env a daemon program would have had. Null everywhere else.
  */
-export interface ServiceRuntime { dir: string; home: string; env: Record<string, string> }
+export interface ServiceRuntime {
+  dir: string
+  home: string
+  env: Record<string, string>
+  /** A leading service (src/binary/service-entry.ts runLeaderService): the Walnut it leads, whose follower never runs here. */
+  leads?: string
+}
 let serviceRuntimeFact: ServiceRuntime | null = null
 export function holdServiceRuntime(fact: ServiceRuntime): void { serviceRuntimeFact = fact }
 export function serviceRuntime(): ServiceRuntime | null { return serviceRuntimeFact }
 /** Tests only. */
 export function _resetServiceRuntimeForTesting(): void { serviceRuntimeFact = null }
+/**
+ * The daemon install root of this machine (`WALNUT_DAEMON_STATE_DIR`, where service-mode.json lives),
+ * absolute, or null: the runtime's env in a host's one Walnut service (either role; the server's own
+ * env never has it), else this process's. The leader switch writes the role with it
+ * (src/binary/service-mode.ts setServiceRole).
+ */
+export function serviceInstallRoot(): string | null {
+  const dir = serviceRuntimeFact?.env.WALNUT_DAEMON_STATE_DIR ?? process.env.WALNUT_DAEMON_STATE_DIR ?? null
+  return dir && dir.startsWith('/') ? dir : null
+}
 /**
  * This server may run a local session daemon: the Mac, the companion with cloud.exec on (checked by
  * its caller), or a host's one Walnut service, which holds the host's runtime in its own process.

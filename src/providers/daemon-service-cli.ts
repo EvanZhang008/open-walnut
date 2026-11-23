@@ -29,7 +29,8 @@ import { daemonReady, daemonStays } from './daemon-service-ready.js'
 import { createLauncherControl } from './service-launcher-control.js'
 import { LAUNCHER_DIR_NAME, LAUNCHER_SCRIPT_NAME } from './service-launcher-script.js'
 import { launcherKeeps, readLauncherFacts } from './service-launcher-beat.js'
-import { nextServiceMode, readServiceMode, SERVICE_MODE_FILE, writeServiceMode, type ServiceMode } from '../binary/service-entry.js'
+import { readServiceMode, type ServiceMode } from '../binary/service-mode.js'
+import { dropServiceMode, removeServiceMode, restoreServiceMode, stageServiceMode } from '../binary/service-mode-update.js'
 
 export { daemonReady, daemonStays, SERVICE_STAY_MS } from './daemon-service-ready.js'
 
@@ -335,7 +336,7 @@ export function servicePath(current: string | undefined, home: string): string {
 
 /** The server passes it when the experiment service_launcher is on (daemon-service-update.ts). */
 export const LAUNCHER_FLAG = '--launcher'
-/** The leader of `<home>` switches this host to its one Walnut service, or back (service-entry.ts). */
+/** The leader of `<home>` switches this host to its one Walnut service, or back (service-mode.ts). */
 export const SERVE_FLAG = '--serve'
 export const NO_SERVE_FLAG = '--no-serve'
 
@@ -417,6 +418,9 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
   // One action uses the same files from probe to verify (owners read once inside the lock), so its view never changes partway through.
   // The mode before this action staged a version (prepareExecutable): back in place when it failed.
   let modeBefore: ServiceMode | null | undefined
+  // What this action last wrote: a put-back restores the mode before only over its own write.
+  // Every mode write here holds the mode's lock (service-mode-update.ts), as setServiceRole does.
+  let modeWritten: ServiceMode | null = null
   const act = async (files: DaemonServiceFiles): Promise<number> => {
     const previousInstance = action === 'restart' || action === 'install' || action === 'update'
       ? await fs.readFile(path.join(runtimeDir, 'daemon.instance'), 'utf8').then((value) => value.trim()).catch((error) => {
@@ -442,9 +446,15 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
           ...prepared, path: servicePath(process.env.PATH, home),
           // Asked: its own Walnut said --serve with this update; else the mode came over from the version before.
           mode: !mode ? null : options.serve?.on && options.serve.home === mode.home ? 'asked' : 'carried',
-          dropMode: () => {
-            process.stderr.write(`walnut daemon: ${prepared.executable} runs only as the session daemon; the service mode it was carried over with is dropped\n`)
-            writeServiceMode(root, null)
+          dropMode: async () => {
+            // A leading machine's role only the leader switch changes: the mode stays, and a later
+            // version that can lead takes it up again (the entry reads another version's mode as the daemon).
+            const dropped = await dropServiceMode(root, prepared.executable)
+            if (dropped === 'leader') process.stderr.write(`walnut daemon: ${prepared.executable} runs only as the session daemon; the leader mode stays for the next version that can lead\n`)
+            if (dropped === 'dropped') {
+              process.stderr.write(`walnut daemon: ${prepared.executable} runs only as the session daemon; the service mode it was carried over with is dropped\n`)
+              modeWritten = null
+            }
           },
         })
       },
@@ -459,11 +469,10 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
       prepareExecutable: async () => {
         if (!options.executable) throw new Error('No standalone daemon binary supplied; build the daemon before installing')
         const staged = await stageDaemonServiceArtifact({ sourceExecutable: options.executable, installRoot: root })
-        const read = readServiceMode(root)
-        modeBefore = 'mode' in read ? read.mode : null
-        const next = nextServiceMode(modeBefore, options.serve, staged.executable)
+        const next = await stageServiceMode(root, options.serve, staged.executable)
+        modeBefore = next.before
+        modeWritten = next.written
         if (next.note) process.stderr.write(`walnut daemon: ${next.note}\n`)
-        writeServiceMode(root, next.mode)
         return staged
       },
     }
@@ -481,10 +490,15 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
     }
     const configPath = manager.configPath(scope)
     const before = action === 'install' || action === 'update' ? await files.readConfig(configPath).catch(() => null) : null
-    // The version that runs on after a failure is the one before: so is its mode (service-entry.ts).
-    const restoreMode = () => { if (modeBefore !== undefined) { try { writeServiceMode(root, modeBefore) } catch { /* the entry reads a doubt as the daemon */ } } }
-    const result = await manager[action as 'install' | 'update' | 'uninstall' | 'restart']({ scope }).catch((error: unknown) => { restoreMode(); throw error })
-    if (!result.ok) restoreMode()
+    // The version that runs on after a failure is the one before: so is its mode (service-mode.ts).
+    // Only over this action's own write (compare and swap): a role the switch wrote since stays.
+    const restoreMode = async () => {
+      if (modeBefore === undefined) return
+      const restored = await restoreServiceMode(root, modeBefore, modeWritten).catch(() => null /* the entry reads a doubt as the daemon */)
+      if (restored === 'changed') process.stderr.write('walnut daemon: the service mode changed since this update wrote it; it stays as it is\n')
+    }
+    const result = await manager[action as 'install' | 'update' | 'uninstall' | 'restart']({ scope }).catch(async (error: unknown) => { await restoreMode(); throw error })
+    if (!result.ok) await restoreMode()
     if (result.ok && (action === 'install' || action === 'update')) {
       // Each update stages a new ~100 MB version: keep the running one and the one before it (the rollback).
       const after = await files.readConfig(configPath).catch(() => null)
@@ -510,7 +524,7 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
       await fs.rm(path.join(root, LAUNCHER_SCRIPT_NAME), { force: true }).catch(() => {})
       await fs.rm(path.join(root, LAUNCHER_DIR_NAME), { recursive: true, force: true }).catch(() => {})
       // No launcher, no service: a later install starts as the daemon unless its leader says otherwise.
-      await fs.rm(path.join(root, SERVICE_MODE_FILE), { force: true }).catch(() => {})
+      await removeServiceMode(root).catch(() => { /* the entry reads a doubt as the daemon */ })
     }
     if (result.ok && action === 'uninstall') {
       // Tells the server not to set it up again (remote-boot-start.ts BOOT_SETUP_MARKER); a later install wins.

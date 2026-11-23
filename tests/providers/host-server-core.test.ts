@@ -483,6 +483,25 @@ describe('host server supervision: the host\'s one Walnut service is its own fol
   })
 })
 
+// A machine that leads a Walnut as its one service (src/binary/service-entry.ts runLeaderService) runs
+// no follower of that Walnut: the spec it kept from when it followed is neither started at boot nor by a
+// configure. Another Walnut's follower runs as before.
+describe('a leading service runs no follower of the Walnut it leads', () => {
+  it('skips that Walnut\'s spec at boot and refuses a configure for it; another Walnut\'s runs', () => {
+    createHostServerSupervisor(deps()).configure('/h', spec())
+    createHostServerSupervisor(deps()).configure('/other', spec({ home: '/other', walnutId: 'w2', port: 4100 }))
+    spawned = []
+    procs.clear()
+    const sup = createHostServerSupervisor({ ...deps(), leads: 'w1' })
+    sup.boot()
+    expect(spawned).toHaveLength(1)
+    expect(sup.homes()).toEqual(['/other'])
+    expect(sup.status('/other')).toMatchObject({ state: 'running' })
+    expect(() => sup.configure('/h', spec({ port: 4001 }))).toThrow(/this machine leads Walnut w1/)
+    expect(spawned).toHaveLength(1)
+  })
+})
+
 describe('the pid file has one reader (heldServerAt)', () => {
   it('reads { pid, startTime }, and nothing from a missing, broken or odd file', () => {
     const file = path.join(dir, 'server-x.pid')

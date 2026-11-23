@@ -16,6 +16,7 @@ import {
   isLauncherScript, renderLauncherScript,
 } from './service-launcher-script.js'
 import { readLauncherFacts, type LauncherFacts } from './service-launcher-beat.js'
+import { daemonFileSays } from './service-roles.js'
 
 export type LauncherOutcome = 'committed' | 'rolledback' | 'interrupted' | 'refused' | 'failed' | 'current'
 export interface LauncherResult { id: string; outcome: LauncherOutcome; exe: string; reason: string }
@@ -78,13 +79,9 @@ export function launcherScriptPath(stateDir: string, backend: 'systemd' | 'launc
 }
 
 /** The daemon build an executable carries (`<exe> __daemon --version`), for the launcher's day-long hold of a failed one. */
-export function daemonBuildOf(exe: string): Promise<string | undefined> {
-  return new Promise((resolve) => {
-    execFile(exe, ['__daemon', '--version'], { timeout: 30_000 }, (error, stdout) => {
-      const last = String(stdout ?? '').trim().split('\n').pop()?.trim() ?? ''
-      resolve(!error && /^walnut-daemon-[A-Za-z0-9]+$/.test(last) ? last : undefined)
-    })
-  })
+export async function daemonBuildOf(exe: string): Promise<string | undefined> {
+  const last = await daemonFileSays(exe, '--version', execFile)
+  return last && /^walnut-daemon-[A-Za-z0-9]+$/.test(last) ? last : undefined
 }
 
 async function writeWhole(file: string, text: string): Promise<void> {

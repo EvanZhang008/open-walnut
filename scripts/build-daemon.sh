@@ -301,6 +301,12 @@ SOURCES=(
   src/providers/registry-writer-core.ts
   src/providers/log-appender-core.ts
   src/binary/service-entry.ts
+  src/binary/service-mode.ts
+  src/binary/service-mode-lock.ts
+  src/binary/service-mode-update.ts
+  src/binary/service-start-hooks.ts
+  src/binary/service-lead-ready.ts
+  src/providers/service-roles.ts
   src/providers/clock-host-start-core.ts
   src/core/sessions/open-items-text.ts
   src/core/human-inbox/letter-check.ts

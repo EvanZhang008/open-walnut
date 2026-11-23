@@ -53,8 +53,12 @@ export async function serveReadyCheck(deps: {
   return null
 }
 
-/** Starts the beat when a launcher runs this server; a no-op otherwise. Call once the port listens. */
-export function startServeLauncherBeat(port: number): void {
+/**
+ * Starts the beat when a launcher runs this server; a no-op otherwise. Call once the port listens.
+ * `standby`: a leading service's standby (standby-service.ts): the same check (its runtime's door,
+ * then GET /api/config, which the standby answers), and nothing written in its home.
+ */
+export function startServeLauncherBeat(port: number, opts: { standby?: boolean } = {}): void {
   if (beat) return
   const { dir, servicePid } = takeLauncherEnv()
   beat = startLauncherBeat({ dir, ...(servicePid ? { pid: servicePid } : {}), warn: (message) => log.web.warn(message) })
@@ -70,7 +74,7 @@ export function startServeLauncherBeat(port: number): void {
     }))
     own.idle()
     log.web.info('launcher: ready mark written', { port, ...(servicePid ? { servicePid } : {}) })
-    if (!isHostReplica() && dir) {
+    if (!isHostReplica() && !opts.standby && dir) {
       const [{ readLauncherFacts }, { noteLauncherRollback }] = await Promise.all([
         import('../providers/service-launcher-beat.js'), import('../core/hosts/host-launcher.js'),
       ])

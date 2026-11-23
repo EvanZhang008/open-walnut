@@ -470,7 +470,7 @@ A host not in the list runs two programs, the daemon and the follower child it s
 
 **One process.** The launcher still runs `<install root>/versions/<sha>/<file> --service`, the same
 command line. That entry first reads `<install root>/service-mode.json` (`src/binary/service-entry.ts`,
-`{ v: 1, home, exe }`). With no file, or any doubt (another version's file, no follower spec for that
+`{ v: 1, home, exe, role?, walnutId? }`). With no file, or any doubt (another version's file, no follower spec for that
 home, a spec that is not the replica program, a spec running its fallback), it runs the daemon as
 always and logs why. Otherwise it runs the follower server of that home (`runWeb({ replica: true })`,
 the same entry as `walnut web --replica`) from the spec the daemon keeps for it
@@ -482,6 +482,24 @@ the spec stays, for a rollback. The server is the one writer of the launcher's m
 and `GET /api/v1/instance` does. `service.update` and `service.handover` from `walnut daemon update`
 end the whole process, as they end a daemon. Agent CLIs stay detached and adopted from the registry,
 so their pids never change across the switch.
+
+**A role: replica or leader.** The mode file also carries `role` (`src/binary/service-mode.ts`, absent =
+`replica`) and `walnutId`. `replica` is the above: `home` is the Walnut this service follows. `leader`
+(a machine the leader switch promoted) runs the leader server on `home`, this machine's data dir,
+with the runtime in the same process (`runLeaderService`, `runWeb({ replica: false })`); no follower
+of that Walnut starts there (the runtime's supervisor skips its spec, `leads`), and the server asks
+for its own permit at boot as on any leader. One writer changes the role: `setServiceRole` (by
+Walnut id, never by path; idempotent; it checks the follower spec or the home at write time and
+sends no signal); `walnut daemon update` keeps the role and leaves a leading machine's mode alone.
+Before any home opens, the start hooks of `src/binary/service-start-hooks.ts` run (5 s in all, local
+files only; the switch's resume lives there and may add env for this one start). A leader that is not
+ready (the launcher's ready mark names it) within `WALNUT_SERVICE_LEAD_READY_SECONDS` (180) writes
+`service-role.fallback` and stops the planned way; the next start runs the daemon only until a new
+mode write or version. The planned stop writes its release record well inside the launcher's 60 s stop
+wait. The compiled file says which roles it can take (`<exe> __daemon --service-roles`); the hello
+carries `serviceRoles` and, for the launcher's good version, `goodRoles`, which host_get shows.
+Tests: `tests/binary/service-role.test.ts`, `tests/binary/service-start.test.ts`,
+`tests/providers/service-roles.test.ts`, `tests/providers/one-service-lead-e2e.test.ts`.
 
 **The follower calls the runtime directly.** In the service the follower link is
 `createDirectFollowerLink` (`src/core/link/follower-link-direct.ts`): it calls the runtime's

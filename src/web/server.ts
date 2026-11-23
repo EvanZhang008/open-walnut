@@ -1270,6 +1270,8 @@ async function serveHandedOverHome(standby: import('../core/leader/switch/handed
   // The line the Mac app waits for before it loads the page (desktop/main.swift: it stops a
   // started server that never says it, after 180 s): the standby's, or the console's at this port.
   console.log(handedOverServer.line)
+  // A leading service's standby keeps this machine's sessions and tells its launcher it is ready.
+  await (await import('./standby-service.js')).holdServiceRuntimeInStandby(port)
   bootCompleted = true
   return handedOverServer.server
 }
@@ -7736,6 +7738,7 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
     const s = handedOverServer
     handedOverServer = null
     beginShutdownSteps({ bailMs: opts.bailMs })
+    await shutdownStep('standby session runtime', async () => (await import('./standby-service.js')).releaseServiceRuntimeInStandby(opts.reason ?? 'server stop', IN_PROCESS_DAEMON_STOP_BUDGET_MS), { budgetMs: IN_PROCESS_DAEMON_STOP_BUDGET_MS + 500 })
     await shutdownStep('handed-over standby', () => s.close(), { budgetMs: 2_000 })
     return
   }

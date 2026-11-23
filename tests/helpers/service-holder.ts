@@ -3,7 +3,7 @@
  * in-process-service-holder.ts): its env on one temp root, its start and stop, and a client on its
  * door (daemon.port). With `serviceHome` it holds the dir as a host's one Walnut service does
  * (startInProcessDaemon's `service`: mode 'service', daemon.pid, hello `serves: 'walnut-serve'`).
- * Used by tests/providers/one-service-lock.test.ts and one-service-door.test.ts.
+ * Used by tests/providers/one-service-lock.test.ts, one-service-door.test.ts and one-service-lead-e2e.test.ts.
  * MACHINE SAFETY: every path is under the root the caller made; a holder ends when its stdin
  * closes; nothing is signalled.
  */
@@ -14,6 +14,25 @@ import { WebSocket } from 'ws'
 import { guardedPath } from '../setup/exec-guard.js'
 
 const FIXTURE = path.resolve(__dirname, '../providers/fixtures/in-process-service-holder.ts')
+
+/** A fake CLI under `root`: an init line, then a result line for every line it reads. */
+export function fakeStreamCli(root: string): string {
+  const file = path.join(root, 'fake-cli.sh')
+  fs.writeFileSync(file, [
+    '#!/bin/sh',
+    'sid=fake',
+    'while [ $# -gt 0 ]; do',
+    '  if [ "$1" = "--session-id" ]; then sid="$2"; fi',
+    '  shift',
+    'done',
+    'echo "{\\"type\\":\\"system\\",\\"subtype\\":\\"init\\",\\"session_id\\":\\"$sid\\",\\"model\\":\\"fake\\",\\"tools\\":[]}"',
+    'while IFS= read -r line; do',
+    '  echo "{\\"type\\":\\"result\\",\\"subtype\\":\\"success\\",\\"is_error\\":false,\\"session_id\\":\\"$sid\\",\\"result\\":\\"ok\\"}"',
+    'done',
+    '',
+  ].join('\n'), { mode: 0o755 })
+  return file
+}
 
 /** The holder's env on `root`: its own HOME, data home and daemon dir; with `serviceHome`, the launcher's state dir too. */
 export function holderEnv(root: string, opts: { serviceHome?: string; extra?: NodeJS.ProcessEnv } = {}): NodeJS.ProcessEnv {

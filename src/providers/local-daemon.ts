@@ -439,7 +439,7 @@ export class LocalDaemon {
       const service = this.service
       const verdict = await ensureInProcessDaemon({
         dir: this.daemonDir,
-        ...(service ? { service: { home: service.home } } : {}),
+        ...(service ? { service: { home: service.home, ...(service.leads ? { leads: service.leads } : {}) } } : {}),
         readPort: () => this.readPortFile(),
         alive: async (port) => (await this.ping(port)).alive,
         // A daemon program still serving the dir hands it over first (SIGTERM: the production dir

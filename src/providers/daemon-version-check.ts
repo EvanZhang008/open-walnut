@@ -421,8 +421,16 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/file-pool-deadline.ts',
   'src/providers/registry-writer-core.ts',
   'src/providers/log-appender-core.ts',
-  // What the --service entry runs, the daemon or the Walnut service (bundled in daemon-service-cli.cjs).
+  // What the --service entry runs, the daemon or the Walnut service in either role, its mode file
+  // (bundled in daemon-service-cli.cjs), its start hooks and the ready watch of a leading service.
   'src/binary/service-entry.ts',
+  'src/binary/service-mode.ts',
+  'src/binary/service-mode-lock.ts',
+  'src/binary/service-mode-update.ts',
+  'src/binary/service-start-hooks.ts',
+  'src/binary/service-lead-ready.ts',
+  // The roles a version can take as that service (hello serviceRoles, goodRoles of the launcher).
+  'src/providers/service-roles.ts',
   // A routine run started on its host while the Mac is away (clock-host-start-v1): same rule.
   'src/providers/clock-host-start-core.ts',
   'src/core/sessions/open-items-text.ts',

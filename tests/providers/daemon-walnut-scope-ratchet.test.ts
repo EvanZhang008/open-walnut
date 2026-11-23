@@ -136,6 +136,7 @@ const TWIN_ONLY: Record<string, string> = {
  */
 const FAN_OUT: Record<string, string> = {
   'cron-metadata': 'per-session values keyed by sid; each server reads only its own sessions',
+  'launcher-facts': 'the machine\'s launcher (its versions and the roles its good version can take), the same for every Walnut on it',
 }
 
 function fanOuts(src: string): string[] {

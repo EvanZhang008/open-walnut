@@ -279,6 +279,7 @@ import { DaemonSessionGate, createDaemonCronRuntime, persistCronHooks, processSt
 import { createCronMetadataTracker, readCronMetadataStream } from './daemon-cron-metadata.js'
 import { readCronBootId } from './daemon-cron-host.js'
 import { askOwnPort, daemonServesCheck, startLauncherBeat, type LauncherBeat } from './service-launcher-beat.js'
+import { createServiceRolesReader, programServiceRoles, SERVICE_ROLES_FLAG, withGoodRoles } from './service-roles.js'
 import { spawnBehindRegistry } from './daemon-spawn-barrier.js'
 import { acquireDaemonInstanceLock, readDaemonInstanceOwner, type DaemonInstanceLockOwner } from './daemon-instance-lock.js'
 import { createDaemonCommandDrain } from './daemon-command-drain.js'
@@ -374,8 +375,19 @@ const DAEMON_STATE_DIR = daemonEnv.WALNUT_DAEMON_STATE_DIR
 const SERVICE_MODE = options.mode === 'service'
 // The launcher's heartbeat and ready mark when a launcher runs this service (service-launcher-beat.ts). Keep in sync with daemon-source.ts.
 let launcherBeat: LauncherBeat | null = null
-/** The launcher's facts for hello: this program's own beat, or the host service's (options.launcherFacts). */
-const launcherFactsNow = () => launcherBeat?.facts() ?? options.launcherFacts?.() ?? null
+/**
+ * What the launcher's good version can take as a service, asked of that file once per path
+ * (service-roles.ts). The first hello goes out before the answer: once it is known, every server
+ * linked here hears the facts again (`launcher-facts`), with no reconnect.
+ */
+const goodRolesOf = createServiceRolesReader(childUse.execFile, { env: daemonEnv, known: () => tellLauncherFacts() })
+function tellLauncherFacts(): void {
+  const launcher = launcherFactsNow()
+  if (!launcher) return
+  for (const client of wsClients) if (isServerClient(client)) sendEvent(client, 'launcher-facts', { launcher })
+}
+/** The launcher's facts for hello: this program's own beat, or the host service's (options.launcherFacts), with its good version's roles. */
+const launcherFactsNow = () => withGoodRoles(launcherBeat?.facts() ?? options.launcherFacts?.() ?? null, goodRolesOf)
 // An isolated dir whose sessions must outlive this process anyway: the cloud
 // companion's daemon for the paired Mac (providers/cloud-tunnel-daemon.ts). A
 // companion upgrade replaces it the way prod's is replaced, and the successor
@@ -3332,6 +3344,8 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       ...(RUNS_AS === 'walnut-serve' && options.selfHome ? { serviceHome: options.selfHome } : {}),
       ...(SERVICE_MODE ? { serviceExecutable: process.execPath } : {}),
       ...(launcherFactsNow() ? { launcher: launcherFactsNow() } : {}),
+      // The roles this program can take as a host's one Walnut service (service-roles.ts). The template twin says none.
+      serviceRoles: programServiceRoles(singleFile() !== null),
       startedAt: DAEMON_START_TS,
       uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000),
       runtime: DAEMON_RUNTIME,
@@ -4866,6 +4880,8 @@ const hostServers = createHostServerSupervisor({
     logMsg('info', 'host server: the service\'s own follower spec changed; restarting the service', { home: options.selfHome, why })
     setTimeout(() => requestDaemonShutdown?.(), 0)
   } } } : {}),
+  // A leading service: no follower of the Walnut it leads runs here.
+  ...(options.leadsWalnut ? { leads: options.leadsWalnut } : {}),
 })
 
 // ── logs.tail ('replica-logs-v1', replica-logs-core.ts; WP14) ──
@@ -15853,6 +15869,12 @@ export async function runDaemonProcess(argv: string[] = process.argv): Promise<v
   // pass it, and a payload containing `--version` must not print the version.
   if (argv.includes('--version') && !isDaemonCliKeyword(action)) {
     console.log(DAEMON_VERSION)
+    process.exit(0)
+  }
+  // `walnut __daemon --service-roles`: the roles this file can take as a host's one Walnut service
+  // (service-roles.ts; the launcher's good version is asked this way). An older file prints its usage.
+  if (action === SERVICE_ROLES_FLAG) {
+    console.log(programServiceRoles(singleFile() !== null).join(' '))
     process.exit(0)
   }
 

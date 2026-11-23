@@ -132,6 +132,8 @@ export interface HostServerDeps {
   self?: { home: string; pid: number; changed: (why: string) => void }
   /** The home a Walnut is keyed by here (walnut-scope-core.ts canonical); only the service's own home is matched by it. */
   canonical?: (home: string) => string
+  /** A leading service: the Walnut this machine leads. No follower of it is started, adopted or configured here. */
+  leads?: string
 }
 
 export function createHostServerSupervisor(deps: HostServerDeps) {
@@ -520,6 +522,7 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
     }
     const spec = validate(raw)
     if (spec.home !== home) throw new Error('server.configure: the spec belongs to another Walnut')
+    if (deps.leads && spec.walnutId === deps.leads) throw new Error(`server.configure: this machine leads Walnut ${deps.leads}; no follower of it runs here`)
     if (prev && runKey(prev.spec) === runKey(spec)) {
       if (JSON.stringify(prev.spec.settings) !== JSON.stringify(spec.settings)) {
         prev.spec = spec
@@ -567,6 +570,10 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
         if (spec.fallback && f && typeof f.since === 'number' && typeof f.until === 'number') fallback = f
       } catch { continue }
       if (entries.has(spec.home)) continue
+      if (deps.leads && spec.walnutId === deps.leads) {
+        deps.log('info', 'host server: this machine leads this Walnut; its follower is not started', { home: spec.home, walnutId: spec.walnutId })
+        continue
+      }
       if (isSelf(spec.home)) {
         const home = deps.self!.home
         if (entries.has(home)) continue

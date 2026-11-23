@@ -133,7 +133,7 @@ export type InProcessStart = { kind: 'started'; dir: string } | { kind: 'existin
  * program would: SIGTERM to this process, whose handler stops the server (and writes the launcher's
  * leaving mark) before it exits.
  */
-export function startInProcessDaemon(opts: { dir: string; env: NodeJS.ProcessEnv; service?: { home: string } }): Promise<InProcessStart> {
+export function startInProcessDaemon(opts: { dir: string; env: NodeJS.ProcessEnv; service?: { home: string; leads?: string } }): Promise<InProcessStart> {
   if (closedForGood) return Promise.reject(new InProcessDaemonClosedError())
   if (held && !held.ended) {
     if (held.dir !== opts.dir) return Promise.reject(new Error(`an in-process daemon already serves ${held.dir}`))
@@ -151,6 +151,7 @@ export function startInProcessDaemon(opts: { dir: string; env: NodeJS.ProcessEnv
       env: opts.env,
       mode: service ? 'service' : 'start',
       ...(service ? { pidFile: true, serves: 'walnut-serve' as const, selfHome: service.home, launcherFacts } : {}),
+      ...(service?.leads ? { leadsWalnut: service.leads } : {}),
       listen: false,
       // The door stays open for everyone this server does not call directly (walnut-net, a
       // host's follower server, hub forwards, a leader's tunnel): turning the experiment on
@@ -288,7 +289,7 @@ export async function ensureInProcessDaemon(deps: {
   /** Who holds the dir's lock (anotherServiceHolds): tests hand their own. */
   otherService?: () => Promise<{ pid: number } | null>
   /** This process is a host's one Walnut service, the follower of `home` (startInProcessDaemon). */
-  service?: { home: string }
+  service?: { home: string; leads?: string }
   /**
    * Folds the registry's streams in a child process first (fold-prewarm.ts), so the start adopts
    * from fresh checkpoints: in process its re-fold holds the server's thread (A3b measure: about

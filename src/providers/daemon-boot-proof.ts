@@ -129,11 +129,11 @@ export const SERVED_AS_DAEMON = 'it wrote the launcher\'s ready mark as the sess
  * the build: the mode goes (`dropMode`) and the file is proven as the daemon it runs as (review
  * A3b S34-L5). An asked one must serve.
  */
-export async function proveStagedBoot(o: BootProofOptions & { mode: 'asked' | 'carried' | null; dropMode: () => void }, prove: (o: BootProofOptions) => Promise<string | null> = proveDaemonBoot): Promise<string | null> {
+export async function proveStagedBoot(o: BootProofOptions & { mode: 'asked' | 'carried' | null; dropMode: () => void | Promise<void> }, prove: (o: BootProofOptions) => Promise<string | null> = proveDaemonBoot): Promise<string | null> {
   const { mode, dropMode, ...proof } = o
   const why = await prove({ ...proof, serve: mode !== null })
   if (mode !== 'carried' || !why?.startsWith(SERVED_AS_DAEMON)) return why
-  dropMode()
+  await dropMode()
   return prove({ ...proof, serve: false })
 }
 

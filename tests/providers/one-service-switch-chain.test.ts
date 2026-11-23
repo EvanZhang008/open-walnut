@@ -38,7 +38,8 @@ vi.mock('../../src/core/host-server/index.js', async (importOriginal) => ({ ...(
 
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 import { parseDaemonServiceArgs } from '../../src/providers/daemon-service-cli.js'
-import { decideServiceEntry, nextServiceMode, readServiceMode, writeServiceMode } from '../../src/binary/service-entry.js'
+import { decideServiceEntry } from '../../src/binary/service-entry.js'
+import { nextServiceMode, readServiceMode, writeServiceMode } from '../../src/binary/service-mode.js'
 import { resetInProcessDaemonWantedForTests } from '../../src/providers/in-process-daemon.js'
 import { WALNUT_HOME } from '../../src/constants.js'
 import { log } from '../../src/logging/index.js'

@@ -97,6 +97,11 @@ export interface FleetHost {
     /** The host's launcher (the experiment service_launcher): absent when the daemon runs without one. */
     launcher?: FleetLauncher | null
     /**
+     * The roles the version running there can take as the host's one Walnut service (src/providers/service-roles.ts):
+     * the leader switch makes a machine lead only when it says `leader`, here and in launcher.goodRoles.
+     */
+    serviceRoles?: Array<'replica' | 'leader'>
+    /**
      * The host's one Walnut service runs here (src/providers/one-service-mode.ts): the session helper and
      * this Walnut's server in one program, said "Walnut service". Absent: the session helper on its own.
      */
@@ -134,6 +139,8 @@ export interface FleetLauncher {
   /** A probation's end (epoch ms), when the phase is probation. */
   watchedUntil: number | null
   lastRollback: { at: number; from: string; reason: string } | null
+  /** The service roles the good version can take, once the host asked it (absent before, or from an older host). */
+  goodRoles?: Array<'replica' | 'leader'>
 }
 
 /** A host's boot start as the fleet shows it (BootStartView, flattened). */

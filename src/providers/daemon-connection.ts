@@ -157,6 +157,8 @@ import { acceptHubStream } from '../core/hosts/hub-ports.js'
 import * as sameDaemonRecord from '../core/hosts/same-daemon-record.js'
 import { TRIGGERS_DELTA_MAX } from './trigger-check-core.js'
 import { launcherFactsFrom, type LauncherFacts } from './service-launcher-beat.js'
+import { serviceRolesFrom } from './service-roles.js'
+import type { ServiceRole } from '../binary/service-mode.js'
 import { noteLauncherRollback } from '../core/hosts/host-launcher.js'
 import { isMachineId } from './machine-id-core.js'
 import { noteFrameParsed } from './line-parse-count.js'
@@ -883,6 +885,8 @@ export class DaemonConnection {
   private _serviceExecutable: string | null = null
   /** The host's launcher (hello `launcher`, service-launcher-beat.ts): its versions and last put-back. */
   private _launcher: LauncherFacts | null = null
+  /** The roles the running version can take as a host's one Walnut service (hello `serviceRoles`, service-roles.ts); [] when it says none. */
+  private _serviceRoles: ServiceRole[] = []
   /** What the hello says runs there (one-service-mode.ts): the daemon, or a host's one Walnut service and whose. */
   private _servesAs: { serves: ServesAs; serviceHome: string | null } = { serves: 'daemon', serviceHome: null }
   /** The home the host keeps this Walnut under after a declared move (leader.configure's homeHere), this connection. */
@@ -1669,6 +1673,7 @@ export class DaemonConnection {
   get daemonStartup(): string { return this._daemonStartup }
   get serviceExecutable(): string | null { return this._serviceExecutable }
   get launcher(): LauncherFacts | null { return this._launcher }
+  get serviceRoles(): ServiceRole[] { return this._serviceRoles }
   /** The hello's `serves` (a host's one Walnut service, or the daemon) and whose service it is. */
   get servesAs(): { serves: ServesAs; serviceHome: string | null } { return servesAsHere(this._servesAs, WALNUT_HOME, this._homeHere) }
   /** Whether the host's daemon starts after a reboot, as the host last said (remote-boot-start.ts); null before it was asked. */
@@ -6180,6 +6185,7 @@ export class DaemonConnection {
       const exe = res.serviceExecutable
       this._serviceExecutable = typeof exe === 'string' && exe.startsWith('/') && exe.length < 1024 && !/[\u0000-\u001f]/.test(exe) ? exe : null
       this._launcher = launcherFactsFrom(res.launcher)
+      this._serviceRoles = serviceRolesFrom(res.serviceRoles)
       if (this._launcher?.rollback) void noteLauncherRollback(this.hostKey, this._launcher)
       this._servesAs = servesFromHello(res)
       // Said again by this connection's leader.configure.
@@ -8319,6 +8325,12 @@ export class DaemonConnection {
       const event = msg as unknown as DaemonEvent
       if (event.ev === 'cron-metadata') {
         if (this._connected && this.cronMetadataToken) sessionCronMetadata.apply(this.hostKey, this.cronMetadataToken, event.value)
+        return
+      }
+      // The launcher's facts again after hello (the good version's roles became known): no reconnect needed.
+      if (event.ev === 'launcher-facts') {
+        const facts = launcherFactsFrom((event as unknown as { launcher?: unknown }).launcher)
+        if (facts) this._launcher = facts
         return
       }
       // STT relay (cloud voice input): the daemon forwards phone audio from

@@ -34,6 +34,7 @@ export function fleetLauncher(facts: LauncherFacts | null | undefined): FleetLau
     phase: facts.phase,
     watchedUntil: facts.phase === 'probation' && facts.since > 0 ? (facts.since + PROBATION_SECONDS) * 1000 : null,
     lastRollback: r ? { at: r.at * 1000, from: launcherVersionWords(r.from, r.build), reason: r.reason } : null,
+    ...(facts.goodRoles ? { goodRoles: [...facts.goodRoles] } : {}),
   }
 }
 
