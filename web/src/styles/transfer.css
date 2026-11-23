@@ -68,7 +68,7 @@
 .tdp-transfer { margin-bottom: 2px; }
 .tdv2-transfer { margin: -4px 0 12px; }
 /* The Model row: one pill that opens the model picker (TransferLaunchRows.tsx). */
-.xfer-model-caret { margin-left: auto; color: var(--fg-muted); font-size: var(--font-size-xs); }
+.xfer-model-caret { margin-left: auto; display: inline-flex; color: var(--fg-muted); }
 
 /* "Move to another host" (MoveHostMenuItems): each host with how busy it is. */
 .task-kebab-move-host { align-items: flex-start; }

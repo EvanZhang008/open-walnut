@@ -4,6 +4,7 @@ import { SESSION_MODES, type SessionMode } from '@open-walnut/core';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { PickerRow } from './PickerRow';
+import { MenuCaret } from '@/components/controls';
 
 /**
  * The permission-mode pill of a Claude Code composer (session panel, side
@@ -77,7 +78,7 @@ export function PermissionModeMenu({ mode, onPick, title, heading = 'Permission 
     >
       <span className="mode-toggle-pill-label">{label ?? entry?.label ?? mode}</span>
       {/* A menu, like the model key beside it: the family's caret (turns over while open). */}
-      <span className="btn-caret" aria-hidden="true">{'\u25BE'}</span>
+      <MenuCaret />
     </button>
     {open && createPortal(
       <div

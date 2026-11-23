@@ -3,6 +3,7 @@ import { EmptyState } from '@/components/common/EmptyState';
 import { usePersistentState, isString, isStringArray } from '@/hooks/usePersistentState';
 import type { MemoryBrowseTree, BrowseItem, BrowseDailyItem } from '@/api/memory';
 import { SearchField } from '@/components/common/SearchField';
+import { DisclosureChevron } from '@/components/controls';
 
 /**
  * The two standing stores every session reads, named by what they hold; the file name stays
@@ -342,7 +343,7 @@ function Section({ title, id, collapsed, onToggle, count, children }: SectionPro
         className="memory-tree-section-header"
         onClick={() => onToggle(id)}
       >
-        <span className="memory-tree-chevron">{isCollapsed ? '\u25B6\uFE0E' : '\u25BC'}</span>
+        <DisclosureChevron open={!isCollapsed} className="memory-tree-chevron" />
         <span className="memory-tree-section-title">{title}</span>
         {count !== undefined && <span className="memory-tree-section-count">{count}</span>}
       </button>
@@ -401,7 +402,7 @@ function ProjectNodeView({ node, depth, selectedPath, onSelect, collapsed, onTog
           onClick={() => onToggle(nodeId)}
           style={{ paddingLeft: `${12 + depth * 16}px` }}
         >
-          <span className="memory-tree-chevron">{isCollapsed ? '\u25B6\uFE0E' : '\u25BC'}</span>
+          <DisclosureChevron open={!isCollapsed} className="memory-tree-chevron" />
           <span className="memory-tree-folder-name wn-title">{node.name}</span>
         </button>
         {!isCollapsed && (

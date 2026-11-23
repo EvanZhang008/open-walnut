@@ -29,6 +29,7 @@ import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/
 import { copyRichText, copyTextRobust } from '@/utils/clipboard';
 import { markdownToRichHtml } from '@/utils/markdown';
 import { badge, priorityTone } from '@/components/common/badge';
+import { DisclosureChevron } from '@/components/controls';
 export interface RouteInfo {
   direction: 'sent' | 'received';
   event: string;
@@ -108,7 +109,7 @@ function CompactionDetails({ details }: { details: string }) {
   return (
     <div className="chat-compaction-details">
       <button className="chat-compaction-details-toggle" onClick={() => setOpen(p => !p)}>
-        <span className="chat-compaction-details-icon">{open ? '\u25BC' : '\u25B6\uFE0E'}</span>
+        <DisclosureChevron open={open} className="chat-compaction-details-icon" />
         <span className="chat-compaction-details-label">
           {open ? 'Hide compaction details' : 'Show compaction details'}
         </span>
@@ -156,7 +157,7 @@ function TaskContextSection({ ctx, onSessionClick }: TaskContextSectionProps) {
   return (
     <div className="chat-task-context">
       <button className="chat-task-context-toggle" onClick={() => setOpen(p => !p)}>
-        <span className="chat-task-context-icon">{open ? '\u25BC' : '\u25B6\uFE0E'}</span>
+        <DisclosureChevron open={open} className="chat-task-context-icon" />
         <span className="chat-task-context-label">
           Task Context &middot; {ctx.title}
         </span>
@@ -283,7 +284,7 @@ function RouteInfoSection({ info, taskLookup, onSessionClick }: RouteInfoSection
   return (
     <div className="chat-route-info">
       <button className="chat-route-info-toggle" onClick={() => setOpen(p => !p)}>
-        <span className="chat-route-info-icon">{open ? '\u25BC' : '\u25B6\uFE0E'}</span>
+        <DisclosureChevron open={open} className="chat-route-info-icon" />
         <span className="chat-route-info-label">{label}</span>
       </button>
       {open && (
@@ -746,7 +747,7 @@ export function ToolCallSection({ block, taskLookup, onSessionClick, file: fileP
         {!open && inputSummaryNode && (
           <span className="chat-tool-block-summary">{inputSummaryNode}</span>
         )}
-        <span className="chat-tool-block-arrow">{open ? '\u25BC' : '\u25B6\uFE0E'}</span>
+        <DisclosureChevron open={open} className="chat-tool-block-arrow" />
       </button>
       {open && (
         <div className="chat-tool-block-body">
@@ -845,7 +846,7 @@ function SystemMessageGroup({ blocks, sourceLabel, taskLookup, cardScope, onSess
             {statusIcon}
           </span>
           <span className="chat-tool-group-summary">{summaryText}</span>
-          <span className="chat-tool-group-arrow">{isOpen ? '\u25BC' : '\u25B6\uFE0E'}</span>
+          <DisclosureChevron open={isOpen} className="chat-tool-group-arrow" />
         </button>
         {isOpen && (
           <div className="chat-tool-group-body">
@@ -1157,7 +1158,7 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
           />
         )}
         {time && <div className="chat-message-time">{time}</div>}
-        {shouldAutoCollapse && <span className="chat-collapse-toggle">{isCollapsed ? '\u25B6\uFE0E' : '\u25BC'}</span>}
+        {shouldAutoCollapse && <DisclosureChevron open={!isCollapsed} className="chat-collapse-toggle" />}
       </div>
     </div>
   ) : null;

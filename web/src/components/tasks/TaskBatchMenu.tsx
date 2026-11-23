@@ -14,6 +14,7 @@ import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import type { FocusTier } from '@/api/focus';
 import { TaskActionMenuItems, MoveToProjectSection } from './TaskKebabMenu';
 import * as ICONS from '../common/Icons';
+import { MenuCaret } from '@/components/controls';
 
 interface TaskBatchMenuProps {
   /** Number of selected tasks (drives the label + group-enabled state). */
@@ -114,7 +115,7 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
         onClick={toggle}
       >
         More
-        <span className="btn-caret" aria-hidden="true">▾</span>
+        <MenuCaret />
       </button>
 
       {/* Portalled to <body>, as the row kebab's: no ancestor's clip or layer caps it, and a press

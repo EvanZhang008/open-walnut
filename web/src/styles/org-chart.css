@@ -195,9 +195,10 @@
 .oc-project[draggable="true"] { cursor: grab; }
 .oc-project.is-dragging { opacity: 0.45; }
 .oc-project-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
-/* The fold marks of a card read alike: a project's and its Directors' "▸" (org-leaders.css) are the same width
-   and colour, darker than the counts, so the tree's levels scan (2026-11-22, the UI audit). */
-.oc-chevron { flex-shrink: 0; width: 12px; color: var(--fg-secondary); font-size: var(--font-size-xs); line-height: 1.6; text-align: center; }
+/* The fold marks of a card read alike: a project's and its Directors' chevron (org-leaders.css) are the same
+   DisclosureChevron, darker than the counts, so the tree's levels scan (2026-11-22, the UI audit). The margin
+   centres it on the name's first line. */
+.oc-project-btn > .oc-chevron { margin-top: 4px; color: var(--fg-secondary); }
 .oc-project-btn {
   display: flex;
   align-items: flex-start;

@@ -1173,11 +1173,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   color: var(--fg);
 }
 
-.task-group-arrow {
-  font-size: var(--font-size-xs);
-  width: 14px;
-}
-
 .task-group-items {
   padding-left: 4px;
 }
@@ -2031,11 +2026,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 
 .user-messages-summary-toggle:hover:not(:disabled) {
   color: var(--accent);
-}
-
-.user-messages-summary-arrow {
-  font-size: var(--font-size-xs);
-  line-height: 1;
 }
 
 .user-messages-summary-label {
@@ -3485,7 +3475,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 .wf-gnode-main { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
 .wf-gnode-name { color: var(--fg); font-size: var(--font-size-sm); font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; }
 .wf-gnode-meta { color: var(--fg-muted); font-size: var(--font-size-xs); }
-.wf-gnode-caret { color: var(--fg-muted); font-size: var(--font-size-xs); padding-top: 3px; }
+.wf-gnode-caret { margin-top: 3px; }
 .wf-gnode-failed .wf-gnode-name { font-weight: 650; }
 .wf-gnode-completed .wf-gnode-name { color: var(--fg-muted); }
 .wf-gnode .wf-agent-detail { padding: 0 20px 14px 46px; }
@@ -4078,13 +4068,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   color: var(--fg);
 }
 
-.memory-tree-chevron {
-  font-size: 8px;
-  width: 12px;
-  text-align: center;
-  flex-shrink: 0;
-}
-
 .memory-tree-section-title {
   flex: 1;
   text-align: left;
@@ -4426,12 +4409,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 }
 
 /* Collapse toggle arrow */
-.chat-collapse-toggle {
-  font-size: 0.7em;
-  color: var(--fg-muted);
-  transition: transform 0.15s ease;
-}
-
 .chat-compaction-divider {
   padding: 12px 0;
 }
@@ -4479,10 +4456,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 .chat-compaction-details-toggle:hover {
   background: var(--bg-secondary);
   color: var(--fg);
-}
-
-.chat-compaction-details-icon {
-  font-size: var(--font-size-xs);
 }
 
 .chat-compaction-details-content {
@@ -4781,12 +4754,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   color: var(--fg-secondary);
 }
 
-.chat-task-context-icon {
-  font-size: 9px;
-  width: 10px;
-  flex-shrink: 0;
-}
-
 .chat-task-context-label {
   font-weight: 500;
 }
@@ -4921,12 +4888,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   color: var(--fg-secondary);
 }
 
-.chat-route-info-icon {
-  font-size: 9px;
-  width: 10px;
-  flex-shrink: 0;
-}
-
 .chat-route-info-label {
   font-weight: 500;
 }
@@ -5059,13 +5020,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   font-size: var(--font-size-xs);
 }
 
-.chat-tool-block-arrow {
-  font-size: 9px;
-  color: var(--fg-muted);
-  flex-shrink: 0;
-  margin-left: auto;
-}
-
+.chat-tool-block-arrow { margin-left: auto; }
 .chat-tool-block-calling-dot {
   width: 6px;
   height: 6px;
@@ -5516,13 +5471,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   background: rgba(52, 199, 89, 0.12);
 }
 
-.task-group-chevron {
-  font-size: 9px;
-  width: 12px;
-  flex-shrink: 0;
-  color: var(--fg-muted);
-}
-
 .task-group-icon {
   font-size: var(--font-size-xs);
   width: 14px;
@@ -5808,13 +5756,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   font-size: var(--font-size-xs);
 }
 
-.chat-tool-group-arrow {
-  font-size: 9px;
-  color: var(--fg-muted);
-  flex-shrink: 0;
-  margin-left: auto;
-}
-
+.chat-tool-group-arrow { margin-left: auto; }
 .chat-tool-group-body {
   border-top: 1px solid var(--border);
   padding: 4px;
@@ -6837,13 +6779,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
 }
 /* Expanded A/B comparison — both engines' full text + latency, stacked. */
 .mic-history-main[role='button'] { cursor: pointer; }
-.mic-history-caret {
-  flex-shrink: 0;
-  font-size: 9px;
-  color: var(--fg-muted);
-  transition: transform 0.12s ease;
-}
-.mic-history-caret-open { transform: rotate(90deg); }
 .mic-history-open { background: var(--bg-hover); }
 .mic-history-expanded {
   flex-basis: 100%;
@@ -9009,19 +8944,6 @@ body.walnut-dragging {
   user-select: none;
 }
 
-.todo-pinned-chevron {
-  font-size: 9px;
-  color: var(--fg-muted);
-  transition: transform 0.15s;
-  flex-shrink: 0;
-  width: 10px;
-  text-align: center;
-}
-
-.todo-pinned-chevron-open {
-  transform: rotate(90deg);
-}
-
 .todo-pinned-icon {
   font-size: var(--font-size-xs);
   line-height: 1;
@@ -10848,14 +10770,6 @@ body.walnut-dragging {
 
 .global-notes-header:hover {
   background: var(--hover-bg, rgba(0,0,0,0.04));
-}
-
-.global-notes-chevron {
-  font-size: 9px;
-  width: 10px;
-  text-align: center;
-  color: var(--fg-muted);
-  flex-shrink: 0;
 }
 
 .global-notes-label {
@@ -12994,13 +12908,6 @@ a.task-kebab-info:hover {
 .context-section-header:hover {
   color: var(--fg);
   background: var(--accent-subtle);
-}
-
-.context-section-arrow {
-  font-size: 9px;
-  width: 12px;
-  flex-shrink: 0;
-  color: var(--fg-muted);
 }
 
 .context-section-title {
@@ -17100,13 +17007,6 @@ a.tag-chip:hover .tag-chip-value,
   background: var(--bg-secondary);
 }
 
-.triage-session-chevron {
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  flex-shrink: 0;
-  width: 14px;
-}
-
 .triage-session-index {
   font-size: var(--font-size-xs);
   font-weight: 600;
@@ -18996,7 +18896,7 @@ a.tag-chip:hover .tag-chip-value,
   text-align: left;
 }
 .notes-chat-switcher-caret {
-  font-size: 9px;
+  display: inline-flex;
   color: var(--fg-muted);
   transition: transform 0.12s;
 }
@@ -21427,16 +21327,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   border-top: 1px solid var(--border);
   overflow: hidden;
 }
-.side-question-legacy-toggle {
-  align-self: flex-start;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--fg-muted);
-  font-size: var(--font-size-xs);
-  cursor: pointer;
-}
-.side-question-legacy-toggle:hover { color: var(--fg); }
+.side-question-legacy-toggle { align-self: flex-start; }
 .side-question-legacy .side-question-stack { max-height: 180px; }
 
 /* ══ App confirm / alert dialog (replaces native window.confirm/alert) ════════ */
@@ -22254,7 +22145,6 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .session-diff-tree-file.is-selected { background: color-mix(in srgb, var(--accent) 18%, transparent); }
 .session-diff-tree-file.is-selected .session-diff-tree-name { color: var(--accent); font-weight: 600; }
 
-.session-diff-tree-caret { width: 10px; color: var(--fg-muted); flex: 0 0 auto; }
 /* Names in the changed-files tree wrap, never cut (.wn-title on the element, text-fit.css); each
    keeps its words' width, so the marks after it (old name, AI mark, context tag) follow it. */
 .session-diff-tree-dir-name {
@@ -26349,15 +26239,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 }
 
 .nfc-card-plan { margin-top: 5px; }
-
-.nfc-card-toggle {
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  font-size: var(--font-size-sm);
-  color: var(--accent);
-}
 
 .nfc-card-pre {
   margin: 6px 0 0;

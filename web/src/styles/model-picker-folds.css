@@ -60,10 +60,6 @@
   font-weight: 400;
 }
 
-.model-picker-fold-caret {
-  font-size: var(--font-size-xs);
-}
-
 .model-picker-fold-dot {
   display: inline-block;
   width: 8px;

@@ -52,7 +52,7 @@ import { ICON_REFRESH, ICON_WARNING, ICON_PANEL_LEFT, ICON_PANEL_LEFT_FILLED, IC
 import { log } from '@/utils/log';
 import { pointerOwnedElsewhere } from '@/utils/find-scope';
 import { SessionCommitButton } from '@/components/sessions/SessionCommitDialog';
-import { Checkbox, SegmentedControl, type SegmentedOption } from '@/components/controls';
+import { Checkbox, SegmentedControl, type SegmentedOption, DisclosureChevron } from '@/components/controls';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { badge } from '@/components/common/badge';
@@ -351,7 +351,7 @@ function TreeRow({
         onClick={() => onToggle(node.id)}
         title={isRepo ? `${node.label} (${REPO_KIND_WORDS[node.repoKind] ?? node.repoKind})` : node.name}
       >
-        <span className="session-diff-tree-caret">{isOpen ? '▾' : '▸'}</span>
+        <DisclosureChevron open={isOpen} className="session-diff-tree-caret" />
         <span className="session-diff-tree-dir-name wn-title">{isRepo ? node.shortLabel : node.name}</span>
         {/* No pill for a submodule: the deep path in the tooltip already says so,
             and the pill only ate width the name needs in a narrow column. */}

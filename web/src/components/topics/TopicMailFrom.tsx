@@ -9,6 +9,7 @@ import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { useMenuButton } from '@/components/settings/sections/useMenuButton';
 import { mailboxWords, useMailAccounts } from './useMailAccounts';
+import { MenuCaret } from '@/components/controls';
 
 export function TopicMailFrom({ value, onPick, disabled }: {
   value: string | null;
@@ -34,7 +35,7 @@ export function TopicMailFrom({ value, onPick, disabled }: {
       <span className="topic-field-label">Email from</span>
       <span ref={anchor} className="topic-mail-from-anchor">
         <button type="button" className="btn btn-sm topic-mail-from-btn" data-testid="topic-mail-from-button" data-account-id={value ?? ''} disabled={disabled} {...buttonProps}>
-          {words ?? 'Choose a mailbox'} <span aria-hidden="true">▾</span>
+          {words ?? 'Choose a mailbox'} <MenuCaret />
         </button>
         {menu && (
           <ContextMenu

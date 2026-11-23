@@ -290,7 +290,10 @@
 }
 .tp-th:hover { color: var(--fg); }
 .tp-th.on { color: var(--accent); }
-.tp-th-arrow { font-size: 8px; }
+/* The sort direction: one chevron, pointing up for ascending. */
+.tp-th-arrow { display: inline-flex; }
+.tp-th-arrow svg { width: 10px; height: 10px; }
+.tp-th-arrow[data-dir='asc'] { transform: rotate(180deg); }
 
 .tp-row {
   /* A floor, not a height: the title wraps whole and the window measures the row (useTableWindow.ts). */
@@ -555,13 +558,6 @@
   z-index: 1;
 }
 .tp-group-header:hover { background: var(--bg-hover); }
-.tp-group-chevron {
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  transition: transform 0.12s ease;
-  flex: none;
-}
-.tp-group-header.closed .tp-group-chevron { transform: rotate(-90deg); }
 .tp-group-icon { flex: none; font-size: var(--font-size-sm); }
 /* The project's name wraps whole (`wn-title`) at its words' width, so the count follows it. */
 .tp-group-header .tp-group-name { flex: 0 1 auto; }

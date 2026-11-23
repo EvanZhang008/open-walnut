@@ -15,6 +15,7 @@
 import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
+import { decodeEscapes, stripComments } from './source-text-scan'
 
 const ROOT = join(__dirname, '..', '..')
 const WEB_SRC = join(ROOT, 'web', 'src')
@@ -35,26 +36,6 @@ const EMOJI_PRESENTATION_RANGES: [number, number][] = [
 export function isEmojiProne(cp: number): boolean {
   if (IOS_EMOJI_GLYPHS.includes(cp)) return true
   return EMOJI_PRESENTATION_RANGES.some(([a, b]) => cp >= a && cp <= b)
-}
-
-/** Blank out comments, keep line numbers. Line comments only after space/start. */
-export function stripComments(src: string): string {
-  const blank = (s: string) => s.replace(/[^\n]/g, ' ')
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, blank)
-    .replace(/(^|[\s;{}(),])\/\/[^\n]*/g, (m, lead: string) => lead + blank(m.slice(lead.length)))
-}
-
-/**
- * Decode `\uXXXX` and `\u{X...}` escapes into the characters they render, so
- * `'\u25B6'` in source counts like a literal one (C73: the ratchet used to
- * read only literal characters and missed every escaped play triangle).
- * Escapes hold no newline, so line numbers stay put.
- */
-export function decodeEscapes(src: string): string {
-  return src
-    .replace(/\\u\{([0-9a-fA-F]{1,6})\}/g, (_, h: string) => String.fromCodePoint(parseInt(h, 16)))
-    .replace(/\\u([0-9a-fA-F]{4})/g, (_, h: string) => String.fromCharCode(parseInt(h, 16)))
 }
 
 /** Emoji-prone characters not followed by U+FE0E, with their line numbers. */

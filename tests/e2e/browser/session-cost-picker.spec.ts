@@ -108,9 +108,11 @@ test('shows the session total, what it leaves out, how long it ran, and each mod
   await expect(block.locator('.session-cost-head')).toHaveCount(0)
   const rows = block.getByTestId('session-cost-model')
   await expect(rows).toHaveCount(3)
-  await expect(rows.nth(0).locator('.session-cost-model-name')).toHaveText('▸ GPT-6.1 Sol')
+  await expect(rows.nth(0).locator('.session-cost-model-name')).toHaveText('GPT-6.1 Sol')
+  // Folded: its chevron points right (the shared DisclosureChevron, not a typed triangle).
+  await expect(rows.nth(0).locator('.session-cost-model-name .wn-disclosure-chevron:not(.is-open)')).toHaveCount(1)
   await expect(rows.nth(0).getByTestId('session-cost-model-usd')).toHaveText('$117')
-  await expect(rows.nth(1).locator('.session-cost-model-name')).toHaveText('▸ Opus 5.5')
+  await expect(rows.nth(1).locator('.session-cost-model-name')).toHaveText('Opus 5.5')
   await expect(rows.nth(2).getByTestId('session-cost-model-usd')).toHaveText('no price')
   await expect(block).toContainText("Priced per request from Claude Code's own usage records (2003 requests, subagents included).")
 

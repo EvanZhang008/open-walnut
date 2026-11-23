@@ -28,7 +28,7 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { DEFAULT_WAIT_LABEL, type Task, type TaskPhase } from '@open-walnut/core';
 import * as ICONS from '../common/Icons';
-import { Chip, ChipGroup, DisclosureChevron } from '@/components/controls';
+import { Chip, ChipGroup, DisclosureChevron, MenuCaret } from '@/components/controls';
 import { DatePicker } from '../common/DatePicker';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
@@ -337,7 +337,7 @@ export function TaskStatusBadge({ task, onSetPhase, onSetWaitUntil, quiet = fals
         data-testid="task-status-badge"
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
       >
-        {!quiet && (option?.icon ?? '○')} {taskStatusLabel(task)} <span className="task-status-caret" aria-hidden="true">▾</span>
+        {!quiet && (option?.icon ?? '○')} {taskStatusLabel(task)} <MenuCaret size={9} className="task-status-caret" />
       </button>
       {open && createPortal(
         <div

@@ -4,6 +4,7 @@ import {
   TICK_BELOW_MS, clockLabel, formatDuration, hourLabel, planDrawMerge, taskColor,
   type AxisRange,
 } from './time-timeline'
+import { FoldChevron } from './fold-chevron'
 import { LANE_BAR_MIN_PX, LANE_ROWS, LANE_TRACK_PX, laneBar } from './time-views'
 
 /**
@@ -281,7 +282,7 @@ export function TimeLanes({ blocks, totals, agentMs, showAgents, outside, outsid
                   title={row.expandable.expanded ? '收起' : `展开 ${row.expandable.count} 行`}
                   onClick={row.expandable.toggle}
                 >
-                  <span className="wt-tl-chev" aria-hidden="true">{row.expandable.expanded ? '▾' : '▸'}</span>
+                  <FoldChevron open={row.expandable.expanded} inline />
                   {row.title}
                 </button>
               ) : (

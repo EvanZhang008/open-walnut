@@ -56,7 +56,6 @@
 .mail-unread-chip ~ .mail-view-menu-btn { margin-left: 0; }
 /* Grouping failed and the list fell back to all mail: the word says so in the warning colour. */
 .mail-view-menu-btn.warn .mail-view-menu-label { color: var(--warning); }
-.mail-view-menu-caret { display: inline-flex; }
 
 /* ── the status strip and the state lines ── */
 

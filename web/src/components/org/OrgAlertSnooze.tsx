@@ -19,6 +19,7 @@ import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { log } from '@/utils/log';
 import type { AnswerSettle } from './OrgInlineAnswer';
 import type { OrgAlertView } from './org-channels-model';
+import { MenuCaret } from '@/components/controls';
 
 /** Tomorrow, the first day a date-only snooze can start (YYYY-MM-DD, local). */
 function tomorrow(): string {
@@ -75,7 +76,7 @@ export function OrgAlertSnooze({ alert, current, onStart }: {
         aria-expanded={open}
         aria-label={`Snooze ${alert.title} until a time`}
         onClick={() => setOpen(!open)}
-      >Snooze <span aria-hidden="true">▾</span></button>
+      >Snooze <MenuCaret /></button>
       {note && <span className="org-answer-error" role="alert" data-testid="org-alert-snooze-note">{note}</span>}
       {open && createPortal(
         <div

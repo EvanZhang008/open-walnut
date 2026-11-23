@@ -16,7 +16,7 @@ import {
   type RepoSelection,
 } from '@/components/sessions/sessionCommitModel';
 import { log } from '@/utils/log';
-import { Checkbox, DisclosureButton } from '@/components/controls';
+import { Checkbox, DisclosureButton, DisclosureChevron } from '@/components/controls';
 import { BoxMic, MicField, type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 
@@ -265,7 +265,7 @@ export function SessionCommitRepo(props: {
       {otherFiles.length > 0 && (
         <div className="scd-others">
           <button type="button" className="scd-link" aria-expanded={othersOpen} onClick={() => setOthersOpen((o) => !o)}>
-            {othersOpen ? '▾' : '▸'} {otherFiles.length}{repo.omitted ? '+' : ''} other change{otherFiles.length === 1 ? '' : 's'} in this repository, not from this session
+            <DisclosureChevron open={othersOpen} inline />{otherFiles.length}{repo.omitted ? '+' : ''} other change{otherFiles.length === 1 ? '' : 's'} in this repository, not from this session
           </button>
           {othersOpen && <div className="scd-files">{otherFiles.map((f) => <FileRow key={f.path} file={f} sel={sel} onSel={setSel} />)}</div>}
         </div>

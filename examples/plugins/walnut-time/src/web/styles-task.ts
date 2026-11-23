@@ -163,7 +163,8 @@ export const TASK_CSS = `
 }
 .wt-task-day-row:disabled { cursor: default; color: var(--fg); }
 .wt-task-day-date { font-weight: 500; white-space: nowrap; }
-.wt-task-day-caret { color: var(--fg-secondary); font-size: 14px; line-height: 1; text-align: center; }
+.wt-task-day-caret { display: flex; align-items: center; justify-content: center; }
+.wt-task-day-caret > .wn-disclosure-chevron { color: var(--fg-secondary); }
 
 /* Each lane reads value then bar, so a day's numbers sit right beside its date and its bar starts at
    the number (2026-11-22, the UI audit: the values sat at the far end of an empty track). A lane with

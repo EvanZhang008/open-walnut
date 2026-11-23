@@ -80,17 +80,17 @@ test.describe.serial('main chat collapse and thinking rendering', () => {
     const cronMessage = page.locator('.chat-message-cron', { hasText: CRON_FIRST_LINE })
     await expect(cronMessage).toBeVisible()
     await expect(cronMessage.locator('.chat-message-content')).toBeHidden()
-    await expect(cronMessage.locator('.chat-collapse-toggle')).toHaveText(/^\u25B6\uFE0E?$/)
+    await expect(cronMessage.locator('.chat-collapse-toggle')).not.toHaveClass(/\bis-open\b/)
 
     const header = cronMessage.locator('.chat-notification-header')
     await header.click()
     await expect(cronMessage.locator('.chat-message-content')).toBeVisible()
     await expect(cronMessage.locator('.chat-message-content')).toContainText('Report line 30')
-    await expect(cronMessage.locator('.chat-collapse-toggle')).toHaveText('▼')
+    await expect(cronMessage.locator('.chat-collapse-toggle')).toHaveClass(/\bis-open\b/)
 
     await header.click()
     await expect(cronMessage.locator('.chat-message-content')).toBeHidden()
-    await expect(cronMessage.locator('.chat-collapse-toggle')).toHaveText(/^\u25B6\uFE0E?$/)
+    await expect(cronMessage.locator('.chat-collapse-toggle')).not.toHaveClass(/\bis-open\b/)
   })
 
   test('blank thinking is omitted while real thinking expands', async ({ page }) => {

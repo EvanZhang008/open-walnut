@@ -12,6 +12,7 @@ import { SessionMessage } from '@/components/sessions/SessionMessage';
 import { AgentText } from '@/components/common/AgentText';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
 import '@/styles/header-fit.css';
+import { DisclosureChevron } from '@/components/controls';
 
 interface TriagePanelProps {
   onClose: () => void;
@@ -110,7 +111,7 @@ function TriageSessionSection({
         onClick={() => setExpanded((p) => !p)}
         aria-expanded={expanded}
       >
-        <span className="triage-session-chevron">{expanded ? '\u25BC' : '\u25B6\uFE0E'}</span>
+        <DisclosureChevron open={expanded} className="triage-session-chevron" />
         <span className="triage-session-index">#{index + 1}</span>
         {entry.timestamp && (
           <span className="triage-session-time">{timeAgo(entry.timestamp)}</span>

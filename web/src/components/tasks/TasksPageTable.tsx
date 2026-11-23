@@ -38,6 +38,7 @@ import '@/styles/header-fit.css';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import { projectDisplayName, projectGroupKey } from '@/utils/project-display';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
+import { DisclosureChevron } from '@/components/controls';
 
 interface TasksPageTableProps {
   tasks: Task[];
@@ -283,7 +284,6 @@ function Th({ label, k, sort, onSortChange }: {
 }) {
   if (!k) return <span className="tp-th tp-th-static">{label}</span>;
   const active = sort?.key === k;
-  const arrow = !active ? '' : sort!.dir === 'asc' ? '▲' : '▼';
   const cycle = () => {
     if (!active) onSortChange({ key: k, dir: 'asc' });
     else if (sort!.dir === 'asc') onSortChange({ key: k, dir: 'desc' });
@@ -292,7 +292,7 @@ function Th({ label, k, sort, onSortChange }: {
   return (
     <button type="button" className={`tp-th${active ? ' on' : ''}`} onClick={cycle} title={`Sort by ${label}`}>
       {label}
-      {arrow && <span className="tp-th-arrow">{arrow}</span>}
+      {active && <span className="tp-th-arrow" data-dir={sort!.dir} aria-hidden="true">{ICONS.ICON_CHEVRON_DOWN}</span>}
     </button>
   );
 }
@@ -595,7 +595,7 @@ export function TasksPageTable({
             data-group-project={project}
             onClick={() => onToggleGroup(project)}
           >
-            <span className="tp-group-chevron">▾</span>
+            <DisclosureChevron open={!isCollapsed} className="tp-group-chevron" />
             <span className="tp-group-icon">{project ? '📁' : '📥'}</span>
             <span className="tp-group-name wn-title" data-fit-title="">{projectDisplayName(project)}</span>
             {project && <ProjectSourceBadge source={sourceByName.get(project.toLowerCase())} />}

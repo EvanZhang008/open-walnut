@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
+import { MenuCaret } from '@/components/controls';
 
 /**
  * NotesChatSwitcher — dropdown selector for the /notes chat column.
@@ -83,7 +84,7 @@ export function NotesChatSwitcher({ sessions, agentChats = [], active, onSelect,
         {/* Group badge — says which KIND of chat this pane is. */}
         <span className="badge notes-chat-switcher-badge"><span>{currentSession ? 'Claude Code' : 'Walnut Agent'}</span></span>
         {currentSession?.pending && <span className="notes-chat-switcher-hint">starting…</span>}
-        <span className={`notes-chat-switcher-caret${open ? ' open' : ''}`} aria-hidden>▾</span>
+        <MenuCaret size={9} className={`notes-chat-switcher-caret${open ? ' open' : ''}`} />
       </button>
 
       {open && (

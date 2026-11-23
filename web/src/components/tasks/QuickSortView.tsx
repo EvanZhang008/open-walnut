@@ -5,6 +5,7 @@
  * on screen (QuickSortFilter); the queue, ages and presets are quick-sort-model.ts.
  */
 import { EmptyState } from '@/components/common/EmptyState';
+import { ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { useTasksContext } from '@/contexts/TasksContext';
@@ -28,7 +29,7 @@ import {
 } from './quick-sort-model';
 import { pageShortcutBlocked } from '@/utils/page-shortcut';
 import '@/styles/quick-sort.css';
-import { SegmentedControl } from '@/components/controls';
+import { SegmentedControl, MenuCaret } from '@/components/controls';
 
 const SHOWN = 3;
 /** A project pick moving this many tasks asks once more first (the group menus' rule). */
@@ -364,8 +365,8 @@ export function QuickSortView({ query, tiers, onOpen, active }: {
               </div> : <div className="quick-sort-actions"><div className="quick-sort-tiers">
                 {tierKeyed(tiers.map(t => t.id).filter(id => (project.tiers[id] ?? 0) < open)).map(({ id, key }) => <button key={id} type="button" className="btn quick-sort-btn" data-sort-tier={id} data-sort-key={key} onClick={() => projectTier(project, id)}>All {label(id)}{key && <small>{key}</small>}</button>)}
                 </div><div className="quick-sort-moves">
-                <button type="button" className="btn quick-sort-btn" data-sort-action="snooze" aria-haspopup="dialog" onClick={e => openSnooze({ kind: 'project', project }, e.currentTarget)}>Snooze all ▾<small>S</small></button>
-                <button type="button" className="btn quick-sort-btn" data-sort-action="tasks" onClick={() => sortProjectTasks(project)}>Sort its tasks ▸</button>
+                <button type="button" className="btn quick-sort-btn" data-sort-action="snooze" aria-haspopup="dialog" onClick={e => openSnooze({ kind: 'project', project }, e.currentTarget)}><span className="quick-sort-btn-line">Snooze all<MenuCaret /></span><small>S</small></button>
+                <button type="button" className="btn quick-sort-btn" data-sort-action="tasks" onClick={() => sortProjectTasks(project)}><span className="quick-sort-btn-line">Sort its tasks{ICON_CHEVRON_RIGHT}</span></button>
                 <button type="button" className="btn btn-ghost quick-sort-btn" data-sort-action="skip" onClick={() => projectSkip(project)}>Skip<small>X</small></button>
               </div></div>}
             </article>;

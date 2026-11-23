@@ -5,6 +5,7 @@ import { ActionNeeded } from '@/components/actions/ActionNeeded';
 import { anyOpen, openPageFrom, useAskPages } from '@/components/actions/ask-pages';
 import { AgentText } from '../common/AgentText';
 import { taskTextSource } from '@/utils/agent-text-source';
+import { DisclosureChevron } from '@/components/controls';
 
 /**
  * What a search hit asks of the user, folded to its question until opened: a "Needs you" mark, the
@@ -70,7 +71,7 @@ export function SearchAskLine({ task }: { task: Task }) {
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); toggle(); }}
           >
-            {open ? 'Hide' : 'Show'} <span aria-hidden="true">{open ? '▴' : '▾'}</span>
+            <DisclosureChevron open={open} />{open ? 'Hide' : 'Show'}
           </button>
         </div>
       ) : null}

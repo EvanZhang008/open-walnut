@@ -65,7 +65,7 @@ import { AgentText } from '@/components/common/AgentText';
 import { taskTextSource } from '@/utils/agent-text-source';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import { threadCountLabel } from '@open-walnut/thread-view';
-import { DisclosureButton, Tab, TabList, SegmentedControl } from '@/components/controls';
+import { DisclosureButton, Tab, TabList, SegmentedControl, DisclosureChevron } from '@/components/controls';
 import { EmptyState } from '@/components/common/EmptyState';
 
 /** What the rows need from the page to answer in place. */
@@ -289,7 +289,7 @@ function AskList({ alerts, tasks, vpOf, ownId, ownName, onOpen, onQuote, canQuot
       {shown.filter(isAsk).map(row)}
       {looks.length > 0 && (
         <button type="button" className="org-to-look" data-testid="org-to-look" aria-expanded={looksOpen} onClick={() => setLooksOpen(!looksOpen)}>
-          <span className="org-to-look-chev" aria-hidden="true">{looksOpen ? '▾' : '▸'}</span>
+          <DisclosureChevron open={looksOpen} className="org-to-look-chev" />
           {looks.length} only to look at <span className="org-to-look-note">· nothing to decide</span>
         </button>
       )}

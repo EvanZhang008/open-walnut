@@ -801,6 +801,11 @@ fieldset:disabled .settings-checkbox-row .settings-checkbox-label {
   transform: rotate(90deg);
 }
 
+.wn-disclosure-chevron.is-inline {
+  vertical-align: -0.2em;
+  margin-inline-end: 0.35em;
+}
+
 .wn-disclosure-label {
   flex: 1 1 auto;
   min-width: 0;

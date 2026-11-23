@@ -39,9 +39,9 @@ import {
   unsubscribeStatusLine,
 } from './mail-unsubscribe-state';
 import { SparklesIcon } from '@/components/icons/SparklesIcon';
+import { MenuCaret } from '@/components/controls';
 import {
   ArchiveBoxIcon,
-  ChevronIcon,
   DocumentIcon,
   EnvelopeIcon,
   EnvelopeOpenIcon,
@@ -128,7 +128,7 @@ export function MailReaderHead({ open, message, accounts, providers }: Props) {
                 onClick={() => setDetails((was) => !was)}
               >
                 Details
-                <span className="btn-caret" aria-hidden="true"><ChevronIcon /></span>
+                <MenuCaret size={12} />
               </button>
             )}
           </span>

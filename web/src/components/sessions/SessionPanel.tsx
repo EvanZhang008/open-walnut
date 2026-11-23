@@ -58,6 +58,7 @@ import { sessionGitStore, useSessionGitGlance } from '@/stores/session-git-store
 import { changedChipTitle } from '@/utils/git-glance-text';
 import '@/styles/git-glance.css';
 import { KANBAN_COLLAPSE_CHAT_BELOW } from '@/components/board/kanban/kanban-contract';
+import { MenuCaret } from '@/components/controls';
 
 /**
  * The split view's panes, each loaded the first time it opens: the editors, the terminal and the
@@ -3439,7 +3440,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                   data-header-id="plan"
                   data-hidden={hid('plan')}
                 >
-                  Plan <span className="btn-caret" aria-hidden="true">{'\u25BE'}</span>
+                  Plan <MenuCaret />
                 </button>
                 {planPopoverOpen && (
                   <div className="plan-popup-overlay wn-scrim" onClick={() => setPlanPopoverOpen(false)}>

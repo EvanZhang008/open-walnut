@@ -1054,12 +1054,13 @@ function SideQuestionDrawerBody({
           {/* Pre-thread one-shot entries — read-only, promote still works. */}
           {state.legacy.length > 0 && (
             <div className="side-question-legacy">
-              <button
+              <DisclosureButton
                 className="side-question-legacy-toggle"
+                expanded={legacyOpen}
                 onClick={() => setLegacyOpen((v) => !v)}
               >
-                {legacyOpen ? '▾' : '▸'} Earlier quick questions ({state.legacy.length})
-              </button>
+                Earlier quick questions ({state.legacy.length})
+              </DisclosureButton>
               {legacyOpen && (
                 <div className="side-question-stack">
                   {state.legacy.map((q) => (

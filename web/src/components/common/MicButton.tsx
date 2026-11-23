@@ -20,6 +20,7 @@ import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import { KEEP_SELECTION_ATTR } from '@/utils/selection-guard';
 import { notifyDictationActivity, type DictationControl } from '@/hooks/useSendAfterDictation';
+import { DisclosureChevron } from '@/components/controls';
 
 /** How long the mic may take to send its first sound before the button says so in words. */
 const SLOW_START_HINT_MS = 700;
@@ -666,10 +667,10 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
                 return (
                   <div key={rec.id} className={`mic-history-item${failed ? ' mic-history-failed' : ''}${expanded ? ' mic-history-open' : ''}`}>
                     {/* Header row — click toggles the full A/B comparison */}
-                    <div className="mic-history-main" role="button" tabIndex={0}
+                    <div className="mic-history-main" role="button" tabIndex={0} aria-expanded={expanded}
                       title={expanded ? 'Collapse' : 'Expand to compare both engines'}
                       onClick={() => setExpandedId(expanded ? null : rec.id)}>
-                      <span className={`mic-history-caret${expanded ? ' mic-history-caret-open' : ''}`}>▸</span>
+                      <DisclosureChevron open={expanded} />
                       <span className="mic-history-time">{time}</span>
                       {!expanded && (
                         <span className="mic-history-text" title={failed ? (rec.error ?? 'No transcription') : partial ? `Only part was transcribed. ${rec.error}` : text}>

@@ -122,8 +122,8 @@ test('model left, effort right, and only Cost, Speed (tok/s) and Details under t
   // Each number says what it counts.
   await expect(costToggle).toHaveAttribute('title', /this session cost/);
   await expect(picker.getByTestId('picker-fold-speed')).toHaveAttribute('title', /This session's speed/);
-  // The composer's pill opens a menu: it carries the menu triggers' caret.
-  await expect(panel.locator('.composer-model-pill').first().locator('.btn-caret')).toHaveText('▾');
+  // The composer's pill opens a menu: it carries the menu triggers' caret (MenuCaret, a drawn chevron).
+  await expect(panel.locator('.composer-model-pill').first().locator('.btn-caret svg')).toHaveCount(1);
   // Each engine of the rail is named, by its accessible name and its title.
   const rail = picker.getByTestId('provider-rail').locator('.provider-rail-item:not(.provider-rail-more)');
   expect(await rail.count()).toBeGreaterThan(1);

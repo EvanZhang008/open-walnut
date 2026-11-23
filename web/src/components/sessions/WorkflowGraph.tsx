@@ -5,6 +5,7 @@ import { buildLayout, NO_PHASE_OPEN, preferredPhase, visibleWorkflowAgents } fro
 import { buildStages } from './workflow-stages';
 import { StageColumn, StageStrip } from './WorkflowStageGraph';
 import { fmtTokens } from './background-ledger';
+import { DisclosureChevron } from '@/components/controls';
 
 export { fmtTokens };
 
@@ -63,7 +64,7 @@ const AgentRow = memo(function AgentRow({ agent, expanded, onToggle, onOpenTrans
           <span className="wf-gnode-name">{name}</span>
           <span className="wf-gnode-meta">{statusLabel(agent.status)}{meta && ` · ${meta}`}</span>
         </span>
-        <span className="wf-gnode-caret" aria-hidden="true">{expanded ? '▾' : '▸'}</span>
+        <DisclosureChevron open={expanded} className="wf-gnode-caret" />
       </button>
       {expanded && (
         <div className="wf-agent-detail">

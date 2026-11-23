@@ -193,7 +193,7 @@ import { FLAT_BATCH_KEY, FRESH_BATCH, LIST_BATCH, cutListBatch, isPastBatch, typ
 import { BUILTIN_TIERS, isBuiltinTier, isRetiredTier, type FocusTier, type CustomTierDef } from '@/api/focus';
 import { useInlineTitleEdit } from './useInlineTitleEdit';
 // Every fold chevron is the shared icon-only DisclosureButton (`.collapse-chevron` places it).
-import { DisclosureButton } from '@/components/controls';
+import { DisclosureButton, DisclosureChevron } from '@/components/controls';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
 import { openTaskHere } from '@/utils/open-session';
 import { projectDisplayName, projectGroupKey, projectIdentity, taskProjectLabel } from '@/utils/project-display';
@@ -1325,7 +1325,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           {/* Info pills + kebab — same line as title, no second row */}
           {startDateLabel && (
             <span className="badge badge-long todo-item-due-pill todo-item-start-pill" title={`Starts: ${task.start_date}`}>
-              <span>▶︎ {startDateLabel}</span>
+              <span className="todo-item-start-icon" aria-hidden="true">{ICONS.ICON_ARROW_RIGHT}</span><span>{startDateLabel}</span>
             </span>
           )}
           {dueDateLabel && (
@@ -8417,7 +8417,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, loa
             <div className={`todo-pinned-section${!isFolded('recent') ? ' todo-pinned-section-recent' : ''}${isAll ? '' : ' todo-pinned-section-solo'}`}>
               {isAll && (
               <div className="todo-pinned-header" onClick={() => toggleSection('recent')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('recent'); }} style={{ cursor: 'pointer' }}>
-                <span className={`todo-pinned-chevron${chevronCollapsed('recent') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
+                <DisclosureChevron open={!chevronCollapsed('recent')} />
                 <span className="todo-pinned-label">Recent</span>
                 <span className="badge badge-count todo-pinned-count">{visibleRecentTasks.length}</span>
               </div>

@@ -3,6 +3,7 @@ import type { SessionHistoryMessage } from '@/types/session';
 // typedUserText: a stored turn can open with a machine block Walnut prepended,
 // which would otherwise be all this one-line preview ever shows.
 import { typedUserText } from '@open-walnut/history-injected-banner';
+import { DisclosureChevron } from '@/components/controls';
 
 interface UserMessagesSummaryProps {
   messages: SessionHistoryMessage[];
@@ -50,7 +51,7 @@ export function UserMessagesSummary({ messages, loading, onMessageClick }: UserM
         onClick={() => setCollapsed(c => !c)}
         disabled={!hasMessages}
       >
-        <span className="user-messages-summary-arrow">{collapsed || !hasMessages ? '\u25B8' : '\u25BE'}</span>
+        <DisclosureChevron open={!collapsed && hasMessages} className="user-messages-summary-arrow" />
         <span className="user-messages-summary-label">My Messages</span>
         {hasMessages && (
           <span className="badge badge-count user-messages-summary-count">{userMessages.length}</span>

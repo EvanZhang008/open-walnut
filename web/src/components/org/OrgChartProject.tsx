@@ -16,6 +16,7 @@ import type { VpProject } from './org-chart-model';
 import { useOpenTask } from '@/hooks/useOpenTask';
 import { domId, useChartOpen } from './OrgChartVp';
 import { EmptyState } from '@/components/common/EmptyState';
+import { DisclosureChevron } from '@/components/controls';
 
 export interface ProjectTaskLine {
   id: string;
@@ -119,7 +120,7 @@ export function OrgChartProject({ project: p, tasks, dragging, onDragStart, onDr
           }
         }}
       >
-        <span className="oc-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
+        <DisclosureChevron open={open} className="oc-chevron" />
         <span className="oc-project-name wn-title">{p.name}</span>
         {/* How many it has (none: nothing said); opened, its tasks are there to see instead. */}
         {!open && p.row.counts.open > 0 && <span className="oc-now wn-fixed" data-testid="org-chart-project-now">{p.row.counts.open} open</span>}

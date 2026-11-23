@@ -9,6 +9,7 @@ import type { Task } from '@open-walnut/core';
 import { ICON_CLOSE, ICON_EXPAND, ICON_NEW_TAB, ICON_NOTE } from '@/components/common/Icons';
 import { openPopout } from '@/popout/openPopout';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
+import { DisclosureChevron } from '@/components/controls';
 
 const LS_NOTES_HEIGHT_KEY = 'open-walnut-global-notes-height';
 const DEFAULT_HEIGHT = 180;
@@ -89,7 +90,7 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
           />
         )}
         <div className="global-notes-header" onClick={fill ? undefined : toggleCollapse} style={fill ? { cursor: 'default' } : undefined}>
-          {!fill && <span className="global-notes-chevron">{collapsed ? '\u25B8' : '\u25BE'}</span>}
+          {!fill && <DisclosureChevron open={!collapsed} />}
           {/* In fill mode the section tab above already reads "Notes" \u2014 repeating it
               here is pure duplication. The row itself stays: it carries the
               saving/error status and the pop-out + fullscreen buttons. */}

@@ -218,16 +218,20 @@
   border-radius: var(--radius-sm);
 }
 
-/* ── Compound trigger slots: "Cost $2077 ▾" is .btn > label, .btn-value, .btn-caret ── */
+/* ── Compound trigger slots: "Cost $2077 v" is .btn > label, .btn-value, .btn-caret ── */
 .btn .btn-value {
   color: var(--fg);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
+/* MenuCaret's slot (components/controls/Disclosure.tsx): an SVG, so it centres as a box, not a glyph. */
+.btn-caret {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+}
 .btn .btn-caret {
   color: var(--fg-muted);
-  font-size: var(--font-size-xs);
-  line-height: 1;
   transition: transform 0.12s;
 }
 .btn[aria-expanded='true'] .btn-caret { transform: rotate(180deg); }

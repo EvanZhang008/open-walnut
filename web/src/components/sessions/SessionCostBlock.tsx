@@ -17,6 +17,7 @@ import { useOpenSessionUsage, useSessionBudgetUsage } from '@/hooks/useSessionBu
 import { budgetSummary } from './session-usage-model';
 import { FoldWarnDot } from './PickerFoldBar';
 import '@/styles/session-cost.css';
+import { DisclosureChevron } from '@/components/controls';
 
 /** The comparison's long first read answers `pending`: asked again this many times, this often. */
 const COMPARE_RETRIES = 20;
@@ -118,7 +119,7 @@ function CostComparison({ sessionId, models, actualUsd }: { sessionId: string; m
   return (
     <div className="session-cost-compare" data-testid="session-cost-compare">
       <button type="button" className="session-cost-compare-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-        {open ? '▾' : '▸'} Same usage on other models
+        <DisclosureChevron open={open} inline />Same usage on other models
       </button>
       {open && (
         <div className="session-cost-compare-body" data-status={data?.status ?? (error ? 'error' : 'loading')}>
@@ -207,7 +208,7 @@ function ModelRow({ m }: { m: SessionCostModel }) {
   return (
     <div className="session-cost-model" data-testid="session-cost-model" data-model={m.model}>
       <button type="button" className="session-cost-model-row" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-        <span className="session-cost-model-name wn-title">{open ? '▾' : '▸'} {costModelLabel(m.model, m.speed)}</span>
+        <span className="session-cost-model-name wn-title"><DisclosureChevron open={open} inline />{costModelLabel(m.model, m.speed)}</span>
         <span className="session-cost-model-meta">
           {m.responses} req · {fmtTokenCount(m.tokens.input + m.tokens.cacheRead + cacheWriteTokens(m))} in · {fmtTokenCount(m.tokens.output)} out
         </span>
@@ -280,7 +281,7 @@ export function SessionCostBlock({ sessionId, liveApiMs, compareModels, budgetRo
         title={expandable ? 'Cost per model, with the rates used' : undefined}
       >
         <span className="session-cost-title">
-          {expandable ? (open ? '▾ ' : '▸ ') : ''}Cost{' '}
+          {expandable && <DisclosureChevron open={open} inline />}Cost{' '}
           <strong data-testid="session-cost-total">
             {cost ? costHeadline(cost) : error ?? 'calculating…'}
           </strong>

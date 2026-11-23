@@ -162,7 +162,6 @@ export const LANES_CSS = `
   outline-offset: 2px;
   border-radius: 4px;
 }
-.wt-tl-chev { display: inline-block; width: 14px; color: var(--fg-muted); }
 
 .wt-tl-now {
   position: absolute;

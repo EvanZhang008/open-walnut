@@ -19,6 +19,7 @@ import { DatePicker } from '@/components/common/DatePicker';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import '@/styles/org-rail.css';
+import { MenuCaret } from '@/components/controls';
 
 /** Tomorrow, the first day a date-only snooze can start (YYYY-MM-DD, local). */
 function tomorrow(): string {
@@ -88,7 +89,7 @@ export function OrgThreadSnooze({ title, current, onSnooze }: {
         aria-expanded={open}
         aria-label={snoozed ? `Change when "${title}" comes back` : `Snooze "${title}" until a time`}
         onClick={() => setOpen(!open)}
-      >{snoozed ? 'Snoozed' : 'Snooze'} <span aria-hidden="true">▾</span></button>
+      >{snoozed ? 'Snoozed' : 'Snooze'} <MenuCaret /></button>
       {snoozed && <button type="button" className="btn btn-sm" data-testid="org-thread-unsnooze" onClick={() => pick(null)}>Unsnooze</button>}
       {note && <span className="org-thread-error" role="alert" data-testid="org-thread-snooze-note">{note}</span>}
       {open && createPortal(

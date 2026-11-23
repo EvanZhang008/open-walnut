@@ -1,6 +1,6 @@
 /* The leaders under a VP (OrgLeaders.tsx): one quiet line, folded, in the Org chart. */
 .org-leaders { display: flex; flex-direction: column; min-width: 0; }
-/* In a chart card: under the name, above the projects, its "▸" in the projects' fold column (org-chart.css .oc-chevron). */
+/* In a chart card: under the name, above the projects, its chevron in the projects' fold column (org-chart.css .oc-chevron). */
 .org-leaders.is-chart { padding: 0 4px 6px 2px; }
 .org-leaders.is-chart .org-leaders-chevron { color: var(--fg-secondary); }
 .org-leaders.is-chart .org-leaders-list { margin-left: 5px; padding-left: 6px; border-left: 1.5px solid color-mix(in srgb, var(--fg) 12%, transparent); }

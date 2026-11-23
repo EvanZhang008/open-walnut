@@ -35,8 +35,8 @@ const menu = (page: Page) => page.getByTestId('tasks-columns-menu')
 const chip = (page: Page, text: string) => page.locator('.tasks-page .tp-toolbar .tp-chip', { hasText: text })
 
 async function headerLabels(page: Page): Promise<string[]> {
-  // Strip the sort arrow so "Created ▲" reads as "Created".
-  return (await headers(page).allTextContents()).map((t) => t.replace(/[▲▼]/g, '').trim())
+  // The sort arrow is a drawn chevron, so a header's text is its label alone.
+  return (await headers(page).allTextContents()).map((t) => t.trim())
 }
 
 /** Header tracks and row cells must agree: Title + N columns each. */
@@ -87,7 +87,7 @@ test('column chooser adds Created / Session / Phase, drops Updated, stays aligne
   expect(before).not.toContain('Session')
   expect(before).not.toContain('Created')
   await expect(page.locator(`${TABLE} .tp-thead .tp-th.on`)).toContainText('Updated')
-  await expect(page.locator(`${TABLE} .tp-thead .tp-th.on .tp-th-arrow`)).toHaveText('▼')
+  await expect(page.locator(`${TABLE} .tp-thead .tp-th.on .tp-th-arrow`)).toHaveAttribute('data-dir', 'desc')
   // The table windows its rows (tasks-table-helpers.ts): scroll to the one under test.
   await revealInTasksTable(page, row(page, OPEN_RECENT))
   await expect(row(page, OPEN_RECENT)).toBeVisible({ timeout: 15_000 })
@@ -128,7 +128,7 @@ test('column chooser adds Created / Session / Phase, drops Updated, stays aligne
   // New columns sort: one click on Created = ascending.
   await headers(page).filter({ hasText: 'Created' }).click()
   await expect(page.locator(`${TABLE} .tp-thead .tp-th.on`)).toContainText('Created')
-  await expect(page.locator(`${TABLE} .tp-thead .tp-th.on .tp-th-arrow`)).toHaveText('▲')
+  await expect(page.locator(`${TABLE} .tp-thead .tp-th.on .tp-th-arrow`)).toHaveAttribute('data-dir', 'asc')
   // Tags has no sort key: it is a plain label, not a button.
   await openColumns(page)
   await setColumn(page, 'tags', true)
@@ -150,7 +150,7 @@ test('column chooser adds Created / Session / Phase, drops Updated, stays aligne
   // The table was sorted by Created, which the reset just hid: the sort falls back
   // to the shipped order (Updated, newest first) instead of lingering invisibly.
   await expect(page.locator(`${TABLE} .tp-thead .tp-th.on`)).toContainText('Updated')
-  await expect(page.locator(`${TABLE} .tp-thead .tp-th.on .tp-th-arrow`)).toHaveText('▼')
+  await expect(page.locator(`${TABLE} .tp-thead .tp-th.on .tp-th-arrow`)).toHaveAttribute('data-dir', 'desc')
 })
 
 test('project, filter, search and columns survive leaving the page and a reload', async ({ page, baseURL }) => {

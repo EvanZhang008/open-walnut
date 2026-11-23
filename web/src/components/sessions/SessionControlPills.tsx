@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import { useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import '@/styles/pick-and-nav.css';
+import { MenuCaret } from '@/components/controls';
 
 interface SessionControlPillsProps {
   controls: SessionControl[];
@@ -121,7 +122,7 @@ function ThoughtControlPill({ control, setControl }: Pick<SessionControlPillsPro
   return <>
     <button ref={trigger} type="button" className="btn btn-sm btn-ghost mode-toggle-pill" title={control.name} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(!open)}>
       <span className="mode-toggle-pill-label">{current?.name ?? control.currentValue}</span>
-      <span className="btn-caret" aria-hidden="true">{'\u25BE'}</span>
+      <MenuCaret />
     </button>
     {open && createPortal(<div ref={menu} className="session-control-menu wn-overlay wn-menu" role="listbox" aria-label={control.name}
       onPointerDown={(event) => event.stopPropagation()}
@@ -178,7 +179,7 @@ function ApprovalControlPills({
           <span className="mode-toggle-pill-label">
             {CHATGPT_MODE_WORDING[mode.currentValue]?.name ?? current?.name ?? mode.currentValue}
           </span>
-          <span className="btn-caret" aria-hidden="true">{'\u25BE'}</span>
+          <MenuCaret />
         </button>
         {open && (
           <span className="session-control-menu wn-overlay wn-menu" role="listbox" aria-label={mode.name}>

@@ -9,7 +9,7 @@
  */
 import { useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
-import { Chip } from '@/components/controls';
+import { Chip, MenuCaret } from '@/components/controls';
 import type { MailGroupsScope } from '@/api/mail-groups';
 import { loadMailMessages } from './mail-actions';
 import { formatCount } from './mail-format';
@@ -19,7 +19,6 @@ import {
   ALL_MAIL, GROUPED, SORTED_WITHOUT_AI, SORTED_WITHOUT_AI_TITLE, SORTING_TITLE, UNREAD_ONLY, VIEW_MENU_ARIA,
   sortingText, totalUnreadWord,
 } from './mail-groups-copy';
-import { ChevronIcon } from './mail-icons';
 
 function choose(on: boolean): void {
   writeGroupedPref(on);
@@ -71,7 +70,7 @@ export function MailViewMenu({ grouped, warn, unreadOnly, onUnreadOnly }: {
         onClick={open}
       >
         <span className="mail-view-menu-label">{grouped ? GROUPED : ALL_MAIL}</span>
-        <span className="btn-caret mail-view-menu-caret" aria-hidden="true"><ChevronIcon size={9} /></span>
+        <MenuCaret size={9} />
       </button>
       {point && (
         <ContextMenu

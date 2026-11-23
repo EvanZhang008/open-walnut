@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { DisclosureChevron } from '@/components/controls';
 
 interface ContextSectionProps {
   title: string;
@@ -20,7 +21,7 @@ export function ContextSection({ title, tokens, count, defaultOpen = false, chil
         onClick={() => setOpen((p) => !p)}
         aria-expanded={open}
       >
-        <span className="context-section-arrow">{open ? '\u25BC' : '\u25B6\uFE0E'}</span>
+        <DisclosureChevron open={open} className="context-section-arrow" />
         <span className="context-section-title">{label}</span>
         <span className="badge context-token-badge"><span>~{tokens.toLocaleString()} tokens</span></span>
       </button>

@@ -8,6 +8,7 @@ import { useConfirm, usePrompt } from '@/hooks/useConfirm';
 import type { BatchTaskOutcome } from '@/api/tasks';
 import { projectDisplayName } from '@/utils/project-display';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
+import { DisclosureChevron } from '@/components/controls';
 
 interface TaskListProps {
   tasks: Task[];
@@ -203,7 +204,7 @@ export function TaskList({
       {grouped.map(({ project, tasks: projTasks }) => (
         <div key={project || '__inbox__'} className="task-group">
           <button className="task-group-header" onClick={() => toggleProject(project)}>
-            <span className="task-group-arrow">{collapsedProjects.has(project) ? '▶︎' : '▼'}</span>
+            <DisclosureChevron open={!collapsedProjects.has(project)} className="task-group-arrow" />
             <span className="task-group-name">{projectDisplayName(project)}</span>
             <span className="task-group-count text-muted text-xs">{projTasks.length}</span>
           </button>

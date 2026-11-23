@@ -9,7 +9,7 @@ import { useTasksContext } from '@/contexts/TasksContext';
 import { OptionPickerFlyout, useCursorFlyout, type FlyoutOption } from './CursorFlyout';
 import { IDLE_STEPS, projectKey, type SortFilter } from './quick-sort-model';
 import { projectIdentity } from '@/utils/project-display';
-import { Chip, ChipGroup } from '@/components/controls';
+import { Chip, ChipGroup, MenuCaret } from '@/components/controls';
 
 const ALL = '__all';
 
@@ -66,9 +66,9 @@ export function QuickSortFilter({ filter, setFilter, tiers, counts, showProject 
     </ChipGroup>
     <ChipGroup className="quick-sort-chips">
       {showProject && <Chip className="quick-sort-pick" data-sort-filter="project" aria-haspopup="listbox" pressed={filter.project !== null}
-        onClick={e => openAt(projectMenu, e.currentTarget)}>{projectLabel} ▾</Chip>}
+        trailing={<MenuCaret />} onClick={e => openAt(projectMenu, e.currentTarget)}>{projectLabel}</Chip>}
       <Chip className="quick-sort-pick" data-sort-filter="folder" aria-haspopup="listbox" pressed={filter.folder !== null}
-        onClick={e => openAt(folderMenu, e.currentTarget)}>{folderLabel} ▾</Chip>
+        trailing={<MenuCaret />} onClick={e => openAt(folderMenu, e.currentTarget)}>{folderLabel}</Chip>
       <span className="quick-sort-chips-label">No action for</span>{/* empty-state-ok: a chip group's label */}
       <ChipGroup className="quick-sort-chips" role="group" aria-label="No action for">
         {IDLE_STEPS.map(n => <Chip key={n} pressed={filter.idleDays === n} data-sort-filter-idle={n}

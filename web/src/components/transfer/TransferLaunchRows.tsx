@@ -17,6 +17,7 @@ import { engineCaps } from '@/utils/engine-capabilities';
 import { formatModelName } from '@/utils/model-name';
 import { blockedReason, launchDefaults, withEngine, type TransferForm } from './transfer-model';
 import { TransferChoice } from './TransferChoice';
+import { MenuCaret } from '@/components/controls';
 
 const EFFORT_LABELS: Record<string, string> = Object.fromEntries(SESSION_EFFORTS.map((e) => [e.id, e.label]));
 
@@ -85,7 +86,7 @@ export function TransferLaunchRows({ options, source, form, onChange, group }: {
             <span className="xfer-opt-line">
               <span className="xfer-opt-name wn-title">{launchLabel(form, acp, source)}</span>
               {isDefault && form.engine === source.engine && <span className="badge badge-accent xfer-now">Now</span>}
-              <span className="xfer-model-caret" aria-hidden="true">▾</span>
+              <MenuCaret className="xfer-model-caret" />
             </span>
             <span className="xfer-opt-sub">
               {form.engine === source.engine ? 'Starts on the current model and effort. Click to change.' : "Starts on the harness's default. Click to change."}

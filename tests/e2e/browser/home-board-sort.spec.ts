@@ -167,15 +167,15 @@ test('projects: a whole project to one tier, its own queue, and the view is kept
   await card.locator('[data-sort-action="tasks"]').click();
   await expect(sort).toHaveAttribute('data-view', 'tasks');
   const projectPick = sort.locator('[data-sort-filter="project"]');
-  await expect(projectPick).toHaveText(`${other} ▾`);
+  await expect(projectPick).toHaveText(other);
   // A project's own tasks, every tier of it.
   await expect(sort.locator('[data-sort-filter-tier=""]')).toHaveAttribute('aria-pressed', 'true');
   await expect(sort.locator('[data-sort-card]')).toHaveCount(2);
   await page.reload();
   await expect(page.getByTestId('home-board')).toHaveAttribute('data-mode', 'sort');
-  await expect(page.getByTestId('quick-sort').locator('[data-sort-filter="project"]')).toHaveText(`${other} ▾`);
+  await expect(page.getByTestId('quick-sort').locator('[data-sort-filter="project"]')).toHaveText(other);
   await pickProject(page, 'All projects');
-  await expect(page.getByTestId('quick-sort').locator('[data-sort-filter="project"]')).toHaveText('All projects ▾');
+  await expect(page.getByTestId('quick-sort').locator('[data-sort-filter="project"]')).toHaveText('All projects');
 });
 
 test('the pin board Move menu snoozes, clears a snooze and marks done', async ({ page, request }) => {
@@ -285,7 +285,7 @@ test('the Inbox project card sorts the Inbox tasks, pinned ones included', async
   await sort.getByRole('radio', { name: 'Projects', exact: true }).click();
   await page.getByRole('textbox', { name: 'Search board tasks' }).fill('Sort inbox pinned task');
   await page.locator('[data-sort-project=""] [data-sort-action="tasks"]').click();
-  await expect(sort.locator('[data-sort-filter="project"]')).toHaveText('Inbox ▾');
+  await expect(sort.locator('[data-sort-filter="project"]')).toHaveText('Inbox');
   await expect(sortCard(page, id)).toBeVisible();
   await pickProject(page, 'All projects');
 });

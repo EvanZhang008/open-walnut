@@ -18,6 +18,7 @@
 import React from 'react';
 import '@/components/actions/ask-card.css';
 import '@/styles/model-picker-folds.css';
+import { DisclosureChevron } from '@/components/controls';
 
 export type PickerFoldId = 'cost' | 'speed' | 'details';
 
@@ -67,10 +68,10 @@ export function PickerFoldBar({ folds, status }: {
       title={f.warn ?? f.title}
       onClick={() => setFold((v) => (v === f.id ? null : f.id))}
     >
+      <DisclosureChevron open={fold === f.id} />
       {f.warn && <FoldWarnDot reason={f.warn} />}
       <span className="model-picker-fold-label">{f.label}</span>
       {f.value !== undefined && <strong className="model-picker-fold-value">{f.value}</strong>}
-      <span className="model-picker-fold-caret" aria-hidden>{fold === f.id ? '▴' : '▾'}</span>
     </button>
   );
   return (

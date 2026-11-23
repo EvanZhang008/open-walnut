@@ -45,7 +45,7 @@
 
 .wn-context-menu-value-caret {
   flex: none;
-  font-size: 9px;
+  display: inline-flex;
   color: var(--fg-muted);
 }
 

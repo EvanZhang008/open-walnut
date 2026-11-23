@@ -48,6 +48,7 @@ button.quick-sort-card-title:hover { color: var(--accent); }
 .quick-sort-moves { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 /* The card's keys are family keys stacked as label over key hint (<small>), wrapping in a narrow grid cell. */
 .quick-sort-btn { flex-direction: column; gap: 0; white-space: normal; overflow-wrap: anywhere; }
+.quick-sort-btn-line { display: inline-flex; align-items: center; gap: 4px; } /* a label and its mark on one line */
 .quick-sort-btn small { font-size: var(--font-size-xs); font-weight: 400; color: var(--fg-muted); }
 /* Each tier keeps its colour (the same one it has across the console) on the key's hint line. */
 .quick-sort-btn.tier-focus small { color: var(--accent-text); }

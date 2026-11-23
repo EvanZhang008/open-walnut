@@ -48,17 +48,15 @@ const isTyped = (content: string) => {
 
 describe('menu rows: one drawn icon and one line of words', () => {
   it('every menu row icon slot holds a drawn icon, never a typed character', () => {
-    // The icon slot, and a row's caret (a typed \u25BE where the shared DisclosureChevron goes).
+    // The icon slot, and a row's caret (a typed \u25BE where the shared MenuCaret goes).
     const SLOT = /className=["'`][^"'`]*?\b([\w-]*(?:kebab|menu)[\w-]*-(?:icon|key|caret))\b[^"'`]*["'`][^>]*>([\s\S]*?)<\/span>/g;
-    // A ContextMenu setting row's value chip keeps its caret (standard.md, Big menus, rule 6).
-    const KEPT = new Set(['wn-context-menu-value-caret']);
     const typed: string[] = [];
     let slots = 0;
     for (const { rel, src } of files) {
       if (!rel.endsWith('.tsx')) continue;
       for (const m of src.matchAll(SLOT)) {
         slots++;
-        if (!KEPT.has(m[1]) && isTyped(m[2])) typed.push(`${rel}:${lineOf(src, m.index!)} ${m[1]}: ${m[2].trim()}`);
+        if (isTyped(m[2])) typed.push(`${rel}:${lineOf(src, m.index!)} ${m[1]}: ${m[2].trim()}`);
       }
     }
     expect(slots, 'the scan finds the menus it guards').toBeGreaterThan(40);

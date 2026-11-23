@@ -43,6 +43,7 @@ import { AskCardFrame } from './AskCard';
 import { AskPager, usePageGestures } from './AskPager';
 import { anyOpen, useAskPages, type AnsweredAsk } from './ask-pages';
 import './action-needed.css';
+import { MenuCaret } from '@/components/controls';
 
 /** How each kind is answered on a row: the surface it reuses (the ratchet reads this). */
 export const ANSWERS: Record<ActionKind, 'approval' | 'prompt' | 'letter' | 'choice' | 'ask'> = {
@@ -61,7 +62,7 @@ function snoozeItem(taskId: string, itemId: string, until: string | null): Promi
   return apiPut(`/api/v1/tasks/${encodeURIComponent(taskId)}/actions/${encodeURIComponent(itemId)}/snooze`, { until });
 }
 
-/** Snooze ▾: the presets ("In 1 hour" first), then a date and time of the user's own. */
+/** Snooze (a menu key): the presets ("In 1 hour" first), then a date and time of the user's own. */
 function SnoozeButton({ label, onPick }: { label: string; onPick: (until: string) => void }) {
   const btn = useRef<HTMLButtonElement>(null);
   const [menu, setMenu] = useState<null | 'presets' | 'date'>(null);
@@ -75,7 +76,7 @@ function SnoozeButton({ label, onPick }: { label: string; onPick: (until: string
     <>
       <button ref={btn} type="button" className="btn btn-sm action-needed-snooze" data-testid="action-snooze"
         aria-haspopup="dialog" aria-expanded={menu !== null} aria-label={`Snooze this ${label.toLowerCase()}`}
-        onClick={() => setMenu(menu ? null : 'presets')}>Snooze <span aria-hidden="true">▾</span></button>
+        onClick={() => setMenu(menu ? null : 'presets')}>Snooze <MenuCaret /></button>
       {menu === 'presets' && (
         <SnoozeFlyout soon point={point()} anchorRef={btn} onSnooze={onPick} onPickDate={() => setMenu('date')} onClose={() => setMenu((m) => (m === 'presets' ? null : m))} />
       )}

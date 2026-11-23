@@ -12,6 +12,7 @@ import type { ToolCallBlock } from '@/api/chat';
 import type { StreamingBlock } from '@/hooks/useSessionStream';
 import { ClaudeStreamView } from '../common/ClaudeStreamView';
 import { AgentText } from '../common/AgentText';
+import { DisclosureChevron } from '@/components/controls';
 
 interface SubagentBlockProps {
   block: ToolCallBlock;
@@ -63,7 +64,7 @@ export const SubagentBlock = memo(function SubagentBlock({ block }: SubagentBloc
             ${meta.cost} · {meta.duration}s
           </span>
         )}
-        <span className="chat-tool-block-arrow">{open ? '\u25BC' : '\u25B6\uFE0E'}</span>
+        <DisclosureChevron open={open} className="chat-tool-block-arrow" />
       </button>
       {open && (
         <div className="chat-tool-block-body subagent-block-body">

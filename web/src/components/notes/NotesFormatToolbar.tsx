@@ -27,6 +27,7 @@ import { editLinkViaPrompt } from './link-prompt';
 import { usePrompt } from '@/hooks/useConfirm';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
+import { MenuCaret } from '@/components/controls';
 
 interface NotesFormatToolbarProps {
   editor: Editor;
@@ -249,7 +250,7 @@ function BlockPicker({ editor, current, disabled }: { editor: Editor; current: B
         onClick={() => setOpen((o) => !o)}
       >
         <span className="notes-format-block-label">{blockLabel(current)}</span>
-        <span className="btn-caret">{ICON_CHEVRON}</span>
+        <MenuCaret size={11} />
       </button>
       {open && createPortal(
         <div
@@ -294,4 +295,3 @@ const ICON_IMAGE = <svg {...svgProps}><rect x="2" y="3" width="12" height="10" r
 const ICON_TABLE = <svg {...svgProps}><rect x="2" y="3" width="12" height="10" rx="1" /><path d="M2 7h12M2 10.5h12M7 3v10" /></svg>;
 const ICON_DIVIDER = <svg {...svgProps}><path d="M2 8h12" /><path d="M4 4h8M4 12h8" opacity="0.4" /></svg>;
 const ICON_CLEAR = <svg {...svgProps}><path d="M4 12.5h8" /><path d="m9.5 3.5 3 3-5.5 5.5H4v-3z" /><path d="m3 3 10 10" opacity="0.6" /></svg>;
-const ICON_CHEVRON = <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 6 8 10 12 6" /></svg>;

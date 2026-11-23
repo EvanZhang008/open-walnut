@@ -117,10 +117,6 @@ export function BackIcon({ size = 14 }: IconProps) {
   return frame(size, <path d="M15 5l-7 7 7 7" />);
 }
 
-export function ChevronIcon({ size = 12 }: IconProps) {
-  return frame(size, <path d="M6 9l6 6 6-6" />);
-}
-
 /**
  * The disclosure chevron of the sidebar groups: points right closed, and CSS rotates it 90deg open.
  *

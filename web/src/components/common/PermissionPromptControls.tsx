@@ -26,6 +26,7 @@ import { PermissionAnswerForm } from './PermissionAnswerForm';
 import { DenyWithNote, denyMessageOf, usePermissionNote } from '@/components/sessions/PermissionNoteBox';
 import { noteOfDenyMessage, splitPromptHint, useSecondClick } from '@/components/sessions/prompt-keys';
 import { RuleDetail, SavedFileMark } from '@/components/sessions/RuleDetail';
+import { DisclosureButton } from '@/components/controls';
 
 export interface PermissionAnswer {
   detail: PermissionDetail;
@@ -170,9 +171,9 @@ export function PermissionAskDetail({ n, detail, clamp = false }: { n: Notificat
               </div>
             ) : (
               <>
-                <button className="nfc-card-toggle" onClick={() => setExpanded((v) => !v)}>
-                  {expanded ? '▼' : '▶︎'} Plan ready for review
-                </button>
+                <DisclosureButton className="nfc-card-toggle" expanded={expanded} onClick={() => setExpanded((v) => !v)}>
+                  Plan ready for review
+                </DisclosureButton>
                 {expanded && <pre className="nfc-card-pre">{detail.plan}</pre>}
               </>
             )

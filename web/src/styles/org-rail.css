@@ -93,7 +93,6 @@ html .org-rail.open-walnut-fullscreen .org-brief-body { max-height: none; overfl
 .org-to-look { display: flex; align-items: baseline; gap: 6px; width: 100%; padding: 7px 12px; border: 0; border-bottom: 1px solid var(--border); background: none; color: var(--fg-secondary); font: inherit; font-size: var(--font-size-md); text-align: left; cursor: pointer; }
 .org-to-look:hover { background: var(--bg-secondary); }
 .org-to-look:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.org-to-look-chev { width: 10px; color: var(--fg-muted); }
 .org-to-look-note { color: var(--fg-muted); }
 .org-ask { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
 /* Needs you: a red dot before the task it is from, never a bar down the row's edge (2026-11-20). */

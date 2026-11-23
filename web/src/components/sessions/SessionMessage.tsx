@@ -76,7 +76,7 @@ import { log } from '@/utils/log';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { KebabVerticalIcon } from '@/components/common/PhoneIcons';
 import { computeLineDiff, editDiffIsLarge, toolCardKind, toolDescription, toolInputSummary } from '@open-walnut/tool-header-text';
-import { DisclosureButton } from '@/components/controls';
+import { DisclosureButton, DisclosureChevron } from '@/components/controls';
 
 // ── Edit Diff View ──
 
@@ -1170,7 +1170,7 @@ export function TaskGroupPrompt({ input, toolUseId }: { input?: Record<string, u
   return (
     <div className="task-group-prompt">
       <button className="task-group-prompt-toggle" onClick={() => setOpen(p => !p)}>
-        <span className="task-group-chevron">{open ? '▼' : '▶︎'}</span>
+        <DisclosureChevron open={open} className="task-group-chevron" />
         <span className="task-group-prompt-title">Prompt &amp; settings</span>
         {!open && prompt && (
           <span className="task-group-prompt-preview">{prompt.slice(0, 120)}</span>

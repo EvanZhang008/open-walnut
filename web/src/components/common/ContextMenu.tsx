@@ -50,6 +50,7 @@ import {
   type PressSelection,
 } from '@/utils/context-menu';
 import { rowAnchorOf, scrollMovedRow, type RowAnchor } from '@/utils/cursor-menu-scroll';
+import { MenuCaret } from '@/components/controls';
 
 export { normalizeContextMenuItems };
 export type { ContextMenuItem };
@@ -653,7 +654,7 @@ export function ContextMenu({
                 {row.value !== undefined && (
                   <span className="wn-context-menu-value">
                     <span className="wn-context-menu-value-text">{row.value}</span>
-                    <span className="wn-context-menu-value-caret" aria-hidden="true">▾</span>
+                    <MenuCaret size={9} className="wn-context-menu-value-caret" />
                   </span>
                 )}
               </button>

@@ -3,6 +3,7 @@ import type { SessionTime, TaskTime, TimePair, TimeTotals } from './api'
 import { formatLane, type TimePage, type TimePaths } from './task-routes'
 import type { TaskTimeStore } from './task-time-store'
 import { dayLabel } from './time-timeline'
+import { FoldChevron } from './fold-chevron'
 
 /**
  * One task's time (or one session's), day by day: where the task detail slot and the
@@ -264,7 +265,7 @@ function TaskBody({ data, focus, onFocus }: { data: TaskTime; focus: string | nu
                 >
                   <span className="wt-task-day-date">{dayName(date, data.today)}</span>
                   <Bars pair={pair} max={max} />
-                  <span className="wt-task-day-caret" aria-hidden="true">{expandable ? (open ? '▾' : '▸') : ''}</span>
+                  <span className="wt-task-day-caret" aria-hidden="true">{expandable && <FoldChevron open={open} />}</span>
                 </button>
                 {open && day && (
                   <ul className="wt-task-day-sessions">
