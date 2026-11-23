@@ -131,7 +131,9 @@ describe('a watch of its own work reads Working, never "A watch" to wait on', ()
   })
   it('the status facts keep an own-work trigger out of the watches a task waits on', () => {
     const src = fss.readFileSync(path.join(ROOT, 'src/core/user-status-sync.ts'), 'utf8')
-    expect(src).toMatch(/triggers: liveTriggers\.filter\(\(t\) => !triggerWatchesOwnWork\(t\)\)/)
+    // The watches it waits on are the standing ones outside its own work (outsideTriggers, shared with org/thread-recheck.ts).
+    expect(src).toMatch(/triggers: outsideTriggers\(liveTriggers\)/)
+    expect(src).toMatch(/function outsideTriggers\([^)]*\)[^{]*\{\s*return live\.filter\(\(t\) => !triggerWatchesOwnWork\(t\)\)/)
     expect(src).toMatch(/ownWorkTriggers: liveTriggers\.filter\(\(t\) => ownWorkInFlight\(t, /)
   })
 })

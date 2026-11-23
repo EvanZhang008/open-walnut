@@ -315,6 +315,38 @@ export async function targetAtWork(
 }
 
 /**
+ * When the target of a request parked itself until (WAITING with a wait_until later than `now`),
+ * in ms; null otherwise. Only once the ask reached it (stillReached): it read the ask and chose to
+ * wait for that time, so nothing is owed before it (2026-11-23: "Waiting: can only file the ticket
+ * at 9 am Seattle" read as no reply). An ask that never reached it is the undelivered notice's.
+ * Never throws: unknown is no clock.
+ */
+export async function targetWaitsUntil(
+  r: Pick<SessionRequest, 'toTaskId' | 'toSessionId' | 'reachedAt' | 'messageId'>, now = Date.now(),
+): Promise<number | null> {
+  try {
+    if (!r.reachedAt) return null;
+    let taskId = r.toTaskId;
+    if (!taskId && r.toSessionId) {
+      const { getSessionByClaudeId } = await import('../session-tracker.js');
+      taskId = (await getSessionByClaudeId(r.toSessionId).catch(() => null))?.taskId ?? undefined;
+    }
+    if (!taskId) return null;
+    const { listTasksByIds } = await import('../task-manager.js');
+    const task = (await listTasksByIds([taskId]).catch(() => []))[0];
+    const until = task?.phase === 'WAITING' && task.wait_until ? Date.parse(task.wait_until) : NaN;
+    if (!(Number.isFinite(until) && until > now)) return null;
+    // A delivery its queue took back (the process died unread) proves nothing (request-reached.ts).
+    const sid = r.toSessionId ?? task?.session_id ?? undefined;
+    const { takenBackIds } = await import('./request-reached.js');
+    const { stillReached } = await import('../session-requests.js');
+    return stillReached(r, sid ? await takenBackIds([sid]) : undefined) ? until : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The target's last words (lastWordsOf), read from its transcript. A live build
  * first (the turn that just ended is already in the JSONL), bounded, because a
  * remote host can be slow or gone; then the cached projection. Never throws.
@@ -710,6 +742,15 @@ export function sweepSessionRequests(): Promise<number> {
       // A target plainly at work waits one more of its waits instead of being chased.
       const due: SessionRequest[] = [];
       for (const request of overdue) {
+        // Its target parked itself until a later time: the deadline moves to that clock, nobody is told now.
+        const until = await targetWaitsUntil(request, now);
+        const parked = until ? await (await import('../session-requests.js')).waitForTargetClock(request.id, until, now) : null;
+        if (parked) {
+          log.session.info('request past its deadline, target waits until a stated time: deadline moved, asker not told', {
+            requestId: request.id, toTaskId: request.toTaskId, until: new Date(parked.deadlineAt).toISOString(),
+          });
+          continue;
+        }
         const why = await targetAtWork(request, rows, now);
         const moved = why ? await waitWhileActive(request.id, why, now) : null;
         if (moved) {
@@ -983,8 +1024,19 @@ export async function remindOverdue(now = Date.now()): Promise<number> {
     const { resolveReplyDestination, isLive } = await import('./reply-routing.js');
     const destination = await resolveReplyDestination(askerSid).catch(() => null);
     if (!destination || !isLive(destination.session)) continue;
+    // A request whose deadline notice still waits unread for this session: that notice says it is
+    // overdue, so the reminder names it no second time in the same message (2026-11-23: one notice
+    // listed two requests twice each). Its reminder is spent: the asker reads the notice once.
+    const { heldRequestIds } = await import('./held-notices.js');
+    const unread = await heldRequestIds(destination.session.claudeSessionId);
     const items: Parameters<typeof buildOverdueReminder>[0][number][] = [];
     for (const request of rows) {
+      if (unread.has(request.id)) {
+        await claimReminder(request.id, now);
+        continue;
+      }
+      // Its target parked itself until a later time: no reminder before that clock, nor past the longest wait.
+      if (await targetWaitsUntil(request, now) && now < (await import('../session-requests.js')).targetClockCapMs(request, now)) continue;
       let target: { title?: string; phase?: string; session_id?: string | null } | undefined;
       if (request.toTaskId) {
         try {

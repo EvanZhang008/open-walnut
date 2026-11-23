@@ -550,7 +550,12 @@ export function threadOverdue(t: ViewThread & { state: string }, now: number = D
 function overdueShown<M extends ViewMessage>(t: ViewThread<M> & { state: string }, shared: ReadonlySet<string>, now: number): boolean {
   const o = threadOverdue(t, now);
   if (!o || o.why !== 'reply' || now < Date.parse(o.showAt)) return false;
-  return o.unanswered || unreadOf(t, exchangesOf(t), shared).length > 0;
+  return o.unanswered || hasUnseenAnswer(t, shared);
+}
+
+/** An answer or first post of the node's on the thread he has not seen (one shared with another thread never counts). */
+export function hasUnseenAnswer<M extends ViewMessage>(t: ViewThread<M>, shared: ReadonlySet<string> = NONE): boolean {
+  return unreadOf(t, exchangesOf(t), shared).length > 0;
 }
 
 /** The plain line his card carries for an overdue thread once it is his to see; null otherwise. */

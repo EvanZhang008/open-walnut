@@ -88,6 +88,7 @@ import {
   LAST_MESSAGE_READ_MS,
   lastWordsOf,
   notifyRequesterFallback,
+  remindOverdue,
   sweepSessionRequests,
 } from '../../src/core/sessions/session-request-notify.js';
 import path from 'node:path';
@@ -95,6 +96,7 @@ import { WALNUT_HOME } from '../../src/constants.js';
 import {
   REQUESTS_FILE,
   DOWNTIME_GAP_MS,
+  TARGET_CLOCK_GRACE_MS,
   creditDowntime,
   reminderDueAt,
   requestWaitMs,
@@ -113,7 +115,7 @@ import type { HookContext, SessionHookContext } from '../../src/core/session-hoo
 import { parseWalnutMessage } from '../../src/core/peers/walnut-message-tag.js';
 import type { SessionRecord } from '../../src/core/types.js';
 import { flushSubtaskNotices } from '../../src/core/sessions/subtask-notices.js';
-import { _clearHeldNotices, pendingHeldNotices } from '../../src/core/sessions/held-notices.js';
+import { _clearHeldNotices, heldNoticeKeys, pendingHeldNotices } from '../../src/core/sessions/held-notices.js';
 import { TURN_RETRY_REASONS, TURN_RETRY_TRAITS, __setTurnRetrierForTesting } from '../../src/core/sessions/turn-run.js';
 
 const ASKER = 'sess-asker-1';
@@ -687,6 +689,86 @@ describe('sweepSessionRequests — a target at work is not chased', () => {
     expect(sendMessageToSession).toHaveBeenCalledTimes(1);
     const text = deliveredText();
     for (const rq of [a, b, c]) expect(text).toContain(rq.id);
+  });
+
+  // 2026-11-23, the org reflection: a lead got one 13,892-character notice of 7 requests whose
+  // workers had each written they could only act at 9 am Seattle.
+  it('a target parked until a time past the deadline: the deadline moves to that clock, nobody is told, and no reminder comes before it', async () => {
+    const until = Date.now() + 3 * HOUR;
+    listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Run the migration', phase: 'WAITING', wait_until: new Date(until).toISOString() }]);
+    // Its ask reached it, and it parked itself.
+    const rq = await overdueAsk();
+    rewriteRow(rq.id, { reachedAt: new Date(Date.now() - 50 * 60_000).toISOString() });
+    expect(await sweepSessionRequests()).toBe(0);
+    const row = await getSessionRequest(rq.id);
+    expect(row?.status).toBe('pending');
+    expect(row?.deadlineAt).toBe(until + TARGET_CLOCK_GRACE_MS);
+    expect(row?.activeWhy).toContain('its target waits until');
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect(await pendingHeldNotices(ASKER)).toBeNull();
+    // An overdue one whose target parks itself later gets no reminder before that clock, and keeps it.
+    const late = await overdueAsk(3, 1);
+    rewriteRow(late.id, { status: 'expired', outcome: 'timeout', overdueAt: new Date(Date.now() - 2 * HOUR).toISOString(), reachedAt: new Date(Date.now() - 170 * 60_000).toISOString() });
+    expect(await remindOverdue()).toBe(0);
+    expect((await getSessionRequest(late.id))?.remindedAt).toBeUndefined();
+    // Its clock rang and it still said nothing: the asker hears.
+    listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Run the migration', phase: 'IN_PROGRESS' }]);
+    rewriteRow(rq.id, { deadlineAt: Date.now() - 1_000 });
+    expect(await sweepSessionRequests()).toBe(1);
+    expect((await getSessionRequest(rq.id))?.status).toBe('expired');
+  });
+
+  it('an ask that never reached its target is not held back by the target\'s clock', async () => {
+    listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Run the migration', phase: 'WAITING', wait_until: new Date(Date.now() + 3 * HOUR).toISOString() }]);
+    const rq = await overdueAsk();
+    await sweepSessionRequests();
+    expect((await getSessionRequest(rq.id))?.status).toBe('expired');
+  });
+
+  it('the reminder of a request whose target waits comes once the clock rang, or once the longest wait passed', async () => {
+    getTask.mockImplementation(async (id: string) => ({ id, phase: 'IN_PROGRESS' }));
+    const waiting = (untilMs: number) => listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Run the migration', phase: 'WAITING', wait_until: new Date(untilMs).toISOString() }]);
+    const expiredAsk = async (agoH: number) => {
+      const rq = await overdueAsk(agoH, 1);
+      rewriteRow(rq.id, { status: 'expired', outcome: 'timeout', overdueAt: new Date(Date.now() - (agoH - 1) * HOUR).toISOString(), reachedAt: new Date(Date.now() - (agoH - 0.1) * HOUR).toISOString() });
+      return rq;
+    };
+    const clock = await expiredAsk(3);
+    waiting(Date.now() + HOUR);
+    expect(await remindOverdue()).toBe(0);
+    expect((await getSessionRequest(clock.id))?.remindedAt).toBeUndefined();
+    // Its clock rang (the task is no longer parked): the reminder comes.
+    listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Run the migration', phase: 'IN_PROGRESS' }]);
+    expect(await remindOverdue()).toBe(1);
+    expect((await getSessionRequest(clock.id))?.remindedAt).toBeTruthy();
+    // Asked 25 hours ago, the target still parked: past the longest wait the reminder comes anyway.
+    const capped = await expiredAsk(25);
+    waiting(Date.now() + HOUR);
+    expect(await remindOverdue()).toBe(1);
+    expect((await getSessionRequest(capped.id))?.remindedAt).toBeTruthy();
+  });
+
+  it('the asker reads each request once: a reminder never names one whose deadline notice still waits unread', async () => {
+    getTask.mockImplementation(async (id: string) => ({ id, phase: 'IN_PROGRESS' }));
+    // c's deadline notice was read already; a and b go overdue now, their reminder due in the same sweep.
+    const c = await overdueAsk(1.5, 1, { text: 'third question' });
+    expect(await sweepSessionRequests()).toBe(1);
+    (await pendingHeldNotices(ASKER))!.markTold();
+    const a = await overdueAsk(3, 1, { text: 'first question' });
+    const b = await overdueAsk(3, 1, { text: 'second question' });
+    rewriteRow(c.id, { createdAt: new Date(Date.now() - 3 * HOUR).toISOString(), deadlineAt: Date.now() - 2 * HOUR });
+    expect(await sweepSessionRequests()).toBe(2);
+    const keys = heldNoticeKeys(ASKER);
+    expect(keys).toHaveLength(2);
+    expect(keys.find((k) => k.startsWith('overdue:'))).toBe(`overdue:${c.id}`);
+    const deadline = keys.find((k) => k.startsWith('request-timeout:'))!;
+    expect(deadline).toContain(a.id);
+    expect(deadline).toContain(b.id);
+    // Their reminder is spent: the deadline notice they ride in says they are overdue.
+    expect((await getSessionRequest(a.id))?.remindedAt).toBeTruthy();
+    expect((await getSessionRequest(b.id))?.remindedAt).toBeTruthy();
+    const text = (await pendingHeldNotices(ASKER))!.text;
+    for (const rq of [a, b, c]) expect(text.split('\n').filter((l) => l.startsWith(`- ${rq.id} `)).length).toBeLessThanOrEqual(1);
   });
 });
 

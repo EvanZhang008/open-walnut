@@ -139,6 +139,16 @@ export function heldNoticeKeys(sessionId: string): string[] {
   return [...(held.get(sessionId)?.keys() ?? [])];
 }
 
+/** The requests a notice waiting for this session names (`whileOpen`): their notice is not read yet. */
+export async function heldRequestIds(sessionId: string): Promise<Set<string>> {
+  // What waited before a restart counts too.
+  const loading = storeLoading();
+  if (loading) await loading;
+  const out = new Set<string>();
+  for (const v of held.get(sessionId)?.values() ?? []) for (const id of v.whileOpen ?? []) out.add(id);
+  return out;
+}
+
 /** Whether any of these requests is still unanswered (pending, or past its deadline and open). */
 async function anyRequestOpen(ids: readonly string[]): Promise<boolean> {
   const { getSessionRequest } = await import('../session-requests.js');

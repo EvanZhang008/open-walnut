@@ -997,6 +997,43 @@ export async function waitWhileActive(id: string, why: string, now = Date.now())
   return moved;
 }
 
+/** After its target's own wait clock rings, this long for the turn it wakes to answer. */
+export const TARGET_CLOCK_GRACE_MS = 15 * 60_000;
+
+/**
+ * The latest a target's own wait clock may hold a request back (waitForTargetClock, and its overdue
+ * reminder): MAX_REPLY_TIMEOUT_SECS from the ask, Walnut's time away left out. A target that parks
+ * itself again and again never keeps its asker waiting past the longest wait. Pure.
+ */
+export function targetClockCapMs(r: Pick<SessionRequest, 'createdAt' | 'pausedMs'>, now = Date.now()): number {
+  const asked = Date.parse(r.createdAt);
+  return (Number.isFinite(asked) ? asked : now) + (r.pausedMs ?? 0) + MAX_REPLY_TIMEOUT_SECS * 1000;
+}
+
+/**
+ * Its target parked itself until a time past this deadline (WAITING with a wait_until): a pending
+ * request past its deadline waits for that clock (plus TARGET_CLOCK_GRACE_MS) instead of its asker
+ * hearing "no reply" now (2026-11-23, the org reflection: a lead got one notice of 7 requests whose
+ * workers had each written they could only act at 9 am Seattle). Never past MAX_REPLY_TIMEOUT_SECS
+ * from the ask. Atomic; the row with its new deadline, or null when it is no longer pending, not
+ * overdue, the clock is not later, or that longest wait is reached (then its asker hears).
+ */
+export async function waitForTargetClock(id: string, untilMs: number, now = Date.now()): Promise<SessionRequest | null> {
+  let moved: SessionRequest | null = null;
+  await updateRequests((store) => {
+    const requests = [...(store.requests ?? [])];
+    const idx = requests.findIndex((r) => r.id === id);
+    const r = requests[idx];
+    if (!r || r.status !== 'pending' || r.deadlineAt > now || !(untilMs > now)) return undefined;
+    const next = Math.min(untilMs + TARGET_CLOCK_GRACE_MS, targetClockCapMs(r, now));
+    if (next <= now) return undefined;
+    moved = { ...r, deadlineAt: next, waitMs: requestWaitMs(r), activeWaits: (r.activeWaits ?? 0) + 1, activeWhy: `its target waits until ${new Date(untilMs).toISOString()}` };
+    requests[idx] = moved;
+    return { requests };
+  });
+  return moved;
+}
+
 /** When this process started: a restart ends the time Walnut was away there. */
 const PROCESS_STARTED_AT = Date.now();
 

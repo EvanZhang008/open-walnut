@@ -385,6 +385,9 @@ export interface ThreadRecheck {
   why: 'reply' | 'needs';
   /** Recorded before the send and not confirmed after it: not delivered (yet). */
   pending?: boolean;
+  /** Reply reminders before this one in a row, with no new message from him between them: each
+   *  repeat waits twice as long as the one before (thread-recheck.ts repeatGapMs). Absent = 0. */
+  repeats?: number;
 }
 
 export interface ThreadsFile {
@@ -514,6 +517,14 @@ function normalizeThread(t: unknown): OrgThread | null {
   if (next.snoozed && !(typeof next.snoozed === 'object' && isStr(next.snoozed.until) && isStr(next.snoozed.at) && Number.isFinite(Date.parse(next.snoozed.until)))) delete next.snoozed;
   if (next.replyAt !== undefined && !(isStr(next.replyAt) && next.reply)) delete next.replyAt;
   if (next.recheck && !(typeof next.recheck === 'object' && isStr(next.recheck.since) && isStr(next.recheck.at))) delete next.recheck;
+  // A repeat count that is not a whole number of at least 1 is dropped (absent reads as none, thread-recheck.ts repeatGapMs).
+  if (next.recheck && 'repeats' in next.recheck) {
+    const n = next.recheck.repeats;
+    if (!(typeof n === 'number' && Number.isInteger(n) && n > 0)) {
+      const { repeats: _drop, ...rest } = next.recheck;
+      next.recheck = rest;
+    }
+  }
   liftLegacyWatch(next);
   if (next.watched && !(typeof next.watched === 'object' && isStr(next.watched.at) && Number.isFinite(Date.parse(next.watched.at)))) delete next.watched;
   else if (next.watched && !isStr(next.watched.by)) next.watched = { ...next.watched, by: 'human' };

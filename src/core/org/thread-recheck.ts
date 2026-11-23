@@ -7,7 +7,10 @@
  * Each pass sends every Main or lead with an overdue thread ONE note
  * naming those threads, once per overdue stretch (`recheck` on the thread, recorded as pending
  * before the send and as sent after it, so a failed wake is tried again every RETRY_MS, never every
- * pass); the node's next write starts a new stretch, but a needs check keeps the daily gap.
+ * pass); the node's next write starts a new stretch, but a needs check keeps the daily gap, and a
+ * reply reminder in a row with nothing new from him waits twice as long as the last (repeatGapMs).
+ * A working thread he does not see is left alone while the node's own work runs on and wakes it
+ * (nodeCarriesOn): its next turn's status line says where it stands.
  * No news needs no write or repeated ask. The card shares this clock (thread-view.ts overdueLine).
  *
  * Primary only, never on an ephemeral server (a copied thread would wake a copied node), and not
@@ -15,10 +18,10 @@
  * turns it off.
  */
 import { log } from '../../logging/index.js';
-import type { Task } from '../types.js';
+import type { SessionRecord, Task } from '../types.js';
 import { agoWords } from '../user-status.js';
 import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
-import { threadDeadline, threadOverdue, type ThreadOverdue } from './thread-view.js';
+import { REPLY_DUE_MS, hasUnseenAnswer, sharedAnswers, threadDeadline, threadOverdue, type ThreadOverdue } from './thread-view.js';
 import type { OrgThread, ThreadRecheck } from './threads-model.js';
 import { keepsThreads } from './keeps-threads.js';
 import { threadsKeptNow } from './threads-kept.js';
@@ -41,18 +44,87 @@ function personStopped(s: { process_status?: string; status_reason?: string; sta
 
 export interface DueThread { thread: OrgThread; overdue: ThreadOverdue }
 
-/** The open threads of one node due a wake now: overdue, and not woken yet for this stretch. Pure. */
-export function threadsDueRecheck(threads: readonly OrgThread[], nowMs: number, tasks: readonly Pick<Task, 'id' | 'due_date' | 'phase'>[] = []): DueThread[] {
+/** The longest gap between two reply reminders of one thread in a row. */
+export const MAX_REPEAT_GAP_MS = 8 * 3600_000;
+
+/**
+ * How long after the last reminder the `repeats`-th one in a row may come: the reply clock doubled
+ * each time (1 h, 2 h, 4 h, at most MAX_REPEAT_GAP_MS). 2026-11-23, the org reflection: a working
+ * thread whose node answered each reminder with "still waiting" was reminded every 30 minutes
+ * (each answer started a new stretch), 6 times in one night.
+ */
+export function repeatGapMs(repeats: number): number {
+  return Math.min(REPLY_DUE_MS * 2 ** Math.max(0, repeats), MAX_REPEAT_GAP_MS);
+}
+
+function lastHisAt(t: OrgThread): string {
+  return t.messages.reduce((last, m) => (m.at > last ? m.at : last), '');
+}
+
+/**
+ * The `repeats` the reminder of this stretch records: one more than the last reply reminder's when
+ * the thread is quiet (quietWorking), the last one went in and nothing came from him since; a retry
+ * of a reminder not delivered keeps its count; anything else (a first reminder, a needs check, a
+ * deadline, his message with no reply, an answer he has not seen, a new message from him) is 0, so
+ * a thread with something for him keeps the plain reply clock. Pure.
+ */
+export function nextRepeats(t: OrgThread, o: ThreadOverdue, shared: ReadonlySet<string>): number {
+  const r = t.recheck;
+  if (!r || r.why !== 'reply' || !quietWorking({ thread: t, overdue: o }, shared)) return 0;
+  if (r.pending || r.since === o.since) return r.repeats ?? 0;
+  return lastHisAt(t) > r.at ? 0 : (r.repeats ?? 0) + 1;
+}
+
+/**
+ * A working thread with nothing for him on it: no message of his without a reply and no answer he
+ * has not seen, so he does not see it (thread-view.ts shownToHim). While the node's own work runs on
+ * and wakes it (nodeCarriesOn), its next turn's status line says where such a thread stands. Pure.
+ */
+export function quietWorking(d: DueThread, shared: ReadonlySet<string>): boolean {
+  return d.overdue.why === 'reply' && !d.overdue.deadline && d.thread.state === 'working'
+    && !d.overdue.unanswered && !hasUnseenAnswer(d.thread, shared);
+}
+
+/**
+ * The open threads of one node due a wake now: overdue, not woken yet for this stretch, and a quiet
+ * repeat only once its gap passed (repeatGapMs). `carriesOn`: the node's own work runs on and wakes
+ * it, so its quiet working threads are left to that turn (quietWorking), but never longer than
+ * MAX_REPEAT_GAP_MS after the later of its last reminder and the time this stretch fell due: a fact that went stale (a
+ * background job whose end was never seen, a trigger that will not fire) cannot silence one for good. Pure.
+ */
+export function threadsDueRecheck(
+  threads: readonly OrgThread[], nowMs: number, tasks: readonly Pick<Task, 'id' | 'due_date' | 'phase'>[] = [],
+  opts: { carriesOn?: boolean } = {},
+): DueThread[] {
   const out: DueThread[] = [];
+  const shared = sharedAnswers(threads);
   for (const t of threads) {
     const o = threadOverdue(t, nowMs, threadDeadline(t, tasks, nowMs));
     const r = t.recheck;
     if (!o || (r?.pending && nowMs - Date.parse(r.at) < RETRY_MS)
       || (!o.deadline && r?.since === o.since && !r.pending)) continue;
+    const repeats = nextRepeats(t, o, shared);
+    if (repeats > 0 && r && !r.pending && nowMs < Date.parse(r.at) + repeatGapMs(repeats)) continue;
+    if (opts.carriesOn && quietWorking({ thread: t, overdue: o }, shared)
+      && nowMs - Math.max(Date.parse(r?.at ?? o.dueAt), Date.parse(o.dueAt)) < MAX_REPEAT_GAP_MS) continue;
     out.push({ thread: t, overdue: o });
     if (out.length >= MAX_PER_NOTE) break;
   }
   return out;
+}
+
+/**
+ * What of the node's own work runs on after its turn and wakes it, or null: a background command or
+ * subagent, its agent team, a wakeup or /loop it armed (outliving-work.ts), a trigger that will
+ * really wake it (user-status-sync.ts wakingTriggers), or its WAITING clock (wait_until). Pure.
+ */
+export function nodeCarriesOn(
+  node: Pick<Task, 'phase' | 'wait_until'>, facts: { outliving: readonly string[]; triggers: number }, nowMs: number,
+): string | null {
+  if (facts.outliving.length) return facts.outliving.join(', ');
+  if (facts.triggers > 0) return 'trigger';
+  if (node.phase === 'WAITING' && node.wait_until && Date.parse(node.wait_until) > nowMs) return 'wait_until';
+  return null;
 }
 
 function q(s: string): string { return JSON.stringify(s); }
@@ -92,6 +164,27 @@ export function threadRecheckMessage(due: readonly DueThread[], nowMs: number): 
   });
 }
 
+/** The live facts nodeCarriesOn reads: the delivery session's outliving work, the triggers that will wake the task. */
+async function workFacts(
+  node: Task, session: { claudeSessionId: string; process_status?: string }, sessions: readonly SessionRecord[],
+): Promise<{ outliving: readonly string[]; triggers: number }> {
+  const live = session.process_status === 'running' || session.process_status === 'idle';
+  const outliving = live
+    ? await import('../../providers/claude-code-session.js').then((m) => m.sessionRunner.outlivingWorkOf(session.claudeSessionId)).catch(() => [])
+    : [];
+  const triggers = await (async () => {
+    const { armedTriggersByTask, wakingTriggers } = await import('../user-status-sync.js');
+    const { allEndedAtMs, sessionWorkEndedAtMs } = await import('../task-wait-wake.js');
+    const own = sessions.filter((s) => !s.archived);
+    const list = (await armedTriggersByTask()).get(node.id) ?? [];
+    return wakingTriggers(node, list, {
+      anyRunning: own.some((s) => s.process_status === 'running'),
+      workEndedMs: allEndedAtMs(own.map((s) => sessionWorkEndedAtMs(s))),
+    }).length;
+  })().catch(() => 0);
+  return { outliving, triggers };
+}
+
 let timer: ReturnType<typeof setInterval> | null = null;
 let passRunning = false;
 
@@ -115,14 +208,31 @@ export async function runThreadRecheck(nowMs = Date.now()): Promise<string[]> {
     for (const node of nodes) {
       const file = await store.readThreads(node.id).catch(() => null);
       if (!file?.threads.length) continue;
-      const due = threadsDueRecheck(await store.withTaskAsks(node.id, file.threads, all), nowMs, all);
+      const threads = await store.withTaskAsks(node.id, file.threads, all);
+      let due = threadsDueRecheck(threads, nowMs, all);
       if (!due.length) continue;
       const { getSessionsForTask } = await import('../session-tracker.js');
       const { pickDeliverySession } = await import('../routines/session-target.js');
-      const target = pickDeliverySession(await getSessionsForTask(node.id).catch(() => []));
+      const sessions = await getSessionsForTask(node.id).catch(() => [] as SessionRecord[]);
+      const target = pickDeliverySession(sessions);
       if (!target || personStopped(target)) continue;
+      // Its own work runs on and wakes it (2026-11-23, the org reflection: 48 of 51 reminders in one
+      // night made a node run a full turn to say "still waiting" while its subagent or land ran): a
+      // working thread he does not see waits for that turn's status line, never a turn of its own.
+      const shared = sharedAnswers(threads);
+      if (due.some((d) => quietWorking(d, shared))) {
+        const carries = nodeCarriesOn(node, await workFacts(node, target, sessions), nowMs);
+        if (carries) {
+          due = threadsDueRecheck(threads, nowMs, all, { carriesOn: true });
+          log.task.info('org threads: quiet working threads left to the node\'s own work', { taskId: node.id, carries });
+          if (!due.length) continue;
+        }
+      }
       const at = new Date(nowMs).toISOString();
-      const mark = (pending: boolean) => new Map<string, ThreadRecheck>(due.map((d) => [d.thread.id, { since: d.overdue.since, at, why: d.overdue.why, ...(pending ? { pending: true } : {}) }]));
+      const mark = (pending: boolean) => new Map<string, ThreadRecheck>(due.map((d) => {
+        const repeats = nextRepeats(d.thread, d.overdue, shared);
+        return [d.thread.id, { since: d.overdue.since, at, why: d.overdue.why, ...(repeats ? { repeats } : {}), ...(pending ? { pending: true } : {}) }];
+      }));
       // Recorded first, as on its way: a pass after a failed send (or a restart before it went in)
       // tries again once RETRY_MS passed, never every pass, and the card says "reminded" only once it went in.
       await store.noteThreadsRechecked(node.id, mark(true)).catch(() => {});

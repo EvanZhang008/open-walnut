@@ -22,7 +22,7 @@ import { startServer, stopServer } from '../../src/web/server.js';
 import { addTask, updateTaskRaw } from '../../src/core/task-manager.js';
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js';
 import { executeOp } from '../../src/ops/index.js';
-import { fileThreadMessage, readThreads, setThreadAnswers } from '../../src/core/org/threads-store.js';
+import { fileThreadMessage, readThreads, setThreadAnswers, writeThreadsFor } from '../../src/core/org/threads-store.js';
 import { getQueue } from '../../src/core/session-message-queue.js';
 import { _resetOrgEnabledForTesting } from '../../src/core/org/org-enabled.js';
 import { runThreadRecheck, THREAD_RECHECK_SOURCE } from '../../src/core/org/thread-recheck.js';
@@ -155,6 +155,31 @@ describe('a thread with no reply for too long', () => {
     expect(await notes(stoppedSession)).toHaveLength(0);
     // His view still says it waits too long.
     expect((await shownOnRoute(stoppedSession))[(await readThreads(stoppedSession.id)).threads[0].id]).toBe(true);
+  });
+
+  it('a working thread he does not see waits while the lead\'s own wait clock runs; the next repeat waits longer (2026-11-23)', async () => {
+    const lead = await newLead();
+    const now = Date.now();
+    const at = (min: number) => new Date(now - min * 60_000).toISOString();
+    // His ask, the lead's answer he read, then only the lead's own write 40 minutes ago.
+    const quiet = {
+      id: 'th-0e2e0aaaa001', title: 'Land the fix', state: 'working', by: `task:${lead.id}`, createdAt: at(60), updatedAt: at(40),
+      messages: [{ id: 'tm-0e2e0aaaa001', at: at(60), text: 'land it please', via: 'chat', answer: { at: at(59), text: 'On it.' }, readAt: at(58) }],
+    };
+    await writeThreadsFor(lead.id, (cur) => ({ file: { ...cur, threads: [...cur.threads, quiet as never] }, out: undefined }));
+    expect((await shownOnRoute(lead))[quiet.id]).toBe(false);
+    await updateTaskRaw(lead.id, { phase: 'WAITING', wait_until: new Date(now + 2 * 3600_000).toISOString() } as never);
+    expect(await runThreadRecheck(now)).not.toContain(lead.id);
+    expect(await notes(lead)).toHaveLength(0);
+    // No clock, no background work, no trigger: the lead is asked.
+    await updateTaskRaw(lead.id, { phase: 'IN_PROGRESS', wait_until: '' } as never);
+    expect(await runThreadRecheck(now)).toContain(lead.id);
+    expect(await notes(lead)).toHaveLength(1);
+    // The lead writes "still waiting": a new stretch, but the repeat waits an hour after the reminder, not 30 minutes after the write.
+    await writeThreadsFor(lead.id, (cur) => ({ file: { ...cur, threads: cur.threads.map((t) => (t.id === quiet.id ? { ...t, updatedAt: new Date(now + 5 * 60_000).toISOString() } : t)) }, out: undefined }));
+    expect(await runThreadRecheck(now + 40 * 60_000)).not.toContain(lead.id);
+    expect(await runThreadRecheck(now + 60 * 60_000)).toContain(lead.id);
+    expect((await readThreads(lead.id)).threads.find((t) => t.id === quiet.id)!.recheck).toMatchObject({ repeats: 1 });
   });
 
   it('nothing while the org is off', async () => {

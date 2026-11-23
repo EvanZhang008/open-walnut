@@ -546,6 +546,44 @@ export function turnWaitFacts(run: import('./sessions/turn-run.js').TurnRun, rec
   return out;
 }
 
+/** Task id -> the armed triggers that deliver into it (the status pass's cached read; org/thread-recheck.ts). */
+export function armedTriggersByTask(): Promise<StatusFacts['triggers']> {
+  return cachedSlow('triggers', []);
+}
+
+/** One armed trigger of a task, as the status facts hold it. */
+export type TriggerFact = NonNullable<ReturnType<StatusFacts['triggers']['get']>>[number];
+
+/**
+ * A task's armed triggers that still stand: not a watch of its own ask (Task.recheck_watch, a wait
+ * on the user), and not one that already did its one job while no turn runs (triggerSpent). Pure.
+ */
+export function standingTriggers(
+  task: Pick<Task, 'recheck_watch' | 'phase_changed_at' | 'status_report'>, list: readonly TriggerFact[], anyRunning: boolean,
+): TriggerFact[] {
+  return list
+    .filter((t) => !(task.recheck_watch ?? []).some((w) => w.trigger === t.id))
+    .filter((t) => anyRunning || !triggerSpent(t, task));
+}
+
+/** The standing triggers that watch something outside the task: every one but a watch of its own work. Pure. */
+export function outsideTriggers(live: readonly TriggerFact[]): TriggerFact[] {
+  return live.filter((t) => !triggerWatchesOwnWork(t));
+}
+
+/**
+ * The triggers that will really wake the task: its standing outside watches, and a watch of its own
+ * work only while that work is in flight (ownWorkInFlight: the Mac queue's watch stays armed until
+ * the task completes). `workEndedMs`: when its sessions last worked (allEndedAtMs). Pure.
+ */
+export function wakingTriggers(
+  task: Pick<Task, 'recheck_watch' | 'phase_changed_at' | 'status_report'>, list: readonly TriggerFact[],
+  s: { anyRunning: boolean; workEndedMs: number | undefined },
+): TriggerFact[] {
+  const live = standingTriggers(task, list, s.anyRunning);
+  return [...outsideTriggers(live), ...live.filter((t) => ownWorkInFlight(t, s.workEndedMs))];
+}
+
 /** Read every fact source (the slow ones from the cache). Never throws: a store that cannot be
  *  read contributes nothing. `allIds` resolves a Board choice's task prefix. */
 export async function readStatusFacts(tasks: readonly Task[], allIds: readonly string[] = tasks.map((t) => t.id), followWorkersChoice?: boolean): Promise<StatusFacts> {
@@ -707,9 +745,7 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
   const waitingOnTasks = own.flatMap(([sid]) => facts.requestsFrom.get(sid) ?? [])
     .filter((id) => id !== task.id)
     .map((id) => facts.titles.get(id) ?? 'another task');
-  const liveTriggers = (facts.triggers.get(task.id) ?? [])
-    .filter((t) => !(task.recheck_watch ?? []).some((w) => w.trigger === t.id))
-    .filter((t) => anyRunning || !triggerSpent(t, task));
+  const liveTriggers = standingTriggers(task, facts.triggers.get(task.id) ?? [], anyRunning);
   return {
     phase: task.phase,
     status: task.status,
@@ -741,7 +777,7 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     // the task still needs the user (sessions/outside-wait.ts, 2026-10-30).
     // Nor a trigger that already did its one job (triggerSpent) while no turn runs: the wait it
     // carried is over, and the task reads stopped or stuck, so its lead hears (org/lead-waits.ts).
-    triggers: liveTriggers.filter((t) => !triggerWatchesOwnWork(t)).map((t) => t.name),
+    triggers: outsideTriggers(liveTriggers).map((t) => t.name),
     // A watch of its own work (watches:"own") is that work going on: Working, never "A watch" to wait on.
     // Only while the work is in flight: one whose latest check said nothing is (`"idle": true`) is
     // in neither list, no work of its own and no wait outside (ownWorkInFlight).
