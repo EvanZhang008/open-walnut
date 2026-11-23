@@ -11,6 +11,8 @@ import { useTaskListSelect } from '@/contexts/TasksContext';
 export interface OrgAvatarLookup {
   /** The avatar of a task (by id), or of a name with no task yet. */
   of: (taskId: string | undefined, name: string) => AvatarPick;
+  /** Whether a task wears one: only an Org node does (the CEO, a VP, a router, a leader or Director). */
+  wears: (taskId: string) => boolean;
 }
 
 const NO_TASKS: readonly Task[] = [];
@@ -20,6 +22,7 @@ function makeLookup(tasks: readonly Task[]): OrgAvatarLookup {
   const a = orgAvatars(tasks as readonly AvatarTask[]);
   const index = new Map(tasks.map((t) => [t.id, t]));
   return {
+    wears: a.wears,
     of: (taskId, name) => {
       const task = taskId ? index.get(taskId) : undefined;
       return a.of((task ?? { id: taskId ?? `name:${name}`, title: name }) as AvatarTask);

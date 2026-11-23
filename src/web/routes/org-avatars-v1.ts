@@ -6,7 +6,8 @@
  *   POST /org/avatars/draw { prompt?, name?, taskId? } → { svgs: [svg, ...] }
  *        three avatars the user's own model draws for a description; nothing is written
  *   GET  /org/avatars/:taskId.png[?size=96] → image/png
- *        the avatar the Org page shows for the task, as a PNG for the phone
+ *        the avatar the Org page shows for the task, as a PNG for the phone; 404 for a task that
+ *        is no Org node (only the CEO, VPs, routers, leaders and Directors wear one)
  *
  * The writes run on the primary only (501 on a replica), as every org write does.
  */
@@ -58,7 +59,11 @@ orgAvatarsV1Router.get('/org/avatars/:file', async (req: Request, res: Response,
     const task = tasks.find((t) => t.id === m[1])
     if (!task) throw new OrgError('not_found', 404, `No task "${m[1]}".`)
     const { orgAvatars } = await import('../../core/org/avatars/index.js')
-    const pick = orgAvatars(tasks).of(task)
+    const avatars = orgAvatars(tasks)
+    // Only an Org node wears one (the CEO, a VP, a router, a leader or Director): an app shows a
+    // plain task as a task.
+    if (!avatars.wears(task.id)) throw new OrgError('no_avatar', 404, `"${task.title}" is no Org node, so it wears no avatar.`)
+    const pick = avatars.of(task)
     const size = Math.max(16, Math.min(512, Number(req.query.size) || 96))
     const key = `${size}:${pick.src}`
     let png = pngCache.get(key)

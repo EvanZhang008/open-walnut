@@ -156,6 +156,8 @@ export interface AvatarTask {
   parent_task_id?: string;
   self_router?: { name?: string } | null;
   org_avatar?: OrgAvatarValue | null;
+  /** Made a Director by hand ('yes') even with no team yet (Task.director). */
+  director?: string | null;
 }
 
 /** The name a node's default is picked by: a VP by its name (or its project), a router by its own. */
@@ -172,20 +174,27 @@ const open = (t: AvatarTask) => t.phase !== 'COMPLETE';
 const lasting = (t: AvatarTask) => t.org_role === 'main' || t.org_role === 'lead' || t.org_role === 'router' || !!t.self_router;
 
 /**
- * The org's own nodes, which never share an avatar: the CEO, the VPs, the routers, and the
- * leaders (an open task with an open task under it).
+ * The org's own nodes, the only ones that wear an avatar (2026-11-23, the user: "只有 leader、
+ * director、VP 和 CEO 需要 icon，其他的 task 是不需要 icon 的"): the CEO, the VPs, the routers, the
+ * leaders (an open task with an open task under it) and a task made a Director by hand. They never
+ * share one. Any other task wears none.
  */
 export function orgAvatarNodes(tasks: readonly AvatarTask[]): AvatarNode[] {
   const parents = new Set(tasks.filter((t) => open(t) && t.parent_task_id).map((t) => t.parent_task_id!));
-  return tasks.filter((t) => open(t) && (lasting(t) || parents.has(t.id)))
+  return tasks.filter((t) => open(t) && (lasting(t) || parents.has(t.id) || t.director === 'yes'))
     .map((t) => ({ id: t.id, name: avatarName(t), main: t.org_role === 'main', created: t.created_at, avatar: t.org_avatar ?? null, leader: !lasting(t) }));
 }
 
-/** Who wears what: the org's nodes all differ; any other task avoids their pairs. */
-export function orgAvatars(tasks: readonly AvatarTask[]): { of: (t: AvatarTask) => AvatarPick } {
+/**
+ * Who wears what: the org's nodes all differ (`wears` says whether a task is one). `of` still
+ * answers for any task (a picture an editor previews, a name with no task yet), avoiding the
+ * nodes' pairs, but only a node is drawn.
+ */
+export function orgAvatars(tasks: readonly AvatarTask[]): { of: (t: AvatarTask) => AvatarPick; wears: (taskId: string) => boolean } {
   const nodes = assignAvatars(orgAvatarNodes(tasks));
   const taken = new Set([...nodes.values()].map((p) => p.preset).filter(Boolean) as string[]);
   return {
+    wears: (taskId) => nodes.has(taskId),
     of(t) {
       const known = nodes.get(t.id);
       if (known) return known;

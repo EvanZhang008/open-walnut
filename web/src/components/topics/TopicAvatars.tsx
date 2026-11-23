@@ -1,15 +1,17 @@
 /**
- * A topic member's avatar and a topic's stacked avatars. A task or an Org node is drawn by the Org
- * page's own NodeAvatar (its character with "Org avatars" on, else its letters), from the task the
+ * A topic member's avatar and a topic's stacked avatars. An Org node (the CEO, a VP, a router, a
+ * leader or Director) is drawn by the Org page's own NodeAvatar, its character, from the task the
  * member is now (an Org node's VP may change), so a VP looks the same in its row and in a topic.
- * Off, the tile is the Org list's (`.org-avatar`, its colour from the name); the CEO keeps its
- * gradient; a person outside Walnut is always a round tile, and a bot wears a small mark.
+ * A plain task wears no character (2026-11-23, the user): it keeps the Org list's letter tile
+ * (`.org-avatar`, its colour from the name); a person outside Walnut is always a round tile, and a
+ * bot wears a small mark.
  */
 import type { MemberRef, TopicMember } from '@/api/topics';
 import type { Task } from '@open-walnut/core';
 import { pickLead, pickMain } from '@open-walnut/org-tree';
 import { avatarColor, initials } from '@/components/org/org-channels-model';
 import { NodeAvatar } from '@/components/org/OrgAvatar';
+import { useOrgAvatars } from '@/components/org/useOrgAvatars';
 import { useTaskListSelect } from '@/contexts/TasksContext';
 import { stackedAvatars } from './topic-model';
 import '@/styles/topics.css';
@@ -34,7 +36,9 @@ export function MemberAvatar({ who, size = 30 }: { who: Who; size?: number }) {
   const ref = typeof who === 'string' ? undefined : who.ref;
   // A string from the selector: one row's write elsewhere never draws this avatar again.
   const taskId = useTaskListSelect(({ tasks }) => memberTaskId(ref, tasks)) ?? (ref?.kind === 'task' ? ref.taskId : undefined);
-  if (typeof who !== 'string' && (ref?.kind === 'task' || ref?.kind === 'org')) {
+  // Only an Org node wears its character; a plain task member keeps the letter tile below.
+  const wears = useOrgAvatars().wears;
+  if (typeof who !== 'string' && (ref?.kind === 'org' || (ref?.kind === 'task' && taskId && wears(taskId)))) {
     return <NodeAvatar taskId={taskId} name={who.name} size={size} className="topic-avatar" />;
   }
   const style = { width: size, height: size, fontSize: Math.round(size * 0.37) };

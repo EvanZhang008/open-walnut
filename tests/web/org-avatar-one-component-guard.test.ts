@@ -34,4 +34,26 @@ describe('one Org avatar component', () => {
     }
     expect(offenders).toEqual([])
   })
+
+  // 2026-11-23, the user: only the CEO, VPs, leaders and Directors wear an avatar, a plain task none.
+  // NodeAvatar asks `wears` before it draws; a file that draws a pick by itself (`.of(` on
+  // useOrgAvatars) would skip that check, so only the component and the editor's preview may.
+  it('only NodeAvatar and the editor read a picture to draw, and NodeAvatar asks wears first', () => {
+    const WEB = path.resolve(import.meta.dirname, '../../web/src')
+    const drawers: string[] = []
+    const walk = (dir: string) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name)
+        if (e.isDirectory()) walk(p)
+        else if (/\.tsx?$/.test(e.name)) {
+          const src = fs.readFileSync(p, 'utf8')
+          if (/useOrgAvatars\(\)/.test(src) && /\.of\(/.test(src)) drawers.push(path.relative(WEB, p))
+        }
+      }
+    }
+    walk(WEB)
+    expect(drawers.sort()).toEqual(['components/org/OrgAvatar.tsx', 'components/org/OrgAvatarDialog.tsx', 'components/org/useOrgAvatars.ts'])
+    const node = fs.readFileSync(path.join(ORG, 'OrgAvatar.tsx'), 'utf8')
+    expect(node).toMatch(/if \(taskId && !avatars\.wears\(taskId\)\) return null;\s*const pick = avatars\.of\(/)
+  })
 })

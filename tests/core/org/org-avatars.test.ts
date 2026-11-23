@@ -91,12 +91,21 @@ describe('who wears which', () => {
     expect(a.of(tasks.find((t) => t.id === 'l-walnut')!).preset).not.toBe('walnut:11')
   })
 
-  it('a task outside the org nodes gets one too, never a pair an org node wears', () => {
-    const a = orgAvatars(org())
-    const worn = new Set(orgAvatarNodes(org()).map((n) => a.of(org().find((t) => t.id === n.id)!).preset))
-    const w = a.of(org().find((t) => t.id === 'worker')!)
-    expect(w.preset).toBeTruthy()
-    expect(worn.has(w.preset)).toBe(false)
+  it('only the CEO, VPs, routers, leaders and Directors wear one; a plain task wears none', () => {
+    // 2026-11-23, the user: "只有 leader、director、VP 和 CEO 需要 icon，其他的 task 是不需要 icon 的".
+    const tasks = org([
+      { id: 'dir', title: 'Made a Director by hand', director: 'yes', created_at: '2026-01-10' },
+      { id: 'not-dir', title: 'A leader that is no Director', director: 'no', created_at: '2026-01-11' },
+      { id: 'not-dir-kid', title: 'Its worker', parent_task_id: 'not-dir', created_at: '2026-01-12' },
+      { id: 'done-leader', title: 'A finished leader', phase: 'COMPLETE', created_at: '2026-01-13' },
+      { id: 'done-kid', title: 'Its worker', parent_task_id: 'done-leader', created_at: '2026-01-14' },
+    ])
+    const a = orgAvatars(tasks)
+    for (const id of ['main', 'l-walnut', 'r-mail', 'r-cron', 'leader', 'dir', 'not-dir']) expect(a.wears(id), id).toBe(true)
+    for (const id of ['worker', 'not-dir-kid', 'done-leader', 'done-kid', 'no-such-task']) expect(a.wears(id), id).toBe(false)
+    // An editor's preview of a plain task still never takes a pair a node wears.
+    const worn = new Set(orgAvatarNodes(tasks).map((n) => a.of(tasks.find((t) => t.id === n.id)!).preset))
+    expect(worn.has(a.of(tasks.find((t) => t.id === 'worker')!).preset)).toBe(false)
   })
 
   it('even past every pair, each node still gets an avatar', () => {

@@ -2,8 +2,8 @@
  * The Org avatars' routes on a real server (src/web/routes/org-avatars-v1.ts):
  *   - PUT /api/v1/org/avatars/:id sets a preset, an SVG or an image, refuses a picture that could
  *     run or load, and `reset` brings the default back; an agent's write names it;
- *   - GET /api/v1/org/avatars/:id.png is the PNG of what the Org page shows (a chosen avatar, else
- *     the default), with no setting to turn on;
+ *   - GET /api/v1/org/avatars/:id.png is the PNG of what the Org page shows for an Org node (a
+ *     chosen avatar, else the default), with no setting to turn on, and a 404 for a plain task;
  *   - POST /api/v1/org/avatars/draw answers three SVGs from the model's reply.
  * Only the model call is replaced (no provider is configured in a test home).
  */
@@ -86,9 +86,8 @@ describe('org avatars', () => {
     expect(res.headers.get('content-type')).toMatch(/image\/png/)
     const meta = await sharp(Buffer.from(await res.arrayBuffer())).metadata()
     expect([meta.width, meta.height]).toEqual([64, 64])
-    // A task with no avatar of its own gets its default.
-    res = await png(taskId)
-    expect(res.status).toBe(200)
+    // A plain task is no Org node: it wears none, so the phone shows it as a task.
+    expect((await png(taskId)).status).toBe(404)
     expect((await png('nope')).status).toBe(404)
   })
 
