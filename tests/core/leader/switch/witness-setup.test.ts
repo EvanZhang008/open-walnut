@@ -142,7 +142,7 @@ describe('a witness missing beside records joins through the leader\'s list chan
   const stepsOf = (a: PermitHandle): JoinSteps => ({
     current: () => a.client.witnessList(),
     change: (next) => changeListAndWait(a, next),
-    generation: async () => generationToJoin((await readStanding(a)).replies),
+    generation: async () => generationToJoin((await readStanding(a)).replies, a.client.config().epoch),
   })
 
   it('w3 lost its disk while A leads: init while leading sets it up joining and adds it back, A renews with it, and it says no to B', async () => {

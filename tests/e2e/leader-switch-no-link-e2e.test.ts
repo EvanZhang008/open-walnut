@@ -3,10 +3,12 @@
  * leader-switch.md, "How a witness is reached" and "A witness that joins later"): two dev boxes and the
  * companion keep the three witnesses, and every process is real.
  *
- *   A, the first leader, runs on dev box 1 and keeps w-a in its own state dir (way a); its service opens
- *     the direct door to it (capability `witness-door`, the same module the companion runs).
- *   Dev box 2 keeps w-c: its host service (a real leader door on loopback, way c, A's link to it) and its
- *     service's direct door (way b) over the same records.
+ *   A, the first leader, runs on dev box 1 and keeps w-a in its own state dir (way a); its own leader
+ *     server opens the direct door to it (capability `witness-door`), and after the switch the handed-over
+ *     standby the switch starts on its home does (the same module the companion runs).
+ *   Dev box 2 keeps w-c: a real host replica (`walnut web --replica`, witness-door on) serves its direct
+ *     door through its front's local row, and its host service's leader door (way c, A's link to it, the
+ *     rehearsal's stand-in for the daemon link) serves the same records.
  *   The companion (the repo's companion test cluster: a WALNUT_CLOUD_MODE replica with `witness-door` on)
  *     keeps w-k behind TLS on loopback; A is paired with it, so init sets w-k up on A's own bridge lane.
  *   B, the candidate, keeps no witness and has no link: it reaches all three by their doors only.
@@ -18,10 +20,9 @@
  * 2 down, and B renewing on w-a and w-k. No :3456, no ~/.open-walnut, no real companion.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { spawn, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
-import express from 'express'
 import fs from 'node:fs'
-import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -31,7 +32,6 @@ import { checkOneLeader, Checks, seed, waitForBatch } from '../../scripts/leader
 import { readSwitchState } from '../../src/core/leader/switch/flow.js'
 import { readHomeSwitchConfig, type RemoteWitnessPlace } from '../../src/core/leader/switch/settings.js'
 import { witnessDir } from '../../src/core/leader/switch/witness-route.js'
-import { createWitnessDoorRouter } from '../../src/web/routes/witness-door.js'
 import { WITNESS_DOOR_PATH } from '../../src/core/leader/switch/witness-wire.js'
 import { seedPrimaryPairing, startCloudBoxReplica, type CloudBoxReplica } from '../helpers/cloud-box-replica.js'
 import { startWitnessMachine, type WitnessMachine } from '../helpers/witness-machines.js'
@@ -40,15 +40,16 @@ import { makeLoopbackCert, startTlsFront, type TlsFront } from '../helpers/loopb
 const root = fs.mkdtempSync(path.join(process.env.LEADER_SWITCH_KEEP === '1' ? path.resolve(import.meta.dirname, '../../.scratch') : os.tmpdir(), 'leader-switch-no-link-'))
 let companion: CloudBoxReplica | null = null
 const fronts: TlsFront[] = []
-const servers: http.Server[] = []
 let hostC: WitnessMachine | null = null
+let replicaC: ChildProcess | null = null
 let w: World
 const port = 5150 + (process.pid % 20) * 4
 
 afterAll(async () => {
   for (const m of [w?.a, w?.b]) if (m) await w.side(m).stopServer(10_000).catch(() => {})
   await Promise.all(fronts.map((f) => f.close()))
-  await Promise.all(servers.map((s) => new Promise<void>((r) => { s.closeAllConnections?.(); s.close(() => r()) })))
+  // The host replica's whole process group (it was spawned detached as its own group).
+  if (replicaC?.pid) { try { process.kill(-replicaC.pid, 'SIGTERM') } catch { /* gone */ } }
   await companion?.stop().catch(() => {})
   await hostC?.close()
   // LEADER_SWITCH_KEEP=1 keeps the folder (the servers' logs, the switch state) for a look after a failure.
@@ -97,16 +98,39 @@ async function until<T>(fn: () => Promise<T | null | false | undefined>, ms: num
   return null
 }
 
-/** A dev box service's direct door over `rootDir` (createWitnessDoorRouter, as the service mounts it), behind TLS. */
-async function serviceDoor(cert: ReturnType<typeof makeLoopbackCert>, rootDir: string): Promise<TlsFront> {
-  const app = express()
-  app.use(WITNESS_DOOR_PATH, createWitnessDoorRouter({ root: rootDir }))
-  const server = http.createServer(app)
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
-  servers.push(server)
-  const front = await startTlsFront(cert, () => (server.address() as net.AddressInfo).port)
-  fronts.push(front)
-  return front
+const freePort = () => new Promise<number>((resolve) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = (s.address() as net.AddressInfo).port; s.close(() => resolve(p)) }) })
+
+/**
+ * Dev box 2's service: the real host replica program (`walnut web --replica`, as its host daemon starts it) with
+ * the capability witness-door, its machine state (machine id, witness root) in `machineDir`. Resolves with its
+ * public port once its door answers.
+ */
+async function startDevBoxReplica(base: string, machineDir: string, walnutId: string): Promise<{ port: number; proc: ChildProcess; log: () => string }> {
+  const home = path.join(base, 'home')
+  const data = path.join(home, '.open-walnut-host', 'data')
+  const run = path.join(home, '.open-walnut-host', 'run')
+  const hostd = path.join(base, 'hostd')
+  for (const d of [data, run, hostd, machineDir]) fs.mkdirSync(d, { recursive: true, mode: 0o700 })
+  fs.writeFileSync(path.join(machineDir, 'machine-id'), 'machine-c\n')
+  const at = await freePort()
+  const env: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH, HOME: home, USERPROFILE: home, TMPDIR: os.tmpdir(), NODE_ENV: 'production', NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS,
+    WALNUT_HOST_DAEMON_DIR: hostd, WALNUT_DAEMON_DIR: run, OPEN_WALNUT_HOME: data,
+    WALNUT_HOST_SERVER: '1', WALNUT_HOST_SERVER_PORT: String(at), WALNUT_WALNUT_ID: walnutId, WALNUT_NO_AUTO_UPDATE: '1',
+    WALNUT_ROLE: 'replica', WALNUT_PLACEMENT: 'host', WALNUT_FOLLOWER_TOKEN: crypto.randomBytes(16).toString('hex'),
+    WALNUT_CAPABILITIES: 'witness-door', WALNUT_MACHINE_ID_FILE: path.join(machineDir, 'machine-id'),
+  }
+  let out = ''
+  const proc = spawn(process.execPath, [path.join(import.meta.dirname, '../../src/cli.ts'), 'web', '--replica', '--dev'], { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+  proc.stdout!.on('data', (x: Buffer) => { out = (out + x.toString()).slice(-200_000) })
+  proc.stderr!.on('data', (x: Buffer) => { out = (out + x.toString()).slice(-200_000) })
+  const up = await until(async () => {
+    if (proc.exitCode !== null) throw new Error(`the host replica exited (${proc.exitCode})\n${out.slice(-3000)}`)
+    const r = await fetch(`http://127.0.0.1:${at}${WITNESS_DOOR_PATH}/challenge`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ v: 1, walnutId, witness: 'w-c', digest: 'a'.repeat(64), cnonce: 'b'.repeat(64) }) })
+    return r.status === 404 && ((await r.json()) as { error?: string }).error === 'no_witness_here'
+  }, 180_000)
+  if (!up) throw new Error(`the host replica's witness door did not answer\n${out.slice(-3000)}`)
+  return { port: at, proc, log: () => out }
 }
 
 describe('a switch whose candidate has no leader link, on two dev boxes and the companion', () => {
@@ -128,12 +152,16 @@ describe('a switch whose candidate has no leader link, on two dev boxes and the 
     const cert = makeLoopbackCert(path.join(root, 'tls'))
     // Every process started from here (the servers, the commands) trusts the loopback certificate, nothing else changes.
     process.env.NODE_EXTRA_CA_CERTS = cert.certFile
-    companion = await startCloudBoxReplica(path.join(root, 'companion'), undefined, { env: { WALNUT_CAPABILITIES: 'witness-door' } })
+    companion = await startCloudBoxReplica(path.join(root, 'companion'), undefined, { env: { WALNUT_CAPABILITIES: 'bridge-door,witness-door' } })
     doorK = await startTlsFront(cert, () => companion!.port)
     fronts.push(doorK)
     w = makeWorld(path.join(root, 'world'), { portA: port, portB: port + 1 })
-    const doorA = await serviceDoor(cert, rootA())
-    doorC = await serviceDoor(cert, rootC())
+    // w-a's door is A's own server (its leader server, later its standby), on A's port.
+    const doorA = await startTlsFront(cert, () => w.a.port)
+    fronts.push(doorA)
+    let replicaPort = 0
+    doorC = await startTlsFront(cert, () => replicaPort)
+    fronts.push(doorC)
     hostC = await startWitnessMachine({ host: 'host-c', root: rootC(), walnutId: null })
     const cfgFile = path.join(w.a.home, 'config.yaml')
     const cfg = YAML.parse(fs.readFileSync(cfgFile, 'utf8')) as Record<string, any>
@@ -146,18 +174,25 @@ describe('a switch whose candidate has no leader link, on two dev boxes and the 
     ]
     // A is paired with the companion, its bridge lane on the same origin as w-k's door (the setup's token goes nowhere else).
     cfg.cloud_bridge = { url: `wss://127.0.0.1:${doorK.port}/bridge` }
-    // Only A has a link (to dev box 2's host service); B has none.
+    // Both machines' servers open the witness door (whatever they run as); only A has a link (to dev box 2's host service).
     const a = cfg.leader_switch.machines.find((m: { id: string }) => m.id === w.a.id)
-    a.env = { ...a.env, WALNUT_REHEARSAL_WITNESS_LINKS: JSON.stringify({ 'host-c': hostC.port }) }
+    const b = cfg.leader_switch.machines.find((m: { id: string }) => m.id === w.b.id)
+    a.env = { ...a.env, WALNUT_CAPABILITIES: 'witness-door', WALNUT_REHEARSAL_WITNESS_LINKS: JSON.stringify({ 'host-c': hostC.port }) }
+    b.env = { ...b.env, WALNUT_CAPABILITIES: 'witness-door' }
     fs.writeFileSync(cfgFile, YAML.stringify(cfg))
     Object.assign(w.a, { env: a.env })
+    Object.assign(w.b, { env: b.env })
     await seedPrimaryPairing(w.a.home, `127.0.0.1:${companion.port}`, companion.tokens)
-  }, 300_000)
-
-  it('init while A waits sets w-a and w-k up from nothing, A leads on them, and init again while A leads adds w-c by list changes', async () => {
+    // Dev box 2's service follows this Walnut: its id is A's, known once A's home exists.
     const started = await w.side(w.a).startServer('leader', 300_000)
     expect(started.ok, started.why).toBe(true)
     walnutId = (await (await import('../../src/core/device-store.js')).instanceIdAt(w.a.home))!
+    const replica = await startDevBoxReplica(path.join(root, 'devbox-2-service'), path.join(root, 'devbox-2'), walnutId)
+    replicaC = replica.proc
+    replicaPort = replica.port
+  }, 300_000)
+
+  it('init while A waits sets w-a and w-k up from nothing, A leads on them, and init again while A leads adds w-c by list changes', async () => {
     expect(walnutId).toBeTruthy()
     hostC!.walnutId = walnutId
     expect((await status(w.a))?.mayAct).toBe(false)
@@ -234,7 +269,7 @@ describe('a switch whose candidate has no leader link, on two dev boxes and the 
     expect(await caughtUp([['w-a', rootA], ['w-c', rootC], ['w-k', rootK]])).not.toBeNull()
   }, 300_000)
 
-  it('the switch completes with dev box 2 down: B commits on w-a and w-k by their doors, and renews there', async () => {
+  it('the switch completes with dev box 2 down: B commits on w-a (A\'s standby\'s door) and w-k by their doors, and renews there', async () => {
     await waitForBatch(w.b.standbyDir, Date.now(), 120_000)
     // Dev box 2 goes down: its host service (A's link to w-c) and its door.
     devBox2(false)
@@ -244,6 +279,11 @@ describe('a switch whose candidate has no leader link, on two dev boxes and the 
     expect(sw.code, `${sw.out}\nrecords: ${JSON.stringify(held)}`).toBe(0)
     expect(st?.step).toBe('done')
     expect((await status(w.b))?.mayAct).toBe(true)
+    // A's home runs again as the handed-over standby (the switch started it, as A's launcher would), and its
+    // witness door with it: the only way B has to w-a.
+    expect(sw.out).toMatch(/its home runs as the standby, its witness door up/)
+    expect(w.side(w.a).standbyServer()).not.toBeNull()
+    expect(await status(w.a)).toMatchObject({ state: 'standby', mayAct: false })
     const c = new Checks()
     checkOneLeader(c, 'A -> B, no leader link, one witness down', w.a, w.b, { stoppedAt: st?.stoppedAt })
     expect(c.all.filter((x) => !x.ok).map((x) => `${x.name}: ${x.detail}`)).toEqual([])

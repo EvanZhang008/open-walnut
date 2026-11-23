@@ -9,10 +9,10 @@
  *     never made again as a fresh one (permit/store.ts: two fresh witnesses and an old expired record
  *     would let a second machine see a majority while the first still leads).
  *   - A witness missing beside records (never set up, or its disk lost): only while this server leads,
- *     through the permit core's own way of adding a member. The leader drops it from the running list
- *     (a list change it writes as the holder), sets it up as a JOINING witness from the generation the
- *     witnesses report (prepareJoiningWitness: it takes nothing until a change names it), then adds it
- *     back by a second list change. The core's membership rules make this safe; a witness that left
+ *     through the permit core's own way of adding a member. The leader sets it up as a JOINING witness
+ *     from the generation the witnesses report, never below its own (prepareJoiningWitness,
+ *     generationToJoin: it takes nothing until a change names it), then drops it from the running list
+ *     (a list change it writes as the holder) and adds it back by a second list change. The core's membership rules make this safe; a witness that left
  *     never counts for the list it left.
  *
  * Each witness is set up the way it is reached: one this machine keeps in this machine's witness root
@@ -145,11 +145,8 @@ export async function setUpRemoteWitnesses(input: SetUpWitnessesInput): Promise<
     // Set up as joining already (an earlier run stopped half way): it still needs the list change that adds it.
     const joining = !seen.absent && seen.listed === false && seen.epoch !== null
     if (!seen.absent && !joining) { report({ ok: false, error: 'not made: it serves another list than this leader (a list change of another holder?)' }); continue }
-    // Out of the running list first: a joining witness takes only a change that adds it to a list it is not in.
-    if (inList) {
-      const out = await join.change(join.current().filter((w) => w !== p.id))
-      if (!out.ok) { report({ ok: false, error: `not made: the list change without it did not stand (${out.why})` }); continue }
-    }
+    // Set up as joining FIRST: it takes nothing until a change names it, and a setup that fails here (no lane,
+    // key_differs, no generation) leaves the running list as it was, its spare witness counted.
     let made = false
     if (seen.absent) {
       const gen = await join.generation()
@@ -157,6 +154,11 @@ export async function setUpRemoteWitnesses(input: SetUpWitnessesInput): Promise<
       const r = await send(p, evidence, gen)
       if (!r.ok) { report(r); continue }
       made = r.made
+    }
+    // Then out of the running list and back in: a joining witness takes only a change that adds it to a list it is not in.
+    if (inList) {
+      const out = await join.change(join.current().filter((w) => w !== p.id))
+      if (!out.ok) { report({ ok: false, error: `set up as joining, but the list change without it did not stand (${out.why}); run this again` }); continue }
     }
     if (!join.current().includes(p.id)) {
       const back = await join.change([...join.current(), p.id])

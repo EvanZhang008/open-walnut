@@ -36,7 +36,7 @@ import { demoteTrialHome, moveRoots, promoteCopy } from './promote.js'
 import { homePathRules } from './home-path-rules.js'
 import { offlineCheck, olderVersion, onlineCheck } from './self-check.js'
 import { LocalSide, type SwitchSide } from './side.js'
-import { machineByHome, machineById, readHomeSwitchConfig, type LeaderSwitchSettings, type MachinePlace } from './settings.js'
+import { isRemoteWitness, machineByHome, machineById, readHomeSwitchConfig, type LeaderSwitchSettings, type MachinePlace } from './settings.js'
 
 export type SwitchStep =
   | 'preflight' | 'handover' | 'stop-source' | 'final-batch' | 'promote' | 'trial' | 'commit' | 'start-target' | 'done'
@@ -181,6 +181,18 @@ async function runLocked(opts: SwitchOptions, env: NodeJS.ProcessEnv, out: (line
   // process that holds the permission, which is always a server.
   const readWitnesses = witnessReading(`${st.from}-switch-reader`, settings, srcSide, dstSide, st)
   const fail = (why: string): never => { throw new StepFailed(why) }
+  /**
+   * The old machine keeps a witness of the list: its home starts again at once as the handed-over standby (as its
+   * launcher would), which keeps that witness's door up (handed-over.ts), so the new leader's commit can count it.
+   * Not fatal: without it the commit needs a majority of the others.
+   */
+  const keepWitnessDoor = async (): Promise<string> => {
+    if (!settings.witnesses.some((w) => isRemoteWitness(w) && w.machine === st.from)) return ''
+    const r = await srcSide.startStandby()
+    if (r.ok) return `; its home runs as the standby, its witness door up`
+    out(`the old home did not start as the standby (${r.why}): its witness is not reached until it does`)
+    return `; its standby did not start (${r.why})`
+  }
 
   for (;;) {
     try {
@@ -217,7 +229,8 @@ async function runLocked(opts: SwitchOptions, env: NodeJS.ProcessEnv, out: (line
         case 'stop-source': {
           const { wasRunning } = await srcSide.stopServer()
           if (wasRunning || !st.stoppedAt) st.stoppedAt ??= new Date().toISOString()
-          save('final-batch', wasRunning ? 'the old leader stopped' : 'the old leader was not running')
+          const door = await keepWitnessDoor()
+          save('final-batch', `${wasRunning ? 'the old leader stopped' : 'the old leader was not running'}${door}`)
           break
         }
         case 'final-batch': {
@@ -284,6 +297,8 @@ async function runLocked(opts: SwitchOptions, env: NodeJS.ProcessEnv, out: (line
           // Before its start the new home says where the old leader was on its hosts: it declares that once its commit stands (moved-home.ts).
           const onHosts = { to: st.to, handover: st.handover, ...(st.sourceHomeOnHosts ? { fromHomeOnHosts: st.sourceHomeOnHosts.home, fromFormerHomes: st.sourceHomeOnHosts.formerHomes } : {}) }
           if (readPromoted(st.targetHome)?.state !== 'led') writePromoted(st.targetHome, { switchId: st.id, state: 'promoted', from: st.sourceHome, ...onHosts, at: new Date().toISOString() })
+          // A resumed switch: the old machine's witness door may have gone with a crash since its stop.
+          await keepWitnessDoor()
           let committed: PermitRecord | null = null
           const deadline = Date.now() + takeBackMs(settings)
           while (!committed && Date.now() < deadline) {

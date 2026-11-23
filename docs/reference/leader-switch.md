@@ -669,10 +669,11 @@ companion on its lane). `init` runs only against the leader's own running server
 machine whose server runs no permission): only the leader mints a key, so a key never comes from a copy.
 
 **A witness that joins later.** Once records exist, a witness that is missing (never set up, or its disk lost) is added through
-the permit core's own way of adding a member, and only while this server leads: `init` again, on the leader. The leader takes it
-out of the running list (a list change it writes as the holder, both steps), sets it up as a JOINING witness from the generation the
-witnesses report (`prepareJoiningWitness`, `generationToJoin`: it takes nothing until a change names it), then adds it back by a
-second list change; `init` prints `joined`. The setup goes the way the witness is reached: its own machine directly, a host over
+the permit core's own way of adding a member, and only while this server leads: `init` again, on the leader. The leader first
+sets it up as a JOINING witness from the generation the witnesses report, never below the one it runs on (`prepareJoiningWitness`,
+`generationToJoin`: it takes nothing until a change names it), then takes it out of the running list (a list change it writes as
+the holder, both steps) and adds it back by a second list change; `init` prints `joined`. Setting it up first means a setup that
+fails (no lane, `key_differs`, no generation) leaves the running list as it was, with its spare. The setup goes the way the witness is reached: its own machine directly, a host over
 the leader's link (now open), the companion on its lane; it carries the key from the leader's config, and a witness that holds
 another key answers `key_differs`, which `init` reports by name (a key is never replaced). A witness that answered with a record
 of another list, or did not answer, is left alone and reported. The model check runs it (a third witness joins after the first
@@ -771,35 +772,46 @@ read one record format, which `permit/store.ts` already versions.
 ```
 POST <url>/challenge  {v:1, walnutId, witness, digest, cnonce} digest = sha256 of the call's JSON text; cnonce: the caller's own
                       -> {ok, nonce, ttlMs}                    a nonce for THIS call only, once, 10 s
-POST <url>/request    {v:1, nonce, proof, call}               proof = HMAC-SHA256 under the witness's key of the caller text
+POST <url>/request    {v:1, nonce, cnonce, proof, call}       proof = HMAC-SHA256 under the witness's key of the caller text
                       -> {ok, reply, proof}                    proof = HMAC-SHA256 under the same key of the witness text
 ```
+
+The door keeps no state for a challenge: the nonce is its expiry on the door's clock and the door's own HMAC (a secret of that
+door process) over the Walnut, the witness, the call's digest, the caller's nonce and the expiry (`witness-door.ts`).
 
 The caller text is the lines `walnut-witness-door-v1`, `caller`, the Walnut id, the witness id, the nonce, the caller's nonce and the
 call's digest; the witness text is the same with `witness` in place of `caller` and the reply's digest added (`witness-wire.ts`
 `doorCallerProofText`, `doorWitnessProofText`). The caller's nonce is fresh per call, so a door that replays a recorded exchange (an
 old nonce, its reply and proof) never passes for the answer to a new call.
 
-A replayed request finds its nonce used, a nonce issued for another call finds another digest, a late one an expired nonce, a
-wrong key no proof that holds, a wrong Walnut no witness to give a nonce for: each is refused (403, 404) before the record is read,
+A replayed request finds its nonce used, a nonce issued for another call (or another Walnut, or none at all) is no nonce of this
+door (`unknown_nonce`), a late one an expired nonce, a wrong key no proof that holds, a wrong Walnut no witness to give a nonce
+for: each is refused (403, 404) before the record is read,
 so no refusal changes the witness's number. The caller counts a reply only when the witness proved the same key over it: a door
 that does not hold the key cannot pass for the witness. Every refusal is a fixed code, never a key or a record. A door gives no
 nonce for a witness it keeps no key of: `no_witness_here` when the directory holds nothing, `not_a_witness` otherwise (a record
-without its key), which a setup counts as not reached. The nonces are kept in the door's memory and limited: at most 32 open per
-caller address (above the 20 calls one permit client keeps open to a witness), 256 per witness, 1024 in all; past a limit a challenge is refused (429 `too_many_challenges`, not logged) and no
-open nonce is ever pushed out, so a flood from one address never takes another caller's nonce. A call holds its nonce for one
-round trip, so an honest caller needs one or two. (On the companion `trust proxy: loopback` makes the address the client's behind
+without its key), which a setup counts as not reached. A nonce is remembered as used only once a proof over it held, so a caller
+without the key fills no state at all (a flood of challenges takes nothing from an honest caller); the used ones are kept until they
+expire, at most 4096 (past it a key holder's request is refused, 429 `too_many_requests`, and no entry is dropped). One caller may
+ask for 256 challenges a 10 s window (429 `too_many_challenges`, not logged): a brake on the HMAC work one place can cause,
+counted by its address, an IPv6 one by its /64. (On the companion `trust proxy: loopback` makes the address the client's behind
 its front.) Only `https://` (plain `http://` only to a loopback address); the proofs are in `src/utils/hmac-proof.ts`, the one
 module of this crypto (5a's door proofs are to use it too).
 
-The cloud companion and a dev machine's service open it as the capability `witness-door` (`src/core/capabilities/witness-door.ts`,
-off on both by default: `WALNUT_CAPABILITIES` names it; a host replica takes it because its manifest says `alsoHostReplica`): the
-same module on both (`createWitnessDoorRouter`, `machineWitnessDoor`), `POST /leader-witness/challenge|request` over that machine's
-witness root. The setup differs, and neither adds a kind of credential:
+Every server opens it as the capability `witness-door` (`src/core/capabilities/witness-door.ts`, off by default:
+`WALNUT_CAPABILITIES` names it; its manifest says `anyServer`): the companion, a host replica, a leader server and the handed-over
+standby that replaces it after a switch, so a machine's door stays up whatever role the machine plays. The same module on each
+(`machineWitnessDoor`, `serveDoorHttp`: the express route `createWitnessDoorRouter`, and the standby's own listener in
+`handed-over.ts`, which still opens nothing in the home: the record is in the state dir), `POST /leader-witness/challenge|request`
+over that machine's witness root. On a host replica the front's route table serves the path itself (a `local` row, never forwarded
+to the leader). When the old leader's machine keeps a witness of the list, the switch starts its home again right after the stop, as
+its launcher would: it boots as the standby and keeps that witness's door up for the new leader's commit (`flow.ts`
+`keepWitnessDoor`, `SwitchSide.startStandby`, its output beside its pid file, outside the home). The setup differs, and neither
+adds a kind of credential:
 
 - on the companion, `POST /bridge/witness-setup`, which takes only the paired Mac's own machine token (the gate of every write the
-  Mac makes to the box);
-- on a dev machine, no setup route on the door: the setup comes only over the leader's own link to that machine's service (way c's
+  Mac makes to the box), mounted only with that lane (capability `bridge-door`);
+- on a host replica, a leader or a standby, no setup route on the door: the setup comes only over the leader's own link to that machine's service (way c's
   `POST /host-api/witness/setup` on its leader door, `authorizeWitnessCaller`: the host daemon's relayed stream from the leader of
   the Walnut the service follows).
 

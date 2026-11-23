@@ -22,33 +22,23 @@ import { log } from '../../logging/index.js'
 export { WITNESS_DOOR_PATH } from '../../core/leader/switch/witness-wire.js'
 export { BRIDGE_WITNESS_SETUP_PATH } from '../../core/leader/switch/witness-direct.js'
 
-/** A request carries one permit record (a list change: every op entry), its call text inside JSON. */
-const BODY_LIMIT = '6mb'
-
 async function machineRoot(): Promise<string> {
   return (await import('../../core/leader/switch/machine-id.js')).witnessRoot()
 }
 
-/** The direct door, one per server (its nonces live here). `root`: where the records are (default this machine's; a test gives its own). */
+/** The direct door, one per server (its secret lives here). `root`: where the records are (default this machine's; a test gives its own). */
 export function createWitnessDoorRouter(o: { root?: string } = {}): Router {
   const router = Router()
-  let door: Promise<import('../../core/leader/switch/witness-door.js').WitnessDoor> | null = null
+  let door: Promise<{ door: import('../../core/leader/switch/witness-door.js').WitnessDoor; serve: typeof import('../../core/leader/switch/witness-door.js').serveDoorHttp }> | null = null
   const theDoor = () => (door ??= (async () => {
-    const { machineWitnessDoor } = await import('../../core/leader/switch/witness-door.js')
+    const { machineWitnessDoor, serveDoorHttp } = await import('../../core/leader/switch/witness-door.js')
     // A refusal is logged by its fixed code only: never a key, a proof, a nonce or a body.
-    return machineWitnessDoor({ root: o.root ?? await machineRoot(), onRefuse: (code) => log.web.info('witness door: refused', { code }), log: (level, msg, data) => log.web[level](msg, data) })
+    return { door: machineWitnessDoor({ root: o.root ?? await machineRoot(), onRefuse: (code) => log.web.info('witness door: refused', { code }), log: (level, msg, data) => log.web[level](msg, data) }), serve: serveDoorHttp }
   })())
-  const send = (res: Response, r: { status: number; body: unknown }) => { res.status(r.status).set('cache-control', 'no-store').json(r.body) }
-  router.post('/challenge', express.json({ limit: '64kb' }), (req: Request, res: Response, next) => {
-    void theDoor().then((d) => send(res, d.challenge(req.body, req.ip ?? req.socket.remoteAddress ?? 'unknown'))).catch(next)
+  // The body is read by the door's own reader (serveDoorHttp), the one every server that opens the door uses.
+  router.post(['/challenge', '/request'], (req: Request, res: Response, next) => {
+    void theDoor().then(({ door: d, serve }) => { if (!serve(d, req.path, req, res, req.ip ?? req.socket.remoteAddress ?? 'unknown')) next() }).catch(next)
   })
-  router.post('/request', express.json({ limit: BODY_LIMIT }), (req: Request, res: Response, next) => {
-    void (async () => {
-      const [{ doorRequest }, d] = await Promise.all([import('../../core/leader/switch/witness-door.js'), theDoor()])
-      send(res, await doorRequest(d, req.body))
-    })().catch(next)
-  })
-  router.use(parseErrors)
   return router
 }
 

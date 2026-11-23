@@ -144,12 +144,13 @@ export function bootstrapWitnessStore(store: PermitStore, list: string[]): void 
 
 /**
  * The generation a joining witness is set up from: the highest any set-up witness reported in
- * one read round (PermitClient.readBack() of a machine that reads every witness of the list).
+ * one read round (PermitClient.readBack() of a machine that reads every witness of the list),
+ * and never below `current`, the generation the asking holder runs on (its config().epoch).
  * Higher is only safer: a joining witness then refuses more. null when no witness answered.
  */
-export function generationToJoin(reads: readonly PermitReply[]): number | null {
+export function generationToJoin(reads: readonly PermitReply[], current?: number | null): number | null {
   const set = reads.filter((r) => r.list && r.epoch !== null).map((r) => r.epoch!)
-  return set.length ? Math.max(...set) : null
+  return set.length ? Math.max(...set, current ?? 0) : null
 }
 
 /**

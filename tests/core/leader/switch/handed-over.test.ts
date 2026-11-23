@@ -11,6 +11,11 @@ import path from 'node:path'
 import { confirmStandby, handedOverAtBoot, readStandbyServer, serveHandedOver, standbyForRecord, type StandbyListener } from '../../../../src/core/leader/switch/handed-over.js'
 import { standbyServerFile } from '../../../../src/core/leader/switch/machine-id.js'
 import { writeMarker } from '../../../../src/core/leader/switch/records.js'
+import { setUpMachineWitness } from '../../../../src/core/leader/switch/witness-route.js'
+import { directWitnessCall } from '../../../../src/core/leader/switch/witness-direct.js'
+import { WITNESS_DOOR_PATH, WITNESS_REQUEST_PATH } from '../../../../src/core/leader/switch/witness-wire.js'
+import { proofSecret, sha256Hex } from '../../../../src/utils/hmac-proof.js'
+import { blankEvidence } from '../../../helpers/witness-machines.js'
 
 let root: string
 let home: string
@@ -133,5 +138,47 @@ describe('the standby of a handed-over home', () => {
     expect(readStandbyServer(home, env)).toBeNull()
     fs.writeFileSync(file, JSON.stringify({ pid: 1, port: 1, home }))
     expect(readStandbyServer(home, env)).toBeNull()
+  })
+})
+
+describe('the standby keeps this machine\'s witness door (N1 of review r2)', () => {
+  const WALNUT = 'walnut-standby-door'
+  const LIST = ['w-a', 'w-c', 'w-k']
+  const challenge = (l: StandbyListener, witness: string) => fetch(url(l, `${WITNESS_DOOR_PATH}/challenge`), {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ v: 1, walnutId: WALNUT, witness, digest: sha256Hex('x'), cnonce: proofSecret() }),
+  })
+  afterEach(() => { delete process.env.WALNUT_CAPABILITIES })
+
+  it('off (the default): its paths get the handed_over refusal as every other path', async () => {
+    writeMarker(home, { switchId: 's1', to: 'machine-b', state: 'handed-over', handover: 4, commit: 5, at: new Date().toISOString() })
+    open = await serveHandedOver(handedOverAtBoot({ home, env })!, { port: 0, host: '127.0.0.1', env })
+    const r = await challenge(open, 'w-a')
+    expect(r.status).toBe(409)
+    expect(await r.json()).toMatchObject({ code: 'handed_over' })
+  })
+
+  it('on: the witness this machine keeps answers a keyed caller, one it does not keep says so, and the home is unchanged', async () => {
+    process.env.WALNUT_CAPABILITIES = 'witness-door'
+    const key = proofSecret()
+    // The witness record and key are this machine's state (beside its machine id), never in the home.
+    expect((await setUpMachineWitness(path.join(root, 'leader-witness'), { v: 1, walnutId: WALNUT, witness: 'w-a', list: LIST, evidence: blankEvidence(LIST, 'w-a'), key })).status).toBe(200)
+    writeMarker(home, { switchId: 's1', to: 'machine-b', state: 'handed-over', handover: 4, commit: 5, at: new Date().toISOString() })
+    const before = listing(home)
+    open = await serveHandedOver(handedOverAtBoot({ home, env })!, { port: 0, host: '127.0.0.1', env })
+    const doorUrl = url(open, WITNESS_DOOR_PATH)
+    const read = await new Promise<{ status: number; body: unknown } | null>((resolve) => {
+      directWitnessCall()({ id: 'w-a', url: doorUrl, key }, WITNESS_REQUEST_PATH, { v: 1, walnutId: WALNUT, witness: 'w-a', request: { type: 'read' } }, resolve)
+    })
+    expect(read).toMatchObject({ status: 200, body: { ok: true, reply: { witness: 'w-a', re: 'read', list: LIST } } })
+    const none = await challenge(open, 'w-c')
+    expect(none.status).toBe(404)
+    expect(await none.json()).toEqual({ ok: false, error: 'no_witness_here' })
+    // A wrong key is no answer; every other path is still refused.
+    const wrong = await new Promise<{ status: number } | null>((resolve) => {
+      directWitnessCall()({ id: 'w-a', url: doorUrl, key: proofSecret() }, WITNESS_REQUEST_PATH, { v: 1, walnutId: WALNUT, witness: 'w-a', request: { type: 'read' } }, resolve)
+    })
+    expect(wrong?.status).toBe(403)
+    expect((await fetch(url(open, '/api/tasks'), { method: 'POST', body: '{}' })).status).toBe(409)
+    expect(listing(home)).toEqual(before)
   })
 })

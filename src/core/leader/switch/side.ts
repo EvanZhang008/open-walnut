@@ -16,12 +16,18 @@ import path from 'node:path'
 import type { MachinePlace } from './settings.js'
 import { switchDir } from './records.js'
 import { confirmStandby, readStandbyServer, type StandbyServer } from './handed-over.js'
+import { standbyServerFile } from './machine-id.js'
 import { alive, serverCommand, stopPid, tail } from '../../trial-start/process.js'
 import { waitForConsolePort } from './console-port.js'
 import { consoleDir, consoleDirOfAccount } from '../../handed-over-console.js'
 import type { WitnessReachReport } from './witness-reach.js'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/** End a server this side spawned itself that did not answer in time. */
+function killSpawned(child: { pid?: number }): void {
+  try { if (child.pid) process.kill(child.pid, 'SIGKILL') } catch { /* gone */ }
+}
 
 export type ServerMode = 'leader' | 'trial'
 
@@ -40,6 +46,11 @@ export interface SwitchSide {
    * `commitHandover`: the new leader's start after the trial, told it may commit (renew on) that handover.
    */
   startServer(mode: ServerMode, timeoutMs?: number, commitHandover?: number): Promise<StartResult>
+  /**
+   * Start this side's home again after its handover, as its launcher would: it boots as the handed-over standby
+   * (handed-over.ts), which keeps this machine's witness door up. ok once the standby answers.
+   */
+  startStandby(timeoutMs?: number): Promise<StartResult>
   /** One request to this side's server. */
   api(method: string, urlPath: string, body?: unknown): Promise<{ status: number; json: unknown }>
   /**
@@ -88,23 +99,10 @@ export class LocalSide implements SwitchSide {
     // Its console files are its account's (its HOME), which need not be this process's.
     const port = await waitForConsolePort(m.home, m.port, 30_000, m.env?.HOME ? consoleDirOfAccount(m.env.HOME) : consoleDir())
     if (!port.ok) return { ok: false, why: port.why }
-    const cmd = m.start ?? serverCommand(['web', '--port', String(m.port)])
-    fs.mkdirSync(switchDir(m.home), { recursive: true, mode: 0o700 })
-    const logFile = path.join(switchDir(m.home), `server-${mode}.log`)
-    const out = fs.openSync(logFile, 'a', 0o600)
-    const env: NodeJS.ProcessEnv = { ...process.env, ...m.env, OPEN_WALNUT_HOME: m.home }
-    if (mode === 'trial') env.WALNUT_LEADER_TRIAL = '1'
-    else delete env.WALNUT_LEADER_TRIAL
-    if (mode === 'leader' && commitHandover) env.WALNUT_LEADER_SWITCH_COMMIT = String(commitHandover)
-    else delete env.WALNUT_LEADER_SWITCH_COMMIT
-    const child = spawn(cmd[0], cmd.slice(1), { env, detached: true, stdio: ['ignore', out, out] })
-    fs.closeSync(out)
-    let exited: number | null = null
-    child.on('exit', (code, signal) => { exited = code ?? (signal ? 128 : 1) })
-    child.unref()
+    const { exited, logFile, child } = this.spawnServer(mode, commitHandover)
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
-      if (exited !== null) return { ok: false, why: `the server exited during its start (code ${exited})`, logTail: tail(logFile) }
+      if (exited() !== null) return { ok: false, why: `the server exited during its start (code ${exited()})`, logTail: tail(logFile) }
       // It came up as a standby (its home handed over, or another machine leads): no start.
       const standby = this.standbyServer()
       if (standby && await confirmStandby(standby)) {
@@ -117,8 +115,50 @@ export class LocalSide implements SwitchSide {
       if (r && r.status < 500 && running) return { ok: true, pid: running.pid }
       await sleep(250)
     }
-    try { if (child.pid) process.kill(child.pid, 'SIGKILL') } catch { /* gone */ }
+    killSpawned(child)
     return { ok: false, why: `the server did not answer within ${Math.round(timeoutMs / 1000)} s`, logTail: tail(logFile) }
+  }
+
+  async startStandby(timeoutMs = 60_000): Promise<StartResult> {
+    const running = this.standbyServer()
+    if (running && await confirmStandby(running)) return { ok: true, pid: running.pid }
+    // Its output goes beside its pid file, outside the home: a handed-over home stays as its final batch left it.
+    const env = { ...process.env, ...this.machine.env }
+    const { exited, logFile, child } = this.spawnServer('leader', undefined, standbyServerFile(this.machine.home, env).replace(/\.json$/, '.log'))
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if (exited() !== null) return { ok: false, why: `it exited during its start (code ${exited()})`, logTail: tail(logFile) }
+      const standby = this.standbyServer()
+      if (standby && await confirmStandby(standby)) return { ok: true, pid: standby.pid }
+      // A server that would lead here is no standby: this home is not handed over.
+      if (this.runningServer()) {
+        await stopPid(this.runningServer()!.pid, 10_000)
+        return { ok: false, why: 'it started as a server that may lead, not as a standby (the home is not handed over)', logTail: tail(logFile) }
+      }
+      await sleep(250)
+    }
+    killSpawned(child)
+    return { ok: false, why: `the standby did not answer within ${Math.round(timeoutMs / 1000)} s`, logTail: tail(logFile) }
+  }
+
+  /** Spawn this home's server command, detached, its output to `logFile` (default the switch's log of `mode`). */
+  private spawnServer(mode: ServerMode, commitHandover?: number, logTo?: string): { child: ReturnType<typeof spawn>; logFile: string; exited: () => number | null } {
+    const m = this.machine
+    const cmd = m.start ?? serverCommand(['web', '--port', String(m.port)])
+    const logFile = logTo ?? path.join(switchDir(m.home), `server-${mode}.log`)
+    fs.mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 })
+    const out = fs.openSync(logFile, 'a', 0o600)
+    const env: NodeJS.ProcessEnv = { ...process.env, ...m.env, OPEN_WALNUT_HOME: m.home }
+    if (mode === 'trial') env.WALNUT_LEADER_TRIAL = '1'
+    else delete env.WALNUT_LEADER_TRIAL
+    if (mode === 'leader' && commitHandover) env.WALNUT_LEADER_SWITCH_COMMIT = String(commitHandover)
+    else delete env.WALNUT_LEADER_SWITCH_COMMIT
+    const child = spawn(cmd[0], cmd.slice(1), { env, detached: true, stdio: ['ignore', out, out] })
+    fs.closeSync(out)
+    let exited: number | null = null
+    child.on('exit', (code, signal) => { exited = code ?? (signal ? 128 : 1) })
+    child.unref()
+    return { child, logFile, exited: () => exited }
   }
 
   /**

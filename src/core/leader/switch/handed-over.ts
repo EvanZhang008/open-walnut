@@ -11,8 +11,9 @@
  *                             witnesses name now (read live, read-only), else the one the marker names
  *   GET  / (any page)         the standby page, which loads again by itself once the console has the port
  *   anything else             409 { code: 'handed_over', error: "this machine handed the leader to X (switch S)" }
+ *   POST /leader-witness/*    this machine's witness door, only when the server opens it (witness-door.ts)
  * and writes only its pid file beside the instance lock (machine-id.ts standbyServerFile),
- * outside the home. It sends nothing, fires nothing and claims nothing: no outward door is
+ * outside the home (and, through its door, this machine's witness record in the state dir). It sends nothing, fires nothing and claims nothing: no outward door is
  * reached, the permit's door log (in the home) gets no line.
  *
  * Two ways in (server.ts): the marker, checked before anything else of the boot; or the write
@@ -228,8 +229,21 @@ export async function serveHandedOver(s: HandedOverStandby, o: {
     res.writeHead(code, { 'content-type': 'application/json' })
     res.end(JSON.stringify(body))
   }
+  // This machine's witness door, when its server opens it (capability witness-door): a machine's witness stays
+  // reachable after it handed the leader over. Its record is in the state dir (machine-id.ts witnessRoot), never in
+  // the home; the door writes no log line. Off, nothing of it is loaded and its paths get the refusal below.
+  const witnessDoor = (await import('../../capabilities.js')).hasCapability('witness-door')
+    ? await (async () => {
+      const [{ machineWitnessDoor, serveDoorHttp }, { witnessRoot }, { WITNESS_DOOR_PATH }] = await Promise.all([
+        import('./witness-door.js'), import('./machine-id.js'), import('./witness-wire.js'),
+      ])
+      return { door: machineWitnessDoor({ root: witnessRoot(env) }), serve: serveDoorHttp, prefix: WITNESS_DOOR_PATH }
+    })()
+    : null
   const server = http.createServer((req, res) => {
     const url = (req.url ?? '/').split('?')[0]
+    if (witnessDoor && url.startsWith(`${witnessDoor.prefix}/`)
+      && witnessDoor.serve(witnessDoor.door, url.slice(witnessDoor.prefix.length), req, res, req.socket.remoteAddress ?? 'unknown')) return
     if (req.method === 'GET' && url === '/api/leader/status') {
       void status().then((body) => json(res, 200, body)).catch((err: unknown) => {
         if (!res.headersSent) json(res, 500, { error: `the standby could not read its status: ${err instanceof Error ? err.message : String(err)}`, standby: true })

@@ -308,17 +308,20 @@ function joinThird(world: World, c: import('../../../../src/core/leader/permit/i
   const list = c.witnessList()
   // One change at a time: its proposal is open until a majority of both lists took it.
   if (c.pendingRecord()?.kind === 'members') return true
-  const prepared = w3.store.load() !== null
-  if (!prepared && list.includes('w3')) { c.changeWitnesses(list.filter((x) => x !== 'w3')); return true }
-  if (!prepared && !list.includes('w3')) {
-    const gen = generationToJoin(c.readBack())
-    if (gen === null || gen < c.config().epoch) return false
-    prepareJoiningWitness(w3.store, gen)
+  const stored = w3.store.load()
+  // The order witness-setup.ts runs: set up as joining first (from the witnesses' generation, never below the
+  // holder's own), then the list without it, then the list with it.
+  if (stored === null) {
+    const gen = generationToJoin(c.readBack(), c.config().epoch)
+    if (gen === null) return false
+    prepareJoiningWitness(w3.store, gen, c.config().epoch)
     w3.store.flush()
     world.startWitness(w3)
     return true
   }
-  if (prepared && !list.includes('w3')) { c.changeWitnesses([...list, 'w3']); return true }
+  const joined = !!stored.list?.includes('w3')
+  if (!joined && list.includes('w3')) { c.changeWitnesses(list.filter((x) => x !== 'w3')); return true }
+  if (!list.includes('w3')) { c.changeWitnesses([...list, 'w3']); return true }
   return false
 }
 

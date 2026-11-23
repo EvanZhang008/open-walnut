@@ -162,6 +162,9 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   { method: 'GET', pattern: '/api/usage/sessions/:sid', away: 'needs-leader', why: 'usage_needs_mac' },
   // This server's own health.
   { method: 'GET', pattern: '/api/health', cls: 'local' },
+  // This machine's witness of a switchable leader (capability witness-door): its record is this machine's
+  // own, so its door answers here whoever leads, never forwarded (core/leader/switch/witness-door.ts).
+  { method: 'POST', pattern: '/leader-witness/*', cls: 'local' },
   // A signed-in browser's cookie is this address's (routes/browser-session.ts): set and
   // read here, against this replica's device copy, the Mac answering or not.
   { method: 'GET', pattern: '/api/devices/browser-session', cls: 'local' },

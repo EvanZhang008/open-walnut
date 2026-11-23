@@ -71,8 +71,10 @@ export interface CapabilityFacts {
 const COMPANION_DEFAULT: ReadonlySet<Capability> = new Set(MANIFESTS.filter((m) => m.companionDefault).map((m) => m.name))
 /** The capabilities a host replica applies when its env names them (manifest `hostReplica`). */
 const HOST_REPLICA_CAPS: ReadonlySet<Capability> = new Set(MANIFESTS.filter((m) => 'hostReplica' in m && m.hostReplica === true).map((m) => m.name))
-/** What a host replica takes from its env: its own, and the companion's that say `alsoHostReplica`. */
-const HOST_REPLICA_TAKES: ReadonlySet<Capability> = new Set([...HOST_REPLICA_CAPS, ...MANIFESTS.filter((m) => 'alsoHostReplica' in m && m.alsoHostReplica === true).map((m) => m.name)])
+/** What any server takes when its env names it (manifest `anyServer`): the leader and its standby take only these. */
+const ANY_SERVER_CAPS: ReadonlySet<Capability> = new Set(MANIFESTS.filter((m) => 'anyServer' in m && m.anyServer === true).map((m) => m.name))
+/** What a host replica takes from its env: its own, and those of any server. */
+const HOST_REPLICA_TAKES: ReadonlySet<Capability> = new Set([...HOST_REPLICA_CAPS, ...ANY_SERVER_CAPS])
 const NONE: ReadonlySet<Capability> = new Set()
 
 export function isCapability(name: string): name is Capability {
@@ -87,7 +89,8 @@ export function defaultCapabilities(where: Placement): ReadonlySet<Capability> {
 /**
  * The capabilities `raw` (WALNUT_CAPABILITIES) gives a server; `companion` is whether it is the
  * companion, `hostReplica` whether it is the replica program on a host. A host replica applies
- * only the host replica's own capabilities (manifest `hostReplica`) and reports the rest as ignored.
+ * only the host replica's own capabilities (manifest `hostReplica`) and those of any server
+ * (`anyServer`); any other server only the latter. Each reports the rest as ignored.
  */
 export function resolveCapabilities(raw: string | undefined, companion: boolean, hostReplica = false): CapabilityFacts {
   const text = (raw ?? '').trim()
@@ -97,7 +100,13 @@ export function resolveCapabilities(raw: string | undefined, companion: boolean,
     const rest = names.filter((n) => !HOST_REPLICA_TAKES.has(n as Capability))
     return { capabilities: own.length ? new Set(own) : NONE, ignored: rest.length ? rest.join(',') : null }
   }
-  if (!companion) return { capabilities: NONE, ignored: text || null }
+  if (!companion) {
+    // A leader (the Mac, a dev box) or the handed-over standby that replaces it: only the capabilities of any server.
+    const names = text.split(/[\s,]+/).filter(Boolean)
+    const own = names.filter((n): n is Capability => ANY_SERVER_CAPS.has(n as Capability))
+    const rest = names.filter((n) => !ANY_SERVER_CAPS.has(n as Capability))
+    return { capabilities: own.length ? new Set(own) : NONE, ignored: rest.length ? rest.join(',') : null }
+  }
   if (!text) return { capabilities: COMPANION_DEFAULT, ignored: null }
   const names = text.split(/[\s,]+/).filter(Boolean)
   if (names.length === 1 && names[0] === 'none') return { capabilities: NONE, ignored: null }

@@ -201,13 +201,14 @@ export function acceptReply(body: unknown, asked: string, req: PermitRequest, ro
 
 // ---- the direct door (witness-door.ts) ----------------------------------------------------
 //
-// A witness's own door on a service others can reach (the cloud companion's capability
-// `witness-door`), independent of any leader link. The caller proves the witness's key; the
+// A witness's own door on a service others can reach (the capability `witness-door`: the companion,
+// a host's service, the leader server or its handed-over standby), independent of any leader link. The caller proves the witness's key; the
 // witness proves the same key over its reply. Two POSTs per request:
 //
 //   POST <url>/challenge  {v:1, walnutId, witness, digest, cnonce}   digest = sha256(call text), cnonce = the caller's own nonce
-//                         -> {ok:true, nonce, ttlMs}                  a nonce for THIS call only, used once
-//   POST <url>/request    {v:1, nonce, proof, call}                   call = the WitnessCall's JSON text,
+//                         -> {ok:true, nonce, ttlMs}                  a nonce for THIS call only, used once (the door
+//                                                                     keeps nothing: it is its expiry and the door's HMAC)
+//   POST <url>/request    {v:1, nonce, cnonce, proof, call}           call = the WitnessCall's JSON text,
 //                                                                     proof = HMAC(key, doorCallerProofText)
 //                         -> {ok:true, reply, proof}                  reply = the PermitReply's JSON text,
 //                                                                     proof = HMAC(key, doorWitnessProofText)
@@ -223,7 +224,9 @@ export const WITNESS_DOOR_MAX_CALL = 4 * 1024 * 1024
 
 /** `cnonce`: the caller's own fresh nonce, in both proofs, so no recorded reply passes for a new one. */
 export interface DoorChallenge { v: 1; walnutId: string; witness: string; digest: string; cnonce: string }
-export interface DoorRequest { v: 1; nonce: string; proof: string; call: string }
+export interface DoorRequest { v: 1; nonce: string; cnonce: string; proof: string; call: string }
+/** A door's nonce: 12 hex of its expiry on the door's clock, then 64 hex of the door's HMAC over the call it is for. */
+export const DOOR_NONCE_RE = /^[0-9a-f]{76}$/
 export type DoorAnswer =
   | { ok: true; nonce: string; ttlMs: number }
   | { ok: true; reply: string; proof: string }
@@ -237,10 +240,11 @@ export function parseDoorChallenge(raw: unknown): DoorChallenge | null {
 }
 
 export function parseDoorRequest(raw: unknown): DoorRequest | null {
-  if (!isObj(raw) || raw.v !== 1 || typeof raw.nonce !== 'string' || !PROOF_SECRET_RE.test(raw.nonce)) return null
+  if (!isObj(raw) || raw.v !== 1 || typeof raw.nonce !== 'string' || !DOOR_NONCE_RE.test(raw.nonce)) return null
+  if (typeof raw.cnonce !== 'string' || !PROOF_SECRET_RE.test(raw.cnonce)) return null
   if (typeof raw.proof !== 'string' || !PROOF_SECRET_RE.test(raw.proof)) return null
   if (typeof raw.call !== 'string' || raw.call.length === 0 || raw.call.length > WITNESS_DOOR_MAX_CALL) return null
-  return { v: 1, nonce: raw.nonce, proof: raw.proof, call: raw.call }
+  return { v: 1, nonce: raw.nonce, cnonce: raw.cnonce, proof: raw.proof, call: raw.call }
 }
 
 interface DoorProofFields { walnutId: string; witness: string; nonce: string; cnonce: string; digest: string }

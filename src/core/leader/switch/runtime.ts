@@ -492,7 +492,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
       log(r.ok ? 'info' : 'warn', r.ok ? 'leader permit: the witness list changed' : 'leader permit: a witness list change did not stand', { list: next, ...(r.ok ? {} : { why: r.why }) })
       return r
     }),
-    joinGeneration: async () => generationToJoin((await readStanding(h)).replies),
+    joinGeneration: async () => generationToJoin((await readStanding(h)).replies, h.client.config().epoch),
     stop: async () => {
       if (stopped) return
       const wasLeading = state === 'leading' && h.client.mayAct()

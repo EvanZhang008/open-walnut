@@ -47,7 +47,7 @@ describe('the companion\'s witness door', () => {
   }, 300_000)
 
   it('on: refuses every caller until set up, takes its setup from the paired Mac only, and then answers only the key', async () => {
-    const box = await startCloudBoxReplica(path.join(root, 'on'), undefined, { env: { WALNUT_CAPABILITIES: 'witness-door' } })
+    const box = await startCloudBoxReplica(path.join(root, 'on'), undefined, { env: { WALNUT_CAPABILITIES: 'bridge-door,witness-door' } })
     boxes.push(box)
     // No key configured: no nonce for anyone, and the witness says it holds nothing (a setup's evidence `absent`).
     const none = await post(box.port, '/leader-witness/challenge', challenge)

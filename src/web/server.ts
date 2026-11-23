@@ -2034,14 +2034,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     app.use(BRIDGE_BUILD_PATH, createBridgeBuildRouter())
   }
   // One witness of a switchable leader (capability witness-door, off by default, on the companion or a host's
-  // service): its direct door, proven with the witness's own key. A host's witness is set up only over the leader's
-  // own link to it (the leader door's witness route), so a host replica mounts no setup route; elsewhere the setup
-  // takes the paired Mac's machine token (its bridge lane's gate). Without the capability nothing is mounted
-  // (routes/witness-door.ts).
+  // service, the leader server): its direct door, proven with the witness's own key. Its setup rides the paired Mac's
+  // bridge lane (that lane's machine token), so it is mounted only where that lane is (capability bridge-door: the
+  // companion); any other server's witness is set up only over the leader's own link or by the leader itself.
+  // Without the capability nothing is mounted (routes/witness-door.ts).
   if (hasCapability('witness-door')) {
     const { createWitnessDoorRouter, createBridgeWitnessSetupRouter, WITNESS_DOOR_PATH, BRIDGE_WITNESS_SETUP_PATH } = await import('./routes/witness-door.js')
     app.use(WITNESS_DOOR_PATH, createWitnessDoorRouter())
-    if (!isHostReplica()) app.use(BRIDGE_WITNESS_SETUP_PATH, createBridgeWitnessSetupRouter())
+    if (bootPolicy('companion-ingest-routes')) app.use(BRIDGE_WITNESS_SETUP_PATH, createBridgeWitnessSetupRouter())
   }
 
   // gzip JSON/text responses. The list payloads (/api/tasks, /api/sessions,

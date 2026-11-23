@@ -10,10 +10,10 @@
  *
  * Callback style, so the model check runs it on its simulated network (tests/core/leader/permit/sim.ts).
  */
-import { hmacProof, proofSecret, proofsEqual, sha256Hex, PROOF_SECRET_RE } from '../../../utils/hmac-proof.js'
+import { hmacProof, proofSecret, proofsEqual, sha256Hex } from '../../../utils/hmac-proof.js'
 import type { RemoteCall, RemoteCallResult } from './witness-transport.js'
 import {
-  WITNESS_DOOR_CHALLENGE, WITNESS_DOOR_REQUEST, WITNESS_REQUEST_PATH, doorCallerProofText, doorWitnessProofText,
+  DOOR_NONCE_RE, WITNESS_DOOR_CHALLENGE, WITNESS_DOOR_REQUEST, WITNESS_REQUEST_PATH, doorCallerProofText, doorWitnessProofText,
   type WitnessEvidence, type WitnessSetup,
 } from './witness-wire.js'
 
@@ -68,9 +68,9 @@ export function directWitnessCall(o: { post?: DoorPost; timeoutMs?: number; waln
         if (gone || challenged) return
         challenged = true
         const nonce = isObj(ch?.json) ? ch.json.nonce : undefined
-        if (!ch || ch.status !== 200 || typeof nonce !== 'string' || !PROOF_SECRET_RE.test(nonce)) { finish(ch ? { status: ch.status === 200 ? 502 : ch.status, body: ch.json } : null); return }
+        if (!ch || ch.status !== 200 || typeof nonce !== 'string' || !DOOR_NONCE_RE.test(nonce)) { finish(ch ? { status: ch.status === 200 ? 502 : ch.status, body: ch.json } : null); return }
         const fields = { walnutId, witness: place.id, nonce, cnonce, digest }
-        abandon = post(`${url}${WITNESS_DOOR_REQUEST}`, { v: 1, nonce, proof: hmacProof(key, doorCallerProofText(fields)), call: text }, (r) => {
+        abandon = post(`${url}${WITNESS_DOOR_REQUEST}`, { v: 1, nonce, cnonce, proof: hmacProof(key, doorCallerProofText(fields)), call: text }, (r) => {
           if (gone) return
           if (!r) { finish(null); return }
           if (r.status !== 200) { finish({ status: r.status, body: r.json }); return }

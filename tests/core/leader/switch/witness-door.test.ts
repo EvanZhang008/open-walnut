@@ -14,7 +14,7 @@ import path from 'node:path'
 import { DEFAULT_PERMIT_PARAMS } from '../../../../src/core/leader/permit/index.js'
 import { openPermitClient, proposeAndWait, readStanding } from '../../../../src/core/leader/switch/permit-ops.js'
 import { createWitnessDoorRouter } from '../../../../src/web/routes/witness-door.js'
-import { MAX_NONCES_PER_CALLER, MAX_NONCES_PER_WITNESS, MAX_OPEN_NONCES, machineWitnessDoor, doorRequest } from '../../../../src/core/leader/switch/witness-door.js'
+import { MAX_CHALLENGES_PER_CALLER, callerKey, machineWitnessDoor, doorRequest } from '../../../../src/core/leader/switch/witness-door.js'
 import { directWitnessCall, BAD_WITNESS_PROOF, type DoorPost } from '../../../../src/core/leader/switch/witness-direct.js'
 import { setUpMachineWitness, witnessDir } from '../../../../src/core/leader/switch/witness-route.js'
 import { doorCallerProofText, WITNESS_DOOR_PATH, WITNESS_REQUEST_PATH, type WitnessCall } from '../../../../src/core/leader/switch/witness-wire.js'
@@ -88,7 +88,7 @@ describe('a permit client over three direct doors on loopback https', () => {
   it('a door that does not prove the witness\'s key over its reply is no answer, whatever it says', async () => {
     // A fake door: hands out nonces and says yes to everything, with a proof it cannot make.
     const fake: DoorPost = (url, _body, done) => {
-      if (url.endsWith('/challenge')) done({ status: 200, json: { ok: true, nonce: proofSecret(), ttlMs: 10_000 } })
+      if (url.endsWith('/challenge')) done({ status: 200, json: { ok: true, nonce: `${'0'.repeat(12)}${proofSecret()}`, ttlMs: 10_000 } })
       else done({ status: 200, json: { ok: true, reply: JSON.stringify({ witness: 'w1', re: 'read', ok: true, held: null, list: LIST, joint: null, cfg: 'c', epoch: 0, progress: null, ops: [], grantable: true }), proof: proofSecret() } })
     }
     const got = await new Promise((resolve) => {
@@ -119,7 +119,7 @@ describe('the door refuses, and a refusal never reaches the record', () => {
   function signed(call: WitnessCall, nonce: string, key: string, digestOf: WitnessCall = call) {
     const text = JSON.stringify(call)
     const cnonce = cnonces.get(nonce) ?? proofSecret()
-    return { v: 1, nonce, call: text, proof: hmacProof(key, doorCallerProofText({ walnutId: digestOf.walnutId, witness: digestOf.witness, nonce, cnonce, digest: sha256Hex(JSON.stringify(digestOf)) })) }
+    return { v: 1, nonce, cnonce, call: text, proof: hmacProof(key, doorCallerProofText({ walnutId: digestOf.walnutId, witness: digestOf.witness, nonce, cnonce, digest: sha256Hex(JSON.stringify(digestOf)) })) }
   }
   const grab = () => LIST.map((id) => fs.readFileSync(recordOf(id), 'utf8'))
 
@@ -162,14 +162,15 @@ describe('the door refuses, and a refusal never reaches the record', () => {
     expect(crossWalnut?.status).toBe(403)
     answers.push(noChallenge?.json, crossWalnut?.json)
 
-    // 4. A nonce issued to another request (a read), used for the proposal, with a proof over the proposal.
+    // 4. A nonce issued to another request (a read), used for the proposal, with a proof over the proposal: the
+    // door's HMAC in the nonce is over the read, so it is no nonce of this door for the proposal.
     const n3 = await challenge(url, read)
     const swapped = await postOnce(post, `${url}/request`, signed(call, n3, keys.w1!))
-    expect(swapped).toEqual({ status: 403, json: { ok: false, error: 'nonce_for_another_request' } })
+    expect(swapped).toEqual({ status: 403, json: { ok: false, error: 'unknown_nonce' } })
     answers.push(swapped?.json)
 
-    // 5. No nonce ever issued.
-    const forged = await postOnce(post, `${url}/request`, signed(call, proofSecret(), keys.w1!))
+    // 5. No nonce ever issued (a made-up one of the right shape, and one with a far expiry).
+    const forged = await postOnce(post, `${url}/request`, signed(call, `${'f'.repeat(12)}${proofSecret()}`, keys.w1!))
     expect(forged).toEqual({ status: 403, json: { ok: false, error: 'unknown_nonce' } })
     answers.push(forged?.json)
 
@@ -189,30 +190,65 @@ describe('the door refuses, and a refusal never reaches the record', () => {
     const nonce = (ch.body as { nonce: string }).nonce
     const before = fs.readFileSync(recordOf('w2'), 'utf8')
     t = 10_001
-    const r = await doorRequest(door, { v: 1, nonce, call: JSON.stringify(call), proof: hmacProof(keys.w2!, doorCallerProofText({ walnutId: WALNUT, witness: 'w2', nonce, cnonce, digest: sha256Hex(JSON.stringify(call)) })) })
+    const r = await doorRequest(door, { v: 1, nonce, cnonce, call: JSON.stringify(call), proof: hmacProof(keys.w2!, doorCallerProofText({ walnutId: WALNUT, witness: 'w2', nonce, cnonce, digest: sha256Hex(JSON.stringify(call)) })) })
     expect(r).toEqual({ status: 403, body: { ok: false, error: 'expired_nonce' } })
     expect(fs.readFileSync(recordOf('w2'), 'utf8')).toBe(before)
     // Control: the same, in time, is answered.
     t = 0
     const ch2 = door.challenge({ v: 1, walnutId: WALNUT, witness: 'w2', digest: sha256Hex(JSON.stringify(call)), cnonce })
     const n2 = (ch2.body as { nonce: string }).nonce
-    const r2 = await doorRequest(door, { v: 1, nonce: n2, call: JSON.stringify(call), proof: hmacProof(keys.w2!, doorCallerProofText({ walnutId: WALNUT, witness: 'w2', nonce: n2, cnonce, digest: sha256Hex(JSON.stringify(call)) })) })
+    const r2 = await doorRequest(door, { v: 1, nonce: n2, cnonce, call: JSON.stringify(call), proof: hmacProof(keys.w2!, doorCallerProofText({ walnutId: WALNUT, witness: 'w2', nonce: n2, cnonce, digest: sha256Hex(JSON.stringify(call)) })) })
     expect(r2.status).toBe(200)
   })
 
-  it('a flood of challenges from one caller is refused past its share, and never crowds out another caller (m1)', () => {
+  it('a flood holds no state: challenges keep nothing, a request is remembered only once its proof held (N2)', async () => {
     const door = machineWitnessDoor({ root: rootOf('w3') })
-    const ask = (i: number, from: string) => door.challenge({ v: 1, walnutId: WALNUT, witness: 'w3', digest: sha256Hex(String(i)), cnonce: proofSecret() }, from)
-    const flood = Array.from({ length: 3_000 }, (_, i) => ask(i, '203.0.113.7').status)
-    expect(flood.filter((s) => s === 200)).toHaveLength(MAX_NONCES_PER_CALLER)
-    expect(flood.filter((s) => s === 429)).toHaveLength(3_000 - MAX_NONCES_PER_CALLER)
-    expect(ask(0, '203.0.113.7')).toEqual({ status: 429, body: { ok: false, error: 'too_many_challenges' } })
-    // The honest caller, from its own address, still gets its nonce in the middle of the flood.
-    expect(ask(1, '198.51.100.2').status).toBe(200)
-    // Many addresses at one witness stop at the witness's share; the door as a whole at its cap.
-    for (let i = 0; i < 2_000; i++) ask(i, `10.0.${i >> 8}.${i & 255}`)
-    expect(door.openNonces()).toBeLessThanOrEqual(MAX_NONCES_PER_WITNESS)
-    expect(door.openNonces()).toBeLessThanOrEqual(MAX_OPEN_NONCES)
+    const call = (i: number): WitnessCall => ({ v: 1, walnutId: WALNUT, witness: 'w3', request: { type: 'read' }, round: i })
+    const ask = (i: number, from: string, cnonce = proofSecret()) => ({ cnonce, r: door.challenge({ v: 1, walnutId: WALNUT, witness: 'w3', digest: sha256Hex(JSON.stringify(call(i))), cnonce }, from) })
+    // 20,000 challenges from 2,000 addresses: no nonce is kept, so nothing fills.
+    for (let i = 0; i < 20_000; i++) ask(i, `10.${(i >> 16) & 255}.${(i >> 8) & 7}.${i & 255}`)
+    expect(door.usedNonces()).toBe(0)
+    // Requests without the key (a wrong proof on a real nonce, forged nonces): refused, and nothing is remembered.
+    for (let i = 0; i < 200; i++) {
+      const { cnonce, r } = ask(i, '203.0.113.9')
+      const nonce = (r.body as { nonce: string }).nonce
+      expect((await doorRequest(door, { v: 1, nonce, cnonce, call: JSON.stringify(call(i)), proof: proofSecret() })).body).toEqual({ ok: false, error: 'bad_proof' })
+    }
+    expect(door.usedNonces()).toBe(0)
+    // The honest caller, in the middle of all that, is answered.
+    const { cnonce, r } = ask(7, '198.51.100.2')
+    const nonce = (r.body as { nonce: string }).nonce
+    const good = { v: 1, nonce, cnonce, call: JSON.stringify(call(7)), proof: hmacProof(keys.w3!, doorCallerProofText({ walnutId: WALNUT, witness: 'w3', nonce, cnonce, digest: sha256Hex(JSON.stringify(call(7))) })) }
+    expect((await doorRequest(door, good)).status).toBe(200)
+    expect(door.usedNonces()).toBe(1)
+    // Used once: the replay is refused.
+    expect(await doorRequest(door, good)).toEqual({ status: 403, body: { ok: false, error: 'unknown_nonce' } })
+  })
+
+  it('one caller is braked past its share of challenges, counted by its address and an IPv6 one by its /64; another caller is not', () => {
+    const door = machineWitnessDoor({ root: rootOf('w3') })
+    const ask = (from: string) => door.challenge({ v: 1, walnutId: WALNUT, witness: 'w3', digest: sha256Hex('x'), cnonce: proofSecret() }, from).status
+    const flood = Array.from({ length: 1_000 }, (_, i) => ask(`2001:db8:1:2::${(i + 1).toString(16)}`))
+    expect(flood.filter((s) => s === 200)).toHaveLength(MAX_CHALLENGES_PER_CALLER)
+    expect(ask('2001:db8:1:2:ffff:ffff:ffff:ffff')).toBe(429)
+    expect(ask('2001:db8:1:3::1')).toBe(200)
+    expect(ask('198.51.100.2')).toBe(200)
+    expect(callerKey('2001:0db8:0001:0002:0000:0000:0000:0001')).toBe(callerKey('2001:db8:1:2::abcd'))
+    expect(callerKey('::ffff:192.0.2.1')).toBe('192.0.2.1')
+    expect(callerKey('192.0.2.1')).toBe('192.0.2.1')
+  })
+
+  it('the used nonces are capped: past the cap a key holder\'s request is refused, never an entry dropped', async () => {
+    const door = machineWitnessDoor({ root: rootOf('w3'), limits: { maxUsed: 3 } })
+    const read: WitnessCall = { v: 1, walnutId: WALNUT, witness: 'w3', request: { type: 'read' } }
+    const once = async () => {
+      const cnonce = proofSecret()
+      const nonce = (door.challenge({ v: 1, walnutId: WALNUT, witness: 'w3', digest: sha256Hex(JSON.stringify(read)), cnonce }).body as { nonce: string }).nonce
+      return doorRequest(door, { v: 1, nonce, cnonce, call: JSON.stringify(read), proof: hmacProof(keys.w3!, doorCallerProofText({ walnutId: WALNUT, witness: 'w3', nonce, cnonce, digest: sha256Hex(JSON.stringify(read)) })) })
+    }
+    for (let i = 0; i < 3; i++) expect((await once()).status).toBe(200)
+    expect(await once()).toEqual({ status: 429, body: { ok: false, error: 'too_many_requests' } })
+    expect(door.usedNonces()).toBe(3)
   })
 
   it('a witness set up without a key refuses every caller (no nonce at all)', async () => {
