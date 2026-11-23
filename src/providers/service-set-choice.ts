@@ -16,7 +16,7 @@
  *
  * A claim is written whole beside the claim file and linked into place (a link fails when one is
  * there: then step 2 decides), under the default root's service-mode.lock. Only install and update
- * claim; status, uninstall and restart only read.
+ * claim; status and restart only read; a successful uninstall of the default removes the claim (releaseSetOwner).
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -98,6 +98,20 @@ async function sweepClaimTemps(root: string): Promise<void> {
   }
 }
 
+/**
+ * The default service is gone (`walnut daemon uninstall` of the default set): so is any claim on its
+ * place, under the lock a claim is written under. Whoever claimed it, no service means no owner; a
+ * claim left behind would give the place back to its claimer over an older Walnut that installs a
+ * plain default meanwhile (no claim, no mode) and runs on it (review round 2, H-L2).
+ */
+export async function releaseSetOwner(defaultRoot: string): Promise<void> {
+  if (!(await present(path.join(defaultRoot, SET_OWNER_FILE)))) return
+  await withServiceModeLockWait(defaultRoot, async () => {
+    await fs.rm(path.join(defaultRoot, SET_OWNER_FILE), { force: true })
+    await sweepClaimTemps(defaultRoot)
+  })
+}
+
 /** Another Walnut than `ourKey` used the default runtime's daemon lately (its serves file). */
 async function sharedWithAnother(runtimeDir: string, ourKey: string | null, now: number): Promise<string | null> {
   if (!ourKey) return null
@@ -152,4 +166,32 @@ export async function chooseServiceSet(input: ServiceSetChoiceInput): Promise<Se
     if (await writeSetOwner(root, input.walnutId)) return { ...now, claimed: true }
     return byClaim((await readSetOwner(root)) ?? '')
   })
+}
+
+/** The Walnut a service is for: its own set when another Walnut holds the default (the experiment host_service_sets). */
+export const WALNUT_FLAG = '--walnut'
+/** The data dir of that Walnut, for the set choice only (no mode word): the leader sends it with --walnut. */
+export const WALNUT_HOME_FLAG = '--walnut-home'
+
+/** `walnut daemon` words at `args[i]` (daemon-service-cli.ts): `--walnut <id>` or `--walnut-home <dir>`, null for any other word. */
+export function serviceSetFlagAt(args: string[], i: number): { walnut: string } | { walnutHome: string } | null {
+  const value = args[i + 1]
+  if (args[i] === WALNUT_FLAG) {
+    if (!value) throw new Error(`${WALNUT_FLAG} requires the walnut id of the Walnut the service is for`)
+    serviceSetIdOf(value)
+    return { walnut: value }
+  }
+  if (args[i] === WALNUT_HOME_FLAG) {
+    if (!value || !path.isAbsolute(value)) throw new Error(`${WALNUT_HOME_FLAG} requires the absolute data dir of the Walnut it is for`)
+    return { walnutHome: value }
+  }
+  return null
+}
+
+/** The set a `walnut daemon <action>` acts on: with no Walnut named, the default (today's); install and update claim. */
+export async function serviceSetOfAction(
+  action: string, o: Omit<ServiceSetChoiceInput, 'walnutId' | 'claim'> & { walnutId?: string },
+): Promise<ServiceSet> {
+  if (!o.walnutId) return serviceSet(o.platform, o.home, '', { runtimeDir: o.defaultRuntimeDir })
+  return (await chooseServiceSet({ ...o, walnutId: o.walnutId, claim: action === 'install' || action === 'update' })).set
 }

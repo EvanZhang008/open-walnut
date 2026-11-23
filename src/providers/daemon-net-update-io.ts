@@ -235,7 +235,8 @@ export function launcherScript(directory: string, latest?: string, set = ''): st
   return [
     `d=${d}; s="$d/update.sh"; L=${markerWord(latest, set)}`,
     ...laterLines(),
-    installRootLine(),
+    // The set's own root: its t_busy waits on its own probation, never the default's (review round 2, H-L1).
+    installRootLine(set),
     ...probationRecordLines(),
     `tsb="$tb/${SNAPSHOT_DIR}"`,
     // A process group: ps, else field 5 of /proc/<pid>/stat (the third after the last ")"), as

@@ -536,7 +536,8 @@ Walnut on the same OS account gets its own set under `~/.open-walnut-host/walnut
 `# open-walnut-daemon <id16>`), registry, streams and ports. The host's CLI chooses
 (`walnut daemon install|update --walnut <id> --walnut-home <home>`, `src/providers/service-set-choice.ts`:
 a set already installed, then the claim file `set-owner.json`, then the default's mode owner, then
-another Walnut in `daemon.serves.json`) and prints `service set: default|<id16>`. A set's runtime keeps
+another Walnut in `daemon.serves.json`) and prints `service set: default|<id16>`; an uninstall of the
+default removes the claim file (no service, no owner: `src/providers/daemon-service-uninstall-tail.ts`). A set's runtime keeps
 its sessions like the default one (`WALNUT_SERVICE_SET`, `KEEPS_SESSIONS`); the machine's single copies
 (the user PATH shim, `~/.open-walnut/tmp`) stay with the default set. Shared on purpose, and only:
 the machine id and the cli-owner records (one CLI per session on the host, whichever service asks).

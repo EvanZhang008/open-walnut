@@ -2,9 +2,10 @@
  * The leader's `walnut daemon` lines and update scripts with service sets (src/providers/
  * service-set-leader.ts; the experiment host_service_sets).
  *
- * Flag off: every line and script is byte for byte the one HEAD da1aecd54a rendered (the sha256
- * values below came from that commit's own code, extracted with `git archive` and rendered by the
- * same steps as render() here; notes/ab-leader/render.ts in the task's notes). Flag on: the lines
+ * Flag off: every line and script is byte for byte the one trunk rendered: the sha256 values below
+ * came from the branch's merge-base with trunk, 2e0ddc8935 (`git merge-base HEAD refs/trunk/main`;
+ * review round 2, H-L5), extracted with `git archive` and rendered by the same steps as render()
+ * here (notes/ab-leader/render-mb.ts in the task's notes). Flag on: the lines
  * name the Walnut (`--walnut <id> --walnut-home <home>`), the scripts watch the set's own service,
  * and a host that prints no `service set:` line keeps today's path (nothing is recorded).
  */
@@ -23,6 +24,7 @@ import {
   helloServiceSet, hostServiceSets, hostServiceSetsWanted, linkStanding, recordServiceSetFrom, serviceSetWords, setServiceConfigPaths,
 } from '../../src/providers/service-set-leader.js'
 import { updateStoresSettled } from '../../src/providers/daemon-update-store.js'
+import { installRootLine } from '../../src/providers/daemon-update-shell.js'
 
 const EXE = '/home/u/.local/share/open-walnut/daemon/versions/x/walnut-daemon-linux-x64'
 const V = 'walnut-daemon-abc123'
@@ -81,10 +83,14 @@ async function render(): Promise<Record<string, string>> {
   out.probe = remoteServiceProbePaths().join('\n') + '|' + remoteServiceProbePaths('/x').join('\n')
   const p = remoteServiceProbePaths()
   out.scopes = JSON.stringify([[p[1]], [p[3]], [p[4]], [p[1], p[3]], [p[2]]].map((x) => [reviveScopeOf(x!), managedUpdateScope(x!)]))
+  const dir = '/tmp/open-walnut-update.abcdefghij'
+  out.runner = runnerScript({ directory: dir, command: 'x', executable: '/x/walnut', tail: { scope: 'user' } })
+  out['runner-cron'] = runnerScript({ directory: dir, command: 'x', executable: '/x/walnut', tail: { scope: 'cron' } })
+  out.launcher = launcherScript(dir)
   return out
 }
 
-/** HEAD da1aecd54a's renderings (flag off). */
+/** The merge-base's renderings (flag off). */
 const HEAD_SHA: Record<string, string> = {
   lines: '7f611c3b8d8e05a560b0f5ba9291ac0c250579001da6ab71af7991e5190688cf',
   'tail-user': 'e49df00453b900064c74a2890899466e12b922f9e670f832efd1f47ebdde3506',
@@ -101,10 +107,13 @@ const HEAD_SHA: Record<string, string> = {
   standinStart: 'c5224daa061f0897637c1688fe2d393263a08588ef5cd41524a8503d0eb082e9',
   probe: '488c8b569cfc1dd66ecf0d61dad08804e628371323350726400b0a4fd37ae6f7',
   scopes: '105fbc2db8ecd7837242bbf0118c89255c2ddc8ac47d11e73e55c2474259df84',
+  runner: '75bf9e8f9bd6f1fa05a8c36a35cc10ebb8c850b1f396468b5d3ba17a67a16eab',
+  'runner-cron': 'b042956ce8370d6ab68cbdad8c5703cf435a23cc7cb00ef28371beb414da8e04',
+  launcher: '21cdbfcbcb5e42c6b51fd58afdabb14f2c3679c1d77c93b1c9c4651ccedd7ae5',
 }
 
 describe('service sets on the leader: flag off', () => {
-  it('every line and script is byte for byte HEAD\'s', async () => {
+  it('every line and script is byte for byte the merge-base\'s', async () => {
     const out = await render()
     expect(Object.fromEntries(Object.entries(out).map(([k, t]) => [k, sha(t)]))).toEqual(HEAD_SHA)
   })
@@ -243,5 +252,14 @@ describe('the latest-update marker is per service set (review round 1, should-fi
     expect(standInScript(30)).toContain(`L=\${3:-${DEFAULT}}`)
     // One set's marker never reads as the other's.
     expect(runner(SET)).not.toContain(`L=${DEFAULT}`)
+  })
+})
+
+describe('a set\'s launcher waits on its own probation (review round 2, H-L1)', () => {
+  it('the launcher reads the set\'s install root, not the default\'s; the default renders as before', () => {
+    const dir = '/tmp/open-walnut-update.abcdefghij'
+    expect(launcherScript(dir, undefined, SET)).toContain(installRootLine(SET))
+    expect(launcherScript(dir, undefined, SET)).not.toContain(installRootLine())
+    expect(launcherScript(dir)).toContain(installRootLine())
   })
 })

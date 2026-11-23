@@ -248,6 +248,7 @@ SOURCES=(
   src/providers/service-set.ts
   src/providers/service-set-choice.ts
   src/providers/service-set-remove.ts
+  src/providers/daemon-service-uninstall-tail.ts
   src/providers/service-set-net.ts
   src/providers/daemon-shared.ts
   src/lib/account.ts

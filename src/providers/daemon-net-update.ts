@@ -57,6 +57,9 @@ import { provisionServiceSet, type SetProvision } from './service-set-provision.
 
 export { localDaemonBinary, netDaemonSource, type NetSourceDeps, type NetUpdateSource } from './daemon-net-update-source.js'
 
+/** How long a service set look waits for an update round in flight on the link. */
+const PROVISION_WAIT_MS = 10 * 60_000
+
 export type NetUpdateSkip =
   | 'not-net' | 'local' | 'test-server' | 'follower' | 'no-build-version' | 'current' | 'unmanaged'
   | 'old-daemon' | 'turned-off' | 'held' | 'contested' | 'shared' | 'gave-up' | 'cooldown' | 'recent' | 'platform-unknown' | 'no-binary'
@@ -64,6 +67,19 @@ export type NetUpdateSkip =
   | 'service-set'
   // The task that asked for it may no longer have it run (its grant was revoked, the host closed).
   | 'refused'
+
+/**
+ * Does a daemon update's line name the Walnut (`--walnut …`, the host's CLI picks the set)? Its tail,
+ * snapshot, probation and marker watch `set`, the set the link reaches ('' the default). With the set
+ * still unknown after the first look (an older host, or a look that failed) on the default's daemon,
+ * the words could make the CLI update this Walnut's own set while all of those watch the default
+ * (review round 2, H2): the line is today's then, so the line and its watchers name the same set.
+ * The next look finds the set, and the update after it names the Walnut. Both paths use it (SSH:
+ * daemon-connection.ts updateManagedDaemon).
+ */
+export function setWordsDue(ask: SetAsk | null | undefined, standing: LinkStanding, set: string): boolean {
+  return !!ask && !(standing === 'unknown' && !set)
+}
 
 /** Daemon commands the update runs on the host. */
 export const NET_UPDATE_CAPABILITIES = ['host-exec-v1', 'fs-write-part-v1', 'service-update-v1'] as const
@@ -393,7 +409,16 @@ export class NetDaemonUpdater {
     const no = (message: string): SetProvision => ({ set: null, installed: false, ok: false, message })
     if (!expected) return no('this server names no daemon build')
     if (!c.connected) return no('the host is not connected')
-    if (this.inFlight) return no('a daemon update is running on the host')
+    // The link's first look and this updater's own round start together after a connect, and a round
+    // asks for the look itself (attempt: sets.check): the look waits for the round, bounded, instead of
+    // being refused (drill round 2, N1: refused there, the look never came back for 30 min).
+    const until = (this.d.now ?? Date.now)() + PROVISION_WAIT_MS
+    while (this.inFlight) {
+      const left = until - (this.d.now ?? Date.now)()
+      if (left <= 0) return no('a daemon update is running on the host')
+      await this.within(this.inFlight, left)
+    }
+    if (!c.connected) return no('the host is not connected')
     const io = createNetUpdateIo(c, this.d.io)
     const target = await (this.d.target ?? probeTarget)((command, ms) => io.run(command, ms)).catch(() => null)
     if (!target) return no('the host\'s system could not be read')
@@ -488,8 +513,10 @@ export class NetDaemonUpdater {
         ? 'the daemon there is another Walnut\'s, and this Walnut moves to its own service there'
         : 'which service on that machine is this Walnut\'s is not known yet' }, trigger)
     }
-    const words = serviceSetWords(setAsk)
     const set = setAsk ? this.d.sets!.set() : ''
+    // The update line names the Walnut only where the watched set is the one its CLI picks (setWordsDue).
+    const lineAsk = setWordsDue(setAsk, standing, set) ? setAsk : null
+    const words = serviceSetWords(lineAsk)
     // Its runner may still be in its check; a second update would swap the service under it.
     if (this.launched.unread) return this.postpone('the previous daemon update is still running on the host')
     // Another host name of this daemon is updating it (daemon-update-claim.ts): nothing goes up from here.
@@ -573,7 +600,7 @@ export class NetDaemonUpdater {
         // The build's hold before its record (the staging dir) is removed on the host.
         onBuildFailed: (error) => this.buildDidNotStay(expected, error.message.slice(0, 300)),
         ...(serve ? { serve } : {}),
-        ...(setAsk ? { walnut: setAsk, ...(set ? { set } : {}), onServiceSet: (named: string | null) => this.d.sets!.named(named) } : {}),
+        ...(lineAsk ? { walnut: lineAsk, ...(set ? { set } : {}), onServiceSet: (named: string | null) => this.d.sets!.named(named) } : {}),
       })
       claimKept = true
     } catch (err) {

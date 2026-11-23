@@ -13,7 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  LINK_CUTS_BEFORE_FAILURE, MAX_AUTO_FAILURES, NetDaemonUpdater, decideNetUpdate, localDaemonBinary, netDaemonSource, scopeFromStatus,
+  LINK_CUTS_BEFORE_FAILURE, MAX_AUTO_FAILURES, NetDaemonUpdater, decideNetUpdate, localDaemonBinary, netDaemonSource, scopeFromStatus, setWordsDue,
   type NetUpdateFacts, type NetUpdaterDeps, type NetUpdateLink,
 } from '../../src/providers/daemon-net-update.js'
 import { NetUpdateHeldError } from '../../src/providers/daemon-net-update-io.js'
@@ -851,12 +851,60 @@ describe('NetDaemonUpdater', () => {
     u.stop()
   })
 
+  // Drill round 2, N1: the round itself asks for the link's first look (a set not known yet), and the
+  // look was refused there ("a daemon update is running") and never came back: it waits for the round.
+  it('a service set look asked for from inside an update round waits for the round instead of being refused', async () => {
+    const ask = { walnutId: '0123456789abcdef0123456789abcdef', home: '/Users/u/.open-walnut' }
+    let look: Promise<{ set: string | null; message?: string }> | null = null
+    const target = vi.fn(async () => 'darwin-arm64' as const)
+    const { u } = updater({
+      target,
+      // The look stops at the daemon file (none in this test), past the point where it was refused.
+      source: async () => ({ missing: 'no daemon file in this test' }),
+      sets: { ask: async () => ask, standing: async () => 'unknown' as const, set: () => '', named: async () => {}, check: () => { look = u.provisionSet(ask) }, looked: () => false },
+    })
+    expect(await u.request()).toMatchObject({ phase: 'skipped', skip: 'service-set' })
+    expect(look).not.toBe(null)
+    const got = await look!
+    expect(got.message).toBe('no daemon file in this test')
+    // It went on to read the host's system, as a look does.
+    expect(target).toHaveBeenCalled()
+    u.stop()
+  })
+
   it('never schedules for a host of another kind', async () => {
     const { u, update } = updater({ kind: () => 'ssh' })
     u.schedule(0)
     await new Promise((r) => setTimeout(r, 30))
     expect(u.state.phase).toBe('idle')
     expect(update).not.toHaveBeenCalled()
+  })
+
+  // Review round 2, H2: the look ended and the set is still unknown. The update line must target the
+  // set the tail, snapshot, probation and marker watch: the default's daemon gets today's line (no
+  // words, the host's CLI cannot pick its own set under a tail that watches the default).
+  it('a set still unknown after the first look: the default\'s daemon gets today\'s update line, a set\'s daemon its own', async () => {
+    const ask = { walnutId: '0123456789abcdef0123456789abcdef', home: '/Users/u/.open-walnut' }
+    const sets = (hello: string) => ({
+      ask: async () => ask, standing: async () => 'unknown' as const, set: () => hello, named: async () => {}, check: () => {}, looked: () => true,
+    })
+    for (const [hello, words] of [['', false], ['0123456789abcdef', true]] as const) {
+      const { u, update } = updater({ sets: sets(hello) })
+      expect(await u.request()).toMatchObject({ phase: 'updated' })
+      const opts = (update.mock.calls[0] as unknown as [unknown, unknown, unknown, unknown, { walnut?: unknown; set?: string }])[4]
+      expect(!!opts.walnut, `hello ${JSON.stringify(hello)}`).toBe(words)
+      expect(opts.set ?? '').toBe(hello)
+      u.stop()
+    }
+  })
+
+  it('setWordsDue, the one rule of both paths (SSH too): the words only where the watched set is the one the CLI picks', () => {
+    const ask = { walnutId: '0123456789abcdef0123456789abcdef', home: '/Users/u/.open-walnut' }
+    expect(setWordsDue(null, 'default', '')).toBe(false)
+    expect(setWordsDue(ask, 'unknown', '')).toBe(false)
+    expect(setWordsDue(ask, 'unknown', '0123456789abcdef')).toBe(true)
+    expect(setWordsDue(ask, 'default', '')).toBe(true)
+    expect(setWordsDue(ask, 'own', '0123456789abcdef')).toBe(true)
   })
 })
 

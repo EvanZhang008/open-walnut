@@ -14,7 +14,15 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-export const DAEMON_DURABLE_STATE_DIRS = ['resume-records', 'host-replica', 'host-server', 'plugin-jobs', 'host-exec'] as const
+/**
+ * The twins' names of their dirs under the state root (daemon-standalone.ts HOST_SERVER_DIR, its
+ * follower's `server-*.pid`; DETACHED_RUNS_DIR, detached-registry.ts). The host CLI reads them by
+ * these names (service-set-remove.ts); tests/providers/service-set-remove.test.ts checks both twins spell them so.
+ */
+export const HOST_SERVER_STATE_DIR = 'host-server'
+export const DETACHED_RUNS_STATE_DIR = 'detached'
+
+export const DAEMON_DURABLE_STATE_DIRS = ['resume-records', 'host-replica', HOST_SERVER_STATE_DIR, 'plugin-jobs', 'host-exec'] as const
 
 export function unmanagedStateRoot(home: string): string {
   return path.join(home, '.open-walnut', 'tmp')

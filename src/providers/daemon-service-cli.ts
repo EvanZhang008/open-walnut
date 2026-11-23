@@ -7,9 +7,9 @@ import { ADOPTED_WORK_CAPABILITIES } from './detached-registry.js'
 import { setTimeout as delay } from 'node:timers/promises'
 import { performance } from 'node:perf_hooks'
 import { readDaemonServiceExecutable } from './daemon-service-config.js'
-import { serviceSet, serviceSetIdOf, serviceSetLine, type ServiceSet } from './service-set.js'
-import { chooseServiceSet } from './service-set-choice.js'
-import { removeServiceSetDir } from './service-set-remove.js'
+import { serviceSetLine, type ServiceSet } from './service-set.js'
+import { serviceSetFlagAt, serviceSetOfAction, WALNUT_FLAG, WALNUT_HOME_FLAG } from './service-set-choice.js'
+import { afterServiceUninstall } from './daemon-service-uninstall-tail.js'
 import { runServiceSetNetArgs, SERVICE_SET_NET_ACTIONS } from './service-set-net.js'
 import { accountInfo } from '../lib/account.js'
 import { readDaemonInstanceOwner } from './daemon-instance-lock.js'
@@ -31,10 +31,10 @@ import { DAEMON_BUSY_WORDS } from './daemon-busy-words.js'
 import { handBackStandIn } from './daemon-service-handback.js'
 import { daemonReady, daemonStays } from './daemon-service-ready.js'
 import { createLauncherControl } from './service-launcher-control.js'
-import { LAUNCHER_DIR_NAME, LAUNCHER_SCRIPT_NAME } from './service-launcher-script.js'
+import { LAUNCHER_DIR_NAME } from './service-launcher-script.js'
 import { launcherKeeps, readLauncherFacts } from './service-launcher-beat.js'
 import { readServiceMode, type ServiceMode } from '../binary/service-mode.js'
-import { dropServiceMode, removeServiceMode, restoreServiceMode, stageServiceMode } from '../binary/service-mode-update.js'
+import { dropServiceMode, restoreServiceMode, stageServiceMode } from '../binary/service-mode-update.js'
 
 export { daemonReady, daemonStays, SERVICE_STAY_MS } from './daemon-service-ready.js'
 
@@ -353,10 +353,7 @@ export const LAUNCHER_FLAG = '--launcher'
 /** The leader of `<home>` switches this host to its one Walnut service, or back (service-mode.ts). */
 export const SERVE_FLAG = '--serve'
 export const NO_SERVE_FLAG = '--no-serve'
-/** The Walnut a service is for: its own set when another Walnut holds the default (the experiment host_service_sets). */
-export const WALNUT_FLAG = '--walnut'
-/** The data dir of that Walnut, for the set choice only (no mode word): the leader sends it with --walnut. */
-export const WALNUT_HOME_FLAG = '--walnut-home'
+export { WALNUT_FLAG, WALNUT_HOME_FLAG } from './service-set-choice.js'
 
 
 export async function runDaemonServiceArgs(args: string[]): Promise<number> {
@@ -381,17 +378,8 @@ export function parseDaemonServiceArgs(args: string[]): { action: string; option
       options.serve = { home, on: args[i] === SERVE_FLAG }
       i++
     }
-    else if (args[i] === WALNUT_FLAG) {
-      const id = args[i + 1]
-      if (!id) throw new Error(`${WALNUT_FLAG} requires the walnut id of the Walnut the service is for`)
-      serviceSetIdOf(id)
-      options.walnut = id
-      i++
-    }
-    else if (args[i] === WALNUT_HOME_FLAG) {
-      const home = args[i + 1]
-      if (!home || !path.isAbsolute(home)) throw new Error(`${WALNUT_HOME_FLAG} requires the absolute data dir of the Walnut it is for`)
-      options.walnutHome = home
+    else if (args[i] === WALNUT_FLAG || args[i] === WALNUT_HOME_FLAG) {
+      Object.assign(options, serviceSetFlagAt(args, i))
       i++
     }
     else if (args[i] === '--scope') {
@@ -426,12 +414,7 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
   // when another user on this machine owns that one (src/lib/daemon-dir.ts).
   const defaultRuntimeDir = localProductionDaemonDir()
   // Which set the action is for: the default, or this Walnut's own beside another's (service-set.ts).
-  const set: ServiceSet = options.walnut
-    ? (await chooseServiceSet({
-        platform: process.platform, home, walnutId: options.walnut, serveHome: options.serve?.home ?? options.walnutHome,
-        defaultRuntimeDir, uid: user.uid, claim: action === 'install' || action === 'update',
-      })).set
-    : serviceSet(process.platform, home, '', { runtimeDir: defaultRuntimeDir })
+  const set = await serviceSetOfAction(action, { platform: process.platform, home, walnutId: options.walnut, serveHome: options.serve?.home ?? options.walnutHome, defaultRuntimeDir, uid: user.uid })
   // Before the answer, on stdout: a leader that asked reads it there (its status run drops stderr).
   if (options.walnut) process.stdout.write(`${serviceSetLine(set.id)}\n`)
   if (action === 'handback') return handBackCli(home, user.uid, set)
@@ -536,7 +519,8 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
       return 0
     }
     const configPath = manager.configPath(scope)
-    const before = action === 'install' || action === 'update' ? await files.readConfig(configPath).catch(() => null) : null
+    // An uninstall's too: the set's dir is judged at the runtime dir its unit pinned (daemon-service-uninstall-tail.ts).
+    const before = action === 'install' || action === 'update' || action === 'uninstall' ? await files.readConfig(configPath).catch(() => null) : null
     // The version that runs on after a failure is the one before: so is its mode (service-mode.ts).
     // Only over this action's own write (compare and swap): a role the switch wrote since stays.
     const restoreMode = async () => {
@@ -567,22 +551,14 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
       if (!set.id) await reportMoved(await moveDaemonState(root, unmanagedStateRoot(home)).catch(() => []), 'back for the daemon Walnut starts over SSH')
     }
     if (result.ok && action === 'uninstall') {
-      // The launcher's own files: its script (systemd, launchd; cron's is the boot script, removed above) and its dir.
-      await fs.rm(path.join(root, LAUNCHER_SCRIPT_NAME), { force: true }).catch(() => {})
-      await fs.rm(path.join(root, LAUNCHER_DIR_NAME), { recursive: true, force: true }).catch(() => {})
-      // No launcher, no service: a later install starts as the daemon unless its leader says otherwise.
-      await removeServiceMode(root).catch(() => { /* the entry reads a doubt as the daemon */ })
-    }
-    if (result.ok && action === 'uninstall') {
-      // Tells the server not to set it up again (remote-boot-start.ts BOOT_SETUP_MARKER); a later install wins.
-      await fs.writeFile(path.join(root, 'boot-setup'), `v=uninstall at=${Date.now()} result=removed\n`, { mode: 0o600 }).catch(() => {})
-    }
-    if (result.ok && action === 'uninstall' && set.id) {
-      // A set's own dir goes once nothing of it runs (service-set-remove.ts); else it says why it stays.
-      const gone = await removeServiceSetDir(home, set, user.uid).catch((error: unknown) => ({ removed: false as const, dir: root, why: String(error) }))
-      process.stderr.write(gone.removed ? `walnut daemon: removed the service set's dir ${gone.dir}\n` : `walnut daemon: kept the service set's dir ${gone.dir}: ${gone.why}\n`)
-      process.stdout.write(JSON.stringify({ ...result, setDir: gone }, null, 2) + '\n')
-      return 0
+      // The launcher's files, the mode, the boot-setup marker, then the default's claim or the set's own dir.
+      const setDir = await afterServiceUninstall({
+        home, uid: user.uid, platform: platform as 'linux' | 'darwin', set, unitConfig: before, say: (line) => { process.stderr.write(line) },
+      })
+      if (setDir) {
+        process.stdout.write(JSON.stringify({ ...result, setDir }, null, 2) + '\n')
+        return 0
+      }
     }
     process.stdout.write(JSON.stringify(result, null, 2) + '\n')
     return result.ok ? 0 : 1

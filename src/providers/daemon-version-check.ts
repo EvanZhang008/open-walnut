@@ -333,6 +333,7 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/service-set.ts',
   'src/providers/service-set-choice.ts',
   'src/providers/service-set-remove.ts',
+  'src/providers/daemon-service-uninstall-tail.ts',
   // The walnut-net identity of a service set, for its leader (walnut daemon net-id and net-forget, daemon-service-cli.cjs).
   'src/providers/service-set-net.ts',
   'src/providers/daemon-shared.ts',
