@@ -20,6 +20,7 @@ import { withoutAddresslessNewHosts } from './net/net-hosts.js';
 import { noteRequestTagConfig } from './sessions/request-tag.js';
 import { firstRunStampAllowed, homeHoldsWork, stampFirstRun } from './first-run.js';
 import { writeConfigSection, type ConfigWriteOptions } from './config-section-write.js';
+import { dropCopyOnlyConfigKeys, isCopyOnlyConfigKey } from './replication/copy-only-keys.js';
 import { setExperimentConfigReader } from './experimental-cache.js';
 import {
   dumpConfig,
@@ -251,6 +252,8 @@ export async function getConfig(): Promise<Config> {
     if (read.source === 'broken') throw new Error(`config.yaml is ${read.state}${read.error ? `: ${read.error}` : ''}`);
     const parsed = read.doc as unknown as Config;
     const config = normalizeReadConfig({ ...DEFAULT_CONFIG, ...parsed });
+    // A key only the config copy says (a host replica's) means nothing in the leader's own file.
+    dropCopyOnlyConfigKeys(config);
     // Merge auto-discovered SSH hosts
     await mergeSshDiscoveredHosts(config);
     // The paired cloud box, reached over the daemon tunnel (in memory only:
@@ -324,6 +327,7 @@ export async function saveConfig(config: Config): Promise<void> {
     const hosts = withoutCloudBoxHost(config.hosts);
     const toWrite = (hosts === config.hosts ? { ...config } : { ...config, hosts }) as Config;
     migrateLegacyCompanionKeep(toWrite as unknown as Record<string, unknown>);
+    dropCopyOnlyConfigKeys(toWrite);
     await writeConfigWithBackup(dumpConfig(toWrite as unknown as Record<string, unknown>));
   });
 }
@@ -350,6 +354,8 @@ export async function updateConfig(partial: Partial<Config>, opts: ConfigWriteOp
     migrateLegacyCompanionKeep(existing);
     const hostsBefore = existing.hosts && typeof existing.hosts === 'object' ? existing.hosts as Record<string, unknown> : undefined;
     for (const [key, value] of Object.entries(partial)) {
+      // A key only the config copy says is never written here (replication/copy-only-keys.ts).
+      if (isCopyOnlyConfigKey(key)) continue;
       if (value !== undefined) existing[key] = writeConfigSection(key, existing[key], value, opts);
     }
     migrateLegacyCompanionKeep(existing);
