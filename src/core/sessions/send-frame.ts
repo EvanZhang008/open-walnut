@@ -17,8 +17,10 @@
  * table there does not classify.
  */
 import { isHistoryUserTurn } from '../../lib/history-turn-window.js';
+import { parseSessionEnvelopes } from '../../lib/history-session-envelope.js';
 import { buildPeerWrapper } from '../peers/peer-wrapper.js';
-import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
+import { buildWalnutMessage, buildWalnutNote } from '../peers/walnut-message-tag.js';
+import { hintBlocksIn } from '../hints/hint-format.js';
 import { ambientAutomatedClient, automatedClientLabel } from './automated-client.js';
 import { isPersonSource } from './send-sent-by.js';
 import { walnutCommandFor } from './walnut-commands.js';
@@ -56,6 +58,30 @@ export function frameAsWalnut(text: string, source: string | undefined, label?: 
     attrs: { from: `Walnut (${label ?? sourceLabel(source)})`, note: NOTE_WALNUT_SEND },
     body: text,
   });
+}
+
+/**
+ * Walnut's own notes that ride in front of a message (session-message-queue.ts): every word of them
+ * must sit inside an envelope, because words between or after envelopes are read as the person's
+ * (transcript-sent-by.ts personTextOf). Loose text is framed in place; envelopes stay byte for
+ * byte, so a note with nothing loose comes back identical. Class guard:
+ * tests/core/sessions/rider-framing-guard.test.ts.
+ */
+export function frameLooseText(text: string): string {
+  if (!text.trim()) return text;
+  const segments = parseSessionEnvelopes(text) ?? [{ kind: 'text' as const, text }];
+  let changed = false;
+  const out = segments.map((s) => {
+    if (s.kind === 'envelope') return s.envelope.raw;
+    // Walnut's hint blocks (hints/hint-format.ts) are framed already: personTextOf reads past them.
+    const blocks = hintBlocksIn(s.text);
+    let rest = s.text;
+    for (const b of blocks) rest = rest.replace(b, '');
+    if (!rest.trim()) return s.text;
+    changed = true;
+    return [...blocks, buildWalnutNote(rest.trim())].join('\n\n');
+  });
+  return changed ? out.filter((t) => t.trim()).join('\n\n') : text;
 }
 
 /**

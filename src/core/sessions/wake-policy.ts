@@ -24,6 +24,7 @@
  */
 import { log } from '../../logging/index.js';
 import { hintBlocksIn } from '../hints/hint-format.js';
+import { buildWalnutNote } from '../peers/walnut-message-tag.js';
 import { holdFoldedNotice } from './held-notices.js';
 
 /**
@@ -158,7 +159,8 @@ export function rowRides(text: string): boolean {
 export function holdRidingNotice(sessionId: string, text: string, now = Date.now()): Promise<void> {
   return holdFoldedNotice<string>(sessionId, 'riding-notices', text, (parts, dropped) => [
     ...parts,
-    ...(dropped > 0 ? [`(${dropped} older notice${dropped === 1 ? '' : 's'} that asked nothing dropped: the newest say where things stand.)`] : []),
+    // Inside an envelope: a bare line here would read as the user's own words (2026-11-23 review).
+    ...(dropped > 0 ? [buildWalnutNote(`${dropped} older notice${dropped === 1 ? '' : 's'} that asked nothing dropped: the newest say where things stand.`)] : []),
   ].join('\n\n'), { now });
 }
 

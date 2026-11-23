@@ -17,7 +17,8 @@ import { clearRiding, flushRidingForTest, loadRiding, noticeKeysSince, noticeTol
 import { orgNoticeText, reportsToOrgNode, STOP_QUOTE_MAX } from '../../../src/core/sessions/org-follow.js'
 import { EXTERNAL_SESSION_IMPORT_TAG, PLUGIN_RUN_TAG, PROGRAM_RUN_TAG } from '../../../src/core/types.js'
 
-const notice = (word: string) => `<walnut-message kind="notification">${word}\n\nNext:\n  walnut tools call task_get</walnut-message>`
+// A real envelope's shape (open tag, newline, body, newline, close tag), as org-follow.ts writes it.
+const notice = (word: string) => `<walnut-message kind="notification" from="Walnut" outcome="stopped">\n${word}\n\nNext:\n  walnut tools call task_get\n</walnut-message>`
 
 beforeEach(async () => {
   clearRiding()

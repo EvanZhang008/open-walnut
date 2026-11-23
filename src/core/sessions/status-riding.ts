@@ -17,7 +17,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { log } from '../../logging/index.js';
-import { buildWalnutMessage as buildMessage } from '../peers/walnut-message-tag.js';
+import { addToEnvelopeBody, buildWalnutMessage as buildMessage } from '../peers/walnut-message-tag.js';
 
 /** A ride-along item older than this is dropped unread: the live list has moved on. */
 export const RIDE_MAX_MS = 3 * 24 * 60 * 60_000;
@@ -241,11 +241,11 @@ export function statusText(lines: readonly string[]): string {
   });
 }
 
-/** A notice with the task's newest status line inside it, before its closing "Next:" list. */
+/** A notice with the task's newest status line inside its envelope, before its closing "Next:" list. */
 function withLine(text: string, line: string): string {
   const add = `Its status now (Walnut's record): ${line.replace(/^- /, '')}`;
-  const at = text.lastIndexOf('\n\nNext:\n');
-  return at === -1 ? `${text}\n\n${add}` : `${text.slice(0, at)}\n\n${add}${text.slice(at)}`;
+  // Never beside the envelope: words after its close tag read as the user's own (2026-11-22).
+  return addToEnvelopeBody(text, add) ?? `${text}\n\n${statusText([line])}`;
 }
 
 /** One item as it is told: the status lines alone, and the notices with their line inside. */

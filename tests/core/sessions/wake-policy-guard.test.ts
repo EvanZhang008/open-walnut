@@ -226,10 +226,19 @@ describe('a message that rides starts no turn', () => {
     }
     expect(kicks).toEqual([]);
     const row = await sendMessageToSession(SID, 'go', { source: 'walnut-notify' });
-    expect(row.message.match(/outcome="status"/g)).toHaveLength(FOLD_PARTS_MAX);
+    // The newest FOLD_PARTS_MAX notices, plus Walnut's own note saying how many it dropped, which is
+    // an envelope too: a bare line there read as the user's words (rider-framing-guard.test.ts).
+    expect(row.message.match(/outcome="status"/g)).toHaveLength(FOLD_PARTS_MAX + 1);
+    expect(row.message.match(/\nline \d+\n/g)).toHaveLength(FOLD_PARTS_MAX);
     expect(row.message).not.toContain('line 0\n');
     expect(row.message).toContain(`line ${FOLD_PARTS_MAX + 1}`);
     expect(row.message).toContain('2 older notices that asked nothing dropped');
+    // Read as every transcript reader reads a row: hint blocks off first, then who typed what.
+    const { personTextOf, transcriptSentBy } = await import('../../../src/core/sessions/transcript-sent-by.js');
+    const { parseHinted } = await import('../../../src/core/hints/hint-format.js');
+    const stored = parseHinted(row.message).text;
+    expect(transcriptSentBy({ role: 'user', text: stored })).toBe('agent');
+    expect(personTextOf(stored)).toBeUndefined();
   });
 
   it('a running turn does not get it either: held, no row, no kick', async () => {

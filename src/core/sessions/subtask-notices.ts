@@ -52,7 +52,7 @@ import type { SessionRecord, Task } from '../types.js';
 import type { NoticeLastMessage } from '../session-requests.js';
 import type { EnvelopeWordsUnread, SubtaskNoticeKind, TurnStarter } from '../peers/envelope-kit.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
-import { parseWalnutMessage } from '../peers/walnut-message-tag.js';
+import { addToEnvelopeBody, parseWalnutMessage } from '../peers/walnut-message-tag.js';
 // The edges worth a new turn for a parent whose own turn is over (completed, error) are the wake policy's.
 import { noticeWakes } from './wake-policy.js';
 
@@ -292,14 +292,12 @@ export function buildSubtaskNoticeText(n: SubtaskNotice): string {
   if (replyCovered(n)) {
     // One line: the reply carried the result and its not-done list. Only a card left behind is news.
     const card = n.cardLine && !/^Card: Done\b/.test(n.cardLine) ? n.cardLine : '';
-    const close = text.lastIndexOf('\n</walnut-message>');
-    return card && close !== -1 ? `${text.slice(0, close)}\n${card}${text.slice(close)}` : text;
+    return card ? addToEnvelopeBody(text, card) ?? text : text;
   }
   const extra = [n.partial, n.remaining, n.cardLine].filter(Boolean).join('\n\n');
   if (!extra) return text;
-  // Inside the envelope, before its closing "Next:" list (the last one: a quote may hold the word).
-  const at = text.lastIndexOf('\n\nNext:\n');
-  return at === -1 ? text : `${text.slice(0, at)}\n\n${extra}${text.slice(at)}`;
+  // Inside the envelope, before its closing "Next:" list when it has one (the last one: a quote may hold the word).
+  return addToEnvelopeBody(text, extra) ?? text;
 }
 
 /**

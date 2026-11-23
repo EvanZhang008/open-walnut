@@ -43,7 +43,7 @@ import { staleTriggerText } from './routines/trigger-stale.js';
 import type { PendingInstructionNotice } from './sessions/instruction-notice.js';
 import { leadsWithNotice, markNoticeDelivering } from './sessions/instruction-notice-flight.js';
 import { AUTOMATED_SEND_SOURCE, PERSON_SEND_SOURCES, isPersonSendSource, queueSentBy, sendSourceOf } from './sessions/send-sent-by.js';
-import { frameAsWalnut, frameForSource } from './sessions/send-frame.js';
+import { frameAsWalnut, frameForSource, frameLooseText } from './sessions/send-frame.js';
 import { ambientTestRun } from './test-run.js';
 import { dropRepeatedHintBlocks, foldTidyIntoThreads, hintBlocksIn, replaceHintedText } from './hints/hint-format.js';
 import { noteUserActivity } from './self-update/idle-gate.js';
@@ -357,25 +357,30 @@ export async function sendMessageToSession(
   // for the next message (each is told only when the row holds it, below).
   const slashCommand = body.trimStart().startsWith('/');
   // App state leads: an App's AI-only brief counts only at the head of a line (lib/ai-only-envelope.ts).
-  const notes = [appState?.text, place?.text, folderMoved?.text, restart?.text, digest?.text, statusNote?.text, heldNotes?.text, withdrawn?.text, waitNote, retiredNote].filter(Boolean).join('\n\n');
-  const lead = [notes, switchContext?.text].filter(Boolean).join('\n\n');
+  // Every word of Walnut's notes sits inside an envelope: loose words in front of the body read as the
+  // person's (sessions/send-frame.ts frameLooseText). A note with nothing loose is unchanged.
+  const rider = (t: string | null | undefined): string | undefined => (t ? frameLooseText(t) : undefined);
+  const notes = [appState?.text, place?.text, folderMoved?.text, restart?.text, digest?.text, statusNote?.text, heldNotes?.text, withdrawn?.text, waitNote, retiredNote].map(rider).filter(Boolean).join('\n\n');
+  const lead = [notes, rider(switchContext?.text)].filter(Boolean).join('\n\n');
   const enqueueText = lead && !slashCommand ? `${lead}\n\n${body}` : body;
   /** Mark told each note `carrier` (stored as row `rowId`) holds; App state and held notices it does not are put back. */
   const tellCarried = async (carrier: string, rowId?: string): Promise<void> => {
-    if (place && carrier.startsWith(place.text)) await place.markTold();
-    if (digest && carrier.includes(digest.text)) await digest.markTold();
-    if (restart && carrier.includes(restart.text)) await restart.markTold();
-    if (folderMoved && carrier.includes(folderMoved.text)) await folderMoved.markTold();
-    if (switchContext && carrier.includes(switchContext.text)) await switchContext.markTold();
-    if (statusNote && carrier.includes(statusNote.text)) statusNote.markTold();
-    if (withdrawn && carrier.includes(withdrawn.text)) await withdrawn.markTold();
+    // Each note as the row holds it (framed where it had loose words).
+    const holds = (t: string): boolean => !!t && carrier.includes(rider(t)!);
+    if (place?.text && carrier.startsWith(rider(place.text)!)) await place.markTold();
+    if (digest && holds(digest.text)) await digest.markTold();
+    if (restart && holds(restart.text)) await restart.markTold();
+    if (folderMoved && holds(folderMoved.text)) await folderMoved.markTold();
+    if (switchContext && holds(switchContext.text)) await switchContext.markTold();
+    if (statusNote && holds(statusNote.text)) statusNote.markTold();
+    if (withdrawn && holds(withdrawn.text)) await withdrawn.markTold();
     if (appState) {
-      if (carrier.includes(appState.text)) appState.markTold();
+      if (holds(appState.text)) appState.markTold();
       else appState.release();
     }
     if (heldNotes) {
       // Off the file once the row that carries them is stored (held-notices.ts): never awaited.
-      if (carrier && carrier.includes(heldNotes.text)) heldNotes.markTold(rowId);
+      if (carrier && holds(heldNotes.text)) heldNotes.markTold(rowId);
       else heldNotes.release();
     }
   };

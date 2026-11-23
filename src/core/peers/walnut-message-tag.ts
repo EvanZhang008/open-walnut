@@ -88,6 +88,34 @@ export function buildWalnutMessage(input: {
   return kit.buildWalnutMessage(input as Parameters<typeof kit.buildWalnutMessage>[0]);
 }
 
+/**
+ * A note of Walnut's own that asks nothing, as a notice the timeline folds in front of a message
+ * (outcome `status` is on lib/history-walnut-riders.ts RIDER_NOTICE_OUTCOMES and rides, never wakes:
+ * sessions/wake-policy.ts). For words Walnut puts in front of or after another envelope, which would
+ * otherwise read as the user's.
+ */
+export function buildWalnutNote(body: string): string {
+  return buildWalnutMessage({ kind: 'notification', attrs: { from: 'Walnut', outcome: 'status', note: 'a note from Walnut, not a work request' }, body });
+}
+
+/**
+ * Add `add` to the body of the LAST envelope in `text`: before its closing "Next:" list when it has
+ * one, else just before its close tag. Escaped like any body, so the added words can never close the
+ * envelope early. Null when `text` ends in no envelope: the caller must frame `add` itself, because
+ * words placed beside an envelope read as the user's (2026-11-22: a status line after a completion
+ * notice with no "Next:" list was stored after the close tag and read `sentBy: "person"`).
+ */
+export function addToEnvelopeBody(text: string, add: string): string | null {
+  const close = text.lastIndexOf(CLOSE_TAG);
+  if (close === -1 || text.slice(close + CLOSE_TAG.length).trim()) return null;
+  const open = text.lastIndexOf(`<${TAG} `, close);
+  if (open === -1) return null;
+  const body = escapeBody(add);
+  const next = text.lastIndexOf('\n\nNext:\n', close);
+  if (next > open) return `${text.slice(0, next)}\n\n${body}${text.slice(next)}`;
+  return `${text.slice(0, close)}\n\n${body}${text.slice(close)}`;
+}
+
 export interface ParsedWalnutMessage {
   kind: string;
   attrs: Record<string, string>;

@@ -141,7 +141,9 @@ const realDeps: WorkspaceManagerDeps = {
   },
   async launchInFolder(task, ws, pending, error) {
     const { startSessionForTask } = await import('../sessions/task-start.js')
-    const note = `(Walnut could not make this task's isolated workspace (${error}), so it runs in ${ws.anchor} itself, a checkout other tasks may share.)`
+    // Walnut's words, so an envelope: after a person's message they would read as theirs.
+    const { buildWalnutNote } = await import('../peers/walnut-message-tag.js')
+    const note = buildWalnutNote(`Walnut could not make this task's isolated workspace (${error}), so it runs in ${ws.anchor} itself, a checkout other tasks may share.`)
     await startSessionForTask({
       taskIdPrefix: task.id, requestedAt: pending.at, message: `${pending.message}\n\n${note}`, model: pending.model, mode: pending.mode,
       ...(pending.effort ? { effort: pending.effort as SessionEffort } : {}),
