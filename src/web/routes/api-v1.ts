@@ -3961,15 +3961,16 @@ apiV1Router.get('/sessions', async (req: Request, res: Response, next: NextFunct
         })
       }
     }
-    // The rows hosts that judge their own sessions told this companion (session-channel/companion-host-ops.ts).
-    const listened = CLOUD_MODE ? await import('../../core/session-channel/companion-host-ops.js') : null
-    if (!projection && ownRows.length === 0 && !heldBack && !listened?.anyListenedRows()) {
+    // The rows hosts that judge their own sessions told this server over its listener door
+    // (session-channel/companion-host-ops.ts): none but where that door is open (the bridge-door capability).
+    const listened = await import('../../core/session-channel/companion-host-ops.js')
+    if (!projection && ownRows.length === 0 && !heldBack && !listened.anyListenedRows()) {
       sendError(res, 503, 'unavailable', 'Session projection not synced yet')
       return
     }
     const { unionOwnedSessions } = await import('../../core/cloud-exec.js')
     const union = unionOwnedSessions(projection?.sessions ?? [], ownRows)
-    const all = listened ? await listened.joinListenedRows(union) as typeof union : union
+    const all = await listened.joinListenedRows(union) as typeof union
 
     const asked = typeof req.query.scope === 'string' && req.query.scope ? req.query.scope : 'all'
     if (asked !== 'all' && asked !== 'project' && asked !== 'folder') {

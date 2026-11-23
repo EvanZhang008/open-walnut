@@ -142,7 +142,7 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
   active = side
   standing = standingNow
   // The door hosts dial into, and their credentials (host-door.ts, leader-issue.ts).
-  const [{ startHostDoor, pushDoorsToDialed }, issue, { setLeaderDoorOpen }, { pooledMachineIdOf }, { standbyRunner }, { isCompanion }, { getConfig }] = await Promise.all([
+  const [{ startHostDoor, pushDoorsToDialed }, issue, { setLeaderDoorOpen }, { pooledMachineIdOf }, { standbyRunner }, { isFollower }, { getConfig }] = await Promise.all([
     import('./host-door.js'), import('./leader-issue.js'), import('../leader-doors.js'), import('../../providers/daemon-connection.js'),
     import('../standby/runner.js'), import('../server-role.js'), import('../config-manager.js'),
   ])
@@ -188,9 +188,9 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     syncStandby,
     log: (level, msg, data) => log.session[level](msg, data),
   })
-  // Open only on the leader (never the companion in this land) while the switch is on.
+  // Open only on the leader (never a replica: the companion's own door is /host-listen) while the switch is on.
   const syncDoor = async (): Promise<void> => {
-    const on = !isCompanion() && await hostRunsSessionsNow().catch(() => false)
+    const on = !isFollower() && await hostRunsSessionsNow().catch(() => false)
     setLeaderDoorOpen('/host-door', on)
   }
   await syncDoor()
