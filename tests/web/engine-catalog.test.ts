@@ -72,6 +72,7 @@ import {
   engineEntry,
   engineLockReason,
   hostEngineLockReason,
+  shortLockReason,
   engineTitle,
   isSessionEngine,
   launchEngineForHost,
@@ -184,6 +185,22 @@ describe('resolveEngineForHost (the one local-only rule)', () => {
     expect(hostEngineLockReason(codex, 'clouddev', { codex: { installed: false, version: null, reason: 'still checking availability' } })).toBeNull();
     // This machine reads the catalog's own availability.
     expect(hostEngineLockReason({ ...codex, availability: { installed: false, version: null, reason: 'not here' } }, '__local__', null)).toBe('not here');
+  });
+
+  it('says every lock reason in a few plain words, never a config field or a binary', () => {
+    const cases: Array<[string, string]> = [
+      ['This session runs on Claude Code — start a new session to use Codex', 'Needs a new session'],
+      ['A fork keeps the source session provider', 'A fork keeps its engine'],
+      ['A quick question runs on the claude engine (the Personal AI profile rides its system prompt)', 'Quick questions use Claude Code'],
+      ['Custom runs on this Mac only', 'Runs on this computer only'],
+      ['Not available on clouddev: codex is not installed', 'Not set up on clouddev'],
+      ['configure engines.custom.adapter_cmd (the ACP adapter argv) to use Custom (ACP)', 'Set up in Settings > Sessions'],
+      ['Codex CLI not found: install `codex` on PATH or set WALNUT_CODEX_BIN', 'Not installed here'],
+      ['the bundled codex-acp adapter is missing from this walnut install (reinstall)', 'Not installed here'],
+    ];
+    for (const [full, short] of cases) expect(shortLockReason(full)).toBe(short);
+    expect(shortLockReason('not here')).toBe('not here');
+    expect(shortLockReason('x'.repeat(40))).toBe('Not available here');
   });
 
   it('keeps it on the local machine, however local is spelled', () => {

@@ -55,8 +55,8 @@ test('C1: /settings opens General alone', async ({ page }) => {
   expect(await mountedSections(page)).toEqual(['general'])
   const nav = page.getByTestId(NAV('general'))
   await expect(nav).toHaveAttribute('aria-current', 'page')
-  await expect(nav).toHaveClass(/settings-nav-active/)
-  await expect(page.locator('.settings-nav-active')).toHaveCount(1)
+  await expect(nav).toHaveClass(/\bwn-nav-item\b/)
+  await expect(page.locator('.settings-nav-item[aria-current="page"]')).toHaveCount(1)
 })
 
 test('C2: each nav entry mounts only its own pane', async ({ page }) => {
@@ -301,19 +301,19 @@ test('C25: every nav tile is a 20px tinted square; the active entry is accent wi
   }
   expect(await page.getByTestId(NAV('general')).locator('.settings-pane-tile').evaluate((el) => getComputedStyle(el).backgroundColor))
     .toBe(hexToRgb('#8E8E93'))
-  // The active entry is the settings selection blue (a deeper accent, so white
-  // 13px text passes 4.5:1: C50) with white text.
+  // The active entry is the shared Nav item, the same light accent as the rail's current page
+  // (pick-and-nav.css), never a solid block of its own.
   const active = await page.getByTestId(NAV('general')).evaluate((el) => {
     const probe = document.createElement('span')
-    probe.style.color = 'var(--settings-nav-selected-bg)'
+    probe.style.color = 'var(--accent-subtle)'
+    probe.style.backgroundColor = 'var(--accent-text)'
     el.closest('.settings-container')!.append(probe)
-    const selected = getComputedStyle(probe).color
+    const tokens = { subtle: getComputedStyle(probe).color, text: getComputedStyle(probe).backgroundColor }
     probe.remove()
-    return { bg: getComputedStyle(el).backgroundColor, color: getComputedStyle(el.querySelector('.settings-nav-label')!).color, selected }
+    return { bg: getComputedStyle(el).backgroundColor, color: getComputedStyle(el.querySelector('.settings-nav-label')!).color, ...tokens }
   })
-  expect(active.bg).toBe(active.selected)
-  expect(active.bg).toBe('rgb(0, 100, 210)')
-  expect(active.color).toBe('rgb(255, 255, 255)')
+  expect(active.bg).toBe(active.subtle)
+  expect(active.color).toBe(active.text)
 })
 
 test('C47: nav clicks replace history, so one Back leaves Settings', async ({ page }) => {

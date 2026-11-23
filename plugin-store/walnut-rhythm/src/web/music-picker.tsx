@@ -71,17 +71,19 @@ export function MusicPicker({ music, store, value, onPick, testId }: {
         const choice = option.choice
         const playingPreview = previewing === key
         return (
-          <div key={key} className={`rhythm-pick-row${on ? ' rhythm-pick-row-on' : ''}`}>
+          <div key={key} className="rhythm-pick-row">
             <button
               type="button"
               role="radio"
               aria-checked={on}
-              className={`rhythm-option${on ? ' rhythm-option-on' : ''}`}
+              className="rhythm-option wn-pick-row"
               data-testid={`${testId}-${key}`}
               onClick={() => onPick(choice)}
             >
-              <span className="rhythm-option-title">{option.title}</span>
-              <span className="rhythm-option-meta">{option.meta}</span>
+              <span className="rhythm-option-copy">
+                <span className="rhythm-option-title">{option.title}</span>
+                <span className="rhythm-option-meta">{option.meta}</span>
+              </span>
             </button>
             {choice.kind !== 'none' && (
               <button

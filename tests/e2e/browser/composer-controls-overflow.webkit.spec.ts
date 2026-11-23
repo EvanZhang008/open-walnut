@@ -85,7 +85,7 @@ test('WebKit narrow composer shows Bypass and the short model name with the real
   await output.click();
   await expect.poll(() => writes.body.some((body) => body.output_mode === 'markdown')).toBe(true);
   await addButton(panel).click();
-  await expect(output).toContainText('MD');
+  await expect(output).toContainText('Markdown');
 });
 
 test('WebKit short viewport keeps the reply style row reachable in the add menu, and Note still opens', async ({ page }) => {

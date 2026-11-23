@@ -6,6 +6,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { MusicOrder, MusicPlayer, MusicView, SpotifyView } from './music'
 import type { RhythmPublicState, RhythmStore } from './store'
+import { Segments } from './choices'
 
 const ORDERS: Array<[MusicOrder, string]> = [
   ['one', 'Repeat one'],
@@ -132,21 +133,12 @@ export function MusicCard({ player, store, state, onOpenFolder, busy }: { player
         </div>
         {music.error && <p className="rhythm-error" role="status" data-testid="rhythm-music-error">{music.error}</p>}
 
-        <div className="rhythm-segments" role="radiogroup" aria-label="How the folder plays">
-          {ORDERS.map(([order, label]) => (
-            <button
-              key={order}
-              type="button"
-              role="radio"
-              aria-checked={music.order === order}
-              className={`rhythm-segment${music.order === order ? ' rhythm-segment-on' : ''}`}
-              data-testid={`rhythm-music-order-${order}`}
-              onClick={() => player.setOrder(order)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        <Segments
+          label="How the folder plays"
+          value={music.order}
+          options={ORDERS.map(([order, label]) => ({ value: order, label, testId: `rhythm-music-order-${order}` }))}
+          onChange={(order) => player.setOrder(order)}
+        />
 
         <div className="rhythm-picker" role="radiogroup" aria-label="Focus music track" data-testid="rhythm-music-tracks">
           {tracks.map((track) => (
@@ -155,13 +147,15 @@ export function MusicCard({ player, store, state, onOpenFolder, busy }: { player
               type="button"
               role="radio"
               aria-checked={track.id === current?.id}
-              className={`rhythm-option${track.id === current?.id ? ' rhythm-option-on' : ''}`}
+              className="rhythm-option wn-pick-row"
               data-testid={`rhythm-music-track-${track.id}`}
               title={track.file}
               onClick={() => player.select(track.id)}
             >
-              <span className="rhythm-option-title">{track.title}</span>
-              <span className="rhythm-option-meta">{track.id} · {sizeText(track.bytes)}</span>
+              <span className="rhythm-option-copy">
+                <span className="rhythm-option-title">{track.title}</span>
+                <span className="rhythm-option-meta">{track.id} · {sizeText(track.bytes)}</span>
+              </span>
             </button>
           ))}
           {music.loading && !listing && <p className="rhythm-muted rhythm-pad">Loading music…</p>}

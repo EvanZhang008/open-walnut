@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { EVIDENCE, expectContentActionsOnly, failedLegacyStart, home, itemRow, mailItem, openLetter, receipt, sendItems, sendLegacyItems, watchTaskMutations } from './inbox-items-helpers';
 import { draftComposer } from './draft-helpers';
 import fs from 'node:fs/promises';
-import { cssColorToRgba } from './css-color';
+import { cssColorToRgba, withCssColor } from './css-color';
 
 // The task chooser this test drove is gone with every email item's task intents (2026-11-02,
 // 5a28ae6c9). What a long letter's item offers now, by keyboard too, is Talk to CEO and New task.
@@ -38,14 +38,23 @@ test('selected Inbox rail stays readable in explicit light and dark themes', asy
   const sent = await sendItems(request, [mailItem('contrast')]);
   await home(page); await openLetter(page, sent.subject);
   await page.getByRole('button', { name: 'Close letter', exact: true }).click();
-  const rail = page.locator('.nfc-rail-btn.nfc-active').filter({ hasText: 'Inbox' });
+  const rail = page.locator('.nfc-rail-btn[aria-current="page"]').filter({ hasText: 'Inbox' });
   const values = [];
   for (const theme of ['light', 'dark']) {
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
-    const colors = await rail.evaluate(el => {
+    // The selected section is the shared Nav item, a translucent accent tint: its fill is read
+    // over the first opaque surface under it.
+    const colors = await rail.evaluate(withCssColor((toRgba) => (el: Element) => {
       const css = getComputedStyle(el);
-      return { foreground: css.color, background: css.backgroundColor, token: css.getPropertyValue('--bg-secondary') };
-    });
+      let under = [255, 255, 255, 1];
+      for (let at = el.parentElement; at; at = at.parentElement) {
+        const c = toRgba(getComputedStyle(at).backgroundColor);
+        if (c[3] === 1) { under = c; break; }
+      }
+      const fill = toRgba(css.backgroundColor);
+      const mixed = fill.slice(0, 3).map((v, i) => Math.round(v * fill[3] + under[i] * (1 - fill[3])));
+      return { foreground: css.color, background: `rgb(${mixed.join(', ')})`, token: css.getPropertyValue('--bg-secondary') };
+    }));
     const luminance = (text: string) => {
       const channels = cssColorToRgba(text).slice(0, 3).map(v => { const c = v / 255; return c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4; });
       return channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722;

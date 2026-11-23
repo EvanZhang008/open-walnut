@@ -25,6 +25,7 @@ import { openBackgroundPanel } from '@/stores/background-panel-store';
 import { openSessionRawView } from './SessionRawView';
 import { backgroundRunningLabel } from './background-ledger';
 import { KebabGroup } from './KebabGroup';
+import { SegmentedControl, segmentIndexForKey } from '@/components/controls';
 import { SessionMetaFacts } from './SessionMetaFacts';
 import {
   useSessionPanelMode,
@@ -73,61 +74,75 @@ const PANEL_CHOICES: SessionPanelMode[] = [
  * it far from Restart / Terminate at the bottom.
  *
  * Labelled "Columns", as the Display menu's "Session columns" row names the same setting.
- * Auto names what it gives in this window ("Auto (2)", the Display menu's words), pressed
- * or not, from the count the home strip publishes (useLiveAutoPanelCount), so the
- * breakpoints live in one place; with no strip measured yet it reads plain "Auto".
+ * One shared SegmentedControl (size sm) whose options are their plain names (Auto, 1, 2, ...);
+ * what Auto gives in this window is a muted note beside it ("Auto: 2 columns now"), from the
+ * count the home strip publishes (useLiveAutoPanelCount), so the breakpoints live in one place.
+ * Every confirm (a click or tap, Enter / Space, an assistive tech's activation) applies and closes
+ * the menu the same way: the control's onChange is the only place a pick lands. The arrows and
+ * Home / End only move the focus between the choices (caught before the control's own keys), as
+ * this row always did: each pick rewrites the app-wide count and can close columns, so walking
+ * past "1" must not apply it.
  */
 export function PanelCountRow({ onAfterAction }: { onAfterAction?: () => void }) {
   const { mode, setMode } = useSessionPanelMode();
   const autoCount = useLiveAutoPanelCount();
+  const autoNote = autoCount === null ? null : `Auto: ${autoCount} column${autoCount === 1 ? '' : 's'} now`;
   return (
     <div className="task-kebab-panels" data-testid="kebab-panels">
       <span className="task-kebab-icon">{VIEWS_ICON}</span>
       <span className="task-kebab-panels-label" title="How many session columns sit side by side (applies to all sessions)">
         Columns
       </span>
+      {autoNote && <span className="task-kebab-panels-note" data-testid="kebab-panels-auto-note">{autoNote}</span>}
       <div
         className="task-kebab-panels-track"
-        role="group"
-        aria-label="Session columns side by side"
-        // Left and Right move between the choices, as in any segmented control.
-        onKeyDown={(e) => {
-          if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-          const opts = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('button'));
-          const at = opts.indexOf(document.activeElement as HTMLButtonElement);
-          if (at < 0) return;
+        // Captured before the segments' own keys: the arrows and Home / End move the focus only
+        // (Enter / Space reach the control, which picks), and the menu around never acts on them.
+        onKeyDownCapture={(e) => {
+          const segs = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('.task-kebab-panels-opt'));
+          const at = segs.indexOf(document.activeElement as HTMLElement);
+          const next = at < 0 ? null : segmentIndexForKey(e.key, at, segs.length);
+          if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || next === null) return;
           e.preventDefault();
           e.stopPropagation();
-          opts[Math.max(0, Math.min(opts.length - 1, at + (e.key === 'ArrowRight' ? 1 : -1)))]?.focus();
+          const to = e.key === 'ArrowLeft' || e.key === 'ArrowRight' ? Math.max(0, Math.min(segs.length - 1, at + (e.key === 'ArrowRight' ? 1 : -1))) : next;
+          const seg = segs[to];
+          // The shared control's keyboard ring (WebKit draws none for a script's focus otherwise).
+          seg.setAttribute('data-keyed', 'true');
+          seg.addEventListener('blur', () => seg.removeAttribute('data-keyed'), { once: true });
+          seg.focus();
         }}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); }}
+        // A pick is this row's own: the menu's row handlers never see it.
+        onClick={(e) => e.stopPropagation()}
       >
-        {PANEL_CHOICES.map((value) => (
-          <button
-            key={value}
-            type="button"
-            aria-pressed={mode === value}
-            data-value={value === 'auto' ? 'Auto' : value}
-            aria-label={value === 'auto' ? 'Auto columns' : `${value} column${value === '1' ? '' : 's'}`}
-            className={`task-kebab-panels-opt${mode === value ? ' active' : ''}`}
-            title={value === 'auto' ? 'As many as fit the window width' : `${value} session column${value === '1' ? '' : 's'} side by side`}
-            onClick={(e) => {
-              e.stopPropagation();
-              // Re-picking the current value is a no-op beyond closing, so we don't
-              // write config (and don't re-trigger column eviction) for nothing.
-              if (value !== mode) setMode(value);
-              onAfterAction?.();
-            }}
-          >
-            {/* The number itself, never that many drawn bars to count (2026-11-04,
-                the user: "just show numbers, people having to count is not
-                reasonable"). tests/web/count-choice-guard.test.ts keeps it so. Auto always
-                names the count it gives in this window, muted until it is pressed, so the
-                track keeps one width whichever choice is pressed. */}
-            {value === 'auto' ? (
-              <>Auto{autoCount !== null && <span className="task-kebab-panels-auto-n">{` (${autoCount})`}</span>}</>
-            ) : value}
-          </button>
-        ))}
+        <SegmentedControl<SessionPanelMode>
+          size="sm"
+          // Up and Down stay the menu's (moving between its rows).
+          horizontalKeys
+          // A pick of the pressed one still closes the menu, without writing config again.
+          reselect
+          aria-label="Session columns side by side"
+          value={mode}
+          options={PANEL_CHOICES.map((value) => ({
+            value,
+            // The number itself, never that many drawn bars to count (2026-11-04, the user:
+            // "just show numbers, people having to count is not reasonable").
+            // tests/web/count-choice-guard.test.ts keeps it so.
+            label: value === 'auto' ? 'Auto' : value,
+            className: 'task-kebab-panels-opt',
+            data: { 'data-value': value === 'auto' ? 'Auto' : value },
+            ariaLabel: value === 'auto' ? 'Auto columns' : `${value} column${value === '1' ? '' : 's'}`,
+            title: value === 'auto'
+              ? `As many as fit the window width${autoCount === null ? '' : ` (${autoCount} now)`}`
+              : `${value} session column${value === '1' ? '' : 's'} side by side`,
+          }))}
+          onChange={(value) => {
+            // Re-picking the current value only closes the menu: no config write, no column eviction.
+            if (value !== mode) setMode(value);
+            onAfterAction?.();
+          }}
+        />
       </div>
     </div>
   );

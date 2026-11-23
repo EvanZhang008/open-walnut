@@ -301,6 +301,12 @@ test('C31: hooks are roomy rows with a level chevron; the label discloses Fires 
   await expect(first.locator('.settings-row-help')).not.toHaveCSS('white-space', 'nowrap')
   const disclose = first.locator('.hook-row-disclose')
   await expect(disclose).toHaveAttribute('aria-expanded', 'false')
+  // The words take no pointer (the whole row is the disclosure), so their tooltip is the button's:
+  // hovering the name still shows the hook's name and description.
+  await expect(disclose).toHaveAttribute('title', /\S/)
+  const nameBox = (await first.locator('.hook-row-name').boundingBox())!
+  expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('.hook-row-disclose') !== null,
+    { x: nameBox.x + 4, y: nameBox.y + nameBox.height / 2 })).toBe(true)
   await disclose.click()
   await expect(disclose).toHaveAttribute('aria-expanded', 'true')
   const details = page.locator(`#${await disclose.getAttribute('aria-controls')}`)
@@ -432,7 +438,23 @@ test('C60: a typed number saves when the pane is left 200ms later; a failure mar
   await expect(page.locator('#idle-timeout-row + .settings-row-error[role="alert"]')).toContainText("Couldn't save")
 })
 
+/** Serve /api/engines with only `installed` installed (the fixture forces every engine installed). */
+async function installedEngines(page: Page, installed: readonly string[]) {
+  await page.route('**/api/engines', async (route: Route) => {
+    try {
+      const res = await route.fetch()
+      const body = await res.json() as { engines: Array<{ id: string; availability?: Record<string, unknown> }> }
+      body.engines = body.engines.map((e) => ({
+        ...e,
+        availability: { ...e.availability, installed: installed.includes(e.id), reason: installed.includes(e.id) ? null : 'not installed' },
+      }))
+      await route.fulfill({ json: body })
+    } catch { /* the page closed with the read in flight */ }
+  })
+}
+
 test('C61: Default engine heads Sessions, is one sentence; the small-jobs warning only when it applies; segments are radios', async ({ page }) => {
+  await installedEngines(page, ['claude'])
   await fakeConfig(page, (c) => {
     c.agent = { ...c.agent, main_provider: 'claude_cli' }
     c.defaults = { ...c.defaults, engine: 'claude' }
@@ -445,21 +467,44 @@ test('C61: Default engine heads Sessions, is one sentence; the small-jobs warnin
   await expect(sessions.locator('.settings-row').first()).toHaveAttribute('data-testid', 'default-engine-row')
   await expect(def.getByTestId('default-engine-used-for')).toHaveText("Everything Walnut starts uses it; a session can still pick its own.")
   await expect(sessions.getByText('Small background jobs')).toHaveCount(0)
-  // Segments (radios) for five engines or fewer, a select beyond that; either
-  // way Claude Code is the picked one.
+  // The fixture machine has Claude Code alone: one engine is a fact, a plain value
+  // with a line on when a choice shows, never a lone radio.
   const picker = def.getByTestId('default-engine-select')
   await expect(picker).toBeVisible()
-  if (await picker.evaluate((el) => el.tagName) === 'SELECT') {
-    await expect(picker).toHaveValue('claude')
-    await expect(picker.locator('option[value="claude"]')).toHaveText('Claude Code')
-  } else {
-    const claude = def.getByTestId('default-engine-option-claude')
-    await expect(claude).toHaveAttribute('role', 'radio')
-    await expect(claude).toHaveAttribute('aria-checked', 'true')
-  }
+  await expect(picker).toHaveText('Claude Code')
+  await expect(picker).toHaveAttribute('data-value', 'claude')
+  await expect(def.getByRole('radio')).toHaveCount(0)
+  await expect(def.getByTestId('default-engine-only')).toContainText('The only engine installed here')
   // No per-engine settings anywhere in Settings: they live in the session's popover.
   await expect(page.locator('[data-testid^="engine-settings-tab-"], [data-testid="engine-settings-host"], .engine-setting-row')).toHaveCount(0)
   await expect(page.getByTestId('settings-nav-engines')).toHaveCount(0)
+})
+
+test('C61: with several engines installed, Default engine is a segmented choice of radios', async ({ page }) => {
+  await installedEngines(page, ['claude', 'codex'])
+  await fakeConfig(page, (c) => { c.defaults = { ...c.defaults, engine: 'claude' } })
+  await openSettings(page)
+  const sessions = await clickNav(page, 'sessions')
+  const def = row(sessions, 'Default engine')
+  await expect(def.getByTestId('default-engine-only')).toHaveCount(0)
+  // Segments (radios) for five engines or fewer (a select beyond that): Claude Code is the picked one.
+  await expect(def.getByRole('radio')).toHaveCount(2)
+  const claude = def.getByTestId('default-engine-option-claude')
+  await expect(claude).toHaveAttribute('role', 'radio')
+  await expect(claude).toHaveAttribute('aria-checked', 'true')
+  await expect(def.getByTestId('default-engine-option-codex')).toHaveAttribute('aria-checked', 'false')
+})
+
+test('C61: more than five engines installed make Default engine a select', async ({ page }) => {
+  await fakeConfig(page, (c) => { c.defaults = { ...c.defaults, engine: 'claude' } })
+  await openSettings(page)
+  const sessions = await clickNav(page, 'sessions')
+  const def = row(sessions, 'Default engine')
+  // The fixture has every engine installed: more than five.
+  const picker = def.locator('select[data-testid="default-engine-select"]')
+  await expect(picker).toHaveValue('claude')
+  await expect(picker.locator('option[value="claude"]')).toHaveText('Claude Code')
+  await expect(def.getByTestId('default-engine-only')).toHaveCount(0)
 })
 
 test('C61: an API in use shows the small-jobs warning in warning colour', async ({ page }) => {
@@ -677,7 +722,12 @@ test('C59: the API provider is one group with a segmented choice; every model la
   await collect()
   await clickNav(page, 'sessions')
   await collect()
-  expect(labels.map((l) => l.trim()).filter((l) => l === 'Model' || l === 'Default model')).toEqual([])
+  // A bare "Model" names no owner. Sessions' "Default model" is Walnut's own default for Claude Code
+  // sessions (Settings > Sessions, under Default engine), so its line has to name Claude Code.
+  expect(labels.map((l) => l.trim()).filter((l) => l === 'Model')).toEqual([])
+  const sessionsPane = page.locator('[id="sessions"].settings-section')
+  const defaultModel = row(sessionsPane, 'Default model')
+  if (await defaultModel.count()) await expect(defaultModel).toContainText('Claude Code sessions')
   expect(labels).toContain('API model')
   expect(labels).toContain('Default engine')
 })
@@ -762,7 +812,8 @@ test('C8 + C10 + C80: configure panes use sentence case, no dashes, no decorativ
     const caps = (text.match(/\b[A-Z][A-Z0-9]{3,}\b/g) ?? []).filter((w) => !CAPS_OK.has(w))
     expect(caps, `${id}: all-caps words`).toEqual([])
     expect(text, `${id}: dashes`).not.toMatch(DASHES)
-    expect(text, `${id}: symbols`).not.toMatch(BANNED_SYMBOLS)
+    // A row still reading its data ("Loading…") is a passing state, not the pane's copy: wait it out.
+    await expect.poll(async () => (await paneText(page)).text, { message: `${id}: symbols`, timeout: 15_000 }).not.toMatch(BANNED_SYMBOLS)
   }
   for (const f of ['GeneralSection.tsx', 'TasksSection.tsx', 'SmartTaskCreation.tsx', 'JevSettings.tsx', 'FocusTiersSection.tsx',
     'SessionsSection.tsx', 'DefaultEngineRow.tsx', 'EngineSettingRows.tsx', 'AdvancedSection.tsx', 'ProvidersSection.tsx', 'HooksSection.tsx',

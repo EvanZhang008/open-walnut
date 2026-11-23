@@ -1109,8 +1109,8 @@ export function DraftSessionPanel({
           the first keystroke: two big intent cards (the approved mockup's
           grammar — user: not a thin tab strip, "two big rounded ones"). Start Task is
           pre-selected so the common case costs zero clicks; Ask Walnut opts
-          into the Personal-AI session. Bound/fork drafts are already committed
-          to a shape and keep the one-line hint instead. */}
+          into the Personal-AI session (both are the shared Option card). Bound/fork
+          drafts are already committed to a shape and keep the one-line hint instead. */}
       {!ownFolder && <div className="draft-session-body">
         {showTabs || isWalnut ? (
           <div className="draft-intent-stack">
@@ -1123,25 +1123,25 @@ export function DraftSessionPanel({
                 <button
                   type="button"
                   aria-pressed={!isWalnut}
-                  className={`draft-intent-card${!isWalnut ? ' is-active' : ''}`}
+                  className="draft-intent-card wn-option-card"
                   onClick={() => { if (isWalnut) { onWalnutToggle?.(draft.id, false); focusComposer(); } }}
                 >
                   <span className="draft-intent-ic" aria-hidden="true">{ICONS.ICON_TERMINAL}</span>
                   {/* The same name as the draft's own header: one name for the flow. */}
-                  <span className="draft-intent-t">{isBound ? 'New session' : 'New task'}</span>
-                  <span className="draft-intent-d">A coding session with Claude Code, Codex, OpenCode, etc.</span>
+                  <span className="wn-option-card-title">{isBound ? 'New session' : 'New task'}</span>
+                  <span className="wn-option-card-desc">A coding session with Claude Code, Codex, OpenCode, etc.</span>
                 </button>
                 <button
                   type="button"
                   aria-pressed={isWalnut}
-                  className={`draft-intent-card draft-intent-card-walnut${isWalnut ? ' is-active' : ''}`}
+                  className="draft-intent-card wn-option-card draft-intent-card-walnut"
                   onClick={() => { if (!isWalnut) { onWalnutToggle?.(draft.id, true); focusComposer(); } }}
                 >
                   <span className="draft-intent-ic" aria-hidden="true">
                     <img src="/walnut-icon.png" alt="" className="draft-intent-walnut-mark" />
                   </span>
-                  <span className="draft-intent-t">{QUICK_QUESTION}</span>
-                  <span className="draft-intent-d">
+                  <span className="wn-option-card-title">{QUICK_QUESTION}</span>
+                  <span className="wn-option-card-desc">
                     {isBound
                       ? 'Hand this task to Walnut: plan it, research it, or organize it.'
                       : 'Search tasks, find notes, schedule your day, or ask anything.'}

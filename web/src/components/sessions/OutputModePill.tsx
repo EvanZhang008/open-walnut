@@ -126,6 +126,8 @@ export function OutputModePill({
       type="button"
       className="btn btn-sm btn-ghost mode-toggle-pill"
       data-compact-label={current === 'rich' ? 'R' : 'M'}
+      // The style itself, for the "+" menu's Reply style row (the label is the short "MD").
+      data-output-mode={current}
       aria-label={`Output mode: ${current === 'rich' ? 'Rich' : 'MD'}`}
       onClick={toggle}
       // Accent (not the amber .plan-active) marks the non-default state: rich

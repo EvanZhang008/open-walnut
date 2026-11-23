@@ -192,7 +192,6 @@ test('the Agenda opens beside the Org page and closes three ways', async ({ page
   await expect(agendaPane(page)).toBeVisible()
   await expect(agendaPane(page).getByTestId('cal-side-panel')).toBeVisible()
   await expect(agendaToggle(page)).toHaveAttribute('aria-pressed', 'true')
-  await expect(agendaToggle(page)).toHaveClass(/\bactive\b/)
   // The page moves over by the column's width and stays on screen beside it.
   await expect.poll(async () => { const e = await edges(page); return e.areaLeft - e.barRight }).toBeLessThanOrEqual(1)
   const e = await edges(page)

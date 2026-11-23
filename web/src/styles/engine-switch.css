@@ -52,6 +52,17 @@
   line-height: 1.4;
 }
 
+/* A locked engine the user pressed says why it cannot be picked: one line at the top of the pane,
+   the way a touch reads what the widened rail and the tooltip say. It starts where the widened
+   rail ends (a mouse press holds the hover, a keyboard press holds the focus, and both widen the
+   rail over the pane), so no part of it is ever under the rail. */
+.model-picker-locked-note {
+  margin: 0 0 8px calc(var(--model-picker-rail-wide, 184px) - var(--model-picker-rail-narrow, 57px));
+  color: var(--fg-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.4;
+}
+
 /* A session an engine switch started idle: one line under the earlier conversation. */
 .session-switch-ready {
   margin: 12px 0 0;

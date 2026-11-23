@@ -15,6 +15,7 @@ import { SettingsGroup, SettingsRow } from '../SettingsSection';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { SegmentedControl } from '../inputs/SegmentedControl';
 import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
+import { DisclosureButton } from '@/components/controls';
 import { setShowWalnutAdditions, useShowWalnutAdditions } from '@/hooks/useShowWalnutAdditions';
 import '@/styles/settings-mic.css';
 
@@ -261,9 +262,11 @@ export function MessageHintsGroup() {
         <div key={h.kind} id={`message-hint-${h.kind}`} data-testid={`message-hint-${h.kind}`}>
           <SettingsRow
             label={(
-              <button type="button" className="message-hint-name" onClick={() => setOpen((o) => (o === h.kind ? null : h.kind))} aria-expanded={open === h.kind}>
-                {h.label} <span aria-hidden="true">{open === h.kind ? '▾' : '▸'}</span>
-                {' '}
+              // The shared Disclosure: its chevron turns by aria-expanded, the origin badge follows the name.
+              <DisclosureButton
+                expanded={open === h.kind}
+                onClick={() => setOpen((o) => (o === h.kind ? null : h.kind))}
+                trailing={(
                 <span
                   className={`badge${hintOrigin(h).kind === 'built-in' ? '' : ' badge-accent'} message-hint-origin-badge`}
                   data-origin={hintOrigin(h).kind}
@@ -272,7 +275,10 @@ export function MessageHintsGroup() {
                 >
                   <span>{hintOrigin(h).label}</span>
                 </span>
-              </button>
+                )}
+              >
+                {h.label}
+              </DisclosureButton>
             )}
             help={hintWhen(h)}
             control={(

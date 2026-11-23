@@ -39,7 +39,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 4px 12px;
   min-height: 32px;
   padding: 2px 8px;
   box-sizing: border-box;
@@ -47,8 +47,11 @@
 .dm-row-label { color: var(--fg); white-space: nowrap; }
 /* The label never shrinks; the segments (the shared SegmentedControl) size to their words. */
 .dm-row-label { flex-shrink: 0; }
-/* The segments may shrink (and scroll) but never run past the menu's edge. */
-.dm-seg { flex: 0 1 auto; }
+/* Every segmented row (Sort, Group, Session columns) is the same shared SegmentedControl
+   size="sm" (DisplaySortRows Segmented). It keeps its whole size: when the row is too narrow it
+   goes to its own line, at the right, instead of squeezing its segments. */
+.dm-row:has(> .dm-seg) { flex-wrap: wrap; }
+.dm-seg { flex: 0 0 auto; margin-left: auto; }
 /* The Collapse all slot. */
 .dm-context { --dm-row-h: 32px; min-height: var(--dm-row-h); }
 .dm-row-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tp-muted); font-size: var(--font-size-sm); }

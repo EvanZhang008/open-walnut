@@ -297,8 +297,8 @@ test('a live session shows no memory or CPU anywhere, and nothing samples it', a
 
   await openBell(page)
   const system = railButton(page, 'System')
-  if (await system.getAttribute('aria-current') !== 'true') await system.click()
-  await expect(system).toHaveAttribute('aria-current', 'true')
+  if (await system.getAttribute('aria-current') !== 'page') await system.click()
+  await expect(system).toHaveAttribute('aria-current', 'page')
   await expect(page.locator('.notification-panel .notification-card').first()).toBeVisible({ timeout: 20_000 })
   await expect(page.locator('[data-testid="nfc-machine-load"]')).toHaveCount(0)
   await page.screenshot({ path: shot('06-system-no-machine-load'), clip: { x: 0, y: 0, width: 1280, height: 720 } })

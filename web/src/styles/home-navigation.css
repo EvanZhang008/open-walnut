@@ -4,7 +4,7 @@
 .app-shell-navigation .sidebar.collapsed .sidebar-header { padding: 0; gap: 0; }
 
 /* Home owns its panel toggles; they sit under the Home icon so the rail says whose they are.
-   A toggle whose panel is open wears the rail's active colour, like the page it belongs to. */
+   A toggle whose panel is open is the Nav item's open pane (aria-pressed), never the page's look. */
 .sidebar-home-panels { margin: 2px 0 4px 21px; padding-left: 6px; border-left: 1px solid var(--border); }
 .sidebar-home-panels .sidebar-link { padding: 6px 10px 6px 12px; font-size: var(--font-size-md); margin-bottom: 1px; }
 .sidebar-home-panels .sidebar-link svg { width: 16px; height: 16px; }
@@ -112,8 +112,8 @@
 .navigation-heading-open { display: flex; gap: 6px; align-items: center; flex: 1; min-width: 0; min-height: 26px; padding: 0 4px; font-size: var(--font-size-sm); text-align: left; touch-action: pan-y; }
 .navigation-heading-open[draggable="true"] { -webkit-user-drag: element; user-select: none; }
 .navigation-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.navigation-chevron { flex-shrink: 0; color: var(--fg-muted); opacity: .7; transition: transform .15s; }
-.navigation-chevron.expanded { transform: rotate(90deg); }
+/* The shared DisclosureChevron (its look and turn are choice-controls.css's); placed only. */
+.navigation-chevron { flex-shrink: 0; }
 .navigation-more { font-size: 14px; width: 24px; height: 24px; flex-shrink: 0; padding: 0; opacity: 0; pointer-events: none; }
 .navigation-heading:hover .navigation-more, .navigation-heading:focus-within .navigation-more,
 .tier-project-label:hover .navigation-more, .tier-project-label:focus-within .navigation-more,

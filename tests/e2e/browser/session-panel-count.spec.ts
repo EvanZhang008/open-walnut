@@ -545,7 +545,7 @@ const panelsRow = (menu: ReturnType<Page['locator']>) => menu.getByTestId('kebab
 /** The segmented switch's options, by their names (1 to 5 are drawn as columns). */
 const panelOpt = (row: ReturnType<Page['locator']>, name: string) => row.locator(`.task-kebab-panels-opt[data-value="${name}"]`)
 const activePanels = (row: ReturnType<Page['locator']>) =>
-  row.locator('.task-kebab-panels-opt[aria-pressed="true"]').evaluateAll((els) => els.map((e) => e.getAttribute('data-value')))
+  row.locator('.task-kebab-panels-opt[aria-checked="true"]').evaluateAll((els) => els.map((e) => e.getAttribute('data-value')))
 
 test('the session kebab exposes the panel count and applies it immediately', async ({ page }) => {
   await page.setViewportSize({ width: 2560, height: 1200 })

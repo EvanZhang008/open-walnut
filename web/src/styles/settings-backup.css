@@ -58,20 +58,6 @@
   font-family: var(--font-mono); font-size: var(--font-size-sm); background: var(--bg-secondary); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; }
 .backup-restore-target-full { margin: 0; padding-top: 0; color: var(--fg-muted); font-size: var(--font-size-md); overflow-wrap: anywhere; }
 
-/* The service backups go to now: a small dot before its name in the Service control. */
-.backup-service-in-use .settings-segment-label::before {
-  content: '';
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 6px;
-  border-radius: 50%;
-  background: var(--success);
-  vertical-align: middle;
-  position: relative;
-  top: -1px;
-}
-
 .backup-contents { display: contents; }
 /* Backups on, paused for a reason the row says: the switch is shown dimmed. */
 .backup-toggle-paused { opacity: 0.5; }

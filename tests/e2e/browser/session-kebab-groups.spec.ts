@@ -122,41 +122,23 @@ test('the first level holds the frequent rows and the groups; nothing else', asy
   await expect(group(menu, 'session-kebab-open').locator('.task-kebab-group-hint')).toHaveText(/^changed · files · (threads|code) · web/)
   await expect(group(menu, 'session-kebab-session').locator('.task-kebab-group-hint')).toHaveText('info · copy · debug · restart')
   // The strip's panel count stays on the first level as the Columns row (the Display menu
-  // calls the same setting "Session columns"), a segmented switch with Settings' choices.
+  // calls the same setting "Session columns"): the shared SegmentedControl, Settings' choices.
   await expect(menu.getByTestId('kebab-panels').locator('.task-kebab-panels-label')).toHaveText('Columns')
   const opts = menu.getByTestId('kebab-panels').locator('.task-kebab-panels-opt')
+  await expect(menu.getByTestId('kebab-panels').locator('.wn-seg.wn-seg-sm[role="radiogroup"]')).toHaveCount(1)
   expect(await opts.evaluateAll((els) => els.map((e) => e.getAttribute('data-value')))).toEqual(['1', '2', '3', '4', '5', 'Auto'])
-  const pressedAt = (await opts.evaluateAll((els) => els.map((e) => e.getAttribute('aria-pressed')))).indexOf('true')
+  const pressedAt = (await opts.evaluateAll((els) => els.map((e) => e.getAttribute('aria-checked')))).indexOf('true')
   expect(pressedAt).toBeGreaterThanOrEqual(0)
   const original = (await opts.nth(pressedAt).getAttribute('data-value'))!
-  // Each choice reads as its number, never as bars to count (2026-11-04); Auto also says
-  // what it gives in this window, pressed or not (muted when not), so the track keeps one
-  // width whichever choice is pressed.
-  await expect(opts.nth(5)).toHaveText(/^Auto \([1-5]\)$/)
-  const texts = await opts.allInnerTexts()
-  expect(texts.slice(0, 5)).toEqual(['1', '2', '3', '4', '5'])
+  // Each choice reads as its plain name, never as bars to count (2026-11-04) and never as an
+  // internal "Auto(1)": what Auto gives in this window is the muted note beside the control.
+  expect(await opts.allInnerTexts()).toEqual(['1', '2', '3', '4', '5', 'Auto'])
+  const note = menu.getByTestId('kebab-panels-auto-note')
+  await expect(note).toHaveText(/^Auto: [1-5] columns? now$/)
   const trackWidth = async () => (await menu.getByTestId('kebab-panels').locator('.task-kebab-panels-track').boundingBox())!.width
   const widthBefore = await trackWidth()
-  // Unselected choices are as quiet as the other rows' grey hints; only the pressed one is
-  // accent and semibold.
-  const look = await opts.evaluateAll((els) => {
-    const probe = (v: string) => {
-      const s = document.createElement('span')
-      s.style.color = v
-      document.body.appendChild(s)
-      const c = getComputedStyle(s).color
-      s.remove()
-      return c
-    }
-    return {
-      secondary: probe('var(--fg-secondary)'), accent: probe('var(--accent)'),
-      opts: els.map((e) => ({ color: getComputedStyle(e).color, weight: getComputedStyle(e).fontWeight })),
-    }
-  })
-  look.opts.forEach((o, i) => expect(o, `option ${i}`).toEqual(i === pressedAt
-    ? { color: look.accent, weight: '500' } : { color: look.secondary, weight: '500' }))
-  // The row is as tall as the menu's other rows, and its track ends on the column of the
-  // other rows' chevrons.
+  // The row is as tall as the menu's other rows, and its control ends on the column of the
+  // other rows' chevrons; the note is shown whole.
   const panelsBox = (await menu.getByTestId('kebab-panels').boundingBox())!
   const openBox = (await group(menu, 'session-kebab-open').locator('.task-kebab-group-toggle').boundingBox())!
   expect(Math.abs(panelsBox.height - openBox.height), `Columns ${panelsBox.height}px, Open ${openBox.height}px`).toBeLessThanOrEqual(1)
@@ -165,11 +147,12 @@ test('the first level holds the frequent rows and the groups; nothing else', asy
   const trackRight = trackBox.x + trackBox.width
   const caretRight = caretBox.x + caretBox.width
   expect(Math.abs(trackRight - caretRight), `track right ${trackRight}, chevron right ${caretRight}`).toBeLessThanOrEqual(1)
+  expect(await note.evaluate((el) => el.scrollWidth <= el.clientWidth), 'the Auto note is not cut').toBe(true)
   // The fresh state: a menu opened by a click, before any key, shows no focus ring.
   await expect(menu.locator('.task-kebab-panels-opt:focus-visible')).toHaveCount(0)
   await shoot(page, menu, '1-first-level')
 
-  // Left and Right move between the choices.
+  // Left and Right move the focus between the choices and pick nothing (a pick can close columns).
   await opts.nth(1).focus()
   await page.keyboard.press('ArrowRight')
   await expect(opts.nth(2)).toBeFocused()
@@ -177,48 +160,23 @@ test('the first level holds the frequent rows and the groups; nothing else', asy
   await page.keyboard.press('ArrowLeft')
   await expect(opts.nth(0)).toBeFocused()
   await expect(menu).toBeVisible()
-  // The ring on an unselected option ("4", or "3" when 4 is the pressed one), reached with
-  // the arrows from the pressed one, so it is seen apart from the chip. A user reaches the
-  // track with Tab (a click on an option closes the menu), and only a keyboard focus draws
-  // the ring, so the walk starts with Shift+Tab, Tab, not a script focus.
-  const target = pressedAt === 3 ? 2 : 3
-  if (browserName === 'webkit') {
-    // Safari's Tab skips buttons unless Full Keyboard Access is enabled; Option+Tab reaches them.
-    await page.keyboard.press('Alt+Shift+Tab')
-    await page.keyboard.press('Alt+Tab')
-  } else {
-    await page.keyboard.press('Shift+Tab')
-    await page.keyboard.press('Tab')
-  }
-  await expect(opts.nth(0)).toBeFocused()
-  for (let i = 0; i < pressedAt; i++) await page.keyboard.press('ArrowRight')
-  await expect(opts.nth(pressedAt)).toBeFocused()
-  for (let i = 0; i < Math.abs(target - pressedAt); i++) await page.keyboard.press(target > pressedAt ? 'ArrowRight' : 'ArrowLeft')
-  await expect(opts.nth(target)).toBeFocused()
-  await expect(opts.nth(target)).toHaveAttribute('aria-pressed', 'false')
-  await expect(menu.locator('.task-kebab-panels-opt:focus-visible')).toHaveCount(1)
-  // Focus on a choice that is not pressed is an accent underline under its words, never a
-  // box, so it can not read as a second pressed chip.
-  const ring = await opts.nth(target).evaluate((el) => {
-    const cs = getComputedStyle(el)
-    return { outline: cs.outlineStyle, line: cs.textDecorationLine, thickness: cs.textDecorationThickness }
-  })
-  expect(ring).toEqual({ outline: 'none', line: 'underline', thickness: '2px' })
+  await expect(opts.nth(pressedAt)).toHaveAttribute('aria-checked', 'true')
   await shoot(page, menu, '1b-panels-keyboard-focus')
   await opts.nth(5).hover()
   await shoot(page, menu, '1c-panels-hover-auto')
   await page.mouse.move(0, 0)
-  await expect(menu.getByTestId('kebab-panels').locator('.task-kebab-panels-opt[aria-pressed="true"]')).toHaveCount(1)
+  await expect(menu.getByTestId('kebab-panels').locator('.task-kebab-panels-opt[aria-checked="true"]')).toHaveCount(1)
 
-  // Auto pressed: its cell says how many panels Auto gives at this window width.
+  // Auto picked: the option still reads "Auto", the note says what it gives here.
   if (original !== 'Auto') {
     await opts.nth(5).click()
     await expect(menu).toBeHidden()
     menu = await openMenu(page, panel)
   }
-  await expect(opts.nth(5)).toHaveAttribute('aria-pressed', 'true')
-  await expect(opts.nth(5)).toHaveText(/^Auto \([1-5]\)$/)
-  // Pressing Auto moves nothing: the track is as wide as it was with a number pressed.
+  await expect(opts.nth(5)).toHaveAttribute('aria-checked', 'true')
+  await expect(opts.nth(5)).toHaveText('Auto')
+  await expect(note).toHaveText(/^Auto: [1-5] columns? now$/)
+  // Picking Auto moves nothing: the control is as wide as it was with a number picked.
   if (original !== 'Auto') expect(Math.abs((await trackWidth()) - widthBefore)).toBeLessThanOrEqual(1)
   await page.mouse.move(0, 0)
   await shoot(page, menu, '1d-panels-auto-pressed')

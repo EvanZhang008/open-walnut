@@ -129,6 +129,7 @@ function HookRow({ hook, name, error, showTag, onToggle, onSettingCommit }: {
   const toggleable = hook.mutable !== 'readonly';
   const tag = showTag ? hookTag(hook) : null;
   const detailsId = `hook-details-${hook.id}`;
+  const nameId = `hook-name-${hook.id}`;
   const help = HOOK_COPY[hook.id]?.help ?? (hook.description ? hookHelp(hook.description) : null);
   return (
     <>
@@ -137,20 +138,30 @@ function HookRow({ hook, name, error, showTag, onToggle, onSettingCommit }: {
         data-testid={`hook-row-${hook.id}`}
         data-state={error ? 'error' : undefined}
       >
+        {/* The whole row opens the details, as a Settings disclosure row does (Advanced's SDK
+            session server): the button lies under the row, its chevron at the far right after the
+            switch, and only the switch takes its own click (the 2026-11-22 audit: the chevron sat
+            in an inner column, away from where every other row puts it). The words lie over it
+            without taking the pointer, so their tooltip (the hook's own name and its whole
+            description) is this button's, and hovering anywhere but the switch still shows it. */}
+        <button
+          type="button"
+          className="hook-row-disclose"
+          aria-expanded={open}
+          aria-controls={detailsId}
+          aria-labelledby={nameId}
+          data-testid={`hook-disclose-${hook.id}`}
+          title={hook.description ? `${hook.name}: ${hook.description}` : hook.name}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <DisclosureChevron open={open} className="settings-disclosure-chevron" />
+        </button>
         <div className="settings-row-copy">
-          <button
-            type="button"
-            className="hook-row-disclose"
-            aria-expanded={open}
-            aria-controls={detailsId}
-            data-testid={`hook-disclose-${hook.id}`}
-            onClick={() => setOpen((v) => !v)}
-          >
-            <span className="settings-row-label hook-row-name wn-title" title={hook.name}>{name}</span>
+          <span className="hook-row-title">
+            <span id={nameId} className="settings-row-label hook-row-name wn-title">{name}</span>
             {tag && <SettingsTag>{tag}</SettingsTag>}
-            <DisclosureChevron open={open} className="settings-disclosure-chevron" />
-          </button>
-          {help && <span className="settings-row-help" title={hook.description}><CodeText text={help} /></span>}
+          </span>
+          {help && <span className="settings-row-help"><CodeText text={help} /></span>}
         </div>
         <div className="settings-row-actions">
           {toggleable ? (

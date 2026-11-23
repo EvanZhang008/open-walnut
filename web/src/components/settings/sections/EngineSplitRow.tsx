@@ -4,9 +4,11 @@
  * compares how each did. An entry is an engine, or an engine on a named model ("Claude Code
  * on sonnet"), added in place. Saves on each change, like the default engine row above it.
  *
- * With two or more entries the switch is the master of the rows under it (a ControlGroup): switched
- * off, they read disabled and grey, kept as they are. With fewer, the entries are what turn it on,
- * so they stay live and the switch is the one that is disabled.
+ * The switch is the master of the rows under it (a ControlGroup), as every Settings master is:
+ * switched off, they read disabled and grey, kept as they are, with the reason under it. Switched
+ * on with fewer than two entries, the rows are live and the state says "Not yet": nothing is
+ * shared until a second entry is checked (the 2026-11-22 audit: a grey Off switch over a box that
+ * still looked live, with one engine installed).
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Config } from '@open-walnut/core';
@@ -51,10 +53,19 @@ export function EngineSplitRow({ config, save }: { config: Config; save: ReturnT
   const acp = new Set(catalog.filter((e) => e.runtimeKind === 'acp').map((e) => e.id as string));
   const enough = splitSize(pick.value, acp) >= 2;
   const offPick = useOptimisticSetting<boolean>(splitIsOff(config), (off) => save((c) => engineSplitSwitchSave(c, !off), { rowKey: SWITCH_KEY }), { rowKey: SWITCH_KEY });
-  const on = enough && !offPick.value;
+  // Switched on in this visit with no entries yet: the switch shows on so its rows can be ticked.
+  const [armed, setArmed] = useState(false);
+  const switchOn = !offPick.value && (armed || keys.length > 0);
+  const on = enough && switchOn;
+  const flip = (v: boolean) => {
+    setArmed(v);
+    // Off keeps the entries (the flag); with none there is nothing to keep, so nothing is written.
+    if (v ? offPick.value : keys.length > 0) offPick.set(!v);
+  };
   const nameOf = (id: string) => engineName(catalog.find((e) => e.id === id)?.displayName ?? id);
   const set = (next: string[]) => pick.set([...new Set(next)].join(','));
   const toggle = (key: string, v: boolean) => {
+    setArmed(true);
     if (v) { set([...keys, key]); return; }
     set(keys.filter((k) => k !== key));
   };
@@ -105,23 +116,27 @@ export function EngineSplitRow({ config, save }: { config: Config; save: ReturnT
         label="Share new tasks"
         help={on
           ? 'A new task that names no engine takes turns between the checked entries below, and Usage & Costs compares them.'
-          : enough
-            ? 'Every new task runs on the default engine. The entries below are kept; switch on to share tasks between them again.'
-            : 'Check two or more entries below to share new tasks between them. Until then every new task runs on the default engine.'}
+          : switchOn
+            ? 'Check two or more entries below to share new tasks between them. Until then every new task runs on the default engine.'
+            // Off: what happens now only. What switching on gives is said once, in the entries'
+            // reason line right under this row (ControlGroup `reason`).
+            : enough
+              ? 'Every new task runs on the default engine. The entries below are kept.'
+              : 'Every new task runs on the default engine.'}
         // What it leaves out is a fact for the curious, not for the choice: hover.
         title={on ? 'Not shared: the chat composer, Main, leads, asks, routines, plugin tasks and reviewer subtasks. Switching off keeps the entries.' : undefined}
         error={pick.error ?? offPick.error}
         data-testid="engine-split-row"
         control={(
           <span className="engine-split-control">
-            <span className="settings-addons-muted" data-testid="engine-split-state" data-on={on || undefined}>{on ? 'On' : 'Off'}</span>
-            {/* Off keeps the entries; with fewer than two there is nothing to switch on. */}
-            <ToggleSwitch checked={on} disabled={!enough || !ready} onChange={(v) => offPick.set(!v)}
-              aria-label="Share new tasks" data-testid="engine-split-switch" {...(enough ? masterProps(ENTRIES_ID) : {})} />
+            <span className="settings-addons-muted" data-testid="engine-split-state" data-on={on || undefined}>{on ? 'On' : switchOn ? 'Not yet' : 'Off'}</span>
+            {/* Off keeps the entries. */}
+            <ToggleSwitch checked={switchOn} disabled={!ready} onChange={flip}
+              aria-label="Share new tasks" data-testid="engine-split-switch" {...masterProps(ENTRIES_ID)} />
           </span>
         )}
       />
-      <ControlGroup id={ENTRIES_ID} off={enough && !on} className="settings-rows-contents" reason="Switch Share new tasks on to change its entries.">
+      <ControlGroup id={ENTRIES_ID} off={!switchOn} className="settings-rows-contents" reason="Switch Share new tasks on to pick the entries it shares between.">
       {catalog.filter((e) => e.availability.installed || checked.has(e.id)).map((e) => (
         <SettingsCheckbox
           key={e.id}

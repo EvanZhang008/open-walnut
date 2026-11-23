@@ -239,7 +239,7 @@ describe('TaskActionMenuItems with the draft props', () => {
     for (const pinnedTier of [null, undefined]) {
       const s = spies();
       const host = await mount({ task: TASK, isPinned: false, pinnedTier, isDone: false, ...s, ...draftProps });
-      expect(host.querySelectorAll('.task-kebab-tier-btn.active').length).toBe(0);
+      expect(host.querySelectorAll('.task-kebab-tier-btn[aria-pressed="true"]').length).toBe(0);
       await click(tierBtn(host, 'Focus')!);
       expect(s.onPinWithTier).toHaveBeenCalledWith('focus');
       await act(async () => { root!.unmount(); });
@@ -318,7 +318,7 @@ describe('TaskActionMenuItems with the draft props', () => {
       task: TASK, isPinned: false, isDone: false, ...spies(), ...draftProps, tierHeading: 'Pin to (default Focus)',
     });
     expect(host.querySelector('.task-kebab-tier-label')!.textContent).toBe('Pin to (default Focus)');
-    expect(host.querySelectorAll('.task-kebab-tier-btn.active').length).toBe(0);
+    expect(host.querySelectorAll('.task-kebab-tier-btn[aria-pressed="true"]').length).toBe(0);
   });
 
   it('"Use Walnut\'s pick" rows sit in their block and hand the field back (C61)', async () => {

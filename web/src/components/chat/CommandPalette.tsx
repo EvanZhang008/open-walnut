@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { SlashCommand } from '../../commands/types';
 import { useMoreBelow } from '@/hooks/useMoreBelow';
+import '@/styles/pick-and-nav.css';
 
 /** Minimal shape required for palette rendering. Both SlashCommand and SlashCommandItem satisfy this. */
 export interface PaletteItem {
@@ -60,7 +61,10 @@ export function CommandPalette<T extends PaletteItem = SlashCommand>({ commands,
         {commands.map((cmd, i) => (
           <div
             key={cmd.name}
-            className={`command-palette-item${i === selectedIndex ? ' command-palette-item-active' : ''}${cmd.source === 'control' ? ' command-palette-control' : ''}`}
+            // The row the arrows are on is the shared keyboard highlight (a Picked row's
+            // data-active fill); a control command keeps the same colours, its badge says so.
+            className={`command-palette-item wn-pick-row${cmd.source === 'control' ? ' command-palette-control' : ''}`}
+            data-active={i === selectedIndex ? 'true' : undefined}
             onMouseDown={(e) => {
               e.preventDefault();
               // A control command can mount a popout before this press reaches

@@ -59,7 +59,7 @@ async function kebabPanels(page: Page) {
   await kebab.click()
   const menu = page.locator('.task-kebab-menu:visible').first()
   await expect(menu).toBeVisible()
-  // A segmented switch since the 2026-11-02 menu redesign: each option names its value in data-value.
+  // The shared SegmentedControl: each option names its value in data-value.
   return menu.getByTestId('kebab-panels')
 }
 /** The Display menu shows whole, its Session columns row included, with nothing to scroll (the body is what scrolls). */
@@ -121,7 +121,7 @@ test('the Display menu shows the column count and a pick moves the strip at once
   await openViewMenu(page)
   await expect(checked(page)).toHaveText(['2'])
   await closeViewMenu(page)
-  await expect((await kebabPanels(page)).locator('.task-kebab-panels-opt[aria-pressed="true"]')).toHaveAttribute('data-value', '2')
+  await expect((await kebabPanels(page)).locator('.task-kebab-panels-opt[aria-checked="true"]')).toHaveAttribute('data-value', '2')
   await page.keyboard.press('Escape')
 
   // C58: Panels 1 from the session kebab: the strip drops to one column and Display shows 1.
@@ -143,12 +143,14 @@ test('a change made in the session kebab shows in the Display menu, and Auto nam
   // 4 from the session kebab: the Display menu shows 4.
   await (await kebabPanels(page)).locator('.task-kebab-panels-opt[data-value="4"]').click()
   await expect.poll(() => readMode(page), { timeout: 45_000, intervals: [500, 1000, 2000] }).toBe('4')
-  // With 4 chosen, the kebab's Auto still names what Auto would give at this width (never
-  // the chosen 4), so the user can see it before picking it.
+  // With 4 chosen, the kebab's note still says what Auto would give at this width (never
+  // the chosen 4), so the user can see it before picking it; the option itself reads "Auto".
   const autoHere = await autoBudget(page)
-  const kebabAutoIdle = (await kebabPanels(page)).locator('.task-kebab-panels-opt[data-value="Auto"]')
-  await expect(kebabAutoIdle).toHaveAttribute('aria-pressed', 'false')
-  await expect(kebabAutoIdle).toHaveText(`Auto (${autoHere})`)
+  const idleRow = await kebabPanels(page)
+  const kebabAutoIdle = idleRow.locator('.task-kebab-panels-opt[data-value="Auto"]')
+  await expect(kebabAutoIdle).toHaveAttribute('aria-checked', 'false')
+  await expect(kebabAutoIdle).toHaveText('Auto')
+  await expect(idleRow.getByTestId('kebab-panels-auto-note')).toHaveText(`Auto: ${autoHere} column${autoHere === 1 ? '' : 's'} now`)
   await page.keyboard.press('Escape')
   await openViewMenu(page)
   await expect(checked(page)).toHaveText(['4'])
@@ -178,9 +180,11 @@ test('a change made in the session kebab shows in the Display menu, and Auto nam
   await closeViewMenu(page)
 
   // The session kebab's Columns row holds the same state, and its Auto names the same count.
-  const kebabAuto = (await kebabPanels(page)).locator('.task-kebab-panels-opt[aria-pressed="true"]')
+  const autoRow = await kebabPanels(page)
+  const kebabAuto = autoRow.locator('.task-kebab-panels-opt[aria-checked="true"]')
   await expect(kebabAuto).toHaveAttribute('data-value', 'Auto')
-  await expect(kebabAuto).toHaveText(`Auto (${wide})`)
+  await expect(kebabAuto).toHaveText('Auto')
+  await expect(autoRow.getByTestId('kebab-panels-auto-note')).toHaveText(`Auto: ${wide} columns now`)
   await page.keyboard.press('Escape')
 
   // The choice survives a reload.

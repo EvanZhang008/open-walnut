@@ -223,7 +223,7 @@ test('the new session starts on the source model, effort and permissions, and th
   await pill.click()
   await picker.locator('.model-picker-col-effort .model-picker-row', { hasText: /^.?Low$/ }).click()
   await expect(pill).toContainText('Low')
-  const other = picker.locator('.model-picker-col-models .model-picker-row:not(.model-picker-row-active):not([disabled])')
+  const other = picker.locator('.model-picker-col-models .model-picker-row:not([aria-selected="true"]):not([disabled])')
     .filter({ hasNotText: 'Opus' }).first()
   const otherName = ((await other.locator('.model-picker-row-name').textContent()) ?? '').trim()
   await other.click()

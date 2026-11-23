@@ -44,6 +44,7 @@ import { HostStatusDot } from '@/components/sessions/path-selector/HostStatusDot
 import { HOME_CHAT_VISIBLE_DEFAULT, readHomeChatVisible, showHomeChatToggle } from '@/pages/home-panel-flags';
 import '@/styles/attention-banner.css';
 import '@/styles/phone-pages.css';
+import '@/styles/pick-and-nav.css';
 import { PhoneNotificationBell } from './PhoneNotificationBell';
 
 // Twins of MainPage's keys: localStorage, so the toggles read the same state the
@@ -226,11 +227,13 @@ export function Sidebar({
     <div className="sidebar-home-panels" role="group" aria-label="Home panels">
       {railShown['home-todo'] && (
       <button
-        className={`sidebar-link sidebar-panel-toggle app-task-panel-toggle${todoVisible ? ' active' : ''}`}
+        className="sidebar-link wn-nav-item sidebar-panel-toggle app-task-panel-toggle"
         data-choice-exempt="sidebar nav link that shows the Home task panel"
         onClick={handleToggleTodo}
         aria-label={todoVisible ? 'Hide task panel' : 'Show task panel'}
         aria-expanded={todoVisible} aria-controls="home-task-navigation"
+        // A pane beside the page, not a page: the Nav item's quiet open look (pick-and-nav.css).
+        aria-pressed={todoVisible}
       >
         <TaskPanelIcon />
         <span className="sidebar-label">Task panel</span>
@@ -238,9 +241,10 @@ export function Sidebar({
       )}
       {chatToggleShown && railShown['home-chat'] && (
         <button
-          className={`sidebar-link sidebar-panel-toggle${chatVisible ? ' active' : ''}`}
+          className="sidebar-link wn-nav-item sidebar-panel-toggle"
           onClick={handleToggleChat}
           aria-label="Quick question"
+          aria-pressed={chatVisible}
         >
           <ChatBubbleIcon />
           <span className="sidebar-label">Quick question</span>
@@ -256,7 +260,7 @@ export function Sidebar({
       <div className="sidebar-group-caption sidebar-label" aria-hidden="true">Side panels</div>
       {railShown['home-agenda'] && (
       <button
-        className={`sidebar-link sidebar-panel-toggle${agendaOpen ? ' active' : ''}`}
+        className="sidebar-link wn-nav-item sidebar-panel-toggle"
         onClick={handleToggleCalendarPanel}
         aria-pressed={agendaOpen}
         data-testid="sidebar-toggle-calendar"
@@ -267,7 +271,7 @@ export function Sidebar({
       )}
       {railShown['home-scratchpad'] && (
       <button
-        className={`sidebar-link sidebar-panel-toggle${scratchpadOpen ? ' active' : ''}`}
+        className="sidebar-link wn-nav-item sidebar-panel-toggle"
         onClick={handleToggleScratchpad}
         aria-pressed={scratchpadOpen}
         data-testid="sidebar-toggle-scratchpad"
@@ -282,7 +286,7 @@ export function Sidebar({
   // `sidebar-panel-toggle` only for the button reset and the phone drawer's close-on-tap.
   const orgEntry = (
     <button
-      className={`sidebar-link sidebar-panel-toggle sidebar-org-link${orgActive ? ' active' : ''}`}
+      className="sidebar-link wn-nav-item sidebar-panel-toggle sidebar-org-link"
       onClick={handleOpenOrg}
       aria-label="Org"
       aria-current={orgActive ? 'page' : undefined}
@@ -523,9 +527,8 @@ export function Sidebar({
   );
 }
 
-function navLinkClass({ isActive }: { isActive: boolean }) {
-  return `sidebar-link${isActive ? ' active' : ''}`;
-}
+// NavLink sets aria-current="page" on the page you are on; .wn-nav-item draws it (pick-and-nav.css).
+const navLinkClass = 'sidebar-link wn-nav-item';
 
 /* Inline SVG icons */
 

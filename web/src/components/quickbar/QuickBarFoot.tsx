@@ -48,13 +48,19 @@ export function QuickBarFoot({
   } else if (mode === 'send' && typedMode) {
     left = <span className="qb-foot-idle"><kbd className="qb-key">tab</kbd> {typedMode.mode.action}{typedMode.rest ? <> for “{typedMode.rest}”</> : null}</span>;
   } else if (mode === 'send' && empty) {
+    // The empty box's other modes are things to start, not a value to pick (the bar shows this
+    // line only here, and each mode then has its own chip and Esc back): buttons, then one muted
+    // sentence for the words that switch from the box. The words are typed, never keys, so no
+    // keycaps (the audit, 2026-11-22).
+    const words = MODES.map((m) => `"${m.keywords[0]}"`);
     left = (
-      <span className="qb-modes" aria-label="Other things the bar does">
+      <span className="qb-modes" role="group" aria-label="Other things the bar does">
         {MODES.map((m) => (
           <button key={m.id} type="button" className="btn btn-sm btn-ghost qb-mode-pill" data-mode={m.id} onClick={() => onMode(m.id)} title={`${m.action}: type "${m.keywords[0]}" then Tab`}>
-            {m.chip}<kbd className="qb-key">{m.keywords[0]}</kbd>
+            {m.chip}
           </button>
         ))}
+        <span className="qb-mode-hint">Or type {words.slice(0, -1).join(', ')} or {words[words.length - 1]}, then Tab</span>
       </span>
     );
   } else if (mode === 'ask') left = <span className="qb-foot-idle">A quick answer, no task made</span>;

@@ -30,7 +30,9 @@ export interface SegmentedOption<V extends string> {
 
 export interface SegmentedControlProps<V extends string> {
   id?: string
-  value: V
+  /** The picked value; null when nothing is picked (what it applies to does not exist yet): no
+   *  segment is drawn picked, and the first one takes the Tab stop. */
+  value: V | null
   options: ReadonlyArray<SegmentedOption<V>>
   onChange: (v: V) => void
   'aria-label': string

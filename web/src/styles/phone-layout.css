@@ -474,10 +474,8 @@
     flex: 0 0 24px;
   }
 
-  .app-shell-navigation .sidebar .sidebar-link[aria-current='page'] {
-    background: var(--bg-secondary);
-    color: var(--fg);
-  }
+  /* The drawer's current page and an open pane are the desktop's Nav item (pick-and-nav.css),
+     so the page you are on and an open pane never look the same on a phone either. */
 }
 
 @media (prefers-reduced-motion: reduce) {

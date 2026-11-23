@@ -418,15 +418,11 @@ textarea::placeholder { max-width: 100%; }
   margin-bottom: 2px;
 }
 
-.sidebar-link:hover {
+/* The current page and an open pane are the shared Nav item (.wn-nav-item, pick-and-nav.css:
+   aria-current="page" and aria-pressed="true"); hover is only the pointer's neutral fill. */
+.sidebar-link:hover:not([aria-current='page']):not([aria-pressed='true']) {
   color: var(--fg);
-  background: var(--accent-subtle);
-}
-
-.sidebar-link.active {
-  color: var(--accent);
-  background: var(--accent-subtle);
-  font-weight: 600;
+  background: var(--bg-hover);
 }
 
 .sidebar-link svg {
@@ -2036,10 +2032,11 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   gap: 1px;
 }
 
+/* The name takes the row's weight and colour: the pick is the shared Picked row (.wn-pick-row,
+   pick-and-nav.css), --accent-text at 500. */
 .session-control-option-name {
   overflow-wrap: anywhere;
   font-size: var(--font-size-md);
-  font-weight: 600;
 }
 
 .session-control-option-description {
@@ -2049,9 +2046,14 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   line-height: 1.35;
 }
 
-/* Full access = ChatGPT's warning-orange row (name, description AND icon). */
-.session-control-option-danger .session-control-option-name,
-.session-control-option-danger .session-control-option-description,
+/* Full access warns in its icon and its description; its name keeps the row's colour, so the
+   warning tone never reads as the pick (the name in --accent-text is the pick). The description is
+   small text, so it takes the readable warning twin (--priority-important-text), as Bypass's hint
+   does in the mode menu (composer-controls.css); the icon keeps --warning. */
+.session-control-option-danger .session-control-option-description {
+  color: var(--priority-important-text);
+}
+
 .session-control-option-danger .session-control-option-icon {
   color: var(--warning);
 }
@@ -9449,6 +9451,12 @@ body.walnut-dragging {
   min-width: 0;
 }
 
+/* A tab that is not the current one may give way (the shared tab never shrinks on its own), so a
+   crowded strip ends its name in an ellipsis instead of cutting the last tab at the edge. */
+.todo-section-tabs .todo-section-tab:not([aria-selected='true']) {
+  flex-shrink: 1;
+}
+
 .todo-section-tab-icon {
   display: inline-flex;
   align-items: center;
@@ -9467,10 +9475,13 @@ body.walnut-dragging {
 
 .todo-section-tab[aria-selected='true'] .todo-section-tab-label,
 /* A short bar (All + Pinned by default) has room to name every tab, and a bar of two
-   bare icons would not say what it is. */
+   bare icons would not say what it is. A shown name is never hard-cut: the cap only bounds
+   the reveal (a long list name, "Virtual Teammate", fits whole), and a name the strip still
+   squeezes ends in an ellipsis, its whole name in the tab's title. */
 .todo-section-tabs.is-roomy .todo-section-tab-label {
-  max-width: 88px;
+  max-width: 200px;
   opacity: 1;
+  text-overflow: ellipsis;
 }
 
 /* The All view's Pinned section with nothing pinned: the heading stays (a first visit
@@ -15006,16 +15017,9 @@ a.task-kebab-info:hover {
   transition: background 0.1s;
 }
 
+/* The pointer's row and the keyboard's row (data-active, pick-and-nav.css) share one fill. */
 .command-palette-item:hover {
-  background: var(--bg-secondary);
-}
-
-.command-palette-item-active {
-  background: var(--accent-subtle);
-}
-
-.command-palette-item-active:hover {
-  background: var(--accent-subtle);
+  background: var(--bg-hover);
 }
 
 .command-palette-name {
@@ -15045,30 +15049,6 @@ a.task-kebab-info:hover {
    (2026-11-04, the user: "it should instantly show, no delay"; a slide in also replaced
    the finder's own centring transform, so it opened 280 px off and slid back).
    Ratchet: tests/web/home-panels-no-transition.test.ts. */
-
-/* Control commands — distinct amber/orange color to differentiate from agent commands */
-.command-palette-control .command-palette-name {
-  color: #d97706;
-}
-.command-palette-control .command-palette-desc {
-  color: #92400e;
-}
-[data-theme="dark"] .command-palette-control .command-palette-name {
-  color: #fbbf24;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .command-palette-control .command-palette-name {
-    color: #fbbf24;
-  }
-}
-[data-theme="dark"] .command-palette-control .command-palette-desc {
-  color: #b59533;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .command-palette-control .command-palette-desc {
-    color: #b59533;
-  }
-}
 
 /* ===== "@" File Mention Popup (mini VS Code above chat input) ===== */
 .file-mention-popup {
@@ -15952,17 +15932,24 @@ a.task-kebab-info:hover {
   overflow-y: auto;
 }
 
-/* ── Engine rail (left pane): one icon per engine. The active one carries an
-   accent edge; on a live session the others are greyed + locked (engine is a
-   spawn-time fact), on a draft they are clickable.
+/* ── Engine rail (left pane): one icon per engine, each a shared vertical Tab. The
+   active one is the Tab's one selected state (choice-controls.css); on a live session
+   the others are greyed + locked (engine is a spawn-time fact) and say why, on a
+   draft they are clickable.
    The slot holds the narrow width in the picker's row; the rail inside it widens
    OVER the model pane on hover (a pointer that hovers) or keyboard focus, showing
    each engine's name beside its icon, and narrows again when the pointer leaves.
    Nothing beside it moves. */
+.model-picker {
+  /* The rail's two widths: the slot it holds in the row, and how far it widens over the pane. */
+  --model-picker-rail-narrow: 57px;
+  --model-picker-rail-wide: 184px;
+}
+
 .model-picker-rail-slot {
   position: relative;
   flex: none;
-  width: 57px;
+  width: var(--model-picker-rail-narrow);
 }
 
 .model-picker-rail {
@@ -15972,7 +15959,7 @@ a.task-kebab-info:hover {
   left: 0;
   z-index: 2;
   box-sizing: border-box;
-  width: 57px;
+  width: var(--model-picker-rail-narrow);
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -15989,12 +15976,12 @@ a.task-kebab-info:hover {
 
 @media (hover: hover) {
   .model-picker-rail:hover {
-    width: 184px;
+    width: var(--model-picker-rail-wide);
     box-shadow: 8px 0 24px rgba(0, 0, 0, 0.18);
   }
 }
 .model-picker-rail:has(:focus-visible) {
-  width: 184px;
+  width: var(--model-picker-rail-wide);
   box-shadow: 8px 0 24px rgba(0, 0, 0, 0.18);
 }
 
@@ -16006,6 +15993,7 @@ a.task-kebab-info:hover {
   height: 40px;
   flex: none;
   display: flex;
+  align-items: center;
   gap: 10px;
   padding: 0;
   text-align: left;
@@ -16023,8 +16011,22 @@ a.task-kebab-info:hover {
   color: var(--fg);
 }
 
-.provider-rail-label {
+/* The engine's name, and under it why it is locked (a muted line of up to two; the tooltip has the
+   whole sentence, and pressing the engine says it in the pane). Both show only while the rail is
+   widened. */
+.provider-rail-text {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+/* A name and a two-line reason fill the 40 px row exactly: 16 + 2 x 12. */
+.provider-rail-text > .provider-rail-label { line-height: 16px; }
+
+.provider-rail-label,
+.provider-rail-why {
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
@@ -16032,40 +16034,66 @@ a.task-kebab-info:hover {
   opacity: 0;
   transition: opacity 120ms ease;
 }
-@media (hover: hover) {
-  .model-picker-rail:hover .provider-rail-label { opacity: 1; }
-}
-.model-picker-rail:has(:focus-visible) .provider-rail-label { opacity: 1; }
 
-/* The engine's own mark fades; its lock badge does not, so the lock reads at a glance. */
-.provider-rail-item-locked > .provider-rail-icon > svg:first-child,
-.provider-rail-item-locked > .provider-rail-label {
-  opacity: 0.35;
+/* The reason wraps to a second line before it is cut. */
+.provider-rail-why {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  line-height: 12px;
+}
+
+/* "More engines" has its name alone, straight in the row. */
+.provider-rail-more > .provider-rail-label {
+  flex: 1;
+}
+
+.provider-rail-why {
+  font-size: var(--font-size-xs);
+  font-weight: 400;
+  color: var(--fg-secondary);
+}
+@media (hover: hover) {
+  .model-picker-rail:hover :is(.provider-rail-label, .provider-rail-why) { opacity: 1; }
+}
+.model-picker-rail:has(:focus-visible) :is(.provider-rail-label, .provider-rail-why) { opacity: 1; }
+
+/* A locked engine's mark and name are greyed but still read; its lock badge is not faded at all. */
+.provider-rail-item-locked > .provider-rail-icon > svg:first-child {
+  opacity: 0.6;
   filter: grayscale(1);
 }
 @media (hover: hover) {
-  .model-picker-rail:hover .provider-rail-item-locked > .provider-rail-label { opacity: 0.5; }
+  .model-picker-rail:hover .provider-rail-item-locked .provider-rail-label { color: var(--fg-secondary); }
 }
+.model-picker-rail:has(:focus-visible) .provider-rail-item-locked .provider-rail-label { color: var(--fg-secondary); }
 
 /* The selected engine on a host that cannot run it: still selected, dimmed, with the lock mark. */
 .provider-rail-item-unavailable .provider-rail-icon > svg:first-child {
-  opacity: 0.45;
+  opacity: 0.6;
   filter: grayscale(1);
 }
 
 .provider-rail-lock {
   position: absolute;
-  right: 2px;
-  bottom: 2px;
-  width: 13px;
-  height: 13px;
+  right: 1px;
+  bottom: 1px;
+  width: 15px;
+  height: 15px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--card-bg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 50%;
-  color: var(--fg-muted);
+  color: var(--fg-secondary);
+}
+
+.provider-rail-lock svg {
+  width: 9px;
+  height: 9px;
 }
 
 /* "More engines": the rail's last row, set apart, in the muted colour. A link out, not a tab, so it
@@ -16393,10 +16421,6 @@ a.task-kebab-info:hover {
 
 .model-picker-row:hover:not(:disabled) {
   background: var(--bg-hover);
-}
-
-.model-picker-row-active {
-  font-weight: 600;
 }
 
 .model-picker-row:disabled,
@@ -27395,8 +27419,8 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   gap: 2px;
 }
 
-/* Home's selected state (.sidebar-link.active): a rounded, inset row in accent text on the
-   subtle accent, never a full-width solid block. */
+/* The selected section is the shared Nav item (.wn-nav-item[aria-current='page'],
+   pick-and-nav.css): a rounded, inset row, the rail's current-page look. */
 .nfc-rail-btn {
   display: flex;
   align-items: center;
@@ -27410,13 +27434,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   color: var(--fg-muted);
 }
 
-.nfc-rail-btn:hover { background: var(--accent-subtle); color: var(--fg); }
-
-.nfc-rail-btn.nfc-active {
-  background: var(--accent-subtle);
-  color: var(--accent);
-  font-weight: 600;
-}
+.nfc-rail-btn:hover:not([aria-current='page']) { background: var(--bg-hover); color: var(--fg); }
 
 /* .wn-title on the element: a label never cuts, the rail takes its width. */
 .nfc-rail-name { min-width: 0; }
@@ -27497,17 +27515,11 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
     width: auto;
     flex: 0 0 auto;
     border-left: none;
-    border-bottom: 2px solid transparent;
-    border-radius: 0;
     padding: 9px 10px;
     white-space: nowrap;
   }
-  /* A tab strip: the selected tab is its accent words over an underline. */
-  .nfc-rail-btn.nfc-active {
-    background: none;
-    border-left-color: transparent;
-    border-bottom-color: var(--accent);
-  }
+  /* A sideways strip: the selected section keeps the Nav item look (a rounded fill, no
+     underline), so the rail reads the same at every width. */
   /* The horizontal strip has no "under" to indent into — the sub-entries sit
      inline after Errors (the strip scrolls), so only the smaller type remains. */
   .nfc-rail-btn.nfc-rail-sub {

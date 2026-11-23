@@ -363,11 +363,23 @@ for (const theme of ['light', 'dark'] as const) {
         return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
       }
       const ratio = (a: string, b: string) => { const [x, y] = [lum(rgb(a)), lum(rgb(b))].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05) }
-      const active = document.querySelector<HTMLElement>('.settings-nav-active')!
+      // The current section is the shared Nav item: a translucent accent tint, so its fill is
+      // read over the first opaque surface under it.
+      const active = document.querySelector<HTMLElement>('.settings-nav-item[aria-current="page"]')!
       const label = active.querySelector<HTMLElement>('.settings-nav-label')!
       const box = document.querySelector<HTMLElement>('.settings-pane .settings-checkbox-input:not(:checked)')
+      const surface = (el: HTMLElement | null): number[] => {
+        for (let at = el; at; at = at.parentElement) {
+          const c = toRgba(getComputedStyle(at).backgroundColor)
+          if (c[3] === 1) return c
+        }
+        return [255, 255, 255, 1]
+      }
+      const fill = toRgba(getComputedStyle(active).backgroundColor)
+      const under = surface(active.parentElement)
+      const blended = fill.slice(0, 3).map((v, i) => Math.round(v * fill[3] + under[i] * (1 - fill[3])))
       return {
-        nav: ratio(getComputedStyle(label).color, getComputedStyle(active).backgroundColor),
+        nav: ratio(getComputedStyle(label).color, `rgb(${blended.join(', ')})`),
         boxBorder: box ? getComputedStyle(box).borderTopColor : null,
       }
     }))

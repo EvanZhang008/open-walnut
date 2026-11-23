@@ -328,7 +328,7 @@ export const SESSION_MODES: readonly SessionModeEntry[] = [
   { id: 'dontAsk', cli: 'dontAsk',           label: "Don't Ask", hint: 'never asks, denies the rest', description: 'Never ask: run what is pre-approved and deny everything else' },
   { id: 'accept',  cli: 'acceptEdits',       label: 'Accept',   hint: 'edits files freely',         description: 'Accept file edits without asking, still ask for everything else' },
   { id: 'auto',    cli: 'auto',              label: 'Auto',     hint: 'a checker allows safe steps', description: 'A checker reviews each step and allows the safe ones without asking' },
-  { id: 'bypass',  cli: 'bypassPermissions', label: 'Bypass',   hint: 'never asks, allows all',     description: 'Full trust: never ask, allow everything, skip every permission check' },
+  { id: 'bypass',  cli: 'bypassPermissions', label: 'Bypass',   hint: 'allows every action without asking', description: 'Full trust: never ask, allow everything, skip every permission check' },
 ] as const;
 
 /** Ordered mode ids (safest → loosest) — the default toggle cycle order. */

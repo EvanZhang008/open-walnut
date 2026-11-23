@@ -368,7 +368,8 @@ export function ComposerControlsBar({ controls, className, handleRef }: Composer
     state: (id) => {
       const button = barRef.current?.querySelector<HTMLElement>(`${ownControl(id)} button`);
       const ariaLabel = button?.getAttribute('aria-label');
-      return id === 'output' ? ariaLabel?.replace(/^Output mode: /, '') ?? '' : ariaLabel ?? button?.textContent?.trim() ?? '';
+      // Reply style answers its style ('rich' | 'markdown'), never the pill's short label.
+      return id === 'output' ? button?.dataset.outputMode ?? '' : ariaLabel ?? button?.textContent?.trim() ?? '';
     },
   }), [present, activate, folded]);
 

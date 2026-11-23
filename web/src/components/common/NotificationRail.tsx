@@ -7,14 +7,17 @@
  * Clear All did not say what it cleared), the close × a bare glyph; the rail's selected entry was
  * a full-width blue block and its counts three colours of their own. Now the header's buttons are
  * the card family's tool buttons (`.ask-card-tools .btn`, components/actions/ask-card.css), the
- * selected entry is Home's quiet selected state, and every count is the console's one label, a
- * `.badge-count` (styles/badge.css) toned by what it counts.
+ * selected entry is the shared Nav item (`.wn-nav-item` with aria-current="page",
+ * styles/pick-and-nav.css), the same as the rail's current page and Settings' current section,
+ * and every count is the console's one label, a `.badge-count` (styles/badge.css) toned by what
+ * it counts.
  */
 import type { NotificationSection } from '@/contexts/notifications';
 import { QuietToggle } from './QuietToggle';
 import { badge, type BadgeTone } from './badge';
 import '@/components/actions/ask-card.css';
 import '@/styles/header-fit.css';
+import '@/styles/pick-and-nav.css';
 
 /** Rail tabs: the notification sections plus the ambient System zone. */
 export type RailSection = NotificationSection | 'system';
@@ -84,8 +87,8 @@ export function RailSubButton({ label, count, active, onClick }: {
 }) {
   return (
     <button
-      className={`nfc-rail-btn nfc-rail-sub${active ? ' nfc-active' : ''}`}
-      aria-current={active}
+      className="nfc-rail-btn wn-nav-item nfc-rail-sub"
+      aria-current={active ? 'page' : undefined}
       onClick={onClick}
     >
       <span className="nfc-rail-name wn-title">{label}</span>
@@ -108,8 +111,8 @@ export function RailButton({ label, count, active, tone = 'neutral', dot, warn, 
 }) {
   return (
     <button
-      className={`nfc-rail-btn${active ? ' nfc-active' : ''}`}
-      aria-current={active}
+      className="nfc-rail-btn wn-nav-item"
+      aria-current={active ? 'page' : undefined}
       onClick={onClick}
     >
       <span className="nfc-rail-name wn-title">{label}</span>

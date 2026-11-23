@@ -44,7 +44,7 @@ for (const size of SIZES) {
       await bpSetup(page, { hosts: problemHostList() })
       // A finger on the phone's own bell (the top bar's), as a person opens the panel there.
       await page.locator('.phone-topbar').getByTestId('phone-bell').tap()
-      await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
+      await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'page')
       await expect(problemRow(page, 'certbox')).toBeVisible({ timeout: 20_000 })
       await expect(problemRow(page, 'keybox')).toBeVisible()
       await page.waitForTimeout(400)

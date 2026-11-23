@@ -1,8 +1,9 @@
 /**
  * The engine split, as a person uses it:
- *   - Settings → Sessions, "Share new tasks": checking two engines turns it on and writes
- *     `defaults.engine_split` with the other `defaults` keys kept; unchecking one turns it off, and the switch
- *     turns it off and on again with the entries kept.
+ *   - Settings → Sessions, "Share new tasks": the switch is the master of its entries (off, they are
+ *     disabled); switched on, checking two engines shares new tasks and writes `defaults.engine_split`
+ *     with the other `defaults` keys kept; unchecking one leaves it "Not yet", and the switch turns it
+ *     off and on again with the entries kept.
  *   - Settings → Usage & Costs, "Engines compared": engines are columns, metrics are rows, the
  *     best value of a ranked row is marked, a column with few finished tasks says so, the
  *     project filter asks the server again, and the tasks behind the numbers open their task.
@@ -62,15 +63,25 @@ async function openUsage(page: Page) {
   await nav.click()
 }
 
-test('Share new tasks: two engines turn it on, the other defaults stay, one turns it off', async ({ page, request }) => {
+test('Share new tasks: the switch governs its entries, two engines share, one leaves it waiting', async ({ page, request }) => {
   const before = await serverDefaults(request)
   const section = await openSessionsSection(page)
   const state = section.getByTestId('engine-split-state')
   await expect(state).toHaveText('Off')
   const boxes = section.locator('input[type="checkbox"][data-testid^="engine-split-"]')
   expect(await boxes.count()).toBeGreaterThanOrEqual(2)
+  // Off, the entries are the master's dependents: disabled, with the reason under the switch.
+  await expect(boxes.nth(0)).toBeDisabled()
+  await expect(section.locator('#engine-split-entries .wn-group-reason')).toHaveText('Switch Share new tasks on to pick the entries it shares between.')
+  // Said once: the row's own help names only what happens now.
+  await expect(section.getByTestId('engine-split-row')).not.toContainText(/switch on/i)
+  // Switched on with no entries, nothing is written: the switch only opens its rows.
+  await section.getByTestId('engine-split-switch').click()
+  await expect(state).toHaveText('Not yet')
+  await expect(boxes.nth(0)).toBeEnabled()
+  expect((await serverDefaults(request)).engine_split_off ?? false).toBe(false)
   await boxes.nth(0).check()
-  await expect(state).toHaveText('Off')
+  await expect(state).toHaveText('Not yet')
   await boxes.nth(1).check()
   await expect(state).toHaveText('On')
   await expect.poll(async () => ((await serverDefaults(request)).engine_split as unknown[] | undefined)?.length).toBe(2)
@@ -79,7 +90,7 @@ test('Share new tasks: two engines turn it on, the other defaults stay, one turn
   await section.getByTestId('engine-split-row').scrollIntoViewIfNeeded()
   await page.screenshot({ path: path.join(SHOTS, `split-settings-${test.info().project.name}.png`), clip: await section.boundingBox().then((b) => b ? { x: b.x, y: b.y, width: Math.min(b.width, 1280), height: Math.min(b.height, 700) } : undefined) })
   await boxes.nth(1).uncheck()
-  await expect(state).toHaveText('Off')
+  await expect(state).toHaveText('Not yet')
   await expect.poll(async () => ((await serverDefaults(request)).engine_split as unknown[] | undefined)?.length).toBe(1)
   // An engine on a named model is added in place, checked, and is an entry of its own.
   await section.getByTestId('engine-split-add-model').fill('sonnet')
@@ -108,7 +119,12 @@ test('Share new tasks: two engines turn it on, the other defaults stay, one turn
   await expect(added).not.toBeChecked()
   await boxes.nth(0).uncheck()
   await expect.poll(async () => ((await serverDefaults(request)).engine_split as unknown[] | undefined)?.length).toBe(0)
-  await expect(section.getByTestId('engine-split-switch')).toBeDisabled()
+  // No entries left: still on until switched off here, which writes nothing and disables the rows again.
+  await expect(state).toHaveText('Not yet')
+  await section.getByTestId('engine-split-switch').click()
+  await expect(state).toHaveText('Off')
+  await expect(boxes.nth(0)).toBeDisabled()
+  expect((await serverDefaults(request)).engine_split_off ?? false).toBe(false)
 })
 
 test('Share new tasks, In projects: typed projects are kept beside the other defaults, unchecking the last shares every project', async ({ page, request }) => {
@@ -116,7 +132,9 @@ test('Share new tasks, In projects: typed projects are kept beside the other def
   const section = await openSessionsSection(page)
   const row = section.getByTestId('engine-split-projects')
   await row.scrollIntoViewIfNeeded()
-  await expect(row).toContainText('Every project')
+  // Its rows are the switch's: switched on first.
+  await section.getByTestId('engine-split-switch').click()
+  await expect(row).toContainText('every project')
   const input = section.getByTestId('engine-split-project-input')
   await input.click()
   await page.keyboard.type('Walnut')
@@ -143,7 +161,39 @@ test('Share new tasks, In projects: typed projects are kept beside the other def
   await walnut.uncheck()
   await section.getByTestId('split-project-Walnut-Idea').uncheck()
   await expect.poll(async () => 'engine_split_projects' in (await serverDefaults(request))).toBe(false)
-  await expect(row).toContainText('Every project')
+  await expect(row).toContainText('tasks in every project take turns')
+})
+
+test('One engine installed: Default engine is a plain value, Share new tasks keeps its one box disabled until switched on', async ({ page, request }) => {
+  // The machine has Claude Code only: every other engine of the catalog reads as not installed.
+  await page.route((url) => url.pathname === '/api/engines', async (route) => {
+    const res = await route.fetch()
+    const body = await res.json() as { engines: Array<{ id: string; availability: Record<string, unknown> }> }
+    const engines = body.engines.map((e) => (e.id === 'claude' ? e : { ...e, availability: { ...e.availability, installed: false } }))
+    await route.fulfill({ response: res, json: { ...body, engines } })
+  })
+  const before = await serverDefaults(request)
+  const section = await openSessionsSection(page)
+  const engine = section.getByTestId('default-engine-row')
+  await expect(engine.getByTestId('default-engine-only')).toHaveText('The only engine installed here. A choice shows once another engine is installed.')
+  await expect(engine.getByTestId('default-engine-select')).toHaveText('Claude Code')
+  await expect(engine.locator('[role="radio"], select')).toHaveCount(0)
+  const state = section.getByTestId('engine-split-state')
+  const box = section.getByTestId('engine-split-claude')
+  await expect(state).toHaveText('Off')
+  await expect(box).toBeDisabled()
+  await expect(section.getByTestId('engine-split-switch')).toHaveAttribute('aria-controls', 'engine-split-entries')
+  await expect(section.locator('#engine-split-entries .wn-group-reason')).toBeVisible()
+  await section.getByTestId('engine-split-row').scrollIntoViewIfNeeded()
+  await page.screenshot({ path: path.join(SHOTS, `split-one-engine-${test.info().project.name}.png`), clip: await section.boundingBox().then((b) => b ? { x: b.x, y: b.y, width: Math.min(b.width, 1280), height: Math.min(b.height, 700) } : undefined) })
+  await section.getByTestId('engine-split-switch').click()
+  await expect(state).toHaveText('Not yet')
+  await expect(box).toBeEnabled()
+  await expect(section.getByTestId('engine-split-row')).toContainText('Check two or more entries below')
+  await section.getByTestId('engine-split-switch').click()
+  await expect(box).toBeDisabled()
+  // Looking and switching with no entries wrote nothing.
+  expect(await serverDefaults(request)).toEqual(before)
 })
 
 test('Engines compared: engines side by side, the best marked, a project filter, the tasks behind it', async ({ page }) => {

@@ -194,6 +194,9 @@ test('OpenCode draft lists probed models and the pick rides the launch payload',
   const providerCol = picker.locator('.model-picker-col-groups')
   await expect(providerCol).toBeVisible()
   await providerCol.locator('.model-picker-row', { hasText: 'Mock Provider' }).click()
+  // The browsed group is aria-selected (a listbox's meaning), with the highlight fill.
+  await expect(providerCol.locator('.model-picker-row', { hasText: 'Mock Provider' })).toHaveAttribute('aria-selected', 'true')
+  await expect(providerCol.locator('.model-picker-row[aria-selected="true"]')).toHaveCount(1)
   await expect(picker.locator('.model-picker-row', { hasText: 'Deep Thinker' })).toBeVisible()
   await expect(defaultRow).toHaveAttribute('aria-selected', 'true') // navigation ≠ selection
 
@@ -503,16 +506,35 @@ test('an engine the server cannot run renders disabled with its reason', async (
   const panel = await openDraft(page)
 
   // The rail draws a locked engine (greyed, a lock badge) instead of hiding it,
-  // and a click on it does nothing.
+  // and a click on it only says why (a touch has no hover to widen the rail or show the tooltip).
   const unconfigured = await draftEngineButton(page, panel, 'custom')
   await expect(unconfigured).toHaveClass(/provider-rail-item-locked/)
   await expect(unconfigured).toHaveAttribute('aria-disabled', 'true')
-  // The tooltip is the server's actionable reason, not a generic "unavailable".
-  await expect(unconfigured).toHaveAttribute('title', reason)
+  // The tooltip names the engine and gives the server's actionable reason, not a generic "unavailable".
+  await expect(unconfigured).toHaveAttribute('title', `Custom (ACP): ${reason}`)
   // force: Playwright's actionability check treats aria-disabled as disabled and
   // would wait forever; the click a user can still make must not switch.
   await unconfigured.click({ force: true })
   await expect(unconfigured).toHaveAttribute('aria-selected', 'false')
+  // The pressed note and the rail's second line say what to do in plain words; the config
+  // field the server names stays in the tooltip above.
+  await expect(page.locator('.model-picker').getByTestId('model-picker-locked-note')).toHaveText('Custom (ACP): Set up in Settings > Sessions')
+  await expect(unconfigured.locator('.provider-rail-why')).toHaveText('Set up in Settings > Sessions')
+  // The note is never under the rail, which the press keeps widened: by the pointer's hover,
+  // and by the keyboard's focus.
+  const lockedNote = page.locator('.model-picker').getByTestId('model-picker-locked-note')
+  const railBox = page.locator('.model-picker').getByTestId('provider-rail')
+  const noteClearOfWideRail = async () => {
+    await expect.poll(async () => (await railBox.boundingBox())!.width).toBeGreaterThan(150)
+    const rail = (await railBox.boundingBox())!
+    expect((await lockedNote.boundingBox())!.x).toBeGreaterThanOrEqual(rail.x + rail.width)
+  }
+  await noteClearOfWideRail()
+  await page.mouse.move(0, 0)
+  await unconfigured.focus()
+  await page.keyboard.press('Enter')
+  await expect(lockedNote).toBeVisible()
+  await noteClearOfWideRail()
   await expect(await draftEngineButton(page, panel, 'claude')).toHaveAttribute('aria-selected', 'true')
 
   // Same catalog, installed engine: still clickable. Proves the lock is per-row

@@ -315,7 +315,7 @@ test('Codex model picker switches models on Homepage', async ({ page }) => {
   const reopenedMenu = page.locator('.model-picker')
   await expect(reopenedMenu).toBeVisible()
   await expect(reopenedMenu.locator('.model-picker-row', { hasText: 'Mock GPT Fast' }))
-    .toHaveClass(/model-picker-row-active/)
+    .toHaveAttribute('aria-selected', 'true')
   await page.keyboard.press('Escape')
 
   await fs.mkdir(MODEL_PICKER_SCREENSHOT_DIR, { recursive: true })

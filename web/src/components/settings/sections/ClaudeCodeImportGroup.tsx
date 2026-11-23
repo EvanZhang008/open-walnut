@@ -110,7 +110,7 @@ function ClaudeCodeImportGroup({ engine, name }: { engine: string; name: string 
               disabled={busy}
               onClick={() => void review(host)}
             >
-              {phase.kind === 'loading' ? 'Reading…' : phase.kind === 'idle' ? 'Review…' : 'Check again'}
+              {phase.kind === 'loading' ? 'Reading' : phase.kind === 'idle' ? 'Review' : 'Check again'}
             </button>
           </span>
         )}

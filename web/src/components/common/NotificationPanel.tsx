@@ -226,7 +226,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   useEffect(() => {
     if (!phone || !open || !panelEl) return undefined;
     const reveal = () => {
-      const active = panelEl.querySelector<HTMLElement>('.nfc-rail-btn.nfc-active');
+      const active = panelEl.querySelector<HTMLElement>('.nfc-rail-btn[aria-current="page"]');
       const rail = active?.closest<HTMLElement>('.nfc-rail');
       if (!active || !rail) return;
       const a = active.getBoundingClientRect();

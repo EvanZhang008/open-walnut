@@ -15,7 +15,7 @@ const SHOTS = process.env.MODE_MENU_SHOTS ?? '/tmp/permission-mode-menu';
 const LABELS = ['Plan', 'Default', "Don't Ask", 'Accept', 'Auto', 'Bypass'];
 // What each mode does, in a few muted words at the right of its name (src/core/types.ts SESSION_MODES).
 const HINTS = ['reads, changes nothing', 'asks before risky steps', 'never asks, denies the rest',
-  'edits files freely', 'a checker allows safe steps', 'never asks, allows all'];
+  'edits files freely', 'a checker allows safe steps', 'allows every action without asking'];
 
 async function enterHome(page: Page): Promise<Locator> {
   await page.addInitScript((id) => {
@@ -73,15 +73,37 @@ test('a running session: no shortcut hint, the pill opens a menu of every mode a
     await expect(menu.locator('[role="option"][aria-selected="true"]')).toHaveCount(1);
     await expect(menu.locator('[role="option"][data-mode="bypass"]')).toHaveAttribute('aria-selected', 'true');
     await fits(page, menu);
-    // The current mode is shown by colour alone: no checkmark, and no column kept for one.
+    // The current mode is a Picked row: its name in --accent-text at weight 500, no checkmark,
+    // no fill, never orange (Bypass's warning is its hint's, so the warning never reads as the pick).
     expect(await menu.innerText()).not.toMatch(/[✓✔]/);
     const current = menu.locator('[role="option"][aria-selected="true"]');
-    await expect(current).toHaveClass(/picker-row-current/);
+    await expect(current).toHaveClass(/wn-pick-row/);
+    await expect(menu.locator('svg')).toHaveCount(0);
     const other = menu.locator('[role="option"][data-mode="default"]');
-    const nameColor = (row: Locator) => row.locator('.permission-mode-name').evaluate((el) => getComputedStyle(el).color);
-    expect(await nameColor(current), 'the current mode has its own colour').not.toBe(await nameColor(other));
+    const accentText = await page.evaluate(() => {
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--accent-text)';
+      document.body.appendChild(probe);
+      const c = getComputedStyle(probe).color;
+      probe.remove();
+      return c;
+    });
+    const nameStyle = (row: Locator) => row.locator('.permission-mode-name').evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { color: s.color, weight: s.fontWeight };
+    });
+    expect(await nameStyle(current), 'the pick is the name in --accent-text').toEqual({ color: accentText, weight: '500' });
+    expect((await nameStyle(other)).color).not.toBe(accentText);
+    const fill = (row: Locator) => row.evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(await fill(current), 'the pick is never a fill').toBe(await fill(other));
+    const hintColor = (row: Locator) => row.locator('.permission-mode-hint').evaluate((el) => getComputedStyle(el).color);
+    expect(await hintColor(current), 'Bypass warns in its hint').not.toBe(await hintColor(other));
+    // Small warning text uses the darker warning twin: --warning itself reads about 2.2:1 on white.
+    expect(await hintColor(current), 'the warning hint is readable small text').toBe('rgb(158, 83, 0)');
+    // No column kept for a mark: every name starts at the row's padding.
     const nameX = async (row: Locator) => (await row.locator('.permission-mode-name').boundingBox())!.x - (await row.boundingBox())!.x;
-    expect(await nameX(other), 'no empty leading column').toBeLessThanOrEqual(10);
+    expect(Math.abs((await nameX(other)) - (await nameX(current))), 'names line up').toBeLessThanOrEqual(0.5);
+    expect(await nameX(current), 'no mark column before the name').toBeLessThanOrEqual(10);
     // Compact, like the model menu beside it: one line per mode, no wider than its name and hint need.
     const menuBox = (await menu.boundingBox())!;
     expect(menuBox.width, 'the menu fits its content').toBeLessThan(320);

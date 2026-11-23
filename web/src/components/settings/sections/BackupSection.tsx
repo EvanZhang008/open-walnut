@@ -556,11 +556,10 @@ export function BackupSection({ config, onSave }: Props) {
               aria-label="Backup service"
               value={legacyMode ? 's3' : type}
               onChange={pickService}
-              options={DESTINATIONS.map((d) => ({
-                value: d.value, label: d.label, testId: `backup-service-${d.value}`,
-                // The service backups go to now carries a mark, whichever tab is open.
-                ...((legacyMode ? d.value === 's3' : savedDest?.type === d.value) ? { className: 'backup-service-in-use', title: 'In use: backups go here' } : {}),
-              }))}
+              // The segments show only the pick; the service in use is said in the help line, and a
+              // connection on its own row (the 2026-11-22 audit: a dot on the picked segment read as
+              // picked and connected at once).
+              options={DESTINATIONS.map((d) => ({ value: d.value, label: d.label, testId: `backup-service-${d.value}` }))}
             />
           }
         />

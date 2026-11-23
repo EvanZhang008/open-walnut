@@ -1,0 +1,89 @@
+/*
+ * The three choice looks that are not a control of their own but a state of a row, a nav item or a
+ * card (standard.md, "Choice controls": "Picked row", "Nav item", "Option card"). Tokens only; the
+ * state is always ARIA, never a per-view `.active` class.
+ */
+
+/* ── Picked row: the current value in a menu or a list of options ─────────────────────────────
+   The pick is the row's name in --accent-text at weight 500, the same in every menu; no check mark
+   (the user, 2026-11-14: "just show the name, and colour the selected one"), never orange, never a
+   fill. A fill on a row is only the pointer or the keyboard highlight. In a browse list
+   (data-pick="browse": the model picker's Provider column) aria-selected is the row being browsed,
+   drawn with the highlight fill, and the row holding the current value is aria-current. */
+.wn-pick-row:is([role='menuitemradio'], [role='option'], [role='radio'])[aria-checked='true'],
+.wn-pick-row[role='option'][aria-selected='true']:not([data-pick='browse']),
+.wn-pick-row[aria-pressed='true'],
+.wn-pick-row[aria-current='true'] {
+  color: var(--accent-text);
+  font-weight: 500;
+}
+
+/* The keyboard highlight of a suggestion list (the slash menu, a combobox): the row the arrows are
+   on. The same fill as a hovered menu row, the text keeps its own colour. */
+.wn-pick-row[data-active='true'] {
+  background: var(--bg-hover);
+}
+
+/* ── Nav item: the current page, and a pane that is open ────────────────────────────────────────
+   The page you are on is `aria-current="page"`: the accent-subtle fill and accent-text. A key that
+   opens a pane beside it (the task panel) is `aria-pressed="true"`: a quiet neutral fill, so the
+   page and the open pane never read as the same state. */
+.wn-nav-item[aria-current='page'] {
+  background: var(--accent-subtle);
+  color: var(--accent-text);
+}
+
+.wn-nav-item[aria-pressed='true']:not([aria-current='page']) {
+  background: var(--bg-tertiary);
+  color: var(--fg);
+}
+
+/* ── Option card: one of a few large choices side by side (New task, Quick question) ─────────────
+   Every card has the same 1 px border and 16 px padding, a title (--font-size-lg, 600) and a line
+   of words under it; the picked one an accent hairline and the accent-subtle fill. The focus ring is the keyboard's alone (:focus-visible). */
+.wn-option-card {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card-bg);
+  box-shadow: none;
+  outline: none;
+  color: var(--fg);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wn-option-card:is([aria-checked='true'], [aria-pressed='true'], [aria-selected='true']) {
+  cursor: default;
+}
+
+/* The card's name, and the one line of words under it. */
+.wn-option-card-title {
+  display: block;
+  margin-bottom: 4px;
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.wn-option-card-desc {
+  display: block;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  color: var(--fg-muted);
+}
+
+.wn-option-card:hover {
+  background: var(--bg-hover);
+}
+
+.wn-option-card:is([aria-checked='true'], [aria-pressed='true'], [aria-selected='true']) {
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  background: var(--accent-subtle);
+}
+
+.wn-option-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

@@ -119,8 +119,6 @@
   padding: 0 10px;
   border: 0;
   border-radius: var(--radius-sm);
-  background: none;
-  color: var(--fg);
   font: inherit;
   font-size: var(--font-size-md);
   line-height: 18px;
@@ -135,7 +133,15 @@
   scroll-margin-block: 28px;
 }
 
-.settings-container .settings-nav-item:hover {
+/* Every row but the current section: the current one is the shared Nav item
+   (.wn-nav-item[aria-current='page'], pick-and-nav.css), never a solid block of its own. */
+.settings-container .settings-nav-item:not([aria-current='page']) {
+  background: none;
+  color: var(--fg);
+}
+
+/* Hover is the pointer's alone: it never covers the current section's look. */
+.settings-container .settings-nav-item:hover:not([aria-current='page']) {
   background: var(--bg-hover);
   color: var(--fg);
 }
@@ -145,39 +151,9 @@
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 
-/* Selected row: a deeper blue than --accent so white 13px text passes 4.5:1
-   (C50: #007AFF gave 4.0:1 light, 3.65:1 dark). */
-.settings-container {
-  --settings-nav-selected-bg: #0064d2;
-}
-
-:root[data-theme='dark'] .settings-container {
-  --settings-nav-selected-bg: #0a5fc8;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .settings-container {
-    --settings-nav-selected-bg: #0a5fc8;
-  }
-}
-
-.settings-container .settings-nav-item.settings-nav-active {
-  background: var(--settings-nav-selected-bg);
-  color: var(--on-accent);
-  font-weight: 500;
-}
-
-.settings-container .settings-nav-item.settings-nav-active .settings-pane-tile {
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
-}
-
 .settings-container .settings-nav-item:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-}
-
-.settings-container .settings-nav-item.settings-nav-active:focus-visible {
-  outline-color: var(--fg);
 }
 
 .settings-container .settings-nav-page-link::after {
@@ -210,10 +186,6 @@
   color: var(--fg-muted);
 }
 
-.settings-container .settings-nav-active .settings-nav-hint {
-  color: rgba(255, 255, 255, 0.85);
-}
-
 .settings-container .settings-nav-trailing {
   flex: 0 0 auto;
   display: inline-flex;
@@ -239,10 +211,6 @@
   height: 6px;
   border-radius: 50%;
   background: var(--error);
-}
-
-.settings-container .settings-nav-active .settings-nav-error-dot {
-  box-shadow: 0 0 0 1.5px #fff;
 }
 
 .settings-container .settings-nav-empty {

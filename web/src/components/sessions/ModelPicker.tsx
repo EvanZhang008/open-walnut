@@ -16,7 +16,7 @@ import { fetchCodexModelCatalog, fetchEngineModelCatalog, getCachedEngineModelCa
 import type { CodexModelInfo, SessionLiveSettings, SessionModelCatalog } from '@/api/sessions';
 import type { SessionEngine } from '@/types/session';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
-import { engineLockReason, pickerRailEngines } from '@/utils/engines';
+import { engineLockReason, pickerRailEngines, shortLockReason } from '@/utils/engines';
 import { engineCaps, engineLabel } from '@/utils/engine-capabilities';
 import { useHostModelCatalog, seedHostCatalog } from '@/hooks/useModelCatalog';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
@@ -30,6 +30,7 @@ import { SessionCostBlock, BudgetPausedMark, costToggleLabel, type CompareModel 
 import { useSessionCost } from '@/hooks/useSessionCost';
 import { PickerFoldBar, type PickerFold } from './PickerFoldBar';
 import { Tab, TabList } from '@/components/controls';
+import { PickerRow } from './PickerRow';
 import { oneRowPerModel, rowNamedLike } from './model-row-dedupe';
 
 const EFFORTS = SESSION_EFFORTS;
@@ -172,8 +173,11 @@ const PROVIDER_ICONS: Partial<Record<string, React.FC>> = {
   custom: CustomEngineMark,
 };
 
-export function ProviderRail({ active, onSwitch, lockReason, onClose }: {
+export function ProviderRail({ active, onSwitch, lockReason, onClose, onLockedPick }: {
   active: ProviderId;
+  /** A locked engine was pressed: gets "<engine>: <why>", so a touch (no hover, no focus ring)
+   *  still reads the reason the widened rail and the tooltip give. */
+  onLockedPick?: (note: string) => void;
   /** Closes the picker before "More engines" opens Settings (a Home column stays mounted): the
    *  cancel path, so an engine picked but not yet switched to is dropped, never started. */
   onClose?: () => void;
@@ -214,14 +218,19 @@ export function ProviderRail({ active, onSwitch, lockReason, onClose }: {
     <TabList className="model-picker-rail" aria-orientation="vertical" flush aria-label="Engine" data-testid="provider-rail">
       {rows.map(({ id, label, unavailable }) => {
         const isActive = id === active;
+        const ownReason = isActive ? null : lockReason?.(id) ?? unavailable;
         const reason = isActive ? null
-          : lockReason?.(id)
-          ?? unavailable
+          : ownReason
           ?? (onSwitch ? null : `This session runs on ${activeLabel} — start a new session to use ${label}`);
         const locked = !isActive && reason !== null;
         // The selected engine stays selected, but says so when the host cannot run it (a draft on
         // a host without Claude Code, 2026-11-05: it read as available, with no reason).
         const activeUnavailable = isActive ? lockReason?.(id) ?? null : null;
+        // Why it is locked, in a few plain words under its name (the widened rail shows them, and
+        // a press says them in the pane); the whole reason is the tooltip and the accessible
+        // description.
+        const fullWhy = activeUnavailable ?? (locked ? reason : null);
+        const why = fullWhy ? shortLockReason(fullWhy) : null;
         const Icon = PROVIDER_ICONS[id] ?? GenericEngineMark;
         return (
           <Tab
@@ -229,11 +238,15 @@ export function ProviderRail({ active, onSwitch, lockReason, onClose }: {
             selected={isActive}
             aria-disabled={locked || undefined}
             aria-label={label}
+            aria-description={locked ? reason ?? undefined : activeUnavailable ?? undefined}
             className={`provider-rail-item${locked ? ' provider-rail-item-locked' : ''}${activeUnavailable ? ' provider-rail-item-unavailable' : ''}`}
             // The engine's name, and why it cannot be picked when it cannot.
             title={locked ? `${label}: ${reason}` : activeUnavailable ? `${label}: ${activeUnavailable}` : label}
             data-provider={id}
-            onClick={() => { if (!isActive && !locked) onSwitch?.(id); }}
+            onClick={() => {
+              if (locked) onLockedPick?.(`${label}: ${why}`);
+              else if (!isActive) onSwitch?.(id);
+            }}
           >
             <span className="provider-rail-icon">
               <Icon />
@@ -246,7 +259,10 @@ export function ProviderRail({ active, onSwitch, lockReason, onClose }: {
                 </span>
               )}
             </span>
-            <span className="provider-rail-label" aria-hidden>{label}</span>
+            <span className="provider-rail-text" aria-hidden>
+              <span className="provider-rail-label">{label}</span>
+              {why && <span className="provider-rail-why">{why}</span>}
+            </span>
           </Tab>
         );
       })}
@@ -431,6 +447,9 @@ export function ModelPicker({
   const costRead = useSessionCost(sessionId ?? null);
   // The selected engine on a host that cannot run it: said at the top of the pane, in the lock's words.
   const activeEngineUnavailable = providerLockReason?.(engine) ?? null;
+  // Why the locked engine the user just pressed cannot be picked; cleared when the engine changes.
+  const [lockedNote, setLockedNote] = React.useState<string | null>(null);
+  React.useEffect(() => { setLockedNote(null); }, [engine]);
   const engineUi = engineCaps(engine, engineCatalog);
   const isAcpPane = engineUi.providerModelCatalog;
   // The last strip this page pulled for the session draws in the first frame; the pull refreshes it.
@@ -832,17 +851,14 @@ export function ModelPicker({
     ? `${engineUi.displayName} default (${acpModelDisplayName(acpDefaultModelId, acpModels?.find((m) => m.modelId === acpDefaultModelId)?.name) ?? shortAcpModelName(acpDefaultModelId)})`
     : `${engineUi.displayName} default`;
   const acpDefaultRow = onAcpSwitch && acpDraft && (
-    <button
-      type="button"
-      className={`model-picker-row${!acpCurrent ? ' model-picker-row-active' : ''}${!acpCurrent ? ' picker-row-current' : ''}`}
-      role="option"
-      aria-selected={!acpCurrent}
+    <PickerRow
+      picked={!acpCurrent}
       data-testid="acp-default-row"
       title={`${engineUi.displayName} picks its configured default model at launch`}
       onClick={() => { if (acpCurrent) onAcpSwitch(''); }}
     >
       <span className="model-picker-row-name wn-title">{acpDefaultLabel}</span>
-    </button>
+    </PickerRow>
   );
 
   const acpLiveStrip = sessionId && acpLive && (
@@ -1052,17 +1068,18 @@ export function ModelPicker({
               const isSelected = group.id === acpSelectedGroup?.id;
               const holdsActive = group.id === acpActiveGroupId && !!acpActive;
               return (
-                <button
+                // The group whose models are listed now is the browsed one (aria-selected, the
+                // quiet highlight fill); the group holding the current model is aria-current, the
+                // picked colour (browsing is not picking).
+                <PickerRow
                   key={group.id || '(none)'}
-                  type="button"
-                  className={`model-picker-row${isSelected ? ' model-picker-row-active' : ''}${holdsActive ? ' picker-row-current' : ''}`}
-                  role="option"
-                  aria-selected={isSelected}
+                  browsed={isSelected}
+                  current={holdsActive}
                   title={group.label || 'Other models'}
                   onClick={() => setAcpGroupSel(group.id)}
                 >
                   <span className="model-picker-row-name wn-title">{group.label || 'Other'}</span>
-                </button>
+                </PickerRow>
               );
             })}
           </div>
@@ -1123,12 +1140,9 @@ export function ModelPicker({
                     // match came from, since the group column no longer does.
                     const showGroup = !!acpMatches && acpGrouped && !!fam.groupLabel;
                     return (
-                      <button
+                      <PickerRow
                         key={fam.familyId}
-                        type="button"
-                        className={`model-picker-row${isActive ? ' model-picker-row-active' : ''}${isActive ? ' picker-row-current' : ''}`}
-                        role="option"
-                        aria-selected={isActive}
+                        picked={isActive}
                         title={sample?.description?.split('.')[0] ?? fam.label}
                         onClick={() => {
                           if (!isActive) switchAcpFamily(fam);
@@ -1143,7 +1157,7 @@ export function ModelPicker({
                           {fam.label}
                           {showGroup && <span className="model-picker-row-group"> — {fam.groupLabel}</span>}
                         </span>
-                      </button>
+                      </PickerRow>
                     );
                   })}
                   {acpOverflow > 0 && (
@@ -1156,15 +1170,12 @@ export function ModelPicker({
             <>
               {/* Legacy caller with no selection channel at all: render the
                   one choice that IS true right now — the engine's default. */}
-              <button
-                type="button"
-                className="model-picker-row model-picker-row-active picker-row-current"
-                role="option"
-                aria-selected
+              <PickerRow
+                picked
                 title={`${engineUi.displayName} picks its configured default model at launch`}
               >
                 <span className="model-picker-row-name wn-title">{engineUi.displayName} default</span>
-              </button>
+              </PickerRow>
               <div className="model-picker-status">
                 Models are discovered when the session starts — open this picker again on the running session to switch.
               </div>
@@ -1179,12 +1190,9 @@ export function ModelPicker({
               const disabled = !variant;
               const active = acpActive?.effort === e.id;
               return (
-                <button
+                <PickerRow
                   key={e.id}
-                  type="button"
-                  className={`model-picker-row${active ? ' model-picker-row-active' : ''}${active ? ' picker-row-current' : ''}`}
-                  role="option"
-                  aria-selected={active}
+                  picked={active}
                   disabled={disabled}
                   title={disabled
                     ? `Not offered by ${acpActiveFamily?.label ?? 'this model'}`
@@ -1194,7 +1202,7 @@ export function ModelPicker({
                   }}
                 >
                   <span className="model-picker-row-name wn-title">{e.label}</span>
-                </button>
+                </PickerRow>
               );
             })}
           </div>
@@ -1205,17 +1213,14 @@ export function ModelPicker({
             {acpControlEfforts.options.map((option) => {
               const active = option.value === acpControlEfforts.currentValue;
               return (
-                <button
+                <PickerRow
                   key={option.value}
-                  type="button"
-                  className={`model-picker-row${active ? ' model-picker-row-active' : ''}${active ? ' picker-row-current' : ''}`}
-                  role="option"
-                  aria-selected={active}
+                  picked={active}
                   title={effortTitle(option.name, option.description)}
                   onClick={() => { if (!active) onAcpEffortControl?.(option.value); }}
                 >
                   <span className="model-picker-row-name wn-title">{option.name}</span>
-                </button>
+                </PickerRow>
               );
             })}
           </div>
@@ -1241,10 +1246,11 @@ export function ModelPicker({
         else onClose();
       }}
     >
-      <ProviderRail active={engine} onSwitch={onProviderSwitch} lockReason={providerLockReason} onClose={onAnchorLost ?? onClose} />
+      <ProviderRail active={engine} onSwitch={onProviderSwitch} lockReason={providerLockReason} onClose={onAnchorLost ?? onClose} onLockedPick={setLockedNote} />
       <div className="model-picker-pane">
       {switchNote && <div className="model-picker-switch-note" role="status" data-testid="model-picker-switch-note">{switchNote}</div>}
       {activeEngineUnavailable && <div className="model-picker-switch-note" role="status" data-testid="model-picker-engine-unavailable">{activeEngineUnavailable}</div>}
+      {lockedNote && <div className="model-picker-locked-note" role="status" data-testid="model-picker-locked-note">{lockedNote}</div>}
       {/* In place (not a popout), one × closes the picker; a popout closes on Escape or an outside click. */}
       {!popped && (
         <div className="model-picker-header model-picker-header-bare">
@@ -1274,7 +1280,7 @@ export function ModelPicker({
               return (
                 <div
                   key={`current:${row.model}`}
-                  className="model-picker-row model-picker-row-active picker-row-current"
+                  className="model-picker-row wn-pick-row"
                   data-testid="picker-out-of-catalog"
                   role="option"
                   aria-selected="true"
@@ -1288,18 +1294,15 @@ export function ModelPicker({
             }
             if (row.kind === 'auto') {
               return (
-                <button
+                <PickerRow
                   key="auto"
-                  type="button"
-                  className={`model-picker-row${row.active ? ' model-picker-row-active' : ''}${row.active ? ' picker-row-current' : ''}`}
+                  picked={row.active}
                   data-testid="picker-auto-row"
-                  role="option"
-                  aria-selected={row.active}
                   title={row.title ?? 'No --model flag — the CLI/config default decides'}
                   onClick={() => { if (!row.active) onSwitch(''); }}
                 >
                   <span className="model-picker-row-name wn-title">{row.label ?? (row.resolvedLabel ? `Auto (${row.resolvedLabel})` : 'Auto')}</span>
-                </button>
+                </PickerRow>
               );
             }
 
@@ -1307,12 +1310,10 @@ export function ModelPicker({
             const isActive = activeRow?.value === m.value;
             const isRequestedNotApplied = modelMismatch && requestedRow?.value === m.value;
             return (
-              <button
+              <PickerRow
                 key={m.value}
-                type="button"
-                className={`model-picker-row${isActive ? ' model-picker-row-active' : ''}${m.disabled ? ' model-picker-row-disabled' : ''}${isActive ? ' picker-row-current' : ''}`}
-                role="option"
-                aria-selected={isActive}
+                picked={isActive}
+                className={m.disabled ? 'model-picker-row-disabled' : undefined}
                 disabled={m.disabled}
                 title={m.disabled
                   ? 'Restricted by your organization\'s settings'
@@ -1325,7 +1326,7 @@ export function ModelPicker({
                   {catalogRowLabel(m)}
                   {isRequestedNotApplied && <span className="model-picker-option-requested"> ⚠</span>}
                 </span>
-              </button>
+              </PickerRow>
             );
           })}
         </div>
@@ -1333,11 +1334,8 @@ export function ModelPicker({
           <div className="model-picker-col model-picker-col-effort" role="listbox" aria-label="Reasoning effort">
             <div className="model-picker-col-title">Effort</div>
             {onEffortDefault && (
-              <button
-                type="button"
-                className={`model-picker-row${currentEffort === undefined ? ' model-picker-row-active' : ''}${currentEffort === undefined ? ' picker-row-current' : ''}`}
-                role="option"
-                aria-selected={currentEffort === undefined}
+              <PickerRow
+                picked={currentEffort === undefined}
                 data-effort="default"
                 title={effortDefaultTitle ?? 'No --effort at start: Claude Code\'s own settings decide'}
                 onClick={() => { if (currentEffort !== undefined) onEffortDefault(); }}
@@ -1346,7 +1344,7 @@ export function ModelPicker({
                   Default
                   {effortDefaultLevel && <span className="model-picker-row-group" data-testid="effort-default-level"> · {effortDefaultLevel}</span>}
                 </span>
-              </button>
+              </PickerRow>
             )}
             {EFFORTS.map((e) => {
               const disabled = !effortSupported
@@ -1364,19 +1362,17 @@ export function ModelPicker({
                 ? 'You requested this level but the CLI is not using it'
                 : effortTitle(e.label, e.description);
               return (
-                <button
+                <PickerRow
                   key={e.id}
-                  type="button"
-                  className={`model-picker-row${active ? ' model-picker-row-active' : ''}${requestedNotApplied ? ' model-picker-row-requested' : ''}${active ? ' picker-row-current' : ''}`}
-                  role="option"
-                  aria-selected={active}
+                  picked={active}
+                  className={requestedNotApplied ? 'model-picker-row-requested' : undefined}
                   disabled={disabled}
                   title={title}
                   data-effort={e.id}
                   onClick={() => { if (!disabled && !active) onEffortSwitch(e.id); }}
                 >
                   <span className="model-picker-row-name wn-title">{e.label}{requestedNotApplied ? ' ⚠' : ''}</span>
-                </button>
+                </PickerRow>
               );
             })}
           </div>

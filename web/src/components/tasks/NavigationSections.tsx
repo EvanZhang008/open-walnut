@@ -1,5 +1,6 @@
 import { Children, createContext, isValidElement, useContext, useEffect, useMemo, useState, type ReactNode, type MouseEvent } from 'react';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
+import { DisclosureChevron } from '@/components/controls';
 import { useNotifications } from '@/contexts/notifications';
 import { TASK_SHORTCUTS_KEY, useNavigationPreference } from '@/hooks/useNavigationPreference';
 import { useTaskUndo } from '@/undo/TaskUndoContext';
@@ -117,6 +118,8 @@ export function NavigationHeading({ id, label, className = '', collapsed, icon, 
 }
 
 /** Trails the name, Claude-sidebar style: `⌄` open, `›` folded. */
+/** A heading's open state is the shared Disclosure chevron (right when shut, down when open),
+ *  never a fill: the heading button carries aria-expanded. */
 export function NavigationChevron({ collapsed }: { collapsed: boolean }) {
-  return <svg className={`navigation-chevron${collapsed ? '' : ' expanded'}`} width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3.5 2 6.5 5 3.5 8" /></svg>;
+  return <DisclosureChevron open={!collapsed} className="navigation-chevron" />;
 }

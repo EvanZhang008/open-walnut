@@ -3,11 +3,12 @@ import { createPortal } from 'react-dom';
 import { SESSION_MODES, type SessionMode } from '@open-walnut/core';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
+import { PickerRow } from './PickerRow';
 
 /**
  * The permission-mode pill of a Claude Code composer (session panel, side
  * chats, the new-task draft): one click opens a menu of every mode, safest
- * first, the current one in the accent colour, and a pick switches to it (Evan, 2026-11-12:
+ * first, the current one's name coloured (a Picked row), and a pick switches to it (Evan, 2026-11-12:
  * "make it drop down menu can select"). Shift+Tab in the box still steps
  * through the enabled cycle; the pill no longer prints that hint.
  */
@@ -94,14 +95,14 @@ export function PermissionModeMenu({ mode, onPick, title, heading = 'Permission 
           return (
             // One line per mode, the model menu's own row: its name, a few muted words on what
             // it does at the right, and the full sentence as the row's tooltip.
-            <button
+            // The current mode is its name in the picked colour (no check mark); a risky mode warns
+            // in its hint's colour, so the warning tone never reads as the pick.
+            <PickerRow
               key={option.id}
-              type="button"
-              role="option"
-              aria-selected={active}
+              picked={active}
               data-mode={option.id}
               title={option.description}
-              className={`model-picker-row${active ? ' model-picker-row-active' : ''}${option.id === 'bypass' ? ' permission-mode-danger' : ''}${active ? ' picker-row-current' : ''}`}
+              className={option.id === 'bypass' ? 'permission-mode-danger' : undefined}
               onClick={() => {
                 setOpen(false);
                 triggerRef.current?.focus({ preventScroll: true });
@@ -110,7 +111,7 @@ export function PermissionModeMenu({ mode, onPick, title, heading = 'Permission 
             >
               <span className="model-picker-row-name permission-mode-name wn-title">{option.label}</span>
               <span className="permission-mode-hint">{option.hint}</span>
-            </button>
+            </PickerRow>
           );
         })}
       </div>,

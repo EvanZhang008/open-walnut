@@ -3,6 +3,7 @@ import type { SessionControl } from '@/api/sessions';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
+import '@/styles/pick-and-nav.css';
 
 interface SessionControlPillsProps {
   controls: SessionControl[];
@@ -125,7 +126,7 @@ function ThoughtControlPill({ control, setControl }: Pick<SessionControlPillsPro
       onPointerDown={(event) => event.stopPropagation()}
       style={{ position: 'fixed', bottom: 'auto', left: 'auto', width: 'min(280px, calc(100vw - 24px))', zIndex: 'var(--z-menu)', ...placement, visibility: placement ? 'visible' : 'hidden' }}>
       <div className="session-control-menu-title">{control.name}</div>
-      {control.options.map((option) => <button key={option.value} type="button" role="option" className="session-control-option" aria-selected={option.value === control.currentValue} disabled={busy}
+      {control.options.map((option) => <button key={option.value} type="button" role="option" className="session-control-option wn-pick-row" aria-selected={option.value === control.currentValue} disabled={busy}
         onClick={() => {
           setBusy(true);
           void setControl(control.id, option.value).catch(() => {}).finally(() => { setBusy(false); setOpen(false); });
@@ -190,7 +191,7 @@ function ApprovalControlPills({
                   type="button"
                   role="option"
                   aria-selected={active}
-                  className={`session-control-option${danger ? ' session-control-option-danger' : ''}`}
+                  className={`session-control-option wn-pick-row${danger ? ' session-control-option-danger' : ''}`}
                   key={option.value}
                   disabled={busy}
                   onClick={() => {
@@ -219,7 +220,7 @@ function ApprovalControlPills({
                 <span className="session-control-menu-divider" aria-hidden />
                 <button
                   type="button"
-                  className="session-control-option"
+                  className="session-control-option wn-pick-row"
                   aria-pressed={planOn}
                   disabled={busy}
                   onClick={() => apply(collab.id, planOn ? 'default' : 'plan')}

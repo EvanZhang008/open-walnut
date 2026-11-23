@@ -225,7 +225,7 @@ export async function bpSetup(page: Page, opts: BpOptions = {}): Promise<Hosts> 
 /** Pick a rail section with a real click and wait until it is the current one. */
 export async function pickRail(page: Page, label: string): Promise<void> {
   await railButton(page, label).click()
-  await expect(railButton(page, label)).toHaveAttribute('aria-current', 'true')
+  await expect(railButton(page, label)).toHaveAttribute('aria-current', 'page')
 }
 
 /**
@@ -235,8 +235,8 @@ export async function pickRail(page: Page, label: string): Promise<void> {
 export async function openSystemHosts(page: Page): Promise<Locator> {
   await openBell(page)
   const system = railButton(page, 'System')
-  if (await system.getAttribute('aria-current') !== 'true') await system.click()
-  await expect(system).toHaveAttribute('aria-current', 'true')
+  if (await system.getAttribute('aria-current') !== 'page') await system.click()
+  await expect(system).toHaveAttribute('aria-current', 'page')
   await expect(systemHosts(page)).toBeVisible({ timeout: 20_000 })
   return systemHosts(page)
 }
@@ -247,7 +247,7 @@ export async function openSystemHosts(page: Page): Promise<Locator> {
  */
 export async function openProblems(page: Page): Promise<Locator> {
   await openBell(page)
-  await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'true')
+  await expect(railButton(page, 'All')).toHaveAttribute('aria-current', 'page')
   await expect(problemHosts(page)).toBeVisible({ timeout: 20_000 })
   return problemHosts(page)
 }

@@ -181,7 +181,7 @@ test('with the chat closed, an empty board opens with one New task draft', async
   await expectChatHidden(page)
   await expect(page.locator('.sidebar-home-panels')).toBeVisible()
   await expect(sidebarAskWalnut(page)).toBeVisible()
-  await expect(sidebarAskWalnut(page)).not.toHaveClass(/active/)
+  await expect(sidebarAskWalnut(page)).toHaveAttribute('aria-pressed', 'false')
 
   // ONE draft column, titled for what it makes, with the caret already in it.
   await expect(drafts(page)).toHaveCount(1, { timeout: 15_000 })
@@ -295,7 +295,7 @@ test('a user who opened the chat keeps it, and the empty board then opens no dra
   // The spot is open, so its toggle is there to close it with.
   await expect(sidebarAskWalnut(page)).toBeVisible()
   await expect(sidebarAskWalnut(page)).toHaveAttribute('aria-label', 'Quick question')
-  await expect(sidebarAskWalnut(page)).toHaveClass(/active/)
+  await expect(sidebarAskWalnut(page)).toHaveAttribute('aria-pressed', 'true')
 
   // Closing it from the sidebar stores the choice, and a reload keeps it closed.
   await sidebarAskWalnut(page).click()
@@ -306,7 +306,7 @@ test('a user who opened the chat keeps it, and the empty board then opens no dra
   await expectChatHidden(page)
   // A user who closed it knows it exists: the toggle stays, inactive.
   await expect(sidebarAskWalnut(page)).toBeVisible()
-  await expect(sidebarAskWalnut(page)).not.toHaveClass(/active/)
+  await expect(sidebarAskWalnut(page)).toHaveAttribute('aria-pressed', 'false')
   // (The Focus Dock's cell follows the same rule; home-panel-visibility-relaunch covers it.)
   // Closed again means the closed-chat empty board again: the draft opens.
   await expect(drafts(page)).toHaveCount(1, { timeout: 15_000 })

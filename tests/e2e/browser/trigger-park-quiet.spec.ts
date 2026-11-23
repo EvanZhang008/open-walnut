@@ -160,7 +160,7 @@ test('a session\'s trigger parks its task off the list, and no letter reaches th
   await expect(panel).toBeVisible()
   const inboxRail = panel.locator('.nfc-rail-btn', { hasText: 'Inbox' })
   await inboxRail.click()
-  await expect(inboxRail).toHaveAttribute('aria-current', 'true')
+  await expect(inboxRail).toHaveAttribute('aria-current', 'page')
   await expect(panel.locator('.hib-row').filter({ hasText: control })).toBeVisible({ timeout: 15_000 })
   await expect(panel.locator('.hib-row').filter({ hasText: `Waiting: ${title}` })).toHaveCount(0)
   await shot(panel, 'inbox-no-park-letter', browserName)

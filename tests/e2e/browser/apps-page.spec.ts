@@ -120,18 +120,21 @@ test('quiet_rail: the apps used now and then open from Apps, their old links sti
     for (const link of links) {
       await page.getByTestId(link.id).click()
       await expect(page).toHaveURL(new RegExp(`^[^?#]*${link.path === '/' ? '/(?:[?#].*)?$' : link.path.replace(/[/]/g, '\\/')}`))
-      await expect(page.getByTestId(link.id)).toHaveClass(/\bactive\b/)
+      await expect(page.getByTestId(link.id)).toHaveAttribute('aria-current', 'page')
     }
     await page.getByTestId('sidebar-core-app-home').click()
     const toggles = nav.locator('button.sidebar-panel-toggle:not([data-testid="sidebar-org"]):not([data-testid="sidebar-quick-bar"])')
     expect(await toggles.count()).toBeGreaterThanOrEqual(4)
+    // A toggle says it is open in ARIA (aria-pressed, or aria-expanded for a popover), never a class.
+    const state = (button: ReturnType<typeof toggles.nth>) => button.evaluate((el) =>
+      `${el.getAttribute('aria-pressed')}|${el.getAttribute('aria-expanded')}`)
     for (let i = 0; i < await toggles.count(); i += 1) {
       const button = toggles.nth(i)
-      const before = await button.getAttribute('class')
+      const before = await state(button)
       await button.click()
-      await expect(button).not.toHaveAttribute('class', before ?? '')
+      await expect.poll(() => state(button)).not.toBe(before)
       await button.click()
-      await expect(button).toHaveAttribute('class', before ?? '')
+      await expect.poll(() => state(button)).toBe(before)
     }
 
     // Each moved app opens from its card on the Apps page.
@@ -426,7 +429,7 @@ test('the old Settings deep link to Plugins forwards to the Apps page', async ({
   await expect(page).toHaveURL(new RegExp(`^http://127\\.0\\.0\\.1:${fixture.port}/apps$`), { timeout: 60_000 })
   await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 60_000 })
   await expect(page.locator('#plugin-store')).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByTestId('sidebar-core-app-apps')).toHaveClass(/\bactive\b/)
+  await expect(page.getByTestId('sidebar-core-app-apps')).toHaveAttribute('aria-current', 'page')
 
   // Settings has no Plugins group and no Apps link: Apps is its own sidebar entry.
   await page.getByTestId('sidebar-core-app-settings').click()
@@ -484,7 +487,7 @@ test("a plugin's settings panels are on its page in Apps, and an old Settings li
   const tracking = page.getByTestId('plugin-panel-walnut-time:tracking')
   await expect(tracking).toHaveClass(/settings-anchor-flash-strong/, { timeout: 10_000 })
   await expect(tracking).toBeInViewport()
-  await expect(page.getByTestId('sidebar-core-app-apps')).toHaveClass(/\bactive\b/)
+  await expect(page.getByTestId('sidebar-core-app-apps')).toHaveAttribute('aria-current', 'page')
 })
 
 test("a plugin panel that throws stays inside its own box; the rest of the plugin's page works", async ({ page }) => {

@@ -396,7 +396,7 @@ test.describe('Rich HTML streaming', () => {
     await expect.poll(() => patches.length, { timeout: 5000 }).toBeGreaterThan(0);
 
     await add.click();
-    await expect(pill).toContainText('MD');
+    await expect(pill).toContainText('Markdown');
     await expect.poll(() => patches.length, { timeout: 5000 }).toBeGreaterThan(0);
     expect(patches.at(-1)).toMatchObject({ output_mode: 'markdown' });
 

@@ -65,7 +65,7 @@ test('the sidebar entry is Quick question, and it hides and shows the slot', asy
   await expect(slot(page)).toBeVisible({ timeout: 30_000 })
   const toggle = sidebarToggle(page)
   await expect(toggle).toHaveText('Quick question')
-  await expect(toggle).toHaveClass(/active/)
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true')
   await shotSlot(page, '1-slot-open')
 
   // Width, not visibility: a yielded chat spot may be collapsed or unmounted.
@@ -74,11 +74,11 @@ test('the sidebar entry is Quick question, and it hides and shows the slot', asy
     return (await chat.count()) ? (await chat.first().boundingBox())?.width ?? 0 : 0
   }
   await pointAt(page, toggle)
-  await expect(toggle).not.toHaveClass(/active/)
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false')
   await expect.poll(chatWidth, { timeout: 10_000 }).toBeLessThanOrEqual(1)
 
   await pointAt(page, toggle)
-  await expect(toggle).toHaveClass(/active/)
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(chatWidth, { timeout: 10_000 }).toBeGreaterThan(1)
   await expect(slot(page)).toBeVisible()
 })

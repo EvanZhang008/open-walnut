@@ -152,7 +152,7 @@ test('reply style in add menu updates the session twice and keeps the menu label
   await expect.poll(() => writes.body.some((body) => body.output_mode === 'markdown')).toBe(true);
   await expect(text).toHaveValue('Do not send this draft');
   await addButton(panel).click();
-  await expect(addRow(panel, 'output')).toContainText('MD');
+  await expect(addRow(panel, 'output')).toContainText('Markdown');
   await addRow(panel, 'output').click();
   await expect.poll(() => writes.body.some((body) => body.output_mode === 'rich')).toBe(true);
   await addButton(panel).click();
@@ -266,7 +266,7 @@ test('failed reply-style update restores the previous value and stays usable', a
   await addRow(panel, 'output').click();
   await expect.poll(() => writes.body.some((body) => body.output_mode === 'markdown')).toBe(true);
   await addButton(panel).click();
-  await expect(addRow(panel, 'output')).toContainText('MD');
+  await expect(addRow(panel, 'output')).toContainText('Markdown');
 });
 
 test('two rapid style changes send sequential writes and retain the last choice', async ({ page }) => {
@@ -292,7 +292,7 @@ test('two rapid style changes send sequential writes and retain the last choice'
   await firstArrived;
   try {
     await add.click();
-    await expect(addRow(panel, 'output')).toContainText('MD');
+    await expect(addRow(panel, 'output')).toContainText('Markdown');
     await addRow(panel, 'output').click();
     await expect(addRow(panel, 'output')).toHaveCount(0);
     expect(writes.body).toHaveLength(1);
@@ -338,7 +338,7 @@ test('a later failed style change restores the last confirmed value', async ({ p
   }
   await expect.poll(() => writes.body.length).toBe(2);
   await addButton(panel).click();
-  await expect(addRow(panel, 'output')).toContainText('MD');
+  await expect(addRow(panel, 'output')).toContainText('Markdown');
 });
 
 test('short viewport scrolls the add menu to every action without clipping, and Note still opens', async ({ page }) => {

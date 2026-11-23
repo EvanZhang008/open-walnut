@@ -41,6 +41,8 @@
 .qb-bar {
   --qb-fg: var(--fg);
   --qb-muted: var(--fg-muted);
+  /* Small text that has to be read (a hint sentence), not only seen: about 10:1, where muted is 3.6:1. */
+  --qb-secondary: var(--fg-secondary);
   --qb-line: var(--border);
   --qb-hover: var(--bg-hover);
   position: relative;
@@ -428,8 +430,12 @@ html.qb-panel-doc #root {
 .qb-mode-chip .qb-to-name { color: var(--on-accent); }
 .qb-mode-x { font-size: 14px; line-height: 1; opacity: 0.8; }
 
-.qb-modes { display: inline-flex; gap: 6px; min-width: 0; overflow: hidden; }
-.qb-mode-pill .qb-key { margin-left: 5px; padding: 0 4px; font-size: var(--font-size-xs); }
+/* The empty box's modes: a button each, then one muted sentence naming the words that switch
+   (the sentence shortens first; the buttons stay whole). The sentence is read, so it takes the
+   secondary text colour, not the muted one. */
+.qb-foot > span.qb-modes { display: flex; align-items: center; gap: 6px; }
+.qb-mode-pill { flex: none; }
+.qb-mode-hint { min-width: 0; margin-left: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--qb-secondary); }
 
 .qb-foot > span.qb-foot-trouble { display: flex; align-items: center; gap: 8px; }
 .qb-foot-trouble-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }

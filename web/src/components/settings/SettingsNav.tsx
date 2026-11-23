@@ -27,6 +27,7 @@ import { APPS_PATH } from '@/utils/open-link'
 import { pageShortcutBlocked } from '@/utils/page-shortcut'
 import '@/styles/settings-nav.css'
 import '@/styles/settings-nav-state.css'
+import '@/styles/pick-and-nav.css'
 import { SearchField } from '@/components/common/SearchField'
 
 export { NAV_OWNER, resolvePane } from './settings-routing'
@@ -220,7 +221,7 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
   // finger left it.
   useEffect(() => {
     if (isPhoneLayout()) return
-    const item = navRef.current?.querySelector<HTMLElement>('.settings-nav-active')
+    const item = navRef.current?.querySelector<HTMLElement>('.settings-nav-item[aria-current="page"]')
     item?.scrollIntoView?.({ block: 'nearest' })
   }, [activePane])
 
@@ -304,10 +305,10 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
     const hit = filtering ? hitByKey.get(row.key) : undefined
     const active = row.kind === 'pane' && (row.key === activePane || (!filtering && tabParent(activePane) === row.key))
     const highlighted = filtering && row.key === highlight
-    const className = 'settings-nav-item'
+    // The current section is the shared Nav item (aria-current="page", pick-and-nav.css).
+    const className = 'settings-nav-item wn-nav-item'
       + (row.kind === 'link' ? ' settings-nav-page-link' : '')
       + (row.parent ? ' settings-nav-subitem' : '')
-      + (active ? ' settings-nav-active' : '')
       + (highlighted ? ' is-highlighted' : '')
     const body = (
       <>

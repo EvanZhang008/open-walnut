@@ -51,7 +51,7 @@ import { useFocusRequest } from '@/utils/focus-when-shown';
 import { caretBackOnMount } from '@/utils/composer-caret-keep';
 import { caretOnEdgeLine, noteSentPrompt, recallPrompts, stepRecall, type RecallPos } from './prompt-recall';
 import { composerDrawing, type DrawingPlace } from './drawing-place';
-import { DisclosureChevron, ToggleSwitch } from '@/components/controls';
+import { ToggleSwitch } from '@/components/controls';
 import { SESSION_NOTE_LABEL, SIDE_CHAT_LABEL } from './composer-words';
 
 // Picture types, limit, read and paste rule are shared with every answer box (image-attachments.ts).
@@ -2321,10 +2321,12 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
                       >
                         {/* Its icon in the 16 px column, so its words start where every other row's do. */}
                         <span className="chat-plus-menu-key" aria-hidden="true">{id === 'output' ? ICON_SLIDERS : id === 'note' ? ICON_NOTE : ICON_CHAT}</span>
-                        <span>{id === 'output' ? 'Reply style' : id === 'btw' ? SIDE_CHAT_LABEL : id === 'note' ? SESSION_NOTE_LABEL : id}</span>
-                        {label && (id !== 'note' || label !== SESSION_NOTE_LABEL) && <span className="chat-plus-menu-control-value">{label}</span>}
-                        {/* It opens its picker: the one chevron of a row that opens more. */}
-                        {id === 'output' && <DisclosureChevron className="chat-plus-menu-chevron" />}
+                        {/* Reply style has two styles and a press flips between them, so it names the
+                            current one and says what a press does: no chevron (a chevron is only for a
+                            row that opens a choice). The hint is lower case so it never reads as the style. */}
+                        <span>{id === 'output' ? `Reply style${label ? `: ${label === 'rich' ? 'Rich' : 'Markdown'}` : ''}` : id === 'btw' ? SIDE_CHAT_LABEL : id === 'note' ? SESSION_NOTE_LABEL : id}</span>
+                        {label && id === 'output' && <span className="chat-plus-menu-control-value">{label === 'rich' ? 'switch to markdown' : 'switch to rich'}</span>}
+                        {label && id !== 'output' && (id !== 'note' || label !== SESSION_NOTE_LABEL) && <span className="chat-plus-menu-control-value">{label}</span>}
                       </button>
                     );
                   })}

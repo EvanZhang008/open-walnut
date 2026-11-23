@@ -257,7 +257,7 @@ test('N9: a card title has its own line, and the section the center opens on is 
   const { errors } = await bootWithFeed(page, [failure(1), failure(2), letter(1)])
   await openCenter(page)
   // No asks: the center lands on All, the strip's last entry. It must be on screen.
-  const active = page.locator('.notification-panel .nfc-rail-btn.nfc-active')
+  const active = page.locator('.notification-panel .nfc-rail-btn[aria-current="page"]')
   await expect(active).toBeVisible()
   const vw = page.viewportSize()!.width
   await expect.poll(async () => {

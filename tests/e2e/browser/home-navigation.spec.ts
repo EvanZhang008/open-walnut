@@ -261,8 +261,9 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   await toggle.click();
   await expect(navigation(page)).not.toHaveAttribute('inert', '');
   const group = page.locator('.sidebar-home-group');
-  // A toggle whose panel is open looks like the current page (the rail's active blue);
-  // one whose panel is shut is a plain grey icon. The pointer leaves the rail first, since
+  // The page you are on (Home, aria-current) and a pane open beside it (the task panel,
+  // aria-pressed) are the Nav item's two states and never look the same (pick-and-nav.css);
+  // a toggle whose pane is shut is a plain grey icon. The pointer leaves the rail first, since
   // hover tints every link, and the poll waits out the colour transition.
   const railLook = (locator: ReturnType<Page['locator']>) => locator.evaluate(el => {
     const style = getComputedStyle(el);
@@ -270,17 +271,20 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   });
   const agenda = page.getByTestId('sidebar-toggle-calendar');
   await page.mouse.move(900, 500);
-  const pageLook = await railLook(group.locator('> .sidebar-link'));
-  await expect(toggle).toHaveClass(/\bactive\b/);
-  await expect.poll(() => railLook(toggle)).toBe(pageLook);
-  await expect(agenda).not.toHaveClass(/\bactive\b/);
+  const home = group.locator('> .sidebar-link');
+  await expect(home).toHaveAttribute('aria-current', 'page');
+  const pageLook = await railLook(home);
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => railLook(toggle)).not.toBe(pageLook);
+  await expect(agenda).toHaveAttribute('aria-pressed', 'false');
   expect(await railLook(agenda)).not.toBe(pageLook);
+  expect(await railLook(agenda)).not.toBe(await railLook(toggle));
   await toggle.click();
   await page.mouse.move(900, 500);
-  await expect(toggle).not.toHaveClass(/\bactive\b/);
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
   await expect.poll(async () => await railLook(toggle) === await railLook(agenda)).toBe(true);
   await toggle.click();
-  await expect(toggle).toHaveClass(/\bactive\b/);
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
   expect(await group.evaluate(el => getComputedStyle(el).borderTopWidth)).toBe('1px');
   // Collapsed, the side bars are boxed on their own too, apart from Home's box.
   expect(await page.locator('.sidebar-side-bar-group').evaluate(el => getComputedStyle(el).borderTopWidth)).toBe('1px');
@@ -1227,11 +1231,11 @@ test('the Scratchpad is a side bar in its own rail group, right of the agenda on
     for (const name of ['Agenda', 'Scratchpad']) {
       await expect(page.locator('.sidebar-nav .sidebar-link .sidebar-label', { hasText: name })).toHaveCount(1);
     }
-    await expect(toggle).not.toHaveClass(/\bactive\b/);
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
     await toggle.click();
     const pane = page.getByTestId('home-companion-scratchpad');
     await expect(pane).toBeVisible();
-    await expect(toggle).toHaveClass(/\bactive\b/);
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
     await expect(pane.locator('.global-notes-label')).toHaveText('Scratchpad');
     const editor = pane.locator('.notes-editor .tiptap');
     // Opening it is a request to write: the caret is already in the editor.
@@ -1271,7 +1275,7 @@ test('the Scratchpad is a side bar in its own rail group, right of the agenda on
     await pane.getByRole('button', { name: 'Close Scratchpad' }).click();
     await expect(pane).toBeHidden();
     await expect(toggle).toBeFocused();
-    await expect(toggle).not.toHaveClass(/\bactive\b/);
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
     await expect(calendar).toBeVisible();
     await toggle.click();
     await expect(editor).toContainText(line);

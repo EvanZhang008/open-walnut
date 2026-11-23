@@ -10,7 +10,7 @@
  * ended on instead.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { SettingsDisclosure, SettingsRow } from '../../SettingsSection'
+import { SettingsDisclosure, SettingsRow, SettingsTag } from '../../SettingsSection'
 import { SettingsButton } from '../../inputs/SettingsButton'
 import { KeyInput } from './KeyInput'
 import { saveErrorMessage } from '../../settings-pane-context'
@@ -155,7 +155,7 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
   if (!status) return <SettingsRow label="Google account" help="Checking..." />
 
   if (status.connected) {
-    const who = `${status.email ? ` as ${status.email}` : ''}`
+    const who = status.email ? `Signed in as ${status.email}. ` : ''
     const clientId = dest.client_id?.trim() || status.signedInClientId
     const ownClientNote = (status.signedInWith ?? status.client) === 'custom'
       ? `Uses your own Google client${clientId ? ` (${clientId.length > 24 ? `${clientId.slice(0, 12)}...${clientId.slice(-12)}` : clientId})` : ''}: a new computer needs the same ID and secret.`
@@ -189,12 +189,14 @@ export function DriveConnect({ dest, onChange, inUse, otherInUse, onConnected, o
       <SettingsRow
         label="Google account"
         help={inUse
-          ? `Connected${who}. Backups go to the "${status.folderName ?? 'Walnut Backup'}" folder in your Drive.`
-          : `Connected${who}. Backups still go to ${otherInUse ?? 'the service picked before'} until you choose Google Drive.`}
+          ? `${who}Backups go to the "${status.folderName ?? 'Walnut Backup'}" folder in your Drive.`
+          : `${who}Backups still go to ${otherInUse ?? 'the service picked before'} until you choose Google Drive.`}
         error={error ?? undefined}
         data-testid="backup-gdrive-connected"
         control={
           <span className="settings-inline-pair">
+            {/* The connection is this row's, never a mark on the Service segment. */}
+            <span data-testid="backup-gdrive-status"><SettingsTag tone="success">Connected</SettingsTag></span>
             {!inUse && <SettingsButton variant="primary" onClick={onUse} data-testid="backup-gdrive-use">Use Google Drive</SettingsButton>}
             <SettingsButton onClick={() => setConfirmingDisconnect(true)} data-testid="backup-gdrive-disconnect">Disconnect</SettingsButton>
           </span>

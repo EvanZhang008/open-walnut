@@ -106,7 +106,7 @@ test('the draft model menu, the folder picker and New task again give the caret 
   await expect(page.locator('.model-picker')).toHaveCount(0)
 
   await pill.click()
-  const row = page.locator('.model-picker .model-picker-row:not(.model-picker-row-active)').first()
+  const row = page.locator('.model-picker .model-picker-row:not([aria-selected="true"])').first()
   await expect(row).toBeVisible()
   const onPick = focusAfter('click')
   await page.waitForTimeout(100)

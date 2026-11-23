@@ -233,7 +233,7 @@ test.describe('ModelPicker fallback registry', () => {
     // Cold: the server's record is the only memory of the pick.
     input = await openSessionPanel(page)
     picker = await openModelPicker(page, input)
-    const active = picker.locator('.model-picker-col-models .model-picker-row-active .model-picker-row-name')
+    const active = picker.locator('.model-picker-col-models [aria-selected="true"] .model-picker-row-name')
     await expect(active).toHaveCount(1)
     await expect(active).toHaveText('Sonnet 1M')
     await picker.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-fallback-1m-checked.png') })
@@ -284,7 +284,7 @@ test.describe('ModelPicker CLI catalog', () => {
       'GPT-5.6 Sol',
       'Opus 5 1M',
     ])
-    await expect(picker.locator('.model-picker-col-models .model-picker-row-active .model-picker-row-name')).toHaveText('Fable 5 1M')
+    await expect(picker.locator('.model-picker-col-models [aria-selected="true"] .model-picker-row-name')).toHaveText('Fable 5 1M')
 
     await expect(picker.locator('.model-picker-col-effort .model-picker-row-name')).toHaveText(['Low', 'Medium', 'High', 'X-High', 'Max'])
 
@@ -309,12 +309,23 @@ test.describe('ModelPicker CLI catalog', () => {
     await expect(names.nth(0)).toHaveText('Fable 5')
     await expect(names.nth(1)).toHaveText('Opus 4.8 1M')
 
-    // Active row = Fable (resolvedModel match on the non-default row), shown by colour, no checkmark.
-    // Scoped to the Model column: the Effort column marks its own active row.
-    const active = picker.locator('.model-picker-col-models .model-picker-row-active')
+    // Active row = Fable (resolvedModel match on the non-default row): a Picked row, its name in
+    // --accent-text, no checkmark. Scoped to the Model column: the Effort column marks its own.
+    const active = picker.locator('.model-picker-col-models [aria-selected="true"]')
     await expect(active).toHaveCount(1)
     await expect(active.locator('.model-picker-row-name')).toHaveText('Fable 5')
-    await expect(active).toHaveClass(/picker-row-current/)
+    await expect(active).toHaveClass(/wn-pick-row/)
+    const accentText = await page.evaluate(() => {
+      const probe = document.createElement('span')
+      probe.style.color = 'var(--accent-text)'
+      document.body.appendChild(probe)
+      const c = getComputedStyle(probe).color
+      probe.remove()
+      return c
+    })
+    const rowColor = (row: typeof active) => row.locator('.model-picker-row-name').evaluate((el) => getComputedStyle(el).color)
+    expect(await rowColor(active), 'the pick is the name in --accent-text').toBe(accentText)
+    expect(await rowColor(picker.locator('.model-picker-col-models [aria-selected="false"]').first())).not.toBe(accentText)
     await expect(page.locator('.model-picker-row-check')).toHaveCount(0)
     expect(await active.innerText()).not.toMatch(/[✓✔]/)
 
@@ -364,7 +375,7 @@ test.describe('ModelPicker CLI catalog', () => {
 
     // No CATALOG row is active — the synthetic row is the only active-styled one
     // in the Model column (the Effort column marks its own active row).
-    const actives = picker.locator('.model-picker-col-models .model-picker-row-active')
+    const actives = picker.locator('.model-picker-col-models [aria-selected="true"]')
     await expect(actives).toHaveCount(1)
     await expect(actives).toHaveAttribute('data-testid', 'picker-out-of-catalog')
 
@@ -415,14 +426,14 @@ test.describe('ModelPicker CLI catalog', () => {
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
 
-    await expect(picker.locator('.model-picker-col-models .model-picker-row-active .model-picker-row-name')).toHaveText('GPT-5.6 Sol')
+    await expect(picker.locator('.model-picker-col-models [aria-selected="true"] .model-picker-row-name')).toHaveText('GPT-5.6 Sol')
     // No effort applied on its own: the Details fold's live strip names the settings' one.
     await picker.getByTestId('picker-fold-details').click()
     await expect(picker.getByTestId('picker-fold-body-details').getByTestId('picker-live-strip')).toContainText('effort from settings xhigh')
     const segs = picker.locator('.model-picker-col-effort .model-picker-row')
     await expect(segs).toHaveCount(5)
     for (const seg of await segs.all()) await expect(seg).toBeEnabled()
-    await expect(segs.nth(3)).toHaveClass(/model-picker-row-active/)
+    await expect(segs.nth(3)).toHaveAttribute('aria-selected', 'true')
 
     await page.screenshot({ path: '/tmp/walnut-effort/gpt-live-xhigh.png', fullPage: true })
 
@@ -454,7 +465,7 @@ test.describe('ModelPicker CLI catalog', () => {
     await expect(saved).toHaveCount(1)
     await expect(saved.locator('.model-picker-row-name')).toHaveText('mythos-1')
     await expect(saved).toHaveAttribute('title', /^Saved model/)
-    await expect(picker.locator('.model-picker-col-models .model-picker-row-active')).toHaveCount(1)
+    await expect(picker.locator('.model-picker-col-models [aria-selected="true"]')).toHaveCount(1)
   })
 
   // The popout has no header: no title, no "Current: …" line and no × (Escape or an outside
@@ -467,7 +478,7 @@ test.describe('ModelPicker CLI catalog', () => {
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
 
-    await expect(picker.locator('.model-picker-col-models .model-picker-row-active .model-picker-row-name')).toHaveText('Fable 5')
+    await expect(picker.locator('.model-picker-col-models [aria-selected="true"] .model-picker-row-name')).toHaveText('Fable 5')
     await expect(picker.locator('.model-picker-header, .model-picker-title, .model-picker-current, .model-picker-close')).toHaveCount(0)
     await expect(picker).not.toContainText('Current:')
     await expect(picker.getByTestId('picker-folds')).toBeVisible()

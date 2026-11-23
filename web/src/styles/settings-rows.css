@@ -185,6 +185,14 @@
   max-width: 100%;
 }
 
+/* A value the row only shows (one engine to run on, nothing to pick): plain words, no control look. */
+.settings-row-value {
+  font-size: var(--font-size-md);
+  line-height: 17px;
+  color: var(--fg-secondary);
+  white-space: nowrap;
+}
+
 .settings-row[aria-disabled='true'] {
   opacity: 0.45;
 }

@@ -82,7 +82,7 @@
     -webkit-tap-highlight-color: transparent;
   }
 
-  .app-shell-navigation .settings-container .settings-layout[data-phone-settings] .settings-nav-item.settings-nav-active {
+  .app-shell-navigation .settings-container .settings-layout[data-phone-settings] .settings-nav-item[aria-current='page'] {
     background: none;
     color: var(--fg);
     font-weight: 400;

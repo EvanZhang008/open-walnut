@@ -1,3 +1,4 @@
+@import './pick-and-nav.css';
 /**
  * Ask Walnut — the draft column's second tab + how its tasks read in lists.
  *
@@ -36,9 +37,11 @@
 /* ── Draft entry fork: two big intent cards (Start Task | Ask Walnut) ── */
 /* The approved mockup's Design-2 card grammar (user round 8: "两个大的圆的",
    not a tab strip): rounded cards with icon + title + one-line description,
-   centered in the empty body; hover lifts, the selected card gets the colored
-   border + soft ring. This is the entry fork, decided before the first
-   keystroke — it deserves the space. */
+   centered in the empty body. This is the entry fork, decided before the first
+   keystroke — it deserves the space. The cards are the shared Option card
+   (.wn-option-card, styles/pick-and-nav.css): the same border on both, one picked look
+   (aria-pressed), the focus ring only for the keyboard, its padding and its title and
+   description lines. This file only places them. */
 .draft-intent-stack {
   display: flex;
   flex-direction: column;
@@ -52,66 +55,28 @@
   gap: 12px;
   width: min(520px, 94%);
 }
-.draft-intent-card {
-  border: 1.5px solid var(--border);
-  border-radius: 14px;
-  padding: 18px 16px 16px;
-  background: var(--card-bg);
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s, transform 0.15s;
-}
-.draft-intent-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
-}
-.draft-intent-card:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
-  outline-offset: 2px;
-}
 /* Card glyphs are line icons (and the Walnut mark), sized like a 22px emoji
    was, in the muted ink so the title below stays the loudest line. */
-.draft-intent-ic { display: block; height: 24px; margin-bottom: 10px; color: var(--fg-muted); }
+.draft-intent-ic { display: block; height: 24px; margin-bottom: 12px; color: var(--fg-muted); }
 .draft-intent-ic svg, .draft-intent-walnut-mark { width: 24px; height: 24px; display: block; }
 /* The Walnut mark is an app icon: rounded like one (iOS corner ratio, ~22%). */
 .draft-intent-walnut-mark { border-radius: 5.5px; }
-.draft-intent-card.is-active .draft-intent-ic { color: var(--accent); }
-.draft-intent-card-walnut.is-active .draft-intent-ic { color: var(--walnut-accent); }
-.draft-intent-t { display: block; font-weight: 700; font-size: 14px; margin-bottom: 5px; color: var(--fg); }
-.draft-intent-d { display: block; font-size: var(--font-size-sm); color: var(--fg-muted); line-height: 1.5; }
-.draft-intent-card.is-active {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 5%, var(--bg));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
-  cursor: default;
-}
-.draft-intent-card.is-active:hover { transform: none; }
-.draft-intent-card.is-active .draft-intent-t { color: var(--accent); }
-.draft-intent-card-walnut.is-active {
-  border-color: var(--walnut-accent);
-  background: color-mix(in srgb, var(--walnut-accent) 7%, var(--bg));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--walnut-accent) 14%, transparent);
-}
-.draft-intent-card-walnut.is-active .draft-intent-t { color: var(--walnut-accent); }
-.draft-intent-card-walnut:focus-visible {
-  outline-color: color-mix(in srgb, var(--walnut-accent) 60%, transparent);
-}
 /* A narrow column (a draft beside open chats): the two cards stack, each one row, icon on
    the left, so neither wraps its description to five lines and the fork stays short. */
 .draft-intent-stack { container: draft-intent / inline-size; }
 @container draft-intent (max-width: 440px) {
   .draft-intent-cards { grid-template-columns: 1fr; gap: 8px; }
-  .draft-intent-card {
+  /* Two classes: wins over the shared card's own padding whatever order the files load in. */
+  .draft-intent-card.wn-option-card {
     display: grid;
     grid-template-columns: 24px 1fr;
     column-gap: 12px;
     row-gap: 2px;
     align-items: start;
-    padding: 12px 14px;
+    padding: 12px 16px;
   }
   .draft-intent-ic { grid-row: 1 / span 2; margin-bottom: 0; }
-  .draft-intent-t { margin-bottom: 0; }
+  .draft-intent-card .wn-option-card-title { margin-bottom: 0; }
 }
 
 /* ── Walnut-mode panel cue: ONE warm hairline at the top. ── */

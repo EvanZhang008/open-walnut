@@ -17,6 +17,7 @@ import { choiceKey, MusicPicker } from './music-picker'
 import { CYCLE_RESET_MS } from '../server/focus'
 import { DndStartToggle } from './dnd-row'
 import { GoalInput } from './goal'
+import { Segments } from './choices'
 import type { OpOutcome, RhythmPublicState, RhythmStore } from './store'
 
 export { choiceKey }
@@ -114,21 +115,12 @@ function MinutesRow({ label, presets, limits, value, onChange, testId }: {
   return (
     <div className="rhythm-start-row">
       <span className="rhythm-start-label" id={`${testId}-label`}>{label}</span>
-      <div className="rhythm-segments" role="radiogroup" aria-labelledby={`${testId}-label`}>
-        {presets.map((preset) => (
-          <button
-            key={preset}
-            type="button"
-            role="radio"
-            aria-checked={parsed === preset}
-            className={`rhythm-segment${parsed === preset ? ' rhythm-segment-on' : ''}`}
-            data-testid={`${testId}-${preset}`}
-            onClick={() => onChange(String(preset))}
-          >
-            {preset}
-          </button>
-        ))}
-      </div>
+      <Segments
+        labelledBy={`${testId}-label`}
+        value={parsed}
+        options={presets.map((preset) => ({ value: preset, label: String(preset), testId: `${testId}-${preset}` }))}
+        onChange={(preset) => onChange(String(preset))}
+      />
       <label className="rhythm-start-number wn-field is-sm">
         <input
           type="text"

@@ -318,7 +318,7 @@ async function showSection(panel: Locator, label: string): Promise<void> {
   await rail(panel, label).click()
   // aria-current, not aria-selected: the rail is plain buttons on purpose (the
   // ARIA tab pattern would oblige a tabpanel + arrow-key nav + roving tabindex).
-  await expect(rail(panel, label)).toHaveAttribute('aria-current', 'true')
+  await expect(rail(panel, label)).toHaveAttribute('aria-current', 'page')
 }
 
 /**
@@ -359,7 +359,7 @@ test('rail sorts the feed by what the user has to do, and cards carry the ask', 
   const panel = await openCenter(page)
 
   // Landing section is Needs Action, because one ask is still pending.
-  await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'true')
+  await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'page')
   // The action badge counts PENDING permissions only — the resolved twin is history.
   await expect(rail(panel, 'Needs you').locator('.nfc-rail-badge')).toHaveText('1')
 
@@ -498,26 +498,26 @@ test('the Errors section lands on all categories and drills into one family', as
 
   // Click straight into one family from the rail.
   await betaSub.click()
-  await expect(betaSub).toHaveAttribute('aria-current', 'true')
-  await expect(rail(panel, 'Errors')).toHaveAttribute('aria-current', 'false')
+  await expect(betaSub).toHaveAttribute('aria-current', 'page')
+  await expect(rail(panel, 'Errors')).not.toHaveAttribute('aria-current', 'page')
   await expect(seededItems(panel)).toHaveCount(1)
   await expect(seededItems(panel)).toContainText('PW NFC beta failure')
   await page.screenshot({ path: `${SCREENSHOT_DIR}/errors-category-drilldown.png`, fullPage: true })
 
   // The way back mirrors the way in: Show all in the filtered header.
   await panel.locator('.nfc-cat-showall').click()
-  await expect(rail(panel, 'Errors')).toHaveAttribute('aria-current', 'true')
+  await expect(rail(panel, 'Errors')).toHaveAttribute('aria-current', 'page')
   await expect(seededItems(panel)).toHaveCount(3)
 
   // The header itself is the other way in — same filter as the rail sub-entry.
   await headers.nth(0).locator('button.nfc-cat-drill').click()
-  await expect(alphaSub).toHaveAttribute('aria-current', 'true')
+  await expect(alphaSub).toHaveAttribute('aria-current', 'page')
   await expect(seededItems(panel)).toHaveCount(2)
 
   // Re-picking the Errors SECTION resets to the all-categories landing.
   await rail(panel, 'Errors').click()
-  await expect(rail(panel, 'Errors')).toHaveAttribute('aria-current', 'true')
-  await expect(alphaSub).toHaveAttribute('aria-current', 'false')
+  await expect(rail(panel, 'Errors')).toHaveAttribute('aria-current', 'page')
+  await expect(alphaSub).not.toHaveAttribute('aria-current', 'page')
   await expect(seededItems(panel)).toHaveCount(3)
 })
 
@@ -529,8 +529,8 @@ test('with no pending ask the center lands on All, and Needs Action reads empty'
   await loadHome(page)
 
   const panel = await openCenter(page)
-  await expect(rail(panel, 'All')).toHaveAttribute('aria-current', 'true')
-  await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'false')
+  await expect(rail(panel, 'All')).toHaveAttribute('aria-current', 'page')
+  await expect(rail(panel, 'Needs you')).not.toHaveAttribute('aria-current', 'page')
   await expect(rail(panel, 'Needs you').locator('.nfc-rail-badge')).toHaveCount(0)
   await expect(seededItems(panel)).toHaveCount(4)
 
@@ -582,7 +582,7 @@ test('Needs Action lists and counts only live session asks; a decision letter st
   await expect(page.locator('.notification-badge-count')).toHaveText('3', { timeout: 15_000 })
 
   const panel = await openCenter(page)
-  await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'true')
+  await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'page')
   await expect(rail(panel, 'Needs you').locator('.nfc-rail-badge')).toHaveText('2')
   await expect(seededPermCards(panel)).toHaveCount(2)
   await expect(panel.locator('.hib-row')).toHaveCount(0)
@@ -620,7 +620,7 @@ test('AskUserQuestion card submits the real answers map to the permission route'
   await loadHome(page)
 
   const panel = await openCenter(page)
-  await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'true')
+  await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'page')
 
   const card = seededPermCards(panel)
   await expect(card).toHaveCount(1)
@@ -852,7 +852,7 @@ test('a session-view approval settles the panel card, the badge and the toast', 
   await waitForWs(page)
 
   const panel = await openCenter(page)
-  await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'true')
+  await expect(rail(panel, 'Needs you')).toHaveAttribute('aria-current', 'page')
   const badgeBefore = await actionBadge(panel)
   expect(badgeBefore).toBeGreaterThanOrEqual(1)
   await expect(seededPermCards(panel).getByRole('button', { name: 'Allow', exact: true })).toBeVisible()
@@ -941,7 +941,7 @@ test('Open session from the panel card navigates and leaves the ask pending', as
   // whole point — a click-through that dismissed or settled the ask would silently
   // drop a session's blocker on the floor.
   const reopened = await openCenter(page)
-  await expect(rail(reopened, 'Needs you')).toHaveAttribute('aria-current', 'true')
+  await expect(rail(reopened, 'Needs you')).toHaveAttribute('aria-current', 'page')
   expect(await actionBadge(reopened)).toBeGreaterThanOrEqual(1)
   const stillPending = seededPermCards(reopened)
   await expect(stillPending).toHaveCount(1)

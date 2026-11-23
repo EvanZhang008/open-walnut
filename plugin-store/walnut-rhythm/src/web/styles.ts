@@ -131,8 +131,9 @@ export const RHYTHM_CSS = `
   background: var(--bg);
 }
 .rhythm-option {
-  display: grid;
-  gap: 1px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   padding: 7px 10px;
   border: 0;
@@ -147,8 +148,9 @@ export const RHYTHM_CSS = `
 }
 .rhythm-option:last-child { border-bottom: 0; }
 .rhythm-option:hover { background: var(--bg-hover, var(--bg-secondary)); }
-.rhythm-option-on { background: var(--accent-subtle, color-mix(in srgb, var(--accent) 12%, transparent)); }
-.rhythm-option-on .rhythm-option-title { color: var(--accent); font-weight: 600; }
+/* The pick is the host's Picked row (wn-pick-row + aria-checked): its name in the accent text, never a fill or a check. */
+.rhythm-option-copy { display: grid; gap: 1px; min-width: 0; }
+.rhythm-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .rhythm-option-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rhythm-option-meta { color: var(--fg-muted); font-size: 12px; line-height: 15px; }
 .rhythm-pad { padding: 8px 10px; }
@@ -189,21 +191,8 @@ export const RHYTHM_CSS = `
 .rhythm-music-title { font-size: 14px; line-height: 19px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rhythm-music-volume { display: grid; gap: 2px; justify-items: start; }
 .rhythm-music-volume input { width: 120px; accent-color: var(--accent); }
-.rhythm-segments { display: inline-flex; justify-self: start; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
-.rhythm-segment {
-  height: 26px;
-  padding: 0 12px;
-  border: 0;
-  border-left: 1px solid var(--border);
-  background: none;
-  color: var(--fg-secondary);
-  font: inherit;
-  font-size: 12.5px;
-  cursor: pointer;
-}
-.rhythm-segment:first-child { border-left: 0; }
-.rhythm-segment:hover { background: var(--bg-hover, var(--bg-secondary)); }
-.rhythm-segment-on { background: var(--accent-subtle, color-mix(in srgb, var(--accent) 12%, transparent)); color: var(--accent); font-weight: 600; }
+/* The host's segmented control (\`wn-seg\`, choices.tsx); Rhythm only places it. */
+.rhythm-segments { justify-self: start; }
 .rhythm-music .rhythm-picker { max-height: 196px; }
 
 /* ── Start form (the App's focus card and the sidebar popover) ── */
@@ -224,15 +213,12 @@ export const RHYTHM_CSS = `
 .rhythm-start-music { display: grid; gap: 4px; }
 .rhythm-start .rhythm-picker { max-height: 196px; }
 .rhythm-start-compact .rhythm-picker { max-height: 150px; }
-.rhythm-start-compact .rhythm-segment { padding: 0 9px; }
 .rhythm-start-plays { font-size: 12.5px; line-height: 17px; color: var(--fg); font-weight: 500; }
 .rhythm-start .rhythm-actions { align-items: center; }
 .rhythm-start .rhythm-muted { font-size: 12px; }
 .rhythm-pick-row { display: flex; align-items: center; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
 .rhythm-pick-row:last-child { border-bottom: 0; }
 .rhythm-pick-row .rhythm-option { flex: 1; min-width: 0; border-bottom: 0; }
-.rhythm-pick-row-on { background: var(--accent-subtle, color-mix(in srgb, var(--accent) 12%, transparent)); }
-.rhythm-pick-row .rhythm-option-on { background: none; }
 .rhythm-preview {
   flex: none; height: 24px; margin-right: 8px; padding: 0 8px;
   border: 1px solid var(--border); border-radius: 6px;

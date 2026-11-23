@@ -241,6 +241,25 @@ export function engineLockReason(
   return null;
 }
 
+/**
+ * A lock reason in a few plain words that say what to do, for the engine rail's second line
+ * and the note a pressed locked engine shows. The full reason (a server's own wording, which
+ * can name a config field or a binary) stays in the tooltip and the accessible description.
+ * One place for every reason's shape: the engine's availability, the host rules above, and
+ * the callers' own locks (a live session, a fork, a quick question).
+ */
+export function shortLockReason(reason: string): string {
+  if (/^This session runs on /.test(reason)) return 'Needs a new session';
+  if (/^A fork keeps /.test(reason)) return 'A fork keeps its engine';
+  if (/^A quick question runs on /.test(reason)) return 'Quick questions use Claude Code';
+  if (/ runs on this Mac only$/.test(reason)) return 'Runs on this computer only';
+  const host = /^Not available on ([^:]+)/.exec(reason)?.[1];
+  if (host) return `Not set up on ${host}`;
+  if (/\bconfigure\b|\bsettings?\b/i.test(reason)) return 'Set up in Settings > Sessions';
+  if (/not installed|not found|missing|install\b/i.test(reason)) return 'Not installed here';
+  return reason.length <= 32 ? reason : 'Not available here';
+}
+
 /** One engine's availability as a host reported it (GET /api/engines/availability). */
 export type HostEngineAvailability = Partial<Record<string, EngineAvailability>>;
 

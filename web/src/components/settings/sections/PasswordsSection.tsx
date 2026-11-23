@@ -14,6 +14,7 @@ import { SettingsGroup, SettingsRow } from '../SettingsSection'
 import { SettingsButton } from '../inputs/SettingsButton'
 import { PasswordSourcesGroup } from './PasswordSourcesGroup'
 import { SegmentedControl } from '../inputs/SegmentedControl'
+import { ControlGroup } from '@/components/controls'
 import { onVaultSessionChange, vaultApi, VaultApiError, type AgentsSwitch, type RecoveryKit, type UnlockFor, type VaultStatus } from '@/api/vault'
 // An unlock or a Lock elsewhere on this computer (the extension, another window) reaches this page live.
 import '@/api/vault-live'
@@ -113,6 +114,10 @@ export function PasswordsSection({ config, onSave }: Props) {
 
   const unlocked = !!status?.unlocked
   const state = !status ? 'Checking…' : !status.setUp ? 'Not set up yet' : unlocked ? `Unlocked in this window · ${status.itemCount ?? 0} items` : `Locked · ${status.itemCount ?? 0} items`
+  const noVault = !!status && !status.setUp
+  // A length is picked only once a vault is confirmed: while the first read is pending or failed,
+  // and with no vault, nothing is in effect, so nothing shows picked.
+  const vaultReady = !!status?.setUp
   const needUnlock = !unlocked ? 'Unlock Passwords in this window to change this.' : undefined
 
   return (
@@ -123,14 +128,20 @@ export function PasswordsSection({ config, onSave }: Props) {
           help={state}
           control={<SettingsButton onClick={() => navigate('/passwords')}>{status?.setUp ? 'Open Passwords' : 'Set up'}</SettingsButton>}
         />
+        {/* With no vault these rows depend on one being set up: disabled, with that reason line,
+            and the help says what the length will do, not what it does now (2026-11-22 audit).
+            Nothing is picked then: no length is in effect while there is no vault. */}
+        <ControlGroup id="pw-vault-rows" off={noVault} className="settings-rows-contents" reason="These apply once a vault is set up." data-testid="pw-vault-rows">
         {/* Stacked: six choices beside the help squeezed it into a narrow column (2026-11-22 audit). */}
         <SettingsRow
           label="Keep Passwords unlocked"
           className="settings-row-stacked"
-          help={status?.unlockFor === 'always'
-            ? 'Forever: a key on this Mac lets agents use Passwords while you are away; any program running as you could read it.'
-            : `${status ? unlockFootText(status) : ''}${status?.unlockFor === 'restart' ? '' : ' Restarting Walnut keeps it.'} ${UNLOCK_CHANGE_WHEN}`}
-          control={<SegmentedControl<UnlockFor> id="pw-unlock-for" aria-label="Keep Passwords unlocked" value={foreverTo ?? status?.unlockFor ?? '48h'} disabled={!status?.setUp || busy === 'unlock' || busy === 'forever'}
+          help={!vaultReady
+            ? `How long Passwords stay unlocked after you last use them. ${UNLOCK_CHANGE_WHEN}`
+            : status?.unlockFor === 'always'
+              ? 'Forever: a key on this Mac lets agents use Passwords while you are away; any program running as you could read it.'
+              : `${status ? unlockFootText(status) : ''}${status?.unlockFor === 'restart' ? '' : ' Restarting Walnut keeps it.'} ${UNLOCK_CHANGE_WHEN}`}
+          control={<SegmentedControl<UnlockFor> id="pw-unlock-for" aria-label="Keep Passwords unlocked" value={vaultReady ? foreverTo ?? status?.unlockFor ?? '48h' : null} disabled={!vaultReady || busy === 'unlock' || busy === 'forever'}
             options={UNLOCK_OPTIONS.map((o) => ({ value: o.value, label: unlockOptionLabel(o, status?.lockAfterIdleMinutes), testId: `pw-unlock-${o.value}` }))}
             onChange={pickUnlock} />}
         />
@@ -164,6 +175,7 @@ export function PasswordsSection({ config, onSave }: Props) {
           help="Each open window then needs your master password again."
           control={<SettingsButton busy={busy === 'lock'} disabled={!status?.setUp} onClick={() => void run('lock', async () => { await vaultApi.lock(true); return 'Every window is locked.' })}>Lock all</SettingsButton>}
         />
+        </ControlGroup>
       </SettingsGroup>
 
       {status?.setUp && (

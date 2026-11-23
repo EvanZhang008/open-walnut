@@ -98,11 +98,11 @@ export function FocusCard({ walnut, store, state, music }: FocusCardProps) {
               type="button"
               role="radio"
               aria-checked={taskId === null}
-              className={`rhythm-option${taskId === null ? ' rhythm-option-on' : ''}`}
+              className="rhythm-option wn-pick-row"
               data-testid="rhythm-task-option-none"
               onClick={() => setTaskId(null)}
             >
-              <span className="rhythm-option-title">No task</span>
+              <span className="rhythm-option-copy"><span className="rhythm-option-title">No task</span></span>
             </button>
             {picker.tasks?.map((task) => (
               <button
@@ -110,13 +110,15 @@ export function FocusCard({ walnut, store, state, music }: FocusCardProps) {
                 type="button"
                 role="radio"
                 aria-checked={taskId === task.id}
-                className={`rhythm-option${taskId === task.id ? ' rhythm-option-on' : ''}`}
+                className="rhythm-option wn-pick-row"
                 data-testid={`rhythm-task-option-${task.id}`}
                 title={task.title}
                 onClick={() => setTaskId(task.id)}
               >
-                <span className="rhythm-option-title">{task.title}</span>
-                {task.project && <span className="rhythm-option-meta">{task.project}</span>}
+                <span className="rhythm-option-copy">
+                  <span className="rhythm-option-title">{task.title}</span>
+                  {task.project && <span className="rhythm-option-meta">{task.project}</span>}
+                </span>
               </button>
             ))}
             {picker.tasks === null && !picker.error && <p className="rhythm-muted rhythm-pad">Loading tasks…</p>}

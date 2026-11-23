@@ -93,7 +93,7 @@ async function openDetails(page: Page, taskId = TASK, search = 'Time slots fixtu
     await expect(row).toBeVisible({ timeout: 5_000 })
   }).toPass({ timeout: 40_000 })
   await row.getByRole('button', { name: 'More actions' }).click()
-  await page.locator('.task-kebab-menu:visible').getByText('Details', { exact: true }).click()
+  await page.locator('.task-kebab-menu:visible').getByText('Task details', { exact: true }).click()
   const modal = page.locator('.task-detail-modal')
   await expect(modal).toBeVisible()
   return modal
@@ -236,7 +236,7 @@ test('a session\'s time is a fact in its menu, and no chip on the header row by 
   const [rowBox, menuBox, createdBox, detailBox] = await Promise.all([
     row.boundingBox(), menu.boundingBox(),
     menu.locator('[data-meta="created"]').boundingBox(),
-    menu.locator('.task-kebab-item').filter({ hasText: /^Details$/ }).boundingBox(),
+    menu.locator('.task-kebab-item').filter({ hasText: /^Task details$/ }).boundingBox(),
   ])
   expect(rowBox!.y).toBeLessThan(createdBox!.y)
   // One line (its Header toggle makes it a little taller than a plain row), never a

@@ -95,9 +95,11 @@
   height: fit-content;
 }
 
+/* A row's value or hint ("switch to markdown", a count) is read, so it takes the secondary text
+   colour (about 10:1); --fg-muted is about 3.6:1 at this 11px size. */
 .chat-plus-menu-control-value {
   margin-left: auto;
-  color: var(--fg-muted);
+  color: var(--fg-secondary);
   font-size: var(--font-size-xs);
 }
 
@@ -165,10 +167,6 @@
   padding: 5px;
 }
 
-.permission-mode-menu .permission-mode-danger .permission-mode-name {
-  color: var(--warning);
-}
-
 /* What the mode does, in a few muted words at the right of its name. */
 .permission-mode-menu .permission-mode-hint {
   margin-left: auto;
@@ -179,16 +177,12 @@
   white-space: nowrap;
 }
 
-/* A picker's current item is shown by colour alone: no checkmark, no column kept
-   for one (2026-11-14, the user: "just show the name, and colour the selected
-   one"). One rule for the model, effort, mode and approval pickers; the compare picker's
-   own rule (.sdc-item.is-selected) does the same. */
-.picker-row-current,
-.picker-row-current .model-picker-row-name,
-.session-control-option[aria-selected="true"]:not(.session-control-option-danger) .session-control-option-name,
-.session-control-option[aria-pressed="true"] .session-control-option-name {
-  color: var(--accent);
-  font-weight: 600;
+/* A risky mode (Bypass) warns in its hint, never in its name: the current mode is its name in
+   --accent-text (PickerRow, a Picked row), so the warning tone and the pick never look alike.
+   Small text takes the darker warning twin (--priority-important-text, as .badge-warning does):
+   --warning itself reads about 2.2:1 on white. */
+.permission-mode-menu .permission-mode-danger .permission-mode-hint {
+  color: var(--priority-important-text);
 }
 
 /* Keyboard focus is a ring, never the selected colour. */

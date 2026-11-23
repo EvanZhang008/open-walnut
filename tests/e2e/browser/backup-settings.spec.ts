@@ -179,7 +179,8 @@ test.describe('Backup settings', () => {
       ],
     })
     const section = await openBackup(page)
-    await expect(section.getByTestId('backup-gdrive-connected')).toContainText('Connected as someone@example.com')
+    await expect(section.getByTestId('backup-gdrive-connected')).toContainText('Signed in as someone@example.com')
+    await expect(section.getByTestId('backup-gdrive-status')).toHaveText('Connected')
     await expect(section.getByTestId('backup-key-row')).toHaveCount(0)
     await expect(section.locator('#backup-encrypt')).not.toBeChecked()
     await expect(section.getByTestId('backup-enabled-row')).not.toContainText('Paused')
@@ -434,9 +435,8 @@ test.describe('Backup settings', () => {
     await answer(page, '**/api/backup/gdrive/status', { builtinClient: true, client: 'builtin', connected: false, email: null, folderName: null, pending: false })
     const section = await openBackup(page)
     await expect(section.getByTestId('backup-service-row')).toContainText(/backups go to Cloudflare R2/i)
-    // The service in use is marked, whichever tab is open.
-    await expect(section.getByTestId('backup-service-r2')).toHaveClass(/backup-service-in-use/)
-    await expect(section.getByTestId('backup-service-gdrive')).not.toHaveClass(/backup-service-in-use/)
+    // The segments show only the pick: no mark of their own (the help line names the service in use).
+    await expect(section.getByTestId('backup-service-row').locator('[role="radio"][class*="in-use"]')).toHaveCount(0)
     // A value out of range is said, never saved, and leaving the field shows the one in use.
     await section.locator('#backup-interval').fill('0')
     await expect(section.getByRole('alert')).toContainText('Enter whole hours from 1 to 168')
@@ -448,7 +448,8 @@ test.describe('Backup settings', () => {
     await section.locator('#backup-interval').blur()
     await expect(section.getByTestId('backup-interval-row')).not.toContainText('kept 24 hours')
     await section.getByTestId('backup-service-gdrive').click()
-    await expect(section.getByTestId('backup-service-r2')).toHaveClass(/backup-service-in-use/)
+    // Another tab open: the help line still names the service in use.
+    await expect(section.getByTestId('backup-service-row')).toContainText('In use: Cloudflare R2.')
     // Walnut's own Google client: Connect is all there is; the user's own client is optional and folded.
     await expect(section.getByTestId('backup-gdrive-connect')).toBeEnabled()
     await expect(section.getByTestId('backup-gdrive-own-client')).toBeVisible()
@@ -479,7 +480,7 @@ test.describe('Backup settings', () => {
     await answer(page, '**/api/backup/gdrive/status', { builtinClient: true, client: 'builtin', connected: true, email: 'me@example.com', folderName: 'Walnut Backup', pending: false })
     const section = await openBackup(page)
     await expect(section.getByTestId('backup-service-r2')).toHaveAttribute('aria-checked', 'true')
-    await expect(section.getByTestId('backup-service-gdrive')).toHaveClass(/backup-service-in-use/)
+    await expect(section.getByTestId('backup-service-row')).toContainText('In use: Google Drive.')
     await expect(section.getByTestId('backup-enabled-row')).toContainText('Encrypted on this computer first')
     await expect(section.getByTestId('backup-enabled-row')).not.toContainText('Paused')
     await expect(section.getByTestId('backup-run-now')).toBeEnabled()

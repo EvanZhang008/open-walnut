@@ -83,7 +83,7 @@ async function expectChatHidden(page: Page): Promise<void> {
   // The toggles are always there (home-panel-flags.ts), reading closed: they are
   // how a closed chat comes back.
   await expect(sidebarChat(page)).toBeVisible()
-  await expect(sidebarChat(page)).not.toHaveClass(/active/)
+  await expect(sidebarChat(page)).toHaveAttribute('aria-pressed', 'false')
   await expect(dockChat(page)).toBeVisible()
   await expect(dockChat(page)).not.toHaveClass(/dock-chat-active/)
 }
@@ -107,7 +107,7 @@ async function expectSlotOnMain(page: Page): Promise<void> {
 async function expectChatOpen(page: Page): Promise<void> {
   await expect.poll(() => chatSpotWidth(page), { timeout: 15_000, message: 'chat spot never opened' }).toBeGreaterThan(1)
   await expect(slot(page)).toBeVisible({ timeout: 30_000 })
-  await expect(sidebarChat(page)).toHaveClass(/active/)
+  await expect(sidebarChat(page)).toHaveAttribute('aria-pressed', 'true')
   await expect(dockChat(page)).toHaveClass(/dock-chat-active/)
 }
 
@@ -242,9 +242,9 @@ test('the Todo and Agenda toggles survive a relaunch too', async ({ browser, pag
 
   let next = await relaunch(browser, page)
   await expect(todoColumn(next)).toHaveClass(/collapsed/)
-  await expect(sidebarTodo(next)).not.toHaveClass(/active/)
+  await expect(sidebarTodo(next)).toHaveAttribute('aria-pressed', 'false')
   await expect(agendaPanel(next)).toBeVisible({ timeout: 15_000 })
-  await expect(sidebarAgenda(next)).toHaveClass(/active/)
+  await expect(sidebarAgenda(next)).toHaveAttribute('aria-pressed', 'true')
   await next.screenshot({ path: `${SCREENSHOT_DIR}/5-todo-hidden-agenda-open-after-relaunch.png` })
 
   // Back to the defaults, and a relaunch keeps THOSE.

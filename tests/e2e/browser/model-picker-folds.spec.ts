@@ -103,8 +103,8 @@ test('model left, effort right, and only Cost, Speed (tok/s) and Details under t
 
   // The main view: the two columns and the three toggles, nothing stacked above them.
   const cols = picker.locator('.model-picker-columns');
-  await expect(cols.locator('[aria-label="Model"] .picker-row-current')).toHaveText('GPT-6.2-Sol');
-  await expect(cols.locator('[aria-label="Reasoning effort"] .picker-row-current')).toHaveText('Max');
+  await expect(cols.locator('[aria-label="Model"] [aria-selected="true"]')).toHaveText('GPT-6.2-Sol');
+  await expect(cols.locator('[aria-label="Reasoning effort"] [aria-selected="true"]')).toHaveText('Max');
   await expect(picker.getByTestId('picker-fold-cost')).toContainText('Cost$102');
   // The session's average on its model, not the one turn's 239 tok/s.
   await expect(picker.getByTestId('speed-headline')).toHaveText('128 tok/s avg');

@@ -86,8 +86,6 @@
 .task-pin-strip::-webkit-scrollbar { display: none; }
 .task-pin-strip .task-kebab-tier-btn { flex: none; max-width: 140px; }
 .task-pin-strip .task-kebab-tier-btn-icon { flex-shrink: 0; }
-.task-pin-strip .task-kebab-tier-btn-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.task-pin-strip .task-kebab-tier-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* The More flyout: the project picker's look (.task-kebab-project-flyout and its rows). */
 .task-pin-flyout { min-width: 200px; max-width: 280px; }
@@ -113,74 +111,20 @@
   html body .task-kebab-menu .task-pin-strip.task-kebab-tier-options { flex-wrap: nowrap; gap: 4px; }
 }
 
-/* Columns (the session panel count): a segmented track (2026-11-02, the user: "the panel
-   switch should at least be in top level, in a really nice way"), each option labelled with
-   its number. The row is as tall as the menu's other rows (6px padding around a 16px icon
-   and 12px text): a 2px row padding around a 26px track (22px options inside a 2px track
-   padding) gives the same 30px. */
-.task-kebab-panels { display: flex; align-items: center; gap: 8px; padding: 2px 12px; }
+/* Columns (the session panel count): the shared SegmentedControl (size sm), each option its
+   plain name, at the right of the row; what Auto gives in this window is the muted note between
+   the label and the control. The row only places them, as tall as the menu's other rows (30px:
+   6px padding around a 16px icon and 12px text), with the control centred in it. */
+.task-kebab-panels { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 12px; }
 .task-kebab-panels-label { font-size: var(--font-size-sm); color: var(--fg); white-space: nowrap; }
-/* A faint track, so the row reads as one of the menu's rows and not a toolbar. Its right
-   edge lines up with the other rows' hints and chevrons (the same 12px row padding). */
-.task-kebab-panels-track {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--fg) 6%, transparent);
-}
-/* Unselected choices are as quiet as the other rows' grey hints; only the pressed one is
-   accent and semibold. */
-.task-kebab-panels-opt {
-  min-width: 24px;
-  height: 22px;
-  padding: 0 6px;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  color: var(--fg-secondary);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
+.task-kebab-panels-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
 }
-/* Auto is a different kind of choice: a 1px, 12px tall line sets it apart from the counts,
-   5px clear on each side (2px gap + 9px margin = 5px, the line, 5px). Its own padding is
-   the numbers' padding. */
-.task-kebab-panels-opt[data-value="Auto"] { position: relative; margin-left: 9px; }
-.task-kebab-panels-opt[data-value="Auto"]::before {
-  content: ''; position: absolute; left: -6px; top: 5px; width: 1px; height: 12px;
-  background: color-mix(in srgb, var(--fg) 24%, transparent);
-}
-/* Hover is a light tint, clearly weaker than the raised white pressed chip, in the same
-   6px corners and the same 2px inset from the track edge. */
-.task-kebab-panels-opt:hover { background: color-mix(in srgb, var(--fg) 12%, transparent); }
-/* Auto's count, muted until Auto is pressed (then it takes the pressed accent). */
-.task-kebab-panels-auto-n { color: var(--fg-secondary); }
-.task-kebab-panels-opt.active .task-kebab-panels-auto-n { color: inherit; }
-/* Pressed: a raised white chip in the accent. Every choice keeps one weight pressed or not
-   (the chip and the accent say which), so the track keeps one width: pressing Auto moves
-   no number. */
-.task-kebab-panels-opt.active {
-  background: var(--bg-elevated);
-  color: var(--accent);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2), 0 0 0 0.5px rgba(0, 0, 0, 0.1);
-}
-/* Keyboard focus on a choice that is not pressed is an accent underline under its words,
-   never a box, so it can not read as a second pressed chip; on the pressed chip it is a
-   ring around it. */
-.task-kebab-panels-opt:focus-visible { outline: none; }
-.task-kebab-panels-opt:not(.active):focus-visible {
-  text-decoration: underline 2px var(--accent);
-  text-underline-offset: 4px;
-}
-.task-kebab-panels-opt.active:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
-  outline-offset: 1px;
-}
+/* Its right edge lines up with the other rows' hints and chevrons (the same 12px row padding). */
+.task-kebab-panels-track { margin-left: auto; flex: none; display: flex; }
+.task-kebab-panels-opt { font-variant-numeric: tabular-nums; }

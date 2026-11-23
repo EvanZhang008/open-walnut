@@ -10,6 +10,7 @@
  */
 import { useCallback } from 'react';
 import { PluginSlotFact, PluginSlots, type SlotEntry } from '@/plugins/PluginSlots';
+import { Chip } from '@/components/controls';
 import { useNavigationList } from '@/hooks/useNavigationPreference';
 import { useSessionServers } from '@/hooks/useSessionServers';
 import { SLOT_ID_PREFIX } from './useSessionHeaderFit';
@@ -41,12 +42,12 @@ function useWebPageCount(sessionId: string, enabled = true): { n: number; known:
   return { n: servers.filter(openable).length, known: state === 'ok' };
 }
 
+/** The shared Chip, as the task menu's Pin to chips: on (aria-pressed) while the fact is on every header. */
 function PinButton({ pinned, title, onToggle }: { pinned: boolean; title: string; onToggle: () => void }) {
   return (
-    <button
-      type="button"
-      className={`wn-chip task-kebab-fact-pin${pinned ? ' active' : ''}`}
-      aria-pressed={pinned}
+    <Chip
+      pressed={pinned}
+      className="task-kebab-fact-pin"
       data-testid="session-fact-pin"
       title={pinned
         ? `Showing ${title} on every session's header. Click to keep it in this menu only`
@@ -54,7 +55,7 @@ function PinButton({ pinned, title, onToggle }: { pinned: boolean; title: string
       onClick={(e) => { e.stopPropagation(); onToggle(); }}
     >
       Header
-    </button>
+    </Chip>
   );
 }
 

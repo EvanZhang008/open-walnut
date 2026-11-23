@@ -28,6 +28,7 @@ import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { usePageView } from '@/utils/view-memory';
 import { DisclosureChevron } from '@/components/controls';
+import { Chip } from '@/components/controls';
 import {
   DEFAULT_PIN_SHORTCUTS, firstLevelPinChoices, isPinShortcutList, normalizePinShortcuts,
   pinMoreEntries, pinShortcutEntries, togglePinShortcut,
@@ -38,11 +39,13 @@ export interface PinChoice {
   value: string;
   label: string;
   icon: ReactNode;
-  /** The tier's color (the chip's text and lit border). */
+  /** The tier's color: More's dot when the lit tier is off the row. The chip itself is the shared
+   *  Chip, the same for every tier, like the page's filter keys. */
   color: string;
 }
 
-/** One tier button: the legacy Pin row (draft, batch) and the first-level row share it. */
+/** One tier button: the legacy Pin row (draft, batch) and the first-level row share it. The
+ *  shared Chip (aria-pressed on the tier the task is pinned to), one look for every tier. */
 export function PinTierButton({ choice, isCurrent, testId, onClick }: {
   choice: PinChoice;
   isCurrent: boolean;
@@ -50,18 +53,17 @@ export function PinTierButton({ choice, isCurrent, testId, onClick }: {
   onClick: () => void;
 }) {
   return (
-    <button
-      type="button"
+    <Chip
+      pressed={isCurrent}
       data-testid={testId}
       // The shared Chip (choice-controls.css); the tier's colour stays on its icon only.
-      className={`wn-chip task-kebab-tier-btn${isCurrent ? ' active' : ''}`}
+      className="task-kebab-tier-btn"
       title={isCurrent ? `Unpin from ${choice.label}` : choice.label}
-      aria-pressed={isCurrent || undefined}
+      leading={<span className="task-kebab-tier-btn-icon" style={{ color: choice.color }} aria-hidden="true">{choice.icon}</span>}
       onClick={(e) => { e.stopPropagation(); onClick(); }}
     >
-      <span className="task-kebab-tier-btn-icon" style={{ color: choice.color }}>{choice.icon}</span>
-      <span className="task-kebab-tier-btn-label">{choice.label}</span>
-    </button>
+      {choice.label}
+    </Chip>
   );
 }
 
@@ -88,7 +90,7 @@ export function PinShortcutChoices({ choices, current, onChoose }: {
   const stripRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const row = stripRef.current;
-    const lit = row?.querySelector<HTMLElement>('.task-kebab-tier-btn.active');
+    const lit = row?.querySelector<HTMLElement>('.task-kebab-tier-btn[aria-pressed="true"]');
     if (!row || !lit) return;
     const left = lit.getBoundingClientRect().left - row.getBoundingClientRect().left + row.scrollLeft;
     const right = left + lit.getBoundingClientRect().width;

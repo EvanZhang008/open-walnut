@@ -53,7 +53,14 @@ export function DefaultEngineRow({ config, save }: { config: Config; save: Seria
     <>Small background jobs use an API instead (<a href="#providers">Advanced</a>).</>
   ) : value !== 'claude' ? 'Small background jobs stay on Claude Code.' : null;
 
-  const control = options.length <= MAX_SEGMENTS ? (
+  // One engine to run on is a fact, not a choice: a lone segment read as a picker with nothing
+  // else in it (the 2026-11-22 audit). It shows as a value, with a line on when there is a pick.
+  const only = options.length === 1 && options[0].installed && options[0].id === value ? options[0] : null;
+  const control = only ? (
+    <span id="default-engine-select" className="settings-row-value" data-testid="default-engine-select" data-value={value}>
+      {engineName(only.label)}
+    </span>
+  ) : options.length <= MAX_SEGMENTS ? (
     <span data-testid="default-engine-select" data-value={value}>
       <SegmentedControl<SessionEngine>
         id="default-engine-select"
@@ -87,6 +94,11 @@ export function DefaultEngineRow({ config, save }: { config: Config; save: Seria
       data-testid="default-engine-row"
       control={control}
     >
+      {only && (
+        <span className="settings-row-help" data-testid="default-engine-only">
+          The only engine installed here. A choice shows once another engine is installed.
+        </span>
+      )}
       {smallJobs && <span className="settings-help-warning" data-testid="default-engine-small-jobs">{smallJobs}</span>}
     </SettingsRow>
   );

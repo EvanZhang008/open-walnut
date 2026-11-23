@@ -111,26 +111,22 @@
    within 140 + 60 * N px (C31). */
 .settings-group .hook-row {
   min-height: 56px;
-  padding-top: 10px;
-  padding-bottom: 10px;
+  padding-top: 8px;
+  padding-bottom: 8px;
 }
 
-/* Positioned so the disclosure chevron can center on BOTH lines, level with
-   the switch beside it, instead of riding the name line. */
 .settings-group .hook-row .settings-row-copy {
-  position: relative;
-  gap: 3px;
-  padding-right: 28px;
+  gap: 4px;
 }
 
-/* A switch or an "Always on" tag: one slot width, so every chevron beside it
-   sits at the same x (N3-11). */
+/* A switch or an "Always on" tag: one slot width, so every chevron after it
+   sits at the same x (N3-11); 20 px on its right keep the chevron's place. */
 .settings-group .hook-row > .settings-row-actions {
   min-width: 72px;
+  margin-right: 20px;
 }
 
-.settings-group .hook-row .settings-row-label,
-.settings-group .hook-row .hook-row-disclose {
+.settings-group .hook-row .settings-row-label {
   line-height: 18px;
 }
 
@@ -138,38 +134,48 @@
   line-height: 16px;
 }
 
-/* The disclosure spans the copy column so its chevron sits at one x on
-   every row, beside the switch, like every other disclosure row (N3-11). */
-.hook-row-disclose {
+.hook-row-title {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
-  max-width: 100%;
+  min-width: 0;
+}
+
+/* The row's words and its switch lie over the disclosure button that fills the
+   row (a Settings disclosure row's one click area); only the switch and the tag
+   take the pointer, so a click anywhere else opens the details. */
+.settings-group .hook-row > :is(.settings-row-copy, .settings-row-actions) {
+  position: relative;
+  pointer-events: none;
+}
+
+.settings-group .hook-row > .settings-row-actions > * {
+  pointer-events: auto;
+}
+
+.hook-row-disclose {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
   margin: 0;
-  padding: 0;
+  padding: 0 var(--settings-row-pad-x);
   border: 0;
   background: none;
   color: inherit;
   font: inherit;
-  text-align: left;
   cursor: pointer;
   border-radius: var(--radius-xs); /* shape: a hook row's disclosure, a row not a key */
 }
 
-.hook-row-disclose:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+.hook-row-disclose:hover {
+  background: var(--bg-hover);
 }
 
-/* Still inside the disclosure button (so it clicks and announces with it), but
-   centered on the copy column; margin-top, not a translate, so the expand
-   rotation keeps the transform. */
-.hook-row-disclose .settings-disclosure-chevron {
-  position: absolute;
-  top: 50%;
-  right: 6px;
-  margin-top: -6px;
+.hook-row-disclose:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .hook-detail-value {

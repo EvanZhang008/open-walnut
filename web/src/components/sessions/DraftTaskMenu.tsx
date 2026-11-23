@@ -146,7 +146,7 @@ export function DraftTaskMenuPopover({
     if (!open || !placed || !focusNonce) return;
     const menu = menuRef.current;
     const target = (focusTarget === 'project' ? menu?.querySelector<HTMLElement>('.draft-task-menu-project .task-kebab-project-current') : null)
-      ?? menu?.querySelector<HTMLElement>('.task-kebab-tier-btn.active')
+      ?? menu?.querySelector<HTMLElement>('.task-kebab-tier-btn[aria-pressed="true"]')
       ?? menu?.querySelector<HTMLElement>('.task-kebab-tier-btn');
     target?.focus({ preventScroll: true });
   }, [open, placed, focusNonce, menuRef, focusTarget]);
