@@ -130,16 +130,19 @@ test('an ordinary invite: one click sends one answer, a change of mind sends ano
   // The mouse is still on Accept after the click: hover must not hide that it is the answer.
   await accept.hover()
   const border = (id: string) => page.getByTestId(id).evaluate((element) => getComputedStyle(element).borderColor)
-  const accent = await card(page).evaluate((element) => {
-    const probe = document.createElement('span')
-    probe.style.color = 'var(--accent)'
+  // Pressed is the button family's on look (standard.md, "The button family": a half-accent
+  // hairline), read from a pressed family key in the same card, so the spec follows the family.
+  const pressedBorder = await card(page).evaluate((element) => {
+    const probe = document.createElement('button')
+    probe.className = 'btn btn-sm'
+    probe.setAttribute('aria-pressed', 'true')
     element.appendChild(probe)
-    const color = getComputedStyle(probe).color
+    const color = getComputedStyle(probe).borderColor
     probe.remove()
     return color
   })
-  expect(await border('mail-invite-accept')).toBe(accent)
-  expect(await border('mail-invite-tentative')).not.toBe(accent)
+  expect(await border('mail-invite-accept')).toBe(pressedBorder)
+  expect(await border('mail-invite-tentative')).not.toBe(pressedBorder)
   // The status line confirms it with a tick; no second sentence repeats it.
   await expect(page.getByTestId('mail-invite-status')).toHaveAttribute('data-confirmed', 'true')
   await expect(page.getByTestId('mail-invite-note')).toHaveCount(0)

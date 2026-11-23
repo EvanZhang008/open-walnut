@@ -10,7 +10,8 @@
 /* ── the header: `INBOX  19 unread  Grouped ▾`, one line while it fits; narrower, the counts and the
    menu move under the name (mail.css, .mail-list-section) ── */
 
-.mail-grouped-unread,
+/* The unread count is the shared Chip (below): its label ends in an ellipsis itself, and clipping
+   the chip would cut its phone finger target (choice-controls.css). */
 .mail-grouped-sorting,
 .mail-grouped-no-ai {
   flex: 0 1 auto;

@@ -319,8 +319,23 @@ test('Tasks: Add to Focus from the row; a reply leaves the row in place with wha
   // Dark: the warm grey of Ask and of the extension's bar over it, never the app's pure black (R2-8).
   await panel.emulateMedia({ colorScheme: 'dark' })
   await expect.poll(() => t.getByTestId('ext-tasks').evaluate((e) => getComputedStyle(e).backgroundColor)).toBe('rgb(31, 29, 27)')
-  // Its buttons on the warm raised grey once their colour transition ends.
-  await expect.poll(() => t.getByTestId('ext-tasks-save-page').evaluate((e) => getComputedStyle(e).backgroundColor)).toBe('rgb(42, 39, 36)')
+  // Its buttons are the button family's key mixed from the panel's warm page colour (standard.md,
+  // "The button family": the text colour mixed into the page colour), never the app's black one:
+  // the same key outside the panel reads another fill. Compared once the colour transition ends.
+  const fills = () => t.getByTestId('ext-tasks-save-page').evaluate((e) => {
+    const fillOf = (parent: Element) => {
+      const probe = e.cloneNode(false) as HTMLElement
+      probe.removeAttribute('data-testid')
+      parent.appendChild(probe)
+      const fill = getComputedStyle(probe).backgroundColor
+      probe.remove()
+      return fill
+    }
+    return { key: getComputedStyle(e).backgroundColor, panel: fillOf(e.parentElement!), app: fillOf(document.body) }
+  })
+  await expect.poll(async () => { const f = await fills(); return f.key === f.panel }).toBe(true)
+  const dark = await fills()
+  expect(dark.panel).not.toBe(dark.app)
   await shot(panel, 'r2-tasks-replied-dark')
   await panel.emulateMedia({ colorScheme: 'light' })
 })

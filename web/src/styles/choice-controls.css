@@ -860,3 +860,27 @@ fieldset:disabled .wn-seg-item {
     font-size: var(--font-size-sm);
   }
 }
+
+/* A chip on a phone is a finger target (C19: 44 px tall) while it keeps its drawn 24 px: a centred
+   ::before 44 px tall is part of the chip for hit testing, so the chip does not grow (the session
+   surfaces' small keys do the same, phone-session.css). Its width is the chip's own, so it never
+   takes a tap meant for the chip beside it; wrapped rows of a ChipGroup sit 44 px apart for the
+   same reason. Every Chip gets it here, at its one definition, not screen by screen. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .wn-chips {
+    row-gap: 20px;
+  }
+  .app-shell-navigation .wn-chip {
+    position: relative;
+  }
+  .app-shell-navigation .wn-chip::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: max(100%, 44px);
+    transform: translateY(-50%);
+    z-index: 1; /* above a neighbouring row that starts inside the 44 px */
+  }
+}
