@@ -1,15 +1,21 @@
 /**
- * A host dials its leader's door (land 5a; src/core/session-channel/host-door.ts, host-dialer.ts),
- * every piece a real process: the cluster of tests/helpers/host-judge-cluster.ts (the Mac with the
- * switch on; the host's one Walnut service running its own sessions), the Mac's daemon link to the
- * host through a proxy the test cuts.
+ * A host-judged session over each way a leader links its host (deliverable 9; the third way, the
+ * companion's listener, is tests/e2e/companion-host-listener-e2e.test.ts), and a host dialing its
+ * leader's door (land 5a; src/core/session-channel/host-door.ts, host-dialer.ts), every piece a real
+ * process: the cluster of tests/helpers/host-judge-cluster.ts (the Mac with the switch on; the
+ * host's one Walnut service running its own sessions), the Mac's daemon link to the host through a
+ * proxy the test cuts.
  *
+ *   K1 dialed  over the link the Mac dials (its daemon link): a start, its stream, a send and an
+ *              interrupt of a running turn, every fact once and in order
  *   D1 issue   with `session.host_door_urls` naming the Mac's door, the Mac issues the host its door
  *              credential over the daemon link; the host keeps it and dials the door, which takes
  *              the host's socket as its channel link (the leader-dialed one is replaced)
  *   D2 cut     the Mac's daemon link to the host is cut: a session started before keeps streaming
  *              its facts to the Mac over the dialed socket, every fact once and in order, and a
  *              send from the Mac reaches it over the socket's call frames
+ *   D3 start   the daemon link still cut: a new start reaches the host over the dialed socket, its
+ *              stream reaches the Mac, and an interrupt stops its running turn there
  *
  * Facts are compared by identity as in host-judged-session-cluster-e2e.test.ts: each record of
  * the host's log (seq order, its name and a hash of its data) against the Mac's bus events of the
@@ -69,7 +75,23 @@ describe.skipIf(!RUN)('a host dials its leader\'s door, every piece a real proce
   })
   afterAll(async () => { await h?.stop() }, 120_000)
 
-  it('D1: the Mac issues the host its door credential over the daemon link; the host dials the door, whose socket becomes the link', async () => {
+  /** A held turn of `s` (the mock CLI holds it until a file that never comes), stopped by the Mac's interrupt. */
+  async function interruptHeld(s: string): Promise<void> {
+    const gate = path.join(h.c.base, `never-released-${s}`)
+    const sent = await h.c.mac('POST', `/api/v1/sessions/${s}/messages`, { text: `please hold until ${gate}` })
+    expect(sent.status, JSON.stringify(sent.json)).toBeLessThan(300)
+    await waitFor(async () => ((await h.host(`/events?sid=${s}`)) as ProbeEvent[]).some((e) => e.name === 'session:send' && String(e.data?.message ?? '').includes(gate)), 60_000, 'the held turn to reach the host').catch((err) => { throw new Error(say(String(err))) })
+    await waitFor(async () => (await h.host(`/row?sid=${s}`)).row?.process_status === 'running', 60_000, 'the held turn to run').catch((err) => { throw new Error(say(String(err))) })
+    const stop = await h.c.mac('POST', `/api/v1/sessions/${s}/interrupt`, {})
+    expect(stop.status, JSON.stringify(stop.json)).toBe(200)
+    expect(stop.json).toMatchObject({ status: 'interrupted', sessionId: s })
+    await waitFor(async () => resultOn(await channelEvents(s), 'echo: interrupted'), 60_000, 'the held turn to end on the interrupt').catch((err) => { throw new Error(say(String(err))) })
+    const onHost = (await h.host(`/events?sid=${s}`)) as ProbeEvent[]
+    expect(onHost.some((e) => e.name === 'session:interrupt'), JSON.stringify(onHost.map((e) => e.name))).toBe(true)
+    expect(fs.existsSync(gate)).toBe(false)
+  }
+
+  it('K1: over the link the Mac dials, a start, its stream, a send and an interrupt each reach the host and every fact the Mac once', async () => {
     await waitFor(async () => { const s = await h.mac(`/side?host=${HOST_KEY}`); return s.active && s.linked && s.judges }, 120_000, 'the Mac to link the host\'s session channel')
     // A session that runs on the host before anything about the door changes.
     const st = await h.c.mac('POST', `/api/v1/tasks/${taskId}/start`, { host: HOST_KEY, cwd: hostCwd, mode: 'bypass', message: 'ROUND before' })
@@ -77,6 +99,18 @@ describe.skipIf(!RUN)('a host dials its leader\'s door, every piece a real proce
     sid = st.json.sessionId as string
     await waitFor(async () => resultOn(await channelEvents(sid), 'echo: ROUND before'), 120_000, 'the first answer on the Mac').catch((err) => { throw new Error(say(String(err))) })
     expect((await h.mac(`/side?host=${HOST_KEY}`)).kind).toBe('leader-dialed')
+    const sent = await h.c.mac('POST', `/api/v1/sessions/${sid}/messages`, { text: 'ROUND leader dialed' })
+    expect(sent.status, JSON.stringify(sent.json)).toBeLessThan(300)
+    await waitFor(async () => resultOn(await channelEvents(sid), 'echo: ROUND leader dialed'), 120_000, 'the send\'s answer on the Mac').catch((err) => { throw new Error(say(String(err))) })
+    await interruptHeld(sid)
+    expect((await h.mac(`/side?host=${HOST_KEY}`)).kind).toBe('leader-dialed')
+    const f = await sameFacts(sid)
+    expect(f.seen, `host: ${f.host.join(' ')}\nmac:  ${f.seen.join(' ')}`).toEqual(f.host)
+    expect(await h.mac(`/parses?sid=${sid}`)).toEqual({ parses: 0 })
+  }, 400_000)
+
+  it('D1: the Mac issues the host its door credential over the daemon link; the host dials the door, whose socket becomes the link', async () => {
+    expect(sid).toBeTruthy()
     expect((await h.host('/dialer')).holds).toBe(false)
 
     // A door that is no allowed URL is refused by the settings write.
@@ -119,6 +153,24 @@ describe.skipIf(!RUN)('a host dials its leader\'s door, every piece a real proce
     const f = await sameFacts(sid)
     expect(f.seen, `host: ${f.host.join(' ')}\nmac:  ${f.seen.join(' ')}`).toEqual(f.host)
     expect(f.host.length).toBeGreaterThan(4)
+  }, 400_000)
+
+  it('D3: with the daemon link still cut, a new start reaches the host over the dialed socket, streams to the Mac, and an interrupt stops its turn', async () => {
+    expect((await h.mac(`/side?host=${HOST_KEY}`)).kind).toBe('host-dialed')
+    const t = await h.c.mac('POST', '/api/tasks', { title: 'Started over the dialed socket', project: 'Acme' })
+    expect(t.status, JSON.stringify(t.json)).toBe(201)
+    const st = await h.c.mac('POST', `/api/v1/tasks/${t.json.task.id}/start`, { host: HOST_KEY, cwd: hostCwd, mode: 'bypass', message: 'ROUND started dialed' })
+    expect(st.status, JSON.stringify(st.json)).toBe(202)
+    const s2 = st.json.sessionId as string
+    await waitFor(async () => resultOn(await channelEvents(s2), 'echo: ROUND started dialed'), 120_000, 'the answer of a start made with the daemon link cut').catch((err) => { throw new Error(say(String(err))) })
+    expect(await h.mac(`/judge?sid=${s2}`)).toEqual({ judge: 'host', host: HOST_KEY })
+    await interruptHeld(s2)
+    expect((await h.mac(`/side?host=${HOST_KEY}`)).kind).toBe('host-dialed')
+    for (const s of [sid, s2]) {
+      const f = await sameFacts(s)
+      expect(f.seen, `${s}\nhost: ${f.host.join(' ')}\nmac:  ${f.seen.join(' ')}`).toEqual(f.host)
+    }
+    expect(await h.mac(`/parses?sid=${s2}`)).toEqual({ parses: 0 })
     h.c.mendLink()
   }, 400_000)
 })

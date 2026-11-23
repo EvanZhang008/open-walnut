@@ -33,7 +33,7 @@
  *         GET /side?host=    the leader side: on, linked to the host (and which side dialed), judging its starts
  *         GET /link?host=    is the Mac's daemon link to the host up (the host-server manager's link)
  *         GET /cursor?host=  the channel cursor in the Mac's sessions store
- *   host  GET /facts?after=  the fact log: its id, head, floor, acked, permit and records
+ *   host  GET /facts?after=  the fact log: its id, head, floor, acked, permit (its pair too) and records
  *         GET /row?sid=      the host's own row of a session (null: none)
  *         GET /events?sid=   the host's own bus events of a session (as above)
  *         GET /queue?sid=    the host's queue rows of a session (id, status, parkedReason, message)
@@ -49,12 +49,21 @@
  * and the host's service dials the companion's listener door with its bridge token. `phone(...)`
  * calls the companion's phone API with the paired phone's token; `phoneStream(sid)` holds a
  * session's SSE stream open and collects its frames.
+ *
+ * `standby(...)`: a second leader of the same Walnut over a copy of the Mac's data
+ * (tests/helpers/standby-leader.ts) with the Mac's probe, read by its `probe(p)`. The probe takes
+ * WALNUT_CLUSTER_PERMIT_NUMBER (the Mac's `macEnv`, the standby's `env`): the permit number that
+ * leader tells its hosts, as the leader switch's permit system numbers two leaders of one Walnut.
+ * The other options (HostJudgeClusterOptions) mix versions and shorten windows: a host whose switch
+ * is forced off is one from before it (it names no session-judge-v1), a Mac with
+ * WALNUT_LEADER_SESSION_CHANNELS=0 a leader from before the channel.
  */
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { ROOT, WINDOWS, startReplicaCluster, waitFor, type ReplicaCluster } from './replica-cluster.js'
 import { seedPrimaryPairing, startCloudBoxReplica, type CloudBoxReplica } from './cloud-box-replica.js'
+import { startStandbyLeader, type StandbyLeader } from './standby-leader.js'
 
 const url = (f: string) => JSON.stringify('file://' + path.join(ROOT, f))
 
@@ -109,6 +118,16 @@ const trk = await import(${url('src/core/session-tracker.ts')})
 const drp = await import(${url('src/core/session-channel/leader-drops.ts')})
 const ccs = await import(${url('src/providers/claude-code-session.ts')})
 const probeFile = (await import('node:path')).join((await import('node:path')).dirname(c.WALNUT_HOME), 'mac-probe.json')
+// The permit number this leader tells its hosts (leader-permit.ts), as the leader switch's permit
+// system would number two leaders of one Walnut: WALNUT_CLUSTER_PERMIT_NUMBER, once the side is on.
+const permitNo = Number(process.env.WALNUT_CLUSTER_PERMIT_NUMBER)
+if (permitNo > 0) {
+  const lp = await import(${url('src/core/session-channel/leader-permit.ts')})
+  void (async () => {
+    while (!lb.activeLeaderSide()) await new Promise((r) => setTimeout(r, 20))
+    lp.setLeaderPermitReader(() => ({ runtime: { status: () => ({ record: { number: permitNo } }) } }))
+  })()
+}
 ${SERVE('probeFile')}
 await serveProbe({
   '/events': (q) => eventsOf(q.get('sid')),
@@ -153,7 +172,7 @@ await serveProbe({
     const h = boot.hostSessionsRunning()
     if (!h) return { running: false }
     const recs = await h.log.read(Number(q.get('after') || 0))
-    return { running: true, logId: h.log.logId, head: h.log.head, floor: h.log.floor, acked: h.log.acked, permit: h.log.permit, recs }
+    return { running: true, logId: h.log.logId, head: h.log.head, floor: h.log.floor, acked: h.log.acked, permit: h.log.permit, permitPair: h.log.permitPair, recs }
   },
   '/events': (q) => eventsOf(q.get('sid')),
   '/row': async (q) => ({ row: await (await import(${url('src/core/session-tracker.ts')})).getSessionByClaudeId(q.get('sid')) }),
@@ -220,6 +239,8 @@ export interface HostJudgeCluster {
   door(method: string, p: string, body?: unknown): Promise<{ status: number; json: any }>
   /** The replica's probe file again (after a restart: a new pid and ports). */
   waitHostProbe(notPid?: number, timeoutMs?: number): Promise<{ pid: number; probe: number; door: number; running: boolean; hasDoor: boolean }>
+  /** A standby leader over `data` (a copy of the Mac's), on `port`, with the Mac's probe (see the header). */
+  standby(o: { data: string; port: number; env?: Record<string, string> }): Promise<{ leader: StandbyLeader; probe(p: string): Promise<any> }>
   stop(): Promise<void>
 }
 
@@ -253,22 +274,42 @@ function readSse(res: http.IncomingMessage, frames: PhoneStream['frames']): void
   })
 }
 
-/**
- * `linkProxy`: the Mac's daemon link to the host runs through a proxy the test can cut (replica-cluster.ts cutLink).
- * `companion`: a real cloud companion paired with the Mac (see the header).
- */
-export async function startHostJudgeCluster(o: { linkProxy?: boolean; companion?: boolean } = {}): Promise<HostJudgeCluster> {
+/** Options of a host-judge cluster (each the cluster's default when left out). */
+export interface HostJudgeClusterOptions {
+  /** The Mac's daemon link to the host runs through a proxy the test can cut (replica-cluster.ts cutLink). */
+  linkProxy?: boolean
+  /** A real cloud companion paired with the Mac (see the header). */
+  companion?: boolean
+  /** The Mac's switch in its config (default on). */
+  macSwitch?: boolean
+  /** More of the host service's env, over the cluster's own (a timing seam, the host's switch forced off: an older host). */
+  hostEnv?: Record<string, string>
+  /** More of the Mac's env (WALNUT_LEADER_SESSION_CHANNELS=0: a leader from before the session channel). */
+  macEnv?: Record<string, string>
+  /** More of the Mac's config.yaml lines, and code its boot script runs after the probe. */
+  macConfigExtra?: readonly string[]
+  macBootExtra?: string
+  /** Called before the Mac boots, with its data dir (and the cluster's base). */
+  seedMac?: (o: { base: string; macData: string }) => void | Promise<void>
+}
+
+export async function startHostJudgeCluster(o: HostJudgeClusterOptions = {}): Promise<HostJudgeCluster> {
   let companion: CloudBoxReplica | null = null
   const c = await startReplicaCluster({
     twin: 'standalone',
     ...(o.linkProxy ? { linkProxy: true } : {}),
-    hostService: { env: hostJudgeServiceEnv, after: hostJudgeServiceProbe() },
-    macBootExtra: MAC_PROBE,
-    macConfigExtra: ['experimental:', '  host_runs_sessions: true', ...(o.companion ? ['cloud_bridge:', '  backup_leader: false'] : [])],
-    ...(o.companion ? {
-      macEnv: { WALNUT_LEADER_HEARTBEAT_MS: '1000' },
-      seedMac: async ({ base, macData }: { base: string; macData: string }) => { companion = await pairCompanion(base, macData) },
-    } : {}),
+    hostService: { env: (d) => ({ ...hostJudgeServiceEnv(d), ...(o.hostEnv ?? {}) }), after: hostJudgeServiceProbe() },
+    macBootExtra: MAC_PROBE + (o.macBootExtra ?? ''),
+    macConfigExtra: [
+      ...(o.macSwitch === false ? [] : ['experimental:', '  host_runs_sessions: true']),
+      ...(o.companion ? ['cloud_bridge:', '  backup_leader: false'] : []),
+      ...(o.macConfigExtra ?? []),
+    ],
+    macEnv: { ...(o.companion ? { WALNUT_LEADER_HEARTBEAT_MS: '1000' } : {}), ...(o.macEnv ?? {}) },
+    seedMac: async ({ base, macData }: { base: string; macData: string }) => {
+      if (o.companion) companion = await pairCompanion(base, macData)
+      await o.seedMac?.({ base, macData })
+    },
   }).catch(async (err) => { await (companion as CloudBoxReplica | null)?.stop().catch(() => {}); throw err })
   const box = companion as CloudBoxReplica | null
   const phone: HostJudgeCluster['phone'] = async (method, p, body) => {
@@ -311,6 +352,7 @@ export async function startHostJudgeCluster(o: { linkProxy?: boolean; companion?
   const waitHostProbe: HostJudgeCluster['waitHostProbe'] = async (notPid, timeoutMs = 120_000) =>
     waitFor(() => { const h = readFile(hostProbeFile()); return h && h.probe && h.pid !== notPid ? h : null }, timeoutMs, 'the replica\'s probe')
   let host = await waitHostProbe(undefined, 180_000).catch(async (err) => { await c.stop().catch(() => {}); await box?.stop().catch(() => {}); throw err })
+  const standbys: StandbyLeader[] = []
   const ok = (r: { status: number; json: any }, p: string) => { if (r.status !== 200) throw new Error(`probe ${p}: ${r.status} ${JSON.stringify(r.json)}`); return r.json }
   return {
     c,
@@ -329,6 +371,18 @@ export async function startHostJudgeCluster(o: { linkProxy?: boolean; companion?
       return getJson(host.door, p, method, body)
     },
     waitHostProbe: async (notPid, timeoutMs) => { host = await waitHostProbe(notPid, timeoutMs); return host },
-    stop: async () => { try { await c.stop() } finally { await box?.stop() } },
+    standby: async (s) => {
+      const leader = await startStandbyLeader(c, { data: s.data, port: s.port, extra: MAC_PROBE, ...(s.env ? { env: s.env } : {}) })
+      standbys.push(leader)
+      const file = path.join(path.dirname(s.data), 'mac-probe.json')
+      const at = await waitFor(() => { const m = readFile(file); return m?.probe && m.pid === leader.pid ? m.probe as number : null }, 60_000, 'the standby\'s probe')
+      return { leader, probe: async (p: string) => ok(await getJson(at, p), p) }
+    },
+    stop: async () => {
+      try {
+        for (const s of standbys.splice(0)) await s.stop().catch(() => {})
+        await c.stop()
+      } finally { await box?.stop() }
+    },
   }
 }

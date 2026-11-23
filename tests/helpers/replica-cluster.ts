@@ -587,8 +587,13 @@ dcm.DaemonConnection.prototype.uploadFile = async function (remotePath, data, op
 `
 }
 
-/** The Mac's boot script: its own data or nothing (REFUSING), the seed, the test transport to the host daemon. */
-export function macBoot(o: { macData: string; daemonPort: number; macCwd: string; hostCwd: string; dev: boolean; hostDaemon: string; plugin: boolean; extra?: string; doorPortFile?: string }): string {
+/**
+ * The Mac's boot script: its own data or nothing (REFUSING), the seed, the test transport to the
+ * host daemon. `seed: false` writes no seed (a standby leader booting over a copy of the Mac's data
+ * holds it already), `hostLink: false` dials no link to the host's daemon (a leader the host
+ * reaches only by dialing its door), `port` is the server's port (0: any).
+ */
+export function macBoot(o: { macData: string; daemonPort: number; macCwd: string; hostCwd: string; dev: boolean; hostDaemon: string; plugin: boolean; extra?: string; doorPortFile?: string; seed?: boolean; hostLink?: boolean; port?: number }): string {
   const src = (f: string) => JSON.stringify(path.join(ROOT, f))
   // A launcher's host changes its door's port at each start (the daemon, then the service): read where it is now, as an ssh dial does.
   const doorUrl = o.doorPortFile
@@ -610,8 +615,10 @@ dcm.DaemonConnection.prototype.runRemoteScript = function (script, timeoutMs = 3
     (err, stdout) => (err ? reject(err) : resolve(String(stdout).trim()))))
 }
 ${o.plugin ? uploadOverride(o.hostDaemon) : ''}const { startServer, stopServer, armGracefulSignalExit } = await import(${src('src/web/server.ts')})
-const server = await startServer({ port: 0, dev: ${o.dev ? 'true' : 'false'} })
-const tm = await import(${src('src/core/task-manager.ts')})
+const server = await startServer({ port: ${o.port ?? 0}, dev: ${o.dev ? 'true' : 'false'} })
+${o.seed === false ? `const board = { id: '' }
+const other = { id: '' }
+` : `const tm = await import(${src('src/core/task-manager.ts')})
 const board = (await tm.addTask({ title: 'Release plan', project: 'Acme', description: 'Ship on Friday after the rollback drill.' })).task
 const other = (await tm.addTask({ title: 'Fix the flaky build \\u00e9t\\u00e9', project: 'Acme' })).task
 const st = await import(${src('src/core/session-tracker.ts')})
@@ -634,7 +641,7 @@ const inbox = await import(${src('src/core/human-inbox/store.ts')})
 const rc = await import(${src('src/core/routines/routines-core.ts')})
 await rc.createRoutine({ name: ${JSON.stringify(MAC_ROUTINE.name)}, enabled: true, schedule: { kind: 'every', everyMs: 86400000 }, sessionTarget: 'main', payload: { kind: 'systemEvent', text: ${JSON.stringify(MAC_ROUTINE.text)} } })
 await inbox.sendLetter({ subject: ${JSON.stringify(MAC_LETTER.subject)}, type: 'info', userAsked: true, markdown: ${JSON.stringify(MAC_LETTER.text)}, sender: { sessionId: ${JSON.stringify(MAC_SID)}, sessionTitle: 'Release checklist', host: '__local__' } })
-// The direct link IS the host's link: every lookup of devbox (the host status, a
+`}${o.hostLink === false ? '' : `// The direct link IS the host's link: every lookup of devbox (the host status, a
 // session's host, the server manager) gets it, as an ssh link would be pooled.
 // Otherwise the host status read devbox as unreachable over ssh and the console
 // showed a host problem card.
@@ -648,14 +655,14 @@ const direct = async () => {
   return conn
 }
 await direct()
-// A test may name only external host facts before it exercises the real clock
+`}// A test may name only external host facts before it exercises the real clock
 // handover. The file is supplied by seedMac inside this cluster's own folder.
 const clockFacts = process.env.WALNUT_CLUSTER_CLOCK_FACTS
 if (clockFacts && clockFacts.startsWith(${JSON.stringify(path.dirname(o.macData))} + '/')) await import(clockFacts)
 // The ssh path redials a link the host closed (a Mac asleep past the daemon's
 // keepalive); a link dialled straight to the URL never does, so the test
 // transport redials it here, once a second, the same way.
-setInterval(() => { void direct().catch(() => {}) }, 1000).unref()
+${o.hostLink === false ? '' : 'setInterval(() => { void direct().catch(() => {}) }, 1000).unref()'}
 ${o.extra ?? ''}
 const addr = server.address()
 process.stdout.write(JSON.stringify({ ids: { board: board.id, other: other.id }, pid: process.pid }) + '\\n')
@@ -668,8 +675,30 @@ armGracefulSignalExit()
 `
 }
 
+/**
+ * A Mac's env: its own home, data and daemon dirs, this cluster's stub bin and app dir (`base`), the
+ * windows; a standby leader over a copy of the Mac's data gets one too (standby-leader.ts).
+ */
+export function macEnvOf(o: { base: string; macHome: string; macData: string; macDaemon: string; built?: boolean; plugin?: boolean; hostService?: boolean; extra?: Record<string, string> }): Record<string, string> {
+  return {
+    PATH: `${path.join(o.base, 'bin')}${path.delimiter}${process.env.PATH ?? ''}`, HOME: o.macHome, USERPROFILE: o.macHome, SHELL: '/bin/sh', TMPDIR: os.tmpdir(),
+    ...(process.env.LANG ? { LANG: process.env.LANG } : {}),
+    OPEN_WALNUT_HOME: o.macData, WALNUT_DAEMON_DIR: o.macDaemon, WALNUT_STREAMS_DIR: path.join(o.macDaemon, 'streams'),
+    WALNUT_LEGACY_STREAMS_DIR: path.join(o.macDaemon, 'no-legacy'), WALNUT_SPAWN_JOURNAL: path.join(o.macDaemon, 'spawn-journal.jsonl'),
+    WALNUT_DISABLE_BACKGROUND_AI: '1', WALNUT_DISABLE_SEARCH: '1', WALNUT_LOCAL_CLAUDE_PROBE: '0', WALNUT_NO_AUTO_UPDATE: '1',
+    WALNUT_HOST_SERVER_ROOT: path.join(o.base, 'hr'), WALNUT_HOST_SERVER_APP_DIR: path.join(o.base, 'app'),
+    // `built`: the Mac serves the console's page from the same build the replica runs.
+    ...(o.built ? { WALNUT_WEB_STATIC_DIR: path.join(ROOT, 'dist', 'web', 'static') } : {}),
+    ...windowEnv(), NODE_ENV: 'production',
+    ...(o.plugin ? { WALNUT_PLUGIN_JOBS_IN_TEST: '1' } : {}),
+    // The Mac offers the host its one Walnut service (service-launcher-flag.ts), so the service is the mode it wants there.
+    ...(o.hostService ? { WALNUT_SERVICE_LAUNCHER: '1', WALNUT_HOST_SERVICE_OFFER: '1' } : {}),
+    ...(o.extra ?? {}),
+  }
+}
+
 /** Boot the Mac child; resolves with its port, pid and the seed's ids. */
-async function bootMac(script: string, file: string, env: Record<string, string>, logRef: { text: string }): Promise<{ proc: ChildProcess; port: number; pid: number; ids: { board: string; other: string } }> {
+export async function bootMac(script: string, file: string, env: Record<string, string>, logRef: { text: string }): Promise<{ proc: ChildProcess; port: number; pid: number; ids: { board: string; other: string } }> {
   fs.writeFileSync(file, script)
   const proc = spawn(HOST_RUNTIME, [file], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
   proc.stderr!.on('data', (b: Buffer) => {
@@ -853,21 +882,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
     if (opts.linkProxy) link = await startSilentLinkProxy(launcher ? doorPortNow : hostDaemon.port)
     seedHostStream(path.join(d.hostDaemon, 'streams'))
     seedHostTranscript(d.hostHome, d.hostCwd)
-    const macEnv: Record<string, string> = {
-      PATH: `${d.bin}${path.delimiter}${process.env.PATH ?? ''}`, HOME: d.macHome, USERPROFILE: d.macHome, SHELL: '/bin/sh', TMPDIR: os.tmpdir(),
-      ...(process.env.LANG ? { LANG: process.env.LANG } : {}),
-      OPEN_WALNUT_HOME: d.macData, WALNUT_DAEMON_DIR: d.macDaemon, WALNUT_STREAMS_DIR: path.join(d.macDaemon, 'streams'),
-      WALNUT_LEGACY_STREAMS_DIR: path.join(d.macDaemon, 'no-legacy'), WALNUT_SPAWN_JOURNAL: path.join(d.macDaemon, 'spawn-journal.jsonl'),
-      WALNUT_DISABLE_BACKGROUND_AI: '1', WALNUT_DISABLE_SEARCH: '1', WALNUT_LOCAL_CLAUDE_PROBE: '0', WALNUT_NO_AUTO_UPDATE: '1',
-      WALNUT_HOST_SERVER_ROOT: d.hostRoot, WALNUT_HOST_SERVER_APP_DIR: d.app,
-      // `built`: the Mac serves the console's page from the same build the replica runs.
-      ...(app === 'built' ? { WALNUT_WEB_STATIC_DIR: path.join(ROOT, 'dist', 'web', 'static') } : {}),
-      ...windowEnv(), NODE_ENV: 'production',
-      ...(opts.plugin ? { WALNUT_PLUGIN_JOBS_IN_TEST: '1' } : {}),
-      // The Mac offers the host its one Walnut service (service-launcher-flag.ts), so the service is the mode it wants there.
-      ...(opts.hostService ? { WALNUT_SERVICE_LAUNCHER: '1', WALNUT_HOST_SERVICE_OFFER: '1' } : {}),
-      ...(opts.macEnv ?? {}),
-    }
+    const macEnv = macEnvOf({ base, macHome: d.macHome, macData: d.macData, macDaemon: d.macDaemon, built: app === 'built', plugin: !!opts.plugin, hostService: !!opts.hostService, extra: opts.macEnv })
     if (opts.seedMac) await opts.seedMac({ base, macData: d.macData, env: macEnv })
     mac = await bootMac(macBoot({ macData: d.macData, daemonPort: link?.port ?? hostDaemon.port, macCwd: d.macCwd, hostCwd: d.hostCwd, dev: app !== 'built', hostDaemon: d.hostDaemon, plugin: !!opts.plugin, extra: opts.macBootExtra, ...(launcher && !link ? { doorPortFile } : {}) }), macBootFile, macEnv, macLog)
     // The server mac-boot runs: the child itself, its command line this runtime and that file.

@@ -249,15 +249,41 @@ describe('every branch on the connection kind is a decided one', () => {
  * host that runs its sessions is reached the way the leader dialed it, or over the socket the host
  * dialed into the leader's door. Each kind carries the channel and every host call; only what must
  * ride the host's authenticated daemon link (the door credential's issue) is said to need it.
+ * `e2e`: the cluster test (every piece a real process) where a host-judged session is started,
+ * streamed (each fact once, in order) and operated (a send, an interrupt) over that kind alone.
  */
-const SESSION_LINK_FEATURES: Record<SessionLinkKind, { channel: string; calls: string; issue: string }> = {
-  'leader-dialed': { channel: 'a WebSocket on a session-channel stream through the host\'s daemon link', calls: 'one HTTP request per call on a session-call stream', issue: 'over this link (POST /host-api/credential)' },
-  'host-dialed': { channel: 'the socket the host dialed into /host-door, after both proved who they are', calls: 'call/reply frames on the same socket, answered by the host\'s route table', issue: 'never: a credential is issued only over the daemon link, so a host reached only this way keeps the one it holds' },
+const SESSION_LINK_FEATURES: Record<SessionLinkKind, { channel: string; calls: string; issue: string; e2e: { file: string; tests: string[] } }> = {
+  'leader-dialed': { channel: 'a WebSocket on a session-channel stream through the host\'s daemon link', calls: 'one HTTP request per call on a session-call stream', issue: 'over this link (POST /host-api/credential)', e2e: { file: 'tests/e2e/host-dialed-door-e2e.test.ts', tests: ['K1'] } },
+  'host-dialed': { channel: 'the socket the host dialed into /host-door, after both proved who they are', calls: 'call/reply frames on the same socket, answered by the host\'s route table', issue: 'never: a credential is issued only over the daemon link, so a host reached only this way keeps the one it holds', e2e: { file: 'tests/e2e/host-dialed-door-e2e.test.ts', tests: ['D2', 'D3'] } },
+}
+
+/**
+ * The other ways a host-judged session is reached that are no leader link, each with its test or
+ * why it does not apply. A new way (a leader link kind above, or a reader beside them) is added here.
+ */
+const OTHER_SESSION_LINKS: Record<string, { what: string; e2e?: { file: string; tests: string[] }; notApplicable?: string }> = {
+  'companion-listener': {
+    what: 'the host dials its cloud companion\'s /host-listen with its own /bridge machine token; the companion reads (rows, facts, flow) and, while the Mac is away, operates the session by call frames (send, interrupt, a prompt\'s answer). A start is not callable there (C5b Amendment 6: its bundle is the leader\'s to build)',
+    e2e: { file: 'tests/e2e/companion-host-listener-e2e.test.ts', tests: ['P1', 'P2', 'P3', 'P4', 'P5', 'P6'] },
+  },
+  local: {
+    what: 'a session on the leader\'s own machine',
+    notApplicable: 'the leader\'s own machine has no host service of its own: its runtime is the leader\'s (in its process or its own daemon), and the leader\'s runner runs and judges those sessions itself (judge-of.ts: a row of this server is never \'host\'), so there is no channel link to it. A host entry that names the leader\'s own machine is a host like any other (its own service and home) and links by one of the kinds above: every cluster test runs exactly that, all its processes on one machine',
+  },
 }
 
 describe('every kind of session channel link carries the channel and the host calls', () => {
   it('every kind is classified (read from the source)', () => {
     expect([...SESSION_LINK_KINDS].sort()).toEqual(Object.keys(SESSION_LINK_FEATURES).sort())
+  })
+
+  it('every kind, and every other way a host-judged session is reached, names its cluster test or why none applies', () => {
+    const named = [...Object.values(SESSION_LINK_FEATURES).map((f) => f.e2e), ...Object.values(OTHER_SESSION_LINKS).flatMap((f) => (f.e2e ? [f.e2e] : []))]
+    for (const { file, tests } of named) {
+      const src = fs.readFileSync(path.join(ROOT, file), 'utf8')
+      for (const id of tests) expect(src, `${file} names ${id}`).toMatch(new RegExp(`\\bit\\('${id}: `))
+    }
+    for (const [kind, f] of Object.entries(OTHER_SESSION_LINKS)) expect(!!f.e2e !== !!f.notApplicable, `${kind}: a test or why none applies, one of the two`).toBe(true)
   })
 
   for (const kind of SESSION_LINK_KINDS) {
