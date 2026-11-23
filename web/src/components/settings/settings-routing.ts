@@ -11,7 +11,7 @@ import { log } from '@/utils/log'
 import { CORE_SETTINGS_CONTRIBUTIONS, type CoreSettingsContribution } from './core-settings-registry'
 import type { FilterEntry } from './settings-filter'
 import { WAY_PANES, wayPaneForRow } from './settings-way-panes'
-import { HINT_ROW_PREFIX, HOST_ROW_PREFIX, legacyPluginTarget } from './settings-legacy-links'
+import { ENGINE_SIGN_IN_ROW_PREFIX, HINT_ROW_PREFIX, HOST_ROW_PREFIX, legacyPluginTarget } from './settings-legacy-links'
 
 export { WAY_PANES, wayPaneForRow } from './settings-way-panes'
 export { legacyPluginTarget } from './settings-legacy-links'
@@ -156,6 +156,10 @@ export function resolvePane(hash: string, opts: { silent?: boolean } = {}): Reso
     return { paneId: NAV_OWNER['remote-hosts'] ?? 'remote-hosts', targetId: id, known: true }
   }
   if (id.startsWith(HINT_ROW_PREFIX) && id.length > HINT_ROW_PREFIX.length) {
+    return { paneId: NAV_OWNER.sessions ?? 'sessions', targetId: id, known: true, row: true }
+  }
+  // An engine's sign-in, one host's row or the whole group (the chat's "Open Settings to sign in").
+  if (id.startsWith(ENGINE_SIGN_IN_ROW_PREFIX) && id.length > ENGINE_SIGN_IN_ROW_PREFIX.length) {
     return { paneId: NAV_OWNER.sessions ?? 'sessions', targetId: id, known: true, row: true }
   }
   if (!opts.silent) log.warn('settings', 'unknown settings hash', { hash })

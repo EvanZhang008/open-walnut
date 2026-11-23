@@ -14372,10 +14372,11 @@ export class SessionRunner {
       } else if (err instanceof EngineSignInRequiredError) {
         // The engine's CLI on that host is not signed in: no retry can sign it in, so the turn
         // waits for the user's Retry, and the chat offers the sign-in in Settings for that host.
+        // The rows are parked, so the chat's Discard drops them; their own row says why (saidOnMessage).
         await parkMessages(rows, classifyDeliveryFailure(err)).catch(() => {})
-        reportBatchFailed(deliverySessionId, rows.map((m) => m.id), err.message)
+        reportBatchFailed(deliverySessionId, rows.map((m) => m.id), err.message, {})
         bus.emit(EventNames.SESSION_ERROR, {
-          sessionId: deliverySessionId, error: err.message, errorKind: 'delivery_failed' as const, parked: true, signIn: err.signIn,
+          sessionId: deliverySessionId, error: err.message, errorKind: 'delivery_failed' as const, parked: true, saidOnMessage: true, signIn: err.signIn,
         }, ['main-ai'], { source: 'session-runner' })
       } else if (goneCwd) {
         await parkOnGoneFolder(deliverySessionId, rows, `Working directory no longer exists: ${goneCwd}`, { cwd: goneCwd })

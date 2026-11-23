@@ -15,6 +15,7 @@ import { useSerialSave, type OnSave } from './GeneralSection';
 import { EngineSplitRow } from './EngineSplitRow';
 import { DefaultEngineRow } from './DefaultEngineRow';
 import { PickerEnginesGroup } from './PickerEnginesGroup';
+import { EngineSignInGroup } from './EngineSignInGroup';
 import { FallbackEngineRow } from './FallbackEngineRow';
 import { ClaudeLaunchDefaultsRow } from './ClaudeLaunchDefaultsRow';
 import { ClaudeCodeImportGroups } from './ClaudeCodeImportGroup';
@@ -157,6 +158,8 @@ export function SessionsSection({ config, onSave }: Props) {
       <SettingsGroup className="settings-checklist engine-split-list">
         <EngineSplitRow config={config} save={save} />
       </SettingsGroup>
+      {/* A sign-in belongs to the host, not to the picker's tick: always shown. */}
+      <EngineSignInGroup engine="antigravity" />
       <ClaudeCodeImportGroups />
       <SettingsGroup>
         <SettingsRow

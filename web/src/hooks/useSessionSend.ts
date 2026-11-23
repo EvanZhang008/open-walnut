@@ -21,6 +21,7 @@ import type { RowWithSendUuids } from '@/utils/send-uuids';
 import { onKept, sendSessionMessage, type SendAck } from '@/api/session-send';
 import { dictationField } from '@/utils/dictation-takes';
 import { applyLateKept, composerSendError, shownSendError, type SendErrorState } from '@/components/sessions/send-acceptance';
+import { parseNotSignedIn } from '../../../src/core/agents/engine-sign-in-words';
 import { dueForAutoRetry, expiredAutoRetry, nextAutoRetryExpiry, sameWaitingSend, waitsForConnectionAfter } from './send-auto-retry';
 
 /** How long after the connection is back a waiting send goes out (the stores refetch first). */
@@ -771,8 +772,8 @@ export function useSessionSend(activeSessionId: string | null, options?: {
 
   const handleBatchFailed = useCallback((messageIds: string[], error: string, info?: { parked?: boolean; waitsFor?: string }) => {
     log.warn('send', 'batch failed', { count: messageIds.length, error, ...(info?.waitsFor ? { waitsFor: info.waitsFor } : {}) });
-    // A message waiting for the agent says so on its own bubble, with the fix: no second red line.
-    if (!info?.waitsFor) setSendError(error, undefined, true);
+    // A message waiting for the agent, or for a sign-in on its host, says so on its own bubble, with the fix: no second red line.
+    if (!info?.waitsFor && !parseNotSignedIn(error)) setSendError(error, undefined, true);
     touch(messageIds);
     // A refused launch prompt reads as the message that was not sent (parked-bubbles.ts).
     setOptimisticMsgs((prev) => markBubblesFailed(prev, messageIds, error, info));

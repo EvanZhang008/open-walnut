@@ -14,6 +14,8 @@ import { wayPaneForRow } from './settings-way-panes'
 export const HOST_ROW_PREFIX = 'rh-host-'
 /** One message hint's row in Sessions, Message hints (MessageHintsGroup). */
 export const HINT_ROW_PREFIX = 'message-hint-'
+/** An engine's sign-in in Sessions (`#engine-sign-in-<engine>[-<host>]`, engine-sign-in-model.ts). */
+export const ENGINE_SIGN_IN_ROW_PREFIX = 'engine-sign-in-'
 
 /** The Settings hash plugins lived under before the Apps page (mirrors open-link LEGACY_PLUGINS_HASH). */
 const LEGACY_PLUGINS_HASH = 'plugin-store'
@@ -40,5 +42,5 @@ export function legacyPluginTarget(hash: string): string | null {
 
 /** A Settings row anchor of Walnut's own whose id carries a free-form part. */
 export function isWalnutRowAnchor(id: string): boolean {
-  return id.startsWith(HOST_ROW_PREFIX) || id.startsWith(HINT_ROW_PREFIX) || id.startsWith('devices-way-') || wayPaneForRow(id) !== null
+  return id.startsWith(HOST_ROW_PREFIX) || id.startsWith(HINT_ROW_PREFIX) || id.startsWith(ENGINE_SIGN_IN_ROW_PREFIX) || id.startsWith('devices-way-') || wayPaneForRow(id) !== null
 }

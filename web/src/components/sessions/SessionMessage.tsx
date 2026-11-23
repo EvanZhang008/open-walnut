@@ -77,6 +77,7 @@ import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { KebabVerticalIcon } from '@/components/common/PhoneIcons';
 import { computeLineDiff, editDiffIsLarge, toolCardKind, toolDescription, toolInputSummary } from '@open-walnut/tool-header-text';
 import { DisclosureButton, DisclosureChevron } from '@/components/controls';
+import { EngineSignInErrorLine, parseNotSignedIn } from './EngineSignInNote';
 
 // ── Edit Diff View ──
 
@@ -564,6 +565,9 @@ export function SystemLineCollapsible({ variant, message, detail, time, noticeId
   const icon = systemLineIcon(variant);
   // Walnut's idle compaction opens, on a click, to why it ran and the setting that decides it.
   if (isIdleCompactLine(message)) return <IdleCompactLine message={message} time={time} noticeId={noticeId} inOpenedRun={inOpenedRun} />;
+  // The engine's CLI is not signed in on the host: its words in full and the way to Settings, never folded.
+  const signIn = variant === 'error' ? parseNotSignedIn(detail) ?? parseNotSignedIn(message) : null;
+  if (signIn) return <EngineSignInErrorLine signIn={signIn} time={time} />;
   if (detail && detail.length > 80) {
     return (
       <div className="tool-run-row">

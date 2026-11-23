@@ -193,6 +193,11 @@ writeOwnerPid(tmpBase)
   await fs.writeFile(path.join(binDir, 'fake-gh'), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(fakeGh)} "$@"\n`, { mode: 0o755 })
   process.env.WALNUT_GH_BIN = path.join(binDir, 'fake-gh')
   process.env.WALNUT_FAKE_GH_DIR = path.join(tmpBase, 'fake-gh')
+  // Antigravity's CLI: the stand-in (tests/fixtures/antigravity/fake-agy.mjs) that signs in with the
+  // code "good" and keeps its sign-in in this home, so Settings' sign-in never meets a real account.
+  const fakeAgy = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../fixtures/antigravity/fake-agy.mjs')
+  await fs.writeFile(path.join(binDir, 'fake-agy'), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(fakeAgy)} "$@"\n`, { mode: 0o755 })
+  process.env.WALNUT_ANTIGRAVITY_PATH = path.join(binDir, 'fake-agy')
   process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH ?? ''}`
 }
 

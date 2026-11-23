@@ -47,6 +47,7 @@ import { streamAgentSettled, knownAgentFromStream, type LiveLane } from './LaneT
 import { dedupeOptimisticMessages } from './optimistic-dedup';
 import { headsAsLaunch } from './parked-bubbles';
 import { AgentWaitNote } from './AgentWaitNote';
+import { EngineSignInNote, parseNotSignedIn } from './EngineSignInNote';
 import { HistoryGapDivider } from './HistoryGapDivider';
 import { gapIndex, type HistoryGap } from '@/hooks/history-gap';
 import { typedUserText } from '@open-walnut/history-injected-banner';
@@ -6026,7 +6027,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const cardViewStatus = cardNode ? viewStatusOf(cardNode, threadsApi.metaIndex, threadDerived.live) : undefined;
   const cardStatus = cardWaiting && cardViewStatus !== 'resolved' ? 'queued' : cardViewStatus;
   const cardTitle = cardKey ? displayTitleOf(cardNode, threadsApi.metaIndex) : undefined;
-  const failedSend = (m: OptimisticMessage): ReactNode => m.status !== 'failed' ? null : m.waitsFor ? (
+  const failedSend = (m: OptimisticMessage): ReactNode => m.status !== 'failed' ? null : parseNotSignedIn(m.failedError) ? (
+    // The engine's CLI on the host is not signed in: the way to Settings first, then today's Retry and Discard.
+    <EngineSignInNote
+      signIn={parseNotSignedIn(m.failedError)!}
+      host={sessionHost || '__local__'}
+      sessionId={sessionId}
+      onRetry={() => onRetryFailed?.(m.queueId)}
+      onDiscard={() => (m.parked ? onDeleteQueued?.(m.queueId) : onDismissFailed?.(m.queueId))}
+    />
+  ) : m.waitsFor ? (
     // Waiting for the agent to run: its own words, the fix in place, and it goes out by itself.
     <AgentWaitNote
       reason={m.failedError}

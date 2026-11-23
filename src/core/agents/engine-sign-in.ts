@@ -18,6 +18,7 @@ import { ENGINE_REGISTRY, engineCaps } from './engine-registry.js'
 import type { SessionEngine } from '../types.js'
 import { descriptorAdapterEnv } from '../../providers/acp-worker/adapter-env.js'
 import { hostDisplayName } from '../hosts/host-display-name.js'
+import { notSignedInSentence } from './engine-sign-in-words.js'
 import { log } from '../../logging/index.js'
 
 export const ENGINE_SIGN_IN_CAPABILITY = 'engine-sign-in-v1'
@@ -51,9 +52,9 @@ export function signInHostName(host: string, config?: { hosts?: Record<string, u
   return hostDisplayName(host, def?.label)
 }
 
-/** The words a session that is not signed in shows, and the chat's link to Settings rides beside them. */
+/** The words a session that is not signed in shows; the chat reads them back (engine-sign-in-words.ts) for its link to Settings. */
 export function notSignedInWords(engine: SessionEngine, hostName: string): string {
-  return `${engineCaps(engine).displayName} is not signed in on ${hostName}. Open Settings to sign in.`
+  return notSignedInSentence(engine, hostName)
 }
 
 function withDeadline<T>(p: Promise<T>, ms: number, what: string): Promise<T> {

@@ -526,6 +526,14 @@ export class MockDaemon {
         })
         return
       }
+      // An engine CLI's sign-in and install ('engine-sign-in-v1'): the real module, as daemon-standalone answers it.
+      case 'engine.signIn': {
+        void this._acp.engineSignIn.handle(cmd).then(
+          (result) => { if (ws.readyState === WebSocket.OPEN) this.sendOk(ws, id, { result }) },
+          (error) => { if (ws.readyState === WebSocket.OPEN) this.sendError(ws, id, 'engine.signIn failed: ' + (error as Error).message) },
+        )
+        return
+      }
       case 'acpSend': return this.cmdAcpOp(ws, id, cmd, 'prompt')
       case 'acpSteer': return this.cmdAcpOp(ws, id, cmd, 'steer')
       case 'acpCancel': return this.cmdAcpOp(ws, id, cmd, 'cancel')

@@ -26,7 +26,7 @@ import { keepKeysInside } from '@/utils/keep-keys-inside';
 import { isImeKey } from '@/utils/ime-key';
 import { formatModelName } from '@/utils/model-name';
 import { sortByModelStrength } from '@/utils/model-strength-order';
-import { parseAcpModelId, acpProviderGroupId, shortAcpModelName, acpModelDisplayName, groupAcpModels, acpFilterMatch, acpEffortLadder, acpEffortLabel } from './acp-model-id';
+import { parseAcpModelId, acpProviderGroupId, shortAcpModelName, acpModelDisplayName, groupAcpModels, acpFilterMatch, acpEffortLadder, acpEffortLabel, acpEffortOptionName } from './acp-model-id';
 import type { AcpModelFamily } from './acp-model-id';
 import { SessionCostBlock, BudgetPausedMark, costToggleLabel, type CompareModel } from './SessionCostBlock';
 import { useSessionCost } from '@/hooks/useSessionCost';
@@ -1225,10 +1225,10 @@ export function ModelPicker({
                 <PickerRow
                   key={option.value}
                   picked={active}
-                  title={effortTitle(option.name, option.description)}
+                  title={effortTitle(acpEffortOptionName(option), option.description)}
                   onClick={() => { if (!active) onAcpEffortControl?.(option.value); }}
                 >
-                  <span className="model-picker-row-name wn-title">{option.name}</span>
+                  <span className="model-picker-row-name wn-title">{acpEffortOptionName(option)}</span>
                 </PickerRow>
               );
             })}

@@ -5,6 +5,7 @@ import { useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import '@/styles/pick-and-nav.css';
 import { MenuCaret } from '@/components/controls';
+import { acpEffortOptionName } from './acp-model-id';
 
 interface SessionControlPillsProps {
   controls: SessionControl[];
@@ -121,7 +122,7 @@ function ThoughtControlPill({ control, setControl }: Pick<SessionControlPillsPro
   if (!control.options.length) return null;
   return <>
     <button ref={trigger} type="button" className="btn btn-sm btn-ghost mode-toggle-pill" title={control.name} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(!open)}>
-      <span className="mode-toggle-pill-label">{current?.name ?? control.currentValue}</span>
+      <span className="mode-toggle-pill-label">{current ? acpEffortOptionName(current) : control.currentValue}</span>
       <MenuCaret />
     </button>
     {open && createPortal(<div ref={menu} className="session-control-menu wn-overlay wn-menu" role="listbox" aria-label={control.name}
@@ -133,7 +134,7 @@ function ThoughtControlPill({ control, setControl }: Pick<SessionControlPillsPro
           setBusy(true);
           void setControl(control.id, option.value).catch(() => {}).finally(() => { setBusy(false); setOpen(false); });
         }}>
-        <span className="session-control-option-name">{option.name}</span>
+        <span className="session-control-option-name">{acpEffortOptionName(option)}</span>
       </button>)}
     </div>, document.body)}
   </>;

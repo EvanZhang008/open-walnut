@@ -248,6 +248,15 @@ export function acpEffortLabel(effort: string): string {
 }
 
 /**
+ * The name an engine's own effort option shows: Walnut's for a level Walnut knows, so one level
+ * reads the same on every engine (Antigravity calls its fourth level "Extra", Codex's is
+ * "X-High"); the engine's own name for a level of its own.
+ */
+export function acpEffortOptionName(option: { value: string; name: string }): string {
+  return SESSION_EFFORTS.find((e) => e.id === option.value)?.label ?? option.name;
+}
+
+/**
  * The effort column of the ACP pane: every level ANY family offers, in ladder
  * order (unknown levels after the known ones, in catalog order). A fixed ladder
  * dropped what it did not list: Codex's "ultra" was reachable only from a

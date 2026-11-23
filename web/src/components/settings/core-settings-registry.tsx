@@ -201,6 +201,8 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     keywords: [
       { word: 'default engine', rowLabel: 'Default engine', anchor: 'default-engine-select' },
       'engine', 'claude code', 'codex', 'coding agent',
+      { word: 'antigravity sign-in', rowLabel: 'Antigravity sign-in', anchor: 'engine-sign-in-antigravity' },
+      'antigravity', 'gemini api key',
       { word: 'idle timeout', rowLabel: 'Idle timeout', anchor: 'idle-timeout' },
       { word: 'max idle sessions', rowLabel: 'Max idle sessions', anchor: 'max-idle' },
       { word: 'permission prompts', rowLabel: 'Intercept permission prompts', anchor: 'permission-prompt' },
