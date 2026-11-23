@@ -6,8 +6,10 @@
  * the scripted app-server (both on the host, through the runtime of the host's one Walnut service).
  *
  * In order, on one cluster:
- *   L1 legacy    a session started with the switch off stays the leader's after it goes on: its
- *                next turn runs in the host daemon as before, and the channel says nothing of it
+ *   L1 legacy    a session started with the switch off, its CLI still running, stays the leader's
+ *                after it goes on (no live session is handed over): its next turn runs in the host
+ *                daemon as before, and the channel says nothing of it. One at rest is resumed by the
+ *                host instead (host-judge-legacy-resume-e2e.test.ts)
  *   L2 acp       an ACP engine (OpenCode's slot) starts, answers and takes a second message on the
  *                host; the Mac keeps the row (judge 'host', its engine), hears its facts, parses no
  *                line, and its runner answers the session through the proxy

@@ -61,7 +61,8 @@ export function inOrder(sid: string, run: () => Promise<void>): Promise<void> {
   return next
 }
 
-function lineOf(m: QueuedMessage): QueuedLine {
+/** One queued row as it crosses to a host (host-api.ts QueuedLine). */
+export function queuedLineOf(m: QueuedMessage): QueuedLine {
   const held = heldOf(m)
   return {
     id: m.id, message: m.message,
@@ -129,7 +130,7 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
   const payload: Record<string, unknown> = {
     ...(o.body ?? { sessionId: sid, message: '' }),
     sessionId: sid,
-    queued: taken.lines.map(lineOf),
+    queued: taken.lines.map(queuedLineOf),
     busSource: (o.body?.busSource as string | undefined) ?? o.source,
     ...(kick ? {} : { holdOnly: true }),
   }

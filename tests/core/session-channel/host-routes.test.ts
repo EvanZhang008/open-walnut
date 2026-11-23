@@ -36,6 +36,10 @@ const dropped: string[][] = []
 const terminated: Array<{ sid: string; opts: unknown }> = []
 /** The claims a start made (session-db.ts claimStartingRow / releaseStartingRow), in order. */
 const claims: string[] = []
+/** The leader's rows a resume's claim was given. */
+const claimRows: unknown[] = []
+/** What the host's at-rest check answers a resume (undefined: the routes take no resume). */
+let notAtRest: string | null | undefined = null
 
 const session = {
   getUsage: async (n: number) => ({ tokens: n * 2 }),
@@ -73,7 +77,8 @@ async function startDoor(withRoutes: boolean): Promise<void> {
     drop: async (sids) => { dropped.push(sids); return sids.length },
     lifecycle: { terminateSession: async (sid, opts) => { terminated.push({ sid, opts }); return { status: 'terminated', sessionId: sid } } },
     owns: async (sid) => sid !== 'sid-leaders',
-    claim: { take: (sid) => { claims.push(`take:${sid}:${runnerCalls.includes('started') ? 'after' : 'before'}`) }, release: (sid) => { claims.push(`release:${sid}`) } },
+    claim: { take: (sid, row) => { claims.push(`take:${sid}:${runnerCalls.includes('started') ? 'after' : 'before'}`); if (row) claimRows.push(row) }, release: (sid) => { claims.push(`release:${sid}`) } },
+    ...(notAtRest === undefined ? {} : { notAtRest: async () => notAtRest ?? null }),
   }) : null
   door = createLeaderDoor({ devices: {} as never, sessions: () => routes })
   server = net.createServer((sock) => door.accept(sock))
@@ -91,6 +96,8 @@ beforeEach(async () => {
   dropped.length = 0
   terminated.length = 0
   claims.length = 0
+  claimRows.length = 0
+  notAtRest = null
   bundles = new StartBundles()
   log = await FactLog.open({ dir: path.join(dir, 'log'), walnutId: 'w1', flushMs: 1, durable: false })
   channel = new HostChannel({ log, walnutId: 'w1', hostId: 'marina-box', ownRows: async () => [] })
@@ -345,6 +352,54 @@ describe('start, send, interrupt', () => {
       { name: 'session:send', data: { sessionId: 'sid-1', message: 'go' }, source: 'chat' },
       { name: 'session:send', data: { sessionId: 'sid-1', message: '' }, source: 'host-api' },
     ])
+  })
+})
+
+describe('a start that resumes a session the leader ran', () => {
+  const sid = '50000000-0000-4000-8000-0000000000f1'
+  const row = { claudeSessionId: sid, taskId: 'task-1', host: 'marina-box', cwd: '/w', mode: 'bypass', judge: 'host' }
+  const lines = [{ id: 'qm-r1', message: 'resume me', sentBy: 'person' }]
+  const resume = () => post('/host-api/sessions/start', { taskId: 'task-1', message: '', resumeSessionId: sid, resumeRow: row, queued: lines, busSource: 'ui' })
+
+  it('at rest here: its row is claimed with the leader\'s, its lines are queued, and the runner drains them; no new session', async () => {
+    await startDoor(true)
+    expect((await resume()).body).toEqual({ ok: true, sessionId: sid, title: '' })
+    expect(claims).toEqual([`take:${sid}:before`])
+    expect(claimRows).toEqual([row])
+    expect(emitted).toEqual([
+      { name: 'enqueue', data: { sid, lines }, source: 'ui' },
+      { name: 'session:send', data: { sessionId: sid, message: '' }, source: 'ui' },
+    ])
+    expect(seenAtStart).toBeNull()
+  })
+
+  it('refused while anything of it runs here, with nothing claimed or queued', async () => {
+    notAtRest = 'its CLI runs in this host\'s runtime'
+    await startDoor(true)
+    expect((await resume()).body).toMatchObject({ ok: false, why: 'not_at_rest' })
+    expect(claims).toEqual([])
+    expect(emitted).toEqual([])
+  })
+
+  it('a host whose routes take no resume says so, and never starts a new session for it', async () => {
+    notAtRest = undefined
+    await startDoor(true)
+    expect((await resume()).body).toMatchObject({ ok: false, why: 'resume_unsupported' })
+    expect(seenAtStart).toBeNull()
+    expect(emitted).toEqual([])
+  })
+
+  it('a bad id or a row of another session is refused', async () => {
+    await startDoor(true)
+    expect((await post('/host-api/sessions/start', { taskId: 'task-1', message: '', resumeSessionId: '../x' })).body).toMatchObject({ ok: false, why: 'bad_request' })
+    expect((await post('/host-api/sessions/start', { taskId: 'task-1', message: '', resumeSessionId: sid, resumeRow: { ...row, claudeSessionId: 'other' } })).body).toMatchObject({ ok: false, why: 'bad_request' })
+    expect(claims).toEqual([])
+  })
+
+  it('the switch off refuses it as any start', async () => {
+    enabled = false
+    await startDoor(true)
+    expect(await resume()).toEqual({ status: 503, body: { ok: false, error: 'host_runs_sessions_off' } })
   })
 })
 

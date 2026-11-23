@@ -12,8 +12,8 @@
  *                the runtime through the own-sessions link, the production path; and a probe in its
  *                process (the module the entry imports once its server answers)
  *
- * The probes only read, but for the Mac's /delete and the host's /slow-start (and the host's door
- * port is the leader door itself, for a send made on the host while the Mac is away).
+ * The probes only read, but for the Mac's /delete and the host's /slow-start and /hold-sid (and
+ * the host's door port is the leader door itself, for a send made on the host while the Mac is away).
  *
  * The host's ACP engines run the scripted adapter (tests/providers/mock-acp-agent.mjs) through an
  * ACP worker built from this checkout (acp-worker-bundle.ts): the setTestAcpArtifacts seam, as the
@@ -34,6 +34,7 @@
  *         GET /loop?reset=   this process's event-loop delay since the last reset (max, p99, p50, mean ms)
  *         GET /profile?start=1, then ?to=<file>   a CPU profile of this process between the two (node:inspector)
  *         GET /judge?sid=    judgeOf and the judging host
+ *         GET /holds?sid=    does the Mac's runner hold a live process of it (holdsLiveSession)
  *         GET /side?host=    the leader side: on, linked to the host (and which side dialed), judging its starts
  *         GET /link?host=    is the Mac's daemon link to the host up (the host-server manager's link)
  *         GET /cursor?host=  the channel cursor in the Mac's sessions store
@@ -47,7 +48,9 @@
  *         GET /judging?sid=  does the host stand down (its leader older, old-leader-watch.ts), its read of
  *                            the leader's presence, is a leader on its channel, and does it judge `sid`
  *         GET /slow-start?ms= the host's next start answers its leader `ms` late, its session up
- *                            and its born row written (a loaded host's order): the probe's one write
+ *                            and its born row written (a loaded host's order)
+ *         GET /hold-sid?sid=&on=1|0   the host's runner says it holds a live session of `sid` (a
+ *                            resume of it is refused there, not at rest) until `on=0`
  *
  * `companion`: a real cloud companion too (tests/helpers/cloud-box-replica.ts), paired with the Mac
  * before the Mac boots, as a first bridge push leaves a pairing: the Mac's `cloud` remote and its
@@ -180,6 +183,7 @@ await serveProbe({
     return { written: q.get('to'), samples: profile.samples.length }
   },
   '/judge': (q) => ({ judge: jo.judgeOf(q.get('sid')), host: jo.judgingHostOf(q.get('sid')) }),
+  '/holds': (q) => ({ live: ccs.sessionRunner.holdsLiveSession(q.get('sid')) }),
   '/side': (q) => { const s = lb.activeLeaderSide(); return { active: !!s, linked: !!s && s.linked(q.get('host')), kind: s ? s.linkKind(q.get('host')) : null, judges: !!s && s.hostJudges(q.get('host')) } },
   '/link': async (q) => ({ connected: (await import(${url('src/core/host-server/index.ts')})).hostServerLink(q.get('host')) !== null }),
   '/cursor': (q) => ({ cursor: sdb.loadChannelCursor(q.get('host')) }),
@@ -249,6 +253,18 @@ await serveProbe({
       return r
     }
     return { ok: true, ms }
+  },
+  // The host's runner says it holds a live session of a held sid (host-boot.ts notAtRest), so a resume of it is refused.
+  '/hold-sid': (q) => {
+    const held = globalThis.__clusterHeldSids ??= new Set()
+    if (!globalThis.__clusterHeldPatched) {
+      globalThis.__clusterHeldPatched = true
+      const own = sessionRunner.holdsLiveSession
+      sessionRunner.holdsLiveSession = function (sid) { return held.has(sid) || own.call(this, sid) }
+    }
+    if (q.get('on') === '0') held.delete(q.get('sid'))
+    else held.add(q.get('sid'))
+    return { ok: true, held: [...held] }
   },
   '/queue': async (q) => (await (await import(${url('src/core/session-message-queue.ts')})).getQueue(q.get('sid'))).map((m) => ({ id: m.id, status: m.status, parkedReason: m.parkedReason ?? null, message: m.message })),
 }, { door: doorPort, hasDoor: !!door, running: !!boot.hostSessionsRunning() })

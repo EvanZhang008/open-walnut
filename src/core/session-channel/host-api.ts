@@ -15,7 +15,7 @@
  * Every route of a host whose switch is off answers `{ok:false, error:'host_runs_sessions_off'}`.
  */
 import type { SessionStartEvent, SessionSendEvent, SessionInterruptEvent } from '../event-types.js'
-import type { SessionProfile, Task } from '../types.js'
+import type { SessionProfile, SessionRecord, Task } from '../types.js'
 import type { HostCallTarget } from './host-calls.js'
 
 export const HOST_SESSIONS_PATH = '/host-api/sessions'
@@ -53,6 +53,20 @@ export type StartBody = Omit<SessionStartEvent, 'largePromptFile'> & {
   largePromptPath?: string
   startBundle?: StartBundle
   busSource?: string
+} & Partial<ResumeFields>
+
+/**
+ * A start that resumes a session the leader ran until now and that no CLI runs anywhere (its
+ * leader's providers/host-resume.ts): the host checks that no CLI of it runs here, makes its row
+ * its own (session-db.ts claimStartingRow, from `resumeRow` when its copy has none yet), queues
+ * `queued` as a send would and drains them, which resumes the same CLI session id (`--resume`).
+ * Only to a host that names SESSION_RESUME_CAP (switch.ts): an older one would start a new session.
+ */
+export interface ResumeFields {
+  resumeSessionId: string
+  /** The leader's row of it, as the leader holds it now. */
+  resumeRow: SessionRecord
+  queued: QueuedLine[]
 }
 
 export type StartAnswer = { ok: true; sessionId: string; title: string } | { ok: false; error: string; why?: string }

@@ -29,6 +29,12 @@ import { experimentalEnabled } from '../experimental.js'
 
 /** Capability a host's service names when it runs and judges sessions itself. */
 export const SESSION_JUDGE_CAP = 'session-judge-v1'
+/**
+ * Capability a host's service names when its start route also resumes a session the leader ran
+ * until now (host-api.ts StartBody `resumeSessionId`): a host from before it would read such a
+ * start as a new session, so a leader hands a resume only to a host that names this.
+ */
+export const SESSION_RESUME_CAP = 'session-resume-v1'
 
 type SwitchConfig = Pick<Config, 'experimental' | 'hosts' | 'hosts_run_sessions'>
 

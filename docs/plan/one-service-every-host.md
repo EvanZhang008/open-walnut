@@ -432,12 +432,17 @@ permission prompts still name Walnut.
 
 ### A session a host runs (phase 2, step C): hand-off, rollback, delete
 
-- **No hand-off of a running session yet.** The switch (`host_runs_sessions`) decides only where a new start
-  goes. A session started before the switch went on stays the leader's for its whole life, resumes included,
-  and one a host started stays that host's after the switch goes off (tests: L1 in
-  `tests/e2e/host-judged-session-lifecycle-e2e.test.ts`, S6 in `host-judged-session-cluster-e2e.test.ts`).
-  So no session changes its judge while it runs. A hand-off is needed only when old sessions must move,
-  which is phase 4 (the legacy path is deleted), not now.
+- **No hand-off of a running session.** The switch (`host_runs_sessions`) decides where a new start goes,
+  and where a session the leader ran resumes once nothing of it runs any more. A delivery to such a session
+  (any send, a redelivery, restart recovery, auto-continue) whose CLI runs nowhere (no process the leader
+  holds, no turn, start, stop or transfer in flight, and the host's runtime says no CLI of it runs) goes to
+  its host as a resume when a start there would (`src/providers/host-resume.ts`): the host resumes the same
+  CLI session id from the same row, through the same claim, in-flight and lost-start rules as a start, and
+  the session is the host's from then on; refused or never sent, it resumes here as before, once. A session
+  with a live CLI is never handed over, ACP engines stay the leader's, and a host that does not name
+  `session-resume-v1` is never asked. One a host runs stays that host's after the switch goes off (tests:
+  L1 in `tests/e2e/host-judged-session-lifecycle-e2e.test.ts`, S6 in `host-judged-session-cluster-e2e.test.ts`,
+  L1 to L5 in `host-judge-legacy-resume-e2e.test.ts`). So no session changes its judge while it runs.
 - **Rolling back, in order.** Each step can stop there; each later one is safe without the earlier.
   1. One host: `hosts.<name>.runs_sessions: false` in the leader's config (no restart). New starts on
      that host take today's path at once; the sessions it already runs keep running and reporting

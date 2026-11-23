@@ -33,6 +33,7 @@ import { checkPermissionAnswer } from './host-permission.js'
 import { isChannelFrame, type HostChannel } from './channel.js'
 import { HOST_CHANNEL_PATH, HOST_SESSIONS_OFF, HOST_SESSIONS_PATH, type CallBody, type QueuedLine, type StartBody } from './host-api.js'
 import type { StartBundles } from './host-port.js'
+import type { SessionRecord } from '../types.js'
 import { HOST_CREDENTIAL_PATH, HOST_DOORS_PATH } from './door-wire.js'
 import { answerCredentialRoute, answerDoorsRoute, type CredentialRouteOptions } from './host-credential-file.js'
 
@@ -100,10 +101,17 @@ export interface HostRoutesOptions {
   credential?: CredentialRouteOptions
   /**
    * A start with a preassigned id makes that session this host's from its first write, whatever
-   * copy of the leader's row is here or comes later (session-db.ts claimStartingRow); `release` when
-   * the start ended without a session here. Absent (tests): nothing is claimed.
+   * copy of the leader's row is here or comes later (session-db.ts claimStartingRow; a resume gives
+   * the leader's row for a host whose copy has none yet); `release` when the start ended without a
+   * session here. Absent (tests): nothing is claimed.
    */
-  claim?: { take(sid: string): void; release(sid: string): void }
+  claim?: { take(sid: string, leaderRow?: SessionRecord): void; release(sid: string): void }
+  /**
+   * Why a session a resume names is not at rest here (a session of it in the runner, its CLI in
+   * the runtime, or no word from the runtime), or null when nothing of it runs. Absent: this host
+   * takes no resume (it answers `resume_unsupported`).
+   */
+  notAtRest?(sid: string): Promise<string | null>
   now?: () => number
   log?: (level: 'info' | 'warn', msg: string, data?: Record<string, unknown>) => void
 }
@@ -193,6 +201,7 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
 
   async function start(body: StartBody): Promise<{ status: number; body: unknown }> {
     if (!body || typeof body.taskId !== 'string' || typeof body.message !== 'string') return { status: 400, body: { ok: false, error: 'taskId and message are required', why: 'bad_request' } }
+    if (body.resumeSessionId !== undefined) return resume(body)
     const pre = (body as { preassignedSessionId?: unknown }).preassignedSessionId
     if (pre !== undefined && (typeof pre !== 'string' || !UUID_V4.test(pre))) return { status: 400, body: { ok: false, error: 'preassignedSessionId must be a v4 UUID', why: 'bad_request' } }
     // Ids that name files or sessions on this host: one plain name each, never a path (R2-L2).
@@ -242,6 +251,42 @@ export function createHostSessionRoutes(o: HostRoutesOptions): HostSessionRoutes
     } finally {
       o.bundles.clear(startId)
     }
+  }
+
+  /**
+   * A start that resumes a session its leader ran until now (host-api.ts ResumeFields): refused
+   * while anything of it runs here; else its row is this host's, its lines are queued here as a
+   * send's are (by their row ids, once) and the runner drains them, which resumes the CLI session.
+   * The answer comes once the lines are queued: what the resume did comes back on the channel.
+   */
+  async function resume(body: StartBody): Promise<{ status: number; body: unknown }> {
+    const sid = body.resumeSessionId
+    const row = body.resumeRow
+    if (typeof sid !== 'string' || !SAFE_ID.test(sid)) return { status: 400, body: { ok: false, error: 'resumeSessionId is not a session id', why: 'bad_request' } }
+    if (row !== undefined && (!row || typeof row !== 'object' || row.claudeSessionId !== sid)) return { status: 400, body: { ok: false, error: 'resumeRow is not the row of the session it resumes', why: 'bad_request' } }
+    if (!o.notAtRest) return { status: 200, body: { ok: false, error: 'this host does not resume sessions', why: 'resume_unsupported' } }
+    // Checked before the row is claimed: a refusal leaves nothing here. Nothing else starts a CLI of
+    // it meanwhile: its leader delivers to it only through this resume until the answer comes.
+    const busy = await o.notAtRest(sid)
+    if (busy) {
+      o.log?.('info', 'host sessions: a resume was refused, the session is not at rest here', { sessionId: sid, why: busy })
+      return { status: 200, body: { ok: false, error: `the session is not at rest on this host: ${busy}`, why: 'not_at_rest' } }
+    }
+    try { o.claim?.take(sid, row) } catch (err) {
+      return { status: 200, body: { ok: false, error: `the session's row could not be made this host's: ${errText(err)}`, why: 'resume_failed' } }
+    }
+    const source = typeof body.busSource === 'string' && body.busSource ? body.busSource : 'host-api'
+    const lines = Array.isArray(body.queued) ? body.queued.filter((l) => l && typeof l.message === 'string') : []
+    try {
+      if (lines.length > 0) await o.enqueue(sid, lines, source)
+    } catch (err) {
+      try { o.claim?.release(sid) } catch { /* the sweep gives it back */ }
+      o.log?.('warn', 'host sessions: a resume could not queue its lines', { sessionId: sid, error: errText(err) })
+      return { status: 200, body: { ok: false, error: `the resume's lines were not queued: ${errText(err)}`, why: 'resume_failed' } }
+    }
+    o.emit('session:send', { sessionId: sid, message: '' }, source)
+    o.log?.('info', 'host sessions: a session its leader ran is resumed here', { sessionId: sid, lines: lines.length })
+    return { status: 200, body: { ok: true, sessionId: sid, title: '' } }
   }
 
   async function call(body: CallBody): Promise<{ status: number; body: unknown }> {

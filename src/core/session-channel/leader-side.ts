@@ -25,7 +25,7 @@ import { attachLeaderChannel, isChannelFrame, type AppliedFact, type ChannelCurs
 import { channelClassOf, sessionIdOf } from './event-classes.js'
 import { EventNames } from '../event-bus.js'
 import { HOST_SESSIONS_PATH, type LiveState } from './host-api.js'
-import { SESSION_JUDGE_CAP } from './switch.js'
+import { SESSION_JUDGE_CAP, SESSION_RESUME_CAP } from './switch.js'
 import { isTurnEndName, turnEndEdgeOf } from '../sessions/turn-end-edge.js'
 import type { HostTurnEnd } from './turn-ends.js'
 import { answerOf, dialOverStream, requestOverStream, type ChannelSocket, type HostCallAnswer } from './leader-links.js'
@@ -481,5 +481,14 @@ export type LeaderSide = ReturnType<typeof createLeaderSide>
 
 /** Does a host's last report say its service runs and judges sessions? */
 export function reportJudges(report: { capabilities?: unknown } | null | undefined): boolean {
-  return Array.isArray(report?.capabilities) && (report!.capabilities as unknown[]).includes(SESSION_JUDGE_CAP)
+  return reportNames(report, SESSION_JUDGE_CAP)
+}
+
+/** Does a host's last report say its start route resumes a session the leader ran (host-resume.ts)? */
+export function reportResumes(report: { capabilities?: unknown } | null | undefined): boolean {
+  return reportNames(report, SESSION_JUDGE_CAP) && reportNames(report, SESSION_RESUME_CAP)
+}
+
+function reportNames(report: { capabilities?: unknown } | null | undefined, cap: string): boolean {
+  return Array.isArray(report?.capabilities) && (report!.capabilities as unknown[]).includes(cap)
 }

@@ -232,7 +232,7 @@ export interface ReplicaCluster {
   deviceCopy(): any
   /** Read-only summary of the copy stores on the replica and the rows on the Mac. */
   stores(): Record<string, unknown>
-  /** The tail of each process's log (failures); `whole`: the replica's whole server log. */
+  /** The tail of each process's log (failures); `whole`: the Mac's whole log and the replica's whole server log. */
   logs(o?: { whole?: boolean }): Record<string, string>
   stop(): Promise<void>
 }
@@ -1100,7 +1100,7 @@ export async function startReplicaCluster(opts: { twin: Twin; app?: ClusterApp; 
         routines: (() => { try { return JSON.parse(fs.readFileSync(path.join(replicaDataNow(), 'cron-jobs.json'), 'utf8')) } catch { return null } })(),
       }
     },
-    logs: (o) => ({ mac: macLog.text.slice(-20_000), replica: replicaLog(o?.whole === true) }),
+    logs: (o) => ({ mac: o?.whole === true ? macLog.text : macLog.text.slice(-20_000), replica: replicaLog(o?.whole === true) }),
     async stop() {
       if (stopped) return
       stopped = true

@@ -35,6 +35,7 @@ import { unwritableSettingsFile } from './settings-file-access.js'
 import { registerSessionServerProbe } from '../core/sessions/session-server-state.js'
 import { frameStartData } from '../core/sessions/send-frame.js'
 import { installHostJudgedRouting, routeHostJudgedEvent, startGoesToHost, startOnJudgingHost } from './host-judged-runner.js'
+import { resumeAtRestOnHost, resumeHostOf, type RunnerRest } from './host-resume.js'
 import { execHostOf } from '../core/sessions/session-row-owner.js'
 import { assertDemoAdmission } from '../core/sessions/demo-admission.js'
 import { CostWatermark } from '../core/usage/cost-watermark.js'
@@ -15120,6 +15121,8 @@ export class SessionRunner {
     })
     if (restartPending || !this.activeProcessing.has(sessionId)) {
       log.session.info('handleSend: triggering processNext', { sessionId, interrupt: !!interrupt })
+      // Who sent it, should this delivery go to its host as a resume (restView, host-resume.ts).
+      if (source) this.sendSources.set(sessionId, source)
       this.processNext(sessionId, mode).catch((err) => {
         log.session.error('processNext failed after send', { sessionId, error: err instanceof Error ? err.message : String(err) })
         this.retryAfterDeliveryThrow(sessionId)
@@ -16403,6 +16406,49 @@ export class SessionRunner {
 
   private nextRuns = new Map<string, Promise<void>>()
 
+  /** This runner's own object of `sid` (never a host-judged session's proxy). */
+  private ownWrapperOf(sid: string): ClaudeCodeSession | undefined {
+    for (const [, s] of this.sessions) if (s.sessionId === sid) return s
+    return undefined
+  }
+
+  /**
+   * Does this runner hold a live process of `sid`: its object's CLI runs, or ended in no way the
+   * object heard yet (a pipe and no end)? An object left from an ended run, or one a read attached to
+   * an ended session, keeps its transport bound: it is no live one (the runtime's word decides then).
+   * An ACP session's object always counts. Asked before a resume (host-resume.ts, and the host's own
+   * check, host-boot.ts).
+   */
+  holdsLiveSession(sid: string): boolean {
+    if (this.findAcpSession(sid)) return true
+    const w = this.ownWrapperOf(sid)
+    return !!w && (w.active || (w.hasPipe && w.processStatus !== 'stopped' && w.processStatus !== 'error'))
+  }
+
+  /** The source of the send that asked for a session's next delivery (handleSend), until that delivery reads it. */
+  private sendSources = new Map<string, string>()
+
+  /** What host-resume.ts reads of a session here, and what it asks of this runner around a resume. */
+  private restView(stopFence: string | null, sendSource: string | undefined): RunnerRest {
+    return {
+      sendSource,
+      sdk: (sid) => this.sdkSessionMap.has(sid),
+      wrapperLive: (sid) => this.holdsLiveSession(sid),
+      wrapperState: (sid) => {
+        const w = this.ownWrapperOf(sid)
+        return w ? { active: w.active, hasPipe: w.hasPipe, bound: w.transportBound, processStatus: w.processStatus } : {}
+      },
+      turnInFlight: (sid) => this.activeProcessing.has(sid) || this.midTurnWrites.has(sid),
+      restartInFlight: (sid) => this.nativeSessionReinitializations.has(sid),
+      preparing: (sid) => this.nativeDeliveryPreps.has(sid),
+      unparkWaiting: (sid) => unparkAgentWaitRows(sid, stopFence, { onlyWithPending: true }),
+      dropDeadWrapper: (sid) => {
+        for (const [key, s] of this.sessions) if (s.sessionId === sid && !s.active && !s.hasPipe) this.sessions.delete(key)
+      },
+      deliverHere: (sid) => { this.processNext(sid).catch((err) => log.session.warn('processNext failed after a lost host resume', { sessionId: sid, error: err instanceof Error ? err.message : String(err) })) },
+    }
+  }
+
   /** Sessions whose next delivery only writes again lines the CLI read past
    *  (send-lost-line-v1). The auto-deny of a pending permission is the answer to
    *  a NEW user message; such a delivery skips it once. */
@@ -16813,6 +16859,12 @@ export class SessionRunner {
       return
     }
     const stopFence = stopRecord?.stopRequest?.id ?? null
+    // A legacy session at rest on a host whose service runs sessions: that host resumes it, and it is
+    // host-judged from then on (host-resume.ts). Null (the switch off for its host): as before.
+    const resumeHost = resumeHostOf(sessionId)
+    const sendSource = this.sendSources.get(sessionId)
+    this.sendSources.delete(sessionId)
+    if (resumeHost && await resumeAtRestOnHost(sessionId, resumeHost, this.restView(stopFence, sendSource))) return
     if (this.nativeSessionReinitializations.has(sessionId)) {
       log.session.info('processNext: waiting for explicit session restart before delivery', { sessionId })
       try {

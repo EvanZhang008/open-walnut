@@ -541,15 +541,20 @@ function writeCopyRow(handle: DatabaseType, raw: Record<string, unknown>): void 
  * own-row writer takes the runner's first write of it; a copy that comes later does the same
  * (applySessionCopy). The leader's version it adopted is kept (noteLeaderDisown), so a start that
  * ends without a session gives the row back as the leader has it now. A row of another host is
- * never claimed. Nothing to do off a host that runs its sessions.
+ * never claimed. Nothing to do off a host that runs its sessions. `leaderRow`: the leader's row a
+ * resume gives, taken over any copy here (its cwd, mode, model and last stop resume it).
  */
-export function claimStartingRow(sid: string): void {
+export function claimStartingRow(sid: string, leaderRow?: SessionRecord): void {
   const key = ownRowHostKey();
   if (!key || !sid) return;
   const handle = applyHandle ??= openCopyApplyConnection();
   handle.transaction(() => {
     const raw = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(sid) as Record<string, any> | undefined;
-    const rec = raw ? rowToSession(raw) : null;
+    // A resume names the leader's row (host-routes.ts resume), as the leader had it the moment it
+    // handed it over: newer than any copy here (a copy round may not have brought its last stop yet,
+    // and the runtime fences the resume with that stop's id).
+    const given = leaderRow?.claudeSessionId === sid ? { ...leaderRow, judge: undefined } : null;
+    const rec = given ?? (raw ? rowToSession(raw) : null);
     if (rec && !claimable(rec, key)) {
       log.session.warn('host start: the row a start names is another host\'s; not claimed', { sessionId: sid, host: rec.host });
       return;

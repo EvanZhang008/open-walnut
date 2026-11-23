@@ -171,6 +171,25 @@ describe('a start the leader handed this host claims its session\'s row', () => 
     await expect(tracker.updateSessionRecord(SID_FAILED, { activity: 'writing' })).rejects.toThrow(sessionDb.NOT_OWN_ROW)
   })
 
+  it('a resume names the leader\'s row: it is this host\'s own, its cwd, mode and last stop kept; a failed one gives it back', async () => {
+    const sid = 'aaaaaaaa-0006-4006-8006-000000000006'
+    const leaderRow = { ...preJudgeSeed(sid), process_status: 'stopped', cwd: '/work/legacy', mode: 'bypass', judge: 'host' } as SessionRecord
+    sessionDb.claimStartingRow(sid, leaderRow)
+    expect(await tracker.getSessionByClaudeId(sid)).toMatchObject({ host: KEY, judge: 'host', cwd: '/work/legacy', mode: 'bypass' })
+    await tracker.updateSessionRecord(sid, { process_status: 'running', activity: 'resuming' })
+    expect((await logged(sid))[0]).toBe('row:born')
+    // The row the resume gave wins over an older copy here: a copy round may not have brought the
+    // leader's last stop yet, and the runtime fences the resume with that stop's id.
+    const copied = 'aaaaaaaa-0007-4007-8007-000000000007'
+    sessionDb.applySessionCopy({ ownHost: KEY, rows: [{ ...preJudgeSeed(copied), cwd: '/work/copied', stopRequest: { id: 'stop-old', requestedAt: '2026-11-23T00:00:00.000Z', state: 'confirmed' } } as SessionRecord] })
+    sessionDb.claimStartingRow(copied, { ...preJudgeSeed(copied), cwd: '/work/given', stopRequest: { id: 'stop-new', requestedAt: '2026-11-23T00:01:00.000Z', state: 'confirmed' } } as SessionRecord)
+    expect(await tracker.getSessionByClaudeId(copied)).toMatchObject({ judge: 'host', cwd: '/work/given', stopRequest: { id: 'stop-new' } })
+    // Given back as the leader's legacy row, once no session here runs it.
+    sessionDb.releaseStartingRow(copied)
+    expect(await sweep(copied)).toEqual([copied])
+    expect((await tracker.getSessionByClaudeId(copied))?.judge).toBeUndefined()
+  })
+
   it('a row no start claimed stays the leader\'s: the own-row writer still refuses it', async () => {
     sessionDb.applySessionCopy({ ownHost: KEY, rows: [preJudgeSeed(SID_UNCLAIMED)] })
     await expect(tracker.updateSessionRecord(SID_UNCLAIMED, { activity: 'writing' })).rejects.toThrow(sessionDb.NOT_OWN_ROW)

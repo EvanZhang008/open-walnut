@@ -126,25 +126,48 @@ export function hostStartsInFlight(): ReadonlySet<string> {
 }
 
 /**
- * A start whose answer was lost (sent, no answer): when its in-flight time runs out with no born row
- * from the host, the host never took it. The seed is the leader's again and the start fails as one
- * that never ran (`onLost`), so it never sits as a running session nobody runs.
+ * A start (or a resume, host-resume.ts) whose answer was lost (sent, no answer): when its in-flight
+ * time runs out with no born row from the host, the host never took it. The seed is the leader's
+ * again and `onLost` runs (a start fails as one that never ran; a resume runs here once), so it never
+ * sits as a running session nobody runs. Its born row in time runs `onBorn` instead.
  */
-const lostStarts = new Set<string>()
-function armLostStartCheck(sid: string, host: string, handed: boolean, why: string, onLost?: (err: Error) => Promise<void>): void {
-  lostStarts.add(sid)
+const lostStarts = new Map<string, { onBorn?: () => void }>()
+export function armLostStartCheck(sid: string, host: string, handed: boolean, why: string, onLost?: (err: Error) => Promise<void>, onBorn?: () => void): void {
+  lostStarts.set(sid, { onBorn })
   const timer = setTimeout(() => {
     if (!lostStarts.delete(sid)) return // its born row came
-    inFlight.delete(sid)
-    forgetHostJudged(sid)
     void (async () => {
-      const tracker = await import('../core/session-tracker.js')
-      if (handed) await tracker.takeSeedBack(sid, host)
+      await takeStartBack(sid, host, handed)
       log.session.warn('host start: no born row came for a start whose answer was lost; it failed', { sessionId: sid, host, error: why })
       await onLost?.(new Error(`the host ${host} never started the session (${why})`))
     })().catch((err: unknown) => log.session.warn('host start: failing a lost start failed', { sessionId: sid, host, error: err instanceof Error ? err.message : String(err) }))
   }, lostStartMs())
   timer.unref?.()
+}
+
+/**
+ * A start (or a resume) of `sid` goes to `host`: it is in flight and the host's before the host
+ * speaks (its facts can beat the answer), and the leader's row of it, when there is one, is marked
+ * the host's (session-tracker.ts handSeedToHost), so the channel's born row fills it in. True: a row
+ * was marked (takeStartBack gives it back).
+ */
+export async function handStartToHost(sid: string, host: string): Promise<boolean> {
+  inFlight.set(sid, Date.now() + IN_FLIGHT_MS)
+  noteHostJudged(sid, host)
+  const tracker = await import('../core/session-tracker.js')
+  return tracker.handSeedToHost(sid, host).catch((err: unknown) => {
+    log.session.warn('host start: the seeded row was not handed to its host', { sessionId: sid, host, error: err instanceof Error ? err.message : String(err) })
+    return false
+  })
+}
+
+/** The host did not take the start (or the resume) of `sid`: it is the leader's again, and so is its row. */
+export async function takeStartBack(sid: string, host: string, handed: boolean): Promise<void> {
+  inFlight.delete(sid)
+  forgetHostJudged(sid)
+  if (!handed) return
+  const tracker = await import('../core/session-tracker.js')
+  await tracker.takeSeedBack(sid, host).catch(() => {})
 }
 
 /** How long a start whose answer was lost waits for its born row (tests shorten it). */
@@ -156,7 +179,9 @@ function lostStartMs(): number {
 /** The host's born row of `sid` was applied here (leader-side.ts): its start is no longer in flight. */
 export function noteHostStartBorn(sid: string): void {
   inFlight.delete(sid)
+  const lost = lostStarts.get(sid)
   lostStarts.delete(sid)
+  lost?.onBorn?.()
 }
 
 /**
@@ -247,16 +272,7 @@ export async function startOnJudgingHost<T extends StartData>(
   // A row seeded for this start (task-start.ts makes one under the id it answers with) is the
   // host's before the host speaks: its facts can beat the start's answer.
   const seeded = (data as { preassignedSessionId?: unknown }).preassignedSessionId
-  const tracker = await import('../core/session-tracker.js')
-  let handed = false
-  if (typeof seeded === 'string' && seeded) {
-    inFlight.set(seeded, Date.now() + IN_FLIGHT_MS)
-    noteHostJudged(seeded, host)
-    handed = await tracker.handSeedToHost(seeded, host).catch((err: unknown) => {
-      log.session.warn('host start: the seeded row was not handed to its host', { sessionId: seeded, host, error: err instanceof Error ? err.message : String(err) })
-      return false
-    })
-  }
+  const handed = typeof seeded === 'string' && seeded ? await handStartToHost(seeded, host) : false
   log.session.info('session routing', { taskId: data.taskId, type: 'host', host })
   let a: Awaited<ReturnType<typeof side.startOnHost>>
   try {
@@ -267,11 +283,7 @@ export async function startOnJudgingHost<T extends StartData>(
     // the leader's again and the start fails here (round 3 MF1).
     const { requestNotSent } = await import('../core/session-channel/leader-side.js')
     if (requestNotSent(err)) {
-      if (typeof seeded === 'string' && seeded) {
-        inFlight.delete(seeded)
-        forgetHostJudged(seeded)
-        if (handed) await tracker.takeSeedBack(seeded, host).catch(() => {})
-      }
+      if (typeof seeded === 'string' && seeded) await takeStartBack(seeded, host, handed)
       throw new Error(`the host ${host} did not get the start: ${why}`)
     }
     // No answer (the leader's timeout, a link that dropped): the host may have taken it, so it is
@@ -288,11 +300,7 @@ export async function startOnJudgingHost<T extends StartData>(
   }
   if (a.ok !== true || typeof a.sessionId !== 'string' || !a.sessionId) {
     // The host said no: the seed is the leader's again, and the start's failure is written on it.
-    if (typeof seeded === 'string' && seeded) {
-      inFlight.delete(seeded)
-      forgetHostJudged(seeded)
-      if (handed) await tracker.takeSeedBack(seeded, host).catch(() => {})
-    }
+    if (typeof seeded === 'string' && seeded) await takeStartBack(seeded, host, handed)
     throw new Error(`the host ${host} did not start the session: ${a.error ?? 'no reason given'}${a.why ? ` (${String(a.why)})` : ''}`)
   }
   noteHostJudged(a.sessionId, host)
