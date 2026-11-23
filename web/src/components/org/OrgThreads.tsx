@@ -488,7 +488,7 @@ export function OrgThreads({ name, owner, state, tasks, onFollowUp, now, byState
       {watchingList}
       {all !== null && !open.length && (hidden.length || snoozed.length
         ? <EmptyState size="section" title="Nothing for you now" hint={`${hidden.length ? `${name} is on the ones below; each` : 'Each snoozed one below'} comes back here when there is news.`} testId="org-threads-empty" />
-            : <ThreadsEmpty name={name} />)}
+            : <ThreadsEmpty />)}
       {!!open.length && <ul className="org-thread-list" data-testid="org-thread-list" data-show="open">{open.map((t) => card(t))}</ul>}
       {snoozed.length > 0 && (
         <DisclosureButton expanded={showSnoozed} className="org-threads-closed-toggle" data-testid="org-threads-snoozed" onClick={() => setShowSnoozed(!showSnoozed)}>

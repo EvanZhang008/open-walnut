@@ -26,7 +26,8 @@ import { MOVE_NOTE_MS, shownGroups, useThreadMoves, type ThreadMove } from './th
 import { EmptyState } from '@/components/common/EmptyState';
 
 /** What an empty threads list says it is for (both list layouts). */
-export const threadsEmptyHint = (name: string) => `Each request you send ${name} becomes a thread here; asks about the same thing stay in one thread.`;
+/** Where this is and why it is empty, in one line that never carries the node's long title. */
+export const THREADS_EMPTY_HINT = 'Each request you send becomes a thread here, one per subject.';
 
 /** One move of one card: a rename keeps it, a new move from another place is another line. */
 const moveKey = (m: ThreadMove) => `moved-${m.id}-${m.from}-${m.index}`;
@@ -60,14 +61,16 @@ function MoveNote({ m, onShow, onDone }: { m: ThreadMove; onShow: (m: ThreadMove
 }
 
 /**
- * A node's Threads with nothing in them: one short line, never a long sentence under a lone button (2026-11-22, UI audit: the empty pane beside a chat took half the
- * window). What the view is for is its hover text; the session pane narrows to it
+ * A node's Threads with nothing in them: what the view is and why it is empty, one short line under
+ * the title (the site's empty rule, .claude/skills/walnut-ui-requirements/standard.md), and no
+ * button: a new topic is not a thread (OrgThreads). The line stays on screen, never only in a hover
+ * text (2026-11-23, UI audit: it had gone into a title attribute). The session pane narrows to it
  * (session-threads.css). Both views draw it (OrgThreads, and this one under brief_off).
  */
-export function ThreadsEmpty({ name }: { name: string }) {
+export function ThreadsEmpty() {
   return (
-    <div className="org-threads-empty-row" data-testid="org-threads-empty-row" title={threadsEmptyHint(name)}>
-      <EmptyState size="row" title="Nothing open yet" testId="org-threads-empty" />
+    <div className="org-threads-empty-row" data-testid="org-threads-empty-row">
+      <EmptyState size="row" title="Nothing open yet" hint={THREADS_EMPTY_HINT} testId="org-threads-empty" />
     </div>
   );
 }
@@ -103,7 +106,7 @@ export function OrgThreadsByState({ groups, opened, onOpen, card, name, owner, o
     if (!last || !hadFocus.current || !lost) return;
     (wasTyping.current ? headOf(rootRef.current, last.from) : rootRef.current?.querySelector<HTMLElement>(`[data-moved-id="${CSS.escape(last.id)}"] button`))?.focus({ preventScroll: true });
   }, [moves]);
-  if (!THREAD_GROUPS.some((g) => groups[g].length > 0)) return <ThreadsEmpty name={name} />;
+  if (!THREAD_GROUPS.some((g) => groups[g].length > 0)) return <ThreadsEmpty />;
   // Show opens the card's group, brings the card's top into view and hands the focus to that
   // group's head, so a keyboard keeps its place.
   const show = (m: ThreadMove) => {

@@ -114,10 +114,14 @@ test('a leader turns Threads on from its menu, files his asks there, and turns t
   await expect(chip).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(async () => (await api<{ task: { threads_on?: boolean } }>('GET', `/api/tasks/${leader}`)).task.threads_on).toBe(true)
   await expect(pane.getByTestId('org-threads-empty')).toBeVisible()
-  // Nothing in it yet: one short line, and the pane narrow so the chat keeps the room (2026-11-22,
-  // UI audit: the empty pane took half the window). No New topic: a topic is not a thread (2026-11-23).
+  // Nothing in it yet: its title and one line on what the view is, on screen (never only a hover
+  // text), and the pane narrow so the chat keeps the room (2026-11-22, UI audit: the empty pane took
+  // half the window). No New topic: a topic is not a thread (2026-11-23).
   const empty = pane.getByTestId('org-threads-empty')
-  await expect(empty).toHaveText('Nothing open yet')
+  await expect(empty.locator('.empty-state-title')).toHaveText('Nothing open yet')
+  await expect(empty.locator('.empty-state-hint')).toHaveText('Each request you send becomes a thread here, one per subject.')
+  await expect(empty.locator('.empty-state-hint')).toBeVisible()
+  await page.screenshot({ path: `${SHOT_DIR}/${engine}-2-empty-pane.png` })
   await expect(pane.getByTestId('org-threads-new-topic')).toHaveCount(0)
   const paneBox = (await pane.boundingBox())!
   const chatBox = (await panel.locator('.session-panel-chat-col').boundingBox())!
