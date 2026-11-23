@@ -1,10 +1,10 @@
 /**
  * Action needed in two places, one record (experiment action_needed_everywhere; 2026-11-19, the
- * user: "我点进去之后，如果它有 needs you，它直接就能显示在……title bar，或者在下面"): a task's row and
+ * user: asking that a task's needs-you show right in its title bar or under it): a task's row and
  * the strip under its session's title bar. Each item is answered in one of them and goes from the other:
  *   - a decision letter answered in the session's strip: gone from its row; the VP's Threads stay
- *     as they were, with no team asks on top (2026-11-20, the user: "你把我这个整个 thread 整个 UI
- *     全部全部都变了")
+ *     as they were, with no team asks on top (2026-11-20, the user, on a change
+ *     that had turned his whole Threads UI around)
  *   - an approval approved in the session's strip: gone from its row
  *   - the session's own live question: the strip points at its card below, never a second answer;
  *     answered on the row, it leaves the strip
@@ -221,7 +221,7 @@ test('three asks: the strip shows one at a time and pages; a snooze in the strip
   await expect(strip.getByTestId('action-page-at')).toHaveText('1/3')
 
   // Snooze the first in the strip: it leaves the top of the chat until its time (2026-11-23, the
-  // user: "我都他妈 snooze 了，它还显示"), and the row shows it snoozed (the same item).
+  // user: that he had snoozed it and it still showed), and the row shows it snoozed (the same item).
   const first = strip.getByTestId('action-item').first()
   const firstId = (await first.getAttribute('data-item-id'))!
   await first.getByTestId('action-snooze').click()

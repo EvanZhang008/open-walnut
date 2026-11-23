@@ -257,7 +257,9 @@ test('on a VP: the top is the Threads list\'s first, steps through all of them, 
   // 3. Hide: one line that counts them; kept over a reload; Show brings it back.
   await top.getByTestId('top-thread-hide').click()
   await expect(top).toHaveAttribute('data-hidden', 'true')
-  await expect(top.getByTestId('top-thread-show')).toHaveText('5 threads (2 need you) · Show')
+  await expect(top.getByTestId('top-thread-count')).toHaveText('5 threads (2 need you)')
+  // It names the first question that waits on him, in the one line (2026-11-23).
+  await expect(top.getByTestId('top-thread-hidden-title')).toBeVisible()
   await shot(page, '4-hidden', page.getByTestId('org-detail'))
   await page.reload()
   await page.waitForLoadState('networkidle')
@@ -354,6 +356,14 @@ test('a task with Threads on: its letter still shows above its thread; the switc
   const [s, t] = [(await strip.boundingBox())!, (await top.boundingBox())!]
   expect(s.y).toBeLessThan(t.y)
   await shot(page, '6-task-on', panel)
+  // Its Threads view open beside the chat shows the thread: the top draws it no more, card or line,
+  // and the letter no thread holds stays (2026-11-23: the same card in the view and above the chat).
+  await panel.getByTestId('session-threads-chip').click()
+  await expect(panel.getByTestId('session-threads-pane').getByTestId('org-thread').first()).toBeVisible({ timeout: 30_000 })
+  await expect(top).toHaveCount(0, { timeout: 15_000 })
+  await expect(strip.locator('[data-testid="action-item"][data-kind="letter"]')).toBeVisible()
+  await panel.getByTestId('session-threads-chip').click()
+  await expect(top).toHaveAttribute('data-thread-id', ids.taskThread, { timeout: 15_000 })
 
   await setFlags(request, { top_thread: false })
   await expect(top).toHaveCount(0, { timeout: 30_000 })

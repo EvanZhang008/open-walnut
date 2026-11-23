@@ -2872,7 +2872,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
       </button>
     );
   // Watch: the eye beside Locate, lit while the task is watched (2026-11-19, the user of the
-  // label row's Watching pill: "watching ... 也应该去放到上面"). The kebab drops its row.
+  // label row's Watching pill: that watching should move up there too). The kebab drops its row.
   const watchButton = taskSlot === 'absent' ? null : taskSlot === 'live' && sessionTask
     ? <WatchButton task={sessionTask} className="task-action-btn session-panel-watch" headerId="watch" testId="session-watch-btn" />
     : <button type="button" className="btn btn-icon btn-sm task-watch-btn task-action-btn session-panel-watch" data-header-id="watch" {...TASK_SLOT_SPACER}>{ICON_EYE}</button>;
@@ -3520,7 +3520,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               {/* Open in new tab is the kebab's Window row only (2026-11-19, the user: "open in
                   new tab can be added into drop down"). */}
               {/* Watch and Locate lead the row (2026-11-19, the user: "why locate task is not at
-                  top right?", and of Watching: "放到上面"); like Lock, Expand and Close they stay at
+                  top right?", and of Watching: put it up there); like Lock, Expand and Close they stay at
                   every width. Minimize sits between them and folds first in a narrow column. */}
               {watchButton}
               {locateButton}
@@ -4240,7 +4240,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
         <div className="session-panel-body" ref={bodyRef}>
           {/* What its task asks the user, right under the title bar (experiment action_needed_everywhere):
               the body's first flow child, so the glass header's offset rule places it. */}
-          {session?.taskId && sessionTask?.id === session.taskId && <SessionActionStrip task={sessionTask} sessionId={sessionId} />}
+          {session?.taskId && sessionTask?.id === session.taskId && <SessionActionStrip task={sessionTask} sessionId={sessionId} threadsOpen={activeView === 'threads'} />}
           {/* A transferred task names the other end in one quiet line (the header row is precious). */}
           <TransferLinks task={sessionTask} className="xfer-links-panel" testId="session-transfer-links" />
           {/* A phone says one plain sentence for a session that is gone (N29). */}

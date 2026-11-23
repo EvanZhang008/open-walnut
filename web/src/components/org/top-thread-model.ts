@@ -19,7 +19,7 @@ export function topThreads(threads: readonly OrgThread[] | null, now: number): O
 /**
  * Which Action needed items a thread can hold, so the top draws that decision once, as the
  * thread (2026-11-21, the user, on a chat whose top showed the same question twice, the task's
- * own ask card over its thread card holding that ask: "我真是服了你了"). Every kind is named:
+ * own ask card over its thread card holding that ask, exasperated). Every kind is named:
  * a new kind must say whether a thread can hold it (tests/web/top-thread.test.ts holds each).
  *   letter  a thread opened from a decision letter (opener letter, its id the ref) or holding it (letter)
  *   ask     the task's own ask on its thread (threads_one_card: heldAsk, askId = the decision id)
@@ -39,9 +39,9 @@ export const HELD_BY_THREAD: Record<ActionKind, ((it: ActionItem, t: OrgThread) 
  * The task's Action needed items that are not one of the threads the top shows (`listed`,
  * topThreads): a live prompt, an approval, and a letter, an ask or a choice no listed thread holds.
  * One a listed thread holds is that thread now, so it shows once, as the thread (behind ‹ ›, the
- * bar points to it: decisionsElsewhere); while that thread is out of the list (the node's move,
- * snoozed, closed) or the top is hidden to its line, the item shows, so it never vanishes from both.
- * Pure.
+ * bar points to it: decisionsElsewhere, and the hidden line names it: hiddenAsk); while that thread
+ * is out of the list (the node's move, snoozed, closed), the item shows, so it never vanishes from
+ * both. Pure.
  */
 export function actionsNotThreads(items: readonly ActionItem[], listed: readonly OrgThread[]): ActionItem[] {
   return items.filter((it) => {
@@ -52,7 +52,7 @@ export function actionsNotThreads(items: readonly ActionItem[], listed: readonly
 
 /**
  * Whether an item is out of its snooze at `now` (2026-11-23, the user, on a snoozed card that still
- * filled the top of his chat: "我都他妈 snooze 了，它还显示"). Pure.
+ * filled the top of his chat: that he had snoozed it and it still showed). Pure.
  */
 export function awakeAt(item: Pick<ActionItem, 'snoozedUntil'>, now: number): boolean {
   const until = item.snoozedUntil ? Date.parse(item.snoozedUntil) : NaN;
@@ -81,6 +81,16 @@ export function decisionsElsewhere(list: readonly OrgThread[], i: number, items:
     if (k !== i && items.some((it) => HELD_BY_THREAD[it.kind]?.(it, t))) out.push(k);
   });
   return out;
+}
+
+/**
+ * The thread the hidden line names: the first that holds one of the task's decisions (`items`; the
+ * strip leaves those to it, so the line is where the question still shows), else the first waiting
+ * on him (2026-11-23, the user, on a hidden top with the same question in the strip above it).
+ * None when no thread holds a decision or waits on him. Pure.
+ */
+export function hiddenAsk<T extends OrgThread>(list: readonly T[], items: readonly ActionItem[]): T | undefined {
+  return list.find((t) => items.some((it) => HELD_BY_THREAD[it.kind]?.(it, t))) ?? list.find((t) => t.state === 'needs');
 }
 
 /** The hidden line's words: "16 threads (1 needs you)", "3 threads (2 need you)", "2 threads". */

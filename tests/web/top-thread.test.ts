@@ -19,7 +19,7 @@ import { listedForHim, orderedForHim } from '../../src/core/org/thread-view.js'
 import { threadCounts } from '../../src/core/org/thread-groups.js'
 import type { ActionItem } from '../../src/core/action-needed.js'
 import type { OrgThread } from '../../web/src/api/org-threads'
-import { HELD_BY_THREAD, TOP_HIDDEN_VIEW, actionsNotThreads, awakeAt, decisionsElsewhere, hiddenLine, stripItems, topIndex, topThreads } from '../../web/src/components/org/top-thread-model'
+import { HELD_BY_THREAD, TOP_HIDDEN_VIEW, actionsNotThreads, awakeAt, decisionsElsewhere, hiddenAsk, hiddenLine, stripItems, topIndex, topThreads } from '../../web/src/components/org/top-thread-model'
 import { ACTION_KINDS } from '../../src/core/action-needed.js'
 import { isBoolean, shownText, storedView, viewKey, writeView } from '../../web/src/utils/view-memory'
 
@@ -143,6 +143,18 @@ describe('the top steps through the Threads view\'s own list', () => {
     expect(hiddenLine(list.filter((t) => t.state !== 'needs'))).toBe('15 threads')
     expect(hiddenLine(list.slice(-1))).toBe('1 thread')
   })
+
+  it('the hidden line names the thread that holds a decision, else the first waiting on him, else none', () => {
+    seq = 400
+    const answered = thread('answered', 90)
+    const waiting = thread('needs', 80)
+    const holding = thread('answered', 70, { heldAsk: { id: 'ask-1', ask: 'Skip it?', was: 'answered' }, askId: 'ask-1' } as Partial<OrgThread>)
+    const ask: ActionItem = { kind: 'ask', id: 'ask-1', summary: 'Skip it?' }
+    // A decision the strip leaves to a thread that is not waiting on him: the line still names it.
+    expect(hiddenAsk([answered, waiting, holding], [ask])?.id).toBe(holding.id)
+    expect(hiddenAsk([answered, waiting, holding], [])?.id).toBe(waiting.id)
+    expect(hiddenAsk([answered], [ask])).toBeUndefined()
+  })
 })
 
 describe('Action needed items above the top thread', () => {
@@ -163,7 +175,7 @@ describe('Action needed items above the top thread', () => {
   })
 
   // 2026-11-23, the user, on an ask he snoozed in the strip that still filled the top of his chat:
-  // "我都他妈 snooze 了，它还显示". Every kind he can snooze leaves the strip until its time, then comes back.
+  // that he had snoozed it and it still showed. Every kind he can snooze leaves the strip until its time, then comes back.
   it('leaves out every item he snoozed until its time, of every kind, and brings it back after', () => {
     const kinds = Object.keys(HELD_BY_THREAD) as ActionItem['kind'][]
     const later = new Date(NOW + 60 * 60_000).toISOString()
@@ -216,7 +228,10 @@ describe('Action needed items above the top thread', () => {
 
   it('the strip and the bar read the same cursor and the same decisions', () => {
     const strip = fs.readFileSync('web/src/components/actions/SessionActionStrip.tsx', 'utf8')
-    expect(strip).toMatch(/const holding = hidden \? \[\] : list/)
+    // Hidden or not, a decision a listed thread holds stays its thread's: the strip never reads the
+    // hidden switch to redraw it (2026-11-23); the hidden line names it (hiddenAsk).
+    expect(strip).not.toMatch(/TOP_HIDDEN_VIEW/)
+    expect(fs.readFileSync('web/src/components/org/TopThread.tsx', 'utf8')).toMatch(/hiddenAsk\(list, decisions\)/)
     expect(strip).toMatch(/cursor=\{cursor\}/)
     expect(strip).toMatch(/decisions=\{/)
     expect(fs.readFileSync('web/src/components/org/TopThread.tsx', 'utf8')).toMatch(/decisionsElsewhere\(list, i, decisions\)/)

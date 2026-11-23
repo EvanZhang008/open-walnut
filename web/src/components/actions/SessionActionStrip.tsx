@@ -1,6 +1,6 @@
 /**
  * The strip under a session's title bar (experiment action_needed_everywhere; 2026-11-19, the user:
- * "我点进去之后，如果它有 needs you，它直接就能显示在……title bar，或者在下面"): its task's Action
+ * asking that a task's needs-you show right in its title bar or under it): its task's Action
  * needed items, the same ones as its row, answered and snoozed in place. This session's own live
  * prompt only points at its card in the chat below (ActionNeeded variant="strip").
  *
@@ -14,16 +14,20 @@ import { keepsThreads } from '@open-walnut/keeps-threads';
 import { useExperimental } from '@/hooks/useExperimental';
 import { useOrgThreads } from '@/components/org/useOrgThreads';
 import { TopThread, useTopCursor, useTopThreads } from '@/components/org/TopThread';
-import { awakeAt, stripItems, TOP_HIDDEN_VIEW } from '@/components/org/top-thread-model';
+import { awakeAt, stripItems } from '@/components/org/top-thread-model';
 import { useNow } from '@/components/approvals/ApprovalPrompts';
-import { isBoolean, usePageView } from '@/utils/view-memory';
 import { ActionNeeded } from './ActionNeeded';
 
-export const SessionActionStrip = memo(function SessionActionStrip({ task, sessionId }: { task: Task | null | undefined; sessionId: string }) {
+/**
+ * `threadsOpen`: the task's Threads view is open beside this chat. It shows every thread, so the top
+ * draws none of them again, neither a card nor its line (2026-11-23, the user, on the same question in
+ * the Threads view and above the chat: the same question card drawn twice); what no thread holds still shows.
+ */
+export const SessionActionStrip = memo(function SessionActionStrip({ task, sessionId, threadsOpen = false }: { task: Task | null | undefined; sessionId: string; threadsOpen?: boolean }) {
   const on = useExperimental('action_needed_everywhere');
   const top = useExperimental('top_thread');
   const everyTask = useExperimental('task_threads');
-  if (top && task && keepsThreads(task, everyTask)) return <SessionTop task={task} sessionId={sessionId} actions={on} />;
+  if (top && task && keepsThreads(task, everyTask)) return <SessionTop task={task} sessionId={sessionId} actions={on} threadsOpen={threadsOpen} />;
   if (!on || !task?.user_status?.actions?.length) return null;
   return <PlainStrip task={task} sessionId={sessionId} />;
 });
@@ -100,26 +104,27 @@ function useTopRoom(shown: boolean) {
 }
 
 /** The top of a chat whose task keeps Threads: the items that are not threads (when the strip is on), then the first thread. */
-function SessionTop({ task, sessionId, actions }: { task: Task; sessionId: string; actions: boolean }) {
+function SessionTop({ task, sessionId, actions, threadsOpen }: { task: Task; sessionId: string; actions: boolean; threadsOpen: boolean }) {
   const threads = useOrgThreads(task.id, true);
   // One list and one clock for both: what the top shows and what the strip leaves to it.
   const { at, list } = useTopThreads(threads);
   const cursor = useTopCursor(list);
   // A decision a listed thread holds is drawn there, once (on another thread, the top's bar points to
-  // it); with the top hidden to its line, the strip draws it, so hiding the top never hides a question.
-  const [hidden] = usePageView(TOP_HIDDEN_VIEW.page, TOP_HIDDEN_VIEW.name, false, isBoolean);
-  const holding = hidden ? [] : list;
+  // it). Hidden, it stays its thread's: the one line names it (hiddenAsk), and the strip never draws it
+  // again (2026-11-23, the user, on a hidden top under the same question in the strip, asking to merge
+  // the two into one).
   const all = task.user_status?.actions ?? [];
   // What he snoozed leaves the top of his chat until its time (stripItems; its row keeps it greyed).
-  const items = actions && task.phase !== 'COMPLETE' ? stripItems(all, holding, at) : [];
-  const shown = items.length > 0 || list.length > 0;
+  const items = actions && task.phase !== 'COMPLETE' ? stripItems(all, list, at) : [];
+  const topShown = list.length > 0 && !threadsOpen;
+  const shown = items.length > 0 || topShown;
   const room = useTopRoom(shown);
   // Nothing to show draws nothing: an empty first child would still move the chat under the glass header.
   if (!shown) return null;
   return (
     <div className="session-top" data-testid="session-top" ref={room}>
-      {items.length > 0 && <ActionNeeded task={task} variant="strip" sessionId={sessionId} accepts={(it) => stripItems([it], holding, at).length > 0} />}
-      {list.length > 0 && <TopThread task={task} sessionId={sessionId} threads={threads} list={list} at={at} cursor={cursor} decisions={actions && task.phase !== 'COMPLETE' ? all : []} />}
+      {items.length > 0 && <ActionNeeded task={task} variant="strip" sessionId={sessionId} accepts={(it) => stripItems([it], list, at).length > 0} />}
+      {topShown && <TopThread task={task} sessionId={sessionId} threads={threads} list={list} at={at} cursor={cursor} decisions={actions && task.phase !== 'COMPLETE' ? all : []} />}
     </div>
   );
 }

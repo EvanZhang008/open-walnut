@@ -137,6 +137,8 @@ test.beforeAll(async ({ request }) => {
   ids.thread = thread.id
   await call(request, 'patch', `/api/v1/tasks/${ids.task}/threads/${thread.id}`, {
     title: `Release the Mac app ${STAMP}`, reply: `Release the new Mac app now? I recommend it.\n\n${LONG}`, state: 'needs', ...WHY,
+    // The two letters above are other decisions (thread-supersede.ts: one matter is asked in one place).
+    separate_reason: 'The two letters ask about the budget and the listing date, not this release.',
     options: [{ id: 'release', label: 'Release it', recommended: true }, { id: 'hold', label: 'Not yet' }],
   }, ids.sid)
   await expect.poll(async () => ((await (await request.get(`/api/tasks/${ids.task}`)).json()).task?.user_status?.actions ?? []).filter((a: { kind: string }) => a.kind === 'letter').length, { timeout: 60_000 }).toBe(2)

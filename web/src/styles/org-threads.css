@@ -52,8 +52,12 @@
 .org-thread-time { flex: none; }
 .org-thread-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-xs); }
 .org-thread-follows { margin: 0; font-size: var(--font-size-sm); color: var(--fg-muted); }
-/* A thread holding its task's own ask: the ask card, then the thread's own summary under it. */
-.org-thread-held-ask { display: flex; flex-direction: column; gap: 6px; }
+/* A thread holding its task's own ask: the ask card, then the thread's own summary under it. They
+   are rows of the card itself (no box of their own), so they stack and give way as its other rows
+   do. A box around them could shrink below them in the top of a chat (top-thread.css) and let the
+   summary run over the "Conversation" line under it (2026-11-23, the user's screenshot at 1512 x
+   900). Guard: tests/e2e/browser/top-thread-one-ask.spec.ts (text-overlap-check.ts). */
+.org-thread-held-ask { display: contents; }
 .org-thread-summary.is-stand-in p { margin: 0; }
 .org-thread-stand-in-note { display: block; margin-top: 2px; font-size: var(--font-size-xs); color: var(--fg-muted); }
 /* His reply a card below sent: his words, then whether its task read them (PoppedThreadCard). */

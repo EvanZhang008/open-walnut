@@ -30,7 +30,7 @@ import { useNamedTasks } from './useNamedTasks';
 import { askThreadFocus, setTopThreads, useFocusedThread } from './thread-focus';
 import { ReplyThreadContext } from '@/components/sessions/reply-thread-line';
 import type { OrgThreadsState } from './useOrgThreads';
-import { TOP_HIDDEN_VIEW, decisionsElsewhere, hiddenLine, topIndex, topThreads } from './top-thread-model';
+import { TOP_HIDDEN_VIEW, decisionsElsewhere, hiddenAsk, hiddenLine, topIndex, topThreads } from './top-thread-model';
 import type { ActionItem } from '@open-walnut/user-status';
 import type { OrgThread } from '@/api/org-threads';
 import '@/styles/top-thread.css';
@@ -139,12 +139,15 @@ export function TopThread({ task, sessionId, threads, list, at, cursor, decision
   const nextDecision = elsewhere.find((k) => k > i) ?? elsewhere[0];
   const followUp = (threadId: string, text: string, images?: ImageAttachment[]) => send(sessionId, text, images, { threadId });
   if (hidden) {
+    const asking = hiddenAsk(list, decisions);
     return (
       <div className="top-thread is-hidden" data-testid="top-thread" data-hidden="true" data-count={n}>
         <button type="button" className="top-thread-line" data-testid="top-thread-show" aria-expanded={false} onClick={() => setHidden(false)}
           title="Show the first thread above the chat">
-          <i className={`top-thread-dot${list.some((x) => x.state === 'needs') ? ' is-needs' : ''}`} aria-hidden="true" />
-          <span data-testid="top-thread-count">{hiddenLine(list)}</span>
+          <i className={`top-thread-dot${asking ? ' is-needs' : ''}`} aria-hidden="true" />
+          <span className="top-thread-line-count" data-testid="top-thread-count">{hiddenLine(list)}</span>
+          {/* The question it waits on stays in sight in this one line, never redrawn by the strip. */}
+          {asking && <><span aria-hidden="true">{' · '}</span><span className="top-thread-line-title" data-testid="top-thread-hidden-title">{asking.title}</span></>}
           <span aria-hidden="true">{' · '}</span>
           <span className="top-thread-show">Show</span>
         </button>
