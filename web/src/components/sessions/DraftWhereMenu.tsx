@@ -23,6 +23,7 @@ import type { DraftColumn } from './draft-column';
 import type { DraftRowUpdate, DraftWhere } from './useDraftWhere';
 import { autoNote, detectProjectForFolder, draftHostFor, ownHostOf } from './draft-work-in';
 import { folderSections, isPathQuery, shownPath, typedPathView, type MenuFolderRow } from './draft-where-menu';
+import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 
 interface Pickable { id: string; pick: () => void; complete?: string }
 
@@ -205,7 +206,7 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onUpdate }
               <FolderRow key={c} id={`child:${c}`} rowProps={rowProps} onPick={() => pickFolder(c, hostKey)} name={c.slice(c.lastIndexOf('/') + 1)}
                 path={shownPath(c, homeOf(hostKey))} project={detectProjectForFolder(c, hostKey, where.rows, { home: homeOf(hostKey) })?.project} />
             ))}
-            {typed.loading && !typed.children.length && <div className="draft-v6-wm-empty">Listing on {hostName}…</div>}
+            {typed.loading && !typed.children.length && <LoadingState size="row" title={`Listing on ${hostName}…`} />}
           </>
         )}
         {homeRows.map((h) => (
@@ -215,14 +216,14 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onUpdate }
         {sections.map((s) => (
           <div key={s.title} role="group" aria-label={s.title}>
             <div className="draft-v6-wm-group">{s.title}</div>
-            {!s.rows.length && <div className="draft-v6-wm-empty is-quiet">No folder used on {where.hostName(hostKey)} yet. Type a path: / or ~</div>}
+            {!s.rows.length && <EmptyState size="row" title={`No folder used on ${where.hostName(hostKey)} yet`} hint="Type a path: / or ~" />}
             {s.rows.map((r) => (
               <FolderRow key={r.key} id={`dir:${r.key}`} rowProps={rowProps} onPick={() => pickFolder(r.cwd, r.host, r.hostLabel, r.lastLaunch)}
                 name={r.name} path={r.path} project={r.project} at={r.at} current={r.current} />
             ))}
           </div>
         ))}
-        {!pathMode && query.trim() && !sections.length && <div className="draft-v6-wm-empty">No folder matches. Type a path: / or ~</div>}
+        {!pathMode && query.trim() && !sections.length && <EmptyState size="row" title="No folder matches" hint="Type a path: / or ~" />}
       </div>
       <div className="draft-v6-wm-foot" aria-hidden="true">
         <kbd className="draft-v6-kbd">↑↓</kbd> move <kbd className="draft-v6-kbd">Enter</kbd> pick <kbd className="draft-v6-kbd">→</kbd> open a level
@@ -235,7 +236,7 @@ export function DraftWhereMenu({ draft, where, initialQuery, onClose, onUpdate }
 function pathUseLine(path: string, hostKey: string, where: DraftWhere, home: string | undefined, validity: 'valid' | 'unknown'): string {
   if (validity === 'unknown') return `Checking on ${where.hostName(hostKey)}…`;
   const found = detectProjectForFolder(untildePath(path, home), hostKey, where.rows, { home });
-  return found ? `Project: ${projectDisplayName(found.project)} (detected)` : 'No project, use this folder';
+  return found ? `Project: ${projectDisplayName(found.project)} (detected)` : 'No project, use this folder'; // empty-state-ok: a row's tooltip
 }
 
 function FolderRow({ id, rowProps, onPick, name, path, project, at, current }: {

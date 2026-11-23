@@ -20,6 +20,7 @@ import { RUN_LAST, engineName, judgeBlocker, lastRunWords, pct, runButtonWords, 
 import '@/styles/settings-sections-addons.css';
 import '@/styles/settings-sections-configure.css';
 import '@/styles/voice-accuracy.css';
+import { EmptyState } from '@/components/common/EmptyState';
 
 export const VOICE_ACCURACY_BLURB =
   "Your saved dictations, heard again by other engines and compared. An AI reads each engine's direct transcript (it doesn't listen) and guesses what you said; " +
@@ -71,12 +72,13 @@ function SummaryGroup({ summary, engines }: { summary: CompareSummary; engines: 
       >
         <JudgeLine judge={summary.judge} />
         {summary.engines.length === 0 && (
-          <SettingsRow
-            label="No estimated errors yet."
-            help={summary.judge.state === 'ready'
+          <EmptyState
+            size="row"
+            title="No estimated errors yet"
+            hint={summary.judge.state === 'ready'
               ? `Run a comparison below: Walnut hears up to ${RUN_LAST} recordings again and the AI judge estimates each engine's errors.`
               : 'They need the AI judge, which reads the engines\' transcripts and guesses what you said.'}
-            data-testid="va-summary-empty"
+            testId="va-summary-empty"
           />
         )}
         {summary.engines.length > 0 && shared === 0 && (

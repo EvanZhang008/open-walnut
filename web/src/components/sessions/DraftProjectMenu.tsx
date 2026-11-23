@@ -13,6 +13,7 @@ import { isInboxProject } from '@open-walnut/core';
 import { WhereIcon, whereKindOf } from './DraftWhereIcons';
 import type { DraftWhere } from './useDraftWhere';
 import { autoWhat, ownHostOf, projectMenuOrder, recentPlaces } from './draft-work-in';
+import { EmptyState } from '@/components/common/EmptyState';
 
 /** Recent projects shown above the list. */
 const RECENT = 5;
@@ -69,13 +70,13 @@ export function DraftProjectMenu({ where, onDone, onCustomizeWalnut }: { where: 
             className={`draft-v6-option${isInboxProject(where.project) ? ' is-current' : ''}`} data-testid="draft-v6-project-none" onClick={() => pick('')}>
             <span className="draft-v6-project-icon is-home"><WhereIcon kind="home" size={14} /></span>
             <span className="draft-v6-option-text">
-              <span className="draft-v6-option-name wn-title">No project</span>
+              <span className="draft-v6-option-name wn-title">No project</span>{/* empty-state-ok: an option's name */}
               <span className="draft-v6-option-line">The Inbox · works in a folder you pick</span>
             </span>
             {isInboxProject(where.project) && <span className="draft-v6-check">{ICONS.ICON_CHECK}</span>}
           </button>
         )}
-        {!all.length && !inboxShown && <div className="draft-v6-wm-empty">No matching project</div>}
+        {!all.length && !inboxShown && <EmptyState size="row" title="No matching project" />}
         {onCustomizeWalnut && !q && (
           <button type="button" role="option" aria-selected={false} className="draft-v6-option" data-testid="draft-customize-walnut"
             title="Open a session in Walnut's own source code to change or fix Walnut" onClick={() => { onDone(); onCustomizeWalnut(); }}>

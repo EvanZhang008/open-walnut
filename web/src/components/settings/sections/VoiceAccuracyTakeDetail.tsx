@@ -23,6 +23,7 @@ import { SegmentedControl } from '../inputs/SegmentedControl';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { showEngineRow } from './VoiceAccuracyEngines';
 import { RUN_WORDS, engineName, judgeBlocker, judgeWords, resultModel, seconds, sentHeading, shortLabel } from './voice-accuracy-model';
+import { EmptyState } from '@/components/common/EmptyState';
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -232,7 +233,7 @@ export function VoiceAccuracyTakeDetail({ takeId, engines, judge, version, retry
               </span>
               {take.sentText !== undefined
                 ? <DiffText segments={take.diffs.sent} fallback={take.sentText} testId="va-engine-text" />
-                : <p className="va-detail-note" data-testid="va-sent-none">No message you sent was matched to this recording.</p>}
+                : <EmptyState size="row" title="No message you sent was matched to this recording" testId="va-sent-none" />}
             </div>
           )}
         <div className="va-detail-block">

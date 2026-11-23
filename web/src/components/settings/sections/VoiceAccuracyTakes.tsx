@@ -20,6 +20,7 @@ import { SegmentedControl } from '../inputs/SegmentedControl';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { VoiceAccuracyTakeDialog, whenOf } from './VoiceAccuracyTakeDialog';
 import { RUN_LAST, markedLowest, pct, shortLabel, takeCell, takeRate, takeText, takesLayout, type TakeCell, type TakesLayout } from './voice-accuracy-model';
+import { EmptyState } from '@/components/common/EmptyState';
 
 type View = 'take' | 'day';
 const isView = (v: unknown): v is View => v === 'take' || v === 'day';
@@ -140,7 +141,7 @@ function TakeRow({ take, engines, layout, open, error, onOpen }: {
 }
 
 function DayRows({ days, engines, layout }: { days: CompareDay[]; engines: CompareEngineRow[]; layout: TakesLayout }) {
-  if (!days.length) return <SettingsRow label="No day has estimated errors yet." />;
+  if (!days.length) return <EmptyState size="row" title="No day has estimated errors yet" />;
   return (
     <>
       {days.map((day) => {
@@ -223,7 +224,7 @@ export function VoiceAccuracyTakes({ takes, total, hasMore, byDay, engines, judg
         {header}
         {view === 'day' && <DayRows days={byDay} engines={engines} layout={layout} />}
         {view === 'take' && takes.length === 0 && (
-          <SettingsRow label="No recordings compared yet." help={`Run a comparison to hear up to ${RUN_LAST} recordings again.`} />
+          <EmptyState size="row" title="No recordings compared yet" hint={`Run a comparison to hear up to ${RUN_LAST} recordings again.`} />
         )}
         {view === 'take' && takes.map((take) => (
           <TakeRow

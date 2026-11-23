@@ -4,7 +4,8 @@
  * the rail entry took too much room). Shown only while experiment `focus_workspace` is on
  * (settings-pane-gates.ts); a focus the person is in also shows on Home's banner.
  */
-import { SettingsEmpty, SettingsGroup, SettingsSection } from '../SettingsSection'
+import { SettingsGroup, SettingsSection } from '../SettingsSection'
+import { UnavailableState } from '@/components/common/EmptyState'
 import { FocusPanel } from '@/focus-spaces/FocusPanel'
 import { useFocusOn } from '@/focus-spaces/useFocusView'
 import '@/styles/focus-spaces.css'
@@ -15,7 +16,7 @@ export function FocusSpacesSection() {
     return (
       <SettingsSection id="focus-spaces" title="Focus">
         <SettingsGroup>
-          <SettingsEmpty>Focus is off. Turn it on in Settings, Experimental.</SettingsEmpty>
+          <UnavailableState size="row" title="Focus is off" hint="Turn it on in Settings, Experimental." />
         </SettingsGroup>
       </SettingsSection>
     )

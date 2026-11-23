@@ -102,7 +102,7 @@ function ProjectField({ draft, where, fieldRef, open, onOpen }: {
   const kind = name ? (where.row ? (where.row.startSource ? whereKindOf(where.row.startSource) : 'folder') : 'folder') : 'home';
   // Only a project the folder's code named (stampFolderDetection), never a name made from the folder.
   const detected = !!name && draft.projectSource === 'folder' && (draft.detectedProject ?? '').toLowerCase() === (draft.project ?? '').toLowerCase();
-  const title = name ? `Project: ${projectDisplayName(name)}${detected ? ' (detected from the folder)' : ''}` : 'No project: the task goes to the Inbox';
+  const title = name ? `Project: ${projectDisplayName(name)}${detected ? ' (detected from the folder)' : ''}` : 'No project: the task goes to the Inbox'; // empty-state-ok: a tooltip
   return (
     <div ref={fieldRef} className={`draft-v6-field draft-v6-project${open ? ' is-open' : ''}`} data-testid="draft-v6-project" title={title}
       onMouseDown={(e) => e.preventDefault()}>
@@ -112,7 +112,7 @@ function ProjectField({ draft, where, fieldRef, open, onOpen }: {
       <span className="draft-v6-field-key">Project{detected && <span className="draft-v6-key-note" data-testid="draft-v6-detected">detected</span>}</span>
       <span className="draft-v6-field-value">
         <span className={`draft-v6-project-icon is-${kind}`}><WhereIcon kind={kind} size={14} /></span>
-        <span className={`draft-v6-project-name wn-meta${name ? '' : ' is-empty'}`} data-testid="draft-v6-project-name">{name ? projectDisplayName(name) : 'No project'}</span>
+        <span className={`draft-v6-project-name wn-meta${name ? '' : ' is-empty'}`} data-testid="draft-v6-project-name">{name ? projectDisplayName(name) : 'No project'}</span>{/* empty-state-ok: a field's value */}
         <span className="draft-v6-caret" aria-hidden="true">{ICONS.ICON_CHEVRON_DOWN}</span>
       </span>
     </div>
@@ -183,7 +183,7 @@ function WhereField({ draft, where, fieldRef, hostRef, narrow, menu, setMenu }: 
 function AutoValue({ where, off, picked }: { where: DraftWhere; off: boolean; picked?: Record<string, string[]> }) {
   const hostName = where.hostName(where.hostKey);
   const count = where.ps.source && where.what.kind === 'box' ? packagesWords(where.ps.source, picked) : '';
-  const words = where.sourceGone ? 'No code source' : off ? `No ${where.what.words.replace(/^New /, '')} on ${hostName}` : where.what.words;
+  const words = where.sourceGone ? 'No code source' : off ? `No ${where.what.words.replace(/^New /, '')} on ${hostName}` : where.what.words; // empty-state-ok: a field's value
   return (
     <span className="draft-v6-auto-value" data-testid="draft-v6-auto">
       <span className={`${badge(off ? 'warning' : 'neutral')} draft-v6-auto-tag`}><WhereIcon kind={off ? 'ban' : 'auto'} size={11} />Auto</span>
