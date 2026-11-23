@@ -6,6 +6,7 @@
 import fs from 'node:fs/promises'
 import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { REAL_PANEL_IN_COLUMN } from './draft-helpers'
+import { pressHeaderTool } from './header-tool-helpers'
 
 export const FULLSCREEN_SESSION = 'pw-vscode-session'
 export const FULLSCREEN_TASK = 'pw-task-vscode'
@@ -126,7 +127,8 @@ export async function openSessionPanel(page: Page): Promise<Locator> {
 
 /** Files promotes the panel to the fullscreen sheet. */
 export async function enterFilesFullscreen(page: Page, panel: Locator): Promise<void> {
-  await panel.getByRole('button', { name: 'Files', exact: true }).click()
+  // On the header row, or in its "..." menu once a second column folds it there.
+  await pressHeaderTool(page, panel, 'files')
   await expect(panel.locator('.session-file-explorer')).toBeVisible({ timeout: 15_000 })
   await expect(panel).toHaveClass(/open-walnut-fullscreen/)
   await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(1)
