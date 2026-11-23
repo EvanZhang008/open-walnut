@@ -183,6 +183,6 @@ describe('where the words of a row open', () => {
     // What an older panel kept: no writer at all, only the current session.
     s.setItem('walnut.ext-tasks.lists', JSON.stringify({ at: 1000, focus: [], needs: [{ state: 'needs', label: 'Needs you', line: 'Decide: see /a.ts', task: { id: 'old', title: 'Old', session_id: 's-new' } }] }))
     const old = keptTaskLists(s, 2000)!.needs[0]!
-    expect(askedSourcedOf(old.task, old.line, old.state)).toEqual([{ text: 'Decide: see /a.ts', source: { unknownSource: true } }])
+    expect(askedSourcedOf(old.task, old.line, old.state)).toEqual([{ text: 'Decide: see /a.ts', source: { unknownSource: true, taskId: 'old' } }])
   })
 })

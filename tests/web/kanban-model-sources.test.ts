@@ -25,8 +25,9 @@ describe('summary and waiting on: links keep their writer (2026-11-07)', () => {
     const c = vm(t);
     expect(c.summary?.textSource).toEqual({ sessionId: REMOTE_WRITER });
     expect(c.summary?.textSource.sessionId).not.toBe(c.sessionId);
-    // An older payload with no writer reads unknown: the machine chooser, not the current session.
-    expect(vm(withSession({ summary: 'Open /home/me/a.ts' })).summary?.textSource).toEqual({ unknownSource: true });
+    // An older payload with no writer reads unknown, never the current session: its task guides the search.
+    const old = withSession({ summary: 'Open /home/me/a.ts' });
+    expect(vm(old).summary?.textSource).toEqual({ unknownSource: true, taskId: old.id });
   });
 
   it('a card summary and waiting on each take their own saved writer', () => {
@@ -60,7 +61,8 @@ describe('summary and waiting on: links keep their writer (2026-11-07)', () => {
     expect(ask.textSource).toEqual({ sessionId: REMOTE_WRITER });
     // A person's ask: the primary. No writer recorded: unknown, never the task's session.
     expect(st({ state: 'needs', source: 'session', ask: 'x', askBy: 'human' } as US).textSource).toEqual({ host: '__local__' });
-    expect(st({ state: 'needs', ask: 'Approve the real iPhone test?' } as US).textSource).toEqual({ unknownSource: true });
+    const noWriter = withSession({ ...ended, user_status: { state: 'needs', ask: 'Approve the real iPhone test?' } as US });
+    expect(vm(noWriter).status.textSource).toEqual({ unknownSource: true, taskId: noWriter.id });
     // A turn to read quotes its last words: their session.
     const turn = vm(withSession({ ...ended, user_status: { state: 'read', toRead: 'turn', waitingOn: 'See /srv/out.txt' } as US,
       last_words: { text: 'See /srv/out.txt', session_id: REMOTE_WRITER } } as Partial<Task>)).status;
@@ -73,7 +75,8 @@ describe('summary and waiting on: links keep their writer (2026-11-07)', () => {
     const wait = st({ state: 'waiting', kind: 'outside', waitingOn: 'CR in /home/me/cr.txt', waitingSessionId: REMOTE_WRITER } as US);
     expect([wait.kind, wait.textSource]).toEqual(['waiting', { sessionId: REMOTE_WRITER }]);
     expect(st({ state: 'waiting', kind: 'stuck', waitingOn: 'It stopped', waitingBy: 'human' } as US).textSource).toEqual({ host: '__local__' });
-    expect(st({ state: 'waiting', kind: 'lead', waitingOn: 'Its lead' } as US).textSource).toEqual({ unknownSource: true });
+    const leadWait = withSession({ ...ended, user_status: { state: 'waiting', kind: 'lead', waitingOn: 'Its lead' } as US });
+    expect(vm(leadWait).status.textSource).toEqual({ unknownSource: true, taskId: leadWait.id });
     // Walnut's own lines carry no writer at all.
     expect(st({ state: 'waiting', kind: 'time', until: '2026-10-04T09:00:00Z' } as US).textSource).toBeUndefined();
     expect(vm(withSession(), { process_status: 'running', activity: 'reading files' }).status.textSource).toBeUndefined();
