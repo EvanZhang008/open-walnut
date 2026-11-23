@@ -225,7 +225,7 @@ import { SessionReaderContext } from './reader-split';
 import { useReaderSplit } from './useReaderSplit';
 import { useExperimental } from '@/hooks/useExperimental';
 import { useVoiceConversation } from '@/hooks/useVoiceConversation';
-import { VoiceConversationBar, VoiceTalkButton } from './VoiceConversationBar';
+import { VoiceKeys, VoiceTalkButton, voiceNotice } from './VoiceConversationBar';
 import { placeKeyOf } from './reading-place';
 import { TreeHalfContext, type TreeHalf } from './tree-half-context';
 import { pathBarHeading, pathBarLevelItems, pathBarSegments } from './tree-path-model';
@@ -2647,6 +2647,11 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const handleStopTurn = useCallback(() => {
     void stopTurn(sessionId);
   }, [sessionId, stopTurn]);
+  // The composer's stop in voice mode: the stopped turn's answer is not read aloud either.
+  const stopVoiceAware = useLeanCallback(() => {
+    if (voice.open) voice.stoppedRun();
+    handleStopTurn();
+  }, [voice.open, voice.stoppedRun, handleStopTurn]);
 
   const handleEdit = useCallback((queueId: string, newText: string) => {
     handleEditQueued(sessionId, queueId, newText);
@@ -4333,8 +4338,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           {voice.micError && !voice.open && (
             <div className="composer-prompt-warning" role="alert" data-testid="voice-mic-error">{voice.micError}</div>
           )}
-          {/* The composer stays mounted under it (its draft and state kept); voice-conversation.css hides it. */}
-          {voice.open && <VoiceConversationBar voice={voice} onStopRun={handleStopTurn} running={pageStreaming(threads.stack.api.currentKey)} />}
+          {voice.open && voiceNotice(voice) && (
+            <div className="composer-prompt-warning" role="status" data-testid="voice-error">{voiceNotice(voice)}</div>
+          )}
           {macSessionAway && <MacAwayComposer />}
           <PendingCommentsTray
             pending={ownPendingComments}
@@ -4344,7 +4350,11 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           />
           <ChatInput
             sendBlocked={macSessionAway}
-            sendSlot={voiceOn && !plainChat && !ownComposerLight && !macSessionAway ? <VoiceTalkButton onClick={voice.start} /> : undefined}
+            sendSlot={voiceOn && !plainChat && !ownComposerLight && !macSessionAway
+              ? (voice.open ? <VoiceKeys voice={voice} /> : <VoiceTalkButton onClick={voice.start} />)
+              : undefined}
+            // Voice conversation: what is being said stands in the box while it is heard.
+            voiceText={voice.open ? voice.liveText : null}
             // Any file goes to this session's host (api/file-upload.ts).
             fileTarget={{ sessionId }}
             drawingTarget={{ taskId: session?.taskId ?? liveStatus?.taskId ?? undefined, sessionId }}
@@ -4387,7 +4397,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             {...(reader.api && !reader.shown ? { onSendInSplit: sendInSplit } : {})}
             // Pending quotes and comments are a message by themselves.
             allowEmptySend={ownPendingComments.length > 0}
-            onStop={handleStopTurn}
+            onStop={stopVoiceAware}
             isStreaming={pageStreaming(threads.stack.api.currentKey)}
             // Phone: the Waiting line folds away with the keyboard up (N2-06), so its words ride here.
             placeholder={plainChat ? 'Ask a follow-up…' : threads.composerPlaceholder ?? (phoneLayer || phoneWidth

@@ -1,65 +1,57 @@
-/* Voice conversation in a session's composer seat (VoiceConversationBar.tsx). */
+/* Voice conversation's keys in the session composer (VoiceConversationBar.tsx: VoiceKeys). The box
+   stays and holds the live words; these keys stand where Talk was, before the send key. */
 
-.voice-bar {
-  /* The column's own width decides the layout (a CEO column is narrow at any window
-     width), so the bar is the container its insides ask. It sits in the composer's seat,
-     with the composer's own surface (the frosted glass is for overlays portalled to <body>). */
-  container-type: inline-size;
-  border-radius: var(--radius-lg);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  box-shadow: var(--card-shadow);
+.voice-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
 }
 
-/* The composer stays mounted under the bar, its draft kept; it shows again with Keyboard. */
-.voice-bar ~ .chat-input-container {
-  display: none;
+/* One quiet word for what is happening now; its hint is the title. */
+.voice-keys-status {
+  font-size: var(--font-size-sm);
+  color: var(--fg-muted);
+  white-space: nowrap;
+  padding: 0 4px;
 }
 
-.voice-bar-inner {
-  /* The orb on the left; the state and the tools on one line; what was heard and said
-     below them across the whole width, so a narrow column still reads in full lines. */
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-areas: 'orb title tools' 'orb text text';
-  align-items: start;
-  column-gap: 16px;
-  row-gap: 4px;
-  padding: 16px;
-  box-sizing: border-box;
-}
-
-/* The conversation's one main control, like the composer's round Send: --accent, white glyph. */
-.voice-orb {
+/* The state key: round like the composer's send key, --accent with a white glyph. Its ring
+   grows with the voice it hears (listening) or makes (speaking). */
+.voice-key {
   --voice-level: 0;
-  grid-area: orb;
-  width: 56px;
-  height: 56px;
+  width: 34px;
+  height: 34px;
   padding: 0;
   border: none;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   cursor: pointer;
   color: var(--on-accent);
   background: var(--accent);
-  /* The ring grows with the voice it hears (listening) or makes (speaking), inside the bar's padding. */
-  box-shadow: 0 0 0 calc(4px + var(--voice-level) * 6px) var(--accent-subtle);
+  box-shadow: 0 0 0 calc(var(--voice-level) * 5px) var(--accent-subtle);
   transition: box-shadow 0.08s linear, background 0.15s, opacity 0.15s;
 }
 
-.voice-orb:hover:not(:disabled) {
+.voice-key svg {
+  width: 18px;
+  height: 18px;
+}
+
+.voice-key:hover:not(:disabled) {
   background: var(--accent-hover);
 }
 
-.voice-orb:disabled {
+.voice-key:disabled {
   opacity: 0.5;
   cursor: default;
 }
 
-/* Paused: the mic is off, so the orb waits in the quiet grey of an action. */
-.voice-bar.is-paused .voice-orb {
+/* Paused: the mic is off, so the key waits in the quiet grey of an action. */
+.voice-keys.is-paused .voice-key {
   color: var(--fg);
   background: var(--bg-secondary);
   box-shadow: 0 0 0 1px var(--border);
@@ -71,93 +63,4 @@
 
 @keyframes voice-orb-spin {
   to { transform: rotate(360deg); }
-}
-
-.voice-bar-text {
-  grid-area: text;
-  min-width: 0;
-  /* Room for the two lines (what was heard, what is said) in every state, so the transcript above does not jump. */
-  min-height: 40px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-
-
-.voice-bar-title {
-  grid-area: title;
-  min-width: 0;
-  font-size: var(--font-size-lg);
-  font-weight: 600;
-  color: var(--fg);
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  column-gap: 8px;
-  /* The tools' 28 px line: the title's first line sits on its centre. */
-  line-height: 28px;
-}
-
-.voice-bar-hint {
-  font-size: var(--font-size-sm);
-  line-height: 20px;
-  font-weight: 400;
-  color: var(--fg-muted);
-}
-
-.voice-bar-line {
-  font-size: var(--font-size-md);
-  color: var(--fg-secondary);
-  overflow-wrap: anywhere;
-}
-
-/* Said and done: the last round steps back while it listens for the next one. */
-.voice-bar.is-listening .voice-bar-line,
-.voice-bar.is-paused .voice-bar-line {
-  color: var(--fg-muted);
-}
-
-.voice-bar-who {
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  color: var(--fg-muted);
-  margin-right: 8px;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-}
-
-.voice-bar-error {
-  font-size: var(--font-size-sm);
-  color: var(--error);
-}
-
-.voice-bar-tools {
-  grid-area: tools;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  /* On the title's first line however the title wraps. */
-  min-height: 28px;
-}
-
-.voice-bar-engine {
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-}
-
-/* A narrow column (a CEO column, a phone): the tools get a line of their own under the words. */
-@container (max-width: 480px) {
-  .voice-bar-inner {
-    grid-template-columns: auto minmax(0, 1fr);
-    grid-template-areas: 'orb title' 'orb text' 'orb tools';
-  }
-  .voice-bar-tools {
-    justify-content: flex-end;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .voice-orb { transition: none; }
-  .voice-orb-spinner { animation: none; }
 }

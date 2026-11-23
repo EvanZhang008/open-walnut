@@ -117,6 +117,16 @@ export class VoiceMic {
     this.startedAt = performance.now();
   }
 
+  /**
+   * What the take holds so far, while it goes on (the recorder hands a part every second, the
+   * first one carrying the header): the live words are drafted from it. Null with no take or no part yet.
+   */
+  peekTake(): Take | null {
+    if (!this.recorder || this.recorder.state === 'inactive' || !this.parts.length) return null;
+    const blob = new Blob(this.parts, { type: this.recorder.mimeType || 'audio/webm' });
+    return { blob, format: recorderFormat().format, ms: performance.now() - this.startedAt };
+  }
+
   /** The take so far, whole; null when no take is running. */
   finishTake(): Promise<Take | null> {
     const recorder = this.recorder;

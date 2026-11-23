@@ -19,6 +19,7 @@ import { voiceStatus, type TtsEngineId } from '../api/voice';
 import { openVoice, reduceVoice, type VoiceEffect, type VoiceEvent, type VoiceState } from '../voice/conversation-machine';
 import { BARGE_IN_OPTIONS, LISTEN_OPTIONS, VoiceActivity } from '../voice/voice-activity';
 import { VoiceMic } from '../voice/voice-mic';
+import { LiveWords } from '../voice/live-words';
 import { VoiceAnswer } from '../voice/voice-answer';
 import { VoiceSpeaker, type SpeakOutcome } from '../voice/voice-speaker';
 import { log } from '../utils/log';
@@ -43,6 +44,8 @@ export interface VoiceConversation {
   micError: string | null;
   /** The open mic delivers no sound, or its device went away (mic-health.ts). */
   micWarning: string | null;
+  /** What the person is saying now, drafted while they talk (shown in the composer); null between takes. */
+  liveText: string | null;
   start: () => void;
   stop: () => void;
   tap: () => void;
@@ -69,6 +72,7 @@ export function useVoiceConversation(
   const [micError, setMicError] = useState<string | null>(null);
   const [micWarning, setMicWarning] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
+  const [liveText, setLiveText] = useState<string | null>(null);
 
   const stateRef = useRef<VoiceState | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
@@ -86,6 +90,8 @@ export function useVoiceConversation(
   /** The speaker's queue this conversation listens to, so its end is reported once. */
   const drainRef = useRef<Promise<SpeakOutcome> | null>(null);
   const answerRef = useRef<VoiceAnswer | null>(null);
+  const liveRef = useRef<LiveWords | null>(null);
+  const live = () => (liveRef.current ??= new LiveWords((text) => setLiveText((prev) => (prev === text ? prev : text))));
 
   // One place every event goes through: reduce, keep, run the effects.
   const dispatch = useLeanCallback((event: VoiceEvent) => {
@@ -100,6 +106,9 @@ export function useVoiceConversation(
     // The soft cue while the turn works and nothing is said; any speech, a pause or a close stops it.
     // (Read from the ref: an effect may have dispatched again meanwhile.)
     speakerRef.current?.waitingCue(stateRef.current?.phase === 'waiting');
+    // The live words stay while the take is heard and sent; they leave once it is out (or dropped).
+    const after = stateRef.current;
+    if (!after || (after.phase !== 'listening' && after.phase !== 'transcribing') || after.take !== current.take) live().clear();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -206,6 +215,7 @@ export function useVoiceConversation(
 
   const stop = useLeanCallback(() => {
     genRef.current++;
+    live().clear();
     speakerRef.current?.stop();
     speakerRef.current = null;
     micRef.current?.close();
@@ -295,6 +305,7 @@ export function useVoiceConversation(
       setLevel((prev) => prev * 0.6 + Math.min(1, rms * 4) * 0.4);
       const now = performance.now();
       if (s.phase === 'listening') {
+        live().tick(mic, s, now);
         const ev = activityRef.current.push(rms, now);
         if (ev === 'speech-start') dispatch({ type: 'speech-start' });
         else if (ev === 'end-of-speech') dispatch({ type: 'end-of-speech' });
@@ -319,5 +330,5 @@ export function useVoiceConversation(
     return () => stop();
   }, [sessionId, stop]);
 
-  return { open: state !== null || opening, state, level, engine, engineNote, micError, micWarning, start, stop, tap, replay, stoppedRun };
+  return { open: state !== null || opening, state, level, engine, engineNote, micError, micWarning, liveText, start, stop, tap, replay, stoppedRun };
 }

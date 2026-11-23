@@ -1,9 +1,7 @@
 /**
- * Voice conversation in a session's composer seat (the experimental
- * `voice_conversation` flag): one big button, what is happening now in words,
- * what was heard and what is being said, Replay, and the keyboard to go back.
- * The full answer stays in the transcript above; only its short spoken part is
- * read aloud.
+ * Voice conversation's keys in a session's composer (the experimental `voice_conversation`
+ * flag): Talk to start, then the state key, Replay and the way back to the keyboard. Only the
+ * short spoken part of an answer is read aloud; the whole of it stays in the transcript.
  */
 
 import type { VoiceConversation } from '../../hooks/useVoiceConversation';
@@ -61,60 +59,55 @@ export function VoiceTalkButton({ onClick, disabled }: { onClick: () => void; di
   );
 }
 
-/** `onStopRun` stops the session's turn (the composer's ■); shown whenever the turn runs (`running`), whatever the voice does. */
-export function VoiceConversationBar({ voice, onStopRun, running }: { voice: VoiceConversation; onStopRun?: () => void; running?: boolean }) {
+/**
+ * Voice conversation in the composer (2026-11-23, the user: the words he says show in the input
+ * box, and the composer shows only a mic mark while it waits for his pause): the box keeps its
+ * place, the live words go in it (ChatInput `voiceText`), and these keys stand where Talk was.
+ * The round key is the conversation's state and its one control (a tap pauses, listens again, or
+ * cuts the answer short); Replay reads the last answer again; the x key goes back to the keyboard.
+ * Stopping the turn is the composer's own stop key. The full answer streams into the transcript.
+ */
+export function VoiceKeys({ voice }: { voice: VoiceConversation }) {
   const state = voice.state;
   const phase: VoicePhase = state?.phase ?? 'paused';
   const status = STATUS[phase];
   const ring = phase === 'listening' || phase === 'speaking' ? Math.min(1, voice.level) : 0;
   const engineLabel = voice.engine === 'elevenlabs' ? 'Voice: ElevenLabs' : voice.engine === 'device' ? 'Voice: built-in' : '';
+  const title = state ? status.title : 'Opening the microphone';
+  const hint = state ? (phase === 'listening' && state.heard ? 'Hearing you, pause to send' : status.hint) : '';
+  const canReplay = !!state?.lastSpoken && phase !== 'speaking' && phase !== 'transcribing' && !(phase === 'listening' && state.heard);
   return (
-    <div className={`voice-bar is-${phase}`} data-testid="voice-bar" data-phase={phase} role="group" aria-label="Voice conversation">
-      <div className="voice-bar-inner">
+    <span className={`voice-keys is-${phase}`} data-testid="voice-bar" data-phase={phase} data-engine={voice.engine ?? ''} role="group" aria-label="Voice conversation">
+      <span className="voice-keys-status" data-testid="voice-status" aria-live="polite" title={hint}>{title}</span>
+      {canReplay && (
+        <button type="button" className="btn btn-icon" onClick={voice.replay} data-testid="voice-replay" title="Read the last answer again" aria-label="Read the last answer again">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" />
+          </svg>
+        </button>
+      )}
       <button
         type="button"
-        className="voice-orb"
+        className="voice-key"
         onClick={voice.tap}
         disabled={!state || phase === 'transcribing'}
         aria-label={status.button}
+        title={[title, hint, engineLabel].filter(Boolean).join(' \u00b7 ')}
         data-testid="voice-orb"
         style={{ '--voice-level': ring.toFixed(3) } as React.CSSProperties}
       >
         <OrbIcon phase={phase} />
       </button>
-      <div className="voice-bar-title" data-testid="voice-status">
-        {state ? status.title : 'Opening the microphone'}
-        <span className="voice-bar-hint" data-testid="voice-hint">{state ? (phase === 'listening' && state.heard ? 'Hearing you, pause to send' : status.hint) : ''}</span>
-      </div>
-      <div className="voice-bar-tools">
-        {engineLabel && <span className="voice-bar-engine" data-testid="voice-engine">{engineLabel}</span>}
-        {(running || phase === 'waiting') && onStopRun && (
-          <button type="button" className="btn btn-sm" onClick={() => { voice.stoppedRun(); onStopRun(); }} data-testid="voice-stop-run" title="Stop the agent's turn">
-            Stop
-          </button>
-        )}
-        {/* Shown only when there is an answer to read again, so it never sits there looking clickable. */}
-        {state?.lastSpoken && phase !== 'speaking' && phase !== 'transcribing' && !(phase === 'listening' && state.heard) && (
-          <button type="button" className="btn btn-sm" onClick={voice.replay} data-testid="voice-replay" title="Read the last answer again">
-            Replay
-          </button>
-        )}
-        <button type="button" className="btn btn-sm" onClick={voice.stop} data-testid="voice-close" title="Back to the keyboard">
-          Keyboard
-        </button>
-      </div>
-      <div className="voice-bar-text" aria-live="polite">
-        {state?.lastHeard && (
-          <div className="voice-bar-line" data-testid="voice-heard"><span className="voice-bar-who">You</span>{state.lastHeard}</div>
-        )}
-        {state?.lastSpoken && (phase === 'speaking' || phase === 'listening' || phase === 'paused') && (
-          <div className="voice-bar-line" data-testid="voice-spoken"><span className="voice-bar-who">Walnut</span>{state.lastSpoken}</div>
-        )}
-        {(state?.error || voice.micWarning || voice.engineNote) && (
-          <div className="voice-bar-error" role="status" data-testid="voice-error">{state?.error ?? voice.micWarning ?? voice.engineNote}</div>
-        )}
-      </div>
-      </div>
-    </div>
+      <button type="button" className="btn btn-icon" onClick={voice.stop} data-testid="voice-close" title="Back to the keyboard" aria-label="Back to the keyboard">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18" />
+        </svg>
+      </button>
+    </span>
   );
+}
+
+/** A line over the composer when voice mode has something to say about itself (an error, a silent mic, the voice it fell back to). */
+export function voiceNotice(voice: VoiceConversation): string | null {
+  return voice.state?.error ?? voice.micWarning ?? voice.engineNote ?? null;
 }

@@ -60,7 +60,8 @@ async function setup(page: Page, opts: { serverVoice: boolean; refuseMic?: boole
     await route.fulfill({ response: res, json })
   })
   await page.route('**/api/stt/transcribe**', (route) => route.fulfill({ json: { text: 'What is on today?', durationMs: 900, recordingId: 'rec-voice-1' } }))
-  await page.route('**/api/v1/voice/status', (route) => route.fulfill({ json: { engine: opts.serverVoice ? 'elevenlabs' : 'device', engines: [] } }))
+  // Opening voice mode asks the warm-up (it answers with the status); an older server only has the status.
+  await page.route((url) => url.pathname === '/api/v1/voice/status' || url.pathname === '/api/v1/voice/warmup', (route) => route.fulfill({ json: { engine: opts.serverVoice ? 'elevenlabs' : 'device', engines: [] } }))
   await page.route('**/api/v1/voice/speak', async (route) => {
     captured.speaks.push(JSON.parse(route.request().postData() ?? '{}').text)
     if (!opts.serverVoice) return route.fulfill({ status: 503, json: { error: { code: 'tts_unavailable', message: 'No voice engine on this server' } } })
@@ -108,9 +109,6 @@ export function registerVoiceConversationScenarios(): void {
 
     await talkAndPause(page)
     await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'waiting', { timeout: 20_000 })
-    await expect(page.getByTestId('voice-heard')).toContainText('What is on today?')
-    // While the turn works, the bar offers the composer's stop.
-    await expect(column.getByTestId('voice-stop-run')).toBeVisible()
     const sent = await sends(page)
     expect(sent).toHaveLength(1)
     expect(JSON.stringify(sent[0])).toContain('What is on today?')
@@ -118,8 +116,7 @@ export function registerVoiceConversationScenarios(): void {
 
     await answer(page, 'Two meetings and one review. The first is at ten.\n\n---\n\n| time | what |\n|---|---|\n| 10:00 | standup |')
     await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'speaking', { timeout: 20_000 })
-    await expect(page.getByTestId('voice-spoken')).toHaveText(/Two meetings and one review\. The first is at ten\. The rest is on screen\.$/)
-    await expect(page.getByTestId('voice-engine')).toHaveText('Voice: ElevenLabs')
+    await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-engine', 'elevenlabs')
     // Read piece by piece: the first sentence alone, then the rest; never the table.
     await expect.poll(() => captured.speaks.length, { timeout: 20_000 }).toBeGreaterThanOrEqual(2)
     expect(captured.speaks[0]).toBe('Two meetings and one review.')
@@ -161,7 +158,7 @@ export function registerVoiceConversationScenarios(): void {
   test('a server with no voice: the device speaks, and the bar says which voice', async ({ page }) => {
     const captured = await setup(page, { serverVoice: false })
     await openVoice(page)
-    await expect(page.getByTestId('voice-engine')).toHaveText('Voice: built-in')
+    await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-engine', 'device')
     await talkAndPause(page)
     await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'waiting', { timeout: 20_000 })
     await answer(page, 'Done.')
@@ -194,8 +191,10 @@ export function registerVoiceConversationScenarios(): void {
     const column = await openVoice(page)
     await talkAndPause(page)
     await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'waiting', { timeout: 20_000 })
-    // Stop from the bar: back to listening, and that turn's interrupted result says nothing.
-    await column.getByTestId('voice-stop-run').click()
+    // Stop from the composer's own stop key (shown once the turn runs): back to listening, and
+    // that turn's interrupted result says nothing.
+    await injectEvent(page, 'session:tool-use', { sessionId: MOCK_SESSION_ID, toolName: 'Bash', toolUseId: 'tu-voice-stop', input: { command: 'ls' }, taskId: '' })
+    await column.getByRole('button', { name: 'Stop the running turn' }).click()
     await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'listening')
     await injectEvent(page, 'session:result', { sessionId: MOCK_SESSION_ID, result: 'Half an answer.', interrupted: true })
     await page.waitForTimeout(800)
@@ -219,7 +218,6 @@ export function registerVoiceConversationScenarios(): void {
     await delta('build now. ', 'msg-voice-a')
     await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'speaking', { timeout: 20_000 })
     await expect.poll(() => captured.speaks[0], { timeout: 20_000 }).toBe('Got it, I will check the build now.')
-    await expect(page.getByTestId('voice-spoken')).toHaveText(/Got it, I will check the build now\.$/)
 
     // A tool call: the turn still works, so once the voice is done it waits again (the cue), not listening.
     await injectEvent(page, 'session:tool-use', { sessionId: MOCK_SESSION_ID, toolName: 'Bash', toolUseId: 'tu-voice-1', input: { command: 'ls' }, msgId: 'msg-voice-a', taskId: '' })
@@ -237,7 +235,6 @@ export function registerVoiceConversationScenarios(): void {
     await expect.poll(() => captured.speaks.length, { timeout: 20_000 }).toBe(4)
     expect(captured.speaks).toEqual(['Got it, I will check the build now.', 'The build passed.', 'Two warnings remain.', 'The rest is on screen.'])
     await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'listening', { timeout: 20_000 })
-    await expect(page.getByTestId('voice-spoken')).toHaveText(/Got it, I will check the build now\. The build passed\. Two warnings remain\. The rest is on screen\.$/)
     await page.waitForTimeout(500)
     expect(captured.speaks).toHaveLength(4)
 
@@ -264,6 +261,25 @@ export function registerVoiceConversationScenarios(): void {
     expect(captured.speaks.slice(heardBefore).join(' ')).not.toContain('Later words')
     await micGain(page, QUIET)
     await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'waiting', { timeout: 20_000 })
+  })
+
+  test('the words said show in the input box while they are heard, and leave it once sent by voice', async ({ page }) => {
+    // 2026-11-23, the user: what he says should show in the input box as he says it.
+    await setup(page, { serverVoice: true })
+    const drafts: number[] = []
+    await page.route('**/api/stt/draft', (route) => { drafts.push(Date.now()); return route.fulfill({ json: { text: 'What is on', durationMs: 300 } }) })
+    const column = await openVoice(page)
+    const box = column.locator('textarea').first()
+    await box.fill('kept draft')
+    await micGain(page, LOUD)
+    await expect(box).toHaveValue(/kept draft\s*What is on$/, { timeout: 15_000 })
+    expect(await phase(page)).toBe('listening')
+    await micGain(page, QUIET)
+    await expect(page.getByTestId('voice-bar')).toHaveAttribute('data-phase', 'waiting', { timeout: 20_000 })
+    // Sent by voice: the words leave the box, what was typed before stays.
+    await expect(box).toHaveValue('kept draft')
+    expect(drafts.length).toBeGreaterThan(0)
+    expect(JSON.stringify((await sends(page))[0])).toContain('What is on today?')
   })
 
   test('a refused microphone says why and keeps the composer', async ({ page }) => {

@@ -396,6 +396,10 @@ interface ChatInputProps {
    *  mic) so the two ways out sit together: the draft's "Save as task". A function gets
    *  `canSend` (the send arrow's own "is there anything to send"), for a slot that sends too. */
   sendSlot?: React.ReactNode | ((state: { canSend: boolean }) => React.ReactNode);
+  /** Voice conversation's live words (useVoiceConversation): while set they stand in the box as a
+   *  dictation draft, at the caret, the rest of the draft left alone; back to null, they leave it
+   *  (the take was sent by voice, or dropped). */
+  voiceText?: string | null;
   /** A removable chip at the top of the box saying where the send goes (the
    *  session's question target). The owner renders it, × included. */
   contextPill?: React.ReactNode;
@@ -475,7 +479,7 @@ export function ChatInput(props: ChatInputProps) {
   );
 }
 
-function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSplit, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, sendOff, queueCount, placeholder, label, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, contextPill, noteSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, drawingTarget, promptRecallKey, inputTestId, sendTestId, namedPills }: ChatInputProps) {
+function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSplit, onClearQueue, disabled, sendBlocked, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, sendOff, queueCount, placeholder, label, compact, light, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onSessionCommandsPaletteOpen, sessionCommandsStatus, onControlCommand, onDictationInsert, draftKey, draftKeptOnReload = true, onToggleMode, mentionCwd, mentionHost, enableEntityMention, sessionMentionSelfId, mentionSelfTaskId, prefillText, prefillNonce, prefillMode = 'replace', focusNonce, controlsSlot, sendSlot, voiceText, contextPill, noteSlot, addMenuControls, onValueChange, plusMenuToggles, plusMenuActions, allowEmptySend, sendTitle: sendTitleProp, fileTarget, drawingTarget, promptRecallKey, inputTestId, sendTestId, namedPills }: ChatInputProps) {
   // ONE read of the persisted draft, split once for both pieces of state below.
   const [initialDraft] = useState(() => readDraftSplit(draftKey));
   const [value, setValue] = useState(initialDraft.body);
@@ -1815,6 +1819,30 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
    * Returns whether the box now holds `finalText` where `provisional` was: a
    * Retry after a partial failure inserts the complete words when it is false.
    */
+  // Voice conversation's words in flight: drafted into the box like dictation, and taken out
+  // again once the take went out by voice (it shows in the transcript then), never sent from here.
+  // The box as it was before the voice wrote in it: taking the words out restores it exactly
+  // (the separators dictation adds around a span go too), unless it was edited meanwhile.
+  const voiceBaseRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (voiceText) {
+      if (voiceBaseRef.current === null) voiceBaseRef.current = liveText();
+      writeDictation(voiceText, true);
+      return;
+    }
+    const base = voiceBaseRef.current;
+    if (base === null) return;
+    voiceBaseRef.current = null;
+    const span = dictationSpanRef.current;
+    if (!span) return;
+    const cur = liveText();
+    dictationSpanRef.current = null;
+    const without = cur.slice(0, span.start) + cur.slice(span.start + span.length);
+    handleChange(without.trim() === base.trim() ? base : without);
+    // writeDictation and handleChange read the box at call time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceText]);
+
   const refineDictation = (finalText: string, provisional: string): boolean => {
     const cur = liveText();
     const at = lastDictationRef.current;
