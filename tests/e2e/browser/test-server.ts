@@ -5674,6 +5674,9 @@ if (!mockDaemon) {
 }
 if (mockDaemon) {
   sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${mockDaemon.port}`)
+  // A spec that asks the daemon directly asks this one, the daemon its sessions run on, never the
+  // isolated real local daemon whose port daemon/daemon.port names (it never saw them).
+  fsSync.writeFileSync(path.join(tmpBase, 'mock-daemon.port'), String(mockDaemon.port))
   // The session gate skips only this in-process MockDaemon, so the seeded fixture sessions resume.
   {
     const { trustFixtureDaemon } = await import('../../../src/providers/ephemeral-session-gate.js')

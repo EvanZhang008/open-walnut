@@ -30,6 +30,8 @@ import { sessionResultPhase } from '../../../src/core/phase'
 import { expectPanelRunning } from './session-header-labels-helpers'
 import { dropFakes } from './route-teardown'
 
+// The unread dot; a row that needs the user carries an attention mark with the same base class.
+const UNREAD_DOT = '.task-unread-dot:not(.task-attention-dot)'
 const SCREENSHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/session-hold-turn-subagents'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 
@@ -345,7 +347,10 @@ test('an error does not hand back a task with a live background command, and the
   if (TEST_PORT === 3456 || !/^(dist-home-|walnut-pw-)/.test(path.basename(walnutHome))) {
     throw new Error('Live-adopt probe requires an isolated fixture')
   }
-  const daemonPort = Number(await fs.readFile(path.join(walnutHome, 'daemon/daemon.port'), 'utf8'))
+  // The daemon this session runs on: the fixture's MockDaemon, or the real local one when the
+  // fixture runs without it (PW_NO_MOCK_DAEMON=1). Asking the other one starts a second CLI.
+  const portFile = await fs.access(path.join(walnutHome, 'mock-daemon.port')).then(() => 'mock-daemon.port', () => 'daemon/daemon.port')
+  const daemonPort = Number(await fs.readFile(path.join(walnutHome, portFile), 'utf8'))
   const beforeAdopt = await page.request.get(`/api/sessions/${sessionId}`)
   expect(beforeAdopt.ok()).toBe(true)
   const oldPid = (await beforeAdopt.json()).session.pid
@@ -381,7 +386,7 @@ test('an error does not hand back a task with a live background command, and the
     return (await response.json()).task.phase
   }).toBe('NEED_ACTION')
   await expect(card.locator('.task-circle-running')).toHaveCount(0)
-  await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
+  await expectHandedBackToRead(page, taskId, card)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/background-drained-followup.png` })
 })
 
@@ -415,7 +420,8 @@ test('a late session hint cannot erase a red task row, but committed task change
   await page.waitForTimeout(300)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/red-after-session-hint.png` })
   await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
-  expect(await card.evaluate((node) => getComputedStyle(node).backgroundColor)).toBe('rgba(255, 59, 48, 0.08)')
+  // The class is the red row; Home's quiet navigation rail paints it with no fill by design
+  // (home-navigation.css, 2026-09-22), so its colour is no signal here.
   const persisted = await page.request.get(`/api/tasks/${taskId}`)
   expect(persisted.ok()).toBe(true)
   expect((await persisted.json()).task.phase).toBe('NEED_ACTION')
@@ -467,9 +473,9 @@ test('red task rows stay current across tiers, reading races, and reconnects', a
     // Satellite holds its 50 tasks and the 34 legacy ones: a long tier may draw in batches.
     await showMoreUntil(section, card)
     await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
-    await expect(card.locator('.task-unread-dot')).toBeVisible()
+    await expect(card.locator(UNREAD_DOT)).toBeVisible()
     await card.locator('.todo-pinned-title').click()
-    await expect(card.locator('.task-unread-dot')).toHaveCount(0)
+    await expect(card.locator(UNREAD_DOT)).toHaveCount(0)
     await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
     await page.screenshot({ path: `${SCREENSHOT_DIR}/red-read-${tier.toLowerCase()}-${index}.png` })
   }
@@ -480,7 +486,7 @@ test('red task rows stay current across tiers, reading races, and reconnects', a
   const reset = await page.request.patch(`/api/tasks/${id}`, { data: { phase: 'IN_PROGRESS', unread: true } })
   expect(reset.ok()).toBe(true)
   await expect(card).not.toHaveClass(/todo-pinned-card-needs-action/)
-  await expect(card.locator('.task-unread-dot')).toBeVisible()
+  await expect(card.locator(UNREAD_DOT)).toBeVisible()
   let releaseRead!: () => void
   const holdRead = new Promise<void>((resolve) => { releaseRead = resolve })
   let readStarted = false
@@ -502,7 +508,7 @@ test('red task rows stay current across tiers, reading races, and reconnects', a
   } finally {
     releaseRead()
   }
-  await expect(card.locator('.task-unread-dot')).toHaveCount(0)
+  await expect(card.locator(UNREAD_DOT)).toHaveCount(0)
   await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
 
   const firstSocket = sockets[0]
@@ -588,7 +594,8 @@ test('permission, question, and plan decisions stay red while waiting and settle
     await expect.poll(() => processStatus(page, sessionId)).toBe('idle')
     await expect(panel.locator('.permission-request-actions button')).toHaveCount(0)
     settledSessions.push(sessionId)
-    await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
+    // The decision answered, the turn ends and hands back: a result to read, not an ask.
+    await expectHandedBackToRead(page, taskId, card)
   }
   await page.screenshot({ path: `${SCREENSHOT_DIR}/permission-decisions-settled.png` })
 })
@@ -653,8 +660,10 @@ test('waiting follows the versioned status when session details arrive after per
       const { task } = await taskResponse.json()
       expect(task.phase).toBe('NEED_ACTION')
       await selectSection(observer, task.focus_tier === 'focus' ? 'Focus' : 'Satellite')
-      await expect(observer.locator(`.todo-pinned-section:not(.todo-pinned-section-recent) [data-task-id="${taskId}"]`))
-        .toHaveClass(/todo-pinned-card-needs-action/)
+      const observerCard = observer.locator(`.todo-pinned-section:not(.todo-pinned-section-recent) [data-task-id="${taskId}"]`)
+      // The open permission is an ask (red); once answered, the turn hands back a result to read.
+      if (stage === 'request') await expect(observerCard).toHaveClass(/todo-pinned-card-needs-action/)
+      else await expectHandedBackToRead(observer, taskId, observerCard)
       await observer.screenshot({ path: `${SCREENSHOT_DIR}/permission-late-details-${stage}.png` })
     }
   } finally {
@@ -702,6 +711,6 @@ test('a cold Home whose socket connects late still paints the hand-back red', as
   allowServer = true
   await expect.poll(() => serverConnects, { timeout: 45_000 }).toBeGreaterThan(0)
   await expect(card).toHaveClass(/todo-pinned-card-needs-action/, { timeout: 20_000 })
-  await expect(card.locator('.task-unread-dot')).toBeVisible()
+  await expect(card.locator(UNREAD_DOT)).toBeVisible()
   await page.screenshot({ path: `${SCREENSHOT_DIR}/cold-open-red-after-late-connect.png` })
 })

@@ -8,7 +8,7 @@
  * itself, and each project folding its own waiting and completed rows. These replaced the old footer ("N Waiting hidden", "N Complete hidden",
  * "N not available yet: show").
  */
-import { expect, type APIRequestContext, type BrowserContext, type Locator, type Page } from '@playwright/test'
+import { expect, test, type APIRequestContext, type BrowserContext, type Locator, type Page } from '@playwright/test'
 
 export type StatusSectionKey = 'watching' | 'needs' | 'working' | 'waiting' | 'notstarted' | 'background' | 'done'
 /** 'status' is Flat (the product default), 'project' By project (what every page's storage starts with). */
@@ -189,6 +189,9 @@ export async function endRunningTurn(request: APIRequestContext, sessionId: stri
  * Needs you (session-status.ts taskNeedsAction) and the task never reads Waiting on that report.
  */
 export async function expectHandedBackToRead(page: Page, taskId: string, card: Locator): Promise<void> {
+  // The poll below may wait out the hand-back hold (HANDBACK_SETTLE_MS, 20 s) and work still
+  // running: the calling test gets that time on top of its own, never a default timeout cut short.
+  test.info().setTimeout(test.info().timeout + 60_000)
   await expect.poll(async () => {
     const response = await page.request.get(`/api/tasks/${taskId}`)
     expect(response.ok()).toBe(true)

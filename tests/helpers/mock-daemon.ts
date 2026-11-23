@@ -596,6 +596,27 @@ export class MockDaemon {
       return this.sendError(ws, id, this._startFault, this._startFaultData)
     }
 
+    // Live-adopt, as the real daemons (daemon-standalone.ts cmdStart): a resume with a message or a
+    // deferred one against a CLI still running is the caller having lost track of it, so the
+    // message goes down its FIFO and the process is kept. Respawning here left two CLIs on one sid.
+    const live = this.sessions.get(sid)
+    if (resume && (message || cmd.deferMessage === true) && live && live.exitCode === null && live.pid) {
+      if (message) {
+        try {
+          const fd = fs.openSync(live.pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
+          writeFifoFully(fd, Buffer.from(JSON.stringify({ type: 'user', message: { role: 'user', content: message } }) + '\n'))
+          fs.closeSync(fd)
+          this._fifoWrites.push({ sid, message, timestamp: Date.now() })
+          this._turnActive.add(sid)
+        } catch (err) {
+          return this.sendError(ws, id, `start: live-adopt delivery failed: ${(err as Error).message}`)
+        }
+      }
+      let offset = 0
+      try { offset = fs.statSync(live.jsonlPath).size } catch { /* no output yet */ }
+      return this.sendOk(ws, id, { pid: live.pid, outputFile: live.jsonlPath, offset, adopted: true })
+    }
+
     const streamsDir = this.streamsDir
     const pipePath = path.join(streamsDir, `${sid}.pipe`)
     const jsonlPath = path.join(streamsDir, `${sid}.jsonl`)
