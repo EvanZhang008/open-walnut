@@ -28,6 +28,8 @@ cd "$(dirname "$0")/.."
 # bun on PATH can be an older one than the bun running the build.
 # shellcheck source=lib/find-bun.sh
 . scripts/lib/find-bun.sh
+# shellcheck source=lib/bun-compile.sh
+. scripts/lib/bun-compile.sh
 BUN=""
 if walnut_find_bun "$PWD"; then BUN="$BUN_BIN"; fi
 if [ -z "$BUN" ]; then
@@ -370,19 +372,19 @@ if [ "$SIDECARS_ONLY" != 1 ]; then
 rm -f "$OUTDIR/daemon.version" "$OUTDIR/.version-guard-gave-up"
 echo "Building daemon binaries (version: $VERSION)..."
 
-"$BUN" build --compile --target=bun-linux-x64 --minify \
+bun_compile --target=bun-linux-x64 --minify \
   --define "process.env.DAEMON_VERSION='$VERSION'" \
   --outfile "$OUTDIR/daemon-linux-x64" \
   src/providers/daemon-standalone.ts src/providers/history-ready-worker.ts
 echo "$VERSION" > "$OUTDIR/daemon-linux-x64.version"
 
-"$BUN" build --compile --target=bun-linux-arm64 --minify \
+bun_compile --target=bun-linux-arm64 --minify \
   --define "process.env.DAEMON_VERSION='$VERSION'" \
   --outfile "$OUTDIR/daemon-linux-arm64" \
   src/providers/daemon-standalone.ts src/providers/history-ready-worker.ts
 echo "$VERSION" > "$OUTDIR/daemon-linux-arm64.version"
 
-"$BUN" build --compile --target=bun-darwin-arm64 --minify \
+bun_compile --target=bun-darwin-arm64 --minify \
   --define "process.env.DAEMON_VERSION='$VERSION'" \
   --outfile "$OUTDIR/daemon-darwin-arm64" \
   src/providers/daemon-standalone.ts src/providers/history-ready-worker.ts

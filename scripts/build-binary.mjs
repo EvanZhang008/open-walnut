@@ -37,6 +37,7 @@ import zlib from 'node:zlib'
 import { assertNoBuildPaths, copyInfraApp, moduleRoots, packageCopies, runtimeDirname, treeDirOf } from './binary-build-checks.mjs'
 import { writeBuildInfo } from './build-info.mjs'
 import { checkDarwinIdentity, stampDarwinIdentity } from './lib/macho-identity.mjs'
+import { buildWithRuntimeRetry } from './lib/bun-compile-retry.mjs'
 
 if (typeof Bun === 'undefined') {
   console.error('build-binary: run this with bun (bun scripts/build-binary.mjs)')
@@ -385,7 +386,7 @@ async function compile(target, outfile, options, stage) {
   const dir = fs.mkdtempSync(path.join(stage, 'compile-'))
   try {
     const tmp = path.join(dir, 'walnut')
-    const result = await Bun.build({
+    const result = await buildWithRuntimeRetry(() => Bun.build({
       ...options,
       // Bytecode for each module's top-level code, so a start no longer parses the
       // whole ~19 MB bundle (`walnut --version` on Linux x64: ~720 ms before, ~75 ms
@@ -407,7 +408,7 @@ async function compile(target, outfile, options, stage) {
         // Components (onnxruntime-node, sharp) resolve their own bare imports from disk.
         autoloadPackageJson: true,
       },
-    })
+    }))
     if (!result.success) throw new Error(`compile ${target} failed:\n${result.logs.map(String).join('\n')}`)
     fs.renameSync(tmp, outfile)
   } finally {
@@ -422,7 +423,7 @@ async function runtimeSize(target, stage) {
   const entry = path.join(stage, 'hello.js')
   fs.writeFileSync(entry, 'console.log(1)\n')
   const out = path.join(stage, `hello-${target}`)
-  const r = await Bun.build({ entrypoints: [entry], compile: { target: TARGETS[target], outfile: out }, throw: false })
+  const r = await buildWithRuntimeRetry(() => Bun.build({ entrypoints: [entry], compile: { target: TARGETS[target], outfile: out }, throw: false }))
   if (!r.success) return NaN
   const size = fs.statSync(out).size
   fs.rmSync(out, { force: true })
