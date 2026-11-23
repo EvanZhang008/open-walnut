@@ -329,6 +329,7 @@ export const EXPERIMENTAL_FEATURES = [
   {
     id: 'local_chinese_voice',
     name: 'Local Chinese voice',
+    summary: 'Voice mode reads Chinese answers in a local Mandarin voice on this Mac (Apple Silicon, about 2.5 GB once).',
     description: 'Voice mode reads Chinese answers with Qwen3-TTS on this Mac, a male standard Mandarin voice by default (tts.qwen_voice in the config names another speaker). Needs a Mac with Apple Silicon: the first time it is on, Walnut sets up the voice model in the background (about 2.5 GB to download), and until it is ready Chinese is read the way it is today. English keeps its voice. Off: every answer is read as before.',
     default: false,
   },
