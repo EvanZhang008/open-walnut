@@ -5,9 +5,10 @@
  * `record.number` for the channel (tests/core/session-channel/leader-permit.test.ts).
  *
  * Today: the running permit's record number, 0 while the permit system is off. The switch's
- * modules load only behind the experiment switchable_leader
- * (tests/core/leader/switch/flag-off-imports.test.ts), so this file imports none of them: the
- * leader side (leader-boot.ts) hands it the switch's own reader, from its dynamic import. The
+ * modules load only when the permit really runs
+ * (tests/core/leader/switch/flag-off-imports.test.ts, the rehearsal's no-witness check), so neither
+ * this file nor the leader side (leader-boot.ts) imports any of them: the server hands this file the
+ * switch's own reader once the permit booted (web/server.ts, beside leaderPermitAtBoot). The
  * leader switch will make this the last number this machine persisted when the system is off, so
  * a host that saw (n, e) never sees (0, e') from the same leader.
  */
@@ -20,6 +21,11 @@ export function setLeaderPermitReader(fn: typeof currentLeaderPermit | null): vo
   read = fn
 }
 
+/** The running permit, or null while none runs (the system off, or no witnesses set). */
+export function runningLeaderPermit(): ReturnType<typeof currentLeaderPermit> {
+  return read?.() ?? null
+}
+
 export function leaderPermitNumberForHosts(): number {
-  return read?.()?.runtime.status().record?.number ?? 0
+  return runningLeaderPermit()?.runtime.status().record?.number ?? 0
 }

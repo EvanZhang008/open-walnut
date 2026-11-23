@@ -38,4 +38,17 @@ describe('leaderPermitNumberForHosts', () => {
       .filter((f) => /\brecord\??\.number\b/.test(fs.readFileSync(path.join(DIR, f), 'utf8')))
     expect(readers).toEqual([])
   })
+
+  it('no file of the session channel imports the leader switch, so a leader with no permit running loads none of it', () => {
+    // The switch rehearsal's no-witness check (scripts/leader-switch/rehearsal.ts rehearseNoWitnesses):
+    // with switchable_leader on and no witnesses, booting the leader loads no switch module. The
+    // permit reader comes from web/server.ts once a permit booted.
+    // doors.ts is the one switch module every leader loads (its outward-door gate), as before.
+    const spec = /(?:from\s+|import\()\s*['"]([^'"]*leader\/switch\/[^'"]+)['"]/g
+    const importers = fs.readdirSync(DIR).filter((f) => f.endsWith('.ts')).flatMap((f) => {
+      const text = fs.readFileSync(path.join(DIR, f), 'utf8').replace(/^\s*import type .*$/gm, '')
+      return [...text.matchAll(spec)].map((m) => m[1]).filter((m) => !m.endsWith('/doors.js')).map((m) => `${f}: ${m}`)
+    })
+    expect(importers).toEqual([])
+  })
 })

@@ -1529,12 +1529,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const switchTrial = process.env.WALNUT_LEADER_TRIAL === '1'
       const switchStart = switchTrial || !!process.env.WALNUT_LEADER_SWITCH_COMMIT
       if ((flagOn && witnessesSet) || switchMarked || switchStart) {
-        const { leaderPermitAtBoot, LeaderBootRefused } = await import('../core/leader/switch/boot.js')
+        const { leaderPermitAtBoot, LeaderBootRefused, currentLeaderPermit } = await import('../core/leader/switch/boot.js')
         try {
           leaderPermitHandle = await leaderPermitAtBoot({
             home: WALNUT_HOME, flagOn, isLeaderRole: role() === 'leader', ephemeral: IS_EPHEMERAL, trial: switchTrial,
             log: (level, msg, data) => log.web[level](msg, data),
           })
+          // The session channel reads the permit's record number through this reader only; with no
+          // permit booted it reads 0 and loads none of the switch's modules (leader-permit.ts).
+          ;(await import('../core/session-channel/leader-permit.js')).setLeaderPermitReader(currentLeaderPermit)
         } catch (err) {
           // Another machine leads (the witnesses say so): this one stays up as a standby that
           // leads nothing and answers who does, instead of exiting into its launcher's restart loop.

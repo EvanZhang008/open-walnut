@@ -8,37 +8,15 @@
  * are readable names, not the 32-hex form the stable id has); nothing in production sets it.
  */
 import { createHash } from 'node:crypto'
-import fs from 'node:fs'
 import path from 'node:path'
-import { machineIdFile as stableMachineIdFile, readMachineIdSync } from '../../machine-id.js'
-
-const ID_RE = /^[A-Za-z0-9._:-]{1,128}$/
+import { machineIdFile as stableMachineIdFile } from '../../machine-id.js'
 
 export function machineIdFile(env: NodeJS.ProcessEnv = process.env): string {
   return env.WALNUT_MACHINE_ID_FILE || stableMachineIdFile()
 }
 
-/**
- * This machine's id, or null when it cannot be had: the named file missing or not holding one,
- * or the stable id neither readable nor makeable. Sync: read at boot (the stable id is read from
- * disk once per process, made once per machine).
- */
-export function permitHolderId(env: NodeJS.ProcessEnv = process.env): string | null {
-  if (env.WALNUT_MACHINE_ID_FILE) {
-    let text: string
-    try {
-      text = fs.readFileSync(env.WALNUT_MACHINE_ID_FILE, 'utf8').trim()
-    } catch {
-      return null
-    }
-    return ID_RE.test(text) ? text : null
-  }
-  try {
-    return readMachineIdSync()
-  } catch {
-    return null
-  }
-}
+/** Where it lives: src/core/machine-id.ts, so a reader outside the switch (the session channel's leader side) loads none of this file. */
+export { permitHolderId } from '../../machine-id.js'
 
 /**
  * Where this machine keeps the records of the witnesses it serves for other machines' write

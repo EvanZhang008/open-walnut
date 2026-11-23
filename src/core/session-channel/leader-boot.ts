@@ -16,7 +16,7 @@ import { reemitDestinations } from './event-classes.js'
 import { forgetHostJudged, judgingHostOf, noteHostJudged, setHostJudgeProbe } from '../sessions/judge-of.js'
 import { leaderDropHosts, leaderDropsOf } from './leader-drops.js'
 import type { PermitPair } from './channel.js'
-import { leaderPermitNumberForHosts, setLeaderPermitReader } from './leader-permit.js'
+import { leaderPermitNumberForHosts, runningLeaderPermit } from './leader-permit.js'
 
 let active: LeaderSide | null = null
 let standing: ((hostKey: string) => LeaderStanding) | null = null
@@ -76,21 +76,19 @@ export function sayHostFact(name: string, data: unknown, opts: { late: boolean; 
 
 export async function startLeaderSessionChannels(): Promise<() => void> {
   if (active) return () => {}
-  const [{ applyHostChannelBatch, loadChannelCursor }, hostServer, { hostLeaderStates }, { getInstanceId }, remote, { saidHereAlready, hostStartsInFlight, noteHostStartBorn }, { currentLeaderPermit }, { permitHolderId }, { cleanDoorUrls }] = await Promise.all([
+  const [{ applyHostChannelBatch, loadChannelCursor }, hostServer, { hostLeaderStates }, { getInstanceId }, remote, { saidHereAlready, hostStartsInFlight, noteHostStartBorn }, { permitHolderId }, { cleanDoorUrls }] = await Promise.all([
     import('../session-tracker.js'),
     import('../host-server/index.js'),
     import('../leader/primary-leader.js'),
     import('../device-auth.js'),
     import('../../providers/remote-judged-session.js'),
     import('../../providers/host-judged-runner.js'),
-    import('../leader/switch/boot.js'),
-    import('../leader/switch/machine-id.js'),
+    import('../machine-id.js'),
     import('./door-wire.js'),
   ])
   const ownMachine = permitHolderId() ?? ''
-  setLeaderPermitReader(currentLeaderPermit)
   const standingNow = (hostKey: string): LeaderStanding => {
-    const permit = currentLeaderPermit()
+    const permit = runningLeaderPermit()
     return {
       pair: { permitNumber: leaderPermitNumberForHosts(), epoch: hostLeaderStates()[hostKey]?.epoch ?? 0 },
       holder: permit?.runtime.status().record?.holder ?? permit?.machine ?? ownMachine,
@@ -249,6 +247,6 @@ export async function startLeaderSessionChannels(): Promise<() => void> {
     side.stop()
     setHostJudgeProbe(null)
     remote.setRemoteJudgedCaller(null)
-    if (active === side) { active = null; standing = null; pushDoors = null; setLeaderPermitReader(null) }
+    if (active === side) { active = null; standing = null; pushDoors = null }
   }
 }

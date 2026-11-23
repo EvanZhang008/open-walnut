@@ -88,3 +88,27 @@ export function setMachineIdHomeForTest(home: string | null): void {
   homeForTest = home
   known.clear()
 }
+
+const HOLDER_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/
+
+/**
+ * This machine's id, or null when it cannot be had: the named file missing or not holding one,
+ * or the stable id neither readable nor makeable. Sync: read at boot (the stable id is read from
+ * disk once per process, made once per machine).
+ */
+export function permitHolderId(env: NodeJS.ProcessEnv = process.env): string | null {
+  if (env.WALNUT_MACHINE_ID_FILE) {
+    let text: string
+    try {
+      text = fs.readFileSync(env.WALNUT_MACHINE_ID_FILE, 'utf8').trim()
+    } catch {
+      return null
+    }
+    return HOLDER_ID_RE.test(text) ? text : null
+  }
+  try {
+    return readMachineIdSync()
+  } catch {
+    return null
+  }
+}
