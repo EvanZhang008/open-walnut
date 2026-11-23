@@ -265,7 +265,7 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork, fallbackL
     // name, never as a provider id like "global.anthropic.claude-..." (N10).
     ? nameOfModel(meta.model!)
     : defaultModel ? `Default (${nameOfModel(defaultModel)})`
-    : autoResolved ? `${autoWord} (${autoResolved})` : autoWord;
+    : autoResolved ? `${autoWord} (${autoResolved})` : autoWord === 'Auto' ? 'Auto model' : autoWord; // a bare "Auto" read as any setting
   // What the effort picker's Default row starts at: the project's, else Walnut's, else Claude Code's own.
   const effortDefault = projectEffort
     ? { level: effortLabel(projectEffort), title: 'No level picked here: the project\'s default effort applies (its settings)' }

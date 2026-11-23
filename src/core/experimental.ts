@@ -216,6 +216,7 @@ export const EXPERIMENTAL_FEATURES = [
     id: 'threads_kept_by_walnut',
     name: 'Walnut keeps your Threads',
     description: 'Main, every VP and lead, and every task with Threads answer you in the chat first and stop writing a thread on each of your messages. At the end of each turn Walnut already asks the agent where its work stands; with this on, the same question asks where each open thread stands, and Walnut writes the answer as the thread\'s state, summary and title, and marks an answer known only when the agent says you reacted to it. The agent writes a thread itself only for a decision you must make, a close you asked for, or a merge, split or move.',
+    summary: 'Agents answer you in the chat; Walnut writes each thread\'s state and summary from the agent\'s end-of-turn answer.',
     default: false,
   },
   {
@@ -257,6 +258,7 @@ export const EXPERIMENTAL_FEATURES = [
     id: 'host_runs_sessions',
     name: 'Each computer runs its own sessions',
     description: 'A new session on another computer is run and watched by Walnut\'s service on that computer, which sends this Walnut what happened in it, so the session keeps going and keeps being watched while this Walnut is away. Only computers whose Walnut is new enough take it; others run their sessions as before. Sessions started before you turn this off keep reporting. "Every experiment on" does not turn this on: it changes which machine runs your sessions, so it keeps its own switch.',
+    summary: 'A new session on another computer is run by that computer\'s Walnut, so it keeps going while this one is away.',
     default: false,
     ownSwitchOnly: true,
   },
@@ -321,6 +323,7 @@ export const EXPERIMENTAL_FEATURES = [
     id: 'stt_compare',
     name: 'Voice Accuracy',
     description: 'Settings › Diagnostics › Voice Accuracy hears your recent voice takes again with other speech-to-text engines and shows how often each one gets your words wrong, against a reference an AI judge writes from all their texts. Engines that run on this computer start right away; an engine or the judge that sends audio or text to a cloud service runs only after you tick its consent. Off: nothing is run or uploaded and nothing new is kept; to remove what it kept, use Delete comparison data in its pane before turning it off.',
+    summary: 'Replays your recent voice takes through other speech engines and shows how often each gets your words wrong.',
     default: false,
   },
   {
