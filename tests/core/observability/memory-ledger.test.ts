@@ -10,7 +10,7 @@ import {
   registerMemoryHolder, readMemoryHolders, memoryReport, sampleMemory, stringCharsOf,
   memoryHolderNames, SAMPLE_EVERY_MS, sampledStringChars, nudgeGcUnderPressure, GC_NUDGE_RSS_MB, GC_NUDGE_EVERY_MS, GC_NUDGE_RISE_MB, _resetMemoryLedgerForTesting,
   writeHeapSnapshot, SNAPSHOT_EVERY_MS,
-  watchMemoryBurst, BURST_HEAP_WALK_MB, registerBurstContext, BURST_RISE_MB, BURST_WINDOW_MS, BURST_EVERY_MS,
+  watchMemoryBurst, startMemoryBurstProbe, BURST_PROBE_EVERY_MS, BURST_HEAP_WALK_MB, registerBurstContext, BURST_RISE_MB, BURST_WINDOW_MS, BURST_EVERY_MS,
 } from '../../../src/core/observability/memory-ledger.js';
 import { log } from '../../../src/logging/index.js';
 
@@ -183,6 +183,43 @@ describe('watchMemoryBurst', () => {
       expect(await watchMemoryBurst(1, 1000 + BURST_RISE_MB)).toBe(true);
       expect(warn.mock.calls.find((c) => c[0] === 'memory burst')?.[1]).toMatchObject({ context: { broken: 'unreadable: mid-reset' } });
     } finally { off(); warn.mockRestore(); }
+  });
+});
+
+describe('startMemoryBurstProbe', () => {
+  // 2026-11-23 17:09: the footprint went 0.9 to 5.8 GB and back within 30 s; the 30 s health
+  // tick logged 3.2 GB after the peak. The probe must log the climb while it happens.
+  it('logs a jump within one probe interval of it, between health ticks', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(log.obs, 'warn').mockImplementation(() => {});
+    let rss = 900;
+    const stop = startMemoryBurstProbe(BURST_PROBE_EVERY_MS, () => rss);
+    try {
+      await vi.advanceTimersByTimeAsync(BURST_PROBE_EVERY_MS * 3);
+      expect(warn.mock.calls.some((c) => c[0] === 'memory burst')).toBe(false);
+      rss = 900 + BURST_RISE_MB + 100;
+      await vi.advanceTimersByTimeAsync(BURST_PROBE_EVERY_MS);
+      const line = warn.mock.calls.find((c) => c[0] === 'memory burst');
+      expect(line?.[1]).toMatchObject({ lowMb: 900, riseMb: BURST_RISE_MB + 100 });
+    } finally { stop(); warn.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it('stops when asked and stays off with WALNUT_MEMORY_PROBE=0', async () => {
+    vi.useFakeTimers();
+    const read = vi.fn(() => 900);
+    try {
+      const stop = startMemoryBurstProbe(BURST_PROBE_EVERY_MS, read);
+      await vi.advanceTimersByTimeAsync(BURST_PROBE_EVERY_MS * 2);
+      const n = read.mock.calls.length;
+      expect(n).toBeGreaterThan(0);
+      stop();
+      await vi.advanceTimersByTimeAsync(BURST_PROBE_EVERY_MS * 5);
+      expect(read.mock.calls.length).toBe(n);
+      vi.stubEnv('WALNUT_MEMORY_PROBE', '0');
+      startMemoryBurstProbe(BURST_PROBE_EVERY_MS, read)();
+      await vi.advanceTimersByTimeAsync(BURST_PROBE_EVERY_MS * 5);
+      expect(read.mock.calls.length).toBe(n);
+    } finally { vi.unstubAllEnvs(); vi.useRealTimers(); }
   });
 });
 

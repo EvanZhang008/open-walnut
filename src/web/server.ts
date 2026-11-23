@@ -682,6 +682,7 @@ function releaseSelfApiRoot(): void {
 let routineWakeHandle: import('../core/routines/wake-events.js').RoutineWakeHandle | null = null
 let healthMonitor: SessionHealthMonitor | null = null
 let changesPrewarmer: import('../core/session-changes-prewarm.js').SessionChangesPrewarmer | null = null
+let stopMemoryBurstProbe: (() => void) | null = null
 let historyReadyRefresher: import('../core/history-ready-refresh.js').HistoryReadyRefresher | null = null
 let stopSessionGitStatus: (() => void) | null = null
 let stopMissingWalnutTool: (() => void) | null = null
@@ -4907,12 +4908,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     startupPhase('health monitor started')
 
     // -- Start session-changes pre-warmer --
-    // Computes every recent session's Changed-tab data in the background
-    // (startup sweep + after each turn + periodic), strictly one at a time and
-    // paced, so the first tab open never pays the 40-80s whale parse itself.
+    // Keeps the Changed-tab data of the sessions someone opened warm in the
+    // background (after each turn + periodic), strictly one at a time and paced.
     const { SessionChangesPrewarmer } = await import('../core/session-changes-prewarm.js')
     changesPrewarmer = new SessionChangesPrewarmer()
     changesPrewarmer.start()
+
+    // -- Catch a memory jump while it happens (memory-ledger.ts, startMemoryBurstProbe) --
+    const { startMemoryBurstProbe } = await import('../core/observability/memory-ledger.js')
+    stopMemoryBurstProbe = startMemoryBurstProbe()
 
     // -- Keep each session's first-paint view current (history-ready-refresh.ts) --
     // After every turn and when a host comes back, the session's daemon is asked for its ready
@@ -7942,6 +7946,8 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
     historyReadyRefresher.stop()
     historyReadyRefresher = null
   }
+  stopMemoryBurstProbe?.()
+  stopMemoryBurstProbe = null
   if (changesPrewarmer) {
     changesPrewarmer.stop()
     changesPrewarmer = null

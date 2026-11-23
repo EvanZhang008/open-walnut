@@ -331,6 +331,31 @@ export async function watchMemoryBurst(now = Date.now(), rssMb = processMemoryMb
   return true;
 }
 
+// The health tick runs every 30 s (longer when idle), so it saw the jump after its peak:
+// 2026-11-23 17:09 the Mac's footprint went 0.9 to 5.8 GB and back to 3.8 GB in 30 s, and the
+// tick's line read 3.2 GB with nothing left in flight. A probe reads RSS every
+// BURST_PROBE_EVERY_MS (one cheap call) and runs the same check, so a rise is caught within
+// seconds of crossing BURST_RISE_MB, with what was in flight then. WALNUT_MEMORY_PROBE=0 turns it off.
+export const BURST_PROBE_EVERY_MS = 2_000;
+
+function rssOnlyMb(): number {
+  const rss = (process.memoryUsage as unknown as { rss?: () => number }).rss;
+  return mb(typeof rss === 'function' ? rss() : process.memoryUsage().rss)!;
+}
+
+/** Start the fast burst probe; returns its stop. */
+export function startMemoryBurstProbe(everyMs = BURST_PROBE_EVERY_MS, readRssMb: () => number = rssOnlyMb): () => void {
+  if (process.env.WALNUT_MEMORY_PROBE === '0') return () => {};
+  let busy = false;
+  const timer = setInterval(() => {
+    if (busy) return;
+    busy = true;
+    void watchMemoryBurst(Date.now(), readRssMb()).catch(() => false).finally(() => { busy = false; });
+  }, everyMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
 // ── A heap snapshot on request ───────────────────────────────────────────
 //
 // The ledger names what each registered cache holds; a heap snapshot names everything
