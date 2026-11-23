@@ -6,13 +6,19 @@
  * another turn.
  *
  * Real: web/src/api/projects.ts and its client. Fake: fetch, the model module
- * (only the server's constant is read).
+ * (only the server's constant is read); the page's deadlines are recorded.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-regenerate-timeout'))
 vi.mock('../../src/model/model.js', () => ({ sendMessage: vi.fn() }))
+/** Every page deadline goes through deadline-signal.ts: record the ones set. */
+const deadlines = vi.hoisted(() => ({ set: [] as number[] }))
+vi.mock('../../web/src/utils/deadline-signal', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../web/src/utils/deadline-signal')>()
+  return { deadlineSignal: (ms: number) => { deadlines.set.push(ms); return real.deadlineSignal(ms) } }
+})
 
 import { REGENERATE_SUMMARY_TIMEOUT_MS, regenerateProjectSummary } from '../../web/src/api/projects'
 import { SUMMARY_REGENERATE_DEADLINE_MS } from '../../src/core/project-summary.js'
@@ -25,7 +31,7 @@ afterEach(() => {
 describe('regenerateProjectSummary (web client)', () => {
   it('waits longer than the server works on one regenerate', async () => {
     expect(REGENERATE_SUMMARY_TIMEOUT_MS).toBeGreaterThan(SUMMARY_REGENERATE_DEADLINE_MS)
-    const timeouts = vi.spyOn(AbortSignal, 'timeout')
+    deadlines.set = []
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ summary: 'Marina work.', summary_task_count: 1 }), {
       status: 200, headers: { 'Content-Type': 'application/json' },
     }))
@@ -33,6 +39,6 @@ describe('regenerateProjectSummary (web client)', () => {
     expect(await regenerateProjectSummary('marina')).toEqual({ summary: 'Marina work.', summary_task_count: 1 })
     expect(fetchMock).toHaveBeenCalledOnce()
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe('/api/projects/marina/summary/regenerate')
-    expect(timeouts.mock.calls.map(([ms]) => ms)).toEqual([REGENERATE_SUMMARY_TIMEOUT_MS])
+    expect(deadlines.set).toEqual([REGENERATE_SUMMARY_TIMEOUT_MS])
   })
 })
