@@ -77,23 +77,38 @@ describe('provisionWith', () => {
 describe('leaveServiceSet', () => {
   const base = (said: string, inTurn = false) => {
     const sent: string[] = []
+    const params_: Array<Record<string, unknown>> = []
     let now = 0
     return {
-      sent,
+      sent, params: params_,
       deps: {
         set: SET, ask, now: () => now, sleep: async (ms: number) => { now += ms },
         sessions: async () => [{ inTurn }],
-        send: async (cmd: string) => { sent.push(cmd); return {} },
+        send: async (cmd: string, params: Record<string, unknown>) => { sent.push(cmd); params_.push(params); return {} },
         runSetCli: async (words: string) => { sent.push(words); return said },
         waitMs: 60_000,
       },
     }
   }
 
-  it('revokes its own net members, then uninstalls only its set', async () => {
+  it('drill D4: stops its follower there and revokes its own net members, then uninstalls only its set', async () => {
     const b = base(`service set: ${SET}\n{"ok":true}`)
     expect(await leaveServiceSet(b.deps)).toMatchObject({ ok: true })
-    expect(b.sent).toEqual(['net.configure', `uninstall --yes --walnut ${WALNUT} --walnut-home /home/u/.open-walnut`])
+    expect(b.sent).toEqual(['server.configure', 'net.configure', `uninstall --yes --walnut ${WALNUT} --walnut-home /home/u/.open-walnut`])
+    expect(b.params[0]).toEqual({ home: '/home/u/.open-walnut', spec: null })
+  })
+
+  it('drill D4: a follower stop that fails does not hold the uninstall (best effort)', async () => {
+    const b = base(`service set: ${SET}\n{"ok":true}`)
+    const send = b.deps.send
+    b.deps.send = async (cmd: string, params: Record<string, unknown>) => { if (cmd === 'server.configure') { b.sent.push(cmd); throw new Error('timed out') } return send(cmd, params) }
+    expect(await leaveServiceSet(b.deps)).toMatchObject({ ok: true })
+    expect(b.sent).toEqual(['server.configure', 'net.configure', `uninstall --yes --walnut ${WALNUT} --walnut-home /home/u/.open-walnut`])
+  })
+
+  it('drill D5: an uninstall that kept the set\'s dir says why', async () => {
+    const b = base(`service set: ${SET}\n{"ok":true,"setDir":{"removed":false,"why":"1 CLI of the set still runs (s1)"}}`)
+    expect(await leaveServiceSet(b.deps)).toEqual({ ok: true, why: 'this Walnut\'s own service set was removed from the host; its dir stays (1 CLI of the set still runs (s1))' })
   })
 
   it('waits for a turn, bounded, and removes nothing at the bound', async () => {
@@ -183,6 +198,40 @@ describe('ServiceSetLink', () => {
     expect(await t.link.sshDir()).toEqual({ dir: rt, set: SET })
     expect(t.link.standing).toBe('own')
     expect(t.held()).toBe(false)
+  })
+
+  it('B6 guard: after the move this Walnut\'s triggers and plugin jobs are on its set\'s daemon only, never also on the shared one', async () => {
+    const rt = `/home/u/.open-walnut-host/walnuts/${SET}/rt`
+    const t = conn('ssh', { set: SET, installed: true, ok: true, runtimeDir: rt })
+    // Two fake daemons, each keeping what a home configured there: the shared one already holds ours.
+    type Held = { triggers: string[]; jobs: string[] }
+    const daemons: Record<string, Map<string, Held>> = {
+      shared: new Map([['/home/u/.open-walnut', { triggers: ['t1'], jobs: ['j1'] }], ['/home/other/.open-walnut', { triggers: ['o1'], jobs: ['oj'] }]]),
+      set: new Map(),
+    }
+    const c = (t.link as unknown as { c: SetLinkConn }).c
+    const at = () => (c.helloSet() === SET ? daemons.set : daemons.shared)
+    const send = c.send
+    c.hasCapability = (cap) => cap === 'host-server-v1' || cap === 'plugin-jobs-v1'
+    c.send = async (cmd, params) => {
+      const home = String(params.home ?? '')
+      const held = at().get(home) ?? { triggers: [], jobs: [] }
+      if (cmd === 'triggers.configure') at().set(home, { ...held, triggers: ((params.config as { triggers: Array<{ id: string }> }).triggers).map((x) => x.id) })
+      if (cmd === 'jobs.configure') at().set(home, { ...held, jobs: ((params.spec as { jobs: Array<{ id: string }> }).jobs).map((x) => x.id) })
+      return send(cmd, params)
+    }
+    await t.link.check()
+    expect(await serviceSetMoves.read('ssh:h')).toMatchObject({ phase: 'done' })
+    // The connect hooks push this Walnut's own triggers and jobs on the new link, to its set's daemon.
+    await c.send('triggers.configure', { config: { version: 1, triggers: [{ id: 't1' }] }, home: '/home/u/.open-walnut' })
+    await c.send('jobs.configure', { home: '/home/u/.open-walnut', spec: { v: 1, jobs: [{ id: 'j1' }] } })
+    const holders = (id: string, kind: keyof Held) => Object.entries(daemons).filter(([, m]) => [...m.values()].some((h) => h[kind].includes(id))).map(([n]) => n)
+    expect(holders('t1', 'triggers')).toEqual(['set'])
+    expect(holders('j1', 'jobs')).toEqual(['set'])
+    // The other Walnut's on the shared daemon are left as they were.
+    expect(daemons.shared.get('/home/other/.open-walnut')).toEqual({ triggers: ['o1'], jobs: ['oj'] })
+    // The drop went before the flip (relink), so no fire was due on both daemons at once.
+    expect(t.calls.indexOf('jobs.configure')).toBeLessThan(t.calls.indexOf('relink'))
   })
 
   it('net: the flip runs net-route with this leader\'s endpoint and a put-back, then confirms', async () => {
