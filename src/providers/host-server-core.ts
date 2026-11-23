@@ -208,7 +208,11 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
   }
 
   // ── A server's data dir as its Walnut's (walnutOf) ──
-  /** Real path of `p` (resolved; its real path when it exists), remembered until the specs change. */
+  /**
+   * Real path of `p` (resolved; its real path when it exists). Only a real path is remembered
+   * (until the specs change): a dir that does not exist yet is looked up again, so once it is
+   * made, a start naming it through a link (`/home` vs `/local/home`) still matches.
+   */
   const realMemo = new Map<string, string>()
   function same(p: string): string {
     const hit = realMemo.get(p)
@@ -216,9 +220,10 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
     const abs = path.resolve(p)
     let real: string | null = null
     try { real = deps.realpath ? deps.realpath(abs) : null } catch { real = null }
+    if (real === null) return abs
     if (realMemo.size >= 1000) realMemo.clear()
-    realMemo.set(p, real ?? abs)
-    return real ?? abs
+    realMemo.set(p, real)
+    return real
   }
   function dataDirsOf(spec: HostServerSpec): string[] {
     const out: string[] = []
@@ -228,11 +233,21 @@ export function createHostServerSupervisor(deps: HostServerDeps) {
     }
     return out
   }
-  /** The layout a leader writes for its server (install.ts walnutDirs): `<host root>/walnuts/<walnut id, 16>/<leaf>`. */
+  /**
+   * The layouts a leader writes for its server (install.ts walnutDirs): its own
+   * `<host root>/walnuts/<walnut id, 16>/<leaf>`, or the shared `<host root>/data` from before
+   * the split, kept by a Walnut that ran there when its `.walnut-id` mark names that Walnut's
+   * whole id (manager.ts, install.ts legacyDataOwnerScript: the mark is compared as `$(cat)`
+   * reads it, so only trailing newlines are dropped).
+   */
   function shaped(dir: string, walnutId: string): boolean {
     const r = path.resolve(dir)
     const up = path.dirname(r)
-    return path.basename(up) === walnutId.slice(0, 16) && path.basename(path.dirname(up)) === 'walnuts'
+    if (path.basename(up) === walnutId.slice(0, 16) && path.basename(path.dirname(up)) === 'walnuts') return true
+    if (path.basename(r) !== 'data' || !walnutId) return false
+    let mark: string
+    try { mark = String(deps.fs.readFileSync(path.join(r, '.walnut-id'), 'utf8')) } catch { return false }
+    return mark.replace(/\n+$/, '') === walnutId
   }
   /**
    * Why `dir` cannot be the data dir of the server `key` runs, or null: a Walnut's own home

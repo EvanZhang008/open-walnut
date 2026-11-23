@@ -322,6 +322,48 @@ describe('host server supervision', () => {
     expect(warned).toContain('host server: its data dir is not taken as its Walnut\'s')
   })
 
+  it('the shared data dir from before the split names the Walnut its .walnut-id mark names in full, and no other', () => {
+    const W = 'w1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    const legacy = path.join(dir, 'host-root', 'data')
+    fs.mkdirSync(legacy, { recursive: true })
+    const sup = createHostServerSupervisor({ ...deps(), realpath: (p) => { try { return fs.realpathSync(p) } catch { return null } } })
+    sup.configure('/h', spec({ home: '/h', walnutId: W, env: { OPEN_WALNUT_HOME: legacy } }))
+    expect(sup.walnutOf(legacy), 'no mark yet').toBeUndefined()
+    // As legacyDataOwnerScript writes it (printf, no newline) and as a hand edit may leave it (one newline).
+    for (const mark of [W, W + '\n']) {
+      fs.writeFileSync(path.join(legacy, '.walnut-id'), mark)
+      expect(sup.walnutOf(legacy), JSON.stringify(mark)).toBe('/h')
+    }
+    // Another Walnut's mark, the 16-char dir key only, or padding: not this Walnut's.
+    for (const mark of ['w2bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', W.slice(0, 16), ` ${W}`, `${W} `]) {
+      fs.writeFileSync(path.join(legacy, '.walnut-id'), mark)
+      expect(sup.walnutOf(legacy), JSON.stringify(mark)).toBeUndefined()
+    }
+    // The mark in a dir that is not the shared one's leaf (`data`): not that layout.
+    const other = path.join(dir, 'host-root', 'store')
+    fs.mkdirSync(other, { recursive: true })
+    fs.writeFileSync(path.join(other, '.walnut-id'), W)
+    sup.configure('/h5', spec({ home: '/h5', walnutId: W, env: { OPEN_WALNUT_HOME: other } }))
+    expect(sup.walnutOf(other)).toBeUndefined()
+    // The conflict checks still hold for it: a dir that is a Walnut's own home is refused, marked or not.
+    fs.writeFileSync(path.join(legacy, '.walnut-id'), W)
+    const guarded = createHostServerSupervisor({ ...deps(), walnutHomes: () => [legacy] })
+    expect(() => guarded.configure('/h', spec({ home: '/h', walnutId: W, env: { OPEN_WALNUT_HOME: legacy } }))).toThrow(/is a Walnut's own home/)
+  })
+
+  it('a data dir looked up before it exists still matches through a link once it is made', () => {
+    const real = path.join(dir, 'real')
+    fs.mkdirSync(real)
+    fs.symlinkSync(real, path.join(dir, 'link'))
+    const data = path.join(real, 'walnuts', 'w1', 'data')
+    const viaLink = path.join(dir, 'link', 'walnuts', 'w1', 'data')
+    const sup = createHostServerSupervisor({ ...deps(), realpath: (p) => { try { return fs.realpathSync(p) } catch { return null } } })
+    sup.configure('/h', spec({ home: '/h', walnutId: 'w1', env: { OPEN_WALNUT_HOME: data } }))
+    expect(sup.walnutOf(viaLink), 'not made yet: the link names another path').toBeUndefined()
+    fs.mkdirSync(data, { recursive: true })
+    expect(sup.walnutOf(viaLink)).toBe('/h')
+  })
+
   it('the service\'s own data dir names the Walnut it follows', () => {
     const own = path.join(dir, 'walnuts', 'self', 'data')
     const sup = createHostServerSupervisor({ ...deps(), self: { home: '/leader', pid: process.pid, dataHome: own, changed: () => {} } })

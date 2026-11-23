@@ -5119,27 +5119,32 @@ function sessionHomeOf(sid) {
   // The Walnut, by its first home here: a session its server started from a later home is the same Walnut's.
   var s = sessions.get(sid);
   if (s && s.spawnInfo && s.spawnInfo.walnut) return walnutScope.canonical(s.spawnInfo.walnut);
+  // A respawn from the journal's first home: the journal's Walnut for that home (rationale in the twin).
+  journaledIds();
+  var firstWalnut = journaledWalnuts.get(sid);
+  if (s && s.spawnInfo && s.spawnInfo.home && firstWalnut && s.spawnInfo.home === journaledHomes.get(sid)) return walnutScope.canonical(firstWalnut);
   if (s && s.spawnInfo && s.spawnInfo.home) return walnutOfHome(s.spawnInfo.home);
   var rec = journaledHome(sid) ? null : hostResume.recall(sid);
   return walnutOfHome(journaledHome(sid) || (rec && rec.home) || offlineHost.ownerOf(sid) || '');
 }
-// The home a session's start named, by its first home only (no server data dir mapping): the
-// companion bridge's gate. Twin of daemon-standalone.ts sessionStartHomeOf (rationale there).
+// The home the session's latest spawn here named (no server data dir mapping): the companion
+// bridge's gate. Twin of daemon-standalone.ts sessionStartHomeOf (rationale there).
 function sessionStartHomeOf(sid) {
+  return walnutScope.canonical(lastSpawnHomeOf(sid) || offlineHost.ownerOf(sid) || '');
+}
+// The home of the latest spawn of sid here: live, else the resume record, else the journal's first line.
+function lastSpawnHomeOf(sid) {
   journaledIds();
   var s = sessions.get(sid);
-  if (s && s.spawnInfo && s.spawnInfo.home) return walnutScope.canonical(s.spawnInfo.home);
-  var raw = journaledHomes.get(sid);
-  var rec = raw ? null : hostResume.recall(sid);
-  return walnutScope.canonical(raw || (rec && rec.home) || offlineHost.ownerOf(sid) || '');
+  if (s && s.spawnInfo && s.spawnInfo.home) return s.spawnInfo.home;
+  var rec = hostResume.recall(sid);
+  return (rec && rec.home) || journaledHomes.get(sid);
 }
 // A stop asked from a server's own data dir reaches only a session that server spawned last here.
 // Twin of daemon-standalone.ts servedStopRefusal (rationale there).
 function servedStopRefusal(sid, home) {
   if (!servedWalnutOf(home)) return null;
-  var s = sessions.get(sid);
-  var rec = hostResume.recall(sid);
-  var last = (s && s.spawnInfo && s.spawnInfo.home) || (rec && rec.home);
+  var last = lastSpawnHomeOf(sid);
   return last && walnutScope.canonical(last) === walnutScope.canonical(home) ? null : { reason: 'not_owned', detail: 'not_this_server' };
 }
 function spawnRecordOf(sid) {

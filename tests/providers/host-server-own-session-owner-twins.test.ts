@@ -18,10 +18,15 @@
  *            still stops it as its own
  *   bridge   A's companion bridge never operates such a session directly (send, attach, history,
  *            status, resume, prompt answer): the host's server and its leader's channel do
+ *   taken    a session the Mac started and the host took over by a resume spawn from D stays fenced
+ *            from A's bridge after the daemon restarts (the journal keeps the Mac's first home)
  *   replica  a stop asked from D (the host's replica) of a session the Mac started and runs is
- *            refused: the replica stops only what its server spawned last here
+ *            refused: the replica stops only what its server spawned last here, by its resume record
+ *            or, when that record is gone, by the journal's home
  *   control  a session of another home stays not_found to A's follower
  *   refused  a spec whose data dir is a Walnut's own home is refused at configure
+ *   layouts  D as the leader writes it now (<root>/walnuts/<id>/data) and the shared <root>/data from
+ *            before the split, which a Walnut keeps when its .walnut-id mark names it
  *
  * Hygiene: every dir is a temp dir; the daemons, the placeholder server, the fake companion and
  * the mock CLIs are ours and are stopped by pid in afterAll.
@@ -42,6 +47,8 @@ const WALNUT_A = 'wmarinahost01'
 const OWN = 'aaaaaaaa-1a1a-4a1a-8a1a-1a1a1a1a1a1a'
 const OTHER = 'cccccccc-2c2c-4c2c-8c2c-2c2c2c2c2c2c'
 const MACS = 'dddddddd-3d3d-4d3d-8d3d-3d3d3d3d3d3d'
+const TAKEN = 'eeeeeeee-4e4e-4e4e-8e4e-4e4e4e4e4e4e'
+const AGED = 'ffffffff-5f5f-4f5f-8f5f-5f5f5f5f5f5f'
 const BUN: string | undefined = testBun()
 
 /** A Claude CLI stand-in: init, a turn's end, idle, and gone with its stdin. */
@@ -64,6 +71,15 @@ async function waitFor<T>(fn: () => T, ms: number, label: string): Promise<T> {
     if (v) return v
     if (Date.now() > end) throw new Error('timed out waiting for ' + label)
     await sleep(50)
+  }
+}
+async function until<T>(fn: () => Promise<T>, ms: number, label: string): Promise<NonNullable<T>> {
+  const end = Date.now() + ms
+  for (;;) {
+    const v = await fn()
+    if (v) return v as NonNullable<T>
+    if (Date.now() > end) throw new Error('timed out waiting for ' + label)
+    await sleep(100)
   }
 }
 const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
@@ -97,8 +113,8 @@ function cmd(ws: WebSocket, body: Record<string, unknown>): Promise<Record<strin
   })
 }
 
-/** A fake companion: the daemon dials it; its first link that said hello answers `cmd`. */
-async function companion(): Promise<{ url: string; link: () => Promise<WebSocket> }> {
+/** A fake companion: the daemon dials it; `link()` is its newest open link that said hello. */
+async function companion(): Promise<{ url: string; link: (after?: number) => Promise<WebSocket>; count: () => number }> {
   const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 })
   servers.push(wss)
   await new Promise<void>((r) => wss.on('listening', () => r()))
@@ -115,7 +131,8 @@ async function companion(): Promise<{ url: string; link: () => Promise<WebSocket
   })
   return {
     url: `ws://127.0.0.1:${(wss.address() as { port: number }).port}/bridge`,
-    link: () => waitFor(() => hellos[0], 15_000, 'the bridge hello'),
+    link: (after = 0) => waitFor(() => { const open = hellos.slice(after).filter((w) => w.readyState === WebSocket.OPEN); return open[open.length - 1] }, 15_000, 'the bridge hello'),
+    count: () => hellos.length,
   }
 }
 
@@ -144,9 +161,10 @@ async function spawnDaemon(dir: string, twin: 'source' | 'standalone'): Promise<
   return { port: parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10), pid }
 }
 
-async function restartDaemon(dir: string, twin: 'source' | 'standalone', d: { pid: number }): Promise<{ port: number; pid: number }> {
+async function restartDaemon(dir: string, twin: 'source' | 'standalone', d: { pid: number }, between?: () => void): Promise<{ port: number; pid: number }> {
   process.kill(d.pid, 'SIGTERM')
   await waitFor(() => !alive(d.pid), 20_000, 'the daemon to stop')
+  between?.()
   return spawnDaemon(dir, twin)
 }
 
@@ -163,13 +181,17 @@ afterAll(async () => {
   try { fs.rmSync(base, { recursive: true, force: true }) } catch { /* best effort */ }
 })
 
-for (const twin of ['source', 'standalone'] as const) {
-  describe.skipIf(twin === 'standalone' && !BUN)(`${twin} twin: the host's own server's session stays its Walnut's`, () => {
+const CASES = [['source', 'split'], ['source', 'legacy'], ['standalone', 'split'], ['standalone', 'legacy']] as const
+for (const [n, [twin, layout]] of CASES.entries()) {
+  describe.skipIf(twin === 'standalone' && !BUN)(`${twin} twin, ${layout} layout: the host's own server's session stays its Walnut's`, () => {
     it('A reads it across a restart and stops it after its spec is gone; A\'s bridge and the replica stay fenced; another home stays not_found', async () => {
-      const dir = path.join(base, twin.slice(0, 2))
-      // The layout a leader writes for its server: <host root>/walnuts/<walnut id>/data.
-      const data = path.join(base, `${twin}-host`, 'walnuts', WALNUT_A, 'data')
-      const cwd = path.join(base, `${twin}-work`)
+      const dir = path.join(base, `${twin.slice(0, 2)}${layout[0]}`)
+      // The layouts a leader writes for its server: <host root>/walnuts/<walnut id>/data, or the
+      // shared <host root>/data it kept from before the split (marked with its whole id).
+      const root = path.join(base, `${twin}-${layout}-host`)
+      const data = layout === 'split' ? path.join(root, 'walnuts', WALNUT_A, 'data') : path.join(root, 'data')
+      if (layout === 'legacy') { fs.mkdirSync(data, { recursive: true }); fs.writeFileSync(path.join(data, '.walnut-id'), WALNUT_A) }
+      const cwd = path.join(base, `${twin}-${layout}-work`)
       fs.mkdirSync(cwd, { recursive: true })
       const mock = path.join(base, 'mock-cli.cjs')
       fs.writeFileSync(mock, MOCK_CLI)
@@ -180,11 +202,11 @@ for (const twin of ['source', 'standalone'] as const) {
       const cloud = await companion()
       expect((await cmd(leader, { cmd: 'bridge.configure', enabled: true, url: cloud.url, token: 'fixture-only', hostAlias: 'fixture-host', home: HOME_A })).ok).toBe(true)
       // The server A's daemon runs for it, on its own data dir D (OPEN_WALNUT_HOME), hands over its token.
-      const tokenFile = path.join(base, `${twin}-token`)
+      const tokenFile = path.join(base, `${twin}-${layout}-token`)
       const spec = {
         v: 1, home: HOME_A, walnutId: WALNUT_A, command: process.execPath,
         args: ['-e', `require('fs').writeFileSync(${JSON.stringify(tokenFile)}, process.env.WALNUT_FOLLOWER_TOKEN + ' ' + process.pid); setInterval(() => {}, 1 << 30)`],
-        cwd: base, env: { OPEN_WALNUT_HOME: data }, log: path.join(base, `${twin}-placeholder.log`), port: 41_100 + (twin === 'source' ? 7 : 8),
+        cwd: base, env: { OPEN_WALNUT_HOME: data }, log: path.join(base, `${twin}-${layout}-placeholder.log`), port: 41_107 + n,
         settings: { expose: { enabled: false, definition: null, options: {} }, exposeRetry: 0 },
       }
       // A data dir that is a Walnut's own home (here this host's production one) is refused: it would
@@ -199,7 +221,7 @@ for (const twin of ['source', 'standalone'] as const) {
       // Started as the host's own server starts its sessions (origin.home is its data dir), the
       // control of another home, and one the Mac started itself (its home).
       const journal = path.join(dir, 'spawn-journal.jsonl')
-      for (const [sid, home] of [[OWN, data], [OTHER, '/fixture/acme-data'], [MACS, HOME_A]] as const) {
+      const startAs = async (sid: string, home: string) => {
         const started = await cmd(leader, { cmd: 'start', sid, cwd, message: 'init', args: [process.execPath, mock, sid], origin: { home, task: 'mwtask-0001' } })
         expect(started.ok, JSON.stringify(started)).toBe(true)
         await waitFor(() => read(path.join(dir, 'streams', `${sid}.jsonl`)).includes('"state":"idle"'), 30_000, `${sid} idle`)
@@ -207,7 +229,17 @@ for (const twin of ['source', 'standalone'] as const) {
         await waitFor(() => read(journal).includes(sid), 30_000, `${sid} in the spawn journal`)
         const st = await cmd(leader, { cmd: 'status', sid })
         if (typeof st.pid === 'number') pids.add(st.pid)
+        return st
       }
+      for (const [sid, home] of [[OWN, data], [OTHER, '/fixture/acme-data'], [MACS, HOME_A], [TAKEN, HOME_A], [AGED, data]] as const) await startAs(sid, home)
+      // taken: the Mac's session, idle, is stopped and resumed by the host's server from D (a live one is never handed over).
+      const first = await cmd(leader, { cmd: 'status', sid: TAKEN })
+      expect(await cmd(leader, { cmd: 'stop', sid: TAKEN, reason: 'user', home: HOME_A }), 'the Mac stops its idle session').toMatchObject({ ok: true, stopped: true })
+      await waitFor(() => typeof first.pid !== 'number' || !alive(first.pid), 20_000, 'the first CLI of the taken session to end')
+      const resumed = await cmd(leader, { cmd: 'start', sid: TAKEN, cwd, message: 'resume', args: [process.execPath, mock, TAKEN], origin: { home: data, task: 'mwtask-0001' } })
+      expect(resumed.ok, JSON.stringify(resumed)).toBe(true)
+      const taken = await until(async () => { const st = await cmd(leader, { cmd: 'status', sid: TAKEN }); return st.alive && st.pid !== first.pid ? st : null }, 30_000, 'the host\'s resume of the taken session')
+      if (typeof taken.pid === 'number') pids.add(taken.pid)
       const ownLine = JSON.parse(read(journal).split('\n').find((l) => l.includes(OWN))!)
       expect(ownLine, 'the journal keeps the home as it was asked, and names the Walnut it was for').toMatchObject({ home: data, walnut: HOME_A })
       expect(JSON.parse(read(journal).split('\n').find((l) => l.includes(OTHER))!).walnut).toBeUndefined()
@@ -246,6 +278,7 @@ for (const twin of ['source', 'standalone'] as const) {
         { cmd: 'bridgeResume', sid: OWN, message: 'from the companion', cwd },
         { cmd: 'session.permission', sid: OWN, requestId: 'r-1', allow: true },
       ]) expect(await cmd(link, frame), String(frame.cmd)).toMatchObject({ ok: false, errorKind: 'not_owner' })
+      expect(await cmd(link, { cmd: 'status', sid: TAKEN }), 'the taken session, live').toMatchObject({ ok: false, errorKind: 'not_owner' })
 
       // replica: a stop asked from D of the session the Mac started and runs is refused, and it runs on.
       const refused = await cmd(leader, { cmd: 'stop', sid: MACS, reason: 'user', home: data })
@@ -254,8 +287,30 @@ for (const twin of ['source', 'standalone'] as const) {
 
       // The host's service restarts: a new daemon on the same dirs, the spec file read again at boot.
       leader.close()
-      d = await restartDaemon(dir, twin, d)
+      const hellosBefore = cloud.count()
+      // The aged session's resume record is gone (pruned after its 30 days) while the daemon is down.
+      d = await restartDaemon(dir, twin, d, () => fs.rmSync(path.join(dir, 'resume-records', `${AGED}.json`), { force: true }))
       judge(await reads(d.port), 'after the restart')
+
+      // taken, after the restart: the daemon adopted it with no spawn of its own; the bridge is still refused.
+      const back = await connect(d.port)
+      expect((await cmd(back, { cmd: 'leader.configure', home: HOME_A, walnutId: WALNUT_A, backup: true })).ok).toBe(true)
+      expect((await cmd(back, { cmd: 'bridge.configure', enabled: true, url: cloud.url, token: 'fixture-only', hostAlias: 'fixture-host', home: HOME_A })).ok).toBe(true)
+      const link2 = await cloud.link(hellosBefore)
+      expect(await cmd(link2, { cmd: 'status', sid: MACS }), 'the bridge still reaches its Walnut\'s session').toMatchObject({ ok: true, exists: true })
+      for (const frame of [
+        { cmd: 'status', sid: TAKEN },
+        { cmd: 'send', sid: TAKEN, message: 'from the companion', messageId: 'qm-companion-2' },
+        { cmd: 'attach', sid: TAKEN },
+        { cmd: 'session.permission', sid: TAKEN, requestId: 'r-2', allow: true },
+      ]) expect(await cmd(link2, frame), `${frame.cmd} on the taken session after the restart`).toMatchObject({ ok: false, errorKind: 'not_owner' })
+      // aged: with no resume record and no spawn of this daemon, the replica's stop reads the journal's home.
+      const aged = await cmd(back, { cmd: 'stop', sid: AGED, reason: 'user', home: data })
+      expect(aged, JSON.stringify(aged)).toMatchObject({ ok: true })
+      expect(aged.detail, JSON.stringify(aged)).not.toBe('not_this_server')
+      // MACS stays the Mac's: the replica is still refused.
+      expect(await cmd(back, { cmd: 'stop', sid: MACS, reason: 'user', home: data })).toMatchObject({ stopped: false, reason: 'not_owned', detail: 'not_this_server' })
+      back.close()
 
       // durable: the spec removed and the daemon restarted again, A still stops the session as its own.
       const again = await connect(d.port)

@@ -3820,19 +3820,30 @@ function sessionHomeOf(sid: string): string {
   // The Walnut, by its first home here: a session its server started from a later home is the same Walnut's.
   const spawn = sessions.get(sid)?.spawnInfo
   if (spawn?.walnut) return walnutScope.canonical(spawn.walnut)
+  // A respawn from the home the journal's first line named (its spec gone since, so the spawn
+  // could not name the Walnut): the journal's Walnut for that home is still the one it was for.
+  journaledIds()
+  const firstWalnut = journaledWalnuts.get(sid)
+  if (spawn?.home && firstWalnut && spawn.home === journaledHomes.get(sid)) return walnutScope.canonical(firstWalnut)
   return walnutOfHome(spawn?.home || journaledHome(sid) || hostResume.recall(sid)?.home || offlineHost.ownerOf(sid) || '')
 }
 
 /**
- * The home a session's start named, by its first home only: a host server's data dir stays that
- * dir, not its Walnut. The companion bridge's gate (bridgeHearsSession, session.permission): a
- * session the host's own server started is operated by that server and its leader's channel
- * only, never by the bridge's direct send, attach, resume or prompt answer. Keep in sync with
- * daemon-source.ts.
+ * The home the session's LATEST spawn here named, unmapped: a host server's data dir stays that
+ * dir, not its Walnut. The latest, so a session the host took over by a resume spawn stays the
+ * host server's after the daemon restarts (the journal keeps the first spawn's home). The
+ * companion bridge's gate (bridgeHearsSession, session.permission): a session the host's own
+ * server started or took over is operated by that server and its leader's channel only, never by
+ * the bridge's direct send, attach, resume or prompt answer. Keep in sync with daemon-source.ts.
  */
 function sessionStartHomeOf(sid: string): string {
+  return walnutScope.canonical(lastSpawnHomeOf(sid) || offlineHost.ownerOf(sid) || '')
+}
+
+/** The home of the latest spawn of `sid` here: live, else the resume record, else the journal's first line. */
+function lastSpawnHomeOf(sid: string): string | undefined {
   journaledIds()
-  return walnutScope.canonical(sessions.get(sid)?.spawnInfo?.home || journaledHomes.get(sid) || hostResume.recall(sid)?.home || offlineHost.ownerOf(sid) || '')
+  return sessions.get(sid)?.spawnInfo?.home || hostResume.recall(sid)?.home || journaledHomes.get(sid)
 }
 
 /**
@@ -3843,7 +3854,7 @@ function sessionStartHomeOf(sid: string): string {
  */
 function servedStopRefusal(sid: string, home: string): { reason: string; detail?: string } | null {
   if (!servedWalnutOf(home)) return null
-  const last = sessions.get(sid)?.spawnInfo?.home || hostResume.recall(sid)?.home
+  const last = lastSpawnHomeOf(sid)
   return last && walnutScope.canonical(last) === walnutScope.canonical(home) ? null : { reason: 'not_owned', detail: 'not_this_server' }
 }
 
