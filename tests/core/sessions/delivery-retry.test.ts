@@ -172,6 +172,7 @@ describe('every park reason in src/ is classified', () => {
     LINE_NOT_ACKNOWLEDGED_REASON: 'Claude Code never acknowledged the line: it may not have read it',
     LINE_UNACKNOWLEDGED_KEPT_REASON: 'Claude Code read past the line and Walnut could not write it again',
     HOST_REFUSED_REASON: 'the host refused the run: it may let the next one through',
+    HOST_START_LOST_REASON: 'the session did not start on its host (host-handover.ts): the next try may start it',
     CANCELLED_UNRUN_REASON: 'a cancel that was no Stop (an engine switch, a lane drain): a person\'s Stop moved the fence, which leaves its rows alone',
   };
 

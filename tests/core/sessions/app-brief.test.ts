@@ -322,6 +322,7 @@ describe('guard: every place that hands a person session text redacts it', () =>
       'src/core/transfer/transfer.ts': 'a boolean flag',
       'src/core/session-hooks/builtins.ts': 'a parameter name, not a view',
       'src/core/session-message-queue.ts': 'the bus event to the server; src/web/server.ts redacts it before the browser',
+      'src/core/session-channel/fact-keys.ts': 'a table of which fact keys a host may send, not a view',
     }
     const { execFileSync } = await import('node:child_process')
     const out = execFileSync('/usr/bin/grep', ['-rnE', '\\b(rawText|rawMessage|queuedText|rowText): ', 'src'], { cwd: ROOT, encoding: 'utf8' })
