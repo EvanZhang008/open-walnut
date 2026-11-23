@@ -4,6 +4,7 @@ import { bridgeHasCapability, bridgeRequest, bridgeRequestPrepared, BridgeOfflin
 import { decodeCloudSessionSend, InvalidCloudSessionPayloadError } from '../../lib/cloud-session-payload.js'
 import { log } from '../../logging/index.js'
 import { DaemonFrameTooLargeError } from '../../providers/daemon-frame-cap.js'
+import { directToDaemonAllowed } from '../../core/session-channel/host-judged-direct.js'
 
 export const BRIDGE_SEND_PATH = '/bridge/send'
 const ID = /^[A-Za-z0-9_-]{1,128}$/
@@ -29,6 +30,11 @@ async function send(req: Request, res: Response): Promise<void> {
     const target = await (await import('../../core/sessions/cloud-session-host.js')).resolveCloudSessionHost(sessionId)
     if (!target || target.host !== host) {
       res.status(409).json({ error: 'host_mismatch', sent: false })
+      return
+    }
+    // A session its host judges is sent through that host, never into its CLI behind it (host-judged-direct.ts).
+    if (!(await directToDaemonAllowed(sessionId, 'bridge-send'))) {
+      res.status(409).json({ error: 'host_judged', sent: false })
       return
     }
     const { stopAskUnconfirmed } = await import('../../core/sessions/cloud-stop-fence.js')
@@ -82,6 +88,10 @@ async function permission(req: Request, res: Response): Promise<void> {
     const target = await (await import('../../core/sessions/cloud-session-host.js')).resolveCloudSessionHost(sessionId)
     if (!target || target.host !== host) {
       res.status(409).json({ error: 'host_mismatch', sent: false })
+      return
+    }
+    if (!(await directToDaemonAllowed(sessionId, 'bridge-send-permission'))) {
+      res.status(409).json({ error: 'host_judged', sent: false })
       return
     }
   } catch {

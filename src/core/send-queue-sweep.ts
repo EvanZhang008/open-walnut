@@ -393,6 +393,11 @@ async function deliverBankedDirect(
     await removeRow(op, file);
     return 'dropped';
   }
+  // A session its host judges is never written into its CLI behind that host (session-channel/
+  // host-judged-direct.ts): the row stays banked, for the Mac's relay or the host's own link, and
+  // the Mac is not asked to give it back.
+  const { directToDaemonAllowed } = await import('./session-channel/host-judged-direct.js');
+  if (!(await directToDaemonAllowed(op.sessionId, 'send-queue-sweep'))) return 'hold-session';
   if (!opts.freed) {
     // A relay of it went out once: the Mac's queue may hold it, and only that
     // queue may deliver it, unless the Mac says it does not hold it. And never

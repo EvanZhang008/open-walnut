@@ -94,6 +94,11 @@ export function createModelCopy(deps: ModelCopyDeps) {
     if (host === '__local__') {
       return { ok: false, answer: error(503, 'bridge_offline', 'This session runs on your Mac, which is offline. Try again when it is back.') }
     }
+    // A session its host judges changes its settings through that host, never leader.settings behind it (host-judged-direct.ts).
+    const { directToDaemonAllowed } = await import('../session-channel/host-judged-direct.js')
+    if (!(await directToDaemonAllowed(sessionId, 'leader.settings'))) {
+      return { ok: false, answer: error(503, 'bridge_offline', 'This session runs on its own host; its model changes need your Mac. Try again when it is back.') }
+    }
     const lead = await deps.leadFor(host)
     if (!lead) {
       return { ok: false, answer: error(503, 'bridge_offline', 'Your Mac is offline. The cloud companion takes over this host within about a minute; try again then.') }

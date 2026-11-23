@@ -100,6 +100,9 @@ export function createHostSessionControl(deps: HostControlDeps) {
     if (!projection || !row || row.engine) return null
     const host = aliasOf(row.host)
     if (host === '__local__') return null
+    // A session its host judges answers through that host, never leader.control behind it (host-judged-direct.ts).
+    const { directToDaemonAllowed } = await import('../session-channel/host-judged-direct.js')
+    if (!(await directToDaemonAllowed(sessionId, 'leader.control'))) return null
     const lead = await deps.leadFor(host)
     return lead ? { row, host, lead, asOf: projection.exportedAt } : null
   }

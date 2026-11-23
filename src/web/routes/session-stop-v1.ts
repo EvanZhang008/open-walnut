@@ -48,6 +48,9 @@ export async function sendStopPending(res: Response, sessionId: string): Promise
 
 /** CLOUD: relay the stop to the primary and answer the phone. */
 export async function cloudTerminate(res: Response, sessionId: string, force: boolean): Promise<void> {
+  // A session its host judges, the Mac away and its host not linked: refused, never a direct path.
+  const route = await (await import('../../core/session-channel/companion-host-ops.js')).hostRoute(sessionId)
+  if (route.kind === 'refuse') { sendError(res, route.status, route.code, route.message); return }
   // Noted BEFORE the relay: a phone message this companion holds from
   // before this stop must not run by the host's direct path, though the
   // primary's list may not show the stop for a while (cloud-stop-fence.ts).
@@ -107,9 +110,6 @@ export async function leadHostOf(sessionId: string) {
   // Only a box with the backup-leader capability ever leads a host (getBackupLeader says the same).
   if (!hasCapability('backup-leader')) return null
   try {
-    // A session its host judges is that host's to answer, through its listener link (companion-host-ops.ts),
-    // never the daemon's leader.control behind its judge's back.
-    if (await (await import('../../core/session-channel/companion-host-ops.js')).listenedSession(sessionId)) return null
     const { getHostSessionControl } = await import('../../core/leader/host-session-control.js')
     const control = getHostSessionControl()
     const target = await control.target(sessionId)

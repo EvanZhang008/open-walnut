@@ -45,7 +45,7 @@ export type DirectSendOutcome =
    * `ambiguous`: a delivery request went out and its answer was lost, so the
    * message MAY have reached the CLI (never send it again without proof).
    */
-  | { ok: false; kind: 'transport'; offline: boolean; ambiguous: boolean; message: string };
+  | { ok: false; kind: 'transport'; offline: boolean; ambiguous: boolean; message: string; hostJudged?: true };
 
 export interface DirectSendInput {
   host: string;
@@ -103,6 +103,12 @@ async function overtakenByStop(input: DirectSendInput): Promise<DirectSendOutcom
 }
 
 export async function deliverDirectToHost(input: DirectSendInput): Promise<DirectSendOutcome> {
+  // A session its host judges is never written into its CLI behind that host
+  // (session-channel/host-judged-direct.ts): nothing is sent, the caller keeps the message.
+  const { directToDaemonAllowed } = await import('../session-channel/host-judged-direct.js');
+  if (!(await directToDaemonAllowed(input.sessionId, 'direct-host-send'))) {
+    return { ok: false, kind: 'transport', offline: true, ambiguous: false, hostJudged: true, message: 'the session\'s host judges it: it is sent through that host, never direct' };
+  }
   if (running.has(input.messageId)) {
     return { ok: false, kind: 'transport', offline: false, ambiguous: false, message: 'a delivery of it is already running' };
   }

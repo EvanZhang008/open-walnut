@@ -17,7 +17,8 @@
  * The user's setting that keeps sessions off the companion (Settings, kinds/gate.ts copyKindOff)
  * wins here too: with it off, no host row joins a list or a push and nothing is operated.
  */
-import { listenerLinked, callListenedHost, ListenerNotLinked, standingRow, standingRows, claimedBy, anyListenedRows as anyRows } from './companion-listener.js'
+import { listenerLinked, callListenedHost, ListenerNotLinked, standingRow, standingRows, anyListenedRows as anyRows } from './companion-listener.js'
+import { hostJudgedAlias, hostUnreachableSentence } from './host-judged-direct.js'
 import type { LiveState } from './host-api.js'
 import type { SessionRecord } from '../types.js'
 
@@ -69,7 +70,7 @@ export type HostRoute =
  * or sessions off here). A host-judged session never takes the daemon's direct path (review M2).
  */
 export async function hostRoute(sid: string): Promise<HostRoute> {
-  const alias = await claimedBy(sid)
+  const alias = await hostJudgedAlias(sid)
   if (!alias || !(await macAway())) return { kind: 'none' }
   if (await sessionsOff()) {
     const { SESSIONS_NOT_KEPT } = await import('../../replica/away-kind-reads.js')
@@ -78,7 +79,7 @@ export async function hostRoute(sid: string): Promise<HostRoute> {
   const t = await hostOperated(sid)
   if (t) return { kind: 'operated', t }
   const { hostDisplayName } = await import('../hosts/host-display-name.js')
-  return { kind: 'refuse', status: 503, code: 'host_unreachable', message: `${hostDisplayName(alias)} can't be reached right now and your Mac is away. Try again in a moment.` }
+  return { kind: 'refuse', status: 503, code: 'host_unreachable', message: hostUnreachableSentence(hostDisplayName(alias)) }
 }
 
 /** The stream of `sid` comes from its host's link (reading is no authority): a linked host stands for it, sessions kept here. */
@@ -91,11 +92,6 @@ export async function streamedByListener(sid: string): Promise<{ processStatus: 
 /** Has any linked host told rows (the list answers from them when the copy has none yet)? */
 export function anyListenedRows(): boolean {
   return anyRows()
-}
-
-/** Does a host stand for `sid` (a claim the copy does not contradict)? The daemon-level paths leave such a session alone. */
-export async function listenedSession(sid: string): Promise<boolean> {
-  return (await claimedBy(sid)) !== null
 }
 
 /** `heard` over `copy`: the host's fields win, except where the host has none (the copy's task title, folder, pin, host label). */

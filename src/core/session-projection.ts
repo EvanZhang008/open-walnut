@@ -174,6 +174,8 @@ export interface ProjectedSession {
   host_label?: string
   process_status: string
   stopRequest?: SessionRecord['stopRequest']
+  /** Additive: 'host' when the session's host runs and judges it itself (sessions/session-row-owner.ts): the companion never sends it direct to a daemon. */
+  judge?: 'host'
   model?: string
   /** The CLI --model the session runs with (additive): the companion's model picker reads it while the Mac is away. */
   cli_model?: string
@@ -246,6 +248,7 @@ export function projectSession(
     ...(s.host && hostLabels?.get(s.host) ? { host_label: hostLabels.get(s.host) } : {}),
     process_status: s.process_status,
     ...(s.stopRequest ? { stopRequest: s.stopRequest } : {}),
+    ...(s.judge === 'host' ? { judge: 'host' as const } : {}),
     ...(s.model ? { model: s.model } : {}),
     ...(s.cliModel ? { cli_model: s.cliModel } : {}),
     ...(s.effectiveEffort || s.effort ? { effort: s.effectiveEffort || s.effort } : {}),

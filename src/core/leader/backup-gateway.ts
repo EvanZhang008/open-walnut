@@ -92,6 +92,13 @@ export function createBackupGateway(deps: BackupGatewayDeps) {
     if (!lead) {
       return { ok: false, code: 'hub_unreachable', message: `the host ${targetAlias === '__local__' ? 'of the Walnut server' : targetAlias} is not reachable while the Walnut server is away` }
     }
+    // A session its host judges takes its messages through that host, never leader.deliver behind it
+    // (session-channel/host-judged-direct.ts): the sender is told to retry, nothing is lost.
+    const toSid = typeof delivery.to === 'string' ? delivery.to : typeof delivery.toSid === 'string' ? delivery.toSid : ''
+    const { directToDaemonAllowed } = await import('../session-channel/host-judged-direct.js')
+    if (toSid && !(await directToDaemonAllowed(toSid, 'leader.deliver'))) {
+      return { ok: false, code: 'hub_unreachable', message: 'that session is run by its own host, which is not reachable through the cloud companion right now; retry in a minute' }
+    }
     let reply: Record<string, unknown>
     try {
       reply = await deps.request(targetAlias, 'leader.deliver', { walnutId: lead.walnutId, epoch: lead.epoch, delivery }, DELIVER_TIMEOUT_MS)
