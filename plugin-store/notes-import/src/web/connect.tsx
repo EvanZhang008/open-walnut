@@ -35,7 +35,7 @@ export function ConnectSteps({ store }: { store: ImportStore }) {
           <span className="ni-help">Choose <b>New integration</b>, pick your workspace, keep the type <b>Internal</b>, and save.</span>
         </div>
         <div className="ni-row-actions">
-          <a className="ni-button" href={NOTION_INTEGRATIONS_URL} target="_blank" rel="noreferrer" data-testid="ni-open-notion">Open Notion</a>
+          <a className="btn" href={NOTION_INTEGRATIONS_URL} target="_blank" rel="noreferrer" data-testid="ni-open-notion">Open Notion</a>
         </div>
       </div>
       <div className="ni-row">
@@ -65,7 +65,7 @@ export function ConnectSteps({ store }: { store: ImportStore }) {
               onChange={(event) => { setSecret(event.target.value); setProblem(null) }}
               data-testid="ni-secret"
             />
-            <button className="ni-button ni-primary" type="submit" disabled={!secret.trim() || busy} data-testid="ni-connect">
+            <button className="btn btn-primary" type="submit" disabled={!secret.trim() || busy} data-testid="ni-connect">
               {busy ? 'Checking…' : 'Connect'}
             </button>
           </form>
@@ -115,8 +115,8 @@ export function ConnectedRow({ state, store }: { state: PublicState; store: Impo
         </div>
         {!confirming && (
           <div className="ni-row-actions">
-            <button className="ni-button" disabled={busy || notion.checking} onClick={() => void run('notion_check')} data-testid="ni-check">Check again</button>
-            <button className="ni-button" disabled={busy || running} onClick={() => setConfirming(true)} data-testid="ni-disconnect">Disconnect</button>
+            <button className="btn" disabled={busy || notion.checking} onClick={() => void run('notion_check')} data-testid="ni-check">Check again</button>
+            <button className="btn" disabled={busy || running} onClick={() => setConfirming(true)} data-testid="ni-disconnect">Disconnect</button>
           </div>
         )}
       </div>
@@ -127,8 +127,8 @@ export function ConnectedRow({ state, store }: { state: PublicState; store: Impo
             <span className="ni-help">Walnut forgets the secret. The notes you imported stay in your notes; connect again later to bring in changes.</span>
           </div>
           <div className="ni-row-actions">
-            <button className="ni-button" disabled={busy} onClick={() => setConfirming(false)} data-testid="ni-disconnect-cancel">Cancel</button>
-            <button className="ni-button ni-danger" disabled={busy || running} onClick={() => { setConfirming(false); void run('notion_disconnect') }} data-testid="ni-disconnect-yes">Disconnect</button>
+            <button className="btn" disabled={busy} onClick={() => setConfirming(false)} data-testid="ni-disconnect-cancel">Cancel</button>
+            <button className="btn btn-danger" disabled={busy || running} onClick={() => { setConfirming(false); void run('notion_disconnect') }} data-testid="ni-disconnect-yes">Disconnect</button>
           </div>
         </div>
       )}
@@ -141,7 +141,7 @@ export function ConnectedRow({ state, store }: { state: PublicState; store: Impo
             </span>
           </div>
           <div className="ni-row-actions">
-            <a className="ni-button" href={NOTION_INTEGRATIONS_URL} target="_blank" rel="noreferrer">Open Notion</a>
+            <a className="btn" href={NOTION_INTEGRATIONS_URL} target="_blank" rel="noreferrer">Open Notion</a>
           </div>
         </div>
       )}

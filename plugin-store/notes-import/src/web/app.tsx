@@ -87,7 +87,7 @@ function PastImports({ history, connected, lastFolder, navigate, store, running,
             <div className="ni-row-actions">
               {connected && folder !== lastFolder && (
                 <button
-                  className="ni-button"
+                  className="btn"
                   disabled={running}
                   aria-label={`Import changes into ${folder}`}
                   title="Brings in what changed in Notion, for the pages this folder was made from"
@@ -102,7 +102,7 @@ function PastImports({ history, connected, lastFolder, navigate, store, running,
                   data-testid="ni-past-update"
                 >Import changes</button>
               )}
-              <button className="ni-button" aria-label={`Open ${folder} in Notes`} onClick={() => { const at = byFolder.get(folder)!.open; navigate(at ? `/notes?path=${encodeURIComponent(at)}` : '/notes') }}>Open in Notes</button>
+              <button className="btn" aria-label={`Open ${folder} in Notes`} onClick={() => { const at = byFolder.get(folder)!.open; navigate(at ? `/notes?path=${encodeURIComponent(at)}` : '/notes') }}>Open in Notes</button>
             </div>
           </div>
         ))}

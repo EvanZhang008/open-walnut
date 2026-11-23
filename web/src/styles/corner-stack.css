@@ -84,16 +84,7 @@
 /* The open notification center lists the approvals waiting: the corner's card steps aside. */
 .corner-stack.approvals-listed .corner-slot-approvals { display: none; }
 
-/* A board toast's actions look like every other toast's (.notification-toast-action). */
-.corner-stack .kanban-toast-btn {
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-full);
-  padding: 3px 10px;
-}
-.corner-stack .kanban-toast-btn:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+/* A board toast's actions are the family's small keys (btn btn-sm), as every other toast's. */
 /* Every card in the stack is a NoticeCard (notice-card.css): one frame, a hairline on all four
    sides, the colour that means something in its status dot and word, never a bar down one side. */
 /* "N more ›" in the top toast's title row: a link to the notification center, not a card. */

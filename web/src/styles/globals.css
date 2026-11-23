@@ -801,32 +801,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   margin-top: 6px;
 }
 
-.notification-perm-btn {
-  flex: 1;
-  padding: 4px 10px;
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--border);
-  background: var(--card-bg);
-  color: var(--fg);
-  cursor: pointer;
-}
-
-.notification-perm-btn.approve {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--on-accent);
-}
-
-.notification-perm-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.notification-perm-btn:not(:disabled):hover {
-  opacity: 0.9;
-}
+.notification-perm-btn { flex: 1; }
 
 .notification-perm-error {
   flex-basis: 100%;
@@ -2856,7 +2831,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 /* A prompt with remembering choices (each with its rule) stacks them, one per line. */
 .perm-options-stack { flex-direction: column; align-items: stretch; }
 .perm-option-saved { display: block; margin-top: 2px; padding-right: 2px; font-size: var(--font-size-xs); font-weight: 400; opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.perm-options-stack > button { text-align: left; min-width: 0; max-width: 100%; box-sizing: border-box; flex: 0 0 auto; }
+.perm-options-stack > button { justify-content: flex-start; white-space: normal; text-align: left; min-width: 0; max-width: 100%; box-sizing: border-box; flex: 0 0 auto; }
 /* A toast and the panel hold many asks: a choice reads in two lines, its name, then
    its rule with the file it is kept in after it. */
 .perm-option-sub { display: block; margin-top: 2px; }
@@ -2979,23 +2954,9 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 }
 .perm-note-toggle:hover:not(:disabled) { border-color: color-mix(in srgb, var(--error) 45%, var(--border)); }
 .perm-note-toggle:disabled { opacity: 0.5; cursor: default; }
-/* Deny once a note is typed: red, as the session card shows it. */
-.nfc-perm-btn.perm-deny-with-note,
-.notification-perm-btn.perm-deny-with-note {
-  color: var(--error);
-  border-color: color-mix(in srgb, var(--error) 55%, var(--border));
-  background: color-mix(in srgb, var(--error) 7%, var(--card-bg));
-}
-/* A choice that is off (Allow while a note is typed) reads as off, not as a lighter button. */
-.nfc-perm-btn:disabled,
-.notification-perm-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-/* A rule kept in a file, clicked once: the second click saves it. */
-.nfc-perm-btn.is-armed,
-.notification-perm-btn.is-armed {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent) inset;
-  color: var(--accent);
-}
+/* A permission key is the family's (btn btn-sm, btn-primary for the strong yes): Deny once a note is
+   typed takes btn-danger, an off choice the family's disabled look, and a rule kept in a file,
+   clicked once, the family's on look (data-on); only its countdown bar above is its own. */
 /* An answered ask in the panel reads in the card's tones (allowed is green below). */
 .notification-feed-item-resolved--denied { color: var(--error); }
 /* An answered toast: its outcome's tone, not the warning that asked. */
@@ -26674,25 +26635,6 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   gap: 6px;
 }
 
-.nfc-perm-btn {
-  padding: 4px 10px;
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--border);
-  background: var(--card-bg);
-  color: var(--fg);
-  cursor: pointer;
-}
-
-.nfc-perm-btn.nfc-perm-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--on-accent);
-}
-
-.nfc-perm-btn:disabled { opacity: 0.5; cursor: default; }
-.nfc-perm-btn:not(:disabled):hover { opacity: 0.9; }
 
 /* A question's header is a `.badge`, as on the session card (.qp-chip). */
 .nfc-answer-q > .nfc-answer-chip {

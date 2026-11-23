@@ -119,7 +119,7 @@ function IndexPreview({ content }: { content: string }) {
     <>
       <span className="ni-muted" data-testid="ni-index-preview-count">{plural(links, 'note')} listed{headings > 1 ? `, under ${headings} headings` : ''}</span>
       <div className="ni-preview-text" data-full={full ? 'true' : undefined} data-testid="ni-index-preview-body">{out}</div>
-      {links > 12 && <button type="button" className="ni-link" onClick={() => setFull(!full)} data-testid="ni-index-preview-full">{full ? 'Show less' : 'Show it all'}</button>}
+      {links > 12 && <button type="button" className="btn btn-link ni-link" onClick={() => setFull(!full)} data-testid="ni-index-preview-full">{full ? 'Show less' : 'Show it all'}</button>}
     </>
   )
 }
@@ -247,7 +247,7 @@ export function OrganizePanel({ store, state, useView, openNote }: { store: Impo
                 <span className="ni-help" data-testid="ni-undone">
                   {o.keptEdits?.length
                     ? <>The last organize was undone. {plural(o.keptEdits.length, 'note')} you changed or made after it stayed as you left {o.keptEdits.length === 1 ? 'it' : 'them'}, with links pointed back:{' '}
-                      {o.keptEdits.slice(0, 5).map((p, i) => <span key={p}>{i ? ', ' : ''}<button className="ni-link" onClick={() => openNote(p)}>{short(o.folder && p.startsWith(`${o.folder}/`) ? p.slice(o.folder.length + 1) : p)}</button></span>)}
+                      {o.keptEdits.slice(0, 5).map((p, i) => <span key={p}>{i ? ', ' : ''}<button className="btn btn-link ni-link" onClick={() => openNote(p)}>{short(o.folder && p.startsWith(`${o.folder}/`) ? p.slice(o.folder.length + 1) : p)}</button></span>)}
                       {o.keptEdits.length > 5 ? ` and ${o.keptEdits.length - 5} more` : ''}.</>
                     : 'The last organize was undone: what it changed is back as it was.'}
                 </span>
@@ -263,11 +263,11 @@ export function OrganizePanel({ store, state, useView, openNote }: { store: Impo
             </div>
             <div className="ni-row-actions">
               {o.backup && (
-                <button className="ni-button" disabled={busy} onClick={() => void run('organize_undo')} data-testid="ni-undo" title={`Reverses the last organize of ${o.backup.folder}`}>
+                <button className="btn" disabled={busy} onClick={() => void run('organize_undo')} data-testid="ni-undo" title={`Reverses the last organize of ${o.backup.folder}`}>
                   {o.phase === 'failed' ? 'Undo' : o.backup.folder === folder ? 'Undo last organize' : `Undo last organize of ${o.backup.folder}`}
                 </button>
               )}
-              <button className="ni-button" disabled={busy || importing || !folder || !folderExists || unfinished} onClick={() => void run('organize_plan', { folder })} data-testid="ni-plan">
+              <button className="btn" disabled={busy || importing || !folder || !folderExists || unfinished} onClick={() => void run('organize_plan', { folder })} data-testid="ni-plan">
                 {o.phase === 'failed' && o.folder === folder && folderExists && !o.backup ? 'Try again' : folder ? `Propose a plan for ${folder.split('/').pop()}` : 'Propose a plan'}
               </button>
             </div>
@@ -281,7 +281,7 @@ export function OrganizePanel({ store, state, useView, openNote }: { store: Impo
               <span className="ni-help">This takes a minute or a few for a big import. You can leave this page.</span>
             </div>
             <div className="ni-row-actions">
-              <button className="ni-button" onClick={() => void run('organize_cancel')} data-testid="ni-plan-cancel">Cancel</button>
+              <button className="btn" onClick={() => void run('organize_cancel')} data-testid="ni-plan-cancel">Cancel</button>
             </div>
           </div>
         )}
@@ -317,13 +317,13 @@ export function OrganizePanel({ store, state, useView, openNote }: { store: Impo
                 <div className="ni-row-actions">
                   {discarding ? (
                     <>
-                      <button className="ni-button" onClick={() => setDiscarding(false)} data-testid="ni-discard-keep">Keep it</button>
-                      <button className="ni-button" disabled={busy} onClick={() => { setDiscarding(false); void run('organize_cancel') }} data-testid="ni-discard-yes">Discard</button>
+                      <button className="btn" onClick={() => setDiscarding(false)} data-testid="ni-discard-keep">Keep it</button>
+                      <button className="btn" disabled={busy} onClick={() => { setDiscarding(false); void run('organize_cancel') }} data-testid="ni-discard-yes">Discard</button>
                     </>
                   ) : (
-                    <button className="ni-button" disabled={busy} onClick={() => setDiscarding(true)} data-testid="ni-discard">Discard</button>
+                    <button className="btn" disabled={busy} onClick={() => setDiscarding(true)} data-testid="ni-discard">Discard</button>
                   )}
-                  {!discarding && <button className="ni-button ni-primary" disabled={busy || !chosenSteps.length} onClick={() => void run('organize_apply', { leaveOut: [...left], plan: o.plan?.madeAt })} data-testid="ni-apply">
+                  {!discarding && <button className="btn btn-primary" disabled={busy || !chosenSteps.length} onClick={() => void run('organize_apply', { leaveOut: [...left], plan: o.plan?.madeAt })} data-testid="ni-apply">
                     {chosenSteps.length < okSteps.length ? `Apply ${plural(chosenSteps.length, 'step')}` : 'Apply plan'}
                   </button>}
                 </div>
@@ -332,7 +332,7 @@ export function OrganizePanel({ store, state, useView, openNote }: { store: Impo
               <div className="ni-row">
                 <div className="ni-row-copy"><span className="ni-help" data-testid="ni-plan-empty">{o.plan?.steps.length ? 'None of the steps can be done (each says why above), so nothing changes.' : 'Walnut found nothing to change in this folder.'}</span></div>
                 <div className="ni-row-actions">
-                  <button className="ni-button" disabled={busy} onClick={() => void run('organize_cancel')} data-testid="ni-discard">Done</button>
+                  <button className="btn" disabled={busy} onClick={() => void run('organize_cancel')} data-testid="ni-discard">Done</button>
                 </div>
               </div>
             )}
@@ -365,9 +365,9 @@ export function OrganizePanel({ store, state, useView, openNote }: { store: Impo
               {problem && <span className="ni-help" data-tone="error" role="alert">{problem}</span>}
             </div>
             <div className="ni-row-actions">
-              <button className="ni-button" disabled={busy} onClick={() => void run('organize_undo')} data-testid="ni-undo">Undo</button>
-              {o.result?.openPath && <button className="ni-button" onClick={() => openNote(o.result!.openPath!)} data-testid="ni-open-organized">Open in Notes</button>}
-              <button className="ni-button" disabled={busy} onClick={() => void run('organize_cancel')} data-testid="ni-organize-done">Done</button>
+              <button className="btn" disabled={busy} onClick={() => void run('organize_undo')} data-testid="ni-undo">Undo</button>
+              {o.result?.openPath && <button className="btn" onClick={() => openNote(o.result!.openPath!)} data-testid="ni-open-organized">Open in Notes</button>}
+              <button className="btn" disabled={busy} onClick={() => void run('organize_cancel')} data-testid="ni-organize-done">Done</button>
             </div>
           </div>
         )}

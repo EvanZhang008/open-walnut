@@ -149,7 +149,7 @@ export function KanbanToasts({ toasts: fromProps, onDismiss: dismissProp }: Kanb
             <button
               key={a.label}
               type="button"
-              className="kanban-toast-btn"
+              className="btn btn-sm kanban-toast-btn"
               data-testid={a.testId ?? 'kanban-toast-action'}
               onClick={() => run(t, a)}
             >{a.label}</button>

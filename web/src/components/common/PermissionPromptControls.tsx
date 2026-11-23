@@ -255,9 +255,10 @@ export function PermissionAnswerButtons({ answer, allowLabel = 'Allow', dismissL
               key={o.optionId}
               // A list that names rules stays neutral: no choice looks picked or recommended
               // before the person picks (a Claude prompt's list, whose Deny takes a note). A plain list keeps its strong yes.
-              className={`notification-perm-btn${kept.armed === o.optionId ? ' is-armed' : ''}${isLongRule(o.detail) ? ' perm-option--long-rule' : ''}${reject || o.kind === 'allow_always' || acpOptions.some((x) => x.detail || x.takesNote) ? '' : ' approve'}${reject && o.takesNote && note.text ? ' perm-deny-with-note' : ''}${held === o.optionId ? ' is-failed' : ''}`}
+              className={`btn btn-sm notification-perm-btn${kept.armed === o.optionId ? ' is-armed' : ''}${isLongRule(o.detail) ? ' perm-option--long-rule' : ''}${reject || o.kind === 'allow_always' || acpOptions.some((x) => x.detail || x.takesNote) ? '' : ' btn-primary approve'}${reject && o.takesNote && note.text ? ' btn-danger perm-deny-with-note' : ''}${held === o.optionId ? ' is-failed' : ''}`}
               data-testid={tid(reject ? 'deny' : 'allow')}
               data-choice={o.optionId}
+              data-on={kept.armed === o.optionId ? 'true' : undefined}
               title={!reject && note.text ? 'Clear the note to allow; a note goes with Deny' : [o.detail, o.savedTo && `Saves to ${o.savedTo}`].filter(Boolean).join('\n') || undefined}
               disabled={busy || (!reject && !!note.text)}
               onClick={() => (o.savedTo && !kept.confirm(o.optionId)) || go(!reject, { optionId: o.optionId, ...(reject && o.takesNote && note.text ? { message: denyMessageOf(note) } : {}) })}
@@ -283,7 +284,7 @@ export function PermissionAnswerButtons({ answer, allowLabel = 'Allow', dismissL
         })}
         {/* The adapter's own reject option may be absent: keep a plain Deny. */}
         {!acpOptions.some(isRejectOption) && (
-          <button className="notification-perm-btn" data-testid={tid('deny')} disabled={busy} onClick={() => go(false)}>Deny</button>
+          <button className="btn btn-sm notification-perm-btn" data-testid={tid('deny')} disabled={busy} onClick={() => go(false)}>Deny</button>
         )}
         {noteReject && answer.requestId && (
           <DenyWithNote note={note} disabled={busy} onDeny={(message) => go(false, { optionId: noteReject.optionId, message })} />
@@ -297,8 +298,8 @@ export function PermissionAnswerButtons({ answer, allowLabel = 'Allow', dismissL
   }
   return (
     <div className="notification-feed-item-actions">
-      <button className="notification-perm-btn approve" data-testid={tid('allow')} disabled={busy || !!note.text} title={note.text ? 'Clear the note to allow; a note goes with Deny' : undefined} onClick={() => go(true)}>{allowLabel}</button>
-      <button className={`notification-perm-btn${note.text ? ' perm-deny-with-note' : ''}`} data-testid={tid('deny')} disabled={busy} onClick={() => go(false, note.text ? { message: denyMessageOf(note) } : undefined)}>{note.text ? 'Deny with note' : 'Deny'}</button>
+      <button className="btn btn-sm btn-primary notification-perm-btn approve" data-testid={tid('allow')} disabled={busy || !!note.text} title={note.text ? 'Clear the note to allow; a note goes with Deny' : undefined} onClick={() => go(true)}>{allowLabel}</button>
+      <button className={`btn btn-sm notification-perm-btn${note.text ? ' btn-danger perm-deny-with-note' : ''}`} data-testid={tid('deny')} disabled={busy} onClick={() => go(false, note.text ? { message: denyMessageOf(note) } : undefined)}>{note.text ? 'Deny with note' : 'Deny'}</button>
       {/* The plain pair is a Claude prompt's: its deny takes a note, as on the session card. */}
       {answer.requestId && <DenyWithNote note={note} disabled={busy} onDeny={(message) => go(false, { message })} />}
     </div>

@@ -160,7 +160,7 @@ export function ImportPanel(props: { walnut: WalnutWebApi; store: ImportStore; s
             {target === settled && following === settled && followed && !narrower && !broader && (
               <span className="ni-help ni-note" data-testid="ni-scope-picked">
                 Set to match {inNotes(settled)}: {followed.all ? 'everything' : `the ${plural(followed.rootIds.length, 'top-level page')}`} it was made from, so its notes update together.
-                {own.current && <>{' '}<button type="button" className="ni-link" onClick={useOwn} disabled={running} data-testid="ni-scope-use-own">Use my own choice</button></>}
+                {own.current && <>{' '}<button type="button" className="btn btn-link ni-link" onClick={useOwn} disabled={running} data-testid="ni-scope-use-own">Use my own choice</button></>}
               </span>
             )}
             {scope === 'some' && roots.length > 0 && (
@@ -212,13 +212,13 @@ export function ImportPanel(props: { walnut: WalnutWebApi; store: ImportStore; s
             {target === settled && narrower && (
               <span className="ni-help" data-tone="warn" data-testid="ni-scope-narrower">
                 This folder was made from {followed!.all ? 'everything shared with the connection' : plural(followed!.rootIds.length, 'top-level page')}. This import updates only the pages ticked above; its other notes stay as they are.
-                {' '}<button type="button" className="ni-link" onClick={() => { applyScope(followed!); own.current = null }} disabled={running} data-testid="ni-scope-use-folder">Import all it was made from</button>
+                {' '}<button type="button" className="btn btn-link ni-link" onClick={() => { applyScope(followed!); own.current = null }} disabled={running} data-testid="ni-scope-use-folder">Import all it was made from</button>
               </span>
             )}
             {target === settled && broader && (
               <span className="ni-help" data-tone="warn" data-testid="ni-scope-broader">
                 This folder was made from {plural(followed!.rootIds.length, 'top-level page')}. This import also brings {scope === 'all' ? 'everything else shared with the connection' : 'the other ticked pages'} into it.
-                {' '}<button type="button" className="ni-link" onClick={() => { applyScope(followed!); own.current = null }} disabled={running} data-testid="ni-scope-use-folder">Import only its pages</button>
+                {' '}<button type="button" className="btn btn-link ni-link" onClick={() => { applyScope(followed!); own.current = null }} disabled={running} data-testid="ni-scope-use-folder">Import only its pages</button>
               </span>
             )}
             {inAttachments && <span className="ni-help" data-tone="warn" data-testid="ni-folder-attachments">Folders named _attachment hold the files of notes. Pick another folder.</span>}
@@ -229,7 +229,7 @@ export function ImportPanel(props: { walnut: WalnutWebApi; store: ImportStore; s
                   : elsewhere.length === 1
                     ? <>A separate copy: "{elsewhere[0]}" already holds an import of this Notion, and the two update apart.</>
                     : <>A separate copy: {elsewhere.length} other folders already hold imports of this Notion (under Imported notes), and each updates apart.</>}
-                {(insideOf || elsewhere.length === 1) && <>{' '}<button type="button" className="ni-link" onClick={() => setFolder(insideOf ?? elsewhere[0])} disabled={running} data-testid="ni-second-copy-use">Import into "{insideOf ?? elsewhere[0]}"</button></>}
+                {(insideOf || elsewhere.length === 1) && <>{' '}<button type="button" className="btn btn-link ni-link" onClick={() => setFolder(insideOf ?? elsewhere[0])} disabled={running} data-testid="ni-second-copy-use">Import into "{insideOf ?? elsewhere[0]}"</button></>}
               </span>
             )}
           </div>
@@ -279,7 +279,7 @@ export function ImportPanel(props: { walnut: WalnutWebApi; store: ImportStore; s
             {problem && <span className="ni-help" data-tone="error" role="alert" data-testid="ni-import-error">{problem}</span>}
           </div>
           <div className="ni-row-actions">
-            <button className="ni-button ni-primary" disabled={!canStart} onClick={() => void start()} data-testid="ni-import">
+            <button className="btn btn-primary" disabled={!canStart} onClick={() => void start()} data-testid="ni-import">
               {busy ? 'Starting…' : job?.phase === 'cancelled' && job.folder === target ? 'Carry on' : before ? 'Import changes' : 'Import'}
             </button>
           </div>
@@ -390,7 +390,7 @@ function RunCard({ job, store, openNote, quietFor, useView, locked, otherFolder 
           {job.error && <span className="ni-help" data-tone="error" role="alert" data-testid="ni-run-error">{job.error}</span>}
           {!compact && !running && apart.length === 1 && (
             <span className="ni-help" data-testid="ni-named-apart">
-              A note named <button className="ni-link" onClick={() => openNote(apart[0].beside)}>{stemOfNote(apart[0].beside)}</button> was already there, so the page came in beside it as <button className="ni-link" onClick={() => openNote(apart[0].path)}>{stemOfNote(apart[0].path)}</button>. Yours is unchanged.
+              A note named <button className="btn btn-link ni-link" onClick={() => openNote(apart[0].beside)}>{stemOfNote(apart[0].beside)}</button> was already there, so the page came in beside it as <button className="btn btn-link ni-link" onClick={() => openNote(apart[0].path)}>{stemOfNote(apart[0].path)}</button>. Yours is unchanged.
             </span>
           )}
           {!compact && !running && apart.length > 1 && (
@@ -401,17 +401,17 @@ function RunCard({ job, store, openNote, quietFor, useView, locked, otherFolder 
           {!compact && !running && (job.removedPaths?.length ?? 0) > 0 && (
             <span className="ni-help" data-testid="ni-gone-removed">
               Deleted {job.removedPaths!.length === 1 ? stemOfNote(job.removedPaths![0]) : plural(job.removedPaths!.length, 'note')} from Walnut.{' '}
-              <button className="ni-link" onClick={() => void restoreGone()} disabled={locked} data-testid="ni-gone-undo">Undo</button>
+              <button className="btn btn-link ni-link" onClick={() => void restoreGone()} disabled={locked} data-testid="ni-gone-undo">Undo</button>
             </span>
           )}
           {!compact && !running && (job.restored ?? []).map((p) => (
             <span key={p} className="ni-help" data-testid="ni-restored">
-              Brought back <button className="ni-link" onClick={() => openNote(p)}>{stemOfNote(p)}</button>.
+              Brought back <button className="btn btn-link ni-link" onClick={() => openNote(p)}>{stemOfNote(p)}</button>.
             </span>
           ))}
           {!compact && !running && (job.replaced ?? []).map((r) => (
             <span key={r.path} className="ni-help" data-testid="ni-replaced">
-              <button className="ni-link" onClick={() => openNote(r.path)}>{stemOfNote(r.path)}</button> now has Notion's version; your edits are in <button className="ni-link" onClick={() => openNote(r.copy)}>{stemOfNote(r.copy)}</button>.
+              <button className="btn btn-link ni-link" onClick={() => openNote(r.path)}>{stemOfNote(r.path)}</button> now has Notion's version; your edits are in <button className="btn btn-link ni-link" onClick={() => openNote(r.copy)}>{stemOfNote(r.copy)}</button>.
             </span>
           ))}
           {!compact && job.phase === 'cancelled' && <span className="ni-help">Press Carry on to finish it: what came in is kept, and the rest follows.</span>}
@@ -424,8 +424,8 @@ function RunCard({ job, store, openNote, quietFor, useView, locked, otherFolder 
           )}
         </div>
         <div className="ni-row-actions">
-          {running && <button className="ni-button" onClick={() => void store.call('import_cancel')} data-testid="ni-stop">Stop</button>}
-          {!running && job.firstPath && <button className="ni-button" onClick={() => openNote(job.firstPath!)} data-testid="ni-open-notes">Open in Notes</button>}
+          {running && <button className="btn" onClick={() => void store.call('import_cancel')} data-testid="ni-stop">Stop</button>}
+          {!running && job.firstPath && <button className="btn" onClick={() => openNote(job.firstPath!)} data-testid="ni-open-notes">Open in Notes</button>}
         </div>
       </div>
       {!running && !compact && (job.errors.length > 0 || job.keptPaths.length > 0 || (job.deletedPaths?.length ?? 0) > 0 || (!job.first && (job.newPaths ?? []).some((p) => !job.restored?.includes(p))) || (job.updatedPaths?.length ?? 0) > 0 || apart.length > 1 || (job.gonePaths?.length ?? 0) > 0 || job.warnings.length > 0 || c.filesKeptInSource > 0) && (
@@ -442,18 +442,18 @@ function RunCard({ job, store, openNote, quietFor, useView, locked, otherFolder 
               <b>Changed in Notion, but you edited them in Walnut, so they were kept ({c.kept})</b>
               <ul>{job.keptPaths.map((p) => (
                 <li key={p}>
-                  <button className="ni-link" onClick={() => openNote(p)}>{shortPath(p)}</button>
+                  <button className="btn btn-link ni-link" onClick={() => openNote(p)}>{shortPath(p)}</button>
                   <span className="ni-acts">
-                  <button className="ni-button ni-small" onClick={() => void compare(p)} data-testid="ni-compare">{comparing?.path === p ? 'Hide the comparison' : 'Compare with Notion'}</button>
-                  {job.keptUrls?.[p] && <a className="ni-button ni-small" href={job.keptUrls[p]} target="_blank" rel="noreferrer">Open in Notion</a>}
-                  {taking !== p && <button className="ni-button ni-small" onClick={() => setTaking(p)} disabled={locked} data-testid="ni-take-notion">Use Notion's version</button>}
+                  <button className="btn btn-sm" onClick={() => void compare(p)} data-testid="ni-compare">{comparing?.path === p ? 'Hide the comparison' : 'Compare with Notion'}</button>
+                  {job.keptUrls?.[p] && <a className="btn btn-sm" href={job.keptUrls[p]} target="_blank" rel="noreferrer">Open in Notion</a>}
+                  {taking !== p && <button className="btn btn-sm" onClick={() => setTaking(p)} disabled={locked} data-testid="ni-take-notion">Use Notion's version</button>}
                   </span>
                   {taking === p && (
                     <span className="ni-confirm-inline">
                       Replace it with Notion's version? Yours is kept beside it as "{stemOfNote(p)} (your edit)".{' '}
                       <span className="ni-acts">
-                        <button className="ni-button ni-small" onClick={() => setTaking(null)}>Cancel</button>
-                        <button className="ni-button ni-small ni-primary" onClick={() => void takeNotion(p)} disabled={locked} data-testid="ni-take-notion-yes">Replace</button>
+                        <button className="btn btn-sm" onClick={() => setTaking(null)}>Cancel</button>
+                        <button className="btn btn-sm btn-primary" onClick={() => void takeNotion(p)} disabled={locked} data-testid="ni-take-notion-yes">Replace</button>
                       </span>
                     </span>
                   )}
@@ -475,7 +475,7 @@ function RunCard({ job, store, openNote, quietFor, useView, locked, otherFolder 
               <b>Named apart from your notes ({apart.length})</b>
               <ul>{apart.map((a) => (
                 <li key={a.path}>
-                  <button className="ni-link" onClick={() => openNote(a.path)}>{shortPath(a.path)}</button> · beside your <button className="ni-link" onClick={() => openNote(a.beside)}>{stemOfNote(a.beside)}</button>
+                  <button className="btn btn-link ni-link" onClick={() => openNote(a.path)}>{shortPath(a.path)}</button> · beside your <button className="btn btn-link ni-link" onClick={() => openNote(a.beside)}>{stemOfNote(a.beside)}</button>
                 </li>
               ))}</ul>
             </div>
@@ -483,14 +483,14 @@ function RunCard({ job, store, openNote, quietFor, useView, locked, otherFolder 
           {!job.first && (job.newPaths ?? []).some((p) => !job.restored?.includes(p)) && (
             <div className="ni-detail-group">
               <b>New since the last import ({c.created - (job.restored?.length ?? 0)})</b>
-              <ul>{job.newPaths!.filter((p) => !job.restored?.includes(p)).map((p) => <li key={p}><button className="ni-link" onClick={() => openNote(p)}>{shortPath(p)}</button></li>)}</ul>
+              <ul>{job.newPaths!.filter((p) => !job.restored?.includes(p)).map((p) => <li key={p}><button className="btn btn-link ni-link" onClick={() => openNote(p)}>{shortPath(p)}</button></li>)}</ul>
               <More shown={job.newPaths!.length} total={c.created} />
             </div>
           )}
           {(job.updatedPaths?.length ?? 0) > 0 && (
             <div className="ni-detail-group" data-testid="ni-updated">
               <b>Updated from Notion ({c.updated})</b>
-              <ul>{job.updatedPaths!.map((p) => <li key={p}><button className="ni-link" onClick={() => openNote(p)}>{shortPath(p)}</button></li>)}</ul>
+              <ul>{job.updatedPaths!.map((p) => <li key={p}><button className="btn btn-link ni-link" onClick={() => openNote(p)}>{shortPath(p)}</button></li>)}</ul>
               <More shown={job.updatedPaths!.length} total={c.updated} />
             </div>
           )}
@@ -500,19 +500,19 @@ function RunCard({ job, store, openNote, quietFor, useView, locked, otherFolder 
               <span className="ni-muted">Deleted in Notion or no longer shared with the connection. Keep them, or delete the ones you do not want.</span>
               <ul>{job.gonePaths!.map((p) => (
                 <li key={p}>
-                  <button className="ni-link" onClick={() => openNote(p)}>{shortPath(p)}</button>
+                  <button className="btn btn-link ni-link" onClick={() => openNote(p)}>{shortPath(p)}</button>
                   {removing === p ? (
                     <span className="ni-confirm-inline">
                       {job.goneEdited?.includes(p) ? 'You edited this note in Walnut. Delete it, your edits too?' : 'Delete this note from Walnut?'}
                       <span className="ni-acts">
-                        <button className="ni-button ni-small" onClick={() => setRemoving(null)}>Cancel</button>
-                        <button className="ni-button ni-small ni-danger" onClick={() => void removeGone([p])} disabled={locked} data-testid="ni-gone-delete-yes">Delete</button>
+                        <button className="btn btn-sm" onClick={() => setRemoving(null)}>Cancel</button>
+                        <button className="btn btn-sm btn-danger" onClick={() => void removeGone([p])} disabled={locked} data-testid="ni-gone-delete-yes">Delete</button>
                       </span>
                     </span>
                   ) : (
                     <span className="ni-acts">
                       {job.goneEdited?.includes(p) && <span className="ni-muted" data-testid="ni-gone-edited">has your edits</span>}
-                      <button className="ni-button ni-small ni-danger" onClick={() => setRemoving(p)} disabled={locked} data-testid="ni-gone-delete">Delete from Walnut</button>
+                      <button className="btn btn-sm btn-danger" onClick={() => setRemoving(p)} disabled={locked} data-testid="ni-gone-delete">Delete from Walnut</button>
                     </span>
                   )}
                 </li>
@@ -521,12 +521,12 @@ function RunCard({ job, store, openNote, quietFor, useView, locked, otherFolder 
                 <span className="ni-confirm-inline">
                   Delete {job.gonePaths!.length === 2 ? 'both' : `all ${job.gonePaths!.length}`} from Walnut?{(job.goneEdited?.length ?? 0) > 0 ? ` ${job.goneEdited!.length === 1 ? 'One has' : `${job.goneEdited!.length} have`} your edits.` : ''}
                   <span className="ni-acts">
-                    <button className="ni-button ni-small" onClick={() => setRemoving(null)}>Cancel</button>
-                    <button className="ni-button ni-small ni-danger" onClick={() => void removeGone(job.gonePaths!)} disabled={locked} data-testid="ni-gone-delete-all-yes">Delete all</button>
+                    <button className="btn btn-sm" onClick={() => setRemoving(null)}>Cancel</button>
+                    <button className="btn btn-sm btn-danger" onClick={() => void removeGone(job.gonePaths!)} disabled={locked} data-testid="ni-gone-delete-all-yes">Delete all</button>
                   </span>
                 </span>
               ) : (
-                <span className="ni-list-actions"><button className="ni-button ni-small ni-danger" onClick={() => setRemoving('*')} disabled={locked} data-testid="ni-gone-delete-all">Delete {job.gonePaths!.length === 2 ? 'both' : `all ${job.gonePaths!.length}`} from Walnut</button></span>
+                <span className="ni-list-actions"><button className="btn btn-sm btn-danger" onClick={() => setRemoving('*')} disabled={locked} data-testid="ni-gone-delete-all">Delete {job.gonePaths!.length === 2 ? 'both' : `all ${job.gonePaths!.length}`} from Walnut</button></span>
               ))}
             </div>
           )}
@@ -538,7 +538,7 @@ function RunCard({ job, store, openNote, quietFor, useView, locked, otherFolder 
               <ul>{job.deletedPaths!.map((p) => (
                 <li key={p}>
                   {shortPath(p)}
-                  <span className="ni-acts"><button className="ni-button ni-small" onClick={() => void bringBack(p)} disabled={locked} data-testid="ni-bring-back">Bring back</button></span>
+                  <span className="ni-acts"><button className="btn btn-sm" onClick={() => void bringBack(p)} disabled={locked} data-testid="ni-bring-back">Bring back</button></span>
                 </li>
               ))}</ul>
             </div>
@@ -548,7 +548,7 @@ function RunCard({ job, store, openNote, quietFor, useView, locked, otherFolder 
               <b>{plural(c.filesKeptInSource, 'file')} stayed in Notion</b>
               <span className="ni-muted">Videos, audio and other file types notes do not keep are linked back to their place in Notion, from the note they were in.</span>
               {(job.filesInSource?.length ?? 0) > 0 && (
-                <ul>{job.filesInSource!.map((f, i) => <li key={i}>{f.name}, in <button className="ni-link" onClick={() => openNote(f.note)}>{f.note.replace(/\.md$/, '').split('/').pop()}</button></li>)}</ul>
+                <ul>{job.filesInSource!.map((f, i) => <li key={i}>{f.name}, in <button className="btn btn-link ni-link" onClick={() => openNote(f.note)}>{f.note.replace(/\.md$/, '').split('/').pop()}</button></li>)}</ul>
               )}
             </div>
           )}

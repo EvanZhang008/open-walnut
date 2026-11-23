@@ -728,8 +728,9 @@ function PermissionToast({ n, onDismiss, onPin, onRead, onLeave, navigate, phone
                     key={o.optionId}
                     // A list that names rules stays neutral: no choice looks picked or recommended
                     // before the person picks (a Claude prompt's list, whose Deny takes a note). A plain list keeps its strong yes.
-                    className={`nfc-perm-btn${kept.armed === o.optionId ? ' is-armed' : ''}${isLongRule(o.detail) ? ' perm-option--long-rule' : ''}${isReject || o.kind === 'allow_always' || acpOptions.some((x) => x.detail || x.takesNote) ? '' : ' nfc-perm-primary'}${o === noteReject && note.text ? ' perm-deny-with-note' : ''}${held === o.optionId ? ' is-failed' : ''}`}
+                    className={`btn btn-sm nfc-perm-btn${kept.armed === o.optionId ? ' is-armed' : ''}${isLongRule(o.detail) ? ' perm-option--long-rule' : ''}${isReject || o.kind === 'allow_always' || acpOptions.some((x) => x.detail || x.takesNote) ? '' : ' btn-primary nfc-perm-primary'}${o === noteReject && note.text ? ' btn-danger perm-deny-with-note' : ''}${held === o.optionId ? ' is-failed' : ''}`}
                     data-choice={o.optionId}
+                    data-on={kept.armed === o.optionId ? 'true' : undefined}
                     // A toast reads each choice in one line: the whole rule and its file are here.
                     title={!isReject && note.text ? 'Clear the note to allow; a note goes with Deny' : [o.detail, o.savedTo && `Saves to ${o.savedTo}`].filter(Boolean).join('\n') || undefined}
                     disabled={busy || (!isReject && !!note.text)}
@@ -756,7 +757,7 @@ function PermissionToast({ n, onDismiss, onPin, onRead, onLeave, navigate, phone
               })}
               {/* The adapter's own reject option may be absent — keep a plain Deny. */}
               {!acpOptions.some(isRejectOption) && (
-                <button className="nfc-perm-btn" disabled={busy} onClick={() => respond(false)}>
+                <button className="btn btn-sm nfc-perm-btn" disabled={busy} onClick={() => respond(false)}>
                   Deny
                 </button>
               )}
@@ -768,14 +769,14 @@ function PermissionToast({ n, onDismiss, onPin, onRead, onLeave, navigate, phone
           ) : (
             <>
               <button
-                className="nfc-perm-btn nfc-perm-primary"
+                className="btn btn-sm btn-primary nfc-perm-btn nfc-perm-primary"
                 disabled={busy || !!note.text}
                 title={note.text ? 'Clear the note to allow; a note goes with Deny' : undefined}
                 onClick={() => respond(true)}
               >
                 Allow
               </button>
-              <button className={`nfc-perm-btn${note.text ? ' perm-deny-with-note' : ''}`} disabled={busy} onClick={() => respond(false, note.text ? { message: denyMessageOf(note) } : undefined)}>
+              <button className={`btn btn-sm nfc-perm-btn${note.text ? ' btn-danger perm-deny-with-note' : ''}`} disabled={busy} onClick={() => respond(false, note.text ? { message: denyMessageOf(note) } : undefined)}>
                 {note.text ? 'Deny with note' : 'Deny'}
               </button>
               {requestId && <DenyWithNote note={note} disabled={busy} onDeny={(message) => respond(false, { message })} />}

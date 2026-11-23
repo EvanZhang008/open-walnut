@@ -76,32 +76,11 @@ export const IMPORT_CSS = `
 .ni-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 999px; background: var(--success, #2f9e5b); }
 .ni-dot[data-tone="error"] { background: var(--settings-error-text, #c4221a); }
 
-.ni-button {
-  display: inline-flex;
-  align-items: center;
-  height: 28px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: var(--card-bg, var(--bg));
-  color: var(--fg);
-  font: inherit;
-  font-size: 13px;
-  line-height: 26px;
-  white-space: nowrap;
-  text-decoration: none;
-  cursor: pointer;
-}
-.ni-button:hover:not(:disabled) { background: var(--bg-hover, var(--bg-secondary)); }
-.ni-button:disabled { opacity: 0.45; cursor: default; }
-.ni-button:focus-visible, .ni-input:focus-visible, .ni-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.ni-primary { border-color: var(--accent); background: var(--accent); color: #fff; }
-.ni-danger { color: var(--settings-error-text, #c4221a); }
-.ni-primary:hover:not(:disabled) { background: var(--accent-hover, var(--accent)); border-color: var(--accent-hover, var(--accent)); }
-.ni-link { border: 0; padding: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; text-align: left; overflow-wrap: anywhere; }
-.ni-link:hover { text-decoration: underline; }
+.ni-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Keys are the family's (btn, btn-sm, btn-primary, btn-danger); an inline note link is its btn-link,
+   left aligned and free to wrap a long path. */
+.ni-link { white-space: normal; text-align: left; overflow-wrap: anywhere; }
 .ni-plan-actions { position: sticky; bottom: 0; z-index: 1; background: var(--settings-group-bg, var(--card-bg, var(--bg))); }
-.ni-link:disabled { color: var(--fg-muted); cursor: default; text-decoration: none; }
 
 .ni-input {
   height: 28px;
@@ -178,9 +157,6 @@ input.ni-keep:indeterminate::after { content: ''; width: 7px; height: 1.75px; ba
 .ni-detail-group ul { max-height: 200px; overflow-y: auto; padding-right: 6px; }
 .ni-detail-group li { padding: 2px 0; }
 .ni-acts { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-left: 10px; vertical-align: middle; }
-.ni-button.ni-small { height: auto; min-height: 0; padding: 1px 8px; font-size: 12px; line-height: 18px; }
-a.ni-button { text-decoration: none; display: inline-flex; align-items: center; }
-.ni-button.ni-danger { color: var(--settings-error-text, #c4221a); }
 .ni-confirm-inline { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-left: 10px; }
 .ni-confirm-inline .ni-acts { margin-left: 0; }
 .ni-list-actions { display: block; padding-left: 18px; margin-top: 4px; }

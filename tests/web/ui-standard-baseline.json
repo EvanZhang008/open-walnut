@@ -18,7 +18,7 @@
     "styles/ask-object-drawer.css": 1,
     "styles/attachments.css": 1,
     "styles/background-task-stop.css": 1,
-    "styles/board-kanban-controls.css": 6,
+    "styles/board-kanban-controls.css": 5,
     "styles/board-kanban.css": 3,
     "styles/board-status.css": 1,
     "styles/change-card.css": 5,
@@ -37,7 +37,7 @@
     "styles/filter-bar-row.css": 1,
     "styles/filter-bar.css": 5,
     "styles/filter-toolbar-base.css": 1,
-    "styles/globals.css": 89,
+    "styles/globals.css": 87,
     "styles/health-monitor.css": 1,
     "styles/home-board.css": 2,
     "styles/home-navigation.css": 5,
@@ -99,8 +99,7 @@
     "styles/voice-conversation.css": 1,
     "styles/walnut-agent.css": 5,
     "styles/worker-fold.css": 2,
-    "styles/workspaces.css": 5,
-    "../../plugin-store/notes-import/src/web/styles.ts": 1
+    "styles/workspaces.css": 5
   },
   "rawAccent": {
     "components/apps-page/builtin-apps.ts": 2,
@@ -160,7 +159,7 @@
     "styles/unpaired-notice.css": 9,
     "styles/usage-breakdown.css": 24,
     "styles/walnut-agent.css": 6,
-    "../../plugin-store/notes-import/src/web/styles.ts": 5
+    "../../plugin-store/notes-import/src/web/styles.ts": 4
   },
   "radiusNotToken": {
     "apps/mail/mail-compose.css": 2,
@@ -354,7 +353,7 @@
     "styles/walnut-agent.css": 1,
     "styles/workspaces.css": 1,
     "../../plugin-store/walnut-rhythm/src/web/styles.ts": 30,
-    "../../plugin-store/notes-import/src/web/styles.ts": 20
+    "../../plugin-store/notes-import/src/web/styles.ts": 18
   },
   "shadowLiteral": {
     "apps/mail/mail-reader.css": 1,
@@ -472,7 +471,7 @@
     "styles/composer-controls.css": 2,
     "styles/content-actions.css": 1,
     "styles/context-menu-setting.css": 2,
-    "styles/corner-stack.css": 8,
+    "styles/corner-stack.css": 7,
     "styles/draft-launch-pills.css": 1,
     "styles/engine-settings-popover-footer.css": 2,
     "styles/engine-settings-popover-rows.css": 2,
@@ -562,10 +561,6 @@
     "../../plugin-store/notes-import/src/web/styles.ts": 6
   },
   "bareButton": {
-    "../../plugin-store/notes-import/src/web/app.tsx": 2,
-    "../../plugin-store/notes-import/src/web/connect.tsx": 5,
-    "../../plugin-store/notes-import/src/web/import-panel.tsx": 31,
-    "../../plugin-store/notes-import/src/web/organize-panel.tsx": 13,
     "../../plugin-store/walnut-drawing/src/narration/NarrationControl.tsx": 5,
     "apps/mail/AddAccountDialog.tsx": 1,
     "apps/mail/MailAccountFolders.tsx": 3,
@@ -611,7 +606,7 @@
     "components/board/kanban/KanbanLaneStrip.tsx": 2,
     "components/board/kanban/KanbanLeaderRow.tsx": 1,
     "components/board/kanban/KanbanRollup.tsx": 3,
-    "components/board/kanban/KanbanToasts.tsx": 2,
+    "components/board/kanban/KanbanToasts.tsx": 1,
     "components/calendar/CalendarContextMenu.tsx": 9,
     "components/calendar/CalendarGridControls.tsx": 4,
     "components/calendar/CalendarItemPopover.tsx": 5,
@@ -659,11 +654,11 @@
     "components/common/NotificationErrorBlocks.tsx": 2,
     "components/common/NotificationFeedCards.tsx": 2,
     "components/common/NotificationRail.tsx": 2,
-    "components/common/NotificationToaster.tsx": 9,
+    "components/common/NotificationToaster.tsx": 5,
     "components/common/PageFind.tsx": 1,
-    "components/common/PermissionAnswerForm.tsx": 3,
+    "components/common/PermissionAnswerForm.tsx": 1,
     "components/common/PermissionFixDialog.tsx": 1,
-    "components/common/PermissionPromptControls.tsx": 6,
+    "components/common/PermissionPromptControls.tsx": 2,
     "components/common/PhoneConfirmSheet.tsx": 1,
     "components/common/PictureStrip.tsx": 2,
     "components/common/PriorityBadge.tsx": 1,

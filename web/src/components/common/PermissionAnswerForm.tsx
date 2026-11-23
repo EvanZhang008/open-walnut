@@ -160,14 +160,14 @@ export function PermissionAnswerForm({
       )}
       <div className="notification-feed-item-actions">
         <button
-          className="notification-perm-btn approve"
+          className="btn btn-sm btn-primary notification-perm-btn approve"
           disabled={disabled || (!complete && !gate.micBusy && !gate.waiting)}
           onClick={gate.send}
           {...dictationWaitProps(gate)}
         >
           Submit
         </button>
-        <button className="notification-perm-btn" disabled={disabled} onClick={onDismissQuestions} title={dismissTitle}>
+        <button className="btn btn-sm notification-perm-btn" disabled={disabled} onClick={onDismissQuestions} title={dismissTitle}>
           {dismissLabel}
         </button>
       </div>

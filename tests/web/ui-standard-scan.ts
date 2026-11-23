@@ -74,6 +74,16 @@ export function btnCompanions(): Set<string> {
   return out;
 }
 
+/**
+ * A key's own behaviour, drawn beside the family's look and never instead of it; each entry says why
+ * the family cannot carry it. The family has no countdown: a permission rule kept in a file, clicked
+ * once, stays armed for 5 s, and a 2 px bar under its label runs out over those 5 s
+ * (globals.css, `.is-armed::after`). The key itself is the family's: btn btn-sm, and while armed the
+ * family's on look (data-on), 2026-11-23.
+ */
+export const OWN_BEHAVIOUR: RegExp[] = [/\.is-armed::after$/];
+export const ownBehaviour = (selector: string) => OWN_BEHAVIOUR.some((re) => re.test(selector.trim()));
+
 /** `.scope .btn`, `.btn.my-card-btn`, `.my-card-btn` written beside `btn`: the shared button restyled for one place. */
 export function restylesBtn(selector: string, companions: Set<string> = new Set()): boolean {
   const parts = compounds(selector);
@@ -490,7 +500,7 @@ export function countAll(): Counts {
     for (const [, decls] of rules) {
       const sels = decls[0].selectors;
       const sets = (re: RegExp) => decls.some((d) => re.test(d.prop));
-      if (decls.some((d) => LOOK.test(d.prop)) && !fingerSize(decls) && sels.some((x) => restylesBtn(x, companions))) bump(out.restyledBtn, rel);
+      if (decls.some((d) => LOOK.test(d.prop)) && !fingerSize(decls) && sels.some((x) => restylesBtn(x, companions) && !ownBehaviour(x))) bump(out.restyledBtn, rel);
       else if (sets(/^background(-color)?$/) && sets(/^border-radius$/) && sels.some((x) => isOwnControl(x, bareKeys))) bump(out.ownControl, rel);
       if (rel !== INPUT_HOME && sels.some((x) => restylesInput(x, decls, parts))) bump(out.restyledInput, rel);
       if (rel !== 'styles/text-fit.css' && decls.some((d) => CUTS(d.prop, d.value) && !META_MARK.test(lines[d.line - 1] ?? '')) && sels.some(cutsTitle)) bump(out.cutTitle, rel);

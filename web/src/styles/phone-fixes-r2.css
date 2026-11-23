@@ -102,7 +102,7 @@
 
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   /* C19: the permission toast answers with a finger: 44 px buttons side by
-     side, the Open session link a full row target, text at 13 px or more. */
+     side (the family's small keys, only taller), the Open session link a full row target. */
   html body .nfc-perm-toast .nfc-perm-actions {
     display: flex;
     gap: 8px;
@@ -110,7 +110,6 @@
   html body .nfc-perm-toast .nfc-perm-btn {
     flex: 1 1 0;
     min-height: 44px;
-    font-size: var(--font-size-lg);
   }
   /* Its Open key is the family's grey key: only a finger's height here. */
   html body .nfc-perm-toast .notification-toast-action {

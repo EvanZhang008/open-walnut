@@ -42,7 +42,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { pluginCss, pluginStyles, countAll, isSquareKey, isRoundRow, restylesBtn, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, inputParts, restylesInput, cutsTitle, fieldClasses, restylesField, isOwnLabel, paintsLabel, isBoxedLabelName, drawsBox, LABEL_HOME, isCard, offCardFill, META_MARK, type Counts } from './ui-standard-scan';
+import { pluginCss, pluginStyles, countAll, isSquareKey, isRoundRow, restylesBtn, ownBehaviour, isOwnControl, TOKEN_KINDS, buttonTags, isBareButton, FAMILY_CSS, inputParts, restylesInput, cutsTitle, fieldClasses, restylesField, isOwnLabel, paintsLabel, isBoxedLabelName, drawsBox, LABEL_HOME, isCard, offCardFill, META_MARK, type Counts } from './ui-standard-scan';
 import { tokenBreaks } from './ui-token-scan';
 import type { Decl } from './css-scan';
 
@@ -162,6 +162,10 @@ describe('UI standard: one look per kind of control', () => {
     // A class on a <button> outside the family is a key with its own look, whatever its name.
     expect(isOwnControl('.nfc-card-action')).toBe(false);
     expect(isOwnControl('.nfc-card-action:hover', new Set(['nfc-card-action']))).toBe(true);
+    // Only a listed behaviour of a key (the armed countdown bar) is exempt, never the key itself.
+    expect(ownBehaviour('.nfc-perm-btn.is-armed::after')).toBe(true);
+    expect(ownBehaviour('.nfc-perm-btn.is-armed')).toBe(false);
+    expect(ownBehaviour('.nfc-perm-btn::after')).toBe(false);
     const bare = (src: string) => buttonTags(src).map(isBareButton);
     expect(bare('<button className="btn btn-sm" onClick={() => a > b}>x</button>')).toEqual([false]);
     expect(bare("<button className={`btn${on ? ' btn-primary' : ''}`}>y</button>")).toEqual([false]);

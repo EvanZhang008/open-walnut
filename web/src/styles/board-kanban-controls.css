@@ -186,10 +186,6 @@ html .kanban-menu-group.wn-menu-heading { padding-left: 28px; }
 .kanban-toast { font-size: var(--font-size-sm); max-width: 100%; }
 .kanban-toast-main { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
 .kanban-toast-text { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
-.kanban-toast-btn {
-  border: 0; background: none; padding: 2px 4px; font: inherit; font-weight: 600; color: var(--accent-text); cursor: pointer; border-radius: var(--radius-full);
-}
-.kanban-toast-btn:hover { background: var(--bg-hover); }
 /* .kanban-toasts-more takes the corner's "N more" look (.corner-more, corner-stack.css). */
 
 /* ── Card widgets: prompt, editor, composer, start, leader row ── */
