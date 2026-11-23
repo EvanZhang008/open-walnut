@@ -51,6 +51,25 @@ export function actionsNotThreads(items: readonly ActionItem[], listed: readonly
 }
 
 /**
+ * Whether an item is out of its snooze at `now` (2026-11-23, the user, on a snoozed card that still
+ * filled the top of his chat: "我都他妈 snooze 了，它还显示"). Pure.
+ */
+export function awakeAt(item: Pick<ActionItem, 'snoozedUntil'>, now: number): boolean {
+  const until = item.snoozedUntil ? Date.parse(item.snoozedUntil) : NaN;
+  return !(until > now);
+}
+
+/**
+ * The items the strip above a chat draws: the ones no listed thread holds (actionsNotThreads), and
+ * none he snoozed, until its time comes (the top's clock ticks, so it comes back by itself). A
+ * snoozed one stays greyed with its Unsnooze on the task's row, as a snoozed thread leaves the top
+ * for the Threads view's Snoozed group. Pure.
+ */
+export function stripItems(items: readonly ActionItem[], listed: readonly OrgThread[], now: number): ActionItem[] {
+  return actionsNotThreads(items, listed).filter((it) => awakeAt(it, now));
+}
+
+/**
  * The other listed threads that hold one of the task's decisions (`items`), by their place in `list`:
  * what the top's bar points to while the thread on show (`i`) is another one (review 2026-11-22:
  * "1 / 2" with the ask on the second). The bar names it and steps to it; the strip above never

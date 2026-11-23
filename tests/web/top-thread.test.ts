@@ -19,7 +19,7 @@ import { listedForHim, orderedForHim } from '../../src/core/org/thread-view.js'
 import { threadCounts } from '../../src/core/org/thread-groups.js'
 import type { ActionItem } from '../../src/core/action-needed.js'
 import type { OrgThread } from '../../web/src/api/org-threads'
-import { HELD_BY_THREAD, TOP_HIDDEN_VIEW, actionsNotThreads, decisionsElsewhere, hiddenLine, topIndex, topThreads } from '../../web/src/components/org/top-thread-model'
+import { HELD_BY_THREAD, TOP_HIDDEN_VIEW, actionsNotThreads, awakeAt, decisionsElsewhere, hiddenLine, stripItems, topIndex, topThreads } from '../../web/src/components/org/top-thread-model'
 import { ACTION_KINDS } from '../../src/core/action-needed.js'
 import { isBoolean, shownText, storedView, viewKey, writeView } from '../../web/src/utils/view-memory'
 
@@ -166,6 +166,19 @@ describe('Action needed items above the top thread', () => {
     ]
     expect(actionsNotThreads(items, topThreads(threads, NOW)).map((i) => i.id)).toEqual(['req-1', 'apr-1', 'lt-b', 'lt-c', 'ask-1'])
     expect(actionsNotThreads(items, [])).toEqual(items)
+  })
+
+  // 2026-11-23, the user, on an ask he snoozed in the strip that still filled the top of his chat:
+  // "我都他妈 snooze 了，它还显示". Every kind he can snooze leaves the strip until its time, then comes back.
+  it('leaves out every item he snoozed until its time, of every kind, and brings it back after', () => {
+    const kinds = Object.keys(HELD_BY_THREAD) as ActionItem['kind'][]
+    const later = new Date(NOW + 60 * 60_000).toISOString()
+    const items = kinds.map((k) => ({ ...item(k, `${k}-1`), snoozedUntil: later }))
+    expect(stripItems(items, [], NOW)).toEqual([])
+    expect(stripItems(items, [], NOW + 61 * 60_000).map((i) => i.id)).toEqual(kinds.map((k) => `${k}-1`))
+    expect(stripItems([item('ask', 'ask-awake'), ...items], [], NOW).map((i) => i.id)).toEqual(['ask-awake'])
+    expect(awakeAt({ snoozedUntil: 'not a date' }, NOW)).toBe(true)
+    expect(awakeAt({}, NOW)).toBe(true)
   })
 
   it("draws one decision once: a task's ask, a letter or a Board choice a listed thread holds shows only as that thread", () => {

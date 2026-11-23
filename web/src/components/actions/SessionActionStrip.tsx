@@ -14,7 +14,8 @@ import { keepsThreads } from '@open-walnut/keeps-threads';
 import { useExperimental } from '@/hooks/useExperimental';
 import { useOrgThreads } from '@/components/org/useOrgThreads';
 import { TopThread, useTopCursor, useTopThreads } from '@/components/org/TopThread';
-import { actionsNotThreads, TOP_HIDDEN_VIEW } from '@/components/org/top-thread-model';
+import { awakeAt, stripItems, TOP_HIDDEN_VIEW } from '@/components/org/top-thread-model';
+import { useNow } from '@/components/approvals/ApprovalPrompts';
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import { ActionNeeded } from './ActionNeeded';
 
@@ -24,8 +25,15 @@ export const SessionActionStrip = memo(function SessionActionStrip({ task, sessi
   const everyTask = useExperimental('task_threads');
   if (top && task && keepsThreads(task, everyTask)) return <SessionTop task={task} sessionId={sessionId} actions={on} />;
   if (!on || !task?.user_status?.actions?.length) return null;
-  return <ActionNeeded task={task} variant="strip" sessionId={sessionId} />;
+  return <PlainStrip task={task} sessionId={sessionId} />;
 });
+
+/** The strip of a task with no Threads on top: its items, none he snoozed until its time (the clock brings it back). */
+function PlainStrip({ task, sessionId }: { task: Task; sessionId: string }) {
+  const now = useNow(30_000);
+  if (!(task.user_status?.actions ?? []).some((it) => awakeAt(it, now))) return null;
+  return <ActionNeeded task={task} variant="strip" sessionId={sessionId} accepts={(it) => awakeAt(it, now)} />;
+}
 
 /**
  * How much of the top still shows, tried in order until it fits: everything in a third of the
@@ -102,14 +110,15 @@ function SessionTop({ task, sessionId, actions }: { task: Task; sessionId: strin
   const [hidden] = usePageView(TOP_HIDDEN_VIEW.page, TOP_HIDDEN_VIEW.name, false, isBoolean);
   const holding = hidden ? [] : list;
   const all = task.user_status?.actions ?? [];
-  const items = actions && task.phase !== 'COMPLETE' ? actionsNotThreads(all, holding) : [];
+  // What he snoozed leaves the top of his chat until its time (stripItems; its row keeps it greyed).
+  const items = actions && task.phase !== 'COMPLETE' ? stripItems(all, holding, at) : [];
   const shown = items.length > 0 || list.length > 0;
   const room = useTopRoom(shown);
   // Nothing to show draws nothing: an empty first child would still move the chat under the glass header.
   if (!shown) return null;
   return (
     <div className="session-top" data-testid="session-top" ref={room}>
-      {items.length > 0 && <ActionNeeded task={task} variant="strip" sessionId={sessionId} accepts={(it) => actionsNotThreads([it], holding).length > 0} />}
+      {items.length > 0 && <ActionNeeded task={task} variant="strip" sessionId={sessionId} accepts={(it) => stripItems([it], holding, at).length > 0} />}
       {list.length > 0 && <TopThread task={task} sessionId={sessionId} threads={threads} list={list} at={at} cursor={cursor} decisions={actions && task.phase !== 'COMPLETE' ? all : []} />}
     </div>
   );

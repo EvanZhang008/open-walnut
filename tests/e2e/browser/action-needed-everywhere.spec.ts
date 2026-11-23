@@ -205,7 +205,7 @@ async function sendLetter(request: APIRequestContext, subject: string, actions: 
   return ((await sent.json()) as { id: string }).id
 }
 
-test('three asks: the strip shows one at a time and pages; a snooze in the strip greys the row too, an unsnooze on the row brings the strip back', async ({ page, request }) => {
+test('three asks: the strip shows one at a time and pages; a snooze in the strip takes it off the strip and greys the row, an unsnooze on the row brings it back', async ({ page, request }) => {
   const renew = await sendLetter(request, `Renew it ${STAMP}?`, [{ id: 'yes', label: 'Renew' }, { id: 'no', label: 'Let it end' }])
   await sendLetter(request, `Paint the hall ${STAMP}?`, [{ id: 'white', label: 'White' }, { id: 'grey', label: 'Grey' }])
   await sendLetter(request, `Keep the keys ${STAMP}?`, [{ id: 'keep', label: 'Keep' }, { id: 'give', label: 'Give back' }])
@@ -220,12 +220,14 @@ test('three asks: the strip shows one at a time and pages; a snooze in the strip
   await strip.getByTestId('action-page-prev').click()
   await expect(strip.getByTestId('action-page-at')).toHaveText('1/3')
 
-  // Snooze the first in the strip: the row shows it snoozed as well (the same item).
+  // Snooze the first in the strip: it leaves the top of the chat until its time (2026-11-23, the
+  // user: "我都他妈 snooze 了，它还显示"), and the row shows it snoozed (the same item).
   const first = strip.getByTestId('action-item').first()
   const firstId = (await first.getAttribute('data-item-id'))!
   await first.getByTestId('action-snooze').click()
   await page.locator('.snooze-row[data-snooze="one-hour"]').click()
-  await expect(first.getByTestId('action-snoozed-until')).toContainText('Snoozed until', { timeout: 15_000 })
+  await expect(strip.locator(`[data-testid="action-item"][data-item-id="${firstId}"]`)).toHaveCount(0, { timeout: 30_000 })
+  await expect(strip.getByTestId('action-page-at')).toHaveText('1/2')
   const card = await showSectionCard(page, 'needs', ids.letter)
   const onRow = await pageToAsk(asksOf(card), asksOf(card).locator(`[data-testid="action-item"][data-item-id="${firstId}"]`))
   await expect(onRow.getByTestId('action-snoozed-until')).toContainText('Snoozed until', { timeout: 30_000 })
