@@ -32,6 +32,8 @@ show inline after the open ones, other completed hits that show the query fold i
   custom property there is inherited by every element, so one write restyles the whole
   document (57 to 96 ms in the Mac app, 2026-11-22: the sidebar's 250 ms slide drew 3 frames).
   `--fullscreen-left` is written only while a sheet that reads it shows (`useFullscreenArea`).
+  A slide starts at the click, ahead of the layout it follows (`createLeadSlide`): a transform
+  created after a 150 ms layout reaches the screen with most of its way behind it, and jumps.
   Ratchet: `tests/web/layout-animation-guard.test.ts`.
 - **A press keeps its control** (`components/settings/inputs/press-keeps-target.ts`). The browser
   clicks only what is under both the press and the release; a Settings row that changes height

@@ -34,7 +34,8 @@ import { ConnectionLine } from './ConnectionLine';
 import { PageSideBar } from './PageSideBar';
 import { SIDE_BAR_LAYOUT_EVENT, pageAreaLeft } from './page-side-bar';
 import { fullscreenArea } from './fullscreen-area';
-import { slideFrom } from '@/utils/layout-slide';
+import { createLeadSlide, type LeadSlide } from '@/utils/layout-slide';
+import { forgetRailWidths, railWidth } from './rail-width';
 import { traceInteraction } from '@/utils/interaction-timer';
 import { ScratchpadHost } from './ScratchpadHost';
 import '@/styles/phone-layout.css';
@@ -74,6 +75,15 @@ function readCollapsed(): boolean {
   }
 }
 
+/** After a layout change (or none): the page stays where its slide has it, then rests. */
+function followSlide(leadSlide: LeadSlide, main: HTMLElement | null, shell: HTMLElement | null): void {
+  if (!main || !shell) return;
+  const slide = leadSlide.land(main);
+  if (!slide) { shell.classList.remove('is-sliding'); return; }
+  const done = () => { if (!leadSlide.running()) shell.classList.remove('is-sliding'); };
+  slide.finished.then(done, done);
+}
+
 export function AppShell({ children }: AppShellProps) {
   return (
     <TasksProvider>
@@ -111,7 +121,7 @@ function AppShellInner({ children }: AppShellProps) {
   // 0 on a phone). It is the side bar's right edge while it shows, beside the page.
   const mainRef = useRef<HTMLElement>(null);
   // The page's slide under way after a rail toggle (below), ended early when a sheet goes full screen.
-  const runningSlide = useRef<Animation | null>(null);
+  const [leadSlide] = useState(createLeadSlide);
   // The window's one scratchpad editor (ScratchpadHost) mounts with the first wide layout and then
   // stays, through a switch to the phone layout too: unmounting it there ended a save under way and
   // lost the words typed after it. A phone that never was wide never loads it.
@@ -125,15 +135,16 @@ function AppShellInner({ children }: AppShellProps) {
     // Written only while a full screen sheet reads it (fullscreen-area.ts): a custom property
     // on <html> restyles the whole document, 57 to 96 ms a write in the Mac app, and this
     // fires on every frame the page area changes width.
-    const unbind = fullscreenArea.bind(() => pageAreaLeft(main), () => runningSlide.current?.finish());
+    const unbind = fullscreenArea.bind(() => pageAreaLeft(main), () => leadSlide.settle());
     const moved = () => fullscreenArea.moved();
+    const resized = () => { forgetRailWidths(); moved(); };
     const ro = new ResizeObserver(moved);
     ro.observe(main);
     ro.observe(area);
-    window.addEventListener('resize', moved);
+    window.addEventListener('resize', resized);
     window.addEventListener(SIDE_BAR_LAYOUT_EVENT, moved);
-    return () => { unbind(); ro.disconnect(); window.removeEventListener('resize', moved); window.removeEventListener(SIDE_BAR_LAYOUT_EVENT, moved); };
-  }, []);
+    return () => { unbind(); ro.disconnect(); window.removeEventListener('resize', resized); window.removeEventListener(SIDE_BAR_LAYOUT_EVENT, moved); };
+  }, [leadSlide]);
   const sidebarRef = useRef<HTMLElement>(null);
   const sidebarToggleRef = useRef<HTMLButtonElement>(null);
   const navigate = useNavigate();
@@ -295,47 +306,57 @@ function AppShellInner({ children }: AppShellProps) {
     };
   }, [closeSidebar, isMobileSidebar, sidebarOpen]);
 
-  // The rail's width changes in one layout and the page slides to its new place on the
-  // compositor (utils/layout-slide.ts): a transition on the width laid the whole page out
-  // on every frame. `slideFromLeft` is the page's left edge at the click.
+  // The rail's width changes in ONE layout and the page slides to its new place on the
+  // compositor (utils/layout-slide.ts). The slide starts at the click and the layout, which
+  // holds the main thread for 150 ms and more on a full page, lands under it.
   const shellRef = useRef<HTMLDivElement>(null);
-  const slideFromLeft = useRef<number | null>(null);
-  const slidesRunning = useRef(0);
   useLayoutEffect(() => {
-    const from = slideFromLeft.current;
-    slideFromLeft.current = null;
-    const main = mainRef.current;
-    const shell = shellRef.current;
-    // A sheet that is full screen is fixed to the window: a transform on the page would
-    // carry it along, so the rail snaps under it.
-    if (from === null || !main || !shell || isMobileSidebar || fullscreenArea.inUse()) return;
-    const slide = slideFrom(main, from);
-    if (!slide) return;
-    slidesRunning.current += 1;
-    runningSlide.current = slide;
-    shell.classList.add('is-sliding');
-    const done = () => {
-      if (runningSlide.current === slide) runningSlide.current = null;
-      slidesRunning.current -= 1;
-      if (slidesRunning.current === 0) shell.classList.remove('is-sliding');
-    };
-    slide.finished.then(done, done);
-    return () => slide.cancel();
-  }, [sidebarCollapsed, isMobileSidebar]);
+    // The phone layout has no rail beside the page: a slide under way ends where it is.
+    if (isMobileSidebar) leadSlide.settle();
+    followSlide(leadSlide, mainRef.current, shellRef.current);
+  }, [sidebarCollapsed, isMobileSidebar, leadSlide]);
+  useEffect(() => () => leadSlide.settle(), [leadSlide]);
+  // What the toggle reads at the click, without being made again on every render:
+  // the layout's state, the layout kind, and what the newest click asked for.
+  const collapsedRef = useRef(sidebarCollapsed);
+  collapsedRef.current = sidebarCollapsed;
+  const mobileRef = useRef(isMobileSidebar);
+  mobileRef.current = isMobileSidebar;
+  const askedRef = useRef(sidebarCollapsed);
+  // The newest click's lead while its layout change is still to come.
+  const newestLead = useRef<Animation | null>(null);
+  if (!newestLead.current && !leadSlide.running()) askedRef.current = sidebarCollapsed;
 
   const toggleSidebarCollapse = useCallback(() => {
     // In the log as `[perf] interaction {name: sidebar-toggle, ms}`: the click to the first
     // painted frame, in the build the user runs.
     traceInteraction('sidebar-toggle');
-    slideFromLeft.current = mainRef.current?.getBoundingClientRect().left ?? null;
-    setSidebarCollapsed((prev) => {
-      const next = !prev;
+    const main = mainRef.current;
+    const shell = shellRef.current;
+    const next = !askedRef.current;
+    askedRef.current = next;
+    const apply = () => {
+      newestLead.current = null;
       try {
         localStorage.setItem('open-walnut-sidebar-collapsed', String(next));
       } catch { /* ignore */ }
-      return next;
-    });
-  }, []);
+      if (next !== collapsedRef.current) { setSidebarCollapsed(next); return; }
+      // Two clicks before the layout changed: it stays as it is, and the page slides back.
+      followSlide(leadSlide, main, shell);
+    };
+    // A sheet that is full screen is fixed to the window: a transform on the page would
+    // carry it along, so the rail snaps under it. The phone's drawer does not move the page.
+    const lead = main && shell && !mobileRef.current && !fullscreenArea.inUse()
+      ? leadSlide.lead(main, railWidth(shell, next) - railWidth(shell, collapsedRef.current))
+      : null;
+    if (!lead || !shell) { apply(); return; }
+    newestLead.current = lead;
+    shell.classList.add('is-sliding');
+    // The layout changes once this frame, the slide's first, is on its way to the screen.
+    // A newer click has its own turn (or changed the layout at once): this one's is dropped.
+    // A lead a full screen sheet ended early still changes the layout.
+    requestAnimationFrame(() => window.setTimeout(() => { if (newestLead.current === lead) apply(); }, 0));
+  }, [leadSlide]);
 
   return (
     <div ref={shellRef} className="app-shell app-shell-navigation">

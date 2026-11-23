@@ -153,6 +153,8 @@ const NO_PAINTED_WORDS: Record<string, string> = {
   'web/src/styles/status-sections.css :: .status-card-meta > [data-line-start][data-line-start]::before': 'the "·" separator of a wrapped status card meta line: no words a painter marks',
   // The off-screen probes that measure a scrollbar track and a kept gutter (Settings' pane).
   'web/src/utils/scrollbar-metrics.ts :: inline (2)': SLOT,
+  // The empty probe that reads the rail's width closed and open before the page slides.
+  'web/src/components/layout/rail-width.ts :: inline (1)': 'an empty probe that measures the rail, removed in the same task: no words a painter marks',
   // A topic line's time in the avatar column, shown on hover: a clock, no words a painter marks.
   'web/src/styles/topics.css :: .topic-msg-clock': CONTROL,
   // The calendar grid's hour label next to the now line, hidden so the two times do not overlap.
