@@ -85,7 +85,10 @@ final class Tests: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
     }
 
     /// The graphics a page process owns (footprint's "Owned physical footprint (unmapped) (graphics)",
-    /// dirty column), in MB: what kernel_task inherits when the process dies holding it.
+    /// dirty column), in MB: what kernel_task inherits when the process dies holding it. NaN when
+    /// footprint ran and lists no graphics row at all. A Mac with no GPU of its own (GitHub's macOS
+    /// runners, Nightly extra tests 45101869535: [0.0, 0.0, 0.0]) charges a drawn page no graphics,
+    /// where a GPU's Mac charges each one tens of MB; nil when footprint could not be read.
     func graphicsMB(_ pid: pid_t) -> Double? {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/footprint")
@@ -97,7 +100,7 @@ final class Tests: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         let data = out.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
         let text = String(decoding: data, as: UTF8.self)
-        guard let line = text.split(separator: "\n").first(where: { $0.contains("Owned physical footprint (unmapped) (graphics)") }) else { return 0 }
+        guard let line = text.split(separator: "\n").first(where: { $0.contains("Owned physical footprint (unmapped) (graphics)") }) else { return .nan }
         let parts = line.split(separator: " ")
         guard parts.count >= 2, let n = Double(parts[0]) else { return nil }
         switch parts[1] { case "GB": return n * 1024; case "MB": return n; case "KB": return n / 1024; default: return 0 }
@@ -114,9 +117,15 @@ final class Tests: NSObject, NSApplicationDelegate, WKScriptMessageHandler {
         waitUntil(deadline: Date().addingTimeInterval(20), { emptied == self.olds.count }) { _ in
             let after = pids.map { self.graphicsMB($0) ?? -1 }
             print("     graphics MB before emptying: \(before), when emptyInPlace calls back: \(after)")
-            check(before.allSatisfy { $0 >= 20 }, "each page holds graphics before the swap (else the next check proves nothing)")
-            check(zip(before, after).allSatisfy { $0.1 >= 0 && $0.1 <= max(16, $0.0 * 0.1) },
-                  "a page emptied in its process gives its graphics back before it is ended")
+            if !before.isEmpty && before.allSatisfy({ $0.isNaN || $0 == 0 }) {
+                // Only where no page is charged any graphics; a real GPU's Mac checks both.
+                print("skip each page holds graphics before the swap: this Mac lists no page graphics (no GPU of its own)")
+                print("skip a page emptied in its process gives its graphics back before it is ended: nothing to give back here")
+            } else {
+                check(before.allSatisfy { $0 >= 20 }, "each page holds graphics before the swap (else the next check proves nothing)")
+                check(zip(before, after).allSatisfy { $0.1 >= 0 && $0.1 <= max(16, $0.0 * 0.1) },
+                      "a page emptied in its process gives its graphics back before it is ended")
+            }
             self.swapNow()
         }
     }
