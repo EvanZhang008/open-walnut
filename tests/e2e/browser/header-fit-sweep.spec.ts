@@ -17,6 +17,15 @@ test.describe.configure({ mode: 'serial' })
 test.setTimeout(240_000)
 
 const LIST_KEY = 'open-walnut-org-list-w'
+// Home's task panel keeps one width beside sessions and one of its own on an empty row (MainPage's
+// todoPanel / todoAlone); the empty row grows to a readable list unless the width was dragged.
+const TODO_KEYS = ['open-walnut-todo-width', 'open-walnut-todo-width-alone']
+const setTodoWidth = (page: Page, px: number | null) => page.evaluate(({ keys, pct }) => {
+  for (const k of keys) {
+    if (pct === null) { localStorage.removeItem(k); localStorage.removeItem(`${k}:dragged`) }
+    else { localStorage.setItem(k, String(pct)); localStorage.setItem(`${k}:dragged`, '1') }
+  }
+}, { keys: TODO_KEYS, pct: px === null ? null : (px / 1280) * 100 })
 const frames = (page: Page) => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
 const problems = async (page: Page) => { await frames(page); return page.evaluate(findHeaderProblems, HEADER_TITLE_MIN_PX) }
 
@@ -97,7 +106,7 @@ test('the task panel at its narrowest: New task and Board go into More, which wo
   await isolateUiPrefs(page)
   await page.setViewportSize({ width: 1280, height: 900 })
   await loadHome(page)
-  await page.evaluate(() => localStorage.setItem('open-walnut-todo-width', String((224 / 1280) * 100)))
+  await setTodoWidth(page, 224)
   await page.reload()
   const more = page.getByTestId('todo-panel-more')
   await expect(more).toBeVisible()
@@ -112,11 +121,11 @@ test('the task panel at its narrowest: New task and Board go into More, which wo
   await expect(menu).toHaveCount(0)
   await expect(more).toBeFocused()
   // Wider, the buttons are back on the row and More is gone.
-  await page.evaluate(() => localStorage.setItem('open-walnut-todo-width', String((400 / 1280) * 100)))
+  await setTodoWidth(page, 400)
   await page.reload()
   await expect(page.locator('.new-launcher-btn')).toBeVisible()
   await expect(more).toBeHidden()
-  await page.evaluate(() => localStorage.removeItem('open-walnut-todo-width'))
+  await setTodoWidth(page, null)
 })
 
 test('a subtitle gives way before the title loses a letter (the shared CSS, any header)', async ({ page }) => {

@@ -226,7 +226,6 @@ const NO_PAINTED_WORDS: Record<string, string> = {
   'web/src/components/sessions/ThreadConfirm.tsx :: inline (1)': PLACING,
   'web/src/components/sessions/SessionCodeView.tsx :: inline (1)': 'the code editor frame while it starts: a frame of its own, nothing painted yet',
   'web/src/pages/PluginAppPage.tsx :: inline (1)': 'a plugin page while it loads: nothing painted yet',
-  'examples/plugins/walnut-time/src/web/styles-task.ts :: inline (1)': CONTROL,
 };
 
 describe('every visibility: hidden is placed', () => {
