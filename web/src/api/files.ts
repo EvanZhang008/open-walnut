@@ -2,6 +2,7 @@
 import { fileDocKey, publishDocSaved } from '@/stores/file-save-signal';
 import { asDeadlineError } from '@/utils/request-failure';
 import { apiPost } from './client';
+import { deadlineSignal } from '../utils/deadline-signal';
 
 export interface FileContentResponse {
   content: string | null;
@@ -246,7 +247,7 @@ export async function saveFileContent(
 ): Promise<{ size: number; contentHash: string }> {
   const res = await fetchOrUnreachable('/api/file-content', {
     method: 'PUT',
-    signal: AbortSignal.timeout(SAVE_TIMEOUT_MS),
+    signal: deadlineSignal(SAVE_TIMEOUT_MS),
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       path: filePath,
@@ -411,7 +412,7 @@ async function fileOp(
   body: Record<string, unknown>,
 ): Promise<{ path?: string }> {
   let res: Response;
-  const deadline = AbortSignal.timeout(FILE_OP_TIMEOUT_MS);
+  const deadline = deadlineSignal(FILE_OP_TIMEOUT_MS);
   try {
     res = await fetch(`/api/files/${op}`, {
       method: 'POST',

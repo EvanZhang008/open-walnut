@@ -4,6 +4,7 @@
  */
 
 import { apiGet, apiPost } from './client';
+import { deadlineSignal } from '../utils/deadline-signal';
 
 export type TtsEngineId = 'elevenlabs' | 'device';
 
@@ -46,7 +47,7 @@ export async function speakPiece(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(piece),
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(25_000)]) : AbortSignal.timeout(25_000),
+    signal: signal ? AbortSignal.any([signal, deadlineSignal(25_000)]) : deadlineSignal(25_000),
   });
   if (!res.ok) {
     let message = res.statusText;

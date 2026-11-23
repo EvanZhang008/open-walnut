@@ -30,6 +30,7 @@ import { log } from '@/utils/log';
 import { getHostStatus } from '@/hooks/useHostStatus';
 import { hostDisplayLabel } from '@/utils/host-display-label';
 import { computeContentHashClient } from '@/utils/content-hash';
+import { deadlineSignal } from '../utils/deadline-signal';
 
 /** Keystroke → disk settle window. Long enough that a typing burst is one write,
  *  short enough that "it saved itself" is believable. */
@@ -1108,7 +1109,7 @@ export function useLiveEdit(opts: UseLiveEditOptions): LiveEdit {
       const res = await fetchFileContentConditional(rec.path, rec.host, {
         ifNoneMatch: o.lockHashRef.current,
         track: reason === 'agent' ? 'agent' : undefined,
-        signal: AbortSignal.timeout(15_000),
+        signal: deadlineSignal(15_000),
       });
       if (!isCurrent(rec)) return;
       // 等待网络期间可能已保存或手动刷新，旧响应不能覆盖新基线。

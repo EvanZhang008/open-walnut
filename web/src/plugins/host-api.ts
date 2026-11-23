@@ -29,6 +29,7 @@ import type {
 } from './types'
 import { PLUGIN_SLOT_TARGETS } from './types'
 import { openPluginDialog } from './dialog-store'
+import { deadlineSignal } from '../utils/deadline-signal'
 
 const LOCAL_EVENT = 'walnut:plugin-web-event'
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/
@@ -294,7 +295,7 @@ export function createWebPluginApi(
         }
         const signal = AbortSignal.any([
           context.signal,
-          AbortSignal.timeout(init.timeoutMs ?? 30_000),
+          deadlineSignal(init.timeoutMs ?? 30_000),
         ])
         let response: Response
         try {

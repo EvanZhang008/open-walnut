@@ -8,6 +8,7 @@ import { apiPut } from '@/api/client';
 import { log } from '@/utils/log';
 import { testRunLabel } from '@/api/test-run';
 import { UNKNOWN_QUIET, normalizeQuiet, type QuietState } from './quiet-model';
+import { deadlineSignal } from '../../utils/deadline-signal';
 
 export * from './quiet-model';
 
@@ -27,7 +28,7 @@ export function onQuietState(fn: (state: QuietState) => void): () => void {
 /** Load once, then follow `quiet:changed`. */
 function loadQuiet(signal: AbortSignal): Promise<QuietState> {
   // Bounded: an answer that never comes must not keep the state unknown (and notices held).
-  const timeout = AbortSignal.timeout?.(10_000);
+  const timeout = deadlineSignal(10_000);
   const both = timeout && 'any' in AbortSignal ? (AbortSignal as unknown as { any: (s: AbortSignal[]) => AbortSignal }).any([signal, timeout]) : signal;
   return fetch('/api/quiet', { signal: both })
     .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })

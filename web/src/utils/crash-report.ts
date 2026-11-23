@@ -13,6 +13,7 @@ import { wsClient } from '../api/ws';
 import { getRecentEntries } from './browser-logger';
 import { getAppInfo } from './app-info';
 import { redactText } from './redact';
+import { deadlineSignal } from './deadline-signal';
 
 const MAX_STACK_CHARS = 4000;
 const MAX_REPORT_BYTES = 100 * 1024;
@@ -129,7 +130,7 @@ export function buildCrashReport(input: CrashReportInput): string {
 export async function fetchServerEnrichment(): Promise<string> {
   const header = '\n=== server (live probe) ===\n';
   try {
-    const res = await fetch('/api/v1/status', { signal: AbortSignal.timeout(1500) });
+    const res = await fetch('/api/v1/status', { signal: deadlineSignal(1500) });
     if (!res.ok) return `${header}(HTTP ${res.status})`;
     const data = await res.json();
     return `${header}${JSON.stringify(data)}`;

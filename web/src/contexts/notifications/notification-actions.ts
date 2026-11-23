@@ -9,6 +9,7 @@
  */
 import type { Notification, NotificationAction } from './types';
 import { isPluginDialogId } from '@/plugins/dialog-store';
+import { deadlineSignal } from '../../utils/deadline-signal';
 
 /** The console renders at most this many buttons per notice. */
 export const MAX_NOTIFICATION_ACTIONS = 3;
@@ -142,7 +143,7 @@ export async function runOpAction(
         ...(typeof a.expiresAt === 'number' ? { [ACTION_EXPIRES_HEADER]: String(a.expiresAt) } : {}),
       },
       body: JSON.stringify(a.args ?? {}),
-      signal: AbortSignal.timeout(OP_TIMEOUT_MS),
+      signal: deadlineSignal(OP_TIMEOUT_MS),
     });
     const body = await res.json().catch(() => null) as { ok?: unknown; message?: unknown; error?: unknown } | null;
     if (!res.ok) {

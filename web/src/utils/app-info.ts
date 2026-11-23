@@ -1,3 +1,4 @@
+import { deadlineSignal } from './deadline-signal'
 /**
  * Boot-cached server identity for crash/bug reports.
  *
@@ -20,7 +21,7 @@ let cached: ServerStatus | null = null;
 /** Fire-and-forget: probe /api/v1/status and cache the result. Never throws. */
 export function initAppInfo(): void {
   try {
-    void fetch('/api/v1/status', { signal: AbortSignal.timeout(5000) })
+    void fetch('/api/v1/status', { signal: deadlineSignal(5000) })
       .then((r) => (r.ok ? r.json() : null))
       .then((data: ServerStatus | null) => {
         if (!data || typeof data !== 'object') return;

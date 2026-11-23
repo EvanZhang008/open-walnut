@@ -20,6 +20,7 @@ import { getDeviceToken } from './device-token'
 import { derivePasswordKey, randomBytes, toB64, PBKDF2_ITERATIONS, type KdfParams } from '../../../src/core/vault/crypto'
 import type { VaultItem, VaultItemInput, VaultItemSummary } from '../../../src/core/vault/types'
 import { busyWaitOf, throwingWhileUnlockBusy, type RetryOptions } from '../../../src/core/vault/unlock-retry'
+import { deadlineSignal } from '../utils/deadline-signal'
 
 export type { VaultItem, VaultItemInput, VaultItemSummary }
 
@@ -182,7 +183,7 @@ async function call<T>(method: string, path: string, body?: unknown, timeoutMs =
   const bk = browserKey()
   if (bk) headers['x-walnut-vault-browser'] = bk
   const res = await fetch(`/api/v1${path}`, {
-    method, headers, cache: 'no-store', signal: AbortSignal.timeout(timeoutMs),
+    method, headers, cache: 'no-store', signal: deadlineSignal(timeoutMs),
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
   const data = await res.json().catch(() => ({})) as Record<string, unknown>

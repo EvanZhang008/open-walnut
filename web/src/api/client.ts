@@ -7,6 +7,7 @@ import { leaderErrorMessage, noteResponseHeaders } from './leader-presence';
 import { readsSuspended, onReadLifecycle } from './read-lifecycle';
 import { ApiError } from './api-error';
 import { quietRetryDelays, quietlyRetryable } from './background-retry';
+import { deadlineSignal } from '../utils/deadline-signal';
 
 
 // ── Fetch admission control ────────────────────────────────────────────────
@@ -493,8 +494,10 @@ async function fetchOnce(path: string, opts: RequestInit): Promise<Response> {
 async function attemptRequest<T>(method: string, path: string, body?: unknown, extra?: { signal?: AbortSignal; timeoutMs?: number; cacheBypass?: boolean; quietStatuses?: number[]; opId?: string; keepalive?: boolean; tokenRetried?: boolean; headers?: Record<string, string> }): Promise<T> {
   const timeoutMs = extra?.timeoutMs ?? 15_000;
   // Created AFTER slot acquisition — the timer measures the network round
-  // trip only, never time spent waiting for a connection.
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  // trip only, never time spent waiting for a connection. A plain timer, as the
+  // queue's own deadline is (deadline-signal.ts): the request holding a slot
+  // gives up on the same clock as the requests waiting behind it.
+  const timeoutSignal = deadlineSignal(timeoutMs);
   const signal = extra?.signal
     ? AbortSignal.any([extra.signal, timeoutSignal])
     : timeoutSignal;
@@ -530,7 +533,7 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
     // A superseded request (e.g. debounced search) aborts via the caller's
     // signal — that's expected cancellation, not a failure. Don't log it at
     // ERROR level (it pollutes the console and masks real errors). A genuine
-    // request timeout fires AbortSignal.timeout → 'TimeoutError', which we DO
+    // request timeout fires deadlineSignal → 'TimeoutError', which we DO
     // surface. AbortError without a timeout = intentional caller abort.
     const isTimeout = err instanceof DOMException && err.name === 'TimeoutError';
     const isAbort = err instanceof DOMException && err.name === 'AbortError';
@@ -668,7 +671,7 @@ async function apiGetRaw<T>(path: string, params: Record<string, string> | undef
     try {
       if (readsSuspended()) { admission.suspended = true; continue; }
       let res: Response;
-      const deadline = AbortSignal.timeout(opts?.timeoutMs ?? 30_000);
+      const deadline = deadlineSignal(opts?.timeoutMs ?? 30_000);
       try {
         res = await fetch(url, { method: 'GET', headers, signal: opts?.signal ? AbortSignal.any([opts.signal, deadline]) : deadline });
       } catch (err) {

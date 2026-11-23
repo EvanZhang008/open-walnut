@@ -10,6 +10,7 @@
  */
 
 import { log } from '@/utils/log';
+import { deadlineSignal } from '../utils/deadline-signal';
 
 export const TAKE_AHEAD_EVERY_MS = 15_000;
 
@@ -69,7 +70,7 @@ export class TakeAhead {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream' },
         body: clip.slice(this.sent),
-        signal: AbortSignal.timeout(60_000),
+        signal: deadlineSignal(60_000),
       });
       const data = await res.json().catch(() => ({})) as { size?: number; error?: string };
       if (res.ok && typeof data.size === 'number') this.sent = data.size;

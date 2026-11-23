@@ -4,6 +4,7 @@
 
 import { apiGet, apiPost, apiDelete } from './client';
 import { asDeadlineError } from '../utils/request-failure';
+import { deadlineSignal } from '../utils/deadline-signal';
 
 /** `fetch`, with a deadline that fired named TimeoutError in every engine (WebKit says AbortError). */
 async function sttFetch(url: string, init: RequestInit): Promise<Response> {
@@ -157,7 +158,7 @@ export async function transcribeAudio(
   /** A caller's own cancel, where it was said when not the page (a plugin: `plugin:<id>`), and the take id it was uploaded under while it recorded. */
   opts: { signal?: AbortSignal; surface?: string; take?: string } = {},
 ): Promise<TranscribeResult> {
-  const deadline = AbortSignal.timeout(finalPassTimeoutMs(typeof audio === 'string' ? audio.length * 0.75 : audio.size));
+  const deadline = deadlineSignal(finalPassTimeoutMs(typeof audio === 'string' ? audio.length * 0.75 : audio.size));
   // The page it was said on (a session, a plugin's composer), kept with the recording.
   const surface = (opts.surface ?? location.pathname).slice(0, 100);
   const signal = opts.signal ? AbortSignal.any([opts.signal, deadline]) : deadline;
@@ -269,7 +270,7 @@ export async function draftTranscribe(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ audio: audioBase64, format, language }),
-    signal: signal ?? AbortSignal.timeout(20_000),
+    signal: signal ?? deadlineSignal(20_000),
   });
   if (!res.ok) {
     let detail = '';
@@ -307,7 +308,7 @@ export async function saveRecording(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ audio: audioBase64, format, text, language, ...(error ? { error } : {}) }),
-    signal: AbortSignal.timeout(30_000),
+    signal: deadlineSignal(30_000),
   });
   if (!res.ok) throw new Error(`save recording failed: ${res.status}`);
   return res.json();
@@ -366,7 +367,7 @@ export async function startSetup(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action, ...params }),
-    signal: signal ?? AbortSignal.timeout(3_600_000),
+    signal: signal ?? deadlineSignal(3_600_000),
   });
 
   if (!res.ok) {

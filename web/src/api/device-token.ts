@@ -33,6 +33,7 @@
  */
 
 import { getSignedOutReason, getUnpairedState, noteAuthRefusal, noteSignedIn, subscribeUnpaired } from './unpaired';
+import { deadlineSignal } from '../utils/deadline-signal';
 
 export const STORAGE_KEY = 'walnut.deviceToken';
 /** Epoch ms the access token runs out at; 'never' = the server said it does not renew. Absent: not known yet. */
@@ -288,7 +289,7 @@ async function renewOnce(timeoutMs: number): Promise<RenewResult> {
         // The token rides only to start the pair of a browser from before renewing.
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         cache: 'no-store',
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: deadlineSignal(timeoutMs),
       });
     } catch {
       return { kind: 'no-answer' };

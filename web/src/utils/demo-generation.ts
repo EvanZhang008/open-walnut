@@ -1,4 +1,5 @@
 import { firstSentence } from '@open-walnut/host-problem';
+import { deadlineSignal } from './deadline-signal';
 
 export function isDemoOrigin(): boolean {
   return typeof window !== 'undefined' && window.location?.hostname === '127.0.0.1' && window.location.port === '3458';
@@ -19,7 +20,7 @@ function usableSignInCommand(value: unknown): string | null {
 
 export async function initDemoGeneration(): Promise<boolean> {
   if (!isDemoOrigin()) return false;
-  const response = await fetch('/api/demo/generation', { cache: 'no-store', signal: AbortSignal.timeout(10_000) });
+  const response = await fetch('/api/demo/generation', { cache: 'no-store', signal: deadlineSignal(10_000) });
   if (response.status === 404) return false;
   if (!response.ok) throw new Error('Demo could not confirm its data generation. Reload to try again.');
   const value = await response.json() as { generation?: unknown; signInCommand?: unknown };

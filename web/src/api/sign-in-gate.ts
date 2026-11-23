@@ -34,6 +34,7 @@
 import { consumePairFragment } from './browser-pair';
 import { getDeviceToken, hasRefreshMark, renewSignIn, tokenExpired, type RenewResult } from './device-token';
 import { getUnpairedState, noteAuthRefusal } from './unpaired';
+import { deadlineSignal } from '../utils/deadline-signal';
 
 export type SignInGate = 'app' | 'sign-in' | 'probe-failed';
 
@@ -114,7 +115,7 @@ export async function resolveSignInGate(): Promise<SignInGate> {
     if (renewed.kind === 'no-answer') return 'probe-failed';
   }
   try {
-    const res = await fetch('/api/v1/me', { signal: AbortSignal.timeout(PROBE_MS), cache: 'no-store' });
+    const res = await fetch('/api/v1/me', { signal: deadlineSignal(PROBE_MS), cache: 'no-store' });
     if (res.status !== 401) {
       // A sign-in cookie of a build before (walnut_signin, walnut_device) answered for a page
       // with no token: trade it for a pair, or the console would read and never write.

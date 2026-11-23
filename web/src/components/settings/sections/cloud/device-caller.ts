@@ -17,6 +17,7 @@
 import { useEffect, useState } from 'react';
 import { getDeviceToken } from '@/api/device-token';
 import { log } from '@/utils/log';
+import { deadlineSignal } from '../../../../utils/deadline-signal';
 
 export interface DeviceCaller {
   /** This browser holds a device token (signed in with a code). */
@@ -51,7 +52,7 @@ export function useDeviceCaller(): DeviceCaller {
     if (!isDevice) return undefined;
     let live = true;
     // Raw fetch: auth-fetch.ts adds the token to every same-origin /api call.
-    fetch('/api/v1/me', { cache: 'no-store', signal: AbortSignal.timeout(10_000) })
+    fetch('/api/v1/me', { cache: 'no-store', signal: deadlineSignal(10_000) })
       .then((res) => (res.ok ? res.json() : null))
       .then((body) => { if (live) setName(deviceNameFromMe(body)); })
       .catch((err) => log.warn('settings', 'who-am-i read failed', { error: String(err) }));

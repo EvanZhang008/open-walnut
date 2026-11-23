@@ -16,6 +16,20 @@ import { classifyWriteFailure } from '../../web/src/hooks/useLiveEdit'
 import { apiGet } from '../../web/src/api/client'
 import { HOST_READ_STREAM_CAP_MS } from '../../src/core/hosts/remote-read-bound.js'
 
+/** While set, every page deadline (deadline-signal.ts) has already fired. */
+const deadlines = vi.hoisted(() => ({ fired: false }))
+vi.mock('../../web/src/utils/deadline-signal', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../web/src/utils/deadline-signal')>()
+  return {
+    deadlineSignal: (ms: number) => {
+      if (!deadlines.fired) return real.deadlineSignal(ms)
+      const deadline = new AbortController()
+      deadline.abort(new DOMException('signal timed out', 'TimeoutError'))
+      return deadline.signal
+    },
+  }
+})
+
 /** DaemonConnection's command timeout (a private static there), which bounds the write. */
 const DAEMON_COMMAND_TIMEOUT_MS = 30_000
 /** The longest liveness probe (DaemonConnection.probeDeadlineMs). */
@@ -24,17 +38,13 @@ const PROBE_CEILING_MS = 20_000
 const SERVER_PENDING_AFTER_MS = 20_000
 
 /**
- * WebKit's shape of a deadline (the Mac app): AbortSignal.timeout fires with a
+ * WebKit's shape of a deadline (the Mac app): the deadline fires with a
  * TimeoutError reason, and fetch rejects with a bare AbortError, "Fetch is
  * aborted". A gate review saw exactly those words on a Save (at 120s) and a New
  * Folder (at 45s) in WebKit while Chromium showed the right sentences.
  */
 function webkitDeadline(): void {
-  vi.spyOn(AbortSignal, 'timeout').mockImplementation(() => {
-    const deadline = new AbortController()
-    deadline.abort(new DOMException('signal timed out', 'TimeoutError'))
-    return deadline.signal
-  })
+  deadlines.fired = true
   vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
     if (!init.signal?.aborted) throw new Error('the request was given no deadline that fired')
     throw new DOMException('Fetch is aborted', 'AbortError')
@@ -42,7 +52,7 @@ function webkitDeadline(): void {
 }
 
 describe('the save deadline', () => {
-  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+  afterEach(() => { deadlines.fired = false; vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
   it('outlasts the longest answer the server may still give', () => {
     expect(SAVE_TIMEOUT_MS).toBeGreaterThan(HOST_READ_STREAM_CAP_MS + PROBE_CEILING_MS + DAEMON_COMMAND_TIMEOUT_MS)
@@ -96,6 +106,7 @@ describe('the save deadline', () => {
     expect((timedOut as Error).name).toBe('TimeoutError')
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+    deadlines.fired = false
     // The caller's own cancel, with the deadline still far off: an AbortError, as before.
     vi.stubGlobal('fetch', vi.fn(async () => { throw new DOMException('Fetch is aborted', 'AbortError') }))
     const cancel = new AbortController()

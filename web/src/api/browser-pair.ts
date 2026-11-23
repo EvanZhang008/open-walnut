@@ -17,6 +17,7 @@
 import { getDeviceToken, setDeviceToken } from './device-token';
 import { noteSignedIn } from './unpaired';
 import { log } from '@/utils/log';
+import { deadlineSignal } from '../utils/deadline-signal';
 
 /** `unanswered`: no answer about the code came back (no response, or a server or tunnel error); `usedUp`: refused as wrong, used or expired. */
 export type PairResult = { ok: true } | { ok: false; message: string; unanswered?: true; usedUp?: true };
@@ -37,7 +38,7 @@ export async function exchangeBrowserCode(code: string): Promise<PairResult> {
       headers: { 'Content-Type': 'application/json' },
       // A Home Screen app says so: Settings names it "iPhone Home Screen", apart from a Safari tab (D6).
       body: JSON.stringify({ code, ...(isStandaloneDisplay() ? { standalone: true } : {}) }),
-      signal: AbortSignal.timeout(15_000),
+      signal: deadlineSignal(15_000),
     });
   } catch {
     return { ok: false, unanswered: true, message: 'Walnut did not answer. Check the connection, then try again.' };
