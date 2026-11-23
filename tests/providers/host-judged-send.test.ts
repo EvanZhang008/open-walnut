@@ -113,7 +113,8 @@ describe('a line that did not reach its host', () => {
     }
     // A hand of held rows is a hold, not a kick.
     expect(side.sent.at(-1)!.body).toMatchObject({ holdOnly: true, queued: [{ id: 'qm-h2-held', held: { reason: AFTER_TURN_REASON } }] })
-    expect((await getQueue(HOST_SID)).map((m) => m.id)).toEqual(['qm-h2-held'])
+    // The row goes back to the queue after the send's answer: wait for it, not for a clock.
+    await vi.waitFor(async () => expect((await getQueue(HOST_SID)).map((m) => [m.id, m.status])).toEqual([['qm-h2-held', 'parked']]))
     vi.useRealTimers()
     side.state.mode = 'ok'
     await redeliverWaitingFor('devbox')
@@ -129,11 +130,13 @@ describe('a line that did not reach its host', () => {
     for (let i = 1; i <= 3; i++) {
       await redeliverWaitingFor('devbox')
       await vi.waitFor(() => expect(side.sent).toHaveLength(i))
-      await settle(20)
+      if (i < 3) await vi.waitFor(async () => expect((await getQueue(HOST_SID)).find((m) => m.id === 'qm-h2-go')?.status).not.toBe('processing'))
     }
-    const q = await getQueue(HOST_SID)
-    expect(q.find((m) => m.id === 'qm-h2-go')).toMatchObject({ status: 'parked', parkedReason: `${HOST_REFUSED_REASON}: busy` })
-    expect(q.find((m) => m.id === 'qm-h2-later')).toMatchObject({ status: 'parked', parkedReason: AFTER_TURN_REASON })
+    await vi.waitFor(async () => {
+      const q = await getQueue(HOST_SID)
+      expect(q.find((m) => m.id === 'qm-h2-go')).toMatchObject({ status: 'parked', parkedReason: `${HOST_REFUSED_REASON}: busy` })
+      expect(q.find((m) => m.id === 'qm-h2-later')).toMatchObject({ status: 'parked', parkedReason: AFTER_TURN_REASON })
+    })
     expect(_waitingForTesting(HOST_SID).scheduled).toBe(false)
   })
 })
