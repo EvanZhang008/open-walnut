@@ -9,23 +9,9 @@ import { useEffect, useState } from 'react'
 import { elapsed, type NarrationRecorder, type RecorderState } from './recorder'
 
 export const NARRATION_CSS = `
-.walnut-narration-pill {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: 0 0 auto;
-  box-sizing: border-box; width: 128px; height: 28px; margin-right: 4px; padding: 0 10px;
-  border: 1px solid var(--border); border-radius: 14px; background: transparent; color: var(--fg);
-  font: inherit; font-size: 12px; font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums;
-  cursor: pointer; transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-.walnut-narration-pill:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--bg-hover); border-color: var(--border-strong); }
-.walnut-narration-pill:disabled { opacity: .45; cursor: default; }
-.walnut-narration-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.walnut-narration-pill[data-phase="recording"], .walnut-narration-pill[data-phase="starting"] {
-  border-color: var(--error, #cf222e); color: var(--error, #cf222e);
-  background: color-mix(in srgb, var(--error, #cf222e) 9%, transparent);
-}
-.walnut-narration-pill[data-phase="recording"]:hover { background: color-mix(in srgb, var(--error, #cf222e) 15%, transparent); }
-.walnut-narration-pill[data-phase="saving"], .walnut-narration-pill[data-phase="saved"] { color: var(--fg-secondary); cursor: default; }
-.walnut-narration-pill[data-phase="error"] { border-color: var(--error, #cf222e); color: var(--error, #cf222e); }
+/* The pill is the family's small key (btn btn-sm, btn-danger while it records or failed); only its
+   fixed width is its own, so the bar never moves between Record, the timer, Saving and Saved. */
+.walnut-narration-pill { flex: 0 0 auto; width: 128px; margin-right: 4px; font-variant-numeric: tabular-nums; }
 .walnut-narration-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--error, #cf222e); flex: 0 0 auto; }
 .walnut-narration-pill[data-phase="recording"] .walnut-narration-dot { animation: walnut-narration-pulse 1.4s ease-in-out infinite; }
 .walnut-narration-pill[data-phase="saving"] .walnut-narration-dot, .walnut-narration-pill[data-phase="saved"] .walnut-narration-dot { background: var(--fg-muted); }
@@ -44,12 +30,10 @@ export const NARRATION_CSS = `
 .walnut-narration-strip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .walnut-narration-strip-muted { color: rgb(255 255 255 / 65%); }
 .walnut-narration-strip[data-tone="error"] { background: rgb(130 20 24 / 92%); }
-.walnut-narration-strip button {
-  pointer-events: auto; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-  width: 22px; height: 22px; margin-right: -8px; padding: 0; border: 0; border-radius: 11px;
-  background: transparent; color: inherit; font: inherit; font-size: 15px; cursor: pointer;
-}
-.walnut-narration-strip button:hover { background: rgb(255 255 255 / 16%); }
+/* Its close is the family's icon key, tinted by the dark strip's own text and fill. */
+.walnut-narration-strip { --fg: #fff; --fg-secondary: rgb(255 255 255 / 80%); --bg: rgb(31 35 40); }
+.walnut-narration-strip[data-tone="error"] { --bg: rgb(130 20 24); }
+.walnut-narration-strip-close { pointer-events: auto; flex: 0 0 auto; margin-right: -8px; }
 `
 
 const MicIcon = () => (
@@ -83,10 +67,11 @@ export function NarrationControl({ recorder, path }: { recorder: NarrationRecord
   const state = useRecorderState(recorder)
   const now = useClock(state.phase === 'recording')
   const { phase } = state
-  const common = { type: 'button' as const, className: 'walnut-narration-pill', 'data-phase': phase }
+  const danger = phase === 'recording' || phase === 'starting' || phase === 'error'
+  const common = { type: 'button' as const, 'data-phase': phase }
   if (phase === 'recording' || phase === 'starting') {
     return (
-      <button {...common} onClick={() => void recorder.stop()} aria-label="Stop recording the walkthrough" title="Stop and save the walkthrough">
+      <button className={`btn btn-sm${danger ? ' btn-danger' : ''} walnut-narration-pill`} {...common} onClick={() => void recorder.stop()} aria-label="Stop recording the walkthrough" title="Stop and save the walkthrough">
         <span className="walnut-narration-dot" aria-hidden="true" />
         <span>{phase === 'starting' ? 'Starting…' : `${elapsed(now - (state.startedAt ?? now))} Stop`}</span>
       </button>
@@ -95,7 +80,7 @@ export function NarrationControl({ recorder, path }: { recorder: NarrationRecord
   if (phase === 'saving' || phase === 'saved') {
     return (
       <>
-        <button {...common} aria-disabled="true" tabIndex={-1} title={phase === 'saving' ? 'Saving the walkthrough beside the drawing' : 'The walkthrough is saved beside the drawing'}>
+        <button className={`btn btn-sm${danger ? ' btn-danger' : ''} walnut-narration-pill`} {...common} aria-disabled="true" tabIndex={-1} title={phase === 'saving' ? 'Saving the walkthrough beside the drawing' : 'The walkthrough is saved beside the drawing'}>
           <span className="walnut-narration-dot" aria-hidden="true" />
           <span>{phase === 'saving' ? 'Saving…' : 'Saved'}</span>
         </button>
@@ -106,13 +91,13 @@ export function NarrationControl({ recorder, path }: { recorder: NarrationRecord
   }
   if (phase === 'error' && state.canRetry) {
     return (
-      <button {...common} onClick={() => void recorder.retrySave()} title="Save the walkthrough again">
+      <button className={`btn btn-sm${danger ? ' btn-danger' : ''} walnut-narration-pill`} {...common} onClick={() => void recorder.retrySave()} title="Save the walkthrough again">
         <span>Try again</span>
       </button>
     )
   }
   return (
-    <button {...common} disabled={!path} onClick={() => { if (path) void recorder.start(path) }}
+    <button className={`btn btn-sm${danger ? ' btn-danger' : ''} walnut-narration-pill`} {...common} disabled={!path} onClick={() => { if (path) void recorder.start(path) }}
       title={path ? 'Record a walkthrough: talk while you draw, and the assistant learns which part you meant' : 'Save the drawing first'}>
       <span className="walnut-narration-dot" aria-hidden="true" />
       <span>Record</span>
@@ -128,7 +113,7 @@ export function NarrationStrip({ recorder }: { recorder: NarrationRecorder }) {
     return (
       <div className="walnut-narration-strip" data-tone="error" role="alert">
         <span className="walnut-narration-strip-text" title={state.error}>{state.error}</span>
-        <button type="button" aria-label="Dismiss" title={state.canRetry ? 'Let this walkthrough go' : 'Dismiss'} onClick={() => recorder.dismiss()}>{'\u00d7'}</button>
+        <button type="button" className="btn btn-icon btn-sm walnut-narration-strip-close" aria-label="Dismiss" title={state.canRetry ? 'Let this walkthrough go' : 'Dismiss'} onClick={() => recorder.dismiss()}>{'\u00d7'}</button>
       </div>
     )
   }

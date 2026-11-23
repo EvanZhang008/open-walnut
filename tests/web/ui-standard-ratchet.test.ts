@@ -166,6 +166,8 @@ describe('UI standard: one look per kind of control', () => {
     expect(ownBehaviour('.nfc-perm-btn.is-armed::after')).toBe(true);
     expect(ownBehaviour('.nfc-perm-btn.is-armed')).toBe(false);
     expect(ownBehaviour('.nfc-perm-btn::after')).toBe(false);
+    expect(ownBehaviour('.app-shell-navigation .permission-request-btn.is-busy::after')).toBe(true);
+    expect(ownBehaviour('.permission-request-btn:hover')).toBe(false);
     const bare = (src: string) => buttonTags(src).map(isBareButton);
     expect(bare('<button className="btn btn-sm" onClick={() => a > b}>x</button>')).toEqual([false]);
     expect(bare("<button className={`btn${on ? ' btn-primary' : ''}`}>y</button>")).toEqual([false]);

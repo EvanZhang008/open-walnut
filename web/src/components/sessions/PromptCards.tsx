@@ -256,7 +256,7 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, ans
       )}
       <div className="permission-request-actions">
         <button
-          className="permission-request-btn permission-request-btn--allow"
+          className="btn btn-sm btn-primary permission-request-btn permission-request-btn--allow"
           disabled={(!complete && !gate.micBusy && !gate.waiting) || locked}
           onClick={gate.send}
           {...dictationWaitProps(gate)}
@@ -264,7 +264,7 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, ans
           {busy ? 'Sending...' : 'Submit'}
         </button>
         <button
-          className="permission-request-btn permission-request-btn--deny"
+          className="btn btn-sm permission-request-btn permission-request-btn--deny"
           disabled={locked}
           onClick={onDismiss}
         >
@@ -543,7 +543,8 @@ export function PermissionRequestCard({ sessionId, requestId, toolName, input, r
             <button
               key={c.key}
               type="button"
-              className={`permission-request-btn ${c.allow ? 'permission-request-btn--allow' : 'permission-request-btn--deny'}${asRows ? ' permission-request-choice' : ''}${c.remembers ? ' is-remembering' : ''}${picked === i ? ' is-picked' : ''}${noteText ? (c.takesNote ? ' is-noted' : ' is-muted') : ''}${heldChoice === c.optionId && picked !== i ? ' is-failed' : ''}${btnBusy(c.key)}`}
+              className={`btn btn-sm permission-request-btn ${c.allow ? 'permission-request-btn--allow' : 'permission-request-btn--deny'}${c.allow && !asRows && !c.remembers && !noteText ? ' btn-primary' : ''}${asRows ? ' permission-request-choice' : ''}${c.remembers ? ' is-remembering' : ''}${picked === i ? ' is-picked' : ''}${noteText ? (c.takesNote ? ' btn-danger is-noted' : ' is-muted') : ''}${heldChoice === c.optionId && picked !== i ? ' btn-danger is-failed' : ''}${btnBusy(c.key)}`}
+              data-on={picked === i ? 'true' : undefined}
               data-choice={c.optionId ?? c.key}
               data-choice-index={i}
               aria-keyshortcuts={keysOn && keys[i] <= 9 ? String(keys[i]) : undefined}

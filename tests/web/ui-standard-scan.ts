@@ -79,9 +79,11 @@ export function btnCompanions(): Set<string> {
  * the family cannot carry it. The family has no countdown: a permission rule kept in a file, clicked
  * once, stays armed for 5 s, and a 2 px bar under its label runs out over those 5 s
  * (globals.css, `.is-armed::after`). The key itself is the family's: btn btn-sm, and while armed the
- * family's on look (data-on), 2026-11-23.
+ * family's on look (data-on), 2026-11-23. The family has no busy ring either: a session card's
+ * answer tapped on a phone hides its label and turns a ring in its place while the answer is sent
+ * (phone-session.css, `.permission-request-btn.is-busy` and its `::after`).
  */
-export const OWN_BEHAVIOUR: RegExp[] = [/\.is-armed::after$/];
+export const OWN_BEHAVIOUR: RegExp[] = [/\.is-armed::after$/, /\.permission-request-btn\.is-busy(::after)?$/];
 export const ownBehaviour = (selector: string) => OWN_BEHAVIOUR.some((re) => re.test(selector.trim()));
 
 /** `.scope .btn`, `.btn.my-card-btn`, `.my-card-btn` written beside `btn`: the shared button restyled for one place. */

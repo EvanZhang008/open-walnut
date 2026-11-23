@@ -2695,37 +2695,9 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   gap: 8px;
   margin-top: 8px;
 }
-.permission-request-btn {
-  padding: 4px 14px;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--border-strong);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-.permission-request-btn--allow {
-  background: var(--success);
-  color: var(--on-accent);
-  border-color: var(--success);
-}
-.permission-request-btn--allow:hover {
-  background: color-mix(in srgb, var(--success) 85%, #000);
-}
-.permission-request-btn--deny {
-  background: var(--bg);
-  color: var(--fg-secondary);
-}
-.permission-request-btn--deny:hover {
-  background: var(--bg-tertiary);
-}
-/* A note is typed: the deny that carries it is the one that sends, so it leads and the yes steps back. */
-.permission-request-btn--allow.is-muted:not(.permission-request-choice) {
-  background: var(--bg);
-  color: var(--fg-secondary);
-  border-color: var(--border-strong);
-}
-.permission-request-btn--deny.is-noted { border-color: var(--error); color: var(--error); }
+/* A session card's answer keys are the family's (btn btn-sm): the plain yes and Submit are
+   btn-primary, a deny that carries a note or a choice the server held is btn-danger, a choice
+   picked by its digit takes the family's on look (data-on), and an off choice its disabled look. */
 .permission-request-choice.is-noted .permission-choice-label { color: var(--error); }
 .permission-request-resolved {
   margin-top: 6px;
@@ -2749,7 +2721,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 .ask-user-question { margin-top: 10px; }
 .ask-user-question .qp-question { font-size: var(--font-size-md); margin-bottom: 8px; }
 .ask-user-answer-line { font-weight: 400; line-height: 1.5; }
-.permission-request-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Prompt choices: number keys (prompt-keys.ts), remembering options as a list, the deny note. */
 .prompt-key {
@@ -2769,28 +2740,19 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   opacity: 0.85;
   box-sizing: border-box;
 }
-.permission-request-btn { display: inline-flex; align-items: center; justify-content: center; }
 .permission-request-btn.permission-request-choice { justify-content: flex-start; }
-.permission-request-btn.is-picked {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
 .permission-request-actions--rows {
   flex-direction: column;
   gap: 4px;
 }
+/* A choice row: a full-width family key whose rule wraps under its name. */
 .permission-request-btn.permission-request-choice {
   width: 100%;
   min-width: 0;
-  padding: 6px 10px;
   gap: 10px;
-  /* Lifted off the card's tint, not a solid block of the page colour (heavy in dark). */
-  background: color-mix(in srgb, var(--bg) 65%, transparent);
-  color: var(--fg);
-  border-color: var(--border-strong);
+  white-space: normal;
   text-align: left;
 }
-.permission-request-btn.permission-request-choice:hover { background: var(--bg-tertiary); }
 /* A pick by key shows and goes at once: a fading ring read as still picked after Esc. */
 .permission-request-btn.permission-request-choice { transition: none; }
 .permission-request-btn.permission-request-choice .prompt-key { margin-right: 0; }
@@ -2803,18 +2765,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 .permission-choice-saved { font-size: var(--font-size-sm); font-weight: 400; color: color-mix(in srgb, var(--fg-muted) 70%, var(--fg)); min-width: 0; overflow-wrap: break-word; }
 /* The file's name never breaks: in a narrow column it moves whole under "Saves to". */
 .perm-saved-file { white-space: nowrap; }
-.permission-request-btn.permission-request-choice.is-picked {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent) inset;
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
-}
-/* Deny picked reads as the refusal it is. */
-.permission-request-btn.permission-request-choice.permission-request-btn--deny.is-picked {
-  border-color: var(--error);
-  box-shadow: 0 0 0 1px var(--error) inset;
-  background: color-mix(in srgb, var(--error) 8%, var(--bg));
-}
 .permission-choice-label { flex: 0 0 auto; font-weight: 500; }
 .permission-choice-detail {
   min-width: 0;
@@ -3002,8 +2952,6 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 .permission-request-note-off { margin-top: 6px; font-size: var(--font-size-sm); color: var(--fg-secondary); }
 .permission-request-note-off.is-blocked { color: var(--warning); }
 /* A choice the server held (its rule's file cannot be written): marked, with why under its name. */
-.permission-request-btn.permission-request-choice.is-failed { border-color: var(--error); }
-.perm-options-stack > button.is-failed { border-color: var(--error); }
 /* Armed in a toast or the panel: the second click's words in the accent, on the choice's own line. */
 .perm-option-confirm-name { color: var(--accent); }
 .perm-options-stack > button > .perm-option-sub.perm-option-confirm-sub { color: var(--accent); font-size: var(--font-size-sm); }

@@ -611,11 +611,12 @@ Counted on 2026-11-23 by `tests/web/ui-standard-ratchet.test.ts` (per file, in
 - 306 rules in 97 files give a key its own fill and corner instead of a `.btn` variant: a
   `*-btn`, `*-button`, `*-pill` or `*-chip` class, or any class written on a `<button>` outside the
   family (`.nfc-card-action` had no such name, 2026-11-23).
-- 938 `<button>` elements in 378 TSX files (the console's and the plugins' in `plugin-store/`) carry no `btn` class (choice controls with role tab,
+- 930 `<button>` elements in 377 TSX files (the console's and the plugins' in `plugin-store/`) carry no `btn` class (choice controls with role tab,
   radio, switch, checkbox or option aside). A new file starts at 0.
 - A key's own behaviour drawn beside the family's look is listed with its reason in
-  `OWN_BEHAVIOUR` (`tests/web/ui-standard-scan.ts`): today only a permission rule's 5 s armed
-  countdown bar (`.is-armed::after`); the armed key itself takes the family's on look (`data-on`).
+  `OWN_BEHAVIOUR` (`tests/web/ui-standard-scan.ts`): a permission rule's 5 s armed countdown bar
+  (`.is-armed::after`; the armed key itself takes the family's on look, `data-on`) and a session
+  card's busy ring on a phone (`.permission-request-btn.is-busy`).
 - 21 raw `#007aff` / `#0a84ff` in 9 files where `var(--accent)` belongs.
 - Values written where a token belongs (per declaration, `tests/web/ui-token-scan.ts`):
   `rawColour`, `radiusNotToken`, `pillRadius` (69: the pill-shaped controls and labels),
