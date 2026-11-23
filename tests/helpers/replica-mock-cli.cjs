@@ -178,7 +178,7 @@ function runNext() {
  * `done` gets what was written, by kind, for the reader to check what arrived.
  */
 function streamLines(total, perSecond, done) {
-  const n = { lines: 0, steps: 0, deltas: 0, toolUses: 0, toolResults: 0, big: 0 }
+  const n = { lines: 0, steps: 0, deltas: 0, deltaChars: 0, toolUses: 0, toolResults: 0, big: 0 }
   const pending = []
   const words = 'the build reads its config then walks every package and checks each lockfile against '
   const step = () => {
@@ -194,6 +194,7 @@ function streamLines(total, perSecond, done) {
       text += piece
       pending.push(ev({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: piece } }))
       n.deltas++
+      n.deltaChars += piece.length
     }
     pending.push(ev({ type: 'content_block_stop', index: 0 }))
     const read = i % 10 === 9

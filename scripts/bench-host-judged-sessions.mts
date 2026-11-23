@@ -93,11 +93,18 @@ function channelLogLines(base: string, sids: string[]): string[] {
   return out
 }
 
+/** The final answer's text of a streaming turn (replica-mock-cli.cjs streamLines' reply). */
+const answerOf = (wrote: Record<string, number>): string => `echo: streamed ${JSON.stringify(wrote)}`
+
 /** The Mac's session events of `sid` by name, whatever their source. */
 async function eventCounts(h: HostJudgeCluster, sid: string): Promise<Record<string, number>> {
   const raw = (await h.mac(`/counts?sid=${sid}`)) as Record<string, number>
   const out: Record<string, number> = {}
-  for (const [k, v] of Object.entries(raw)) { const name = k.split('|')[0]!; out[name] = (out[name] ?? 0) + v }
+  for (const [k, v] of Object.entries(raw)) {
+    const [name, part] = k.split('|') as [string, string]
+    const key = part === 'chars' ? `${name}:chars` : name
+    out[key] = (out[key] ?? 0) + v
+  }
   return out
 }
 
@@ -168,14 +175,15 @@ async function runOnce(mode: Mode, index: number) {
       const parses = (await h.mac(`/parses?sid=${sid}`)).parses as number
       sessions.push({
         sid, wrote, parses,
-        got: { deltas: got['session:text-delta'] ?? 0, toolUses: got['session:tool-use'] ?? 0, toolResults: got['session:tool-result'] ?? 0, results: got['session:result'] ?? 0 },
+        got: { deltas: got['session:text-delta'] ?? 0, deltaChars: got['session:text-delta:chars'] ?? 0, toolUses: got['session:tool-use'] ?? 0, toolResults: got['session:tool-result'] ?? 0, results: got['session:result'] ?? 0 },
       })
     }
     const sum = (f: (s: typeof sessions[number]) => number) => sessions.reduce((a, s) => a + f(s), 0)
     const lines = sum((s) => s.wrote.lines)
     const loss = {
-      // The turn's final answer (an assistant message the CLI did not stream) is one text delta more.
-      deltas: sum((s) => s.wrote.deltas + 1) - sum((s) => s.got.deltas),
+      // Text, not events (a host merges deltas): every streamed piece, and the turn's final answer
+      // (an assistant message the CLI did not stream: one delta more, its text the result's).
+      deltaChars: sum((s) => s.wrote.deltaChars + answerOf(s.wrote).length) - sum((s) => s.got.deltaChars),
       toolUses: sum((s) => s.wrote.toolUses) - sum((s) => s.got.toolUses),
       toolResults: sum((s) => s.wrote.toolResults) - sum((s) => s.got.toolResults),
       results: SESSIONS - sum((s) => Math.min(1, s.got.results)),
@@ -187,7 +195,7 @@ async function runOnce(mode: Mode, index: number) {
     const window = { daemonFrames: parses1.daemon - parses0.daemon, channelFrames: parses1.channel - parses0.channel, lineBodies: parses1.line - parses0.line }
     const parses = { daemonFramesPerLine: per(window.daemonFrames), channelFramesPerLine: per(window.channelFrames), lineBodiesPerLine: per(window.lineBodies), allPerLine: per(window.daemonFrames + window.channelFrames + window.lineBodies), window }
     // A loss keeps what the cluster's logs say of the channel and of the sessions that lost events.
-    const lossy = sessions.filter((s) => s.got.deltas !== s.wrote.deltas + 1 || s.got.toolUses !== s.wrote.toolUses || s.got.toolResults !== s.wrote.toolResults || s.got.results < 1).map((s) => s.sid)
+    const lossy = sessions.filter((s) => s.got.deltaChars !== s.wrote.deltaChars + answerOf(s.wrote).length || s.got.toolUses !== s.wrote.toolUses || s.got.toolResults !== s.wrote.toolResults || s.got.results < 1).map((s) => s.sid)
     if (lossy.length && OUT) fs.writeFileSync(path.join(OUT, `run-${index}-${mode}.loss.log`), channelLogLines(h.c.base, lossy).join('\n') + '\n')
     return {
       mode, run: index, loadBefore, loadAfter: loadavg(), sessions: SESSIONS, ratePerSession: RATE, windowS: Math.round(wallS * 10) / 10, windowFrom, windowTo, link,
@@ -244,7 +252,7 @@ async function main() {
   process.stdout.write(`| metric (median of ${RUNS}) | ${MODES.join(' | ')} |\n|---|${MODES.map(() => '---').join('|')}|\n`)
   for (const [k, label] of COLUMNS) process.stdout.write(`| ${label} | ${MODES.map((m) => medians[m]![k]).join(' | ')} |\n`)
   const lost = runs.filter((r) => Object.values(r.loss).some((v) => v !== 0) || r.endedEarly.length)
-  process.stdout.write(lost.length ? `\nloss or short window in runs: ${lost.map((r) => `${r.run}(${r.mode}) ${JSON.stringify(r.loss)} ended early ${r.endedEarly.length}`).join('; ')}\n` : '\nno loss: every delta, tool call, tool result and result reached the Mac in every run\n')
+  process.stdout.write(lost.length ? `\nloss or short window in runs: ${lost.map((r) => `${r.run}(${r.mode}) ${JSON.stringify(r.loss)} ended early ${r.endedEarly.length}`).join('; ')}\n` : '\nno loss: the text of every delta, every tool call, tool result and result reached the Mac in every run\n')
 }
 
 main().then(() => process.exit(0), (err) => { process.stderr.write(`${err?.stack ?? err}\n`); process.exit(1) })
